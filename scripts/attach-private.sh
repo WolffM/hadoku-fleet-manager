@@ -49,6 +49,14 @@ ROOT="$(git --no-replace-objects rev-list --max-parents=0 HEAD)"
 git -C "$TOP" fetch --quiet --no-tags "$PRIV" "+refs/tags/public-cut:refs/private/public-cut" \
 	|| die "could not fetch the public-cut tag from $PRIV"
 PARENT="$(git rev-parse refs/private/public-cut^{commit})"
+# A checkout that still holds the PRIVATE history (an old worktree, a branch
+# from before the cut) reports the private repo's own root here. Grafting that
+# onto the tag would make the root its own descendant: a cycle, and every
+# `git log` through it never ends.
+if git --no-replace-objects merge-base --is-ancestor "$ROOT" "$PARENT"; then
+	die "HEAD is on the private history (its root ${ROOT:0:12} is already behind public-cut).
+  Run this from a checkout of the public main."
+fi
 if [ "$(git replace -l "$ROOT")" = "$ROOT" ] \
 	&& [ "$(git rev-parse "refs/replace/$ROOT^")" = "$PARENT" ]; then
 	echo "history already attached (root ${ROOT:0:12} -> ${PARENT:0:12})"
