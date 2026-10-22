@@ -36,7 +36,7 @@ import { isLocalNode } from './lib/node-identity.js';
 import { nodeReservation, getPm2HostBusy, type Reservation } from './node-reservation.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { logger, manifestDir, stateDir, storeDoctorPath } from './host.js';
+import { logger, manifestDir, stateDir, storeDoctorPath, TOKEN_RETRY_MS } from './host.js';
 import { withGhCaller } from './gh-budget.js';
 import { coveredRepos } from './ci-runner-fallback.js';
 import { dispatchEphemeral } from './runners/ephemeral-tick.js';
@@ -1218,6 +1218,17 @@ export function nodeIsSafe(
  */
 let believedLabel = new Map<string, boolean>();
 let started = false;
+/**
+ * Has a pass run WITH a token since start? Until one has, a missing token is
+ * retried every TOKEN_RETRY_MS rather than at the next interval (#133).
+ */
+let tokenSeen = false;
+let tokenWaitHandle: ReturnType<typeof setTimeout> | null = null;
+let tokenRetryMs = TOKEN_RETRY_MS;
+/** Test seam: shorten the wait between token reads before the first pass. */
+export function __setFastLoopTokenRetryForTesting(ms: number | null): void {
+	tokenRetryMs = ms ?? TOKEN_RETRY_MS;
+}
 
 export function __resetFleetLoopForTesting(): void {
 	lastFleetProbe = null;
@@ -1235,6 +1246,9 @@ export function __resetFleetLoopForTesting(): void {
 	believedLabel = new Map();
 	tickCount = 0;
 	started = false;
+	tokenSeen = false;
+	if (tokenWaitHandle) clearTimeout(tokenWaitHandle);
+	tokenWaitHandle = null;
 }
 
 export interface FleetTickResult {
@@ -1379,7 +1393,9 @@ export const DISPATCH_SECONDS = 15;
  */
 export function startFastLoop(
 	getToken: () => string | undefined,
-	gh: Parameters<typeof tickFleet>[1]
+	gh: Parameters<typeof tickFleet>[1],
+	/** Test seam: the pass itself, so a test can start the loop without ssh. */
+	tick: typeof tickFleet = tickFleet
 ): void {
 	if (started) return;
 	started = true;
@@ -1388,10 +1404,42 @@ export function startFastLoop(
 	);
 	// Tick IMMEDIATELY, then on the interval: a restart must not leave the Fleet
 	// panel showing every node "unprobed" for the first minute.
+	const startedAtMs = Date.now();
+	let waitLogged = false;
+	//
+	// A boot with the vault still sealed has no token yet (#133). That pass
+	// used to return silently and the probe waited a whole interval, so an
+	// unseal 5s after boot still left the panel `machines probing…` for a
+	// minute. Until the first pass with a token, look again every
+	// TOKEN_RETRY_MS, and say once that the loop is waiting.
 	const run = () => {
 		const token = getToken();
-		if (!token) return;
-		withGhCaller('fleet-loop', () => tickFleet(token, gh))
+		if (!token) {
+			if (!tokenSeen && !tokenWaitHandle) {
+				if (!waitLogged) {
+					logger.warn(
+						`[fleet-loop] no GitHub token from host yet (vault sealed?) — first probe waits for it, ` +
+							`retrying every ${tokenRetryMs / 1000}s`
+					);
+					waitLogged = true;
+				}
+				tokenWaitHandle = setTimeout(() => {
+					tokenWaitHandle = null;
+					run();
+				}, tokenRetryMs);
+				tokenWaitHandle.unref?.();
+			}
+			return;
+		}
+		if (!tokenSeen && waitLogged) {
+			logger.info(
+				`[fleet-loop] GitHub token arrived after ${Math.round((Date.now() - startedAtMs) / 1000)}s — probing now`
+			);
+		}
+		tokenSeen = true;
+		if (tokenWaitHandle) clearTimeout(tokenWaitHandle);
+		tokenWaitHandle = null;
+		withGhCaller('fleet-loop', () => tick(token, gh))
 			.then((r) => {
 				for (const a of r.actions) {
 					logger.info(

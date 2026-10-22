@@ -33,6 +33,8 @@ import {
 	loadClawNodes,
 	loadResidentRepos,
 	nodeFailsBootcamp,
+	startFastLoop,
+	__setFastLoopTokenRetryForTesting,
 } from '../fleet-loop.js';
 import { __resetReservationForTesting } from '../node-reservation.js';
 import type { DispatchPassResult } from '../runners/dispatch-pass.js';
@@ -1087,4 +1089,64 @@ test('bootcamp: sickness still strips a node whose finding is clean', async () =
 		await tick(s.gh);
 		assert.ok(s.writes.length > 0 && s.writes.every((w) => w.method === 'DELETE'));
 	});
+});
+
+// --- A sealed vault at boot (#133) ---
+//
+// mgmt-api boots with no token whenever Vaultwarden restarts beside it. The
+// first pass returned silently and the probe waited a full FAST_LOOP_SECONDS,
+// so a vault that unsealed 5s after boot still left the panel unprobed for a
+// minute (02:32 on 2026-10-22: first probe at +121s).
+
+test('start: no token at boot — the first pass runs as soon as the token arrives, not an interval later', async () => {
+	__resetFleetLoopForTesting();
+	__setFastLoopTokenRetryForTesting(10);
+	let token: string | undefined;
+	// The loop's intervals are not stoppable from a test; `done` makes every
+	// later timer a no-op, so nothing fires after this case.
+	let done = false;
+	const passes: string[] = [];
+	try {
+		startFastLoop(
+			() => (done ? undefined : token),
+			ghStub([], []).gh,
+			(t) => {
+				passes.push(t);
+				return Promise.resolve({ actions: [] });
+			}
+		);
+		await new Promise((r) => setTimeout(r, 40));
+		assert.deepEqual(passes, [], 'no pass may run without a token');
+		token = 'tok';
+		await new Promise((r) => setTimeout(r, 40));
+		assert.deepEqual(passes, ['tok'], 'exactly one pass, on the retry after the unseal');
+	} finally {
+		done = true;
+		__setFastLoopTokenRetryForTesting(null);
+		__resetFleetLoopForTesting();
+	}
+});
+
+test('start: a token present at boot ticks immediately and schedules no retry', async () => {
+	__resetFleetLoopForTesting();
+	__setFastLoopTokenRetryForTesting(10);
+	let done = false;
+	const passes: string[] = [];
+	try {
+		startFastLoop(
+			() => (done ? undefined : 'tok'),
+			ghStub([], []).gh,
+			(t) => {
+				passes.push(t);
+				return Promise.resolve({ actions: [] });
+			}
+		);
+		assert.deepEqual(passes, ['tok'], 'the first pass goes out on the turn start is called');
+		await new Promise((r) => setTimeout(r, 40));
+		assert.deepEqual(passes, ['tok'], 'and nothing re-runs before the interval');
+	} finally {
+		done = true;
+		__setFastLoopTokenRetryForTesting(null);
+		__resetFleetLoopForTesting();
+	}
 });

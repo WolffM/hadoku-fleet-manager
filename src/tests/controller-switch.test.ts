@@ -12,7 +12,7 @@
  * synchronously, before any interval fires: `startFastLoop` logs
  * `[fleet-loop] fast loop every …` on the turn it is called, and
  * `startRunnerHealthMonitor` logs under `[runner-health]` on the turn it is
- * called (here: "no GitHub token from host — monitor disabled", because the
+ * called (here: "no GitHub token from host yet … waiting", because the
  * test host supplies none — deliberately, so no real interval survives this
  * test: `runner-health.ts`'s own `setInterval` is NOT `.unref()`'d, and a live
  * token would otherwise hold this test file's process open). Each module's own

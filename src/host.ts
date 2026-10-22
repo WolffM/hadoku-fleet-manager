@@ -268,6 +268,18 @@ export const recordJobResult: FleetHost['jobs']['recordJobResult'] = (
 
 export const githubToken = (): string | undefined => need().githubToken();
 
+/**
+ * How often a loop that started before the host had a token looks again (#133).
+ *
+ * mgmt-api boots with its vault SEALED whenever an ecosystem reload restarts
+ * Vaultwarden beside it, so "no token at start()" is a normal boot, not a
+ * misconfiguration. On 2026-10-22 02:32 runner-health read it once, disabled
+ * itself, and the Fleet panel showed every claw `unpolled` for 17 minutes until
+ * the next restart. `githubToken()` is an env read in mgmt-api, so polling it
+ * costs nothing; the first tick goes out within this long of the unseal.
+ */
+export const TOKEN_RETRY_MS = 5_000;
+
 export const manifestDir = (): string => need().manifestDir;
 
 /** A named manifest or allowlist inside {@link manifestDir}. */

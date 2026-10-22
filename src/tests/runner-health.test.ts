@@ -41,6 +41,7 @@ import {
 	__awaitInFlightTickForTesting,
 	__stopRunnerHealthMonitorForTesting,
 	__setRemeasureDelayForTesting,
+	__setTokenRetryForTesting,
 	__resetRunnerHealthAlertsForTesting,
 	__reloadAlertLedgerForTesting,
 	__setFleetReposForTesting,
@@ -4328,6 +4329,34 @@ test('start: a MEASURED first tick schedules no re-tick', async () => {
 	} finally {
 		__stopRunnerHealthMonitorForTesting();
 		__setRemeasureDelayForTesting(null);
+		__setHostForTesting(testHost);
+	}
+});
+
+test('start: no token at boot (vault sealed) — waits, then starts on its own once the token arrives (#133)', async () => {
+	// 2026-10-22 02:32: start() read no token, logged "monitor disabled" and
+	// returned for the life of the process — 17 minutes with no tick until the
+	// next restart happened to boot unsealed.
+	installFetch({ runners: FLEET_ALL_UP });
+	__setSupervisionCheckerForTesting(() => Promise.resolve(null));
+	let token: string | undefined;
+	__setHostForTesting({ ...testHost, githubToken: () => token });
+	__setTokenRetryForTesting(10);
+	try {
+		startRunnerHealthMonitor();
+		await new Promise((r) => setTimeout(r, 40));
+		assert.equal(getRunnerHealthSnapshot(), null, 'no tick may run without a token');
+		token = 'tok';
+		await new Promise((r) => setTimeout(r, 40));
+		await __awaitInFlightTickForTesting();
+		assert.equal(
+			getRunnerHealthSnapshot()?.runnersChecked,
+			true,
+			'the monitor started by itself once the token appeared — no restart needed'
+		);
+	} finally {
+		__stopRunnerHealthMonitorForTesting();
+		__setTokenRetryForTesting(null);
 		__setHostForTesting(testHost);
 	}
 });

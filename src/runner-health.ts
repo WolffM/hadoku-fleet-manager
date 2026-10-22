@@ -70,7 +70,7 @@ import {
 import { parseJitName, TMP_FREE_FLOOR_MB } from './runners/ephemeral.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { logger, githubToken, manifest, stateDir } from './host.js';
+import { logger, githubToken, manifest, stateDir, TOKEN_RETRY_MS } from './host.js';
 import {
 	checkSupervision,
 	describeProblem,
@@ -4489,6 +4489,8 @@ async function checkHostSupervision(data: TickReport): Promise<void> {
 /** The tick currently running, so a test can wait for one it did not call. */
 let inFlightTick: Promise<void> | null = null;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
+/** Pending re-read of the host's token while start() waits for it (#133). */
+let tokenWaitHandle: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Did the last tick read the fleet as UNMEASURED (no fast-loop probe snapshot
@@ -4579,6 +4581,8 @@ export function __awaitInFlightTickForTesting(): Promise<void> {
 
 /** Undo `startRunnerHealthMonitor` so a suite can start it again. Test-only seam. */
 export function __stopRunnerHealthMonitorForTesting(): void {
+	if (tokenWaitHandle) clearTimeout(tokenWaitHandle);
+	tokenWaitHandle = null;
 	if (intervalHandle) clearInterval(intervalHandle);
 	intervalHandle = null;
 	if (remeasureHandle) clearTimeout(remeasureHandle);
@@ -4635,6 +4639,12 @@ async function logTokenCapabilities(token: string): Promise<void> {
 	}
 }
 
+let tokenRetryMs = TOKEN_RETRY_MS;
+/** Test seam: shorten the wait between token reads. */
+export function __setTokenRetryForTesting(ms: number | null): void {
+	tokenRetryMs = ms ?? TOKEN_RETRY_MS;
+}
+
 export function startRunnerHealthMonitor(): void {
 	if (started) return;
 	started = true;
@@ -4642,11 +4652,38 @@ export function startRunnerHealthMonitor(): void {
 	// Injected, not read from the environment: the host owns credential
 	// resolution, and this package is consumed in-process by a service that
 	// already resolves it through the vault broker.
-	const token = (githubToken() ?? '').trim();
-	if (!token) {
-		logger.info('[runner-health] no GitHub token from host — monitor disabled');
-		return;
-	}
+	//
+	// No token yet is a SEALED vault on boot, not a disabled monitor (#133).
+	// This returned for the life of the process until 2026-10-22, so a boot
+	// that beat the unseal by a minute went unmonitored until the next restart.
+	const waitStartedMs = Date.now();
+	let waited = false;
+	const begin = (): void => {
+		tokenWaitHandle = null;
+		const token = (githubToken() ?? '').trim();
+		if (!token) {
+			if (!waited) {
+				logger.warn(
+					`[runner-health] no GitHub token from host yet (vault sealed?) — waiting, ` +
+						`retrying every ${tokenRetryMs / 1000}s; no tick runs until it arrives`
+				);
+			}
+			waited = true;
+			tokenWaitHandle = setTimeout(begin, tokenRetryMs);
+			tokenWaitHandle.unref?.();
+			return;
+		}
+		if (waited) {
+			logger.info(
+				`[runner-health] GitHub token arrived after ${Math.round((Date.now() - waitStartedMs) / 1000)}s — starting`
+			);
+		}
+		startWithToken(token);
+	};
+	begin();
+}
+
+function startWithToken(token: string): void {
 	// The host's token is HADOKU_SITE_TOKEN (see AGENTS.md "Secrets"); naming it
 	// is what lets a low-budget page say which credential it is about.
 	labelGhToken(token, 'HADOKU_SITE_TOKEN');
