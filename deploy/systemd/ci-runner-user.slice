@@ -1,0 +1,67 @@
+[Unit]
+Description=Self-hosted CI runners (user manager) — memory- and priority-isolated
+Documentation=file:///etc/systemd/system/ci-runner.slice
+Documentation=file:///home/hadoku/repos/hadoku_site/docs/planning/fleet-rearchitecture-2026-08-25.md
+Before=slices.target
+
+# The USER-manager twin of ci-runner.slice. Install to
+# ~/.config/systemd/user/ci-runner.slice (no root needed), then
+# `systemctl --user daemon-reload`.
+#
+# WHY BOTH EXIST
+#   hokon carries 26 runners: 2 in the system manager (github-runner.service,
+#   github-runner-tenhands.service) and 24 in the user manager
+#   (actions-runner-*.service). A slice in one manager cannot contain units of the
+#   other — user units live under user@1000.service — so containing all 26 takes a
+#   slice in each. Until 2026-08-28 only the system half existed and the 24 user
+#   units ran in app.slice with MemoryMax=infinity: CI containment covered 2 of 26
+#   runners while looking complete. Nothing reported it, because nothing asked the
+#   machine until `pnpm run check:slice` existed.
+#
+# WHY THE WEIGHTS ARE REPEATED HERE
+#   CPUWeight/IOWeight are relative among SIBLINGS under the same parent. On the
+#   system twin the parent is the root slice, so the weights rank CI against
+#   pm2-hadoku.service — the production surface. Here the parent is
+#   user@1000.service — or so this note claimed until 2026-10-16. It is wrong:
+#   systemd's dash hierarchy makes ci-runner.slice a child of ci.slice, so the
+#   weights below rank this slice only against ci.slice's other children, and
+#   ci.slice sat at the default 100, level with session.slice. The weight that
+#   actually ranks CI against the desktop is ci.slice's, set by
+#   deploy/systemd/user-priority/ci.slice.d/priority.conf (CPUWeight=25). These
+#   are kept for symmetry with the system twin, which has the same shape.
+#
+# WHAT THIS IS NOT
+#   It is NOT a response to CI having taken the box down. The 2026-08-04 incident
+#   was ComfyUI — launched by the `conjure` PM2 app via backend/launch_comfyui.sh
+#   — reaching 50.2 GB RSS / 127 GB virtual and thrashing the host for ~11
+#   minutes. CI was a victim of the frozen host, not its cause; see
+#   tenhands/docs/incident-2026-08-04-ci-failures.md and the corrected note in the
+#   system twin. The slice exists because CI sat in the same unbounded cgroup and
+#   could have done the same thing, and a CI job is far likelier to allocate
+#   without limit than a steady-state service is.
+#
+# SIZING mirrors the system twin deliberately; see it for the derivation.
+#   MemoryHigh=12G   soft: throttle and reclaim, so a runaway slows before it dies
+#   MemoryMax=16G    hard: cgroup OOM kill, scoped to CI
+#   MemorySwapMax=2G bounds the swap storm that froze the box, not just the RAM
+#
+#   MemoryHigh is right HERE even though runners-slice-install.sh argues against
+#   it. That argument is about claw-1's 7200rpm disk at 13.6% iowait, where
+#   reclaim thrashes instead of protecting. hokon is not that machine.
+#
+# NOT MANAGED BY TOOLING. fleet-runner-manifest.json marks hokon
+# `slice.manageUnit: false`, so deploy-runners-slice.mjs places runners into this
+# slice and caps them but never rewrites it — its generic body carries only the
+# two ceilings and would silently drop everything else here. The ceilings ARE
+# still audited by `pnpm run check:slice`, so this file cannot drift unnoticed.
+
+[Slice]
+MemoryAccounting=yes
+MemoryHigh=12G
+MemoryMax=16G
+MemorySwapMax=2G
+
+CPUAccounting=yes
+CPUWeight=50
+IOAccounting=yes
+IOWeight=50

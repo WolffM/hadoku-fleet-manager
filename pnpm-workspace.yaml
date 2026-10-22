@@ -1,0 +1,5 @@
+# pnpm 11 refuses to silently skip a dependency's build script and fails the
+# install with ERR_PNPM_IGNORED_BUILDS — before a single check can run. Anything
+# needing a postinstall must be named here explicitly.
+allowBuilds:
+  - esbuild

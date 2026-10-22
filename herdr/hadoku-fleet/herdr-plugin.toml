@@ -1,0 +1,16 @@
+id = "hadoku.fleet"
+name = "Hadoku fleet"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "The CI fleet as herdr agents: one pane per node, plus CI and fleet health. Read-only."
+platforms = ["linux"]
+
+# No [[startup]] hook on purpose. herdr's startup hooks are one-shot and
+# unsupervised, and a plugin may not leave background processes behind. The
+# watchers live in their panes instead, so closing the workspace stops them.
+
+[[actions]]
+id = "open"
+title = "Open fleet workspace"
+contexts = ["workspace"]
+command = ["node", "open.mjs"]

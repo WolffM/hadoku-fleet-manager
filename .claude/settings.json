@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit(src/**)",
+      "Edit(scripts/**)",
+      "Edit(docs/**)",
+      "Edit(manifests/**)",
+      "Bash(node dist/cli.js *)",
+      "Bash(pnpm test*)",
+      "Bash(pnpm lint*)",
+      "Bash(pnpm typecheck*)",
+      "Bash(pnpm run check*)",
+      "Bash(npx tsc*)",
+      "Bash(pm2 logs *)",
+      "Bash(pm2 describe *)",
+      "Bash(pm2 list *)",
+      "Bash(git worktree add *)",
+      "Bash(git merge --ff-only *)",
+      "Bash(git push origin HEAD:main)"
+    ]
+  }
+}

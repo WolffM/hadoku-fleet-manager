@@ -1,0 +1,64 @@
+{
+  "name": "@wolffm/fleet-manager",
+  "version": "0.34.30",
+  "description": "Fleet manager for the hadoku CI fleet — runner health, priority tiering, JIT provisioning, and fleet-wide auditors. Consumed in-process by mgmt-api; ships a single `fleet` CLI for the operator half.",
+  "type": "module",
+  "packageManager": "pnpm@11.5.0+sha512.dbfcc4f81cf48597afd4bc391ffdf12c11f1a9fb83a395bfa6b0a2d9cc2fd8ffebafdb1ccbd529632153f793904c2615b7f09fe1a345473fd1c35845172a8eb1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WolffM/hadoku-fleet-manager.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": [
+    "dist",
+    "scripts",
+    "deploy",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./fleet-exec": "./scripts/lib/fleet-exec.mjs",
+    "./sibling-repos": "./scripts/lib/sibling-repos.mjs",
+    "./tier-detectors": "./scripts/lib/tier-detectors.mjs",
+    "./yaml-comments": "./scripts/lib/yaml-comments.mjs"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "lint:types": "ESLINT_TYPE_AWARE=1 eslint . --max-warnings 0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "rm -rf dist/tests && tsc && node --disable-warning=ExperimentalWarning --import ./dist/tests/install-test-host.js --test 'dist/tests/**/*.test.js' && node --disable-warning=ExperimentalWarning --test 'scripts/**/*.test.mjs'",
+    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run check:exports && pnpm run test",
+    "check:exports": "node scripts/check-exports.mjs",
+    "prepare": "git config core.hooksPath .husky 2>/dev/null || true"
+  },
+  "peerDependencies": {
+    "express": ">=5.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/express": "^5.0.0",
+    "@types/express-serve-static-core": "^5.1.3",
+    "@types/node": "^22.15.21",
+    "eslint": "^9.39.4",
+    "globals": "^17.11.0",
+    "prettier": "^3.8.3",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.4"
+  },
+  "bin": {
+    "fleet": "./dist/cli.js"
+  },
+  "dependencies": {
+    "@wolffm/logger": "^1.4.1",
+    "express": "^5.1.0"
+  }
+}

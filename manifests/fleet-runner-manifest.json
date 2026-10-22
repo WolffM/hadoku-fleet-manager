@@ -1,0 +1,846 @@
+{
+  "$comment": "Desired self-hosted runner coverage across the fleet. MACHINE-CENTRIC: a machine describes itself once, and placement (which repo gets a runner where) is DERIVED. Reconcile with `pnpm run fleet:reconcile`. Read by BOTH halves of @wolffm/fleet-manager - its `fleet reconcile` CLI and its runner-tiers runtime - change them together. This file STAYS in hadoku_site: it is operator config, reconcile-repo-policy.mjs reads it here, and the CLI resolves it through FLEET_MANIFEST_DIR. Design + rationale: docs/planning/fleet-runner-reconciler.md",
+  "$why-machine-centric": "Until 2026-08-23 this file was repo-centric: ten repo entries each carried a `claws` whitelist, and all ten encoded ONE fact - 'not claw-3' - in three near-identical $why paragraphs. A property of a machine was stored ten times inside repositories, so nothing could enforce the '~2.8 runners per core' rule those paragraphs cite, and a new repo silently defaulted onto the weakest box. Machines now describe themselves; exclusions live on the machine they are about.",
+  "toolchain": {
+    "$why": "The toolchain every fleet machine must carry, declared ONCE. Runner registration was already declarative; what a machine can actually BUILD was not, and the difference showed up as CI that passed or failed on which runner happened to pick the job up. On 2026-08-25 claw-1 and claw-2 were missing python3-venv while claw-3 had it, so any job creating a venv was a coin flip — and the failure reads as a flaky test, never as fleet drift.",
+    "$why-not-setup-python": "The claws run Debian 13 (trixie) and actions/python-versions publishes NO trixie build, so actions/setup-python can only succeed where a matching interpreter is already in the tool cache. That is why inventory-test.yml says 'NO actions/setup-python HERE'. The cache below is what makes the sanctioned versions available; anything outside it must use system python3.",
+    "toolCache": {
+      "$why": "Versions seeded under /opt/hostedtoolcache/<lang>/<version>/x64. actions/setup-python reads these; a machine missing one fails any job pinned to it while its neighbours pass.",
+      "Python": ["3.11", "3.12"]
+    },
+    "$why-capabilities": "What every managed machine must be able to DO, replacing the Debian package list that used to live here. A package name is a DISTRO'S ANSWER to a capability question, not the question: `dpkg-query` returns nothing where there is no dpkg, `python3-venv` does not exist as a package where venv ships inside python, and an auto-fix built on `apt-get install` cannot run at all. Every one of the three declared packages would have read as MISSING on a machine that had the capability. Executing the capability asks the question directly, and it is also STRONGER: a package can be installed and BROKEN, which is exactly the claw-1/claw-2 ensurepip drift of 2026-08-25 - python3-venv present, venv creation failing, surfacing as a flaky test rather than as fleet drift. CORRECTED 2026-08-30: this note used to say 'the fleet is about to stop being one distro: the new claws run Omarchy (Arch)' and was read as a PLAN. It was not one. Every machine runs Debian Trixie and stays there until there is a reason to move, and the two nodes being onboarded now are Trixie as well. The reasoning above does not depend on that and must not be re-coupled to a package manager - but DISTRO IS A NODE-PROFILE CONCERN, declared per node by the onboarding profiles, and this file has no business knowing it.",
+    "capabilities": ["ffmpeg", "python-venv", "python-toolcache", "playwright", "gh", "rust"],
+    "$why-rust": "rust joined the required set on 2026-10-09. The capability registry already called it a requirement of every managed node (brave-quartet builds on the general pool), but it was not listed here, so a node whose rust probe did not pass was recorded with NO trace of it - not blocked, not unearned, just absent - which is how claw-1's record showed no rust for two weeks while cargo 1.98.1 ran fine on its stock PATH. Listed, a failed probe is reported BLOCKED with its reason in the record.",
+    "$why-gh": "gh joined the required set on 2026-09-05, the day its absence cost a fan-out. Workflow steps across the fleet shell out to it — the alert-issue open/close pair on every update-wolffm job is the widest user — so a node without it fails those steps with exit 127 AFTER the real work has already succeeded and pushed, which reads as a broken checker rather than as a broken box. claw-4/5/6 were enrolled on 2026-09-02 with no gh and nothing named it, so whether a job passed depended on which node GitHub handed it to; four repos failed at once on 2026-09-05 while the same jobs stayed green on claw-1/2/3. It is a prerequisite rather than a routing label for the same reason python-toolcache is: EVERY managed node needs it, so a box failing it should be reported BLOCKED rather than quietly carrying work it will drop at the last step. THIS FILE IS THE ONE THE GATE READS — FLEET_MANIFEST_DIR defaults here, and the copy in the fleet-manager package covers four nodes, so requiring it there alone would have enforced nothing on claw-4/5/6.",
+    "$why-python-toolcache": "python-toolcache joined the required set on 2026-09-02. It is a prerequisite rather than a routing label because EVERY managed node must have it: 5 of the 26 covered repos use actions/setup-python on the general pool as of 2026-09-07 (hadoku-registry, hadoku-scraper, hadoku_site, hadoku-pygmalion, hadoku-games-host -- measured by `fleet tool-inventory --write`, which emits a per-repo/job demand ledger at ~/.hadoku-mgmt/demand-ledger.jsonl; re-run it for the current figure rather than trusting this prose). This number MOVES: it was 3 on 2026-09-03 (tier-assignment-2026-09-03.md §5.2) -- hadoku-pygmalion reverted its RUNNER_TEMP-venv workaround back to setup-python the same day (`f9a66cc`), and hadoku-games-host joined coverage since. The earlier '9 of the 26' figure (pre-2026-09-03) was a raw grep counting repos whose workflows carry comments FORBIDDING the action. The claws run trixie for which actions/python-versions publishes no build, so a node without the cache fails those jobs outright with nothing to fall back on. Listing it here is what lets `fleet bootcamp` report BLOCKED - a box failing a prerequisite should not be carrying general CI at all - instead of the fleet finding out when a job dies."
+  },
+  "toolCaches": {
+    "$why": "Tool caches, and WHICH REPOS PUT THEM THERE. `excludeRepos` moves the WORK and leaves the FOOTPRINT: the install half is reclaimed by `reconcile --remove-excluded`, and until 2026-09-01 nothing touched the caches. Measured that day: claw-3 held 5.5 GB under ~/.cache/trunk having run ZERO vibecheck and ZERO watchparty jobs in the whole 14-day history, both excluded from it since the 2026-08-19 rebalance. The node deliberately lightened in August was carrying the fleet's second-largest cache for work it is forbidden to run.",
+    "$why-not-age": "Age is the obvious rule and the wrong one. Directory mtime does not move when files inside are READ; newest-file-inside does not either, because a pnpm store is written once and read forever; atime would be correct and is not trustworthy under relatime. Every one of those eventually deletes ~/.cache/pnpm on the busiest node in the fleet and reports a successful reclaim. So the question asked is not 'was this used recently' but 'is this cache's REASON still here', resolved against the same exclusion rules placement uses (scripts/lib/placement-rules.mjs).",
+    "$why-undeclared-is-kept": "A cache with no `repos` is NEVER reclaimed, and `repos: []` counts as undeclared. Silence means nobody has said what the cache is for, which is not evidence that nothing needs it — and `repos: []` is the shape a half-finished edit leaves behind, so reading it as 'no owner remains' would clear caches fleet-wide the moment someone started declaring them. pnpm, pip and uv are deliberately absent: they serve every repo and belong to none.",
+    "trunk": {
+      "path": "~/.cache/trunk",
+      "repos": ["WolffM/hadoku-watchparty", "WolffM/vibecheck"],
+      "$why": "TWO UNRELATED TOOLS SHARE THIS DIRECTORY, which is why both repos own it and neither alone may free it. hadoku-watchparty uses trunk-rs, the WASM bundler, via its deploy workflow (wasm-opt, wasm-bindgen). vibecheck uses trunk.io, the linter aggregator, via .trunk/trunk.yaml — no workflow invokes it, so a grep of CI finds only watchparty and would have declared the cache half-owned. Measured 2026-09-01 on claw-2: 4.1 GB of trunk.io `repos` state and 3.0 GB across 124 downloaded linter tools, beside trunk-rs's wasm artifacts."
+    },
+    "ms-playwright": {
+      "path": "~/.cache/ms-playwright",
+      "repos": [
+        "WolffM/brave-quartet",
+        "WolffM/hadoku-dataplatform",
+        "WolffM/hadoku_site",
+        "WolffM/hadoku-tenhands"
+      ],
+      "$why": "Downloaded browser binaries, ~630 MB. Re-fetched on demand, so losing it costs one slow job."
+    },
+    "gradle": {
+      "path": "~/.gradle",
+      "repos": ["WolffM/hadoku-task-mobile", "WolffM/vibecheck"],
+      "$why": "~1.4 GB per node. NOT pre-CI residue, which is what it looks like: hadoku-task-mobile builds an APK and vibecheck references gradle. Checked before declaring, because the claws' pre-CI life left real junk too."
+    },
+    "android": {
+      "path": "~/.android",
+      "repos": ["WolffM/hadoku-task-mobile"],
+      "$why": "~1.6 GB per node, for one repo's APK build. The single-owner case, and the one most likely to become reclaimable on a node the rebalance moves that repo off."
+    },
+    "cargo": {
+      "path": "~/.cargo",
+      "repos": ["WolffM/brave-quartet", "WolffM/hadoku-watchparty", "WolffM/vibecheck"],
+      "$why": "~1.5 GB per node. Rust toolchain and registry for the WASM builds."
+    }
+  },
+  "$why-role": "What the fleet chain is allowed to do to a machine. `claw` is general CI capacity and is in scope for everything — `fleet converge-toolchain`, bootcamp's required set, node-health BLOCKING findings, resident placement, and repairs that need sudo. `guest` is a machine that LENDS the fleet something and is otherwise none of the fleet's business. hokon is the only guest, decided by the operator on 2026-09-14: \"I do NOT want hokon being impacted by the fleet chain. hokon is a guest fleet member; they are here when they are needed.\" It lends its backstop registration (pm2-host, taskauto, av1-nvenc, tier 4) and nothing else, so it is in scope for exactly ONE question — is that registration online with its labels, which `fleet check-label-floor` asks of the GitHub API — and out of scope for all five of the above. A guest's labels therefore stay DECLARED rather than earned: nothing probes it, so the declaration is the only evidence there is, and that is one of the two places declaration is correct (a mint-only label being the other). WRITTEN AS A ROLE RATHER THAN AS AN EXCEPTION IN EACH GATE because three gates independently read hokon as a claw (converge-toolchain, fleet-preflight, runner-health #24) and the alternative was three copies of `if (node === 'hokon')` that could disagree. ABSENCE READS AS `claw`, deliberately: the strict direction, so a machine nobody has classified gets the full chain rather than a silent pass. `fleet capability-schema` REQUIRES the key so absence cannot persist. NOT the same field as `$enrollment.role` (\"runner\"), which records what node-bootstrap imaged the box as; this one is a live policy input.",
+  "machines": {
+    "claw-1": {
+      "role": "claw",
+      "jobP95Mb": 3400,
+      "$why-jobP95Mb": "RE-MEASURED 2026-09-05 from 390 real jobs, across all six claws and hokon, using job-metrics.sh's own cgroup readings — the writer of the number is not the reader of it. Fleet p95 is 3337MB; this is 3400 because rounding DOWN under-reserves and the value this replaces was stale in exactly that direction. It sat at 2970 from a 2026-09-01 sample of two nodes while the real p95 had moved to 3337, so admission was reserving ~370MB less than the 95th-percentile job actually took. Nothing OOM-killed — unitMaxMb still bounds every unit and there were ZERO oom_kill events in 390 jobs — but the estimate was optimistic and the gap grows with hadoku_site. Per-node p95 ranges 2982-3229 (claw-6 n=12, too few to trust alone); one fleet-wide figure is used because the repo mix is the same everywhere, which is the same reasoning the previous note gave. Observed MAX is 4096MB and is CENSORED: hadoku_site/analyze hit the cgroup ceiling exactly and was throttled against it 27,258 times, so its true demand is unknown and higher. claw-4/5/6 deliberately keep NO value and fall back to unitMaxMb (4096), which reserves more and admits less — maxConcurrent binds there first anyway.",
+      "cores": 8,
+      "labels": [],
+      "maxRegistrations": 32,
+      "tierCapacity": 2,
+      "$why": "8 cores, but a 7200rpm HGST root disk: 84s/job against claw-2's 60s, 13.6% iowait (17x claw-2) and thermal throttling at 96C. Full coverage, but runner-tiers keeps it as tier2 surge rather than always-on.",
+      "ramGb": 11,
+      "maxConcurrent": 3,
+      "minFreeMb": 2048,
+      "slice": {
+        "swapMb": 4096,
+        "$why": "name and maxMb are DERIVED — the slice is runners.slice and its ceiling is this machine's measured MemTotal minus minFreeMb, so it tracks the actual box rather than the rounded ramGb above (claw-1 measures 11885MiB, not 11*1024). Swap is capped because it was infinity: without it the kernel trades a fast OOM for hours of thrashing on claw-1's 7200rpm disk.",
+        "unitMaxMb": 4096
+      },
+      "$why-maxConcurrent": "3 since 2026-08-27, MEASURED. Was 4 on the reasoning that 'the disk is the bottleneck here, not memory' — the anon harvest says otherwise: 674 job windows fleet-wide, and claw-1's own p95 is 2897MB. Four of those is 11588MB against a 9216MB slice cap (11G less the 2048MB floor), so the count cap was not bounding memory at all and the aggregate slice would have been the thing saying no. Three fits at 8691MB. The disk is still the LATENCY bottleneck (84s/job, 13.6% iowait); it is simply not the only one.",
+      "$why-maxConcurrent-does-not-bind-here-anymore": "MEASURED 2026-09-01, after the JIT flip. This corrects the MECHANISM the note above describes, not its number. buildSpawnPlan runs `systemd-run --user --property=MemoryMax=<unitMaxMb>M --property=MemorySwapMax=0` and sets NO --slice, so a JIT unit never joins runners.slice. The slice ceiling therefore bounds nothing on an ephemeral node — it now covers only whatever standing runners remain — and the 'three fits at 8691MB' arithmetic above is about a container this node's CI jobs no longer enter. What actually gates a mint is admitMint, on OBSERVED free memory: it refuses when freeMb minus requiredMb would fall below minFreeMb, re-read every tick and decremented per planned mint. That is the stronger control because it reads the box rather than a declaration. The catch: requiredMb is the per-unit CAP (slice.unitMaxMb, 4096MB), not the measured p95 (2897MB), so admission is ~40% more conservative than the evidence supports. At 10067MB free, claw-1 admits ONE concurrent job before the 2048MB floor refuses a second, against a count cap of 3 it never reaches. claw-3 corroborates: 150 mints landed slot0 99 / slot1 49 / slot2 2, an admission ceiling near 2 rather than its declared 3. Whether admission should estimate with p95 instead of the cap is OPEN — MemoryMax still bounds each unit either way, so the floor stays protected by the per-unit cap rather than by the estimate.",
+      "minFreeGb": 25,
+      "ephemeral": true,
+      "residentRepos": [],
+      "$why-residentRepos-empty": "MOVED OFF 2026-09-07 — operator decision, WS-R. This carried the bootstrap guarantee (see fleet-manager's docs/VOCABULARY.md, \"the resident backstop\") from 2026-09-02, applied entirely by hand because the tier loop's `if (ephemeral.has(node)) continue` skip meant nothing here could ever promote or demote it — the label was set once and never touched again. claw-1 is also the weakest non-drained claw and a single point of failure, both wrong properties for a backstop. The guarantee now lives on claw-4 AND claw-6 (two holders, so one dying does not take it down), labelled by the tier loop through normal promotion/demotion rather than by hand. Do not restore it here to tidy up — see claw-4/claw-6's `$why-residentRepos` for the current reasoning.",
+      "$why-ephemeral": "JIT ROLLOUT, 2026-09-01 — the second node after the claw-3 pilot. claw-1 carried 26 standing registrations, and the 28 Runner.Listener processes they require held 2.49GB of anon memory INSIDE runners.slice before any job started, 1.9GB of it swapped onto a 7200rpm HGST at 13.6% iowait. That day four concurrent jobs (scraper, jobplatform, conjure, pygmalion — against maxConcurrent 3, which the throttle cannot enforce because MAX_WAIT_S=90 admits rather than fails) thrashed the slice and hadoku-conjure's vitest could not fork a worker in 3m21s. No OOM was logged because nothing ran out: it paged. Listener rent is the price of being reachable, charged per repo per node, and deleting it is what JIT is for. The payload was seeded from this node's OWN standing install BEFORE the flip — a node made ephemeral first is dropped from every repo, has no install left to copy bin/externals from, and is then permanently unable to mint while every check on it reads green.",
+      "$capabilities": {
+        "at": "2026-10-10T12:03:51.673Z",
+        "by": "fleet bootcamp",
+        "declared": [],
+        "earned": [
+          "cuda",
+          "ffmpeg",
+          "gh",
+          "jitconfig",
+          "nvdec",
+          "nvenc-h264",
+          "playwright",
+          "pm2-capable",
+          "python-toolcache",
+          "python-venv",
+          "rust"
+        ],
+        "unclaimed": [],
+        "unearned": [],
+        "blocked": [],
+        "prereqs": [
+          {
+            "id": "ffmpeg",
+            "detail": "7.1.5-0+deb13u1"
+          },
+          {
+            "id": "python-venv",
+            "detail": "3.13.5"
+          },
+          {
+            "id": "python-toolcache",
+            "detail": "executed 3.11 3.12"
+          },
+          {
+            "id": "playwright",
+            "detail": "launched chromium-1234, 1 build(s) present"
+          },
+          {
+            "id": "gh",
+            "detail": "2.102.0 (2026-09-30)"
+          },
+          {
+            "id": "rust",
+            "detail": "1.98.1 (48a229cea 2026-09-01) wasm32-unknown-unknown"
+          }
+        ],
+        "unprobed": []
+      }
+    },
+    "claw-2": {
+      "role": "claw",
+      "ephemeral": true,
+      "jobP95Mb": 3400,
+      "$why-jobP95Mb": "MEASURED 2026-09-01 from systemd's own per-unit accounting on the JIT units themselves, not from the standing-runner anon harvest the maxConcurrent notes cite - those included listener overhead these nodes no longer carry. claw-1 n=41 and claw-3 n=227 both land on p95=2970MB against the 4096MB cap (same workload, so the agreement is expected). This is ADMISSION'S ESTIMATE and nothing else: MemoryMax stays unitMaxMb, MemorySwapMax stays 0, and the code clamps the estimate to the cap so an operator typo cannot admit work the kernel will then kill. Reserving the CAP per job is what made claw-1 admit ONE concurrent mint at 10GB free while 13 jobs queued on 2026-09-01.",
+      "cores": 8,
+      "labels": [],
+      "maxRegistrations": 32,
+      "tierCapacity": 2,
+      "$why": "8 cores, NVMe, 0.8% iowait. Fastest measured at 60s/job. tier1, never demoted.",
+      "ramGb": 7,
+      "maxConcurrent": 2,
+      "minFreeMb": 1536,
+      "slice": {
+        "swapMb": 4096,
+        "$why": "name and maxMb are DERIVED — the slice is runners.slice and its ceiling is this machine's measured MemTotal minus minFreeMb, so it tracks the actual box rather than the rounded ramGb above (claw-1 measures 11885MiB, not 11*1024). Swap is capped because it was infinity: without it the kernel trades a fast OOM for hours of thrashing on claw-1's 7200rpm disk.",
+        "unitMaxMb": 4096
+      },
+      "$why-maxConcurrent": "2 since 2026-08-27, MEASURED. 8 cores but the LEAST RAM in the fleet at 7G, and tier1 so it attracts the most work — the combination that OOM-killed two jobs on 2026-08-24 when a 14-repo fan-out put ELEVEN concurrent builds on it. The value was 3 on the claim that 'three is what 7G holds without the kernel picking victims'; that was a guess, and the harvest contradicts it. claw-2's own p95 is 2759MB over 272 job windows, so three is 8277MB against a 5632MB slice cap (7G less the 1536MB floor) — 2.6G over, which is why the kernel was still picking victims at 3. Two fits at 5518MB. Cores are not the constraint; memory is, which is why this stays lower than claw-1 at identical core count.",
+      "minFreeGb": 25,
+      "$why-ephemeral-REVERTED": "REVERTED the same evening it was set, 2026-09-01, and the revert is the finding. Converting claw-2 made THREE of four nodes ephemeral, and both mechanisms that keep hadoku-builder on a live runner treat ephemeral capacity as if it were standing: the ladder demotes tier4 when higher tiers look free, and decideBackstop stands hokon down on clawsOnline=4 / clawsFree>0. Neither can see that a mintable node cannot ANSWER until the dispatcher acts. So the fleet concluded it was healthy while zero online runners carried its primary label, and jobs queued 11-19 minutes repeatedly. jit-provision.sh's own header predicted exactly this: 'runnerCensus counts the box at full tierCapacity off a bare SSH probe - so the fleet believes it has capacity it does not have, and the backstop that would have covered the gap is suppressed by the phantom.' claw-2 is tier1 and alwaysOn, so standing registrations here give the label a carrier that is always promoted and never depends on the dispatcher. claw-1 and claw-3 stay ephemeral: two minting nodes behind one standing tier1 is the shape the ladder and backstop were built for. Re-converting claw-2 needs the phantom-capacity fix FIRST - census and backstop must count ephemeral nodes as zero standing capacity - not another manifest edit.",
+      "$capabilities": {
+        "at": "2026-10-09T19:39:09.057Z",
+        "by": "fleet bootcamp",
+        "declared": [],
+        "earned": [
+          "cargo-bevy",
+          "ffmpeg",
+          "gh",
+          "jitconfig",
+          "playwright",
+          "python-toolcache",
+          "python-venv",
+          "rust"
+        ],
+        "unclaimed": ["cargo-bevy"],
+        "unearned": [],
+        "blocked": [],
+        "prereqs": [
+          {
+            "id": "ffmpeg",
+            "detail": "7.1.5-0+deb13u1"
+          },
+          {
+            "id": "python-venv",
+            "detail": "3.13.5"
+          },
+          {
+            "id": "python-toolcache",
+            "detail": "executed 3.11 3.12"
+          },
+          {
+            "id": "playwright",
+            "detail": "launched chromium-1234, 1 build(s) present"
+          },
+          {
+            "id": "gh",
+            "detail": "2.92.0 (2026-04-28)"
+          },
+          {
+            "id": "rust",
+            "detail": "1.98.1 (48a229cea 2026-09-01) wasm32-unknown-unknown"
+          }
+        ],
+        "unprobed": []
+      }
+    },
+    "claw-3": {
+      "role": "claw",
+      "jobP95Mb": 3400,
+      "$why-jobP95Mb": "MEASURED 2026-09-01 from systemd's own per-unit accounting on the JIT units themselves, not from the standing-runner anon harvest the maxConcurrent notes cite - those included listener overhead these nodes no longer carry. claw-1 n=41 and claw-3 n=227 both land on p95=2970MB against the 4096MB cap (same workload, so the agreement is expected). This is ADMISSION'S ESTIMATE and nothing else: MemoryMax stays unitMaxMb, MemorySwapMax stays 0, and the code clamps the estimate to the cap so an operator typo cannot admit work the kernel will then kill. Reserving the CAP per job is what made claw-1 admit ONE concurrent mint at 10GB free while 13 jobs queued on 2026-09-01.",
+      "cores": 4,
+      "labels": [],
+      "maxRegistrations": 16,
+      "tierCapacity": 1,
+      "$why": "Surface-class i7-6600U: a 15W 2-core/4-thread part against the others' 8 cores, but fast per job (67s, NVMe, 0.2% iowait). Speed ranked it tier1 until 2026-08-25, when it was demoted to tier3 on thermals - 96C package against a 100C trip with a SINGLE worker on it, 1018 package throttles in 51 minutes, and four hard crashes since 2026-08-13. tierCapacity/maxConcurrent still bound how much lands on it WHEN it is promoted; the tier is what keeps it dark the rest of the time. Those are two different axes and both are true.",
+      "$why-maxRegistrations": "15 placements today, so this is one slot of headroom. It bounds DISK and install footprint (~835 MB each), and is a PROXY for load rather than a thermal control - registrations sit idle at no cost, concurrent builds are what cook the box. Growth past this should be a deliberate decision, which is the entire point of the gate.",
+      "excludeRepos": {
+        "WolffM/hadoku-cardtable": "claw-3 is a 4-thread i7-6600U that runs at 94C, and cardtable's CPU-bound work starves on it. Restored 2026-10-09 after one day without it: CI run 37889231485's check died on vitest's 'Timeout calling onTaskUpdate' after every test passed, the main-thread starvation the other claws cap workers for (cardtable 5e6feb2); claw-3's cardtable check p50 is 303 s against 190-240 s elsewhere (max 603 s) and it fails 7/46 against 7-12% elsewhere; and its jdk21 canary failed on a 20 s match-create timeout (run 37835158414). The jdk21 workload gate only withholds Forge; this keeps every cardtable job off claw-3. The fleet averages ~1 running job against 23 slots, so the capacity cost is nil."
+      },
+      "ramGb": 15,
+      "maxConcurrent": 3,
+      "minFreeMb": 2048,
+      "slice": {
+        "swapMb": 4096,
+        "$why": "name and maxMb are DERIVED — the slice is runners.slice and its ceiling is this machine's measured MemTotal minus minFreeMb, so it tracks the actual box rather than the rounded ramGb above (claw-1 measures 11885MiB, not 11*1024). Swap is capped because it was infinity: without it the kernel trades a fast OOM for hours of thrashing on claw-1's 7200rpm disk.",
+        "unitMaxMb": 4096
+      },
+      "$why-maxConcurrent": "The inverse of claw-2: most RAM in the fleet (15G) but only 4 cores, so CPU binds first. Three keeps it off the 92C thermal ceiling that tripped its watchdog on 2026-08-17.",
+      "minFreeGb": 25,
+      "ephemeral": true,
+      "residentRepos": [],
+      "$why-ephemeral": "PILOT, 2026-08-29. claw-3 mints a JIT runner per job instead of carrying 17 standing registrations. Chosen over hokon because being wrong here is cheap: it is tier3, the fleet's lowest-consequence machine, and its containment is already live. Measured against 14 days of real job history (398 jobs/12d): dropping from 17 standing runners to 0 costs roughly 13 cold mints/day at ~9s each — about two minutes of added latency per DAY, across the whole machine.",
+      "$why-residentRepos-empty": "DELIBERATELY NONE, and this is the thermal argument, not an oversight. runner-tiers.json says claw-3's demotion IS its thermal fix: an i7-6600U 15W part that sits at 96C against a 100C trip and has hard-crashed four times, kept safe by sitting unlabelled and idle in steady state. A resident runner is a standing registration, and GitHub assigns to those WITHOUT ASKING THE DISPATCHER — which reintroduces exactly what demotion removes, on the one machine that cannot afford it. R1 (a repo must keep CI through a dispatcher outage) is satisfied by hadoku_site standing on claw-1, claw-2 and hokon: the invariant is resident SOMEWHERE, not resident here.",
+      "$capabilities": {
+        "at": "2026-10-06T23:35:31.673Z",
+        "by": "fleet bootcamp",
+        "declared": ["jit-canary"],
+        "earned": [
+          "ffmpeg",
+          "gh",
+          "jdk21",
+          "jitconfig",
+          "playwright",
+          "pm2-capable",
+          "python-toolcache",
+          "python-venv",
+          "rust"
+        ],
+        "unclaimed": ["jdk21"],
+        "unearned": [],
+        "blocked": [],
+        "prereqs": [
+          {
+            "id": "ffmpeg",
+            "detail": "7.1.5-0+deb13u1"
+          },
+          {
+            "id": "python-venv",
+            "detail": "3.13.5"
+          },
+          {
+            "id": "python-toolcache",
+            "detail": "executed 3.11 3.12"
+          },
+          {
+            "id": "playwright",
+            "detail": "launched chromium-1234, 1 build(s) present"
+          },
+          {
+            "id": "gh",
+            "detail": "2.92.0 (2026-04-28)"
+          }
+        ],
+        "unprobed": []
+      }
+    },
+    "hokon": {
+      "role": "guest",
+      "cores": 12,
+      "$why-av1-nvenc": "Hardware AV1 encode, which is NOT the same capability as \"has an NVIDIA GPU\". dataplatform clip rendering encodes with av1_nvenc, and that needs an Ada-generation card: hokon's RTX 4090 probes YES, and claw-1's GTX 860M - a real NVIDIA GPU - probes NO, which is exactly the trap tests/hostcaps.py documents. claw-2 and claw-3 have Intel integrated graphics only. So hokon is the ONLY machine that can run those 22 tests, and without a label addressing it they skip on every CI run instead. Deliberately NOT hadoku-builder: this routes one narrow job to the prod host, it does not put hokon in the general CI pool.",
+      "labels": ["pm2-host", "taskauto", "av1-nvenc"],
+      "$why-hadoku-builder-added": "ADDED 2026-09-01. The av1-nvenc note above says 'Deliberately NOT hadoku-builder ... it does not put hokon in the general CI pool', and that was right while three claws held standing registrations. It stopped being right the moment claw-1 and claw-2 joined claw-3 as ephemeral: hokon then WAS the general pool, as the only node in the fleet with standing registrations, and its runners already carried the label at runtime whenever the ladder promoted it. The declaration was simply lying about what this machine does. It is also load-bearing for ALERTING: check-label-floor treats a label as ephemeralOnly when EVERY manifest machine offering it is ephemeral, and then deliberately stops requiring an online runner — correct for a JIT-only label, catastrophic for this one. With hokon silent, hadoku-builder became ephemeralOnly the instant claw-2 flipped, the floor alert switched itself off for the fleet's PRIMARY label, and label-floor reported green while zero online runners carried it and jobs queued 19 minutes. Declaring it here is what makes that guard real again. CORRECTED 2026-09-10 (wave 3-prep lane K, issue #19): the declaration is GONE and the guard is still real, by a different mechanism. `check-label-floor`'s `offerersOf` no longer reads this array — it reads `nodeOffer`, which derives the offer from `$capabilities.earned` plus the tier ladder's eligibility answer — so hokon still counts as a NON-ephemeral offerer of hadoku-builder and `strandedOnEphemeral` still fires. Verified by execution against this manifest. What hokon's runners actually carried never came from here anyway: `identityLabels` filtered the eligibility label out of every registration, which is why live GitHub showed hokon as self-hosted,Linux,X64,pm2-host,taskauto,av1-nvenc the whole time it declared it.",
+      "tierCapacity": 4,
+      "$why": "The production host — mgmt-api, the tunnel and the other production services live here — and, since 2026-08-24, the fleet BACKSTOP. It was excluded from placement until then, which meant it had runners for 2 of 26 repos and could not back anything up: when two jobs were OOM-killed on claw-2 that day, the retry had nowhere to go but the box that had just killed them. It is safe to place on because it sits in the LAST tier (tier4 since 2026-08-25, when claw-3 was demoted in above it), which leaves it unlabelled in steady state, so GitHub cannot schedule here until runner-tiers promotes it.",
+      "$why-labels": "What this MACHINE can do, projected onto every runner it hosts. `pm2-host` is required by 7 deploy/restart jobs that must execute on the PM2 host; `taskauto` by 2 tenhands jobs (`runs-on: [self-hosted, pm2-host, taskauto]`). `taskauto` was previously hand-applied to a single runner named `hokon-tenhands` and declared nowhere, so nothing could reapply it and nothing recorded that it was hokon's to offer. Declaring it here is what makes the ROUTING authoritative instead of the NAME: a runner called `hokon-tenhands` carrying these labels routes identically to one called `hokon`, which is the whole point of routing on capabilities.",
+      "ramGb": 61,
+      "maxConcurrent": 4,
+      "minFreeMb": 8192,
+      "slice": {
+        "name": "ci-runner.slice",
+        "manageUnit": false,
+        "$why-manageUnit": "ci-runner.slice is HAND-AUTHORED and carries more than this tooling manages: MemoryHigh=12G, CPUWeight=50 and IOWeight=50. The CPU and IO weights are the whole reason it exists — \"CI should lose to interactive work, not compete with it\" — written after a runaway taskauto job left the box unusable for 11 minutes on 2026-08-04 and dropped the operator's SSH. The deployer's generic slice body has none of them, so writing it would have quietly restored that condition while reporting success. Place runners into this slice and cap them; never author it. The ceilings below are still audited, so it cannot drift unnoticed either.",
+        "maxMb": 16384,
+        "swapMb": 2048,
+        "$why": "hokon is the ONLY machine that overrides both name and maxMb, and neither is cosmetic. It runs the production surface — mgmt-api, the tunnel and the other production services — and CI is a guest, so the ceiling is a deliberate 16GiB rather than the derived MemTotal-minFreeMb of ~55GiB: CI must not be allowed to grow into the space production needs. The slice is ci-runner.slice because that is what already contains both runner units; pointing the installer at the default runners.slice would MIGRATE them out of a capped slice, which is a containment change dressed up as a cap.",
+        "unitMaxMb": 8192,
+        "$why-unitMaxMb": "8192, raised from 4096 on 2026-10-10 (fleet-manager#106). 4096 was the flat per-unit cap every node carried on 2026-08-28; #26 removed it for the claws on 2026-09-12, after it OOM-killed real builds, and hokon kept it only because guests are not converged. hadoku-cardtable CI/check peaks at p50 4598 / max 5338 MB on the claws (23 job-basis samples, 2026-10-04..10), 17 of 23 above 4096, and was cgroup-OOM-killed on hokon twice on 10-10 with ~27 GB of the host free. 8192 is ~1.5x that max. It stays BELOW the 16384 slice on purpose: the slice protects production, and the per-unit cap turns a runaway like the 2026-08-04 50 GB taskauto job into one dead unit instead of a slice-wide kill of its siblings. No unit-level MemoryHigh: the slice already carries MemoryHigh=12G, and throttling one unit at its own limit is the reclaim thrash (failcnt 12.4M) that preceded the 04:02 kill."
+      },
+      "$why-maxConcurrent": "61G, but it is the PRODUCTION host — mgmt-api, the tunnel and the other production services all live here. The floor protects those, not the build: CI on hokon is already a last resort, so it should yield to prod rather than compete with it.",
+      "maxRegistrations": 32,
+      "$why-maxRegistrations": "Disk, not cores, is the bound here: 26 repos x ~835MB is ~22GB against 812G free. Set to match the 8-core claws so a runaway roster still trips the gate.",
+      "minFreeGb": 25,
+      "$capabilities": {
+        "at": "2026-10-09T20:51:14.109Z",
+        "by": "fleet bootcamp",
+        "declared": ["pm2-host", "taskauto", "av1-nvenc"],
+        "earned": [
+          "av1-nvenc",
+          "cargo-bevy",
+          "cuda",
+          "ffmpeg",
+          "gh",
+          "jdk21",
+          "jitconfig",
+          "nvdec",
+          "nvenc-h264",
+          "nvenc-hevc",
+          "playwright",
+          "pm2-capable",
+          "pm2-host",
+          "python-toolcache",
+          "python-venv",
+          "rust"
+        ],
+        "unclaimed": ["cargo-bevy", "jdk21"],
+        "unearned": [],
+        "blocked": [],
+        "prereqs": [
+          {
+            "id": "ffmpeg",
+            "detail": "7.1.5-0+deb13u1"
+          },
+          {
+            "id": "python-venv",
+            "detail": "3.13.5"
+          },
+          {
+            "id": "python-toolcache",
+            "detail": "executed 3.11 3.12"
+          },
+          {
+            "id": "playwright",
+            "detail": "launched chromium-1223, 6 build(s) present"
+          },
+          {
+            "id": "gh",
+            "detail": "2.93.0 (2026-05-27)"
+          },
+          {
+            "id": "rust",
+            "detail": "1.98.1 (48a229cea 2026-09-01) wasm32-unknown-unknown"
+          }
+        ],
+        "unprobed": []
+      }
+    },
+    "claw-5": {
+      "role": "claw",
+      "ephemeral": true,
+      "cores": 8,
+      "ramGb": 15,
+      "$measured": {
+        "at": "2026-09-02T03:15:02.033Z",
+        "by": "fleet enroll",
+        "source": "claw-5:/var/log/node-bootstrap-*.log + ssh re-probe",
+        "recordedAt": "2026-09-02T03:13:45Z",
+        "memTotalMb": 15877,
+        "diskFreeGb": 851,
+        "diskModel": "WDC WD10EZEX-08WN4A0",
+        "osId": "debian",
+        "osCodename": "trixie",
+        "kernel": "6.12.94+deb13-amd64",
+        "profile": "desktop-debian-trixie",
+        "role": "runner",
+        "fleetUser": "hadoku",
+        "sshPort": 22,
+        "sudoNoPasswd": "ok",
+        "sshKeyAuthLoopback": "ok",
+        "sshFromControl": "ok",
+        "verified": true,
+        "capabilities": ["ffmpeg", "python-venv"],
+        "unproven": ["av1-nvenc", "jitconfig"]
+      },
+      "$why": "Enrolled by `fleet enroll` from a node-bootstrap v1 record MEASURED on the box, not typed. cores and ramGb come from that measurement; ramGb is floor(MemTotal) and $measured.memTotalMb carries the unrounded figure, because the slice ceiling needs the second (claw-1 measures 11885MiB, not 11*1024). labels, maxRegistrations, maxConcurrent and tierCapacity are DELIBERATELY ABSENT: labels are eligibility and runner-tiers.json is their single writer, and the capacity numbers are decisions with consequences (claw-3's are a thermal safety control) that no measurement can make. Until a human sets them this node is declared but bounded by nothing.",
+      "labels": [],
+      "excludeRepos": {
+        "WolffM/hadoku-cardtable": "claw-5 is slow at everything (measured p10 2.07x, p50 2.91x, p90 3.54x the other claws, 100% of job kinds >=1.5x — fleet-wide the next worst is claw-3 at 43%). cardtable's vitest suite has a 5s-per-test timeout and failed outright here: run 37109806015 took 262.7s wall-clock against 55-80s on claw-4/claw-9. This is a HARD per-repo exclusion (#82), not the slow-tier spill gate (#83) — cardtable never runs on claw-5 regardless of queue depth. Added wave 3w, 2026-10-03; see docs/planning/wave3w-2026-10-03.md §A.2 and 'Settled'."
+      },
+      "maxConcurrent": 3,
+      "minFreeMb": 2048,
+      "minFreeGb": 25,
+      "tierCapacity": 2,
+      "maxRegistrations": 32,
+      "slice": {
+        "swapMb": 4096,
+        "unitMaxMb": 4096
+      },
+      "$why-declared": "DECLARED 2026-09-02, completing the enrolment `fleet enroll` left as a measured skeleton. Every value here is either measured on the box or copied from the fleet-mate this hardware matches. MEASURED: AMD FX-8350 (8 cores), 15877MB, and sda is a WDC WD10EZEX with ROTA=1 - a 7200rpm SPINNING disk, 851G free at 1% used. Toolchain probed present: node v22.23.2, python 3.13.5 with a working venv, ffmpeg, git. maxConcurrent 3 matches claw-1 rather than claw-2: this box has more RAM than either 8-core claw (15877MB vs 11885/7872) so memory would allow 4 at the measured p95 of 2970MB, but it shares claw-1's disk class and claw-1 sits at 3 for reasons the disk does not stop being. minFreeMb 2048 and minFreeGb 25 are the fleet floors for a box this size; tierCapacity 2 and maxRegistrations 32 are what both other 8-core claws carry; the slice is the fleet standard. NOT ephemeral, deliberately: on 2026-09-01 converting the second-to-last standing claw left nothing carrying hadoku-builder and queued CI for 19 minutes - see docs/planning/jit-rollout-retro-2026-09-01.md in @wolffm/fleet-manager. A second STANDING claw is what this fleet is short of. If it is ever converted, seed the JIT payload from its own standing install BEFORE the flip. NO THERMAL SENSORS are exposed (no readable /sys/class/thermal zones), so the guard that caught claw-3 at 96C cannot see this box. That is why its tier rank is provisional - see runner-tiers.json.",
+      "$capabilities": {
+        "at": "2026-10-06T23:36:47.462Z",
+        "by": "fleet bootcamp",
+        "declared": [],
+        "earned": [
+          "ffmpeg",
+          "gh",
+          "jdk21",
+          "jitconfig",
+          "playwright",
+          "pm2-capable",
+          "python-toolcache",
+          "python-venv",
+          "rust"
+        ],
+        "unclaimed": ["jdk21"],
+        "unearned": [],
+        "blocked": [],
+        "prereqs": [
+          {
+            "id": "ffmpeg",
+            "detail": "7.1.5-0+deb13u1"
+          },
+          {
+            "id": "python-venv",
+            "detail": "3.13.5"
+          },
+          {
+            "id": "python-toolcache",
+            "detail": "executed 3.11 3.12"
+          },
+          {
+            "id": "playwright",
+            "detail": "launched chromium-1234, 1 build(s) present"
+          },
+          {
+            "id": "gh",
+            "detail": "2.100.0 (2026-09-03)"
+          }
+        ],
+        "unprobed": []
+      }
+    },
+    "claw-4": {
+      "role": "claw",
+      "ephemeral": true,
+      "cores": 8,
+      "ramGb": 15,
+      "$measured": {
+        "at": "2026-09-02T04:34:03.712Z",
+        "by": "fleet enroll",
+        "source": "claw-4:/var/log/node-bootstrap-*.log + ssh re-probe",
+        "recordedAt": "2026-09-02T03:21:10Z",
+        "memTotalMb": 15936,
+        "diskFreeGb": 851,
+        "diskModel": "WDC WDS100T2B0B-00YS70",
+        "osId": "debian",
+        "osCodename": "trixie",
+        "kernel": "6.12.94+deb13-amd64",
+        "profile": "desktop-debian-trixie",
+        "role": "runner",
+        "fleetUser": "hadoku",
+        "sshPort": 22,
+        "sudoNoPasswd": "ok",
+        "sshKeyAuthLoopback": "ok",
+        "sshFromControl": "ok",
+        "verified": true,
+        "capabilities": ["ffmpeg", "python-venv"],
+        "unproven": ["av1-nvenc", "jitconfig"]
+      },
+      "$why": "Enrolled by `fleet enroll` from a node-bootstrap v1 record MEASURED on the box, not typed. cores and ramGb come from that measurement; ramGb is floor(MemTotal) and $measured.memTotalMb carries the unrounded figure, because the slice ceiling needs the second (claw-1 measures 11885MiB, not 11*1024). labels, maxRegistrations, maxConcurrent and tierCapacity are DELIBERATELY ABSENT: labels are eligibility and runner-tiers.json is their single writer, and the capacity numbers are decisions with consequences (claw-3's are a thermal safety control) that no measurement can make. Until a human sets them this node is declared but bounded by nothing.",
+      "labels": [],
+      "maxConcurrent": 3,
+      "minFreeMb": 2048,
+      "minFreeGb": 25,
+      "tierCapacity": 2,
+      "maxRegistrations": 32,
+      "slice": {
+        "swapMb": 4096,
+        "unitMaxMb": 4096
+      },
+      "$why-declared": "DECLARED 2026-09-02, completing the skeleton `fleet enroll` left. MEASURED on the box: Intel i7-6700 (8 threads), 15936MB, root on sdb with rotational=0 - a WDC WDS100T2B0B, which is the WD Blue SSD and NOT the WD10EZEX mechanical drive of the same brand that claw-5 has - 851G free, gigabit ethernet, and thermal zones that READ (27-29C), unlike claw-5 which exposes none. A second spinning Seagate sits on sda and carries nothing. maxConcurrent 3 is deliberately below what the memory allows: 4 jobs at the measured p95 of 2970MB is 11880MB against 13888MB of headroom, so 4 FITS. It stays at 3 because every other 8-thread claw runs 3 and this box has no job history yet; raise it on evidence, not on spec sheet. tierCapacity 2 and maxRegistrations 32 match the other 8-thread claws. minFreeMb 2048 is the floor for a box this size. NOT ephemeral: after 2026-09-01 the fleet needs STANDING carriers for hadoku-builder, not fewer - see docs/planning/jit-rollout-retro-2026-09-01.md in @wolffm/fleet-manager. libicu76 was installed by hand here on 2026-09-02; node-bootstrap now ships it.",
+      "residentRepos": ["WolffM/hadoku-fleet-manager"],
+      "$why-residentRepos": "RESIDENT BACKSTOP, MOVED HERE 2026-09-07 (WS-R, operator decision) — one of TWO holders, the other is claw-6. The guarantee: this repo's own CI must be able to run even when the dispatcher is broken, because this is the repo where minting gets fixed — see jit-name-length-ceiling in @wolffm/fleet-manager's memory for the 2026-09-02 deadlock this exists to prevent (check and publish both queued forever, and nothing in the checkout could break that loop). It was one registration on claw-1 until today: a single point of failure, and on the fleet's weakest non-drained claw. The rule going forward is AT LEAST TWO HOLDERS, NEVER THE WEAKEST CLAW, NEVER A DRAINED ONE — claw-4 measures second-fastest of the claws (704 MB/s sha512, fleet-hardware-baseline 2026-09-02) and was not drained at time of writing. Unlike claw-1's hand-applied label, the tier loop now processes this node's resident set through normal promotion/demotion (runner-tiers.ts), so thermal/sick demotion still applies and the label is stripped if this entry is emptied. `fleet label-floor` fails if fewer than two holders are online or any holder is drained.",
+      "$capabilities": {
+        "at": "2026-10-06T23:35:54.420Z",
+        "by": "fleet bootcamp",
+        "declared": [],
+        "earned": [
+          "cargo-bevy",
+          "ffmpeg",
+          "gh",
+          "jdk21",
+          "jitconfig",
+          "playwright",
+          "pm2-capable",
+          "python-toolcache",
+          "python-venv",
+          "rust"
+        ],
+        "unclaimed": ["cargo-bevy", "jdk21"],
+        "unearned": [],
+        "blocked": [],
+        "prereqs": [
+          {
+            "id": "ffmpeg",
+            "detail": "7.1.5-0+deb13u1"
+          },
+          {
+            "id": "python-venv",
+            "detail": "3.13.5"
+          },
+          {
+            "id": "python-toolcache",
+            "detail": "executed 3.11 3.12"
+          },
+          {
+            "id": "playwright",
+            "detail": "launched chromium-1234, 1 build(s) present"
+          },
+          {
+            "id": "gh",
+            "detail": "2.100.0 (2026-09-03)"
+          }
+        ],
+        "unprobed": []
+      }
+    },
+    "claw-6": {
+      "role": "claw",
+      "ephemeral": true,
+      "cores": 4,
+      "ramGb": 7,
+      "$measured": {
+        "at": "2026-09-02T05:16:27.890Z",
+        "by": "fleet enroll",
+        "source": "claw-6:/var/log/node-bootstrap-*.log + ssh re-probe",
+        "recordedAt": "2026-09-02T05:05:38Z",
+        "memTotalMb": 7849,
+        "diskFreeGb": 207,
+        "diskModel": "Samsung SSD 750 EVO 250GB",
+        "osId": "debian",
+        "osCodename": "trixie",
+        "kernel": "6.12.94+deb13-amd64",
+        "profile": "desktop-debian-trixie",
+        "role": "runner",
+        "fleetUser": "hadoku",
+        "sshPort": 22,
+        "sudoNoPasswd": "ok",
+        "sshKeyAuthLoopback": "ok",
+        "sshFromControl": "ok",
+        "verified": true,
+        "capabilities": ["ffmpeg", "python-venv"],
+        "unproven": ["av1-nvenc", "jitconfig"]
+      },
+      "$why": "Enrolled by `fleet enroll` from a node-bootstrap v1 record MEASURED on the box, not typed. cores and ramGb come from that measurement; ramGb is floor(MemTotal) and $measured.memTotalMb carries the unrounded figure, because the slice ceiling needs the second (claw-1 measures 11885MiB, not 11*1024). labels, maxRegistrations, maxConcurrent and tierCapacity are DELIBERATELY ABSENT: labels are eligibility and runner-tiers.json is their single writer, and the capacity numbers are decisions with consequences (claw-3's are a thermal safety control) that no measurement can make. Until a human sets them this node is declared but bounded by nothing.",
+      "labels": [],
+      "maxConcurrent": 2,
+      "minFreeMb": 1536,
+      "minFreeGb": 25,
+      "tierCapacity": 1,
+      "maxRegistrations": 32,
+      "slice": {
+        "swapMb": 4096,
+        "unitMaxMb": 4096
+      },
+      "$why-declared": "DECLARED 2026-09-02. MEASURED: Intel i5-6500 (4 cores, no hyperthreading), 7849MB, root on a Samsung SSD 750 with rotational=0, 207G free - the smallest disk in the fleet - gigabit ethernet, thermal zones readable at 27-29C. maxConcurrent 2 is MEMORY, exactly as it is on claw-2 which has almost the same RAM: 7849 less the 1536MB floor leaves 6313MB, and three jobs at the measured p95 of 2970MB is 8910MB, which does not fit. Two is 5940MB and does. minFreeMb 1536 matches claw-2's memory class rather than the 2048 the larger boxes use. tierCapacity 1 and maxRegistrations 16 match claw-3, the fleet's other 4-thread machine - 26 standing installs at ~835MB each would be 21G against 207G free, which fits but leaves far less margin than any other node, and maxRegistrations is the reconciler's refusal for exactly that. NOT ephemeral, for the same reason as claw-4. libicu76 installed by hand 2026-09-02.",
+      "residentRepos": ["WolffM/hadoku-fleet-manager"],
+      "$why-residentRepos": "RESIDENT BACKSTOP, MOVED HERE 2026-09-07 (WS-R, operator decision) — the second of TWO holders, the other is claw-4. Same guarantee, same rule: AT LEAST TWO HOLDERS, NEVER THE WEAKEST CLAW, NEVER A DRAINED ONE — see claw-4's `$why-residentRepos` for the deadlock this backstops and the full reasoning. claw-6 measures third-fastest of the claws (669 MB/s sha512, fleet-hardware-baseline 2026-09-02), ahead of claw-1 (595, the previous single holder) and claw-3/claw-5, and was not drained at time of writing. The tier loop processes this node's resident set through normal promotion/demotion, so thermal/sick demotion still applies here.",
+      "$why-maxRegistrations": "32, CORRECTED 2026-09-02 the same day it was set to 16. 16 was copied from claw-3, the fleet's other 4-core box - but claw-3 fits under 16 only because it carries excludeRepos entries, and claw-6 carries none, so all 26 covered repos place here. reconcile REFUSED the entire run over it ('26 placements against maxRegistrations 16'), correctly declining to apply a partial plan. The disk argument behind 16 was also wrong in the cautious direction: 26 standing installs at ~835MB is about 21.7G against 207G free, which is comfortable even under the 25G minFreeGb floor. Registration count is NOT this box's load bound in any case - maxConcurrent 2 is, and ci-throttle enforces it. At 26 registrations on 4 cores this node sits well above the fleet's ~2.8-runners-per-core guideline, which the reconciler's own note calls a capacity IMBALANCE rather than an error: a burst can swamp it while its peers coast. Watch it; the throttle is what stops that becoming an outage.",
+      "$capabilities": {
+        "at": "2026-09-26T18:06:58.493Z",
+        "by": "fleet bootcamp",
+        "declared": [],
+        "earned": [
+          "cargo-bevy",
+          "ffmpeg",
+          "gh",
+          "jitconfig",
+          "playwright",
+          "python-toolcache",
+          "python-venv",
+          "rust"
+        ],
+        "unclaimed": ["cargo-bevy"],
+        "unearned": [],
+        "blocked": [],
+        "prereqs": [
+          {
+            "id": "ffmpeg",
+            "detail": "7.1.5-0+deb13u1"
+          },
+          {
+            "id": "python-venv",
+            "detail": "3.13.5"
+          },
+          {
+            "id": "python-toolcache",
+            "detail": "executed 3.11 3.12"
+          },
+          {
+            "id": "playwright",
+            "detail": "launched chromium-1234, 1 build(s) present"
+          },
+          {
+            "id": "gh",
+            "detail": "2.100.0 (2026-09-03)"
+          }
+        ],
+        "unprobed": []
+      }
+    },
+    "claw-8": {
+      "role": "claw",
+      "cores": 8,
+      "ramGb": 15,
+      "maxConcurrent": 3,
+      "minFreeMb": 2048,
+      "$measured": {
+        "at": "2026-09-21T00:14:02.346Z",
+        "by": "fleet enroll",
+        "source": "claw-8:/var/log/node-bootstrap-*.log + ssh re-probe",
+        "recordedAt": "2026-09-09T05:39:08Z",
+        "memTotalMb": 15910,
+        "diskFreeGb": 1700,
+        "diskModel": "Samsung SSD 970 EVO Plus 2TB",
+        "osId": "debian",
+        "osCodename": "trixie",
+        "kernel": "6.12.107+deb13-amd64",
+        "profile": "desktop-debian-trixie",
+        "role": "runner",
+        "fleetUser": "hadoku",
+        "sshPort": 22,
+        "sudoNoPasswd": "ok",
+        "sshKeyAuthLoopback": "ok",
+        "sshFromControl": "ok",
+        "verified": true,
+        "capabilities": ["ffmpeg", "python-venv", "gh"],
+        "unproven": [
+          "av1-nvenc",
+          "nvenc-h264",
+          "nvenc-hevc",
+          "nvdec",
+          "cuda",
+          "jitconfig",
+          "python-toolcache",
+          "playwright"
+        ]
+      },
+      "$why": "Enrolled by `fleet enroll` from a node-bootstrap v1 record MEASURED on the box, not typed. cores and ramGb come from that measurement; ramGb is floor(MemTotal) and $measured.memTotalMb carries the unrounded figure, because the slice ceiling needs the second (claw-1 measures 11885MiB, not 11*1024). labels, maxRegistrations and tierCapacity are DELIBERATELY ABSENT: labels are eligibility and runner-tiers.json is their single writer. maxConcurrent and minFreeMb are DERIVED from measured MemTotal (derivedCapacity: floor = MemTotal/8 clamped [1536,8192], concurrency = min(4, floor((MemTotal-floor)/4096))) rather than left for a human, because leaving them absent meant a node could sit declared and bounded by NOTHING -- ci-throttle.sh renders a missing value as MAX_CONCURRENT=99, MIN_FREE_MB=0, and claw-7 sat in exactly that state, invisible to the deployer. A box whose memory could not be read still gets neither field: null is not zero.",
+      "$capabilities": {
+        "at": "2026-10-06T23:37:03.259Z",
+        "by": "fleet bootcamp",
+        "declared": ["taskauto"],
+        "earned": [
+          "cargo-bevy",
+          "cuda",
+          "ffmpeg",
+          "gh",
+          "jdk21",
+          "jitconfig",
+          "nvdec",
+          "nvenc-h264",
+          "nvenc-hevc",
+          "playwright",
+          "pm2-capable",
+          "python-toolcache",
+          "python-venv",
+          "rust"
+        ],
+        "unclaimed": ["cargo-bevy", "jdk21"],
+        "unearned": [],
+        "blocked": [],
+        "prereqs": [
+          {
+            "id": "ffmpeg",
+            "detail": "7.1.5-0+deb13u1"
+          },
+          {
+            "id": "python-venv",
+            "detail": "3.13.5"
+          },
+          {
+            "id": "python-toolcache",
+            "detail": "executed 3.11 3.12"
+          },
+          {
+            "id": "playwright",
+            "detail": "launched chromium-1234, 1 build(s) present"
+          },
+          {
+            "id": "gh",
+            "detail": "2.100.0 (2026-09-03)"
+          }
+        ],
+        "unprobed": []
+      },
+      "labels": ["taskauto"],
+      "$why-labels": "`taskauto` is a `role`-verified capability: bootcamp cannot earn it, so it is declared. It is here so `claude` (the one REPAIRS tool scoped to `when: taskauto`) is installed and kept current on a real node rather than only on the guest (#69). It is routing-inert TODAY: both consumers ask for `[self-hosted, pm2-host, taskauto]` and claw-8 does not offer `pm2-host`, so `satisfiesLabels` still refuses it. A job asking for `taskauto` WITHOUT `pm2-host` would now be able to land here; none exists.",
+      "maxRegistrations": 32,
+      "tierCapacity": 2,
+      "slice": {
+        "swapMb": 4096,
+        "unitMaxMb": 4096
+      },
+      "ephemeral": true,
+      "$why-declared": "Declarations mirror claw-4, the same hardware class (15 GB usable, maxConcurrent 3, tier2): labels stay EMPTY because they are earned by bootcamp, never typed; maxRegistrations 32 and tierCapacity 2 match claw-4; slice.unitMaxMb 4096 is the declared FLOOR the deployer may only widen (it computes the node ceiling since 0.22.165). ephemeral: true is set only now, after the JIT payload was verified present on the box (691 MB at ~/.hadoku/jit/payload) — an ephemeral node gets no standing install, so flipping it first would strand the node while every check reported green.",
+      "minFreeGb": 25,
+      "$why-minFreeGb": "25, the fleet value, and it is a DISK floor rather than anything to do with how fast that disk is. `claw-cleanup` requires every machine to declare one ABOVE 16, because 16 is the registration refusal: below it a node stops being able to register at all, so a floor at or under the refusal can never fire in time to prevent what it exists to prevent. Measured 2026-09-20: 1716GB of 1817GB free here, so this is an alarm threshold with enormous headroom, not a constraint. Deliberately NOT reasoned from the tier decision — claw-9 sits on tier2 because its root is a 7200rpm spindle, which is a question about latency and says nothing about how many gigabytes are on it."
+    },
+    "claw-9": {
+      "cores": 12,
+      "ramGb": 31,
+      "maxConcurrent": 4,
+      "minFreeMb": 4096,
+      "$measured": {
+        "at": "2026-09-21T04:13:00.165Z",
+        "by": "fleet enroll",
+        "source": "claw-9:/var/log/node-bootstrap-*.log + ssh re-probe",
+        "recordedAt": "2026-09-21T04:07:02Z",
+        "memTotalMb": 32003,
+        "diskFreeGb": 835,
+        "diskModel": "WDC WDS240G2G0A-00JH30",
+        "osId": "debian",
+        "osCodename": "trixie",
+        "kernel": "6.12.107+deb13-amd64",
+        "profile": "desktop-debian-trixie",
+        "role": "runner",
+        "fleetUser": "hadoku",
+        "sshPort": 22,
+        "sudoNoPasswd": "ok",
+        "sshKeyAuthLoopback": "ok",
+        "sshFromControl": "ok",
+        "verified": true,
+        "capabilities": [
+          "ffmpeg",
+          "nvenc-h264",
+          "nvenc-hevc",
+          "nvdec",
+          "cuda",
+          "python-venv",
+          "gh"
+        ],
+        "unproven": [
+          "av1-nvenc",
+          "jitconfig",
+          "python-toolcache",
+          "playwright",
+          "rust",
+          "cargo-bevy",
+          "pm2-host"
+        ],
+        "rootDisk": "sda",
+        "$why-disk-2026-09-22": "root moved HDD->SSD 2026-09-22 by the tracker, live over ssh: rsync clone of the running system onto the 223G WDS240G2G0A, GRUB on the SSD MBR plus an HDD-menu entry defaulting to it; the old HDD root is intact and bootable as fallback. Disk read 177->491 MB/s. CORRECTION: the earlier note that the HDD had 7 reallocated sectors was wrong — the HDD reads 0/0; the 7 belong to THIS SSD (29,886h, PASSED, normal wear). The SSD carries root now; watch its SMART at doctor cadence."
+      },
+      "$why": "Enrolled by `fleet enroll` from a node-bootstrap v1 record MEASURED on the box, not typed. cores and ramGb come from that measurement; ramGb is floor(MemTotal) and $measured.memTotalMb carries the unrounded figure, because the slice ceiling needs the second (claw-1 measures 11885MiB, not 11*1024). labels, maxRegistrations and tierCapacity are DELIBERATELY ABSENT: labels are eligibility and runner-tiers.json is their single writer. maxConcurrent and minFreeMb are DERIVED from measured MemTotal (derivedCapacity: floor = MemTotal/8 clamped [1536,8192], concurrency = min(4, floor((MemTotal-floor)/4096))) rather than left for a human, because leaving them absent meant a node could sit declared and bounded by NOTHING -- ci-throttle.sh renders a missing value as MAX_CONCURRENT=99, MIN_FREE_MB=0, and claw-7 sat in exactly that state, invisible to the deployer. A box whose memory could not be read still gets neither field: null is not zero.",
+      "$capabilities": {
+        "at": "2026-10-06T23:37:25.992Z",
+        "by": "fleet bootcamp",
+        "declared": [],
+        "earned": [
+          "cargo-bevy",
+          "cuda",
+          "ffmpeg",
+          "gh",
+          "jdk21",
+          "jitconfig",
+          "nvdec",
+          "nvenc-h264",
+          "nvenc-hevc",
+          "playwright",
+          "pm2-capable",
+          "python-toolcache",
+          "python-venv",
+          "rust"
+        ],
+        "unclaimed": ["cargo-bevy", "jdk21"],
+        "unearned": [],
+        "blocked": [],
+        "prereqs": [
+          {
+            "id": "ffmpeg",
+            "detail": "7.1.5-0+deb13u1"
+          },
+          {
+            "id": "python-venv",
+            "detail": "3.13.5"
+          },
+          {
+            "id": "python-toolcache",
+            "detail": "executed 3.11 3.12"
+          },
+          {
+            "id": "playwright",
+            "detail": "launched chromium-1234, 1 build(s) present"
+          },
+          {
+            "id": "gh",
+            "detail": "2.101.0 (2026-09-15)"
+          }
+        ],
+        "unprobed": []
+      },
+      "role": "claw",
+      "labels": [],
+      "maxRegistrations": 32,
+      "tierCapacity": 2,
+      "ephemeral": true,
+      "$why-jit": "labels is EMPTY and that is the all-JIT shape, not an omission — same as claw-1 and claw-8. A JIT runner is minted per job with its labels on the mint call, so a standing labels array would describe registrations this node does not keep. ephemeral is set only AFTER the payload was seeded: `fleet seed-cache --machine claw-9 --confirm` put Runner.Listener under ~/.hadoku/jit/payload on 2026-09-20 and bootcamp then EARNED jitconfig by executing it. Flipping ephemeral before that is the known way to make a node mint runners it cannot start. maxRegistrations/tierCapacity match the fleet's other tier2 claws; maxConcurrent 4 and minFreeMb 4096 were DERIVED by enroll from the measured 32GB rather than copied.",
+      "slice": {
+        "swapMb": 4096,
+        "unitMaxMb": 4096,
+        "$why": "name and maxMb are DERIVED — the slice is runners.slice and its ceiling is this machine's measured MemTotal minus minFreeMb, so it tracks the box rather than the rounded ramGb. swapMb is capped for claw-1's reason and it applies harder here: this node's root is a 7200rpm WDC WD10EZEX, and uncapped swap trades a fast OOM for hours of thrashing on a spinning disk. unitMaxMb is 4096 to MATCH THE FLEET, not because 4096 fits this box — 32GB and a 4-job cap leave room for roughly 7000MB a unit. It is deliberately not raised here. Every job-memory figure the fleet has (p50 927MB, p95 3337MB over 390 jobs) was measured against a 4096 ceiling, and a node with a different ceiling produces numbers that cannot be compared with the other eight. Worth knowing separately: that ceiling CENSORS at least one job — hadoku_site/analyze hit exactly 4096MB and was throttled against it 27,258 times, so its real demand is unknown and larger. This is the first node with the headroom to find out. Raising it should be a deliberate fleet experiment with the result written down, not a number chosen while onboarding a box."
+      },
+      "minFreeGb": 25,
+      "$why-minFreeGb": "25, the fleet value, and it is a DISK floor rather than anything to do with how fast that disk is. `claw-cleanup` requires every machine to declare one ABOVE 16, because 16 is the registration refusal: below it a node stops being able to register at all, so a floor at or under the refusal can never fire in time to prevent what it exists to prevent. Measured 2026-09-20: 831GB of 885GB free here, so this is an alarm threshold with enormous headroom, not a constraint. Deliberately NOT reasoned from the tier decision — claw-9 sits on tier2 because its root is a 7200rpm spindle, which is a question about latency and says nothing about how many gigabytes are on it."
+    }
+  },
+  "autoInclude": {
+    "owner": "WolffM",
+    "excludeForks": true,
+    "excludeArchived": true,
+    "pushedWithinDays": 180,
+    "minWorkflows": 2,
+    "$why-minWorkflows": "A repo with no CI does not need a 835 MB runner install on each of three claws. One workflow is the signature of the dormant tail here (a single pages/deploy job on a years-idle project); two is the signature of a maintained repo. This is a PROXY, and it is overridden by direct evidence: a repo whose workflows actually say `self-hosted` gets coverage at any workflow count, because the shape the proxy gets wrong (one workflow, targeting the fleet) is exactly the shape that queues forever and reports as a benign cancellation. hadoku-games-host sat that way for eleven consecutive nightly runs, 2026-08-13 to 2026-08-23. An explicit entry below still wins over both.",
+    "$why-pushedWithinDays": "Recency alone was the original proposal and is not sufficient: 40 repos fall inside 180 days and 14 of those have no .github/workflows at all. Recency AND CI presence together are the entitlement signal, the same shape the keys:github-secret-seed cron uses."
+  },
+  "repos": {
+    "WolffM/hadoku-registry": {
+      "$why": "Live infra with only one workflow, so autoInclude's minWorkflows would drop it. It already has coverage on all three claws and should keep it."
+    },
+    "WolffM/secretProject": {
+      "skip": true,
+      "$why": "Private scratch repo. One workflow, no fleet CI intent — the original spec names it as the explicit-skip example."
+    },
+    "WolffM/hadoku-promptsmith-legacy": {
+      "skip": true,
+      "$why": "Superseded by hadoku-promptsmith. Kept for history; its single workflow should not pull three runner installs."
+    },
+    "WolffM/watchparty": {
+      "skip": true,
+      "$why": "Superseded by hadoku-watchparty, which is the repo that actually carries coverage. No .github/workflows (verified 2026-08-08)."
+    },
+    "WolffM/epicmediabattle": {
+      "skip": true,
+      "$why": "Dormant, hosted CI, no fleet intent — the same shape as secretProject and hadoku-promptsmith-legacy above. One workflow each, last real activity months ago (webcomicreact has never run one). The 2026-08-30 org-wide runs-on sweep converted all three to the fleet form, which is the ONE thing that overrides minWorkflows, so they auto-included and the reconciler planned nine registration pairs — over the safety cap, paging @here. They are back on ubuntu-latest in their own repos. The root cause was that the evidence test read COMMENTS (fixed in scripts/lib/yaml-comments.mjs); this entry is the durable half, so a second workflow landing here does not silently pull them back in. skip rather than ignore because they genuinely SHOULD have no runners, and they have none, so it manufactures no orphans."
+    },
+    "WolffM/upcominganimego": {
+      "skip": true,
+      "$why": "Dormant, hosted CI, no fleet intent — the same shape as secretProject and hadoku-promptsmith-legacy above. One workflow each, last real activity months ago (webcomicreact has never run one). The 2026-08-30 org-wide runs-on sweep converted all three to the fleet form, which is the ONE thing that overrides minWorkflows, so they auto-included and the reconciler planned nine registration pairs — over the safety cap, paging @here. They are back on ubuntu-latest in their own repos. The root cause was that the evidence test read COMMENTS (fixed in scripts/lib/yaml-comments.mjs); this entry is the durable half, so a second workflow landing here does not silently pull them back in. skip rather than ignore because they genuinely SHOULD have no runners, and they have none, so it manufactures no orphans."
+    },
+    "WolffM/webcomicreact": {
+      "skip": true,
+      "$why": "Dormant, hosted CI, no fleet intent — the same shape as secretProject and hadoku-promptsmith-legacy above. One workflow each, last real activity months ago (webcomicreact has never run one). The 2026-08-30 org-wide runs-on sweep converted all three to the fleet form, which is the ONE thing that overrides minWorkflows, so they auto-included and the reconciler planned nine registration pairs — over the safety cap, paging @here. They are back on ubuntu-latest in their own repos. The root cause was that the evidence test read COMMENTS (fixed in scripts/lib/yaml-comments.mjs); this entry is the durable half, so a second workflow landing here does not silently pull them back in. skip rather than ignore because they genuinely SHOULD have no runners, and they have none, so it manufactures no orphans."
+    }
+  },
+  "$why-concurrency": "maxConcurrent / minFreeMb are enforced on the MACHINE by scripts/admin/ci-throttle.sh, installed as each runner's ACTIONS_RUNNER_HOOK_JOB_STARTED. They are the only real concurrency limit in the fleet: registrations are per-repo, so N registered repos means N independent listeners and up to N simultaneous jobs, and GitHub offers no way to tell it a machine is full. maxRegistrations bounds that N but at 26 where ~3 is safe; tierCapacity is a promotion threshold read by a 60s poll, not a limit. Deploy with `pnpm run fleet:throttle -- --confirm`.",
+  "$why-labels-are-capabilities": "Every entry in a machine's `labels` is a CAPABILITY id defined in @wolffm/fleet-manager src/capabilities.ts, and `fleet capability-schema` refuses a label that is not. The registry states, per capability, whether it is IDENTITY (a fact about the machine, projected onto every runner the reconciler registers) or ELIGIBILITY (a routing lever the tier monitor rewrites every few minutes). `hadoku-builder` is the only ELIGIBILITY one, which is why the registration path derives it from the tier ladder rather than from this array: a machine a tier policy demotes must not be born schedulable. STRIPPED 2026-09-10 (@wolffm/fleet-manager wave 3-prep lane K, issue #19): it is no longer listed here at all. Its WRITER is now `fleet bootcamp` — a node carries it iff it proves the demand-derived required set — and `nodeOffer` in src/capabilities.ts is the ONE function that answers \"what labels does this node offer\", read by every JIT mint, warm listener, placement check and reconciled registration. This array now carries only what no probe can settle: a `role` capability (pm2-host, taskauto) or a `mint`-verified one (jit-canary). A probe-verified label here is REPLACED by `$capabilities.earned`, and `fleet label-floor` fails naming the node if the two disagree. Do NOT re-add `hadoku-builder`: the gate will not catch it (a declaration and the derivation agreeing is the passing case), and it re-creates the hand-applied label this work retired. A dead `defaults.labels` block sat above `toolchain` until 2026-08-30 declaring the same thing fleet-wide; nothing had ever read it.",
+  "$why-display-only": "`cores` and `ramGb` DECIDE NOTHING. They render in the command station's fleet panel and in a generated comment line, and that is all — every consumer that needs the real number measures it instead: runner-tiers probes `nproc` (the manifest value is only a fallback for the UI column when the probe has not run), and the cgroup slice derives its ceiling from measured MemTotal because `ramGb` is rounded (claw-1 measures 11885MiB, not 11*1024). Keep them accurate for the operator; never gate on them. Every OTHER field here is load-bearing: maxConcurrent/minFreeMb (ci-throttle), maxRegistrations (the reconciler's capacity refusal), tierCapacity (promotion threshold), minFreeGb (ci:claw-cleanup), slice (the cgroup deployer), labels/excludeRepos/placement/ephemeral/residentRepos (placement).",
+  "$why-minFreeGb": "Free-space floor per machine, asserted by ci:claw-cleanup AFTER it has cleaned. That ordering is the point: the check only fires when the REMEDY WAS NOT ENOUGH, so it is silent on every normal day and means something on the day it speaks. 25 GB is chosen against the reconciler's own registration refusal — MIN_FREE_GB_AFTER 15 + INSTALL_GB 1 = it declines below 16 GB — so this warns with ~9 GB of runway instead of surfacing as a failed reconcile. claw-2 sat at 24 GB on 2026-08-24, i.e. already under this floor, with nothing watching."
+}

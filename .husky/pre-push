@@ -1,0 +1,55 @@
+#!/bin/sh
+
+# --- worktree preamble ---------------------------------------------------
+# Same reasoning as pre-commit: core.hooksPath points at .husky (tracked), so
+# this fires from a linked worktree too. Several agents share this checkout and
+# every one of them pushes from a worktree.
+[ "${HUSKY-}" = "0" ] && exit 0
+
+common_dir=$(git rev-parse --git-common-dir)
+case "$common_dir" in /*) ;; *) common_dir="$PWD/$common_dir" ;; esac
+main_checkout=$(dirname "$common_dir")
+if [ ! -e node_modules ] && [ -e "$main_checkout/node_modules" ]; then
+	ln -s "$main_checkout/node_modules" node_modules 2>/dev/null || true
+fi
+
+# The remote may have moved since the last fetch — and it moves often here,
+# because other agents are pushing to the same branch. Comparing against a
+# stale origin/main is the exact blind spot this gate exists to close, so
+# refresh it first. Failure is non-fatal: offline must not block a push, and
+# publish.yml still refuses a stale version.
+git fetch -q origin main 2>/dev/null || true
+
+echo "🔢 Checking the version is ahead of origin/main..."
+node scripts/check-version-ahead.mjs || exit 1
+
+# --- correctness gate ----------------------------------------------------
+# WHY THIS EXISTS: on 2026-09-08 a push put 19 failing job-history tests onto
+# main (run 34184085429) and the fleet alerted @here. Nothing local had run the
+# suite: pre-commit stops at lint/format/typecheck/version-bump, and everything
+# above in this file guards PUBLISHING (is the version ahead) rather than
+# whether the code works. `pnpm run test` fired in no hook at all.
+#
+# WHY THE WHOLE `check` AND NOT A HAND-PICKED SUBSET: ci.yml runs exactly
+# `pnpm run check`. A local gate that runs a DIFFERENT set is theatre — it
+# drifts from CI and starts passing things CI rejects, which is worse than no
+# gate because it is trusted. One name, one definition, both sides.
+#
+# WHY PRE-PUSH AND NOT PRE-COMMIT: a broken commit costs its author a moment; a
+# broken PUSH pages everyone. This is the last point where it is still private.
+#
+# COST: measured 11s total on this repo (format 3s, lint 3s, typecheck 1s,
+# build 1s, test 3s). That is not a reason to skip it.
+#
+# ESCAPE HATCH: `HUSKY=0 git push` or `git push --no-verify`. Use it for a
+# genuine emergency, not to get past a red suite — a red suite pushed is a red
+# main, and main being green is the whole point.
+echo "🧪 Running the full CI check (pnpm run check)..."
+if ! pnpm run check; then
+	echo ""
+	echo "❌ 'pnpm run check' FAILED — this is exactly what CI will run."
+	echo "   Pushing now would turn a local failure into an @here alert."
+	echo "   Fix it, or bypass deliberately with: git push --no-verify"
+	exit 1
+fi
+echo "✅ check passed — safe to push."

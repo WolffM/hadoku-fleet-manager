@@ -1,0 +1,21 @@
+{
+  "$comment": "Exemptions for check-tier-fleet.mjs, keyed 'repo:path'. Every entry needs a `why`. The bar is the same as the in-repo allowlist: an INVERSE list (tiers that must be REFUSED) is the only routinely-legitimate shape, because no syntax distinguishes it from a stale one. 'It's only a test' and 'it's only a script' are NOT reasons — a stale tier list in a test means the tier is untested, not exempt. A stale entry (no longer matching) fails the check, so exemptions cannot outlive their reason.",
+  "allowed": [
+    {
+      "file": "hadoku-task:worker/test/tier-gating-verify.ts",
+      "why": "Inverse list: the tiers an ADMIN-gated route must REFUSE. It omits `admin` because admin is the one tier that passes — completing it would invert the assertion. Must still be reviewed on every new tier: a tier added to the ladder and not added here is untested, not exempt."
+    },
+    {
+      "file": "hadoku-dataplatform:server/tests/test_tube_visibility.py",
+      "why": "Inverse list. `test_free_never_unlocks_a_private_clip` iterates ('public','friend','service','wife') asserting each is REFUSED a private clip, and omits `admin` because admin is the one tier that IS admitted — the very next test, `test_admin_still_sees_private_regardless_of_free`, asserts that. Completing the list would invert the assertion."
+    },
+    {
+      "file": "hadoku-promptsmith:tests/test_tunnel_server.py",
+      "why": "Two inverse lists, both 'service and above'. `test_service_and_above_are_admitted` (L111) and `test_service_and_above_are_not_marked_public` (L160) each parametrize ('admin','wife','service') and omit `friend` BECAUSE friend ranks below service and must not be admitted — the refusal is asserted separately a few lines up. Adding friend would assert the opposite of the gate."
+    },
+    {
+      "file": "hadoku-pygmalion:tests/test_tiers.py",
+      "why": "Not a gate vocabulary: `[\"admin\", \"friend\"]` is a SEED's tier list — test data reproducing the shipped shape — and the assertion is that a `service` caller outranks it (the 2026-08-17 regression this module exists for). The neighbouring parametrize DOES name all four tiers, so the ladder itself is covered; completing this literal would destroy the fixture it reproduces."
+    }
+  ]
+}

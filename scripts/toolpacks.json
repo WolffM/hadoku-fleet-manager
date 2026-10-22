@@ -1,0 +1,28 @@
+{
+  "$comment": "The INSTRUMENTS a node needs so `fleet benchmark` can see it honestly. NOT the CI toolchain -- what a box can BUILD is capabilities.ts and `fleet toolchain`, a separate question with a separate prober. This file is the answer to 'what must be installed before a measurement of this machine is trustworthy'.",
+  "$why-derived-not-declared": "`when` is evaluated against a node's OWN scan record, never against a list someone typed. A box with a radio needs iw whether or not anybody remembered to say so, and a desktop with no radio must not have iw installed to satisfy a declaration. This is the same rule bootcamp applies to labels: the machine's observed shape decides, not a manifest entry.",
+  "$why-scan-must-work-without-these": "The pack is CHOSEN FROM the scan, so the scan has to run on a box that has none of it. That is a circular dependency unless every reader degrades -- which is why each one emits `unk` with a reason instead of failing. Do not add a reader that hard-requires a pack tool.",
+  "packs": {
+    "base": {
+      "when": "always",
+      "why": "Every node. Without these the record has holes on any hardware.",
+      "apt": ["util-linux", "pciutils", "curl", "openssl", "smartmontools", "dmidecode"],
+      "bins": ["lscpu", "lspci", "curl", "openssl", "smartctl", "dmidecode"]
+    },
+    "wifi": {
+      "when": "wireless",
+      "why": "A wireless rate is negotiated per frame, so /sys/class/net/*/speed is empty on every radio and `iw dev <if> link` is the only source. Three claws are wifi-primary and it is their hard ceiling on checkout and install.",
+      "apt": ["iw"],
+      "bins": ["iw"]
+    },
+    "python-pip": {
+      "when": "ciClaw",
+      "why": "Wave 1 P3.4/P1.6, the 'pip hole': hadoku-pygmalion's CI runs `python -m pip install`, and until this pack existed nothing had ever verified pip was actually there -- both node profiles in manifests/node-profiles.json declare `python3-pip`, but bootstrap only applies a profile at enrollment, and claw-1/claw-2 had drifted from that declaration with no reconciler behind it. `ciClaw` (never `pm2-host`) because a production host never runs a CI job that needs it. `capabilities.ts`'s `python-pip` probe (owned by workstream P) is the standing guard against this drifting back a second time.",
+      "apt": ["python3-pip"],
+      "bins": ["pip3"]
+    }
+  },
+  "$why-no-ethtool": "DELIBERATELY EXCLUDED. It was the obvious candidate and it turned out to add nothing: /sys/class/net/<if>/speed and /duplex already carry both numbers the readers use, on every node including the one box that has no ethtool. What ethtool adds beyond them is static capability data -- supported modes, auto-negotiation, port type -- and no capacity decision reads it. Installing a package on seven machines to duplicate a file the kernel already exports is cost with no signal.",
+  "$why-no-nvme-cli": "Also excluded. smartctl already parses the NVMe log -- powerOnHours, percentageUsed, availableSpare and mediaErrors all come back from it -- so nvme-cli would be a second tool for data we already have.",
+  "$why-gpu-is-not-here": "nvidia-smi is a driver artifact, not a utility to apt-install, and what the fleet needs from a GPU is whether it can ENCODE -- which capability-probe.sh answers by encoding. That belongs to capabilities, not to instruments."
+}

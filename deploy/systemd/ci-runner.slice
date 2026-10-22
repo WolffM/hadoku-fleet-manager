@@ -1,0 +1,69 @@
+[Unit]
+Description=Self-hosted CI runners (memory-isolated from PM2 services)
+Documentation=file:///home/hadoku/repos/hadoku_site/ecosystem.config.cjs
+Before=slices.target
+
+# Why this slice exists
+#
+# Both GitHub Actions runners used to be PM2 apps, so every CI job executed
+# inside /system.slice/pm2-hadoku.service — the same cgroup as mgmt-api, the
+# tunnel and 20 other services, with MemoryMax=infinity.
+#
+# On 2026-08-04 that cgroup was blown out by ComfyUI — launched by the
+# `conjure` PM2 app via backend/launch_comfyui.sh — which reached 50.2 GB RSS /
+# 127 GB virtual, exhausted 61 GB of RAM and thrashed the host for ~11 minutes.
+#
+# CI did NOT cause that incident. An earlier revision of this file said it did;
+# the taskauto job that appeared to hang for 17 minutes was a victim of the
+# frozen host, not its cause. See tenhands/docs/incident-2026-08-04-ci-failures.md.
+#
+# The reason the slice still exists: CI sat in the same unbounded cgroup and
+# could have done exactly the same thing, and a CI job is far likelier to
+# allocate without limit than a steady-state service is. Capping
+# pm2-hadoku.service protects the host as a whole; this slice additionally stops
+# CI and the production services from drawing on one shared budget, so a runaway
+# job can only ever kill CI.
+#
+# SIZING
+#   Measured 2026-08-05: pm2-hadoku.service peaked at 11.04 GB with CI and all
+#   22 services sharing it; services-only baseline is ~4.5-5 GB, putting CI's
+#   share around 6 GB under normal concurrent load (two runners, a
+#   `pnpm install && pnpm run build`, and a full `tsc`). Note that baseline
+#   excludes a ComfyUI balloon — that lives in pm2-hadoku.service, not here.
+#
+#   MemoryHigh=12G  ~2x CI's observed share. Soft limit: throttles allocation
+#                   and forces reclaim, so a runaway slows before it dies.
+#   MemoryMax=16G   ~2.7x. Hard limit: cgroup OOM kill, scoped to CI.
+#   MemorySwapMax=2G  bounds swap so CI cannot repeat the 24 GB swap storm
+#                   that froze the box — that thrash, not the RAM use itself,
+#                   is what killed the SSH session.
+#
+#   A CI job that tried what ComfyUI did would now die at 16 GB, and nothing
+#   outside this slice would notice.
+#
+# Raise these if a legitimate CI job is ever OOM-killed. Check headroom with:
+#   systemctl show ci-runner.slice -p MemoryPeak -p MemoryHigh -p MemoryMax
+#
+# Two real jobs measured 2026-08-05 right after the migration ("drain the
+# board" and a "redeploy") peaked the slice at 0.79 GB — 20x under the cap.
+#
+# NAMING: systemd treats '-' in a slice name as a hierarchy separator, so this
+# is a CHILD of an implicit ci.slice and its cgroup path is
+# /ci.slice/ci-runner.slice. Inspect it with:
+#   systemd-cgls /ci.slice/ci-runner.slice
+# The short path /ci-runner.slice does not exist and errors out. The limits
+# below still bind; the implicit parent is uncapped, which is harmless because
+# nothing else is ever placed in it.
+
+[Slice]
+MemoryAccounting=yes
+MemoryHigh=12G
+MemoryMax=16G
+MemorySwapMax=2G
+
+# CI should lose to interactive work, not compete with it. This is the reason
+# the box stayed unusable for 11 minutes rather than merely slow.
+CPUAccounting=yes
+CPUWeight=50
+IOAccounting=yes
+IOWeight=50

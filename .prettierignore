@@ -1,0 +1,29 @@
+dist/
+node_modules/
+pnpm-lock.yaml
+manifests/fleet-runner-coverage.json
+.claude/worktrees/
+
+# Vendored history and other agents' scratch output. Same class of bug as
+# .claude/worktrees/ above: git does not track these, so `prettier --write .` in
+# the pre-commit hook reformats them and NOTHING shows a diff to undo. It
+# rewrote 20 files across archive/minions/ on 2026-08-30 — the 982-line bazooka
+# and both claw retrospectives among them. They were recoverable only because
+# that directory happens to carry its own .git. Historical documents are
+# EVIDENCE; reflowing them is not a style improvement.
+archive/
+.playwright-mcp/
+
+# Per-workstream handoff briefs. Manager scaffolding, not repo content; see the
+# matching entries in .gitignore and eslint.config.js. All three, or none.
+docs/handoff/
+
+# Python bytecode — untracked, binary. See the matching entries in .gitignore
+# and eslint.config.js. All three, or none.
+__pycache__/
+*.pyc
+
+# The private planning docs, symlinked in by scripts/attach-private.sh. Their
+# formatting is the private repo's business. See the matching entries in
+# .gitignore and eslint.config.js. All three, or none.
+docs/planning

@@ -1,0 +1,29 @@
+[Unit]
+# Step 1d of docs/planning/fleet-rearchitecture-2026-08-25.md — sample per-job
+# ANON memory so steps 6/9/10 have a real distribution to size limits from.
+# Observation only: it reads cgroup files and appends JSONL. It never signals a
+# process and never writes outside $XDG_STATE_HOME/hadoku/runner-mem/.
+#
+# INSTALLED BY THE THROTTLE PAYLOAD (#47), not by hand. Until 2026-09-22 this
+# unit and its script were copied onto three claws by hand and onto no others —
+# claw-4/5/6/8/9 never had a harvester at all. `fleet throttle --confirm` now
+# writes both files (the script lands in %h/.hadoku, beside the hook that
+# self-heals it, because that is the directory the payload already owns and
+# hashes) and runs `enable --now`; the ~/.local/bin copy the hand installs
+# left behind is removed by the same payload. The STATE the sampler writes
+# still lives under $XDG_STATE_HOME — a sample log is data, not a program.
+Description=CI runner per-job anon memory harvest
+Documentation=file:///home/hadoku/repos/hadoku_site/docs/planning/fleet-rearchitecture-2026-08-25.md
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.hadoku/runner-mem-harvest.py
+Restart=always
+RestartSec=10
+# It must not become the thing it measures.
+MemoryMax=128M
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

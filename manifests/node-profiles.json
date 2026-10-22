@@ -1,0 +1,481 @@
+{
+  "version": 1,
+  "$comment": "Node profiles — what a node of a given SHAPE must be, declared once, as data. Read by `fleet usb-prep` (which copies the chosen profile onto the stick) and by `scripts/node-bootstrap.sh` (which reads it on the new node and converts the box). Resolved through FLEET_MANIFEST_DIR by scripts/lib/node-profiles.mjs — never by __dirname arithmetic, and a missing file THROWS.",
+  "$why-data-not-flags": "garage-server-bazooka.sh took --hostname, --lan-cidr, --ssh-port, --ssh-pubkey and --surface. Every one of those is a property of a NODE, and every one of them lived only in the operator's shell history: claw-2 and claw-3 needed --surface and claw-1 did not, and the only record of which was a sentence in a retrospective. That is the same mistake fleet-runner-manifest.json was rewritten to fix on 2026-08-23, one layer down — there, a property of a machine was stored ten times inside repositories and so nothing could enforce it. A flag is a fact nothing can audit, diff, or re-apply. A profile is.",
+  "$why-no-labels": "A profile declares NOTHING a runner label would carry. `hadoku-builder` is the fleet's only eligibility label and runner-tiers is its single writer (src/capabilities.ts, `eligibilityLabels()`); identity labels like `pm2-host` and `av1-nvenc` are facts about a specific box, not about its shape. A profile that shipped labels would let a freshly imaged node arrive already claiming to be schedulable, before anything had probed it. `role` below is the closest thing, and it is deliberately coarse.",
+  "$why-two-profiles": "Exactly two, on purpose. `desktop-debian-trixie` is for the two new garage desktops; `laptop-debian-trixie` describes the three claws that already exist, so the format is proven against hardware rather than against an intention. A format validated only by the thing it was invented for is not validated.",
+  "profiles": {
+    "desktop-debian-trixie": {
+      "$why": "The two new garage desktops. Everything the fleet's power policy assumed until now was laptop-shaped — logind lid handling, a battery, a Surface kernel — and a desktop has to be able to SAY it has no lid rather than inherit an ignore rule that happens to be harmless. `power.lid: \"none\"` is a claim node-bootstrap.sh verifies against /proc/acpi/button/lid: run this profile on a laptop by mistake and it refuses, because that mistake leaves a fleet node suspending on lid close.",
+      "role": "runner",
+      "$why-role": "DECLARED, not measured — these boxes are being added for CI capacity. Change to \"both\" when an agent is wanted on them; that turns on the agent prerequisites in node-bootstrap.sh and nothing else. Nothing in this package reads `role` to route work: it is the answer to 'what is this node FOR', which the enrollment record carries so a human deciding the manifest entry does not have to remember.",
+      "os": {
+        "distro": "debian",
+        "codename": "trixie",
+        "versionId": "13",
+        "$why-trixie": "Chosen by the operator. Debian 13 is what the three claws already run, so the toolchain drift surface stays one distro wide. Trixie's packet filter is nftables even though UFW writes iptables rules — see network.$why-nft-flush.",
+        "kernelExtras": {
+          "$why": "Keyed by the string in /sys/class/dmi/id/sys_vendor, so the node decides from what it IS rather than from a --surface flag somebody had to remember. Empty here is a DECLARATION, not an omission: no desktop chassis we own needs a vendor kernel, and node-bootstrap.sh refuses a profile that leaves the key out entirely."
+        }
+      },
+      "power": {
+        "$why": "A fleet node that sleeps is a fleet node that is 'offline' with no explanation, and the tier monitor cannot tell that apart from a dead box. Every target below is masked rather than disabled — a masked unit cannot be pulled in by a dependency, and `systemctl disable` on sleep.target does not stop something else wanting it.",
+        "chassis": "desktop",
+        "lid": "none",
+        "battery": "none",
+        "maskSleepTargets": [
+          "sleep.target",
+          "suspend.target",
+          "hibernate.target",
+          "hybrid-sleep.target",
+          "suspend-then-hibernate.target",
+          "systemd-suspend.service",
+          "systemd-hibernate.service",
+          "systemd-hybrid-sleep.service",
+          "systemd-suspend-then-hibernate.service"
+        ],
+        "logind": {
+          "HandleSuspendKey": "ignore",
+          "HandleSuspendKeyLongPress": "ignore",
+          "HandleHibernateKey": "ignore",
+          "HandleHibernateKeyLongPress": "ignore",
+          "HandlePowerKey": "ignore",
+          "HandlePowerKeyLongPress": "poweroff",
+          "HandleRebootKey": "reboot",
+          "HandleRebootKeyLongPress": "poweroff",
+          "IdleAction": "ignore",
+          "IdleActionSec": "infinity"
+        },
+        "consoleBlank": false,
+        "wifiPowersave": false,
+        "watchdog": {
+          "$why": "max-load-1 is 8x the MEASURED core count, never a constant. Load is not core-normalised and a CI runner's whole purpose is saturation: a fixed 24 shut claw-1 down three times in one hour on 2026-08-17, logging 'load average too high' at a 1-minute load of 40 on 8 cores. The temperature check is pointed at the x86_pkg_temp zone found BY TYPE — thermal_zone0 is an ambient zone on every machine the fleet owns, it read 27C against a 95C limit, and the package zone's index is 3 on claw-1, 7 on claw-2 and 8 on claw-3.",
+          "device": "/dev/watchdog",
+          "modules": ["iTCO_wdt", "sp5100_tco", "softdog"],
+          "$why-modules": "Tried in order, first one that loads wins. iTCO_wdt is Intel PCH, sp5100_tco is AMD; a desktop may be either and the bazooka's hardcoded iTCO_wdt would have silently left an AMD box with no watchdog device and a daemon that fails to start. softdog is the last resort — it catches a wedged userspace but not a wedged kernel, so it is worth having and worth knowing about.",
+          "timeoutSec": 15,
+          "intervalSec": 5,
+          "maxLoadPerCore": 8,
+          "minMemoryPages": 1,
+          "retryTimeoutSec": 60,
+          "maxTempMilliC": 95000,
+          "systemd": {
+            "RuntimeWatchdogSec": "30",
+            "RebootWatchdogSec": "10min",
+            "ShutdownWatchdogSec": "10min"
+          }
+        }
+      },
+      "users": {
+        "$why": "ONE user. garage-server-bazooka.sh created `openclaw` beside the invoking `hadoku` and hardened sshd for both, which doubled every key, group and home-permission question and is half of why the SSH lockout cluster took three machines to find. provision-fleet.mjs states the operational half: without passwordless sudo the system units cannot be written remotely, so `fleet slice` and `fleet throttle` report a verify failure that no amount of retrying fixes. hokon is the standing proof — it has no NOPASSWD rule and its SYSTEM units still cannot be managed from here.",
+        "fleetUser": "hadoku",
+        "shell": "/bin/bash",
+        "sudo": "nopasswd",
+        "groups": ["sudo", "adm", "systemd-journal"],
+        "$why-groups": "adm and systemd-journal are not decoration. Without them the account reads only its OWN journal, so `journalctl -k` returns zero rows and exits 0 — 'you are not allowed to look' rendered as 'nothing is wrong'. That is why the 2026-08-17 crashes could not be diagnosed.",
+        "linger": true,
+        "homeMode": "755",
+        "$why-homeMode": "sshd SILENTLY rejects authorized_keys when the home directory is group-writable. Debian's useradd left it that way on claw-1 and the failure looks exactly like a wrong key."
+      },
+      "network": {
+        "lanCidr": "192.0.2.0/24",
+        "$why-lanCidr": "A PLACEHOLDER, and node-bootstrap.sh REFUSES to run with it. 192.0.2.0/24 is RFC 5737 TEST-NET-1, the range reserved for documentation. The LAN is a property of the SITE, not of a node SHAPE, and this manifest is published — so the real range is supplied by the operator through FLEET_LAN_CIDR and never committed. Bootstrapping with the placeholder still in place would open ufw to a network this box is not on and leave SSH-from-LAN shut: the same lockout class every retrospective this profile was built from is about. trustedCidrs carries the placeholder too, and node-bootstrap.sh substitutes the real value into BOTH so the fail2ban ignoreip guard does not fire on our own override. THE SPLIT IS DELIBERATE, in both directions. manifests/ here is the TEST FIXTURE copy (manifests/README.md says so) and is the copy that goes public, so it must never carry real topology. The OPERATOR copy is hadoku_site/scripts/admin/node-profiles.json, which manifestDir() actually resolves to, which lives beside runner-tiers.json and fleet-runner-manifest.json, and which is in a private repo — it holds the real LAN and SHOULD. Do not scrub the operator copy, and do not paste the real range back into this one. A console run resolves the operator copy and needs no FLEET_LAN_CIDR; a run off this fixture hits the refusal, which is the correct failure.",
+        "sshPort": 22,
+        "$why-nft-flush": "Trixie's UFW manages iptables rules through iptables-nft, but nftables is the real packet filter. `ufw disable` drops the iptables rules and leaves nftables chains with a DROP policy intact, so the box goes silent while every tool reports the firewall off. node-bootstrap.sh runs `nft flush ruleset` BEFORE configuring UFW for exactly this reason, and verifies the iptables alternative is the nft backend.",
+        "trustedCidrs": ["127.0.0.1/8", "::1", "192.0.2.0/24", "100.64.0.0/10"],
+        "$why-trustedCidrs": "fail2ban's ignoreip. On claw-1 fail2ban banned the operator's own workstation at 192.0.2.10 after a Windows SSH client offered several keys, and the ban SURVIVED `ufw disable` because fail2ban injects nftables rules directly. 100.64.0.0/10 is Tailscale's CGNAT range.",
+        "tailscale": {
+          "install": true,
+          "ssh": true,
+          "tags": ["tag:claw"]
+        },
+        "sshd": {
+          "permitRootLogin": "no",
+          "pubkeyAuthentication": "yes",
+          "x11Forwarding": "no",
+          "allowAgentForwarding": "no",
+          "allowTcpForwarding": "yes",
+          "maxAuthTries": 6,
+          "clientAliveInterval": 60,
+          "clientAliveCountMax": 3,
+          "$why-maxAuthTries": "3 is too low for a client whose agent offers every key it holds before falling back — the client exhausts the server's budget and never reaches password auth. 6 was measured against the operator's own workstation."
+        },
+        "openPorts": [
+          {
+            "port": 9090,
+            "proto": "tcp",
+            "from": "lan",
+            "why": "Cockpit"
+          }
+        ],
+        "wireless": {
+          "$why": "WS-N, 2026-09-08. claw-7 is imaged on ethernet and then UNPLUGGED, and has to stay both online and REACHABLE on wifi until the cable comes back. Two measured facts from this fleet decide the shape. MECHANISM: garage-network-constraint records that during the 2026-09-07 SSID rename claw-1 (NetworkManager) reassociated on its own and claw-3 (ifupdown) did not - ifupdown never retries, and recovering claw-3 cost a garage trip. So a node EXPECTED to lose a link gets NetworkManager; nodes that are wired and staying wired are not converted, because rewriting a working node's network buys nothing. ADDRESSING: hokon reaches every claw by a hardcoded LAN IP in ~/.ssh/config, and ethernet and wireless are different MACs drawing different DHCP leases - so a node whose address moves when the cable is pulled goes dark to every gate, which this codebase correctly reports as a FAILURE and not a pass. claw-3 is the worked example of the answer: its stable .203 lives on the WIRELESS interface and its USB ethernet is secondary, so the address is identical whether or not a cable is in. That is what preferWired means here, and why it is about ROUTES and not addresses: both interfaces stay associated and addressed at all times, and the wired link wins only the default route, by metric. Nothing fails over, because nothing moves.",
+          "$why-not-in-the-laptop-profile": "Declared on the desktop profile only, and that is a statement about the NEXT box rather than about chassis shape. laptop-debian-trixie describes claw-1/2/3 as they already are, and all three already carry both SSIDs by the mechanism appropriate to each. Adding this block there would declare a conversion of three working nodes nobody asked for, which node-bootstrap.sh would then perform on the next re-run. A profile describes a target; it must not smuggle in a migration.",
+          "manager": "networkmanager",
+          "$why-manager": "The ONLY supported value, spelled out rather than assumed so a profile saying anything else fails loudly instead of silently keeping ifupdown. node-bootstrap.sh hands BOTH interfaces to NM - it is not enough to give it the radio and leave the wired port on ifupdown. d-i writes the wired stanza into /etc/network/interfaces, NM ships managed=false for exactly those interfaces, and allow-hotplug does NOT react to carrier loss on an interface already up: pull the cable in that split and the dead wired default route STAYS, at a better metric than the radio's, and the box blackholes itself while both links look configured. One manager owning both is what makes carrier loss a route change rather than an outage.",
+          "preferWired": true,
+          "wiredRouteMetric": 100,
+          "wirelessRouteMetric": 600,
+          "$why-metrics": "Lower wins. Both connections stay UP and addressed simultaneously; the metric alone decides which carries the default route, so returning the cable tomorrow is a route swap needing no operator action that drops no ssh session bound to the wireless address. These are NM's own defaults for wired and wifi, written down rather than inherited: a default that is load-bearing should be visible in the file depending on it.",
+          "networks": [
+            {
+              "id": "primary",
+              "band": "5",
+              "priority": 10,
+              "ssidEnv": "FLEET_WIFI_SSID",
+              "pskEnv": "FLEET_WIFI_PSK"
+            },
+            {
+              "id": "fallback",
+              "band": "2.4",
+              "priority": 1,
+              "ssidEnv": "FLEET_WIFI_SSID_FALLBACK",
+              "pskEnv": "FLEET_WIFI_PSK_FALLBACK"
+            }
+          ],
+          "$why-networks": "TWO of them, and the second is the whole point. The 2026-09-07 outage was caused by an SSID RENAME, not by a node: the gateway's bands were split into ExampleNet (2.4 GHz) and ExampleNet_5G (5 GHz), and any node holding only the old name was stranded. Every claw now carries both, 5 GHz at priority 10 and 2.4 GHz at priority 1, so a future rename of either band cannot take a node off the network. These priorities are NM connection.autoconnect-priority, higher wins - the inverse of the route metrics above, which is confusing enough to say once: PRIORITY picks which wifi to join, METRIC picks whether wifi or ethernet carries traffic. 2.4 GHz is a fallback and never a balancing lever; the same memory measures it at 33-38 Mbit/s against 5 GHz's 146-218, and records that airtime, not device count, is the unit that matters.",
+          "$why-env": "SSID and PSK are properties of the SITE, and manifests/ is PUBLISHED - so neither is committed and neither goes on the stick, where a lost CLAWKIT would carry a live PSK out of the building. The profile names the ENVIRONMENT VARIABLE and node-bootstrap.sh reads it at the console, the same shape network.lanCidr already proves with FLEET_LAN_CIDR: a placeholder in the file, the real value supplied per run, a refusal if it is still the placeholder. FLEET_WIFI_PSK_FALLBACK is OPTIONAL and defaults to FLEET_WIFI_PSK, because a split-SSID gateway normally carries one password across both bands and requiring it typed twice invents a way to typo it.",
+          "pcieAerStormThreshold": 100000,
+          "$why-pcieAerStormThreshold": "THE CLAW-4 INSTALL KILLER, as a number. Section 10 of claw-4-install-postmortem-2026-09-01.md: a Realtek RTL8723BE behind PCIe Root Port #1 threw 2,307,238 correctable AER errors, the storm consumed enough bus and log bandwidth that USB reads timed out, /dev/sdc1 stopped opening, and the installer lost its media mid-pkgsel with no in-place recovery. Two hours, and it nearly cost a rewrite of the whole imaging toolchain because the storm was first blamed on Ventoy. It is a WIRELESS card fault, so it lands on the next box with a radio - which is claw-7. 100000 is chosen to be unmissable rather than tuned: a healthy node reads 0 (claw-4 and claw-5 both do today) and the observed fault was twenty-three times this. A count between the two is not a storm and must not be sold as one, so it is REPORTED, never acted on.",
+          "drivers": {
+            "$why": "WS-N, 2026-09-08, written against claw-7. A radio can be PRESENT, claimed by a kernel module, and still produce no network interface at all — and that is not an exotic case, it is the default outcome for every Broadcom card this fleet is likely to meet. claw-7's BCM4360 came up bound to `bcma-pci-bridge` with b43/ssb/bcma loaded, none of which drive that chip, so /sys/class/net held no wireless entry and the box looked exactly like claw-5, which genuinely has no radio at all. Keyed by `vendor:device` as sysfs spells them, for the same reason gpu.vendors is keyed by vendor: the box reads its own PCI bus and the profile says what that silicon needs, rather than an operator remembering which machine got which module.",
+            "$why-not-vendor-keyed": "gpu.vendors is keyed by VENDOR alone because one NVIDIA package drives every NVIDIA card the fleet owns. Wireless is not like that: Broadcom alone spans brcmfmac, b43 and the proprietary wl, and which one is right is a property of the CHIP, not the vendor. Keying this by vendor would have claw-7's answer applied to a Broadcom card that wants a completely different module.",
+            "0x14e4:0x43a0": {
+              "name": "Broadcom BCM4360 802.11ac",
+              "aptComponents": ["non-free"],
+              "packages": ["broadcom-sta-dkms", "linux-headers-amd64"],
+              "module": "wl",
+              "blacklist": ["b43", "bcma", "ssb", "brcmsmac", "bcma_pci_bridge"],
+              "$why": "The wl module from broadcom-sta is the only thing that drives a BCM4360 on Debian. Measured on claw-7, 2026-09-08: `modinfo brcmfmac | grep -c 43a0` is ZERO, so the in-tree PCIe driver will not bind this device and no amount of firmware changes that. b43/ssb/bcma DO claim the card — that is the trap, because claiming it is not driving it: the modules load, the device is bound, and no netdev is ever created. They must be blacklisted or they win the race on the next boot. `linux-headers-amd64` is not optional, the module is built by DKMS against the running kernel."
+            }
+          }
+        }
+      },
+      "capabilities": ["ffmpeg", "python-venv"],
+      "$why-capabilities": "THE TOOLCHAIN FLOOR, expressed as capabilities rather than as a package list, and validated against src/capabilities.ts at load time. A package name is one distro's answer to a capability question; `python3-venv` does not exist on Arch because venv ships with python, and every declared package would have read as MISSING on a machine that had the capability. node-bootstrap.sh proves these by EXECUTING scripts/capability-probe.sh, and reports a node that misses one as not ready. `gh` is NOT added here — see toolchain.$why-gh: this array is the imaging-time PROBE floor, and P1.5 only owed the package that puts the binary on disk.",
+      "toolchain": {
+        "$why": "The apt package list is distro-specific, which is why it lives inside a profile whose id names the distro rather than in a shared block. Everything here is either something a gate reads (jq, git), something a probe needs (ffmpeg, python3-venv), or something an operator needed at 2am and did not have (btop, lsof, strace, smartmontools).",
+        "$why-gh": "P1.5, 2026-09-07; CORRECTED 2026-09-08 (WS-N). `gh` joined fleet-runner-manifest.json's required toolchain.capabilities on 2026-09-05 - the day its absence on claw-4/5/6 cost a four-repo fan-out, src/capabilities.ts's `gh` entry tells that story - and this profile is what IMAGES a new box, so it names the package. THE ORIGINAL $why HERE WAS WRONG ON ITS CENTRAL FACT, and the correction is why this text is longer than the entry deserves: it said `gh` 'is not in Debian trixie's own archive', and it is. Measured 2026-09-08 from hokon, `apt-cache madison gh` reports 2.46.0-3 in trixie/main. So the missing thirdPartySources wiring never made this package unresolvable - `apt-get install gh` would have succeeded from the base archive all along, and section 5 would NOT have died the way the old text implied. What the wiring actually buys is the VERSION: trixie/main froze at 2.46.0 (2024-04) while claw-4 runs 2.100.0 from GitHub's own repo, and a fleet split across a 17-month gh gap is drift of exactly the shape check-fleet-toolchain.mjs exists to find. Still worth adding - as a currency fix, not as a rescue. thirdPartySources below is that repo's key and list, and node-bootstrap.sh section 5a consumes it BEFORE section 5 installs toolchain.packages.",
+        "thirdPartySources": {
+          "$why": "Present as {} would mean 'every package in toolchain.packages resolves from the base archive'; declaring it here means at least one does not. Keyed by source name, not by vendor (contrast os.kernelExtras, keyed by DMI vendor because a vendor kernel is a property of the CHASSIS) — a third-party apt source is a property of what the fleet needs installed, true on every desktop and every laptop alike.",
+          "github-cli": {
+            "$why": "GitHub publishes gh through its own apt repo, keyring-signed rather than the deprecated apt-key model — the modern equivalent of the aptKeyUrl/aptList pair os.kernelExtras already proves works. `aptKeyPath` is spelled out separately (kernelExtras never needed this: it writes to one fixed trusted.gpg.d file because only one vendor kernel is ever active per node, where thirdPartySources is keyed and plural) so a future reader adding a second source does not have to parse a path back out of the sources.list line.",
+            "aptKeyUrl": "https://cli.github.com/packages/githubcli-archive-keyring.gpg",
+            "aptKeyPath": "/etc/apt/keyrings/githubcli-archive-keyring.gpg",
+            "aptList": "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main"
+          }
+        },
+        "node": "22",
+        "packages": [
+          "acpi",
+          "apt-listchanges",
+          "btop",
+          "build-essential",
+          "ca-certificates",
+          "cmake",
+          "curl",
+          "dmidecode",
+          "ethtool",
+          "extra-cmake-modules",
+          "fail2ban",
+          "ffmpeg",
+          "gettext",
+          "gh",
+          "git",
+          "gnupg",
+          "htop",
+          "jq",
+          "libasound2-dev",
+          "libasound2t64",
+          "libatk-bridge2.0-0t64",
+          "libatk1.0-0t64",
+          "libcairo2",
+          "libcups2t64",
+          "libdrm2",
+          "libgbm1",
+          "libicu76",
+          "libkf6coreaddons-dev",
+          "libkf6i18n-dev",
+          "libkf6texteditor-dev",
+          "libkf6wallet-dev",
+          "libkf6xmlgui-dev",
+          "libnspr4",
+          "libnss3",
+          "libpango-1.0-0",
+          "libudev-dev",
+          "libwayland-dev",
+          "libxcomposite1",
+          "libxdamage1",
+          "libxfixes3",
+          "libxkbcommon-dev",
+          "libxkbcommon0",
+          "libxrandr2",
+          "lm-sensors",
+          "lsof",
+          "net-tools",
+          "nftables",
+          "openssh-server",
+          "openssl",
+          "pciutils",
+          "python3",
+          "python3-pip",
+          "python3-venv",
+          "qt6-base-dev",
+          "qt6-declarative-dev",
+          "rsync",
+          "smartmontools",
+          "strace",
+          "sudo",
+          "time",
+          "tmux",
+          "ufw",
+          "unattended-upgrades",
+          "util-linux",
+          "watchdog",
+          "wget"
+        ],
+        "maskServices": ["cups", "cups.socket", "cups.path", "avahi-daemon", "avahi-daemon.socket"],
+        "$why-maskServices": "CUPS binds 0.0.0.0:631 and avahi answers mDNS on every interface. Neither has a job on a headless fleet node, and both are listening ports the firewall then has to have an opinion about.",
+        "$why-libicu76": "libicu76 is THE ACTIONS RUNNER'S dependency, not a convenience. `config.sh` is .NET, and without libicu it exits 1 with 'Libicu's dependencies is missing for Dotnet Core 6.0' - so a perfectly bootstrapped node cannot register a single runner. Measured 2026-09-02: claw-1, claw-2 and claw-3 all carry it because they were built by hand before this script existed; claw-4, claw-5 and claw-6 - every node this script has produced - carried NONE. All 26 registrations on claw-5 failed on it, and the reconciler reported only 'Command failed: ssh', so the cause was four layers from the message. The version is pinned because this profile's id names the distro (trixie ships 76); a different codename gets a different profile and a different number. The runner ships bin/installdependencies.sh which does the same job, but it only exists AFTER a runner directory does - too late to be the thing that makes registration possible.",
+        "$why-playwright-deps": "Chromium's shared-library dependencies, for the `playwright` capability. hadoku_site's e2e-canary.yml runs on fromJSON(vars.CI_RUNNER) - the general pool - and carries NO `playwright install` step deliberately, so every claw must be able to launch a browser. MEASURED 2026-09-02: copying the ms-playwright cache onto claw-5 was not enough - the binary was present and died with 'error while loading shared libraries: libnspr4.so'. `fleet bootcamp` caught it as 'binary present but would not launch', which is the distinction a presence check cannot make and the reason that probe LAUNCHES a browser. These are what `playwright install --with-deps` would have installed; bootstrap installs them so a fresh node is not BLOCKED on arrival. The browser cache itself is still copied separately - it is 631MB of versioned binaries, not an apt concern.",
+        "$why-bevy-deps": "Bevy's build dependencies, for brave-quartet's `check`, `wasm-size` and `bundle` jobs. Those were GitHub-HOSTED until 2026-09-10 on the stated grounds that the claws had neither a Rust toolchain nor a way to run `sudo apt-get` — the second half was about the retired `openclaw` runner user, which has not been what jobs run as for some time, and `hadoku` has NOPASSWD sudo. Named here so a node imaged from this profile can build the crate on arrival rather than after someone notices. The workflow still carries its own install step, but it now installs only what dpkg reports missing, so on a node built from this profile it is a no-op — which is also what keeps it working on hokon, where sudo needs a password.",
+        "$why-kf6-qt6": "KF6/Qt6 development headers, for hadoku-task's kate-plugin build. That job ran `container: debian:trixie` on `ubuntu-24.04` because KF6 dev packages exist only on trixie or Ubuntu 25.04 — while EVERY NODE THIS PROFILE IMAGES ALREADY IS Debian 13 (trixie), which is what the profile id says. The container was importing an OS the machine already runs, and the Docker the claws lack was only needed to paper over the wrong base image. Dropped 2026-09-10; the job now builds natively against trixie's own KF6 6.13.0 / Qt6 6.8.2, which is the same KF6 the target desktop runs and therefore what the container was for in the first place.",
+        "$why-t64": "The t64 TRANSITION. Debian renamed every library whose ABI changed with 64-bit time_t, so trixie has no `libasound2` at all — `apt-cache policy` reports Candidate: (none) for the old name while `libasound2t64` is installed and doing the job. These four were declared under their pre-transition names, which meant the profile asked for four packages that CANNOT be installed on the distro its own id names. Nothing caught it because nothing ever converged against this list: bootstrap ran once per node and `apt-get install` on an unavailable name fails the step, not the fleet. `fleet converge-toolchain` found all four on its first run, on every node, 2026-09-10.",
+        "$why-time": "GNU `time` (/usr/bin/time -v), for peak RSS. The shell builtin reports wall/user/sys and NOT maximum resident set size, which is the number a capability probe needs when it has to say how much memory a payload actually wants. Found missing on all seven claws 2026-09-11, when the cargo-bevy payload probe exited 127 on every node at once."
+      },
+      "unattendedUpgrades": {
+        "$why": "Security origin only, and Automatic-Reboot false. A node that reboots itself mid-job turns a security update into a CI failure with no operator-visible cause, and the watchdog already owns the 'this box is wedged' reboot.",
+        "allowedOrigins": ["${distro_id}:${distro_codename}-security"],
+        "automaticReboot": false,
+        "removeUnusedKernelPackages": true
+      },
+      "gpu": {
+        "$why": "WS-N, 2026-09-08. claw-7 and claw-8 are the first fleet nodes with a discrete GPU that is not hokon's. Keyed by the PCI VENDOR ID the box reads out of its own sysfs, for the same reason os.kernelExtras is keyed by the DMI vendor string: the alternative is an operator remembering which box got which driver, which is the --surface flag mistake this whole file was written to end. Nothing here names a card. claw-7 has a Maxwell GM200 and claw-8 a Turing TU104, and one entry covers both because the entry describes a VENDOR, not a model - a third NVIDIA box needs no edit at all, and an AMD box needs one new key rather than a change to this one.",
+        "$why-no-labels": "This block installs a DRIVER. It grants nothing, declares nothing, and must never be read as a claim that the node can do GPU work - capability-probe.sh answers that by EXECUTING each codec, and the operator decides what to do with the answer. That is the 2026-09-07 settled decision verbatim: capabilities are DERIVED from what a box proves, never declared, and a profile may not declare a capability bootcamp cannot prove. It matters here more than usual because the honest answer for both new cards is partly NO: NVENC AV1 encode arrived with Ada (RTX 40), so neither a GTX 980 Ti nor an RTX 2080 can do it and av1-nvenc will probe `no` on both. A profile declaring 'GPU' as one capability would have made both boxes claim it.",
+        "vendors": {
+          "0x10de": {
+            "name": "NVIDIA",
+            "aptComponents": ["non-free"],
+            "$why-aptComponents": "The claws run `main contrib non-free-firmware` - measured on claw-4, 2026-09-08 - and nvidia-driver is in plain `non-free`, a DIFFERENT component the installer does not enable. Without this line apt reports the package uninstallable on a box sitting there holding the card. node-bootstrap.sh adds the component only when a matching GPU is actually observed, so a node with no discrete GPU never widens its archive.",
+            "packages": [
+              "nvidia-driver",
+              "nvidia-smi",
+              "firmware-misc-nonfree",
+              "linux-headers-amd64"
+            ],
+            "$why-packages": "nvidia-driver in trixie/non-free is 550.163.01-2, verified 2026-09-08, and ONE package covers both cards: 550 still supports Maxwell (GM200, claw-7) and Turing (TU104, claw-8). Worth stating because it EXPIRES - NVIDIA's 595 and 610 branches, which hokon runs from NVIDIA's own CUDA repo, have DROPPED Maxwell, so a future reader who 'upgrades' this to a newer branch takes claw-7's GPU away and gets no warning. linux-headers-amd64 is not optional: the module is built by DKMS and without headers the build fails at install and again on every kernel upgrade - and unattended-upgrades is on. nvidia-smi is what the probe reads model and VRAM out of. The package drops its own nouveau blacklist, which is why none is written here.",
+            "probeCapabilities": ["nvenc-h264", "nvenc-hevc", "av1-nvenc", "nvdec", "cuda"],
+            "$why-probeCapabilities": "What capability-probe.sh SHOULD ATTEMPT on a node carrying this vendor's silicon - not what it will find. Listing av1-nvenc here, knowing both current cards fail it, is deliberate: the probe's job is to answer the question, and a list trimmed to the expected answers would turn the probe into a restatement of this file. That is AGENTS.md's 'a verifier that reads its own writer's artifact cannot fail', one layer up.",
+            "requiresReboot": true,
+            "$why-requiresReboot": "The kernel module is not loaded into a running kernel that booted with nouveau, so every probe in this list answers `no` until the box has been rebooted once. node-bootstrap.sh does not reboot - a script that reboots is one whose output you read or do not - so it SAYS so, and the enrollment record carries gpuDriver as `pending-reboot` rather than as a failure. Reporting an unrebooted box's `no` as a hardware verdict would strand a working card."
+          }
+        }
+      }
+    },
+    "laptop-debian-trixie": {
+      "$why": "The three claws as they actually are: claw-1 is an MSI GE70, claw-2 and claw-3 are Surface devices. This profile exists to prove the format against hardware that is already deployed rather than against the two boxes that motivated it — a schema only its author's case fits is not a schema. Every difference from desktop-debian-trixie below is a real difference the fleet has already been bitten by.",
+      "role": "both",
+      "$why-role": "The claws serve CI (616 of 621 jobs in the 2026-08-29 window came off the fleet) and also host the openclaw agent that garage-server-bazooka.sh installed. `both` is a description of what they are, not a plan.",
+      "os": {
+        "distro": "debian",
+        "codename": "trixie",
+        "versionId": "13",
+        "kernelExtras": {
+          "$why": "Keyed by /sys/class/dmi/id/sys_vendor. This replaces the bazooka's --surface flag, which is the clearest case in the whole script of a node property living in an operator's memory: claw-2 and claw-3 needed it, claw-1 did not, and nothing but a retrospective recorded which. The box knows its own vendor string.",
+          "Microsoft Corporation": {
+            "$why": "linux-surface. The stock Debian kernel boots on a Surface but does not drive its touchpad, keyboard cover, or thermal sensors correctly. Do NOT add TLP alongside it — the claw-1 retrospective records slowdowns and hangs.",
+            "packages": ["linux-image-surface", "linux-headers-surface", "libwacom-surface"],
+            "aptKeyUrl": "https://raw.githubusercontent.com/linux-surface/linux-surface/master/pkg/keys/surface.asc",
+            "aptList": "deb [arch=amd64] https://pkg.surfacelinux.com/debian release main",
+            "forbidPackages": ["tlp", "tlp-rdw"]
+          }
+        }
+      },
+      "power": {
+        "$why": "A laptop lid is the single most likely way one of these boxes goes offline for a reason nothing can explain, so lid handling is the one setting here that is genuinely load-bearing. `lid: \"ignore\"` says the chassis HAS a lid and logind must do nothing about it; that is a different statement from the desktop's \"none\", and node-bootstrap.sh treats them differently rather than writing the same drop-in twice.",
+        "chassis": "laptop",
+        "lid": "ignore",
+        "battery": "present",
+        "maskSleepTargets": [
+          "sleep.target",
+          "suspend.target",
+          "hibernate.target",
+          "hybrid-sleep.target",
+          "suspend-then-hibernate.target",
+          "systemd-suspend.service",
+          "systemd-hibernate.service",
+          "systemd-hybrid-sleep.service",
+          "systemd-suspend-then-hibernate.service"
+        ],
+        "logind": {
+          "HandleLidSwitch": "ignore",
+          "HandleLidSwitchExternalPower": "ignore",
+          "HandleLidSwitchDocked": "ignore",
+          "$why-three-lid-keys": "logind picks between them by power source and dock state, so setting only HandleLidSwitch leaves a machine that suspends when it happens to be on mains. All three, always.",
+          "HandleSuspendKey": "ignore",
+          "HandleSuspendKeyLongPress": "ignore",
+          "HandleHibernateKey": "ignore",
+          "HandleHibernateKeyLongPress": "ignore",
+          "HandlePowerKey": "ignore",
+          "HandlePowerKeyLongPress": "poweroff",
+          "HandleRebootKey": "reboot",
+          "HandleRebootKeyLongPress": "poweroff",
+          "IdleAction": "ignore",
+          "IdleActionSec": "infinity",
+          "LidSwitchIgnoreInhibited": "no"
+        },
+        "consoleBlank": false,
+        "wifiPowersave": false,
+        "watchdog": {
+          "$why": "Same rules as the desktop profile and for the same measured reasons. The module list is Intel-only here because all three claws are Intel; softdog stays as the fallback that at least catches a wedged userspace.",
+          "device": "/dev/watchdog",
+          "modules": ["iTCO_wdt", "softdog"],
+          "timeoutSec": 15,
+          "intervalSec": 5,
+          "maxLoadPerCore": 8,
+          "minMemoryPages": 1,
+          "retryTimeoutSec": 60,
+          "maxTempMilliC": 95000,
+          "systemd": {
+            "RuntimeWatchdogSec": "30",
+            "RebootWatchdogSec": "10min",
+            "ShutdownWatchdogSec": "10min"
+          }
+        }
+      },
+      "users": {
+        "$why": "Stated as the fleet wants them, NOT as the claws currently are. The claws were built with a second `openclaw` user and no NOPASSWD rule, which is the state scripts/fixes/claw-admin-fix.sh exists to repair: discovered 2026-08-17, when a crashing machine could not be diagnosed because nothing could read its journal, and recovering it needed a physical console and a USB stick per machine. A profile describes the target, and the drift between it and a live box is what a probe is for.",
+        "fleetUser": "hadoku",
+        "shell": "/bin/bash",
+        "sudo": "nopasswd",
+        "groups": ["sudo", "adm", "systemd-journal"],
+        "linger": true,
+        "homeMode": "755"
+      },
+      "network": {
+        "lanCidr": "192.0.2.0/24",
+        "$why-lanCidr": "A PLACEHOLDER, and node-bootstrap.sh REFUSES to run with it. 192.0.2.0/24 is RFC 5737 TEST-NET-1, the range reserved for documentation. The LAN is a property of the SITE, not of a node SHAPE, and this manifest is published — so the real range is supplied by the operator through FLEET_LAN_CIDR and never committed. Bootstrapping with the placeholder still in place would open ufw to a network this box is not on and leave SSH-from-LAN shut: the same lockout class every retrospective this profile was built from is about. trustedCidrs carries the placeholder too, and node-bootstrap.sh substitutes the real value into BOTH so the fail2ban ignoreip guard does not fire on our own override. THE SPLIT IS DELIBERATE, in both directions. manifests/ here is the TEST FIXTURE copy (manifests/README.md says so) and is the copy that goes public, so it must never carry real topology. The OPERATOR copy is hadoku_site/scripts/admin/node-profiles.json, which manifestDir() actually resolves to, which lives beside runner-tiers.json and fleet-runner-manifest.json, and which is in a private repo — it holds the real LAN and SHOULD. Do not scrub the operator copy, and do not paste the real range back into this one. A console run resolves the operator copy and needs no FLEET_LAN_CIDR; a run off this fixture hits the refusal, which is the correct failure.",
+        "sshPort": 22,
+        "trustedCidrs": ["127.0.0.1/8", "::1", "192.0.2.0/24", "100.64.0.0/10"],
+        "tailscale": {
+          "install": true,
+          "ssh": true,
+          "tags": ["tag:claw"]
+        },
+        "sshd": {
+          "permitRootLogin": "no",
+          "pubkeyAuthentication": "yes",
+          "x11Forwarding": "no",
+          "allowAgentForwarding": "no",
+          "allowTcpForwarding": "yes",
+          "maxAuthTries": 6,
+          "clientAliveInterval": 60,
+          "clientAliveCountMax": 3
+        },
+        "openPorts": [
+          {
+            "port": 9090,
+            "proto": "tcp",
+            "from": "lan",
+            "why": "Cockpit"
+          }
+        ]
+      },
+      "capabilities": ["ffmpeg", "python-venv"],
+      "$why-capabilities": "gh is NOT added here — see toolchain.$why-gh on the desktop profile, which this one shares word for word: this array is the imaging-time PROBE floor and P1.5 only owed the package that puts the binary on disk.",
+      "toolchain": {
+        "$why-gh": "See toolchain.$why-gh on desktop-debian-trixie, which this profile shares. Note it was CORRECTED on 2026-09-08: gh IS in trixie/main at 2.46.0-3, so the third-party source is a currency fix (claw-4 runs 2.100.0) and never was the thing making the package resolvable.",
+        "thirdPartySources": {
+          "$why": "See desktop-debian-trixie's toolchain.thirdPartySources.$why — identical reasoning, kept per-profile because toolchain (like the package list itself) is declared once per distro/profile rather than shared, and the two profiles are proven to be the same distro precisely by NOT sharing a block.",
+          "github-cli": {
+            "$why": "GitHub's own keyring-signed apt repo for `gh` — see desktop-debian-trixie's identical entry.",
+            "aptKeyUrl": "https://cli.github.com/packages/githubcli-archive-keyring.gpg",
+            "aptKeyPath": "/etc/apt/keyrings/githubcli-archive-keyring.gpg",
+            "aptList": "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main"
+          }
+        },
+        "node": "22",
+        "packages": [
+          "acpi",
+          "apt-listchanges",
+          "btop",
+          "build-essential",
+          "ca-certificates",
+          "cmake",
+          "curl",
+          "dmidecode",
+          "ethtool",
+          "extra-cmake-modules",
+          "fail2ban",
+          "ffmpeg",
+          "gettext",
+          "gh",
+          "git",
+          "gnupg",
+          "htop",
+          "jq",
+          "libasound2-dev",
+          "libasound2t64",
+          "libatk-bridge2.0-0t64",
+          "libatk1.0-0t64",
+          "libcairo2",
+          "libcups2t64",
+          "libdrm2",
+          "libgbm1",
+          "libicu76",
+          "libkf6coreaddons-dev",
+          "libkf6i18n-dev",
+          "libkf6texteditor-dev",
+          "libkf6wallet-dev",
+          "libkf6xmlgui-dev",
+          "libnspr4",
+          "libnss3",
+          "libpango-1.0-0",
+          "libudev-dev",
+          "libwayland-dev",
+          "libxcomposite1",
+          "libxdamage1",
+          "libxfixes3",
+          "libxkbcommon-dev",
+          "libxkbcommon0",
+          "libxrandr2",
+          "lm-sensors",
+          "lsof",
+          "net-tools",
+          "nftables",
+          "openssh-server",
+          "openssl",
+          "pciutils",
+          "python3",
+          "python3-pip",
+          "python3-venv",
+          "qt6-base-dev",
+          "qt6-declarative-dev",
+          "rsync",
+          "smartmontools",
+          "strace",
+          "sudo",
+          "time",
+          "tmux",
+          "ufw",
+          "unattended-upgrades",
+          "util-linux",
+          "watchdog",
+          "wget"
+        ],
+        "maskServices": ["cups", "cups.socket", "cups.path", "avahi-daemon", "avahi-daemon.socket"],
+        "$why-libicu76": "libicu76 is THE ACTIONS RUNNER'S dependency, not a convenience. `config.sh` is .NET, and without libicu it exits 1 with 'Libicu's dependencies is missing for Dotnet Core 6.0' - so a perfectly bootstrapped node cannot register a single runner. Measured 2026-09-02: claw-1, claw-2 and claw-3 all carry it because they were built by hand before this script existed; claw-4, claw-5 and claw-6 - every node this script has produced - carried NONE. All 26 registrations on claw-5 failed on it, and the reconciler reported only 'Command failed: ssh', so the cause was four layers from the message. The version is pinned because this profile's id names the distro (trixie ships 76); a different codename gets a different profile and a different number. The runner ships bin/installdependencies.sh which does the same job, but it only exists AFTER a runner directory does - too late to be the thing that makes registration possible.",
+        "$why-playwright-deps": "Chromium's shared-library dependencies, for the `playwright` capability. hadoku_site's e2e-canary.yml runs on fromJSON(vars.CI_RUNNER) - the general pool - and carries NO `playwright install` step deliberately, so every claw must be able to launch a browser. MEASURED 2026-09-02: copying the ms-playwright cache onto claw-5 was not enough - the binary was present and died with 'error while loading shared libraries: libnspr4.so'. `fleet bootcamp` caught it as 'binary present but would not launch', which is the distinction a presence check cannot make and the reason that probe LAUNCHES a browser. These are what `playwright install --with-deps` would have installed; bootstrap installs them so a fresh node is not BLOCKED on arrival. The browser cache itself is still copied separately - it is 631MB of versioned binaries, not an apt concern.",
+        "$why-bevy-deps": "Bevy's build dependencies, for brave-quartet's `check`, `wasm-size` and `bundle` jobs. Those were GitHub-HOSTED until 2026-09-10 on the stated grounds that the claws had neither a Rust toolchain nor a way to run `sudo apt-get` — the second half was about the retired `openclaw` runner user, which has not been what jobs run as for some time, and `hadoku` has NOPASSWD sudo. Named here so a node imaged from this profile can build the crate on arrival rather than after someone notices. The workflow still carries its own install step, but it now installs only what dpkg reports missing, so on a node built from this profile it is a no-op — which is also what keeps it working on hokon, where sudo needs a password.",
+        "$why-kf6-qt6": "KF6/Qt6 development headers, for hadoku-task's kate-plugin build. That job ran `container: debian:trixie` on `ubuntu-24.04` because KF6 dev packages exist only on trixie or Ubuntu 25.04 — while EVERY NODE THIS PROFILE IMAGES ALREADY IS Debian 13 (trixie), which is what the profile id says. The container was importing an OS the machine already runs, and the Docker the claws lack was only needed to paper over the wrong base image. Dropped 2026-09-10; the job now builds natively against trixie's own KF6 6.13.0 / Qt6 6.8.2, which is the same KF6 the target desktop runs and therefore what the container was for in the first place.",
+        "$why-t64": "The t64 TRANSITION. Debian renamed every library whose ABI changed with 64-bit time_t, so trixie has no `libasound2` at all — `apt-cache policy` reports Candidate: (none) for the old name while `libasound2t64` is installed and doing the job. These four were declared under their pre-transition names, which meant the profile asked for four packages that CANNOT be installed on the distro its own id names. Nothing caught it because nothing ever converged against this list: bootstrap ran once per node and `apt-get install` on an unavailable name fails the step, not the fleet. `fleet converge-toolchain` found all four on its first run, on every node, 2026-09-10.",
+        "$why-time": "GNU `time` (/usr/bin/time -v), for peak RSS. The shell builtin reports wall/user/sys and NOT maximum resident set size, which is the number a capability probe needs when it has to say how much memory a payload actually wants. Found missing on all seven claws 2026-09-11, when the cargo-bevy payload probe exited 127 on every node at once."
+      },
+      "unattendedUpgrades": {
+        "allowedOrigins": ["${distro_id}:${distro_codename}-security"],
+        "automaticReboot": false,
+        "removeUnusedKernelPackages": true
+      }
+    }
+  }
+}

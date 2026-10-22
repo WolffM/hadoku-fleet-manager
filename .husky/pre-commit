@@ -1,0 +1,84 @@
+#!/bin/sh
+
+# --- worktree preamble ---------------------------------------------------
+# git resolves a relative core.hooksPath against the WORKING TREE ROOT, so a
+# hook only fires in a linked worktree when the directory holding it is tracked.
+# husky's generated .husky/_ is not — its own .gitignore excludes it — so every
+# commit made from a worktree ran no hook at all. Silently: no warning, no
+# non-zero exit. core.hooksPath now points at .husky itself, which is tracked.
+[ "${HUSKY-}" = "0" ] && exit 0
+
+# --- identity gate, FIRST -------------------------------------------------
+# 59 of the 60 commits on origin/main before 2026-09-19 are authored `fleet
+# test <fleet-test@invalid>` or `t <t@t>` — this repo's own test fixtures,
+# which used to set those with `git config user.email`. Cheapest possible
+# failure, so it runs before everything: three `git` calls and no node_modules,
+# and there is no point linting a commit that must not be made at all.
+if ! node scripts/check-commit-identity.mjs; then
+  exit 1
+fi
+# --- end identity gate ----------------------------------------------------
+
+# Firing the hook is only half of it. A fresh worktree is missing everything
+# .gitignore excludes, and the gates below read some of it. Borrow those from
+# the main checkout rather than skipping the gate: same repo, and in the normal
+# case the same artifacts. A branch that genuinely CHANGES dependencies fails
+# loudly on the missing package instead, which is the outcome we want.
+common_dir=$(git rev-parse --git-common-dir)
+case "$common_dir" in /*) ;; *) common_dir="$PWD/$common_dir" ;; esac
+main_checkout=$(dirname "$common_dir")
+
+if [ ! -e node_modules ]; then
+  if [ "$main_checkout" != "$PWD" ] && [ -d "$main_checkout/node_modules" ]; then
+    echo "🔗 No node_modules in this worktree — linking the main checkout's"
+    ln -s "$main_checkout/node_modules" node_modules
+  else
+    echo "❌ No node_modules — run 'pnpm install' before committing."
+    exit 1
+  fi
+fi
+# --- end worktree preamble -----------------------------------------------
+
+echo "🔍 Running pre-commit checks..."
+
+# Capture originally staged files BEFORE any modifications
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
+# Auto-fix linting and formatting issues
+echo "📋 Running ESLint auto-fix..."
+if ! pnpm run lint:fix; then
+  echo "❌ ESLint found errors that could not be auto-fixed."
+  echo "💡 Please fix the errors manually before committing."
+  exit 1
+fi
+
+echo "✨ Auto-formatting code..."
+pnpm run format
+
+echo "✅ Linting and formatting complete!"
+
+# Re-stage files that lint/format may have touched, before the TS gate and the
+# version bump — both read the staged tree.
+if [ -n "${STAGED_FILES}" ]; then
+  echo "${STAGED_FILES}" | xargs -r git add
+fi
+
+# TS gate — prevents commits that break tsc.
+echo "🔎 Running typecheck..."
+if ! pnpm run typecheck; then
+  echo "❌ TypeScript errors — fix before committing (or --no-verify to bypass)."
+  exit 1
+fi
+
+# Version bump LAST, once every gate above has passed — a commit that's about
+# to be rejected must not leave a bumped package.json behind. classify() in
+# scripts/version-bump.mjs mirrors publish.yml's "Did the published surface
+# change?" step (package.json, src, scripts, deploy) exactly, so the two
+# cannot drift the way a hand-kept second copy of the rule would.
+echo "📦 Checking if a version bump is needed..."
+if ! node scripts/version-bump.mjs; then
+  echo "❌ Version bump failed."
+  exit 1
+fi
+
+echo "✅ All pre-commit checks passed!"

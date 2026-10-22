@@ -1,0 +1,21 @@
+# Auto-detect text files and normalize line endings to LF
+* text=auto eol=lf
+
+# Explicitly mark binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+
+
+# Vendored history is EVIDENCE — store the bytes that were captured.
+#
+# `* text=auto eol=lf` above would rewrite the claw-2/claw-3 conversion
+# transcripts from CRLF to LF (1,995 and 1,982 lines each). They are raw
+# terminal captures of the real bazooka runs on 2026-03-07 and the only record
+# of what a successful run looked like on hardware; normalising them is the same
+# mistake as letting prettier reflow the retrospectives, which happened on
+# 2026-08-30. Nothing in this repo reads them — they are read by people.
+archive/** -text

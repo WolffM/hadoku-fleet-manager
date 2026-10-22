@@ -1,0 +1,24 @@
+id = "hadoku.sessions"
+name = "Hadoku sessions"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Find a Claude Code session by what was typed into it; jump to it or resume it"
+platforms = ["linux"]
+
+# No [[startup]] hook: the index is brought up to date when the picker opens
+# (17-30 ms when nothing changed, measured on hokon), so nothing needs to run
+# in the background to keep it fresh.
+
+[[actions]]
+id = "find"
+title = "Find a Claude session"
+contexts = ["workspace"]
+command = ["node", "open.mjs"]
+
+[[panes]]
+id = "picker"
+title = "Find session"
+placement = "popup"
+width = "90%"
+height = "85%"
+command = ["node", "find.mjs"]

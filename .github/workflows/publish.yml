@@ -1,0 +1,208 @@
+name: Publish @wolffm/fleet-manager
+
+# Publishes when package.json's version changes on main.
+#
+# NO `paths:` FILTER, deliberately. It used to allow only `package.json` and
+# `src/**`, but `files` ships `dist`, `scripts` AND `deploy`, and three of the
+# package's exports point INTO scripts/lib — ./fleet-exec, ./sibling-repos and
+# ./tier-detectors, all of which hadoku_site imports. A commit touching only
+# scripts/lib/tier-detectors.mjs could therefore go green on main and never
+# reach the registry. No publishing sibling uses a fail-closed `paths:` filter;
+# the one that filters at all uses fail-open `paths-ignore`.
+#
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: publish-fleet-manager
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}
+    timeout-minutes: 15
+    steps:
+      # FULL history, not `fetch-depth: 2`.
+      #
+      # The gate below diffs against `github.event.before`, and a push carrying
+      # more than one commit puts that commit outside a depth-2 clone. On
+      # 2026-08-31 a 3-commit push produced `fatal: bad object efc404f` and the
+      # gate reported "nothing changed" — silently skipping the publish for
+      # three version bumps (0.20.8, .9, .10) while reporting success.
+      - name: Mark the start, so the reported duration is real
+        run: echo "JOB_STARTED_AT=$(date -u +%s)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # Did this push touch anything that SHIPS? `files` is dist + scripts +
+      # deploy, and three exports point into scripts/lib. A docs-only push
+      # should not demand a version bump; a change to a shipped module must.
+      - name: Did the published surface change?
+        id: gate
+        run: |
+          # pipefail, because the `| tr` below otherwise MASKS a failing git.
+          # That is precisely how this gate failed open: git wrote its error to
+          # stderr, `tr` exited 0, CHANGED came back empty, and "I could not
+          # look" rendered as "nothing is wrong" — the one thing CLAUDE.md says
+          # must never happen.
+          set -o pipefail
+          BASE="${{ github.event.before }}"
+          # An UNRESOLVABLE base is treated as "assume yes", never as "nothing
+          # changed". Assuming yes costs one `check` run and, if the version did
+          # not move, a LOUD failure from the publish step below. Assuming no
+          # silently skips shipping — which is the bug this replaces.
+          if [ -z "$BASE" ] \
+            || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            CHANGED="src/forced"          # first push, dispatch, or base not in the clone
+          else
+            CHANGED=$(git diff --name-only "$BASE" "${{ github.sha }}" -- \
+              package.json src scripts deploy | tr '\n' ' ')
+          fi
+          if [ -z "$CHANGED" ]; then
+            echo "ships=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::nothing under package.json/src/scripts/deploy changed — no publish needed."
+          else
+            echo "ships=true" >> "$GITHUB_OUTPUT"
+            echo "changed: $CHANGED"
+          fi
+
+      - uses: actions/setup-node@v6
+        if: steps.gate.outputs.ships == 'true'
+        with:
+          node-version: '22'
+          registry-url: https://npm.pkg.github.com
+          scope: '@wolffm'
+
+      - name: Enable pnpm
+        if: steps.gate.outputs.ships == 'true'
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.5.0 --activate
+
+      # Both tokens come from the vault, never a repo secret: this repo is public,
+      # and a raw PAT in its secrets is one compromised workflow away from every
+      # repo the PAT reaches. The service key is the only secret it holds, and
+      # mgmt-api rotates that one daily.
+      - name: Registry and dispatch tokens from the vault
+        uses: WolffM/hadoku-actions/vault-fetch@v1
+        if: steps.gate.outputs.ships == 'true'
+        with:
+          keys: HADOKU_NPM_READ_TOKEN,HADOKU_SITE_TOKEN
+        env:
+          HADOKU_VAULT_KEY: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
+
+      - name: Install
+        if: steps.gate.outputs.ships == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ env.HADOKU_NPM_READ_TOKEN }}
+        run: pnpm install --frozen-lockfile
+
+      # THE SAME GATE AS CI, IN THIS JOB, ON THIS SHA.
+      #
+      # Publish used to run `pnpm run build` alone, so it shared nothing with
+      # `check` but a trigger. On 2026-08-30/31 that cost twelve versions: CI was
+      # red for 46 consecutive runs across ~10 hours and every one of those runs
+      # had a green publish beside it, shipping to mgmt-api the whole time. Two
+      # workflows on the same `push` are not a gate — they are two opinions, and
+      # only one of them was load-bearing.
+      #
+      # `pnpm run check` RUNS THE BUILD (format:check, lint, typecheck, build,
+      # check:exports, test), so this replaces the build step rather than adding
+      # to it. The cost is one extra `check` per SHIPPING push — docs-only pushes
+      # stop at the gate above and pay nothing.
+      #
+      # NOT `workflow_run`, deliberately. That would couple publish to CI's
+      # conclusion across workflows, and it fails open in exactly the ways that
+      # matter here: it reads workflow definitions from the default branch rather
+      # than the pushed SHA, it needs its own head_sha checkout dance to publish
+      # the commit that was actually verified, and a CI run that never starts
+      # produces no completion event at all — which is silence, not a refusal.
+      # Verifying in-process keeps "published" and "verified" the same event.
+      - name: Verify (the `check` gate, same as CI)
+        if: steps.gate.outputs.ships == 'true'
+        # publish-safety-guard reads its denylist from here; absent, it FAILS.
+        env:
+          PUBLISH_DENYLIST: ${{ secrets.PUBLISH_DENYLIST }}
+        run: pnpm run check
+
+      # GITHUB_TOKEN, not the PAT. The PAT is read-only for packages by design.
+      - name: Publish
+        if: steps.gate.outputs.ships == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "@wolffm/fleet-manager@$VERSION" version >/dev/null 2>&1; then
+            # This used to `exit 0` with a notice. That is the wrong shape: a
+            # shipped change whose version did not move is a change that never
+            # reaches mgmt-api, and a green no-op is exactly how nobody finds
+            # out.
+            #
+            # There IS a version-bump hook now — .husky/pre-commit runs
+            # scripts/version-bump.mjs, whose classify() mirrors this step's file
+            # list. This comment said there wasn't one long after it landed, which
+            # matters because it is the text someone reads at the moment they hit
+            # this error: it told them to fix by hand a thing that is automatic.
+            #
+            # So reaching here means the hook did not RUN, not that it is missing
+            # — `git commit --no-verify`, or a commit made by something that does
+            # not fire hooks. Bumping the version by hand is the correct fix; the
+            # hook leaves an already-moved version alone.
+            echo "::error::@wolffm/fleet-manager@$VERSION is already published, but this push"
+            echo "::error::changed shipped files. Bump the version in package.json — otherwise"
+            echo "::error::the change goes green here and never reaches any consumer."
+            exit 1
+          fi
+          npm publish --no-git-checks
+
+      # Tell the consumer. mgmt-api picks a new version up through hadoku_site's
+      # Update Packages workflow, which runs on a `packages_updated` dispatch —
+      # and until 2026-09-01 nothing here sent one. Every fleet-manager bump
+      # that reached mgmt-api that day rode on ANOTHER package's publish
+      # (hopper, watchparty-ui, contact-ui), so a fix landed whenever someone
+      # else happened to ship, or at the nightly fan-out, or when the daily
+      # drift check noticed. That is the same shape as the 0.11.1 incident: a
+      # shipped version that no consumer is told about.
+      #
+      # A failed dispatch FAILS the job, on purpose. The package is on the
+      # registry either way; what is lost is the consumer finding out, and a
+      # warning in a green log is exactly how that stays lost.
+      - name: Dispatch packages_updated to hadoku_site
+        if: steps.gate.outputs.ships == 'true'
+        run: |
+          if [ -z "$HADOKU_SITE_TOKEN" ]; then
+            echo "::error::HADOKU_SITE_TOKEN is unset — published, but hadoku_site was not told."
+            exit 1
+          fi
+          status=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -X POST "https://api.github.com/repos/WolffM/hadoku_site/dispatches" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $HADOKU_SITE_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -d "{\"event_type\": \"packages_updated\", \"client_payload\": {\"packages\": [\"@wolffm/fleet-manager\"], \"sha\": \"${{ github.sha }}\", \"ref\": \"${{ github.ref }}\"}}")
+          if [ "$status" != "204" ]; then
+            echo "::error::packages_updated dispatch to hadoku_site returned HTTP $status — published, but the consumer was not told."
+            exit 1
+          fi
+          echo "packages_updated dispatched for @wolffm/fleet-manager"
+
+      # A red run is seen by nobody unless it says so itself: nothing polls
+      # these repos. `always()` so RECOVERIES report too -- without the success
+      # side the alert state stays broken and the next real failure arrives as a
+      # suppressed reminder rather than a new alert.
+      - name: Report the outcome so a silent failure can't hide
+        if: always()
+        uses: WolffM/hadoku-actions/report-job@v1
+        with:
+          job-name: fleet-manager:publish
+          service-key: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
+          started-at: ${{ env.JOB_STARTED_AT }}

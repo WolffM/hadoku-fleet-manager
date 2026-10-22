@@ -1,0 +1,87 @@
+node_modules
+dist/
+
+# Agent worktrees. git skips a REGISTERED worktree in `status`, so these never
+# show as untracked — but eslint and prettier walk the filesystem and happily
+# lint a second, stale copy of the whole repo. Measured 2026-08-30: 172 of the
+# 250 files eslint touched were in here, and `lint:types` reported 513 problems
+# of which ZERO were in src/. A gate that reports another branch's code is worse
+# than no gate.
+.claude/worktrees/
+*.tsbuildinfo
+.eslintcache
+
+# NEVER commit an npmrc. CI injects a token into the checkout copy; a tracked
+# one would let commit-back workflows leak it. The host's tokenless ~/.npmrc
+# expands ${NODE_AUTH_TOKEN} from the environment and serves local + CI alike.
+.npmrc
+
+# Holds this checkout's vault key. dev-vault resolves it from CWD.
+.devvault.local.json
+
+# Site facts that are not package content: switch/AP addresses, port maps, the
+# LAN topology. Same reasoning as manifests/ shipping an RFC 5737 placeholder —
+# this repo is published, and a network diagram is a property of the SITE.
+# CREDENTIALS DO NOT GO HERE EITHER; they go through the hadoku_site broker.
+*.local.json
+
+.DS_Store
+*.log
+.dev-logs/
+
+# Scratch output from the playwright MCP server. Another tool's working files,
+# not this repo's — same reason .claude/worktrees/ is here.
+.playwright-mcp/
+
+# Downloaded OS installer images. onboarding.sh caches them in
+# ${XDG_CACHE_HOME:-~/.cache}/hadoku-fleet/iso — OUTSIDE the repo, so this entry
+# is belt-and-braces for anyone who points a cache at the working tree. A ~700MB
+# binary in a package whose `files` field publishes `scripts/` would ship to
+# every consumer of @wolffm/fleet-manager.
+*.iso
+SHA256SUMS
+
+# Vendored history: the minions tree, kept as local evidence and NOT published.
+# It carried the operator's home LAN, Tailscale addresses, per-machine hardware
+# and a USER.md with personal details — none of which belongs in a repo
+# that is going public. Untracked and stripped from history on 2026-08-30.
+#
+# git says nothing about an ignored path, and prettier/eslint walk the
+# filesystem anyway: `prettier --write .` reformatted 20 files in here on
+# 2026-08-30, including both claw retrospectives, with no diff to reveal it.
+# That is why this path is ALSO in .prettierignore and eslint's ignores, and
+# why .gitattributes pins `archive/** -text`. All four, or none.
+#
+# infra/archive/claw-{2,3}-Bazooka.txt exist in NO other repository — minions'
+# own .gitignore excludes *-Bazooka.txt. This working copy is the only one.
+# Do not `git clean -x` this directory.
+archive/
+
+# Per-workstream handoff briefs, written by the manager session INSIDE a
+# worktree — one file per lane, scaffolding for a session rather than repo
+# content. They must never land on main. Same failure mode as
+# .claude/worktrees/ above: git says nothing about an untracked path, but
+# prettier and eslint walk the filesystem and will happily reformat or lint it.
+# So this path is in .gitignore, .prettierignore AND eslint's `ignores`.
+# All three, or none.
+docs/handoff/
+
+# Python bytecode, written beside a module whenever something imports or
+# compiles it. Two were committed with the scripts/runner-mem-*.py files —
+# binary, interpreter-versioned, and published, since `files` ships `scripts/`.
+# Untracked 2026-09-18. Same trap as docs/handoff/ above: git goes quiet about
+# an ignored path while prettier and eslint still walk it, so this is ALSO in
+# .prettierignore and eslint's `ignores`. All three, or none.
+__pycache__/
+*.pyc
+
+# The publish-safety denylist: what must never ship, so it cannot ship either.
+# scripts/lib/publish-safety-guard.test.mjs reads it; CI reads the PUBLISH_DENYLIST secret.
+.publish-denylist
+
+# The planning docs. They live in WolffM/hadoku-fleet-manager-private and appear
+# here only as a symlink that scripts/attach-private.sh makes. Ignored so a bare
+# `git add .` cannot commit it; publish-safety-guard fails if `git add -f` does.
+# prettier walks the symlink like any directory, so this path is ALSO in
+# .prettierignore and eslint's `ignores`. All three, or none.
+/docs/planning

@@ -1,0 +1,74 @@
+{
+  "$comment": [
+    "THE EGRESS TAXONOMY. fleet-manager SPECIFIES this; local-hawk ROUTES on it.",
+    "Boundary agreed 2026-09-05 (local-hawk/docs/handoff-fleet-manager-2026-09-05.md §5):",
+    "we say which cgroups carry fleet work and must egress direct; local-hawk owns the",
+    "nftables/ip-rule policy that puts everything else through the tunnel, and verifies it.",
+    "Do NOT add routing, marks, interfaces or CIDRs to this file — that is the other half.",
+    "",
+    "Every entry is a PREFIX match on the observed cgroup path, so a new PM2 service and",
+    "a newly-minted JIT runner are covered with no edit here. That is the drift resistance,",
+    "and it is why the taxonomy is cgroups rather than a process list."
+  ],
+  "directEgress": [
+    {
+      "cgroup": "/system.slice/pm2-hadoku.service",
+      "holds": "every PM2 app plus cloudflared",
+      "why": "ecosystem services and the tunnel that fronts them. A consumer-VPN exit IP in front of the hosted sites is not a posture anyone chose."
+    },
+    {
+      "cgroup": "/user.slice/user-1000.slice/user@1000.service/ci.slice/ci-runner.slice",
+      "holds": "the standing per-repo runner units, and every JIT runner minted into the same slice",
+      "why": "runners long-poll the GitHub API and move serious volume (356 GB read / 1.6 TB written). A shared consumer-VPN exit is a plausible source of rate limits and flaky long-polls. Treat runners as INFRASTRUCTURE, not as the human."
+    },
+    {
+      "cgroup": "/user.slice/user-1000.slice/user@1000.service/vpnbypass.slice",
+      "holds": "Discord and the Battle.net launcher, placed there by their own launchers",
+      "why": "The third reason for direct egress, and the first that is not about fleet role: these destinations REFUSE a VPN exit. Phase 4 moved unclassified Cloudflare traffic onto the tunnel as designed, and Discord then answered every API call 403 / code 40333 and hung on its \"Starting\" splash; Battle.net rejected the login as a VPN. Measured 2026-09-13. Nothing malfunctioned -- the taxonomy only encoded \"this is fleet infrastructure\" as a reason to stay direct, so the operator's own apps fell into \"everything else\". Membership is a named decision, as hokonLocal is: everything in this slice wears the real WAN address. Add an app only when the service actually blocks the tunnel."
+    }
+  ],
+  "$comment_ecosystemRoot": [
+    "A PM2 app is ecosystem when its pm_cwd is this path OR A DIRECTORY UNDER IT.",
+    "PREFIX, not equality: mgmt-api runs from srv/hadoku_site/services/mgmt-api, so an",
+    "equality test misclassifies the single most important service on the box as unknown."
+  ],
+  "ecosystemRoot": "srv/hadoku_site",
+  "$comment_hokonLocal": [
+    "Apps that run under PM2 but are NOT hadoku ecosystem services. They sit in",
+    "pm2-hadoku.service, so under the policy above they receive DIRECT egress — that is a",
+    "known, accepted leak, not an oversight, and naming them here is what makes it a",
+    "decision rather than an accident. An app that is neither under ecosystemRoot nor",
+    "listed here FAILS the gate: a new PM2 app silently inheriting fleet egress is the",
+    "drift this file exists to catch.",
+    "",
+    "To stop leaking one, the fix is to move it out of PM2 or give it its own slice —",
+    "not to delete its line here."
+  ],
+  "hokonLocal": [
+    {
+      "app": "jd-clipboard-watch",
+      "class": "hokon-local",
+      "why": "JDownloader clipboard helper — the operator's desktop tooling, no fleet role."
+    },
+    {
+      "app": "obs-game-sort",
+      "class": "hokon-local",
+      "why": "OBS capture sorting under ~/setup/drive-organization — desktop tooling, no fleet role."
+    },
+    {
+      "app": "valheim",
+      "class": "hokon-local",
+      "why": "Valheim dedicated game server under /mnt/games/valheim-server, with its own ecosystem.config.cjs and wrapper. Nothing in hadoku_site references it and cloudflared has no ingress for it — the operator's game box, no fleet role."
+    },
+    {
+      "app": "valheim-panel",
+      "class": "hokon-local",
+      "why": "The admin web panel beside it (panel/panel.py, same root). Same classification and the same reason: it fronts the game server only, not anything on hadoku.me."
+    },
+    {
+      "app": "pm2-logrotate",
+      "class": "platform",
+      "why": "PM2's own module, running from ~/.pm2/modules. Not ours and not the operator's; it is the process manager maintaining itself."
+    }
+  ]
+}

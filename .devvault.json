@@ -1,0 +1,5 @@
+{
+  "//": "Loaded by ../hadoku_site/scripts/secrets/dev-vault.mjs. Names map local env var -> vault item. No admin-tier credential here by policy.",
+  "HADOKU_SITE_TOKEN": "HADOKU_SITE_TOKEN",
+  "HADOKU_NPM_READ_TOKEN": "HADOKU_NPM_READ_TOKEN"
+}
