@@ -38,6 +38,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseJsonStdout, spawnCapture } from './lib/spawn-json.mjs';
 import { tempDir, cleanupTempDirs } from './lib/test-tmpdir.mjs';
 
+/**
+ * Every directory this suite creates under os.tmpdir() starts with this, and
+ * the LAST hook in the file fails if any survive (#129). The pid is what makes
+ * that check this process's alone: other sessions run this suite concurrently
+ * against the same /tmp, so a bare `ci-throttle-*` count would flake. On the
+ * claws and hokon /tmp is RAM, and this suite once left ~950 MB there; each
+ * nodeFixture() holds a 1.3 MB copy of bash.
+ */
+const FIXTURE_PREFIX = `ci-throttle-${process.pid}-`;
+
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 const HOOK = join(SCRIPTS, 'ci-throttle.sh');
 const DEPLOYER = join(SCRIPTS, 'deploy-ci-throttle.mjs');
@@ -75,7 +85,7 @@ function ambient() {
 let _defaultDfDir;
 function defaultDfDir() {
 	if (_defaultDfDir) return _defaultDfDir;
-	const bin = mkdtempSync(join(tmpdir(), 'ci-throttle-hookenv-df-'));
+	const bin = mkdtempSync(join(tmpdir(), `${FIXTURE_PREFIX}hookenv-df-`));
 	writeFileSync(
 		join(bin, 'df'),
 		'#!/bin/sh\necho "Filesystem 1M-blocks Used Available Use% Mounted"\necho "fixture 100000000 1 99999999 0% x"\n',
@@ -137,7 +147,7 @@ function hookEnv(env) {
  * refusing IS the behaviour under test.
  */
 function run({ conf = {}, others = 0, memAvailableMb = 999_999, env = {} } = {}) {
-	const dir = tempDir('ci-throttle-');
+	const dir = tempDir(`${FIXTURE_PREFIX}run-`);
 	try {
 		const confPath = join(dir, 'ci-throttle.conf');
 		writeFileSync(
@@ -288,7 +298,7 @@ test('an ambient GITHUB_WORKFLOW cannot exempt a case that did not ask for it', 
 });
 
 test('a broken config fails OPEN — uncertainty is never grounds for refusal', () => {
-	const dir = tempDir('ci-throttle-badconf-');
+	const dir = tempDir(`${FIXTURE_PREFIX}badconf-`);
 	try {
 		const confPath = join(dir, 'ci-throttle.conf');
 		writeFileSync(confPath, 'MAX_CONCURRENT=not-a-number\nMIN_FREE_MB=0\nMAX_WAIT_S=2\n');
@@ -321,7 +331,7 @@ test('the default config (no conf file at all) is permissive, not enforcing', ()
 	// 50 "other" jobs must still admit; if the permissive default ever flipped
 	// to enforcing, this would be the one test that catches it, so it has to
 	// assert the exit code, not just "did not throw".
-	const dir = tempDir('ci-throttle-noconf-');
+	const dir = tempDir(`${FIXTURE_PREFIX}noconf-`);
 	try {
 		const r = spawnSync('bash', [HOOK], {
 			encoding: 'utf8',
@@ -385,7 +395,7 @@ const BASH = execFileSync('sh', ['-c', 'command -v bash'], { encoding: 'utf8' })
  * counted, so the same fixture reproduces the deadlock against it.
  */
 function nodeFixture({ maxConcurrent, maxWaitS, minFreeMb = 0, memAvailableMb = 999_999 }) {
-	const home = tempDir('ci-throttle-node-');
+	const home = tempDir(`${FIXTURE_PREFIX}node-`);
 	const confPath = join(home, 'ci-throttle.conf');
 	writeFileSync(
 		confPath,
@@ -752,7 +762,7 @@ test('#67: an UNREADABLE admitted-job count never becomes a placement finding', 
 
 /** A temp `fleet-runner-coverage.json` holding exactly the facets given. */
 function reserveFixture(facets) {
-	const dir = tempDir('ci-throttle-reserve-');
+	const dir = tempDir(`${FIXTURE_PREFIX}reserve-`);
 	const file = join(dir, 'fleet-runner-coverage.json');
 	writeFileSync(file, JSON.stringify({ facets }));
 	return file;
@@ -760,7 +770,7 @@ function reserveFixture(facets) {
 
 /** A temp file standing in for this job's cgroup `memory.max`. */
 function capFixture(bytesOrMax) {
-	const dir = tempDir('ci-throttle-cap-');
+	const dir = tempDir(`${FIXTURE_PREFIX}cap-`);
 	const file = join(dir, 'memory.max');
 	writeFileSync(file, `${bytesOrMax}\n`);
 	return file;
@@ -919,7 +929,7 @@ test('#76: the lower-bound shape (jobP95Mb.mb raised off a capped run) is still 
 
 /** A temp manifest dir holding `machines`, plus the state dir the script wants. */
 function manifestFixture(machines) {
-	const root = tempDir('throttle-role-');
+	const root = tempDir(`${FIXTURE_PREFIX}role-`);
 	const manifestDir = join(root, 'manifests');
 	const stateDir = join(root, 'state');
 	mkdirSync(manifestDir, { recursive: true });
@@ -1410,7 +1420,7 @@ test('deployer: the skip reads the ROLE, not the capacity numbers or the name', 
 // directory (see nodeFixture/requirePruneRoot above), so these cases never
 // touch the real host's /tmp. A stub `df` on PATH (stubDf) drives the
 // threshold arithmetic deterministically.
-const PRUNE_SCRATCH = mkdtempSync(join(tmpdir(), 'ci-throttle-prune-scratch-'));
+const PRUNE_SCRATCH = mkdtempSync(join(tmpdir(), `${FIXTURE_PREFIX}prune-scratch-`));
 after(() => rmSync(PRUNE_SCRATCH, { recursive: true, force: true }));
 const EPHEMERAL_TS_SRC = readFileSync(
 	join(SCRIPTS, '..', 'src', 'runners', 'ephemeral.ts'),
@@ -1897,7 +1907,7 @@ function stubPgrep(scratchDir, pids, { includeSelf = true } = {}) {
 }
 
 test('host load: the start line carries all four values against a fixture /proc', () => {
-	const dir = tempDir('ci-throttle-hostload-');
+	const dir = tempDir(`${FIXTURE_PREFIX}hostload-`);
 	try {
 		const loadavg = join(dir, 'loadavg');
 		writeFileSync(loadavg, '2.50 1.30 0.80 3/120 12345\n');
@@ -1960,7 +1970,7 @@ test('host load: an unreadable /proc/loadavg reads "unreadable", not a guessed 0
 });
 
 test('host load: co-tenants are counted EXCLUDING the job itself', () => {
-	const dir = tempDir('ci-throttle-hostload-self-');
+	const dir = tempDir(`${FIXTURE_PREFIX}hostload-self-`);
 	try {
 		const procRoot = join(dir, 'proc');
 		mkdirSync(procRoot, { recursive: true });
@@ -1992,7 +2002,7 @@ test('host load: co-tenants are counted EXCLUDING the job itself', () => {
 });
 
 test('host load: zero co-tenants reads as "repos=none", not an empty string', () => {
-	const dir = tempDir('ci-throttle-hostload-zero-');
+	const dir = tempDir(`${FIXTURE_PREFIX}hostload-zero-`);
 	try {
 		const pgrepBin = stubPgrep(dir, [], { includeSelf: false });
 		const r = run({
@@ -2008,7 +2018,7 @@ test('host load: zero co-tenants reads as "repos=none", not an empty string', ()
 });
 
 test('host load: no pgrep on PATH at all reads "unreadable", not zero', () => {
-	const dir = tempDir('ci-throttle-hostload-nopgrep-');
+	const dir = tempDir(`${FIXTURE_PREFIX}hostload-nopgrep-`);
 	try {
 		// A PATH with nothing named pgrep on it — coreutils/bash essentials only.
 		// A genuinely missing pgrep must read as "could not look", never as a
@@ -2045,4 +2055,37 @@ test('host load: no pgrep on PATH at all reads "unreadable", not zero', () => {
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+// --- THE LEAK GATE (#129). Registered LAST, so it runs after every other
+// `after` in this file (the df stub's and PRUNE_SCRATCH's) and after the final
+// afterEach cleanup. A fixture any case forgets to remove fails the suite here
+// instead of accumulating in a RAM-backed /tmp.
+
+test('static: every temp dir this suite creates under tmpdir() carries FIXTURE_PREFIX', () => {
+	// Built, not written, so this case's own lines are not creation sites.
+	const sites = ['tempDir' + '(', 'mkdtempSync(join(' + 'tmpdir()'];
+	const creations = readFileSync(fileURLToPath(import.meta.url), 'utf8')
+		.split('\n')
+		.filter((l) => !/^\s*(\*|\/\/)/.test(l) && sites.some((s) => l.includes(s)));
+	assert.ok(
+		creations.length >= 10,
+		`expected the suite's creation sites, found ${creations.length}`
+	);
+	assert.deepEqual(
+		creations.filter((l) => !l.includes('${FIXTURE_PREFIX}')),
+		[],
+		'a temp dir without FIXTURE_PREFIX is invisible to the leak gate below'
+	);
+});
+
+after(() => {
+	const left = readdirSync(tmpdir()).filter((n) => n.startsWith(FIXTURE_PREFIX));
+	for (const n of left) rmSync(join(tmpdir(), n), { recursive: true, force: true });
+	assert.deepEqual(
+		left,
+		[],
+		`ci-throttle.test.mjs left ${left.length} fixture dir(s) in ${tmpdir()} (removed now, but ` +
+			'a case is missing its cleanup — on the claws /tmp is RAM)'
+	);
 });
