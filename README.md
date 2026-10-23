@@ -26,9 +26,12 @@ anything single-repo. Those stay in `hadoku_site`.
 
 ## Running it
 
-fleet-manager runs as **its own service** — `node dist/serve.js`, PM2 name
-`fleet-manager`, bound to `127.0.0.1` (nothing here is reachable from the
-edge). It serves:
+**Today, production runs it in-process inside mgmt-api** (next section). The
+standalone service below is built and tested but not yet deployed; moving to
+it is in progress.
+
+As its own service — `node dist/serve.js`, PM2 name `fleet-manager`, bound to
+`127.0.0.1` (nothing here is reachable from the edge) — it serves:
 
 | route                        | for                                                              |
 | ---------------------------- | ---------------------------------------------------------------- |
@@ -56,11 +59,11 @@ no hostname:
 `FLEET_LOOPS=off` exists for a cutover only: the loops WRITE runner labels, and
 two copies running at once would be two writers on one label.
 
-## Consuming it in-process (deprecated)
+## Consuming it in-process (production today)
 
-Until the standalone service took over, mgmt-api built a `FleetHost` and ran
-this package inside its own process. That path still works and is being
-retired (`docs/planning/leave-hadoku-site-2026-09-21.md`). `serve.ts` is the
+mgmt-api builds a `FleetHost` and runs this package inside its own process.
+This is the live path; it is being retired in favour of the standalone service
+(`docs/planning/leave-hadoku-site-2026-09-21.md`). `serve.ts` is the
 reference host — `standaloneHost()` in `src/standalone.ts`.
 
 ```ts

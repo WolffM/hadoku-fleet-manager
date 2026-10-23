@@ -5,7 +5,7 @@ Library + CLI that manages the hadoku CI fleet. Published as
 port, no PM2 entry.
 
 **This repo is PUBLIC. `WolffM/hadoku-fleet-manager-private` holds the rest.**
-It was cut from one squashed commit on 2026-10-20. The private repo
+It was cut from one squashed commit on 2026-10-22. The private repo
 (checkout `~/repos/hadoku-fleet-manager-private`) keeps three things:
 
 - **`docs/planning/`**, at the SAME relative path. `bash scripts/attach-private.sh`
@@ -229,8 +229,11 @@ different things. Read it before naming anything new.
 ## Known gaps — read before assuming these work
 
 - **This repo is inside the fleet-wide gates.** It is in
-  `fleet-runner-coverage.json`, `ci-watch.generated.json`, the token-rotation
-  list and branch protection. It is NOT in coverage `facets`, and that is
+  `fleet-runner-coverage.json`, `ci-watch.generated.json` and branch
+  protection. It is deliberately NOT in hadoku_site's PAT rotation list
+  (`manage_github_token.py`): a public repo holds no PAT, and its workflows
+  fetch tokens from the vault with `KEY_SERVICE_FLEET_MANAGER`, which
+  key-lifecycle rotates. It is NOT in coverage `facets`, and that is
   CORRECT rather than a gap: `deriveFacets` writes a key only for a repo with
   `@wolffm/*` dependencies, a UI app, or a micro-frontend, and this package has
   no `dependencies` field at all. So `check-header-fleet` / `check-tier-fleet` /

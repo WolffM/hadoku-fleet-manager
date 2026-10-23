@@ -3,7 +3,7 @@
 #
 #   bash scripts/attach-private.sh        # from any worktree of this repo
 #
-# This repo was cut public from ONE squashed commit on 2026-10-20. Everything it
+# This repo was cut public from ONE squashed commit on 2026-10-22. Everything it
 # left behind lives in WolffM/hadoku-fleet-manager-private: docs/planning/, the
 # issues cited as bare `#N` in comments, and the 762 commits before the cut.
 # This script makes both reachable locally and publishes neither:

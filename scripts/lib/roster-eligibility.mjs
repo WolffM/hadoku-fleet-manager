@@ -84,7 +84,7 @@ export function autoIncludeDrop(repo, ai, probe, now = Date.now()) {
  * `resolveDesired` records a departure only for a repo it VISITS, and it visits
  * the current repo list. A covered repo that is simply ABSENT from that list —
  * renamed, transferred or deleted — was never visited, so it left the roster
- * with no record at all. That is fleet-manager#135: on 2026-10-22 the repo was
+ * with no record at all. That is #135: on 2026-10-22 the repo was
  * renamed to `-private` (which the manifest skips) before the public repo took
  * the old name, the nightly reconcile dropped `WolffM/hadoku-fleet-manager` from
  * coverage and ci-watch in a `[skip ci]` commit, and hadoku_site main went red

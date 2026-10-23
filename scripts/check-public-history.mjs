@@ -64,7 +64,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 				`   ${b.ref} ${b.sha.slice(0, 12)} → root(s) ${b.roots.map((r) => r.slice(0, 12)).join(', ')}`
 			);
 		}
-		console.error('   Almost always a MERGE with a branch begun before the 2026-10-20 cut.');
+		console.error('   Almost always a MERGE with a branch begun before the 2026-10-22 cut.');
 		console.error('   Pushing it would publish the private history. Rebase instead:');
 		console.error('     git reset --hard <your pre-merge commit> && git rebase main');
 		process.exit(1);
