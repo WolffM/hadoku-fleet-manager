@@ -670,3 +670,93 @@ test('a dry run counts named debris once, under its own rule, never again as unc
 	assert.match(r.stdout, /unclassified_kb=0 /);
 	assert.match(r.stdout, /tmpfs_kb=[1-9]/);
 });
+
+// --- A venv whose interpreter is gone (#127) ---
+//
+// hadoku-registry's drift-check on hokon, 2026-10-17: `.venv/bin/pip: cannot
+// execute: required file not found`. The venv in a reused `_work` checkout
+// pointed at a Python that a tool-cache refresh had replaced.
+
+/** A venv at `dir`: pyvenv.cfg plus bin/python as a symlink to `target`. */
+function mkVenv(dir, target) {
+	mkdirSync(join(dir, 'bin'), { recursive: true });
+	writeFileSync(join(dir, 'pyvenv.cfg'), `home = ${dirname(target)}\n`);
+	symlinkSync(target, join(dir, 'bin', 'python'));
+}
+
+test('venv: a broken one in an idle JIT slot goes; a healthy one, a --copies one and the checkout stay', () => {
+	const fixtureRoot = mkfixture();
+	const env = baseEnv(fixtureRoot, { MAX_CONCURRENT_NODE: '3' });
+	const checkout = join(env.JIT_ROOT, 'slot0', '_work', 'hadoku-registry', 'hadoku-registry');
+	const broken = join(checkout, '.venv');
+	mkVenv(broken, join(fixtureRoot, 'gone', 'python3.11'));
+	const healthy = join(env.JIT_ROOT, 'slot1', '_work', 'tenhands', 'tenhands', '.venv-ci');
+	mkVenv(healthy, process.execPath);
+	const copies = join(env.JIT_ROOT, 'slot2', '_work', 'study', 'study', '.venv');
+	mkdirSync(join(copies, 'bin'), { recursive: true });
+	writeFileSync(join(copies, 'pyvenv.cfg'), 'home = /nowhere\n');
+	writeFileSync(join(copies, 'bin', 'python'), '');
+
+	const r = run(fixtureRoot, env);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(existsSync(broken), false, 'a venv whose interpreter is gone must be removed');
+	assert.equal(existsSync(checkout), true, 'only the venv goes, never the checkout around it');
+	assert.equal(existsSync(healthy), true, 'a venv whose interpreter resolves must survive');
+	assert.equal(existsSync(copies), true, 'a --copies venv has no link to dangle and must survive');
+	assert.match(r.stdout, /BROKEN-VENV .*hadoku-registry\/\.venv -> .*gone\/python3\.11/);
+	assert.match(r.stdout, /venv_kb=\d+/);
+});
+
+test('venv: a broken one under a standing runner goes too, and a busy runner is never touched', () => {
+	const fixtureRoot = mkfixture();
+	const env = baseEnv(fixtureRoot);
+	const runner = join(env.HOME, 'runners', 'actions-runner-hadoku-registry');
+	for (const v of ['bin.2.330.0', 'externals.2.330.0'])
+		mkdirSync(join(runner, v), { recursive: true });
+	symlinkSync(join(runner, 'bin.2.330.0'), join(runner, 'bin'));
+	symlinkSync(join(runner, 'externals.2.330.0'), join(runner, 'externals'));
+	writeFileSync(join(runner, '.runner'), '{}');
+	const venv = join(runner, '_work', 'hadoku-registry', 'hadoku-registry', '.venv');
+	mkVenv(venv, join(fixtureRoot, 'gone', 'python3.12'));
+
+	// Busy first: a worker whose PARENT's argv names this runner's
+	// bin/Runner.Listener, which is how the script attributes a live job.
+	const listenerPath = join(runner, 'bin', 'Runner.Listener');
+	const childPidFile = join(fixtureRoot, 'worker.pid');
+	writeFileSync(listenerPath, `#!/bin/sh\nsleep 10 &\necho $! > ${childPidFile}\nwait\n`);
+	chmodSync(listenerPath, 0o755);
+	const listener = spawn(listenerPath, [], { stdio: 'ignore' });
+	try {
+		const deadline = Date.now() + 5000;
+		while (!existsSync(childPidFile) && Date.now() < deadline) spawnSync('sleep', ['0.05']);
+		const workerPid = readFileSync(childPidFile, 'utf8').trim();
+		const busy = run(fixtureRoot, env, { stubBin: mkStubBin({ workerPid }) });
+		assert.equal(busy.status, 0, busy.stderr);
+		assert.match(busy.stdout, /SKIP-BUSY runners\/actions-runner-hadoku-registry/);
+		assert.equal(existsSync(venv), true, 'a runner mid-job keeps even a broken venv');
+	} finally {
+		listener.kill();
+		try {
+			process.kill(Number(readFileSync(childPidFile, 'utf8')));
+		} catch {
+			// already gone
+		}
+	}
+
+	const r = run(fixtureRoot, env);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(existsSync(venv), false, 'an idle standing runner loses its broken venv');
+	assert.match(r.stdout, /BROKEN-VENV runners\/actions-runner-hadoku-registry\/_work/);
+});
+
+test('venv: a dry run names the broken venv and deletes nothing', () => {
+	const fixtureRoot = mkfixture();
+	const env = baseEnv(fixtureRoot, { MAX_CONCURRENT_NODE: '3' });
+	delete env.APPLY;
+	const venv = join(env.JIT_ROOT, 'slot0', '_work', 'r', 'r', '.venv');
+	mkVenv(venv, join(fixtureRoot, 'gone', 'python3.11'));
+	const r = run(fixtureRoot, env);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(existsSync(venv), true, 'a dry run must never delete');
+	assert.match(r.stdout, /WOULD-REMOVE .*r\/r\/\.venv/);
+});

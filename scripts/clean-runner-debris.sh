@@ -23,6 +23,11 @@
 #   _work/_update             self-update staging, re-created on the next update.
 #   _diag/*.log               older than DIAG_KEEP_DAYS. Rotation, not deletion:
 #                             recent logs are how a failed job gets diagnosed.
+#   _work/**/<venv>           a virtualenv whose bin/python is a symlink to an
+#                             interpreter that no longer exists (#127). It can
+#                             never run again, and the next job that reuses the
+#                             checkout dies on `.venv/bin/pip: cannot execute`
+#                             instead of building a fresh one.
 #
 # NEVER touched: `.credentials`, `.runner`, `.env`, anything under a runner
 # that is currently RUNNING A JOB, or a path any live process still has open
@@ -129,6 +134,7 @@ kb_diag=0
 kb_tmpfs=0
 kb_slot=0
 kb_work=0
+kb_venv=0
 kb_unclassified=0
 tmpfs_used_kb=0
 skipped_busy=0
@@ -243,12 +249,36 @@ drop() { # path kind
 	orphan) kb_orphan=$((kb_orphan + sz)) ;;
 	slot) kb_slot=$((kb_slot + sz)) ;;
 	work) kb_work=$((kb_work + sz)) ;;
+	venv) kb_venv=$((kb_venv + sz)) ;;
 	esac
 	if [ "$APPLY" = 1 ]; then
 		rm -rf -- "$1" && removed=$((removed + 1)) && echo "REMOVED ${1#"$HOME"/}"
 	else
 		echo "WOULD-REMOVE ${1#"$HOME"/} ($((sz / 1024))M)"
 	fi
+}
+
+# sweep_broken_venvs RUNNER_DIR — drop every virtualenv under its `_work`
+# whose interpreter is gone (#127). A venv's bin/python is a SYMLINK to the
+# interpreter that built it; when a tool-cache refresh replaces that Python, the
+# link dangles, the venv can never run again, and a workflow that reuses the
+# checkout (`[ -d .venv ] || python3 -m venv .venv`) fails on the old one —
+# hadoku-registry's drift-check on hokon, 2026-10-17. Identified by
+# `pyvenv.cfg`, which only a venv carries, at the depth a checkout puts one
+# (`_work/<repo>/<repo>/.venv`). A venv built with --copies has a real file,
+# not a link, and is never a candidate. Callers have already ruled out a busy
+# runner.
+sweep_broken_venvs() {
+	[ -d "$1/_work" ] || return 0
+	local cfg v py
+	while IFS= read -r cfg; do
+		v=$(dirname "$cfg")
+		py="$v/bin/python"
+		[ -L "$py" ] || py="$v/bin/python3"
+		[ -L "$py" ] && [ ! -e "$py" ] || continue
+		echo "BROKEN-VENV ${v#"$HOME"/} -> $(readlink "$py")"
+		drop "$v" venv
+	done < <(find "$1/_work" -mindepth 2 -maxdepth 4 -name pyvenv.cfg -type f 2>/dev/null)
 }
 
 # $HOME/actions-runner (no suffix) is deliberate, not redundant with the glob
@@ -318,6 +348,7 @@ for d in "$HOME"/runners/actions-runner-* "$HOME"/actions-runner-* "$HOME/action
 	done
 
 	[ -d "$d/_work/_update" ] && drop "$d/_work/_update" update
+	sweep_broken_venvs "$d"
 
 	if [ -d "$d/_diag" ]; then
 		sz=$(find "$d/_diag" -name '*.log' -mtime "+$DIAG_KEEP_DAYS" -printf '%k\n' 2>/dev/null |
@@ -375,6 +406,7 @@ if [ -n "$MAX_CONCURRENT_NODE" ] && [ -d "$JIT_ROOT" ]; then
 		# anything GitHub's runner itself names with a leading underscore) are
 		# skipped by name: only repo trees are staleness candidates here.
 		[ -d "$sd/_work" ] || continue
+		sweep_broken_venvs "$sd"
 		for wd in "$sd"/_work/*; do
 			[ -d "$wd" ] || continue
 			wdbase=$(basename "$wd")
@@ -650,4 +682,4 @@ else
 fi
 
 free_kb=$(df -Pk "$HOME" | tail -1 | awk '{print $4}')
-echo "SUMMARY host=$(hostname) stale_kb=$kb_stale update_kb=$kb_update orphan_kb=$kb_orphan diag_kb=$kb_diag tmpfs_kb=$kb_tmpfs tmpfs_used_kb=$tmpfs_used_kb slot_kb=$kb_slot work_kb=$kb_work unclassified_kb=$kb_unclassified removed=$removed busy_skipped=$skipped_busy free_kb=$free_kb"
+echo "SUMMARY host=$(hostname) stale_kb=$kb_stale update_kb=$kb_update orphan_kb=$kb_orphan diag_kb=$kb_diag tmpfs_kb=$kb_tmpfs tmpfs_used_kb=$tmpfs_used_kb slot_kb=$kb_slot work_kb=$kb_work venv_kb=$kb_venv unclassified_kb=$kb_unclassified removed=$removed busy_skipped=$skipped_busy free_kb=$free_kb"

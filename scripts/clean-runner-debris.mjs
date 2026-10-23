@@ -188,6 +188,7 @@ for (const m of nodes) {
 		Number(f.orphan_kb ?? 0) +
 		Number(f.diag_kb ?? 0) +
 		Number(f.tmpfs_kb ?? 0) +
+		Number(f.venv_kb ?? 0) +
 		Number(f.unclassified_kb ?? 0);
 	totalKb += kb;
 	// What the backstop sweep found that no rule names, by class. Printed and
@@ -221,6 +222,16 @@ for (const m of nodes) {
 			`\n   free after: ${GB(f.free_kb ?? 0)} GB` +
 			(Number(f.tmpfs_used_kb ?? 0)
 				? `\n   tmpfs /tmp: ${GB(f.tmpfs_used_kb)} GB resident in RAM, ${GB(f.tmpfs_kb ?? 0)} GB reclaimable`
+				: '') +
+			// A venv whose interpreter is gone (#127): named per path, because each
+			// one is a checkout that would have failed its next job.
+			(Number(f.venv_kb ?? 0)
+				? `\n   broken venvs (interpreter gone): ${GB(f.venv_kb)} GB` +
+					r.out
+						.split('\n')
+						.filter((l) => l.startsWith('BROKEN-VENV '))
+						.map((l) => `\n     ${l.slice('BROKEN-VENV '.length)}`)
+						.join('')
 				: '') +
 			(Number(f.unclassified_kb ?? 0)
 				? `\n   unclassified (no rule names it, untouched a day): ${GB(f.unclassified_kb)} GB` +
