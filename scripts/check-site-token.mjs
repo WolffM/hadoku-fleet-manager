@@ -73,33 +73,71 @@ function holdsSecret(repo) {
 	return last;
 }
 
-function onDisk(dir) {
-	const workflows = {};
-	const wf = join(dir, '.github', 'workflows');
-	if (existsSync(wf)) {
-		for (const file of readdirSync(wf)) {
-			if (!/\.ya?ml$/.test(file)) continue;
-			workflows[file] = workflowRefs(readFileSync(join(wf, file), 'utf8'));
+/** One git read in a checkout. */
+function git(dir, args) {
+	return execFileSync('git', args, {
+		cwd: dir,
+		encoding: 'utf8',
+		stdio: ['ignore', 'pipe', 'pipe'],
+		timeout: READ_TIMEOUT_MS,
+	});
+}
+
+/**
+ * Workflows and `.devvault.json` as SHIPPED: the default branch on origin,
+ * fetched first. A
+ * checkout's working tree is whatever someone last pulled, and nobody pulls
+ * most of them, so it reported workflows that were fixed hours earlier. Same
+ * source and same fetch-first rule as check-tier-fleet. A failed fetch is a
+ * finding, not a silent scan of a stale ref.
+ */
+function shipped(dir, branch) {
+	const ref = `origin/${branch}`;
+	const out = { workflows: {}, devvault: [], fetch: null };
+	try {
+		git(dir, ['fetch', 'origin', '--quiet']);
+	} catch (err) {
+		out.fetch = reason(err);
+	}
+	let files;
+	try {
+		files = git(dir, ['ls-tree', '--name-only', ref, '.github/workflows/', '.devvault.json'])
+			.split('\n')
+			.filter(Boolean);
+	} catch (err) {
+		out.devvault = `cannot list ${ref}: ${reason(err)}`;
+		return out;
+	}
+	for (const f of files) {
+		const body = git(dir, ['show', `${ref}:${f}`]);
+		if (f === '.devvault.json') {
+			try {
+				out.devvault = devvaultRefs(body);
+			} catch (err) {
+				out.devvault = err instanceof Error ? err.message : String(err);
+			}
+		} else if (/\.ya?ml$/.test(f)) {
+			out.workflows[f.split('/').pop()] = workflowRefs(body);
 		}
 	}
-	let devvault = [];
-	const dv = join(dir, '.devvault.json');
-	if (existsSync(dv)) {
-		try {
-			devvault = devvaultRefs(readFileSync(dv, 'utf8'));
-		} catch (err) {
-			devvault = err instanceof Error ? err.message : String(err);
-		}
-	}
-	return { workflows, devvault };
+	return out;
 }
 
 function main() {
 	let repos;
 	try {
 		repos = JSON.parse(
-			gh(['repo', 'list', OWNER, '--limit', '1000', '--no-archived', '--json', 'nameWithOwner'])
-		).map((r) => r.nameWithOwner);
+			gh([
+				'repo',
+				'list',
+				OWNER,
+				'--limit',
+				'1000',
+				'--no-archived',
+				'--json',
+				'nameWithOwner,defaultBranchRef',
+			])
+		);
 	} catch (err) {
 		const msg = `check-site-token: could not list ${OWNER}'s repos: ${reason(err)}`;
 		if (JSON_OUT) emitter.emit({ error: msg, examined: 0, findings: [] });
@@ -125,12 +163,20 @@ function main() {
 	// clone or an archived repo, and holds nothing of ours.
 	const findings = [];
 	let read = 0;
-	for (const repo of [...repos].sort()) {
+	for (const { nameWithOwner: repo, defaultBranchRef } of repos.sort((a, b) =>
+		a.nameWithOwner.localeCompare(b.nameWithOwner)
+	)) {
 		const dir = checkouts.get(repo);
 		if (dir) read++;
-		findings.push(
-			...repoFindings(repo, { secret: holdsSecret(repo), ...(dir ? onDisk(dir) : {}) })
-		);
+		const facts = dir ? shipped(dir, defaultBranchRef?.name || 'main') : {};
+		if (facts.fetch && !allowed.has(repo)) {
+			findings.push({
+				repo,
+				kind: 'unreadable',
+				detail: `could not fetch origin, so the default branch may be stale: ${facts.fetch}`,
+			});
+		}
+		findings.push(...repoFindings(repo, { secret: holdsSecret(repo), ...facts }, allowed));
 	}
 
 	const examined = { repos: repos.length, checkouts: read };
