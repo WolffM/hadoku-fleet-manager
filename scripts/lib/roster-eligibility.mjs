@@ -77,3 +77,52 @@ export function autoIncludeDrop(repo, ai, probe, now = Date.now()) {
 
 	return null;
 }
+
+/**
+ * Covered repos that are no longer in the owner's repo list, with the reason.
+ *
+ * `resolveDesired` records a departure only for a repo it VISITS, and it visits
+ * the current repo list. A covered repo that is simply ABSENT from that list —
+ * renamed, transferred or deleted — was never visited, so it left the roster
+ * with no record at all. That is fleet-manager#135: on 2026-10-22 the repo was
+ * renamed to `-private` (which the manifest skips) before the public repo took
+ * the old name, the nightly reconcile dropped `WolffM/hadoku-fleet-manager` from
+ * coverage and ci-watch in a `[skip ci]` commit, and hadoku_site main went red
+ * hours later while `-private` was still building and publishing.
+ *
+ * A rename is told apart from a deletion by looking the old name up: GitHub
+ * redirects a renamed repo, so the lookup answers with a DIFFERENT name.
+ * A lookup that fails for any reason other than 404 is still a departure — "I
+ * could not look" must not let the repo slip out quietly — and says so.
+ *
+ * A repo the manifest NAMES is not a departure: a `skip` or `ignore` entry is
+ * the operator's answer to exactly this question, and `resolveDesired` already
+ * reports a named-but-missing repo as retired.
+ *
+ * @param {readonly string[]} committedRoster the `repos` on disk
+ * @param {ReadonlySet<string> | Map<string, unknown>} universe names in the owner's repo list
+ * @param {(name: string) => ({ok: true, nameWithOwner: string} | {ok: false, notFound: boolean, reason: string})} lookup
+ * @param {ReadonlySet<string>} [answered] repos the manifest names
+ * @returns {{repo: string, why: string}[]}
+ */
+export function vanishedFromUniverse(committedRoster, universe, lookup, answered = new Set()) {
+	const out = [];
+	for (const name of committedRoster) {
+		if (universe.has(name) || answered.has(name)) continue;
+		const found = lookup(name);
+		let why;
+		if (found.ok && found.nameWithOwner !== name) {
+			why =
+				`renamed on GitHub to ${found.nameWithOwner}. If another repo is taking this ` +
+				'name, it does not exist yet; finish that before regenerating coverage';
+		} else if (found.ok) {
+			why = 'exists, but is missing from the owner repo list (a truncated listing?)';
+		} else if (found.notFound) {
+			why = 'no longer exists under the owner (deleted or transferred)';
+		} else {
+			why = `missing from the owner repo list and could not be looked up: ${found.reason}`;
+		}
+		out.push({ repo: name, why });
+	}
+	return out;
+}

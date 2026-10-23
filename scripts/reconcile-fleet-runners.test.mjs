@@ -578,6 +578,21 @@ case "$argv" in
       exit 1
     fi
     printf '{"content":"%s"}\\n' "$(printf '{"dependencies":{}}' | base64 -w0)" ;;
+  "api repos/"*)
+    # #135: a lookup of ONE repo by name. 404 unless GH_RENAMED ("old=new")
+    # says GitHub redirects it; any deeper path keeps the generic answer.
+    name="\${argv#api repos/}"
+    if [[ "$name" != */*/* && "$name" != *" "* ]]; then
+      renamed="\${GH_RENAMED:-}"
+      if [ -n "$renamed" ] && [ "\${renamed%%=*}" = "$name" ]; then
+        printf '{"full_name":"%s"}\\n' "\${renamed#*=}"
+      else
+        echo "gh: Not Found (HTTP 404)" >&2
+        exit 1
+      fi
+    else
+      echo '{}'
+    fi ;;
   *) echo '{}' ;;
 esac
 `;
@@ -612,13 +627,23 @@ fi
  * also satisfy the registration phase; a test that wants a clean exit code
  * passes one covering every (repo, claw) pair.
  */
-function coverageFixture({ repos, committedRepos, committedFacets, metricsRows, runners }) {
+function coverageFixture({
+	repos,
+	committedRepos,
+	committedFacets,
+	metricsRows,
+	runners,
+	skipRepos,
+}) {
 	const root = mkdtempSync(join(tmpdir(), 'reconcile-coverage-'));
 	writeFileSync(
 		join(root, 'fleet-runner-manifest.json'),
 		JSON.stringify({
 			machines: { 'cov-claw-1': { labels: ['hadoku-builder'], maxConcurrent: 2 } },
-			repos: Object.fromEntries((repos ?? []).map((r) => [r, {}])),
+			repos: Object.fromEntries([
+				...(repos ?? []).map((r) => [r, {}]),
+				...(skipRepos ?? []).map((r) => [r, { skip: true }]),
+			]),
 		})
 	);
 	writeFileSync(
@@ -824,6 +849,9 @@ test('--write-coverage --allow-shrink lands the same drastic shrink on purpose',
 	const fx = coverageFixture({
 		repos: ['WolffM/cov-alpha'],
 		committedRepos: ['WolffM/cov-a', 'WolffM/cov-b', 'WolffM/cov-c', 'WolffM/cov-d'],
+		// ON PURPOSE means answered: each dropped repo carries the manifest entry
+		// a departure asks for. Without one they vanish unanswered (#135, below).
+		skipRepos: ['WolffM/cov-a', 'WolffM/cov-b', 'WolffM/cov-c', 'WolffM/cov-d'],
 		metricsRows: [metricsRow('WolffM/filler', 3215)],
 		// Every (repo, claw) pair already registered and online, so the exit
 		// code reflects the WRITE alone, never the unrelated registration phase
@@ -843,6 +871,36 @@ test('--write-coverage --allow-shrink lands the same drastic shrink on purpose',
 		assert.equal(r.code, 0, r.out + r.stderr);
 		const onDisk = JSON.parse(readFileSync(fx.coveragePath, 'utf8'));
 		assert.deepEqual(onDisk.repos, ['WolffM/cov-alpha']);
+	} finally {
+		rmSync(fx.root, { recursive: true, force: true });
+	}
+});
+
+// #135, the 2026-10-22 shape: a covered repo renamed away, with nothing yet
+// under the old name and no manifest entry. It used to leave the roster in
+// silence and the run exited 0, so the nightly workflow committed the drop.
+test('#135: a covered repo renamed away is a departure that fails the run and names the new name', () => {
+	const fx = coverageFixture({
+		repos: ['WolffM/cov-alpha'],
+		committedRepos: ['WolffM/cov-alpha', 'WolffM/cov-renamed'],
+		metricsRows: [metricsRow('WolffM/filler', 3215)],
+		runners: [
+			{
+				id: 1,
+				name: 'cov-claw-1',
+				status: 'online',
+				busy: false,
+				labels: [{ name: 'hadoku-builder' }],
+			},
+		],
+	});
+	try {
+		const r = runCoverage(fx, ['--write-coverage'], {
+			GH_RENAMED: 'WolffM/cov-renamed=WolffM/cov-renamed-private',
+		});
+		assert.equal(r.code, 1, r.out + r.stderr);
+		assert.match(r.out, /LEFT THE ROSTER \(1\)/);
+		assert.match(r.out, /WolffM\/cov-renamed +renamed on GitHub to WolffM\/cov-renamed-private/);
 	} finally {
 		rmSync(fx.root, { recursive: true, force: true });
 	}

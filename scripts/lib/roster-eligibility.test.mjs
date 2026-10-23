@@ -12,7 +12,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { autoIncludeDrop } from './roster-eligibility.mjs';
+import { autoIncludeDrop, vanishedFromUniverse } from './roster-eligibility.mjs';
 import { blankComments } from './blank-comments.mjs';
 
 const AI = { excludeForks: true, pushedWithinDays: 180, minWorkflows: 2 };
@@ -172,4 +172,62 @@ test('the reconciler routes eligibility through this one rule, and reports depar
 	// signal, the `departed` field is the cron's.
 	assert.match(src, /departed\.length > 0/, 'departures must fail the run');
 	assert.match(src, /\bdeparted,/, 'departures must be in the --json summary');
+});
+
+// #135: a covered repo absent from the owner's repo list used to leave with no
+// record, because nothing ever visited it.
+void test('vanishedFromUniverse: a renamed covered repo is a departure that names where it went', () => {
+	const universe = new Set(['WolffM/hadoku_site', 'WolffM/hadoku-fleet-manager-private']);
+	const lookups = [];
+	const out = vanishedFromUniverse(
+		['WolffM/hadoku_site', 'WolffM/hadoku-fleet-manager'],
+		universe,
+		(name) => {
+			lookups.push(name);
+			return { ok: true, nameWithOwner: 'WolffM/hadoku-fleet-manager-private' };
+		}
+	);
+	assert.deepEqual(
+		lookups,
+		['WolffM/hadoku-fleet-manager'],
+		'a repo still listed is never looked up'
+	);
+	assert.equal(out.length, 1);
+	assert.equal(out[0].repo, 'WolffM/hadoku-fleet-manager');
+	assert.match(out[0].why, /renamed on GitHub to WolffM\/hadoku-fleet-manager-private/);
+});
+
+void test('vanishedFromUniverse: deleted, unlisted and unreadable are each departures with their own reason', () => {
+	const answers = {
+		'WolffM/gone': { ok: false, notFound: true, reason: 'HTTP 404' },
+		'WolffM/unlisted': { ok: true, nameWithOwner: 'WolffM/unlisted' },
+		'WolffM/flaky': { ok: false, notFound: false, reason: 'timed out (attempt 2/2)' },
+	};
+	const out = vanishedFromUniverse(Object.keys(answers), new Set(), (n) => answers[n]);
+	assert.deepEqual(
+		out.map((d) => d.repo),
+		['WolffM/gone', 'WolffM/unlisted', 'WolffM/flaky']
+	);
+	assert.match(out[0].why, /deleted or transferred/);
+	assert.match(out[1].why, /missing from the owner repo list/);
+	assert.match(out[2].why, /could not be looked up: timed out/);
+});
+
+void test('vanishedFromUniverse: nothing vanished is an empty answer with no lookups', () => {
+	const out = vanishedFromUniverse(['WolffM/a'], new Map([['WolffM/a', {}]]), () => {
+		throw new Error('must not look up a listed repo');
+	});
+	assert.deepEqual(out, []);
+});
+
+void test('vanishedFromUniverse: a repo the manifest names is answered, not a departure', () => {
+	const out = vanishedFromUniverse(
+		['WolffM/old-name'],
+		new Set(),
+		() => {
+			throw new Error('must not look up a repo the manifest already answers for');
+		},
+		new Set(['WolffM/old-name'])
+	);
+	assert.deepEqual(out, []);
 });

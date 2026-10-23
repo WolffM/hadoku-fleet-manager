@@ -120,7 +120,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stripYamlComments } from './lib/yaml-comments.mjs';
 import { runnerVarForm } from './lib/runner-var.mjs';
-import { autoIncludeDrop } from './lib/roster-eligibility.mjs';
+import { autoIncludeDrop, vanishedFromUniverse } from './lib/roster-eligibility.mjs';
 import { mayRunRepo } from './lib/placement-rules.mjs';
 import {
 	loadManifest as readManifest,
@@ -1125,7 +1125,37 @@ function resolveDesired(manifest, committedRoster = []) {
 		}
 	}
 
+	// A covered repo the loop above never visited, because it is no longer in the
+	// list at all. See `vanishedFromUniverse` (#135).
+	departed.push(
+		...vanishedFromUniverse(committedRoster, byName, lookupRepo, new Set(explicit.map(([n]) => n)))
+	);
+
 	return { desired, retired, ignored, departed, allRepos: byName };
+}
+
+/**
+ * One repo by name. GitHub follows a rename, so `nameWithOwner` is the CURRENT
+ * name. A 404 is an answer and is not retried; anything else is.
+ */
+function lookupRepo(name) {
+	let reason = 'no attempt was made';
+	for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
+		try {
+			const repo = JSON.parse(gh(['api', `repos/${name}`], { timeout: READ_TIMEOUT_MS }));
+			if (typeof repo.full_name !== 'string') {
+				return { ok: false, notFound: false, reason: 'the lookup answered with no full_name' };
+			}
+			return { ok: true, nameWithOwner: repo.full_name };
+		} catch (err) {
+			if (/HTTP 404/.test(String(err.stderr ?? ''))) {
+				return { ok: false, notFound: true, reason: 'HTTP 404' };
+			}
+			reason = `${describeReadFailure(err, READ_TIMEOUT_MS)} (attempt ${attempt}/${READ_ATTEMPTS})`;
+			if (attempt < READ_ATTEMPTS) sleepSync(RETRY_DELAY_MS);
+		}
+	}
+	return { ok: false, notFound: false, reason };
 }
 
 // ---------------------------------------------------------------------------
