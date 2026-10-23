@@ -1009,6 +1009,20 @@ test('an unreadable installed version is unknown, not current', () => {
 	assert.equal(j.finding, true);
 });
 
+test('an apt-tracked tool on PATH that dpkg does not own is named as installed outside apt', () => {
+	// hokon 2026-10-23: gh in ~/.local/bin, dpkg with no gh, Debian's 2.46 the
+	// only candidate. apt answered — "could not say" sent the reader looking
+	// for an apt fault. MUTATION: drop the branch and the reason assertion fails.
+	const seen = { detect: 'OK', runner: '', apt: '|2.46.0-3|unknown' };
+	const j = judgeTool('gh', REPAIRS.gh, seen);
+	assert.equal(j.status, 'unknown');
+	assert.equal(j.finding, true);
+	assert.match(j.reason, /installed outside apt.*apt would install 2\.46\.0-3/);
+	// An empty answer is still "could not say".
+	const blind = judgeTool('gh', REPAIRS.gh, { ...seen, apt: '' });
+	assert.match(blind.reason, /apt could not say/);
+});
+
 test('behind / current / ahead, judged against the release cleared minAge + tolerance ago', async () => {
 	// MUTATION: look up at plain minAge (drop the tolerance) and the `minAge`
 	// assertion fails. MUTATION: flag `ahead` and the third case fails.

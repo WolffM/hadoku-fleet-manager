@@ -272,6 +272,19 @@ function judgeApt(id, line) {
 		};
 	}
 	if (state === 'current') return { id, status: 'ok', finding: false, installed: plain(inst) };
+	// The tool already passed detect, so dpkg owning nothing means it was put on
+	// PATH some other way. apt DID answer; nothing on the node tracks that copy,
+	// and the candidate may come from a source the fleet does not use.
+	if (!inst && cand && cand !== '(none)') {
+		return {
+			id,
+			status: 'unknown',
+			finding: true,
+			reason:
+				`installed outside apt, so nothing keeps it current — dpkg has no ${id} ` +
+				`package (apt would install ${cand}; check it comes from the source the fleet uses)`,
+		};
+	}
 	return {
 		id,
 		status: 'unknown',
