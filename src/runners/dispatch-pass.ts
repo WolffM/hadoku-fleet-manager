@@ -265,7 +265,10 @@ export async function runDispatchPass(
 		// Skipping the node probe too: it only ever qualifies a listing.
 		if (targets.length) {
 			const res = await withGhCaller('reap', () =>
-				reapJitRunners(targets, input.order, token, gh, sh, { nowMs })
+				reapJitRunners(targets, input.order, token, gh, sh, {
+					nowMs,
+					queuedJobIds: new Set(input.pending.map((p) => p.jobId)),
+				})
 			);
 			reaped = res.reaped;
 			for (const o of res.observed) reapBook.set(o.repo, { listedAtMs: nowMs, heldJit: o.heldJit });

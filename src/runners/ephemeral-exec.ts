@@ -822,7 +822,16 @@ export async function reapJitRunners(
 	token: string,
 	gh: GhLike & { get: (path: string, token: string, repo?: string) => Promise<unknown> },
 	sh: ShellLike,
-	opts: { graceMs?: number; nowMs?: number } = {}
+	opts: {
+		graceMs?: number;
+		nowMs?: number;
+		/**
+		 * Jobs observed QUEUED this pass. A live idle JIT minted for one of them
+		 * past the grace is STRANDED and released (fleet-manager#2). Absent,
+		 * nothing live is.
+		 */
+		queuedJobIds?: ReadonlySet<number>;
+	} = {}
 ): Promise<{
 	reaped: number;
 	kept: number;
@@ -916,11 +925,28 @@ export async function reapJitRunners(
 				kept++;
 				continue;
 			}
-			if (liveUnits.has(r.name)) {
+			const parsed = parseJitName(r.name);
+			// A live listener is kept unless it is STRANDED: idle (busy was checked
+			// above) while the job it was minted for is still queued, and — by the
+			// grace below — past any honest mint-to-assignment gap. GitHub assigns a
+			// matching idle runner in seconds, so one that has listened this long
+			// beside its own job is one GitHub will not give the job to. On
+			// 2026-10-23 a hokon mint for hadoku-bomberman registered without
+			// `hadoku-builder`, and "already has a runner in flight" held the job
+			// off every claw until a hand delete 59 minutes later; nothing else
+			// would have cleared it before JIT_UNIT_MAX_SEC, six and a half hours.
+			// Deleting the registration is the whole release: the listener sees
+			// "runner no longer exists on the server" and exits, its unit goes, and
+			// the next pass places the job again. Only a job-scoped name can say
+			// which job it was minted for.
+			const stranded =
+				liveUnits.has(r.name) && parsed?.jobId != null && opts.queuedJobIds?.has(parsed.jobId)
+					? parsed
+					: null;
+			if (liveUnits.has(r.name) && !stranded) {
 				kept++;
 				continue;
 			}
-			const parsed = parseJitName(r.name);
 			if (parsed && nowMs - parsed.mintedAtMs < graceMs) {
 				kept++;
 				continue;
@@ -929,7 +955,13 @@ export async function reapJitRunners(
 			if (res.ok) {
 				reaped++;
 				deletedHere++;
-				logger.info(`[ephemeral] reaped orphaned registration ${r.name} from ${repo}`);
+				logger.info(
+					stranded
+						? `[ephemeral] released stranded registration ${r.name} from ${repo}: idle ` +
+								`${Math.round((nowMs - stranded.mintedAtMs) / 60_000)}m beside its still-queued ` +
+								`job ${stranded.jobId} — GitHub will not assign it there`
+						: `[ephemeral] reaped orphaned registration ${r.name} from ${repo}`
+				);
 			} else {
 				logger.warn(`[ephemeral] failed to reap ${r.name} from ${repo}: ${res.status}`);
 			}

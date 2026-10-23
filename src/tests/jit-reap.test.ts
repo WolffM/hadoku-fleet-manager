@@ -188,3 +188,67 @@ test('the repo sweep is bounded-concurrent — neither serial nor a burst', asyn
 		`must stay under the shared bound — a burst trips the SECONDARY limit (max open ${maxOpen})`
 	);
 });
+
+/** A job-scoped JIT name — the format that names the job it was minted for. */
+const jobName = (node: string, jobId: number, agoMs: number) =>
+	`jit-${node}-hadoku-bomberma-j${jobId}-r40010762625-${Math.floor((NOW - agoMs) / 1000)}`;
+
+/**
+ * STRANDED, NOT ORPHANED (fleet-manager#2). On 2026-10-23 a hokon mint for
+ * bomberman registered without `hadoku-builder`: listener alive, idle, its job
+ * queued beside it. Every orphan guard kept it — the unit was live — and
+ * "already has a runner in flight" held the job off every claw until a hand
+ * delete 59 minutes later. MUTATION: drop `stranded` from the live-unit guard
+ * and the first case fails; drop any one of its conditions and the case that
+ * isolates it fails.
+ */
+test('a live idle JIT past the grace beside its still-queued job is released', async () => {
+	const stuck = jobName('hokon', 120610233720, mins(15));
+	const h = harness({ runners: [{ id: 1, name: stuck, busy: false }], liveUnits: [stuck] });
+	const r = await reapJitRunners(['WolffM/hadoku-bomberman'], ['hokon'], 'tok', h.gh, h.sh, {
+		nowMs: NOW,
+		queuedJobIds: new Set([120610233720]),
+	});
+	assert.deepEqual(h.deleted, [1]);
+	assert.equal(r.reaped, 1);
+});
+
+test('a stranded-looking JIT is kept when its job is NOT queued — it may be about to serve it', async () => {
+	const live = jobName('hokon', 120610233720, mins(15));
+	const h = harness({ runners: [{ id: 1, name: live, busy: false }], liveUnits: [live] });
+	await reapJitRunners(['WolffM/hadoku-bomberman'], ['hokon'], 'tok', h.gh, h.sh, {
+		nowMs: NOW,
+		queuedJobIds: new Set([999]),
+	});
+	assert.deepEqual(h.deleted, []);
+});
+
+test('a live JIT inside the grace is kept even with its job queued — assignment takes seconds, not zero', async () => {
+	const fresh = jobName('hokon', 120610233720, mins(3));
+	const h = harness({ runners: [{ id: 1, name: fresh, busy: false }], liveUnits: [fresh] });
+	await reapJitRunners(['WolffM/hadoku-bomberman'], ['hokon'], 'tok', h.gh, h.sh, {
+		nowMs: NOW,
+		queuedJobIds: new Set([120610233720]),
+	});
+	assert.deepEqual(h.deleted, []);
+});
+
+test('a BUSY JIT is never released as stranded — GitHub gave it some job', async () => {
+	const busy = jobName('hokon', 120610233720, mins(30));
+	const h = harness({ runners: [{ id: 1, name: busy, busy: true }], liveUnits: [busy] });
+	await reapJitRunners(['WolffM/hadoku-bomberman'], ['hokon'], 'tok', h.gh, h.sh, {
+		nowMs: NOW,
+		queuedJobIds: new Set([120610233720]),
+	});
+	assert.deepEqual(h.deleted, []);
+});
+
+test('a live JIT with a pre-job-scoped name is never released — it cannot say which job it is for', async () => {
+	const legacy = name('hokon', 40010762625, mins(30));
+	const h = harness({ runners: [{ id: 1, name: legacy, busy: false }], liveUnits: [legacy] });
+	await reapJitRunners(['WolffM/x'], ['hokon'], 'tok', h.gh, h.sh, {
+		nowMs: NOW,
+		queuedJobIds: new Set([40010762625]),
+	});
+	assert.deepEqual(h.deleted, []);
+});
