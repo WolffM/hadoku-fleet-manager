@@ -14,7 +14,11 @@ It was cut from one squashed commit on 2026-10-22. The private repo
   the directory is missing, run that script; nothing was deleted.
 - **The issue tracker up to the cut.** A bare `#N` in a comment or doc means
   that tracker's issue N, not this repo's. Cite issues filed here as
-  `fleet-manager#N`.
+  `fleet-manager#N`. From any OTHER repo, cite the private tracker as
+  `fleet-manager-private#N`; every pre-cut reference elsewhere was rewritten
+  to that form on 2026-10-23, because this repo numbers from #1 again.
+  In a commit message, write `WolffM/hadoku-fleet-manager-private#N`: GitHub
+  links a bare `#N` there to THIS repo's issue N.
 - **The 762 commits before the cut.** The same script grafts them under this
   repo's root, locally, so `git log` and `git blame` reach them.
 
