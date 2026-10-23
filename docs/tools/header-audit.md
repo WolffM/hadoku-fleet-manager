@@ -30,13 +30,13 @@ is an audit, not a gate — it reports, a human or cron acts.
 ## The rules
 
 The source section (2026-08-05) listed: `stale-package`, `stale-peer`,
-`no-update-flow`, `no-push-token`, `private-picker`, `no-app-header`,
+`no-update-flow`, `no-landing-path`, `private-picker`, `no-app-header`,
 `no-provider`, `no-checkout`, `not-in-fleet`, `not-in-fanout`, `npm-auth-form`.
 
 **Changed since** — the script's own header comment (`scripts/check-header-fleet.mjs:36-123`)
 now documents these rules instead, and the set has grown:
 
-- `stale-package`, `stale-peer`, `no-update-flow`, `no-push-token`,
+- `stale-package`, `stale-peer`, `no-update-flow`, `no-landing-path`,
   `private-picker`, `no-app-header`, `npm-auth-form` — **unchanged**, same
   rationale as below.
 - `release-age-cooldown` — **new**, not in the source section at all. pnpm
@@ -162,7 +162,7 @@ and `no-provider`/`no-checkout` sections, and the roster-derivation claim
 against `scripts/check-header-fleet.mjs` in full.
 
 **7 claims verified unchanged** (`stale-package`, `stale-peer`,
-`no-update-flow`, `no-push-token`, `private-picker`, `no-app-header`,
+`no-update-flow`, `no-landing-path`, `private-picker`, `no-app-header`,
 `npm-auth-form`, `no-provider`, `no-checkout`, `not-in-fleet` — core mechanics
 all intact).
 **3 claims changed/retired**: `not-in-fanout` retired 2026-08-26 (source

@@ -265,8 +265,8 @@ const CLEAN_APP = {
 	}),
 	'pnpm-workspace.yaml': "packages:\n  - '.'\nminimumReleaseAgeExclude:\n  - '@wolffm/*'\n",
 	'.github/workflows/update-wolffm.yml':
-		'jobs:\n  update:\n    steps:\n      - uses: actions/checkout@v4\n' +
-		'        with:\n          token: ${{ secrets.HADOKU_SITE_TOKEN }}\n',
+		'jobs:\n  update:\n    steps:\n      - uses: actions/checkout@v6\n' +
+		'      - uses: example/actions/update-wolffm@v1\n',
 	'vite.config.ts': 'export default {};\n',
 	'index.html': '<html><head><link rel="icon" href="/favicon.svg"></head></html>\n',
 	'src/App.tsx':
@@ -442,15 +442,15 @@ test('#98: release-age-cooldown still accepts the glob in a flow sequence', () =
 	}
 });
 
-test('#98: a COMMENTED-OUT push token is no-push-token', () => {
+test('#98: a COMMENTED-OUT update-wolffm step is no-landing-path', () => {
 	const fx = appFixture({
 		'.github/workflows/update-wolffm.yml':
-			'jobs:\n  update:\n    steps:\n      - uses: actions/checkout@v4\n' +
-			'        # with:\n        #   token: ${{ secrets.HADOKU_SITE_TOKEN }}\n',
+			'jobs:\n  update:\n    steps:\n      - uses: actions/checkout@v6\n' +
+			'      # - uses: example/actions/update-wolffm@v1\n',
 	});
 	try {
 		const { code, out } = run(fx);
-		assert.deepEqual(rulesFor(JSON.parse(out)), ['no-push-token'], out);
+		assert.deepEqual(rulesFor(JSON.parse(out)), ['no-landing-path'], out);
 		assert.equal(code, 1);
 	} finally {
 		cleanup(fx);

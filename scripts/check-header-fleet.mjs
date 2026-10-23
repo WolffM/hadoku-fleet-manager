@@ -54,10 +54,12 @@
  *   no-update-flow  the repo consumes @wolffm/* but has no update-wolffm.yml.
  *                   pygmalion sat like this from creation: nothing ever updated
  *                   it, and nothing ever said so.
- *   no-push-token   the update workflow's checkout lacks the HADOKU_SITE_TOKEN
- *                   PAT. Its push to a protected main is rejected — but only
- *                   when there is something to push, so the repo sits green
- *                   until the first real update, then silently freezes.
+ *   no-landing-path the update workflow does not use the shared
+ *                   `update-wolffm` action, the only thing that can land a bump
+ *                   on a protected main without a PAT. A hand-rolled push is
+ *                   rejected — but only when there is something to push, so
+ *                   the repo sits green until the first real update, then
+ *                   silently freezes.
  *   private-picker  a raw ThemePicker/ConnectedThemePicker import, or a local
  *                   hooks/useTheme.ts + prefs/themePrefs.ts copy. Impossible on
  *                   3.x, so finding one means the repo is stale in a way that
@@ -1000,27 +1002,25 @@ for (const repo of FLEET) {
 	}
 
 	// ---- ...and it must be able to LAND its result -----------------------
-	// The updater pushes straight to a protected main. The default
-	// GITHUB_TOKEN cannot satisfy the required checks, so its push is
-	// rejected — but only when there is actually something to push; with
-	// nothing to update the push step exits 0 early, so a broken repo sits
-	// GREEN indefinitely and the freeze surfaces days later, on the first
-	// real payload. There is no template for update-wolffm.yml — each repo
-	// hand-maintains a copy — so a hand-copied workflow that omits the PAT
-	// checkout is exactly the drift that happened: the 2026-08-05 sweep
-	// touched ten repos but the token landed ad-hoc, only where someone had
-	// already hit the failure. no-update-flow covers "no workflow at all";
-	// this is the same guarantee one step further along.
+	// The default branch is protected, and a fresh bump has run none of its
+	// required checks, so a plain push is rejected — but only when there is
+	// actually something to push; with nothing to update the job exits 0 early,
+	// so a broken repo sits GREEN indefinitely and the freeze surfaces days
+	// later, on the first real payload. Until 2026-10-23 the fix was a PAT
+	// checkout that bypassed protection as an admin: HADOKU_SITE_TOKEN, repo +
+	// workflow on the whole account, in every consumer. The landing path now
+	// is the shared `update-wolffm` action, which pushes a bot branch with the
+	// job's own token and has mgmt-api fast-forward main onto it; a repo that
+	// still holds the PAT is check-site-token's finding, not this one's.
 	for (const f of updateFlows) {
 		const raw = readFile(repoPath, f);
 		if (!raw) continue;
-		// Comment-stripped: a commented-out `token:` line, or a comment explaining
-		// why the PAT is needed, is not a checkout that uses it.
-		if (!/token:\s*\$\{\{\s*secrets\.HADOKU_SITE_TOKEN\s*\}\}/.test(stripYamlComments(raw))) {
+		// Comment-stripped: a commented-out `uses:` line is not a step that runs.
+		if (!/uses:\s*\S+\/update-wolffm@\S+/.test(stripYamlComments(raw))) {
 			report(
 				repo,
-				'no-push-token',
-				`${f} — checkout does not use the HADOKU_SITE_TOKEN PAT, so its push to a protected main is rejected; the run stays green until the first real update, then the repo silently freezes`
+				'no-landing-path',
+				`${f} — does not use the shared update-wolffm action, so nothing can land its bump on a protected main; the run stays green until the first real update, then the repo silently freezes`
 			);
 		}
 	}
