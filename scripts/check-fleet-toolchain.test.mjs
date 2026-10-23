@@ -14,7 +14,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -65,14 +65,47 @@ function fakeHome({ version = '2.1.285', onStockPath = false } = {}) {
 	return { home, bin, path: onStockPath ? `${bin}:${STOCK_PATH}` : STOCK_PATH };
 }
 
+/**
+ * The runner PATHs a fixture node reports (#127), through stub `systemctl` and
+ * `pgrep` ahead of everything else on PATH, so the probe never reads the REAL
+ * user manager or the real listeners of whatever box runs this suite. Anything
+ * else either is asked passes through to the real binary, as before.
+ *
+ * `runnerPath` is the manager's PATH (default: the fixture's own stock PATH, so
+ * a tool's runner verdict matches its non-login one); `null` = unreadable.
+ * `listenerPid` is a live process the stub pgrep names as a Runner.Listener.
+ */
+function stubRunnerEnv(fh, { runnerPath = fh.path, listenerPid = null } = {}) {
+	const dir = join(fh.home, 'stub-bin');
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(
+		join(dir, 'systemctl'),
+		'#!/bin/sh\n' +
+			'if [ "$1" = --user ] && [ "$2" = show-environment ]; then\n' +
+			(runnerPath === null ? '  exit 1\n' : `  echo 'PATH=${runnerPath}'; exit 0\n`) +
+			'fi\nexec /usr/bin/systemctl "$@"\n'
+	);
+	writeFileSync(
+		join(dir, 'pgrep'),
+		'#!/bin/sh\n' +
+			'if [ "$1" = -x ] && [ "$2" = Runner.Listener ]; then\n' +
+			(listenerPid ? `  echo ${listenerPid}; exit 0\n` : '  exit 1\n') +
+			'fi\nexec /usr/bin/pgrep "$@"\n'
+	);
+	chmodSync(join(dir, 'systemctl'), 0o755);
+	chmodSync(join(dir, 'pgrep'), 0o755);
+	return dir;
+}
+
 /** "ssh" to a fixture node: run the real probe under bash with the fake home. */
-function localRun(fh) {
+function localRun(fh, runnerEnv = {}) {
+	const stub = stubRunnerEnv(fh, runnerEnv);
 	return (_node, script) => {
 		try {
 			const out = execFileSync('bash', ['--noprofile', '--norc', '-s'], {
 				input: script,
 				encoding: 'utf8',
-				env: { PATH: fh.path, HOME: fh.home },
+				env: { PATH: `${stub}:${fh.path}`, HOME: fh.home },
 			});
 			return { ok: true, out, error: null };
 		} catch (err) {
@@ -121,6 +154,110 @@ test('a detect that only a LOGIN shell can satisfy is NOT a pass', async () => {
 		);
 		assert.equal(report.find((m) => m.machine === TASKAUTO).drift, true);
 		assert.match(NON_LOGIN, /--noprofile --norc/);
+	} finally {
+		rmSync(fh.home, { recursive: true, force: true });
+	}
+});
+
+// --- The PATH a runner job gets (#127) ---
+//
+// hokon, 2026-10-13→15: hadoku_site's runner failed `spawnSync gh ENOENT` five
+// times while a non-login shell over ssh found gh in ~/.local/bin. A runner's
+// PATH comes from the process systemd started it from, not from ssh.
+
+test('#127: on the ssh PATH but NOT on the manager PATH runners inherit is a finding, never a pass', async () => {
+	// MUTATION: drop the `runner` line from toolProbeScript (or the check in
+	// judgeTool) and claude reads ok — the bug, green.
+	const fh = fakeHome({ onStockPath: true });
+	try {
+		const { report } = await runDoctor({
+			manifest: FLEET,
+			run: localRun(fh, { runnerPath: STOCK_PATH }),
+			lookup: stubLookup(known('2.1.285')),
+			drains: {},
+		});
+		const claude = claudeOf(report, TASKAUTO);
+		assert.equal(claude.status, 'absent');
+		assert.equal(claude.finding, true);
+		assert.equal(claude.runnerPathOnly, true);
+		assert.match(claude.reason, /not on the PATH runner jobs get — manager=\/usr\/bin:\/bin/);
+		assert.equal(report.find((m) => m.machine === TASKAUTO).drift, true);
+	} finally {
+		rmSync(fh.home, { recursive: true, force: true });
+	}
+});
+
+test("#127: a LIVE listener started with an older PATH is judged by its own PATH, not the manager's", async () => {
+	// The hokon shape exactly: the manager's PATH has ~/.local/bin NOW, the
+	// listener was started before it did. MUTATION: read only the manager.
+	const fh = fakeHome({ onStockPath: true });
+	const runnerDir = join(fh.home, 'runners', 'actions-runner-hadoku-site');
+	mkdirSync(join(runnerDir, 'bin'), { recursive: true });
+	const listener = join(runnerDir, 'bin', 'Runner.Listener');
+	writeFileSync(listener, '#!/bin/sh\nsleep 30\n');
+	chmodSync(listener, 0o755);
+	const proc = spawn('/bin/sh', [listener], { env: { PATH: STOCK_PATH }, stdio: 'ignore' });
+	try {
+		const { report } = await runDoctor({
+			manifest: FLEET,
+			run: localRun(fh, { runnerPath: fh.path, listenerPid: proc.pid }),
+			lookup: stubLookup(known('2.1.285')),
+			drains: {},
+		});
+		const claude = claudeOf(report, TASKAUTO);
+		assert.equal(claude.status, 'absent');
+		assert.match(claude.reason, /listener:runners\/actions-runner-hadoku-site=\/usr\/bin:\/bin/);
+		assert.doesNotMatch(
+			claude.reason,
+			/manager=/,
+			'the manager PATH has the tool and is not named'
+		);
+	} finally {
+		proc.kill();
+		rmSync(fh.home, { recursive: true, force: true });
+	}
+});
+
+test('#127: a listener whose .env sets PATH is judged by that PATH — the listener loads it after start', async () => {
+	const fh = fakeHome({ onStockPath: true });
+	const runnerDir = join(fh.home, 'runners', 'actions-runner-x');
+	mkdirSync(join(runnerDir, 'bin'), { recursive: true });
+	writeFileSync(join(runnerDir, '.env'), `LANG=C\nPATH=${STOCK_PATH}\n`);
+	const listener = join(runnerDir, 'bin', 'Runner.Listener');
+	writeFileSync(listener, '#!/bin/sh\nsleep 30\n');
+	chmodSync(listener, 0o755);
+	// Its environ HAS the tool; its .env, which wins, does not.
+	const proc = spawn('/bin/sh', [listener], { env: { PATH: fh.path }, stdio: 'ignore' });
+	try {
+		const { report } = await runDoctor({
+			manifest: FLEET,
+			run: localRun(fh, { listenerPid: proc.pid }),
+			lookup: stubLookup(known('2.1.285')),
+			drains: {},
+		});
+		assert.match(
+			claudeOf(report, TASKAUTO).reason,
+			/listener:runners\/actions-runner-x=\/usr\/bin:\/bin/
+		);
+	} finally {
+		proc.kill();
+		rmSync(fh.home, { recursive: true, force: true });
+	}
+});
+
+test('#127: no readable runner PATH at all is UNKNOWN, a finding — could not look is not ok', async () => {
+	const fh = fakeHome({ onStockPath: true });
+	try {
+		const { report } = await runDoctor({
+			manifest: FLEET,
+			run: localRun(fh, { runnerPath: null }),
+			lookup: stubLookup(known('2.1.285')),
+			drains: {},
+		});
+		const claude = claudeOf(report, TASKAUTO);
+		assert.equal(claude.status, 'unknown');
+		assert.equal(claude.finding, true);
+		assert.match(claude.reason, /could not read the PATH runner jobs get/);
 	} finally {
 		rmSync(fh.home, { recursive: true, force: true });
 	}
@@ -862,7 +999,12 @@ test('a registry that fails EVERY attempt is unknown through the real lookup', a
 
 test('an unreadable installed version is unknown, not current', () => {
 	const tool = REPAIRS.claude;
-	const j = judgeTool('claude', tool, { detect: 'OK', login: 'OK', version: '' }, known('2.1.285'));
+	const j = judgeTool(
+		'claude',
+		tool,
+		{ detect: 'OK', login: 'OK', runner: '', version: '' },
+		known('2.1.285')
+	);
 	assert.equal(j.status, 'unknown');
 	assert.equal(j.finding, true);
 });

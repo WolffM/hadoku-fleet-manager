@@ -34,6 +34,8 @@ function seenFor(entry, { claude = '2.1.285', rust = true, apt = {} } = {}) {
 		seen[id] = {
 			detect: ok ? 'OK' : '',
 			login: ok ? 'OK' : '',
+			// Reachable under every runner PATH the probe read (#127).
+			runner: '',
 			...(t.version ? { version: claude } : {}),
 			// An apt-tracked tool reports `installed|candidate|state`; current by default.
 			...(t.apt ? { apt: apt[id] ?? '1.0.0|1.0.0|current' } : {}),
@@ -107,8 +109,10 @@ function harness(machines, world, over = {}) {
 						return { id: w.id, ok: false, reason: 'sudo: a password is required' };
 					if (!over.updateNoEffect) {
 						// The link makes the login-shell view the stock-PATH view.
+						// The link lands in /usr/local/bin, which every runner PATH carries.
 						const t = world[node][w.id];
 						t.detect = 'OK';
+						t.runner = '';
 						t.version = t.loginversion ?? '';
 					}
 					return { id: w.id, ok: true };
@@ -120,7 +124,7 @@ function harness(machines, world, over = {}) {
 					else if (world[node][w.id].apt) {
 						const [, cand] = world[node][w.id].apt.split('|');
 						world[node][w.id].apt = `${cand}|${cand}|current`;
-					} else world[node][w.id].detect = 'OK';
+					} else Object.assign(world[node][w.id], { detect: 'OK', runner: '' });
 				}
 				return { id: w.id, ok: true };
 			});
@@ -657,7 +661,7 @@ test('a link that works on a tool that is ALSO behind is not a failed link: reac
 	const v = verdictAfter(
 		[{ id: 'claude', action: 'link', from: null }],
 		tools,
-		withClaude(TASKAUTO, { detect: 'OK', login: 'OK', version: '2.1.200' }),
+		withClaude(TASKAUTO, { detect: 'OK', login: 'OK', runner: '', version: '2.1.200' }),
 		{ claude: OLD_TARGET }
 	);
 	assert.equal(v.status, 'ok');
@@ -665,7 +669,7 @@ test('a link that works on a tool that is ALSO behind is not a failed link: reac
 
 test('NO DOWNGRADE: a node whose claude is NEWER than the newest cleared release is never work, never drained', async () => {
 	const world = {
-		'claw-8': withClaude(TASKAUTO, { detect: 'OK', login: 'OK', version: '2.1.284' }),
+		'claw-8': withClaude(TASKAUTO, { detect: 'OK', login: 'OK', runner: '', version: '2.1.284' }),
 	};
 	const h = harness([['claw-8', TASKAUTO]], world, { latest: OLD_TARGET });
 	const r = await h.run();
@@ -707,7 +711,7 @@ test('the install step still INSTALLS an upgrade, and a LINK runs the declared l
 test('BEHIND still upgrades, and ABSENT (not login-only) still installs pinned to the newest cleared release', async () => {
 	const behind = planNode(
 		applicableRepairs(TASKAUTO),
-		withClaude(TASKAUTO, { detect: 'OK', login: 'OK', version: '2.1.270' }),
+		withClaude(TASKAUTO, { detect: 'OK', login: 'OK', runner: '', version: '2.1.270' }),
 		{ claude: OLD_TARGET }
 	);
 	assert.deepEqual(
@@ -724,7 +728,7 @@ test('BEHIND still upgrades, and ABSENT (not login-only) still installs pinned t
 		[['install', '2.1.281']]
 	);
 	const world = {
-		'claw-a': withClaude(TASKAUTO, { detect: 'OK', login: 'OK', version: '2.1.270' }),
+		'claw-a': withClaude(TASKAUTO, { detect: 'OK', login: 'OK', runner: '', version: '2.1.270' }),
 	};
 	const h = harness([['claw-a', TASKAUTO]], world, { latest: OLD_TARGET });
 	const r = await h.run();
@@ -870,4 +874,46 @@ test("RECHECK uses the cycle's own last-checked time — an unchanged record is 
 	assert.deepEqual(rb.calls, ['claw-b'], 'claw-a was checked yesterday, so claw-b goes');
 	assert.deepEqual(marked, ['claw-b'], 'and the cycle records that it checked it');
 	assert.equal(r.nodes.find((n) => n.node === 'claw-a').status, 'current');
+});
+
+// ---------------------------------------------------------------------------
+// RUNNER-PATH ONLY (#127). Installed, current, found by a non-login shell — and
+// missing from the PATH a runner job gets. An install cannot move a binary onto
+// a PATH, so the remedy is the declared link or a finding, never an install.
+// ---------------------------------------------------------------------------
+
+const runnerMiss = (version) => ({
+	detect: 'OK',
+	login: 'OK',
+	runner: 'listener:runners/actions-runner-hadoku-site=/usr/bin:/bin; ',
+	version,
+});
+
+test('#127: a runner-PATH miss on a tool WITH a link plans the link, not an install', () => {
+	const { work, findings } = planNode(
+		applicableRepairs(TASKAUTO),
+		withClaude(TASKAUTO, runnerMiss('2.1.285')),
+		{ claude: KNOWN }
+	);
+	assert.deepEqual(
+		work.map((w) => [w.id, w.action]),
+		[['claude', 'link']]
+	);
+	assert.deepEqual(findings, []);
+});
+
+test('#127: a runner-PATH miss on a tool with NO link is a finding, and nothing is installed', () => {
+	const tools = applicableRepairs(TASKAUTO);
+	const [id] = tools.find(([, t]) => !t.link && !t.apt) ?? [];
+	assert.ok(id, 'the fixture node carries a tool with no declared link');
+	const seen = {
+		...seenFor(TASKAUTO),
+		[id]: { ...seenFor(TASKAUTO)[id], runner: 'manager=/usr/bin; ' },
+	};
+	const { work, findings } = planNode(tools, seen, { claude: KNOWN });
+	assert.deepEqual(work, [], `nothing may be installed for ${id}`);
+	assert.equal(findings.length, 1);
+	assert.equal(findings[0].tool, id);
+	assert.equal(findings[0].kind, 'unreachable');
+	assert.match(findings[0].reason, /not on the PATH runner jobs get/);
 });

@@ -121,10 +121,13 @@ export async function waitUntilDrained({
  *   behind            -> update to the newest cleared release
  *   absent, but the   -> LINK ONLY: the binary is there and only a login shell
  *   login shell can      can see it, so the fault is stock-PATH reachability.
- *   see it               Never an install: a pinned install would DOWNGRADE a
+ *   see it, or only      The same for one a non-login shell finds but a runner's
+ *   a runner's PATH      own PATH does not (#127); with no `link` that is a
+ *   misses it            finding, never an install.
+ *                        Never an install: a pinned install would DOWNGRADE a
  *                        binary newer than the newest debounce-cleared release,
  *                        and an unreadable version must not be reinstalled over.
- *                        A tool with no declared `link` keeps the old path.
+ *                        A login-only tool with no declared `link` keeps the old path.
  *   absent            -> version-managed: install pinned to the cleared release
  *                        (needs a KNOWN latest, or it is a finding — an install
  *                        with no debounce answer would skip the debounce);
@@ -141,7 +144,7 @@ export function planNode(tools, seen, latestById) {
 		if (j.status === 'behind') {
 			work.push({ id, action: 'update', from: j.installed, target: j.target });
 		} else if (j.status === 'absent') {
-			if (j.loginOnly && tool.link) {
+			if ((j.loginOnly || j.runnerPathOnly) && tool.link) {
 				work.push({
 					id,
 					action: 'link',
@@ -149,6 +152,10 @@ export function planNode(tools, seen, latestById) {
 					installed: j.installed ?? 'unknown',
 					reason: j.reason,
 				});
+			} else if (j.runnerPathOnly) {
+				// Installed and current; only a runner's PATH misses it. An install
+				// cannot fix where a binary lives, so with no `link` it is a finding.
+				findings.push({ tool: id, kind: 'unreachable', reason: j.reason });
 			} else if (!isVersionManaged(tool)) {
 				work.push({ id, action: 'repair', reason: j.reason });
 			} else if (latest?.status === 'known') {

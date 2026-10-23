@@ -151,6 +151,54 @@ const shq = (text) => `'${String(text).replace(/'/g, `'\\''`)}'`;
 export const NON_LOGIN = 'bash --noprofile --norc -c';
 
 /**
+ * THE PATH A RUNNER JOB ACTUALLY GETS (#127), which is neither of the shells above.
+ *
+ * Every runner on a node inherits its environment from a process systemd
+ * started: the user manager for a JIT mint, a warm listener (`systemd-run
+ * --user`) and a reconciler user unit (`ExecStart=run.sh`, which never reads
+ * `.path`); `runsvc.sh` exports `.path` for a system unit. None of that is the
+ * PATH an ssh session builds. On hokon `gh` lives in ~/.local/bin, and
+ * hadoku_site's runner there went without it for three days (2026-10-13→15,
+ * `spawnSync gh ENOENT` ×5) while a non-login shell over ssh found it fine;
+ * whether a runner sees ~/.local/bin depends on whether a login session had
+ * imported its PATH into the user manager before the unit last started.
+ *
+ * So the PATH is READ from the processes that hold it, never derived: the user
+ * manager's (what the next mint or restart inherits) and each live
+ * Runner.Listener's own environ (what a job on it gets now — a PATH line in its
+ * `.env` wins, because the listener loads that file after it starts). One
+ * `RUNNERPATH <label> <PATH>` line per distinct PATH. NONE at all means "could
+ * not look", and `judgeTool` fails every tool on it.
+ */
+const RUNNER_PATHS_SCRIPT = `__rp=''
+__add() { case "
+$__rp
+" in *"	$2
+"*) return ;; esac; __rp="$__rp
+$1	$2"; }
+__m=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^PATH=//p')
+[ -n "$__m" ] && __add manager "$__m"
+for __p in $(pgrep -x Runner.Listener 2>/dev/null); do
+  __d=$(tr '\\0' '\\n' < "/proc/$__p/cmdline" 2>/dev/null | grep -m1 '/bin/Runner.Listener$')
+  __d=\${__d%/bin/Runner.Listener}
+  __l=$(sed -n 's/^PATH=//p' "$__d/.env" 2>/dev/null | tail -n1)
+  [ -n "$__l" ] || __l=$(tr '\\0' '\\n' < "/proc/$__p/environ" 2>/dev/null | sed -n 's/^PATH=//p')
+  [ -n "$__l" ] && __add "listener:\${__d#"$HOME"/}" "$__l"
+done
+__rp=\${__rp#?}
+__bash=$(command -v bash)
+printf '%s\\n' "$__rp" | while IFS='	' read -r __a __b; do [ -n "$__b" ] && printf 'RUNNERPATH\\t%s\\t%s\\n' "$__a" "$__b"; done
+# __runner_miss DETECT — the runner PATHs under which DETECT does not print OK,
+# as "label=PATH; …"; \`?\` when there is no runner PATH to try at all.
+__runner_miss() {
+  [ -n "$__rp" ] || { printf '?'; return; }
+  printf '%s\\n' "$__rp" | while IFS='	' read -r __a __b; do
+    [ -n "$__b" ] || continue
+    [ "$(env -i HOME="$HOME" PATH="$__b" "$__bash" --noprofile --norc -c "$1" 2>/dev/null | head -n1)" = OK ] || printf '%s=%s; ' "$__a" "$__b"
+  done
+}`;
+
+/**
  * The per-tool lines for one node. `tools` is `applicableRepairs(node)`.
  *
  *   TOOL <id> detect <OK|...>     detect, run non-login
@@ -162,13 +210,18 @@ export const NON_LOGIN = 'bash --noprofile --norc -c';
  *                                 present-but-unreachable binary still has a readable
  *                                 version (the cycle must never downgrade it).
  *   TOOL <id> version <text>      first line of the version command, non-login
+ *   TOOL <id> runner <misses>     the runner PATHs (above) detect FAILS under, as
+ *                                 `label=PATH; …`; empty when it passes under all
+ *                                 of them, `?` when none could be read.
  */
 export function toolProbeScript(tools) {
-	return tools
+	if (!tools.length) return '';
+	const perTool = tools
 		.flatMap(([id, t]) => {
 			const lines = [
 				`printf 'TOOL\\t%s\\tdetect\\t%s\\n' ${shq(id)} "$(${NON_LOGIN} ${shq(t.detect)} 2>/dev/null | head -n1 | tr -d '\\t')"`,
 				`printf 'TOOL\\t%s\\tlogin\\t%s\\n' ${shq(id)} "$(bash -lc ${shq(t.detect)} 2>/dev/null | head -n1 | tr -d '\\t')"`,
+				`printf 'TOOL\\t%s\\trunner\\t%s\\n' ${shq(id)} "$(__runner_miss ${shq(t.detect)} | tr -d '\\t')"`,
 			];
 			if (t.apt) {
 				// installed|candidate|behind-or-current, decided by dpkg ON the node.
@@ -188,9 +241,10 @@ export function toolProbeScript(tools) {
 			return lines;
 		})
 		.join('\n');
+	return `${RUNNER_PATHS_SCRIPT}\n${perTool}`;
 }
 
-/** `{ [id]: { detect, login, version, loginversion } }` from the TOOL lines of a probe. */
+/** `{ [id]: { detect, login, runner, version, loginversion } }` from the TOOL lines of a probe. */
 export function parseToolProbe(out) {
 	const seen = {};
 	for (const line of String(out).split('\n')) {
@@ -232,7 +286,8 @@ function judgeApt(id, line) {
  * `status` is one of:
  *   ok       present (and, when version-managed, current or ahead)
  *   ahead    newer than the debounce allows us to install — never a finding
- *   absent   detect did not pass under a non-login shell — a finding
+ *   absent   detect did not pass under a non-login shell, or passed there but
+ *            not under a PATH a runner job gets (`runnerPathOnly`) — a finding
  *   behind   older than the release that cleared minAge + tolerance — a finding
  *   unknown  version unreadable or upstream unreachable — a finding, with `reason`
  *
@@ -257,6 +312,28 @@ export function judgeTool(id, tool, seen, latest) {
 			...(loginOnly
 				? { loginOnly: true, installed: parseInstalledVersion(s.loginversion) ?? null }
 				: {}),
+		};
+	}
+	// Reachable from a non-login shell over ssh is still not reachable from a JOB
+	// (#127): the runner's PATH is read from the processes that hold it.
+	if (s.runner === undefined || s.runner === '?') {
+		return {
+			id,
+			status: 'unknown',
+			finding: true,
+			reason:
+				'could not read the PATH runner jobs get (no systemd --user manager environment ' +
+				'and no live Runner.Listener), so whether a job can reach it is unknown',
+		};
+	}
+	if (s.runner !== '') {
+		return {
+			id,
+			status: 'absent',
+			finding: true,
+			runnerPathOnly: true,
+			installed: parseInstalledVersion(s.version) ?? null,
+			reason: `installed, but not on the PATH runner jobs get — ${s.runner.replace(/;\s*$/, '')}`,
 		};
 	}
 	if (tool?.apt) return judgeApt(id, s.apt);
