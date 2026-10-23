@@ -3729,6 +3729,88 @@ test('queued (#110): a fresh offline mint, or one for ANOTHER job, is not called
 	);
 });
 
+test('queued (fleet-manager#2): an ONLINE mint for the job that lacks its labels pages, naming what it lacks', async () => {
+	// The 2026-10-23 shape: hokon's mint for bomberman registered without
+	// `hadoku-builder`, and the alert said hokon "offers it and can mint" while
+	// that runner sat online beside the job it could never take.
+	// MUTATION: drop the mismatch check and this reads "waiting for a mint".
+	__setFleetProbeForTesting({
+		at: new Date().toISOString(),
+		nodes: { 'claw-9': { reachable: true, free: 2, sick: false } },
+	} as never);
+	const minted = Math.floor((Date.now() - 8 * 60_000) / 1000);
+	const stuck = `jit-claw-9-hadoku-bomberma-j21-r88-${minted}`;
+	// A node the mint view does not list is not named — `nodeOf` falls back to
+	// the bare runner name, which is not a node.
+	const unlisted = `jit-hokon-hadoku-bomberman-j21-r88-${minted}`;
+	mintQueueFetch(
+		[
+			...hokonOnly(),
+			{ id: 9, name: stuck, status: 'online', busy: false, labels: hokonLabels() },
+			{ id: 10, name: unlisted, status: 'online', busy: false, labels: hokonLabels() },
+		],
+		12
+	);
+	await tick('tok');
+
+	const pings = discordPosts.filter((m) => m.includes('QUEUED'));
+	assert.equal(pings.length, 1, 'a mint that cannot take its job is an outage, not a wait');
+	assert.match(
+		pings[0]!,
+		new RegExp(
+			`\`${stuck}\` was minted for it on \`claw-9\` 8m ago and is online, but lacks \`hadoku-builder\``
+		)
+	);
+	assert.match(
+		pings[0]!,
+		new RegExp(`\`${unlisted}\` was minted for it 8m ago and is online, but lacks`)
+	);
+	assert.match(pings[0]!, /GitHub will never assign it the job/);
+});
+
+test('queued (fleet-manager#2): an online mint that carries the labels, is busy, or is for another job is not a mismatch', async () => {
+	__setFleetProbeForTesting({
+		at: new Date().toISOString(),
+		nodes: { 'claw-9': { reachable: true, free: 2, sick: false } },
+	} as never);
+	const minted = Math.floor((Date.now() - 8 * 60_000) / 1000);
+	mintQueueFetch(
+		[
+			...hokonOnly(),
+			// Carries `hadoku-builder` in another case — GitHub matches labels case-insensitively.
+			{
+				id: 9,
+				name: `jit-claw-9-x-j21-r88-${minted}`,
+				status: 'online',
+				busy: false,
+				labels: [{ name: 'self-hosted' }, { name: 'HADOKU-BUILDER' }],
+			},
+			{
+				id: 10,
+				name: `jit-hokon-x-j21-r88-${minted}`,
+				status: 'online',
+				busy: true,
+				labels: hokonLabels(),
+			},
+			{
+				id: 11,
+				name: `jit-hokon-x-j999-r88-${minted}`,
+				status: 'online',
+				busy: false,
+				labels: hokonLabels(),
+			},
+		],
+		12
+	);
+	await tick('tok');
+
+	assert.equal(discordPosts.filter((m) => m.includes('QUEUED')).length, 0);
+	assert.match(
+		quietRecords.find((m) => m.includes('QUEUED'))!,
+		/waiting for a mint/
+	);
+});
+
 test('queued (#110): every claw that offers it unreachable — a coverage gap, and it says why', async () => {
 	// The default probe: claw-1 and claw-3 looked at and down; the rest absent.
 	mintQueueFetch(hokonOnly(), 12);

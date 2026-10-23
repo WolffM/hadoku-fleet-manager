@@ -2181,6 +2181,15 @@ async function classifyQueuedRun(
 				'GitHub, and the dispatcher holds the job as in flight so nothing else will serve it.',
 		};
 
+	const mismatched = mismatchedMints(waiting, state.runners, mint, nowMs);
+	if (mismatched.length)
+		return {
+			covered: false,
+			reason:
+				`${mismatched.join('; ')} — GitHub will never assign it the job, and the dispatcher ` +
+				'holds the job as in flight until the reap releases that registration.',
+		};
+
 	const unmet = new Set<string>();
 	/** Jobs no standing runner covers, for the minting arm. */
 	const forMint: string[][] = [];
@@ -2255,6 +2264,47 @@ async function classifyQueuedRun(
 }
 
 /**
+ * JIT registrations minted for one of these waiting jobs that are ONLINE and
+ * idle but do not carry every label the job asks for (fleet-manager#2).
+ *
+ * On 2026-10-23 hokon's mint for hadoku-bomberman registered without
+ * `hadoku-builder`, and this alert said hokon "offers it and can mint" while
+ * the runner it HAD minted sat right there in the listing, unable to take the
+ * job. Matched by the job id the name carries only — a pre-job-scoped name
+ * cannot say which job's labels it should be held to. Labels compare
+ * case-insensitively, as GitHub matches them.
+ */
+function mismatchedMints(
+	waiting: GhJob[],
+	runners: GhRunner[],
+	mint: { view: MintView } | null,
+	nowMs: number
+): string[] {
+	const wanted = new Map<number, string[]>();
+	for (const j of waiting)
+		if (typeof j.id === 'number' && Array.isArray(j.labels)) wanted.set(j.id, j.labels);
+	const nodes = mint?.view.nodes.map((n) => n.name) ?? [];
+	const out: string[] = [];
+	for (const r of runners) {
+		if (r.status !== 'online' || r.busy) continue;
+		const parsed = parseJitName(r.name);
+		const labels = parsed?.jobId != null ? wanted.get(parsed.jobId) : undefined;
+		if (!parsed || !labels) continue;
+		const carries = new Set((r.labels ?? []).map((l) => l.name.toLowerCase()));
+		const missing = labels.filter((l) => !carries.has(l.toLowerCase()));
+		if (!missing.length) continue;
+		const node = nodes.length ? nodeOf(r.name, nodes) : '';
+		const where = nodes.includes(node) ? ` on \`${node}\`` : '';
+		const ageMin = Math.round((nowMs - parsed.mintedAtMs) / 60000);
+		out.push(
+			`\`${r.name}\` was minted for it${where} ${ageMin}m ago and is online, but lacks ` +
+				missing.map((l) => `\`${l}\``).join(', ')
+		);
+	}
+	return out;
+}
+
+/**
  * JIT registrations minted for one of these waiting jobs that never came online.
  *
  * Matched by the job id the name carries (`parseJitName`), or by the run id
@@ -2284,7 +2334,7 @@ function deafMints(
 		const ageMin = (nowMs - parsed.mintedAtMs) / 60000;
 		if (!(ageMin > DEAF_MINT_MINUTES)) continue;
 		const node = nodes.length ? nodeOf(r.name, nodes) : '';
-		const where = node && node !== r.name ? ` on \`${node}\`` : '';
+		const where = nodes.includes(node) ? ` on \`${node}\`` : '';
 		out.push(`\`${r.name}\` was minted for it${where} ${Math.round(ageMin)}m ago`);
 	}
 	return out;
