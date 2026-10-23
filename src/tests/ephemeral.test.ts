@@ -1288,6 +1288,30 @@ test('#120: the guest offers hadoku-builder ONLY while the backstop holds it', a
 	}
 });
 
+test('a backstop demotion MID-TICK cannot strip a label from a mint placement already chose (2026-10-23)', async () => {
+	const g = guestRig();
+	let placed: string[] = [];
+	let minted: string[] = [];
+	const run = async (i: {
+		nodes: { name: string; labels?: string[] }[];
+		labelsFor: (n: string) => string[];
+	}) => {
+		placed = i.nodes.find((n) => n.name === 'hokon')?.labels ?? [];
+		// runner-health's demote lands between placement and the mint.
+		setBackstopHold([]);
+		minted = i.labelsFor('hokon');
+		return { minted: 0, failed: 0, skipped: 0, inFlight: 0, reaped: 0 };
+	};
+	try {
+		setBackstopHold(['hokon']);
+		await dispatchEphemeral(g.input as never, 'tok', GH, g.sh as never, run as never);
+		assert.ok(placed.includes('hadoku-builder'), 'placement saw the promoted offer');
+		assert.deepEqual(minted, placed, 'the mint registers exactly what placement matched on');
+	} finally {
+		setBackstopHold([]);
+	}
+});
+
 test('#120: a guest unit is capped at its OWN unitMaxMb inside its allowance, in its OWN slice', async () => {
 	const g = guestRig();
 	await dispatchEphemeral(g.input as never, 'tok', GH, g.sh as never, g.run as never);

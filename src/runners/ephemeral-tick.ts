@@ -1963,7 +1963,15 @@ export async function dispatchEphemeral(
 	const minting = [...input.ephemeral, ...guests];
 	if (!minting.length) return { minted: 0, failed: 0, skipped: 0, inFlight: 0, reaped: 0 };
 	const isGuest = (name: string): boolean => guests.includes(name);
-	const eligibleFor = (name: string): boolean => !isGuest(name) || isBackstopHeld(name);
+	// The backstop hold is read ONCE per tick. Placement's `NodeState.labels` and
+	// the mint's `labelsFor` both ask this, seconds apart, with probes and GitHub
+	// polls in between — and runner-health flips the hold on its own clock. On
+	// 2026-10-23 it demoted hokon at 19:21:42, and at 19:21:48 the mint of a
+	// `hadoku-builder` job hokon had been PLACED for registered without
+	// `hadoku-builder`. The job could never land on it, and "already has a
+	// runner in flight" kept every claw from taking it for the unit's full TTL.
+	const heldThisTick = new Set(guests.filter(isBackstopHeld));
+	const eligibleFor = (name: string): boolean => !isGuest(name) || heldThisTick.has(name);
 	// ONE state-dir read for this whole tick — see `offerFor`'s own doc. A
 	// second read from `dispatchWarmCache`'s OWN call below (it is also called
 	// directly, with its own tick) is accepted: both are one read of a small
