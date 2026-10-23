@@ -1,5 +1,4 @@
 {
-  "//": "Loaded by ../hadoku_site/scripts/secrets/dev-vault.mjs. Names map local env var -> vault item. No admin-tier credential here by policy.",
-  "HADOKU_SITE_TOKEN": "HADOKU_SITE_TOKEN",
+  "//": "Loaded by ../hadoku_site/scripts/secrets/dev-vault.mjs. Names map local env var -> vault item. No admin-tier credential here by policy, and no HADOKU_SITE_TOKEN: this repo is public and its key is also its CI key. Commands that want a GitHub token locally fall back to GITHUB_TOKEN / GH_TOKEN / `gh auth token`.",
   "HADOKU_NPM_READ_TOKEN": "HADOKU_NPM_READ_TOKEN"
 }
