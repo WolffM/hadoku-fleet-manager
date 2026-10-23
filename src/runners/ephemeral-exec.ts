@@ -18,6 +18,7 @@ import {
 	JIT_PREFIX,
 	assertSafeJitConfig,
 	buildSpawnPlan,
+	labelsFromUnitDescription,
 	buildWarmSpawnPlan,
 	parseJitName,
 	slotDir,
@@ -217,6 +218,7 @@ export async function mintEphemeralRunner(
 		memoryMaxMb: req.memoryMaxMb,
 		sliceName: req.sliceName,
 		ttlSeconds: req.ttlSeconds,
+		labels: mintLabels(req.labels),
 	});
 	// Write the config FIRST, at 0600, then start the unit that reads it. Order
 	// matters for the same reason the throttle installs its hook before pointing
@@ -365,6 +367,17 @@ export async function liveJitSlots(node: string, sh: ShellLike): Promise<Set<num
  * `check-boundary-contracts` asserts the same flag.
  */
 export async function liveJitUnits(node: string, sh: ShellLike): Promise<string[]> {
+	return (await liveJitUnitRecords(node, sh)).map((u) => u.name);
+}
+
+/** A live JIT unit and the labels its mint stamped on it (`null`: not stamped). */
+export interface LiveJitUnit {
+	name: string;
+	labels: string[] | null;
+}
+
+/** {@link liveJitUnits}, with each unit's stamped labels off the same one listing. */
+export async function liveJitUnitRecords(node: string, sh: ShellLike): Promise<LiveJitUnit[]> {
 	const out = await sh(
 		node,
 		"XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user list-units 'jit-*' --no-legend --plain"
@@ -374,7 +387,33 @@ export async function liveJitUnits(node: string, sh: ShellLike): Promise<string[
 		.split('\n')
 		.map((l) => l.trim().split(/\s+/))
 		.filter(([u, , active]) => u && u.startsWith('jit-') && active !== 'failed')
-		.map(([u]) => u.replace(/\.service$/, ''));
+		.map(([u, , , , ...description]) => ({
+			name: u.replace(/\.service$/, ''),
+			labels: labelsFromUnitDescription(description.join(' ')),
+		}));
+}
+
+/**
+ * Retire a JIT runner that can never serve the job it was minted for: its
+ * registration, then its unit — {@link evictWarmListener}'s order, for its
+ * reason. GitHub refuses to delete a runner that is running a job, so a runner
+ * that took some OTHER job its labels fit is left to finish it.
+ */
+export async function retireStrandedJit(
+	node: string,
+	repo: string,
+	runnerName: string,
+	token: string,
+	gh: GhLike & { get?: (path: string, token: string, repo?: string) => Promise<unknown> },
+	sh: ShellLike
+): Promise<boolean> {
+	const removed = await deleteRunnerByName(repo, runnerName, token, gh);
+	if (!removed) return false;
+	await sh(
+		node,
+		`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop ${shellQuote(runnerName)} 2>/dev/null || true`
+	);
+	return true;
 }
 
 // --- warm cache of one (P4.1) -------------------------------------------

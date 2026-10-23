@@ -1037,6 +1037,68 @@ test('a runner minted for a queued job that is NOT busy yet is still in flight �
 	assert.equal(r.minted, 0, 'no second runner while the first is still coming up');
 });
 
+// --- a runner whose labels can never take its own job -----------------------
+
+/** A shell whose one live unit is MINTED_FOR_100, described as `description`. */
+function strandedShell(description: string, seen: string[]) {
+	const base = fakeShell();
+	return async (n: string, cmd: string) => {
+		seen.push(cmd);
+		if (cmd.includes('list-units'))
+			return `${MINTED_FOR_100}.service loaded active running ${description}`;
+		return base(n, cmd);
+	};
+}
+const BUILDER_JOB = { ...run(1), labels: ['self-hosted', 'hadoku-builder'] };
+const builderNode = () => node('claw-2', { maxConcurrent: 3, labels: ['hadoku-builder'] });
+
+test('2026-10-23: a runner minted WITHOUT its job’s label is retired, and the job is placed again', async () => {
+	const seen: string[] = [];
+	const gh = fakeGh({ runners: [{ id: 218, name: MINTED_FOR_100 }] });
+	const r = await runDispatchPass(
+		base({ nodes: [builderNode()], pending: [BUILDER_JOB] }),
+		'tok',
+		gh,
+		strandedShell('jit labels=self-hosted,Linux,X64,pm2-host,taskauto', seen)
+	);
+	assert.equal(r.minted, 1, 'job 100 is not held in flight by a runner that cannot take it');
+	assert.ok(gh.writes.includes('/actions/runners/218'), 'its registration is deleted');
+	assert.ok(
+		seen.some((c) => c.includes('systemctl --user stop') && c.includes(MINTED_FOR_100)),
+		'and its unit stopped, so it stops holding a slot'
+	);
+});
+
+test('a runner whose stamp DOES fit its job is still in flight — no second mint, nothing retired', async () => {
+	const seen: string[] = [];
+	const gh = fakeGh({ runners: [{ id: 218, name: MINTED_FOR_100 }] });
+	const r = await runDispatchPass(
+		base({ nodes: [builderNode()], pending: [BUILDER_JOB] }),
+		'tok',
+		gh,
+		strandedShell('jit labels=self-hosted,Linux,X64,hadoku-builder', seen)
+	);
+	assert.equal(r.minted, 0);
+	assert.equal(gh.writes.includes('/actions/runners/218'), false);
+});
+
+test('a BUSY mismatched runner is serving another job — it is never deleted out from under it', async () => {
+	const seen: string[] = [];
+	const gh = fakeGh({ runners: [{ id: 218, name: MINTED_FOR_100, busy: true }] });
+	const r = await runDispatchPass(
+		base({
+			nodes: [builderNode()],
+			pending: [BUILDER_JOB],
+			runningJobs: [{ repo: 'WolffM/hadoku-meet', runner: MINTED_FOR_100, jobName: 'deploy' }],
+		}),
+		'tok',
+		gh,
+		strandedShell('jit labels=self-hosted,Linux,X64,pm2-host', seen)
+	);
+	assert.equal(r.minted, 1, 'job 100 is placed again, as for any reassigned runner');
+	assert.equal(gh.writes.includes('/actions/runners/218'), false, 'the busy runner is left alone');
+});
+
 // --- order: a push before a manual dispatch ---------------------------------
 
 test('2026-10-09 20:27Z: a PUSH run’s job places before verify-branch dispatches queued after… and before', async () => {

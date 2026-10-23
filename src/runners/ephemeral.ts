@@ -1520,6 +1520,40 @@ export function guestUnitMemoryMaxMb(o: {
 	return slice === null ? requested : Math.min(requested, slice);
 }
 
+const UNIT_LABELS_PREFIX = 'jit labels=';
+/** A label the description can carry and `list-units`' whitespace split gives back intact. */
+const SAFE_LABEL = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * A JIT unit's description: the labels its registration was minted with.
+ *
+ * The unit name is the only record of a mint that survives an mgmt-api restart
+ * (B9), and it carries the job, not the labels. On 2026-10-23 a hokon mint for
+ * a `hadoku-builder` job registered without `hadoku-builder`; the unit held the
+ * job "in flight" and no claw could take it. The labels belong beside the name,
+ * on the node, where `list-units` already prints them for free.
+ *
+ * `null` when any label would not survive the round trip — the reader then sees
+ * no stamp, which is "unknown", never "mismatched".
+ */
+export function jitUnitDescription(labels: readonly string[]): string | null {
+	if (!labels.length || !labels.every((l) => SAFE_LABEL.test(l))) return null;
+	return `${UNIT_LABELS_PREFIX}${labels.join(',')}`;
+}
+
+/**
+ * The labels {@link jitUnitDescription} stamped, read back from `list-units`'
+ * DESCRIPTION column. `null` for a unit minted before the stamp existed (its
+ * description is systemd-run's own `[systemd-run] /bin/sh -c …`) or anything
+ * else unrecognised.
+ */
+export function labelsFromUnitDescription(description: string): string[] | null {
+	const d = description.trim();
+	if (!d.startsWith(UNIT_LABELS_PREFIX)) return null;
+	const labels = d.slice(UNIT_LABELS_PREFIX.length).split(',');
+	return labels.length && labels.every((l) => SAFE_LABEL.test(l)) ? labels : null;
+}
+
 export interface SpawnPlan {
 	/** Where the config must be written, mode 0600, before the unit starts. */
 	configPath?: string;
@@ -1563,6 +1597,12 @@ export function buildSpawnPlan(o: {
 	 * what issue #22 was.
 	 */
 	ttlSeconds: number;
+	/**
+	 * The labels the registration was minted with, stamped into the unit's
+	 * description so the dispatcher can read them back off `list-units` — see
+	 * {@link jitUnitDescription}. Absent leaves systemd-run's default.
+	 */
+	labels?: readonly string[];
 }): SpawnPlan {
 	// THE JITCONFIG DOES NOT GO IN THE COMMAND LINE.
 	//
@@ -1584,6 +1624,7 @@ export function buildSpawnPlan(o: {
 	// throwing here would leak a black-hole runner GitHub schedules onto. Widening
 	// a backstop is always safe; narrowing it below GitHub's ceiling is #22.
 	const runtimeMaxSec = Math.max(o.ttlSeconds, JIT_UNIT_MAX_SEC);
+	const description = o.labels ? jitUnitDescription(o.labels) : null;
 	return {
 		unit: o.unit,
 		configPath: cfgPath,
@@ -1592,6 +1633,7 @@ export function buildSpawnPlan(o: {
 			'systemd-run',
 			'--user',
 			`--unit=${o.unit}`,
+			...(description ? [`--description=${description}`] : []),
 			'--collect',
 			`--property=RuntimeMaxSec=${runtimeMaxSec}`,
 			// THE GROUP CEILING. Without it systemd puts a `--user` transient unit in

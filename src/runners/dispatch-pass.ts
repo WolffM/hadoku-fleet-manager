@@ -19,9 +19,11 @@ import { withGhCaller } from '../gh-budget.js';
 import { planTick, type PendingRun, type SkipReason } from './dispatcher.js';
 import {
 	mintEphemeralRunner,
-	liveJitUnits,
+	liveJitUnitRecords,
 	liveJitSlots,
 	evictWarmListener,
+	retireStrandedJit,
+	type LiveJitUnit,
 	warmRegistration,
 	reapJitRunners,
 	REAP_INTERVAL_MS,
@@ -33,7 +35,7 @@ import { JIT_PREFIX, WARM_PREFIX, parseJitName, warmRunnerName } from './ephemer
 import { recordCapacityLedger } from './capacity-ledger.js';
 import { nodeOf } from './census.js';
 import { recordDispatchDay } from './dispatch-daily.js';
-import type { NodeState } from './placement.js';
+import { satisfiesLabels, type NodeState } from './placement.js';
 import type { FleetDispatchAffinity } from '../fleet-report-types.js';
 
 export interface DispatchPassInput {
@@ -283,11 +285,16 @@ export async function runDispatchPass(
 
 	// Reconstruct in-flight state from the nodes.
 	const unitsByNode = new Map<string, string[]>();
+	const unitRecordsByNode = new Map<string, LiveJitUnit[]>();
 	const usedSlots = new Map<string, Set<number>>();
 	await Promise.all(
 		input.order.map(async (m) => {
-			const [units, slots] = await Promise.all([liveJitUnits(m, sh), liveJitSlots(m, sh)]);
-			unitsByNode.set(m, units);
+			const [units, slots] = await Promise.all([liveJitUnitRecords(m, sh), liveJitSlots(m, sh)]);
+			unitRecordsByNode.set(m, units);
+			unitsByNode.set(
+				m,
+				units.map((u) => u.name)
+			);
 			usedSlots.set(m, slots);
 		})
 	);
@@ -313,15 +320,31 @@ export async function runDispatchPass(
 	// this pass read) while its own job is still QUEUED is serving someone else:
 	// X is not in flight. The unit still counts toward its node's load.
 	const busyRunners = new Set((input.runningJobs ?? []).map((j) => j.runner));
-	const queuedJobIds = new Set(input.pending.map((p) => p.jobId));
+	const queuedJobs = new Map(input.pending.map((p) => [p.jobId, p]));
 	let reassigned = 0;
-	for (const units of unitsByNode.values()) {
+	// A RUNNER THAT CAN NEVER TAKE ITS OWN JOB. Its labels do not satisfy the
+	// job's, so GitHub will never assign the two — and holding the job "in
+	// flight" kept every other node from taking it for the unit's whole TTL
+	// (2026-10-23: a hokon mint registered without `hadoku-builder` after a
+	// backstop demote, 49 minutes of ci:queue-health red until a hand delete).
+	// The labels are the mint's own stamp on the unit; an unstamped unit is
+	// UNKNOWN and keeps the conservative answer. A busy one is serving some other
+	// job its labels fit, which the branch above already handles.
+	const stranded: { node: string; repo: string; name: string; has: string[]; wants: string[] }[] =
+		[];
+	for (const [node, units] of unitRecordsByNode) {
 		inFlight += units.length;
-		for (const u of units) {
+		for (const { name: u, labels } of units) {
 			const parsed = parseJitName(u);
 			if (!parsed) continue;
-			if (parsed.jobId !== null && queuedJobIds.has(parsed.jobId) && busyRunners.has(u)) {
+			const job = parsed.jobId !== null ? queuedJobs.get(parsed.jobId) : undefined;
+			if (job && busyRunners.has(u)) {
 				reassigned++;
+				continue;
+			}
+			const wants = job?.labels ?? [];
+			if (job && labels && wants.length && !satisfiesLabels(labels, wants)) {
+				stranded.push({ node, repo: job.repo, name: u, has: labels, wants });
 				continue;
 			}
 			// A name from before the job-scoped format has no job id. Block its
@@ -336,6 +359,16 @@ export async function runDispatchPass(
 		logger.info(
 			`[dispatch] ${reassigned} runner(s) minted for a still-queued job are serving another job — ` +
 				`those jobs are placed again, not held as in flight`
+		);
+	}
+	for (const s of stranded) {
+		const retired = await withGhCaller('reap', () =>
+			retireStrandedJit(s.node, s.repo, s.name, token, gh, sh)
+		);
+		logger.warn(
+			`[dispatch] STRANDED ${s.name}: carries ${s.has.join(',')}, its job wants ${s.wants.join(',')} — ` +
+				(retired ? 'retired; ' : 'could not be retired; ') +
+				'the job is placed again, not held as in flight'
 		);
 	}
 

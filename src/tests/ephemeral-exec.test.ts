@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 
 import {
 	__resetTarballCacheForTesting,
+	liveJitUnitRecords,
 	liveJitUnits,
 	mintEphemeralRunner,
 	runnerTarballUrl,
 } from '../runners/ephemeral-exec.js';
+import { jitUnitDescription, labelsFromUnitDescription } from '../runners/ephemeral.js';
 import { GOOD_JITCONFIG, jitConfig } from './helpers/fleet-fakes.js';
 
 const REQ = {
@@ -162,6 +164,41 @@ test('liveJitUnits asks for --plain and excludes a FAILED unit by its ACTIVE col
 		'jit-claw2-site-r3-1787797300',
 	]);
 	assert.match(asked, /--plain/);
+});
+
+test('a mint stamps its COMPLETE label set on the unit, and list-units gives it back', async () => {
+	const spawned: string[] = [];
+	const h = harness();
+	const sh = async (n: string, cmd: string) => {
+		if (cmd.startsWith('systemd-run ')) spawned.push(cmd);
+		return h.sh(n, cmd);
+	};
+	await mintEphemeralRunner(REQ, 'tok', h.gh, sh);
+	const stamp = /'--description=([^']*)'/.exec(spawned[0]!)?.[1];
+	assert.equal(stamp, 'jit labels=self-hosted,Linux,X64,pm2-host', 'the implicit labels too');
+
+	// What `systemctl --user list-units --plain` prints for it, beside a unit
+	// minted before the stamp existed (systemd-run's own description).
+	const listing = [
+		`${REQ.runnerName}.service loaded active running ${stamp}`,
+		`jit-hokon-old-1787797000.service loaded active running [systemd-run] /bin/sh -c "C=$(cat x)"`,
+	].join('\n');
+	assert.deepEqual(await liveJitUnitRecords('hokon', async () => listing), [
+		{ name: REQ.runnerName, labels: ['self-hosted', 'Linux', 'X64', 'pm2-host'] },
+		{ name: 'jit-hokon-old-1787797000', labels: null },
+	]);
+});
+
+test('a label that would not survive the round trip leaves the unit UNSTAMPED, never half-stamped', () => {
+	assert.equal(jitUnitDescription(['self-hosted', 'has space']), null);
+	assert.equal(jitUnitDescription([]), null);
+	assert.equal(labelsFromUnitDescription('jit labels='), null);
+	assert.equal(labelsFromUnitDescription('jit labels=a,,b'), null);
+	assert.deepEqual(labelsFromUnitDescription(jitUnitDescription(['a', 'b.c', 'd_e-f'])!), [
+		'a',
+		'b.c',
+		'd_e-f',
+	]);
 });
 
 test('an unreachable node reports no units rather than throwing', async () => {
