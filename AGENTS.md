@@ -27,6 +27,15 @@ tracked file carries a private address, MAC, tailnet name or a
 `.publish-denylist` entry. That list is gitignored here and mirrored in the
 `PUBLISH_DENYLIST` secret. Keep the two in sync.
 
+**A branch begun before the cut: REBASE it, never merge it.** The graft makes
+old and new history look like one, so `git merge` succeeds and the result
+looks clean. But `git push` ignores grafts, and that merge commit's private
+parent would upload all 762 private commits. `check-public-history.mjs`
+refuses it in pre-push; `--no-verify` skips that too, so do not. `git rebase
+main` replays only the branch's own commits and is safe. A commit of the
+branch's that touches `docs/planning` will then fail the build; move that
+change to the private checkout.
+
 **Live since 2026-08-30.** mgmt-api consumes it in production and the CLI runs
 every fleet gate. Migration record:
 `docs/planning/fleet-manager-extraction-2026-08-29.md` — read §3 (the client

@@ -13,6 +13,12 @@ if [ ! -e node_modules ] && [ -e "$main_checkout/node_modules" ]; then
 	ln -s "$main_checkout/node_modules" node_modules 2>/dev/null || true
 fi
 
+# FIRST, because it reads git's ref lines on stdin and the rest of this file
+# does not need them. The graft makes old-history branches look mergeable;
+# a push of such a merge would publish the private history.
+echo "🔒 Checking every pushed commit is public history..."
+node scripts/check-public-history.mjs || exit 1
+
 # The remote may have moved since the last fetch — and it moves often here,
 # because other agents are pushing to the same branch. Comparing against a
 # stale origin/main is the exact blind spot this gate exists to close, so
