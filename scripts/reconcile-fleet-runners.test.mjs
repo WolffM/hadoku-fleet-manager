@@ -506,6 +506,26 @@ test('a --confirm run with a missing pair calls the registration-token POST exac
 	}
 });
 
+// A new registration carries no `hadoku-builder` until the fast loop grants
+// it. On 2026-10-22 that gap read as a bug and the label was written by hand.
+test('a --confirm run that registers says when the builder label arrives, from the loop constants', () => {
+	const fx = fixture();
+	try {
+		writeFileSync(
+			join(fx.root, 'fleet-runner-manifest.json'),
+			JSON.stringify({ machines: { [CLAW]: { labels: ['hadoku-builder'], maxConcurrent: 2 } } })
+		);
+		const r = run(fx, [], ['--confirm']);
+		assert.match(r.out, /Done: 1 registered/, r.out + r.stderr);
+		assert.match(
+			r.out,
+			/fast loop grants hadoku-builder: within ~10 minutes\. Do not add it by hand\./
+		);
+	} finally {
+		cleanup(fx);
+	}
+});
+
 // ── --write-coverage / --check-coverage / --allow-shrink (#88, #86, #84 pt.2) ──
 //
 // A SEPARATE fixture from the one above: `--check-coverage` exits (0 or 1)

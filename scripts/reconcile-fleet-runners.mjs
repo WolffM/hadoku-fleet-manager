@@ -139,6 +139,7 @@ import {
 } from './lib/demand-derive.mjs';
 import { metricsReadScript, metricsSince, perJobCosts, readOutcome } from './lib/job-metrics.mjs';
 import {
+	BUILDER_LABEL,
 	registrationLabels,
 	workloadGateContext,
 	workloadGatedCapabilities,
@@ -147,6 +148,7 @@ import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.j
 import { fleetOwner, qualifyRepo } from '../dist/lib/fleet-config.js';
 import { isGuestNode, mintsOnDemand, standingRepos } from '../dist/lib/node-role.js';
 import { RETENTION_DAYS } from '../dist/job-history.js';
+import { FAST_LOOP_SECONDS, RECONCILE_EVERY_TICKS } from '../dist/fleet-loop.js';
 import { createEmitter } from './lib/emit.mjs';
 // The queue-health precedent, imported rather than re-derived — that gate
 // measured the transient rate (0.13% of `gh api` calls, 2026-09-07) and one
@@ -2347,6 +2349,17 @@ async function main() {
 			`Done: ${results.registered.length} registered, ${results.removed.length} removed, ${results.failed.length} failed.`
 		);
 		if (!results.failed.length && !missing.length) log('Fleet matches the manifest.');
+		// A new registration has no `hadoku-builder`, so it takes no job until the
+		// fast loop's full reconcile grants it. That gap read as a bug on
+		// 2026-10-22 and the label was written by hand, which is the one writer
+		// this label must not have. Say how long, from the loop's own constants.
+		if (results.registered.length) {
+			const mins = Math.ceil((FAST_LOOP_SECONDS * RECONCILE_EVERY_TICKS) / 60);
+			log(
+				`New runners take jobs once mgmt-api's fast loop grants ${BUILDER_LABEL}: ` +
+					`within ~${mins} minutes. Do not add it by hand.`
+			);
+		}
 	} else if (missing.length || orphans.length) {
 		log('Dry run only. Re-run with --confirm to apply.');
 	}
