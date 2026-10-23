@@ -152,6 +152,10 @@ const COMMANDS: Record<string, Command> = {
 		script: 'check-runner-var.mjs',
 		summary: 'every repo asking for vars.CI_RUNNER actually has it',
 	},
+	'check-site-token': {
+		script: 'check-site-token.mjs',
+		summary: 'HADOKU_SITE_TOKEN is held only by the repos that need it',
+	},
 	'egress-slices': {
 		script: 'check-egress-slices.mjs',
 		summary: 'the cgroup taxonomy the split tunnel routes on — every PM2 app classified',
