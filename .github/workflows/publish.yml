@@ -88,15 +88,15 @@ jobs:
           corepack enable
           corepack prepare pnpm@11.5.0 --activate
 
-      # Both tokens come from the vault, never a repo secret: this repo is public,
-      # and a raw PAT in its secrets is one compromised workflow away from every
-      # repo the PAT reaches. The service key is the only secret it holds, and
-      # mgmt-api rotates that one daily.
-      - name: Registry and dispatch tokens from the vault
+      # The registry token comes from the vault, never a repo secret, and this
+      # repo holds no token that can write anywhere: hadoku_site is told through
+      # mgmt-api with the service key (below). The service key is the only
+      # secret this public repo holds, and mgmt-api rotates it daily.
+      - name: Registry token from the vault
         uses: WolffM/hadoku-actions/vault-fetch@v1
         if: steps.gate.outputs.ships == 'true'
         with:
-          keys: HADOKU_NPM_READ_TOKEN,HADOKU_SITE_TOKEN
+          keys: HADOKU_NPM_READ_TOKEN
         env:
           HADOKU_VAULT_KEY: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
 
@@ -178,22 +178,11 @@ jobs:
       # warning in a green log is exactly how that stays lost.
       - name: Dispatch packages_updated to hadoku_site
         if: steps.gate.outputs.ships == 'true'
-        run: |
-          if [ -z "$HADOKU_SITE_TOKEN" ]; then
-            echo "::error::HADOKU_SITE_TOKEN is unset — published, but hadoku_site was not told."
-            exit 1
-          fi
-          status=$(curl -sS -o /dev/null -w "%{http_code}" \
-            -X POST "https://api.github.com/repos/WolffM/hadoku_site/dispatches" \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $HADOKU_SITE_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            -d "{\"event_type\": \"packages_updated\", \"client_payload\": {\"packages\": [\"@wolffm/fleet-manager\"], \"sha\": \"${{ github.sha }}\", \"ref\": \"${{ github.ref }}\"}}")
-          if [ "$status" != "204" ]; then
-            echo "::error::packages_updated dispatch to hadoku_site returned HTTP $status — published, but the consumer was not told."
-            exit 1
-          fi
-          echo "packages_updated dispatched for @wolffm/fleet-manager"
+        uses: WolffM/hadoku-actions/repo-action@v1
+        with:
+          verb: notify
+          body: '{"event_type":"packages_updated","client_payload":{"packages":["@wolffm/fleet-manager"],"sha":"${{ github.sha }}"}}'
+          service-key: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
 
       # A red run is seen by nobody unless it says so itself: nothing polls
       # these repos. `always()` so RECOVERIES report too -- without the success
