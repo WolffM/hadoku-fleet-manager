@@ -60,7 +60,7 @@ import { resolve } from 'node:path';
 import { reposWith } from './lib/fleet-roster.mjs';
 import { reposDir } from './lib/sibling-repos.mjs';
 import { siteRoot } from './lib/paths.mjs';
-import { tryShipped } from './lib/fleet-source.mjs';
+import { tryShipped, UnreadableRepo } from './lib/fleet-source.mjs';
 import { qualifyRepo } from '../dist/lib/fleet-config.js';
 import { blankComments } from './lib/blank-comments.mjs';
 import { crawlBundle, fetchText, judgeBuilt, siteOrigin } from './lib/mf-built.mjs';
@@ -239,6 +239,15 @@ function openRepo(name) {
 	}
 	const h = tryShipped(qualifyRepo(name), { fetch: !NO_FETCH });
 	if ('unreadable' in h) return { unreadable: `shipped branch unreadable: ${h.unreadable}` };
+	// One round trip for every source blob, so a fetch failure lands HERE as
+	// unreadable instead of in readAt below, where it would read as a missing file.
+	try {
+		h.prefetch();
+	} catch (err) {
+		if (err instanceof UnreadableRepo)
+			return { unreadable: `shipped branch unreadable: ${err.reason}` };
+		throw err;
+	}
 	return { read: (file) => h.read(file), list: (prefix) => h.list(prefix) };
 }
 

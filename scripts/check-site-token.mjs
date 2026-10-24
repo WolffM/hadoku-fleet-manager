@@ -111,7 +111,16 @@ function main() {
 	let repos;
 	try {
 		repos = JSON.parse(
-			gh(['repo', 'list', OWNER, '--limit', '1000', '--no-archived', '--json', 'nameWithOwner'])
+			gh([
+				'repo',
+				'list',
+				OWNER,
+				'--limit',
+				'1000',
+				'--no-archived',
+				'--json',
+				'nameWithOwner,isFork,isEmpty',
+			])
 		);
 	} catch (err) {
 		const msg = `check-site-token: could not list ${OWNER}'s repos: ${reason(err)}`;
@@ -126,12 +135,19 @@ function main() {
 	const policyFile = manifest('repo-policy-manifest.json');
 	const allowed = holders(JSON.parse(readFileSync(policyFile, 'utf8')).siteTokenHolders);
 
-	// The owner's list is the population, and every repo on it is read.
+	// The owner's list is the population, and every own, non-empty repo on it is read.
 	const findings = [];
 	let read = 0;
-	for (const { nameWithOwner: repo } of repos.sort((a, b) =>
+	for (const { nameWithOwner: repo, isFork, isEmpty } of repos.sort((a, b) =>
 		a.nameWithOwner.localeCompare(b.nameWithOwner)
 	)) {
+		// A fork's tree is upstream's code (microsoft-vscode, nodejs-node), and an
+		// empty repo has no tree: neither is mirrored. Both still get the secrets
+		// check, which is the API's answer and covers what a fork could hold.
+		if (isFork || isEmpty) {
+			findings.push(...repoFindings(repo, { secret: holdsSecret(repo) }, allowed));
+			continue;
+		}
 		const { unreadable, ...facts } = shipped(repo);
 		if (unreadable === null) read++;
 		else if (!allowed.has(repo)) {

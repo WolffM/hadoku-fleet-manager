@@ -105,11 +105,16 @@ function ownerRepos() {
 					'1000',
 					'--no-archived',
 					'--json',
-					'nameWithOwner',
+					'nameWithOwner,isFork,isEmpty',
 				],
 				{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
 			);
-			return JSON.parse(out).map((r) => r.nameWithOwner);
+			// Not forks (upstream's workflows, which never ask for this fleet's
+			// variable) and not empty repos (no workflows at all). The roster is
+			// added back by the caller, fork or not.
+			return JSON.parse(out)
+				.filter((r) => !r.isFork && !r.isEmpty)
+				.map((r) => r.nameWithOwner);
 		} catch (err) {
 			last = String(err?.stderr || err?.message || err)
 				.trim()

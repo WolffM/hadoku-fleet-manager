@@ -94,7 +94,12 @@ const GH_SHIM = `const fx = JSON.parse(require('fs').readFileSync(process.env.GH
 const argv = process.argv.slice(2).join(' ');
 if (argv.startsWith('repo list')) {
 	if (fx.listFail) { process.stderr.write('gh: HTTP 502\\n'); process.exit(1); }
-	process.stdout.write(JSON.stringify(fx.repos.map((nameWithOwner) => ({ nameWithOwner }))));
+	const listing = fx.repos.map((nameWithOwner) => ({
+		nameWithOwner,
+		isFork: (fx.forks ?? []).includes(nameWithOwner),
+		isEmpty: false,
+	}));
+	process.stdout.write(JSON.stringify(listing));
 	process.exit(0);
 }
 const m = argv.match(new RegExp('repos/([^ ]+)/actions/variables/CI_RUNNER'));
@@ -107,7 +112,14 @@ process.exit(1);
  * A throwaway fleet: fixture REMOTES read through fleet-source, a `gh` shim,
  * a manifest dir, and an EMPTY REPOS_DIR — nothing on disk may matter.
  */
-function fleet({ repos = [], roster = [], vars = {}, listFail = false, remotes: files = {} } = {}) {
+function fleet({
+	repos = [],
+	roster = [],
+	vars = {},
+	listFail = false,
+	forks = [],
+	remotes: files = {},
+} = {}) {
 	const remotes = fixtureRemotes('runnervar-');
 	const { root } = remotes;
 	for (const [repo, f] of Object.entries(files)) remotes.push(repo, f);
@@ -116,7 +128,7 @@ function fleet({ repos = [], roster = [], vars = {}, listFail = false, remotes: 
 	const bin = join(root, 'bin');
 	for (const d of [manifests, reposDir, bin]) mkdirSync(d, { recursive: true });
 	writeFileSync(join(manifests, 'fleet-runner-coverage.json'), JSON.stringify({ repos: roster }));
-	writeFileSync(join(root, 'gh.json'), JSON.stringify({ repos, vars, listFail }));
+	writeFileSync(join(root, 'gh.json'), JSON.stringify({ repos, vars, listFail, forks }));
 	// A .cjs beside a bash wrapper: an extensionless node script would be loaded
 	// as ESM under any ancestor package.json with "type": "module".
 	writeFileSync(join(bin, 'gh.cjs'), GH_SHIM);
@@ -314,4 +326,21 @@ test('#125: a 404 is the answer "not set", returned at once and never retried', 
 	});
 	assert.deepEqual(r, { value: null });
 	assert.equal(calls, 1);
+});
+
+test('a FORK is not in the population — upstream code, never mirrored — unless the roster names it', () => {
+	// WolffM/microsoft-vscode has no remote: reading it would be unreadable.
+	const fx = fleet({
+		repos: ['WolffM/present', 'WolffM/microsoft-vscode'],
+		forks: ['WolffM/microsoft-vscode'],
+		vars: { 'WolffM/present': '["self-hosted"]' },
+		remotes: { 'WolffM/present': { '.github/workflows/ci.yml': BARE } },
+	});
+	try {
+		const r = run(fx.env);
+		assert.equal(r.status, 0, r.stdout + r.stderr);
+		assert.ok(!r.stdout.includes('microsoft-vscode'), r.stdout);
+	} finally {
+		fx.cleanup();
+	}
 });

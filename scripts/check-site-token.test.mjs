@@ -24,7 +24,13 @@ const NO_GIT_ENV = Object.fromEntries(
 const GH_SHIM = `const fx = JSON.parse(require('fs').readFileSync(process.env.GH_FIXTURE, 'utf8'));
 const argv = process.argv.slice(2).join(' ');
 if (argv.startsWith('repo list')) {
-	const listing = JSON.stringify(fx.repos.map((nameWithOwner) => ({ nameWithOwner })));
+	const listing = JSON.stringify(
+		fx.repos.map((nameWithOwner) => ({
+			nameWithOwner,
+			isFork: (fx.forks ?? []).includes(nameWithOwner),
+			isEmpty: false,
+		}))
+	);
 	process.stdout.write(listing);
 	process.exit(0);
 }
@@ -41,7 +47,7 @@ const USES_TOKEN =
 	'jobs:\n  bump:\n    runs-on: x\n    steps:\n      - run: echo ${{ secrets.HADOKU_SITE_TOKEN }}\n';
 const CLEAN = 'jobs:\n  check:\n    runs-on: x\n';
 
-function fleet({ repos, secrets = {}, remotes: files = {} }) {
+function fleet({ repos, secrets = {}, forks = [], remotes: files = {} }) {
 	const remotes = fixtureRemotes('site-token-');
 	const { root } = remotes;
 	for (const [repo, f] of Object.entries(files)) remotes.push(repo, f);
@@ -53,7 +59,7 @@ function fleet({ repos, secrets = {}, remotes: files = {} }) {
 		join(manifests, 'repo-policy-manifest.json'),
 		JSON.stringify({ siteTokenHolders: {} })
 	);
-	writeFileSync(join(root, 'gh.json'), JSON.stringify({ repos, secrets }));
+	writeFileSync(join(root, 'gh.json'), JSON.stringify({ repos, secrets, forks }));
 	// A .cjs beside a bash wrapper: an extensionless node script would load as ESM
 	// under any ancestor package.json with "type": "module".
 	writeFileSync(join(bin, 'gh.cjs'), GH_SHIM);
@@ -194,6 +200,28 @@ test('#7: a missing, CRLF, stale, dirty clone under REPOS_DIR does not change th
 		assert.equal(poisoned.status, baseline.status, poisoned.stdout);
 		assert.deepEqual(poisoned.out.findings, baseline.out.findings);
 		assert.deepEqual(poisoned.out.examined, baseline.out.examined);
+	} finally {
+		fx.cleanup();
+	}
+});
+
+test('a FORK gets the secrets check but its tree is not mirrored', () => {
+	// WolffM/upstream-fork has no remote: reading its tree would be unreadable.
+	const fx = fleet({
+		repos: [HUB, 'WolffM/upstream-fork'],
+		forks: ['WolffM/upstream-fork'],
+		secrets: { [HUB]: ['HADOKU_SITE_TOKEN'], 'WolffM/upstream-fork': ['HADOKU_SITE_TOKEN'] },
+		remotes: { [HUB]: { '.github/workflows/deploy.yml': USES_TOKEN } },
+	});
+	try {
+		const r = run(fx.env);
+		assert.equal(r.status, 1, 'a fork holding the secret is still a finding');
+		assert.deepEqual(r.out.examined, { repos: 2, checkouts: 1 });
+		assert.ok(
+			r.out.findings.some((f) => f.repo === 'WolffM/upstream-fork' && f.kind !== 'unreadable'),
+			JSON.stringify(r.out.findings)
+		);
+		assert.ok(!r.out.findings.some((f) => f.kind === 'unreadable'), JSON.stringify(r.out.findings));
 	} finally {
 		fx.cleanup();
 	}

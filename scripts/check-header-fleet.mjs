@@ -129,7 +129,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { namesWith } from './lib/fleet-roster.mjs';
 import { reposDir } from './lib/sibling-repos.mjs';
-import { tryShipped } from './lib/fleet-source.mjs';
+import { tryShipped, UnreadableRepo } from './lib/fleet-source.mjs';
 import { READ_ATTEMPTS } from './lib/queue-health.mjs';
 import { blankComments } from './lib/blank-comments.mjs';
 import { stripYamlComments } from './lib/yaml-comments.mjs';
@@ -250,6 +250,13 @@ function openRepo(name) {
 	}
 	const h = tryShipped(qualifyRepo(name), { fetch: !NO_FETCH });
 	if ('unreadable' in h) return { name, unreadable: h.unreadable };
+	// The rules read file by file; without this each read is a network round trip.
+	try {
+		h.prefetch();
+	} catch (err) {
+		if (err instanceof UnreadableRepo) return { name, unreadable: err.reason };
+		throw err;
+	}
 	return { name, files: () => h.list(), read: (file) => h.read(file) };
 }
 
@@ -1161,7 +1168,7 @@ function repoAgeHours(name) {
 }
 
 /**
- * The owner's non-archived, non-empty repos, by bare name — the universe the
+ * The owner's own (non-fork), non-archived, non-empty repos, by bare name — the universe the
  * `not-in-fleet` check compares the roster against. `{ names }`, or `{ reason }`
  * when the listing failed every attempt. It used to be "every directory under
  * REPOS_DIR", which is the operator's checkouts, not the account: a cron host
@@ -1181,12 +1188,15 @@ function ownerRepos() {
 					'1000',
 					'--no-archived',
 					'--json',
-					'nameWithOwner,isEmpty',
+					'nameWithOwner,isEmpty,isFork',
 				],
 				{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024 }
 			);
+			// NOT FORKS. The account forks upstream projects (microsoft-vscode,
+			// nodejs-node, 34 of them on 2026-10-24) that are other people's code
+			// and no @wolffm consumer; mirroring them cost 1.2 GB and 7 minutes cold.
 			const names = JSON.parse(out)
-				.filter((r) => !r.isEmpty)
+				.filter((r) => !r.isEmpty && !r.isFork)
 				.map((r) => r.nameWithOwner.split('/')[1]);
 			if (!names.length) return { reason: `gh repo list ${fleetOwner()} returned ZERO repos` };
 			return { names };
@@ -1254,6 +1264,7 @@ function ownerRepos() {
 				// (`packages/ui/` behind seven `packages/a…` siblings) was never
 				// admitted as a consumer — and therefore never reported missing.
 				.filter((f) => f.endsWith('package.json') && !f.includes('node_modules'));
+			shipped.readMany(manifests); // one fetch for all of them, not one per manifest
 			for (const m of manifests) {
 				const raw = shipped.read(m);
 				if (!raw) continue;

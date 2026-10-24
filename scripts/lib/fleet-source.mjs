@@ -60,6 +60,14 @@ const FETCH_TIMEOUT_MS = 180_000;
 /** The mirror's own record of its last successful fetch. */
 const STAMP = 'fleet-source-fetched';
 
+/**
+ * Source text a scanner may read: code, configs, manifests, markup. For
+ * `prefetch` — a gate whose rules read files one at a time would otherwise pay
+ * one fetch round trip per file (header-audit measured ~20s a repo, cold).
+ */
+export const SOURCE_TEXT =
+	/(\.(json|[cm]?[jt]sx?|html|astro|vue|svelte|css|scss|ya?ml|toml|md|py|rs|sql|sh)|(^|\/)\.npmrc)$/;
+
 /** A repo whose shipped files could not be read, and why. */
 export class UnreadableRepo extends Error {
 	/** @param {string} repo @param {string} reason */
@@ -378,6 +386,15 @@ export function shipped(repo, { fetch = true } = {}) {
 				out.set(p, texts.get(p));
 			}
 			return out;
+		},
+		/**
+		 * Fetch every blob whose path passes `filter` in ONE round trip, so the
+		 * single-file reads after it are local. Throws UnreadableRepo like a read.
+		 *
+		 * @param {(path: string) => boolean} [filter]
+		 */
+		prefetch(filter = (p) => SOURCE_TEXT.test(p)) {
+			load(handle.list().filter(filter));
 		},
 		/** Normalised text of one path, or `null` when it is not in the tree. */
 		read(path) {
