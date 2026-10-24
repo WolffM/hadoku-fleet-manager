@@ -661,7 +661,15 @@ function catalogue() {
 		const cats = JSON.parse(readFile(site, 'spec/categories.json'));
 		for (const c of cats.categories ?? []) for (const a of c.apps ?? []) labels.set(a.id, a.label);
 		const kids = JSON.parse(readFile(site, 'scripts/child-apps.json'));
-		for (const a of kids.apps ?? []) if (a.repoName) repoToId.set(a.repoName, a.id);
+		// A repo may own SEVERAL ids — a PPE twin, a worker, a tunnel — and only
+		// one of them need have a tile. Last-wins kept whichever row came last:
+		// hadoku-cardtable's cardtable-ppe row (2026-10-23) shadowed cardtable
+		// and reported the repo uncatalogued every night (fleet-manager#4).
+		for (const a of kids.apps ?? []) {
+			if (!a.repoName) continue;
+			if (!repoToId.has(a.repoName)) repoToId.set(a.repoName, []);
+			repoToId.get(a.repoName).push(a.id);
+		}
 	} catch {
 		readable = false;
 	}
@@ -742,8 +750,8 @@ function checkHeaderName(repo, repoPath, appRoots) {
 		const title = appHeaderTitle(src);
 		if (!title) continue; // no <AppHeader> at all — `no-app-header` owns that
 
-		const appId = repoToId.get(repo);
-		if (!appId || !labels.has(appId)) {
+		const appId = (repoToId.get(repo) ?? []).find((id) => labels.has(id));
+		if (!appId) {
 			report(
 				repo,
 				'header-name-unverified',

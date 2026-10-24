@@ -294,19 +294,19 @@ function makeRepo(dir, files, extraEnv) {
 }
 
 /** The hub's catalogue, under REPOS_DIR — where `catalogue()` reads it. */
-function makeHub(fx) {
+function makeHub(fx, childApps = [{ id: 'appx', repoName: APP }]) {
 	makeRepo(join(fx.reposDir, 'hadoku_site'), {
 		'spec/categories.json': JSON.stringify({
 			categories: [{ apps: [{ id: 'appx', label: 'App X' }] }],
 		}),
-		'scripts/child-apps.json': JSON.stringify({ apps: [{ id: 'appx', repoName: APP }] }),
+		'scripts/child-apps.json': JSON.stringify({ apps: childApps }),
 	});
 }
 
 /** A fleet of one app: CLEAN_APP with `changes` applied. */
-function appFixture(changes = {}, { hub = true } = {}) {
+function appFixture(changes = {}, { hub = true, childApps } = {}) {
 	const fx = fixture(APP_ROSTER);
-	if (hub) makeHub(fx);
+	if (hub) makeHub(fx, childApps);
 	makeRepo(join(fx.reposDir, APP), { ...CLEAN_APP, ...changes });
 	return fx;
 }
@@ -337,6 +337,56 @@ test('#98: an unreadable catalogue is reported ONCE, against the hub — it used
 		assert.equal(blind[0].rule, 'catalogue-unreadable');
 		assert.match(blind[0].detail, new RegExp(APP));
 		assert.equal(code, 1);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+// fleet-manager#4: hadoku-cardtable owns cardtable AND cardtable-ppe, and only
+// cardtable has a tile. The PPE row comes second, so a last-wins map lost the
+// tile and reported the repo uncatalogued.
+const TWO_IDS = [
+	{ id: 'appx', repoName: APP },
+	{ id: 'appx-ppe', repoName: APP },
+];
+
+test('fleet-manager#4: a repo with two child-apps rows, only the first catalogued, is verified', () => {
+	const fx = appFixture({}, { childApps: TWO_IDS });
+	try {
+		const { code, out } = run(fx);
+		const doc = JSON.parse(out);
+		assert.deepEqual(doc.findings, [], out);
+		assert.equal(code, 0);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('fleet-manager#4: the header is checked against the catalogued id’s label', () => {
+	const fx = appFixture(
+		{
+			'src/App.tsx':
+				"import { AppHeader } from '@wolffm/task-ui-components';\n" +
+				"import { HadokuThemeRoot } from '@wolffm/themes';\n" +
+				'export function App() {\n' +
+				'  return (\n' +
+				'    <HadokuThemeRoot>\n' +
+				'      <AppHeader title="Wrong Name" />\n' +
+				'    </HadokuThemeRoot>\n' +
+				'  );\n' +
+				'}\n',
+		},
+		{ childApps: TWO_IDS }
+	);
+	try {
+		const { out } = run(fx);
+		const found = findingsFor(JSON.parse(out), APP);
+		assert.deepEqual(
+			found.map((f) => f.rule),
+			['header-name-hardcoded'],
+			out
+		);
+		assert.match(found[0].detail, /The catalogue says "App X"/);
 	} finally {
 		cleanup(fx);
 	}
