@@ -227,6 +227,19 @@ export const JSON_CONTRACT = [
 			'writer, which is the case it is most for.',
 	},
 	{
+		sub: 'check-site-token',
+		hostBound: true,
+		argv: ['--json'],
+		job: 'ci:site-token',
+		consumer: 'services/mgmt-api/src/routes/jobs/site-token-check.ts',
+		why:
+			'Is HADOKU_SITE_TOKEN, the account-wide repo+workflow PAT, held only by the ' +
+			'hub and the declared siteTokenHolders. Child repos stopped holding it on ' +
+			'2026-10-23 (mgmt-api does their two writes with their own service key), and ' +
+			'a copy that comes back fails nothing on its own. Reads Actions secrets from ' +
+			'the GitHub API and workflows/.devvault.json from each default branch on origin.',
+	},
+	{
 		sub: 'egress-slices',
 		hostBound: true,
 		argv: ['--json'],

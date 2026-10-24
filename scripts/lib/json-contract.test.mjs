@@ -140,15 +140,15 @@ void test('the contract itself is well-formed', () => {
 });
 
 /**
- * THE SEVEN HOST-BOUND ENTRIES, PINNED.
+ * THE EIGHT HOST-BOUND ENTRIES, PINNED.
  *
  * `hostBound: true` means the subcommand reads something that belongs to THIS
  * box specifically rather than the fleet — see the field's own doc comment in
  * json-contract.mjs. This is a REGRESSION test, not a structural one: it does
  * not re-derive which entries are host-bound from the source (that would just
  * be the declaration checking itself), it pins the seven #79 evidenced by
- * hand so that flipping any one of them to `false` — or adding an eighth
- * without updating this list — fails loudly instead of silently changing what
+ * hand plus check-site-token (2026-10-23), so that flipping any one of them
+ * to `false` — or adding a ninth without updating this list — fails loudly instead of silently changing what
  * an active/passive split is allowed to assume.
  */
 const HOST_BOUND_SUBS = [
@@ -159,9 +159,10 @@ const HOST_BOUND_SUBS = [
 	'identity-model',
 	'inventory',
 	'check-runner-var',
+	'check-site-token',
 ].sort();
 
-void test('the host-bound declaration matches the evidenced seven, exactly', () => {
+void test('the host-bound declaration matches the evidenced eight, exactly', () => {
 	const actual = JSON_CONTRACT.filter((e) => e.hostBound === true)
 		.map((e) => e.sub)
 		.sort();

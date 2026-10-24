@@ -167,6 +167,7 @@ code first would turn every real finding into "the checker broke".
 | `fleet identity-model --fleet --json`       | `ci:identity-model`     |
 | `fleet cleanup --json --confirm`            | `ci:claw-cleanup`       |
 | `fleet check-runner-var --json`             | `ci:runner-var`         |
+| `fleet check-site-token --json`             | `ci:site-token`         |
 | `fleet egress-slices --json`                | `ci:egress-slices`      |
 | `fleet queue-health --json`                 | `ci:queue-health`       |
 | `fleet reap-trend --json`                   | `ci:reap-timeout-trend` |

@@ -170,6 +170,7 @@ belongs to THIS box specifically, not the fleet:
 | `identity-model`                         | the same sibling checkouts, via `--fleet`                         | `scripts/check-identity-model.mjs:57,1194`                                                 |
 | `inventory`                              | the same sibling checkouts                                        | `scripts/fleet-inventory.mjs:39,104-105` (`reposDir()`, `siteRoot()`)                      |
 | `check-runner-var` (job `ci:runner-var`) | the same sibling checkouts                                        | `scripts/check-runner-var.mjs:49,93` (`reposDir()` from `./lib/sibling-repos.mjs`)         |
+| `check-site-token` (job `ci:site-token`) | the same sibling checkouts, fetched                               | `scripts/check-site-token.mjs:24,154` (`reposDir()` from `./lib/sibling-repos.mjs`)        |
 
 The other nine entries (`drain-check`, `benchmark`, `reconcile`, `toolchain`,
 `converge-toolchain`, `cleanup`, `queue-health`, `preflight`,
@@ -188,7 +189,7 @@ box is currently driving the fleet's loops.
 
 `scripts/lib/json-contract.test.mjs` requires every entry to declare
 `hostBound` as a literal boolean (present on a hypothetical new entry too,
-not just the current sixteen) and separately pins the seven above by name, so
+not just the current eighteen) and separately pins the eight above by name, so
 flipping any one of them — or quietly dropping the field from a new entry —
 fails the gate rather than drifting unnoticed the way the `--json` consumer
 count itself did twice before (`scripts/lib/json-contract.mjs`'s own header
