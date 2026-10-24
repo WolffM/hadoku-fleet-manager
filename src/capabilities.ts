@@ -724,20 +724,65 @@ export const CAPABILITIES: readonly Capability[] = [
 	 * already exists — instead of a guess made today about hardware nobody has
 	 * booted.
 	 *
+	 * `nvenc-h264` WAS THE FIRST TO TAKE THAT STEP, 2026-10-23 (fleet-manager#3):
+	 * hadoku-watchparty's ingest encodes with `h264_nvenc` and moved from a child
+	 * process of its server to a fleet job. Its entry carries why.
+	 *
 	 * The honest expected answers on the two new cards, so nobody reads a `no` as a
 	 * regression: NVENC AV1 encode arrived with Ada (RTX 40), so `av1-nvenc` is NO
 	 * on both. H.264 and HEVC are YES on both. And every one of them is NO on an
 	 * unrebooted box, because the DKMS module is not in the running kernel yet.
 	 */
 	{
+		/*
+		 * PROMOTED TO A LABEL 2026-10-23 (fleet-manager#3), against probe output that
+		 * already existed: bootcamp had earned it on hokon (10-09), claw-1 (10-10),
+		 * claw-8 and claw-9 (10-06). No `nodeOffer` change came with it — every
+		 * earned identity label is offered, on a guest too, which is how hokon
+		 * already carried `jdk21`.
+		 *
+		 * FOUR NODES DEEP, ON PURPOSE. watchparty's ingest needs only H.264, so
+		 * any of them can encode. What pins the job to one box is the DATA, and
+		 * that is a separate question with its own label — `watchparty-media`
+		 * below. Narrowing this label to hokon instead would make an encoder
+		 * capability lie about three nodes that have it.
+		 */
 		id: 'nvenc-h264',
 		label: 'NVENC H.264 encode',
 		kind: 'identity',
-		surface: 'implicit',
+		surface: 'label',
 		verify: 'probe',
 		description:
 			'Hardware H.264 encoding through NVENC. The broadest NVENC codec — every ' +
-			'NVIDIA card the fleet owns can do it, back to Maxwell.',
+			'NVIDIA card the fleet owns can do it, back to Maxwell. Routed on by ' +
+			'watchparty’s ingest, alongside `watchparty-media`.',
+	},
+	{
+		/*
+		 * DATA LOCALITY, NOT A TOOL — and still proved by looking, not declared.
+		 *
+		 * watchparty's ingest runs IN PLACE against its ~290 GB library
+		 * (`INGEST_MEDIA_ROOT`, a repo variable there), reading sources and writing
+		 * ~1 GB outputs beside them. A node without the library refuses the job at
+		 * once (`ingest-job.sh`, exit 2). So "can encode H.264" was never enough,
+		 * and "is hokon" would be the wrong answer the day the library moves.
+		 *
+		 * The probe reads the directory the job will read. That makes the label
+		 * follow the library: move it to a claw at the same path and the next
+		 * bootcamp earns it there, with no declaration to forget. THE PATH IS A
+		 * CROSS-REPO CONTRACT with watchparty's `INGEST_MEDIA_ROOT`; the probe
+		 * names it and says why.
+		 */
+		id: 'watchparty-media',
+		label: 'Holds watchparty library',
+		kind: 'identity',
+		surface: 'label',
+		verify: 'probe',
+		description:
+			'This node holds watchparty’s media library, which ingest encodes in ' +
+			'place: `input/` is present and non-empty and the media root is writable. ' +
+			'Proved by reading the directory, so the label moves with the library rather ' +
+			'than with a hostname.',
 	},
 	{
 		id: 'nvenc-hevc',

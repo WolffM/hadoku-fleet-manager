@@ -938,12 +938,16 @@ test('every label the committed manifest declares is a registry entry', () => {
 	// toolchain nothing executed.
 	// `jit-canary` joined it 2026-10-09: `nodeOffer` DERIVES it for every
 	// ephemeral node, so the live manifest stopped declaring it on claw-3.
+	// `nvenc-h264` and `watchparty-media` joined it 2026-10-23 (fleet-manager#3)
+	// on `jdk21`'s reasoning: earned from the bootcamp record, never declared.
 	const runtimeWritten = new Set([
 		'hokon-backstop',
 		'hadoku-builder',
 		'cargo-bevy',
 		'jdk21',
 		'jit-canary',
+		'nvenc-h264',
+		'watchparty-media',
 	]);
 	for (const c of labelCapabilities()) {
 		if (runtimeWritten.has(c.id)) continue;

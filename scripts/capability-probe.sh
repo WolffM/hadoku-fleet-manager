@@ -310,6 +310,28 @@ say nvenc-h264 $(nvenc_try h264_nvenc)
 # shellcheck disable=SC2046
 say nvenc-hevc $(nvenc_try hevc_nvenc)
 
+# --- watchparty-media: is the library HERE, where ingest will read it --------
+# hadoku-watchparty's ingest encodes in place against `INGEST_MEDIA_ROOT`, a
+# repo variable on that side. This path is that variable's value, and it is a
+# CROSS-REPO CONTRACT: change one, change both, or the label leaves the node
+# that holds the library. Present, non-empty and writable, because the job
+# reads `input/` and writes its outputs under the root. Never a size or a
+# listing of titles — this repo is public.
+watchparty_media_try() {
+	root="$HOME/srv/hadoku-watchparty/media"
+	if [ ! -d "$root/input" ]; then
+		printf 'no no-input-dir'
+	elif [ -z "$(ls -A "$root/input" 2>/dev/null)" ]; then
+		printf 'no input-empty'
+	elif [ ! -w "$root" ]; then
+		printf 'no root-not-writable'
+	else
+		printf 'ok input-present'
+	fi
+}
+# shellcheck disable=SC2046
+say watchparty-media $(watchparty_media_try)
+
 # --- nvdec: DECODE something, on the GPU -------------------------------------
 # Encode and decode are separate silicon and separate driver paths; a card can
 # lose one and keep the other. Generated on the CPU first so the decode is

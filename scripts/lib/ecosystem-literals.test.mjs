@@ -237,7 +237,11 @@ const BASELINE = {
 	// same pattern, one more declared repo.
 	WolffM: 9,
 	hokon: 39,
-	hadoku: 113,
+	// 114: `watchparty-media`'s probe reads `$HOME/srv/hadoku-watchparty/media`
+	// (fleet-manager#3, 2026-10-23). That path IS the capability: it is the
+	// value of watchparty's `INGEST_MEDIA_ROOT`, a cross-repo contract the probe
+	// names, and a node has no environment the probe could resolve it from.
+	hadoku: 114,
 };
 
 /**
