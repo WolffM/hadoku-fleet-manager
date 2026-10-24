@@ -43,15 +43,17 @@
  * What a declaration still answers is WHO OFFERS a label, and even that is now
  * one of three sources — see `offerersOf`.
  *
- * Scans SIBLING CHECKOUTS, and says so when one is missing rather than passing
- * quietly — a repo that is not on disk is a repo whose labels were not read, and
- * "I could not look" must never read as "there was nothing to find".
+ * Reads each repo's SHIPPED workflows through `lib/fleet-source.mjs`, and says so
+ * when one is unreadable rather than passing quietly — a repo whose workflows
+ * were not read is a repo whose labels were not read, and "I could not look"
+ * must never read as "there was nothing to find".
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { reposDir } from './lib/sibling-repos.mjs';
-import { manifest as manifestFile, siteRoot, stateDir } from './lib/paths.mjs';
+import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
+import { tryShipped } from './lib/fleet-source.mjs';
+import { hubRepoFull } from '../dist/lib/fleet-config.js';
 import { FLOOR_DEMAND_FILE, floorLabels, isFloorDemandLabel } from '../dist/label-floor.js';
 import { FLEET_VALUE } from '../dist/ci-runner-fallback.js';
 import { BUILDER_LABEL } from '../dist/runners/census.js';
@@ -93,7 +95,6 @@ const emitter = createEmitter();
 const JSON_OUT = emitter.json;
 const log = emitter.log;
 
-const REPOS_DIR = reposDir();
 const MANIFEST = manifestFile('fleet-runner-manifest.json');
 const COVERAGE = manifestFile('fleet-runner-coverage.json');
 
@@ -498,7 +499,11 @@ try {
  */
 const coverage = JSON.parse(readFileSync(COVERAGE, 'utf8'));
 const coveredRepos = coverage.repos ?? [];
-const repos = [siteRoot(), ...coveredRepos.map((r) => join(REPOS_DIR, r.split('/').pop()))];
+// THE SHIPPED WORKFLOWS, through fleet-source: each repo's default branch,
+// fetched by the reader itself. Never a sibling working tree — on 2026-10-24 a
+// CRLF, 1627-commits-behind clone of secretProject made this gate report a parse
+// failure in a file that was fine on GitHub (fleet-manager#7).
+const repos = [...new Set([hubRepoFull(), ...coveredRepos])];
 
 const requested = new Set();
 /** label -> where it was asked for: `repo/file:job` (static) and a job count (observed). */
@@ -511,28 +516,28 @@ function noteDemand(label, where) {
 	else demandSources[label].static.push(where);
 }
 const unread = [];
+/** name -> why it could not be read; printed beside `unread`, which stays names. */
+const unreadWhy = new Map();
 const noWorkflows = [];
 const unresolvable = [];
-for (const dir of repos) {
-	const name = dir.split('/').pop();
-	if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+for (const slug of repos) {
+	const name = slug.split('/').pop();
+	const source = tryShipped(slug);
+	if ('unreadable' in source) {
 		unread.push(name);
+		unreadWhy.set(name, source.unreadable);
 		continue;
 	}
-	// A CHECKOUT WITH NO WORKFLOWS DIRECTORY CONTRIBUTED NOTHING, silently, and
-	// the gate's scope shrank by a whole repo. Every covered repo is covered
-	// BECAUSE its workflows run on the fleet, so a missing directory is a broken
-	// or wrong checkout — the same "could not look" as a missing one.
-	const wf = join(dir, '.github', 'workflows');
-	if (!existsSync(wf)) {
+	// A REPO WITH NO WORKFLOWS DIRECTORY CONTRIBUTED NOTHING, silently, and the
+	// gate's scope shrank by a whole repo. Every covered repo is covered BECAUSE
+	// its workflows run on the fleet, so a missing directory is the same "could
+	// not look" as an unreadable repo.
+	if (!source.hasWorkflowsDir()) {
 		noWorkflows.push(name);
 		continue;
 	}
-	for (const f of readdirSync(wf)) {
-		if (!/\.ya?ml$/.test(f)) continue;
-		const { jobs, unresolved } = workflowDemand(readFileSync(join(wf, f), 'utf8'), {
-			fleetValue: FLEET_VALUE,
-		});
+	for (const { file: f, text } of source.workflows()) {
+		const { jobs, unresolved } = workflowDemand(text, { fleetValue: FLEET_VALUE });
 		for (const u of unresolved) unresolvable.push(`${name}/${f}: ${u}`);
 		for (const j of jobs) for (const l of j.labels) noteDemand(l, `${name}/${f}:${j.id}`);
 	}
@@ -830,8 +835,8 @@ if (residentHolders.size) {
  * DEMAND rather than for a workflow's literal `runs-on`.
  *
  * A missing ledger is a FAILURE, not a skip — `unread.length` above holds the
- * same line for sibling checkouts. This gate already assumes an operational
- * environment (it reads sibling repos off disk), so requiring the ledger
+ * same line for unreadable repos. This gate already assumes an operational
+ * environment (it reads the state dir and GitHub), so requiring the ledger
  * `fleet tool-inventory --write` produces is consistent, not a new floor.
  */
 let ledgerRecords;
@@ -916,12 +921,11 @@ function emitJson(verdict, extra = {}) {
 // run having examined a single repository. Reported as a failure, with the
 // resolved path, so the cause is visible rather than inferred.
 if (unread.length) {
-	console.error(`✗ ${unread.length} fleet repo(s) not on disk under ${REPOS_DIR}:`);
-	console.error(`  ${unread.join(', ')}`);
+	console.error(`✗ ${unread.length} fleet repo(s) whose shipped workflows could not be read:`);
+	for (const name of unread) console.error(`  ${name}: ${unreadWhy.get(name)}`);
 	console.error(
-		`\n  This gate reads workflow labels from sibling checkouts. Missing ones mean\n` +
-			`  their labels were not examined, so a pass here would be meaningless.\n` +
-			`  Set REPOS_DIR if they live elsewhere.`
+		`\n  This gate reads workflow labels from each repo's default branch. Unreadable ones\n` +
+			`  mean their labels were not examined, so a pass here would be meaningless.`
 	);
 	emitJson('unread');
 	process.exit(1);
@@ -939,10 +943,10 @@ if (!coveredRepos.length) {
 }
 if (noWorkflows.length) {
 	console.error(
-		`✗ ${noWorkflows.length} covered checkout(s) have no .github/workflows under ${REPOS_DIR}:\n` +
+		`✗ ${noWorkflows.length} covered repo(s) ship no .github/workflows on their default branch:\n` +
 			`  ${noWorkflows.join(', ')}\n\n` +
-			`  A covered repo is covered because its workflows run on the fleet, so this is a wrong\n` +
-			`  or broken checkout, and its demand was not read.`
+			`  A covered repo is covered because its workflows run on the fleet, so its demand\n` +
+			`  was not read.`
 	);
 	emitJson('no-workflows');
 	process.exit(1);

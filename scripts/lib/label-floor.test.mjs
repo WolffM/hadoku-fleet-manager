@@ -25,11 +25,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { labelCapabilities } from '../../dist/capabilities.js';
+import { fixtureRemotes, poisonedClone } from './fleet-source-fixture.mjs';
 
 const GATE = join(dirname(dirname(fileURLToPath(import.meta.url))), 'check-label-floor.mjs');
 
@@ -83,36 +83,35 @@ function fixture(
 		],
 	} = {}
 ) {
-	const root = mkdtempSync(join(tmpdir(), 'label-floor-'));
+	const remotes = fixtureRemotes('label-floor-');
+	const root = remotes.root;
 	const manifestDir = join(root, 'admin');
 	const siteRoot = join(root, 'site');
 	const stateDir = join(root, 'state');
 	const reposDir = join(root, 'repos');
 	mkdirSync(manifestDir, { recursive: true });
-	mkdirSync(join(siteRoot, '.github', 'workflows'), { recursive: true });
 	mkdirSync(join(siteRoot, 'scripts', 'admin'), { recursive: true });
+	mkdirSync(reposDir, { recursive: true });
 	mkdirSync(stateDir, { recursive: true });
 
 	writeFileSync(
 		join(manifestDir, 'fleet-runner-manifest.json'),
 		JSON.stringify({ machines }, null, 2)
 	);
-	const repoDir = join(reposDir, 'fixture-repo');
-	mkdirSync(repoDir, { recursive: true });
-	if (covered) {
-		mkdirSync(join(repoDir, '.github', 'workflows'), { recursive: true });
-		for (const [f, body] of Object.entries(covered)) {
-			writeFileSync(join(repoDir, '.github', 'workflows', f), body);
-		}
+	// THE REPOS ARE REMOTES, read through fleet-source the way the gate reads
+	// GitHub. REPOS_DIR is set to an EMPTY directory: nothing there may matter.
+	const coveredFiles = {};
+	for (const [f, body] of Object.entries(covered ?? {})) {
+		coveredFiles[`.github/workflows/${f}`] = body;
 	}
+	remotes.push('WolffM/fixture-repo', { 'README.md': 'fixture\n', ...coveredFiles });
 	writeFileSync(
 		join(manifestDir, 'fleet-runner-coverage.json'),
 		JSON.stringify({ repos: ['WolffM/fixture-repo'] })
 	);
-	writeFileSync(
-		join(siteRoot, '.github', 'workflows', 'ci.yml'),
-		`jobs:\n  build:\n    runs-on: [${requests.map((r) => `'${r}'`).join(', ')}]\n`
-	);
+	remotes.push('WolffM/hadoku_site', {
+		'.github/workflows/ci.yml': `jobs:\n  build:\n    runs-on: [${requests.map((r) => `'${r}'`).join(', ')}]\n`,
+	});
 	if (history) {
 		writeFileSync(
 			join(stateDir, 'job-history.jsonl'),
@@ -143,10 +142,12 @@ function fixture(
 	return {
 		root,
 		manifestDir,
-		repoDir,
+		reposDir,
+		remotes,
 		stateDir,
 		env: {
 			...process.env,
+			...remotes.env,
 			FLEET_MANIFEST_DIR: manifestDir,
 			HADOKU_SITE_ROOT: siteRoot,
 			HADOKU_STATE_DIR: stateDir,
@@ -791,6 +792,88 @@ test('#98: an EMPTY roster FAILS — it read only the site', () => {
 		const { code, report } = run(env);
 		assert.equal(code, 1);
 		assert.equal(report.verdict, 'empty-roster');
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+/**
+ * fleet-manager#7: A LOCAL CLONE CANNOT CHANGE THE VERDICT.
+ *
+ * The baseline run has clones under REPOS_DIR (and the site root) that MATCH the
+ * shipped branches, so a gate that read them would pass it too. Then the clones
+ * are poisoned the three ways a real one goes wrong — CRLF (the 2026-10-24
+ * secretProject read: "no jobs could be read"), behind (a workflow the remote
+ * deleted) and dirty (an uncommitted workflow asking for a label nothing
+ * offers) — and the verdict must not move. Revert the gate to reading disk and
+ * the second run fails.
+ */
+test('#7: a CRLF, stale, dirty clone under REPOS_DIR does not change the verdict', () => {
+	const fx = fixture({ hokon: { $capabilities: passes() } });
+	const covered = {
+		'.github/workflows/ci.yml': 'jobs:\n  check:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n',
+	};
+	const site = {
+		'.github/workflows/ci.yml': "jobs:\n  build:\n    runs-on: ['self-hosted', 'hadoku-builder']\n",
+	};
+	const siteRoot = fx.env.HADOKU_SITE_ROOT;
+	try {
+		poisonedClone(fx.reposDir, 'WolffM/fixture-repo', covered);
+		poisonedClone(fx.reposDir, 'WolffM/hadoku_site', site);
+		mkdirSync(join(siteRoot, '.github', 'workflows'), { recursive: true });
+		writeFileSync(join(siteRoot, '.github/workflows/ci.yml'), site['.github/workflows/ci.yml']);
+		const baseline = run(fx.env);
+		assert.equal(baseline.code, 0, `the clean fleet must pass: ${baseline.stderr}`);
+
+		rmSync(join(fx.reposDir, 'fixture-repo'), { recursive: true, force: true });
+		rmSync(join(fx.reposDir, 'hadoku_site'), { recursive: true, force: true });
+		poisonedClone(
+			fx.reposDir,
+			'WolffM/fixture-repo',
+			{
+				...covered,
+				'.github/workflows/deleted-upstream.yml':
+					"jobs:\n  gone:\n    runs-on: ['self-hosted', 'retired-label']\n",
+			},
+			{
+				crlf: true,
+				edit: {
+					'.github/workflows/local.yml':
+						"jobs:\n  wip:\n    runs-on: ['self-hosted', 'nobody-offers-this']\n",
+				},
+			}
+		);
+		poisonedClone(fx.reposDir, 'WolffM/hadoku_site', site, { crlf: true });
+		writeFileSync(
+			join(siteRoot, '.github/workflows/ci.yml'),
+			"jobs:\r\n  build:\r\n    runs-on: ['self-hosted', 'stale-label']\r\n"
+		);
+		const poisoned = run(fx.env);
+		assert.equal(poisoned.code, baseline.code, poisoned.stderr);
+		assert.equal(poisoned.report.verdict, baseline.report.verdict);
+		assert.deepEqual(poisoned.report.dependencies, baseline.report.dependencies);
+		assert.deepEqual(poisoned.report.demandSources, baseline.report.demandSources);
+		assert.ok(
+			baseline.report.demandSources['hadoku-builder'],
+			'the baseline must have read demand'
+		);
+	} finally {
+		rmSync(fx.root, { recursive: true, force: true });
+	}
+});
+
+test('#7: an unreadable covered repo FAILS as unread, with the reason', () => {
+	const { root, env, manifestDir } = fixture({ hokon: { $capabilities: passes() } });
+	try {
+		writeFileSync(
+			join(manifestDir, 'fleet-runner-coverage.json'),
+			JSON.stringify({ repos: ['WolffM/fixture-repo', 'WolffM/never-pushed'] })
+		);
+		const { code, report, stderr } = run(env);
+		assert.equal(code, 1);
+		assert.equal(report.verdict, 'unread');
+		assert.deepEqual(report.unread, ['never-pushed']);
+		assert.match(stderr, /never-pushed: fetch from .* failed/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

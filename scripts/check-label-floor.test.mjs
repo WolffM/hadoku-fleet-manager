@@ -17,25 +17,18 @@
  * PATH with failure injection, the same shape `check-fleet-preflight.test.mjs`
  * uses (a counter FILE, because each invocation is a fresh process).
  *
- * NOTHING HERE SPAWNS git. See lib/hook-safe-tests.test.mjs.
+ * The repos are fixture REMOTES (lib/fleet-source-fixture.mjs), whose git
+ * children run with every GIT_* stripped. See lib/hook-safe-tests.test.mjs.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-	chmodSync,
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { READ_ATTEMPTS } from './lib/queue-health.mjs';
+import { fixtureRemotes } from './lib/fleet-source-fixture.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GATE = join(HERE, 'check-label-floor.mjs');
@@ -89,12 +82,13 @@ esac
 `;
 
 function fixture() {
-	const root = mkdtempSync(join(tmpdir(), 'label-floor-resident-'));
+	const remotes = fixtureRemotes('label-floor-resident-');
+	const root = remotes.root;
 	const manifestDir = join(root, 'admin');
 	const siteRoot = join(root, 'site');
 	const stateDir = join(root, 'state');
 	mkdirSync(manifestDir, { recursive: true });
-	mkdirSync(join(siteRoot, '.github', 'workflows'), { recursive: true });
+	mkdirSync(siteRoot, { recursive: true });
 	mkdirSync(stateDir, { recursive: true });
 
 	writeFileSync(
@@ -112,12 +106,12 @@ function fixture() {
 	);
 	// One covered repo and one observed job: an empty roster and an empty job
 	// history each FAIL the gate on their own (#98), ahead of the resident floor.
+	// The covered repo is a REMOTE, read through fleet-source like GitHub.
 	const reposDir = join(root, 'repos');
-	mkdirSync(join(reposDir, 'fixture-resident', '.github', 'workflows'), { recursive: true });
-	writeFileSync(
-		join(reposDir, 'fixture-resident', '.github', 'workflows', 'ci.yml'),
-		'jobs:\n  check:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n'
-	);
+	mkdirSync(reposDir, { recursive: true });
+	remotes.push(REPO, {
+		'.github/workflows/ci.yml': 'jobs:\n  check:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n',
+	});
 	writeFileSync(join(manifestDir, 'fleet-runner-coverage.json'), JSON.stringify({ repos: [REPO] }));
 	writeFileSync(
 		join(stateDir, 'job-history.jsonl'),
@@ -128,10 +122,9 @@ function fixture() {
 			startedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
 		}) + '\n'
 	);
-	writeFileSync(
-		join(siteRoot, '.github', 'workflows', 'ci.yml'),
-		"jobs:\n  build:\n    runs-on: ['self-hosted', 'hadoku-builder']\n"
-	);
+	remotes.push('WolffM/hadoku_site', {
+		'.github/workflows/ci.yml': "jobs:\n  build:\n    runs-on: ['self-hosted', 'hadoku-builder']\n",
+	});
 	writeFileSync(
 		join(stateDir, 'demand-ledger.jsonl'),
 		JSON.stringify({
@@ -176,6 +169,7 @@ function fixture() {
 
 	return {
 		root,
+		remotes,
 		bin,
 		manifestDir,
 		siteRoot,
@@ -195,6 +189,7 @@ function cleanup(fx) {
 function run(fx, { failTimes = 0 } = {}) {
 	const env = {
 		...process.env,
+		...fx.remotes.env,
 		PATH: `${fx.bin}:${process.env.PATH}`,
 		FLEET_MANIFEST_DIR: fx.manifestDir,
 		HADOKU_SITE_ROOT: fx.siteRoot,
