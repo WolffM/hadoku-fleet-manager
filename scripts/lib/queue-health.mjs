@@ -305,6 +305,51 @@ export function summariseQueue(
 }
 
 /**
+ * Split runs GitHub lists as `pending` into HELD and INVISIBLE.
+ *
+ * EVERY QUEUE READER LISTS `?status=queued`, and a run can wait for a runner
+ * without ever being listed there (fleet-manager#6). hadoku-task run
+ * 40123491036 was created while the previous push held its
+ * `cancel-in-progress` concurrency group. That run was cancelled, and this one
+ * stayed `pending` with three jobs `queued` on the fleet labels. The dispatcher
+ * never minted for it, and this gate reported `queued: 0` for 15 minutes.
+ *
+ * A pending run is usually fine. Without `cancel-in-progress`, the next run of
+ * a deploy or update workflow is `pending` for the current one's whole duration.
+ * The difference is in the jobs. A run held by its concurrency group has NONE
+ * until it is released: measured 2026-10-24, hadoku_site run 40122856716 spent
+ * five minutes `pending` and was cancelled having been given zero. The stuck
+ * run's jobs existed one second after the run. So:
+ *
+ *   - zero jobs: `held`. Waiting on its own group, not on the fleet. Reported, never a finding.
+ *   - a job started: the run status lags its jobs, as for queued runs. Dropped.
+ *   - jobs queued, or jobs UNREADABLE: `invisible`, a finding past `failSeconds`,
+ *     measured from the first queued job like summariseQueue. An unread run is
+ *     counted here because the strict direction is the only safe one when this
+ *     gate is the sole reader that can see it.
+ *
+ * No zombie band, unlike queued runs: a pending run can be cancelled, so a run
+ * here is always something an operator can clear (cancel, then re-run).
+ *
+ * `runs`: `[{repo, id, createdAt, jobless, started, queuedSince}]`, with the jobs
+ * fields set only for runs whose jobs were read.
+ */
+export function summarisePending(runs, { nowMs = Date.now(), failSeconds = FAIL_SECONDS } = {}) {
+	const held = [];
+	const invisible = [];
+	for (const r of runs) {
+		const since = Number.isFinite(Date.parse(r.queuedSince)) ? r.queuedSince : r.createdAt;
+		const ageSec = Math.max(0, Math.round((nowMs - Date.parse(since)) / 1000));
+		if (!Number.isFinite(ageSec) || ageSec <= failSeconds) continue;
+		if (r.jobless === true) held.push({ repo: r.repo, id: r.id, ageSec });
+		else if (r.started !== true) invisible.push({ repo: r.repo, id: r.id, ageSec });
+	}
+	held.sort((a, b) => b.ageSec - a.ageSec);
+	invisible.sort((a, b) => b.ageSec - a.ageSec);
+	return { held, invisible };
+}
+
+/**
  * The findings, from a summary and whatever could not be read.
  *
  * An unreadable repo is a FINDING, never an omission: a token that expired
@@ -331,6 +376,21 @@ export function queueFindings(summary, unreadable = [], failSeconds = FAIL_SECON
 				stranded
 					.slice(0, 5)
 					.map((s) => `${s.repo} ${s.ageSec}s`)
+					.join(', ')
+		);
+	}
+	// INVISIBLE IS A FINDING. Nothing mints for these runs, so they never age out
+	// on their own, and before #6 this gate could not see them either. See
+	// summarisePending.
+	const invisible = summary.invisible ?? [];
+	if (invisible.length) {
+		findings.push(
+			`${invisible.length} run(s) listed \`pending\` with jobs waiting for a runner — the ` +
+				`dispatcher lists only \`queued\` runs and will never mint for them ` +
+				`(cancel, then \`gh run rerun\`): ` +
+				invisible
+					.slice(0, 5)
+					.map((s) => `${s.repo} run ${s.id} ${s.ageSec}s`)
 					.join(', ')
 		);
 	}

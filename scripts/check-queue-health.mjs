@@ -39,6 +39,15 @@
  * using the same one-hour boundary `MAX_QUEUED_MS` already draws for the
  * dispatcher, so the two agree on what "stuck" means.
  *
+ * IT ALSO LISTS `pending`, WHICH THE DISPATCHER DOES NOT
+ * ------------------------------------------------------
+ * A run can wait for a runner while GitHub lists it `pending` rather than
+ * `queued`, and then nothing mints for it (fleet-manager#6). Only this gate
+ * reads that listing. It is one more call per repo per sweep, plus a jobs read
+ * for each pending run past the floor; the dispatcher's cadence is untouched.
+ * See summarisePending for how a run held by its concurrency group is told
+ * apart.
+ *
  * `--json` for the cron; stdout stays parseable and the exit code carries the
  * finding, per scripts/lib/json-contract.mjs.
  */
@@ -49,6 +58,7 @@ import process from 'node:process';
 import { manifest as manifestFile } from './lib/paths.mjs';
 import {
 	summariseQueue,
+	summarisePending,
 	queueFindings,
 	readQueuedWithRetry,
 	isSaturated,
@@ -77,12 +87,12 @@ function sleepSync(ms) {
 }
 
 /** One read, unretried. The retry and the diagnosis live in lib/queue-health. */
-function readQueuedOnce(repo) {
+function readRunsOnce(repo, status) {
 	const out = execFileSync(
 		'gh',
 		[
 			'api',
-			`repos/${repo}/actions/runs?status=queued&per_page=100`,
+			`repos/${repo}/actions/runs?status=${status}&per_page=100`,
 			'-q',
 			'.workflow_runs[] | "\\(.id) \\(.created_at)"',
 		],
@@ -95,12 +105,12 @@ function readQueuedOnce(repo) {
 }
 
 /**
- * Queued runs for one repo.
+ * One repo's runs in one status, `queued` or `pending`.
  *
  * `{ ok: false, reason }` = COULD NOT LOOK, which is never a pass.
  */
-function queuedRuns(repo) {
-	return readQueuedWithRetry(repo, readQueuedOnce, {
+function runsIn(repo, status) {
+	return readQueuedWithRetry(repo, (r) => readRunsOnce(r, status), {
 		sleep: () => sleepSync(RETRY_DELAY_MS),
 		timeoutMs: READ_TIMEOUT_MS,
 	});
@@ -214,10 +224,11 @@ try {
 }
 
 const runs = [];
+const pendingRuns = [];
 const unreadable = [];
 
 for (const repo of roster) {
-	const read = queuedRuns(repo);
+	const read = runsIn(repo, 'queued');
 	if (!read.ok) {
 		unreadable.push({ repo, reason: read.reason });
 		continue;
@@ -225,6 +236,15 @@ for (const repo of roster) {
 	for (const line of read.created) {
 		const [id, createdAt] = line.split(' ');
 		runs.push({ repo, id, createdAt });
+	}
+	const pending = runsIn(repo, 'pending');
+	if (!pending.ok) {
+		unreadable.push({ repo, reason: `pending listing: ${pending.reason}` });
+	} else {
+		for (const line of pending.created) {
+			const [id, createdAt] = line.split(' ');
+			pendingRuns.push({ repo, id, createdAt });
+		}
 	}
 }
 
@@ -239,6 +259,16 @@ for (const r of runs) {
 		r.started = jobs.started;
 		r.queuedSince = jobs.queuedSince;
 		r.saturated = isSaturated(jobs.queuedJobs, repoRunners(r.repo), { isBackstop });
+	}
+}
+// The same floor for pending runs: a run held by its concurrency group is
+// usually well under it, so a healthy fleet pays nothing here either.
+for (const r of pendingRuns) {
+	if ((sweptAt - Date.parse(r.createdAt)) / 1000 > FAIL_SECONDS) {
+		const jobs = readJobs(r.repo, r.id);
+		r.jobless = jobs.jobless;
+		r.started = jobs.started;
+		r.queuedSince = jobs.queuedSince;
 	}
 }
 
@@ -266,6 +296,7 @@ const now = Date.now();
 // the one the tests beside it exercise — not a second copy living here.
 const q = summariseQueue(runs, { stuckMs: MAX_QUEUED_MS, nowMs: now });
 const { waiting, stuck, stranded, zombie, unscheduled, saturated, started } = q;
+const { held, invisible } = summarisePending(pendingRuns, { nowMs: now });
 const summary = {
 	queued: q.queued,
 	p50: q.p50,
@@ -280,6 +311,8 @@ const summary = {
 	unscheduled: unscheduled.length,
 	saturated: saturated.length,
 	started: started.length,
+	held: held.length,
+	invisible: invisible.length,
 	unreadable: unreadable.length,
 	failSeconds: FAIL_SECONDS,
 };
@@ -337,7 +370,22 @@ if (saturated.length) {
 	for (const s of saturated.slice(0, 5)) log(`    ${s.repo}  ${s.ageSec}s`);
 }
 
-const findings = queueFindings(q, unreadable, FAIL_SECONDS);
+if (invisible.length) {
+	log(
+		`  invisible=${invisible.length} (listed pending with jobs waiting for a runner — ` +
+			'the dispatcher lists only queued runs and will never mint for these)'
+	);
+	for (const s of invisible.slice(0, 5)) log(`    ${s.repo}  run ${s.id}  ${s.ageSec}s`);
+}
+if (held.length) {
+	log(
+		`  held=${held.length} (pending with no jobs — waiting on their own concurrency group, ` +
+			'not on the fleet; not counted)'
+	);
+	for (const s of held.slice(0, 5)) log(`    ${s.repo}  ${s.ageSec}s`);
+}
+
+const findings = queueFindings({ ...q, invisible }, unreadable, FAIL_SECONDS);
 
 if (JSON_OUT) {
 	emitter.emit({
@@ -355,6 +403,9 @@ if (JSON_OUT) {
 		unscheduledRuns: unscheduled,
 		saturatedRuns: saturated,
 		startedRuns: started,
+		// Additive (#6): pending runs past the floor, split by whether they have jobs.
+		invisibleRuns: invisible,
+		heldRuns: held,
 		// NAMES ONLY, exactly as before. This field has been a string[] for every
 		// consumer that has ever parsed it, and widening it to objects under the
 		// --json contract would be a cross-repo change for a diagnostic. The

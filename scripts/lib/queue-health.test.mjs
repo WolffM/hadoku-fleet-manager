@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
 	summariseQueue,
+	summarisePending,
 	queueFindings,
 	isSaturated,
 	readQueuedWithRetry,
@@ -434,4 +435,89 @@ test('an unread or unparseable queuedSince falls back to run creation — the st
 		);
 		assert.deepEqual(q.stranded, [{ repo: 'WolffM/hadoku-cardtable', ageSec: 3972 }]);
 	}
+});
+
+// --- pending runs: the listing the dispatcher never reads (fleet-manager#6) --
+
+// Both shapes are the two runs measured on 2026-10-24.
+const SWEEP = Date.parse('2026-10-24T19:17:30Z');
+
+test('#6: a pending run with jobs queued for a runner is INVISIBLE, and a finding', () => {
+	// hadoku-task 40123491036: created 19:02:49, jobs queued 19:02:50, never served.
+	const p = summarisePending(
+		[
+			{
+				repo: 'WolffM/hadoku-task',
+				id: '40123491036',
+				createdAt: '2026-10-24T19:02:49Z',
+				jobless: false,
+				started: false,
+				queuedSince: '2026-10-24T19:02:50Z',
+			},
+		],
+		{ nowMs: SWEEP }
+	);
+	assert.deepEqual(p.invisible, [{ repo: 'WolffM/hadoku-task', id: '40123491036', ageSec: 880 }]);
+	assert.deepEqual(p.held, []);
+	// The queue the dispatcher sees is EMPTY — exactly what the gate reported
+	// that afternoon — and the finding still fires.
+	const q = summariseQueue([], { stuckMs: 60 * 60 * 1000, nowMs: SWEEP });
+	const findings = queueFindings({ ...q, invisible: p.invisible });
+	assert.equal(findings.length, 1);
+	assert.match(findings[0], /WolffM\/hadoku-task run 40123491036 880s/);
+	assert.match(findings[0], /gh run rerun/);
+});
+
+test('#6: a pending run with NO jobs is held by its concurrency group, not a finding', () => {
+	// hadoku_site 40122856716: five minutes pending behind its predecessor, zero jobs.
+	const p = summarisePending(
+		[
+			{
+				repo: 'WolffM/hadoku_site',
+				id: '40122856716',
+				createdAt: '2026-10-24T19:00:00Z',
+				jobless: true,
+			},
+		],
+		{ nowMs: SWEEP }
+	);
+	assert.deepEqual(p.invisible, []);
+	assert.deepEqual(p.held, [{ repo: 'WolffM/hadoku_site', id: '40122856716', ageSec: 1050 }]);
+	assert.deepEqual(
+		queueFindings({ ...summariseQueue([], { stuckMs: 3600000, nowMs: SWEEP }), ...p }),
+		[]
+	);
+});
+
+test('#6: a pending run under the floor costs nothing and says nothing', () => {
+	const p = summarisePending(
+		[{ repo: 'WolffM/x', id: '1', createdAt: '2026-10-24T19:15:00Z', jobless: false }],
+		{ nowMs: SWEEP }
+	);
+	assert.deepEqual(p, { held: [], invisible: [] });
+});
+
+test('#6: a pending run whose job has started is not waiting', () => {
+	const p = summarisePending(
+		[
+			{
+				repo: 'WolffM/x',
+				id: '1',
+				createdAt: '2026-10-24T19:00:00Z',
+				jobless: false,
+				started: true,
+			},
+		],
+		{ nowMs: SWEEP }
+	);
+	assert.deepEqual(p, { held: [], invisible: [] });
+});
+
+test('#6: a pending run whose jobs could not be read is INVISIBLE — the strict direction', () => {
+	// No other reader lists pending runs, so "could not look" here must not pass.
+	const p = summarisePending([{ repo: 'WolffM/x', id: '1', createdAt: '2026-10-24T19:00:00Z' }], {
+		nowMs: SWEEP,
+	});
+	assert.equal(p.invisible.length, 1);
+	assert.equal(p.held.length, 0);
 });
