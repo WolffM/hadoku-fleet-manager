@@ -96,6 +96,29 @@ test('workflowDemand: per job, comments are not demand, a reusable call is not a
 	assert.deepEqual(workflowDemand('name: x\n', ctx).unresolved.length, 1);
 });
 
+test('workflowDemand: a CRLF workflow reads the same as an LF one (fleet-manager#5)', () => {
+	// secretProject's working tree was CRLF, and every job header kept a
+	// trailing \r, so the label floor reported the file as having no jobs.
+	const lines = [
+		'on: push',
+		'jobs:',
+		'  daily:',
+		'    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}',
+		'  pinned:',
+		'    runs-on: [self-hosted, pm2-host] # where the deploy lives',
+		'',
+	];
+	const want = [
+		{ id: 'daily', labels: ['self-hosted', 'hadoku-builder'] },
+		{ id: 'pinned', labels: ['self-hosted', 'pm2-host'] },
+	];
+	assert.deepEqual(workflowDemand(lines.join('\n'), ctx), { jobs: want, unresolved: [] });
+	assert.deepEqual(workflowDemand(lines.join('\r\n'), ctx), { jobs: want, unresolved: [] });
+	// A lone \r is the old Mac line ending; no fleet file has one, but it is the
+	// same failure and the same one-line fix.
+	assert.deepEqual(workflowDemand(lines.join('\r'), ctx), { jobs: want, unresolved: [] });
+});
+
 test('hosted images are not capabilities — ubuntu-24.04 included', () => {
 	for (const l of [
 		'ubuntu-latest',

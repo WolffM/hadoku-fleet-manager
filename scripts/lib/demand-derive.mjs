@@ -13,6 +13,7 @@
  * out, on the same terms.
  */
 import { mb, percentile } from './job-metrics.mjs';
+import { normalizeEol } from './yaml-comments.mjs';
 
 /** A tool named here is supplied by the runner image when runs-on is hosted. */
 export const HOSTED_RE = /ubuntu-latest|ubuntu-\d|windows-|macos-/;
@@ -32,7 +33,9 @@ export const HOSTED_RE = /ubuntu-latest|ubuntu-\d|windows-|macos-/;
  * never a silent skip. See `demand-derive.test.mjs` "zero jobs" for the case.
  */
 export function splitJobs(text) {
-	const lines = text.split('\n');
+	// Normalised here as well as in stripYamlComments: check-tool-inventory
+	// splits RAW text, which never passes through it.
+	const lines = normalizeEol(text).split('\n');
 	const jobsAt = lines.findIndex((l) => /^jobs:\s*$/.test(l));
 	if (jobsAt === -1) return [];
 	const jobs = [];

@@ -29,8 +29,20 @@
  * to fire on a value that mentions it inside a string, never a comment making a
  * rule fire or clear.
  */
+/**
+ * `\r\n` and a lone `\r` become `\n`. Every reader here splits on `\n` and
+ * anchors on `$`, so a CRLF line keeps a trailing `\r` and a key never matches:
+ * a CRLF working tree of secretProject read as a workflow with NO jobs
+ * (fleet-manager#5). A Windows-edited or `core.autocrlf` clone is an ordinary
+ * thing for `REPOS_DIR` to hold, so it is normalised where workflow text comes
+ * in, not left to each reader.
+ */
+export function normalizeEol(text) {
+	return text.replace(/\r\n?/g, '\n');
+}
+
 export function stripYamlComments(body) {
-	return body
+	return normalizeEol(body)
 		.split('\n')
 		.map((line) => line.replace(/(^|\s)#.*$/, '$1'))
 		.join('\n');

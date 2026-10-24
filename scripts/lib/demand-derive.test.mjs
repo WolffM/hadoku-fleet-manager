@@ -55,6 +55,14 @@ test('splitJobs: no jobs: key is zero jobs, not a crash', () => {
 	assert.deepEqual(splitJobs('on:\n  push:\n'), []);
 });
 
+test('splitJobs: CRLF raw text splits like LF (check-tool-inventory passes it unstripped)', () => {
+	const text = ['jobs:', '  a:', '    runs-on: x', '  b:', '    runs-on: y', ''].join('\r\n');
+	assert.deepEqual(splitJobs(text), [
+		{ id: 'a', text: '    runs-on: x' },
+		{ id: 'b', text: '    runs-on: y\n' },
+	]);
+});
+
 test('splitJobs: a workflow with only one job', () => {
 	const text = 'jobs:\n  check:\n    runs-on: ubuntu-latest\n';
 	assert.deepEqual(

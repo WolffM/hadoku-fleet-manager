@@ -41,3 +41,11 @@ test('a full-line comment leaves an empty line, not its text', () => {
 	assert.equal(stripYamlComments('# whole line'), '');
 	assert.equal(stripYamlComments('   # indented'), '   ');
 });
+
+test('CRLF and lone CR come out as LF, and line numbers still survive (fleet-manager#5)', () => {
+	// The readers that call this and nothing else (runner-var, site-token,
+	// fleet-inventory) get their line-ending handling from here alone.
+	assert.equal(stripYamlComments('jobs:\r\n  a: # c\r\n    x: 1\r\n'), 'jobs:\n  a: \n    x: 1\n');
+	assert.equal(stripYamlComments('a\rb'), 'a\nb');
+	assert.equal(stripYamlComments('a\r\n# gone\r\nb').split('\n').length, 3);
+});
