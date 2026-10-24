@@ -583,7 +583,7 @@ export function shrinkRefusal(previousCount, nextCount, { allowShrink = false } 
 	const pct = Math.round((nextCount / previousCount) * 100);
 	return (
 		`refusing to write: ${nextCount} of ${previousCount} previous entries (${pct}%) — ` +
-		'below half. A shrink this large is more likely a broken read (an empty REPOS_DIR, ' +
+		'below half. A shrink this large is more likely a broken read (unreadable repos, ' +
 		'an unreadable roster) than a real retirement, and "wrote a degraded file, then ' +
 		'failed" must stay unreachable. Pass --allow-shrink if this is a deliberate shrink.'
 	);

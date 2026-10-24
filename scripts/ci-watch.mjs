@@ -30,10 +30,10 @@
  * @guards scripts/admin/ci-watch-policy.json
  */
 import process from 'node:process';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { allRepos } from './lib/fleet-roster.mjs';
-import { reposDir } from './lib/sibling-repos.mjs';
+import { tryShipped } from './lib/fleet-source.mjs';
 import { jobNamesIn } from './lib/ci-watch-jobnames.mjs';
 import { manifest as manifestFile, siteRoot } from './lib/paths.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
@@ -79,7 +79,17 @@ const OUT = join(siteRoot(), 'workers', 'monitoring-api', 'src', 'ci-watch.gener
 // cannot drift apart while both exist.
 const OUT_MANIFEST = manifestFile('ci-watch.generated.json');
 
-const dirFor = (repo) => join(reposDir(), repo.split('/').pop());
+/**
+ * Each roster repo's SHIPPED workflows, through fleet-source: the default
+ * branch, fetched by the reader itself, never a sibling working tree
+ * (fleet-manager#7). What gets watched is what GitHub runs, so it is what this
+ * reads.
+ */
+const sources = new Map();
+const sourceOf = (repo) => {
+	if (!sources.has(repo)) sources.set(repo, tryShipped(repo));
+	return sources.get(repo);
+};
 
 /**
  * Job names for one watched workflow. The parsing rules live in
@@ -87,17 +97,16 @@ const dirFor = (repo) => join(reposDir(), repo.split('/').pop());
  * every name here is one monitoring-api will go silent about.
  */
 function jobNamesOf(repo, workflow) {
-	const file = join(dirFor(repo), '.github', 'workflows', workflow);
-	if (!existsSync(file)) return [];
-	return jobNamesIn(readFileSync(file, 'utf8'));
+	const text = sourceOf(repo).read?.(`.github/workflows/${workflow}`);
+	return text ? jobNamesIn(text) : [];
 }
 
+/** Workflow file names, sorted, or null when the repo could not be read —
+ *  unreadable is NOT "no workflows". */
 function workflowsOf(repo) {
-	const wf = join(dirFor(repo), '.github', 'workflows');
-	if (!existsSync(wf)) return null; // checkout missing — NOT "no workflows"
-	return readdirSync(wf)
-		.filter((f) => /\.ya?ml$/.test(f))
-		.sort();
+	const source = sourceOf(repo);
+	if ('unreadable' in source) return null;
+	return source.workflows().map((w) => w.file);
 }
 
 const targets = [];
@@ -142,7 +151,7 @@ for (const repo of allRepos({ includeHost: true })) {
 	if (policy.exempt?.[repo]) continue;
 	const files = workflowsOf(repo);
 	if (files === null) {
-		missingCheckouts.push(repo);
+		missingCheckouts.push(`${repo} (${sourceOf(repo).unreadable})`);
 		continue;
 	}
 	const picked = new Set(files.filter(conventionPicks));
@@ -180,12 +189,12 @@ for (const repo of allRepos({ includeHost: true })) {
 	}
 }
 
-// A repo the roster names but whose checkout is absent is NOT "nothing to
-// watch" — it is a question we could not ask. Same rule the fleet auditors use.
+// A repo the roster names but whose workflows could not be read is NOT "nothing
+// to watch" — it is a question we could not ask. Same rule the fleet auditors use.
 const problems = [];
 if (missingCheckouts.length)
 	problems.push(
-		`${missingCheckouts.length} roster repo(s) have no checkout: ${missingCheckouts.join(', ')}`
+		`${missingCheckouts.length} roster repo(s) could not be read: ${missingCheckouts.join(', ')}`
 	);
 if (unwatched.length)
 	problems.push(
@@ -230,7 +239,7 @@ if (!ALLOW_SHRINK) {
 if (shrinkMessage) problems.push(shrinkMessage);
 
 // A write that would replace a GOOD file with a DEGRADED one must never
-// happen (#84 part 1): a missing checkout means we could not look, which is
+// happen (#84 part 1): an unreadable repo means we could not look, which is
 // never a reason to write anyway, and there is no override for it. The
 // shrink floor above is the only guard `--allow-shrink` can lift.
 const REFUSE_WRITE = missingCheckouts.length > 0 || Boolean(shrinkMessage);

@@ -215,3 +215,52 @@ test('shippedMany splits readable from unreadable and drops neither', () => {
 		assert.ok(many.unreadable[0].reason);
 	});
 });
+
+test('four processes reading one mirror at once all succeed (ci:audit-gates beside a pre-push)', async () => {
+	const fx = fixtureRemotes();
+	try {
+		const files = {};
+		for (let i = 0; i < 200; i++) files[`src/f${i}.ts`] = `export const n = ${i};\n`;
+		fx.push('WolffM/shared', files);
+		const reader = new URL('./fleet-source.mjs', import.meta.url).href;
+		const code =
+			`const m = await import(${JSON.stringify(reader)});` +
+			`const h = m.shipped('WolffM/shared');` +
+			`const all = h.readMany(h.list('src'));` +
+			`if (all.get('src/f7.ts') !== 'export const n = 7;\\n') throw new Error('bad read');` +
+			`console.log(all.size);`;
+		const { spawn } = await import('node:child_process');
+		const runs = Array.from(
+			{ length: 4 },
+			() =>
+				new Promise((done) => {
+					const child = spawn(process.execPath, ['--input-type=module', '-e', code], {
+						env: { ...NO_GIT_ENV, ...fx.env },
+					});
+					let out = '';
+					let err = '';
+					child.stdout.on('data', (d) => (out += d));
+					child.stderr.on('data', (d) => (err += d));
+					child.on('close', (status) => done({ status, out: out.trim(), err }));
+				})
+		);
+		for (const r of await Promise.all(runs)) {
+			assert.equal(r.status, 0, r.err);
+			assert.equal(r.out, '200');
+		}
+	} finally {
+		fx.cleanup();
+	}
+});
+
+test('under node --test, a reader with no FLEET_SOURCE_URL refuses instead of reading GitHub', () => {
+	const saved = process.env.FLEET_SOURCE_URL;
+	delete process.env.FLEET_SOURCE_URL;
+	forgetHandles();
+	try {
+		assert.ok(process.env.NODE_TEST_CONTEXT, 'this file must run under node --test');
+		assert.match(tryShipped('WolffM/hadoku_site').unreadable, /no FLEET_SOURCE_URL/);
+	} finally {
+		if (saved !== undefined) process.env.FLEET_SOURCE_URL = saved;
+	}
+});

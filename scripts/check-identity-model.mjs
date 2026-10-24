@@ -61,7 +61,7 @@ import { readFileSync, readdirSync, statSync, existsSync, writeSync } from 'node
 import { resolve, relative, sep, basename, dirname } from 'node:path';
 
 import { allRepos } from './lib/fleet-roster.mjs';
-import { reposDir } from './lib/sibling-repos.mjs';
+import { tryShipped } from './lib/fleet-source.mjs';
 import { blankComments } from './lib/blank-comments.mjs';
 import { manifest as manifestFile, siteRoot } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
@@ -1662,8 +1662,7 @@ function checkG5(rel, src, add) {
  * Allowlisted findings go into `hits` (entry -> the violations it absorbed),
  * shared across every repo so the count and stale checks see the whole run.
  */
-function scanRepo(root, label, allow, violations, hits) {
-	const tracked = trackedFiles(root);
+function scanRepo(root, label, allow, violations, hits, tracked = trackedFiles(root)) {
 	const sqlByDir = new Map();
 	/** worker -> first `workers/<w>/src` file reading X-User-Id. G6's input. */
 	const userIdReaders = new Map();
@@ -1768,10 +1767,10 @@ function scanRepo(root, label, allow, violations, hits) {
 }
 
 /**
- * The sibling checkouts to scan, and the roster entries that HAVE no checkout.
+ * The sibling repos to scan, and the roster entries that could NOT be read.
  *
  * DERIVED from `fleet-runner-coverage.json` via lib/fleet-roster.mjs, never from
- * the directory listing. The filter used to be `name.startsWith('hadoku')`,
+ * a directory listing. The filter used to be `name.startsWith('hadoku')`,
  * which is a naming convention doing the job of a membership list — and the
  * convention is not universal: `brave-quartet` and `ArchiveBot` are both in the
  * roster and neither would ever have been scanned. Nothing would have reported
@@ -1779,28 +1778,42 @@ function scanRepo(root, label, allow, violations, hits) {
  * findings reads as clean. Same defect class as check-header-fleet's
  * `not-in-fleet` rule, which exists for exactly this.
  *
- * MISSING CHECKOUTS ARE RETURNED, NOT SKIPPED. A roster repo with no local
- * clone is a repo this run did not audit, and "I could not look" must never
+ * EACH SIBLING IS ITS SHIPPED TREE, through lib/fleet-source.mjs: the default
+ * branch, fetched by the reader itself and written out as a clean tree, never a
+ * clone under REPOS_DIR (fleet-manager#7). A sibling checkout was whatever its
+ * last pull left — 30 commits behind on 2026-09-24, reporting a violation whose
+ * fix was already shipped. The tracked set comes from the shipped tree's own
+ * listing, so git, not the denylist, still says what is source.
+ *
+ * UNREADABLE REPOS ARE RETURNED, NOT SKIPPED. A roster repo the reader could not
+ * read is a repo this run did not audit, and "I could not look" must never
  * render as "nothing is wrong" — the `no-checkout` trap named in
  * scripts/CLAUDE.md. The caller decides what to do with them; the JSON report
  * carries them and the cron fails on them.
  */
 function siblingRepos() {
-	const parent = reposDir();
-	const dirs = [];
+	const trees = [];
 	const missing = [];
-	if (!existsSync(parent)) return { dirs, missing: allRepos() };
+	/** slug -> why it could not be read. */
+	const why = new Map();
 	for (const slug of allRepos()) {
-		const dir = resolve(parent, slug.split('/')[1]);
-		// Not this repo — and not this repo's PARENT either. A run from a git
-		// worktree has REPO_ROOT at `<repo>/.claude/worktrees/<name>`, so a plain
-		// `!==` lets the main checkout in as a "sibling" and every finding gets
-		// reported twice, once with a repo prefix and once without.
-		if (dir === REPO_ROOT || REPO_ROOT.startsWith(dir + sep)) continue;
-		if (existsSync(resolve(dir, '.git'))) dirs.push(dir);
-		else missing.push(slug);
+		const source = tryShipped(slug);
+		if ('unreadable' in source) {
+			missing.push(slug);
+			why.set(slug, source.unreadable);
+			continue;
+		}
+		try {
+			const root = source.materialize({
+				include: (p) => SCANNED_EXT.some((e) => p.endsWith(e)) || p === EDGE_INDEX,
+			});
+			trees.push({ root, label: slug.split('/')[1], tracked: new Set(source.list()) });
+		} catch (err) {
+			missing.push(slug);
+			why.set(slug, err.reason ?? String(err));
+		}
 	}
-	return { dirs, missing };
+	return { trees, missing, why };
 }
 
 const { map: allow, entries } = loadAllowlist();
@@ -1809,7 +1822,11 @@ const violations = [];
 const hitEntries = new Map();
 scanRepo(REPO_ROOT, null, allow, violations, hitEntries);
 
-/** Repos whose files are OLDER than origin — see checkoutFreshness. */
+/**
+ * Repos whose files are OLDER than origin — see checkoutFreshness. Only the
+ * site root can land here: a sibling is read at its shipped commit, so it is
+ * never behind.
+ */
 const staleCheckouts = [];
 const ALLOW_STALE = process.argv.includes('--allow-stale');
 const noteFreshness = (dir, label) => {
@@ -1822,6 +1839,8 @@ const noteFreshness = (dir, label) => {
 
 let scanned = 1;
 let missingCheckouts = [];
+/** slug -> the reader's reason, for the text report. */
+let missingWhy = new Map();
 /**
  * Why a `--fleet` run scanned no sibling at all, or null. An EMPTY roster — or
  * one whose every entry was skipped — scanned only the site and printed "clean
@@ -1831,14 +1850,14 @@ let missingCheckouts = [];
 let rosterError = null;
 noteFreshness(REPO_ROOT, basename(REPO_ROOT));
 if (FLEET) {
-	const { dirs, missing } = siblingRepos();
+	const { trees, missing, why } = siblingRepos();
 	missingCheckouts = missing;
-	for (const repo of dirs) {
-		scanRepo(repo, basename(repo), allow, violations, hitEntries);
-		noteFreshness(repo, basename(repo));
+	missingWhy = why;
+	for (const { root, label, tracked } of trees) {
+		scanRepo(root, label, allow, violations, hitEntries, tracked);
 	}
-	scanned += dirs.length;
-	if (!dirs.length) {
+	scanned += trees.length;
+	if (!trees.length) {
 		const listed = allRepos().length;
 		rosterError = listed
 			? `--fleet opened ZERO sibling repos (the roster lists ${listed}) — this was not a fleet audit`
@@ -1912,13 +1931,13 @@ if (rosterError) console.error(`\n✗ ${rosterError}\n`);
 
 if (missingCheckouts.length) {
 	console.error(
-		`\n✗ ${missingCheckouts.length} roster repo(s) have no local checkout, so this run did not audit them:\n`
+		`\n✗ ${missingCheckouts.length} roster repo(s) could not be read, so this run did not audit them:\n`
 	);
-	for (const r of missingCheckouts) console.error(`  ${r}`);
+	for (const r of missingCheckouts) console.error(`  ${r}: ${missingWhy.get(r)}`);
 	console.error(
 		`\n  An audit that asserts cleanliness without looking is worse than no audit.\n` +
-			`  Clone them under ${reposDir()}, or drop them\n` +
-			`  from scripts/admin/fleet-runner-coverage.json if they are genuinely gone.\n`
+			`  Fix the read, or drop them from fleet-runner-coverage.json if they are\n` +
+			`  genuinely gone.\n`
 	);
 }
 

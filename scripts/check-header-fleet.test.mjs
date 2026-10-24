@@ -9,20 +9,19 @@
  * paged `@here` at 06:11Z with `not-in-fleet` before the regeneration could
  * possibly have run. The grace covers exactly that window.
  *
- * Age is measured from the checkout's FIRST commit reachable from
- * `origin/main` — a local, read-only proxy for repo creation, no GitHub call.
- * "Could not look" must never earn the grace: a shallow clone's only visible
- * commit is its NEWEST one, not its oldest, so trusting it would make an OLD
- * repo read as brand new — exactly backwards. That case is exercised below by
- * actually shallow-cloning a 100-hour-old fixture repo at its tip and
- * confirming it still fails, not advises.
+ * Age is measured from the FIRST commit reachable from the repo's shipped
+ * default branch, read from the fleet-source mirror (full history, never
+ * shallow) — a read-only proxy for repo creation, no GitHub REST call. A repo
+ * whose newest commit is 1h old but whose first is 100h old is OLD, and is
+ * exercised below.
  *
- * Exercised as a CLI, the same pattern `check-mf-externals.test.mjs` and
- * `check-identity-model.test.mjs` use: a throwaway manifest dir, site root and
- * repos dir, run with `REPOS_DIR` / `HADOKU_SITE_ROOT` / `FLEET_MANIFEST_DIR`
- * pointed at them explicitly (so an ambient `HADOKU_SITE_ROOT=/nonexistent
+ * Exercised as a CLI: a throwaway manifest dir and site root, the repos as
+ * fixture REMOTES read through fleet-source (lib/fleet-source-fixture.mjs), a
+ * `gh` shim listing those remotes as the owner's account, and `REPOS_DIR`
+ * pointed at an EMPTY directory — nothing there may matter (fleet-manager#7).
+ * Everything is pointed at explicitly, so an ambient `HADOKU_SITE_ROOT=/nonexistent
  * REPOS_DIR=/nonexistent` — the blinding CI runs this file with — is
- * overridden, never inherited), and `--json` read back as structured data.
+ * overridden, never inherited, and `--json` is read back as structured data.
  *
  * `FLEET` (the `uiApp` facet) and `KNOWN_CONSUMERS` (`wolffmConsumer`) are both
  * empty in every fixture here, so the only things that can ever produce a
@@ -40,11 +39,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { fixtureRemotes, poisonedClone } from './lib/fleet-source-fixture.mjs';
 import { cleanGitEnv } from './lib/test-git-identity.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -75,22 +74,48 @@ function gitIn(dir, args, extraEnv) {
 	});
 }
 
+/**
+ * `gh repo list` answered with every fixture remote, so the owner's account is
+ * exactly what the test pushed. Any other `gh` call is a test bug.
+ */
+const GH_SHIM = `#!/bin/sh
+case "$1 $2" in
+"repo list")
+	printf '['
+	sep=''
+	for d in "$FIXTURE_REMOTES"/WolffM/*.git; do
+		[ -d "$d" ] || continue
+		printf '%s{"nameWithOwner":"WolffM/%s","isEmpty":false}' "$sep" "$(basename "$d" .git)"
+		sep=','
+	done
+	printf ']\\n'
+	;;
+*) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+`;
+
 /** A throwaway manifest dir, site root (with the six real template dirs, so
- *  the templates sweep finds something real and reports nothing) and repos
- *  dir, with an empty `uiApp`/`wolffmConsumer` roster. */
+ *  the templates sweep finds something real and reports nothing), an EMPTY
+ *  repos dir, and fixture remotes, with an empty `uiApp`/`wolffmConsumer`
+ *  roster. */
 function fixture({ repos = [], facets = {} } = {}) {
-	const root = mkdtempSync(join(tmpdir(), 'header-fleet-grace-'));
+	const remotes = fixtureRemotes('header-fleet-grace-');
+	const root = remotes.root;
 	const manifestDir = join(root, 'manifest');
 	const siteRoot = join(root, 'site');
 	const reposDir = join(root, 'repos');
+	const bin = join(root, 'bin');
 	mkdirSync(manifestDir, { recursive: true });
 	mkdirSync(reposDir, { recursive: true });
+	mkdirSync(bin, { recursive: true });
+	writeFileSync(join(bin, 'gh'), GH_SHIM);
+	chmodSync(join(bin, 'gh'), 0o755);
 	for (const t of TEMPLATES) mkdirSync(join(siteRoot, t), { recursive: true });
 	gitIn(siteRoot, ['init', '-q']);
 
 	writeFileSync(join(manifestDir, 'fleet-runner-coverage.json'), JSON.stringify({ repos, facets }));
 
-	return { root, manifestDir, siteRoot, reposDir };
+	return { root, remotes, manifestDir, siteRoot, reposDir, bin };
 }
 
 function cleanup(fx) {
@@ -98,57 +123,46 @@ function cleanup(fx) {
 }
 
 /**
- * A fixture repo consuming `@wolffm/themes`, with ONE commit backdated
- * `ageHours` ago, and `refs/remotes/origin/main` pointed at it — a full
- * (non-shallow) clone, the case the age read is supposed to trust.
+ * Push `commits` — each `{ files, ageHours? }` — to the fixture remote for
+ * `WolffM/<name>`, in order, each dated `ageHours` ago. Dated through
+ * `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`, which `remotes.push` does not take.
  */
-function makeAgedRepo(dir, ageHours) {
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(
-		join(dir, 'package.json'),
-		JSON.stringify({ name: 'x', dependencies: { '@wolffm/themes': '^1.0.0' } })
-	);
-	gitIn(dir, ['init', '-q']);
-	gitIn(dir, ['add', '-A']);
-	const ts = new Date(Date.now() - ageHours * 3_600_000).toISOString();
-	gitIn(dir, ['commit', '-qm', 'init'], { GIT_AUTHOR_DATE: ts, GIT_COMMITTER_DATE: ts });
-	gitIn(dir, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+function pushDated(fx, name, commits) {
+	const bare = fx.remotes.remote(`WolffM/${name}`);
+	const work = join(fx.root, 'dated', name);
+	mkdirSync(bare, { recursive: true });
+	gitIn(bare, ['init', '-q', '--bare', '-b', 'main']);
+	gitIn(bare, ['config', 'uploadpack.allowFilter', 'true']);
+	gitIn(bare, ['config', 'uploadpack.allowAnySHA1InWant', 'true']);
+	mkdirSync(work, { recursive: true });
+	gitIn(work, ['init', '-q', '-b', 'main']);
+	for (const { files, ageHours = 1000 } of commits) {
+		for (const [rel, body] of Object.entries(files)) {
+			mkdirSync(dirname(join(work, rel)), { recursive: true });
+			writeFileSync(join(work, rel), body);
+		}
+		gitIn(work, ['add', '-A']);
+		const ts = new Date(Date.now() - ageHours * 3_600_000).toISOString();
+		gitIn(work, ['commit', '-qm', 'fixture'], { GIT_AUTHOR_DATE: ts, GIT_COMMITTER_DATE: ts });
+	}
+	gitIn(work, ['push', '-q', bare, 'HEAD:main']);
 }
 
-/**
- * A fixture repo whose TRUE first commit is 100h old, consuming `@wolffm/*`
- * only from its second commit (1h old) — then shallow-cloned at depth 1, so
- * the clone's only visible commit is the 1h-old one. `git clone --depth 1`
- * silently ignores `--depth` for a local path unless given a `file://` URL
- * (verified against this host's git), which is why the source lives at a
- * `file://` path rather than a bare directory argument.
- */
-function makeShallowRepo(destDir, srcDir) {
-	mkdirSync(srcDir, { recursive: true });
-	gitIn(srcDir, ['init', '-q', '-b', 'main']);
-	writeFileSync(join(srcDir, 'package.json'), JSON.stringify({ name: 'x' }));
-	gitIn(srcDir, ['add', '-A']);
-	const old = new Date(Date.now() - 100 * 3_600_000).toISOString();
-	gitIn(srcDir, ['commit', '-qm', 'old'], { GIT_AUTHOR_DATE: old, GIT_COMMITTER_DATE: old });
+const CONSUMER_PKG = JSON.stringify({ name: 'x', dependencies: { '@wolffm/themes': '^1.0.0' } });
 
-	writeFileSync(
-		join(srcDir, 'package.json'),
-		JSON.stringify({ name: 'x', dependencies: { '@wolffm/themes': '^1.0.0' } })
-	);
-	gitIn(srcDir, ['add', '-A']);
-	const recent = new Date(Date.now() - 1 * 3_600_000).toISOString();
-	gitIn(srcDir, ['commit', '-qm', 'new'], { GIT_AUTHOR_DATE: recent, GIT_COMMITTER_DATE: recent });
-
-	execFileSync('git', ['clone', '--quiet', '--depth', '1', `file://${srcDir}`, destDir], {
-		env: cleanGitEnv(),
-	});
+/** A repo consuming `@wolffm/themes`, with ONE commit backdated `ageHours` ago. */
+function makeAgedRepo(fx, name, ageHours) {
+	pushDated(fx, name, [{ files: { 'package.json': CONSUMER_PKG }, ageHours }]);
 }
 
-function run(fx, { argv = ['--json', '--no-fetch', '--no-registry'], env = {} } = {}) {
+function run(fx, { argv = ['--json', '--no-registry'], env = {} } = {}) {
 	try {
 		const out = execFileSync('node', [SCRIPT, ...argv], {
 			env: {
 				...NO_GIT_ENV,
+				...fx.remotes.env,
+				FIXTURE_REMOTES: join(fx.root, 'remotes'),
+				PATH: `${fx.bin}:${process.env.PATH}`,
 				REPOS_DIR: fx.reposDir,
 				HADOKU_SITE_ROOT: fx.siteRoot,
 				FLEET_MANIFEST_DIR: fx.manifestDir,
@@ -173,7 +187,7 @@ function advisoriesFor(doc, repo) {
 test('a 3-hour-old repo is ADVISORY new-repo-grace, not a failing finding, and the run exits 0', () => {
 	const fx = fixture();
 	try {
-		makeAgedRepo(join(fx.reposDir, 'repo-new'), 3);
+		makeAgedRepo(fx, 'repo-new', 3);
 		const { code, out } = run(fx);
 		const doc = JSON.parse(out);
 
@@ -191,7 +205,7 @@ test('a 3-hour-old repo is ADVISORY new-repo-grace, not a failing finding, and t
 test('a 30-hour-old repo FAILS as not-in-fleet (past the grace), run exits 1', () => {
 	const fx = fixture();
 	try {
-		makeAgedRepo(join(fx.reposDir, 'repo-old'), 30);
+		makeAgedRepo(fx, 'repo-old', 30);
 		const { code, out } = run(fx);
 		const doc = JSON.parse(out);
 
@@ -205,25 +219,24 @@ test('a 30-hour-old repo FAILS as not-in-fleet (past the grace), run exits 1', (
 	}
 });
 
-test('an UNDETERMINABLE age (shallow clone) FAILS rather than earning the grace', () => {
+test('age is the FIRST commit, not the newest: a 100h-old repo touched 1h ago FAILS', () => {
 	const fx = fixture();
 	try {
-		// True age 100h, but the clone's only visible commit is 1h old — if the
-		// shallow guard were missing, this would misread as brand new and the
-		// grace would wrongly fire.
-		makeShallowRepo(join(fx.reposDir, 'repo-shallow'), join(fx.root, 'repo-shallow-src'));
+		// The consumer appears only in the 1h-old commit. Reading the NEWEST
+		// commit's date would misread this repo as brand new and wrongly grant
+		// the grace.
+		pushDated(fx, 'repo-touched', [
+			{ files: { 'package.json': JSON.stringify({ name: 'x' }) }, ageHours: 100 },
+			{ files: { 'package.json': CONSUMER_PKG }, ageHours: 1 },
+		]);
 		const { code, out } = run(fx);
 		const doc = JSON.parse(out);
 
-		assert.deepEqual(
-			advisoriesFor(doc, 'repo-shallow'),
-			[],
-			'an undeterminable age must never be read as a grace'
-		);
-		const found = findingsFor(doc, 'repo-shallow');
+		assert.deepEqual(advisoriesFor(doc, 'repo-touched'), [], 'a 100h-old repo earns no grace');
+		const found = findingsFor(doc, 'repo-touched');
 		assert.equal(found.length, 1);
 		assert.equal(found[0].rule, 'not-in-fleet');
-		assert.equal(code, 1, `expected exit 1 — "could not look" must fail, got ${code}: ${out}`);
+		assert.equal(code, 1, `expected exit 1, got ${code}: ${out}`);
 	} finally {
 		cleanup(fx);
 	}
@@ -232,6 +245,9 @@ test('an UNDETERMINABLE age (shallow clone) FAILS rather than earning the grace'
 test('a clean fleet (nothing out of roster) is still exit 0 with no advisories', () => {
 	const fx = fixture();
 	try {
+		// The account holds at least the hub. A listing of ZERO repos is a broken
+		// read, and is its own failure (`unreadable` against the owner).
+		makeHub(fx);
 		const { code, out } = run(fx);
 		const doc = JSON.parse(out);
 		assert.deepEqual(doc.findings, []);
@@ -281,33 +297,31 @@ const CLEAN_APP = {
 		'}\n',
 };
 
-/** A repo whose `origin/main` holds exactly `files` (path -> content). */
-function makeRepo(dir, files, extraEnv) {
-	for (const [rel, body] of Object.entries(files)) {
-		mkdirSync(dirname(join(dir, rel)), { recursive: true });
-		writeFileSync(join(dir, rel), body);
-	}
-	gitIn(dir, ['init', '-q']);
-	gitIn(dir, ['add', '-A']);
-	gitIn(dir, ['commit', '-qm', 'init'], extraEnv);
-	gitIn(dir, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+/** A repo whose shipped default branch holds exactly `files` (path -> content). */
+function makeRepo(fx, name, files) {
+	fx.remotes.push(`WolffM/${name}`, files);
 }
 
-/** The hub's catalogue, under REPOS_DIR — where `catalogue()` reads it. */
-function makeHub(fx, childApps = [{ id: 'appx', repoName: APP }]) {
-	makeRepo(join(fx.reposDir, 'hadoku_site'), {
+/** The hub's catalogue files. */
+function hubFiles(childApps = [{ id: 'appx', repoName: APP }]) {
+	return {
 		'spec/categories.json': JSON.stringify({
 			categories: [{ apps: [{ id: 'appx', label: 'App X' }] }],
 		}),
 		'scripts/child-apps.json': JSON.stringify({ apps: childApps }),
-	});
+	};
+}
+
+/** The hub's catalogue, on the hub's shipped branch — where `catalogue()` reads it. */
+function makeHub(fx, childApps) {
+	makeRepo(fx, 'hadoku_site', hubFiles(childApps));
 }
 
 /** A fleet of one app: CLEAN_APP with `changes` applied. */
 function appFixture(changes = {}, { hub = true, childApps } = {}) {
 	const fx = fixture(APP_ROSTER);
 	if (hub) makeHub(fx, childApps);
-	makeRepo(join(fx.reposDir, APP), { ...CLEAN_APP, ...changes });
+	makeRepo(fx, APP, { ...CLEAN_APP, ...changes });
 	return fx;
 }
 
@@ -392,15 +406,36 @@ test('fleet-manager#4: the header is checked against the catalogued id’s label
 	}
 });
 
-test('#98: a checkout whose origin/main cannot be listed is an `unreadable` finding, not a stderr line', () => {
+test('#98: a roster repo whose shipped branch cannot be read is an `unreadable` finding', () => {
 	const fx = fixture(APP_ROSTER);
 	try {
-		makeHub(fx);
-		const dir = join(fx.reposDir, APP);
-		mkdirSync(dir, { recursive: true });
-		gitIn(dir, ['init', '-q']); // a repo, but no origin/main to list
+		makeHub(fx); // and APP is never pushed: there is nothing to read
 		const { code, out } = run(fx);
-		assert.deepEqual(rulesFor(JSON.parse(out)), ['unreadable'], out);
+		const found = findingsFor(JSON.parse(out), APP);
+		assert.deepEqual(
+			found.map((f) => f.rule),
+			['unreadable'],
+			out
+		);
+		assert.match(found[0].detail, /fetch from .* failed/);
+		assert.equal(code, 1);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('#7: a failed owner listing is an `unreadable` finding, never an empty universe', () => {
+	const fx = appFixture();
+	try {
+		writeFileSync(join(fx.bin, 'gh'), '#!/bin/sh\necho "gh: HTTP 502" >&2\nexit 1\n');
+		const { code, out } = run(fx);
+		const found = findingsFor(JSON.parse(out), 'WolffM');
+		assert.deepEqual(
+			found.map((f) => f.rule),
+			['unreadable'],
+			out
+		);
+		assert.match(found[0].detail, /HTTP 502/);
 		assert.equal(code, 1);
 	} finally {
 		cleanup(fx);
@@ -431,13 +466,13 @@ function npmShim(fx, { stdout = '', code = 0 }) {
 	const p = join(bin, 'npm');
 	writeFileSync(p, `#!/bin/sh\nprintf '%s' '${stdout}'\nexit ${code}\n`);
 	chmodSync(p, 0o755);
-	return { PATH: `${bin}:${process.env.PATH}` };
+	return { PATH: `${bin}:${fx.bin}:${process.env.PATH}` };
 }
 
 test('#98: a registry it could not read FAILS the exit code, not just the JSON field', () => {
 	const fx = appFixture();
 	try {
-		const argv = ['--json', '--no-fetch'];
+		const argv = ['--json'];
 		// Control: the registry answers with the declared version — clean, exit 0.
 		const ok = run(fx, { argv, env: npmShim(fx, { stdout: '1.0.0' }) });
 		assert.equal(ok.code, 0, ok.out);
@@ -590,14 +625,60 @@ test('#98: not-in-fleet reads EVERY manifest — a consumer sorted ninth is stil
 			dependencies: { '@wolffm/themes': '^1.0.0' },
 		});
 		// Past the grace, so the finding is a failing one.
-		const ts = new Date(Date.now() - 100 * 3_600_000).toISOString();
-		makeRepo(join(fx.reposDir, 'repo-mono'), files, {
-			GIT_AUTHOR_DATE: ts,
-			GIT_COMMITTER_DATE: ts,
-		});
+		pushDated(fx, 'repo-mono', [{ files, ageHours: 100 }]);
 		const { code, out } = run(fx);
 		assert.deepEqual(rulesFor(JSON.parse(out), 'repo-mono'), ['not-in-fleet'], out);
 		assert.equal(code, 1);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+/**
+ * fleet-manager#7: A LOCAL CLONE CANNOT CHANGE THE VERDICT.
+ *
+ * The baseline has clones under REPOS_DIR that MATCH the shipped branches, so a
+ * gate reading them would pass it too. Then they are replaced with clones that
+ * lie the three ways a real one does — CRLF, a stale commit (its origin/main
+ * holds an App.tsx with no provider), an uncommitted edit dropping the header —
+ * plus a local-only repo consuming @wolffm that the account does not have. The
+ * findings and the exit code must not move. Revert the gate to reading REPOS_DIR
+ * and the poisoned run reports no-provider, no-app-header and not-in-fleet.
+ */
+test('#7: a CRLF, stale, dirty clone under REPOS_DIR does not change the verdict', () => {
+	const fx = appFixture();
+	try {
+		poisonedClone(fx.reposDir, `WolffM/${APP}`, CLEAN_APP);
+		poisonedClone(fx.reposDir, 'WolffM/hadoku_site', hubFiles());
+		const baseline = run(fx);
+		const before = JSON.parse(baseline.out);
+		assert.deepEqual(before.findings, [], baseline.out);
+		assert.equal(baseline.code, 0);
+
+		rmSync(join(fx.reposDir, APP), { recursive: true, force: true });
+		rmSync(join(fx.reposDir, 'hadoku_site'), { recursive: true, force: true });
+		poisonedClone(
+			fx.reposDir,
+			`WolffM/${APP}`,
+			{
+				...CLEAN_APP,
+				'src/App.tsx':
+					"import { AppHeader } from '@wolffm/task-ui-components';\n" +
+					'export function App({ appName }) {\n' +
+					'  return <AppHeader title={appName ?? __HADOKU_APP_NAME__} />;\n}\n',
+			},
+			{
+				crlf: true,
+				edit: { 'src/Local.tsx': "import { AppHeader } from '@wolffm/task-ui-components';\n" },
+			}
+		);
+		poisonedClone(fx.reposDir, 'WolffM/hadoku_site', hubFiles(), { crlf: true });
+		poisonedClone(fx.reposDir, 'WolffM/local-only', { 'package.json': CONSUMER_PKG });
+		const poisoned = run(fx);
+		const after = JSON.parse(poisoned.out);
+		assert.deepEqual(after.findings, before.findings, poisoned.out);
+		assert.deepEqual(after.advisory, before.advisory);
+		assert.equal(poisoned.code, baseline.code);
 	} finally {
 		cleanup(fx);
 	}

@@ -50,8 +50,9 @@ export function fixtureRemotes(prefix = 'fleet-source-') {
 		 * @param {string} repo `owner/name`
 		 * @param {Record<string, string | null>} files a null content deletes the path
 		 * @param {string} [message]
+		 * @param {{ ageSec?: number }} [opts] date the commit `ageSec` in the past
 		 */
-		push(repo, files, message = 'fixture') {
+		push(repo, files, message = 'fixture', { ageSec } = {}) {
 			const bare = join(remotes, `${repo}.git`);
 			const tree = join(work, repo);
 			mkdirSync(dirname(bare), { recursive: true });
@@ -76,7 +77,15 @@ export function fixtureRemotes(prefix = 'fleet-source-') {
 				}
 			}
 			run(tree, 'add', '-A');
-			run(tree, 'commit', '-q', '--allow-empty', '-m', message);
+			if (ageSec === undefined) run(tree, 'commit', '-q', '--allow-empty', '-m', message);
+			else {
+				const when = `@${Math.floor(Date.now() / 1000) - ageSec} +0000`;
+				execFileSync('git', ['commit', '-q', '--allow-empty', '-m', message], {
+					cwd: tree,
+					env: { ...ENV, GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when },
+					stdio: ['ignore', 'pipe', 'pipe'],
+				});
+			}
 			run(tree, 'push', '-q', 'origin', 'HEAD:main');
 			return run(tree, 'rev-parse', 'HEAD').trim();
 		},

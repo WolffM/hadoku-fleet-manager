@@ -25,9 +25,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,7 +45,7 @@ import {
 	spliceRegion,
 	workflowLabel,
 } from './fleet-inventory.mjs';
-import { cleanGitEnv } from './test-git-identity.mjs';
+import { fixtureRemotes, poisonedClone } from './fleet-source-fixture.mjs';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -259,14 +258,15 @@ void test('countTableRows: null or a fenceless doc is 0, never a crash', () => {
 // ── the end-to-end half, against a fixture tree ──────────────────────────────
 
 /**
- * A repos dir, a manifest dir and a site root, all under one temp directory.
- *
- * No git anywhere: every path the subcommand resolves is handed to it in the
- * environment, so nothing here can reach a real checkout — and nothing can
- * reach the repository a hook was invoked for either.
+ * Fixture REMOTES (read through fleet-source, as the subcommand reads GitHub),
+ * a manifest dir and a site root, all under one temp directory. REPOS_DIR is an
+ * EMPTY directory: nothing there may matter. The remotes' git children run with
+ * every GIT_* stripped, so nothing can reach the repository a hook was invoked
+ * for. `ageSec` dates each repo's first commit.
  */
-function fixture({ notes, repos } = {}) {
-	const dir = mkdtempSync(join(tmpdir(), 'fleet-inventory-'));
+function fixture({ notes, repos, ageSec } = {}) {
+	const remotes = fixtureRemotes('fleet-inventory-');
+	const dir = remotes.root;
 	const reposDir = join(dir, 'repos');
 	const manifests = join(dir, 'manifests');
 	const site = join(dir, 'site');
@@ -274,9 +274,9 @@ function fixture({ notes, repos } = {}) {
 	for (const d of [reposDir, manifests, docDir]) mkdirSync(d, { recursive: true });
 
 	for (const [name, workflows] of Object.entries(repos ?? {})) {
-		const wf = join(reposDir, name, '.github', 'workflows');
-		mkdirSync(wf, { recursive: true });
-		for (const [file, body] of Object.entries(workflows)) writeFileSync(join(wf, file), body);
+		const files = {};
+		for (const [file, body] of Object.entries(workflows)) files[`.github/workflows/${file}`] = body;
+		remotes.push(`WolffM/${name}`, files, 'fixture', { ageSec });
 	}
 	writeFileSync(
 		join(manifests, 'fleet-runner-coverage.json'),
@@ -292,12 +292,13 @@ function fixture({ notes, repos } = {}) {
 	const env = { ...process.env };
 	for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k];
 	Object.assign(env, {
+		...remotes.env,
 		REPOS_DIR: reposDir,
 		FLEET_MANIFEST_DIR: manifests,
 		HADOKU_SITE_ROOT: site,
 		FLEET_NO_BANNER: '1',
 	});
-	return { dir, reposDir, manifests, site, doc, env };
+	return { dir, remotes, reposDir, manifests, site, doc, env };
 }
 
 const run = (fx, argv) =>
@@ -345,9 +346,13 @@ void test('--check is 0 right after a write, and non-zero once a workflow appear
 		assert.equal(run(fx, ['--write']).status, 0);
 		assert.equal(run(fx, ['--check']).status, 0, 'a fresh write must be current');
 
-		writeFileSync(join(fx.reposDir, 'fixture-beta', '.github', 'workflows', 'publish.yml'), BARE);
+		// Dated OUTSIDE the regeneration window: a fresh commit is young drift,
+		// advisory by design (#103), and is covered below.
+		fx.remotes.push('WolffM/fixture-beta', { '.github/workflows/publish.yml': BARE }, 'add', {
+			ageSec: 40 * 3600,
+		});
 		const after = run(fx, ['--check']);
-		assert.equal(after.status, 1, 'a workflow added by hand must redden the gate');
+		assert.equal(after.status, 1, 'a workflow pushed after the write must redden the gate');
 		assert.match(after.stderr, /STALE/);
 	} finally {
 		rmSync(fx.dir, { recursive: true, force: true });
@@ -360,11 +365,11 @@ void test('a repo we could not open FAILS, names why, and blocks the write', (t)
 	try {
 		assert.equal(run(fx, ['--write']).status, 0);
 		const before = readFileSync(fx.doc, 'utf8');
-		rmSync(join(fx.reposDir, 'fixture-beta'), { recursive: true, force: true });
+		renameSync(fx.remotes.remote('WolffM/fixture-beta'), `${fx.dir}/beta-moved.git`);
 
 		const r = run(fx, ['--write']);
 		assert.equal(r.status, 1, 'unknown is not healthy');
-		assert.match(r.stderr, /no checkout at/);
+		assert.match(r.stderr, /shipped workflows unreadable \(fetch from .* failed/);
 		assert.match(r.stderr, /fixture-beta/);
 		assert.equal(
 			readFileSync(fx.doc, 'utf8'),
@@ -422,11 +427,9 @@ void test('--json stays a single parseable document, and carries the findings', 
 
 // ── #103 item 3: drift the regeneration has not reached yet ──────────────────
 //
-// THE ONE PLACE THIS FILE USES GIT: the subject dates the newest commit to a
-// drifted workflow, and only a real commit has a date. Every invocation gets
-// `cleanGitEnv` — every ambient GIT_* stripped, the fixture identity in the
-// ENVIRONMENT, never a config write (see test-git-identity.mjs) — and targets a
-// repo inside the mkdtemp root. Commit dates are RELATIVE to now.
+// The subject dates the newest commit to a drifted workflow off the SHIPPED
+// branch's history in the reader's mirror, so each fixture push carries a date
+// RELATIVE to now (fleet-source-fixture's `ageSec`).
 
 const regionOf = (rows, notes = {}) =>
 	renderRegion(renderTable(rows, notes), { repos: 1, workflows: rows.length });
@@ -457,27 +460,13 @@ test('#103 the window is one regeneration period plus the sync offset plus sched
 	assert.equal(YOUNG_DRIFT_SECONDS, 29 * 3600);
 });
 
-const git = (args) => execFileSync('git', args, { env: cleanGitEnv(), stdio: 'ignore' });
-
-/** Commit everything in `dir` dated `ageSec` ago, initialising the repo the first time. */
-function commitAged(dir, ageSec) {
-	if (!existsSync(join(dir, '.git'))) git(['-c', 'init.defaultBranch=main', 'init', '-q', dir]);
-	const when = `@${Math.floor(Date.now() / 1000) - ageSec} +0000`;
-	git(['-C', dir, 'add', '-A']);
-	execFileSync('git', ['-C', dir, 'commit', '-q', '-m', 'fixture'], {
-		env: cleanGitEnv({ GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when }),
-		stdio: 'ignore',
-	});
-}
-
 /** A written, current table, then one workflow added to fixture-beta `ageSec` ago. */
 function driftedFixture(ageSec) {
-	const fx = fixture({ repos: TWO_REPOS });
-	const beta = join(fx.reposDir, 'fixture-beta');
-	commitAged(beta, 10 * 86_400);
+	const fx = fixture({ repos: TWO_REPOS, ageSec: 10 * 86_400 });
 	assert.equal(run(fx, ['--write']).status, 0);
-	writeFileSync(join(beta, '.github', 'workflows', 'forge.yml'), BARE);
-	commitAged(beta, ageSec);
+	fx.remotes.push('WolffM/fixture-beta', { '.github/workflows/forge.yml': BARE }, 'forge', {
+		ageSec,
+	});
 	return fx;
 }
 
@@ -516,7 +505,7 @@ void test('#103: young drift beside a REMOVAL still fails — a removal is never
 	if (!existsSync(DIST)) return t.skip('dist/lib/fleet-paths.js is not built');
 	const fx = driftedFixture(3 * 3600);
 	try {
-		rmSync(join(fx.reposDir, 'fixture-alpha', '.github', 'workflows', 'deploy.yml'));
+		fx.remotes.push('WolffM/fixture-alpha', { '.github/workflows/deploy.yml': null });
 		const r = run(fx, ['--check']);
 		assert.equal(r.status, 1);
 		assert.match(r.stderr, /removed: fixture-alpha deploy\.yml/);
@@ -527,10 +516,10 @@ void test('#103: young drift beside a REMOVAL still fails — a removal is never
 
 // ── the shrink floor (#84 part 2) ───────────────────────────────────────────
 //
-// Distinct from "a repo we could not open FAILS" above: THAT guard trips on a
-// missing checkout. This one trips when the ROSTER ITSELF shrinks drastically
-// with every remaining checkout still perfectly readable — a `--write-coverage`
-// gone wrong upstream, not a REPOS_DIR problem this file would ever see.
+// Distinct from "a repo we could not open FAILS" above: THAT guard trips on an
+// unreadable repo. This one trips when the ROSTER ITSELF shrinks drastically
+// with every remaining repo still perfectly readable — a `--write-coverage`
+// gone wrong upstream.
 
 void test('--write refuses a drastic roster shrink, and the doc is left byte-identical', (t) => {
 	if (!existsSync(DIST)) return t.skip('dist/lib/fleet-paths.js is not built');
@@ -540,8 +529,8 @@ void test('--write refuses a drastic roster shrink, and the doc is left byte-ide
 		const before = readFileSync(fx.doc, 'utf8');
 
 		// The roster shrinks from 2 repos (3 workflow rows) to 1 (1 row) — well
-		// below half — while fixture-beta's checkout is untouched and perfectly
-		// readable. No "no checkout" finding fires; only the shrink floor should.
+		// below half — while fixture-beta is untouched and perfectly readable. No
+		// "unreadable" finding fires; only the shrink floor should.
 		writeFileSync(
 			join(fx.manifests, 'fleet-runner-coverage.json'),
 			`${JSON.stringify({ repos: ['WolffM/fixture-beta'], facets: {} }, null, 2)}\n`
@@ -575,6 +564,49 @@ void test('--write --allow-shrink lands the same drastic shrink on purpose', (t)
 		const region = generatedRegion(readFileSync(fx.doc, 'utf8'));
 		assert.ok(!region.includes('fixture-alpha'), region);
 		assert.ok(region.includes('fixture-beta'), region);
+	} finally {
+		rmSync(fx.dir, { recursive: true, force: true });
+	}
+});
+
+/**
+ * fleet-manager#7: A LOCAL CLONE CANNOT CHANGE THE TABLE. The baseline has
+ * clones under REPOS_DIR that MATCH the shipped branches, so a subcommand that
+ * read them would write the same table. Then they go CRLF, keep a workflow the
+ * remote never had, and carry an uncommitted relabel — and `--check` must stay
+ * current. Revert the subcommand to reading REPOS_DIR and it reports STALE.
+ */
+void test('#7: a CRLF, stale, dirty clone under REPOS_DIR does not change the table', (t) => {
+	if (!existsSync(DIST)) return t.skip('dist/lib/fleet-paths.js is not built');
+	const fx = fixture({ repos: TWO_REPOS });
+	const filesOf = (name) =>
+		Object.fromEntries(
+			Object.entries(TWO_REPOS[name]).map(([f, b]) => [`.github/workflows/${f}`, b])
+		);
+	try {
+		for (const name of Object.keys(TWO_REPOS)) {
+			poisonedClone(fx.reposDir, `WolffM/${name}`, filesOf(name));
+		}
+		assert.equal(run(fx, ['--write']).status, 0);
+		const written = readFileSync(fx.doc, 'utf8');
+		assert.equal(run(fx, ['--check']).status, 0, 'a fresh write must be current');
+
+		for (const name of Object.keys(TWO_REPOS)) {
+			rmSync(join(fx.reposDir, name), { recursive: true, force: true });
+		}
+		poisonedClone(
+			fx.reposDir,
+			'WolffM/fixture-alpha',
+			{ ...filesOf('fixture-alpha'), '.github/workflows/stale.yml': BARE },
+			{ crlf: true }
+		);
+		poisonedClone(fx.reposDir, 'WolffM/fixture-beta', filesOf('fixture-beta'), {
+			edit: { '.github/workflows/ci.yml': LITERAL_LIST },
+		});
+		const after = run(fx, ['--check']);
+		assert.equal(after.status, 0, after.stdout + after.stderr);
+		assert.equal(run(fx, ['--write']).status, 0);
+		assert.equal(readFileSync(fx.doc, 'utf8'), written, 'the table moved');
 	} finally {
 		rmSync(fx.dir, { recursive: true, force: true });
 	}

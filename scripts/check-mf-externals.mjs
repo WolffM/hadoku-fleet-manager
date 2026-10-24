@@ -39,10 +39,10 @@
  * loop. Everything that does reach it IS mounted — see the `lib:` check.
  *
  * USAGE
- *   fleet mf-externals             # audit origin/main
- *   fleet mf-externals --worktree  # audit working copies
+ *   fleet mf-externals             # audit each repo's shipped default branch
+ *   fleet mf-externals --worktree  # audit the working copies under REPOS_DIR
  *   fleet mf-externals --warn      # report, exit 0
- *   fleet mf-externals --no-fetch
+ *   fleet mf-externals --no-fetch  # read the fleet-source mirrors as they stand (offline)
  *   fleet mf-externals --source-only  # skip the deployed-bundle half, and say so
  *
  * TWO HALVES (#111). The SOURCE half below reads each repo's vite `external:`
@@ -60,6 +60,8 @@ import { resolve } from 'node:path';
 import { reposWith } from './lib/fleet-roster.mjs';
 import { reposDir } from './lib/sibling-repos.mjs';
 import { siteRoot } from './lib/paths.mjs';
+import { tryShipped } from './lib/fleet-source.mjs';
+import { qualifyRepo } from '../dist/lib/fleet-config.js';
 import { blankComments } from './lib/blank-comments.mjs';
 import { crawlBundle, fetchText, judgeBuilt, siteOrigin } from './lib/mf-built.mjs';
 
@@ -212,18 +214,37 @@ function parentProvides() {
 	return [...specifiers];
 }
 
-function git(repoPath, argv) {
-	return execFileSync('git', ['-C', repoPath, ...argv], {
+function git(dir, argv) {
+	return execFileSync('git', ['-C', dir, ...argv], {
 		encoding: 'utf8',
 		stdio: ['ignore', 'pipe', 'ignore'],
 	});
 }
 
-function readAt(repoPath, ref, file) {
+/**
+ * One micro-frontend's files: `{ read(file), list(prefix) }`, or `{ unreadable }`.
+ *
+ * The SHIPPED default branch through `lib/fleet-source.mjs` by default — never a
+ * sibling clone, which is only as current as whoever last pulled it
+ * (fleet-manager#7). `--worktree` reads the working copy under REPOS_DIR.
+ */
+function openRepo(name) {
+	if (USE_WORKTREE) {
+		const dir = resolve(ROOT, name);
+		if (!existsSync(dir)) return { unreadable: `no checkout at ${dir}` };
+		return {
+			read: (file) => readFileSync(resolve(dir, file), 'utf8'),
+			list: (prefix) => git(dir, ['ls-files', prefix]).split('\n').filter(Boolean),
+		};
+	}
+	const h = tryShipped(qualifyRepo(name), { fetch: !NO_FETCH });
+	if ('unreadable' in h) return { unreadable: `shipped branch unreadable: ${h.unreadable}` };
+	return { read: (file) => h.read(file), list: (prefix) => h.list(prefix) };
+}
+
+function readAt(source, file) {
 	try {
-		return USE_WORKTREE
-			? readFileSync(resolve(repoPath, file), 'utf8')
-			: git(repoPath, ['show', `${ref}:${file}`]);
+		return source.read(file);
 	} catch {
 		return null;
 	}
@@ -234,12 +255,9 @@ function readAt(repoPath, ref, file) {
  * `[]` — indistinguishable from a src/ with no sources, and both read as "this
  * app imports nothing from the parent", i.e. clean.
  */
-function listFiles(repoPath, ref, prefix) {
+function listFiles(source, prefix) {
 	try {
-		const out = USE_WORKTREE
-			? git(repoPath, ['ls-files', prefix])
-			: git(repoPath, ['ls-tree', '-r', '--name-only', ref, prefix]);
-		return { files: out.split('\n').filter((f) => /\.(tsx?|jsx?)$/.test(f)) };
+		return { files: source.list(prefix).filter((f) => /\.(tsx?|jsx?)$/.test(f)) };
 	} catch (err) {
 		return { reason: String(err.message || err).split('\n')[0] };
 	}
@@ -283,22 +301,13 @@ if (FLEET.length === 0) {
 }
 
 for (const entry of FLEET) {
-	const repoPath = resolve(ROOT, entry.repo);
-	if (!existsSync(repoPath)) {
-		findings.push({ repo: entry.repo, msg: `no checkout at ${repoPath} — not audited` });
+	const source = openRepo(entry.repo);
+	if (source.unreadable) {
+		findings.push({ repo: entry.repo, msg: `${source.unreadable} — not audited` });
 		continue;
 	}
 
-	if (!NO_FETCH && !USE_WORKTREE) {
-		try {
-			execFileSync('git', ['-C', repoPath, 'fetch', 'origin', '--quiet'], { stdio: 'ignore' });
-		} catch {
-			console.error(`⚠ ${entry.repo}: fetch failed — auditing last known origin/main`);
-		}
-	}
-
-	const ref = 'origin/main';
-	const viteRaw = readAt(repoPath, ref, entry.vite);
+	const viteRaw = readAt(source, entry.vite);
 	if (viteRaw === null) {
 		findings.push({ repo: entry.repo, msg: `${entry.vite} not found — has the layout moved?` });
 		continue;
@@ -331,7 +340,7 @@ for (const entry of FLEET) {
 	}
 
 	// What does this app actually import from the parent-provided set?
-	const listing = listFiles(repoPath, ref, entry.src);
+	const listing = listFiles(source, entry.src);
 	if (listing.reason) {
 		findings.push({ repo: entry.repo, msg: `cannot list ${entry.src} (${listing.reason})` });
 		continue;
@@ -351,7 +360,7 @@ for (const entry of FLEET) {
 		imported.add('react/jsx-runtime');
 	}
 	for (const f of files) {
-		const raw = readAt(repoPath, ref, f);
+		const raw = readAt(source, f);
 		if (!raw) continue;
 		// Comment-blanked: an import in a comment is not an import.
 		const src = blankComments(raw);

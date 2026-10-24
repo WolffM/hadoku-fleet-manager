@@ -31,23 +31,27 @@
  *
  * TWO READERS, DELIBERATELY DIFFERENT SOURCES
  * -------------------------------------------
- * Workflow FORMS come from sibling checkouts on disk (cheap, and the same source
- * check-label-floor uses). The VARIABLE comes from the GitHub API, never from a
+ * Workflow FORMS come from each repo's SHIPPED default branch, through
+ * `lib/fleet-source.mjs` — the same reader check-label-floor uses, never a
+ * sibling working tree (fleet-manager#7). The population is the owner's
+ * non-archived repo list plus the roster, not "whatever is checked out on this
+ * disk": a cron host need not hold any checkout at all. The VARIABLE comes from the GitHub API, never from a
  * manifest or a local record — "the reader for a facet may not read what the
  * writer wrote". A checker that read our own idea of what we set would pass by
  * construction.
  *
- * A repo we could not look at — no checkout, unreadable variable — is a FINDING,
- * never a pass.
+ * A repo we could not look at — unreadable source, unreadable variable — is a
+ * FINDING, never a pass.
  *
  * @guards src/ci-runner-fallback.ts
  */
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
 import process from 'node:process';
-import { reposDir } from './lib/sibling-repos.mjs';
 import { manifest as manifestFile } from './lib/paths.mjs';
+import { tryShipped, UnreadableRepo } from './lib/fleet-source.mjs';
+import { READ_ATTEMPTS } from './lib/queue-health.mjs';
+import { fleetOwner } from '../dist/lib/fleet-config.js';
 import { readRunnerVar, runnerVarForm, repoVerdict } from './lib/runner-var.mjs';
 import { createEmitter } from './lib/emit.mjs';
 
@@ -76,21 +80,48 @@ function readVarOnce(repo) {
 	}).trim();
 }
 
-/** Every workflow in a checkout that references CI_RUNNER, with its form. */
-function usesIn(dir) {
-	const wf = join(dir, '.github', 'workflows');
-	if (!existsSync(wf)) return [];
+/** Every shipped workflow that references CI_RUNNER, with its form. */
+function usesIn(source) {
 	const uses = [];
-	for (const file of readdirSync(wf)) {
-		if (!/\.ya?ml$/.test(file)) continue;
-		const form = runnerVarForm(readFileSync(join(wf, file), 'utf8'));
+	for (const { file, text } of source.workflows()) {
+		const form = runnerVarForm(text);
 		if (form) uses.push({ file, form });
 	}
 	return uses;
 }
 
+/** The owner's non-archived repos, `owner/name` — or a string saying why not. */
+function ownerRepos() {
+	let last = '';
+	for (let i = 0; i < READ_ATTEMPTS; i++) {
+		try {
+			const out = execFileSync(
+				'gh',
+				[
+					'repo',
+					'list',
+					fleetOwner(),
+					'--limit',
+					'1000',
+					'--no-archived',
+					'--json',
+					'nameWithOwner',
+				],
+				{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
+			);
+			return JSON.parse(out).map((r) => r.nameWithOwner);
+		} catch (err) {
+			last = String(err?.stderr || err?.message || err)
+				.trim()
+				.split('\n')
+				.pop();
+			if (i + 1 < READ_ATTEMPTS) sleepSync(RETRY_DELAY_MS);
+		}
+	}
+	return last || 'gh repo list failed';
+}
+
 function main() {
-	const REPOS = reposDir();
 	// The roster is the list of repos we EXPECT to be maintained, used only to
 	// say which findings are inside it. It is never the population.
 	let roster = [];
@@ -102,28 +133,42 @@ function main() {
 	}
 	const inRoster = new Set(roster);
 
-	// Every sibling checkout on disk, plus every roster repo — so a covered repo
-	// with NO checkout is reported as unlooked-at rather than silently skipped.
-	const dirs = existsSync(REPOS)
-		? readdirSync(REPOS).filter((d) => existsSync(join(REPOS, d, '.git')))
-		: [];
-	const byName = new Map(dirs.map((d) => [`WolffM/${d}`, join(REPOS, d)]));
-	for (const r of roster) if (!byName.has(r)) byName.set(r, null);
+	// The owner's repos, plus every roster repo — so a covered repo the listing
+	// somehow missed is still read, or reported as unlooked-at.
+	const listed = ownerRepos();
+	if (typeof listed === 'string') {
+		const msg = `check-runner-var: could not list ${fleetOwner()}'s repos: ${listed}`;
+		if (JSON_OUT) emitter.emit({ error: msg, examined: 0, findings: [] });
+		else console.error(msg);
+		process.exit(1);
+	}
+	const population = [...new Set([...listed, ...roster])].sort();
 
 	const findings = [];
 	const ok = [];
-	for (const [repo, dir] of [...byName].sort()) {
-		if (dir === null) {
+	for (const repo of population) {
+		const source = tryShipped(repo);
+		// Blobs are fetched on first read, so reading the workflows can fail too.
+		let uses;
+		let unreadable = 'unreadable' in source ? source.unreadable : null;
+		if (!unreadable) {
+			try {
+				uses = usesIn(source);
+			} catch (err) {
+				if (!(err instanceof UnreadableRepo)) throw err;
+				unreadable = err.reason;
+			}
+		}
+		if (unreadable) {
 			findings.push({
 				repo,
 				status: 'no-checkout',
 				why:
-					'in fleet-runner-coverage.json but not checked out here, so its workflows ' +
-					'could not be read. Unknown is not healthy.',
+					`its shipped workflows could not be read (${unreadable}), so whether it ` +
+					'asks for CI_RUNNER is unknown. Unknown is not healthy.',
 			});
 			continue;
 		}
-		const uses = usesIn(dir);
 		if (!uses.length) continue;
 		const read = readRunnerVar(repo, readVarOnce, {
 			sleep: () => sleepSync(RETRY_DELAY_MS),
@@ -135,13 +180,13 @@ function main() {
 		(verdict.status === 'ok' || verdict.status === 'unset-but-safe' ? ok : findings).push(verdict);
 	}
 
-	// SCANNING NOTHING IS A FAILURE. Zero repos examined means the checkout
-	// directory was wrong, and an empty report reads exactly like a clean one.
+	// SCANNING NOTHING IS A FAILURE. Zero repos examined means the listing or the
+	// reader broke, and an empty report reads exactly like a clean one.
 	const examined = findings.length + ok.length;
 	if (examined === 0) {
 		const msg =
-			`check-runner-var: examined ZERO repos under ${REPOS}. That is a broken scan, ` +
-			'not a clean fleet — set REPOS_DIR to the directory holding the sibling checkouts.';
+			`check-runner-var: examined ZERO repos of ${population.length} listed. That is a ` +
+			'broken scan, not a clean fleet.';
 		if (JSON_OUT) emitter.emit({ error: msg, examined: 0, findings: [] });
 		else console.error(msg);
 		process.exit(1);

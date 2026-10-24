@@ -84,7 +84,6 @@
 import {
 	existsSync,
 	readFileSync,
-	readdirSync,
 	appendFileSync,
 	mkdirSync,
 	unlinkSync,
@@ -94,13 +93,8 @@ import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import process from 'node:process';
 
-import {
-	manifest as manifestFile,
-	manifestDir,
-	stateDir,
-	reposDir,
-	siteRoot,
-} from './lib/paths.mjs';
+import { manifest as manifestFile, manifestDir, stateDir, siteRoot } from './lib/paths.mjs';
+import { tryShipped } from './lib/fleet-source.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { stripYamlComments } from './lib/yaml-comments.mjs';
 import { runOn } from './lib/fleet-exec.mjs';
@@ -482,7 +476,7 @@ function demandFor(repo, job) {
  * and it applies here unchanged: writing `06:03..06:53` into this file would be
  * correct today and wrong the first time WS-E restaggers.
  *
- * A COVERED REPO WITH NO CHECKOUT IS A FAILURE, not zero schedules. If the
+ * A COVERED REPO THAT CANNOT BE READ IS A FAILURE, not zero schedules. If the
  * reader cannot see a repo's workflows it cannot know whether that repo is about
  * to fan out, and probing on that basis is exactly "I could not look" rendering
  * as "nothing is wrong". `quietWindow()` refuses an empty schedule list for the
@@ -496,27 +490,15 @@ function fleetCronSchedules() {
 	const unreadable = [];
 	for (const full of repos) {
 		const name = full.split('/').pop();
-		const dir = join(reposDir(), name, '.github', 'workflows');
-		if (!existsSync(dir)) {
-			unreadable.push(`${full}: no checkout at ${dir}`);
+		// The SHIPPED workflows, through fleet-source: what GitHub will fire is the
+		// default branch, never a sibling working tree (fleet-manager#7).
+		const source = tryShipped(full);
+		if ('unreadable' in source) {
+			unreadable.push(`${full}: shipped workflows unreadable (${source.unreadable})`);
 			continue;
 		}
-		let files;
-		try {
-			files = readdirSync(dir);
-		} catch (err) {
-			unreadable.push(`${full}: ${err.message}`);
-			continue;
-		}
-		for (const f of files) {
-			if (!/\.ya?ml$/.test(f)) continue;
-			let body;
-			try {
-				body = stripYamlComments(readFileSync(join(dir, f), 'utf8'));
-			} catch (err) {
-				unreadable.push(`${full}/${f}: ${err.message}`);
-				continue;
-			}
+		for (const { file: f, text } of source.workflows()) {
+			const body = stripYamlComments(text);
 			for (const m of body.matchAll(/cron:\s*['"]([^'"]+)['"]/g)) {
 				const minutes = dailyCronMinutes(m[1]);
 				if (minutes !== null) schedules.push({ name: `${name}/${f}`, minutesOfDay: minutes });
@@ -1106,14 +1088,24 @@ async function modeProbe() {
 	}
 	if (!CLAWS.includes(node)) fail(notAProbeTarget(node));
 
-	// 1. SAFETY. Read the workflow from the CHECKOUT — the operator can read the
-	//    same bytes this refusal was computed from, and a checkout behind origin
-	//    is a stale refusal rather than a missing one.
-	const wfPath = join(reposDir(), repo.split('/').pop(), '.github', 'workflows', workflow);
-	if (!existsSync(wfPath)) {
-		fail(`cannot read ${wfPath} — refusing to dispatch a workflow I cannot inspect`);
+	// 1. SAFETY. Read the workflow as SHIPPED, at the default branch — the
+	//    bytes a dispatch at that ref will run, never a sibling checkout that may
+	//    be behind, dirty or CRLF (fleet-manager#7). A `--ref` this cannot read
+	//    is a refusal: the safety verdict would be about some other file.
+	if (ref !== 'main') fail(`refusing to dispatch a workflow I cannot inspect at ${ref}`);
+	const source = tryShipped(repo);
+	if ('unreadable' in source) {
+		fail(
+			`cannot read ${repo}'s shipped workflows (${source.unreadable}) — refusing to dispatch a workflow I cannot inspect`
+		);
 	}
-	const safety = shadowSafety(stripYamlComments(readFileSync(wfPath, 'utf8')));
+	const wfText = source.read(`.github/workflows/${workflow}`);
+	if (wfText === null) {
+		fail(
+			`${repo} ships no .github/workflows/${workflow} — refusing to dispatch a workflow I cannot inspect`
+		);
+	}
+	const safety = shadowSafety(stripYamlComments(wfText));
 	if (!safety.ok) fail(`${repo}/${workflow} is not safe to shadow-dispatch: ${safety.reason}`);
 
 	// 2. WINDOW.

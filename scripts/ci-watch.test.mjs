@@ -19,27 +19,19 @@
  *      legitimate "a repo was archived" case, independent of (1).
  *
  * Exercised as a CLI, the same way `reconcile-fleet-runners.test.mjs` does
- * it: a throwaway manifest dir, repos dir and site root, the EXIT CODE and
- * the ON-DISK FILES read directly rather than grepped out of stdout.
- *
- * NOTHING HERE SPAWNS git — `ci-watch.mjs` reads the filesystem only. See
- * lib/hook-safe-tests.test.mjs for why that distinction matters.
+ * it: a throwaway manifest dir, fixture REMOTES (read through fleet-source,
+ * as the gate reads GitHub) and site root, the EXIT CODE and the ON-DISK FILES
+ * read directly rather than grepped out of stdout. The remotes' git children
+ * run with every GIT_* stripped — see lib/hook-safe-tests.test.mjs.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-	closeSync,
-	mkdirSync,
-	mkdtempSync,
-	openSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { fixtureRemotes, poisonedClone } from './lib/fleet-source-fixture.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'ci-watch.mjs');
@@ -55,7 +47,8 @@ const NO_GIT_ENV = Object.fromEntries(
  *  `scripts/lib/paths.mjs` expects via `FLEET_MANIFEST_DIR`, `REPOS_DIR` and
  *  `HADOKU_SITE_ROOT`. */
 function fixture(repos) {
-	const root = mkdtempSync(join(tmpdir(), 'ci-watch-gate-'));
+	const remotes = fixtureRemotes('ci-watch-gate-');
+	const root = remotes.root;
 	const manifestDir = join(root, 'manifest');
 	const reposDir = join(root, 'repos');
 	const siteRoot = join(root, 'site');
@@ -73,6 +66,7 @@ function fixture(repos) {
 
 	return {
 		root,
+		remotes,
 		manifestDir,
 		reposDir,
 		siteRoot,
@@ -81,11 +75,12 @@ function fixture(repos) {
 	};
 }
 
-/** A roster repo with a real checkout holding one watched workflow. */
-function addCheckout(fx, repo, { workflow = 'ci.yml' } = {}) {
-	const dir = join(fx.reposDir, repo.split('/').pop(), '.github', 'workflows');
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(join(dir, workflow), 'jobs:\n  check:\n    runs-on: ubuntu-latest\n');
+const WORKFLOW_BODY = 'jobs:\n  check:\n    runs-on: ubuntu-latest\n';
+
+/** A roster repo that SHIPS one more watched workflow. A repo never given one
+ *  has no remote at all, and reads as unreadable. */
+function addShipped(fx, repo, { workflow = 'ci.yml' } = {}) {
+	fx.remotes.push(repo, { [`.github/workflows/${workflow}`]: WORKFLOW_BODY });
 }
 
 /** A believable "already generated" file — only `targets.length` matters to
@@ -130,6 +125,7 @@ function run(fx, argv = []) {
 		execFileSync('node', [SCRIPT, ...argv], {
 			env: {
 				...NO_GIT_ENV,
+				...fx.remotes.env,
 				REPOS_DIR: fx.reposDir,
 				FLEET_MANIFEST_DIR: fx.manifestDir,
 				HADOKU_SITE_ROOT: fx.siteRoot,
@@ -157,8 +153,8 @@ const REPO_B = 'WolffM/repo-b';
 test('a fully covered roster with no prior output writes both copies and exits 0', () => {
 	const fx = fixture([REPO_A, REPO_B]);
 	try {
-		addCheckout(fx, REPO_A);
-		addCheckout(fx, REPO_B);
+		addShipped(fx, REPO_A);
+		addShipped(fx, REPO_B);
 		const r = run(fx, ['--write']);
 		assert.equal(
 			r.code,
@@ -173,12 +169,12 @@ test('a fully covered roster with no prior output writes both copies and exits 0
 	}
 });
 
-// ── #84 part 1/4: a missing checkout refuses the write outright ───────────
+// ── #84 part 1/4: an unreadable roster refuses the write outright ─────────
 
-test('an empty REPOS_DIR leaves both output files byte-identical and exits non-zero', () => {
+test('a roster none of whose repos can be read leaves both output files byte-identical and exits non-zero', () => {
 	const fx = fixture([REPO_A, REPO_B]);
 	try {
-		// No addCheckout calls: REPOS_DIR exists but holds neither repo.
+		// No addShipped calls: neither repo has a remote, so neither can be read.
 		const baseline = priorGenerated(2);
 		seed(fx, baseline);
 
@@ -202,7 +198,7 @@ test('an empty REPOS_DIR leaves both output files byte-identical and exits non-z
 test('a roster missing ONE checkout still refuses the write, not just a total wipeout', () => {
 	const fx = fixture([REPO_A, REPO_B]);
 	try {
-		addCheckout(fx, REPO_A); // REPO_B has none
+		addShipped(fx, REPO_A); // REPO_B has none
 		const baseline = priorGenerated(5);
 		seed(fx, baseline);
 
@@ -223,8 +219,8 @@ test('a write that would shrink targets below 50% is refused without --allow-shr
 		// Every roster repo HAS a checkout and a watched workflow — this is not
 		// the missing-checkout case. 2 new targets against 10 prior is below
 		// the 50% floor on its own.
-		addCheckout(fx, REPO_A);
-		addCheckout(fx, REPO_B);
+		addShipped(fx, REPO_A);
+		addShipped(fx, REPO_B);
 		const baseline = priorGenerated(10);
 		seed(fx, baseline);
 
@@ -241,8 +237,8 @@ test('a write that would shrink targets below 50% is refused without --allow-shr
 test('--allow-shrink lifts the floor and the write proceeds', () => {
 	const fx = fixture([REPO_A, REPO_B]);
 	try {
-		addCheckout(fx, REPO_A);
-		addCheckout(fx, REPO_B);
+		addShipped(fx, REPO_A);
+		addShipped(fx, REPO_B);
 		const baseline = priorGenerated(10);
 		seed(fx, baseline);
 
@@ -263,8 +259,8 @@ test('--allow-shrink lifts the floor and the write proceeds', () => {
 test('a shrink floor at the boundary (exactly 50%) is not refused', () => {
 	const fx = fixture([REPO_A, REPO_B]);
 	try {
-		addCheckout(fx, REPO_A);
-		addCheckout(fx, REPO_B);
+		addShipped(fx, REPO_A);
+		addShipped(fx, REPO_B);
 		// 2 new targets against 4 prior is exactly 50% — the guard is "below",
 		// not "at or below", so this must be allowed to proceed.
 		const baseline = priorGenerated(4);
@@ -281,7 +277,7 @@ test('a shrink floor at the boundary (exactly 50%) is not refused', () => {
 test('no prior output file means no shrink baseline — the first write is never a shrink', () => {
 	const fx = fixture([REPO_A]);
 	try {
-		addCheckout(fx, REPO_A);
+		addShipped(fx, REPO_A);
 		// Deliberately no seed(): outSite/outManifest do not exist yet.
 		const r = run(fx, ['--write']);
 		assert.equal(r.code, 0, `a first write has nothing to shrink from: ${r.out}\n${r.stderr}`);
@@ -296,7 +292,7 @@ test('no prior output file means no shrink baseline — the first write is never
 test('an unreadable existing manifest copy skips the shrink floor AND warns by name, rather than failing silently', () => {
 	const fx = fixture([REPO_A]);
 	try {
-		addCheckout(fx, REPO_A);
+		addShipped(fx, REPO_A);
 		// A baseline that exists but is not valid JSON — distinct from "absent".
 		writeFileSync(fx.outManifest, '{ not valid json');
 		writeFileSync(fx.outSite, '{ not valid json');
@@ -327,8 +323,8 @@ test('an unreadable existing manifest copy skips the shrink floor AND warns by n
 function policyRun(policy, { extraWorkflows = [] } = {}) {
 	const fx = fixture([REPO_A]);
 	try {
-		addCheckout(fx, REPO_A);
-		for (const w of extraWorkflows) addCheckout(fx, REPO_A, { workflow: w });
+		addShipped(fx, REPO_A);
+		for (const w of extraWorkflows) addShipped(fx, REPO_A, { workflow: w });
 		writeFileSync(join(fx.manifestDir, 'ci-watch-policy.json'), JSON.stringify(policy));
 		const r = run(fx, ['--json']);
 		return { ...r, doc: JSON.parse(r.out) };
@@ -379,3 +375,61 @@ for (const [name, policy, pattern] of [
 		assert.equal(r.code, 1);
 	});
 }
+
+/**
+ * fleet-manager#7: A LOCAL CLONE CANNOT CHANGE THE TARGETS. The baseline has
+ * clones under REPOS_DIR that MATCH the shipped branches. Then they go CRLF,
+ * keep a deploy workflow the remote deleted, and carry an uncommitted
+ * `publish.yml` — each a watched name if read off disk. The generated targets
+ * must not move. Revert the gate to reading REPOS_DIR and they do.
+ */
+test('#7: a CRLF, stale, dirty clone under REPOS_DIR does not change the targets', () => {
+	const fx = fixture([REPO_A, REPO_B]);
+	try {
+		addShipped(fx, REPO_A);
+		addShipped(fx, REPO_B);
+		const shippedFiles = { '.github/workflows/ci.yml': WORKFLOW_BODY };
+		poisonedClone(fx.reposDir, REPO_A, shippedFiles);
+		poisonedClone(fx.reposDir, REPO_B, shippedFiles);
+		const baseline = run(fx, ['--json']);
+		assert.equal(baseline.code, 0, baseline.out + baseline.stderr);
+		const before = JSON.parse(baseline.out);
+		assert.equal(before.targets, 2);
+		assert.equal(run(fx, ['--write']).code, 0);
+		const written = readFileSync(fx.outManifest, 'utf8');
+
+		rmSync(join(fx.reposDir, 'repo-a'), { recursive: true, force: true });
+		rmSync(join(fx.reposDir, 'repo-b'), { recursive: true, force: true });
+		poisonedClone(
+			fx.reposDir,
+			REPO_A,
+			{ ...shippedFiles, '.github/workflows/deploy-old.yml': WORKFLOW_BODY },
+			{ crlf: true }
+		);
+		poisonedClone(fx.reposDir, REPO_B, shippedFiles, {
+			edit: { '.github/workflows/publish.yml': 'jobs:\n  wip:\n    runs-on: ubuntu-latest\n' },
+		});
+		const poisoned = run(fx, ['--json']);
+		assert.equal(poisoned.code, baseline.code, poisoned.out + poisoned.stderr);
+		assert.deepEqual(JSON.parse(poisoned.out), before);
+		assert.equal(run(fx, ['--write']).code, 0);
+		assert.equal(readFileSync(fx.outManifest, 'utf8'), written, 'the written targets moved');
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('#7: an unreadable roster repo is a problem carrying the reason', () => {
+	const fx = fixture([REPO_A, REPO_B]);
+	try {
+		addShipped(fx, REPO_A);
+		const r = run(fx, ['--json']);
+		assert.equal(r.code, 1);
+		assert.match(
+			JSON.parse(r.out).problems.join('\n'),
+			/1 roster repo\(s\) could not be read: WolffM\/repo-b \(fetch from .* failed/
+		);
+	} finally {
+		cleanup(fx);
+	}
+});

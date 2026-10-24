@@ -17,11 +17,13 @@
  *
  * WHAT IT READS
  * -------------
- * `origin/main` of each repo, fetched first — what is SHIPPED, not what happens
- * to be on disk. Scanning working copies makes the result meaningless: a local
- * checkout may be behind origin (so it reports drift that is already fixed) or
- * dirty (so it reports drift nobody pushed). Use `--worktree` to scan the
- * working copies instead, which is what you want while fixing things.
+ * Each repo's default branch through `lib/fleet-source.mjs` — what is SHIPPED,
+ * not what happens to be on disk, and fetched by the reader itself rather than
+ * read off a sibling clone somebody else fetched (fleet-manager#7). Scanning
+ * working copies makes the result meaningless: a local checkout may be behind
+ * (so it reports drift that is already fixed) or dirty (so it reports drift
+ * nobody pushed). Use `--worktree` to scan the working copies under REPOS_DIR
+ * instead, which is what you want while fixing things.
  *
  * WHAT IT CANNOT DO
  * -----------------
@@ -35,14 +37,13 @@
  *     named; this is the two-tier allowlist shape the vocabulary rule misses
  *
  * USAGE
- *   fleet tier-fleet             # audit origin/main, exit 1 on drift
- *   fleet tier-fleet --worktree  # audit the working copies
+ *   fleet tier-fleet             # audit each default branch, exit 1 on drift
+ *   fleet tier-fleet --worktree  # audit the working copies under REPOS_DIR
  *   fleet tier-fleet --warn      # report, always exit 0
- *   fleet tier-fleet --no-fetch  # skip the fetch (offline)
- *   REPOS_DIR=/path fleet tier-fleet
+ *   fleet tier-fleet --no-fetch  # read the reader's mirror as it stands (offline)
+ *   REPOS_DIR=/path fleet tier-fleet --worktree
  */
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { resolve, relative, sep } from 'node:path';
 import {
@@ -53,6 +54,8 @@ import {
 import { allRepos } from './lib/fleet-roster.mjs';
 import { reposDir } from './lib/sibling-repos.mjs';
 import { manifest as manifestFile } from './lib/paths.mjs';
+import { fleetOwner } from '../dist/lib/fleet-config.js';
+import { tryShipped } from './lib/fleet-source.mjs';
 
 const ALLOWLIST_JSON = manifestFile('tier-fleet-allowlist.json');
 
@@ -194,25 +197,6 @@ const findings = [];
 let scannedRepos = 0;
 let scannedFiles = 0;
 
-/** Files tracked on `origin/main`, filtered to the extensions we scan. */
-function shippedFiles(root) {
-	const out = execFileSync('git', ['ls-tree', '-r', '--name-only', 'origin/main'], {
-		cwd: root,
-		encoding: 'utf8',
-		maxBuffer: 64 * 1024 * 1024,
-	});
-	return out.split('\n').filter((f) => f && EXTENSIONS.some((e) => f.endsWith(e)));
-}
-
-/** One file's content at `origin/main`. */
-function shippedContent(root, rel) {
-	return execFileSync('git', ['show', `origin/main:${rel}`], {
-		cwd: root,
-		encoding: 'utf8',
-		maxBuffer: 32 * 1024 * 1024,
-	});
-}
-
 function scanText(repo, rel, raw) {
 	// Python docstrings are bare prose, so the line-prefix test cannot see them —
 	// and a tier module's docstring is exactly where a description of a FIXED tier
@@ -303,21 +287,20 @@ function noteEmptyRepo(repo, n) {
 }
 
 for (const repo of FLEET) {
-	const root = resolve(ROOT, repo);
-	if (!existsSync(root)) {
-		findings.push({
-			repo,
-			kind: 'missing checkout',
-			file: '-',
-			line: 0,
-			detail: `not found under ${ROOT}`,
-		});
-		continue;
-	}
-	scannedRepos++;
-	const filesBefore = scannedFiles;
-
 	if (useWorktree) {
+		const root = resolve(ROOT, repo);
+		if (!existsSync(root)) {
+			findings.push({
+				repo,
+				kind: 'missing checkout',
+				file: '-',
+				line: 0,
+				detail: `not found under ${ROOT}`,
+			});
+			continue;
+		}
+		scannedRepos++;
+		const filesBefore = scannedFiles;
 		for (const file of walk(root)) {
 			const rel = relative(root, file).split(sep).join('/');
 			scannedFiles++;
@@ -331,42 +314,36 @@ for (const repo of FLEET) {
 		continue;
 	}
 
-	// Fetch so origin/main means today's main. A stale ref would report drift
-	// that is already fixed, which is the fastest way to get a check ignored.
-	if (!noFetch) {
-		try {
-			execFileSync('git', ['fetch', 'origin', '--quiet'], { cwd: root, stdio: 'ignore' });
-		} catch {
-			findings.push({
-				repo,
-				kind: 'fetch failed',
-				file: '-',
-				line: 0,
-				detail: 'could not fetch origin — scanning a possibly stale origin/main',
-			});
-		}
+	// THE SHIPPED TREE, fetched by the reader itself. An unreadable repo — no
+	// such repo, a failed fetch, a failed blob read — is ONE finding carrying the
+	// reader's reason; there is no stale "last known" ref to fall back to.
+	const source = tryShipped(`${fleetOwner()}/${repo}`, { fetch: !noFetch });
+	if ('unreadable' in source) {
+		findings.push({ repo, kind: 'unreadable', file: '-', line: 0, detail: source.unreadable });
+		continue;
 	}
-	let files;
+	scannedRepos++;
+	const filesBefore = scannedFiles;
+	const files = source
+		.list()
+		.filter((f) => EXTENSIONS.some((e) => f.endsWith(e)))
+		.filter((rel) => !rel.split('/').some((seg) => SKIP_DIRS.has(seg)));
+	let texts;
 	try {
-		files = shippedFiles(root);
+		texts = source.readMany(files);
 	} catch (err) {
 		findings.push({
 			repo,
 			kind: 'unreadable',
 			file: '-',
 			line: 0,
-			detail: `cannot list origin/main (${(err.message || '').split('\n')[0]})`,
+			detail: err.reason ?? String(err),
 		});
 		continue;
 	}
 	for (const rel of files) {
-		if (rel.split('/').some((seg) => SKIP_DIRS.has(seg))) continue;
 		scannedFiles++;
-		try {
-			scanText(repo, rel, shippedContent(root, rel));
-		} catch {
-			/* unreadable blob — skip */
-		}
+		scanText(repo, rel, texts.get(rel));
 	}
 	noteEmptyRepo(repo, scannedFiles - filesBefore);
 }
@@ -375,7 +352,7 @@ for (const repo of FLEET) {
 // the failure mode check-key-sync learned to report loudly.
 console.log(
 	`Scanned ${scannedFiles} ${useWorktree ? 'working-copy' : 'origin/main'} files ` +
-		`across ${scannedRepos}/${FLEET.length} repos under ${ROOT}`
+		`across ${scannedRepos}/${FLEET.length} repos ${useWorktree ? `under ${ROOT}` : 'at their default branch'}`
 );
 
 // ...and PRINTING the count was as far as that lesson got. A roster that

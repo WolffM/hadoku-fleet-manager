@@ -106,13 +106,13 @@
  * with user settings, and keying on the word would flag it every run.
  *
  * USAGE
- *   fleet header-audit             # audit origin/main, exit 1 on drift
- *   fleet header-audit --worktree  # audit the working copies
+ *   fleet header-audit             # audit each repo's shipped default branch, exit 1 on drift
+ *   fleet header-audit --worktree  # audit the working copies under REPOS_DIR
  *   fleet header-audit --warn      # report, always exit 0
- *   fleet header-audit --no-fetch  # skip the fetch (offline)
+ *   fleet header-audit --no-fetch  # read the fleet-source mirrors as they stand (offline)
  *   fleet header-audit --no-registry  # skip npm view (offline)
  *   fleet header-audit --json      # machine-readable, for ci:header-fleet
- *   REPOS_DIR=/path fleet header-audit
+ *   REPOS_DIR=/path fleet header-audit --worktree
  *
  * `--json` exists so the cron can consume this without scraping the human
  * output, and it reports REGISTRY BLINDNESS as a first-class field. That is not
@@ -125,15 +125,17 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { namesWith } from './lib/fleet-roster.mjs';
 import { reposDir } from './lib/sibling-repos.mjs';
+import { tryShipped } from './lib/fleet-source.mjs';
+import { READ_ATTEMPTS } from './lib/queue-health.mjs';
 import { blankComments } from './lib/blank-comments.mjs';
 import { stripYamlComments } from './lib/yaml-comments.mjs';
 import { manifest as manifestFile, siteRoot } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
-import { hubRepo } from '../dist/lib/fleet-config.js';
+import { fleetOwner, hubRepo, qualifyRepo } from '../dist/lib/fleet-config.js';
 
 const REPO_ROOT = siteRoot();
 const ALLOWLIST_JSON = manifestFile('header-fleet-allowlist.json');
@@ -141,12 +143,12 @@ const ALLOWLIST_JSON = manifestFile('header-fleet-allowlist.json');
 const REGISTRY = 'https://npm.pkg.github.com';
 
 /**
- * The one ref every read is taken at. `--worktree` does not audit a DIFFERENT
- * ref — it reads the working copy instead of a ref at all — so there has never
- * been a second value here, and threading it through six signatures only made
- * that harder to see.
+ * What a default run audits: each repo's SHIPPED default branch, read through
+ * `lib/fleet-source.mjs` — never a sibling clone, which is only as current as
+ * whoever last pulled it (fleet-manager#7). `--worktree` reads the working copy
+ * under REPOS_DIR instead; it is an operator's flag, never the cron's.
  */
-const REF = 'origin/main';
+const REF = 'the shipped default branch';
 
 /**
  * Repos subject to the unified-header policy: those consuming
@@ -224,39 +226,40 @@ function refuse(message) {
 	process.exit(1);
 }
 
-function git(repoPath, argv) {
-	return execFileSync('git', ['-C', repoPath, ...argv], {
+function git(dir, argv) {
+	return execFileSync('git', ['-C', dir, ...argv], {
 		encoding: 'utf8',
 		stdio: ['ignore', 'pipe', 'ignore'],
 	});
 }
 
-/** Files tracked on the ref being audited. */
-function listFiles(repoPath) {
-	const out = USE_WORKTREE
-		? git(repoPath, ['ls-files'])
-		: git(repoPath, ['ls-tree', '-r', '--name-only', REF]);
-	return out.split('\n').filter(Boolean);
-}
-
-/** Read a path at a ref regardless of --worktree; the coverage pass always
- *  wants what is SHIPPED, since that is what the fan-out acts on. */
-function readFileAt(repoPath, file) {
-	try {
-		return git(repoPath, ['show', `${REF}:${file}`]);
-	} catch {
-		return null;
+/**
+ * One repo's files, as `{ name, files(), read(file) }`, or `{ name, unreadable,
+ * missing? }` when they could not be looked at. Shipped by default; the
+ * working copy under REPOS_DIR with `--worktree`.
+ */
+function openRepo(name) {
+	if (USE_WORKTREE) {
+		const dir = resolve(ROOT, name);
+		if (!existsSync(dir)) return { name, unreadable: `no checkout at ${dir}`, missing: true };
+		return {
+			name,
+			files: () => git(dir, ['ls-files']).split('\n').filter(Boolean),
+			read: (file) => readFileSync(resolve(dir, file), 'utf8'),
+		};
 	}
+	const h = tryShipped(qualifyRepo(name), { fetch: !NO_FETCH });
+	if ('unreadable' in h) return { name, unreadable: h.unreadable };
+	return { name, files: () => h.list(), read: (file) => h.read(file) };
 }
 
 /**
  * One read per file per repo, not one per RULE.
  *
  * Three separate passes over the source list each called this on overlapping
- * sets, so every file was fetched from git two or three times and re-blanked
- * each time — roughly 900 `git show` subprocesses per run where 300 would do.
- * The rules are kept separate deliberately (each is its own finding with its own
- * rationale); it is the READ that should not be repeated.
+ * sets, so every file was fetched two or three times and re-blanked each time.
+ * The rules are kept separate deliberately (each is its own finding with its
+ * own rationale); it is the READ that should not be repeated.
  *
  * Cleared per repo in the fleet loop, so the cache is one repo's files at a
  * time rather than fifteen repos' worth held at once.
@@ -269,14 +272,12 @@ function resetFileCache() {
 	blankCache.clear();
 }
 
-function readFile(repoPath, file) {
-	const key = `${repoPath}\u0000${file}`;
+function readFile(source, file) {
+	const key = `${source.name}\u0000${file}`;
 	if (fileCache.has(key)) return fileCache.get(key);
 	let out;
 	try {
-		out = USE_WORKTREE
-			? readFileSync(resolve(repoPath, file), 'utf8')
-			: git(repoPath, ['show', `${REF}:${file}`]);
+		out = source.read(file);
 	} catch {
 		out = null;
 	}
@@ -285,10 +286,10 @@ function readFile(repoPath, file) {
 }
 
 /** `blankComments` over a cached read — the second half of the same waste. */
-function readBlanked(repoPath, file) {
-	const key = `${repoPath}\u0000${file}`;
+function readBlanked(source, file) {
+	const key = `${source.name}\u0000${file}`;
 	if (blankCache.has(key)) return blankCache.get(key);
-	const raw = readFile(repoPath, file);
+	const raw = readFile(source, file);
 	const out = raw === null ? null : blankComments(raw);
 	blankCache.set(key, out);
 	return out;
@@ -372,7 +373,7 @@ function peerRangeIsSound(r) {
  * so a leak of it from an install step is an account compromise, which is the
  * whole reason the split exists.
  */
-function checkNpmAuthForm(repo, repoPath, files) {
+function checkNpmAuthForm(repo, source, files) {
 	const NPM_AUTH = /NODE_AUTH_TOKEN\s*:|_authToken\s*=/;
 	// EVERY place a credential is presented, not the two this started with.
 	// It read the repo-root `.npmrc` and `.github/workflows/` only, so a monorepo
@@ -390,7 +391,7 @@ function checkNpmAuthForm(repo, repoPath, files) {
 	);
 
 	for (const f of candidates) {
-		const raw = readFile(repoPath, f);
+		const raw = readFile(source, f);
 		if (!raw) continue;
 		// blankComments strips JS comments; these files are YAML and .npmrc, where
 		// prose starts with `#`. Without this the rule fires on documentation —
@@ -475,7 +476,7 @@ function yamlKeyBlock(src, key) {
 	return null;
 }
 
-function checkReleaseAgeCooldown(repo, repoPath, files) {
+function checkReleaseAgeCooldown(repo, source, files) {
 	// The workspace root is NOT always the repo root. tenhands and pygmalion
 	// keep theirs at `frontend/`, and a rule that only reads the repo root
 	// reported both as having no config at all — a false finding, which is the
@@ -507,11 +508,11 @@ function checkReleaseAgeCooldown(repo, repoPath, files) {
 				f.startsWith(prefix) &&
 				f.endsWith('package.json') &&
 				!f.includes('node_modules/') &&
-				/"@wolffm\//.test(readFile(repoPath, f) || '')
+				/"@wolffm\//.test(readFile(source, f) || '')
 		);
 		if (!consumes) continue;
 
-		const raw = readFile(repoPath, ws);
+		const raw = readFile(source, ws);
 		if (raw === null) continue;
 		// blankComments is for JS; this is YAML, where prose starts with `#`.
 		// Every repo that gets this right explains WHY in a comment naming both
@@ -601,8 +602,8 @@ function majorOf(v) {
  * entry. Repos with no lib entry (workers, apps that serve their own UI) have
  * no such contract and are skipped.
  */
-function checkTypesEntry(repo, dir) {
-	const rawPkg = readFile(dir, 'package.json');
+function checkTypesEntry(repo, source) {
+	const rawPkg = readFile(source, 'package.json');
 	if (!rawPkg) return;
 	let pkg;
 	try {
@@ -614,7 +615,7 @@ function checkTypesEntry(repo, dir) {
 	const types = dot && typeof dot === 'object' ? dot.types : null;
 	if (!types) return;
 
-	const viteCfg = readFile(dir, 'vite.config.ts');
+	const viteCfg = readFile(source, 'vite.config.ts');
 	if (!viteCfg) return;
 	// `lib: { entry: 'src/entry.tsx', ... }` — the declaration tsc emits for it
 	// keeps that basename.
@@ -641,11 +642,11 @@ const ROOT = reposDir();
  * titles the browser tab on every /<app>/ route. `scripts/child-apps.json` is
  * the only place that says which repo an app id belongs to.
  *
- * Read through `readFile`, so the catalogue comes from the SAME ref as every
- * child repo this compares it against — origin/main by default, the working copy
- * under --worktree. Reading the site's working tree directly instead looks
- * harmless and is not: `~/repos/hadoku_site` only fast-forwards on an ecosystem
- * reload or the daily repos:main-sync, so it routinely lags origin/main by days.
+ * Read through `openRepo`, so the catalogue comes from the SAME ref as every
+ * child repo this compares it against — the shipped default branch by default,
+ * the working copy under --worktree. Reading the site's working tree directly
+ * instead looks harmless and is not: `~/repos/hadoku_site` only fast-forwards on
+ * an ecosystem reload or the daily repos:main-sync, so it routinely lags main by days.
  * The first draft of this rule did exactly that and reported four apps as having
  * "no catalogue entry" — they had been added to categories.json a week earlier
  * and the checkout had simply not caught up.
@@ -653,10 +654,10 @@ const ROOT = reposDir();
 let catalogueCache = null;
 function catalogue() {
 	if (catalogueCache) return catalogueCache;
-	const site = resolve(ROOT, hubRepo());
+	const site = openRepo(hubRepo());
 	const labels = new Map();
 	const repoToId = new Map();
-	let readable = existsSync(site);
+	let readable = !site.unreadable;
 	try {
 		const cats = JSON.parse(readFile(site, 'spec/categories.json'));
 		for (const c of cats.categories ?? []) for (const a of c.apps ?? []) labels.set(a.id, a.label);
@@ -738,14 +739,14 @@ function appHeaderTitle(src) {
  *     to keep it, so an unreadable catalogue silenced both rules fleet-wide.
  */
 const catalogueBlindFor = [];
-function checkHeaderName(repo, repoPath, appRoots) {
+function checkHeaderName(repo, source, appRoots) {
 	const { labels, repoToId, readable } = catalogue();
 	if (!readable) {
 		if (appRoots.length) catalogueBlindFor.push(repo);
 		return;
 	}
 	for (const f of appRoots) {
-		const src = readBlanked(repoPath, f);
+		const src = readBlanked(source, f);
 		if (!src) continue;
 		const title = appHeaderTitle(src);
 		if (!title) continue; // no <AppHeader> at all — `no-app-header` owns that
@@ -857,7 +858,7 @@ function checkHeaderName(repo, repoPath, appRoots) {
  * surface with a tab. A rule whose output has to be filtered by hand is one
  * nobody reads.
  */
-function checkFavicon(repo, repoPath, files) {
+function checkFavicon(repo, source, files) {
 	const viteDirs = new Set(
 		files
 			.filter((f) => /(^|\/)vite\.config\.[cm]?[jt]s$/.test(f))
@@ -869,7 +870,7 @@ function checkFavicon(repo, repoPath, files) {
 		return viteDirs.has(dir);
 	});
 	for (const f of shells) {
-		const src = readFile(repoPath, f);
+		const src = readFile(source, f);
 		if (!src) continue;
 		// HTML comments out first: `<!-- <link rel="icon" …> -->` is an icon
 		// somebody switched off, and the tab renders the globe exactly as if the
@@ -891,32 +892,24 @@ const matchedExemptions = new Set();
 
 for (const repo of FLEET) {
 	resetFileCache();
-	const repoPath = resolve(ROOT, repo);
-	if (!existsSync(repoPath)) {
+	const source = openRepo(repo);
+	if (source.missing) {
 		// A finding, not a skip. Silently skipping every repo is how this script
 		// printed "OK — no drift" while auditing nothing at all, which is worse
 		// than no audit: it actively asserts the fleet is clean.
-		report(repo, 'no-checkout', `no checkout at ${repoPath} — nothing was audited for this repo`);
+		report(repo, 'no-checkout', `${source.unreadable} — nothing was audited for this repo`);
 		continue;
-	}
-
-	if (!NO_FETCH && !USE_WORKTREE) {
-		try {
-			execFileSync('git', ['-C', repoPath, 'fetch', 'origin', '--quiet'], { stdio: 'ignore' });
-		} catch {
-			console.error(`⚠ ${repo}: fetch failed — auditing the last known origin/main`);
-		}
 	}
 
 	let files;
 	try {
-		files = listFiles(repoPath);
+		if (source.unreadable) throw new Error(source.unreadable);
+		files = source.files();
 	} catch (err) {
 		// A finding, not a stderr line. This used to log and `continue`, so a
-		// checkout with no `origin/main` (a clone that never fetched, a default
-		// branch renamed upstream) ran ZERO rules while the summary still said
-		// "no drift" — the `no-checkout` trap one step further in, and invisible
-		// to ci:header-fleet, which reads stdout only.
+		// repo whose files could not be listed ran ZERO rules while the summary
+		// still said "no drift" — the `no-checkout` trap one step further in, and
+		// invisible to ci:header-fleet, which reads stdout only.
 		report(
 			repo,
 			'unreadable',
@@ -928,17 +921,17 @@ for (const repo of FLEET) {
 	}
 
 	// ---- published types entry resolves ----------------------------------
-	checkTypesEntry(repo, repoPath);
+	checkTypesEntry(repo, source);
 
 	// ---- npm registry auth uses the canonical token ----------------------
-	checkNpmAuthForm(repo, repoPath, files);
+	checkNpmAuthForm(repo, source, files);
 
 	// ---- package manifests: staleness -----------------------------------
 	const manifests = files.filter((f) => f.endsWith('package.json') && !f.includes('node_modules'));
 	let consumesWolffm = false;
 
 	for (const m of manifests) {
-		const raw = readFile(repoPath, m);
+		const raw = readFile(source, m);
 		if (!raw) continue;
 		let pkg;
 		try {
@@ -995,7 +988,7 @@ for (const repo of FLEET) {
 	if (!consumesWolffm) continue;
 
 	// ---- the release-age cooldown must not gate @wolffm/* -----------------
-	checkReleaseAgeCooldown(repo, repoPath, files);
+	checkReleaseAgeCooldown(repo, source, files);
 
 	// ---- an update path must exist --------------------------------------
 	const updateFlows = files.filter((f) =>
@@ -1021,7 +1014,7 @@ for (const repo of FLEET) {
 	// job's own token and has mgmt-api fast-forward main onto it; a repo that
 	// still holds the PAT is check-site-token's finding, not this one's.
 	for (const f of updateFlows) {
-		const raw = readFile(repoPath, f);
+		const raw = readFile(source, f);
 		if (!raw) continue;
 		// Comment-stripped: a commented-out `uses:` line is not a step that runs.
 		if (!/uses:\s*\S+\/update-wolffm@\S+/.test(stripYamlComments(raw))) {
@@ -1044,7 +1037,7 @@ for (const repo of FLEET) {
 			);
 			continue;
 		}
-		const src = readBlanked(repoPath, f);
+		const src = readBlanked(source, f);
 		if (!src) continue;
 		if (RAW_PICKER_IMPORT.test(src)) {
 			report(
@@ -1064,7 +1057,7 @@ for (const repo of FLEET) {
 	// ---- an app root should mount the shared header ----------------------
 	const appRoots = sources.filter((f) => /(^|\/)App\.(tsx|jsx)$/.test(f));
 	for (const f of appRoots) {
-		const src = readBlanked(repoPath, f);
+		const src = readBlanked(source, f);
 		if (!src) continue;
 		// RENDERED, not named. A bare-identifier match passed an App.tsx that
 		// imports AppHeader and never mounts it — an import left behind by a
@@ -1075,10 +1068,10 @@ for (const repo of FLEET) {
 	}
 
 	// ---- and it must call the app what the catalogue calls it -------------
-	checkHeaderName(repo, repoPath, appRoots);
+	checkHeaderName(repo, source, appRoots);
 
 	// ---- every entry shell declares an icon -------------------------------
-	checkFavicon(repo, repoPath, files);
+	checkFavicon(repo, source, files);
 
 	// ---- the provider must exist wherever the controls are used ----------
 	//
@@ -1101,7 +1094,7 @@ for (const repo of FLEET) {
 	const usesControls = [];
 	let hasProvider = false;
 	for (const f of sources) {
-		const src = readBlanked(repoPath, f);
+		const src = readBlanked(source, f);
 		if (!src) continue;
 		// MOUNTED, not named — same reason as `no-app-header`: an import of the
 		// provider that nothing renders provides nothing, and throws at mount
@@ -1128,7 +1121,7 @@ if (catalogueBlindFor.length) {
 		hubRepo(),
 		'catalogue-unreadable',
 		`spec/categories.json / scripts/child-apps.json unreadable at ` +
-			`${USE_WORKTREE ? 'the working copy' : REF} of ${resolve(ROOT, hubRepo())}, so ` +
+			`${USE_WORKTREE ? `the working copy of ${resolve(ROOT, hubRepo())}` : `${REF} of ${hubRepo()}`}, so ` +
 			`header-name-hardcoded and header-name-unverified did not run for ` +
 			`${catalogueBlindFor.length} repo(s): ${catalogueBlindFor.join(', ')}`
 	);
@@ -1150,49 +1143,61 @@ if (catalogueBlindFor.length) {
 const NEW_REPO_GRACE_HOURS = 24;
 
 /**
- * Whether `repoPath`'s clone is too shallow to trust its earliest commit's
- * date as a stand-in for the repo's age.
+ * The repo's age in hours, measured from the FIRST commit reachable from its
+ * shipped default branch — a read-only proxy for "when was this repo created"
+ * that needs no GitHub REST call. Read from the fleet-source mirror, which is a
+ * full-history (blobless, never shallow) fetch, so the earliest commit it holds
+ * is the repo's real first commit.
  *
- * A depth-1 clone's only visible commit is the NEWEST one, not the oldest, so
- * reading "first commit" off one understates age rather than overstating it —
- * exactly backwards for a grace that must never fire on a bad read: it would
- * read a repo that has existed for months as brand new. A fixture proves the
- * shape — a 100-hour-old repo shallow-cloned at its tip reads as 1 hour old
- * unless this is checked first.
+ * `null` whenever that date cannot be trusted or read at all. The call site
+ * treats `null` as "could not look", which fails the grace exactly as it fails
+ * everywhere else in this script — never silently passes.
  */
-function isShallowClone(repoPath) {
-	try {
-		return git(repoPath, ['rev-parse', '--is-shallow-repository']).trim() === 'true';
-	} catch {
-		return true; // could not ask — never trust a clone this could not verify
-	}
+function repoAgeHours(name) {
+	const source = tryShipped(qualifyRepo(name), { fetch: !NO_FETCH });
+	if ('unreadable' in source) return null;
+	const epochSec = source.firstCommitSec();
+	return epochSec === null ? null : (Date.now() - epochSec * 1000) / 3_600_000;
 }
 
 /**
- * The repo's age in hours, measured from the checkout's FIRST commit reachable
- * from `REF` — a local, read-only proxy for "when was this repo created" that
- * needs no GitHub call (its `created_at` is the alternative this deliberately
- * avoids; the checkout is already on disk for every other rule in this file).
- *
- * `null` whenever that date cannot be trusted or read at all: a shallow clone
- * (see `isShallowClone`), no commits reachable from `REF`, or a `git log` that
- * fails outright. The call site treats `null` as "could not look", which must
- * fail the grace exactly as it fails everywhere else in this script — never
- * silently pass.
+ * The owner's non-archived, non-empty repos, by bare name — the universe the
+ * `not-in-fleet` check compares the roster against. `{ names }`, or `{ reason }`
+ * when the listing failed every attempt. It used to be "every directory under
+ * REPOS_DIR", which is the operator's checkouts, not the account: a cron host
+ * with no `~/repos` read an empty universe and reported a complete roster.
  */
-function repoAgeHours(repoPath) {
-	if (isShallowClone(repoPath)) return null;
-	let out;
-	try {
-		out = git(repoPath, ['log', REF, '--reverse', '--format=%ct']);
-	} catch {
-		return null;
+function ownerRepos() {
+	let last = '';
+	for (let i = 0; i < READ_ATTEMPTS; i++) {
+		try {
+			const out = execFileSync(
+				'gh',
+				[
+					'repo',
+					'list',
+					fleetOwner(),
+					'--limit',
+					'1000',
+					'--no-archived',
+					'--json',
+					'nameWithOwner,isEmpty',
+				],
+				{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024 }
+			);
+			const names = JSON.parse(out)
+				.filter((r) => !r.isEmpty)
+				.map((r) => r.nameWithOwner.split('/')[1]);
+			if (!names.length) return { reason: `gh repo list ${fleetOwner()} returned ZERO repos` };
+			return { names };
+		} catch (err) {
+			last = String(err?.stderr || err?.message || err)
+				.trim()
+				.split('\n')
+				.pop();
+		}
 	}
-	const first = out.split('\n').find(Boolean);
-	if (!first) return null;
-	const epochSec = Number(first);
-	if (!Number.isFinite(epochSec)) return null;
-	return (Date.now() - epochSec * 1000) / 3_600_000;
+	return { reason: last || 'gh repo list failed' };
 }
 
 // ---- is the FLEET list itself complete? ---------------------------------
@@ -1205,38 +1210,52 @@ function repoAgeHours(repoPath) {
 // weeks, and pygmalion had NO update path at all from creation until
 // 2026-08-05. Both were found by hand, twice, because nothing checked the list
 // against reality. This block is that check — the manifest is a claim about the
-// world, and the world is what is on disk.
+// world, and the world is the owner's account on GitHub.
 //
 // Reality here is "consumes an @wolffm package". Any repo that does is part of
 // the ecosystem and must appear in the roster, or carry an allowlist entry
 // saying why not. (The fan-out half of that assertion was `not-in-fanout`,
 // retired 2026-08-26 — see the header.)
 {
-	let entries;
-	try {
-		entries = readdirSync(ROOT, { withFileTypes: true }).filter((e) => e.isDirectory());
-	} catch {
-		entries = [];
+	const universe = ownerRepos();
+	if (universe.reason) {
+		// A FAILED LISTING IS NOT AN EMPTY ACCOUNT. Every repo outside the roster
+		// would go unexamined while the summary said the roster was complete.
+		report(
+			fleetOwner(),
+			'unreadable',
+			`could not list ${fleetOwner()}'s repos (${universe.reason}), so whether the fleet ` +
+				'roster misses an @wolffm consumer was not checked'
+		);
 	}
 
-	for (const e of entries) {
-		const repo = e.name;
+	for (const repo of universe.names ?? []) {
 		if (repo === hubRepo()) continue; // the parent, not a consumer
-		const dir = resolve(ROOT, repo);
-		if (!existsSync(resolve(dir, '.git'))) continue;
+		// Shipped manifests, whatever --worktree says: whether a repo consumes
+		// @wolffm is a fact about what it ships.
+		const shipped = tryShipped(qualifyRepo(repo), { fetch: !NO_FETCH });
+		if ('unreadable' in shipped) {
+			report(
+				repo,
+				'unreadable',
+				`cannot read ${REF} (${shipped.unreadable}), so whether it consumes @wolffm ` +
+					'packages — and so belongs in the roster — is unknown'
+			);
+			continue;
+		}
 
 		// Cheap check: does any tracked manifest name an @wolffm dependency?
 		let consumes = false;
 		try {
-			const manifests = git(dir, ['ls-tree', '-r', '--name-only', REF])
-				.split('\n')
+			const manifests = shipped
+				.list()
 				// EVERY manifest. A `.slice(0, 8)` here read the first eight in path
 				// order and stopped, so a monorepo whose @wolffm consumer sorted ninth
 				// (`packages/ui/` behind seven `packages/a…` siblings) was never
 				// admitted as a consumer — and therefore never reported missing.
 				.filter((f) => f.endsWith('package.json') && !f.includes('node_modules'));
 			for (const m of manifests) {
-				const raw = readFileAt(dir, m);
+				const raw = shipped.read(m);
 				if (!raw) continue;
 				// DEPENDENCY FIELDS, not the raw text. `/"@wolffm\//` also matches a
 				// manifest's own `"name": "@wolffm/…"`, so a repo that PUBLISHES an
@@ -1261,7 +1280,13 @@ function repoAgeHours(repoPath) {
 					break;
 				}
 			}
-		} catch {
+		} catch (err) {
+			report(
+				repo,
+				'unreadable',
+				`cannot read ${REF}'s manifests (${err.reason ?? err.message}), so whether it ` +
+					'consumes @wolffm packages is unknown'
+			);
 			continue;
 		}
 		if (!consumes) continue;
@@ -1274,7 +1299,7 @@ function repoAgeHours(repoPath) {
 		// actually means is "this consumer is unknown to the fleet", and the
 		// roster is what knows.
 		if (!KNOWN_CONSUMERS.includes(repo)) {
-			const ageHours = repoAgeHours(dir);
+			const ageHours = repoAgeHours(repo);
 			if (ageHours !== null && ageHours < NEW_REPO_GRACE_HOURS) {
 				reportAdvisory(
 					repo,

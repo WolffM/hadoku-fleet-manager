@@ -76,6 +76,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { blankComments } from './blank-comments.mjs';
+import { fixtureRemotes } from './fleet-source-fixture.mjs';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const SCRIPTS_DIR = join(ROOT, 'scripts');
@@ -476,23 +477,25 @@ printf 'pnpm\\tyes\\nnode\\tyes\\n'
 			JSON.stringify({ repos: ['WolffM/hadoku_site'] })
 		);
 		if (drain) writeFileSync(join(root, 'fleet-drain.json'), JSON.stringify({ nodes: drain }));
-		// A throwaway "site" checkout with one self-hosted workflow that invokes no
-		// tool from TOOLS — so the only thing this fixture can fail on is
-		// reachability, never a real tool-drift finding.
+		// The site as a fixture REMOTE (lib/fleet-source-fixture.mjs) with one
+		// self-hosted workflow that invokes no tool from TOOLS — so the only thing
+		// this fixture can fail on is reachability, never a real tool-drift
+		// finding. The gate reads the hub through fleet-source; without the remote
+		// it would read the REAL hadoku_site from GitHub.
+		const remotes = fixtureRemotes('guard-toolinv-remotes-');
+		remotes.push('WolffM/hadoku_site', {
+			'.github/workflows/ci.yml':
+				'jobs:\n  check:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n    steps:\n      - run: echo hi\n',
+		});
 		const site = join(root, 'site');
-		mkdirSync(join(site, '.git'), { recursive: true });
-		mkdirSync(join(site, '.github', 'workflows'), { recursive: true });
-		writeFileSync(
-			join(site, '.github', 'workflows', 'ci.yml'),
-			'jobs:\n  check:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n    steps:\n      - run: echo hi\n'
-		);
+		mkdirSync(site, { recursive: true });
 		const bin = join(root, 'bin');
 		mkdirSync(bin, { recursive: true });
 		shim(bin, 'ssh', SSH_SHIM);
-		return { root, site };
+		return { root, site, remotes };
 	}
 
-	function run({ root, site }, { failNode = '' } = {}) {
+	function run({ root, site, remotes }, { failNode = '' } = {}) {
 		return runScript(
 			SCRIPT,
 			[],
@@ -502,6 +505,7 @@ printf 'pnpm\\tyes\\nnode\\tyes\\n'
 				FLEET_MANIFEST_DIR: root,
 				HADOKU_STATE_DIR: root,
 				HADOKU_SITE_ROOT: site,
+				...remotes.env,
 				SSH_FAIL_NODE: failNode,
 			},
 			root
@@ -512,22 +516,26 @@ printf 'pnpm\\tyes\\nnode\\tyes\\n'
 	let r = run(fx, { failNode: NODE });
 	assert.equal(r.code, 1, `unreachable with no drain must fail, got ${r.code}:\n${r.out}`);
 	rmSync(fx.root, { recursive: true, force: true });
+	fx.remotes.cleanup();
 
 	fx = fixture({ drain: { [NODE]: { since: DAYS_AGO(0), kind: 'maintenance', reason: 'x' } } });
 	r = run(fx, { failNode: NODE });
 	assert.equal(r.code, 0, `a fresh maintenance drain must defer, got ${r.code}:\n${r.out}`);
 	assert.match(r.out, /expected down/);
 	rmSync(fx.root, { recursive: true, force: true });
+	fx.remotes.cleanup();
 
 	fx = fixture({ drain: { [NODE]: { since: DAYS_AGO(8), kind: 'maintenance' } } });
 	r = run(fx, { failNode: NODE });
 	assert.equal(r.code, 1, `an expired drain must fail again, got ${r.code}:\n${r.out}`);
 	rmSync(fx.root, { recursive: true, force: true });
+	fx.remotes.cleanup();
 
 	fx = fixture({ drain: { [NODE]: { since: DAYS_AGO(0), kind: 'training' } } });
 	r = run(fx, { failNode: NODE });
 	assert.equal(r.code, 1, `a 'training' drain must never defer, got ${r.code}:\n${r.out}`);
 	rmSync(fx.root, { recursive: true, force: true });
+	fx.remotes.cleanup();
 });
 
 // ── check-warm-canary.mjs ───────────────────────────────────────────────────

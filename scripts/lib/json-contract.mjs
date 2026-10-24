@@ -88,9 +88,11 @@
  *
  * `hostBound` (#79 Lane 2/3, `docs/control-plane.md`): does this subcommand
  * read something that belongs to THIS box specifically — this host's own pm2
- * list or cgroups, its own mgmt-api log, or the operator's sibling checkouts
- * under `HADOKU_SITE_ROOT`/`REPOS_DIR` — rather than the fleet (GitHub, the
- * manifest, ssh to a node)? A host-bound subcommand gives a DIFFERENT answer
+ * list or cgroups, its own mgmt-api log, its own `~/srv` deploy clone — rather
+ * than the fleet (GitHub, the manifest, ssh to a node)? Another repo's source is
+ * NOT host-bound: since fleet-manager#7 every gate reads it through
+ * `lib/fleet-source.mjs`, which fetches the default branch itself, so five
+ * entries that read sibling checkouts under `REPOS_DIR` flipped to `false`. A host-bound subcommand gives a DIFFERENT answer
  * on a passive replica than on the active controller, even reading the same
  * manifest, so it cannot be split across them the way the fleet-facing ones
  * can; the active/passive design (`docs/control-plane.md`) has to run every
@@ -177,7 +179,7 @@ export const JSON_CONTRACT = [
 	},
 	{
 		sub: 'header-audit',
-		hostBound: true,
+		hostBound: false,
 		argv: ['--json'],
 		job: 'ci:header-fleet',
 		consumer: 'services/mgmt-api/src/routes/jobs/header-fleet-check.ts',
@@ -189,7 +191,7 @@ export const JSON_CONTRACT = [
 	},
 	{
 		sub: 'identity-model',
-		hostBound: true,
+		hostBound: false,
 		argv: ['--fleet', '--json'],
 		job: 'ci:identity-model',
 		consumer: 'services/mgmt-api/src/routes/jobs/identity-model-check.ts',
@@ -213,7 +215,7 @@ export const JSON_CONTRACT = [
 	},
 	{
 		sub: 'check-runner-var',
-		hostBound: true,
+		hostBound: false,
 		argv: ['--json'],
 		job: 'ci:runner-var',
 		consumer: 'services/mgmt-api/src/routes/jobs/runner-var-check.ts',
@@ -228,7 +230,7 @@ export const JSON_CONTRACT = [
 	},
 	{
 		sub: 'check-site-token',
-		hostBound: true,
+		hostBound: false,
 		argv: ['--json'],
 		job: 'ci:site-token',
 		consumer: 'services/mgmt-api/src/routes/jobs/site-token-check.ts',
@@ -332,7 +334,7 @@ export const JSON_CONTRACT = [
 	},
 	{
 		sub: 'inventory',
-		hostBound: true,
+		hostBound: false,
 		argv: ['--check', '--json'],
 		job: 'ci:fleet-inventory',
 		consumer: 'services/mgmt-api/src/routes/jobs/fleet-inventory-check.ts',

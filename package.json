@@ -1,7 +1,7 @@
 {
   "name": "@wolffm/fleet-manager",
-  "version": "0.34.52",
-  "description": "Fleet manager for the hadoku CI fleet — runner health, priority tiering, JIT provisioning, and fleet-wide auditors. Consumed in-process by mgmt-api; ships a single `fleet` CLI for the operator half.",
+  "version": "0.34.53",
+  "description": "Fleet manager for the hadoku CI fleet \u2014 runner health, priority tiering, JIT provisioning, and fleet-wide auditors. Consumed in-process by mgmt-api; ships a single `fleet` CLI for the operator half.",
   "type": "module",
   "packageManager": "pnpm@11.5.0+sha512.dbfcc4f81cf48597afd4bc391ffdf12c11f1a9fb83a395bfa6b0a2d9cc2fd8ffebafdb1ccbd529632153f793904c2615b7f09fe1a345473fd1c35845172a8eb1",
   "repository": {
@@ -23,6 +23,7 @@
       "default": "./dist/index.js"
     },
     "./fleet-exec": "./scripts/lib/fleet-exec.mjs",
+    "./fleet-source": "./scripts/lib/fleet-source.mjs",
     "./sibling-repos": "./scripts/lib/sibling-repos.mjs",
     "./tier-detectors": "./scripts/lib/tier-detectors.mjs",
     "./yaml-comments": "./scripts/lib/yaml-comments.mjs"

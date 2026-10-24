@@ -161,27 +161,29 @@ Reverting either branch of the switch fails its test.
 `hostBound: true | false`. `true` means the subcommand reads something that
 belongs to THIS box specifically, not the fleet:
 
-| sub                                      | reads                                                             | evidence                                                                                   |
-| ---------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `egress-slices`                          | this host's `pm2 jlist` and `/proc/<pid>/cgroup`                  | `scripts/check-egress-slices.mjs:39-40`                                                    |
-| `reap-trend`                             | this host's own mgmt-api pm2 log file                             | `scripts/check-reap-timeout-trend.mjs:46-48` (`pm2Apps`, `execFileSync('pm2', ['jlist'])`) |
-| `srv-drift`                              | the `~/srv/hadoku_site` checkout ON this box                      | `scripts/check-srv-drift.mjs:8`                                                            |
-| `header-audit`                           | the operator's sibling checkouts (`REPOS_DIR`/`HADOKU_SITE_ROOT`) | `scripts/check-header-fleet.mjs:129,538` (`reposDir()`)                                    |
-| `identity-model`                         | the same sibling checkouts, via `--fleet`                         | `scripts/check-identity-model.mjs:57,1194`                                                 |
-| `inventory`                              | the same sibling checkouts                                        | `scripts/fleet-inventory.mjs:39,104-105` (`reposDir()`, `siteRoot()`)                      |
-| `check-runner-var` (job `ci:runner-var`) | the same sibling checkouts                                        | `scripts/check-runner-var.mjs:49,93` (`reposDir()` from `./lib/sibling-repos.mjs`)         |
-| `check-site-token` (job `ci:site-token`) | the same sibling checkouts, fetched                               | `scripts/check-site-token.mjs:24,154` (`reposDir()` from `./lib/sibling-repos.mjs`)        |
+| sub             | reads                                            | evidence                                     |
+| --------------- | ------------------------------------------------ | -------------------------------------------- |
+| `egress-slices` | this host's `pm2 jlist` and `/proc/<pid>/cgroup` | `scripts/check-egress-slices.mjs:39-40`      |
+| `reap-trend`    | this host's own mgmt-api pm2 log file            | `scripts/check-reap-timeout-trend.mjs:46-48` |
+| `srv-drift`     | the `~/srv/hadoku_site` checkout ON this box     | `scripts/check-srv-drift.mjs:8`              |
 
-The other nine entries (`drain-check`, `benchmark`, `reconcile`, `toolchain`,
-`converge-toolchain`, `cleanup`, `queue-health`, `preflight`,
-`health-freshness`) read the fleet — GitHub's API, the manifest, or a node
+There were eight. `header-audit`, `identity-model`, `inventory`,
+`check-runner-var` and `check-site-token` read the operator's sibling
+checkouts under `REPOS_DIR`, which only hokon holds. Since fleet-manager#7
+they read each repo's default branch through `scripts/lib/fleet-source.mjs`
+(the `@wolffm/fleet-manager/fleet-source` export), a blobless mirror the
+reader fetches itself, so any host gives the same answer and they carry
+`hostBound: false`. `REPOS_DIR` is now read only under an explicit
+`--worktree` flag.
+
+The other entries read the fleet — GitHub's API, the manifest, or a node
 reached by the `isLocalNode`-or-`ssh` branch from §1 — and give the same
 answer regardless of which box asks, so they carry `hostBound: false`.
 
 **Why this matters for active/passive hosting specifically:** a host-bound
 subcommand run from a PASSIVE box's cron would answer a question about the
 passive box, not about the box the fleet actually depends on (`~/srv`'s drift,
-this process's own pm2 log, the sibling checkouts on THIS disk). Splitting
+this process's own pm2 log). Splitting
 cron jobs across active/passive hosts is therefore not a question of which
 host is "the controller" at all — every `hostBound: true` job must keep
 running from wherever its own inputs physically live, independent of which
@@ -189,7 +191,7 @@ box is currently driving the fleet's loops.
 
 `scripts/lib/json-contract.test.mjs` requires every entry to declare
 `hostBound` as a literal boolean (present on a hypothetical new entry too,
-not just the current eighteen) and separately pins the eight above by name, so
+not just the current ones) and separately pins the three above by name, so
 flipping any one of them — or quietly dropping the field from a new entry —
 fails the gate rather than drifting unnoticed the way the `--json` consumer
 count itself did twice before (`scripts/lib/json-contract.mjs`'s own header

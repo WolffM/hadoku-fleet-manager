@@ -9,7 +9,10 @@
  *     we believe we pushed. `manage_github_token.py` writes it to every repo on
  *     its list unconditionally, so a stale list there is exactly how a deleted
  *     copy comes back;
- *   - every sibling checkout, for workflows and `.devvault.json` that ask for it.
+ *   - every one of those repos' SHIPPED default branch, for workflows and
+ *     `.devvault.json` that ask for it — through `lib/fleet-source.mjs`, never a
+ *     sibling checkout (fleet-manager#7). A repo with no clone on this disk used
+ *     to have its files silently not read.
  *
  * Detection only: it never deletes a secret. A repo it could not read is a
  * finding, and scanning zero repos is a failure, not a clean report.
@@ -17,11 +20,10 @@
  *   fleet check-site-token [--json]
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { createEmitter } from './lib/emit.mjs';
-import { reposDir } from './lib/sibling-repos.mjs';
+import { tryShipped, UnreadableRepo } from './lib/fleet-source.mjs';
 import { fleetOwner } from '../dist/lib/fleet-config.js';
 import { manifest } from './lib/paths.mjs';
 import {
@@ -73,51 +75,33 @@ function holdsSecret(repo) {
 	return last;
 }
 
-/** One git read in a checkout. */
-function git(dir, args) {
-	return execFileSync('git', args, {
-		cwd: dir,
-		encoding: 'utf8',
-		stdio: ['ignore', 'pipe', 'pipe'],
-		timeout: READ_TIMEOUT_MS,
-	});
-}
-
 /**
- * Workflows and `.devvault.json` as SHIPPED: the default branch on origin,
- * fetched first. A
- * checkout's working tree is whatever someone last pulled, and nobody pulls
- * most of them, so it reported workflows that were fixed hours earlier. Same
- * source and same fetch-first rule as check-tier-fleet. A failed fetch is a
- * finding, not a silent scan of a stale ref.
+ * Workflows and `.devvault.json` as SHIPPED: the default branch, read through
+ * fleet-source. A checkout's working tree is whatever someone last pulled, and
+ * nobody pulls most of them, so it reported workflows that were fixed hours
+ * earlier. An unreadable repo is a finding (`unreadable`), not a skip.
  */
-function shipped(dir, branch) {
-	const ref = `origin/${branch}`;
-	const out = { workflows: {}, devvault: [], fetch: null };
-	try {
-		git(dir, ['fetch', 'origin', '--quiet']);
-	} catch (err) {
-		out.fetch = reason(err);
-	}
-	let files;
-	try {
-		files = git(dir, ['ls-tree', '--name-only', ref, '.github/workflows/', '.devvault.json'])
-			.split('\n')
-			.filter(Boolean);
-	} catch (err) {
-		out.devvault = `cannot list ${ref}: ${reason(err)}`;
+function shipped(repo) {
+	const out = { workflows: {}, devvault: [], unreadable: null };
+	const source = tryShipped(repo);
+	if ('unreadable' in source) {
+		out.unreadable = source.unreadable;
 		return out;
 	}
-	for (const f of files) {
-		const body = git(dir, ['show', `${ref}:${f}`]);
-		if (f === '.devvault.json') {
-			try {
-				out.devvault = devvaultRefs(body);
-			} catch (err) {
-				out.devvault = err instanceof Error ? err.message : String(err);
-			}
-		} else if (/\.ya?ml$/.test(f)) {
-			out.workflows[f.split('/').pop()] = workflowRefs(body);
+	let devvault;
+	try {
+		for (const { file, text } of source.workflows()) out.workflows[file] = workflowRefs(text);
+		devvault = source.read('.devvault.json');
+	} catch (err) {
+		// Blobs are fetched on first read, so the read itself can fail.
+		if (!(err instanceof UnreadableRepo)) throw err;
+		return { workflows: {}, devvault: [], unreadable: err.reason };
+	}
+	if (devvault !== null) {
+		try {
+			out.devvault = devvaultRefs(devvault);
+		} catch (err) {
+			out.devvault = err instanceof Error ? err.message : String(err);
 		}
 	}
 	return out;
@@ -127,16 +111,7 @@ function main() {
 	let repos;
 	try {
 		repos = JSON.parse(
-			gh([
-				'repo',
-				'list',
-				OWNER,
-				'--limit',
-				'1000',
-				'--no-archived',
-				'--json',
-				'nameWithOwner,defaultBranchRef',
-			])
+			gh(['repo', 'list', OWNER, '--limit', '1000', '--no-archived', '--json', 'nameWithOwner'])
 		);
 	} catch (err) {
 		const msg = `check-site-token: could not list ${OWNER}'s repos: ${reason(err)}`;
@@ -151,29 +126,19 @@ function main() {
 	const policyFile = manifest('repo-policy-manifest.json');
 	const allowed = holders(JSON.parse(readFileSync(policyFile, 'utf8')).siteTokenHolders);
 
-	const REPOS = reposDir();
-	const checkouts = new Map();
-	if (existsSync(REPOS)) {
-		for (const d of readdirSync(REPOS)) {
-			if (existsSync(join(REPOS, d, '.git'))) checkouts.set(`${OWNER}/${d}`, join(REPOS, d));
-		}
-	}
-
-	// The owner's list is the population. A checkout not on it is a third-party
-	// clone or an archived repo, and holds nothing of ours.
+	// The owner's list is the population, and every repo on it is read.
 	const findings = [];
 	let read = 0;
-	for (const { nameWithOwner: repo, defaultBranchRef } of repos.sort((a, b) =>
+	for (const { nameWithOwner: repo } of repos.sort((a, b) =>
 		a.nameWithOwner.localeCompare(b.nameWithOwner)
 	)) {
-		const dir = checkouts.get(repo);
-		if (dir) read++;
-		const facts = dir ? shipped(dir, defaultBranchRef?.name || 'main') : {};
-		if (facts.fetch && !allowed.has(repo)) {
+		const { unreadable, ...facts } = shipped(repo);
+		if (unreadable === null) read++;
+		else if (!allowed.has(repo)) {
 			findings.push({
 				repo,
 				kind: 'unreadable',
-				detail: `could not fetch origin, so the default branch may be stale: ${facts.fetch}`,
+				detail: `could not read the default branch's workflows or .devvault.json: ${unreadable}`,
 			});
 		}
 		findings.push(...repoFindings(repo, { secret: holdsSecret(repo), ...facts }, allowed));
@@ -192,7 +157,7 @@ function main() {
 		emitter.emit({ examined, holders: holderList, findings });
 	} else {
 		log(
-			`Examined ${examined.repos} repo(s) on GitHub and ${examined.checkouts} checkout(s) under ${REPOS}.\n`
+			`Examined ${examined.repos} repo(s) on GitHub and ${examined.checkouts} default branch(es).\n`
 		);
 		for (const f of findings)
 			log(`  ${f.kind.toUpperCase().padEnd(10)} ${f.repo}\n    ${f.detail}`);

@@ -76,6 +76,17 @@ export function cacheDir() {
 	return process.env.FLEET_SOURCE_CACHE || join(homedir(), '.cache', 'hadoku', 'fleet-source');
 }
 
+/**
+ * A test that forgot its fixture remotes would otherwise read the REAL repo from
+ * GitHub and pass or fail on whatever main holds today — it happened to
+ * expected-down-guard.test.mjs on the day this module landed. `node --test`
+ * marks every process under it, gates it spawns included, with
+ * NODE_TEST_CONTEXT; under that, the default GitHub URL is refused.
+ */
+function testWithoutFixture() {
+	return Boolean(process.env.NODE_TEST_CONTEXT) && !process.env.FLEET_SOURCE_URL;
+}
+
 /** @param {string} repo `owner/name` */
 function remoteUrl(repo) {
 	const [owner, name] = repo.split('/');
@@ -275,6 +286,13 @@ const handles = new Map();
  */
 export function shipped(repo, { fetch = true } = {}) {
 	if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new UnreadableRepo(repo, 'not an owner/name slug');
+	if (testWithoutFixture()) {
+		throw new UnreadableRepo(
+			repo,
+			'running under node --test with no FLEET_SOURCE_URL — point the reader at fixture ' +
+				'remotes (lib/fleet-source-fixture.mjs), never at GitHub'
+		);
+	}
 	const key = `${cacheDir()}\0${repo}\0${fetch}`;
 	if (handles.has(key)) return handles.get(key);
 
@@ -305,10 +323,25 @@ export function shipped(repo, { fetch = true } = {}) {
 		const missing = missingOids(dir, oids);
 		if (missing.length) {
 			const failure = attempt(() =>
-				git(dir, ['fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--stdin', 'origin'], {
-					network: true,
-					input: missing.join('\n') + '\n',
-				})
+				git(
+					dir,
+					[
+						// The flags git's own lazy fetch uses. Without `noop` negotiation and
+						// the filter, GitHub answered some repos (SillyTavern-SillyTavern)
+						// with "did not send all necessary objects".
+						'-c',
+						'fetch.negotiationAlgorithm=noop',
+						'fetch',
+						'--quiet',
+						'--no-tags',
+						'--no-write-fetch-head',
+						'--recurse-submodules=no',
+						'--filter=blob:none',
+						'--stdin',
+						'origin',
+					],
+					{ network: true, input: missing.join('\n') + '\n' }
+				)
 			);
 			if (failure) throw new UnreadableRepo(repo, `blob fetch failed: ${failure}`);
 		}
@@ -372,6 +405,15 @@ export function shipped(repo, { fetch = true } = {}) {
 			return /^\d+$/.test(out) ? Number(out) : null;
 		},
 		/**
+		 * Unix seconds of the repo's FIRST commit — its age. The mirror holds
+		 * full history (blobless, never shallow), so this is the root commit.
+		 */
+		firstCommitSec() {
+			const out = git(dir, ['log', '--reverse', '--format=%ct', sha]);
+			const first = out.split('\n').find(Boolean);
+			return first && /^\d+$/.test(first) ? Number(first) : null;
+		},
+		/**
 		 * A clean copy of the shipped tree on disk, for a scanner whose logic is
 		 * shaped around the filesystem. Text files are written normalised; binary
 		 * files as they are. `include` narrows which paths are written (and so
@@ -405,8 +447,9 @@ export function shipped(repo, { fetch = true } = {}) {
 }
 
 /**
- * `shipped(repo)`, or `{ unreadable: reason }` — the shape most gates want,
- * since an unreadable repo is a finding they report and move past.
+ * `shipped(repo)` with its workflows already loaded, or `{ unreadable: reason }`
+ * — the shape most gates want, since an unreadable repo is a finding they
+ * report and move past.
  *
  * @param {string} repo
  * @param {{ fetch?: boolean }} [opts]
@@ -414,7 +457,13 @@ export function shipped(repo, { fetch = true } = {}) {
  */
 export function tryShipped(repo, opts) {
 	try {
-		return shipped(repo, opts);
+		const h = shipped(repo, opts);
+		// Blobs are fetched on first read, so a repo that opened can still fail
+		// there. The workflows are what most gates read, so they are loaded HERE,
+		// where that failure lands in `unreadable`. A gate reading other files
+		// still catches UnreadableRepo around its own reads.
+		h.workflows();
+		return h;
 	} catch (err) {
 		if (err instanceof UnreadableRepo) return { unreadable: err.reason };
 		throw err;

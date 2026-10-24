@@ -35,17 +35,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { requiredIdentitySet } from '../dist/capabilities.js';
+import { fixtureRemotes, poisonedClone } from './lib/fleet-source-fixture.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GATE = join(HERE, 'check-tool-inventory.mjs');
 
+const HUB = 'WolffM/hadoku_site';
 const CARDTABLE = 'WolffM/hadoku-cardtable';
 const MEDIAFORGE = 'WolffM/hadoku-mediaforge';
 const TASKMOBILE = 'WolffM/hadoku-task-mobile';
@@ -126,7 +127,8 @@ exit 1
 `;
 
 function fixture() {
-	const root = mkdtempSync(join(tmpdir(), 'tool-inventory-'));
+	const remotes = fixtureRemotes('tool-inventory-');
+	const root = remotes.root;
 	const manifestDir = join(root, 'admin');
 	const siteRoot = join(root, 'site');
 	const reposDir = join(root, 'repos');
@@ -162,18 +164,18 @@ function fixture() {
 		JSON.stringify({ repos: [CARDTABLE, MEDIAFORGE, TASKMOBILE] })
 	);
 
+	// The repos are REMOTES read through fleet-source; REPOS_DIR stays empty.
+	mkdirSync(reposDir, { recursive: true });
+	remotes.push(HUB, { 'README.md': 'hub\n' });
 	for (const [repo, text] of [
 		[CARDTABLE, CARDTABLE_WORKFLOW],
 		[MEDIAFORGE, MEDIAFORGE_WORKFLOW],
 		[TASKMOBILE, TASKMOBILE_WORKFLOW],
 	]) {
-		const dir = join(reposDir, repo.split('/').pop());
-		mkdirSync(join(dir, '.git'), { recursive: true });
-		mkdirSync(join(dir, '.github', 'workflows'), { recursive: true });
-		writeFileSync(join(dir, '.github', 'workflows', 'ci.yml'), text);
+		remotes.push(repo, { '.github/workflows/ci.yml': text });
 	}
 
-	return { root, manifestDir, siteRoot, reposDir, stateDir, bin };
+	return { root, remotes, manifestDir, siteRoot, reposDir, stateDir, bin };
 }
 
 function cleanup(fx) {
@@ -183,6 +185,7 @@ function cleanup(fx) {
 function env(fx) {
 	return {
 		...process.env,
+		...fx.remotes.env,
 		PATH: `${fx.bin}:${process.env.PATH}`,
 		FLEET_MANIFEST_DIR: fx.manifestDir,
 		HADOKU_SITE_ROOT: fx.siteRoot,
@@ -378,17 +381,15 @@ test('--write: the cardtable general-pool jobs (build, js-lint) never carry jdk2
 	}
 });
 
-// ── B2: ROOT and REPOS_DIR/hadoku_site are the SAME repo at DIFFERENT paths ──
+// ── B2: the hub is ONE repo, read ONCE, at its SHIPPED branch ──────────────
 
 /**
- * The deployed shape (mgmt-api's audit-gates): `HADOKU_SITE_ROOT` (and so
- * `siteRoot()`/`ROOT`) is the DEPLOYED checkout (`~/srv/hadoku_site`), while
- * `REPOS_DIR` (`~/repos`) holds a SEPARATE sibling development checkout of
- * the SAME repo at `REPOS_DIR/hadoku_site`. The old path-keyed `Set` saw two
- * different strings and scanned the repo TWICE. This fixture reproduces that
- * exact shape with two distinct directories, both carrying the identical
- * pinned job the live finding named (`WolffM/hadoku_site / run`, pinned
- * `[self-hosted, pm2-host]`, using `docker`).
+ * The deployed shape (mgmt-api's audit-gates): `HADOKU_SITE_ROOT` is the
+ * DEPLOYED checkout (`~/srv/hadoku_site`) and `REPOS_DIR` (`~/repos`) holds a
+ * SEPARATE development checkout of the SAME repo. The old path-keyed `Set` saw
+ * two strings and scanned the repo TWICE (2026-10-05). Since fleet-manager#7
+ * neither directory is read: the hub comes from its shipped branch, once, by
+ * slug. Both local trees are kept in the fixture, disagreeing, to prove it.
  */
 const HADOKU_SITE_PINNED_JOB = [
 	'jobs:',
@@ -399,13 +400,15 @@ const HADOKU_SITE_PINNED_JOB = [
 	'',
 ].join('\n');
 
+const FFMPEG_PINNED_JOB = HADOKU_SITE_PINNED_JOB.replace(
+	'docker run --rm hello-world',
+	'ffmpeg -version'
+);
+
 function dupPathFixture() {
-	const root = mkdtempSync(join(tmpdir(), 'tool-inventory-duppath-'));
+	const remotes = fixtureRemotes('tool-inventory-duppath-');
+	const root = remotes.root;
 	const manifestDir = join(root, 'admin');
-	// `deployedSite` is what `HADOKU_SITE_ROOT` points at — the ROOT the gate
-	// must prefer. `devSite` is `REPOS_DIR/hadoku_site` — a SEPARATE checkout
-	// of the identically-named repo, exactly as a sibling `~/repos/hadoku_site`
-	// sits beside the deployed `~/srv/hadoku_site` in production.
 	const deployedSite = join(root, 'srv', 'hadoku_site');
 	const reposDir = join(root, 'repos');
 	const devSite = join(reposDir, 'hadoku_site');
@@ -413,27 +416,26 @@ function dupPathFixture() {
 	mkdirSync(manifestDir, { recursive: true });
 	mkdirSync(stateDir, { recursive: true });
 
+	remotes.push(HUB, { '.github/workflows/ci.yml': HADOKU_SITE_PINNED_JOB });
+	// Both local trees hold a DIFFERENT job. Neither may be read.
 	for (const dir of [deployedSite, devSite]) {
 		mkdirSync(join(dir, '.git'), { recursive: true });
 		mkdirSync(join(dir, '.github', 'workflows'), { recursive: true });
-		writeFileSync(join(dir, '.github', 'workflows', 'ci.yml'), HADOKU_SITE_PINNED_JOB);
+		writeFileSync(join(dir, '.github', 'workflows', 'ci.yml'), FFMPEG_PINNED_JOB);
 	}
 
-	// No machines at all — this fixture is about which DIRECTORY gets scanned,
-	// not about what a node has earned, so zero nodes keeps it ssh-free with
-	// no shim needed.
+	// No machines at all — this fixture is about what gets READ, not about what
+	// a node has earned, so zero nodes keeps it ssh-free with no shim needed.
 	writeFileSync(join(manifestDir, 'fleet-runner-manifest.json'), JSON.stringify({ machines: {} }));
-	writeFileSync(
-		join(manifestDir, 'fleet-runner-coverage.json'),
-		JSON.stringify({ repos: ['WolffM/hadoku_site'] })
-	);
+	writeFileSync(join(manifestDir, 'fleet-runner-coverage.json'), JSON.stringify({ repos: [HUB] }));
 
-	return { root, manifestDir, deployedSite, reposDir, devSite, stateDir };
+	return { root, remotes, manifestDir, deployedSite, reposDir, devSite, stateDir };
 }
 
 function dupPathEnv(fx) {
 	return {
 		...process.env,
+		...fx.remotes.env,
 		FLEET_MANIFEST_DIR: fx.manifestDir,
 		HADOKU_SITE_ROOT: fx.deployedSite,
 		REPOS_DIR: fx.reposDir,
@@ -454,7 +456,7 @@ function dupPathRun(fx, argv = []) {
 	}
 }
 
-test('B2: ROOT and REPOS_DIR/hadoku_site at different paths — the pinned job is printed ONCE, not twice', () => {
+test('B2: the hub, in the roster AND the hub, is printed ONCE, not twice', () => {
 	const fx = dupPathFixture();
 	try {
 		const { stdout } = dupPathRun(fx);
@@ -470,7 +472,7 @@ test('B2: ROOT and REPOS_DIR/hadoku_site at different paths — the pinned job i
 	}
 });
 
-test('B2: --write with ROOT and REPOS_DIR/hadoku_site at different paths — exactly ONE ledger row for the job', () => {
+test('B2: --write — exactly ONE ledger row for the hub job', () => {
 	const fx = dupPathFixture();
 	const ledgerPath = join(fx.root, 'demand-ledger.jsonl');
 	try {
@@ -479,7 +481,7 @@ test('B2: --write with ROOT and REPOS_DIR/hadoku_site at different paths — exa
 			.trim()
 			.split('\n')
 			.map((l) => JSON.parse(l));
-		const matches = rows.filter((r) => r.repo === 'WolffM/hadoku_site' && r.job === 'run');
+		const matches = rows.filter((r) => r.repo === HUB && r.job === 'run');
 		assert.equal(
 			matches.length,
 			1,
@@ -490,23 +492,9 @@ test('B2: --write with ROOT and REPOS_DIR/hadoku_site at different paths — exa
 	}
 });
 
-test("B2: ROOT wins — the scanned workflow is the DEPLOYED checkout's, not the sibling dev one", () => {
-	// Prove WHICH directory won by making them disagree: the deployed site's
-	// job uses docker, the dev sibling's uses ffmpeg instead. If ROOT really
-	// wins, the single pinned line must show docker, never ffmpeg.
+test('#7: the SHIPPED hub wins — neither the deployed nor the dev checkout is read', () => {
 	const fx = dupPathFixture();
 	try {
-		writeFileSync(
-			join(fx.devSite, '.github', 'workflows', 'ci.yml'),
-			[
-				'jobs:',
-				'  run:',
-				'    runs-on: [self-hosted, pm2-host]',
-				'    steps:',
-				'      - run: ffmpeg -version',
-				'',
-			].join('\n')
-		);
 		const { stdout } = dupPathRun(fx);
 		const section = pinnedSection(stdout);
 		assert.ok(
@@ -515,12 +503,9 @@ test("B2: ROOT wins — the scanned workflow is the DEPLOYED checkout's, not the
 		);
 		assert.ok(
 			section.includes('docker (earned by no pool node)'),
-			`expected the DEPLOYED (docker) job to win, got:\n${section}`
+			`expected the SHIPPED (docker) job, got:\n${section}`
 		);
-		assert.ok(
-			!section.includes('ffmpeg'),
-			`the dev sibling's ffmpeg job must not have won:\n${section}`
-		);
+		assert.ok(!section.includes('ffmpeg'), `a local checkout's ffmpeg job was read:\n${section}`);
 	} finally {
 		cleanup(fx);
 	}
@@ -588,7 +573,8 @@ const PER_JOB_WORKFLOWS = {
 };
 
 function perJobFixture({ repos = ['WolffM/fixture-tools'], state } = {}) {
-	const root = mkdtempSync(join(tmpdir(), 'tool-inventory-perjob-'));
+	const remotes = fixtureRemotes('tool-inventory-perjob-');
+	const root = remotes.root;
 	const manifestDir = join(root, 'admin');
 	const siteRoot = join(root, 'site');
 	const reposDir = join(root, 'repos');
@@ -603,14 +589,15 @@ function perJobFixture({ repos = ['WolffM/fixture-tools'], state } = {}) {
 		JSON.stringify({ machines: { [LOCAL_NODE]: { $capabilities: { earned: [], prereqs: [] } } } })
 	);
 	writeFileSync(join(manifestDir, 'fleet-runner-coverage.json'), JSON.stringify({ repos }));
-	const dir = join(reposDir, 'fixture-tools');
-	mkdirSync(join(dir, '.git'), { recursive: true });
-	mkdirSync(join(dir, '.github', 'workflows'), { recursive: true });
+	mkdirSync(reposDir, { recursive: true });
+	remotes.push(HUB, { 'README.md': 'hub\n' });
+	const files = {};
 	for (const [f, body] of Object.entries(PER_JOB_WORKFLOWS)) {
-		writeFileSync(join(dir, '.github', 'workflows', f), body.join('\n') + '\n');
+		files[`.github/workflows/${f}`] = body.join('\n') + '\n';
 	}
+	remotes.push('WolffM/fixture-tools', files);
 	if (state !== undefined) writeFileSync(join(stateDir, 'tool-inventory-capabilities.json'), state);
-	return { root, manifestDir, siteRoot, reposDir, stateDir, bin };
+	return { root, remotes, manifestDir, siteRoot, reposDir, stateDir, bin, files };
 }
 
 /** Run with PATH narrowed so `trunk` (a ~/.cargo/bin tool, if present at all) is absent. */
@@ -676,6 +663,63 @@ test('#98: a MISSING previous capability state is a first run, and quiet about i
 	try {
 		const { stderr } = runNarrow(fx);
 		assert.doesNotMatch(stderr, /could not read previous capability state/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+/**
+ * fleet-manager#7: A LOCAL CLONE CANNOT CHANGE THE VERDICT. The baseline has a
+ * clone under REPOS_DIR that MATCHES the shipped branch, so a gate reading disk
+ * would agree on it. Then the clone goes CRLF, keeps a workflow the remote never
+ * had, and carries an uncommitted edit that drops the bare `trunk build` — each
+ * of which moves the findings when read off disk. Revert the gate to reading
+ * REPOS_DIR and the second run differs.
+ */
+test('#7: a CRLF, stale, dirty clone under REPOS_DIR does not change the findings', () => {
+	const fx = perJobFixture();
+	try {
+		poisonedClone(fx.reposDir, 'WolffM/fixture-tools', fx.files);
+		const baseline = runNarrow(fx);
+		assert.equal(baseline.code, 1, baseline.stderr);
+		assert.equal(trunkFindings(baseline.stderr).length, 5, baseline.stderr);
+
+		rmSync(join(fx.reposDir, 'fixture-tools'), { recursive: true, force: true });
+		poisonedClone(
+			fx.reposDir,
+			'WolffM/fixture-tools',
+			{
+				...fx.files,
+				'.github/workflows/stale.yml':
+					['jobs:', ...job('old', FLEET, 'trunk serve')].join('\n') + '\n',
+			},
+			{
+				crlf: true,
+				edit: {
+					'.github/workflows/install-elsewhere.yml':
+						['jobs:', ...job('build', FLEET, 'cargo install trunk', 'trunk build')].join('\n') +
+						'\n',
+				},
+			}
+		);
+		const poisoned = runNarrow(fx);
+		assert.equal(poisoned.code, baseline.code);
+		assert.deepEqual(trunkFindings(poisoned.stderr), trunkFindings(baseline.stderr));
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('#7: an unreadable covered repo is a finding carrying the reason, and blocks retirement', () => {
+	const fx = perJobFixture({ repos: ['WolffM/fixture-tools', 'WolffM/never-pushed'] });
+	try {
+		const { code, stdout, stderr } = runNarrow(fx);
+		assert.equal(code, 1);
+		assert.match(
+			stderr,
+			/WolffM\/never-pushed: shipped workflows unreadable \(fetch from .* failed/
+		);
+		assert.match(stdout, /retirement: skipped — 1 covered repo\(s\) could not be read this run/);
 	} finally {
 		cleanup(fx);
 	}

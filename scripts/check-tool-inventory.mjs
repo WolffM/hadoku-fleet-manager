@@ -36,11 +36,12 @@
  * different things (`deploy-workers.yml`'s `detect-changes` runs hosted, its
  * `deploy` runs on the fleet), and the demand ledger has to tell them apart.
  */
-import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { loadManifest, runOn, selectNodes } from './lib/fleet-exec.mjs';
-import { manifest as manifestFile, siteRoot, stateDir } from './lib/paths.mjs';
+import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
+import { tryShipped } from './lib/fleet-source.mjs';
+import { hubRepoFull } from '../dist/lib/fleet-config.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import {
 	splitJobs,
@@ -53,7 +54,6 @@ import {
 } from './lib/demand-derive.mjs';
 import { CI_DEMAND_CLASS, provenCapabilities } from '../dist/capabilities.js';
 
-const ROOT = siteRoot();
 const COVERAGE = manifestFile('fleet-runner-coverage.json');
 
 /**
@@ -134,23 +134,6 @@ function writeFlagValue() {
 	const i = process.argv.indexOf('--write');
 	const next = i >= 0 ? process.argv[i + 1] : undefined;
 	return next && !next.startsWith('--') ? next : join(stateDir(), 'demand-ledger.jsonl');
-}
-
-function reposDir() {
-	if (process.env.REPOS_DIR) return process.env.REPOS_DIR;
-	try {
-		const common = execFileSync(
-			'git',
-			['rev-parse', '--path-format=absolute', '--git-common-dir'],
-			{
-				cwd: ROOT,
-				encoding: 'utf8',
-			}
-		).trim();
-		return dirname(dirname(common));
-	} catch {
-		return resolve(ROOT, '..');
-	}
 }
 
 async function probe(node, tools) {
@@ -256,52 +239,17 @@ for (const [name, node] of selectedNodes) {
 const readable = clawSet.filter((m) => present[m]);
 const onAllClaws = (t) => readable.length > 0 && readable.every((m) => present[m].has(t));
 
-const REPOS_DIR = reposDir();
 const coverage = JSON.parse(readFileSync(COVERAGE, 'utf8'));
-/** dir -> "WolffM/repo", for the demand ledger's `repo` field. Built before the
- * dedupe below so ROOT — which `siteRoot()` always resolves to hadoku_site's
- * own checkout, never this package's — gets the right name if it is not also
- * covered.repos' own hadoku_site entry (it is, today; see the dedupe note). */
-const repoNameByDir = new Map([[ROOT, 'WolffM/hadoku_site']]);
-for (const r of coverage.repos ?? []) repoNameByDir.set(join(REPOS_DIR, r.split('/').pop()), r);
-// DEDUPED BY REPO NAME, NOT BY PATH (wave 3y, 2026-10-05 — the path-keyed `Set`
-// below this comment used to live here, and it only deduped hadoku_site when
-// `ROOT` and `join(REPOS_DIR, 'hadoku_site')` happened to be the SAME STRING).
-// `ROOT` (`siteRoot()`) and `REPOS_DIR/hadoku_site` are the same REPO but need
-// not be the same PATH — in production, run the way mgmt-api's audit-gates
-// runs it (`cwd=~/srv/hadoku_site`, `REPOS_DIR=~/repos`), `siteRoot()`
-// resolves to the DEPLOYED checkout `~/srv/hadoku_site` while
-// `REPOS_DIR/hadoku_site` is the sibling DEVELOPMENT checkout
-// `~/repos/hadoku_site` — two real, different directories holding the same
-// repo. A path-keyed `Set` cannot see that they name the same thing, so every
-// hadoku_site workflow was scanned TWICE in production: `examined` inflated,
-// and a production `--write` carried a duplicate ledger row per hadoku_site
-// job (found 2026-10-05: the pinned-demand report printed
-// `WolffM/hadoku_site / run` twice).
+// THE SHIPPED WORKFLOWS, through fleet-source: each repo's default branch,
+// fetched by the reader itself — never a sibling working tree under REPOS_DIR,
+// and never the hub's deployed tree either (fleet-manager#7).
 //
-// ROOT WINS for hadoku_site. Every other manifest-derived input this gate
-// reads (`COVERAGE` via `manifestFile()`, and `FLEET_MANIFEST_DIR`'s own
-// default) already resolves off `siteRoot()`, so keeping ROOT as hadoku_site's
-// one canonical checkout keeps the whole gate reading ONE tree for it — the
-// DEPLOYED tree in production, never a sibling development checkout that may
-// be ahead of or behind it. `ROOT` is listed FIRST below, so its name is the
-// one `seenRepoNames` records and `REPOS_DIR/hadoku_site` loses the race.
-//
-// This also generalises past the one known collision: ANY two coverage
-// entries that resolved to the same repo NAME (not just hadoku_site) would
-// have hit the identical bug, and a name-keyed dedupe fixes all of them, not
-// just this one.
-const seenRepoNames = new Set();
-const dirs = [];
-for (const dir of [
-	ROOT,
-	...(coverage.repos ?? []).map((r) => join(REPOS_DIR, r.split('/').pop())),
-]) {
-	const name = repoNameByDir.get(dir) ?? relative(REPOS_DIR, dir);
-	if (seenRepoNames.has(name)) continue;
-	seenRepoNames.add(name);
-	dirs.push(dir);
-}
+// DEDUPED BY SLUG (wave 3y, 2026-10-05). The hub used to be read twice — once as
+// `siteRoot()` and once as `REPOS_DIR/hadoku_site`, two directories naming one
+// repo — so every hadoku_site workflow was scanned TWICE in production and a
+// `--write` carried a duplicate ledger row per job. One reader, one slug, one
+// read.
+const repos = [...new Set([hubRepoFull(), ...(coverage.repos ?? [])])];
 /** Workflows this gate actually INSPECTED. A pass with a low count is a pass
  * over nothing — the shape that hid `gh` for three days. */
 let examined = 0;
@@ -336,29 +284,23 @@ const capabilityRepos = new Map();
  * that invokes at least one tracked capability. */
 const pinnedDemand = [];
 
-for (const dir of dirs) {
-	// A covered repo with no local checkout could not be inspected AT ALL —
-	// that is "I could not look", never "nothing to invoke here". The test is
-	// the repo's own `.git`, not the `.github/workflows` dir it may
-	// legitimately lack: a real checkout with no workflows genuinely needs no
-	// tools, but a repo never cloned here tells us nothing either way. This
-	// used to be `if (!existsSync(wf)) continue` — one line that could not
-	// tell those two states apart, so a covered repo missing its checkout
-	// silently read as a clean pass (docs/planning/tier-assignment-2026-09-03.md
-	// §8, wave1-2026-09-08.md §T item 3).
-	if (!existsSync(join(dir, '.git'))) {
+for (const slug of repos) {
+	// A covered repo whose shipped workflows could not be read was not inspected
+	// AT ALL — that is "I could not look", never "nothing to invoke here". A repo
+	// that READ and ships no workflows genuinely needs no tools; the two used to
+	// be one `if (!existsSync(wf)) continue` that could not tell them apart
+	// (docs/planning/tier-assignment-2026-09-03.md §8, wave1-2026-09-08.md §T 3).
+	const source = tryShipped(slug);
+	if ('unreadable' in source) {
 		noCheckoutCount++;
 		findings.push(
-			`${repoNameByDir.get(dir) ?? dir}: no local checkout at ${dir} — its workflows could not ` +
+			`${slug}: shipped workflows unreadable (${source.unreadable}) — its workflows could not ` +
 				`be inspected for tool or capability use here. Unreadable is not clean.`
 		);
 		continue;
 	}
-	const wf = join(dir, '.github', 'workflows');
-	if (!existsSync(wf)) continue;
-	for (const file of readdirSync(wf)) {
-		if (!/\.ya?ml$/.test(file)) continue;
-		const raw = readFileSync(join(wf, file), 'utf8');
+	const name = slug.split('/').pop();
+	for (const { file, text: raw } of source.workflows()) {
 		// STRIP COMMENTS BEFORE MATCHING. A tool name in prose is not an
 		// invocation, and this fleet's workflows are heavily commented: the first
 		// run of this gate reported six pm2 "invocations" that were all sentences
@@ -373,7 +315,7 @@ for (const dir of dirs) {
 			// services` reading as a pm2 invocation.
 			.filter((l) => !/^\s*#/.test(l) && !/^\s*-?\s*(name|description):/.test(l))
 			.join('\n');
-		const rel = relative(REPOS_DIR, join(wf, file));
+		const rel = `${name}/.github/workflows/${file}`;
 
 		// P2.2's job split, and the capability-retirement tracker built on top of
 		// it (P3.4), now run on EVERY file — not just under `--write`. The
@@ -410,7 +352,7 @@ for (const dir of dirs) {
 				);
 			}
 		}
-		const repoName = repoNameByDir.get(dir) ?? relative(REPOS_DIR, dir);
+		const repoName = slug;
 		for (const j of jobs) {
 			const { runsOn: jobRunsOn, fleetForm, selfHosted, hosted, explicit } = deriveLabels(j.text);
 			const capabilities = deriveCapabilities(j.text);
@@ -632,7 +574,7 @@ if (checkoutsComplete) {
 	}
 } else {
 	console.log(
-		`\nretirement: skipped — ${noCheckoutCount} covered repo(s) had no local checkout this run, ` +
+		`\nretirement: skipped — ${noCheckoutCount} covered repo(s) could not be read this run, ` +
 			`so their capability use could not be reconfirmed. Retiring off an incomplete view would be ` +
 			`the same "I could not look" ≠ "nothing needs it" mistake, just about a capability instead ` +
 			`of a node.`

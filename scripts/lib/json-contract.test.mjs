@@ -140,29 +140,24 @@ void test('the contract itself is well-formed', () => {
 });
 
 /**
- * THE EIGHT HOST-BOUND ENTRIES, PINNED.
+ * THE THREE HOST-BOUND ENTRIES, PINNED.
  *
  * `hostBound: true` means the subcommand reads something that belongs to THIS
  * box specifically rather than the fleet — see the field's own doc comment in
  * json-contract.mjs. This is a REGRESSION test, not a structural one: it does
  * not re-derive which entries are host-bound from the source (that would just
- * be the declaration checking itself), it pins the seven #79 evidenced by
- * hand plus check-site-token (2026-10-23), so that flipping any one of them
- * to `false` — or adding a ninth without updating this list — fails loudly instead of silently changing what
- * an active/passive split is allowed to assume.
+ * be the declaration checking itself), it pins them by hand, so that flipping
+ * one — or adding a fourth without updating this list — fails loudly instead
+ * of silently changing what an active/passive split is allowed to assume.
+ *
+ * There were eight. header-audit, identity-model, inventory, check-runner-var
+ * and check-site-token read sibling checkouts under REPOS_DIR, and since
+ * fleet-manager#7 read each repo's default branch through lib/fleet-source.mjs
+ * instead, which any host can do.
  */
-const HOST_BOUND_SUBS = [
-	'egress-slices',
-	'reap-trend',
-	'srv-drift',
-	'header-audit',
-	'identity-model',
-	'inventory',
-	'check-runner-var',
-	'check-site-token',
-].sort();
+const HOST_BOUND_SUBS = ['egress-slices', 'reap-trend', 'srv-drift'].sort();
 
-void test('the host-bound declaration matches the evidenced eight, exactly', () => {
+void test('the host-bound declaration matches the evidenced three, exactly', () => {
 	const actual = JSON_CONTRACT.filter((e) => e.hostBound === true)
 		.map((e) => e.sub)
 		.sort();
@@ -174,7 +169,7 @@ void test('the host-bound declaration matches the evidenced eight, exactly', () 
 			'sibling checkout), update HOST_BOUND_SUBS here AND docs/control-plane.md in the ' +
 			'same pass — this list is the thing the doc cites, not a copy of it.'
 	);
-	// Every one of the seven must still be an entry at all — a rename that
+	// Every one of them must still be an entry at all — a rename that
 	// slipped the sub through the OTHER tests (e.g. renamed on both sides at
 	// once) would otherwise make this list compare against nothing.
 	const subs = new Set(JSON_CONTRACT.map((e) => e.sub));

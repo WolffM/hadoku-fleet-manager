@@ -30,20 +30,21 @@
  * Exercised as a CLI, the same pattern `ci-watch.test.mjs` uses: a throwaway
  * manifest dir and site root, the EXIT CODE and output read directly.
  *
- * The fixture repos are real git repos with `refs/remotes/origin/main` set,
- * built through `cleanGitEnv` and run under NO_GIT_ENV — see
- * lib/hook-safe-tests.test.mjs for why every git call here goes that way.
+ * The fixture repos are REMOTES read through fleet-source
+ * (lib/fleet-source-fixture.mjs), the way the gate reads GitHub, and REPOS_DIR
+ * is an EMPTY directory unless a test puts a working copy there on purpose
+ * (`--worktree`, or the fleet-manager#7 poisoned clone). Everything runs under
+ * NO_GIT_ENV — see lib/hook-safe-tests.test.mjs.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { cleanGitEnv } from './lib/test-git-identity.mjs';
+import { fixtureRemotes, poisonedClone } from './lib/fleet-source-fixture.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'check-mf-externals.mjs');
@@ -60,36 +61,19 @@ const CLEAN_MF = {
 	'src/main.ts': "import { createElement } from 'react';\nexport const el = createElement;\n",
 };
 
-/** `repoPath` as a git repo whose `origin/main` holds exactly `files`. */
-function commitRepo(repoPath, files) {
-	for (const [rel, body] of Object.entries(files)) {
-		mkdirSync(dirname(join(repoPath, rel)), { recursive: true });
-		writeFileSync(join(repoPath, rel), body);
-	}
-	const git = (args) =>
-		execFileSync('git', ['-C', repoPath, ...args], {
-			cwd: repoPath,
-			env: cleanGitEnv(),
-			stdio: ['ignore', 'pipe', 'pipe'],
-		});
-	git(['init', '-q']);
-	git(['add', '-A']);
-	git(['commit', '-qm', 'init']);
-	git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
-}
-
-/** Puts `name` on the roster as a mounted micro-frontend and commits `files`
- *  (or leaves the directory as plain files when `git` is false). */
+/** Puts `name` on the roster as a mounted micro-frontend and pushes `files`
+ *  to its remote — or, when `git` is false, writes them as plain files under
+ *  REPOS_DIR for a `--worktree` run. */
 function addMicroFrontend(fx, name, files, { git = true } = {}) {
 	const cov = JSON.parse(readFileSync(fx.coverage, 'utf8'));
 	cov.repos.push(`WolffM/${name}`);
 	cov.facets[`WolffM/${name}`] = { microFrontend: { vite: 'vite.config.ts', src: 'src' } };
 	writeFileSync(fx.coverage, JSON.stringify(cov));
-	const repoPath = join(fx.reposDir, name);
 	if (git) {
-		commitRepo(repoPath, files);
+		fx.remotes.push(`WolffM/${name}`, files);
 		return;
 	}
+	const repoPath = join(fx.reposDir, name);
 	for (const [rel, body] of Object.entries(files)) {
 		mkdirSync(dirname(join(repoPath, rel)), { recursive: true });
 		writeFileSync(join(repoPath, rel), body);
@@ -99,7 +83,8 @@ function addMicroFrontend(fx, name, files, { git = true } = {}) {
 /** A throwaway manifest dir and site root, with one clean micro-frontend
  *  unless `mf: false` — see the file header. */
 function fixture({ mf = true } = {}) {
-	const root = mkdtempSync(join(tmpdir(), 'mf-externals-gate-'));
+	const remotes = fixtureRemotes('mf-externals-gate-');
+	const root = remotes.root;
 	const manifestDir = join(root, 'manifest');
 	const siteRoot = join(root, 'site');
 	const reposDir = join(root, 'repos');
@@ -109,10 +94,11 @@ function fixture({ mf = true } = {}) {
 
 	const coverage = join(manifestDir, 'fleet-runner-coverage.json');
 	writeFileSync(coverage, JSON.stringify({ repos: [], facets: {} }));
-	if (mf) addMicroFrontend({ coverage, reposDir }, 'mf-clean', CLEAN_MF);
+	if (mf) addMicroFrontend({ coverage, reposDir, remotes }, 'mf-clean', CLEAN_MF);
 
 	return {
 		coverage,
+		remotes,
 		root,
 		manifestDir,
 		siteRoot,
@@ -142,9 +128,10 @@ function run(fx, argv = []) {
 	try {
 		// --source-only: these fixtures have no site to serve bundles from. The
 		// built half (#111) has its own tests at the bottom of this file.
-		const out = execFileSync('node', [SCRIPT, '--no-fetch', '--source-only', ...argv], {
+		const out = execFileSync('node', [SCRIPT, '--source-only', ...argv], {
 			env: {
 				...NO_GIT_ENV,
+				...fx.remotes.env,
 				REPOS_DIR: fx.reposDir,
 				FLEET_MANIFEST_DIR: fx.manifestDir,
 				HADOKU_SITE_ROOT: fx.siteRoot,
@@ -428,6 +415,62 @@ test('#98: an import that exists only in a comment is not an import', () => {
 	assert.equal(r.code, 0, r.out + r.stderr);
 });
 
+test('#7: a roster micro-frontend whose shipped branch cannot be read is a finding', () => {
+	const fx = fixture({ mf: false });
+	try {
+		writeBaseAstro(fx, SINGLETON_IMPORTMAP);
+		const cov = JSON.parse(readFileSync(fx.coverage, 'utf8'));
+		cov.repos.push('WolffM/mf-never-pushed');
+		cov.facets['WolffM/mf-never-pushed'] = {
+			microFrontend: { vite: 'vite.config.ts', src: 'src' },
+		};
+		writeFileSync(fx.coverage, JSON.stringify(cov));
+		const r = run(fx);
+		assert.equal(r.code, 1, r.out);
+		assert.match(r.out, /mf-never-pushed: shipped branch unreadable: fetch from .* failed/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+/**
+ * fleet-manager#7: A LOCAL CLONE CANNOT CHANGE THE VERDICT.
+ *
+ * Baseline: a clone under REPOS_DIR that MATCHES the shipped branch, so a gate
+ * reading it would pass too. Then it is replaced by one that lies — a stale
+ * commit (its origin/main drops `@wolffm/themes` from `external`), CRLF, and an
+ * uncommitted source file importing react-dom — and the verdict must not move.
+ * Revert the gate to reading the clone and the poisoned run reports
+ * "inlines @wolffm/themes".
+ */
+test('#7: a CRLF, stale, dirty clone under REPOS_DIR does not change the verdict', () => {
+	const fx = fixture({ mf: false });
+	const shipped = {
+		'vite.config.ts': viteWith(ALL_EXTERNAL),
+		'src/main.ts': "import { useTheme } from '@wolffm/themes';\nexport { useTheme };\n",
+	};
+	try {
+		writeBaseAstro(fx, SINGLETON_IMPORTMAP);
+		addMicroFrontend(fx, 'mf-x', shipped);
+		poisonedClone(fx.reposDir, 'WolffM/mf-x', shipped);
+		const baseline = run(fx);
+		assert.equal(baseline.code, 0, baseline.out + baseline.stderr);
+
+		rmSync(join(fx.reposDir, 'mf-x'), { recursive: true, force: true });
+		poisonedClone(
+			fx.reposDir,
+			'WolffM/mf-x',
+			{ ...shipped, 'vite.config.ts': viteWith("['react']") },
+			{ crlf: true, edit: { 'src/local.ts': "import 'react-dom';\n" } }
+		);
+		const poisoned = run(fx);
+		assert.equal(poisoned.code, baseline.code, poisoned.out);
+		assert.equal(poisoned.out, baseline.out);
+	} finally {
+		cleanup(fx);
+	}
+});
+
 // ── #111: the BUILT half, against a served site ─────────────────────────────
 //
 // A real HTTP server on loopback stands in for the live site: astro.config's
@@ -474,10 +517,11 @@ async function runBuilt({
 		return await new Promise((resolveRun) => {
 			execFile(
 				'node',
-				[SCRIPT, '--no-fetch'],
+				[SCRIPT],
 				{
 					env: {
 						...NO_GIT_ENV,
+						...fx.remotes.env,
 						REPOS_DIR: fx.reposDir,
 						FLEET_MANIFEST_DIR: fx.manifestDir,
 						HADOKU_SITE_ROOT: fx.siteRoot,

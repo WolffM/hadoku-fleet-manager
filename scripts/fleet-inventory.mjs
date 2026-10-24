@@ -11,16 +11,17 @@
  * repo.
  *
  * `scripts/ci-watch.mjs` is the precedent and this is the same shape: resolve
- * `siteRoot()`, derive the content from the roster plus the checkouts, write a
+ * `siteRoot()`, derive the content from the roster plus each repo's SHIPPED
+ * workflows (`lib/fleet-source.mjs`, never a sibling clone), write a
  * fenced GENERATED region into that repo, and make `--check` the staleness
  * gate. The difference is the Notes column, which is merged from a hand-written
  * map and never generated — see `lib/fleet-inventory.mjs` for why.
  *
  * "I COULD NOT LOOK" IS NOT "NOTHING IS WRONG", AND IT NEVER BECOMES A ROW. A
- * roster repo with no checkout, a checkout with no `.github/workflows`, a
- * workflow that will not read — each is a FINDING carrying its own reason,
- * because a missing checkout, a permissions error and a deleted directory are
- * three different jobs. And a run that found problems REFUSES TO WRITE: a table
+ * roster repo that cannot be read, a default branch with no `.github/workflows`,
+ * a directory with no workflow in it — each is a FINDING carrying its own
+ * reason, because a deleted repo, a credential failure and a repo that left CI
+ * are three different jobs. And a run that found problems REFUSES TO WRITE: a table
  * silently missing the repo we could not open is worse than the stale one,
  * since the stale one at least still names it.
  *
@@ -31,13 +32,13 @@
  *
  * @guards docs/operations/SELF_HOSTED_RUNNERS.md (in hadoku_site)
  */
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
 import { allRepos } from './lib/fleet-roster.mjs';
-import { reposDir, siteRoot, manifest as manifestFile } from './lib/paths.mjs';
+import { siteRoot, manifest as manifestFile } from './lib/paths.mjs';
+import { tryShipped } from './lib/fleet-source.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { loadPrettier } from './lib/prettier-json.mjs';
 import { shrinkRefusal } from './lib/demand-derive.mjs';
@@ -100,35 +101,6 @@ async function formatMarkdown(text, filePath) {
 }
 
 /**
- * Unix seconds of the newest commit touching `rel` in the checkout at `dir`,
- * or an Error saying why it could not be read.
- *
- * Every `GIT_*` variable is stripped: run from a hook, `GIT_DIR` would point
- * this read at the hook's repository instead of the checkout it names.
- */
-function newestCommitSec(dir, rel) {
-	const env = Object.fromEntries(
-		Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))
-	);
-	try {
-		const out = execFileSync('git', ['-C', dir, 'log', '-1', '--format=%ct', '--', rel], {
-			env,
-			encoding: 'utf8',
-			stdio: ['ignore', 'pipe', 'pipe'],
-			timeout: 15_000,
-		}).trim();
-		if (!/^\d+$/.test(out)) return new Error(`no commit touches ${rel}`);
-		return Number(out);
-	} catch (err) {
-		return new Error(
-			String(err.stderr || err.message)
-				.trim()
-				.split('\n')[0]
-		);
-	}
-}
-
-/**
  * IS THIS DRIFT ONLY THE REGENERATION NOT HAVING RUN YET? (#103 item 3)
  *
  * Advisory only when EVERY difference is an added or relabelled row AND the
@@ -137,7 +109,7 @@ function newestCommitSec(dir, rel) {
  * prose, an old commit, or a commit that could not be dated keeps the run
  * failing, and the reason says which — "could not date it" is not "it is new".
  */
-function youngDrift(onDisk, rendered, rows, reposRoot) {
+function youngDrift(onDisk, rendered, rows, sources) {
 	const d = classifyDrift(onDisk, rendered);
 	const real = [];
 	if (d.removed.length) real.push(`removed: ${d.removed.join(', ')}`);
@@ -151,10 +123,19 @@ function youngDrift(onDisk, rendered, rows, reposRoot) {
 			real.push(`${key}: differs and no derived row names it`);
 			continue;
 		}
-		const sec = newestCommitSec(
-			join(reposRoot, row.repo.split('/').pop()),
-			join('.github', 'workflows', row.workflow)
-		);
+		// Dated off the SHIPPED branch's history, in the reader's mirror — the
+		// commit that put the workflow on main, not whatever a clone last pulled.
+		let sec;
+		try {
+			sec = sources.get(row.repo)?.lastCommitSec(`.github/workflows/${row.workflow}`) ?? null;
+		} catch (err) {
+			sec = new Error(
+				String(err.stderr || err.message)
+					.trim()
+					.split('\n')[0]
+			);
+		}
+		if (sec === null) sec = new Error(`no commit on the shipped branch touches it`);
 		if (sec instanceof Error) {
 			real.push(`${row.repo} ${row.workflow}: could not date its newest commit (${sec.message})`);
 			continue;
@@ -179,15 +160,7 @@ function youngDrift(onDisk, rendered, rows, reposRoot) {
 	return real.length ? { ok: false, why: real.join('; ') } : { ok: true, lines };
 }
 
-/** Every `.yml`/`.yaml` under a checkout's workflows dir, sorted. */
-function workflowFiles(dir) {
-	return readdirSync(dir)
-		.filter((f) => /\.ya?ml$/.test(f))
-		.sort();
-}
-
 async function main() {
-	const REPOS = reposDir();
 	const SITE = siteRoot();
 	const doc = join(SITE, ...DOC_PATH);
 	const notesPath = manifestFile(NOTES_FILE);
@@ -215,58 +188,48 @@ async function main() {
 
 	const rows = [];
 	const reposSeen = new Set();
+	/** slug -> fleet-source handle, for dating rows in youngDrift. */
+	const sources = new Map();
 	for (const repo of allRepos({ includeHost: true })) {
-		const dir = join(REPOS, repo.split('/').pop());
-		if (!existsSync(dir)) {
+		// The SHIPPED workflows, through fleet-source — the default branch, fetched
+		// by the reader itself, never a sibling working tree (fleet-manager#7).
+		const source = tryShipped(repo);
+		if ('unreadable' in source) {
 			problems.push(
-				`${repo}: no checkout at ${dir}, so its workflows could not be read. ` +
-					'A repo we could not look at is never an empty row.'
+				`${repo}: shipped workflows unreadable (${source.unreadable}), so its workflows ` +
+					'could not be read. A repo we could not look at is never an empty row.'
 			);
 			continue;
 		}
-		const wf = join(dir, '.github', 'workflows');
-		if (!existsSync(wf)) {
+		sources.set(repo, source);
+		if (!source.hasWorkflowsDir()) {
 			problems.push(
-				`${repo}: the checkout at ${dir} has no .github/workflows directory. ` +
-					'Either the checkout is shallow/stale or the repo left CI — say which.'
+				`${repo}: the default branch ships no .github/workflows directory. ` +
+					'Either the roster is stale or the repo left CI — say which.'
 			);
 			continue;
 		}
-		let files;
-		try {
-			files = workflowFiles(wf);
-		} catch (err) {
-			problems.push(`${repo}: ${wf} would not list: ${err.message}`);
-			continue;
-		}
-		if (!files.length) {
+		const workflows = source.workflows();
+		if (!workflows.length) {
 			problems.push(
-				`${repo}: ${wf} holds no workflow file, but the roster says this repo has CI. ` +
+				`${repo}: .github/workflows holds no workflow file, but the roster says this repo has CI. ` +
 					'A covered repo with nothing to run is a coverage finding, not an empty row.'
 			);
 			continue;
 		}
-		for (const workflow of files) {
-			let body;
-			try {
-				body = readFileSync(join(wf, workflow), 'utf8');
-			} catch (err) {
-				problems.push(`${repo} ${workflow}: would not read: ${err.message}`);
-				continue;
-			}
+		for (const { file: workflow, text: body } of workflows) {
 			reposSeen.add(repo);
 			rows.push({ repo, workflow, label: workflowLabel(body) });
 		}
 	}
 
 	// SCANNING NOTHING IS A FAILURE. An empty inventory reads exactly like a
-	// fleet with no workflows, and the causes — a wrong REPOS_DIR, an empty
+	// fleet with no workflows, and the causes — an unreadable fleet, an empty
 	// roster — are all fixable and none of them is healthy.
 	if (!rows.length) {
 		const why =
-			`fleet inventory: derived ZERO workflow rows under ${REPOS}. That is a broken ` +
-			'scan, not a fleet with no CI — set REPOS_DIR to the directory holding the ' +
-			'sibling checkouts.';
+			'fleet inventory: derived ZERO workflow rows from the shipped branches. That is a ' +
+			'broken scan, not a fleet with no CI — check the roster and the problems below.';
 		if (emitter.json) emitter.emit({ ok: false, error: why, problems });
 		else console.error(why);
 		process.exit(1);
@@ -324,7 +287,7 @@ async function main() {
 		const onDisk = wrote ? generatedRegion(readFileSync(doc, 'utf8')) : current;
 		if (onDisk !== rendered) {
 			stale = true;
-			const young = youngDrift(onDisk, rendered, rows, REPOS);
+			const young = youngDrift(onDisk, rendered, rows, sources);
 			if (young.ok) {
 				advisory.push(...young.lines);
 			} else {

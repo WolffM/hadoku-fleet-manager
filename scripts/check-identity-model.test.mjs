@@ -19,6 +19,33 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { cleanGitEnv } from './lib/test-git-identity.mjs';
+import { fixtureRemotes, poisonedClone } from './lib/fleet-source-fixture.mjs';
+
+/**
+ * Run `fn(repos, remotes)` with the gate's reader pointed at fresh fixture
+ * remotes (lib/fleet-source-fixture.mjs) and `repos` an EMPTY REPOS_DIR: a
+ * sibling is its SHIPPED tree, never a checkout (fleet-manager#7). `run()`
+ * spreads process.env, so the FLEET_SOURCE_* variables reach the gate.
+ */
+function withRemotes(fn) {
+	const remotes = fixtureRemotes('idm-remotes-');
+	const repos = join(remotes.root, 'repos');
+	mkdirSync(repos, { recursive: true });
+	const saved = {};
+	for (const [k, v] of Object.entries(remotes.env)) {
+		saved[k] = process.env[k];
+		process.env[k] = v;
+	}
+	try {
+		return fn(repos, remotes);
+	} finally {
+		for (const [k, v] of Object.entries(saved)) {
+			if (v === undefined) delete process.env[k];
+			else process.env[k] = v;
+		}
+		remotes.cleanup();
+	}
+}
 
 const GATE = join(dirname(fileURLToPath(import.meta.url)), 'check-identity-model.mjs');
 
@@ -191,24 +218,22 @@ test('the gate does not report ITSELF when scanned as a sibling repo', () => {
 	// test asserted exactly that nothing for its first draft — reverting the fix
 	// left it green, which is how the vacuity was found.
 	const root = siteWith(RESOLVER, KV_BINDING);
-	const repos = mkdtempSync(join(tmpdir(), 'idmodel-repos-'));
 	try {
 		writeFileSync(
 			join(root, 'scripts', 'admin', 'fleet-runner-coverage.json'),
 			JSON.stringify({ repos: ['WolffM/hadoku-fleet-manager'], facets: {} })
 		);
-		// A sibling checkout holding a copy of the gate's own source.
-		const sibling = join(repos, 'hadoku-fleet-manager', 'scripts');
-		mkdirSync(join(repos, 'hadoku-fleet-manager', '.git'), { recursive: true });
-		mkdirSync(sibling, { recursive: true });
-		writeFileSync(join(sibling, 'check-identity-model.mjs'), readFileSync(GATE));
-
-		const r = run(root, { REPOS_DIR: repos, extra: ['--fleet'] });
-		assert.equal(r.code, 0, r.out);
-		assert.doesNotMatch(r.out, /check-identity-model/);
+		withRemotes((repos, remotes) => {
+			// A sibling repo shipping a copy of the gate's own source.
+			remotes.push('WolffM/hadoku-fleet-manager', {
+				'scripts/check-identity-model.mjs': readFileSync(GATE, 'utf8'),
+			});
+			const r = run(root, { REPOS_DIR: repos, extra: ['--fleet'] });
+			assert.equal(r.code, 0, r.out);
+			assert.doesNotMatch(r.out, /check-identity-model/);
+		});
 	} finally {
 		rmSync(root, { recursive: true, force: true });
-		rmSync(repos, { recursive: true, force: true });
 	}
 });
 
@@ -771,20 +796,12 @@ function jsonDoc(r) {
 
 const handler = (body) => `export async function handler(c) {\n${body}\n}\n`;
 
-/** A sibling checkout under a fresh REPOS_DIR, holding `files`. */
+/** A sibling repo shipping `files`, with an EMPTY REPOS_DIR beside it. */
 function withSibling(name, files, fn) {
-	const repos = mkdtempSync(join(tmpdir(), 'idm-sib-'));
-	try {
-		const dir = join(repos, name);
-		mkdirSync(join(dir, '.git'), { recursive: true });
-		for (const [rel, body] of Object.entries(files)) {
-			mkdirSync(join(dir, dirname(rel)), { recursive: true });
-			writeFileSync(join(dir, rel), body);
-		}
+	withRemotes((repos, remotes) => {
+		remotes.push(`WolffM/${name}`, files);
 		fn(repos);
-	} finally {
-		rmSync(repos, { recursive: true, force: true });
-	}
+	});
 }
 
 // ── G3 ──
@@ -1364,4 +1381,67 @@ test('G5: a file that only NAMES e2e is still shipped code', () => {
 	for (const rel of ['src/e2e-helper.ts', 'src/edge.stub.ts']) {
 		assert.equal(missedCheck(runFiles({ [rel]: E2E_STAMP }), 'G5'), null, rel);
 	}
+});
+
+// ── fleet-manager#7: siblings are read SHIPPED, never off REPOS_DIR ──
+
+test('#7: an unreadable roster repo is a missing checkout, with the reason', () => {
+	withRemotes((repos, remotes) => {
+		remotes.push('WolffM/sib', { 'src/ok.ts': 'export const x = 1;\n' });
+		const r = runFiles(
+			{ 'src/ok.ts': 'export const x = 1;\n' },
+			{
+				extra: ['--fleet', '--allow-stale'],
+				coverage: { repos: ['WolffM/sib', 'WolffM/never-pushed'], facets: {} },
+				REPOS_DIR: repos,
+			}
+		);
+		assert.equal(r.code, 1, r.out);
+		assert.match(r.out, /WolffM\/never-pushed: fetch from .* failed/);
+	});
+});
+
+/**
+ * A LOCAL CLONE CANNOT CHANGE THE VERDICT. The baseline holds a clone under
+ * REPOS_DIR that matches the shipped branch, with that branch as its origin.
+ * Then it is replaced by one that is CRLF, BEHIND (its last commit holds a
+ * schema the remote never shipped) and DIRTY (an uncommitted G3 read). The
+ * `--fleet` verdict must not move. Revert the gate to scanning REPOS_DIR and
+ * the poisoned run reports the dirty file.
+ */
+test('#7: a CRLF, stale, dirty clone under REPOS_DIR does not change the verdict', () => {
+	withRemotes((repos, remotes) => {
+		const files = { 'src/ok.ts': 'export const x = 1;\n' };
+		remotes.push('WolffM/sib', files);
+		const runIt = () =>
+			runFiles(
+				{ 'src/ok.ts': 'export const x = 1;\n' },
+				{
+					extra: ['--fleet', '--json', '--allow-stale'],
+					coverage: { repos: ['WolffM/sib'], facets: {} },
+					REPOS_DIR: repos,
+				}
+			);
+		const clone = poisonedClone(repos, 'WolffM/sib', files);
+		gitIn(clone, ['remote', 'add', 'origin', remotes.remote('WolffM/sib')]);
+		const baseline = runIt();
+		assert.equal(baseline.code, 0, baseline.out);
+
+		rmSync(clone, { recursive: true, force: true });
+		poisonedClone(
+			repos,
+			'WolffM/sib',
+			{ ...files, 'src/schema.sql': 'CREATE TABLE t (voter_key TEXT);' },
+			{
+				crlf: true,
+				edit: {
+					'src/wip.ts': handler('\tconst { userId } = await c.req.json();\n\treturn userId;'),
+				},
+			}
+		);
+		const poisoned = runIt();
+		assert.equal(poisoned.code, baseline.code, poisoned.out);
+		assert.deepEqual(jsonDoc(poisoned).violations, jsonDoc(baseline).violations);
+		assert.equal(jsonDoc(poisoned).scanned, 2, 'the sibling must have been scanned');
+	});
 });

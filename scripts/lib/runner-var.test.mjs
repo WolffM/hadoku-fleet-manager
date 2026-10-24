@@ -8,11 +8,11 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 import { readRunnerVar, runnerVarForm, repoVerdict } from './runner-var.mjs';
+import { fixtureRemotes, poisonedClone } from './fleet-source-fixture.mjs';
 
 const BARE = 'jobs:\n  check:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n';
 const FALLBACK =
@@ -86,50 +86,164 @@ test('one bare file among fallbacks still fails the repo', () => {
 
 const CHECKER = new URL('../check-runner-var.mjs', import.meta.url).pathname;
 
-/** Run the real checker against a throwaway REPOS_DIR. */
-function run(reposDir) {
-	return spawnSync(process.execPath, [CHECKER, '--json'], {
-		encoding: 'utf8',
-		env: { ...process.env, REPOS_DIR: reposDir, FLEET_MANIFEST_DIR: reposDir },
-	});
+/**
+ * A `gh` that answers from a JSON fixture: `repos` for `repo list` (or
+ * `listFail: true` to fail it), `vars` for the CI_RUNNER read — absent is a 404.
+ */
+const GH_SHIM = `const fx = JSON.parse(require('fs').readFileSync(process.env.GH_FIXTURE, 'utf8'));
+const argv = process.argv.slice(2).join(' ');
+if (argv.startsWith('repo list')) {
+	if (fx.listFail) { process.stderr.write('gh: HTTP 502\\n'); process.exit(1); }
+	process.stdout.write(JSON.stringify(fx.repos.map((nameWithOwner) => ({ nameWithOwner }))));
+	process.exit(0);
+}
+const m = argv.match(new RegExp('repos/([^ ]+)/actions/variables/CI_RUNNER'));
+if (m && fx.vars[m[1]] !== undefined) { process.stdout.write(fx.vars[m[1]] + '\\n'); process.exit(0); }
+process.stderr.write('gh: Not Found (HTTP 404)\\n');
+process.exit(1);
+`;
+
+/**
+ * A throwaway fleet: fixture REMOTES read through fleet-source, a `gh` shim,
+ * a manifest dir, and an EMPTY REPOS_DIR — nothing on disk may matter.
+ */
+function fleet({ repos = [], roster = [], vars = {}, listFail = false, remotes: files = {} } = {}) {
+	const remotes = fixtureRemotes('runnervar-');
+	const { root } = remotes;
+	for (const [repo, f] of Object.entries(files)) remotes.push(repo, f);
+	const manifests = join(root, 'manifests');
+	const reposDir = join(root, 'repos');
+	const bin = join(root, 'bin');
+	for (const d of [manifests, reposDir, bin]) mkdirSync(d, { recursive: true });
+	writeFileSync(join(manifests, 'fleet-runner-coverage.json'), JSON.stringify({ repos: roster }));
+	writeFileSync(join(root, 'gh.json'), JSON.stringify({ repos, vars, listFail }));
+	// A .cjs beside a bash wrapper: an extensionless node script would be loaded
+	// as ESM under any ancestor package.json with "type": "module".
+	writeFileSync(join(bin, 'gh.cjs'), GH_SHIM);
+	writeFileSync(join(bin, 'gh'), `#!/usr/bin/env bash\nexec node "$0.cjs" "$@"\n`);
+	chmodSync(join(bin, 'gh'), 0o755);
+	const env = {
+		...process.env,
+		...remotes.env,
+		PATH: `${bin}:${process.env.PATH}`,
+		GH_FIXTURE: join(root, 'gh.json'),
+		REPOS_DIR: reposDir,
+		FLEET_MANIFEST_DIR: manifests,
+	};
+	return { root, reposDir, env, cleanup: remotes.cleanup };
+}
+
+function run(env) {
+	const r = spawnSync(process.execPath, [CHECKER, '--json'], { encoding: 'utf8', env });
+	return { ...r, out: r.stdout.trim().startsWith('{') ? JSON.parse(r.stdout) : null };
 }
 
 test('scanning ZERO repos FAILS — an empty report is not a clean one', () => {
-	// The failure this whole file exists to prevent, one level up: a wrong
-	// REPOS_DIR examines nothing and every finding list comes back empty.
-	const dir = mkdtempSync(join(tmpdir(), 'runnervar-empty-'));
+	// The failure this whole file exists to prevent, one level up: a broken
+	// listing examines nothing and every finding list comes back empty.
+	const fx = fleet();
 	try {
-		const r = run(dir);
+		const r = run(fx.env);
 		assert.equal(r.status, 1, `zero repos must exit 1, got ${r.status}: ${r.stdout}${r.stderr}`);
 		assert.match(r.stdout + r.stderr, /ZERO repos/);
 	} finally {
-		rmSync(dir, { recursive: true, force: true });
+		fx.cleanup();
 	}
 });
 
-test('a covered repo with NO checkout is reported, not skipped', () => {
+test('a repo listing that fails is exit 1 with the error shape, never zero findings', () => {
+	const fx = fleet({ listFail: true });
+	try {
+		const r = run(fx.env);
+		assert.equal(r.status, 1);
+		assert.match(r.out.error, /could not list .*HTTP 502/);
+		assert.equal(r.out.examined, 0);
+	} finally {
+		fx.cleanup();
+	}
+});
+
+test('a covered repo whose source cannot be read is reported, not skipped', () => {
 	// Silently skipping what you could not read is how a roster shrinks into a
 	// clean bill of health.
-	const dir = mkdtempSync(join(tmpdir(), 'runnervar-nocheckout-'));
+	const fx = fleet({
+		repos: ['WolffM/present'],
+		roster: ['WolffM/ghost', 'WolffM/present'],
+		vars: { 'WolffM/present': '["self-hosted"]' },
+		remotes: { 'WolffM/present': { '.github/workflows/ci.yml': BARE } },
+	});
 	try {
-		// A roster naming a repo that is not on disk, plus one repo that IS.
-		writeFileSync(
-			join(dir, 'fleet-runner-coverage.json'),
-			JSON.stringify({ repos: ['WolffM/ghost', 'WolffM/present'] })
-		);
-		const p = join(dir, 'present', '.github', 'workflows');
-		mkdirSync(p, { recursive: true });
-		mkdirSync(join(dir, 'present', '.git'), { recursive: true });
-		writeFileSync(join(p, 'ci.yml'), BARE);
-
-		const r = run(dir);
-		const out = JSON.parse(r.stdout);
-		const ghost = out.findings.find((f) => f.repo === 'WolffM/ghost');
-		assert.ok(ghost, `the un-checked-out repo must be reported: ${r.stdout}`);
+		const r = run(fx.env);
+		const ghost = r.out.findings.find((f) => f.repo === 'WolffM/ghost');
+		assert.ok(ghost, `the unreadable repo must be reported: ${r.stdout}`);
 		assert.equal(ghost.status, 'no-checkout');
+		assert.match(ghost.why, /fetch from .* failed/, 'the reader says WHY');
 		assert.equal(r.status, 1, 'and it must fail the run');
 	} finally {
-		rmSync(dir, { recursive: true, force: true });
+		fx.cleanup();
+	}
+});
+
+test('a listed repo with NO clone anywhere is still read', () => {
+	// A cron host holds no ~/repos. Its population is the owner's list.
+	const fx = fleet({
+		repos: ['WolffM/unset'],
+		remotes: { 'WolffM/unset': { '.github/workflows/ci.yml': BARE } },
+	});
+	try {
+		const r = run(fx.env);
+		assert.equal(r.status, 1);
+		assert.deepEqual(
+			r.out.findings.map((f) => [f.repo, f.status]),
+			[['WolffM/unset', 'missing']]
+		);
+	} finally {
+		fx.cleanup();
+	}
+});
+
+/**
+ * fleet-manager#7: A LOCAL CLONE CANNOT CHANGE THE VERDICT. Baseline clones
+ * under REPOS_DIR match the shipped branches, so a gate reading disk passes it
+ * too. Then they are poisoned — CRLF, a workflow the remote deleted, and an
+ * uncommitted workflow on the bare form in a repo whose variable is unset —
+ * and the verdict must not move. Revert the gate to reading disk and the
+ * poisoned run reports `missing`.
+ */
+test('#7: a CRLF, stale, dirty clone under REPOS_DIR does not change the verdict', () => {
+	const present = { '.github/workflows/ci.yml': BARE };
+	const plain = { '.github/workflows/ci.yml': 'jobs:\n  a:\n    runs-on: ubuntu-latest\n' };
+	const fx = fleet({
+		repos: ['WolffM/present', 'WolffM/plain'],
+		roster: ['WolffM/present'],
+		vars: { 'WolffM/present': '["self-hosted"]' },
+		remotes: { 'WolffM/present': present, 'WolffM/plain': plain },
+	});
+	try {
+		poisonedClone(fx.reposDir, 'WolffM/present', present);
+		poisonedClone(fx.reposDir, 'WolffM/plain', plain);
+		const baseline = run(fx.env);
+		assert.equal(baseline.status, 0, `the clean fleet must pass: ${baseline.stdout}`);
+
+		rmSync(join(fx.reposDir, 'present'), { recursive: true, force: true });
+		rmSync(join(fx.reposDir, 'plain'), { recursive: true, force: true });
+		poisonedClone(
+			fx.reposDir,
+			'WolffM/present',
+			{ ...present, '.github/workflows/deleted-upstream.yml': FALLBACK },
+			{ crlf: true }
+		);
+		poisonedClone(fx.reposDir, 'WolffM/plain', plain, {
+			crlf: true,
+			edit: { '.github/workflows/wip.yml': BARE },
+		});
+		const poisoned = run(fx.env);
+		assert.equal(poisoned.status, baseline.status, poisoned.stdout);
+		assert.deepEqual(poisoned.out.findings, baseline.out.findings);
+		assert.deepEqual(poisoned.out.ok, baseline.out.ok);
+		assert.equal(poisoned.out.examined, baseline.out.examined);
+	} finally {
+		fx.cleanup();
 	}
 });
 

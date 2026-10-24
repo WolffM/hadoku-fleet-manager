@@ -212,7 +212,11 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'header-audit': {
 		script: 'check-header-fleet.mjs',
-		summary: 'the @wolffm consumer contract across every checkout',
+		summary: 'the @wolffm consumer contract across every repo',
+	},
+	source: {
+		script: 'fleet-source.mjs',
+		summary: "another repo's SHIPPED files: list <owner/repo> [prefix] | read <owner/repo> <path>",
 	},
 	'identity-model': {
 		script: 'check-identity-model.mjs',
