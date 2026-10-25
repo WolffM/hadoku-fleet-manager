@@ -392,16 +392,23 @@ async function fetchAdmission(names) {
 		if (refusal === null) {
 			out.set(name, { verdict: 'admitted', why: '' });
 		} else if (refusal && typeof refusal === 'object') {
-			const { clause, availableMb, needMb, reserveBasis } = refusal;
+			const { clause, availableMb, needMb, reserveBasis, reason } = refusal;
 			out.set(name, {
 				verdict: 'refused',
 				clause: clause ?? null,
 				availableMb: availableMb ?? null,
 				needMb: needMb ?? null,
 				reserveBasis: reserveBasis ?? null,
+				// `admitMint`'s own sentence, verbatim. This used to compose
+				// "<available>MB available < <need>MB needed" for EVERY clause, which
+				// is false for most of them: a node at its concurrency cap read
+				// "9788MB available < 3400MB needed" (2026-10-25), and even a memory
+				// refusal is a floor calculation, not that inequality. The numbers
+				// stay in the JSON fields above; only the controller says why.
 				why:
-					`${clause ?? 'refused'}: ${availableMb ?? '?'}MB available < ` +
-					`${needMb ?? '?'}MB needed (${reserveBasis ?? 'basis unknown'})`,
+					typeof reason === 'string' && reason.trim()
+						? reason
+						: `${clause ?? 'refused'}: the controller gave no reason`,
 			});
 		} else {
 			out.set(name, { verdict: 'unknown', why: 'admissionRefusal had an unexpected shape' });

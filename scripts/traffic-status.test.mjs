@@ -219,6 +219,7 @@ test('a refused node carries its real numbers from the live /api/fleet admission
 				availableMb: 4813,
 				needMb: 5632,
 				reserveBasis: 'default-4096',
+				reason: 'memory: 4813MB free, this repo peaks at 5632MB',
 			},
 		},
 	]);
@@ -235,6 +236,85 @@ test('a refused node carries its real numbers from the live /api/fleet admission
 	assert.equal(claw6.admission.availableMb, 4813);
 	assert.equal(claw6.admission.needMb, 5632);
 	assert.equal(claw6.admission.reserveBasis, 'default-4096');
+});
+
+test('the why is the controller’s own reason, never an inequality built from the numbers', async () => {
+	// The live payload from 2026-10-25: claw-1 at its concurrency cap, claw-8
+	// drained, claw-2 refused on its memory FLOOR with more free than it needs.
+	// The old display printed "9788MB available < 3400MB needed" for claw-1 —
+	// false on its face, and the clause is not about memory at all.
+	const dir = manifestDir({
+		'claw-1': { labels: ['hadoku-builder'] },
+		'claw-2': { labels: ['hadoku-builder'] },
+		'claw-8': { labels: ['hadoku-builder'] },
+	});
+	writeHistory(dir, []);
+	const memoryReason =
+		'memory: 4644MB free, this repo peaks at 3400MB, would leave 1244MB against a 1536MB floor';
+	const mgmtApiUrl = await startFleetApi([
+		{
+			name: 'claw-1',
+			admissionRefusal: {
+				clause: 'concurrency',
+				availableMb: 9179,
+				needMb: 3400,
+				reserveBasis: 'node',
+				reason: 'at capacity: 3/2 in flight',
+			},
+		},
+		{
+			name: 'claw-2',
+			admissionRefusal: {
+				clause: 'memory',
+				availableMb: 4644,
+				needMb: 3400,
+				reserveBasis: 'node',
+				reason: memoryReason,
+			},
+		},
+		{
+			name: 'claw-8',
+			admissionRefusal: {
+				clause: 'drained',
+				availableMb: 14349,
+				needMb: 4096,
+				reserveBasis: 'default',
+				reason: 'drained: held out of service for maintenance',
+			},
+		},
+	]);
+
+	const r = await runAsync(dir, [], mgmtApiUrl);
+	assert.equal(r.status, 0, r.stderr);
+	const nodes = JSON.parse(r.stdout).nodes;
+	const why = (n) => nodes.find((x) => x.name === n).admission.why;
+	assert.equal(why('claw-1'), 'at capacity: 3/2 in flight');
+	assert.equal(why('claw-2'), memoryReason);
+	assert.equal(why('claw-8'), 'drained: held out of service for maintenance');
+	for (const n of ['claw-1', 'claw-2', 'claw-8']) assert.doesNotMatch(why(n), /available </);
+	// The numbers are still there for a reader that wants them.
+	assert.equal(nodes.find((x) => x.name === 'claw-1').admission.availableMb, 9179);
+});
+
+test('a refusal with no reason says so, and still claims no inequality', async () => {
+	const dir = manifestDir({ 'claw-6': { labels: ['hadoku-builder'] } });
+	writeHistory(dir, []);
+	const mgmtApiUrl = await startFleetApi([
+		{
+			name: 'claw-6',
+			admissionRefusal: {
+				clause: 'concurrency',
+				availableMb: 5000,
+				needMb: 3400,
+				reserveBasis: 'node',
+			},
+		},
+	]);
+	const r = await runAsync(dir, [], mgmtApiUrl);
+	assert.equal(r.status, 0, r.stderr);
+	const claw6 = JSON.parse(r.stdout).nodes.find((n) => n.name === 'claw-6');
+	assert.equal(claw6.admission.verdict, 'refused');
+	assert.equal(claw6.admission.why, 'concurrency: the controller gave no reason');
 });
 
 test('a deploy with no admissionRefusal field reads unknown, never admitted', async () => {
