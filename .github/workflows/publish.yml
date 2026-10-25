@@ -141,6 +141,19 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
+          # A RE-RUN OF THE COMMIT THAT PUBLISHED IT is not a missed bump. When
+          # only the dispatch below failed, re-running this workflow is the way
+          # to retry it, and on 2026-10-25 that re-run died HERE instead:
+          # 0.34.64 published at 05:54, its dispatch got a 502 inside a mgmt-api
+          # restart, and the 06:00 re-run was refused as "already published",
+          # so the dispatch never ran. npm records the publishing commit as
+          # `gitHead`, so this is decided exactly, never guessed from
+          # run_attempt. An unreadable gitHead falls through to the refusal.
+          published_by=$(npm view "@wolffm/fleet-manager@$VERSION" gitHead 2>/dev/null || true)
+          if [ -n "$published_by" ] && [ "$published_by" = "$GITHUB_SHA" ]; then
+            echo "@wolffm/fleet-manager@$VERSION was published by this commit ($GITHUB_SHA) — a re-run; skipping to the dispatch"
+            exit 0
+          fi
           if npm view "@wolffm/fleet-manager@$VERSION" version >/dev/null 2>&1; then
             # This used to `exit 0` with a notice. That is the wrong shape: a
             # shipped change whose version did not move is a change that never
