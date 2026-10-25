@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Runs its command unprivileged: every root-written path has a seam into the fixture.
+[ "${1:-}" = -n ] && shift
+exec "$@"

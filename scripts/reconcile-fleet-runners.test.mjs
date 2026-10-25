@@ -45,6 +45,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { createFakeNode } from './lib/fake-node.mjs';
 import { READ_ATTEMPTS } from './lib/queue-health.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -508,20 +509,38 @@ test('a --confirm run with a missing pair calls the registration-token POST exac
 
 // A new registration carries no `hadoku-builder` until the fast loop grants
 // it. On 2026-10-22 that gap read as a bug and the label was written by hand.
+// Registered on a fake node, because since #1 a claw's unit is started only
+// after its slice and throttle provisioning have really run there.
 test('a --confirm run that registers says when the builder label arrives, from the loop constants', () => {
 	const fx = fixture();
+	const node = createFakeNode({ runnerVersion: '2.337.0' });
 	try {
 		writeFileSync(
 			join(fx.root, 'fleet-runner-manifest.json'),
-			JSON.stringify({ machines: { [CLAW]: { labels: ['hadoku-builder'], maxConcurrent: 2 } } })
+			JSON.stringify({
+				machines: {
+					[CLAW]: {
+						labels: ['hadoku-builder'],
+						maxConcurrent: 2,
+						minFreeMb: 1024,
+						slice: {},
+					},
+				},
+			})
 		);
-		const r = run(fx, [], ['--confirm']);
+		const r = run(fx, [], ['--confirm'], {
+			...node.env,
+			PATH: `${node.callerBin}:${fx.bin}:${process.env.PATH}`,
+			HADOKU_SITE_ROOT: '/nonexistent',
+			FLEET_NO_BANNER: '1',
+		});
 		assert.match(r.out, /Done: 1 registered/, r.out + r.stderr);
 		assert.match(
 			r.out,
 			/fast loop grants hadoku-builder: within ~10 minutes\. Do not add it by hand\./
 		);
 	} finally {
+		node.cleanup();
 		cleanup(fx);
 	}
 });

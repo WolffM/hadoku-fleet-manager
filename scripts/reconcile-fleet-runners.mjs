@@ -150,6 +150,7 @@ import { isGuestNode, mintsOnDemand, standingRepos } from '../dist/lib/node-role
 import { RETENTION_DAYS } from '../dist/job-history.js';
 import { FAST_LOOP_SECONDS, RECONCILE_EVERY_TICKS } from '../dist/fleet-loop.js';
 import { createEmitter } from './lib/emit.mjs';
+import { runFleetScript } from './lib/run-fleet-script.mjs';
 // The queue-health precedent, imported rather than re-derived — that gate
 // measured the transient rate (0.13% of `gh api` calls, 2026-09-07) and one
 // number is the point, exactly as `check-fleet-preflight.mjs` and
@@ -159,6 +160,8 @@ import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = manifestPath();
 const TOOLCACHE_RULE = resolve(__dirname, 'lib', 'runner-toolcache.sh');
+const SLICE_SCRIPT = resolve(__dirname, 'deploy-runners-slice.mjs');
+const THROTTLE_SCRIPT = resolve(__dirname, 'deploy-ci-throttle.mjs');
 
 /**
  * Resolved coverage, written for OTHER tools to read — chiefly mgmt-api's
@@ -1245,8 +1248,17 @@ function currentRunnerVersion() {
  * and failed its first job until self-update caught up. GitHub hard-deprecates
  * old runners, so a stale-enough cache eventually cannot connect at all.
  */
-function registerScript({ repo, claw, version, token, labels }) {
+function registerScript({ repo, claw, version, token, labels, start }) {
 	const suffix = repoSuffix(repo);
+	// ENABLED, NOT STARTED, on a claw (#1). A unit's first start decides its
+	// cgroup, so starting it here put it in app.slice — no group ceiling — and a
+	// runner started before its .env carries the throttle hook has no
+	// concurrency limit and no shared tool cache. The caller writes both through
+	// the drivers and only then starts it; see provisionBeforeStart. A guest
+	// (start=true) is out of both drivers' scope and starts here, as it always did.
+	const startBlock = start
+		? 'systemctl --user enable --now "$UNIT"\nsleep 3\nsystemctl --user is-active "$UNIT"'
+		: 'systemctl --user enable "$UNIT"';
 	return `
 set -euo pipefail
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
@@ -1389,12 +1401,104 @@ TimeoutStopSec=5min
 [Install]
 WantedBy=default.target
 UNIT_EOF
+echo "UNIT-WRITTEN $UNIT"
 
 systemctl --user daemon-reload
-systemctl --user enable --now "$UNIT"
+${startBlock}
+`;
+}
+
+/**
+ * Start a unit whose slice drop-in and throttle env are already on disk, and
+ * prove where it landed.
+ *
+ * THE KERNEL, NOT THE CONFIG. `Slice=` reads right the moment the drop-in
+ * exists; only `ControlGroup` says where the processes went. A unit that
+ * comes up outside the slice FAILS the registration here, rather than waiting
+ * for check:slice to find it the next night.
+ *
+ * THE ONE-SECOND SLEEP is for check:throttle's staleness rule, which calls a
+ * listener stale when its `.env` mtime is NEWER than the listener's start,
+ * both in whole seconds. The throttle step wrote that `.env` moments ago, and
+ * a start inside the same second can read as one second EARLIER than the
+ * write. Then a correctly provisioned runner reports "written but not loaded".
+ */
+function startScript({ repo, sliceName }) {
+	const unit = 'actions-runner-' + repoSuffix(repo) + '.service';
+	return `
+set -euo pipefail
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+UNIT="${unit}"
+sleep 1
+systemctl --user daemon-reload
+systemctl --user start "$UNIT"
 sleep 3
 systemctl --user is-active "$UNIT"
+cg=$(systemctl --user show "$UNIT" -p ControlGroup --value)
+parent=\${cg%/*}
+parent=\${parent##*/}
+if [ "$parent" != "${sliceName}" ]; then
+  echo "BORN-OUTSIDE-SLICE $UNIT effective=\${parent:-none} want=${sliceName}" >&2
+  exit 6
+fi
+echo "STARTED $UNIT in ${sliceName}"
 `;
+}
+
+/**
+ * Write a claw's slice drop-in and throttle env for units that are enabled
+ * but not yet started (#1), by running the SAME drivers the operator runs.
+ *
+ * The drivers are the only statement of what those files hold — the per-unit
+ * cap is computed from the node's measured MemTotal, the `.env` carries five
+ * keys and the hook must land before the line naming it — so registration
+ * calls them rather than writing a third copy. Slice first, without
+ * `--restart`: `place()` sees an inactive unit's declared `Slice=`, writes the
+ * drop-in and daemon-reloads, and there is nothing running to restart. Throttle
+ * with `--no-restart`: there is no listener yet, and every OTHER runner on the
+ * node is left exactly as it was.
+ *
+ * JUDGED PER MACHINE, NOT BY EXIT CODE. Either driver exits 1 for drift
+ * elsewhere on the node (a stale listener on another runner, say), which says
+ * nothing about whether THIS unit's files were written. What has to hold is
+ * that the node answered and the write steps did not report failure. The
+ * start step then reads the kernel.
+ */
+async function provisionBeforeStart(claw) {
+	const slice = await runFleetScript(SLICE_SCRIPT, ['--machine', claw, '--confirm', '--json']);
+	const s = slice.json?.results?.find((r) => r.machine === claw);
+	if (!s?.ok || !s.summary)
+		return {
+			ok: false,
+			why: `slice --confirm did not converge ${claw}: ${s?.error ?? (slice.why || 'no result for this node')}`,
+		};
+	const sliceFailed = (s.notes ?? []).filter((n) =>
+		/^(PLACE-FAILED|NEEDS-OPERATOR|SLICE-FAIL) /.test(n)
+	);
+	if (sliceFailed.length || Number(s.summary.failed) > 0)
+		return {
+			ok: false,
+			why: `slice --confirm on ${claw}: ${sliceFailed.join('; ') || `failed=${s.summary.failed}`}`,
+		};
+
+	const thr = await runFleetScript(THROTTLE_SCRIPT, [
+		'--machine',
+		claw,
+		'--confirm',
+		'--no-restart',
+		'--json',
+	]);
+	const t = thr.json?.results?.find((r) => r.machine === claw);
+	if (!t?.ok || !t.summary || t.expectedDown)
+		return {
+			ok: false,
+			why: `throttle --confirm did not converge ${claw}: ${t?.error ?? t?.skipped ?? (thr.why || 'no result for this node')}`,
+		};
+	const hookFailed = (t.notes ?? []).filter((n) => n.startsWith('HOOK-INSTALL-FAILED'));
+	if (hookFailed.length)
+		return { ok: false, why: `throttle --confirm on ${claw}: ${hookFailed.join('; ')}` };
+
+	return { ok: true, sliceName: s.sliceName };
 }
 
 /**
@@ -2178,6 +2282,11 @@ async function main() {
 
 		await Promise.all(
 			[...byClaw.entries()].map(async ([claw, pairs]) => {
+				// A guest lends the fleet a registration and nothing else: the slice
+				// and throttle drivers refuse it by role (operator, 2026-09-14), so
+				// its unit starts at registration exactly as before. A claw's waits.
+				const guest = isGuestNode(manifest.machines?.[claw]);
+				const unstarted = [];
 				for (const { repo } of pairs) {
 					const token = mintToken(repo, 'register');
 					// A runner's labels are the NODE's declared capabilities, projected
@@ -2196,15 +2305,60 @@ async function main() {
 					const labelArg = labels.length ? labels.join(',') : 'self-hosted';
 					const res = await ssh(
 						claw,
-						registerScript({ repo, claw, version, token, labels: labelArg })
+						registerScript({ repo, claw, version, token, labels: labelArg, start: guest })
 					);
-					if (res.ok) {
+					// A claw's script ends in exactly one of two ways when it exits 0:
+					// UNIT-WRITTEN (enabled, waiting to be provisioned) or SKIP (a
+					// system unit already supervises this directory). Anything else is
+					// a script that succeeded without saying what it did.
+					const wrote = /^UNIT-WRITTEN /m.test(res.stdout);
+					const skipped = /^SKIP: /m.test(res.stderr);
+					if (res.ok && !guest && wrote) {
+						unstarted.push(repo);
+					} else if (res.ok && (guest || skipped)) {
 						results.registered.push({ repo, claw });
 						log(`  ✓ ${claw}  ${repo}`);
+					} else if (res.ok) {
+						const error = 'registration exited 0 but wrote no unit and gave no SKIP reason';
+						results.failed.push({ repo, claw, error });
+						log(`  ✗ ${claw}  ${repo}\n      ${error}`);
 					} else {
 						results.failed.push({ repo, claw, error: res.stderr.trim().slice(0, 400) });
 						log(
 							`  ✗ ${claw}  ${repo}\n      ${res.stderr.trim().split('\n').slice(-3).join('\n      ')}`
+						);
+					}
+				}
+				if (!unstarted.length) return;
+
+				// BORN PROVISIONED (#1). Each unit is registered and enabled but has
+				// never run; its slice drop-in and throttle env go on disk now, so its
+				// first start is in the slice with the hook loaded and nothing ever
+				// needs `--restart`. A unit whose provisioning failed is NOT started:
+				// an offline runner fails the next reconcile loudly, an unthrottled
+				// one outside the slice ran unnoticed for two nights.
+				const prov = await provisionBeforeStart(claw);
+				for (const repo of unstarted) {
+					const unit = `actions-runner-${repoSuffix(repo)}.service`;
+					if (!prov.ok) {
+						results.failed.push({ repo, claw, error: `registered, NOT started: ${prov.why}` });
+						log(
+							`  ✗ ${claw}  ${repo} — registered and enabled, NOT started: ${prov.why}\n` +
+								`      fix: fleet slice --machine ${claw} --confirm && ` +
+								`fleet throttle --machine ${claw} --confirm --no-restart, ` +
+								`then: ssh ${claw} systemctl --user start ${unit}`
+						);
+						continue;
+					}
+					const started = await ssh(claw, startScript({ repo, sliceName: prov.sliceName }));
+					if (started.ok) {
+						results.registered.push({ repo, claw });
+						log(`  ✓ ${claw}  ${repo}  (started in ${prov.sliceName}, throttle env loaded)`);
+					} else {
+						results.failed.push({ repo, claw, error: started.stderr.trim().slice(0, 400) });
+						log(
+							`  ✗ ${claw}  ${repo} — provisioned, but its first start failed:\n      ` +
+								started.stderr.trim().split('\n').slice(-2).join('\n      ')
 						);
 					}
 				}

@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Part of scripts/lib/fake-node.mjs — read its header for what is faked and why.
+# Fake systemctl. State: $FAKE_STATE/<scope>/<unit>.{active,enabled}
+S="$FAKE_STATE"
+scope=system; value=0; props=(); pos=(); now=0; type=""
+for a in "$@"; do
+	case "$a" in
+	--user) scope=user ;;
+	--value) value=1 ;;
+	--now) now=1 ;;
+	--type=*) type="${a#--type=}" ;;
+	--all | --no-legend | --no-pager | --runtime | --quiet | -q | --kill-whom=* | --signal=* | --plain) ;;
+	-p) want_prop=1 ;;
+	*)
+		if [ "${want_prop:-0}" = 1 ]; then props+=("$a"); want_prop=0; else pos+=("$a"); fi
+		;;
+	esac
+done
+printf '%s\n' "$scope $*" >>"$S/calls.log"
+if [ "$scope" = user ]; then UD="$HOME/.config/systemd/user"; else UD="$SYS_DIR"; fi
+mkdir -p "$S/$scope"
+uid=$(id -u)
+cgbase() { if [ "$scope" = user ]; then echo "/user.slice/user-$uid.slice/user@$uid.service"; else echo ""; fi; }
+files() { [ -f "$UD/$1" ] && echo "$UD/$1"; [ -d "$UD/$1.d" ] && ls "$UD/$1.d"/*.conf 2>/dev/null | sort; }
+fileprop() { # unit key -> last value across file + drop-ins
+	v=""
+	for f in $(files "$1"); do
+		l=$(grep -E "^$2=" "$f" | tail -1)
+		[ -n "$l" ] && v="${l#*=}"
+	done
+	printf '%s' "$v"
+}
+bytes() { case "$1" in '' | infinity) echo infinity ;; *M) echo $((${1%M} * 1048576)) ;; *G) echo $((${1%G} * 1073741824)) ;; *) echo "$1" ;; esac; }
+loaded() { [ -f "$UD/$1" ]; }
+active() { [ -f "$S/$scope/$1.active" ]; }
+slice_of() { s=$(fileprop "$1" Slice); [ -n "$s" ] || s=$([ "$scope" = user ] && echo app.slice || echo system.slice); echo "$s"; }
+slice_active() { for f in "$S/$scope"/*.active; do [ -f "$f" ] && grep -q "^slice=$1$" "$f" && return 0; done; return 1; }
+get() { # unit prop
+	u="$1"; p="$2"
+	case "$p" in
+	LoadState) loaded "$u" && echo loaded || echo not-found ;;
+	ActiveState) { active "$u" || { case "$u" in *.slice) slice_active "$u" ;; *) false ;; esac; }; } && echo active || echo inactive ;;
+	ControlGroup)
+		case "$u" in
+		*.slice) slice_active "$u" && echo "$(cgbase)/$u" ;;
+		*) active "$u" && sed -n 's/^cg=//p' "$S/$scope/$u.active" ;;
+		esac ;;
+	Slice) loaded "$u" && slice_of "$u" ;;
+	MemoryMax | MemorySwapMax) loaded "$u" && bytes "$(fileprop "$u" "$p")" ;;
+	MainPID) active "$u" && sed -n 's/^pid=//p' "$S/$scope/$u.active" || echo 0 ;;
+	DefaultIOAccounting) echo yes ;;
+	*) fileprop "$u" "$p" ;;
+	esac
+}
+start_unit() {
+	u="$1"
+	loaded "$u" || { echo "Unit $u not found." >&2; return 5; }
+	active "$u" && return 0
+	sl=$(slice_of "$u"); cg="$(cgbase)/$sl/$u"
+	mkdir -p "$CGROUP_ROOT$cg" "$CGROUP_ROOT$(cgbase)/$sl"
+	bytes "$(fileprop "$u" MemoryMax)" | sed 's/^infinity$/max/' >"$CGROUP_ROOT$cg/memory.max"
+	if [ -f "$UD/$sl" ]; then
+		bytes "$(fileprop "$sl" MemoryMax)" | sed 's/^infinity$/max/' >"$CGROUP_ROOT$(cgbase)/$sl/memory.max"
+		bytes "$(fileprop "$sl" MemorySwapMax)" | sed 's/^infinity$/max/' >"$CGROUP_ROOT$(cgbase)/$sl/memory.swap.max"
+	fi
+	dir=$(fileprop "$u" WorkingDirectory); dir="${dir//%h/$HOME}"
+	pid=""
+	if [ -n "$dir" ] && [ -f "$dir/.runner" ]; then
+		sleep 600 </dev/null >/dev/null 2>&1 &
+		pid=$!
+		echo "$pid" >>"$S/pids"
+	fi
+	printf 'slice=%s\ncg=%s\npid=%s\nlistener=%s\n' "$sl" "$cg" "$pid" "${pid:+$dir/bin/Runner.Listener}" >"$S/$scope/$u.active"
+	printf '%s\n' "START $u slice=$sl" >>"$S/starts.log"
+}
+stop_unit() {
+	u="$1"; active "$u" || return 0
+	pid=$(sed -n 's/^pid=//p' "$S/$scope/$u.active")
+	[ -n "$pid" ] && kill "$pid" 2>/dev/null
+	rm -f "$S/$scope/$u.active"
+}
+list() { # patterns...
+	{
+		for f in "$UD"/*; do [ -f "$f" ] && basename "$f"; done
+	} | while read -r n; do
+		case "$type" in slice) case "$n" in *.slice) ;; *) continue ;; esac ;; esac
+		case "$n" in *.service) [ -f "$S/$scope/$n.enabled" ] || active "$n" || continue ;; esac
+		m=0
+		if [ "$#" = 0 ]; then m=1; fi
+		for p in "$@"; do [[ "$n" == $p ]] && m=1; done
+		[ "$m" = 1 ] || continue
+		if [ "$(get "$n" ActiveState)" = active ]; then echo "$n loaded active running fake"; else echo "$n loaded inactive dead fake"; fi
+	done
+}
+cmd="${pos[0]:-}"; args=("${pos[@]:1}")
+case "$cmd" in
+daemon-reload | daemon-reexec | reset-failed) exit 0 ;;
+show)
+	u="${args[0]:-}"
+	for p in "${props[@]}"; do
+		v=$(get "$u" "$p")
+		if [ "$value" = 1 ]; then echo "$v"; else echo "$p=$v"; fi
+	done ;;
+list-units) list "${args[@]}" ;;
+list-unit-files) for f in "$UD"/*; do [ -f "$f" ] && echo "$(basename "$f") enabled"; done ;;
+start) for u in "${args[@]}"; do start_unit "$u" || exit $?; done ;;
+stop | kill) for u in "${args[@]}"; do stop_unit "$u"; done ;;
+restart) for u in "${args[@]}"; do stop_unit "$u"; start_unit "$u" || exit $?; done ;;
+enable)
+	for u in "${args[@]}"; do
+		loaded "$u" || { echo "Unit $u not found." >&2; exit 1; }
+		touch "$S/$scope/$u.enabled"
+		[ "$now" = 1 ] && { start_unit "$u" || exit $?; }
+	done ;;
+disable) for u in "${args[@]}"; do rm -f "$S/$scope/$u.enabled"; [ "$now" = 1 ] && stop_unit "$u"; done ;;
+is-active) u="${args[0]:-}"; if [ "$(get "$u" ActiveState)" = active ]; then echo active; else echo inactive; exit 3; fi ;;
+is-enabled) [ -f "$S/$scope/${args[0]:-}.enabled" ] && echo enabled || { echo disabled; exit 1; } ;;
+cat) for f in $(files "${args[0]:-}"); do cat "$f"; done ;;
+set-property)
+	u="${args[0]:-}"
+	for kv in "${args[@]:1}"; do
+		case "$kv" in MemoryMax=*)
+			active "$u" && bytes "${kv#MemoryMax=}" >"$CGROUP_ROOT$(get "$u" ControlGroup)/memory.max" ;;
+		esac
+	done ;;
+*) printf '%s\n' "UNHANDLED systemctl $*" >>"$S/calls.log"; exit 1 ;;
+esac
+# Every failure above exits explicitly; anything that reaches here succeeded.
+exit 0

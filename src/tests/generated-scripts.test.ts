@@ -37,7 +37,7 @@ const SRC = readFileSync(
 );
 
 /** Pull one generator out of the module and run it, without importing the CLI. */
-function generate(fnName: string, args: Record<string, string>): unknown {
+function generate(fnName: string, args: Record<string, string | boolean>): unknown {
 	const start = SRC.indexOf(`function ${fnName}`);
 	assert.notEqual(start, -1, `${fnName} not found`);
 	const end = SRC.indexOf('\n}', SRC.indexOf('return', start)) + 2;
@@ -49,7 +49,7 @@ function generate(fnName: string, args: Record<string, string>): unknown {
 		'MIN_FREE_GB_AFTER',
 		'INSTALL_GB',
 		`return ${body}`
-	) as (...a: unknown[]) => (a: Record<string, string>) => unknown;
+	) as (...a: unknown[]) => (a: Record<string, string | boolean>) => unknown;
 	return make(
 		(r: string) => r.split('/').pop()!.toLowerCase(),
 		() => '# toolcache rule',
@@ -70,8 +70,30 @@ void test('registerScript returns a complete script, not a comparison', () => {
 	assert.equal(typeof out, 'string', 'an unescaped backtick makes this a boolean');
 	const s = out as string;
 	assert.match(s, /\.\/config\.sh/, 'must actually configure the runner');
-	assert.match(s, /systemctl --user enable --now/, 'must install the unit');
-	assert.match(s, /is-active/, 'must reach its final verification line');
+	assert.match(s, /UNIT-WRITTEN/, 'must say it wrote the unit — the caller keys on it');
+	assert.match(s, /systemctl --user enable "\$UNIT"\n*$/, 'must reach its final line');
+});
+
+// #1: a claw's unit is enabled and NOT started. Its first start decides its
+// cgroup, and the slice drop-in and throttle env do not exist yet.
+void test('registerScript never starts a claw unit; only a guest starts at registration', () => {
+	const args = { repo: 'WolffM/x', claw: 'claw-1', version: '2.337.0', token: 't', labels: 'l' };
+	const claw = generate('registerScript', args) as string;
+	assert.doesNotMatch(claw, /--now/, 'a claw unit must not start before it is provisioned');
+	assert.doesNotMatch(claw, /systemctl --user (re)?start/);
+	const guest = generate('registerScript', { ...args, start: true }) as string;
+	assert.match(guest, /systemctl --user enable --now "\$UNIT"/);
+	assert.match(guest, /is-active/, 'a guest still verifies what it started');
+});
+
+void test('startScript starts the unit and refuses one born outside its slice', () => {
+	const s = generate('startScript', { repo: 'WolffM/x', sliceName: 'runners.slice' }) as string;
+	assert.equal(typeof s, 'string');
+	assert.match(s, /systemctl --user start "\$UNIT"/);
+	assert.match(s, /-p ControlGroup/, 'placement is read from the kernel, not Slice=');
+	assert.match(s, /BORN-OUTSIDE-SLICE/);
+	assert.match(s, /\[ "\$parent" != "runners\.slice" \]/);
+	assert.match(s, /echo "STARTED \$UNIT in runners\.slice"/, 'must reach its final line');
 });
 
 void test('removeScript deregisters from GitHub, not just locally', () => {
@@ -88,7 +110,7 @@ void test('removeScript deregisters from GitHub, not just locally', () => {
 void test('no generator is truncated by an unescaped backtick', () => {
 	// Every backtick inside these template literals must be escaped. An
 	// unescaped one ends the literal, and what follows is parsed as JavaScript.
-	for (const fn of ['registerScript', 'removeScript']) {
+	for (const fn of ['registerScript', 'removeScript', 'startScript']) {
 		const start = SRC.indexOf(`function ${fn}`);
 		const end = SRC.indexOf('\n}', SRC.indexOf('return', start)) + 2;
 		const body = SRC.slice(start, end);

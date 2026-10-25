@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Part of scripts/lib/fake-node.mjs — read its header for what is faked and why.
+# Fake pgrep: only listeners the fake systemctl started exist.
+exact=0; full=0; listp=0; count=0; pat=""
+for a in "$@"; do
+	case "$a" in
+	-*) case "$a" in *x*) exact=1 ;; esac; case "$a" in *f*) full=1 ;; esac
+		case "$a" in *a*) listp=1 ;; esac; case "$a" in *c*) count=1 ;; esac ;;
+	*) pat="$a" ;;
+	esac
+done
+n=0; out=""
+for f in "$FAKE_STATE"/user/*.active; do
+	[ -f "$f" ] || continue
+	pid=$(sed -n 's/^pid=//p' "$f"); cmdl=$(sed -n 's/^listener=//p' "$f")
+	[ -n "$pid" ] && [ -n "$cmdl" ] || continue
+	if [ "$exact" = 1 ]; then [ "$pat" = Runner.Listener ] || continue
+	elif [ "$full" = 1 ]; then printf '%s' "$cmdl" | grep -Eq -- "$pat" || continue
+	else continue; fi
+	n=$((n + 1))
+	if [ "$listp" = 1 ]; then out="$out$pid $cmdl"$'\n'; else out="$out$pid"$'\n'; fi
+done
+if [ "$count" = 1 ]; then echo "$n"; else printf '%s' "$out"; fi
+[ "$n" -gt 0 ]

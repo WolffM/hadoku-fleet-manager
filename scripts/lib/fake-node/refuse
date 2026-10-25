@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# "Not available on this node": systemd-run, loginctl, ps and curl all refuse.
+exit 1

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Reports plenty of free disk for the registration script's space check.
+echo "Avail"
+echo "500G"
