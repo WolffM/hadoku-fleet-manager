@@ -75,7 +75,7 @@ import process from 'node:process';
 
 import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
-import { readQueuedWithRetry } from './lib/queue-health.mjs';
+import { describeReadFailure, readQueuedWithRetry } from './lib/queue-health.mjs';
 
 const JSON_OUT = process.argv.includes('--json');
 const emitter = createEmitter({ json: JSON_OUT });
@@ -180,10 +180,15 @@ function completedRuns(repo) {
 /**
  * Could this run EVER have produced a job-history record?
  *
- * `false` only when the answer is a definite no — an empty jobs array, or no job
- * carrying a runner name and both timestamps, which are exactly the two skips
- * `ingestRuns` makes. Anything else, INCLUDING a call that fails, is `true`: a
- * run we could not look at must be counted against the recorder, never excused.
+ * `possible: false` only when the answer is a definite no — an empty jobs
+ * array, or no job carrying a runner name and both timestamps, which are
+ * exactly the two skips `ingestRuns` makes. Anything else, INCLUDING a call
+ * that fails, is `possible: true`: a run we could not look at must be counted
+ * against the recorder, never excused.
+ *
+ * BUT A FAILED LOOKUP SAYS SO (#10). It used to be a bare `catch { return true }`,
+ * so a burst of failed lookups read as the recorder losing runs, with nothing
+ * to tell the two apart. `failed` carries the reason, and the caller counts it.
  */
 function couldHaveBeenRecorded(repo, runId) {
 	let jobs;
@@ -202,10 +207,11 @@ function couldHaveBeenRecorded(repo, runId) {
 			.split('\n')
 			.map((l) => l.split('\t'))
 			.filter((p) => p.length === 3);
-	} catch {
-		return true; // could not look — the pessimistic side
+	} catch (err) {
+		// Could not look — the pessimistic side, and said.
+		return { possible: true, failed: describeReadFailure(err, 30_000) };
 	}
-	return jobs.some(([runner, started, completed]) => runner && started && completed);
+	return { possible: jobs.some(([runner, started, completed]) => runner && started && completed) };
 }
 
 let roster = [];
@@ -246,6 +252,10 @@ const unreadable = [];
 
 let unrecordable = 0;
 let classified = 0;
+/** Misses whose jobs lookup FAILED: counted as lost, pessimistically, and reported as such. */
+let lookupFailed = 0;
+/** The distinct reasons, so a burst of one cause reads as one line. */
+const lookupReasons = new Map();
 
 for (const repo of roster) {
 	const read = completedRuns(repo);
@@ -257,6 +267,7 @@ for (const repo of roster) {
 	let n = 0;
 	let hit = 0;
 	let skipped = 0;
+	let failedHere = 0;
 	for (const r of runs) {
 		const at = Date.parse(r.at);
 		if (!Number.isFinite(at) || at > cutoffNew) continue; // too new to judge
@@ -271,7 +282,13 @@ for (const repo of roster) {
 		// while the classify budget holds; past it the run counts as lost.
 		if (classified < MAX_CLASSIFY) {
 			classified++;
-			if (!couldHaveBeenRecorded(repo, r.id)) {
+			const verdict = couldHaveBeenRecorded(repo, r.id);
+			if (verdict.failed) {
+				failedHere++;
+				lookupFailed++;
+				lookupReasons.set(verdict.failed, (lookupReasons.get(verdict.failed) ?? 0) + 1);
+			}
+			if (!verdict.possible) {
 				skipped++;
 				unrecordable++;
 				continue; // out of the numerator AND the denominator
@@ -282,7 +299,14 @@ for (const repo of roster) {
 	if (!n) continue;
 	eligible += n;
 	recorded += hit;
-	rows.push({ repo, eligible: n, recorded: hit, coverage: hit / n, unrecordable: skipped });
+	rows.push({
+		repo,
+		eligible: n,
+		recorded: hit,
+		coverage: hit / n,
+		unrecordable: skipped,
+		lookupFailed: failedHere,
+	});
 }
 
 if (unreadable.length) {
@@ -303,7 +327,16 @@ const worst = rows
 const ok = worst.length === 0;
 
 if (JSON_OUT) {
-	emitter.emit({ ok, overall, eligible, recorded, unrecordable, repos: rows });
+	emitter.emit({
+		ok,
+		overall,
+		eligible,
+		recorded,
+		unrecordable,
+		lookupFailed,
+		lookupReasons: [...lookupReasons].map(([reason, count]) => ({ reason, count })),
+		repos: rows,
+	});
 	process.exit(ok ? 0 : 1);
 }
 
@@ -318,12 +351,24 @@ const unrecordableNote = unrecordable
 		`that reached a runner; there was never a record to lose.`
 	: '';
 
+/**
+ * Misses counted as lost only because the jobs lookup FAILED (#10). Low
+ * coverage with a large count here is the lookup, not the recorder — and the
+ * gate still fails on it, because could-not-look is not a pass.
+ */
+const lookupNote = lookupFailed
+	? `\n  ${lookupFailed} miss(es) counted as lost because their jobs lookup FAILED, so ` +
+		`whether they were recordable is unknown: ` +
+		[...lookupReasons].map(([reason, count]) => `${count}× ${reason}`).join('; ')
+	: '';
+
 if (!ok) {
 	console.error(
 		`✗ job-history is losing runs in ${worst.length} repo(s) ` +
 			`(floor ${MIN_COVERAGE * 100}%, last ${LOOKBACK_H}h; fleet-wide ${(overall * 100).toFixed(0)}%):\n` +
 			worst.map((r) => `    ${r.repo.padEnd(34)} ${r.recorded}/${r.eligible}`).join('\n') +
 			unrecordableNote +
+			lookupNote +
 			'\n\n  Every per-node median, idle time and backstop threshold is computed over' +
 			'\n  this sample, so a gap here is not a missing graph — it is every number' +
 			'\n  being quietly wrong, and biased toward whatever the recorder drops.' +
@@ -336,5 +381,6 @@ log(
 	`✓ job-history coverage ${(overall * 100).toFixed(0)}% over the last ${LOOKBACK_H}h — ` +
 		`${recorded} of ${eligible} completed runs across ${rows.length} repo(s); ` +
 		`${judged} with a judgeable sample, none under ${MIN_COVERAGE * 100}%` +
-		unrecordableNote
+		unrecordableNote +
+		lookupNote
 );
