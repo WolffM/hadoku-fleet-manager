@@ -364,6 +364,13 @@ export interface FleetMachine {
 	 * `null` for a node onboarding never measured.
 	 */
 	measured: FleetMachineMeasured | null;
+	/**
+	 * The OS as the node RUNS it now, from the 60s probe: `/etc/debian_version`
+	 * (the point release `measured` cannot see) and `uname -r`. `null` for a
+	 * node not probed yet; a half the node could not read is `null`. Prefer
+	 * this over `measured.osCodename`/`kernel`, which are enrollment-time.
+	 */
+	os: { release: string | null; kernel: string | null } | null;
 }
 
 /** Mirrors `capabilities.BootcampFacet` — every key optional, as the producer writes it. */
@@ -709,6 +716,18 @@ export interface FleetDispatch {
 	failingSince: string | null;
 	/** Since process start, so a panel can show a RATE rather than one tick. */
 	totals: { minted: number; failed: number };
+	/**
+	 * The last pass that minted anything. A pass runs every 15s and most mint
+	 * nothing even while the fleet is busy, so `minted` read `0` beside eight
+	 * jobs in flight (2026-10-25). `null` = nothing minted since restart.
+	 */
+	lastMintAt: string | null;
+	/**
+	 * Mints and failures over the trailing hour, cut at `recent.since` — which is
+	 * the process start when that is later, so a fresh restart never reads as a
+	 * quiet hour.
+	 */
+	recent: { since: string; minted: number; failed: number };
 }
 
 /**
@@ -1088,7 +1107,16 @@ export interface FleetReport {
 	};
 	reservation: FleetReservation;
 	/** `affinity` is the only field not from the fast loop's snapshot — see FleetDispatchAffinity. */
-	dispatch: FleetDispatch & { affinity: FleetDispatchAffinity };
+	dispatch: FleetDispatch & {
+		affinity: FleetDispatchAffinity;
+		/**
+		 * The queue from the dispatcher's own 15s listing, aged at request time
+		 * — fresher than `fleet.queuedNow`, which is cut every 10 minutes. `at`
+		 * is the stalest read it rests on; `unread` repos had no read since
+		 * restart and are NOT counted as empty.
+		 */
+		queue: { at: string | null; runs: number; oldestQueuedMin: number | null; unread: number };
+	};
 	/** @see FleetGithubBudget — empty until this process has seen a GitHub response. */
 	githubBudget: FleetGithubBudget[];
 	/** @see FleetVocabulary — the words, shipped with the numbers. */

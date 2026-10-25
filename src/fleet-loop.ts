@@ -397,7 +397,15 @@ export function loadNodeCapacity(): Record<string, number> {
  */
 const PROBE_CMD =
 	's=0; [ -s "$HOME/.hadoku/sick-runner" ] && s=1; ' +
-	'w=$(pgrep -c Runner.Worker 2>/dev/null); ' +
+	// A JOB is a Worker the runner SPAWNED: `.../bin*/Runner.Worker spawnclient
+	// <in> <out>`. Matching the process name alone counted anything called
+	// Runner.Worker — and ci-throttle.test.mjs copies bash to exactly that name
+	// to stand in for one. Every run of this repo's suite on a CI node (claw-4,
+	// claw-6) or an agent's worktree on hokon added phantom jobs: on 2026-10-25
+	// claw-6 read `busy 7 / 2` holding two real jobs, and the dispatcher, which
+	// charges these as standing work, refused it as at capacity while the
+	// fan-out queued. `grep -c` prints 0 on no match, so this stays defaulted.
+	'w=$(pgrep -ax Runner.Worker 2>/dev/null | grep -c " spawnclient "); ' +
 	// Field 4: which REPO each running job belongs to, comma-joined.
 	//
 	// A node-wide worker count cannot answer "can repo R start a job here",
@@ -417,7 +425,7 @@ const PROBE_CMD =
 	// while the Listener runs from the plain `bin` symlink. Stripping `/bin/`
 	// matched the listener path, produced no directory for any worker, and made
 	// this field come back empty on a node that was demonstrably busy.
-	'r=$(pgrep -a Runner.Worker 2>/dev/null | while read -r _ c _; do ' +
+	'r=$(pgrep -ax Runner.Worker 2>/dev/null | grep " spawnclient " | while read -r _ c _; do ' +
 	'd=${c%/bin*/Runner.Worker}; ' +
 	'sed -n \'s#.*"gitHubUrl"[^"]*"https://github.com/\\([^"]*\\)".*#\\1#p\' ' +
 	'"$d/.runner" 2>/dev/null; done | tr "\\n" ","); ' +
@@ -444,7 +452,13 @@ const PROBE_CMD =
 	// so this executes the capability rather than inferring it. TAGGED, so it
 	// can never be mistaken for the repo field after it.
 	'g=0; timeout 3 getent ahosts broker.actions.githubusercontent.com >/dev/null 2>&1 && g=1; ' +
-	'printf "%s %s %s g=%s %s" "${w:-0}" "$(nproc)" "$s" "$g" "$r"';
+	// THE OS AS RUNNING, tagged `o=<debian_version>,<kernel>` (comma, because Ubuntu's debian_version reads `trixie/sid`). The inventory read
+	// `$measured`, which enrollment writes once: claw-1..3 predate enrollment and
+	// showed no OS at all, and every other claw showed the release it joined
+	// with. On 2026-10-25 the fleet spanned Debian 13.3 to 13.7 and no panel
+	// could say so. `-` for a half that could not be read.
+	'o="$(cat /etc/debian_version 2>/dev/null || echo -),$(uname -r 2>/dev/null || echo -)"; ' +
+	'printf "%s %s %s g=%s o=%s %s" "${w:-0}" "$(nproc)" "$s" "$g" "$o" "$r"';
 
 /**
  * Where pnpm-guarded-install.sh records that it found this node's store
@@ -480,7 +494,16 @@ export interface ProbeResult {
 	 * than to a wrong one.
 	 */
 	busyRepos: ReadonlyMap<string, number> | null;
+	/**
+	 * `/etc/debian_version` and `uname -r` as the node runs them now — the `o=`
+	 * probe field. Absent when the field was; a half that could not be read is
+	 * `null`.
+	 */
+	os?: { release: string | null; kernel: string | null };
 }
+
+/** Test seam: the probe command itself, so a test can run it against a stub `pgrep`. */
+export const __PROBE_CMD_FOR_TESTING = PROBE_CMD;
 
 /** Test seam: the probe's wire format is the contract between two nodes. */
 export function __parseProbeForTesting(stdout: string): ProbeResult | null {
@@ -490,11 +513,22 @@ export function __parseProbeForTesting(stdout: string): ProbeResult | null {
 function parseProbe(stdout: string): ProbeResult | null {
 	const fields = String(stdout).trim().split(/\s+/);
 	const [w, c, sickField] = fields;
-	// The DNS field is tagged and optional: absent, the next field is the repo
-	// list exactly as it was before the tag existed.
-	const dnsTag = /^g=([01])$/.exec(fields[3] ?? '');
-	const repoField = dnsTag ? fields[4] : fields[3];
-	const githubDns = dnsTag ? dnsTag[1] === '1' : undefined;
+	// The TAGGED fields (`g=`, `o=`) are optional and precede the repo list,
+	// the one untagged field after the third: with no tags, the next field is
+	// the repo list exactly as it was before the tags existed.
+	let i = 3;
+	let githubDns: boolean | undefined;
+	let os: ProbeResult['os'];
+	for (; i < fields.length; i++) {
+		const dnsTag = /^g=([01])$/.exec(fields[i]);
+		const osTag = /^o=([^,]*),(.*)$/.exec(fields[i]);
+		if (dnsTag) githubDns = dnsTag[1] === '1';
+		else if (osTag) {
+			const half = (v: string): string | null => (v && v !== '-' ? v : null);
+			os = { release: half(osTag[1]), kernel: half(osTag[2]) };
+		} else break;
+	}
+	const repoField = fields[i];
 	const workers = Number(w);
 	const cores = Number(c);
 	if (!Number.isFinite(workers) || !Number.isFinite(cores) || cores <= 0) return null;
@@ -511,14 +545,21 @@ function parseProbe(stdout: string): ProbeResult | null {
 	// per-repo signal. `workers === 0` settles it: nothing is running, so the
 	// empty attribution is the complete and correct answer.
 	if (repoField === undefined) {
-		return { workers, cores, sick, githubDns, busyRepos: workers === 0 ? new Map() : null };
+		return {
+			workers,
+			cores,
+			sick,
+			githubDns,
+			...(os ? { os } : {}),
+			busyRepos: workers === 0 ? new Map() : null,
+		};
 	}
 	const busyRepos = new Map<string, number>();
 	for (const slug of repoField.split(',')) {
 		if (!slug) continue; // trailing comma from `tr`
 		busyRepos.set(slug, (busyRepos.get(slug) ?? 0) + 1);
 	}
-	return { workers, cores, sick, githubDns, busyRepos };
+	return { workers, cores, sick, githubDns, ...(os ? { os } : {}), busyRepos };
 }
 
 /**
@@ -570,6 +611,7 @@ export interface ProbeResultLike {
 	sick?: boolean;
 	busyRepos?: ReadonlyMap<string, number> | null;
 	githubDns?: boolean;
+	os?: ProbeResult['os'];
 }
 
 export interface NodeProbe {
@@ -597,6 +639,12 @@ export interface NodeProbe {
 	 * retired on 2026-08-24. This is what makes that question answerable.
 	 */
 	busyRepos: ReadonlyMap<string, number> | null;
+	/**
+	 * `/etc/debian_version` and `uname -r` as the node runs them now — the `o=`
+	 * probe field. Absent when the field was; a half that could not be read is
+	 * `null`.
+	 */
+	os?: { release: string | null; kernel: string | null };
 }
 
 const DNS_BLIND_WHY =
@@ -673,6 +721,7 @@ export async function probeFleet(
 				unreachableWhy: DNS_BLIND_WHY,
 				sick: p.sick === true,
 				busyRepos: new Map(),
+				...(p.os ? { os: p.os } : {}),
 			});
 			continue;
 		}
@@ -685,6 +734,7 @@ export async function probeFleet(
 			reachable: true,
 			sick: p.sick === true,
 			busyRepos: p.busyRepos ?? null,
+			...(p.os ? { os: p.os } : {}),
 		});
 	}
 	return out;
@@ -742,11 +792,27 @@ let lastDispatch: FleetDispatch = {
 	error: null,
 	failingSince: null,
 	totals: { minted: 0, failed: 0 },
+	lastMintAt: null,
+	recent: { since: new Date().toISOString(), minted: 0, failed: 0 },
 };
 
+const RECENT_WINDOW_MS = 60 * 60 * 1000;
+/** Passes that minted or failed something, for `recent`. Quiet passes add nothing. */
+let recentPasses: { atMs: number; minted: number; failed: number }[] = [];
+let dispatchStartMs = Date.now();
+
 /** What the last dispatch pass did, for the Fleet panel. */
-export function getDispatchSnapshot(): FleetDispatch {
-	return lastDispatch;
+export function getDispatchSnapshot(nowMs: number = Date.now()): FleetDispatch {
+	const sinceMs = Math.max(dispatchStartMs, nowMs - RECENT_WINDOW_MS);
+	const inWindow = recentPasses.filter((p) => p.atMs >= sinceMs);
+	return {
+		...lastDispatch,
+		recent: {
+			since: new Date(sinceMs).toISOString(),
+			minted: inWindow.reduce((n, p) => n + p.minted, 0),
+			failed: inWindow.reduce((n, p) => n + p.failed, 0),
+		},
+	};
 }
 
 /**
@@ -784,7 +850,14 @@ export function recordDispatch(
 			minted: prev.totals.minted + (res?.minted ?? 0),
 			failed: prev.totals.failed + (res?.failed ?? 0),
 		},
+		lastMintAt: res && res.minted > 0 ? nowIso : prev.lastMintAt,
+		recent: prev.recent,
 	};
+	if (res && (res.minted || res.failed)) {
+		const atMs = Date.parse(nowIso);
+		recentPasses = recentPasses.filter((p) => p.atMs >= atMs - RECENT_WINDOW_MS);
+		recentPasses.push({ atMs, minted: res.minted, failed: res.failed });
+	}
 }
 
 let lastReservation: Reservation = { reserved: false, reason: null, detail: null };
@@ -1242,7 +1315,11 @@ export function __resetFleetLoopForTesting(): void {
 		error: null,
 		failingSince: null,
 		totals: { minted: 0, failed: 0 },
+		lastMintAt: null,
+		recent: { since: new Date().toISOString(), minted: 0, failed: 0 },
 	};
+	recentPasses = [];
+	dispatchStartMs = Date.now();
 	believedLabel = new Map();
 	tickCount = 0;
 	started = false;

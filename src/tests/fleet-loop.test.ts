@@ -30,6 +30,7 @@ import {
 	runDoctor,
 	__resetSickForTesting,
 	__parseProbeForTesting,
+	__PROBE_CMD_FOR_TESTING,
 	loadClawNodes,
 	loadResidentRepos,
 	nodeFailsBootcamp,
@@ -41,7 +42,8 @@ import type { DispatchPassResult } from '../runners/dispatch-pass.js';
 import type { EphemeralTickInput } from '../runners/ephemeral-tick.js';
 import { setBackstopHold } from '../runners/backstop-hold.js';
 import { writeDrain } from '../runners/drain.js';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tempDir } from './tmpdir.js';
 import { __setHostForTesting } from '../host.js';
@@ -529,6 +531,71 @@ test('probeNode: the local host is probed WITHOUT ssh', async () => {
 	assert.notEqual(me, null, 'probing our own hostname must not fail');
 	assert.ok((me?.cores ?? 0) > 0, `cores should be positive, got ${me?.cores}`);
 	assert.ok((me?.workers ?? -1) >= 0, 'worker count must be a non-negative number');
+});
+
+test('probe parses the tagged OS field and still finds the repo list after it', () => {
+	const p = __parseProbeForTesting('2 8 0 g=1 o=13.6,6.12.94+deb13-amd64 WolffM/a,WolffM/b,');
+	assert.deepEqual(p?.os, { release: '13.6', kernel: '6.12.94+deb13-amd64' });
+	assert.equal(p?.githubDns, true);
+	assert.deepEqual(
+		[...(p?.busyRepos ?? [])],
+		[
+			['WolffM/a', 1],
+			['WolffM/b', 1],
+		]
+	);
+	assert.deepEqual(__parseProbeForTesting('0 8 0 g=1 o=-,6.12.94')?.os, {
+		release: null,
+		kernel: '6.12.94',
+	});
+	assert.equal(__parseProbeForTesting('0 8 0 g=1 ')?.os, undefined, 'absent claims nothing');
+});
+
+test('probe runs here and reports this host’s real OS', async () => {
+	const me = await probeNode(hostname());
+	assert.match(me?.os?.release ?? '', /^\d+(\.\d+)*$|^[a-z]+\/sid$/, `got ${me?.os?.release}`);
+	assert.ok(me?.os?.kernel, 'uname -r is always readable');
+});
+
+test('dispatch snapshot: a quiet pass keeps the last mint and the trailing hour', () => {
+	// 2026-10-25: the panel read `Minted 0` beside eight jobs in flight, because
+	// it showed the one 15s pass that happened to mint nothing.
+	__resetFleetLoopForTesting();
+	const t0 = Date.now();
+	const at = (ms: number) => new Date(t0 + ms).toISOString();
+	const pass = (minted: number) => ({ minted, failed: 0, skipped: 0, inFlight: 8, reaped: null });
+	recordDispatch(pass(3), null, at(0));
+	recordDispatch(pass(0), null, at(15_000));
+	const snap = getDispatchSnapshot(t0 + 15_000);
+	assert.equal(snap.minted, 0, 'the last pass is still reported as itself');
+	assert.equal(snap.lastMintAt, at(0));
+	assert.equal(snap.recent.minted, 3);
+	assert.equal(
+		getDispatchSnapshot(t0 + 61 * 60_000 + 15_000).recent.minted,
+		0,
+		'an hour later it ages out'
+	);
+});
+
+test('probe counts SPAWNED workers only, never a process merely named Runner.Worker', () => {
+	// 2026-10-25: claw-6 read `busy 7 / 2` holding two real jobs. The extra five
+	// were ci-throttle.test.mjs fixtures — bash copied to `Runner.Worker` — from
+	// this repo's own suite running on the node, and the dispatcher charged them
+	// as standing work and refused the node as at capacity. A stub `pgrep` makes
+	// the census deterministic: one real job, one fixture.
+	const bin = tempDir('probe-pgrep-');
+	writeFileSync(
+		join(bin, 'pgrep'),
+		'#!/bin/sh\n' +
+			'echo "101 /home/u/.hadoku/jit/slot0/bin.2.338.0/Runner.Worker spawnclient 149 152"\n' +
+			'echo "102 /tmp/ci-throttle-1-node-x/Runner.Worker -c sleep 60"\n'
+	);
+	chmodSync(join(bin, 'pgrep'), 0o755);
+	const out = execFileSync('bash', ['-c', __PROBE_CMD_FOR_TESTING], {
+		env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+		encoding: 'utf8',
+	});
+	assert.equal(__parseProbeForTesting(out)?.workers, 1);
 });
 
 test('probeFleet: the local host reports reachable, not down', async () => {

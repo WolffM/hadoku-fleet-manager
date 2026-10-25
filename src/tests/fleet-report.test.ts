@@ -444,6 +444,25 @@ const GUEST_MANIFEST = {
 	hokon: { ...EPHEMERAL_MANIFEST.hokon, role: 'guest', mint: 'on-demand' },
 };
 
+test('os comes from the live probe, so a node enrollment never measured still has one', () => {
+	// claw-1..3 predate enrollment, so `$measured` is empty and the inventory
+	// showed no OS for them; the rest showed the release they joined with.
+	const r = buildFleetReport(
+		health(),
+		{
+			at: 'now',
+			nodes: { 'claw-3': upProbe({ os: { release: '13.3', kernel: '6.18.7-surface-1' } }) },
+		},
+		EPHEMERAL_MANIFEST,
+		NO_JOBS
+	);
+	assert.deepEqual(r.machines.find((m) => m.name === 'claw-3')!.os, {
+		release: '13.3',
+		kernel: '6.18.7-surface-1',
+	});
+	assert.equal(r.machines.find((m) => m.name === 'hokon')!.os, null, 'unprobed is null');
+});
+
 test('a HELD on-demand guest reads mintable, not the census demoted', async () => {
 	// 2026-10-25: hokon showed `demoted` beside 13 queued jobs while the
 	// dispatcher minted onto it. Its one standing registration is a deploy runner
@@ -814,6 +833,8 @@ const WIRE_MACHINE = [
 	// `runner-health.ts`'s starvation finding, keyed onto the machine it is
 	// about rather than left in a separate per-node map the panel has to join.
 	'starved',
+	// The OS as running, from the probe; `measured` is enrollment-time only.
+	'os',
 ];
 
 /**
@@ -854,6 +875,9 @@ const WIRE_DISPATCH = [
 	'error',
 	'failingSince',
 	'totals',
+	'lastMintAt',
+	'recent',
+	'queue',
 ];
 const WIRE_FLEET = [
 	'clawsOnline',

@@ -34,7 +34,9 @@ import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
 import {
 	DEFAULT_POLL_POLICY,
 	deriveHotRepos,
+	ZOMBIE_MS,
 	mintableRuns,
+	queuedSinceMs,
 	reposDue,
 	runnableJobs,
 	type QueuedJob,
@@ -58,6 +60,58 @@ const etagByRepo = new Map<string, string>();
 const cachedRunsByRepo = new Map<string, { workflow_runs?: QueuedRun[] }>();
 
 const lastPolledMs = new Map<string, number>();
+/**
+ * Each repo's last successfully READ listing (200 or 304) and when. An errored
+ * poll leaves the entry alone, and `at` says how old it is. Separate from
+ * `cachedRunsByRepo`, which exists for conditional requests only.
+ */
+const lastReadByRepo = new Map<string, { atMs: number; runs: readonly QueuedRun[] }>();
+
+/**
+ * THE QUEUE AS THE DISPATCHER SEES IT, every 15s, for the panel's headline.
+ *
+ * The headline read runner-health's `queued_now`, which is cut once per
+ * 10-minute tick, so on 2026-10-25 "13 queued · oldest 44m" sat on screen while
+ * the queue moved under it. This is the same listing the dispatcher mints
+ * from, re-evaluated at request time so ages are current. Zombies (past
+ * ZOMBIE_MS) are excluded for the reason runner-health excludes them; a run
+ * stranded under that line is a real wait and counts.
+ *
+ * `at` is the OLDEST read among the repos counted, so the figure is never
+ * presented as fresher than its stalest input; `unread` names how many of the
+ * given repos have no successful read since restart — "could not look" is
+ * never folded into zero.
+ */
+export function getDispatchQueueSnapshot(
+	repos: readonly string[],
+	nowMs: number = Date.now()
+): { at: string | null; runs: number; oldestQueuedMin: number | null; unread: number } {
+	let runs = 0;
+	let oldestMs: number | null = null;
+	let readAt: number | null = null;
+	let unread = 0;
+	for (const repo of repos) {
+		const read = lastReadByRepo.get(repo);
+		if (!read) {
+			unread++;
+			continue;
+		}
+		readAt = readAt === null ? read.atMs : Math.min(readAt, read.atMs);
+		for (const r of read.runs) {
+			if (r.status !== 'queued') continue;
+			const since = queuedSinceMs(r);
+			if (since === undefined || nowMs - since > ZOMBIE_MS) continue;
+			runs++;
+			oldestMs = oldestMs === null ? since : Math.min(oldestMs, since);
+		}
+	}
+	return {
+		at: readAt === null ? null : new Date(readAt).toISOString(),
+		runs,
+		oldestQueuedMin: oldestMs === null ? null : Math.round((nowMs - oldestMs) / 60_000),
+		unread,
+	};
+}
 
 /**
  * Per candidate run (`repo#runId`): the jobs listing's ETag and the body it
@@ -686,6 +740,7 @@ export async function runDispatchTick(
 		// same is how a fleet-wide API failure reads as "nothing to do".
 		if (!resp?.workflow_runs) return;
 		polledOk.add(repo);
+		lastReadByRepo.set(repo, { atMs: nowMs, runs: resp.workflow_runs });
 		const { mintable, stuck, stranded } = mintableRuns(resp.workflow_runs, {
 			nowMs,
 			minQueuedMs: input.minQueuedMs,
@@ -991,6 +1046,7 @@ export function __resetPollStateForTesting(): void {
 	// makes the next test's first poll answer 304 against a body it never set.
 	etagByRepo.clear();
 	cachedRunsByRepo.clear();
+	lastReadByRepo.clear();
 	jobsCacheByRun.clear();
 	probeBackoff.clear();
 	// The reap clock is the OTHER cadence a tick carries. Left behind, the first

@@ -10,6 +10,7 @@ import {
 	__resetPollStateForTesting,
 	__restartAnnouncedStuckForTesting,
 	PROBE_BACKOFF_MS,
+	getDispatchQueueSnapshot,
 	type DispatchTickInput,
 } from '../runners/dispatch-tick.js';
 import type { NodeState } from '../runners/placement.js';
@@ -121,6 +122,18 @@ test('no ephemeral nodes means no poll and no mint', async () => {
 	const r = await runDispatchTick(base({ order: [] }), 'tok', h.gh, h.sh, NOW);
 	assert.deepEqual(r, { minted: 0, failed: 0, skipped: 0, inFlight: 0, reaped: 0 });
 	assert.deepEqual(h.calls, []);
+});
+
+test('the queue snapshot is the dispatcher listing, aged at READ time, zombies out, unread named', async () => {
+	// 2026-10-25: the panel headline came from a 10-minute health tick. This is
+	// the 15s listing; asked a minute later, the same run is a minute older.
+	const h = harness([queued(1, 44 * 60_000), unclearable(2)]);
+	await runDispatchTick(base(), 'tok', h.gh, h.sh, NOW);
+	const q = getDispatchQueueSnapshot(['WolffM/hadoku-meet', 'WolffM/never-read'], NOW + 60_000);
+	assert.equal(q.runs, 1, 'the zombie is not a wait');
+	assert.equal(q.oldestQueuedMin, 45);
+	assert.equal(q.unread, 1, 'a repo never read is unread, not empty');
+	assert.equal(q.at, new Date(NOW).toISOString());
 });
 
 test('a queued run on an ephemeral node is minted for', async () => {

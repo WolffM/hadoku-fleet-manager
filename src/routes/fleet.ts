@@ -70,6 +70,8 @@ import { activeForces, readForce } from '../runners/backstop-force.js';
 import { getCapacityLedger } from '../runners/capacity-ledger.js';
 import { admissionVerdictsForReport } from '../runners/ephemeral-tick.js';
 import { getDispatchAffinitySnapshot } from '../runners/dispatch-pass.js';
+import { getDispatchQueueSnapshot } from '../runners/dispatch-tick.js';
+import { coveredRepos } from '../ci-runner-fallback.js';
 import { dispatchForDay, readDispatchDaily } from '../runners/dispatch-daily.js';
 import {
 	ADMISSION_BASES,
@@ -415,7 +417,10 @@ export function buildFleetReport(
 		proofsByCapability: Record<string, ProofRecord[]>;
 		corrupt: boolean;
 	} = loadWorkloadGateInputs(),
-	dispatchDaily: ReturnType<typeof readDispatchDaily> = readDispatchDaily()
+	dispatchDaily: ReturnType<typeof readDispatchDaily> = readDispatchDaily(),
+	// The SAME repo list the dispatcher polls (fleet-loop hands it `coveredRepos()`),
+	// so `unread` counts repos it was asked to watch, not a second roster.
+	dispatchQueue: FleetReport['dispatch']['queue'] = getDispatchQueueSnapshot(coveredRepos())
 ): Omit<FleetReport, 'success'> {
 	const names = [...new Set([...Object.keys(manifest), ...Object.keys(probe?.nodes ?? {})])];
 	const workloadGateInput = workloadGateContext(names, workloadGateInputs.proofsByCapability, {
@@ -674,6 +679,7 @@ export function buildFleetReport(
 			// `null` — never `{}` — for a node bootcamp has never reached.
 			capabilities: bootcampFacet({ $capabilities: m.$capabilities }),
 			measured: trimMeasured(m.$measured),
+			os: p?.reachable ? (p.os ?? null) : null,
 		};
 	});
 
@@ -729,7 +735,11 @@ export function buildFleetReport(
 		reservation: getReservationSnapshot(),
 		// `affinity` is counted by the pass itself, not folded by the fast loop —
 		// so it is spread on here rather than widening `recordDispatch`'s input.
-		dispatch: { ...getDispatchSnapshot(), affinity: getDispatchAffinitySnapshot() },
+		dispatch: {
+			...getDispatchSnapshot(),
+			affinity: getDispatchAffinitySnapshot(),
+			queue: dispatchQueue,
+		},
 		githubBudget: getGhBudgetSnapshot(),
 		vocabulary,
 		jobs: {
