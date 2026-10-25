@@ -72,6 +72,7 @@ import { SATURATED_QUEUED_MS } from './queue-discovery.js';
 import { buildSpeedModel, type SpeedModel } from './speed-tier.js';
 import { heavyMarkedRecently, type DispatchPassResult } from './dispatch-pass.js';
 import type { NodeState } from './placement.js';
+import { chargedLikeDispatch, getCapacityLedger } from './capacity-ledger.js';
 
 /** The half of the fast loop's probe this needs. Declared locally, not imported,
  *  so the dependency stays one-directional. */
@@ -2350,7 +2351,12 @@ export async function dispatchEphemeral(
 		// `ns` placement just built, before any queued run is known. See
 		// `admissionVerdictFor`'s own docblock for why this is display and not a
 		// second gate.
-		const verdict = admissionVerdictFor(ns, genericReserve.from);
+		// Charged as the dispatcher charged it, when its ledger is fresh — see
+		// `chargedLikeDispatch`. Display only: `ns` itself goes to placement as is.
+		const verdict = admissionVerdictFor(
+			chargedLikeDispatch(name, ns, getCapacityLedger()),
+			genericReserve.from
+		);
 		nextVerdicts.set(name, verdict);
 		// #101: LOGGED ON CHANGE, not every 15 s tick — the probe above already
 		// logs once per process lifetime; this catches a node crossing the

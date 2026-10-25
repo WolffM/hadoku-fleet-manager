@@ -10,6 +10,10 @@
  * sequence, and a fresh stateless mock per call cannot show that the second
  * tick sees what the first one did.
  */
+import {
+	__resetCapacityLedgerForTesting,
+	recordCapacityLedger,
+} from '../runners/capacity-ledger.js';
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -2774,6 +2778,37 @@ async function verdictsFrom(
 	);
 	return admissionVerdictsForReport();
 }
+
+test('WIRING: the display verdict is charged like the dispatcher when its ledger is fresh (2026-10-25)', async () => {
+	// claw-1/claw-9 read `at capacity` in GET /fleet while the dispatcher's own
+	// ledger charged them under their budget. Same probe both times; only the
+	// ledger differs, so this proves ephemeral-tick consults it.
+	const sims: Record<string, NodeSim> = {
+		'claw-1': { marker: null, activeUnits: new Set(), installedMb: 32000 },
+	};
+	const input = () =>
+		baseInput({
+			fleetProbe: new Map([['claw-1', { reachable: true, busyRepos: null, workers: 3 }]]),
+		});
+	__resetCapacityLedgerForTesting();
+	const raw = (await verdictsFrom(input(), sims)).get('claw-1');
+	assert.equal(raw?.ok, false, 'three workers against a cap of three is at capacity, read raw');
+	if (raw && !raw.ok) assert.equal(raw.clause, 'concurrency');
+	recordCapacityLedger([
+		{
+			node: 'claw-1',
+			liveUnits: 0,
+			probeWorkers: 3,
+			standingBusy: 1,
+			warmHeld: 0,
+			budget: 3,
+			inFlight: 1,
+		},
+	]);
+	const charged = (await verdictsFrom(input(), sims)).get('claw-1');
+	__resetCapacityLedgerForTesting();
+	assert.deepEqual(charged, { ok: true }, 'charged 1 of 3 by the dispatcher, the panel must agree');
+});
 
 test('WIRING: a node whose free memory cannot clear its reserve records a MEMORY-refused verdict', async () => {
 	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku_site', startedAt: histAt(0) });

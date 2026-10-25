@@ -98,6 +98,36 @@ export function getCapacityLedger(): CapacityLedger | null {
 	return ledger;
 }
 
+/** Older than this, the ledger no longer describes the node: dispatch runs every 15 s. */
+export const LEDGER_FRESH_MS = 2 * 60_000;
+
+/**
+ * A node's admission input, charged the way the DISPATCHER charged it.
+ *
+ * The generic verdict (`ephemeral-tick.ts`, shown as `admissionRefusal` in
+ * GET /fleet and in `fleet traffic`) is built from the raw probe: every
+ * Runner.Worker in `standingBusy`, the held warm listener's busy worker
+ * included, against a budget that has ALREADY had that listener's slot taken
+ * out. That is the 2026-10-21 double count, fixed in dispatch-pass and never in
+ * the display path. Measured 2026-10-25 across three samples: claw-1 shown
+ * `at capacity: 2/2` while the dispatcher charged it 1/2, claw-9 `3/3` against
+ * 2/3, and every other node's numbers one too high.
+ *
+ * Subtracting the held slot here is NOT the fix: an idle listener has no worker
+ * to subtract, and only dispatch-pass knows the live JIT units that make the
+ * correction exact. So the dispatcher's own last charge is substituted while it
+ * is fresh, and `admitMint` is re-run on it, so a memory or space clause
+ * behind the concurrency one is still evaluated. No fresh entry: unchanged.
+ */
+export function chargedLikeDispatch<
+	T extends { liveUnits: number; standingBusy: number; maxConcurrent: number },
+>(name: string, ns: T, l: CapacityLedger | null, nowMs: number = Date.now()): T {
+	if (!l || nowMs - Date.parse(l.at) > LEDGER_FRESH_MS) return ns;
+	const e = l.nodes.find((x) => x.node === name);
+	if (!e) return ns;
+	return { ...ns, liveUnits: e.liveUnits, standingBusy: e.standingBusy, maxConcurrent: e.budget };
+}
+
 export function __resetCapacityLedgerForTesting(): void {
 	ledger = null;
 }
