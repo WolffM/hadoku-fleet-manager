@@ -42,6 +42,7 @@ import {
 } from './ephemeral.js';
 import {
 	evictWarmListener,
+	withholdWarmListener,
 	warmRegistration,
 	readWarmMarker,
 	mintWarmListener,
@@ -1559,6 +1560,21 @@ export async function dispatchWarmCache(
 		try {
 			if (tier === 'slow' || drained || spaceRefused || runningHeavyNow) {
 				neverWarm.add(o.node);
+				// A DRAIN MAY NOT WAIT FOR AN IDLE MOMENT. The eviction below is locked
+				// while the listener is busy, and a listener under load is busy at
+				// nearly every look — see `withholdWarmListener`. Withholding first
+				// stops new assignments at once; the eviction follows when it idles.
+				// Drain only: the other three reasons are about where work SHOULD go,
+				// and a job finishing on a slow node is not a safety question.
+				if (drained && o.current) {
+					const w = await withholdWarmListener(
+						o.current.repo,
+						warmRunnerName(o.node, o.current.repo),
+						token,
+						gh
+					);
+					if (w === 'failed') result.failed++;
+				}
 				if (
 					o.current &&
 					!warmBackoffActive(o.node, nowMs) &&

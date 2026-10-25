@@ -564,6 +564,40 @@ export async function mintWarmListener(
  * with no process behind it looks live. Deleting first closes that window too —
  * the registration is gone before the process is.
  */
+/**
+ * Stop GitHub ASSIGNING to a warm listener without touching the job it runs.
+ *
+ * A busy registration cannot be deleted (422 "currently running a job"), and a
+ * listener under load is busy almost every time anyone looks: it takes its next
+ * job the moment one ends. So on 2026-10-25 drained claw-9's warm listener
+ * refused deletion at 05:05 and went on starting hadoku_site jobs until 05:12,
+ * 13 of them after the drain landed at 04:57. Removing every custom label
+ * (`DELETE .../labels`, which leaves only self-hosted/OS/arch) makes it
+ * unmatchable by any fleet job; the running one finishes, and the next pass
+ * finds it idle and evicts it as before. Idempotent: a listener with no custom
+ * labels left is reported withheld without a write.
+ */
+export async function withholdWarmListener(
+	repo: string,
+	name: string,
+	token: string,
+	gh: GhLike & { get?: (path: string, token: string, repo?: string) => Promise<unknown> }
+): Promise<'withheld' | 'not-found' | 'failed'> {
+	const list = (await gh.get?.('/actions/runners?per_page=100', token, repo)) as
+		| { runners?: { id: number; name: string; labels?: { name: string; type?: string }[] }[] }
+		| undefined;
+	const hit = list?.runners?.find((r) => r.name === name);
+	if (!hit) return 'not-found';
+	const custom = (hit.labels ?? []).filter((l) => l.type !== 'read-only');
+	if (!custom.length) return 'withheld';
+	const res = await gh.write('DELETE', `/actions/runners/${hit.id}/labels`, token, undefined, repo);
+	if (!res.ok) {
+		logger.warn(`[ephemeral] could not withhold ${name} in ${repo} (remove labels): ${res.status}`);
+		return 'failed';
+	}
+	return 'withheld';
+}
+
 export async function evictWarmListener(
 	node: string,
 	repo: string,

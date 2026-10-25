@@ -1788,6 +1788,41 @@ test('dispatchWarmCache: a drained node holding a warm listener has it evicted, 
 	}
 });
 
+test('dispatchWarmCache: a drained node whose warm listener is BUSY stops being assigned at once', async () => {
+	// 2026-10-25: claw-9 was drained at 04:57; its warm listener was busy at
+	// every look, so the eviction stayed locked, the delete it finally tried
+	// got 422, and it started 13 jobs after the drain, the last at 05:12. The
+	// running job must finish, but GitHub must not hand it another.
+	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku_site', startedAt: histAt(0) });
+	const unit = warmRunnerName('claw-1', 'WolffM/hadoku_site');
+	const nowMs = 1_000_000 + WARM_ASSIGN_WINDOW_MS + 1;
+	const sims: Record<string, NodeSim> = {
+		'claw-1': { marker: 'WolffM/hadoku_site 1000', activeUnits: new Set([unit]) },
+	};
+	const gh = fakeGh({
+		runners: [
+			{
+				id: 1,
+				name: unit,
+				busy: true,
+				labels: ['hadoku-builder'],
+			},
+		],
+	});
+	writeDrain({ 'claw-1': { since: histAt(0), reason: 'stress lease', by: 'hadoku' } });
+	try {
+		const res = await dispatchWarmCache(baseInput(), 'tok', gh, simShell(sims), nowMs);
+		assert.ok(
+			gh.writes.some((w) => w.endsWith('/actions/runners/1/labels')),
+			`its custom labels must be removed: ${gh.writes.join(' ')}`
+		);
+		assert.equal(res.evicted, 0, 'a busy registration is not deleted under its job');
+		assert.ok(sims['claw-1'].activeUnits.has(unit), 'the running job keeps its unit');
+	} finally {
+		writeDrain({});
+	}
+});
+
 test('SAFETY dispatchWarmCache: a warm listener killed outside this code path is reaped, not leaked (#61)', async () => {
 	// claw-9's 2026-09-22/23 migration reboots, reproduced. A warm unit is
 	// transient, so the reboot takes it; `$HOME/.hadoku/warm/repo` is a file in
