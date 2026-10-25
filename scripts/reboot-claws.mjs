@@ -41,6 +41,31 @@ import {
 import { busyCount, drainCli, liveQueuePressure, waitUntilDrained } from './lib/refresh-cycle.mjs';
 
 const argv = process.argv.slice(2);
+
+// THIS COMMAND'S DEFAULT IS A REAL REBOOT, so a flag it does not know must never
+// fall through to one. fleet-exec allows unknown flags fleet-wide on purpose;
+// that is safe for a read and not for this. On 2026-10-25 `fleet reboot-claws
+// --help` ran a live pass and rebooted claw-4, taking pygmalion down with it.
+// Checked before anything is read or probed.
+const USAGE =
+	'fleet reboot-claws [--plan] [--machine <claw>] [--json]\n' +
+	'  --plan     what would be rebooted, and why; touches nothing\n' +
+	'  (no flag)  one REAL pass: drain one claw, reboot it, verify, undrain';
+if (argv.includes('--help') || argv.includes('-h')) {
+	console.log(USAGE);
+	process.exit(0);
+}
+const unknown = argv.filter(
+	(a, i) =>
+		a.startsWith('-') &&
+		!['--plan', '--json', '--machine'].includes(a) &&
+		argv[i - 1] !== '--machine'
+);
+if (unknown.length) {
+	console.error(`✗ unknown flag(s): ${unknown.join(' ')} — nothing was touched.\n${USAGE}`);
+	process.exit(2);
+}
+
 const PLAN = argv.includes('--plan');
 const ONLY = machineArg(argv);
 const emitter = createEmitter({ argv: process.argv });
