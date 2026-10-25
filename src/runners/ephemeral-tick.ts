@@ -59,10 +59,12 @@ import { isBackstopHeld } from './backstop-hold.js';
 
 import {
 	nodeOffer,
+	revokedFor,
 	workloadGateContext,
 	workloadGatedCapabilities,
 	type WorkloadGateContext,
 } from '../capabilities.js';
+import { readRevocations, REVOCATIONS_FILE, revokedSets } from '../capability-revocations.js';
 import { proofFileStatus, readProofsForCapability, type ProofRecord } from '../lib/measured.js';
 import { historyFile, idleSecondsByNode, jobRecords } from '../job-history.js';
 import { logger, manifest, stateDir } from '../host.js';
@@ -520,6 +522,7 @@ function offerFor(
 		eligible,
 		workloadProofs: gate.byNode[node] ?? {},
 		provenCounts: gate.provenCounts,
+		revoked: revokedFor(gate, node),
 	});
 }
 
@@ -550,6 +553,7 @@ let lastLoggedProofCorruption: string | null = null;
 
 export function loadWorkloadGateContext(nodeNames: readonly string[]): WorkloadGateContext {
 	if (workloadGateContextOverride) return workloadGateContextOverride;
+	const revoked = loadRevoked();
 	const status = proofFileStatus({ dir: stateDir() });
 	if (status.corrupt) {
 		const key = `${status.reason}:${status.why}`;
@@ -561,13 +565,35 @@ export function loadWorkloadGateContext(nodeNames: readonly string[]): WorkloadG
 					`never silently re-grant a label a bad reading withdrew.`
 			);
 		}
-		return workloadGateContext(nodeNames, {}, { corrupt: true });
+		return workloadGateContext(nodeNames, {}, { corrupt: true, revoked });
 	}
 	lastLoggedProofCorruption = null;
 	const proofsByCapability: Record<string, ProofRecord[]> = {};
 	for (const id of workloadGatedCapabilities())
 		proofsByCapability[id] = readProofsForCapability(id, { dir: stateDir() });
-	return workloadGateContext(nodeNames, proofsByCapability);
+	return workloadGateContext(nodeNames, proofsByCapability, { revoked });
+}
+
+let lastLoggedRevocationCorruption: string | null = null;
+
+/**
+ * This tick's revoked labels — one state-dir read, alongside `$proof`'s. A
+ * corrupt record withholds every probe-verified routing label (`'all'`) and
+ * says so once per distinct reason: "I could not look" must never re-grant a
+ * label a failed execution withdrew. See src/capability-revocations.ts.
+ */
+function loadRevoked(): Record<string, ReadonlySet<string>> | 'all' {
+	const read = readRevocations(stateDir());
+	if (read.corrupt) {
+		if (read.why !== lastLoggedRevocationCorruption) {
+			lastLoggedRevocationCorruption = read.why;
+			logger.error(
+				`[ephemeral-tick] ${REVOCATIONS_FILE} is unreadable (${read.why}) — withholding every ` +
+					'probe-verified label fleet-wide until it is readable again.'
+			);
+		}
+	} else lastLoggedRevocationCorruption = null;
+	return revokedSets(read);
 }
 
 /** Test seam: the corruption-logging dedup is module-level, same leak class as every other reset in this file. */

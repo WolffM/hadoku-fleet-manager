@@ -372,6 +372,7 @@ function writableFixture(
 	return {
 		root,
 		manifestPath,
+		stateDir,
 		env,
 		answer: (text) => writeFileSync(answerFile, text),
 		calls: () => (existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n') : []),
@@ -385,6 +386,34 @@ function writableFixture(
 
 const PROBE_ANSWER = (ffmpegDetail) =>
 	['CAP ffmpeg ok ' + ffmpegDetail, 'PROBE-END', ''].join('\n');
+
+// THE REBOOT CYCLE'S RE-PROVE (2026-10-25): a bootcamp that EXECUTES a revoked
+// label and passes gives it back — the only way, besides `fleet capabilities`,
+// a revocation is ever cleared (src/capability-revocations.ts).
+test('a bootcamp that proves a revoked label CLEARS the revocation', () => {
+	const f = writableFixture(
+		['CAP ffmpeg ok 7.1.5-0+deb13u1', 'CAP nvenc-h264 ok h264_nvenc', 'PROBE-END', ''].join('\n')
+	);
+	try {
+		const file = join(f.stateDir, 'capability-revocations.json');
+		writeFileSync(
+			file,
+			JSON.stringify({
+				nodes: { [CLAW]: { 'nvenc-h264': { at: 'a', reason: 'driver', by: 'capabilities' } } },
+			})
+		);
+		const r = run(['--machine', CLAW, '--json'], f.env);
+		const doc = JSON.parse(r.out);
+		assert.deepEqual(
+			doc.revocations.cleared.map((v) => v.capability),
+			['nvenc-h264'],
+			r.err
+		);
+		assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).nodes, {});
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
 
 test('two consecutive --write runs on an unchanged node produce ONE commit, not two', () => {
 	const f = writableFixture(PROBE_ANSWER('7.1.5-0+deb13u1'));

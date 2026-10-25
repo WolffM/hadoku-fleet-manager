@@ -43,6 +43,7 @@ import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest, runOn, selectNodes } from './lib/fleet-exec.mjs';
 import { judgeHosting, observeScript, parseObserved } from './lib/hosting.mjs';
+import { readRevocations } from '../dist/capability-revocations.js';
 import { stateDir } from './lib/paths.mjs';
 
 /** The health writer runs daily; a day and a half covers one late run and no more. */
@@ -91,6 +92,7 @@ const doc = readDrainDoc();
 const held = effectiveDrains(doc, NOW);
 const notices = drainNotices(doc, NOW);
 const health = readHealth();
+const revocationRead = readRevocations(stateDir());
 const seen = readSeen();
 
 const rows = await Promise.all(
@@ -136,6 +138,30 @@ const rows = await Promise.all(
 			}
 		}
 
+		// A label a probe executed and judged failed is withheld from routing
+		// (src/capability-revocations.ts). Advisory: the node still runs what it
+		// can; it no longer advertises what it cannot.
+		const revoked = revocationRead.corrupt
+			? null
+			: Object.entries(revocationRead.nodes[name] ?? {}).map(([capability, r]) => ({
+					capability,
+					...r,
+				}));
+		if (revocationRead.corrupt) {
+			findings.push({
+				class: 'advisory',
+				category: 'revocations-unreadable',
+				why: `the revocation record is unreadable (${revocationRead.why}); every probe-verified label is withheld`,
+			});
+		}
+		for (const r of revoked ?? []) {
+			findings.push({
+				class: 'advisory',
+				category: 'label-revoked',
+				why: `${r.capability} withheld since ${r.at}: ${r.reason}`,
+			});
+		}
+
 		const rec = held[name] ?? null;
 		const hostingRec = doc.nodes[name]?.kind === 'hosting' ? doc.nodes[name] : null;
 		let hosting = null;
@@ -164,6 +190,7 @@ const rows = await Promise.all(
 			notices: notices.filter((n) => n.node === name).map(({ node: _, ...n }) => n),
 			hosting,
 			capabilities: m.$capabilities?.earned ?? [],
+			revoked,
 			health: healthOut,
 			findings,
 		};

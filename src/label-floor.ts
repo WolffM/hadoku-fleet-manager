@@ -60,6 +60,7 @@
 import {
 	IMPLICIT_LABELS,
 	nodeOffer,
+	revokedFor,
 	type ManifestNode,
 	type WorkloadGateContext,
 } from './capabilities.js';
@@ -286,6 +287,7 @@ export function buildMintView(input: {
 				eligible: m.ephemeral === true || (input.held?.(name) ?? false),
 				workloadProofs: input.gate.byNode[name] ?? {},
 				provenCounts: input.gate.provenCounts,
+				revoked: revokedFor(input.gate, name),
 			}),
 			drained: input.drained.has(name),
 			sick: input.isSick(name),

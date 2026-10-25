@@ -1649,6 +1649,16 @@ export function workloadGateReasons(
 export interface WorkloadGateContext {
 	byNode: Record<string, Record<string, ProofRecord | null>>;
 	provenCounts: Record<string, number>;
+	/** Per-node revoked labels, or `'all'` when the record is unreadable. Absent: none. */
+	revoked?: Record<string, ReadonlySet<string>> | 'all';
+}
+
+/** The revoked set `nodeOffer` takes for one node, from a tick's context. */
+export function revokedFor(
+	gate: Pick<WorkloadGateContext, 'revoked'>,
+	node: string
+): ReadonlySet<string> | 'all' | undefined {
+	return gate.revoked === 'all' ? 'all' : gate.revoked?.[node];
 }
 
 /**
@@ -1682,7 +1692,11 @@ export interface WorkloadGateContext {
 export function workloadGateContext(
 	nodeNames: readonly string[],
 	proofsByCapability: Readonly<Record<string, readonly ProofRecord[]>>,
-	opts: { corrupt?: boolean; now?: Date } = {}
+	opts: {
+		corrupt?: boolean;
+		now?: Date;
+		revoked?: Record<string, ReadonlySet<string>> | 'all';
+	} = {}
 ): WorkloadGateContext {
 	const ids = workloadGatedCapabilities();
 	const byNode: Record<string, Record<string, ProofRecord | null>> = {};
@@ -1698,7 +1712,7 @@ export function workloadGateContext(
 		provenCounts[id] = freshPassingProofs(records, id, opts.now).length;
 		for (const name of nodeNames) byNode[name][id] = records.find((r) => r.node === name) ?? null;
 	}
-	return { byNode, provenCounts };
+	return { byNode, provenCounts, ...(opts.revoked ? { revoked: opts.revoked } : {}) };
 }
 
 /**
@@ -1782,6 +1796,13 @@ export function nodeOffer(
 		eligible: boolean;
 		workloadProofs?: Record<string, ProofRecord | null | undefined>;
 		provenCounts?: Record<string, number>;
+		/**
+		 * Labels a probe EXECUTED on this node and judged failed
+		 * (src/capability-revocations.ts). Withheld until a passing probe clears
+		 * them. `'all'`: the revocation record is unreadable, so every
+		 * probe-verified routing label is withheld — never re-granted on a bad read.
+		 */
+		revoked?: ReadonlySet<string> | 'all';
 	}
 ): string[] {
 	const eligibility = new Set(eligibilityLabels());
@@ -1827,8 +1848,18 @@ export function nodeOffer(
 			if ((cap.requires?.facts ?? []).every((f) => f.holds(node))) out.push(cap.id);
 		}
 	}
-	if (opts.eligible) out.push(...eligibilityLabels());
-	return [...new Set(out)];
+	const revoked = opts.revoked;
+	const kept = revoked
+		? out.filter((id) => {
+				if (revoked !== 'all') return !revoked.has(id);
+				const cap = capability(id);
+				return !(cap && cap.surface === 'label' && verificationFor(node, cap) === 'probe');
+			})
+		: out;
+	// Eligibility is the fast loop's and the backstop's to grant, never a probe's
+	// to revoke: general CI keeps flowing whatever the revocation record says.
+	if (opts.eligible) kept.push(...eligibilityLabels());
+	return [...new Set(kept)];
 }
 
 /**
@@ -1851,6 +1882,7 @@ export function registrationLabels(
 	gate: {
 		workloadProofs?: Record<string, ProofRecord | null | undefined>;
 		provenCounts?: Record<string, number>;
+		revoked?: ReadonlySet<string> | 'all';
 	} = {}
 ): string[] {
 	// NEVER a mint-only label on a standing registration. `nodeOffer` derives

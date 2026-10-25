@@ -23,6 +23,11 @@ import { readFileSync } from 'node:fs';
 import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { stateDir } from './lib/paths.mjs';
 import {
+	applyVerdicts,
+	readRevocations,
+	writeRevocations,
+} from '../dist/capability-revocations.js';
+import {
 	capability,
 	judgeMeasurement,
 	measuredIdleOnly,
@@ -280,6 +285,14 @@ function parseCaps(out) {
 
 /** Offered idle-only labels whose re-measure (#122) passed — reported, not findings. */
 const remeasured = [];
+/**
+ * Every JUDGED execution of an offered routing label: what revokes it or clears
+ * its revocation (src/capability-revocations.ts). A label not judged (measured
+ * under load), not probeable, or on an unreachable node adds nothing — "could
+ * not look" moves no record.
+ */
+const verdicts = [];
+const routable = (cap) => Boolean(cap && cap.surface === 'label' && cap.kind === 'identity');
 
 await Promise.all(
 	nodes.map(async ([name, m]) => {
@@ -359,6 +372,15 @@ await Promise.all(
 				notJudged.push({ node: name, capability: label, reason: verdict.reason });
 				continue;
 			}
+			const idleMiss = !verdict.proven && measuredIdleOnly(cap) && caps[label]?.ok;
+			if (routable(cap) && !idleMiss) {
+				verdicts.push({
+					node: name,
+					capability: label,
+					passed: verdict.proven,
+					reason: verdict.reason,
+				});
+			}
 			if (!verdict.proven) {
 				// An idle MEASUREMENT that missed its bar is asked again below; a
 				// tool that failed to run is not a reading heat could explain.
@@ -383,6 +405,9 @@ await Promise.all(
 				else if (second.proven)
 					remeasured.push({ node: name, capability: label, first, second: second.reason });
 				else findings.push(driftFinding(name, label, both));
+				if (second.judged && routable(cap)) {
+					verdicts.push({ node: name, capability: label, passed: second.proven, reason: both });
+				}
 			}
 		}
 		// The dispatcher's own dependency, on every node that could ever mint.
@@ -400,6 +425,28 @@ await Promise.all(
 // on completion order makes two identical runs produce two different reports.
 // Emit in MANIFEST order: an audit whose output cannot be diffed against its own
 // previous run cannot be used to spot drift, which is the only thing it is for.
+// THE REVOCATION STEP. A failed execution of an offered routing label withholds
+// it from every routing path on the next tick; a passing one gives it back.
+// Written once, after every node answered, so concurrent probes never race on
+// the file. A record that cannot be read is NOT overwritten from this run's
+// partial view — that would re-grant whatever an unreached node had revoked.
+const revocationRead = readRevocations(stateDir());
+const revocations = { revoked: [], cleared: [], held: [] };
+if (revocationRead.corrupt) {
+	findings.push(
+		`the capability revocation record is unreadable (${revocationRead.why}) — nothing revoked or ` +
+			'cleared this run, and every probe-verified label stays withheld fleet-wide until it is repaired'
+	);
+} else {
+	const applied = applyVerdicts(revocationRead.nodes, verdicts, 'capabilities');
+	if (applied.revoked.length || applied.cleared.length) writeRevocations(stateDir(), applied.nodes);
+	revocations.revoked = applied.revoked;
+	revocations.cleared = applied.cleared;
+	revocations.held = Object.entries(applied.nodes).flatMap(([node, caps]) =>
+		Object.entries(caps).map(([capability, r]) => ({ node, capability, ...r }))
+	);
+}
+
 findings.sort();
 notJudged.sort((a, b) => (a.node + a.capability < b.node + b.capability ? -1 : 1));
 remeasured.sort((a, b) => (a.node + a.capability < b.node + b.capability ? -1 : 1));
@@ -439,6 +486,9 @@ if (JSON_OUT) {
 		notJudged,
 		// ADDITIVE (#122), same footing.
 		remeasured,
+		// ADDITIVE (2026-10-25), same footing: what this run revoked or cleared,
+		// and every revocation still held after it.
+		revocations,
 	});
 } else {
 	for (const [name, caps] of ordered) {
@@ -457,6 +507,19 @@ if (JSON_OUT) {
 		out.log(
 			`  · ${n.node.padEnd(8)} ${n.capability}: ${n.first}; passed on re-measure: ${n.second}`
 		);
+	}
+	for (const v of revocations.revoked) {
+		console.error(
+			`  ✗ REVOKED ${v.node} ${v.capability} — withheld from routing until a probe passes (${v.reason})`
+		);
+	}
+	for (const v of revocations.cleared) {
+		out.log(`  ✓ cleared ${v.node} ${v.capability} — executed and passed; routable again`);
+	}
+	for (const h of revocations.held.filter(
+		(h) => !revocations.revoked.some((v) => v.node === h.node && v.capability === h.capability)
+	)) {
+		out.log(`  · still revoked: ${h.node} ${h.capability} since ${h.at} (${h.reason})`);
 	}
 	for (const u of trulyUnreachable) console.error(`  ! unreachable: ${u}`);
 	for (const u of expectedDown)

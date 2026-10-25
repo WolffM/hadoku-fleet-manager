@@ -27,7 +27,15 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -598,6 +606,89 @@ test('#98: an EMPTY toolchain.capabilities refuses — a bar of zero is not a pa
 		const r = run(['--machine', CLAW, '--json'], f.env);
 		assert.equal(r.code, 1);
 		assert.equal(r.out.trim(), '', 'a refusal must not emit a parseable clean report');
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+// ── REVOCATION (2026-10-25) ─────────────────────────────────────────────────
+//
+// claw-1 rebooted onto a kernel its NVIDIA module was not built for and went on
+// advertising `nvenc-h264` for hours. A failed EXECUTION of an offered routing
+// label now revokes it in the state dir — `nodeOffer` withholds it on the next
+// tick — and a passing one clears it. Nothing else moves the record.
+
+const revocationsFile = (f) => join(f.stateDir, 'capability-revocations.json');
+const readRevoked = (f) =>
+	existsSync(revocationsFile(f)) ? JSON.parse(readFileSync(revocationsFile(f), 'utf8')).nodes : {};
+
+test('a failed execution of an earned label REVOKES it, and says so', () => {
+	const f = reachableFixture({
+		machine: earnedClaw(['jdk21']),
+		probe: ['CAP ffmpeg ok 7.1.5', 'CAP jdk21 no javac-failed'],
+	});
+	try {
+		const report = json(run(['--machine', CLAW, '--json'], f.env));
+		assert.deepEqual(
+			report.revocations.revoked.map((v) => `${v.node}:${v.capability}`),
+			[`${CLAW}:jdk21`]
+		);
+		assert.equal(readRevoked(f)[CLAW].jdk21.by, 'capabilities');
+		assert.match(readRevoked(f)[CLAW].jdk21.reason, /javac-failed/);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('a passing execution CLEARS a held revocation — and only a passing one', () => {
+	const f = reachableFixture({
+		machine: earnedClaw(['jdk21']),
+		probe: ['CAP ffmpeg ok 7.1.5', 'CAP jdk21 ok 21.0.12'],
+	});
+	try {
+		writeFileSync(
+			revocationsFile(f),
+			JSON.stringify({ nodes: { [CLAW]: { jdk21: { at: 'a', reason: 'r', by: 'capabilities' } } } })
+		);
+		const report = json(run(['--machine', CLAW, '--json'], f.env));
+		assert.deepEqual(
+			report.revocations.cleared.map((v) => v.capability),
+			['jdk21']
+		);
+		assert.deepEqual(readRevoked(f), {});
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('a measurement NOT JUDGED (taken beside a live job) neither revokes nor clears', () => {
+	const f = reachableFixture({
+		machine: earnedClaw(['cargo-bevy']),
+		probe: ['CAP ffmpeg ok 7.1.5', 'CAP cargo-bevy ok 900', 'LOAD cargo-bevy 2'],
+	});
+	try {
+		const held = { [CLAW]: { 'cargo-bevy': { at: 'a', reason: 'r', by: 'capabilities' } } };
+		writeFileSync(revocationsFile(f), JSON.stringify({ nodes: held }));
+		const report = json(run(['--machine', CLAW, '--json'], f.env));
+		assert.deepEqual(report.revocations.revoked, []);
+		assert.deepEqual(report.revocations.cleared, []);
+		assert.deepEqual(readRevoked(f), held);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('a corrupt record is a FINDING and is never overwritten from a partial view', () => {
+	const f = reachableFixture({
+		machine: earnedClaw(['jdk21']),
+		probe: ['CAP ffmpeg ok 7.1.5', 'CAP jdk21 no javac-failed'],
+	});
+	try {
+		writeFileSync(revocationsFile(f), '{ not json');
+		const r = run(['--machine', CLAW, '--json'], f.env);
+		assert.equal(r.code, 1);
+		assert.ok(json(r).findings.some((x) => /revocation record is unreadable/.test(x)));
+		assert.equal(readFileSync(revocationsFile(f), 'utf8'), '{ not json');
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

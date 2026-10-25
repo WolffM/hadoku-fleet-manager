@@ -152,6 +152,11 @@ import {
 import { isGuestNode } from '../dist/lib/node-role.js';
 import { readProof } from '../dist/lib/measured.js';
 import { manifest as manifestPath, stateDir } from './lib/paths.mjs';
+import {
+	applyVerdicts,
+	readRevocations,
+	writeRevocations,
+} from '../dist/capability-revocations.js';
 import { describeProof, proofKey, readProofs } from './lib/job-proof-record.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { renderJson } from './lib/prettier-json.mjs';
@@ -406,6 +411,8 @@ if (!nodes.length) {
 const REQUIRED = manifest.toolchain?.capabilities ?? [];
 
 const report = {};
+/** Judged executions of routing labels, applied once after every node answers. */
+const revocationVerdicts = [];
 const unreachable = [];
 /** node -> [{id, action: 'present' | 'installed' | 'failed', detail}] */
 const toolResults = {};
@@ -794,6 +801,25 @@ await Promise.all(
 			if (proven.has(id) || explained.has(id) || !caps[id] || !capability(id)) continue;
 			notEarned.push({ id, detail: barReason[id] ?? caps[id].detail ?? 'no reason given' });
 		}
+		// REVOCATION VERDICTS (src/capability-revocations.ts): this run EXECUTED
+		// these routing labels. A pass clears a revocation — the reboot cycle's
+		// re-prove lands here — and a failure revokes one the node was offering.
+		// An unjudged measurement moves nothing.
+		const offeredBefore = new Set(nodeOffer(m, { eligible: true }));
+		for (const id of probeableIds()) {
+			const cap = capability(id);
+			if (!cap || cap.surface !== 'label' || cap.kind !== 'identity') continue;
+			if (!caps[id] || unjudged.has(id)) continue;
+			const passed = proven.has(id);
+			if (!passed && !offeredBefore.has(id)) continue;
+			revocationVerdicts.push({
+				node: name,
+				capability: id,
+				passed,
+				reason: passed ? caps[id].detail : (barReason[id] ?? caps[id].detail ?? 'failed'),
+			});
+		}
+
 		report[name] = {
 			earned,
 			unearned,
@@ -819,6 +845,30 @@ await Promise.all(
 			: await seedNode(name, { ...m, $capabilities: { earned, prereqs } }, manifest, seedDeps);
 	})
 );
+
+/**
+ * Revoke what this run saw fail and clear what it saw pass — one write, after
+ * every node answered. An unreadable record is left alone and said: rewriting
+ * it from this run's partial view would re-grant whatever it held for nodes
+ * this run did not probe.
+ */
+const revocationChanges = (() => {
+	const read = readRevocations(stateDir());
+	if (read.corrupt) {
+		log(`── revocations: the record is unreadable (${read.why}) — nothing revoked or cleared.`);
+		return { revoked: [], cleared: [], unreadable: read.why };
+	}
+	const applied = applyVerdicts(read.nodes, revocationVerdicts, 'bootcamp');
+	if (applied.revoked.length || applied.cleared.length) writeRevocations(stateDir(), applied.nodes);
+	for (const v of applied.revoked) {
+		log(
+			`── ${v.node}  REVOKED ${v.capability} — withheld from routing until a probe passes (${v.reason})`
+		);
+	}
+	for (const v of applied.cleared)
+		log(`── ${v.node}  cleared ${v.capability} — proven again, routable`);
+	return { revoked: applied.revoked, cleared: applied.cleared };
+})();
 
 /**
  * `fleet bootcamp --prove`'s one node/capability attempt: drain, wait for
@@ -1322,6 +1372,7 @@ if (JSON_OUT)
 				roleDeclared,
 				tools: toolResults,
 				seeds: seedResultsByNode,
+				revocations: revocationChanges,
 				...(proofLedger.ok ? {} : { jobProofLedgerError: proofLedger.reason }),
 				...(PROVE ? { prove: proveResults } : {}),
 			},

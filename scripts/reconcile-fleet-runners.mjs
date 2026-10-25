@@ -129,7 +129,8 @@ import {
 	runOnSync,
 	selectNodes,
 } from './lib/fleet-exec.mjs';
-import { manifest as manifestFile, siteRoot } from './lib/paths.mjs';
+import { manifest as manifestFile, siteRoot, stateDir } from './lib/paths.mjs';
+import { readRevocations, revokedSets } from '../dist/capability-revocations.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import {
 	RESERVE_DRIFT_PCT,
@@ -141,6 +142,7 @@ import { metricsReadScript, metricsSince, perJobCosts, readOutcome } from './lib
 import {
 	BUILDER_LABEL,
 	registrationLabels,
+	revokedFor,
 	workloadGateContext,
 	workloadGatedCapabilities,
 } from '../dist/capabilities.js';
@@ -247,11 +249,15 @@ function offeredLabels(manifest, node) {
 		);
 		gateCtx = workloadGateContext(Object.keys(manifest.machines ?? {}), proofs, {
 			corrupt: status.corrupt,
+			// A label a probe executed and judged failed is not projected onto a
+			// standing registration either (src/capability-revocations.ts).
+			revoked: revokedSets(readRevocations(stateDir())),
 		});
 	}
 	return registrationLabels(manifest.machines?.[node] ?? {}, {
 		workloadProofs: gateCtx.byNode[node] ?? {},
 		provenCounts: gateCtx.provenCounts,
+		revoked: revokedFor(gateCtx, node),
 	});
 }
 
