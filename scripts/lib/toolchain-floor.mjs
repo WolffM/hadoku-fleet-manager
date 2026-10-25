@@ -362,11 +362,19 @@ export const REPAIRS = {
 		// STOCK PATH. Compiles and RUNS a one-class program rather than asking `java
 		// -version`: a `java`/`javac` that exists and exits non-zero (the shape a
 		// stub or a half-broken install takes) must read as absent, not present.
+		//
+		// THE SCRATCH DIR IS REMOVED ON EVERY PATH, not only the passing one. It
+		// was `… && rm -rf "$d" && echo OK`, so every failing detect left a
+		// `tmp.XXXXXX/Probe.java` behind, and the doctor runs each detect three
+		// ways (non-login, login, per runner PATH). This repo's own suite fails it
+		// on purpose (the hidden-java fixtures) against the host's real mktemp:
+		// 455 of them on claw-4's tmpfs and 513 on claw-6's on 2026-10-24.
 		detect:
-			'd="$(mktemp -d)" && printf ' +
+			'd="$(mktemp -d)" || exit 0; ok=0; printf ' +
 			'\'public class Probe{public static void main(String[] a){System.out.println("JDK21-PROBE-OK");}}\' ' +
 			'> "$d/Probe.java" && javac -d "$d" "$d/Probe.java" >/dev/null 2>&1 && ' +
-			'[ "$(java -cp "$d" Probe 2>/dev/null)" = JDK21-PROBE-OK ] && rm -rf "$d" && echo OK',
+			'[ "$(java -cp "$d" Probe 2>/dev/null)" = JDK21-PROBE-OK ] && ok=1; rm -rf "$d"; ' +
+			'[ "$ok" = 1 ] && echo OK',
 		// major.minor.security ONLY — never the raw banner. `check-fleet-toolchain.mjs`'s
 		// `judgeTool` reads this through the SHARED `parseInstalledVersion`
 		// (`tool-release.mjs`), which looks for the FIRST run of three dotted
@@ -420,7 +428,9 @@ export const REPAIRS = {
 			'  asset_url="$(curl -fsSI "$bin_url" | tr -d \'\\r\' | ' +
 				"awk -F': ' 'tolower($1)==\"location\"{u=$2} END{print u}')\"",
 			'  [ -n "$asset_url" ] || { echo "Adoptium gave no download location for $rel" >&2; exit 1; }',
-			'  tmp="$(mktemp -d)"',
+			// Reaped on every exit: under `set -eu` a failed curl or tar exits
+			// here, and a JDK tarball left on a claw's tmpfs is RAM.
+			'  tmp="$(mktemp -d)"; trap \'rm -rf "$tmp"\' EXIT',
 			'  curl -fsSL "$asset_url" -o "$tmp/jdk.tar.gz"',
 			'  curl -fsSL "${asset_url}.sha256.txt" -o "$tmp/jdk.tar.gz.sha256"',
 			// Compared by HASH, not by `sha256sum -c`: Adoptium's .sha256.txt names
@@ -476,7 +486,9 @@ export const REPAIRS = {
 			'  : # already current or newer than the pin -- never move backward',
 			'else',
 			'  base="https://archive.apache.org/dist/maven/maven-3/${want}/binaries/apache-maven-${want}-bin.tar.gz"',
-			'  tmp="$(mktemp -d)"',
+			// Reaped on every exit: under `set -eu` a failed curl or tar exits
+			// here, and a JDK tarball left on a claw's tmpfs is RAM.
+			'  tmp="$(mktemp -d)"; trap \'rm -rf "$tmp"\' EXIT',
 			'  curl -fsSL "$base" -o "$tmp/maven.tar.gz"',
 			'  curl -fsSL "${base}.sha512" -o "$tmp/maven.tar.gz.sha512"',
 			'  exp="$(awk \'{print $1}\' "$tmp/maven.tar.gz.sha512" | tr -d \'[:space:]\')"',

@@ -18,7 +18,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import {
 	chmodSync,
 	existsSync,
@@ -181,6 +181,59 @@ test('the default phase is the whole probe, measurement and LOAD included — ev
 		assert.deepEqual(lines(out, 'LOAD'), ['LOAD cargo-bevy 1']);
 		assert.match(out, /^CAP ffmpeg no absent$/m);
 	} finally {
+		rmSync(h.root, { recursive: true, force: true });
+	}
+});
+
+/**
+ * A KILLED PROBE LEAVES NOTHING IN TMPDIR. The benchmark runs as
+ * `say cargo-bevy $(cargo_bevy_try)`, a subshell, and a scratch dir it
+ * registered there was invisible to the top-level trap — so a probe killed
+ * mid-compile stranded its dir, which is how 455 and 513 `tmp.*` dirs piled up
+ * on claw-4's and claw-6's tmpfs. The probe now roots every scratch dir under
+ * one made in the top-level shell. MUTATION: drop the `export TMPDIR` of that
+ * root and this fails.
+ */
+/** SIGKILL a process group that may already be gone; any other failure is real. */
+function killGroup(pid) {
+	try {
+		process.kill(-pid, 'SIGKILL');
+	} catch (err) {
+		if (err.code !== 'ESRCH') throw err;
+	}
+}
+
+test('a probe killed mid-measurement removes its scratch, though the dir was made in a subshell', async () => {
+	const h = harness({ rustcBody: 'sleep 30' });
+	const child = spawn('/bin/bash', [PROBE], {
+		cwd: h.root,
+		detached: true,
+		stdio: 'ignore',
+		env: {
+			PATH: join(h.root, 'bin'),
+			HOME: join(h.root, 'home'),
+			TMPDIR: h.tmp,
+			CAP_PROBE_PHASE: 'measured',
+		},
+	});
+	try {
+		const deadline = Date.now() + 20_000;
+		const deep = () => readdirSync(h.tmp).some((d) => readdirSync(join(h.tmp, d)).length > 0);
+		while (!(readdirSync(h.tmp).length && deep())) {
+			assert.ok(Date.now() < deadline, 'the probe never made its scratch dir');
+			await new Promise((r) => setTimeout(r, 50));
+		}
+		// The WHOLE GROUP, as a dropped ssh session or a group kill delivers it:
+		// the subshell dies at once and never reaches its own `rm -rf`. A
+		// signal to the top-level bash alone proves nothing — bash defers a
+		// trap until the command substitution it is waiting on returns, so the
+		// subshell would simply finish and clean up after itself.
+		const exited = new Promise((r) => child.once('exit', r));
+		process.kill(-child.pid, 'SIGTERM');
+		await exited;
+		assert.deepEqual(readdirSync(h.tmp), []);
+	} finally {
+		killGroup(child.pid);
 		rmSync(h.root, { recursive: true, force: true });
 	}
 });

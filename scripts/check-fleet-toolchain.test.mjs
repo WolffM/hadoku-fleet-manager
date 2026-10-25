@@ -62,7 +62,13 @@ function fakeHome({ version = '2.1.285', onStockPath = false } = {}) {
 	const profile = `export PATH="${bin}:$PATH"\n`;
 	writeFileSync(join(home, '.bash_profile'), profile);
 	writeFileSync(join(home, '.profile'), profile);
-	return { home, bin, path: onStockPath ? `${bin}:${STOCK_PATH}` : STOCK_PATH };
+	// The probe runs the HOST's real pnpm and javac on the stock PATH, and an
+	// env built from scratch has no TMPDIR: pnpm's compile cache and every
+	// failing jdk21 detect landed on the real /tmp — 400+ MB of tmpfs on
+	// whichever claw ran this suite (claw-4, claw-6, 2026-10-24).
+	const tmp = join(home, 'tmp');
+	mkdirSync(tmp);
+	return { home, bin, tmp, path: onStockPath ? `${bin}:${STOCK_PATH}` : STOCK_PATH };
 }
 
 /**
@@ -105,7 +111,7 @@ function localRun(fh, runnerEnv = {}) {
 			const out = execFileSync('bash', ['--noprofile', '--norc', '-s'], {
 				input: script,
 				encoding: 'utf8',
-				env: { PATH: `${stub}:${fh.path}`, HOME: fh.home },
+				env: { PATH: `${stub}:${fh.path}`, HOME: fh.home, TMPDIR: fh.tmp },
 			});
 			return { ok: true, out, error: null };
 		} catch (err) {

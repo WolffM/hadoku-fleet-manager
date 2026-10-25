@@ -24,11 +24,31 @@ say() { printf 'CAP %s %s %s\n' "$1" "$2" "$3"; }
 # that put /tmp under the dispatcher's 2 GB mint floor — which refused even
 # the pm2-host deploys only hokon can run. A scratch dir is registered the
 # moment it exists and reaped by the trap, whichever way the script ends.
+#
+# THE REGISTRY ALONE DID NOT DO THAT, AND COULD NOT. Almost every probe runs as
+# `say <cap> $(<cap>_try)`, and a command substitution is a SUBSHELL: its
+# `SCRATCH+=` lands in a copy of the array that dies with it, so this trap
+# reaped only the one or two dirs made at top level. claw-4 and claw-6 still
+# held 455 and 513 such dirs on 2026-10-24. So the probe makes ONE root here,
+# in this shell, and points TMPDIR at it: every `mktemp` below, in whatever
+# subshell, and every tool a probe runs (javac, python, rustc) lands inside
+# it, and the root is what the trap removes. HUP is trapped too: the probe
+# runs over ssh, and a dropped session is a HUP, not a TERM. The name has no
+# leading dot — a dotted TMPDIR breaks tools that refuse dot segments
+# (ci-throttle-install.sh's TMPDIR note). The pm2 probe's dir is under $HOME
+# on purpose and so outside the root; it runs in a subshell too, so it is
+# reaped by that probe's own `rm -rf`, which runs on every path but a kill.
 SCRATCH=()
+SCRATCH_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/cap-probe-XXXXXX" 2>/dev/null) || SCRATCH_ROOT=""
+if [ -n "$SCRATCH_ROOT" ]; then
+	SCRATCH+=("$SCRATCH_ROOT")
+	export TMPDIR="$SCRATCH_ROOT"
+fi
 scratch_reap() { rm -rf -- ${SCRATCH[@]+"${SCRATCH[@]}"} 2>/dev/null || true; }
 trap scratch_reap EXIT
 trap 'scratch_reap; exit 143' TERM
 trap 'scratch_reap; exit 130' INT
+trap 'scratch_reap; exit 129' HUP
 
 # --- WHICH HALF OF THE PROBE TO RUN ------------------------------------------
 #

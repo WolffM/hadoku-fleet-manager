@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tempDir } from './test-tmpdir.mjs';
 import { fileURLToPath } from 'node:url';
@@ -511,7 +519,7 @@ function fakeNode({ bin, versions = [] }) {
 	const run = (script, env = {}) => {
 		const r = spawnSync('bash', ['--noprofile', '--norc', '-c', script], {
 			encoding: 'utf8',
-			env: { PATH: `${stubs}:/usr/bin:/bin`, HOME: home, ...env },
+			env: { PATH: `${stubs}:/usr/bin:/bin`, HOME: home, TMPDIR: tempDir('tf-tmp-'), ...env },
 		});
 		return { status: r.status, stderr: r.stderr, log: readFileSync(log, 'utf8') };
 	};
@@ -781,7 +789,7 @@ test('check-fleet-toolchain doctor path: jdk21 resolves to a KNOWN latest, on a 
 		const r = spawnSync('bash', ['--noprofile', '--norc', '-s'], {
 			input: script,
 			encoding: 'utf8',
-			env: { PATH: `${blockDir}:/usr/bin:/bin`, HOME: home },
+			env: { PATH: `${blockDir}:/usr/bin:/bin`, HOME: home, TMPDIR: tempDir('tf-tmp-') },
 		});
 		return r.error
 			? { ok: false, out: '', error: String(r.error.message) }
@@ -911,7 +919,7 @@ function fakeToolchainHome() {
 	const run = (script, env = {}) => {
 		const r = spawnSync('bash', ['--noprofile', '--norc', '-c', script], {
 			encoding: 'utf8',
-			env: { PATH: `${stubs}:/usr/bin:/bin`, HOME: home, ...env },
+			env: { PATH: `${stubs}:/usr/bin:/bin`, HOME: home, TMPDIR: tempDir('tf-tmp-'), ...env },
 		});
 		return { status: r.status, stderr: r.stderr, stdout: r.stdout, log: readFileSync(log, 'utf8') };
 	};
@@ -992,6 +1000,7 @@ test('jdk21 repair: an already-current-or-newer java NEVER downgrades or re-down
 		env: {
 			PATH: `${binDir}:${join(fx.home, '..', 'stubs')}:/usr/bin:/bin`,
 			HOME: fx.home,
+			TMPDIR: tempDir('tf-tmp-'),
 			TARGET_VERSION: '21.0.12',
 			// No CURL_* vars set: if the script tried to download anyway, the
 			// stub curl would exit 7 on the first call and fail this test.
@@ -1046,14 +1055,32 @@ function stubBin(programs) {
 	return dir;
 }
 
-function runDetect(id, programs) {
+function runDetect(id, programs, scratch = tempDir('tf-tmp-')) {
 	const dir = stubBin(programs);
 	const r = spawnSync('bash', ['--noprofile', '--norc', '-c', REPAIRS[id].detect], {
 		encoding: 'utf8',
-		env: { PATH: `${dir}:/usr/bin:/bin` },
+		env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: scratch },
 	});
 	return (r.stdout ?? '').trim();
 }
+
+/**
+ * A FAILING DETECT LEAVES NOTHING BEHIND. It used to remove its scratch dir
+ * only on the passing path, so every failure stranded a `tmp.XXXXXX/Probe.java`
+ * on the node's tmpfs — 455 on claw-4 and 513 on claw-6 by 2026-10-24.
+ * MUTATION: put the `rm -rf` back behind the `&&` chain and this fails.
+ */
+test('jdk21 detect: the scratch dir is removed when the probe FAILS, not only when it passes', () => {
+	for (const programs of [
+		{ javac: '#!/bin/sh\nexit 1\n', java: '#!/bin/sh\nexit 1\n' },
+		{ javac: '#!/bin/sh\nexit 0\n', java: '#!/bin/sh\nexit 1\n' },
+		{ javac: '#!/bin/sh\nexit 0\n', java: '#!/bin/sh\necho JDK21-PROBE-OK\n' },
+	]) {
+		const scratch = tempDir('tf-scratch-');
+		runDetect('jdk21', programs, scratch);
+		assert.deepEqual(readdirSync(scratch), [], JSON.stringify(programs));
+	}
+});
 
 /**
  * THE DONE-WHEN, LITERALLY: "a fake java that exits 1 is not the capability".
@@ -1116,7 +1143,7 @@ test('jdk21 version: extracts major.minor.security from a 4-component Temurin ba
 	});
 	const r = spawnSync('bash', ['--noprofile', '--norc', '-c', REPAIRS.jdk21.version], {
 		encoding: 'utf8',
-		env: { PATH: `${dir}:/usr/bin:/bin` },
+		env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: tempDir('tf-tmp-') },
 	});
 	assert.equal(r.stdout.trim(), '21.0.12');
 	// And the shared parser, fed exactly this output, must read it unchanged —
