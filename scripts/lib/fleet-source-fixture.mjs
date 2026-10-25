@@ -1,6 +1,10 @@
 /**
  * Fixture REMOTES for tests of anything that reads through `fleet-source.mjs`.
  *
+ * A PUBLISHED SUBPATH EXPORT (`@wolffm/fleet-manager/fleet-source-fixture`):
+ * hadoku_site's tests of its fleet-checkouts adapter import it, so this module
+ * specifier is a contract. It imports `test-git-identity.mjs`, which ships too.
+ *
  * Real bare repos on local disk, served over `file://`, not a mock of the
  * reader: the blobless fetch, the batched blob fetch and the CRLF
  * normalisation all run exactly as they do against GitHub. `uploadpack.*` is
