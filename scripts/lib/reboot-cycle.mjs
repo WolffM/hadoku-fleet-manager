@@ -61,7 +61,13 @@ const END = 'END reboot-probe';
 export const REBOOT_PROBE = `set -u
 echo "BOOTID $(cat /proc/sys/kernel/random/boot_id)"
 echo "RUNNING $(uname -r)"
-echo "NEWEST $(ls /boot/vmlinuz-* 2>/dev/null | sed 's|^/boot/vmlinuz-||' | sort -V | tail -n 1)"
+newest=$(ls /boot/vmlinuz-* 2>/dev/null | sed 's|^/boot/vmlinuz-||' | sort -V | tail -n 1)
+echo "NEWEST $newest"
+dkfiles() { ls "/lib/modules/$1/updates/dkms" 2>/dev/null | sort | tr '\n' ' '; }
+echo "DKMS-RUNNING $(dkfiles "$(uname -r)")"
+echo "DKMS-NEWEST $(dkfiles "$newest")"
+mi=$(command -v modinfo || echo /usr/sbin/modinfo)
+echo "DKMS-LOADED $(for f in /lib/modules/$(uname -r)/updates/dkms/*.ko*; do [ -e "$f" ] || continue; n=$("$mi" -F name "$f" 2>/dev/null); [ -n "$n" ] && grep -q "^$n " /proc/modules && echo "$n"; done | sort | tr '\n' ' ')"
 if [ -f /var/run/reboot-required ]; then echo "FLAG REQUIRED"; else echo "FLAG CLEAN"; fi
 echo "PKGS $(cat /var/run/reboot-required.pkgs 2>/dev/null | tr '\\n' ' ')"
 echo "BUSY $(pgrep -c -f '[R]unner\\.Worker' || true)"
@@ -112,6 +118,13 @@ export function parseRebootProbe(text) {
 		busy: /^\d+$/.test(get('BUSY') ?? '') ? Number(get('BUSY')) : null,
 		unitsEnabled: words(get('UNITS-ENABLED')),
 		unitsActive: words(get('UNITS-ACTIVE')),
+		// DKMS: module FILES built per kernel (Debian renames them, so files and
+		// loaded names differ: nvidia-current.ko.xz loads as `nvidia`), and the
+		// LOADED names of the running kernel's DKMS modules, from each file's own
+		// `modinfo -F name`.
+		dkmsRunning: words(get('DKMS-RUNNING')),
+		dkmsNewest: words(get('DKMS-NEWEST')),
+		dkmsLoaded: words(get('DKMS-LOADED')),
 		// null: no pm2 on the node. 'unreadable': pm2 is there and would not say.
 		pm2: pm2 === 'NONE' ? null : pm2 === 'UNREADABLE' || pm2 === null ? 'unreadable' : words(pm2),
 	};
@@ -126,6 +139,51 @@ export function rebootReason(p) {
 		why.push(`/var/run/reboot-required${p.packages.length ? ` (${p.packages.join(', ')})` : ''}`);
 	}
 	return why.length ? why.join('; ') : null;
+}
+
+/**
+ * DKMS modules built for the running kernel that are NOT built for the one the
+ * reboot will boot. Non-empty means rebooting loses a driver.
+ *
+ * Measured 2026-10-25: claw-1 rebooted onto 6.12.113 holding headers only for
+ * 6.12.73 and no `linux-headers-amd64`, so DKMS never built nvidia for the new
+ * kernel; it came back with no driver and went on advertising `nvenc-h264`.
+ */
+export function dkmsGap(p) {
+	if (!p.newest || p.newest === p.running) return [];
+	return (p.dkmsRunning ?? []).filter((f) => !(p.dkmsNewest ?? []).includes(f));
+}
+
+/**
+ * Did `fleet capabilities --machine <node> --json` re-prove the node?
+ *
+ * Its contract is the exit code plus the arrays; there is no `ok` field. A pass
+ * needs exit 0, no findings, the node not unreachable, AND the node present in
+ * `results`: a run that never looked at it proves nothing.
+ */
+export function judgeReprove(node, status, stdout) {
+	let doc;
+	try {
+		doc = JSON.parse(String(stdout ?? '').trim() || 'null');
+	} catch (e) {
+		return {
+			ok: false,
+			reason: `capabilities output was not JSON (exit ${status}): ${errText(e)}`,
+		};
+	}
+	if (!doc || typeof doc !== 'object')
+		return { ok: false, reason: `capabilities printed nothing (exit ${status})` };
+	const findings = Array.isArray(doc.findings) ? doc.findings : [];
+	if (findings.length) {
+		const text = findings.map((f) => (typeof f === 'string' ? f : JSON.stringify(f))).join('; ');
+		return { ok: false, reason: text.slice(0, 400) };
+	}
+	if ((doc.unreachable ?? []).some((u) => (u?.node ?? u) === node))
+		return { ok: false, reason: 'unreachable' };
+	if (!doc.results || !(node in doc.results))
+		return { ok: false, reason: `${node} is not in the capability results` };
+	if (status !== 0) return { ok: false, reason: `capabilities exited ${status} with no finding` };
+	return { ok: true };
 }
 
 /**
@@ -151,6 +209,9 @@ export function verifyAfter(before, after) {
 			if (missing.length) problems.push(`pm2 app(s) not back online: ${missing.join(', ')}`);
 		}
 	}
+	const unloaded = (before.dkmsLoaded ?? []).filter((m) => !(after.dkmsLoaded ?? []).includes(m));
+	if (unloaded.length)
+		problems.push(`DKMS module(s) not loaded after the reboot: ${unloaded.join(', ')}`);
 	return problems;
 }
 
@@ -296,6 +357,27 @@ export async function runRebootCycle({
 			nodes.push({ node: name, status: 'deferred', reason: why, why: `service host: ${serves}` });
 			continue;
 		}
+		// A REBOOT MUST NOT LOSE A DRIVER. Checked before the drain, so a node
+		// that would come back without one is never taken out at all.
+		const gap = dkmsGap(probe);
+		if (gap.length) {
+			const fix = `install linux-headers-amd64, then \`dkms autoinstall -k ${probe.newest}\``;
+			log(
+				`── ${name}  [deferred] needs a reboot (${why}), but ${probe.newest} has no DKMS build of ${gap.join(', ')}; ${fix}`
+			);
+			nodes.push({
+				node: name,
+				status: 'deferred',
+				reason: why,
+				why: `dkms missing for ${probe.newest}: ${gap.join(', ')}`,
+			});
+			finding(
+				name,
+				'dkms-missing',
+				`${probe.newest} has no DKMS build of ${gap.join(', ')}; rebooting would lose the driver. ${fix}.`
+			);
+			continue;
+		}
 		candidates.push({ name, probe, why });
 	}
 
@@ -426,6 +508,25 @@ async function verifyAndReturn(node, before, rebootAt, rec, deps, finding, log, 
 		}
 	}
 	if (problems.length) return hold(node, rec, deps, finding, log, problems.join('; '));
+	// RE-PROVE BEFORE UNDRAIN. A node must not advertise a label it has not
+	// proven (operator, 2026-10-25), and a reboot is exactly when a proven
+	// capability can silently go: claw-1 lost nvidia. Not optional: a pass with
+	// no way to re-prove holds the node rather than trusting it.
+	const rp = deps.reprove
+		? await attempt(() => deps.reprove(node))
+		: { ok: false, reason: 'this pass has no way to re-prove capabilities' };
+	const proved = rp.ok ? rp.value : { ok: false, reason: rp.reason };
+	if (!proved.ok) {
+		return hold(
+			node,
+			rec,
+			deps,
+			finding,
+			log,
+			`capabilities did not re-prove after the reboot: ${proved.reason}`
+		);
+	}
+	log(`   ${node}: capabilities re-proven on ${after.running}`);
 	rec.kernel = { from: before.running, to: after.running };
 	await putBack(node, rec, deps, finding, log);
 	rec.status = rec.undrained ? 'rebooted' : 'finding';

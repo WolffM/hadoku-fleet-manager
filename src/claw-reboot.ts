@@ -119,7 +119,9 @@ export const runRebootScript: RebootRunner = () =>
 	spawnScriptJson<RebootDoc>(rebootScriptPath(), ['--json'], RUN_TIMEOUT_MS);
 
 const hours = (ms: number): string => `${Math.round(ms / 3_600_000)}h`;
-const PAGED_KINDS = new Set(['verify-failed', 'hold-failed', 'undrain-failed']);
+// dkms-missing pages: the claw can never take its kernel until a human builds
+// the module, so it would sit on an unpatched kernel in silence.
+const PAGED_KINDS = new Set(['verify-failed', 'hold-failed', 'undrain-failed', 'dkms-missing']);
 
 export interface RebootTickSummary {
 	ran: boolean;

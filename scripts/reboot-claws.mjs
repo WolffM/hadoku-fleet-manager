@@ -21,8 +21,10 @@
  *
  * EXIT 0 when the pass raised no finding. `--json` is parseable either way.
  */
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 import { isLocalNode } from '../dist/lib/node-identity.js';
@@ -35,6 +37,7 @@ import {
 	REBOOT_PROBE,
 	oursOn,
 	parseRebootProbe,
+	judgeReprove,
 	rebootDrainArgs,
 	runRebootCycle,
 } from './lib/reboot-cycle.mjs';
@@ -111,6 +114,23 @@ const deps = {
 		return res.ok && res.stdout.includes('SCHEDULED')
 			? { ok: true }
 			: { ok: false, reason: res.error || 'reboot was not scheduled' };
+	},
+	// The capability check, EXECUTING each declared capability on the node,
+	// against this node only. Before undrain; see the cycle's re-prove step.
+	reprove: (node) => {
+		const r = spawnSync(
+			process.execPath,
+			[
+				join(dirname(fileURLToPath(import.meta.url)), 'check-capabilities.mjs'),
+				'--machine',
+				node,
+				'--json',
+			],
+			{ encoding: 'utf8', timeout: 10 * 60_000, env: { ...process.env, FLEET_NO_BANNER: '1' } }
+		);
+		if (r.error)
+			return { ok: false, reason: `could not run the capability check: ${r.error.message}` };
+		return judgeReprove(node, r.status, r.stdout);
 	},
 	sleep: clock.sleep,
 	now: clock.now,
