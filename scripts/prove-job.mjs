@@ -87,16 +87,6 @@ import { readProofsForCapability, writeProof } from '../dist/lib/measured.js';
  * host: stderr logging only, so `--json` stdout stays one document; anything else
  * the host offers (alerts, job sink) throws rather than no-ops. See `installCliHost`.
  */
-installCliHost({
-	logger: {
-		info: (m) => process.stderr.write(`${m}\n`),
-		warn: (m) => process.stderr.write(`${m}\n`),
-		error: (m) => process.stderr.write(`${m}\n`),
-	},
-	manifestDir: manifestDir(),
-	stateDir: stateDir(),
-});
-
 const argv = process.argv.slice(2);
 const out = createEmitter({ argv: process.argv });
 
@@ -148,6 +138,18 @@ if (argv.includes('--help') || argv.includes('-h')) {
 	out.log('  Exit 0 only for a pass. See the header of scripts/prove-job.mjs for the flags.');
 	process.exit(0);
 }
+
+// AFTER --help, not before: installing the host resolves the manifest dir, which
+// THROWS when it is missing, so usage text was unreachable without a fleet.
+installCliHost({
+	logger: {
+		info: (m) => process.stderr.write(`${m}\n`),
+		warn: (m) => process.stderr.write(`${m}\n`),
+		error: (m) => process.stderr.write(`${m}\n`),
+	},
+	manifestDir: manifestDir(),
+	stateDir: stateDir(),
+});
 
 /** A usage error: one JSON document under --json, exit 2. Nothing was touched. */
 function usage(message) {

@@ -67,6 +67,13 @@ interface Command {
 	 * has already paid for a duplicated reader once: isLocalNode had five.
 	 */
 	args?: string[];
+	/**
+	 * The script answers `--help` itself, and `cli-help.test.mjs` PROVES it: run
+	 * with `--help` in a sandbox where ssh, gh, sudo, apt, npm and systemctl all
+	 * fail and record the attempt, it must exit 0, print usage, and call none of
+	 * them. Absent, `--help` never reaches the script — see the door below.
+	 */
+	help?: true;
 }
 
 /**
@@ -98,20 +105,24 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'reboot-claws': {
 		script: 'reboot-claws.mjs',
+		help: true,
 		summary:
 			'reboot ONE claw that needs it: drain, wait idle, reboot, verify kernel + runners, undrain',
 	},
 	identity: { script: 'reconcile-runner-identity.mjs', summary: 'runner identity/ownership drift' },
 	traffic: {
 		script: 'traffic-status.mjs',
+		help: true,
 		summary: 'where the next job would go, and why every other node did not get it',
 	},
 	drain: {
 		script: 'drain-node.mjs',
+		help: true,
 		summary: 'soft-close a node: no new jobs, current work finishes',
 	},
 	backstop: {
 		script: 'backstop-switch.mjs',
+		help: true,
 		summary: 'the green light: --force <node> holds it eligible for CI; --status says why not',
 	},
 	'converge-toolchain': {
@@ -120,19 +131,23 @@ const COMMANDS: Record<string, Command> = {
 	},
 	toolpack: {
 		script: 'toolpack.mjs',
+		help: true,
 		summary: 'the instruments a node needs before its measurements are trustworthy',
 	},
 	scan: {
 		script: 'benchmark-fleet.mjs',
+		help: true,
 		args: ['--scan'],
 		summary: 'measure any reachable box, in the fleet or not — nothing is written',
 	},
 	benchmark: {
 		script: 'benchmark-fleet.mjs',
+		help: true,
 		summary: 'measure every node and put the numbers side by side',
 	},
 	'benchmark-join': {
 		script: 'join-workload-benchmark.mjs',
+		help: true,
 		summary: 'hardware x job-metrics x job-history — is peak memory the workload or the node',
 	},
 	stress: {
@@ -145,6 +160,7 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'job-metrics': {
 		script: 'collect-job-metrics.mjs',
+		help: true,
 		summary: 'peak memory per job, joined to job history',
 	},
 	'service-inventory': {
@@ -153,22 +169,27 @@ const COMMANDS: Record<string, Command> = {
 	},
 	hosting: {
 		script: 'hosting.mjs',
+		help: true,
 		summary: 'lend a node to a tenant: CI off, declared resources served, agent supervised',
 	},
 	'node-status': {
 		script: 'node-status.mjs',
+		help: true,
 		summary: 'per node: reachable, health, drains and their notice, hosting — for a tenant to read',
 	},
 	'drain-check': {
 		script: 'check-drain-enforced.mjs',
+		help: true,
 		summary: 'is every drain actually being enforced',
 	},
 	'contract-consumers': {
 		script: 'check-contract-consumers.mjs',
+		help: true,
 		summary: 'every --json contract entry names a consumer that exists',
 	},
 	'runner-units': {
 		script: 'check-runner-units.mjs',
+		help: true,
 		summary: 'standing runner units that name a renamed, archived or off-roster repo',
 	},
 	'check-runner-var': {
@@ -199,6 +220,7 @@ const COMMANDS: Record<string, Command> = {
 	// and races a guest, so it is an operator act). See scripts/prove-job.mjs.
 	'prove-job': {
 		script: 'prove-job.mjs',
+		help: true,
 		summary: 'run ONE real workflow job on a named node and read back where it ran',
 	},
 	'tool-inventory': {
@@ -219,10 +241,12 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'warm-canary': {
 		script: 'check-warm-canary.mjs',
+		help: true,
 		summary: 'at least one warm listener is actually held, on an eligible node',
 	},
 	'fleet-kills': {
 		script: 'check-fleet-kills.mjs',
+		help: true,
 		summary: 'jobs the FLEET stopped at a unit TTL, not jobs that failed',
 	},
 	'history-coverage': {
@@ -264,6 +288,7 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'srv-drift': {
 		script: 'check-srv-drift.mjs',
+		help: true,
 		summary: 'the DEPLOYED manifest against the commit it came from, and against main',
 	},
 	'ci-watch': {
@@ -276,6 +301,7 @@ const COMMANDS: Record<string, Command> = {
 	},
 	enroll: {
 		script: 'enroll-node.mjs',
+		help: true,
 		summary: 'declare a bootstrapped box in the manifest (measured, not typed)',
 	},
 	'lan-reserve': {
@@ -296,6 +322,7 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'seed-cache': {
 		script: 'seed-node-cache.mjs',
+		help: true,
 		summary: 'copy the big caches a fresh node cannot build for itself',
 	},
 	'mem-report': { script: 'runner-mem-report.py', summary: 'per-runner memory report' },
@@ -316,6 +343,7 @@ const COMMANDS: Record<string, Command> = {
 	// pass, and the gate beside it fails the build if this key moves.
 	'health-freshness': {
 		script: 'check-health-freshness.mjs',
+		help: true,
 		summary: 'how old is the $health record every placement rule reads',
 	},
 	// IMAGE and CONVERT, the two onboarding phases before `provision` can pick a
@@ -403,6 +431,19 @@ if (!cmd) {
 	console.error(`fleet: unknown subcommand "${name}"\n`);
 	usage();
 	process.exit(1);
+}
+
+// --help NEVER REACHES A SCRIPT THAT HAS NOT PROVEN IT HANDLES IT. Every script
+// parses its own argv and most ignore a flag they do not know, so `--help`
+// fell through to the default action: on 2026-10-25 `fleet bootcamp --help` ran
+// a real bootcamp fleet-wide and installed the JDK on three claws, and `fleet
+// reboot-claws --help` rebooted claw-4. The door answers instead, from the
+// table, and runs nothing. A script with real usage text opts in with
+// `help: true`, which a test holds to the sandbox rule above.
+if (!cmd.help && rest.some((a) => a === '--help' || a === '-h')) {
+	console.log(`fleet ${name} — ${cmd.summary}`);
+	console.log(`\n(no detailed --help for this subcommand; nothing was run)`);
+	process.exit(0);
 }
 
 // WHICH TREE, AND WHICH VERSION. Before the packaging check below, so a
