@@ -144,12 +144,20 @@ test('converge-provisioning --check is refused: the flag it passes its children 
 	assert.match(r.out, /unknown flag\(s\) --check/);
 });
 
+test('converge-toolchain --refresh with a mistyped --plan is refused: the typo was the dry run', () => {
+	const r = door('converge-toolchain', '--refresh', '--plna');
+	assert.equal(r.status, 2, r.out);
+	assert.match(r.out, /unknown flag\(s\) --plna — nothing was run/);
+	assert.equal(r.touched, '', r.touched);
+});
+
 test('the declared flags pass the door, value flags in both spellings', () => {
 	for (const args of [
 		['bootcamp', '--write', '--json', '--due', '7d', '--machine', 'claw-x'],
 		['bootcamp', '--machine=claw-x', '--idle-wait=30'],
 		['provision', '--confirm', '--address', '192.0.2.9', '--machine', 'claw-x'],
 		['converge-provisioning', '--dry-run', '--json'],
+		['converge-toolchain', '--refresh', '--plan', '--budget-min', '30', '--machine=claw-x'],
 	]) {
 		const r = door(...args);
 		assert.doesNotMatch(r.out, /unknown flag/, `${args.join(' ')}: ${r.out}`);
