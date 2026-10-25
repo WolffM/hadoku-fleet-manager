@@ -979,6 +979,33 @@ export const CAPABILITIES: readonly Capability[] = [
 		},
 	},
 	{
+		/*
+		 * java21 (2026-10-24, hadoku-cardtable's FLEET_MANAGER_FORGE_HOSTING
+		 * request §2): a Java 21 runtime that RUNS, which is what a node needs to
+		 * host Forge matches — and nothing else. Not `jdk21`, on purpose: that
+		 * label routes forge-e2e CI jobs (p95 5.5 GB, max 10 GB), so it keeps its
+		 * 12 GiB floor, Maven, and its workload canary. A hosting node runs no CI
+		 * at all, and an idle JDK costs disk, not RAM, so claw-1/2/6 can hold this
+		 * one without being offered the other.
+		 *
+		 * `surface: 'implicit'`: PROBED, ROUTABLE BY NOTHING. Cardtable reads it
+		 * from `$capabilities.earned` to decide where it can place; no workflow
+		 * may ask for it, which is what keeps it from becoming a backdoor onto
+		 * the jdk21 workload.
+		 *
+		 * The probe compiles and runs a class and checks the MAJOR version, so a
+		 * Java 17 on the stock PATH reads `no`, not `ok`.
+		 */
+		id: 'java21',
+		label: 'Java 21 runtime',
+		kind: 'identity',
+		surface: 'implicit',
+		verify: 'probe',
+		description:
+			'A Java 21 JDK that compiles and runs a class from a non-login shell. What a node ' +
+			'needs to host Forge matches; carries no CI routing, unlike `jdk21`.',
+	},
+	{
 		id: 'ffmpeg',
 		label: 'ffmpeg',
 		kind: 'identity',

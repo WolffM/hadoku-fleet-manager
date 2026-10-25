@@ -129,6 +129,14 @@ const stubLookup = (result) => {
 	return fn;
 };
 
+/**
+ * The lookups made for claude alone. Every claw also carries the JDK since
+ * 2026-10-24 (toolchain-floor.mjs `jdk21`), which is version-managed through
+ * Adoptium, so a run now asks upstream twice — once per TOOL, still never
+ * once per node. These tests are about claude's lookup.
+ */
+const claudeCalls = (lookup) => lookup.calls.filter((c) => c.source?.kind !== 'adoptium');
+
 const claudeOf = (report, node) =>
 	report.find((m) => m.machine === node)?.tools?.find((t) => t.id === 'claude');
 
@@ -349,7 +357,7 @@ test('includeGuests evaluates the guest for REAL, instead of reporting tools: []
 		const ids = m.tools.map((t) => t.id).sort();
 		assert.deepEqual(
 			ids,
-			['claude', 'docker', 'ffmpeg', 'gh', 'rust', 'rust-wasm32'],
+			['claude', 'docker', 'ffmpeg', 'gh', 'jdk21', 'rust', 'rust-wasm32'],
 			'taskauto is declared'
 		);
 		assert.equal(claudeOf(report, GUEST)?.status, 'ok');
@@ -991,7 +999,7 @@ test('a registry that fails EVERY attempt is unknown through the real lookup', a
 		assert.equal(claude.status, 'unknown');
 		assert.match(claude.reason, /ECONNRESET/);
 		assert.match(claude.reason, /gave up after 2/);
-		assert.equal(fetches, 2, 'retried once, and asked once for the one tool');
+		assert.equal(fetches, 4, 'retried once, and asked once per tool: claude and the JDK');
 	} finally {
 		rmSync(fh.home, { recursive: true, force: true });
 	}
@@ -1044,8 +1052,8 @@ test('behind / current / ahead, judged against the release cleared minAge + tole
 			const c = claudeOf(report, TASKAUTO);
 			assert.equal(c.finding, finding, `${installed}`);
 			assert.equal(c.status, want === 'current' ? 'ok' : want, `${installed}`);
-			assert.equal(lookup.calls.length, 1, 'one lookup per tool per run');
-			assert.equal(lookup.calls[0].opts.minAge, MIN_AGE + TOLERANCE_MINUTES);
+			assert.equal(claudeCalls(lookup).length, 1, 'one lookup per tool per run');
+			assert.equal(claudeCalls(lookup)[0].opts.minAge, MIN_AGE + TOLERANCE_MINUTES);
 			if (want === 'behind') assert.equal(c.target, '2.1.285');
 		} finally {
 			rmSync(fh.home, { recursive: true, force: true });
@@ -1063,7 +1071,8 @@ test('upstream is asked once per tool however many nodes carry it', async () => 
 	});
 	try {
 		await runDoctor({ manifest: two, run: localRun(fh), lookup, drains: {} });
-		assert.equal(lookup.calls.length, 1);
+		assert.equal(claudeCalls(lookup).length, 1);
+		assert.equal(lookup.calls.length, 2, 'two tools, two lookups — however many nodes');
 	} finally {
 		rmSync(fh.home, { recursive: true, force: true });
 	}

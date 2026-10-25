@@ -360,7 +360,15 @@ test('includeGuests lifts the guest exclusion for VERIFICATION, and only when as
 		'the `when` scoping still applies — includeGuests only lifts the ROLE check'
 	);
 	const ids = applicableRepairs(guest, { includeGuests: true }).map(([id]) => id);
-	assert.deepEqual(ids.sort(), ['claude', 'docker', 'ffmpeg', 'gh', 'rust', 'rust-wasm32']);
+	assert.deepEqual(ids.sort(), [
+		'claude',
+		'docker',
+		'ffmpeg',
+		'gh',
+		'jdk21',
+		'rust',
+		'rust-wasm32',
+	]);
 	// Still nothing without the flag, same guest object.
 	assert.deepEqual(applicableRepairs(guest), []);
 });
@@ -614,11 +622,11 @@ test('JDK21_MIN_INSTALLED_MB sits strictly between the 11 GB and 15 GB buckets',
  * must coerce to a sentence instead. MUTATION: remove the `.toString`
  * override and this fails (the coerced string contains `node =>` instead).
  */
-test('the RAM-floor predicate stringifies to a sentence, never its own source', () => {
-	assert.equal(`${REPAIRS.jdk21.when}`, 'installed RAM >= 12288 MiB');
+test('a predicate `when` stringifies to a sentence, never its own source', () => {
 	assert.equal(`${REPAIRS.maven.when}`, 'installed RAM >= 12288 MiB');
-	assert.equal(String(REPAIRS.jdk21.when), `installed RAM >= ${JDK21_MIN_INSTALLED_MB} MiB`);
-	assert.doesNotMatch(`${REPAIRS.jdk21.when}`, /=>|function/);
+	assert.equal(String(REPAIRS.maven.when), `installed RAM >= ${JDK21_MIN_INSTALLED_MB} MiB`);
+	assert.equal(`${REPAIRS.jdk21.when}`, 'every claw');
+	for (const id of ['jdk21', 'maven']) assert.doesNotMatch(`${REPAIRS[id].when}`, /=>|function/);
 });
 
 /**
@@ -626,25 +634,32 @@ test('the RAM-floor predicate stringifies to a sentence, never its own source', 
  * return `true` (or drop the `$measured`/`ramGb` floor to 0) and every
  * assertion in this test that expects `false` flips to `true` and fails.
  */
-test('jdk21/maven offer only above the measured RAM floor, never to a guest regardless of its RAM', () => {
+test('the JDK goes to every claw; Maven — and with it the jdk21 LABEL — only above the RAM floor', () => {
+	// Since 2026-10-24 the JDK is the `java21` hosting capability every claw may
+	// need (cardtable's hosting request §2). An idle JDK costs disk, not RAM.
 	assert.equal(toolAppliesTo('jdk21', claw15gb), true);
-	assert.equal(toolAppliesTo('jdk21', claw7gb), false);
+	assert.equal(toolAppliesTo('jdk21', claw7gb), true);
+	assert.equal(toolAppliesTo('jdk21', claw11gbDeclaredOnly), true);
+	assert.equal(toolAppliesTo('jdk21', { role: 'claw', labels: [] }), true);
+	// The forge-e2e floor did not move: it is Maven's, and the jdk21 label
+	// needs Maven, so the 10 GB CI job still lands only where it fits.
 	assert.equal(toolAppliesTo('maven', claw15gb), true);
 	assert.equal(toolAppliesTo('maven', claw7gb), false);
-	// claw-1/2/3's own shape: declared ramGb only, no $measured yet.
-	assert.equal(toolAppliesTo('jdk21', claw11gbDeclaredOnly), false, '11 GB is below the floor');
-	// Never hokon, even at 61 GB measured — the guest check runs BEFORE `when`.
-	assert.equal(toolAppliesTo('jdk21', guest15gb), false);
-	assert.equal(toolAppliesTo('jdk21', guest15gb, { includeGuests: true }), true);
+	assert.equal(toolAppliesTo('maven', claw11gbDeclaredOnly), false, '11 GB is below the floor');
 	// A node nothing has ever measured does not qualify by omission.
-	assert.equal(toolAppliesTo('jdk21', { role: 'claw', labels: [] }), false);
+	assert.equal(toolAppliesTo('maven', { role: 'claw', labels: [] }), false);
+	// Never hokon, even at 61 GB measured — the guest check runs BEFORE `when`.
+	for (const id of ['jdk21', 'maven']) {
+		assert.equal(toolAppliesTo(id, guest15gb), false);
+		assert.equal(toolAppliesTo(id, guest15gb, { includeGuests: true }), true);
+	}
 });
 
-test('jdk21 is scoped like the existing optional capabilities — present in applicableRepairs only above the floor', () => {
+test('Maven is scoped like the existing optional capabilities — present in applicableRepairs only above the floor', () => {
 	const ids15 = applicableRepairs(claw15gb).map(([id]) => id);
 	const ids7 = applicableRepairs(claw7gb).map(([id]) => id);
 	assert.ok(ids15.includes('jdk21') && ids15.includes('maven'));
-	assert.ok(!ids7.includes('jdk21') && !ids7.includes('maven'));
+	assert.ok(ids7.includes('jdk21') && !ids7.includes('maven'));
 	// The unscoped tools are unaffected either way.
 	assert.ok(ids7.includes('rust') && ids7.includes('docker'));
 });

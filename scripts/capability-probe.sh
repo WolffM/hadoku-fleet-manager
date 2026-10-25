@@ -841,4 +841,44 @@ jdk21_try() {
 # shellcheck disable=SC2046
 say jdk21 $(jdk21_try)
 
+# --- java21: a Java 21 that RUNS, nothing more -------------------------------
+#
+# What a node needs to host Forge matches (src/capabilities.ts `java21`). The
+# same compile-and-run as jdk21 above without Maven, plus the MAJOR version:
+# a working Java 17 is a working Java, and the wrong one for Forge.
+java21_try() {
+	if ! command -v javac >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
+		printf 'no no-jdk'
+		return
+	fi
+	j21_v=$(java -version 2>&1 | sed -n '1s/.*"\([0-9][0-9.]*\)".*/\1/p')
+	if [ "${j21_v%%.*}" != "21" ]; then
+		printf 'no major-%s' "${j21_v:-unknown}"
+		return
+	fi
+	j21_d=$(mktemp -d 2>/dev/null) || j21_d=""
+	[ -n "$j21_d" ] && SCRATCH+=("$j21_d")
+	if [ -z "$j21_d" ]; then
+		printf 'no no-tmpdir'
+		return
+	fi
+	printf 'public class Probe{public static void main(String[] a){System.out.println("JAVA21-PROBE-OK");}}' \
+		>"$j21_d/Probe.java"
+	if ! javac -d "$j21_d" "$j21_d/Probe.java" >/dev/null 2>&1; then
+		rm -rf "$j21_d"
+		printf 'no compile-failed'
+		return
+	fi
+	j21_out=$(java -cp "$j21_d" Probe 2>/dev/null)
+	rm -rf "$j21_d"
+	if [ "$j21_out" != "JAVA21-PROBE-OK" ]; then
+		printf 'no run-failed'
+		return
+	fi
+	printf 'ok %s' "$j21_v"
+}
+
+# shellcheck disable=SC2046
+say java21 $(java21_try)
+
 printf 'PROBE-END %s\n' "$(hostname)"

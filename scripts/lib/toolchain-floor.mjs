@@ -73,6 +73,9 @@ function installedRamAtLeast(mb) {
  * without being the hub; see `hostsPm2Services` in src/lib/node-role.ts.
  */
 const pm2ServicesHost = (node) => hostsPm2Services(node);
+/** Every node `toolAppliesTo` lets through — a guest is already filtered out before `when` runs. */
+const everyClaw = () => true;
+everyClaw.toString = () => 'every claw';
 pm2ServicesHost.toString = () => 'services: "pm2"';
 
 /** Claude's reachability repair; see REPAIRS.claude.link. One text, shared by `link` and `repair`. */
@@ -345,7 +348,12 @@ export const REPAIRS = {
 	 * fact, not a guess made once about today's hostnames.
 	 */
 	jdk21: {
-		when: installedRamAtLeast(JDK21_MIN_INSTALLED_MB),
+		// EVERY CLAW, since 2026-10-24. The JDK alone is the `java21` capability a
+		// node needs to host Forge matches (cardtable's hosting request §2), and
+		// an idle JDK costs disk, not RAM. The forge-e2e floor did not move: it
+		// stays on `maven` below, so the `jdk21` LABEL — which needs Maven and a
+		// passing workload canary — still lands only where the 10 GB job fits.
+		when: everyClaw,
 		why:
 			"cardtable's forge-e2e/forge-jvm (#5) move off the production host onto a claw with room for the " +
 			'JVM: p50 2.9 GB, p95 5.5 GB, max 10 GB on top of whatever else the node runs. ' +

@@ -67,6 +67,16 @@ import { cleanGitEnv, FIXTURE_IDENTITY } from './lib/test-git-identity.mjs';
 import { SEED_DISK_FLOOR_MB } from './lib/capability-seeds.mjs';
 import { writeProof } from '../dist/lib/measured.js';
 
+/**
+ * Every fixture claw is asked for the JDK (toolchain-floor.mjs `jdk21` applies
+ * to every claw since 2026-10-24) and answers as a node that already carries
+ * one: present, never installed, never logged, so each call log stays about
+ * the tool its test is testing. Matched on `javac -d "$d"`, text only the
+ * REPAIRS detect contains — capability-probe.sh compiles the same class under
+ * other variable names, and a broader match would answer the probe itself.
+ */
+const JDK_PRESENT_CASE = `  *'javac -d "$d"'*) echo OK; exit 0 ;;`;
+
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 
 /** Names that resolve NOWHERE, and are not this box. */
@@ -319,6 +329,7 @@ function writableFixture(
 			'# fixture ssh — classify the script on stdin, answer like a node would',
 			'script="$(cat)"',
 			`case "$script" in`,
+			JDK_PRESENT_CASE,
 			`  *claude.ai/install.sh*)`,
 			`    echo INSTALL >>${JSON.stringify(calls)}`,
 			`    printf '%s' "$script" >${JSON.stringify(installScriptLog)}`,
@@ -862,6 +873,7 @@ function seedingFixture({
 			'#!/bin/sh',
 			'script="$(cat)"',
 			'case "$script" in',
+			JDK_PRESENT_CASE,
 			'  *claude.ai/install.sh*)',
 			`    echo INSTALL >>${JSON.stringify(calls)}; exit 0 ;;`,
 			'  *"claude --version"*)',
@@ -1058,12 +1070,12 @@ test('hokon (a guest) is never seeded even when $seeds is declared — guarded a
 // at the boundary: does bootcamp correctly SKIP, naming why, without ever
 // reaching for the node a second time.
 //
-// RAM IS KEPT BELOW `JDK21_MIN_INSTALLED_MB` DELIBERATELY: jdk21's REPAIRS
-// entry installs on ANY node whose declared RAM clears that floor, regardless
+// RAM IS KEPT BELOW `JDK21_MIN_INSTALLED_MB` DELIBERATELY: `maven`'s REPAIRS
+// entry installs on any node whose declared RAM clears that floor, regardless
 // of whether it has earned the label yet (the two are independent — see
 // `toolchain-floor.mjs`). A low-RAM fixture node never triggers that install
-// attempt, so the ssh shim only has to answer the PROBE, which is the only
-// thing these two tests are about.
+// attempt; the JDK itself applies to every claw and the shim answers its
+// detect as present, so the probe is the only thing these two tests are about.
 function proveFixture({ cores = 8 } = {}) {
 	const root = mkdtempSync(join(tmpdir(), 'fleet-bootcamp-prove-'));
 	const manifestDir = join(root, 'manifests');
@@ -1099,6 +1111,7 @@ function proveFixture({ cores = 8 } = {}) {
 			'#!/bin/sh',
 			'script="$(cat)"',
 			'case "$script" in',
+			JDK_PRESENT_CASE,
 			'  *)',
 			`    echo PROBE >>${JSON.stringify(calls)}`,
 			"    printf 'CAP jdk21 ok 21.0.1\\nPROBE-END\\n' ;;",
@@ -1286,6 +1299,7 @@ function idleFixture({
 			`case "$*" in *pgrep*) cat ${q(files.busy)}; exit 0 ;; esac`,
 			'script="$(cat)"',
 			'case "$script" in',
+			JDK_PRESENT_CASE,
 			'  *"export CAP_PROBE_PHASE=measured"*)',
 			`    echo MEASURED >>${q(files.calls)}`,
 			// What the drain file said AT THE MOMENT of the measurement.

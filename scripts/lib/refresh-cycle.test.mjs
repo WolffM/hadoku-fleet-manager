@@ -14,7 +14,7 @@ import {
 	verdictAfter,
 	waitUntilDrained,
 } from './refresh-cycle.mjs';
-import { REPAIRS, applicableRepairs } from './toolchain-floor.mjs';
+import { REPAIRS, applicableRepairs, isVersionManaged } from './toolchain-floor.mjs';
 
 const CLAW = { labels: [] };
 const TASKAUTO = { labels: ['taskauto'] };
@@ -36,7 +36,9 @@ function seenFor(entry, { claude = '2.1.285', rust = true, apt = {} } = {}) {
 			login: ok ? 'OK' : '',
 			// Reachable under every runner PATH the probe read (#127).
 			runner: '',
-			...(t.version ? { version: claude } : {}),
+			// `claude` is the version under test; any OTHER version-managed tool
+			// (the JDK, on every claw since 2026-10-24) reads as current.
+			...(t.version ? { version: id === 'claude' ? claude : KNOWN.version } : {}),
 			// An apt-tracked tool reports `installed|candidate|state`; current by default.
 			...(t.apt ? { apt: apt[id] ?? '1.0.0|1.0.0|current' } : {}),
 		};
@@ -445,14 +447,14 @@ test('`when` FILTER: claude is not probed, not installed, and not a finding on a
 
 	// Even with a probe that says claude is absent, a node that does not carry the
 	// capability gets no work — planNode only sees applicableRepairs.
-	const plan = planNode(applicableRepairs(CLAW), seenFor(CLAW), { claude: KNOWN });
+	const plan = planNode(applicableRepairs(CLAW), seenFor(CLAW), { claude: KNOWN, jdk21: KNOWN });
 	assert.deepEqual(plan, { work: [], findings: [] });
 });
 
 test('an ABSENT version-managed tool is INSTALLED pinned to the cleared release; unknown upstream refuses to install unpinned', () => {
 	const tools = applicableRepairs(TASKAUTO);
 	const absent = { ...seenFor(TASKAUTO), claude: { detect: '', login: '' } };
-	const p = planNode(tools, absent, { claude: KNOWN });
+	const p = planNode(tools, absent, { claude: KNOWN, jdk21: KNOWN });
 	assert.deepEqual(
 		p.work.map((w) => [w.id, w.action, w.target]),
 		[['claude', 'install', '2.1.285']]
@@ -523,13 +525,23 @@ test('upstream is asked ONCE PER TOOL per run, not once per node', async () => {
 	const world = Object.fromEntries(machines.map(([n, e]) => [n, seenFor(e)]));
 	const h = harness(machines, world);
 	await h.run({ plan: true });
-	assert.equal(h.calls.latest, 1);
+	// One lookup per version-managed TOOL (claude, and the JDK every claw
+	// carries since 2026-10-24) — never one per node.
+	const tools = new Set(
+		machines.flatMap(([, e]) =>
+			applicableRepairs(e)
+				.filter(([, t]) => isVersionManaged(t))
+				.map(([id]) => id)
+		)
+	);
+	assert.equal(tools.size, 2);
+	assert.equal(h.calls.latest, tools.size);
 });
 
 test('verdictAfter: still-behind is STALE (unchanged, undrain), absent is BROKEN (hold)', () => {
 	const tools = applicableRepairs(TASKAUTO);
 	const work = [{ id: 'claude', action: 'update', target: '2.1.285' }];
-	const latest = { claude: KNOWN };
+	const latest = { claude: KNOWN, jdk21: KNOWN };
 	assert.equal(
 		verdictAfter(work, tools, seenFor(TASKAUTO, { claude: '2.1.285' }), latest).status,
 		'ok'
@@ -607,6 +619,7 @@ test('PATH-ONLY: present but login-only plans a LINK and no install, even when t
 	const tools = applicableRepairs(TASKAUTO);
 	const p = planNode(tools, withClaude(TASKAUTO, loginOnly('2.1.284 (Claude Code)')), {
 		claude: OLD_TARGET,
+		jdk21: KNOWN,
 	});
 	assert.deepEqual(
 		p.work.map((w) => [w.id, w.action, w.target, w.from]),
@@ -617,7 +630,10 @@ test('PATH-ONLY: present but login-only plans a LINK and no install, even when t
 
 test('PATH-ONLY with an UNREADABLE version: link only, installed reported unknown, never reinstalled over', () => {
 	const tools = applicableRepairs(TASKAUTO);
-	const p = planNode(tools, withClaude(TASKAUTO, loginOnly('')), { claude: OLD_TARGET });
+	const p = planNode(tools, withClaude(TASKAUTO, loginOnly('')), {
+		claude: OLD_TARGET,
+		jdk21: KNOWN,
+	});
 	assert.equal(p.work.length, 1);
 	assert.equal(p.work[0].action, 'link');
 	assert.equal(p.work[0].target, undefined);
@@ -662,7 +678,7 @@ test('a link that works on a tool that is ALSO behind is not a failed link: reac
 		[{ id: 'claude', action: 'link', from: null }],
 		tools,
 		withClaude(TASKAUTO, { detect: 'OK', login: 'OK', runner: '', version: '2.1.200' }),
-		{ claude: OLD_TARGET }
+		{ claude: OLD_TARGET, jdk21: KNOWN }
 	);
 	assert.equal(v.status, 'ok');
 });
@@ -712,7 +728,7 @@ test('BEHIND still upgrades, and ABSENT (not login-only) still installs pinned t
 	const behind = planNode(
 		applicableRepairs(TASKAUTO),
 		withClaude(TASKAUTO, { detect: 'OK', login: 'OK', runner: '', version: '2.1.270' }),
-		{ claude: OLD_TARGET }
+		{ claude: OLD_TARGET, jdk21: KNOWN }
 	);
 	assert.deepEqual(
 		behind.work.map((w) => [w.action, w.from, w.target]),
@@ -721,7 +737,7 @@ test('BEHIND still upgrades, and ABSENT (not login-only) still installs pinned t
 	const absent = planNode(
 		applicableRepairs(TASKAUTO),
 		withClaude(TASKAUTO, { detect: '', login: '' }),
-		{ claude: OLD_TARGET }
+		{ claude: OLD_TARGET, jdk21: KNOWN }
 	);
 	assert.deepEqual(
 		absent.work.map((w) => [w.action, w.target]),
@@ -893,7 +909,7 @@ test('#127: a runner-PATH miss on a tool WITH a link plans the link, not an inst
 	const { work, findings } = planNode(
 		applicableRepairs(TASKAUTO),
 		withClaude(TASKAUTO, runnerMiss('2.1.285')),
-		{ claude: KNOWN }
+		{ claude: KNOWN, jdk21: KNOWN }
 	);
 	assert.deepEqual(
 		work.map((w) => [w.id, w.action]),
@@ -910,7 +926,7 @@ test('#127: a runner-PATH miss on a tool with NO link is a finding, and nothing 
 		...seenFor(TASKAUTO),
 		[id]: { ...seenFor(TASKAUTO)[id], runner: 'manager=/usr/bin; ' },
 	};
-	const { work, findings } = planNode(tools, seen, { claude: KNOWN });
+	const { work, findings } = planNode(tools, seen, { claude: KNOWN, jdk21: KNOWN });
 	assert.deepEqual(work, [], `nothing may be installed for ${id}`);
 	assert.equal(findings.length, 1);
 	assert.equal(findings[0].tool, id);
