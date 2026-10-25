@@ -140,6 +140,14 @@ const COMMANDS: Record<string, Command> = {
 		script: 'service-inventory.mjs',
 		summary: 'every RESIDENT workload on this node, measured (--write merges the demand ledger)',
 	},
+	hosting: {
+		script: 'hosting.mjs',
+		summary: 'lend a node to a tenant: CI off, declared resources served, agent supervised',
+	},
+	'node-status': {
+		script: 'node-status.mjs',
+		summary: 'per node: reachable, health, drains and their notice, hosting — for a tenant to read',
+	},
 	'drain-check': {
 		script: 'check-drain-enforced.mjs',
 		summary: 'is every drain actually being enforced',

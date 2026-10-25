@@ -15,6 +15,16 @@ three already in use.
 | **runner** | One GitHub registration: a `(node, repo)` pair, with its own listener. | not a node — one node hosts up to `maxRegistrations` |
 | **fleet**  | Every declared node, plus the coverage derived from them.              | not "the claws"                                      |
 
+Two words for a node the fleet LENDS, both drains with a `kind` (`src/runners/drain.ts`):
+
+- A **lease** lends a node for a window — a tenant's measurement, a calibration
+  slot. CI is held off until its `until`, then returns by itself.
+- A **hosting node** is lent to a tenant's RESIDENT service (`fleet hosting`):
+  CI held off, declared memory and cores served from a slice and read back from
+  the kernel, the tenant's agent supervised. It is still enrolled and probed,
+  but it is not a claw while it hosts, because a claw's only job is CI. Say
+  "hosting node", never bare "host" (below).
+
 `claw` is load-bearing and stays. It is the answer to "which nodes may be
 demoted without taking production with them", and `clawsOnline` /
 `clawsPromotable` are read by the outage and saturation triggers. It is also the

@@ -95,6 +95,20 @@ const DEFER_CALL = /\bdeferralFor\s*\(/;
  */
 const EXEMPT = new Map([
 	[
+		'node-status.mjs',
+		'a TENANT reads this to decide whether a node can hold live work, and a node ' +
+			'drained for maintenance is exactly one that cannot. Deferring its ' +
+			'unreachability would report a powered-off box as fine to the one reader ' +
+			'that must not be told so. Its drain is reported beside it instead.',
+	],
+	[
+		'hosting.mjs',
+		'operator-invoked against ONE named node, and an unreachable node is a ' +
+			'refusal to change what it serves, not a finding. `--check` reports the ' +
+			'hosting nodes, which are held by a `hosting` drain that deferralFor never ' +
+			'defers anyway (only `maintenance` is expected down).',
+	],
+	[
 		'lan-reserve.mjs',
 		'operator-invoked against ONE named node, and it writes a record about that ' +
 			'node. A drained node is still on its address, so it can still be recorded; an ' +
