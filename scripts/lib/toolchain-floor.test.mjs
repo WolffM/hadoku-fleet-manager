@@ -1122,26 +1122,29 @@ test('maven detect: a real-shaped mvn -v banner reports OK', () => {
 // Bonus coverage, not load-bearing: the stubbed tests above are what CI can
 // rely on regardless of what is installed on the box running it.
 
-const hasRealJdkToolchain = (() => {
-	const r = spawnSync('bash', ['--noprofile', '--norc', '-c', REPAIRS.jdk21.detect], {
+// ONE GUARD PER TOOL. This was one test gated on the JDK alone that then
+// asserted Maven too, so a host with a JDK and no Maven failed it rather than
+// skipping. claw-6 is that host (/usr/local/bin/javac 21, no mvn), and it
+// reddened main twice on 2026-10-25 depending only on where CI landed.
+const detects = (repair) => {
+	const r = spawnSync('bash', ['--noprofile', '--norc', '-c', REPAIRS[repair].detect], {
 		encoding: 'utf8',
 	});
 	return (r.stdout ?? '').trim() === 'OK';
-})();
+};
+const hasRealJdk = detects('jdk21');
+const hasRealMaven = detects('maven');
 
 test(
-	'jdk21/maven detect: a real stock-PATH JDK and Maven, when this host happens to carry one',
-	{ skip: !hasRealJdkToolchain },
-	() => {
-		const javac = spawnSync('bash', ['--noprofile', '--norc', '-c', REPAIRS.jdk21.detect], {
-			encoding: 'utf8',
-		});
-		assert.equal(javac.stdout.trim(), 'OK');
-		const mvn = spawnSync('bash', ['--noprofile', '--norc', '-c', REPAIRS.maven.detect], {
-			encoding: 'utf8',
-		});
-		assert.equal(mvn.stdout.trim(), 'OK');
-	}
+	'jdk21 detect: a real stock-PATH JDK, when this host happens to carry one',
+	{ skip: !hasRealJdk },
+	() => assert.equal(detects('jdk21'), true)
+);
+
+test(
+	'maven detect: a real stock-PATH Maven, when this host happens to carry one',
+	{ skip: !hasRealMaven },
+	() => assert.equal(detects('maven'), true)
 );
 
 // ---------------------------------------------------------------------------
