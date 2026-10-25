@@ -75,6 +75,7 @@ import process from 'node:process';
 
 import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
+import { readQueuedWithRetry } from './lib/queue-health.mjs';
 
 const JSON_OUT = process.argv.includes('--json');
 const emitter = createEmitter({ json: JSON_OUT });
@@ -126,31 +127,54 @@ function fail(msg) {
 	process.exit(1);
 }
 
-/** Completed runs for one repo. `null` = COULD NOT LOOK, never a pass. */
+const LIST_TIMEOUT_MS = 30_000;
+const RETRY_DELAY_MS = 1_000;
+
+/** Synchronous sleep. The sweep is serial and sync; a promise cannot help here. */
+function sleepSync(ms) {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** One listing, unretried; throws on failure so the reason survives. */
+function completedRunsOnce(repo) {
+	const out = execFileSync(
+		'gh',
+		[
+			'api',
+			`repos/${repo}/actions/runs?per_page=100`,
+			'-q',
+			'.workflow_runs[] | select(.status=="completed") | "\\(.id)\\t\\(.updated_at)"',
+		],
+		{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: LIST_TIMEOUT_MS }
+	);
+	return out
+		.split('\n')
+		.map((l) => l.trim())
+		.filter(Boolean)
+		.map((l) => {
+			const [id, at] = l.split('\t');
+			return { id: Number(id), at };
+		})
+		.filter((r) => Number.isFinite(r.id) && r.at);
+}
+
+/**
+ * Completed runs for one repo: `{ ok: true, created }` or `{ ok: false, reason }`.
+ *
+ * RETRIED ONCE, WITH THE REASON KEPT. This was a bare `catch { return null }`,
+ * the shape check-queue-health carried until 2026-09-07: one transient blip on
+ * one repo failed the gate and the finding named the repo and nothing else. On
+ * 2026-10-25 that reddened the morning digest — `could not list runs for 1
+ * repo(s): WolffM/secretProject` at 13:20Z — and the same gate passed on all 26
+ * repos when re-run, with no way to tell a blip from a lost grant afterwards.
+ * Same helper and policy as queue-health (READ_ATTEMPTS): a repo that fails
+ * every attempt is still unreadable and still fails.
+ */
 function completedRuns(repo) {
-	try {
-		const out = execFileSync(
-			'gh',
-			[
-				'api',
-				`repos/${repo}/actions/runs?per_page=100`,
-				'-q',
-				'.workflow_runs[] | select(.status=="completed") | "\\(.id)\\t\\(.updated_at)"',
-			],
-			{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 }
-		);
-		return out
-			.split('\n')
-			.map((l) => l.trim())
-			.filter(Boolean)
-			.map((l) => {
-				const [id, at] = l.split('\t');
-				return { id: Number(id), at };
-			})
-			.filter((r) => Number.isFinite(r.id) && r.at);
-	} catch {
-		return null;
-	}
+	return readQueuedWithRetry(repo, completedRunsOnce, {
+		sleep: () => sleepSync(RETRY_DELAY_MS),
+		timeoutMs: LIST_TIMEOUT_MS,
+	});
 }
 
 /**
@@ -224,11 +248,12 @@ let unrecordable = 0;
 let classified = 0;
 
 for (const repo of roster) {
-	const runs = completedRuns(repo);
-	if (runs === null) {
-		unreadable.push(repo);
+	const read = completedRuns(repo);
+	if (!read.ok) {
+		unreadable.push({ repo, reason: read.reason });
 		continue;
 	}
+	const runs = read.created;
 	let n = 0;
 	let hit = 0;
 	let skipped = 0;
@@ -262,7 +287,9 @@ for (const repo of roster) {
 
 if (unreadable.length) {
 	fail(
-		`could not list runs for ${unreadable.length} repo(s): ${unreadable.join(', ')}. ` +
+		`could not list runs for ${unreadable.length} repo(s): ` +
+			unreadable.map((u) => `${u.repo} — ${u.reason}`).join('; ') +
+			'. ' +
 			'Refusing to report coverage over a fleet only partly looked at.'
 	);
 }
