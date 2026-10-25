@@ -168,3 +168,14 @@ delegated to the user manager (`cgroup.subtree_control` is `cpu memory pids`).
 Enabling it needs a root `user@.service` drop-in with `Delegate=`. Memory is
 deliberately uncapped per pane for now; the swap pressure seen in the same
 incident is not addressed by this.
+
+## Converged by the controller since 2026-10-24 (fleet-manager#1)
+
+`fleet converge-provisioning` runs every 30 minutes inside mgmt-api
+(`src/provisioning-converge.ts`). It reads both `--check`s, repairs only the
+nodes that drifted (throttle env, standing-unit slice placement and cap), and
+reads those nodes again. Idle units only; a node drifting on both facets
+restarts each unit once. It logs what it changed and pages only on a repair
+the re-check still disagrees with, or a deferral behind a live job that has
+lasted 6 hours. `check:slice` in hadoku_site is now the backstop and should
+find nothing.

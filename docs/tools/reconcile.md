@@ -64,6 +64,21 @@ and again on 2026-08-21.
 `register-fleet-runner.sh` remains the tool for a `hadoku`-user registration
 and is still the only way to **remove** one.
 
+## Born provisioned since 2026-10-24 (fleet-manager#1)
+
+A claw's new unit is **enabled, not started**. The reconciler then runs
+`fleet slice --machine <claw> --confirm` and `fleet throttle --machine <claw>
+--confirm --no-restart` for that node, starts the unit, and fails the
+registration unless its `ControlGroup` is under the node's slice. A unit's
+first start decides its cgroup, so the drop-in and the throttle `.env` must
+both exist before it. On 2026-10-22 they did not: `enable --now` started
+hadoku-fleet-manager's standing runners on claw-4/claw-6 in `app.slice` with
+no hook, and they needed `slice --confirm --restart` two nights later. A unit
+whose provisioning fails stays stopped and the run fails with the fix
+commands. A guest still starts at registration, because both drivers refuse
+it by role. `scripts/registration-provisioning.test.mjs` registers on a fake
+node and runs the real `--check` of both afterwards, with nothing between.
+
 ## Machine-centric since 2026-08-23
 
 The manifest used to be repo-centric: ten repo entries each carried a `claws`

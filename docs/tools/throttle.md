@@ -154,3 +154,14 @@ and fails the job, reversed deliberately after a 2026-09-01 incident
 `Runner.Worker` process-tree counting to an admitted-marker model with
 `flock`, after a waiters-count-as-load bug recurred three nights running on
 hokon (`scripts/ci-throttle.sh:42-83`).
+
+## Converged by the controller since 2026-10-24 (fleet-manager#1)
+
+`fleet converge-provisioning` runs every 30 minutes inside mgmt-api
+(`src/provisioning-converge.ts`). It reads both `--check`s, repairs only the
+nodes that drifted (throttle env, standing-unit slice placement and cap), and
+reads those nodes again. Idle units only; a node drifting on both facets
+restarts each unit once. It logs what it changed and pages only on a repair
+the re-check still disagrees with, or a deferral behind a live job that has
+lasted 6 hours. `check:throttle` in hadoku_site is now the backstop and should
+find nothing.

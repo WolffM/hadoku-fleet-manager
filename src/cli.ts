@@ -86,6 +86,10 @@ const COMMANDS: Record<string, Command> = {
 		script: 'deploy-ci-throttle.mjs',
 		summary: 'per-node CI concurrency hook (--check)',
 	},
+	'converge-provisioning': {
+		script: 'converge-provisioning.mjs',
+		summary: 'repair drifted throttle env + slice placement on idle runners, then re-check',
+	},
 	identity: { script: 'reconcile-runner-identity.mjs', summary: 'runner identity/ownership drift' },
 	traffic: {
 		script: 'traffic-status.mjs',

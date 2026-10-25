@@ -19,6 +19,7 @@ import {
 import { startFastLoop } from './fleet-loop.js';
 import { router as fleetRouter } from './routes/fleet.js';
 import type { RunnerHealthSnapshot } from './runner-health.js';
+import { startProvisioningConverge } from './provisioning-converge.js';
 
 export type { FleetHost, FleetHostLogger } from './host.js';
 export type { RunnerHealthSnapshot } from './runner-health.js';
@@ -120,6 +121,9 @@ export function createFleetManager(host: FleetHost): FleetManager {
 			// timers: runner-health ticks every 10 minutes, which is fine for
 			// outage detection and far too slow to keep a queue short.
 			startFastLoop(() => host.githubToken(), gh);
+			// Standing-runner throttle env and slice placement (#1): repaired here
+			// on idle units, paged only when a repair does not converge.
+			startProvisioningConverge();
 		},
 		snapshot: () => getRunnerHealthSnapshot(),
 	};

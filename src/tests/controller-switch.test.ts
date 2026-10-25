@@ -34,6 +34,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFleetManager, __resetFleetManagerForTesting } from '../index.js';
 import { __resetFleetLoopForTesting } from '../fleet-loop.js';
+import { __stopProvisioningConvergeForTesting } from '../provisioning-converge.js';
 import { __stopRunnerHealthMonitorForTesting, getRunnerHealthSnapshot } from '../runner-health.js';
 import { __setHostForTesting, type FleetHost } from '../host.js';
 import { testHost } from './install-test-host.js';
@@ -80,6 +81,7 @@ function hostWith(lines: string[], controller: boolean | undefined): FleetHost {
 function stopRealLoops(): void {
 	__resetFleetLoopForTesting();
 	__stopRunnerHealthMonitorForTesting();
+	__stopProvisioningConvergeForTesting();
 }
 
 test('controller: false — start() starts neither loop, logs one line, router/snapshot still work', () => {
@@ -99,6 +101,10 @@ test('controller: false — start() starts neither loop, logs one line, router/s
 		assert.ok(
 			!lines.some((l) => l.includes('[runner-health]')),
 			`runner-health must not have started: ${JSON.stringify(lines)}`
+		);
+		assert.ok(
+			!lines.some((l) => l.includes('[provisioning]')),
+			`the provisioning converger must not have started: ${JSON.stringify(lines)}`
 		);
 
 		// The router is still the real one — not gated on controller at all.
@@ -155,6 +161,10 @@ test('controller: true — explicit true behaves exactly like omitted', () => {
 		assert.ok(
 			lines.some((l) => l.includes('[runner-health]')),
 			`runner-health must have started with controller: true: ${JSON.stringify(lines)}`
+		);
+		assert.ok(
+			lines.some((l) => l.includes('[provisioning] converger every 30 min')),
+			`the provisioning converger must have started with controller: true: ${JSON.stringify(lines)}`
 		);
 	} finally {
 		stopRealLoops();
