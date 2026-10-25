@@ -167,7 +167,7 @@ test('a staged kernel: drained as a lease, idle, rebooted, verified, undrained â
 	const w = world({
 		nodes: {
 			'claw-1': box({ busy: 2 }),
-			'claw-4': box({ newest: NEW, unitsEnabled: [UNIT], unitsActive: [UNIT], pm2: ['pygmalion'] }),
+			'claw-4': box({ newest: NEW, unitsEnabled: [UNIT], unitsActive: [UNIT], pm2: [] }),
 			'claw-8': box(),
 		},
 	});
@@ -208,6 +208,22 @@ test("NOBODY ELSE'S DRAIN: claw-8/9 held by the operator are reported and never 
 		planned: [{ node: 'claw-1', from: inDays(5), reason: 'reseat RAM' }],
 	});
 	assert.deepEqual((await runRebootCycle({ machines: MACHINES, deps: p.deps })).rebooted, []);
+});
+
+test('a SERVICE HOST is never cycled: pm2 apps online, or a pm2 it could not read', async () => {
+	// claw-4 serves pygmalion; on 2026-10-25 its state existed nowhere else.
+	const w = world({
+		nodes: {
+			'claw-1': box({ flag: true, pm2: 'unreadable' }),
+			'claw-4': box({ flag: true, pm2: ['pygmalion'] }),
+			'claw-8': box({ flag: true, pm2: [] }),
+		},
+	});
+	const r = await runRebootCycle({ machines: MACHINES, deps: w.deps });
+	assert.deepEqual(r.rebooted, ['claw-8'], 'a pm2 with nothing online is an ordinary claw');
+	assert.match(r.nodes.find((n) => n.node === 'claw-4').why, /service host: it serves pygmalion/);
+	assert.match(r.nodes.find((n) => n.node === 'claw-1').why, /could not be read/);
+	assert.equal(w.calls.includes('drain claw-4'), false);
 });
 
 test('never this box, never a guest â€” even when they need a reboot', async () => {

@@ -269,6 +269,21 @@ export async function runRebootCycle({
 			});
 			continue;
 		}
+		// A SERVICE HOST IS NOT A CI NODE TO CYCLE. Draining stops CI, not pm2, so
+		// rebooting one takes its services down with it — and on 2026-10-25 the
+		// only copy of pygmalion's state lived on claw-4. Read from the node's
+		// own pm2, not from a placement file: what is RUNNING is what goes down.
+		// An unreadable pm2 is "could not look", which is held, never "none".
+		// Until a service has a standby to move to first, a human reboots it.
+		if (probe.pm2 === 'unreadable' || (Array.isArray(probe.pm2) && probe.pm2.length)) {
+			const serves =
+				probe.pm2 === 'unreadable'
+					? 'its pm2 could not be read'
+					: `it serves ${probe.pm2.join(', ')} under pm2 with no standby`;
+			log(`── ${name}  [deferred] needs a reboot (${why}), but ${serves}; reboot it by hand`);
+			nodes.push({ node: name, status: 'deferred', reason: why, why: `service host: ${serves}` });
+			continue;
+		}
 		candidates.push({ name, probe, why });
 	}
 
