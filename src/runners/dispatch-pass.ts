@@ -107,6 +107,11 @@ export interface DispatchPassResult {
 	 * Optional so every existing result literal stands; absent is "none".
 	 */
 	unplaceable?: SkipReason[];
+	/**
+	 * `repo#runId` of every held (backed-off) run this pass reserved a slot for.
+	 * The dispatcher lifts their backoff so the next tick re-reads and mints.
+	 */
+	reserved?: string[];
 }
 
 /**
@@ -253,6 +258,7 @@ export async function runDispatchPass(
 	// for the measurement. The dispatcher may look for work as fast as it likes;
 	// the reap must not ride along.
 	const nowMs = input.nowMs ?? Date.now();
+	const fresh = input.pending.filter((p) => !p.held);
 	// `null`, not 0. A pass that did not sweep has NOT observed zero orphans, and
 	// collapsing the two would let a sweep that stopped running read for as long
 	// as anyone cared to look like a fleet that never leaks.
@@ -269,7 +275,9 @@ export async function runDispatchPass(
 			const res = await withGhCaller('reap', () =>
 				reapJitRunners(targets, input.order, token, gh, sh, {
 					nowMs,
-					queuedJobIds: new Set(input.pending.map((p) => p.jobId)),
+					// Only jobs READ as queued this tick: a held entry is the last
+					// listing's word, and releasing a unit is not done on hearsay.
+					queuedJobIds: new Set(fresh.map((p) => p.jobId)),
 				})
 			);
 			reaped = res.reaped;
@@ -279,7 +287,9 @@ export async function runDispatchPass(
 		}
 	}
 
-	if (!input.pending.length) {
+	// Held entries only matter when something fresh could take their slot, so
+	// a pass with nothing fresh has nothing to do.
+	if (!fresh.length) {
 		return { minted: 0, failed: 0, skipped: 0, inFlight: 0, reaped };
 	}
 
@@ -320,7 +330,7 @@ export async function runDispatchPass(
 	// this pass read) while its own job is still QUEUED is serving someone else:
 	// X is not in flight. The unit still counts toward its node's load.
 	const busyRunners = new Set((input.runningJobs ?? []).map((j) => j.runner));
-	const queuedJobs = new Map(input.pending.map((p) => [p.jobId, p]));
+	const queuedJobs = new Map(fresh.map((p) => [p.jobId, p]));
 	let reassigned = 0;
 	// A RUNNER THAT CAN NEVER TAKE ITS OWN JOB. Its labels do not satisfy the
 	// job's, so GitHub will never assign the two — and holding the job "in
@@ -545,8 +555,19 @@ export async function runDispatchPass(
 		}
 	}
 	await closeWarmBesideHeavy(nodes, mintedHeavyOn, heavyModel, nowMs, token, gh, sh);
+	// A held run's refusal was said when it was last probed and is said again
+	// when it is next probed; repeating it every pass is what the backoff's own
+	// log line exists to replace.
 	for (const s of plan.skipped) {
+		if (s.kind === 'held') continue;
 		logger.info(`[dispatch] skipped run ${s.runId} (${s.repo}): ${s.reason}`);
+	}
+	if (plan.reserved.length) {
+		logger.info(
+			`[dispatch] held ${plan.reserved.length} slot(s) for older backed-off run(s) rather than ` +
+				`give them to younger jobs; re-reading them next tick: ` +
+				plan.reserved.map((r) => `${r.repo}#${r.runId}@${r.node}`).join(', ')
+		);
 	}
 	if (minted) {
 		const t = affinity.totals;
@@ -586,10 +607,11 @@ export async function runDispatchPass(
 	return {
 		minted,
 		failed,
-		skipped: plan.skipped.length,
+		skipped: plan.skipped.filter((x) => x.kind !== 'held').length,
 		inFlight,
 		reaped,
 		unplaceable: plan.skipped.filter((x) => x.kind === 'unplaceable'),
+		reserved: [...new Set(plan.reserved.map((r) => `${r.repo}#${r.runId}`))],
 	};
 }
 
@@ -644,8 +666,33 @@ async function closeWarmBesideHeavy(
 }
 
 /**
- * The order a pass places queued jobs in: a PUSH first, a manual dispatch last,
- * oldest first within each.
+ * How far ahead of the queue each event band starts, in milliseconds of age.
+ *
+ * A HEAD START, NOT A LANE. A push still goes first among jobs that arrived
+ * within a few minutes of it — the 2026-10-09 case below — but a job that has
+ * waited longer than its band's head start outranks every push that arrived
+ * after that. Until 2026-10-25 the bands were strict, and a strict lane starves
+ * the lower one for as long as the upper one keeps arriving: that morning a
+ * package fan-out queued 57 `repository_dispatch` auto-update runs, every one
+ * of which pushes a commit, so pushes never ran out. hadoku-study run
+ * 40165607402 (queued 05:27:37Z) and hadoku-resume-bot 40165520825 (05:26:07Z)
+ * waited 47 minutes; between 05:27:37 and their mints at 06:12–06:14 the
+ * dispatcher minted 87 runners, 65 of them for push runs created AFTER them,
+ * and not one for a younger auto-update run — age order held inside the band
+ * and the band was the whole wait.
+ *
+ * 300 s per band is the fan-out's own p90 job wait that day (571 self-hosted
+ * jobs, created_at -> started_at: p50 84 s, p90 311 s) and the line at which
+ * ci:queue-health declares the fleet not serving work. It keeps the 2026-10-09
+ * order exactly: a verify-branch dispatch (band 2, ten minutes) still yields
+ * to a push that arrived up to ten minutes after it.
+ */
+export const BAND_HEAD_START_MS = 300_000;
+
+/**
+ * The order a pass places queued jobs in: oldest first, with a PUSH given a
+ * head start over everything else and a manual dispatch starting furthest back
+ * (see {@link BAND_HEAD_START_MS}).
  *
  * Capacity a job kind can use is sometimes three nodes deep (jdk21), and then
  * order is the whole policy. On 2026-10-09 20:27Z cardtable's push to main —
@@ -653,14 +700,14 @@ async function closeWarmBesideHeavy(
  * behind eleven verify-branch dispatches that arrived after it, because the
  * pass placed jobs in the order repos and runs were listed. A dispatch is
  * somebody checking a branch; a push is the branch everyone else builds on.
- * Stable, and a job with no readable age sorts last within its band.
+ * Stable, and a job with no readable age sorts last.
  */
 export function byPriority(pending: readonly PendingRun[]): PendingRun[] {
 	const band = (r: PendingRun): number =>
 		r.event === 'push' ? 0 : r.event === 'workflow_dispatch' ? 2 : 1;
-	const age = (r: PendingRun): number => {
+	const rank = (r: PendingRun): number => {
 		const t = Date.parse(r.jobCreatedAt ?? (r as { created_at?: string }).created_at ?? '');
-		return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+		return Number.isFinite(t) ? t + band(r) * BAND_HEAD_START_MS : Number.POSITIVE_INFINITY;
 	};
-	return [...pending].sort((a, b) => band(a) - band(b) || age(a) - age(b));
+	return [...pending].sort((a, b) => rank(a) - rank(b) || band(a) - band(b));
 }

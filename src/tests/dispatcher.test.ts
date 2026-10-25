@@ -145,7 +145,7 @@ test('an unhealthy first tier falls through without consuming its capacity', () 
 
 test('nothing queued means nothing planned', () => {
 	const p = planTick([], [node('claw-2')], ORDER, NONE, NOW);
-	assert.deepEqual(p, { mint: [], skipped: [] });
+	assert.deepEqual(p, { mint: [], skipped: [], reserved: [] });
 });
 
 // --- viaAffinity reaches the mint action (W §5e) --------------------------

@@ -660,13 +660,20 @@ export async function runDispatchTick(
 	/** Jobs this tick did not mint for because a probe said it was serving them. */
 	const yielded: string[] = [];
 
-	const pending: (QueuedRun & {
+	type Entry = QueuedRun & {
 		id: number;
 		repo: string;
 		jobId: number;
 		jobName?: string;
 		jobCreatedAt?: string;
-	})[] = [];
+		held?: boolean;
+	};
+	const pending: Entry[] = [];
+	/**
+	 * Backed-off runs' waiting jobs from their LAST listing, so they keep their
+	 * place in the age order without a call (see `PendingRun.held`).
+	 */
+	const heldPending: Entry[] = [];
 	const stuckRuns: string[] = [];
 	/**
 	 * Repos whose queued listing was actually READ this tick — including a 304,
@@ -772,12 +779,19 @@ export async function runDispatchTick(
 					held.fingerprint === placementFingerprint(input.nodes, repo, held.wanted)
 				) {
 					backedOff.push(key);
+					const cachedJobs = jobsCacheByRun.get(key)?.body.jobs ?? [];
 					// Its last-seen RUNNING siblings still count toward their nodes —
 					// the direction that holds work back, never the one that overfills.
-					for (const j of jobsCacheByRun.get(key)?.body.jobs ?? []) {
+					for (const j of cachedJobs) {
 						if (j.status === 'in_progress' && j.runner_name && j.name) {
 							runningJobs.push({ repo, runner: j.runner_name, jobName: j.name });
 						}
+					}
+					for (const j of runnableJobs(cachedJobs)) {
+						if (typeof j.name === 'string' && declared.has(`${repo}${INTENT_KEY_SEP}${j.name}`)) {
+							continue;
+						}
+						heldPending.push({ ...entryFor(r, repo, j), held: true });
 					}
 					return;
 				}
@@ -787,7 +801,12 @@ export async function runDispatchTick(
 				let jobs: JobsResponse = null;
 				try {
 					jobs = await withGhCaller('dispatch-probe', async () => {
-						if (!gh.getConditional) return (await gh.get(path, token, repo)) as JobsResponse;
+						if (!gh.getConditional) {
+							const body = (await gh.get(path, token, repo)) as JobsResponse;
+							// Kept even without an ETag: a backed-off run is placed from it.
+							if (body?.jobs) jobsCacheByRun.set(key, { etag: null, body });
+							return body;
+						}
 						const cached = jobsCacheByRun.get(key);
 						const c = await gh.getConditional<NonNullable<JobsResponse>>(
 							path,
@@ -855,20 +874,7 @@ export async function runDispatchTick(
 						yielded.push(`${repo}#${j.name}`);
 						continue;
 					}
-					// #89: the queued JOB's own name, not the run's — `PendingRun.jobName`
-					// is what `SpeedModel.expectedExtraSec` needs for its (repo, job)
-					// lookup. Without it every placement decision ran at the coarser
-					// repo-level estimate; this is the one line that was missing.
-					pending.push({
-						...r,
-						id: r.id,
-						repo,
-						jobId: j.id,
-						labels: j.labels ?? [],
-						jobName: j.name,
-						// #96: the JOB's own wait, not the run's.
-						jobCreatedAt: j.created_at,
-					});
+					pending.push(entryFor(r, repo, j));
 				}
 			})
 		);
@@ -884,7 +890,9 @@ export async function runDispatchTick(
 			order: input.order,
 			tarballUrl,
 			nodes: input.nodes,
-			pending,
+			// Held entries ride along only when a FRESH job could take their slot;
+			// alone, nothing can overtake them and the pass has nothing to do.
+			pending: pending.length ? [...pending, ...heldPending] : pending,
 			runningJobs,
 			repos: input.repos,
 			labelsFor: input.labelsFor,
@@ -902,6 +910,9 @@ export async function runDispatchTick(
 		sh
 	);
 	recordProbeBackoff(input.nodes, pending, res.unplaceable ?? [], nowMs);
+	// A held run the pass kept a slot for is re-read on the next tick, which
+	// mints from a fresh listing — one call per slot it actually won.
+	for (const k of res.reserved ?? []) probeBackoff.delete(k);
 	// Forget runs that have left the queue, so neither book grows for ever. Only
 	// for repos read this tick: a repo not polled has not shown its runs gone.
 	for (const book of [jobsCacheByRun, probeBackoff]) {
@@ -983,6 +994,33 @@ export async function runDispatchTick(
 		);
 	}
 	return res;
+}
+
+/**
+ * One pending entry per waiting JOB. #89: the job's own name, not the run's —
+ * `PendingRun.jobName` is what `SpeedModel.expectedExtraSec` keys on. #96: the
+ * job's own `created_at`, not the run's, is its wait.
+ */
+function entryFor(
+	r: QueuedRun & { id: number },
+	repo: string,
+	j: QueuedJob
+): QueuedRun & {
+	id: number;
+	repo: string;
+	jobId: number;
+	jobName?: string;
+	jobCreatedAt?: string;
+} {
+	return {
+		...r,
+		id: r.id,
+		repo,
+		jobId: j.id,
+		labels: j.labels ?? [],
+		jobName: j.name,
+		jobCreatedAt: j.created_at,
+	};
 }
 
 /**

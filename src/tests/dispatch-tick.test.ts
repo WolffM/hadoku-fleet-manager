@@ -14,6 +14,7 @@ import {
 	type DispatchTickInput,
 } from '../runners/dispatch-tick.js';
 import type { NodeState } from '../runners/placement.js';
+import { jitRunnerName } from '../runners/ephemeral.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import { SATURATED_QUEUED_MS } from '../runners/queue-discovery.js';
 import { __setHostForTesting } from '../host.js';
@@ -766,6 +767,140 @@ test('a freed slot on a node that COULD take it lifts the backoff; churn elsewhe
 	const r = await runDispatchTick(input, 'tok', h.gh, h.sh, NOW + 30_000);
 	assert.equal(h.probes.length, 2, 'the freed jdk21 slot is seen on the next tick');
 	assert.equal(r.minted, 1);
+});
+
+/**
+ * 2026-10-25 05:27–06:14Z: a backed-off run is ABSENT from the pass, so a slot
+ * that frees inside its backoff goes to whatever younger run was probed that
+ * tick. The backoff lifts on the fast loop's probe, which a JIT job ending as
+ * another starts on the same node does not move. hadoku-study 40165607402
+ * (queued 05:27:37) was asked about once a minute or so for 47 minutes while
+ * the 15s ticks between placed younger work.
+ */
+test("2026-10-25: a slot that frees inside an older run's backoff is held for it, not given to a younger run", async () => {
+	const OLD = 1;
+	const YOUNG = 2;
+	const clock = { now: NOW };
+	const minted: string[] = [];
+	const probes: number[] = [];
+	const inner = fakeGh();
+	const oldRun = {
+		...queued(OLD, 30 * 60_000),
+		event: 'repository_dispatch',
+	};
+	const youngRun = { ...queued(YOUNG, 200_000), event: 'push' };
+	const job = (id: number, agoMs: number) => ({
+		id,
+		name: 'update',
+		status: 'queued',
+		labels: ['self-hosted', 'hadoku-builder'],
+		created_at: iso(NOW - agoMs),
+	});
+	const gh = {
+		get writes() {
+			return inner.writes;
+		},
+		write: async (
+			method: 'POST' | 'DELETE',
+			path: string,
+			token: string,
+			body?: unknown,
+			repo?: string
+		) => {
+			if (path.includes('generate-jitconfig')) minted.push((body as { name: string }).name);
+			return inner.write(method, path, token, body, repo);
+		},
+		get: async (path: string, token?: string, repo?: string) => {
+			// The young run is not queued yet on the first tick.
+			if (path.startsWith('/actions/runs?')) {
+				return { workflow_runs: clock.now === NOW ? [oldRun] : [oldRun, youngRun] };
+			}
+			const m = /\/actions\/runs\/(\d+)\/jobs$/.exec(path);
+			if (m) {
+				const id = Number(m[1]);
+				probes.push(id);
+				return { jobs: [id === OLD ? job(11, 30 * 60_000) : job(22, 200_000)] };
+			}
+			return inner.get(path, token, repo);
+		},
+	};
+	// One slot, held by some other repo's JIT job on the first tick only — the
+	// unit listing sees it end, the fast loop's probe (`input.nodes`) does not.
+	let units = [jitRunnerName('claw-3', 'WolffM/other', NOW - 60_000, 555, 999)];
+	const plain = fakeShell();
+	const sh = async (n: string, cmd: string) =>
+		cmd.includes('list-units')
+			? units.map((u) => `${u}.service loaded active running x`).join('\n')
+			: plain(n, cmd);
+	const input = base({
+		order: ['claw-3'],
+		nodes: [builder('claw-3', { maxConcurrent: 1 })],
+		recentJobCounts: hot,
+	});
+
+	await runDispatchTick(input, 'tok', gh, sh, NOW);
+	assert.deepEqual(minted, [], 'the one slot is taken');
+	assert.deepEqual(probes, [OLD]);
+
+	units = [];
+	clock.now = NOW + 15_000;
+	await runDispatchTick(input, 'tok', gh, sh, clock.now);
+	assert.deepEqual(minted, [], 'the freed slot is NOT given to the younger run');
+	assert.deepEqual(probes, [OLD, YOUNG], 'and the older run was not re-read to decide it');
+
+	clock.now = NOW + 30_000;
+	await runDispatchTick(input, 'tok', gh, sh, clock.now);
+	assert.equal(minted.length, 1);
+	assert.match(minted[0], /-j11-r1-/, 'the older run takes it, minted from a fresh read');
+	assert.deepEqual(probes, [OLD, YOUNG, OLD], 'one probe for the slot it won');
+});
+
+test('a held run that cannot use the free slot does not keep it from a younger one', async () => {
+	// The older run needs jdk21 and nothing free carries it: holding the
+	// builder slot for it would waste capacity it can never use.
+	const h = stuckRunHarness(['jdk21']);
+	const minted: string[] = [];
+	let tickNo = 0;
+	const youngRun = { ...queued(2, 200_000), event: 'push' };
+	const gh = {
+		...h.gh,
+		write: async (
+			method: 'POST' | 'DELETE',
+			path: string,
+			token: string,
+			body?: unknown,
+			repo?: string
+		) => {
+			if (path.includes('generate-jitconfig')) minted.push((body as { name: string }).name);
+			return h.gh.write(method, path, token, body, repo);
+		},
+		get: async (path: string, token?: string, repo?: string) => {
+			if (path.startsWith('/actions/runs?')) {
+				return { workflow_runs: tickNo === 0 ? h.runs() : [...h.runs(), youngRun] };
+			}
+			if (path === '/actions/runs/2/jobs') {
+				return {
+					jobs: [
+						{
+							id: 22,
+							name: 'check',
+							status: 'queued',
+							labels: ['self-hosted', 'hadoku-builder'],
+							created_at: iso(NOW - 200_000),
+						},
+					],
+				};
+			}
+			return h.gh.get(path, token, repo);
+		},
+	};
+	const input = base({ order: ['claw-3'], nodes: [builder('claw-3')], recentJobCounts: hot });
+	await runDispatchTick(input, 'tok', gh, h.sh, NOW);
+	tickNo = 1;
+	await runDispatchTick(input, 'tok', gh, h.sh, NOW + 15_000);
+	assert.equal(h.probes.length, 1, 'the jdk21 run stays backed off');
+	assert.equal(minted.length, 1);
+	assert.match(minted[0], /-j22-r2-/, 'the younger run it could never have used goes ahead');
 });
 
 test('a TIME-based hold is re-asked when it releases, not a full backoff later', async () => {

@@ -71,6 +71,20 @@ export interface PendingRun extends RunIdentity {
 	queuedSinceMs?: number;
 	/** The queued JOB's own `created_at` (#96): the spill gate's clock. */
 	jobCreatedAt?: string;
+	/**
+	 * BACKED OFF, NOT RE-READ (#117): the run is in its probe backoff and this
+	 * entry comes from its last jobs listing, not this tick's. It takes its
+	 * place in the age order and is placed like any other job — but a node
+	 * chosen for it is RESERVED, never minted on (see {@link TickPlan.reserved}).
+	 *
+	 * Without it a backed-off run is simply absent from the pass, so a slot that
+	 * frees inside its backoff goes to whatever younger job was probed that tick.
+	 * The backoff lifts on `placementFingerprint`, which reads the fast loop's
+	 * probe — a minute stale, and blind to a JIT job ending when another starts
+	 * on the same node — so under a steady stream the older run kept missing
+	 * the slot it was waiting for.
+	 */
+	held?: boolean;
 }
 
 export interface MintAction {
@@ -127,7 +141,7 @@ export interface SkipReason {
 	 * dispatcher may back its probe off for: every node refused the job, and the
 	 * next tick will ask the same nodes the same question.
 	 */
-	kind: 'in-flight' | 'fork' | 'unplaceable';
+	kind: 'in-flight' | 'fork' | 'unplaceable' | 'held';
 	/**
 	 * `unplaceable` only: the earliest moment a refusal that TIME lifts (a heavy
 	 * hold, a slow-tier hold) would stop holding this job. Absent when no node
@@ -149,9 +163,24 @@ export interface InFlight {
 	runIds: ReadonlySet<number>;
 }
 
+/** A slot held for a backed-off job older than whatever else wanted it. */
+export interface ReservedSlot {
+	runId: number;
+	jobId: number;
+	repo: string;
+	node: string;
+}
+
 export interface TickPlan {
 	mint: MintAction[];
 	skipped: SkipReason[];
+	/**
+	 * Placements for {@link PendingRun.held} jobs. Capacity is consumed exactly
+	 * as for a mint, so no younger job takes the slot this pass; nothing is
+	 * minted, because the job was not re-read and may already be running. The
+	 * caller re-probes these runs on the next tick and mints from a fresh read.
+	 */
+	reserved: ReservedSlot[];
 }
 
 /**
@@ -204,7 +233,7 @@ export function firstSentence(reason: string): string {
  *
  * Only LABELS decide "single-node", never current capacity: a node full this
  * tick is still that job's only home, and the job must be first in line for
- * it. Stable, so `byPriority`'s push-before-dispatch order holds within both
+ * it. Stable, so `byPriority`'s age-with-head-start order holds within both
  * groups. A run no node can serve stays where it was and is skipped as before.
  */
 export function singleNodeFirst(
@@ -229,6 +258,7 @@ export function planTick(
 ): TickPlan {
 	const mint: MintAction[] = [];
 	const skipped: SkipReason[] = [];
+	const reserved: ReservedSlot[] = [];
 	// A working copy: assignments below consume capacity from it.
 	const state = new Map(nodes.map((m) => [m.name, { ...m }]));
 
@@ -285,7 +315,9 @@ export function planTick(
 			const releaseAtMs =
 				queuedAt !== undefined && holds.length ? queuedAt + Math.min(...holds) * 1000 : undefined;
 			skipped.push({
-				kind: 'unplaceable',
+				// A held job's refusal is the one its backoff already recorded; it
+				// is not a new observation and must not extend that backoff.
+				kind: run.held ? 'held' : 'unplaceable',
 				...(releaseAtMs === undefined ? {} : { releaseAtMs }),
 				runId: run.id,
 				jobId: run.jobId,
@@ -336,6 +368,10 @@ export function planTick(
 		// lane C's two-jobs-one-tick case. `?? chosen.requiredMb` keeps every
 		// ordinary repo's arithmetic bit-for-bit what it was on main.
 		chosen.freeMb -= placed.requiredMb ?? chosen.requiredMb;
+		if (run.held) {
+			reserved.push({ runId: run.id, jobId: run.jobId, repo: run.repo, node: placed.node });
+			continue;
+		}
 		mint.push({
 			runId: run.id,
 			jobId: run.jobId,
@@ -348,5 +384,5 @@ export function planTick(
 			busyAtChoice,
 		});
 	}
-	return { mint, skipped };
+	return { mint, skipped, reserved };
 }

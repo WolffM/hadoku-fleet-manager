@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
 	runDispatchPass,
 	byPriority,
+	BAND_HEAD_START_MS,
 	getDispatchAffinitySnapshot,
 	heavyMarkedRecently,
 	HEAVY_MARK_MS,
@@ -1142,5 +1143,53 @@ test('the push wins the one free node in a real pass', async () => {
 	assert.ok(
 		infos.some((i) => i.includes('skipped run 1 ')),
 		`the dispatch is the one that waits:\n  ${infos.join('\n  ')}`
+	);
+});
+
+test('2026-10-25: a push is a head start, not a lane — an auto-update queued 47 minutes outranks pushes that came after it', async () => {
+	// hadoku-study run 40165607402 (repository_dispatch, 05:27:37Z) waited until
+	// 06:14 while the dispatcher minted 65 runners for pushes created after it.
+	const at = (hms: string) => `2026-10-25T${hms}Z`;
+	const job = (id: number, event: string, hms: string): PendingRun => ({
+		...run(id),
+		event,
+		jobCreatedAt: at(hms),
+	});
+	const ordered = byPriority([
+		job(1, 'push', '06:11:00'),
+		job(2, 'repository_dispatch', '05:27:37'),
+		job(3, 'push', '05:34:14'),
+		job(4, 'push', '05:29:02'),
+		job(5, 'workflow_dispatch', '05:20:00'),
+	]);
+	assert.deepEqual(
+		ordered.map((r) => r.id),
+		// 05:29:02 push is inside the dispatch's five-minute head start; 05:34:14 is
+		// not. The manual dispatch starts ten minutes back, so 05:30:00, between them.
+		[4, 5, 2, 3, 1]
+	);
+	assert.equal(BAND_HEAD_START_MS, 300_000);
+});
+
+test('2026-10-25: the old auto-update wins the one free node over a fresh push in a real pass', async () => {
+	const infos = recordInfos();
+	const h = harness();
+	const r = await runDispatchPass(
+		base({
+			order: ['claw-2'],
+			nodes: [node('claw-2', { maxConcurrent: 1 })],
+			pending: [
+				{ ...run(1), event: 'push', jobCreatedAt: '2026-10-25T06:11:00Z' },
+				{ ...run(2), event: 'repository_dispatch', jobCreatedAt: '2026-10-25T05:27:37Z' },
+			],
+		}),
+		'tok',
+		h.gh,
+		h.sh
+	);
+	assert.equal(r.minted, 1);
+	assert.ok(
+		infos.some((i) => i.includes('skipped run 1 ')),
+		`the young push is the one that waits:\n  ${infos.join('\n  ')}`
 	);
 });
