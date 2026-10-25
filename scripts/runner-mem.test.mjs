@@ -277,6 +277,7 @@ function runCheckWithHistory(fx, historyDir, args = [], extraEnv = {}) {
 		env: {
 			...process.env,
 			HOME: fx.home,
+			PATH: fixturePath(fx),
 			FLEET_MANIFEST_DIR: fx.admin,
 			FLEET_NO_BANNER: '1',
 			HADOKU_STATE_DIR: historyDir,
@@ -354,11 +355,24 @@ test('no resolvable manifest → the report REFUSES; it never reads the packaged
 
 // ── #47: `--check` reads the OUTPUT, not the unit ────────────────────────────
 
+/**
+ * The probe also asks `systemctl --user` when the sampler started, and a
+ * fixture HOME does not stop that reaching the box the test runs on. On
+ * 2026-10-25 CI ran on claw-6 three minutes after its reboot: the REAL
+ * harvester's start excused this file's "long job five minutes ago" and the
+ * mixed-history test went red. So every check fixture answers for the sampler
+ * itself — up for days, the steady state these tests describe — and the
+ * runners below put that stub first on PATH.
+ */
 function checkFixture({ samples, inflight, jobs, machines }) {
 	const home = homeFixture({ samples, inflight, jobs });
 	const { dir, admin } = siteFixture(machines ?? { [ME]: { ramGb: 16, maxConcurrent: 2 } });
-	return { home, dir, admin };
+	const fx = { home, dir, admin };
+	withSamplerStart(fx, Date.now() / 1000 - 10 * 86400);
+	return fx;
 }
+
+const fixturePath = (fx) => `${join(fx.home, 'bin')}:${process.env.PATH}`;
 
 function runCheck(fx, args = []) {
 	return run('python3', [REPORT, '--check', ...args], {
@@ -366,6 +380,7 @@ function runCheck(fx, args = []) {
 		env: {
 			...process.env,
 			HOME: fx.home,
+			PATH: fixturePath(fx),
 			FLEET_MANIFEST_DIR: fx.admin,
 			FLEET_NO_BANNER: '1',
 		},
@@ -378,6 +393,7 @@ function runReport(fx, args = []) {
 		env: {
 			...process.env,
 			HOME: fx.home,
+			PATH: fixturePath(fx),
 			FLEET_MANIFEST_DIR: fx.admin,
 			FLEET_NO_BANNER: '1',
 		},
