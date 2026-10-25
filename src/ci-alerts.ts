@@ -408,6 +408,72 @@ export function writeStates(states: Record<string, CiState>): void {
 	}
 }
 
+/**
+ * When the last CLEAN pass finished — every target read, nothing errored. On
+ * disk because the question is asked by the NEXT process (2026-10-25).
+ *
+ * Each mgmt-api boot ran a full pass at once: 75 targets, 75-104 charged calls
+ * in the window holding the boot, and the restart-storm morning of 2026-10-25
+ * had 12 boots in two hours, each a few minutes after the last process's own
+ * pass. A boot within `CI_ALERTS_BOOT_SKIP_MS` of a clean pass now leaves the
+ * work to its first interval tick, so the gap between passes is under two
+ * intervals (20 minutes) however often the process restarts: a boot past the
+ * window runs one, and a process that lives ten minutes runs one on its tick.
+ *
+ * Only a CLEAN pass counts. A pass that could not read a target is not
+ * evidence that nothing broke, and a boot after one runs its own.
+ */
+export const CI_ALERTS_PASS_FILE = 'ci-alerts-last-pass.json';
+export const CI_ALERTS_BOOT_SKIP_MS = 10 * 60_000;
+
+function passPath(): string {
+	return join(stateDir(), CI_ALERTS_PASS_FILE);
+}
+
+/** The last clean pass's end, or null when there is none on record or it cannot be read. */
+export function lastCleanCiAlertsPassMs(): number | null {
+	let raw: string;
+	try {
+		raw = readFileSync(passPath(), 'utf8');
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+			logger.warn(`[ci-alerts] could not read ${passPath()}: ${String(err)} — the boot pass runs`);
+		}
+		return null;
+	}
+	try {
+		const at = Date.parse((JSON.parse(raw) as { completedAt?: string }).completedAt ?? '');
+		return Number.isNaN(at) ? null : at;
+	} catch (err) {
+		logger.warn(`[ci-alerts] ${passPath()} is not parseable (${String(err)}) — the boot pass runs`);
+		return null;
+	}
+}
+
+/** Should a fresh process run its own pass now? */
+export function ciAlertsBootPassDue(nowMs = Date.now()): boolean {
+	const last = lastCleanCiAlertsPassMs();
+	return last === null || nowMs - last >= CI_ALERTS_BOOT_SKIP_MS || last > nowMs;
+}
+
+function recordCleanPass(s: CiTickSummary): void {
+	if (!s.targets || s.unreadable || s.errors) return;
+	const p = passPath();
+	try {
+		mkdirSync(stateDir(), { recursive: true });
+		const tmp = `${p}.tmp`;
+		writeFileSync(
+			tmp,
+			JSON.stringify({ completedAt: new Date().toISOString(), targets: s.targets })
+		);
+		renameSync(tmp, p);
+	} catch (err) {
+		logger.warn(
+			`[ci-alerts] could not record the pass: ${String(err)} — the next boot runs its own`
+		);
+	}
+}
+
 export type CiAction = 'none' | 'broken' | 'recovered' | 'suppressed' | 'ignored';
 
 export interface CiDecision {
@@ -735,6 +801,7 @@ export async function runCiAlerts(token: string, ghGet: GhGet): Promise<CiTickSu
 	}
 
 	if (changed) writeStates(states);
+	recordCleanPass(summary);
 	logCiTickSummary(summary);
 	return summary;
 }

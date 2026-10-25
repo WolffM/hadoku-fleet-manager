@@ -1051,6 +1051,12 @@ export interface FleetGithubBudget {
 	otherSinceFirst: number;
 	/** The low-budget alert has fired for this window. */
 	alerted: boolean;
+	/**
+	 * How many processes have carried these books over from a predecessor —
+	 * mgmt-api restarts on every deploy, and the books are persisted. Optional
+	 * only for readers built against an older report.
+	 */
+	restarts?: number;
 }
 
 export interface FleetReport {

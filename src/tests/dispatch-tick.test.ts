@@ -8,6 +8,7 @@ import {
 	resetRecoveryClock,
 	STUCK_ANNOUNCED_FILE,
 	__resetPollStateForTesting,
+	__restartPollCacheForTesting,
 	__restartAnnouncedStuckForTesting,
 	PROBE_BACKOFF_MS,
 	getDispatchQueueSnapshot,
@@ -967,4 +968,59 @@ test('the jobs probe is CONDITIONAL — a 304 reuses the body it vouches for', a
 	// it backs off again rather than reading as "no jobs waiting".
 	await runDispatchTick(input, 'tok', gh, h.sh, NOW + PROBE_BACKOFF_MS + 15_000);
 	assert.equal(sent.length, 2, 'backed off again off the cached body');
+});
+
+// 2026-10-25: 12 restarts in two hours, and each one's first polls and probes
+// were full-price listings of queues that had not changed. The ETags now
+// outlive the process; a restored body is only ever read on a 304.
+test('a restart keeps the poll ETag: the first poll after it is conditional, and a 304 serves the body', async () => {
+	const h = harness([queued(1)]);
+	const sent: (string | null)[] = [];
+	let answer: 'ok' | 'unchanged' | 'error' = 'ok';
+	const gh = {
+		...h.gh,
+		getConditional: async (path: string, _t: string, _r: string, etag: string | null) => {
+			if (path.includes('/jobs'))
+				return { status: 'ok', body: await h.gh.get(path), etag: null } as never;
+			sent.push(etag);
+			if (answer === 'ok')
+				return { status: 'ok', body: { workflow_runs: [queued(1)] }, etag: 'W/"a"' } as const;
+			return { status: answer } as const;
+		},
+	};
+	await runDispatchTick(base(), 'tok', gh as never, h.sh, NOW);
+	__restartPollCacheForTesting();
+	answer = 'unchanged';
+	const after = await runDispatchTick(base(), 'tok', gh as never, h.sh, NOW + 60_000);
+	assert.deepEqual(sent, [null, 'W/"a"'], 'the restarted process sent the ETag it inherited');
+	assert.ok(after.minted + after.skipped > 0, 'the 304 was answered from the persisted body');
+
+	// "Could not look" after a restart is still not the cached body.
+	__restartPollCacheForTesting();
+	answer = 'error';
+	const blind = await runDispatchTick(base(), 'tok', gh as never, h.sh, NOW + 120_000);
+	assert.equal(blind.minted + blind.skipped, 0);
+});
+
+test('a restart keeps the jobs-probe ETag too', async () => {
+	const h = stuckRunHarness(['jdk21']);
+	const sent: (string | null)[] = [];
+	const body = { jobs: h.jobs() };
+	const gh = {
+		...h.gh,
+		getConditional: async <T>(path: string, _t: string, _r: string, etag: string | null) => {
+			if (/\/jobs$/.test(path)) {
+				sent.push(etag);
+				return etag
+					? ({ status: 'unchanged' } as const)
+					: { status: 'ok' as const, body: body as T, etag: 'W/"j1"' };
+			}
+			return { status: 'ok' as const, body: { workflow_runs: h.runs() } as T, etag: null };
+		},
+	};
+	const input = base({ order: ['claw-3'], nodes: [builder('claw-3')], recentJobCounts: hot });
+	await runDispatchTick(input, 'tok', gh, h.sh, NOW);
+	__restartPollCacheForTesting();
+	await runDispatchTick(input, 'tok', gh, h.sh, NOW + 15_000);
+	assert.deepEqual(sent, [null, 'W/"j1"'], 'the backoff is per process; the ETag is not');
 });

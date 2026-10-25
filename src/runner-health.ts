@@ -121,7 +121,8 @@ import {
 	jobRecords,
 } from './job-history.js';
 import { isProofRunnerName } from './runners/prove-job.js';
-import { runCiAlerts } from './ci-alerts.js';
+import { CI_ALERTS_BOOT_SKIP_MS, ciAlertsBootPassDue, runCiAlerts } from './ci-alerts.js';
+import { conditionalCacheStore } from './conditional-cache-store.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from './lib/concurrency.js';
 import { fleetOwner, hubRepoFull, userAgent } from './lib/fleet-config.js';
 import { admissionVerdictsForReport, loadWorkloadGateContext } from './runners/ephemeral-tick.js';
@@ -1650,6 +1651,17 @@ export function unreadableTickError(f: GhReadFailure | null): string {
 	}
 }
 
+/**
+ * Drop the PROCESS's half of the conditional cache and keep the disk, which is
+ * exactly what an mgmt-api deploy does. Test seam.
+ */
+export function __restartGhCacheForTesting(): void {
+	ghCache.clear();
+	ghCacheBytes = 0;
+	ghCacheHydrated = false;
+	runnerWriteGen.clear();
+}
+
 /** Test seam. Not part of the supported API. */
 export function __resetGhBlackoutForTesting(): void {
 	primaryResetAtMs = 0;
@@ -1756,8 +1768,15 @@ export async function ghGetConditional<T>(
  * served. Bounded by bytes, oldest-touched first, because per-run `/jobs`
  * paths are unbounded in number and almost never asked twice.
  *
- * Module state, lost on restart: the first read of each path after a restart
- * is charged, and refills its entry.
+ * PERSISTED, so a restart does not start cold (2026-10-25). Every entry with an
+ * ETag is written through to `stateDir()` (see conditional-cache-store.ts for
+ * the bounds and for why a restored body is safe), and the first `ghGet` of a
+ * process loads them back. A restored entry is loaded with `atMs: 0` — GitHub
+ * has not vouched for it in THIS process — so the shared listing below never
+ * answers from it without asking; it is only ever served on a 304. Before
+ * this, every one of the 12 restarts on 2026-10-25 04:46-06:39Z paid full price
+ * for every listing it read first: runner-health 85-91, ci-alerts 75-104 and
+ * the reap 22-43 charged calls in the window holding each boot.
  */
 export const GH_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 interface GhCached {
@@ -1774,12 +1793,33 @@ interface GhCached {
 }
 const ghCache = new Map<string, GhCached>();
 let ghCacheBytes = 0;
+const ghCacheDisk = conditionalCacheStore('runner-health', { maxBytes: GH_CACHE_MAX_BYTES });
+let ghCacheHydrated = false;
 
 function ghCacheKey(token: string, repo: string, path: string): string {
 	return `${ghTokenFingerprint(token)}\n${repo}\n${path}`;
 }
 
-function ghCacheStore(key: string, entry: GhCached): void {
+/**
+ * The previous process's entries, once per process, before the first read.
+ * Synchronous, so every concurrent first read of a tick sees the same cache.
+ */
+function hydrateGhCache(): void {
+	if (ghCacheHydrated) return;
+	ghCacheHydrated = true;
+	for (const e of ghCacheDisk.load()) {
+		const [, repo, path] = e.key.split('\n');
+		if (!repo || !path || ghCache.has(e.key)) continue;
+		ghCacheStore(e.key, { repo, path, etag: e.etag, text: e.text, atMs: 0 }, false);
+	}
+}
+
+/**
+ * `persist`: write the entry through to disk. TRUE only for a body GitHub just
+ * sent — a 304 changes nothing worth writing, and a write per 304 would turn
+ * the free answers into the most frequent disk write in the process.
+ */
+function ghCacheStore(key: string, entry: GhCached, persist: boolean): void {
 	const prev = ghCache.get(key);
 	if (prev) {
 		ghCacheBytes -= prev.text.length;
@@ -1788,10 +1828,18 @@ function ghCacheStore(key: string, entry: GhCached): void {
 	// Re-inserted, so Map order is touch order and the first key is the oldest.
 	ghCache.set(key, entry);
 	ghCacheBytes += entry.text.length;
+	if (persist) {
+		// An entry with no ETag can never earn a 304, so the disk copy of an
+		// older one goes rather than staying behind as a pair that no longer
+		// matches what this process holds.
+		if (entry.etag) ghCacheDisk.save(key, entry.etag, entry.text);
+		else ghCacheDisk.remove(key);
+	}
 	for (const [k, v] of ghCache) {
 		if (ghCacheBytes <= GH_CACHE_MAX_BYTES || k === key) break;
 		ghCache.delete(k);
 		ghCacheBytes -= v.text.length;
+		ghCacheDisk.remove(k);
 	}
 }
 
@@ -1840,6 +1888,7 @@ export async function readRunnerListingShared(
 	maxAgeMs = SHARED_LISTING_MAX_AGE_MS,
 	nowMs = Date.now()
 ): Promise<RunnerListing | null> {
+	hydrateGhCache();
 	const hit = ghCache.get(ghCacheKey(token, repo, RUNNER_LISTING_PATH));
 	if (hit && hit.atMs > 0 && nowMs - hit.atMs < maxAgeMs) {
 		return JSON.parse(hit.text) as RunnerListing;
@@ -1855,6 +1904,7 @@ export async function ghGet<T>(path: string, token: string, repo = SELF_REPO): P
 		noteGhReadBlackout();
 		return null;
 	}
+	hydrateGhCache();
 	const genAtStart = runnerWriteGen.get(repo) ?? 0;
 	const key = ghCacheKey(token, repo, path);
 	// Held by reference: the entry may be evicted while the request is in
@@ -1878,7 +1928,7 @@ export async function ghGet<T>(path: string, token: string, repo = SELF_REPO): P
 		// free answer as a failure would turn every unchanged listing into
 		// "could not look".
 		if (resp.status === 304 && cached?.etag) {
-			ghCacheStore(key, { ...cached, atMs: fresh ? Date.now() : cached.atMs });
+			ghCacheStore(key, { ...cached, atMs: fresh ? Date.now() : cached.atMs }, false);
 			return JSON.parse(cached.text) as T;
 		}
 		if (!resp.ok) {
@@ -1897,7 +1947,7 @@ export async function ghGet<T>(path: string, token: string, repo = SELF_REPO): P
 			path === RUNNER_LISTING_PATH
 				? Array.isArray((body as RunnerListing | null)?.runners)
 				: etag !== null;
-		if (keep) ghCacheStore(key, { repo, path, etag, text, atMs: fresh ? Date.now() : 0 });
+		if (keep) ghCacheStore(key, { repo, path, etag, text, atMs: fresh ? Date.now() : 0 }, true);
 		return body;
 	} catch (err) {
 		clearTimeout(timeoutId);
@@ -2427,6 +2477,11 @@ export function __resetRunnerHealthAlertsForTesting(): void {
 	// listing answers the next test's sweep, which then lists nothing and passes.
 	ghCache.clear();
 	ghCacheBytes = 0;
+	// The disk half too, or the next test's first read would answer 304 against
+	// a body some earlier test cached. Marked hydrated: a test reads disk only
+	// through `__restartGhCacheForTesting`, which models a restart on purpose.
+	ghCacheDisk.clear();
+	ghCacheHydrated = true;
 	runnerWriteGen.clear();
 	// Cross-tick memory — see the comment below. A leaked timestamp would make
 	// the verify sweep "not due" for an hour of test time and pass while
@@ -4620,7 +4675,10 @@ function scheduleRemeasure(token: string, attempt = 1): void {
 				'as UNMEASURED (no probe since the restart) and the backstop decided nothing — ' +
 				'the fast loop has had time to probe, deciding now rather than at the next interval'
 		);
-		void runTick(token).finally(() => {
+		// Without ci-alerts: this re-tick exists for the backstop's measurement,
+		// and ci-alerts has nothing waiting on the fleet probe. It ran a second
+		// full pass ~90s after every boot until 2026-10-25.
+		void runTick(token, { alerts: false }).finally(() => {
 			if (lastTickEphemeralUnknown === true && attempt < REMEASURE_MAX_ATTEMPTS) {
 				scheduleRemeasure(token, attempt + 1);
 			}
@@ -4824,7 +4882,16 @@ function startWithToken(token: string): void {
 	withGhCaller('runner-health', () => logTokenCapabilities(token)).catch(() => undefined);
 	// …and if that first tick could not measure the fleet, a second one once the
 	// fast loop's probe has landed — see `scheduleRemeasure`.
-	void runTick(token).finally(() => {
+	// ci-alerts only when its last clean pass is not recent — see
+	// `CI_ALERTS_BOOT_SKIP_MS`. A restart storm otherwise runs it per boot.
+	const alerts = ciAlertsBootPassDue();
+	if (!alerts) {
+		logger.info(
+			`[ci-alerts] boot pass skipped: a clean pass finished under ${CI_ALERTS_BOOT_SKIP_MS / 60_000}m ` +
+				'ago (before this restart); the next one runs on the interval tick'
+		);
+	}
+	void runTick(token, { alerts }).finally(() => {
 		if (lastTickEphemeralUnknown === true) scheduleRemeasure(token);
 	});
 	intervalHandle = setInterval(() => void runTick(token), TICK_INTERVAL_MS);

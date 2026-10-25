@@ -15,6 +15,9 @@ import { join } from 'node:path';
 import { tempDir } from './tmpdir.js';
 
 import {
+	ciAlertsBootPassDue,
+	CI_ALERTS_BOOT_SKIP_MS,
+	CI_ALERTS_PASS_FILE,
 	decideCiAlert,
 	formatCiTickSummary,
 	runCiAlerts,
@@ -31,7 +34,7 @@ import {
 	type CiState,
 	type CiTickSummary,
 } from '../ci-alerts.js';
-import { __setHostForTesting } from '../host.js';
+import { __setHostForTesting, stateDir } from '../host.js';
 import { testHost } from './install-test-host.js';
 
 const NOW = Date.parse('2026-09-08T12:00:00.000Z');
@@ -910,4 +913,47 @@ test('#124: a timeout after green is a fresh break; the next green recovers from
 	};
 	const d = decideCiAlert(prev, run('success', { id: 8 }), NOW);
 	assert.equal(d.action, 'recovered');
+});
+
+// 2026-10-25: 12 boots in two hours, each running a full 75-target pass a few
+// minutes after its predecessor's. A boot now skips its pass when a CLEAN one
+// is recent — and only a clean one, since a blind pass proves nothing.
+test('a boot right after a clean pass skips its own; after a blind one it does not', async () => {
+	const targets = [
+		{ owner: 'WolffM', repo: 'a', workflow: 'ci.yml', label: 'a / ci' },
+		{ owner: 'WolffM', repo: 'b', workflow: 'ci.yml', label: 'b / ci' },
+	];
+	await withTempHost(async (manifests) => {
+		writeFileSync(join(manifests, 'ci-watch.generated.json'), JSON.stringify({ targets }));
+		assert.equal(ciAlertsBootPassDue(), true, 'no pass on record: the boot runs one');
+
+		let blind = false;
+		const ghGet = async <T>(_p: string, _t: string, repo?: string): Promise<T | null> => {
+			if (blind && repo === 'WolffM/b') return await Promise.resolve(null);
+			return await Promise.resolve({
+				workflow_runs: [ghRun(1, 'success', '2026-09-19T10:00:00Z', '2026-09-19T10:05:00Z')],
+			} as T);
+		};
+		await runCiAlerts('tok', ghGet);
+		assert.equal(ciAlertsBootPassDue(), false, 'a clean pass just finished');
+		assert.equal(ciAlertsBootPassDue(Date.now() + CI_ALERTS_BOOT_SKIP_MS), true, 'and it ages out');
+
+		// A blind pass is not recorded, so it cannot extend the skip.
+		blind = true;
+		await runCiAlerts('tok', ghGet);
+		assert.equal(
+			ciAlertsBootPassDue(Date.now() + CI_ALERTS_BOOT_SKIP_MS - 1000),
+			false,
+			'still anchored on the clean pass, not the blind one'
+		);
+	});
+});
+
+test('an unreadable pass record runs the boot pass, and says why', async () => {
+	await withTempHost((_m, log) => {
+		writeFileSync(join(stateDir(), CI_ALERTS_PASS_FILE), '{not json');
+		assert.equal(ciAlertsBootPassDue(), true);
+		assert.ok(log.warn.some((w) => w.includes('not parseable')));
+		return Promise.resolve();
+	});
 });

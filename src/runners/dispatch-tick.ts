@@ -22,7 +22,8 @@ import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync
 import { join } from 'node:path';
 
 import { logger, stateDir } from '../host.js';
-import { withGhCaller } from '../gh-budget.js';
+import { ghTokenFingerprint, withGhCaller } from '../gh-budget.js';
+import { conditionalCacheStore } from '../conditional-cache-store.js';
 import {
 	runDispatchPass,
 	__resetReapClockForTesting,
@@ -51,13 +52,58 @@ import type { GhLike, ShellLike } from './ephemeral-exec.js';
 /**
  * Per-repo ETag and the body it belongs to.
  *
- * Module-level, like `lastPolledMs`, and lost on restart — which is correct and
- * cheap: a missing ETag costs one full listing, and the next answer refills it.
- * Persisting it would risk serving a body from before a restart that the fleet
- * has already acted on.
+ * PERSISTED since 2026-10-25, with the jobs cache below. This said persisting
+ * "would risk serving a body from before a restart that the fleet has already
+ * acted on" — true of a body served without asking, and these never are: the
+ * cached body is read ONLY on `unchanged`, which is GitHub answering 304 to the
+ * ETag stored beside it, i.e. saying that body is the one it would serve now.
+ * What persisting changes is the price of the first poll after a restart, not
+ * what it returns: on 2026-10-25 the dispatcher's first minutes after each of 12
+ * restarts charged 36-63 polls and 23-70 probes, every one a full listing.
+ * The bounds and the write rule are in conditional-cache-store.ts.
  */
 const etagByRepo = new Map<string, string>();
 const cachedRunsByRepo = new Map<string, { workflow_runs?: QueuedRun[] }>();
+const POLL_CACHE_MAX_BYTES = 8 * 1024 * 1024;
+const runsDisk = conditionalCacheStore('dispatch-runs', { maxBytes: POLL_CACHE_MAX_BYTES });
+const jobsDisk = conditionalCacheStore('dispatch-jobs', { maxBytes: POLL_CACHE_MAX_BYTES });
+let pollCacheHydrated = false;
+/** `${token fingerprint}\n${repo or repo#runId}` — an ETag is answered per credential. */
+const diskKey = (token: string, key: string): string => `${ghTokenFingerprint(token)}\n${key}`;
+
+/**
+ * The previous process's ETags and bodies, once per process, before the first
+ * poll. An entry for another token (a rotation since) is skipped, not served.
+ */
+function hydratePollCache(token: string): void {
+	if (pollCacheHydrated) return;
+	pollCacheHydrated = true;
+	const fp = ghTokenFingerprint(token);
+	const restore = (
+		disk: typeof runsDisk,
+		put: (key: string, etag: string, body: unknown) => void
+	): void => {
+		for (const e of disk.load()) {
+			const sep = e.key.indexOf('\n');
+			if (e.key.slice(0, sep) !== fp) continue;
+			try {
+				put(e.key.slice(sep + 1), e.etag, JSON.parse(e.text));
+			} catch (err) {
+				// Written by JSON.stringify, so this is a damaged file: drop it and
+				// pay one full read, which is all a missing entry ever costs.
+				disk.remove(e.key);
+				logger.warn(`[dispatch-tick] dropped an unparseable cached body: ${reasonOf(err)}`);
+			}
+		}
+	};
+	restore(runsDisk, (repo, etag, body) => {
+		etagByRepo.set(repo, etag);
+		cachedRunsByRepo.set(repo, body as { workflow_runs?: QueuedRun[] });
+	});
+	restore(jobsDisk, (key, etag, body) => {
+		jobsCacheByRun.set(key, { etag, body: body as { jobs?: QueuedJob[] } });
+	});
+}
 
 const lastPolledMs = new Map<string, number>();
 /**
@@ -639,6 +685,7 @@ export async function runDispatchTick(
 ): Promise<DispatchPassResult> {
 	const empty = { minted: 0, failed: 0, skipped: 0, inFlight: 0, reaped: 0 };
 	if (!input.order.length) return empty;
+	hydratePollCache(token);
 
 	// deriveHotRepos, not an inlined `>= 20`. The threshold was duplicated here
 	// while the function that owns it sat uncalled — and a comment two files away
@@ -729,8 +776,13 @@ export async function runDispatchTick(
 					resp = cachedRunsByRepo.get(repo) ?? null;
 				} else if (c.status === 'ok') {
 					resp = c.body;
-					if (c.etag) etagByRepo.set(repo, c.etag);
-					else etagByRepo.delete(repo);
+					if (c.etag) {
+						etagByRepo.set(repo, c.etag);
+						runsDisk.save(diskKey(token, repo), c.etag, JSON.stringify(c.body));
+					} else {
+						etagByRepo.delete(repo);
+						runsDisk.remove(diskKey(token, repo));
+					}
 					cachedRunsByRepo.set(repo, c.body);
 				} else {
 					// An error must NOT reuse the cache: stale queued runs would be
@@ -817,6 +869,8 @@ export async function runDispatchTick(
 						if (c.status === 'unchanged') return cached?.body ?? null;
 						if (c.status === 'ok') {
 							jobsCacheByRun.set(key, { etag: c.etag, body: c.body });
+							if (c.etag) jobsDisk.save(diskKey(token, key), c.etag, JSON.stringify(c.body));
+							else jobsDisk.remove(diskKey(token, key));
 							return c.body;
 						}
 						// An error must NOT reuse the cache, for the reason the runs
@@ -917,7 +971,10 @@ export async function runDispatchTick(
 	// for repos read this tick: a repo not polled has not shown its runs gone.
 	for (const book of [jobsCacheByRun, probeBackoff]) {
 		for (const k of book.keys()) {
-			if (polledOk.has(k.slice(0, k.lastIndexOf('#'))) && !candidateKeys.has(k)) book.delete(k);
+			if (polledOk.has(k.slice(0, k.lastIndexOf('#'))) && !candidateKeys.has(k)) {
+				book.delete(k);
+				if (book === jobsCacheByRun) jobsDisk.remove(diskKey(token, k));
+			}
 		}
 	}
 	if (yielded.length) {
@@ -1087,6 +1144,11 @@ export function __resetPollStateForTesting(): void {
 	lastReadByRepo.clear();
 	jobsCacheByRun.clear();
 	probeBackoff.clear();
+	// And its disk half, for the same reason. Marked hydrated so a test reads
+	// disk only through `__restartPollCacheForTesting`, which means to.
+	runsDisk.clear();
+	jobsDisk.clear();
+	pollCacheHydrated = true;
 	// The reap clock is the OTHER cadence a tick carries. Left behind, the first
 	// test's sweep gates every later test's, and they assert `reaped: skipped`
 	// while believing they proved something about dispatch.
@@ -1095,6 +1157,17 @@ export function __resetPollStateForTesting(): void {
 	// second test's suppression is silent and a test asserting the log line reads
 	// the first test's.
 	announcedIntents.clear();
+}
+
+/** Tests only: drop the process's poll state and keep the disk, as a deploy does. */
+export function __restartPollCacheForTesting(): void {
+	lastPolledMs.clear();
+	lastReadByRepo.clear();
+	probeBackoff.clear();
+	etagByRepo.clear();
+	cachedRunsByRepo.clear();
+	jobsCacheByRun.clear();
+	pollCacheHydrated = false;
 }
 
 /**

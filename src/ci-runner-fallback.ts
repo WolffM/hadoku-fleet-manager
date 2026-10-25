@@ -65,7 +65,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { logger, manifestDir } from './host.js';
-import { recordGhResponse } from './gh-budget.js';
+import { ghTokenFingerprint, recordGhResponse } from './gh-budget.js';
+import { conditionalCacheStore } from './conditional-cache-store.js';
 import { mapConcurrent } from './lib/concurrency.js';
 import { hubRepoFull, userAgent } from './lib/fleet-config.js';
 
@@ -159,8 +160,9 @@ async function ghVar(
 	method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
 	path: string,
 	token: string,
-	body?: unknown
-): Promise<{ ok: boolean; status: number; body?: unknown }> {
+	body?: unknown,
+	ifNoneMatch?: string
+): Promise<{ ok: boolean; status: number; body?: unknown; etag?: string | null }> {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 	try {
@@ -174,6 +176,7 @@ async function ghVar(
 			'User-Agent': userAgent('ci-runner-fallback'),
 		};
 		if (body !== undefined) headers['Content-Type'] = 'application/json';
+		if (ifNoneMatch) headers['If-None-Match'] = ifNoneMatch;
 		const resp = await fetch(`https://api.github.com${path}`, {
 			method,
 			headers,
@@ -186,7 +189,13 @@ async function ghVar(
 		// CHANGE. The other verbs return nothing worth reading.
 		if (method === 'GET' && resp.ok) {
 			const parsed: unknown = await resp.json().catch(() => undefined);
-			return { ok: true, status: resp.status, body: parsed };
+			// Optional: a test double may carry no headers at all.
+			return {
+				ok: true,
+				status: resp.status,
+				body: parsed,
+				etag: resp.headers?.get('etag') ?? null,
+			};
 		}
 		return { ok: resp.ok, status: resp.status };
 	} catch (err) {
@@ -209,10 +218,53 @@ async function ghVar(
  * whole fleet is being brought back off hosted.
  */
 async function readVar(repo: string, token: string): Promise<string | null> {
-	const res = await ghVar('GET', `/repos/${repo}/actions/variables/${CI_RUNNER_VAR}`, token);
-	if (!res.ok) return null;
-	const value = (res.body as { value?: unknown } | undefined)?.value;
-	return typeof value === 'string' ? value : null;
+	hydrateVarCache();
+	const key = `${ghTokenFingerprint(token)}\n${repo}`;
+	const cached = varCache.get(key);
+	const res = await ghVar(
+		'GET',
+		`/repos/${repo}/actions/variables/${CI_RUNNER_VAR}`,
+		token,
+		undefined,
+		cached?.etag
+	);
+	// A 304 IS an observation: GitHub says the value we hold is the value now.
+	if (res.status === 304 && cached) return cached.value;
+	if (!res.ok) {
+		// Unset (404) or unreadable: either way the held value is not current.
+		if (cached) {
+			varCache.delete(key);
+			varDisk.remove(key);
+		}
+		return null;
+	}
+	const raw = (res.body as { value?: unknown } | undefined)?.value;
+	const value = typeof raw === 'string' ? raw : null;
+	if (res.etag && value !== null) {
+		varCache.set(key, { etag: res.etag, value });
+		varDisk.save(key, res.etag, value);
+	}
+	return value;
+}
+
+/**
+ * The variable's ETag and value per (token, repo), persisted (2026-10-25).
+ *
+ * `readVar` runs for every repo this PROCESS has not yet written — so the whole
+ * roster on the first pass after each restart, 32 charged calls in the window
+ * holding the 04:52Z boot on 2026-10-25, a morning of 12 boots. Sent
+ * conditionally, an unchanged variable answers 304 for free, and the rule this
+ * file states about `had` holds: a 304 is GitHub's answer about the value NOW,
+ * observed, not cached. Why a restored pair is safe: conditional-cache-store.ts.
+ */
+const varCache = new Map<string, { etag: string; value: string }>();
+const varDisk = conditionalCacheStore('ci-runner-var', { maxBytes: 1024 * 1024 });
+let varCacheHydrated = false;
+
+function hydrateVarCache(): void {
+	if (varCacheHydrated) return;
+	varCacheHydrated = true;
+	for (const e of varDisk.load()) varCache.set(e.key, { etag: e.etag, value: e.text });
 }
 
 async function setVar(repo: string, token: string, value: string): Promise<boolean> {
@@ -280,6 +332,16 @@ const converged = new Set<string>();
 /** Test seam — a fresh process is the precondition this set models. */
 export function __resetFallbackConvergenceForTesting(): void {
 	converged.clear();
+	varCache.clear();
+	varDisk.clear();
+	varCacheHydrated = true;
+}
+
+/** A restart: the process forgets, the disk does not. Test seam. */
+export function __restartFallbackForTesting(): void {
+	converged.clear();
+	varCache.clear();
+	varCacheHydrated = false;
 }
 
 /**

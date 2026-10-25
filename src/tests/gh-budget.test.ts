@@ -9,7 +9,9 @@ import {
 	getGhBudgetSnapshot,
 	labelGhToken,
 	__resetGhBudgetForTesting,
+	__restartGhBudgetForTesting,
 	BUDGET_ALERT_MIN_LEFT_MS,
+	GH_BUDGET_SAVE_MS,
 } from '../gh-budget.js';
 import { ghGet, ghGetConditional, __resetGhBlackoutForTesting } from '../runner-health.js';
 
@@ -192,4 +194,94 @@ test('a response with no headers is ignored — the meter never breaks the call 
 		({ ok: true, status: 200, text: async () => '{"runners":[]}' }) as Response) as typeof fetch;
 	assert.deepEqual(await ghGet('/actions/runners', 'tok', 'WolffM/a'), { runners: [] });
 	assert.deepEqual(getGhBudgetSnapshot(), []);
+});
+
+/**
+ * 2026-10-25: one token, two windows. `/actions/runners*` is counted in a bucket
+ * of its own with its own reset, and every response still says `core`. Read as
+ * one window, each crossing closed the window holding the real spend, and the
+ * general bucket's readings were then dropped as late — `GET /fleet` showed 65%
+ * left while dispatch was about to be refused.
+ */
+const RUNNERS_RESET_S = RESET_S + 210; // the runner bucket resets 3.5 minutes later
+
+function bucketHeaders(used: number, resetS: number) {
+	return headers(5000 - used, resetS);
+}
+
+test('two buckets on one token are two windows, each with its own reading', () => {
+	for (let i = 0; i < 5; i++) {
+		recordGhResponse('tok', 200, bucketHeaders(4000 + i, RESET_S), T0);
+		recordGhResponse('tok', 200, bucketHeaders(1700 + i, RUNNERS_RESET_S), T0);
+	}
+	assert.equal(
+		infos.filter((l) => l.startsWith('[gh-budget] window ended')).length,
+		0,
+		'interleaved buckets close nothing'
+	);
+	const snap = getGhBudgetSnapshot(T0).sort((a, b) => a.resetAt.localeCompare(b.resetAt));
+	assert.equal(snap.length, 2);
+	assert.equal(snap[0].used, 4004, 'the general bucket keeps its own count');
+	assert.equal(snap[1].used, 1704);
+	assert.equal(snap[0].byCaller[0].charged + snap[1].byCaller[0].charged, 10);
+});
+
+test('the general bucket pages even while the runner bucket, resetting later, is healthy', () => {
+	recordGhResponse('tok', 200, bucketHeaders(1700, RUNNERS_RESET_S), T0);
+	recordGhResponse('tok', 200, bucketHeaders(4200, RESET_S), T0);
+	recordGhResponse('tok', 200, bucketHeaders(1701, RUNNERS_RESET_S), T0);
+	assert.equal(posts.length, 1);
+	assert.match(posts[0], /800\/5000 core calls left/);
+});
+
+test('a bucket that resets closes alone, and the other keeps counting', () => {
+	recordGhResponse('tok', 200, bucketHeaders(3000, RESET_S), T0);
+	recordGhResponse('tok', 200, bucketHeaders(1700, RUNNERS_RESET_S), T0);
+	const after = T0 + 46 * 60_000; // past RESET_S, before RUNNERS_RESET_S
+	recordGhResponse('tok', 200, bucketHeaders(1, RESET_S + 3600), after);
+	const ended = infos.filter((l) => l.startsWith('[gh-budget] window ended'));
+	assert.equal(ended.length, 1);
+	assert.match(ended[0], /used 3000\/5000/);
+	assert.equal(getGhBudgetSnapshot(after).length, 2, 'the runner bucket and the new general one');
+	// A late answer from the window that just ended opens nothing.
+	recordGhResponse('tok', 200, bucketHeaders(3001, RESET_S), after);
+	assert.equal(getGhBudgetSnapshot(after).length, 2);
+});
+
+test('the books survive a restart, and the window that ended in between is still logged', async () => {
+	await withGhCaller('ci-alerts', async () => {
+		recordGhResponse('tok', 200, bucketHeaders(1000, RESET_S), T0);
+		recordGhResponse('tok', 200, bucketHeaders(1001, RESET_S), T0 + GH_BUDGET_SAVE_MS);
+	});
+	__restartGhBudgetForTesting();
+	await withGhCaller('reap', async () => {
+		recordGhResponse('tok', 200, bucketHeaders(1002, RESET_S), T0 + 2 * GH_BUDGET_SAVE_MS);
+	});
+	const [w] = getGhBudgetSnapshot(T0 + 2 * GH_BUDGET_SAVE_MS);
+	assert.deepEqual(
+		w.byCaller.map((c) => [c.caller, c.charged]),
+		[
+			['ci-alerts', 2],
+			['reap', 1],
+		],
+		'the predecessor spent it, and it is still named'
+	);
+	assert.equal(w.restarts, 1);
+	assert.equal(w.otherSinceFirst, 0, 'every call accounted for across the restart');
+
+	// The process dies again; the window resets before anything reads it.
+	__restartGhBudgetForTesting();
+	getGhBudgetSnapshot(T0 + 46 * 60_000);
+	const ended = infos.find((l) => l.startsWith('[gh-budget] window ended'));
+	assert.ok(ended, 'the hourly line is written by whichever process sees the reset');
+	assert.match(ended, /ci-alerts 2, reap 1/);
+	assert.match(ended, /books carried across 2 restarts/);
+});
+
+test('a page that fired before a restart does not fire again after it', () => {
+	recordGhResponse('tok', 200, headers(900), T0);
+	assert.equal(posts.length, 1);
+	__restartGhBudgetForTesting();
+	recordGhResponse('tok', 200, headers(890), T0 + 1000);
+	assert.equal(posts.length, 1);
 });
