@@ -2087,7 +2087,8 @@ export async function dispatchEphemeral(
 	const nodes: NodeState[] = [];
 	// Once per tick. A drain is operator state on disk; re-reading it per node
 	// would let a node change status halfway through one placement decision.
-	const drainedNodes = new Set(Object.keys(readDrain()));
+	const drainRecords = readDrain();
+	const drainedNodes = new Set(Object.keys(drainRecords));
 	// ONCE PER TICK, not per node (#83): the model is the same fleet-wide
 	// answer for every node this tick builds, rebuilt on its own cadence
 	// rather than this one's. EVERY DECLARED MACHINE, not only `input.ephemeral`
@@ -2203,6 +2204,7 @@ export async function dispatchEphemeral(
 			// down, because placement.ts is pure on purpose — decisions there
 			// must be assertable without a filesystem.
 			drained: drainedNodes.has(name),
+			drainedAs: drainRecords[name],
 			// NODE-WIDE `placement: "excluded"` (reconcile-fleet-runners.mjs's own
 			// `placementFor`/`mayRunRepo`: "the reconciler must not register here
 			// at all"). Found while writing the placement-keys guard (#82's shape,

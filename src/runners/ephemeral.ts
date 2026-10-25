@@ -229,6 +229,9 @@ export interface AdmissionInput {
 	 * observed busy counts rather than trusting either.
 	 */
 	drained?: boolean;
+	/** The drain record behind `drained`, so the refusal names it rather than
+	 *  calling every drain "maintenance". Absent: the old generic wording. */
+	drainedAs?: { kind?: string; reason?: string };
 
 	/** Spawned-and-not-yet-exited JIT units on this node. NOT registrations:
 	 * §12.8 showed a registration outlives its listener. */
@@ -362,7 +365,18 @@ export function admitMint(i: AdmissionInput): AdmissionResult {
 	// This is the ephemeral half of a soft-close. The standing half is the label
 	// strip in setTierEligibility, and both are needed: the dispatcher mints for
 	// claw-1 and claw-3, GitHub assigns directly to the other five.
-	if (i.drained) return { ok: false, reason: 'drained: held out of service for maintenance' };
+	// The `drained:` prefix is what classifyAdmissionClause reads; the rest names
+	// the drain. Every drain read as "for maintenance" until 2026-10-25, so a
+	// claw mid-reboot and a claw lent to a tenant looked identical everywhere.
+	if (i.drained) {
+		const d = i.drainedAs;
+		return {
+			ok: false,
+			reason: d?.reason
+				? `drained: ${d.kind ?? 'maintenance'}: ${d.reason}`
+				: 'drained: held out of service for maintenance',
+		};
+	}
 	const inFlight = i.liveUnits + i.standingBusy;
 	if (inFlight >= i.maxConcurrent) {
 		return { ok: false, reason: `at capacity: ${inFlight}/${i.maxConcurrent} in flight` };

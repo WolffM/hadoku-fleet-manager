@@ -9,8 +9,10 @@ import assert from 'node:assert/strict';
 import {
 	BOOT_TIMEOUT_MS,
 	REASON_PREFIX,
+	REBOOT_LEASE,
 	oursOn,
 	parseRebootProbe,
+	rebootDrainArgs,
 	rebootReason,
 	runRebootCycle,
 	verifyAfter,
@@ -63,7 +65,7 @@ function world({
 		drainDoc: () => doc,
 		drain: (node, reason) => {
 			calls.push(`drain ${node}`);
-			doc.nodes[node] = { kind: 'lease', reason, since: 'x', until: 'y' };
+			doc.nodes[node] = { kind: 'reboot', reason, since: 'x', until: 'y' };
 			return { ok: true };
 		},
 		hold: (node, reason) => {
@@ -163,7 +165,7 @@ test('verifyAfter: same boot, wrong kernel, a dead runner unit and a lost pm2 ap
 	assert.deepEqual(verifyAfter(before, { ...before, bootId: 'b', running: NEW }), []);
 });
 
-test('a staged kernel: drained as a lease, idle, rebooted, verified, undrained — and recorded', async () => {
+test('a staged kernel: drained as a reboot, idle, rebooted, verified, undrained — and recorded', async () => {
 	const w = world({
 		nodes: {
 			'claw-1': box({ busy: 2 }),
@@ -383,4 +385,28 @@ test('an unreachable claw is a finding, never "current" — unless a human took 
 	const d = await runRebootCycle({ machines: [['claw-1', {}]], deps: w.deps });
 	assert.equal(d.ok, true);
 	assert.equal(d.nodes[0].status, 'expected-down');
+});
+
+test('the cycle drains as kind `reboot`, with an end — never as a tenant lease', () => {
+	const args = rebootDrainArgs('claw-6', `${REASON_PREFIX}: running ${OLD}`);
+	assert.deepEqual(args.slice(0, 5), ['claw-6', '--kind', 'reboot', '--for', REBOOT_LEASE]);
+	assert.equal(args[args.indexOf('--reason') + 1].startsWith(REASON_PREFIX), true);
+});
+
+test("oursOn: the `reboot` kind, a pre-kind lease it wrote, and never anyone else's lease", () => {
+	const doc = {
+		nodes: {
+			'claw-6': { kind: 'reboot', reason: 'anything' },
+			'claw-4': { kind: 'lease', reason: `${REASON_PREFIX}: running ${OLD}` },
+			'claw-8': { kind: 'lease', reason: 'cardtable stress lease' },
+		},
+	};
+	assert.equal(oursOn(doc, 'claw-6'), true);
+	assert.equal(
+		oursOn(doc, 'claw-4'),
+		true,
+		'a record written before the kind existed is still finished'
+	);
+	assert.equal(oursOn(doc, 'claw-8'), false);
+	assert.equal(oursOn(doc, 'claw-1'), false);
 });

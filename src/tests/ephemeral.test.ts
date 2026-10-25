@@ -92,6 +92,24 @@ test('an idle node admits', () => {
 	assert.equal(admitMint(BASE).ok, true);
 });
 
+test('a drained node is refused, and the refusal names WHICH drain', () => {
+	// Every drain read "held out of service for maintenance" until 2026-10-25,
+	// so a claw mid-reboot and a claw lent to a tenant looked identical in the
+	// panel, in GET /fleet and in `fleet traffic`.
+	const r = admitMint({
+		...BASE,
+		drained: true,
+		drainedAs: { kind: 'reboot', reason: 'automated reboot: running 6.12.94, newest 6.12.113' },
+	});
+	assert.equal(r.ok, false);
+	assert.equal(r.reason, 'drained: reboot: automated reboot: running 6.12.94, newest 6.12.113');
+	// The prefix is the clause; the generic wording survives a caller with no record.
+	assert.equal(
+		admitMint({ ...BASE, drained: true }).reason,
+		'drained: held out of service for maintenance'
+	);
+});
+
 test('standing registrations count against the cap — GitHub does not ask us first', () => {
 	// This is the whole of B2. A dispatcher that counted only its own mints would
 	// let GitHub fill the node behind its back, which is how eleven concurrent

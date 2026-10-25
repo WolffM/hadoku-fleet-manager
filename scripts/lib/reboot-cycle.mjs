@@ -18,7 +18,7 @@
  *              /var/run/reboot-required, runner units, pm2 apps
  *   pick       a claw that needs it and that NOBODY ELSE holds: not drained
  *              by anyone, no drain planned on it. The least busy first.
- *   drain      a LEASE that lapses by itself (REBOOT_LEASE_MS), so a cycle
+ *   drain      kind `reboot`, which lapses by itself (REBOOT_LEASE), so a cycle
  *              that dies outright gives the node back on the clock
  *   wait       until zero jobs have held for the settle window (the same
  *              `waitUntilDrained` the toolchain cadence uses); a timeout
@@ -42,7 +42,7 @@
 
 /** Every drain this cycle writes starts with this, and it undoes only those. */
 export const REASON_PREFIX = 'automated reboot';
-/** The drain is a lease: if the cycle dies outright, the node comes back by itself. */
+/** The drain's window (kind `reboot`): if the cycle dies outright, the node comes back by itself. */
 export const REBOOT_LEASE = '2h';
 /** From the reboot command to a reachable node on a new boot id. */
 export const BOOT_TIMEOUT_MS = 12 * 60_000;
@@ -163,9 +163,21 @@ async function attempt(fn) {
 	}
 }
 
-/** Is the node's CURRENT drain record this cycle's own? */
+/** The `fleet drain` arguments for this cycle's drain: kind `reboot`, with an end. */
+export function rebootDrainArgs(node, reason) {
+	return [node, '--kind', 'reboot', '--for', REBOOT_LEASE, '--reason', reason];
+}
+
+/**
+ * Is the node's CURRENT drain record this cycle's own?
+ *
+ * By kind first. The reason prefix still counts, so a record a pass wrote as a
+ * `lease` before the `reboot` kind existed is still finished and undone by the
+ * next pass rather than stranded.
+ */
 export function oursOn(doc, node) {
-	return String(doc?.nodes?.[node]?.reason ?? '').startsWith(REASON_PREFIX);
+	const rec = doc?.nodes?.[node];
+	return rec?.kind === 'reboot' || String(rec?.reason ?? '').startsWith(REASON_PREFIX);
 }
 
 /**

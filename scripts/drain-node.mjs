@@ -545,7 +545,9 @@ if (!reason) {
 // A LEASE ends by the clock: the node is lent for a window and comes back when
 // it closes, whether or not anybody remembers. `hosting` is not settable here —
 // it carries resources and units on the node, and `fleet hosting` writes both.
-const KINDS = ['training', 'maintenance', 'lease'];
+// `reboot` is written by the reboot cycle (reboot-claws); it is settable here
+// so a hand-run cycle step and the automated one write the same record.
+const KINDS = ['training', 'maintenance', 'lease', 'reboot'];
 const kind = valueOf('--kind') ?? 'maintenance';
 if (kind === 'hosting') {
 	console.error(
@@ -559,8 +561,8 @@ if (!KINDS.includes(kind)) {
 }
 const startMs = when('--at') ?? when('--in') ?? NOW;
 const endMs = when('--until') ?? when('--for', startMs);
-if (kind === 'lease' && endMs === null) {
-	console.error('drain: a lease needs an end — --for 48h or --until <iso>.');
+if ((kind === 'lease' || kind === 'reboot') && endMs === null) {
+	console.error(`drain: a ${kind} needs an end — --for 2h or --until <iso>.`);
 	process.exit(1);
 }
 if (endMs !== null && endMs <= startMs) {

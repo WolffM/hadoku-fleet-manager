@@ -136,6 +136,19 @@ export function deferralFor(node, drains, now = Date.now()) {
 	if (!rec) return { deferred: false, why: 'not drained' };
 
 	const kind = rec.kind ?? 'maintenance';
+	// A REBOOT IS EXPECTED DOWN, inside its own window. The drain carries an end
+	// and lapses by itself (effectiveDrains), so a claw that never comes back
+	// stops being deferred when the window closes, and a dead reboot cannot hide
+	// for DEFER_DAYS the way an open-ended maintenance drain could.
+	if (kind === 'reboot') {
+		return {
+			deferred: true,
+			kind,
+			since: rec.since,
+			reason: rec.reason,
+			why: `rebooting: ${rec.reason}`,
+		};
+	}
 	if (kind !== 'maintenance') {
 		return { deferred: false, kind, why: `drained as '${kind}', which is expected to be RUNNING` };
 	}

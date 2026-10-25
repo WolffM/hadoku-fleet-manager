@@ -58,7 +58,15 @@ import { manifest, stateDir } from '../host.js';
  *                docs/VOCABULARY.md). CI stays off for as long as it lasts, and
  *                the record carries the resources the fleet promised to serve.
  */
-export type DrainKind = 'maintenance' | 'training' | 'lease' | 'hosting';
+/**
+ * `reboot` is the reboot cycle's own drain (scripts/lib/reboot-cycle.mjs): a
+ * claw being drained, rebooted onto a staged kernel and verified. Its own kind
+ * so every reader (traffic, node-status, GET /fleet) can say "rebooting"
+ * instead of reading it as a tenant `lease`, which is what it was written as
+ * until 2026-10-25. Like a lease it always carries an end, so a cycle that dies
+ * outright gives the node back by the clock.
+ */
+export type DrainKind = 'maintenance' | 'training' | 'lease' | 'hosting' | 'reboot';
 
 /** What a hosting node promises its tenant. Verified against the cgroup, never this record. */
 export interface HostingResources {

@@ -170,7 +170,9 @@ export const ADMISSION_CLAUSES: Record<AdmissionClause, TelemetryTerm> = {
 	},
 	drained: {
 		kind: 'reserve',
-		description: 'held out of service for maintenance — an operator’s own decision, not a fault',
+		description:
+			'held out of service — an operator’s drain or a fleet cycle (maintenance, training, lease, ' +
+			'hosting, reboot); the reason names which. Not a fault',
 	},
 	space: {
 		kind: 'fault',

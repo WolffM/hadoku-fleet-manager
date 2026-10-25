@@ -118,3 +118,12 @@ for (const f of [
 		assert.match(src, /deferralFor\(/, `${f} imports the helper but never calls it`);
 	});
 }
+
+test('a node drained as a REBOOT is deferred — briefly down is the expected state', () => {
+	const drains = {
+		'claw-6': { kind: 'reboot', since: new Date().toISOString(), reason: 'automated reboot: x' },
+	};
+	const d = deferralFor('claw-6', drains);
+	assert.equal(d.deferred, true);
+	assert.match(d.why, /rebooting: automated reboot/);
+});

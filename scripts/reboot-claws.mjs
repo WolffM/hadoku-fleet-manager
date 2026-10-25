@@ -32,10 +32,10 @@ import { deferralFor, readDrainDoc, readDrains } from './lib/expected-down.mjs';
 import { loadManifest, machineArg, runOnSync } from './lib/fleet-exec.mjs';
 import { stateDir } from './lib/paths.mjs';
 import {
-	REBOOT_LEASE,
 	REBOOT_PROBE,
 	oursOn,
 	parseRebootProbe,
+	rebootDrainArgs,
 	runRebootCycle,
 } from './lib/reboot-cycle.mjs';
 import { busyCount, drainCli, liveQueuePressure, waitUntilDrained } from './lib/refresh-cycle.mjs';
@@ -96,8 +96,7 @@ const deps = {
 	},
 	expectedDown: (node) => deferralFor(node, readDrains()).deferred,
 	drainDoc: () => readDrainDoc(),
-	drain: (node, reason) =>
-		drainCli([node, '--kind', 'lease', '--for', REBOOT_LEASE, '--reason', reason]),
+	drain: (node, reason) => drainCli(rebootDrainArgs(node, reason)),
 	hold: (node, reason) => drainCli([node, '--kind', 'maintenance', '--reason', reason]),
 	undrain: (node) => drainCli([node, '--undo']),
 	waitDrained: (node) => waitUntilDrained({ node, busy: busyCount, clock }),
