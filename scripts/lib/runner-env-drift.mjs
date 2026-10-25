@@ -256,5 +256,31 @@ export function throttleSummaryDrift({ name, m, kv, wantConfSha }) {
 				`nothing intends to be running.`
 		);
 	}
+	// WHAT A LIVE JOB SEES (2026-10-24). Every rule above reads a FILE; this
+	// reads the jobs — each live Runner.Worker's own environ, and the
+	// filesystem its effective temp dir is on. `jobtmpseen=0` is an idle node:
+	// no observation, and not a finding, because the file rules above still
+	// judge it. A missing token is a node half that never reached the rule.
+	const jobSeen = count('jobtmpseen');
+	const jobBad = count('jobtmpbad');
+	const jobUnread = count('jobtmpunread');
+	if (jobSeen === null) unread('jobtmpseen', 'where live jobs write their temp');
+	if (jobBad === null) unread('jobtmpbad', 'how many live jobs write their temp to RAM');
+	if (jobUnread === null) unread('jobtmpunread', "how many live jobs' env could not be read");
+	if (jobBad !== null && jobBad > 0) {
+		findings.push(
+			`${name}: ${jobBad} live job(s) write temp or compile cache to tmpfs, or have a TMPDIR ` +
+				`that does not exist — RAM their MemoryMax never sees, on a /tmp the mint floor ` +
+				`guards (the JOBTMP-BAD lines name each). Fix: fleet throttle --confirm, which ` +
+				`rewrites runner.env and every standing .env; a running job keeps the env it ` +
+				`started with, and the next mint picks the fix up`
+		);
+	}
+	if (jobUnread !== null && jobUnread > 0) {
+		findings.push(
+			`${name}: could not read where ${jobUnread} live job(s) write their temp (the ` +
+				`JOBTMP-UNREADABLE lines say why) — not observed, so not known to be on disk`
+		);
+	}
 	return findings;
 }

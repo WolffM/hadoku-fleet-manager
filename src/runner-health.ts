@@ -4359,6 +4359,19 @@ async function checkDiskWatch(data: TickReport): Promise<void> {
 		// #132: judged against the tmpfs's own SIZE. An 8 GB claw's ~3.9 GB /tmp
 		// sat under the absolute advisory line while empty and re-pinged hourly;
 		// that is a property of the box, said once below, not a leak.
+		//
+		// WHY THIS STILL FIRES NOW THAT JOBS WRITE TO DISK (2026-10-24). Every
+		// live job's TMPDIR and compile cache are on disk, observed per job by
+		// the throttle check and converged by converge-provisioning, and claw-2
+		// held 6 MB of /tmp that day. But /tmp is not empty of writers: a JVM
+		// ignores TMPDIR (hsperfdata, kotlin-daemon logs), a subprocess built
+		// from a scratch env drops it (this repo's own tests left 457 MB of
+		// node-compile-cache and 580 leaked `tmp.*` dirs on claw-6), and ssh probes
+		// carry none. tmpfs pages are RAM either way, and the dispatcher still
+		// refuses a mint under the floor. So the floor and both lines stay as
+		// they are; what changed is what a crossing MEANS — not "a job leaked",
+		// but "something that ignores TMPDIR is filling RAM" — and the messages
+		// say so.
 		const tmpSizeMb = reading.tmpSizeMb ?? null;
 		if (tmpSizeMb !== null && tmpIsSmall(tmpSizeMb)) {
 			tmpSmall[node] = tmpSizeMb;
@@ -4367,7 +4380,12 @@ async function checkDiskWatch(data: TickReport): Promise<void> {
 					`ℹ️ **disk** (reported by \`${selfHostname()}\`): \`${node}\`'s /tmp is a ` +
 						`${Math.round((tmpSizeMb / 1024) * 10) / 10}GB filesystem — less than one mint floor ` +
 						`(${TMP_FREE_FLOOR_MB}MB) of runway above the floor even when empty. A capacity fact, ` +
-						`said once: its advisory line sits at ${tmpAdvisoryLineMb(tmpSizeMb)}MB free instead.`,
+						`said once: its advisory line sits at ${tmpAdvisoryLineMb(tmpSizeMb)}MB free instead. ` +
+						"CI jobs' TMPDIR is on disk, not here" +
+						(onDemand.includes(node)
+							? '.'
+							: ': observed per live job by `fleet throttle --check` (jobtmpbad) and ' +
+								'repaired by converge-provisioning.'),
 					'runner-health'
 				);
 			}
@@ -4381,7 +4399,14 @@ async function checkDiskWatch(data: TickReport): Promise<void> {
 				`⚠️ **disk** (reported by \`${selfHostname()}\`): \`${node}\`'s /tmp has ${tmp.freeGb}GB free — ` +
 					`within ${tmpAdvisoryLineMb(tmpSizeMb) - TMP_FREE_FLOOR_MB}MB of the ` +
 					`${TMP_FREE_FLOOR_MB}MB floor under which the dispatcher refuses to mint there. ` +
-					'Leaked temp dirs are the usual cause (`find /tmp -maxdepth 1 -mmin +60`).'
+					"A job's own TMPDIR is on disk, so this is something that ignores TMPDIR (a JVM's " +
+					'java.io.tmpdir, a stripped-env subprocess, an ssh probe)' +
+					(onDemand.includes(node)
+						? ''
+						: ' or a job that is not (`fleet throttle --check --machine ' +
+							node +
+							'`, JOBTMP-BAD)') +
+					'. `find /tmp -maxdepth 1 -mmin +60` names the leftovers.'
 			);
 		} else if (tmp.level === 'page') {
 			const cost = onDemand.includes(node)

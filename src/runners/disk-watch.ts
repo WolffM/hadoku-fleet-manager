@@ -179,7 +179,14 @@ export function tmpIsSmall(tmpSizeMb: number | null = null): boolean {
 	return tmpSizeMb !== null && tmpSizeMb < TMP_FREE_FLOOR_MB + TMP_WATCH_ADVISORY_MARGIN_MB;
 }
 
-/** The pure judgement for /tmp. Same levels as {@link judgeWorkDisk}. */
+/**
+ * The pure judgement for /tmp. Same levels as {@link judgeWorkDisk}.
+ *
+ * Unchanged by CI jobs' temp moving to disk (#100/#101, observed per job since
+ * 2026-10-24): what still writes /tmp ignores TMPDIR, tmpfs is still RAM, and
+ * admission still refuses under the floor. `runner-health.ts`'s
+ * `checkDiskWatch` says why at the point the advisory is worded.
+ */
 export function judgeTmpDisk(
 	tmpFreeMb: number | null,
 	tmpSizeMb: number | null = null

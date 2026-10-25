@@ -16,6 +16,14 @@
  *     but not loaded (`stale`), or the node's own scripts lag this package
  *     (see scriptLag). `throttle --confirm` rewrites them and restarts only
  *     IDLE runners. A busy one keeps its job and stays stale.
+ *     ALSO, since 2026-10-24: a LIVE JOB writes its temp to RAM
+ *     (`jobtmpbad`, read from each Runner.Worker's own environ and the
+ *     filesystem under it — see ci-throttle-install.sh), or `runner.env`, the
+ *     file every JIT slot and warm listener is built from, is missing a key.
+ *     The same `--confirm` rewrites runner.env and every standing .env. A job
+ *     already running keeps the env it started with, so the re-check defers
+ *     exactly the jobs that were already bad before the repair, and a NEW bad
+ *     one after it is unconverged.
  *   slice — a standing unit runs outside its slice or above or below its cap
  *     (SLICE-PLACEMENT-DRIFT / UNIT-CAP-DRIFT). `slice --confirm --restart`
  *     writes the drop-in, sets the cap live, and restarts only idle units. A
@@ -45,6 +53,25 @@ function subjects(notes, prefix) {
 		.filter((l) => l.startsWith(`${prefix} `))
 		.map((l) => l.split(/\s+/)[1])
 		.filter(Boolean);
+}
+
+/** `<dir> pid=<n>` of every JOBTMP-BAD note: one live job, never confused with the next job in that slot. */
+function badJobs(notes) {
+	return (notes ?? [])
+		.filter((l) => l.startsWith('JOBTMP-BAD '))
+		.map((l) => l.split(/\s+/).slice(1, 3).join(' '));
+}
+
+/**
+ * Why a throttle SUMMARY needs the repair, beyond `newly`: live jobs whose temp
+ * is on RAM, and a runner.env present but missing a key (every node, any role
+ * — `runnerEnvDrift`'s rule). Empty when neither holds.
+ */
+function jobTmpWhy(kv) {
+	const why = [];
+	if (n(kv.jobtmpbad) > 0) why.push(`${n(kv.jobtmpbad)} live job(s) write temp to RAM`);
+	if (kv.runnerenv === '1' && kv.runnerenvkeys === '0') why.push('runner.env is missing a key');
+	return why;
 }
 
 const SLICE_DRIFT = ['SLICE-PLACEMENT-DRIFT', 'UNIT-CAP-DRIFT'];
@@ -93,7 +120,8 @@ export function planRepairs(throttleDoc, sliceDoc) {
 		}
 		const kv = throttleKv(r.summary);
 		const lag = scriptLag(r);
-		if (n(kv.newly) > 0 || lag.length) {
+		const extra = jobTmpWhy(kv);
+		if (n(kv.newly) > 0 || lag.length || extra.length) {
 			const wrong = n(kv.newly) - n(kv.stale);
 			repair.push({
 				node: r.machine,
@@ -103,6 +131,7 @@ export function planRepairs(throttleDoc, sliceDoc) {
 						? `${wrong} runner(s) with the wrong env, ${n(kv.stale)} written but not loaded`
 						: '',
 					lag.length ? `node-side files behind this package: ${lag.join(', ')}` : '',
+					...extra,
 				]
 					.filter(Boolean)
 					.join('; '),
@@ -173,10 +202,45 @@ export function classifyRepair(facet, confirms, recheck) {
 				busy,
 			};
 		}
-		if (n(r.newly) === 0) return { outcome: 'converged', changed, why: '', busy };
+		// Live jobs on RAM after the repair: deferred only if every one was
+		// ALREADY running, and already bad, when the last confirm ran — those
+		// keep the env they started with. One that started after it means the
+		// rewrite did not reach what new jobs are built from.
+		const before = new Set(badJobs(last.notes));
+		const jobsLeft = badJobs(recheck.notes);
+		const newBad = jobsLeft.filter((j) => !before.has(j));
+		const keysWrong = r.runnerenv === '1' && r.runnerenvkeys === '0';
+		if (keysWrong || newBad.length) {
+			return {
+				outcome: 'unconverged',
+				changed,
+				why:
+					`after throttle --confirm, ` +
+					[
+						keysWrong ? 'runner.env is still missing a key' : '',
+						newBad.length
+							? `${newBad.length} job(s) started since still write temp to RAM: ${newBad.join(', ')}`
+							: '',
+					]
+						.filter(Boolean)
+						.join('; '),
+				busy,
+			};
+		}
+		const jobsBusy = jobsLeft.map((j) => `${j} (temp on RAM, started before the repair)`);
+		if (n(r.newly) === 0 && !jobsLeft.length)
+			return { outcome: 'converged', changed, why: '', busy };
+		if (n(r.newly) === 0) {
+			return { outcome: 'deferred', changed, why: `busy: ${jobsBusy.join(', ')}`, busy: jobsLeft };
+		}
 		const stale = subjects(recheck.notes, 'STALE');
 		if (wrong === 0 && stale.length && stale.every((d) => busy.includes(d))) {
-			return { outcome: 'deferred', changed, why: `busy: ${stale.join(', ')}`, busy: stale };
+			return {
+				outcome: 'deferred',
+				changed,
+				why: `busy: ${[...stale, ...jobsBusy].join(', ')}`,
+				busy: [...stale, ...jobsLeft],
+			};
 		}
 		const failed = runs.flatMap((c) => subjects(c.notes, 'RESTART-FAILED'));
 		return {

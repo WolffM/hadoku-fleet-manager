@@ -725,7 +725,8 @@ const CONF_SHA = 'a'.repeat(64);
 const HEALTHY =
 	'SUMMARY conf=1 conf_max=3 conf_minfree=2048 confsha=' +
 	CONF_SHA +
-	' jit=1 payload=1 wired=4 newly=0 stale=0 stale_remaining=0 nolistener=0 harvest=1';
+	' jit=1 payload=1 wired=4 newly=0 stale=0 stale_remaining=0 nolistener=0 harvest=1' +
+	' jobtmpseen=2 jobtmpbad=0 jobtmpunread=0';
 
 /** `HEALTHY` with one token replaced (`value === null` drops it entirely). */
 function withToken(token, value, base = HEALTHY) {
@@ -750,7 +751,18 @@ void test('throttleSummaryDrift: no SUMMARY at all is a finding, not a pass', ()
 	assert.match(summaryDrift('').join('\n'), /produced no SUMMARY line/);
 });
 
-for (const token of ['conf', 'harvest', 'jit', 'payload', 'newly', 'stale', 'nolistener']) {
+for (const token of [
+	'conf',
+	'harvest',
+	'jit',
+	'payload',
+	'newly',
+	'stale',
+	'nolistener',
+	'jobtmpseen',
+	'jobtmpbad',
+	'jobtmpunread',
+]) {
 	for (const value of [null, '', 'x']) {
 		const shown = value === null ? '(absent)' : `'${value}'`;
 		void test(`throttleSummaryDrift: ${token}=${shown} is "could not read", never clean`, () => {
@@ -766,6 +778,19 @@ void test('throttleSummaryDrift: the bad values keep their own findings', () => 
 	assert.match(summaryDrift(withToken('harvest', '0')).join('\n'), /harvester unit is not active/);
 	assert.match(summaryDrift(withToken('jit', '0')).join('\n'), /no ~\/\.hadoku\/jit-provision\.sh/);
 	assert.match(summaryDrift(withToken('payload', '0')).join('\n'), /NO JIT payload/);
+});
+
+void test('throttleSummaryDrift: a live job on RAM, or one whose temp could not be read, is a finding', () => {
+	assert.match(
+		summaryDrift(withToken('jobtmpbad', '1')).join('\n'),
+		/1 live job\(s\) write temp or compile cache to tmpfs/
+	);
+	assert.match(
+		summaryDrift(withToken('jobtmpunread', '2')).join('\n'),
+		/could not read where 2 live job\(s\) write their temp/
+	);
+	// An idle node is no observation, not a failure: the file rules judge it.
+	assert.deepEqual(summaryDrift(withToken('jobtmpseen', '0')), []);
 });
 
 void test('throttleSummaryDrift: jit/payload are not judged on a non-ephemeral node', () => {

@@ -639,6 +639,75 @@ if [ "$runnerenv_present" = 1 ]; then
 	fi
 fi
 
+# --- WHAT A JOB ACTUALLY SEES: is its temp on disk? ------------------------
+# Everything above judges FILES: the .env lines, runner.env's keys, the
+# listener's start time against the .env's mtime. None of it is what a job
+# sees, and the reader for a facet may not read what the writer wrote
+# (AGENTS.md). A JIT slot's .env is written by jit-provision.sh at mint, a warm
+# listener's by warm-provision.sh, a standing runner's here, and on a claw /tmp
+# is tmpfs sized to half the RAM: a job whose temp lands there spends memory
+# its MemoryMax never sees, and debris left there starved claw-2 and claw-6
+# below the mint floor for days.
+#
+# So read the jobs. A live Runner.Worker is spawned by its listener AFTER the
+# listener loaded .env, so the Worker's /proc environ — unlike the listener's,
+# which is only its initial environment — is exactly what every step of that
+# job inherits. The verdict is the FILESYSTEM the effective directory is on,
+# read with findmnt, not the path: an unset TMPDIR is judged as /tmp, an unset
+# NODE_COMPILE_CACHE as node's own default under the temp dir.
+#   JOBTMP-BAD <dir> pid=<n> …  a live job whose temp or compile cache is on
+#                               tmpfs/ramfs, or whose TMPDIR does not exist
+#   JOBTMP-UNREADABLE <dir> …   a live job whose env or filesystem could not be
+#                               read — "could not look", never "fine"
+# No live job is no observation, said as jobtmpseen=0: the file checks above
+# still stand for an idle node, and the driver does not read zero as a pass.
+nearest_existing() {
+	ne=$1
+	while [ ! -e "$ne" ] && [ "$ne" != / ] && [ -n "$ne" ]; do ne=$(dirname "$ne"); done
+	printf '%s' "$ne"
+}
+fs_of() { findmnt -n -o FSTYPE -T "$1" 2>/dev/null | head -1; }
+jobtmp_seen=0
+jobtmp_bad=0
+jobtmp_unread=0
+for wp in $(pgrep -x Runner.Worker 2>/dev/null); do
+	wexe=$(readlink "/proc/$wp/exe" 2>/dev/null)
+	wdir=${wexe%/bin/Runner.Worker}
+	[ -n "$wdir" ] || wdir="(unknown-dir)"
+	# The READ's status, not an empty result: a job with an empty environment
+	# is readable, and is the worst case (TMPDIR unset), not a blind spot.
+	if ! wenv=$(tr '\0' '\n' <"/proc/$wp/environ" 2>/dev/null); then
+		# Gone between pgrep and the read is a job that finished, not a
+		# finding; still there and unreadable is.
+		[ -d "/proc/$wp" ] || continue
+		jobtmp_unread=$((jobtmp_unread + 1))
+		echo "JOBTMP-UNREADABLE $wdir pid=$wp (its /proc environ could not be read)"
+		continue
+	fi
+	jobtmp_seen=$((jobtmp_seen + 1))
+	wt=$(printf '%s\n' "$wenv" | sed -n 's/^TMPDIR=//p' | tail -1)
+	wc_=$(printf '%s\n' "$wenv" | sed -n 's/^NODE_COMPILE_CACHE=//p' | tail -1)
+	t_eff=${wt:-/tmp}
+	c_eff=${wc_:-$t_eff/node-compile-cache}
+	t_fs=$(fs_of "$t_eff")
+	c_fs=$(fs_of "$(nearest_existing "$c_eff")")
+	desc="TMPDIR=${wt:-unset} fs=${t_fs:-unread} NODE_COMPILE_CACHE=${wc_:-unset} fs=${c_fs:-unread}"
+	if [ ! -d "$t_eff" ]; then
+		jobtmp_bad=$((jobtmp_bad + 1))
+		echo "JOBTMP-BAD $wdir pid=$wp $desc (TMPDIR does not exist: every mktemp in this job fails)"
+	elif [ -z "$t_fs" ] || [ -z "$c_fs" ]; then
+		jobtmp_unread=$((jobtmp_unread + 1))
+		echo "JOBTMP-UNREADABLE $wdir pid=$wp $desc (findmnt could not name the filesystem)"
+	else
+		case " $t_fs $c_fs " in
+		*" tmpfs "* | *" ramfs "*)
+			jobtmp_bad=$((jobtmp_bad + 1))
+			echo "JOBTMP-BAD $wdir pid=$wp $desc"
+			;;
+		esac
+	fi
+done
+
 # --- PROVENANCE: is what is deployed here what the package ships? -----------
 # A CONTENT HASH, not a version marker written into the file. Two reasons.
 #
@@ -689,4 +758,4 @@ systemctl --user is-active --quiet runner-mem-harvest.service 2>/dev/null && har
 harvest_sha=$(sha_of "$NODE_DIR/runner-mem-harvest.py")
 harvest_unit_sha=$(sha_of "$HOME/.config/systemd/user/runner-mem-harvest.service")
 
-echo "SUMMARY conf=$conf_ok conf_max=$conf_max conf_minfree=$conf_minfree confsha=$conf_sha jit=$jit_installed payload=$jit_payload wired=$already newly=$changed stale=$stalecount stale_remaining=$stale_remaining nolistener=$nolistener restarted=$restarted busy=$busy skipped=$skipped hooksha=$hook_sha metricssha=$metrics_sha jitsha=$jit_sha harvest=$harvest_active harvestsha=$harvest_sha harvestunitsha=$harvest_unit_sha runnerenv=$runnerenv_present runnerenvkeys=$runnerenv_keys_ok"
+echo "SUMMARY conf=$conf_ok conf_max=$conf_max conf_minfree=$conf_minfree confsha=$conf_sha jit=$jit_installed payload=$jit_payload wired=$already newly=$changed stale=$stalecount stale_remaining=$stale_remaining nolistener=$nolistener restarted=$restarted busy=$busy skipped=$skipped hooksha=$hook_sha metricssha=$metrics_sha jitsha=$jit_sha harvest=$harvest_active harvestsha=$harvest_sha harvestunitsha=$harvest_unit_sha runnerenv=$runnerenv_present runnerenvkeys=$runnerenv_keys_ok jobtmpseen=$jobtmp_seen jobtmpbad=$jobtmp_bad jobtmpunread=$jobtmp_unread"

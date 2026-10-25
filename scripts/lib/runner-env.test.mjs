@@ -521,3 +521,81 @@ void test('node-side scripts are replaced by rename, never truncated in place, a
 		'no temp file is left behind'
 	);
 });
+
+// --- WHAT A LIVE JOB SEES (2026-10-24) -------------------------------------
+//
+// The file checks above can all pass while a job writes its temp to RAM: the
+// .env is right, and the thing that read it is not what the job inherited. So
+// the node half reads each live Runner.Worker's own environ and asks findmnt
+// what filesystem the effective temp dir is on. Here the workers are REAL
+// processes (a copy of `sleep` named Runner.Worker, so /proc is genuinely
+// read), found through a pgrep stub that names only them, and findmnt is a
+// stub so the verdict does not depend on what this host's /tmp happens to be.
+void test('--check reads each live job: one with TMPDIR on disk passes, one with none is JOBTMP-BAD', async () => {
+	const { spawn } = await import('node:child_process');
+	const { copyFileSync, chmodSync } = await import('node:fs');
+	const home = take(mkdtempSync(join(tmpdir(), 'runner-env-')));
+	const sleepBin = ['/usr/bin/sleep', '/bin/sleep'].find((p) => existsSync(p));
+	const worker = (name, env) => {
+		const bin = join(home, name, 'bin');
+		mkdirSync(bin, { recursive: true });
+		copyFileSync(sleepBin, join(bin, 'Runner.Worker'));
+		chmodSync(join(bin, 'Runner.Worker'), 0o755);
+		return spawn(join(bin, 'Runner.Worker'), ['30'], { env, stdio: 'ignore' });
+	};
+	const disk = join(home, 'disk');
+	mkdirSync(join(disk, 'tmp'), { recursive: true });
+	const good = worker('good', {
+		TMPDIR: join(disk, 'tmp'),
+		NODE_COMPILE_CACHE: join(disk, 'ncc'),
+	});
+	const bad = worker('bad', {});
+	try {
+		const stubs = join(home, 'observe-stubs');
+		mkdirSync(stubs);
+		writeFileSync(
+			join(stubs, 'pgrep'),
+			`#!/bin/sh\n[ "$1" = -x ] && [ "$2" = Runner.Worker ] && { echo ${good.pid}; echo ${bad.pid}; exit 0; }\nexit 1\n`,
+			{ mode: 0o755 }
+		);
+		writeFileSync(
+			join(stubs, 'findmnt'),
+			`#!/bin/sh\ncase "$5" in ${disk}*) echo ext4 ;; *) echo tmpfs ;; esac\n`,
+			{ mode: 0o755 }
+		);
+		// Wait until both are exec'd: /proc/<pid>/exe names the copy only then.
+		const { readlinkSync } = await import('node:fs');
+		for (const p of [good, bad]) {
+			const deadline = Date.now() + 5_000;
+			for (;;) {
+				let exe = '';
+				try {
+					exe = readlinkSync(`/proc/${p.pid}/exe`);
+				} catch (err) {
+					if (err.code !== 'ENOENT') throw err;
+				}
+				if (exe.endsWith('/bin/Runner.Worker')) break;
+				assert.ok(Date.now() < deadline, 'fake worker never started');
+				await new Promise((r) => setTimeout(r, 20));
+			}
+		}
+		const out = runHermetic(INSTALL_SRC, home, {
+			APPLY: '0',
+			RESTART: '0',
+			TOOLCACHE: '/opt/hostedtoolcache',
+			HOOK_B64: Buffer.from(FAKE_HOOK, 'utf8').toString('base64'),
+			CONF_B64: Buffer.from(FAKE_CONF, 'utf8').toString('base64'),
+			PATH: `${stubs}:${STUB_DIR}:${process.env.PATH}`,
+		});
+		assert.match(out, /\bjobtmpseen=2 jobtmpbad=1 jobtmpunread=0\b/, out);
+		const lines = out.split('\n').filter((l) => l.startsWith('JOBTMP-BAD '));
+		assert.equal(lines.length, 1, out);
+		assert.ok(
+			lines[0].startsWith(`JOBTMP-BAD ${join(home, 'bad')} pid=${bad.pid} TMPDIR=unset fs=tmpfs`),
+			lines[0]
+		);
+	} finally {
+		good.kill('SIGKILL');
+		bad.kill('SIGKILL');
+	}
+});

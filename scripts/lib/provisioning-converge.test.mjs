@@ -240,3 +240,72 @@ test('classifyRepair throttle: scripts still behind after the redeploy is unconv
 	});
 	assert.equal(ok.outcome, 'converged');
 });
+
+// --- what a LIVE JOB sees (2026-10-24) -------------------------------------
+// The JOBTMP-BAD line is ci-throttle-install.sh's own shape: `<dir> pid=<n>`.
+const SLOT = '/home/hadoku/.hadoku/jit/slot0';
+const BAD = (pid) =>
+	`JOBTMP-BAD ${SLOT} pid=${pid} TMPDIR=unset fs=tmpfs NODE_COMPILE_CACHE=unset fs=tmpfs`;
+
+test('planRepairs: a live job writing temp to RAM is a throttle repair, though every .env file is right', () => {
+	const plan = planRepairs(
+		{
+			results: [
+				thr('claw-2', { jobtmpseen: 1, jobtmpbad: 1 }, [BAD(101)]),
+				thr('claw-6', { jobtmpseen: 2, jobtmpbad: 0, runnerenv: 1, runnerenvkeys: 0 }),
+				thr('claw-1', { jobtmpseen: 2, jobtmpbad: 0, runnerenv: 1, runnerenvkeys: 1 }),
+			],
+		},
+		{ results: [] }
+	);
+	assert.deepEqual(
+		plan.repair.map((r) => r.node),
+		['claw-2', 'claw-6']
+	);
+	assert.match(plan.repair[0].before, /1 live job\(s\) write temp to RAM/);
+	assert.match(plan.repair[1].before, /runner\.env is missing a key/);
+});
+
+test('classifyRepair: a job ALREADY bad before the repair is deferred; it keeps the env it started with', () => {
+	const confirm = thr('claw-2', { jobtmpseen: 1, jobtmpbad: 1, runnerenv: 1, runnerenvkeys: 1 }, [
+		BAD(101),
+	]);
+	const recheck = thr('claw-2', { jobtmpseen: 1, jobtmpbad: 1, runnerenv: 1, runnerenvkeys: 1 }, [
+		BAD(101),
+	]);
+	const c = classifyRepair('throttle', [confirm], recheck);
+	assert.equal(c.outcome, 'deferred', c.why);
+	assert.match(c.why, /pid=101/);
+});
+
+test('classifyRepair: a job that STARTED after the repair and still writes to RAM is unconverged', () => {
+	// Same slot, new pid: the next mint was built from what the repair wrote,
+	// and it is still wrong. MUTATION: compare by directory alone and this
+	// reads as the old job and defers.
+	const confirm = thr('claw-2', { jobtmpseen: 1, jobtmpbad: 1, runnerenv: 1, runnerenvkeys: 1 }, [
+		BAD(101),
+	]);
+	const recheck = thr('claw-2', { jobtmpseen: 1, jobtmpbad: 1, runnerenv: 1, runnerenvkeys: 1 }, [
+		BAD(202),
+	]);
+	const c = classifyRepair('throttle', [confirm], recheck);
+	assert.equal(c.outcome, 'unconverged');
+	assert.match(c.why, /started since still write temp to RAM: .*pid=202/);
+});
+
+test('classifyRepair: runner.env still missing a key after the repair is unconverged; clean jobs converge', () => {
+	const confirm = thr('claw-6', { runnerenv: 1, runnerenvkeys: 0 });
+	const stillBad = classifyRepair(
+		'throttle',
+		[confirm],
+		thr('claw-6', { jobtmpseen: 0, jobtmpbad: 0, runnerenv: 1, runnerenvkeys: 0 })
+	);
+	assert.equal(stillBad.outcome, 'unconverged');
+	assert.match(stillBad.why, /runner\.env is still missing a key/);
+	const fixed = classifyRepair(
+		'throttle',
+		[confirm],
+		thr('claw-6', { jobtmpseen: 2, jobtmpbad: 0, runnerenv: 1, runnerenvkeys: 1 })
+	);
+	assert.equal(fixed.outcome, 'converged');
+});
