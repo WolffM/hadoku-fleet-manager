@@ -181,10 +181,17 @@ export async function clawRebootTick(
 					`${k}, runners and services verified back, undrained.`,
 				'reboot'
 			);
+		} else if (n.status === 'held') {
+			logger.warn(`[reboot] ${n.node} HELD after its reboot: ${n.why ?? ''}`);
 		} else if (n.status === 'deferred' || n.status === 'unreadable') {
 			logger.info(`[reboot] ${n.node} ${n.status}: ${n.why ?? n.reason ?? ''}`);
 		}
 	}
+	// One line per pass naming every node, so "did the cycle look at claw-8, and
+	// what did it decide" is answered by the log even when nothing happened.
+	logger.info(
+		`[reboot] pass: ${doc.nodes.map((n) => `${n.node}=${n.status ?? '?'}`).join(' ') || 'no nodes'}`
+	);
 
 	const open = new Set<string>();
 	for (const f of doc.findings) {

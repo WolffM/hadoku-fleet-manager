@@ -10,6 +10,7 @@ import {
 	BOOT_TIMEOUT_MS,
 	REASON_PREFIX,
 	REBOOT_LEASE,
+	HELD_PREFIX,
 	oursOn,
 	parseRebootProbe,
 	dkmsGap,
@@ -423,6 +424,57 @@ test("oursOn: the `reboot` kind, a pre-kind lease it wrote, and never anyone els
 	assert.equal(oursOn(doc, 'claw-1'), false);
 });
 
+test('a node held by a FAILED verification HALTS the rollout: nothing else is drained', async () => {
+	const since = inDays(-0.05);
+	const w = world({
+		nodes: { 'claw-8': box({ newest: NEW }), 'claw-9': box({ running: NEW, newest: NEW }) },
+		drains: {
+			'claw-9': {
+				kind: 'maintenance',
+				reason: `${HELD_PREFIX}: DKMS module(s) not loaded after the reboot: nvidia_uvm`,
+				since,
+			},
+		},
+	});
+	const r = await runRebootCycle({
+		machines: [
+			['claw-8', {}],
+			['claw-9', {}],
+		],
+		deps: w.deps,
+	});
+	assert.deepEqual(
+		w.calls.filter((c) => !c.startsWith('probe')),
+		[]
+	);
+	const f = r.findings.find((x) => x.kind === 'halted');
+	assert.equal(f?.node, 'claw-9', JSON.stringify(r.findings));
+	assert.ok(f.reason.includes(`claw-9 (since ${since}) failed reboot verification`), f.reason);
+	const c8 = r.nodes.find((n) => n.node === 'claw-8');
+	assert.equal(c8.status, 'deferred');
+	assert.match(c8.why, /^halted: /);
+});
+
+test("someone else's maintenance drain does not halt the rollout", async () => {
+	const w = world({
+		nodes: { 'claw-8': box({ newest: NEW }), 'claw-9': box({ running: NEW, newest: NEW }) },
+		drains: { 'claw-9': { kind: 'maintenance', reason: 'reseat RAM' } },
+	});
+	const r = await runRebootCycle({
+		machines: [
+			['claw-8', {}],
+			['claw-9', {}],
+		],
+		deps: w.deps,
+	});
+	assert.deepEqual(r.rebooted, ['claw-8']);
+});
+
+test("oursOn never claims a FAILED hold, though it starts with the cycle's prefix", () => {
+	const doc = { nodes: { 'claw-9': { kind: 'maintenance', reason: `${HELD_PREFIX}: x` } } };
+	assert.equal(oursOn(doc, 'claw-9'), false);
+});
+
 // --- a reboot must not lose a driver (claw-1, 2026-10-25) --------------------
 
 const NV = ['nvidia-current.ko.xz', 'nvidia-current-uvm.ko.xz'];
@@ -436,12 +488,14 @@ test('parseRebootProbe reads the DKMS lines', () => {
 			`DKMS-RUNNING ${NV.join(' ')}`,
 			'DKMS-NEWEST nvidia-current.ko.xz',
 			'DKMS-LOADED nvidia nvidia_uvm',
+			'DKMS-READY nvidia nvidia_uvm nvidia_peermem',
 			'END reboot-probe',
 		].join('\n')
 	);
 	assert.deepEqual(p.dkmsRunning, NV);
 	assert.deepEqual(p.dkmsNewest, ['nvidia-current.ko.xz']);
 	assert.deepEqual(p.dkmsLoaded, ['nvidia', 'nvidia_uvm']);
+	assert.deepEqual(p.dkmsReady, ['nvidia', 'nvidia_uvm', 'nvidia_peermem']);
 	assert.deepEqual(dkmsGap(p), ['nvidia-current-uvm.ko.xz']);
 });
 
@@ -468,7 +522,7 @@ test('the gap is only about the TARGET kernel: a node already on its newest kern
 	assert.deepEqual(dkmsGap(box({ dkmsRunning: NV, dkmsNewest: [] })), []);
 });
 
-test('a DKMS module loaded before the reboot and not after HOLDS the node', async () => {
+test('a DKMS module loaded before the reboot and neither loaded nor loadable after HOLDS the node', async () => {
 	const w = world({
 		nodes: {
 			'claw-1': box({ newest: NEW, dkmsRunning: NV, dkmsNewest: NV, dkmsLoaded: ['nvidia'] }),
@@ -478,8 +532,33 @@ test('a DKMS module loaded before the reboot and not after HOLDS the node', asyn
 	const r = await runRebootCycle({ machines: [['claw-1', { role: 'claw' }]], deps: w.deps });
 	assert.deepEqual(r.rebooted, []);
 	const held = r.findings.find((x) => x.kind === 'verify-failed');
-	assert.match(held?.reason ?? '', /DKMS module\(s\) not loaded after the reboot: nvidia/);
+	assert.match(
+		held?.reason ?? '',
+		/DKMS module\(s\) neither loaded nor loadable after the reboot: nvidia/
+	);
 	assert.equal(w.doc.nodes['claw-1']?.kind, 'maintenance', 'held drained for a human');
+});
+
+test('an on-demand module (nvidia_uvm) not yet loaded after a fresh boot, but loadable, is back', async () => {
+	// claw-9 and claw-8, 2026-10-25: uvm was loaded before because a CUDA job
+	// had run; nothing loads it at boot. Both were held for it.
+	const w = world({
+		nodes: {
+			'claw-8': box({
+				newest: NEW,
+				dkmsRunning: NV,
+				dkmsNewest: NV,
+				dkmsLoaded: ['nvidia', 'nvidia_uvm'],
+			}),
+		},
+		bootsInto: {
+			'claw-8': { dkmsLoaded: ['nvidia'], dkmsReady: ['nvidia', 'nvidia_uvm'] },
+		},
+	});
+	const r = await runRebootCycle({ machines: [['claw-8', { role: 'claw' }]], deps: w.deps });
+	assert.equal(r.ok, true, JSON.stringify(r.findings));
+	assert.deepEqual(r.rebooted, ['claw-8']);
+	assert.deepEqual(w.doc.nodes, {});
 });
 
 test('capabilities that do not re-prove after the reboot HOLD the node — no unproven label', async () => {

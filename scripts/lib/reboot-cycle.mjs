@@ -29,8 +29,9 @@
  *              online before online again
  *   undrain    only what this cycle drained (the record's reason says so)
  *
- * A node that fails verification STAYS OUT: it is re-held as `maintenance`, a
- * human lifts it, and the cycle halts. The controller pages on that.
+ * A node that fails verification STAYS OUT: it is re-held as `maintenance`
+ * under HELD_PREFIX, a human lifts it, and no other node reboots until then
+ * (`halted`). The controller pages on the failure itself.
  *
  * NEVER A GUEST, NEVER THIS BOX. hokon is a guest (the operator's rule: no
  * routine automation there) and is also where this runs; both are refused by
@@ -68,6 +69,8 @@ echo "DKMS-RUNNING $(dkfiles "$(uname -r)")"
 echo "DKMS-NEWEST $(dkfiles "$newest")"
 mi=$(command -v modinfo || echo /usr/sbin/modinfo)
 echo "DKMS-LOADED $(for f in /lib/modules/$(uname -r)/updates/dkms/*.ko*; do [ -e "$f" ] || continue; n=$("$mi" -F name "$f" 2>/dev/null); [ -n "$n" ] && grep -q "^$n " /proc/modules && echo "$n"; done | sort | tr '\n' ' ')"
+ready() { for f in /lib/modules/$(uname -r)/updates/dkms/*.ko*; do [ -e "$f" ] || continue; n=$("$mi" -F name "$f" 2>/dev/null); [ -n "$n" ] || continue; [ "$("$mi" -F vermagic "$f" 2>/dev/null | cut -d' ' -f1)" = "$(uname -r)" ] || continue; ok=1; for d in $("$mi" -F depends "$f" 2>/dev/null | tr ',-' ' _'); do grep -q "^$d " /proc/modules || ok=0; done; [ $ok = 1 ] && echo "$n"; done | sort | tr '\n' ' '; }
+echo "DKMS-READY $(ready)"
 if [ -f /var/run/reboot-required ]; then echo "FLAG REQUIRED"; else echo "FLAG CLEAN"; fi
 echo "PKGS $(cat /var/run/reboot-required.pkgs 2>/dev/null | tr '\\n' ' ')"
 echo "BUSY $(pgrep -c -f '[R]unner\\.Worker' || true)"
@@ -125,6 +128,10 @@ export function parseRebootProbe(text) {
 		dkmsRunning: words(get('DKMS-RUNNING')),
 		dkmsNewest: words(get('DKMS-NEWEST')),
 		dkmsLoaded: words(get('DKMS-LOADED')),
+		// Built for the running kernel with every module it depends on loaded:
+		// what `modprobe` would load on first use. nvidia_uvm loads when CUDA
+		// first opens the device, so a fresh boot has it READY, not loaded.
+		dkmsReady: words(get('DKMS-READY')),
 		// null: no pm2 on the node. 'unreadable': pm2 is there and would not say.
 		pm2: pm2 === 'NONE' ? null : pm2 === 'UNREADABLE' || pm2 === null ? 'unreadable' : words(pm2),
 	};
@@ -209,9 +216,15 @@ export function verifyAfter(before, after) {
 			if (missing.length) problems.push(`pm2 app(s) not back online: ${missing.join(', ')}`);
 		}
 	}
-	const unloaded = (before.dkmsLoaded ?? []).filter((m) => !(after.dkmsLoaded ?? []).includes(m));
+	// Loaded before, so it must load now: either it did, or it is ready to on
+	// first use. Holding on "not loaded" alone held claw-9 and claw-8 on
+	// 2026-10-25 for nvidia_uvm, which nothing loads until a CUDA job runs.
+	const back = new Set([...(after.dkmsLoaded ?? []), ...(after.dkmsReady ?? [])]);
+	const unloaded = (before.dkmsLoaded ?? []).filter((m) => !back.has(m));
 	if (unloaded.length)
-		problems.push(`DKMS module(s) not loaded after the reboot: ${unloaded.join(', ')}`);
+		problems.push(
+			`DKMS module(s) neither loaded nor loadable after the reboot: ${unloaded.join(', ')}`
+		);
 	return problems;
 }
 
@@ -238,7 +251,20 @@ export function rebootDrainArgs(node, reason) {
  */
 export function oursOn(doc, node) {
 	const rec = doc?.nodes?.[node];
+	if (heldByCycle(rec)) return false;
 	return rec?.kind === 'reboot' || String(rec?.reason ?? '').startsWith(REASON_PREFIX);
+}
+
+/** A node this cycle rebooted and could not verify is held under this; a human lifts it. */
+export const HELD_PREFIX = `${REASON_PREFIX} FAILED verification`;
+
+/**
+ * Is this drain record a FAILED verification's hold? It starts with
+ * REASON_PREFIX too, so without this the legacy-prefix rule in `oursOn` would
+ * read the hold as the cycle's own drain and the next resume would undo it.
+ */
+export function heldByCycle(rec) {
+	return String(rec?.reason ?? '').startsWith(HELD_PREFIX);
 }
 
 /**
@@ -382,6 +408,21 @@ export async function runRebootCycle({
 	}
 
 	if (!candidates.length) return done();
+	// HALT ON A FAILED REBOOT. A rollout stops at its first failure: whatever
+	// held that node may hold the next one too, and two nodes out at once is
+	// what one-at-a-time exists to prevent. On 2026-10-25 claw-9 was held at
+	// 17:31Z and the next pass took claw-8 at 18:32Z for the same false reason.
+	const failed = Object.entries(doc.nodes ?? {}).filter(([, rec]) => heldByCycle(rec));
+	if (failed.length) {
+		const by = failed.map(([n, rec]) => `${n} (since ${rec.since ?? '?'})`).join(', ');
+		const why = `halted: ${by} failed reboot verification and is still held; lift it with \`fleet drain <node> --undo\` once it is checked`;
+		for (const c of candidates) {
+			log(`── ${c.name}  [deferred] needs a reboot (${c.why}); ${why}`);
+			nodes.push({ node: c.name, status: 'deferred', reason: c.why, why });
+		}
+		finding(failed[0][0], 'halted', why);
+		return done();
+	}
 	// The least busy first: the shortest drain wait, and the fewest jobs moved.
 	candidates.sort((a, b) => (a.probe.busy ?? Infinity) - (b.probe.busy ?? Infinity));
 	const [pick, ...rest] = candidates;
@@ -542,9 +583,7 @@ async function hold(node, rec, deps, finding, log, why) {
 	rec.status = 'held';
 	rec.why = why;
 	finding(node, 'verify-failed', `${why}. The node STAYS DRAINED — a human puts it back.`);
-	const h = await attempt(() =>
-		deps.hold(node, `${REASON_PREFIX} FAILED verification: ${why}`.slice(0, 300))
-	);
+	const h = await attempt(() => deps.hold(node, `${HELD_PREFIX}: ${why}`.slice(0, 300)));
 	if (!h.ok || h.value?.ok === false) {
 		finding(
 			node,

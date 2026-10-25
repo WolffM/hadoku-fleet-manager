@@ -101,6 +101,11 @@ void test('a held node pages once, again only after REPAGE_MS, and recovers when
 	await clawRebootTick(runner(held), T0 + HOUR);
 	assert.equal(posts.length, 1);
 	assert.match(posts[0], /^🔴 claw-5: .*verify-failed.*fleet drain claw-5 --undo/);
+	assert.ok(
+		warns.some(
+			(l) => l === '[reboot] claw-5 HELD after its reboot: booted 6.12.94, expected 6.12.113'
+		)
+	);
 	await clawRebootTick(runner(held), T0 + REPAGE_MS + 1);
 	assert.equal(posts.length, 2);
 	await clawRebootTick(
@@ -128,6 +133,7 @@ void test('deferrals, an idle wait that timed out and an unreadable claw are log
 	assert.deepEqual(posts, []);
 	assert.ok(infos.some((l) => l.includes('claw-8 deferred')));
 	assert.ok(warns.some((l) => l.includes('claw-1 unreadable')));
+	assert.ok(infos.includes('[reboot] pass: claw-8=deferred claw-1=unreadable'), infos.join('\n'));
 });
 
 void test('a cycle with no report pages only after FAIL_PAGE_MS, then recovers', async () => {
