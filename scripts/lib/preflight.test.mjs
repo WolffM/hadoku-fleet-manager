@@ -26,6 +26,10 @@ import {
 	BLOCKING,
 	ADVISORY,
 	REBOOT_ESCALATE_DAYS,
+	SECURITY_STALE_DAYS,
+	parseSecurityProbe,
+	pendingSince,
+	securityUpdateFinding,
 } from './preflight.mjs';
 
 const SCRIPTS = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -617,4 +621,84 @@ test('lanReservationFindings: findings only, keyed by node', () => {
 		out.map((f) => [f.node, f.status]),
 		[['claw-10', 'unrecorded']]
 	);
+});
+
+// --- security updates ---------------------------------------------------------
+
+const NOW = Date.now();
+const D = 86_400_000;
+const sec = (over = {}) => ({
+	node: 'claw-4',
+	ok: true,
+	listsAtMs: NOW - 0.5 * D,
+	lastInstallAtMs: NOW - 2 * D,
+	lastPackage: 'curl=8.14.1-2+deb13u7',
+	pending: [],
+	...over,
+});
+
+test('parseSecurityProbe: the probe shape, a cut-off answer, and a node without python3-apt', () => {
+	const p = parseSecurityProbe(
+		'LISTS 1792869504\nLAST 1789218384 libxfont2=1:2.0.6-1+deb13u1\nPKG curl=8.14.1-2+deb13u7\nPKG jq=1.7.1-6+deb13u4\nEND security-probe\n'
+	);
+	assert.deepEqual(p, {
+		listsAtMs: 1792869504000,
+		lastInstallAtMs: 1789218384000,
+		lastPackage: 'libxfont2=1:2.0.6-1+deb13u1',
+		pending: ['curl=8.14.1-2+deb13u7', 'jq=1.7.1-6+deb13u4'],
+	});
+	assert.equal(parseSecurityProbe('LISTS 1\nLAST NONE\n'), null);
+	assert.equal(parseSecurityProbe('LISTS NONE\nLAST NONE\nEND security-probe').listsAtMs, null);
+	assert.match(parseSecurityProbe('ERROR python3-apt unavailable: x').error, /python3-apt/);
+});
+
+test('securityUpdateFinding: claw-4 on 10-25 — 29 pending, nothing from security since 09-12 — is BLOCKING', () => {
+	const f = securityUpdateFinding(
+		sec({
+			lastInstallAtMs: NOW - 43 * D,
+			pending: Array.from({ length: 29 }, (_, i) => `pkg${i}=1+deb13u1`),
+		})
+	);
+	assert.equal(f.class, BLOCKING);
+	assert.equal(f.status, 'not-installing');
+	assert.match(f.why, /29 Debian security update\(s\) pending .*\+24 more.*43 days/);
+	assert.equal(
+		securityUpdateFinding(sec({ lastInstallAtMs: null, pending: ['curl=1'] })).status,
+		'not-installing'
+	);
+});
+
+test('securityUpdateFinding: a patching node, and a node with nothing pending, are clean', () => {
+	assert.equal(securityUpdateFinding(sec({ pending: ['curl=1'] })), null);
+	// Nothing pending: an old last install is just a quiet archive.
+	assert.equal(securityUpdateFinding(sec({ lastInstallAtMs: NOW - 90 * D })), null);
+});
+
+test('securityUpdateFinding: stale or missing lists are blindness, not a clean box', () => {
+	for (const listsAtMs of [null, NOW - 4 * D]) {
+		const f = securityUpdateFinding(sec({ listsAtMs }));
+		assert.equal(f?.status, 'lists-stale', String(listsAtMs));
+		assert.equal(f.class, BLOCKING);
+	}
+});
+
+test('securityUpdateFinding: one update held back past the window, behind a node that patches, is stuck', () => {
+	const old = new Date(NOW - (SECURITY_STALE_DAYS + 1) * D).toISOString();
+	const seen = pendingSince({ 'libfoo=2+deb13u1': old }, ['libfoo=2+deb13u1', 'curl=1'], NOW);
+	assert.equal(seen['curl=1'], new Date(NOW).toISOString());
+	const f = securityUpdateFinding(sec({ pending: ['libfoo=2+deb13u1', 'curl=1'] }), seen, {
+		nowMs: NOW,
+	});
+	assert.equal(f.status, 'stuck');
+	assert.deepEqual(f.stuck, ['libfoo=2+deb13u1']);
+	// Installed since: its clock is dropped, and a newer version starts a fresh one.
+	assert.deepEqual(pendingSince(seen, ['libfoo=3+deb13u2'], NOW), {
+		'libfoo=3+deb13u2': new Date(NOW).toISOString(),
+	});
+});
+
+test('securityUpdateFinding: an unreachable node is blocking — could not look', () => {
+	const f = securityUpdateFinding({ node: 'claw-4', ok: false, error: 'ssh timed out' });
+	assert.equal(f.status, 'unreachable');
+	assert.equal(f.class, BLOCKING);
 });

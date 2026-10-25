@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Part of scripts/lib/fake-node.mjs. `apt-config shell VAR KEY ...` over the node's
+# conf.d, last definition wins, as apt merges it. Nothing else is modelled.
+[ "${1:-}" = shell ] || { printf '%s\n' "UNHANDLED apt-config $*" >>"$FAKE_STATE/calls.log"; exit 1; }
+shift
+while [ "$#" -ge 2 ]; do
+	var="$1" key="$2"; shift 2
+	v=$(cat "$APT_CONF_D"/* 2>/dev/null | sed -n "s/^${key//::/::} \"\(.*\)\";$/\1/p" | tail -1)
+	[ -n "$v" ] && echo "$var='$v'"
+done
+exit 0

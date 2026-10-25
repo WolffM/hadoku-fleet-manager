@@ -309,3 +309,50 @@ test('classifyRepair: runner.env still missing a key after the repair is unconve
 	);
 	assert.equal(fixed.outcome, 'converged');
 });
+
+const apt = (machine, drift = [], extra = '') => ({
+	machine,
+	ok: true,
+	summary: `SUMMARY origins=${drift.length ? 'wrong' : 'ok'} candidates=30 selected=${drift.length ? 0 : 29} drift=${drift.length}${extra}`,
+	notes: drift.map((d) => `DRIFT ${d}`),
+});
+const NOTHING = '30 security update(s) are pending and the dry run selects none of them';
+
+test('planRepairs apt-security: the 10-25 claws are planned, a clean or drained one is not, a locked one is unreadable', () => {
+	const plan = planRepairs(null, null, {
+		results: [
+			apt('claw-4', [NOTHING]),
+			apt('claw-1'),
+			{ machine: 'claw-8', ok: false, expectedDown: true, error: 'ssh timed out' },
+			{ machine: 'claw-9', ok: false, error: 'unattended-upgrade --dry-run exited 1: Cache lock' },
+		],
+	});
+	assert.deepEqual(plan.repair, [{ node: 'claw-4', facet: 'apt-security', before: NOTHING }]);
+	assert.deepEqual(plan.unreadable, [
+		{
+			node: 'claw-9',
+			facet: 'apt-security',
+			why: 'unattended-upgrade --dry-run exited 1: Cache lock',
+		},
+	]);
+});
+
+test('classifyRepair apt-security: judged by the re-check dry run, never deferred', () => {
+	const confirm = apt('claw-4', [NOTHING], ' changed=1');
+	assert.deepEqual(classifyRepair('apt-security', confirm, apt('claw-4')), {
+		outcome: 'converged',
+		changed: 'apt conf rewritten from the profile, timers enabled',
+		why: '',
+		busy: [],
+	});
+	const still = classifyRepair('apt-security', confirm, apt('claw-4', [NOTHING]));
+	assert.equal(still.outcome, 'unconverged');
+	assert.match(still.why, /the dry run still says: 30 security update/);
+	const broken = classifyRepair(
+		'apt-security',
+		{ machine: 'claw-4', ok: false, error: 'repair failed: sudo: a password is required' },
+		apt('claw-4')
+	);
+	assert.equal(broken.outcome, 'unconverged');
+	assert.match(broken.why, /could not run: repair failed: sudo/);
+});

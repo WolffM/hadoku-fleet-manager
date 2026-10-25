@@ -11,7 +11,7 @@
  * it, never by the repair's own report. The idempotency check reads observed
  * state too (AGENTS.md), and the drivers' --check already does.
  *
- * THE TWO FACETS, AND WHY ONLY THESE:
+ * THE THREE FACETS, AND WHY ONLY THESE:
  *   throttle — a standing runner's `.env` is wrong (`newly > stale`) or right
  *     but not loaded (`stale`), or the node's own scripts lag this package
  *     (see scriptLag). `throttle --confirm` rewrites them and restarts only
@@ -28,6 +28,11 @@
  *     (SLICE-PLACEMENT-DRIFT / UNIT-CAP-DRIFT). `slice --confirm --restart`
  *     writes the drop-in, sets the cap live, and restarts only idle units. A
  *     busy one is reported BUSY and moved on a later pass.
+ *   apt-security — a claw whose unattended-upgrades would not install a
+ *     pending Debian security update (2026-10-25: every claw's origin pattern
+ *     matched nothing). `apt-security --confirm` writes two apt conf files and
+ *     enables two timers. It restarts nothing, so it never waits for idle and
+ *     is never deferred: the re-check, which RUNS the dry run, decides.
  * MINT-* drift is the minter's: a live JIT unit is never restarted from here.
  * Every other finding either check makes (io-delegation, unreachable nodes)
  * stays the nightly gates' to report.
@@ -97,6 +102,11 @@ function scriptLag(result) {
 	return files;
 }
 
+/** What an apt-security result says is wrong, from its DRIFT notes. */
+export function aptDrift(result) {
+	return (result?.notes ?? []).filter((l) => l.startsWith('DRIFT ')).map((l) => l.slice(6));
+}
+
 /** A per-machine result that answered: reached, and carrying a SUMMARY. */
 function answered(result) {
 	return Boolean(result?.ok && result.summary && !result.expectedDown);
@@ -109,7 +119,7 @@ function answered(result) {
  * @returns {{ repair: { node: string, facet: 'throttle' | 'slice', before: string }[],
  *             unreadable: { node: string, facet: string, why: string }[] }}
  */
-export function planRepairs(throttleDoc, sliceDoc) {
+export function planRepairs(throttleDoc, sliceDoc, aptDoc = null) {
 	const repair = [];
 	const unreadable = [];
 	for (const r of throttleDoc?.results ?? []) {
@@ -146,6 +156,16 @@ export function planRepairs(throttleDoc, sliceDoc) {
 		}
 		const units = sliceDriftUnits(r);
 		if (units.length) repair.push({ node: r.machine, facet: 'slice', before: units.join(', ') });
+	}
+	for (const r of aptDoc?.results ?? []) {
+		if (r.expectedDown) continue;
+		if (!answered(r)) {
+			unreadable.push({ node: r.machine, facet: 'apt-security', why: r.error ?? 'no SUMMARY' });
+			continue;
+		}
+		const drift = aptDrift(r);
+		if (drift.length)
+			repair.push({ node: r.machine, facet: 'apt-security', before: drift.join('; ') });
 	}
 	return { repair, unreadable };
 }
@@ -251,6 +271,19 @@ export function classifyRepair(facet, confirms, recheck) {
 				`${n(r.stale)} are written but not loaded` +
 				(failed.length ? `; restart failed: ${failed.join(', ')}` : ''),
 			busy,
+		};
+	}
+	if (facet === 'apt-security') {
+		const changed = runs.some((c) => /\bchanged=1\b/.test(c.summary))
+			? 'apt conf rewritten from the profile, timers enabled'
+			: '';
+		const left = aptDrift(recheck);
+		if (!left.length) return { outcome: 'converged', changed, why: '', busy: [] };
+		return {
+			outcome: 'unconverged',
+			changed,
+			why: `after apt-security --confirm, the dry run still says: ${left.join('; ')}`,
+			busy: [],
 		};
 	}
 	const kv = (c) => c.summary;

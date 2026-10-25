@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * converge-provisioning.mjs — repair standing-runner throttle env and slice
- * placement wherever it has drifted, then read the node again (fleet-manager#1).
+ * placement, and a claw's unattended security upgrades, wherever they have
+ * drifted, then read the node again (fleet-manager#1).
  *
  *   fleet converge-provisioning            # check, repair what drifted, re-check
  *   fleet converge-provisioning --json     # the same, as one document
@@ -14,9 +15,10 @@
  *
  * HOW. The operator's own drivers, nothing re-derived — see
  * lib/run-fleet-script.mjs for why. One fleet-wide `--check` of each, then for
- * each (node, facet) with drift: `throttle --machine N --confirm` or
- * `slice --machine N --confirm --restart` (see ONE RESTART PER UNIT below),
- * and then a fresh `--check --machine N` of each.
+ * each (node, facet) with drift: `throttle --machine N --confirm`,
+ * `slice --machine N --confirm --restart` (see ONE RESTART PER UNIT below) or
+ * `apt-security --machine N --confirm`, and then a fresh `--check --machine N`
+ * of each.
  * Both repairs touch IDLE runners only; a runner mid-job is left running and
  * reported `deferred`. lib/provisioning-converge.mjs decides what drifted and
  * what each repair achieved.
@@ -39,6 +41,8 @@ import { runFleetScript } from './lib/run-fleet-script.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const THROTTLE = resolve(__dirname, 'deploy-ci-throttle.mjs');
 const SLICE = resolve(__dirname, 'deploy-runners-slice.mjs');
+const APT = resolve(__dirname, 'apt-security.mjs');
+const DRIVER = { throttle: THROTTLE, slice: SLICE, 'apt-security': APT };
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
@@ -57,14 +61,16 @@ function resultFor(run, node) {
 }
 
 async function main() {
-	const [thr, sl] = await Promise.all([
+	const [thr, sl, apt] = await Promise.all([
 		runFleetScript(THROTTLE, ['--check', '--json']),
 		runFleetScript(SLICE, ['--check', '--json']),
+		runFleetScript(APT, ['--check', '--json']),
 	]);
 	const unreadable = [];
 	if (!thr.json) unreadable.push({ node: '*', facet: 'throttle', why: thr.why });
 	if (!sl.json) unreadable.push({ node: '*', facet: 'slice', why: sl.why });
-	const plan = planRepairs(thr.json, sl.json);
+	if (!apt.json) unreadable.push({ node: '*', facet: 'apt-security', why: apt.why });
+	const plan = planRepairs(thr.json, sl.json, apt.json);
 	unreadable.push(...plan.unreadable);
 
 	const changed = [];
@@ -102,16 +108,18 @@ async function main() {
 		// runs again: a runner the slice repair did not touch may still be stale,
 		// and one it did restart now reads as wired and is left alone.
 		if (facets.throttle) confirms.throttle.push(await throttleConfirm([]));
-		for (const facet of ['throttle', 'slice']) {
+		// Restarts nothing, so it has no ordering with the two above.
+		if (facets['apt-security']) {
+			confirms['apt-security'] = resultFor(
+				await runFleetScript(APT, ['--machine', node, '--confirm', '--json']),
+				node
+			);
+		}
+		for (const facet of ['throttle', 'slice', 'apt-security']) {
 			const item = facets[facet];
 			if (!item) continue;
 			const recheck = resultFor(
-				await runFleetScript(facet === 'throttle' ? THROTTLE : SLICE, [
-					'--machine',
-					node,
-					'--check',
-					'--json',
-				]),
+				await runFleetScript(DRIVER[facet], ['--machine', node, '--check', '--json']),
 				node
 			);
 			const verdict = classifyRepair(facet, confirms[facet], recheck);
@@ -132,7 +140,10 @@ async function main() {
 	}
 	for (const u of unreadable) log(`unreadable  ${u.node} ${u.facet}: ${u.why}`);
 	if (!plan.repair.length && !unreadable.length)
-		log('✓ no standing runner has drifted throttle env or slice placement.');
+		log(
+			'✓ no standing runner has drifted throttle env or slice placement, and every claw ' +
+				'will install security updates.'
+		);
 
 	const ok = unconverged.length === 0 && unreadable.length === 0;
 	if (!emitter.json) {

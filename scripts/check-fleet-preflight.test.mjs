@@ -107,8 +107,8 @@ printf '{"Self":{"HostName":"%s"},"Peer":{}}' "$TS_HOSTNAME"
 /**
  * Answers the four things the gate asks ssh: \`ssh -G\` (where the node
  * resolves), the interface probe (the LAN-reservation check), the JIT payload
- * probe — no payload yet, so nothing stale — and the reboot probe — CLEAN, no
- * reboot staged. The interface it reports is the one the
+ * probe — no payload yet, so nothing stale — the security probe — lists fresh,
+ * nothing pending — and the reboot probe — CLEAN, no reboot staged. The interface it reports is the one the
  * fixture manifest records, so a clean fixture is clean on every signal.
  */
 const SSH_SHIM = `#!/usr/bin/env bash
@@ -118,6 +118,7 @@ case "$script" in
 	*/sys/class/net*)
 		printf 'ADDR 2: eth0    inet ${FIXTURE_IP}/24 brd x\\nIF eth0 no ${FIXTURE_MAC}\\n' ;;
 	*jit/payload*) echo "PAYLOAD ABSENT" ;;
+	*"END security-probe"*) printf 'LISTS %s\nLAST NONE\nEND security-probe\n' "$(date +%s)" ;;
 	*) echo CLEAN ;;
 esac
 `;

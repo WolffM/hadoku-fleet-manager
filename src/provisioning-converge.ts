@@ -3,7 +3,10 @@
  *
  * WHY THIS EXISTS. A standing runner whose `.env` lacks the throttle keys has
  * no concurrency limit and cannot see the shared tool cache, and one running
- * outside its slice has no group memory ceiling. Until 2026-10-24 the only
+ * outside its slice has no group memory ceiling. A claw whose unattended-
+ * upgrades selects nothing never installs a security update (2026-10-25:
+ * every claw, from first boot; `apt-security` is the third facet, and its
+ * repair restarts nothing so it is never deferred). Until 2026-10-24 the only
  * thing that noticed either was hadoku_site's nightly check:throttle /
  * check:slice, and hadoku_site does not run fleet fixes. So every drift waited
  * for a human: claw-4 and claw-6 sat in that state from 10-22 to 10-24. Now
@@ -71,7 +74,7 @@ const SELF_KEY = 'converger';
 
 export interface ConvergeRow {
 	node: string;
-	facet: 'throttle' | 'slice';
+	facet: 'throttle' | 'slice' | 'apt-security';
 	before?: string;
 	changed?: string;
 	why?: string;
@@ -146,18 +149,23 @@ export function convergeScriptPath(): string {
 }
 
 /**
- * Run the subcommand with the HOST's manifest and state directories. Its
- * stdout goes to a file, because a pipe loses everything past 8 KB from a child
- * that prints and exits (#33).
+ * Run one of this package's subcommand scripts with the HOST's manifest and
+ * state directories, and read its `--json`. Its stdout goes to a file, because
+ * a pipe loses everything past 8 KB from a child that prints and exits (#33).
+ * Shared with the reboot cycle (claw-reboot.ts).
  */
-export const runConvergeScript: ConvergeRunner = () => {
-	// The real converger runs `--confirm` against the live fleet. A test that
-	// reaches it through start() must get a refusal, not a repair, because a
-	// fixture HOME is not isolation (10-06, 10-10). Tests inject a runner.
+export function spawnScriptJson<T>(
+	script: string,
+	args: string[],
+	timeoutMs: number
+): Promise<{ doc: T | null; why: string }> {
+	// The real scripts act on the live fleet. A test that reaches one through
+	// start() must get a refusal, not a repair, because a fixture HOME is not
+	// isolation (10-06, 10-10). Tests inject a runner.
 	if (process.env.NODE_TEST_CONTEXT) {
 		return Promise.resolve({ doc: null, why: 'refused under node --test (inject a runner)' });
 	}
-	const dir = mkdtempSync(join(tmpdir(), 'provisioning-converge-'));
+	const dir = mkdtempSync(join(tmpdir(), 'fleet-controller-'));
 	const out = join(dir, 'stdout.json');
 	const fd = openSync(out, 'w');
 	return new Promise((res) => {
@@ -169,10 +177,10 @@ export const runConvergeScript: ConvergeRunner = () => {
 			closeSync(fd);
 			const text = readFileSync(out, 'utf8');
 			rmSync(dir, { recursive: true, force: true });
-			let doc: ConvergeDoc | null = null;
+			let doc: T | null = null;
 			let parseErr = '';
 			try {
-				doc = text.trim() ? (JSON.parse(text) as ConvergeDoc) : null;
+				doc = text.trim() ? (JSON.parse(text) as T) : null;
 			} catch (err) {
 				parseErr = err instanceof Error ? err.message : String(err);
 			}
@@ -184,7 +192,7 @@ export const runConvergeScript: ConvergeRunner = () => {
 					: `${why}${parseErr ? `, unparseable (${parseErr})` : ', no report'}${tail ? ` — ${tail}` : ''}`,
 			});
 		};
-		const child = spawn(process.execPath, [convergeScriptPath(), '--json'], {
+		const child = spawn(process.execPath, [script, ...args], {
 			env: {
 				...process.env,
 				FLEET_MANIFEST_DIR: manifestDir(),
@@ -192,7 +200,7 @@ export const runConvergeScript: ConvergeRunner = () => {
 				FLEET_NO_BANNER: '1',
 			},
 			stdio: ['ignore', fd, 'pipe'],
-			timeout: RUN_TIMEOUT_MS,
+			timeout: timeoutMs,
 		});
 		child.stderr?.on('data', (d: Buffer) => {
 			stderr = (stderr + d.toString()).slice(-2000);
@@ -202,7 +210,10 @@ export const runConvergeScript: ConvergeRunner = () => {
 			done(`exit ${code ?? 'none'}${signal ? ` (${signal})` : ''}`)
 		);
 	});
-};
+}
+
+export const runConvergeScript: ConvergeRunner = () =>
+	spawnScriptJson<ConvergeDoc>(convergeScriptPath(), ['--json'], RUN_TIMEOUT_MS);
 
 export interface ConvergeTickSummary {
 	ran: boolean;
@@ -247,7 +258,8 @@ export async function convergeProvisioningTick(
 			await page(
 				SELF_KEY,
 				`⚠️ fleet converge-provisioning has not produced a report for ${hours(failingFor)} — ` +
-					`standing-runner throttle env and slice placement are not being converged. Last: ${why}`
+					`standing-runner throttle env, slice placement and claw security upgrades are not being ` +
+					`converged. Last: ${why}`
 			);
 		}
 		writeState(state);
@@ -307,7 +319,12 @@ export async function convergeProvisioningTick(
 	for (const k of closed) {
 		delete state.deferredSince[k];
 		const [node, facet] = k.split('|');
-		await recover(k, `✅ ${node}: standing-runner ${facet} provisioning converged.`);
+		await recover(
+			k,
+			facet === 'apt-security'
+				? `✅ ${node}: unattended security upgrades converged.`
+				: `✅ ${node}: standing-runner ${facet} provisioning converged.`
+		);
 	}
 
 	writeState(state);

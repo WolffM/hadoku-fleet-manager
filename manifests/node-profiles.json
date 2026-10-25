@@ -244,8 +244,11 @@
         "$why-time": "GNU `time` (/usr/bin/time -v), for peak RSS. The shell builtin reports wall/user/sys and NOT maximum resident set size, which is the number a capability probe needs when it has to say how much memory a payload actually wants. Found missing on all seven claws 2026-09-11, when the cargo-bevy payload probe exited 127 on every node at once."
       },
       "unattendedUpgrades": {
-        "$why": "Security origin only, and Automatic-Reboot false. A node that reboots itself mid-job turns a security update into a CI failure with no operator-visible cause, and the watchdog already owns the 'this box is wedged' reboot.",
-        "allowedOrigins": ["${distro_id}:${distro_codename}-security"],
+        "$why": "Security origin only, and Automatic-Reboot false. A node that reboots itself mid-job turns a security update into a CI failure with no operator-visible cause, and the watchdog already owns the 'this box is wedged' reboot; the fleet's own reboot cycle (`fleet reboot-claws`, drained and one node at a time) owns the kernel one.",
+        "$why-originsPattern": "ORIGINS-PATTERN, NOT ALLOWED-ORIGINS, and matched on the LABEL. Until 2026-10-25 this was `Allowed-Origins: ${distro_id}:${distro_codename}-security`, which unattended-upgrades expands to `o=Debian,a=trixie-security` - an ARCHIVE match. Debian's security archive is `a=stable-security, n=trixie-security, l=Debian-Security`: the codename is `n`, not `a`. So the pattern matched NOTHING on any node this profile imaged, from the first boot. `unattended-upgrade --dry-run -d` on claw-4 printed `Allowed origins are: o=Debian,a=trixie-security` and passed over curl 8.14.1-2+deb13u7 from security.debian.org; measured that day, claw-1 had 70 pending security updates, claw-2/claw-3 60, the rest 29-30, and every claw was still on its boot kernel. Nothing noticed because nothing EXECUTED the policy: the timer ran daily, the log said 'No packages found', and that reads exactly like a patched box. `codename=` is the archive's `n` field and `label=Debian-Security` pins it to the security archive, so a future rename of the suite alias (stable -> oldstable) cannot silently empty it again. `fleet apt-security` now checks this by RUNNING the dry run, on the controller's provisioning timer, and `fleet preflight` fails a claw whose pending security updates age past a week.",
+        "originsPattern": [
+          "origin=Debian,codename=${distro_codename}-security,label=Debian-Security"
+        ],
         "automaticReboot": false,
         "removeUnusedKernelPackages": true
       },
@@ -472,7 +475,11 @@
         "$why-time": "GNU `time` (/usr/bin/time -v), for peak RSS. The shell builtin reports wall/user/sys and NOT maximum resident set size, which is the number a capability probe needs when it has to say how much memory a payload actually wants. Found missing on all seven claws 2026-09-11, when the cargo-bevy payload probe exited 127 on every node at once."
       },
       "unattendedUpgrades": {
-        "allowedOrigins": ["${distro_id}:${distro_codename}-security"],
+        "$why": "Security origin only, and Automatic-Reboot false. A node that reboots itself mid-job turns a security update into a CI failure with no operator-visible cause, and the watchdog already owns the 'this box is wedged' reboot; the fleet's own reboot cycle (`fleet reboot-claws`, drained and one node at a time) owns the kernel one.",
+        "$why-originsPattern": "ORIGINS-PATTERN, NOT ALLOWED-ORIGINS, and matched on the LABEL. Until 2026-10-25 this was `Allowed-Origins: ${distro_id}:${distro_codename}-security`, which unattended-upgrades expands to `o=Debian,a=trixie-security` - an ARCHIVE match. Debian's security archive is `a=stable-security, n=trixie-security, l=Debian-Security`: the codename is `n`, not `a`. So the pattern matched NOTHING on any node this profile imaged, from the first boot. `unattended-upgrade --dry-run -d` on claw-4 printed `Allowed origins are: o=Debian,a=trixie-security` and passed over curl 8.14.1-2+deb13u7 from security.debian.org; measured that day, claw-1 had 70 pending security updates, claw-2/claw-3 60, the rest 29-30, and every claw was still on its boot kernel. Nothing noticed because nothing EXECUTED the policy: the timer ran daily, the log said 'No packages found', and that reads exactly like a patched box. `codename=` is the archive's `n` field and `label=Debian-Security` pins it to the security archive, so a future rename of the suite alias (stable -> oldstable) cannot silently empty it again. `fleet apt-security` now checks this by RUNNING the dry run, on the controller's provisioning timer, and `fleet preflight` fails a claw whose pending security updates age past a week.",
+        "originsPattern": [
+          "origin=Debian,codename=${distro_codename}-security,label=Debian-Security"
+        ],
         "automaticReboot": false,
         "removeUnusedKernelPackages": true
       }

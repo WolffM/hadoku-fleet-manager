@@ -4,4 +4,5 @@
 exec env HOME="$FAKE_NODE_HOME" PATH="$FAKE_NODE_BIN:$FAKE_REAL_PATH" TMPDIR="$FAKE_NODE_TMP" \
 	CGROUP_ROOT="$FAKE_NODE_ROOT/cgroup" SYS_DIR="$FAKE_NODE_ROOT/etc/systemd/system" \
 	USER_CONF_DIR="$FAKE_NODE_ROOT/etc/systemd/user.conf.d" IO_WAIT_SECS=0 \
+	APT_CONF_D="$FAKE_NODE_ROOT/etc/apt/apt.conf.d" \
 	FAKE_STATE="$FAKE_STATE" bash -s

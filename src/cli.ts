@@ -88,7 +88,13 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'converge-provisioning': {
 		script: 'converge-provisioning.mjs',
-		summary: 'repair drifted throttle env + slice placement on idle runners, then re-check',
+		summary:
+			'repair drifted throttle env + slice placement on idle runners and claw security upgrades, then re-check',
+	},
+	'apt-security': {
+		script: 'apt-security.mjs',
+		summary:
+			'will each claw install Debian security updates — RUNS the dry run (--confirm repairs)',
 	},
 	identity: { script: 'reconcile-runner-identity.mjs', summary: 'runner identity/ownership drift' },
 	traffic: {

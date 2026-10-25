@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Part of scripts/lib/fake-node.mjs — read its header for what is faked and why.
+# Fake unattended-upgrade --dry-run: resolves the origins the node's conf declares
+# the way the real one does (Allowed-Origins become o=..,a=..; patterns verbatim),
+# and selects the fake's one pending security update only when a resolved origin
+# pins the security archive's label — the property the 2026-10-25 conf lacked.
+printf '%s\n' "unattended-upgrade $*" >>"$FAKE_STATE/calls.log"
+conf="$APT_CONF_D/50unattended-upgrades"
+origins=()
+if [ -f "$conf" ]; then
+	block=""
+	while IFS= read -r l; do
+		case "$l" in
+		*Allowed-Origins*'{'*) block=allowed ;;
+		*Origins-Pattern*'{'*) block=pattern ;;
+		*'};'*) block="" ;;
+		*'"'*)
+			v=$(sed 's/^ *"\(.*\)";$/\1/' <<<"$l")
+			v=${v//'${distro_id}'/Debian}
+			v=${v//'${distro_codename}'/trixie}
+			case "$block" in
+			allowed) origins+=("o=${v%%:*},a=${v#*:}") ;;
+			pattern) origins+=("$v") ;;
+			esac ;;
+		esac
+	done <"$conf"
+fi
+joined=$(printf '%s, ' "${origins[@]}")
+echo "Allowed origins are: ${joined%, }"
+if printf '%s\n' "${origins[@]}" | grep -q 'label=Debian-Security'; then
+	echo "Packages that will be upgraded: fake-libsec"
+else
+	echo "No packages found that can be upgraded unattended and no pending auto-removals"
+fi
+exit 0

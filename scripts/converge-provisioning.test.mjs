@@ -7,7 +7,9 @@
  * the throttle writes. The converger runs, then the two real checks run
  * read-only against the same node.
  *
- * Covered here: both facets drifting at once, repaired with ONE restart.
+ * Covered here: both facets drifting at once, repaired with ONE restart; and
+ * the third, apt-security, in the 2026-10-25 shape — an Allowed-Origins conf
+ * that resolves to `o=Debian,a=trixie-security` and selects nothing.
  * The deferral and failure verdicts are covered against driver-shaped JSON in
  * lib/provisioning-converge.test.mjs. Throttle's own restart path reads
  * /proc/<pid>/cgroup, which a fake node cannot supply.
@@ -15,7 +17,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,12 +39,24 @@ printf 'LANG=C.UTF-8\\nRUNNER_TOOL_CACHE=/opt/hostedtoolcache\\n' > "$D/.env"
 printf '[Unit]\\nDescription=x\\n[Service]\\nExecStart=%%h/runners/actions-runner-hadoku-fleet-manager/run.sh\\nWorkingDirectory=%%h/runners/actions-runner-hadoku-fleet-manager\\nRestart=always\\nKillMode=mixed\\n[Install]\\nWantedBy=default.target\\n' > "$HOME/.config/systemd/user/${UNIT}"
 systemctl --user daemon-reload
 systemctl --user enable --now ${UNIT}
+# 2026-10-25: every claw, from first boot. The timers are installed but the conf
+# names the security archive by a field it does not carry.
+mkdir -p "$SYS_DIR" "$APT_CONF_D"
+printf '[Timer]\n' > "$SYS_DIR/apt-daily.timer"
+printf '[Timer]\n' > "$SYS_DIR/apt-daily-upgrade.timer"
+printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > "$APT_CONF_D/20auto-upgrades"
+printf 'Unattended-Upgrade::Allowed-Origins {\n    "\${distro_id}:\${distro_codename}-security";\n};\n' > "$APT_CONF_D/50unattended-upgrades"
 `;
 
 function fixture() {
 	const node = createFakeNode({ runnerVersion: '2.337.0' });
 	const manifests = join(node.root, 'manifests');
 	mkdirSync(manifests);
+	// The apt repair renders from the profile, so the fixture carries the real one.
+	copyFileSync(
+		join(HERE, '..', 'manifests', 'node-profiles.json'),
+		join(manifests, 'node-profiles.json')
+	);
 	writeFileSync(
 		join(manifests, 'fleet-runner-manifest.json'),
 		JSON.stringify({
@@ -78,6 +92,8 @@ test('the 10-23 drift is converged on both facets with one restart, and both che
 		// Not vacuous: the checks see what the nightly gates saw.
 		const t0 = await check('deploy-ci-throttle.mjs', env);
 		assert.match(t0.summary, /\bnewly=1\b/, t0.summary);
+		const a0 = await check('apt-security.mjs', env);
+		assert.match(a0.summary, /\borigins=wrong candidates=1 selected=0\b/, a0.summary);
 		const s0 = await check('deploy-runners-slice.mjs', env);
 		assert.ok(
 			s0.notes.some((n) => n.startsWith(`SLICE-PLACEMENT-DRIFT ${UNIT} effective=app.slice`)),
@@ -90,13 +106,14 @@ test('the 10-23 drift is converged on both facets with one restart, and both che
 		assert.equal(run.code, 0, JSON.stringify(doc, null, 2));
 		assert.deepEqual(
 			doc.converged.map((r) => `${r.node}/${r.facet}`),
-			[`${CLAW}/throttle`, `${CLAW}/slice`],
+			[`${CLAW}/throttle`, `${CLAW}/slice`, `${CLAW}/apt-security`],
 			JSON.stringify(doc, null, 2)
 		);
 		assert.deepEqual([doc.unconverged, doc.deferred, doc.unreadable], [[], [], []]);
-		const [thrChanged, sliceChanged] = doc.changed.map((c) => c.changed);
+		const [thrChanged, sliceChanged, aptChanged] = doc.changed.map((c) => c.changed);
 		assert.equal(thrChanged, 'env written on 1 runner(s), 0 restarted');
 		assert.match(sliceChanged, /, 1 restarted$/);
+		assert.equal(aptChanged, 'apt conf rewritten from the profile, timers enabled');
 
 		// Born in app.slice, restarted ONCE into runners.slice.
 		assert.deepEqual(
@@ -114,6 +131,9 @@ test('the 10-23 drift is converged on both facets with one restart, and both che
 			[]
 		);
 		assert.equal(s1.summary.in_slice, '1');
+		// Judged by the dry run, not by the file: the pattern now resolves and selects.
+		const a1 = await check('apt-security.mjs', env);
+		assert.match(a1.summary, /\borigins=ok candidates=1 selected=1 drift=0\b/, a1.summary);
 
 		// And a second pass finds nothing to do.
 		const again = await runFleetScript(join(HERE, 'converge-provisioning.mjs'), ['--json'], {

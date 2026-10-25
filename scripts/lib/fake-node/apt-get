@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Part of scripts/lib/fake-node.mjs. Simulation only: one pending security update.
+printf '%s\n' "apt-get $*" >>"$FAKE_STATE/calls.log"
+for a in "$@"; do
+	if [ "$a" = -s ]; then
+		echo "Inst fake-libsec [1.0-1] (1.0-1+deb13u1 Debian-Security:13/stable-security [amd64])"
+		exit 0
+	fi
+done
+printf '%s\n' "UNHANDLED apt-get $*" >>"$FAKE_STATE/calls.log"
+exit 1

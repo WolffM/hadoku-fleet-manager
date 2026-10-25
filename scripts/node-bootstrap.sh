@@ -753,6 +753,7 @@ REQUIRED_PROFILE_KEYS="
 .network.sshd.allowAgentForwarding .network.sshd.allowTcpForwarding
 .network.sshd.clientAliveInterval .network.sshd.clientAliveCountMax
 .toolchain.node
+.unattendedUpgrades.originsPattern
 "
 MISSING_KEYS=""
 for _k in $REQUIRED_PROFILE_KEYS; do
@@ -1772,6 +1773,15 @@ run systemctl start watchdog >/dev/null 2>&1 || warn "the watchdog daemon did no
 # ════════════════════════════════════════════════════════════════════════════
 step "10/12 — unattended security upgrades"
 
+# BEGIN apt-security render. `fleet apt-security --confirm` writes the same two
+# files on a node already in service, from scripts/lib/apt-security.mjs, and
+# apt-security.test.mjs runs THIS block and compares the bytes: the profile is
+# the one source and these are its two renderers.
+#
+# Origins-Pattern, matched on codename + label. The Allowed-Origins form this
+# replaced expanded to `o=Debian,a=trixie-security`, and Debian's security
+# archive is `a=stable-security`, so it matched nothing on any node from first
+# boot until 2026-10-25 (the profile's `$why-originsPattern` has the measurement).
 write_file /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
@@ -1779,8 +1789,8 @@ APT::Periodic::AutocleanInterval "7";
 EOF
 
 {
-	echo 'Unattended-Upgrade::Allowed-Origins {'
-	parr .unattendedUpgrades.allowedOrigins | sed 's/.*/    "&";/'
+	echo 'Unattended-Upgrade::Origins-Pattern {'
+	parr .unattendedUpgrades.originsPattern | sed 's/.*/    "&";/'
 	echo '};'
 	echo "Unattended-Upgrade::Remove-Unused-Kernel-Packages \"$(jq -r '.unattendedUpgrades.removeUnusedKernelPackages' "$PROFILE_FILE")\";"
 	echo 'Unattended-Upgrade::Remove-Unused-Dependencies "true";'
@@ -1789,6 +1799,7 @@ EOF
 	# wedged" reboot; nothing else gets one.
 	echo "Unattended-Upgrade::Automatic-Reboot \"$(jq -r '.unattendedUpgrades.automaticReboot' "$PROFILE_FILE")\";"
 } | write_file /etc/apt/apt.conf.d/50unattended-upgrades
+# END apt-security render.
 
 # ════════════════════════════════════════════════════════════════════════════
 # 11. TOOLCHAIN + TAILSCALE

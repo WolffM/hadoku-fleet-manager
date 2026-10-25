@@ -24,6 +24,12 @@
  *     the installers write as root has a seam (SYS_DIR, USER_CONF_DIR,
  *     CGROUP_ROOT) pointed into the fixture.
  *   - `systemd-run`, `loginctl`, `ps` refuse. `df` reports plenty of disk.
+ *   - apt (`unattended-upgrade`, `apt-get -s`, `apt-config shell`) answers
+ *     from the conf files under the APT_CONF_D seam, with one pending
+ *     security update that the dry run selects only when an origin pins
+ *     `label=Debian-Security` — so `fleet apt-security` is judged against the
+ *     conf it wrote, through the same probe a claw runs. Unfaked, a test would
+ *     run the HOST's apt.
  *
  * NOTHING REACHES THE HOST. The fakes are first on PATH for every node-side
  * command, and none of them consults the real systemd or process table. A
@@ -88,7 +94,16 @@ export function createFakeNode({ runnerVersion }) {
 		copyFileSync(join(FAKES, fake), join(dir, name));
 		chmodSync(join(dir, name), 0o755);
 	};
-	for (const name of ['systemctl', 'pgrep', 'sudo', 'df']) put(nodeBin, name);
+	for (const name of [
+		'systemctl',
+		'pgrep',
+		'sudo',
+		'df',
+		'unattended-upgrade',
+		'apt-get',
+		'apt-config',
+	])
+		put(nodeBin, name);
 	for (const name of ['systemd-run', 'loginctl', 'ps', 'curl']) put(nodeBin, name, 'refuse');
 	put(callerBin, 'ssh');
 	seedRunnerTarball(home, runnerVersion);

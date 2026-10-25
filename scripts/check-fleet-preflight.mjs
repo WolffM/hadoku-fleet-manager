@@ -2,8 +2,8 @@
 /**
  * check-fleet-preflight — the nightly sweep for slow-motion failures: node-key
  * expiry, `HADOKU_SITE_TOKEN` expiry, runner version drift on the standing
- * registrations, pending reboots, and LAN addresses no gateway reservation
- * pins. See `lib/preflight.mjs` for why each of these and not some others —
+ * registrations, pending reboots, LAN addresses no gateway reservation pins,
+ * and Debian security updates a claw is not installing. See `lib/preflight.mjs` for why each of these and not some others —
  * every one of them has already bitten this fleet once, except the reboot
  * check, which is the same shape of risk paid for with a probe already in hand.
  *
@@ -32,6 +32,8 @@
  * and `attempt N/M` rather than a bare error string.
  */
 import { execFile, execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import process from 'node:process';
 
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
@@ -49,7 +51,12 @@ import {
 	guestAdvisory,
 	lanReservationFindings,
 	BLOCKING,
+	SECURITY_PROBE,
+	parseSecurityProbe,
+	pendingSince,
+	securityUpdateFinding,
 } from './lib/preflight.mjs';
+import { stateDir } from './lib/paths.mjs';
 import { INTERFACE_PROBE, parseInterfaces, proposeLanRecord } from './lib/node-interfaces.mjs';
 import { guestNodeNames } from '../dist/lib/node-role.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
@@ -234,6 +241,39 @@ async function rebootProbe(node) {
 	};
 }
 
+/** Pending security updates and the last security install, for `securityUpdateFinding`. */
+async function securityProbe(node) {
+	const res = await runOn(node, SECURITY_PROBE, { timeoutMs: 45_000, connectTimeout: 8 });
+	if (!res.ok) return { node, ok: false, error: res.error ?? (res.stderr.trim() || 'unreachable') };
+	const parsed = parseSecurityProbe(res.stdout);
+	if (!parsed)
+		return { node, ok: false, error: `unexpected probe output: ${res.out.slice(0, 200)}` };
+	if (parsed.error) return { node, ok: false, error: parsed.error };
+	return { node, ok: true, ...parsed };
+}
+
+/**
+ * When each pending security update was first seen, per node — the one piece
+ * of history this sweep keeps, because apt records when a package was
+ * INSTALLED and never when an update for it APPEARED. In the state dir, never
+ * a checkout. Absent is a first run; unparseable is "could not look", because
+ * reading it as empty would restart every clock and quietly mute `stuck`.
+ */
+const PENDING_FILE = () => join(stateDir(), 'security-pending.json');
+function readPendingState() {
+	if (!existsSync(PENDING_FILE())) return { ok: true, doc: {} };
+	try {
+		return { ok: true, doc: JSON.parse(readFileSync(PENDING_FILE(), 'utf8')) };
+	} catch (err) {
+		return { ok: false, error: `${PENDING_FILE()} is unreadable: ${err.message}` };
+	}
+}
+function writePendingState(doc) {
+	mkdirSync(dirname(PENDING_FILE()), { recursive: true });
+	writeFileSync(`${PENDING_FILE()}.tmp`, `${JSON.stringify(doc, null, 2)}\n`);
+	renameSync(`${PENDING_FILE()}.tmp`, PENDING_FILE());
+}
+
 /**
  * The node's interfaces, for the LAN-reservation check. A SEPARATE ssh from the
  * reboot probe rather than one combined script: each parser then reads only
@@ -306,13 +346,14 @@ async function main() {
 	// once, and `Promise.all` preserves input order in its results regardless
 	// of which settles first, so the rest of this function reads exactly as it
 	// did when these were sequential awaits.
-	const [tok, latest, registered, probes, lanProbes, payloadProbes] = await Promise.all([
+	const [tok, latest, registered, probes, lanProbes, payloadProbes, secProbes] = await Promise.all([
 		tokenExpiryHeader(),
 		ghApi(['repos/actions/runner/releases/latest', '-q', '.tag_name'], RELEASE_TIMEOUT_MS),
 		ghApi([`repos/${RESIDENT_REPO}/actions/runners`, '-q', '.runners']),
 		Promise.all(fleetNodes.map(rebootProbe)),
 		Promise.all(fleetNodes.map(lanProbe)),
 		Promise.all(fleetNodes.map(payloadProbe)),
+		Promise.all(fleetNodes.map(securityProbe)),
 	]);
 
 	if (!tok.ok) {
@@ -354,6 +395,29 @@ async function main() {
 	// --- pending reboots ------------------------------------------------------
 	// (probed above, concurrently with the gh reads — see the comment there)
 	findings.push(...rebootFindings(probes));
+
+	// --- security updates ------------------------------------------------------
+	// A guest's finding becomes advisory below like every other node-health one:
+	// hokon keeps its own apt config and its updates are the operator's.
+	const pendingState = readPendingState();
+	if (!pendingState.ok) {
+		errors.push(pendingState.error);
+	} else {
+		const next = { ...pendingState.doc };
+		for (const p of secProbes) {
+			if (!p.ok) continue;
+			next[p.node] = pendingSince(pendingState.doc[p.node], p.pending);
+		}
+		for (const p of secProbes) {
+			const f = securityUpdateFinding(p, next[p.node] ?? {});
+			if (f) findings.push(f);
+		}
+		try {
+			writePendingState(next);
+		} catch (err) {
+			errors.push(`could not record pending security updates: ${err.message}`);
+		}
+	}
 
 	// --- LAN reservations -----------------------------------------------------
 	const resolved = Object.fromEntries(fleetNodes.map((n) => [n, sshResolves(n)]));
@@ -420,7 +484,10 @@ async function main() {
 
 	log(`Nightly preflight across ${fleetNodes.length} fleet node(s), ${RESIDENT_REPO}'s runners`);
 	if (!blocking.length && !advisory.length)
-		log('✓ node keys, HADOKU_SITE_TOKEN, runner versions, reboots and LAN reservations all clean');
+		log(
+			'✓ node keys, HADOKU_SITE_TOKEN, runner versions, reboots, LAN reservations and ' +
+				'security updates all clean'
+		);
 	if (!blocking.length && advisory.length)
 		log(
 			'✓ nothing blocking — node keys, HADOKU_SITE_TOKEN, runner versions and LAN reservations clean'
