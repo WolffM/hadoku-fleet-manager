@@ -39,16 +39,24 @@
  * safe reading of an unexplained drain is "leave it", which is how a node stays
  * out of the fleet for a month.
  *
+ * A DRAIN CAN BE BOUNDED AND SCHEDULED. `--for 48h` / `--until <iso>` makes it
+ * lapse by itself — a lease that needs somebody to remember to end it runs a
+ * week over. `--in 30m` / `--at <iso>` schedules it instead of starting it, so
+ * whoever is using the node can see it coming (`fleet node-status --json`).
+ * A HOSTING node (`fleet hosting`) has a tenant on it, and anything that takes
+ * it away is scheduled at least HOSTING_NOTICE_MS ahead unless `--force`.
+ *
  * USAGE
  *   fleet drain claw-3 --reason "semi-annual stress test"
+ *   fleet drain claw-8 --kind lease --for 48h --reason "cardtable stress lease"
+ *   fleet drain claw-8 --at 2026-10-30T18:00Z --for 2h --reason "reseat RAM"
  *   fleet drain --status
  *   fleet drain claw-3 --undo
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import process from 'node:process';
-import { manifest, stateDir } from './lib/paths.mjs';
+import { manifest } from './lib/paths.mjs';
 import { isLocalNode } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
@@ -61,7 +69,14 @@ import { nodeOf } from '../dist/runners/census.js';
 // THE ONE VERDICT, not a second copy of its branches. `drainStatus` is pure
 // and unit-tested in `src/tests/drain.test.ts`; this CLI's only job is to
 // gather the two observations (`busy`, `hasLiveRegistration`) it asks for.
-import { drainStatus } from '../dist/runners/drain.js';
+import {
+	drainNotices,
+	drainStatus,
+	effectiveDrains,
+	noticeRefusal,
+	parseWhen,
+} from '../dist/runners/drain.js';
+import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
 // Retried per READ_ATTEMPTS before a `gh api` read is called could-not-look —
 // the same shape `check-label-floor.mjs`, `check-fleet-preflight.mjs` and
 // `reconcile-runner-identity.mjs` already carry for their own `gh` reads
@@ -72,10 +87,7 @@ import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
 // The STATE dir, not the manifest dir — see src/runners/drain.ts for why.
 // Short version: manifestDir is inside a git checkout and there are two of
 // them, so this CLI wrote to the operator's checkout while the dispatcher read
-// mgmt-api's. stateDir is one absolute path regardless of where it is invoked.
-const FILE = () => join(stateDir(), 'fleet-drain.json');
-/** Pre-2026-09-04 location. Read as a fallback so an existing drain survives. */
-const LEGACY_FILE = () => manifest('fleet-drain.json');
+// mgmt-api's. `writeDrainDoc` writes to the state dir and nowhere else.
 const args = process.argv.slice(2);
 const has = (f) => args.includes(f);
 const valueOf = (f) => {
@@ -91,12 +103,17 @@ const R = '\x1b[31m',
 if (has('--help') || has('-h')) {
 	console.log(
 		[
-			'fleet drain <node> --reason "why" [--kind training|maintenance]',
-			'fleet drain <node> --undo           put it back',
+			'fleet drain <node> --reason "why" [--kind training|maintenance|lease]',
+			'                  [--for 48h | --until <iso>] [--in 30m | --at <iso>] [--force]',
+			'fleet drain <node> --undo           put it back (and cancel anything planned for it)',
 			'',
 			'  --kind training     the node is earning its labels; it comes back when it',
 			'                      passes. Bootcamp sets this.',
 			'  --kind maintenance  (default) a human took it out and a human puts it back.',
+			'  --kind lease        lent to a tenant for a window; pair it with --for/--until.',
+			'  --for / --until     the drain lapses by itself at that time.',
+			'  --in / --at         schedule it instead of starting it now. A HOSTING node',
+			'                      (fleet hosting) is owed 15 min notice; --force skips it.',
 			'fleet drain --status                what is held, and has it gone quiet',
 			'fleet drain-check [--json]          is each drain actually being ENFORCED',
 			'',
@@ -111,30 +128,11 @@ if (has('--help') || has('-h')) {
 	process.exit(0);
 }
 
-function read() {
-	// New location wins; the legacy manifest-dir copy is still honoured so an
-	// operator's existing drain is not silently lifted by the upgrade itself.
-	const p = [FILE(), LEGACY_FILE()].find((c) => existsSync(c));
-	if (!p) return {};
-	const raw = readFileSync(p, 'utf8');
-	if (!raw.trim()) return {};
-	// A parse failure THROWS rather than defaulting to {}. Reporting "nothing is
-	// drained" because the file is corrupt would put work back onto a node
-	// somebody is holding a screwdriver over.
-	return JSON.parse(raw).nodes ?? {};
-}
-function write(nodes) {
-	const p = FILE();
-	mkdirSync(dirname(p), { recursive: true });
-	writeFileSync(
-		p,
-		`${JSON.stringify({ $comment: 'Nodes held out of service. The fast loop and the dispatcher both read this. Lives in the state dir, NOT a git checkout.', nodes }, null, 2)}\n`
-	);
-	// One source of truth afterwards — a leftover copy in a checkout would go on
-	// answering for whoever happens to read that checkout.
-	const legacy = LEGACY_FILE();
-	if (legacy !== p && existsSync(legacy)) rmSync(legacy, { force: true });
-}
+// The whole file, through the one reader and writer every script shares. A
+// parse failure THROWS rather than defaulting to {}: reporting "nothing is
+// drained" because the file is corrupt would put work back onto a node
+// somebody is holding a screwdriver over.
+const write = writeDrainDoc;
 
 /**
  * The fleet manifest, for ROLES only. Unreadable is `null`, never `{}`.
@@ -336,13 +334,33 @@ function liveWarmOrJitRegistrations(candidateNodes) {
 	return { ok: true, map };
 }
 
-const state = read();
-const node = args.find((a) => !a.startsWith('--') && a !== valueOf('--reason'));
+const NOW = Date.now();
+const doc = readDrainDoc();
+/** What is held NOW — the view the dispatcher enforces. */
+const state = effectiveDrains(doc, NOW);
+const VALUE_FLAGS = ['--reason', '--kind', '--for', '--until', '--in', '--at'];
+const node = args.find((a, i) => !a.startsWith('--') && !VALUE_FLAGS.includes(args[i - 1]));
+const iso = (ms) => new Date(ms).toISOString();
+/** `--for`/`--until`/`--in`/`--at`, read once; a typo exits rather than guessing. */
+function when(flag, baseMs = NOW) {
+	const v = valueOf(flag);
+	if (v === null) return null;
+	try {
+		return parseWhen(v, baseMs);
+	} catch (err) {
+		console.error(`drain: ${flag} ${err.message}`);
+		process.exit(1);
+	}
+}
 
 if (has('--status') || (!node && !has('--undo'))) {
 	const names = Object.keys(state);
+	const notices = drainNotices(doc, NOW);
 	if (!names.length) {
 		console.log('nothing is drained — every node is taking work.');
+		for (const n of notices) {
+			console.log(`  planned: ${n.node} ${n.kind} ${n.event} ${n.at.slice(0, 16)}Z — ${n.reason}`);
+		}
 		process.exit(0);
 	}
 	// #90: a node whose status is read below must never surface as `drained`
@@ -383,10 +401,20 @@ if (has('--status') || (!node && !has('--undo'))) {
 						: 'drained';
 			col = verdict === 'drained' ? G : Y;
 		}
+		const ends = state[n].until ? `  (ends ${state[n].until.slice(0, 16)}Z)` : '';
 		console.log(
 			`${n.padEnd(11)} ${col}${st.padEnd(10)}${N} ${(state[n].kind ?? 'maintenance').padEnd(12)}` +
-				`${state[n].since.slice(0, 19)}  ${state[n].reason}`
+				`${state[n].since.slice(0, 19)}  ${state[n].reason}${ends}`
 		);
+	}
+	const ahead = notices.filter((x) => x.event === 'starts');
+	if (ahead.length) {
+		console.log(`\n${B}planned${N}`);
+		for (const x of ahead) {
+			console.log(
+				`  ${x.node.padEnd(11)} ${x.kind.padEnd(12)} starts ${x.at.slice(0, 16)}Z  ${x.reason}`
+			);
+		}
 	}
 	console.log(
 		`\n${G}drained${N} = nothing running AND no live warm/JIT registration, safe for ` +
@@ -419,12 +447,32 @@ if (!node) {
 }
 
 if (has('--undo')) {
-	if (!state[node]) {
+	const plannedHere = doc.planned.filter((p) => p.node === node);
+	const current = doc.nodes[node];
+	if (current?.kind === 'hosting') {
+		// A hosting record carries a promise to a tenant and units on the node;
+		// lifting it here would put CI back beside a live tenant with no notice.
+		if (!plannedHere.length) {
+			console.error(
+				`drain: ${node} is a hosting node. End it with \`fleet hosting ${node} --end --in 30m\`.`
+			);
+			process.exit(1);
+		}
+		write({ nodes: doc.nodes, planned: doc.planned.filter((p) => p.node !== node) });
+		console.log(
+			`${G}✓ cancelled ${plannedHere.length} planned drain(s) on ${node}; it stays hosting.${N}`
+		);
+		process.exit(0);
+	}
+	if (!current && !plannedHere.length) {
 		console.log(`${node} is not drained.`);
 		process.exit(0);
 	}
-	delete state[node];
-	write(state);
+	const nodes = { ...doc.nodes };
+	delete nodes[node];
+	write({ nodes, planned: doc.planned.filter((p) => p.node !== node) });
+	if (plannedHere.length)
+		console.log(`  cancelled ${plannedHere.length} planned drain(s) on ${node}.`);
 	console.log(`${G}✓ ${node} is back in service.${N}`);
 	console.log('  The fast loop restores its label on the next tick.');
 	process.exit(0);
@@ -493,10 +541,37 @@ if (!reason) {
 // it" from "somebody has the lid off", and the safe reading of the ambiguity is
 // always the second one — which is how a node that finished training stays out
 // of the fleet for a week.
-const KINDS = ['training', 'maintenance'];
+//
+// A LEASE ends by the clock: the node is lent for a window and comes back when
+// it closes, whether or not anybody remembers. `hosting` is not settable here —
+// it carries resources and units on the node, and `fleet hosting` writes both.
+const KINDS = ['training', 'maintenance', 'lease'];
 const kind = valueOf('--kind') ?? 'maintenance';
+if (kind === 'hosting') {
+	console.error(
+		`drain: a hosting node is declared with \`fleet hosting\`, which also serves its resources.`
+	);
+	process.exit(1);
+}
 if (!KINDS.includes(kind)) {
 	console.error(`drain: --kind must be one of ${KINDS.join(', ')} (got "${kind}")`);
+	process.exit(1);
+}
+const startMs = when('--at') ?? when('--in') ?? NOW;
+const endMs = when('--until') ?? when('--for', startMs);
+if (kind === 'lease' && endMs === null) {
+	console.error('drain: a lease needs an end — --for 48h or --until <iso>.');
+	process.exit(1);
+}
+if (endMs !== null && endMs <= startMs) {
+	console.error(`drain: it would end (${iso(endMs)}) before it starts (${iso(startMs)}).`);
+	process.exit(1);
+}
+const refusal = noticeRefusal(node, startMs, doc, NOW);
+if (refusal && !has('--force')) {
+	console.error(
+		`${R}drain: ${refusal}${N}\n  Schedule it with --in 15m (or later), or --force if the box is failing.`
+	);
 	process.exit(1);
 }
 
@@ -523,16 +598,28 @@ if (remaining === null) {
 	);
 }
 
-state[node] = {
-	since: new Date().toISOString(),
+const record = {
+	since: iso(NOW),
 	kind,
 	reason,
 	by: process.env.SUDO_USER || process.env.USER || 'unknown',
+	...(endMs !== null ? { until: iso(endMs) } : {}),
 };
-write(state);
+// SCHEDULED, or laid OVER a hosting record: both go to `planned`, so a
+// maintenance window on a hosting node never erases the tenant's promise.
+if (startMs > NOW || doc.nodes[node]?.kind === 'hosting') {
+	write({ nodes: doc.nodes, planned: [...doc.planned, { node, from: iso(startMs), ...record }] });
+	console.log(`${G}✓ ${node} drain planned for ${iso(startMs)}.${N}`);
+	console.log(`  kind:   ${kind}${endMs !== null ? ` (ends ${iso(endMs)})` : ''}`);
+	console.log(`  reason: ${reason}`);
+	console.log('  It is visible in `fleet node-status --json` until it starts.');
+	process.exit(0);
+}
+write({ nodes: { ...doc.nodes, [node]: record }, planned: doc.planned });
 console.log(`${G}✓ ${node} is draining.${N}`);
+if (endMs !== null) console.log(`  ends:   ${iso(endMs)} — it lapses by itself; no undo needed.`);
 console.log(
-	`  kind:   ${kind}${kind === 'training' ? ' (returns when it passes its probes)' : ' (a human puts it back)'}`
+	`  kind:   ${kind}${{ training: ' (returns when it passes its probes)', lease: ' (returns when the lease ends)' }[kind] ?? ' (a human puts it back)'}`
 );
 console.log(`  reason: ${reason}`);
 console.log(`  Running jobs finish. New assignment stops within one fast-loop tick (~60s).`);

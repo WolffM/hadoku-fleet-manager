@@ -94,6 +94,7 @@ import { join, dirname } from 'node:path';
 import process from 'node:process';
 
 import { manifest as manifestFile, manifestDir, stateDir, siteRoot } from './lib/paths.mjs';
+import { readDrains } from './lib/expected-down.mjs';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { stripYamlComments } from './lib/yaml-comments.mjs';
@@ -398,13 +399,10 @@ const notAProbeTarget = (node) =>
 
 /** Drain state, read from where the DISPATCHER reads it — not a git checkout. */
 function drainedNodes() {
-	const p = join(stateDir(), 'fleet-drain.json');
-	if (!existsSync(p)) return [];
 	// A parse failure THROWS in drain.ts and every caller fails closed. Same here:
 	// answering "nothing is drained" would place a probe on a box somebody is
 	// holding a screwdriver over.
-	const parsed = readJson(p, 'the drain state');
-	return Object.keys(parsed.nodes ?? {});
+	return Object.keys(readDrains());
 }
 
 /**

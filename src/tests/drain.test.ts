@@ -7,11 +7,19 @@ import { join } from 'node:path';
 
 import { __setHostForTesting } from '../host.js';
 import {
+	drainNotices,
 	drainOverrides,
 	drainStatus,
+	effectiveDrains,
+	HOSTING_NOTICE_MS,
 	isDraining,
+	noticeRefusal,
+	parseDrainDoc,
+	parseWhen,
+	pruneDrainDoc,
 	readDrain,
 	writeDrain,
+	type DrainDoc,
 	type DrainState,
 } from '../runners/drain.js';
 
@@ -179,5 +187,140 @@ test('writing migrates: the legacy copy is removed, so one file answers', () => 
 test('neither file is an EMPTY drain, not an error', () => {
 	withDirs(() => {
 		assert.deepEqual(readDrain(), {});
+	});
+});
+
+// ── leases, planned drains and hosting notice ────────────────────────────────
+
+const T0 = Date.parse('2026-10-25T05:00:00Z');
+const at = (min: number): string => new Date(T0 + min * 60_000).toISOString();
+const rec = { reason: 'cardtable stress lease', by: 'hadoku' };
+
+test('a lease past its `until` is not a drain to ANY reader', () => {
+	const doc: DrainDoc = {
+		nodes: { 'claw-8': { ...rec, since: at(-60), kind: 'lease', until: at(-1) } },
+		planned: [],
+	};
+	assert.equal(isDraining('claw-8', effectiveDrains(doc, T0)), false);
+	assert.equal(isDraining('claw-8', effectiveDrains(doc, T0 - 2 * 60_000)), true);
+});
+
+test('an unparseable `until` holds the node — garbage must not read as "it ended"', () => {
+	const doc: DrainDoc = {
+		nodes: { 'claw-8': { ...rec, since: at(-60), until: 'soon' } },
+		planned: [],
+	};
+	assert.equal(isDraining('claw-8', effectiveDrains(doc, T0)), true);
+});
+
+test('a planned drain is not in force before `from`, and is from then, measured from `from`', () => {
+	const doc: DrainDoc = {
+		nodes: {},
+		planned: [{ ...rec, node: 'claw-3', since: at(-30), from: at(20), until: at(40) }],
+	};
+	assert.equal(isDraining('claw-3', effectiveDrains(doc, T0)), false);
+	const live = effectiveDrains(doc, T0 + 25 * 60_000);
+	assert.equal(live['claw-3'].since, at(20), 'drain-check must measure from when it took effect');
+	assert.equal(isDraining('claw-3', effectiveDrains(doc, T0 + 41 * 60_000)), false);
+});
+
+test('a planned window over a hosting node wins while open and hands back the hosting record after', () => {
+	const hosting = {
+		...rec,
+		since: at(-600),
+		kind: 'hosting' as const,
+		hosting: { tenant: 'cardtable', memoryMb: 8192, cores: 4, port: 7621 },
+	};
+	const doc: DrainDoc = {
+		nodes: { 'claw-8': hosting },
+		planned: [
+			{ ...rec, node: 'claw-8', kind: 'maintenance', since: at(0), from: at(30), until: at(90) },
+		],
+	};
+	assert.equal(effectiveDrains(doc, T0 + 45 * 60_000)['claw-8'].kind, 'maintenance');
+	assert.equal(effectiveDrains(doc, T0 + 95 * 60_000)['claw-8'].kind, 'hosting');
+});
+
+test('notices list every start and end still ahead, soonest first, and nothing past', () => {
+	const doc: DrainDoc = {
+		nodes: {
+			'claw-8': { ...rec, since: at(-60), kind: 'lease', until: at(120) },
+			'claw-9': { ...rec, since: at(-60), kind: 'lease', until: at(-5) },
+		},
+		planned: [{ ...rec, node: 'claw-3', since: at(0), kind: 'lease', from: at(20), until: at(40) }],
+	};
+	const n = drainNotices(doc, T0);
+	assert.deepEqual(
+		n.map((x) => `${x.node}:${x.event}`),
+		['claw-3:starts', 'claw-3:ends', 'claw-8:ends']
+	);
+});
+
+test('a hosting node is owed notice; anything else is not', () => {
+	const doc: DrainDoc = {
+		nodes: {
+			'claw-8': {
+				...rec,
+				since: at(-600),
+				kind: 'hosting',
+				hosting: { tenant: 'cardtable', memoryMb: 8192, cores: 4, port: 7621 },
+			},
+			'claw-9': { ...rec, since: at(-60), kind: 'lease', until: at(600) },
+		},
+		planned: [],
+	};
+	assert.match(noticeRefusal('claw-8', T0 + 5 * 60_000, doc, T0) ?? '', /cardtable.*15 min/);
+	assert.equal(noticeRefusal('claw-8', T0 + HOSTING_NOTICE_MS, doc, T0), null);
+	assert.equal(noticeRefusal('claw-9', T0, doc, T0), null);
+	assert.equal(noticeRefusal('claw-1', T0, doc, T0), null);
+});
+
+test('prune drops only what has lapsed', () => {
+	const doc: DrainDoc = {
+		nodes: {
+			a: { ...rec, since: at(-60), until: at(-1) },
+			b: { ...rec, since: at(-60) },
+		},
+		planned: [
+			{ ...rec, node: 'c', since: at(-60), from: at(-30), until: at(-1) },
+			{ ...rec, node: 'd', since: at(-60), from: at(30) },
+		],
+	};
+	const p = pruneDrainDoc(doc, T0);
+	assert.deepEqual(Object.keys(p.nodes), ['b']);
+	assert.deepEqual(
+		p.planned.map((x) => x.node),
+		['d']
+	);
+});
+
+test('a pre-lease file (no `planned` key) reads as no plans', () => {
+	assert.deepEqual(parseDrainDoc('{"nodes":{}}'), { nodes: {}, planned: [] });
+	assert.deepEqual(parseDrainDoc(''), { nodes: {}, planned: [] });
+	assert.throws(() => parseDrainDoc('{nope'));
+});
+
+test('parseWhen reads durations and zoned timestamps, and refuses everything else', () => {
+	assert.equal(parseWhen('20m', T0), T0 + 20 * 60_000);
+	assert.equal(parseWhen('48h', T0), T0 + 48 * 3_600_000);
+	assert.equal(parseWhen('2d', T0), T0 + 2 * 86_400_000);
+	assert.equal(parseWhen('2026-10-27T04:57:48Z', T0), Date.parse('2026-10-27T04:57:48Z'));
+	assert.throws(() => parseWhen('2026-10-27T04:57', T0), /zone/);
+	assert.throws(() => parseWhen('tomorrow', T0));
+	assert.throws(() => parseWhen('20', T0));
+});
+
+test('planned drains survive a write and are read back through the effective view', () => {
+	withDirs(() => {
+		const now = Date.now();
+		writeDrain({}, [
+			{
+				...rec,
+				node: 'claw-4',
+				since: new Date(now).toISOString(),
+				from: new Date(now - 1000).toISOString(),
+			},
+		]);
+		assert.equal(isDraining('claw-4', readDrain()), true);
 	});
 });

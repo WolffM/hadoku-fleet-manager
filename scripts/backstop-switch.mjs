@@ -45,27 +45,21 @@ import {
 	isHostIdle,
 } from '../dist/runners/backstop.js';
 import { TMP_FREE_FLOOR_MB } from '../dist/runners/ephemeral.js';
-import { stateDir } from './lib/paths.mjs';
+import { readDrains } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
-import { join } from 'node:path';
 
 // `--status --json` prints one document and exits; through a pipe that loses
 // the tail past 8 KB (#33) unless fd 1 is made whole first. Idempotent.
 keepStdoutWhole();
 
 /**
- * The drain set, read the way drain-node.mjs reads it: no host is installed in
- * a CLI process, so `dist/runners/drain.js`'s reader cannot be used here. A
- * parse failure THROWS — "nothing is drained" is not an answer a corrupt file
- * may give when the question is whether to route work onto a box.
+ * The drain set, read through `lib/expected-down.mjs`: no host is installed in
+ * a CLI process, so `dist/runners/drain.js`'s `readDrain` cannot be used here,
+ * but the lapse rule it applies is the same function. A parse failure THROWS —
+ * "nothing is drained" is not an answer a corrupt file may give when the
+ * question is whether to route work onto a box.
  */
-function readDrain() {
-	const p = join(stateDir(), 'fleet-drain.json');
-	if (!existsSync(p)) return {};
-	const raw = readFileSync(p, 'utf8');
-	if (!raw.trim()) return {};
-	return JSON.parse(raw).nodes ?? {};
-}
+const readDrain = () => readDrains();
 
 const args = process.argv.slice(2);
 const has = (f) => args.includes(f);

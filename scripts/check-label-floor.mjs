@@ -52,6 +52,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
+import { readDrains } from './lib/expected-down.mjs';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { hubRepoFull } from '../dist/lib/fleet-config.js';
 import { FLOOR_DEMAND_FILE, floorLabels, isFloorDemandLabel } from '../dist/label-floor.js';
@@ -731,13 +732,7 @@ for (const [name, m] of Object.entries(manifest.machines ?? {})) {
  * holder through that somebody has a screwdriver in.
  */
 function drainedNodeNames() {
-	const current = join(stateDir(), 'fleet-drain.json');
-	const legacy = manifestFile('fleet-drain.json');
-	const path = [current, legacy].find((p) => existsSync(p));
-	if (!path) return new Set();
-	const raw = readFileSync(path, 'utf8');
-	if (!raw.trim()) return new Set();
-	return new Set(Object.keys(JSON.parse(raw).nodes ?? {}));
+	return new Set(Object.keys(readDrains()));
 }
 
 /** A read that never finishes is a read that never reports (#80). */

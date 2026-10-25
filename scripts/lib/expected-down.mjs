@@ -62,10 +62,11 @@
  * They are not consolidated here — that is a separate change — but new callers
  * should use `readDrains()` rather than adding a seventh.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import { manifest, stateDir } from './paths.mjs';
+import { effectiveDrains, parseDrainDoc, pruneDrainDoc } from '../../dist/runners/drain.js';
 
 /**
  * How long a deliberate power-off may suppress a reachability finding.
@@ -76,18 +77,49 @@ import { manifest, stateDir } from './paths.mjs';
  */
 export const DEFER_DAYS = 7;
 
-/** The canonical read. New location wins; the pre-2026-09-04 copy is honoured. */
-export function readDrains() {
-	const p = [join(stateDir(), 'fleet-drain.json'), manifest('fleet-drain.json')].find((c) =>
+/** Where `fleet drain` writes. New location wins; the pre-2026-09-04 copy is honoured. */
+export function drainFilePath() {
+	return [join(stateDir(), 'fleet-drain.json'), manifest('fleet-drain.json')].find((c) =>
 		existsSync(c)
 	);
-	if (!p) return {};
-	const raw = readFileSync(p, 'utf8');
-	if (!raw.trim()) return {};
-	// A parse failure THROWS. Reporting "nothing is drained" from a corrupt file
-	// would silently un-defer every node, which is the safe direction here, but
-	// it would also silently un-DRAIN them everywhere else that reads this file.
-	return JSON.parse(raw).nodes ?? {};
+}
+
+/**
+ * The whole drain file — current records, planned ones, and lapsed ones a
+ * writer has not pruned yet. A parse failure THROWS. Reporting "nothing is
+ * drained" from a corrupt file would silently un-defer every node, which is the
+ * safe direction here, but it would also silently un-DRAIN them everywhere else
+ * that reads this file.
+ */
+export function readDrainDoc() {
+	const p = drainFilePath();
+	return p ? parseDrainDoc(readFileSync(p, 'utf8')) : { nodes: {}, planned: [] };
+}
+
+/**
+ * The one script-side WRITE, shared by `fleet drain` and `fleet hosting`.
+ * Lapsed records are pruned on the way out. Always to the state dir; the
+ * legacy copy is removed so exactly one file answers afterwards.
+ */
+export function writeDrainDoc(doc) {
+	const p = join(stateDir(), 'fleet-drain.json');
+	mkdirSync(dirname(p), { recursive: true });
+	writeFileSync(
+		p,
+		`${JSON.stringify({ $comment: 'Nodes held out of service. The fast loop and the dispatcher both read this. Lives in the state dir, NOT a git checkout.', ...pruneDrainDoc(doc) }, null, 2)}\n`
+	);
+	const legacy = manifest('fleet-drain.json');
+	if (legacy !== p && existsSync(legacy)) rmSync(legacy, { force: true });
+}
+
+/**
+ * The canonical read: what is held RIGHT NOW. A lease past its `until` is gone
+ * and a planned drain past its `from` is in force — `effectiveDrains` in
+ * src/runners/drain.ts, the same function the dispatcher reads through, so a
+ * script and the dispatcher can never disagree about whether a lease ended.
+ */
+export function readDrains(now = Date.now()) {
+	return effectiveDrains(readDrainDoc(), now);
 }
 
 /**

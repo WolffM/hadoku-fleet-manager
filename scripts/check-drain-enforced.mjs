@@ -43,7 +43,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { manifest, stateDir } from './lib/paths.mjs';
+import { stateDir } from './lib/paths.mjs';
+import { readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { drainViolations, drainHonoured, recordNodeOf } from './lib/drain-enforcement.mjs';
 
@@ -68,18 +69,10 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 	process.exit(0);
 }
 
-const FILE = 'fleet-drain.json';
-/** New location first; the pre-2026-09-04 manifest-dir copy is still honoured. */
-const path = [join(stateDir(), FILE), manifest(FILE)].find((p) => existsSync(p));
-
-let state = {};
-if (path) {
-	const raw = readFileSync(path, 'utf8');
-	if (raw.trim()) {
-		const doc = JSON.parse(raw);
-		state = doc.nodes ?? doc;
-	}
-}
+// What is held NOW: a lease past its end is not a drain to enforce, and a
+// planned drain in force is enforced from when it took effect, not from when
+// it was scheduled.
+const state = readDrains();
 
 const HISTORY = join(stateDir(), 'job-history.jsonl');
 if (!existsSync(HISTORY)) {

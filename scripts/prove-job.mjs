@@ -63,13 +63,13 @@
  */
 import { proofDrainState } from './lib/proof-drain.mjs';
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import process from 'node:process';
 
 import { loadManifest, runOn, unconsumedArgs } from './lib/fleet-exec.mjs';
-import { manifest as manifestFile, manifestDir, stateDir } from './lib/paths.mjs';
+import { manifestDir, stateDir } from './lib/paths.mjs';
+import { readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { recordProof } from './lib/job-proof-record.mjs';
 import { guestPostCheck, proofShell } from './lib/prove-job-guest.mjs';
@@ -296,12 +296,7 @@ if (includeGuests) {
 
 /** This node's drain row, from the same two locations `fleet drain` writes. */
 function drainRow() {
-	const path = [join(stateDir(), 'fleet-drain.json'), manifestFile('fleet-drain.json')].find((p) =>
-		existsSync(p)
-	);
-	if (!path) return undefined;
-	const raw = readFileSync(path, 'utf8');
-	return raw.trim() ? (JSON.parse(raw).nodes ?? {})[nodeName] : undefined;
+	return readDrains()[nodeName];
 }
 
 // `--under-own-drain`: bootcamp --prove drained this node for the canary, so

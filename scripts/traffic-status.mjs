@@ -68,6 +68,7 @@ import { idleSecondsFromRecords } from '../dist/job-history.js';
 import { buildSpeedModel } from '../dist/runners/speed-tier.js';
 import { runOnSync } from './lib/fleet-exec.mjs';
 import { manifest, stateDir } from './lib/paths.mjs';
+import { readDrains } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
@@ -137,21 +138,17 @@ function readJson(name, fallback) {
  * a different file from the one gating placement would describe a fleet that
  * does not exist, which is the mistake the whole move is correcting.
  */
-function readDrainJson() {
-	for (const p of [join(stateDir(), 'fleet-drain.json'), manifest('fleet-drain.json')]) {
-		if (!existsSync(p)) continue;
-		try {
-			return JSON.parse(readFileSync(p, 'utf8'));
-		} catch (err) {
-			console.error(`traffic: ${p} is unreadable (${err.message}). Refusing to guess.`);
-			process.exit(1);
-		}
+function readDrainState() {
+	try {
+		return readDrains();
+	} catch (err) {
+		console.error(`traffic: the drain file is unreadable (${err.message}). Refusing to guess.`);
+		process.exit(1);
 	}
-	return { nodes: {} };
 }
 
 const fleet = readJson('fleet-runner-manifest.json', { machines: {} });
-const drain = readDrainJson().nodes ?? {};
+const drain = readDrainState();
 /** Every declared node, in name order — no file's key order may decide anything. */
 const nodeNames = Object.keys(fleet.machines ?? {}).sort();
 
