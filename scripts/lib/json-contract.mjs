@@ -302,7 +302,8 @@ export const JSON_CONTRACT = [
 		consumer: 'services/mgmt-api/src/routes/jobs/fleet-preflight-check.ts',
 		why:
 			'The nightly slow-motion sweep: Tailscale node-key expiry, HADOKU_SITE_TOKEN expiry, ' +
-			'runner-version drift on the standing claw-4/claw-6/hokon registrations, pending ' +
+			'runner-version drift on the standing claw-4/claw-6/hokon registrations and on each ' +
+			"node's JIT payload (every mint is copied from it), pending " +
 			'reboots. Every one of the first three has already caused a silent outage on this ' +
 			'fleet once (claw-1/claw-2 node keys lapsing 2026-08-31, HADOKU_SITE_TOKEN expiring ' +
 			'unregistered 2026-08-13) or is the same shape of risk (runner version, reboots). ' +

@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
 	nodeKeyFinding,
@@ -9,6 +11,10 @@ import {
 	tokenExpiryFinding,
 	runnerVersionFinding,
 	runnerVersionFindings,
+	jitPayloadFinding,
+	jitPayloadFindings,
+	parseJitPayloadProbe,
+	JIT_PAYLOAD_PROBE,
 	rebootFinding,
 	rebootFindings,
 	blockingFindings,
@@ -151,6 +157,95 @@ test('runnerVersionFindings: filters to only the drifted runners', () => {
 	const findings = runnerVersionFindings(runners, '2.337.0');
 	assert.equal(findings.length, 1);
 	assert.equal(findings[0].runner, 'claw-6');
+});
+
+// --- minted runners and the JIT payload (fleet-manager#1) -------------------
+
+// The runner ci:fleet-preflight paged on at 2026-10-23 13:20 UTC, verbatim.
+const JIT_1023 = 'jit-claw-3-hadoku-fleet-ma-j120292936639-r39917109208-1792740045';
+
+test('runnerVersionFindings: a jit-* or warm-* runner is never judged as a STANDING registration', () => {
+	const runners = [
+		{ repo: 'WolffM/hadoku-fleet-manager', name: JIT_1023, version: '2.336.0' },
+		{ repo: 'WolffM/hadoku-fleet-manager', name: 'warm-claw-8-hadoku_site', version: '2.300.0' },
+		{ repo: 'WolffM/hadoku-fleet-manager', name: 'claw-4', version: '2.336.0' },
+	];
+	const findings = runnerVersionFindings(runners, '2.338.1');
+	assert.deepEqual(
+		findings.map((f) => f.runner),
+		['claw-4'],
+		'only the standing registration is judged by the standing-runner rule'
+	);
+	assert.ok(!findings.some((f) => /jit-|warm-/.test(f.why)));
+});
+
+test('jitPayloadFinding: a payload two minors behind is its own finding, naming the node, not a registration', () => {
+	const f = jitPayloadFinding(
+		{ node: 'claw-3', ok: true, present: true, version: '2.336.0' },
+		'2.338.1'
+	);
+	assert.equal(f.category, 'jit-payload');
+	assert.equal(f.node, 'claw-3');
+	assert.equal(f.status, 'behind');
+	assert.equal(f.class, BLOCKING);
+	assert.match(f.why, /~\/\.hadoku\/jit\/payload/);
+	assert.match(f.why, /never rebuilds/);
+	assert.doesNotMatch(f.why, /STANDING|never re-minted/);
+});
+
+test('jitPayloadFinding: within tolerance, and an absent payload, are not findings', () => {
+	assert.equal(
+		jitPayloadFinding({ node: 'claw-4', ok: true, present: true, version: '2.337.0' }, '2.338.1'),
+		null
+	);
+	assert.equal(
+		jitPayloadFinding({ node: 'claw-7', ok: true, present: false, version: null }, '2.338.1'),
+		null
+	);
+});
+
+test('jitPayloadFinding: a payload that will not run, and a node that could not be read, are findings', () => {
+	const dead = jitPayloadFinding(
+		{ node: 'claw-2', ok: true, present: true, version: null },
+		'2.338.1'
+	);
+	assert.equal(dead.status, 'unrunnable');
+	assert.equal(dead.class, BLOCKING);
+	const dark = jitPayloadFinding({ node: 'claw-5', ok: false, error: 'ssh timed out' }, '2.338.1');
+	assert.equal(dark.status, 'unreachable');
+	assert.equal(dark.class, BLOCKING);
+});
+
+test('jitPayloadFindings: a guest payload is advisory through guestAdvisory, like every node finding', () => {
+	const found = jitPayloadFindings(
+		[{ node: 'hokon', ok: true, present: true, version: '2.300.0' }],
+		'2.338.1'
+	);
+	assert.equal(guestAdvisory(found, ['hokon'])[0].class, ADVISORY);
+});
+
+test('JIT_PAYLOAD_PROBE, run for real: version, absent, and a binary that will not run', () => {
+	const home = mkdtempSync(join(tmpdir(), 'payload-probe-'));
+	try {
+		const probe = () =>
+			parseJitPayloadProbe(
+				execFileSync('bash', ['-c', JIT_PAYLOAD_PROBE], {
+					encoding: 'utf8',
+					env: { PATH: process.env.PATH, HOME: home },
+				})
+			);
+		assert.deepEqual(probe(), { present: false, version: null });
+		const bin = join(home, '.hadoku', 'jit', 'payload', 'bin');
+		mkdirSync(bin, { recursive: true });
+		writeFileSync(join(bin, 'Runner.Listener'), '#!/usr/bin/env bash\necho 2.336.0\n', {
+			mode: 0o755,
+		});
+		assert.deepEqual(probe(), { present: true, version: '2.336.0' });
+		writeFileSync(join(bin, 'Runner.Listener'), '#!/usr/bin/env bash\nexit 1\n', { mode: 0o755 });
+		assert.deepEqual(probe(), { present: true, version: null });
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
 });
 
 // --- pending reboots ---------------------------------------------------------

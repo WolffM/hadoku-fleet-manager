@@ -23,17 +23,22 @@
  *   the credential this repo's OWN `gh` calls depend on, so the fleet's health
  *   sweep does not have a blind spot shaped like "hadoku_site's tracker is
  *   itself down".
- * - **Runner version drift.** Every ephemeral JIT registration downloads
- *   whatever `actions/runner`'s latest release is AT MINT TIME
- *   (`register-fleet-runner.sh`), so it cannot go stale — it is reborn current
- *   every job. The two STANDING registrations this repo's `residentRepos`
- *   backstop keeps on claw-4/claw-6 (plus hokon's own) are the opposite: they
- *   are never re-minted, so they are the only registrations that CAN drift
- *   behind, and `GET /actions/runners` reports each one's `version` — measured
- *   live 2026-09-07, all three read `2.337.0` against a `2.337.0` latest
- *   release. GitHub does force old runner versions offline eventually; this is
- *   the early warning, not an authoritative deprecation feed GitHub does not
+ * - **Runner version drift.** The STANDING registrations this repo's
+ *   `residentRepos` keeps on claw-4/claw-6 (plus hokon's own) are never
+ *   re-minted, and `GET /actions/runners` reports each one's `version`.
+ *   GitHub does force old runner versions offline eventually; this is the
+ *   early warning, not an authoritative deprecation feed GitHub does not
  *   publish over the API.
+ * - **JIT payload drift.** This file used to say a JIT registration "cannot go
+ *   stale — it is reborn current every job". It is reborn from the NODE's
+ *   payload, `~/.hadoku/jit/payload`, which `jit-provision.sh` builds once
+ *   and never rebuilds. Measured 2026-10-24: five nodes' payloads were
+ *   2.336.0, built 2026-07-20, against a 2.338.1 release. The listing showed it
+ *   on 10-23 as a `jit-*` runner at 2.336.0, and preflight called that a
+ *   STANDING registration (fleet-manager#1). So minted names are excluded from
+ *   the standing check, and the payload is read on each node instead. A
+ *   minted runner is in the listing only while its job runs, so sampling the
+ *   listing would see one node one night and none the next.
  * - **Pending reboots.** No incident yet on this fleet specifically, but the
  *   standard Debian signal (`/var/run/reboot-required`) costs one `ssh` line
  *   already paid for by every other fleet-exec probe, and a kernel security
@@ -82,6 +87,7 @@
  * {@link GUEST_BLOCKING_CATEGORIES} keeps "could not look at it" blocking.
  */
 
+import { JIT_PREFIX, WARM_PREFIX } from '../../dist/runners/ephemeral.js';
 import { isIpv4 } from './node-interfaces.mjs';
 
 /** Fails the gate. The default for anything not deliberately marked otherwise. */
@@ -274,16 +280,32 @@ function parseSemver(v) {
 	return [Number(m[1]), Number(m[2]), Number(m[3])];
 }
 
+/** Behind by a major, or by `minMinorsBehind` minors within one. */
+function isBehind(have, latest, minMinorsBehind) {
+	return have[0] < latest[0] || (have[0] === latest[0] && latest[1] - have[1] >= minMinorsBehind);
+}
+
 /**
- * Runner-version drift for one registered runner.
+ * A `jit-*` or `warm-*` registration: minted per job (or per warm fill) from
+ * the node's payload, never a standing install. The prefixes are the minter's
+ * own constants, so a rename there cannot leave this reading the old name.
+ */
+export function isMintedRunnerName(name) {
+	const n = String(name ?? '');
+	return n.startsWith(JIT_PREFIX) || n.startsWith(WARM_PREFIX);
+}
+
+/**
+ * Runner-version drift for one STANDING registration.
  *
- * Scoped to STANDING registrations by construction of the caller: an
- * ephemeral JIT registration is re-minted with whatever is latest at mint
- * time and cannot drift, so feeding this every runner on the fleet would
- * dilute the signal with entries that are never behind by design. Behind by
- * `minMinorsBehind` minor versions is a PROXY for GitHub's periodic forced
- * deprecation, not an official notice — GitHub does not publish one over the
- * API — so the finding says so rather than claiming more certainty than it has.
+ * {@link runnerVersionFindings} drops minted names before this is reached —
+ * the caller passes the repo's whole listing, which is how a `jit-*` runner
+ * was called "a STANDING registration that is never re-minted" on 2026-10-23.
+ * A minted runner's version is its node's payload version, judged by
+ * {@link jitPayloadFinding}. Behind by `minMinorsBehind` minor versions is a
+ * PROXY for GitHub's periodic forced deprecation, not an official notice —
+ * GitHub does not publish one over the API — so the finding says so rather
+ * than claiming more certainty than it has.
  */
 export function runnerVersionFinding(runner, latestVersion, { minMinorsBehind = 2 } = {}) {
 	const latest = parseSemver(latestVersion);
@@ -299,9 +321,7 @@ export function runnerVersionFinding(runner, latestVersion, { minMinorsBehind = 
 		};
 	}
 	if (!latest) return null; // could not resolve "latest" — reported once by the caller, not per-runner
-	const behind =
-		have[0] < latest[0] || (have[0] === latest[0] && latest[1] - have[1] >= minMinorsBehind);
-	if (!behind) return null;
+	if (!isBehind(have, latest, minMinorsBehind)) return null;
 	return {
 		category: 'runner-version',
 		class: BLOCKING,
@@ -318,9 +338,95 @@ export function runnerVersionFinding(runner, latestVersion, { minMinorsBehind = 
 	};
 }
 
-/** {@link runnerVersionFinding} over every standing runner, findings only. */
+/** {@link runnerVersionFinding} over the STANDING runners in a listing, findings only. */
 export function runnerVersionFindings(runners, latestVersion, opts = {}) {
-	return runners.map((r) => runnerVersionFinding(r, latestVersion, opts)).filter(Boolean);
+	return runners
+		.filter((r) => !isMintedRunnerName(r.name))
+		.map((r) => runnerVersionFinding(r, latestVersion, opts))
+		.filter(Boolean);
+}
+
+/**
+ * Where `jit-provision.sh` keeps a node's payload, relative to the node's
+ * $HOME. Spelled once here: the probe and every finding are built from it.
+ */
+export const JIT_PAYLOAD_DIR = '.hadoku/jit/payload';
+
+/**
+ * Ask a node which runner version its JIT payload is. One line, always:
+ * `PAYLOAD ABSENT`, `PAYLOAD UNRUNNABLE`, or `PAYLOAD <version>`.
+ */
+export const JIT_PAYLOAD_PROBE = `
+P="$HOME/${JIT_PAYLOAD_DIR}/bin/Runner.Listener"
+if [ ! -e "$P" ]; then
+	echo "PAYLOAD ABSENT"
+else
+	v=$("$P" --version 2>/dev/null | head -1)
+	echo "PAYLOAD \${v:-UNRUNNABLE}"
+fi
+`;
+
+/** The probe's stdout -> `{ present, version }`, or `null` when it is not the probe's line. */
+export function parseJitPayloadProbe(stdout) {
+	const line = String(stdout ?? '')
+		.split('\n')
+		.map((l) => l.trim())
+		.find((l) => l.startsWith('PAYLOAD '));
+	if (!line) return null;
+	const v = line.slice('PAYLOAD '.length).trim();
+	if (v === 'ABSENT') return { present: false, version: null };
+	return { present: true, version: v === 'UNRUNNABLE' ? null : v };
+}
+
+/**
+ * One node's JIT payload -> a finding, or `null`.
+ *
+ * `probe` is `{ node, ok, present, version, error }`. No payload is not a
+ * finding: a node that has never minted builds one fresh on its first mint.
+ * A payload that will not run IS one: `jit-provision.sh` answers
+ * `SLOT-FAIL payload will not execute` to every mint on that node.
+ */
+export function jitPayloadFinding(probe, latestVersion, { minMinorsBehind = 2 } = {}) {
+	const base = { category: 'jit-payload', node: probe.node, class: BLOCKING };
+	if (!probe.ok) {
+		return {
+			...base,
+			status: 'unreachable',
+			why: `${probe.node}'s JIT payload version could not be read: ${probe.error}.`,
+		};
+	}
+	if (!probe.present) return null;
+	const have = parseSemver(probe.version);
+	if (!have) {
+		return {
+			...base,
+			status: 'unrunnable',
+			why:
+				`${probe.node}'s JIT payload (~/${JIT_PAYLOAD_DIR}) did not report a version` +
+				`${probe.version ? ` ("${probe.version}")` : ''} — jit-provision.sh refuses every ` +
+				'mint on this node while its Runner.Listener will not run.',
+		};
+	}
+	const latest = parseSemver(latestVersion);
+	if (!latest || !isBehind(have, latest, minMinorsBehind)) return null;
+	return {
+		...base,
+		status: 'behind',
+		version: probe.version,
+		latestVersion,
+		why:
+			`${probe.node}'s JIT payload (~/${JIT_PAYLOAD_DIR}) is runner v${probe.version} against a ` +
+			`latest release of v${latestVersion}. Every jit-* and warm-* runner minted on ` +
+			`${probe.node} is copied from it, and jit-provision.sh never rebuilds a payload that ` +
+			'exists, so every mint there starts at this version. GitHub periodically stops ' +
+			'accepting old runner versions, and past that point every mint on this node fails; this ' +
+			'is the early proxy for that, not an official deprecation feed.',
+	};
+}
+
+/** {@link jitPayloadFinding} over every probed node, findings only. */
+export function jitPayloadFindings(probes, latestVersion, opts = {}) {
+	return probes.map((p) => jitPayloadFinding(p, latestVersion, opts)).filter(Boolean);
 }
 
 /**

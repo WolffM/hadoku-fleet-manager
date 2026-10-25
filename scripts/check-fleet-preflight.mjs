@@ -40,6 +40,9 @@ import {
 	nodeKeyFindings,
 	tokenExpiryFinding,
 	runnerVersionFindings,
+	JIT_PAYLOAD_PROBE,
+	jitPayloadFindings,
+	parseJitPayloadProbe,
 	rebootFindings,
 	blockingFindings,
 	advisoryFindings,
@@ -195,6 +198,16 @@ async function ghApi(args, timeoutMs = GH_TIMEOUT_MS) {
 	return { ok: false, error: reason };
 }
 
+/** The node's JIT payload version, for `jitPayloadFinding`. Its own ssh, like the LAN probe. */
+async function payloadProbe(node) {
+	const res = await runOn(node, JIT_PAYLOAD_PROBE, { timeoutMs: 20_000, connectTimeout: 8 });
+	if (!res.ok) return { node, ok: false, error: res.error ?? (res.stderr.trim() || 'unreachable') };
+	const parsed = parseJitPayloadProbe(res.stdout);
+	if (!parsed)
+		return { node, ok: false, error: `unexpected probe output: ${res.out.slice(0, 200)}` };
+	return { node, ok: true, ...parsed };
+}
+
 async function rebootProbe(node) {
 	const res = await runOn(node, REBOOT_PROBE, { timeoutMs: 20_000, connectTimeout: 8 });
 	if (!res.ok) return { node, ok: false, error: res.error ?? (res.stderr.trim() || 'unreachable') };
@@ -293,12 +306,13 @@ async function main() {
 	// once, and `Promise.all` preserves input order in its results regardless
 	// of which settles first, so the rest of this function reads exactly as it
 	// did when these were sequential awaits.
-	const [tok, latest, registered, probes, lanProbes] = await Promise.all([
+	const [tok, latest, registered, probes, lanProbes, payloadProbes] = await Promise.all([
 		tokenExpiryHeader(),
 		ghApi(['repos/actions/runner/releases/latest', '-q', '.tag_name'], RELEASE_TIMEOUT_MS),
 		ghApi([`repos/${RESIDENT_REPO}/actions/runners`, '-q', '.runners']),
 		Promise.all(fleetNodes.map(rebootProbe)),
 		Promise.all(fleetNodes.map(lanProbe)),
+		Promise.all(fleetNodes.map(payloadProbe)),
 	]);
 
 	if (!tok.ok) {
@@ -308,7 +322,12 @@ async function main() {
 		if (f) findings.push(f);
 	}
 
-	// --- runner version drift, standing registrations only ------------------
+	// --- runner version drift: standing registrations, and each JIT payload --
+	// The listing holds minted runners too; runnerVersionFindings drops them,
+	// and the payload they were copied from is judged per node instead (#1).
+	if (latest.ok) {
+		findings.push(...jitPayloadFindings(payloadProbes, latest.out.trim().replace(/^v/, '')));
+	}
 	if (!latest.ok) {
 		errors.push(`could not read the latest actions/runner release: ${latest.error}`);
 	} else if (!registered.ok) {
