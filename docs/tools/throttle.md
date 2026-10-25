@@ -159,8 +159,14 @@ hokon (`scripts/ci-throttle.sh:42-83`).
 
 `fleet converge-provisioning` runs every 30 minutes inside mgmt-api
 (`src/provisioning-converge.ts`). It reads both `--check`s, repairs only the
-nodes that drifted (throttle env, standing-unit slice placement and cap), and
-reads those nodes again. Idle units only; a node drifting on both facets
+nodes that drifted (throttle env, node-side scripts behind the package,
+standing-unit slice placement and cap), and reads those nodes again. Node-side
+scripts are replaced by rename, never rewritten in place, so a redeploy is
+safe while a job runs the hook. The package mgmt-api runs is the reference: a
+node hand-deployed ahead of it is put back. That is how a fixed
+`jit-provision.sh` reaches every node, and `jit-provision.sh` now rebuilds a
+JIT payload that is behind the release it is handed, relinking any idle slot
+built from the old one. Idle units only; a node drifting on both facets
 restarts each unit once. It logs what it changed and pages only on a repair
 the re-check still disagrees with, or a deferral behind a live job that has
 lasted 6 hours. `check:throttle` in hadoku_site is now the backstop and should

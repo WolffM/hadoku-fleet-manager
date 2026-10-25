@@ -99,13 +99,26 @@ if [ "$APPLY" = 1 ]; then
 	# very directories its next line is about to report on.
 	mkdir -p "$RUNNER_TMPDIR" && chmod 0700 "$RUNNER_TMPDIR"
 	mkdir -p "$RUNNER_COMPILE_CACHE"
-	printf '%s' "${HOOK_B64:-}" | base64 -d >"$HOOK" && chmod 0755 "$HOOK"
-	printf '%s' "${CONF_B64:-}" | base64 -d >"$CONF" && chmod 0644 "$CONF"
+	# REPLACED, NEVER REWRITTEN IN PLACE. `>` truncates the file a running job's
+	# hook, or a mint's jit-provision.sh, is reading at that moment, and bash
+	# reads a script as it goes. Since #1 the controller redeploys these
+	# unattended, so a deploy must be safe mid-job: identical bytes are left
+	# untouched, and anything else is written beside the file and renamed over
+	# it. A reader already running keeps the inode it opened.
+	put_b64() { # $1=dest $2=mode $3=base64 body
+		if printf '%s' "$3" | base64 -d | cmp -s - "$1" 2>/dev/null; then
+			chmod "$2" "$1"
+			return 0
+		fi
+		printf '%s' "$3" | base64 -d >"$1.new.$$" && chmod "$2" "$1.new.$$" && mv "$1.new.$$" "$1"
+	}
+	put_b64 "$HOOK" 0755 "${HOOK_B64:-}"
+	put_b64 "$CONF" 0644 "${CONF_B64:-}"
 	# Payload before .env, for the same reason as the throttle hook above: a
 	# .env naming a hook that is not there is one restart away from failing
 	# every build on the box.
 	if [ -n "${METRICS_B64:-}" ]; then
-		printf '%s' "$METRICS_B64" | base64 -d >"$METRICS" && chmod 0755 "$METRICS"
+		put_b64 "$METRICS" 0755 "$METRICS_B64"
 	fi
 	# The JIT provisioner, for nodes the manifest marks `ephemeral: true`.
 	# It ships from here because this script already owns ~/.hadoku and creates
@@ -113,8 +126,7 @@ if [ "$APPLY" = 1 ]; then
 	# no gain. It is INERT on arrival — nothing runs it until the dispatcher
 	# mints, and nothing mints until `ephemeral: true` is set.
 	if [ -n "${JIT_B64:-}" ]; then
-		printf '%s' "$JIT_B64" | base64 -d >"$NODE_DIR/jit-provision.sh" &&
-			chmod 0755 "$NODE_DIR/jit-provision.sh"
+		put_b64 "$NODE_DIR/jit-provision.sh" 0755 "$JIT_B64"
 		# THE TOOL CACHE, for jit-provision.sh to stamp into each slot.
 		#
 		# It is written as a FILE rather than baked into the provisioner because

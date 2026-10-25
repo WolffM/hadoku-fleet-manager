@@ -648,6 +648,11 @@ for (const [name, m] of nodes) {
 	// PROVENANCE. The round trip is already made; this is the part of it that
 	// answers "is the code on that box the code we think we shipped".
 	// A missing SUMMARY is already throttleSummaryDrift()'s finding above.
+	// The drifted file names are carried on the result too, so the provisioning
+	// converger can redeploy a node whose scripts lag this package (#1)
+	// without parsing prose. jit-provision.sh is the one that keeps the JIT
+	// payload current, so it matters most.
+	const scriptDrift = [];
 	if (CHECK && kv) {
 		for (const { file, summaryKey, everyNode, dest } of NODE_SIDE_FILES) {
 			// A file the manifest does not send here is not drift. The
@@ -660,7 +665,10 @@ for (const [name, m] of nodes) {
 				if (kv.jit !== '1') continue;
 			}
 			const d = fileDrift(name, file, kv[summaryKey], SHIPPED[file], dest);
-			if (d) drift.push(d);
+			if (d) {
+				drift.push(d);
+				scriptDrift.push(file);
+			}
 		}
 	}
 	// #102: a stale listener this run did NOT clear — busy, a failed restart
@@ -671,7 +679,15 @@ for (const [name, m] of nodes) {
 	const staleRemaining = Number(/stale_remaining=(\d+)/.exec(summary)?.[1] ?? 0);
 	for (const n of notes.slice(0, 6)) log(`     ${n}`);
 	if (notes.length > 6) log(`     … ${notes.length - 6} more`);
-	results.push({ machine: name, ok: true, summary, notes, staleRemaining });
+	results.push({
+		machine: name,
+		ok: true,
+		summary,
+		notes,
+		staleRemaining,
+		scriptDrift,
+		standingEnv: standingEnv ?? null,
+	});
 }
 
 // #102: --confirm's own gate. A node this run never reached (expectedDown,

@@ -13,15 +13,16 @@
  *
  * THE TWO FACETS, AND WHY ONLY THESE:
  *   throttle — a standing runner's `.env` is wrong (`newly > stale`) or right
- *     but not loaded (`stale`). `throttle --confirm` rewrites it and restarts
- *     only IDLE runners. A busy one keeps its job and stays stale.
+ *     but not loaded (`stale`), or the node's own scripts lag this package
+ *     (see scriptLag). `throttle --confirm` rewrites them and restarts only
+ *     IDLE runners. A busy one keeps its job and stays stale.
  *   slice — a standing unit runs outside its slice or above or below its cap
  *     (SLICE-PLACEMENT-DRIFT / UNIT-CAP-DRIFT). `slice --confirm --restart`
  *     writes the drop-in, sets the cap live, and restarts only idle units. A
  *     busy one is reported BUSY and moved on a later pass.
  * MINT-* drift is the minter's: a live JIT unit is never restarted from here.
- * Every other finding either check makes (node-side script hashes,
- * io-delegation, unreachable nodes) stays the nightly gates' to report.
+ * Every other finding either check makes (io-delegation, unreachable nodes)
+ * stays the nightly gates' to report.
  *
  * Pure: the I/O lives in `converge-provisioning.mjs`.
  */
@@ -53,6 +54,22 @@ export function sliceDriftUnits(result) {
 	return [...new Set(SLICE_DRIFT.flatMap((p) => subjects(result?.notes, p)))].sort();
 }
 
+/**
+ * The node-side files on this node that do not match the package running the
+ * check: `scriptDrift` from the throttle driver, plus `standing.env` when it
+ * is absent or stale. `throttle --confirm` redeploys all of them, atomically
+ * (ci-throttle-install.sh's put_b64), so a running hook is never truncated.
+ * This is how a fixed jit-provision.sh reaches the nodes without anyone running
+ * the deploy by hand. The package the controller runs is the reference, as it
+ * is for the nightly check; a node hand-deployed AHEAD of it is put back.
+ */
+function scriptLag(result) {
+	const files = [...(result?.scriptDrift ?? [])];
+	if (result?.standingEnv === 'absent' || result?.standingEnv === 'stale')
+		files.push('standing.env');
+	return files;
+}
+
 /** A per-machine result that answered: reached, and carrying a SUMMARY. */
 function answered(result) {
 	return Boolean(result?.ok && result.summary && !result.expectedDown);
@@ -75,12 +92,20 @@ export function planRepairs(throttleDoc, sliceDoc) {
 			continue;
 		}
 		const kv = throttleKv(r.summary);
-		if (n(kv.newly) > 0) {
+		const lag = scriptLag(r);
+		if (n(kv.newly) > 0 || lag.length) {
 			const wrong = n(kv.newly) - n(kv.stale);
 			repair.push({
 				node: r.machine,
 				facet: 'throttle',
-				before: `${wrong} runner(s) with the wrong env, ${n(kv.stale)} written but not loaded`,
+				before: [
+					n(kv.newly) > 0
+						? `${wrong} runner(s) with the wrong env, ${n(kv.stale)} written but not loaded`
+						: '',
+					lag.length ? `node-side files behind this package: ${lag.join(', ')}` : '',
+				]
+					.filter(Boolean)
+					.join('; '),
 			});
 		}
 	}
@@ -139,6 +164,15 @@ export function classifyRepair(facet, confirms, recheck) {
 		const r = throttleKv(recheck.summary);
 		const changed = `env written on ${sum('newly', kv) - sum('stale', kv)} runner(s), ${sum('restarted', kv)} restarted`;
 		const wrong = n(r.newly) - n(r.stale);
+		const lag = scriptLag(recheck);
+		if (lag.length) {
+			return {
+				outcome: 'unconverged',
+				changed,
+				why: `after throttle --confirm, node-side files still differ from this package: ${lag.join(', ')}`,
+				busy,
+			};
+		}
 		if (n(r.newly) === 0) return { outcome: 'converged', changed, why: '', busy };
 		const stale = subjects(recheck.notes, 'STALE');
 		if (wrong === 0 && stale.length && stale.every((d) => busy.includes(d))) {

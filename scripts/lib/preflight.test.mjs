@@ -189,7 +189,7 @@ test('jitPayloadFinding: a payload two minors behind is its own finding, naming 
 	assert.equal(f.status, 'behind');
 	assert.equal(f.class, BLOCKING);
 	assert.match(f.why, /~\/\.hadoku\/jit\/payload/);
-	assert.match(f.why, /never rebuilds/);
+	assert.match(f.why, /PAYLOAD-REFRESH-FAILED/);
 	assert.doesNotMatch(f.why, /STANDING|never re-minted/);
 });
 

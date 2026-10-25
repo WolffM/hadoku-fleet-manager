@@ -15,6 +15,7 @@ import {
 	readFileSync,
 	rmSync,
 	existsSync,
+	readdirSync,
 	statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -493,5 +494,30 @@ void test('#98: the driver hashes the conf it RENDERS and hands it to throttleSu
 		src,
 		/throttleSummaryDrift\(\{[^}]*wantConfSha: createHash\('sha256'\)\.update\(conf, 'utf8'\)/s,
 		'the driver must judge the node against the sha256 of that same `conf`'
+	);
+});
+
+// Since fleet-manager#1 the controller redeploys node-side scripts unattended,
+// so a deploy must be safe while a job is running the hook. A changed file is
+// RENAMED over (new inode; a reader keeps the one it opened), and identical
+// bytes are not touched at all.
+void test('node-side scripts are replaced by rename, never truncated in place, and left alone when unchanged', () => {
+	const home = take(mkdtempSync(join(tmpdir(), 'runner-env-')));
+	const hook = join(home, '.hadoku', 'ci-throttle.sh');
+	runInstall(home);
+	const first = statSync(hook).ino;
+	runInstall(home);
+	assert.equal(statSync(hook).ino, first, 'identical bytes: the same file, untouched');
+	runInstall(home, {
+		env: {
+			HOOK_B64: Buffer.from('#!/usr/bin/env bash\n# v2\nexit 0\n', 'utf8').toString('base64'),
+		},
+	});
+	assert.notEqual(statSync(hook).ino, first, 'changed bytes: a new file renamed over the old');
+	assert.match(readFileSync(hook, 'utf8'), /# v2/);
+	assert.equal(statSync(hook).mode & 0o777, 0o755);
+	assert.ok(
+		!readdirSync(join(home, '.hadoku')).some((f) => f.includes('.new.')),
+		'no temp file is left behind'
 	);
 });

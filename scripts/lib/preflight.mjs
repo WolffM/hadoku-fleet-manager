@@ -31,8 +31,9 @@
  *   publish over the API.
  * - **JIT payload drift.** This file used to say a JIT registration "cannot go
  *   stale — it is reborn current every job". It is reborn from the NODE's
- *   payload, `~/.hadoku/jit/payload`, which `jit-provision.sh` builds once
- *   and never rebuilds. Measured 2026-10-24: five nodes' payloads were
+ *   payload, `~/.hadoku/jit/payload`, which `jit-provision.sh` built once
+ *   and never rebuilt (a mint now rebuilds one behind the release it is
+ *   handed; this finding is the backstop). Measured 2026-10-24: five nodes' payloads were
  *   2.336.0, built 2026-07-20, against a 2.338.1 release. The listing showed it
  *   on 10-23 as a `jit-*` runner at 2.336.0, and preflight called that a
  *   STANDING registration (fleet-manager#1). So minted names are excluded from
@@ -417,10 +418,12 @@ export function jitPayloadFinding(probe, latestVersion, { minMinorsBehind = 2 } 
 		why:
 			`${probe.node}'s JIT payload (~/${JIT_PAYLOAD_DIR}) is runner v${probe.version} against a ` +
 			`latest release of v${latestVersion}. Every jit-* and warm-* runner minted on ` +
-			`${probe.node} is copied from it, and jit-provision.sh never rebuilds a payload that ` +
-			'exists, so every mint there starts at this version. GitHub periodically stops ' +
-			'accepting old runner versions, and past that point every mint on this node fails; this ' +
-			'is the early proxy for that, not an official deprecation feed.',
+			`${probe.node} is copied from it. A mint rebuilds a payload behind the release it is ` +
+			"handed, so one still behind means the node's jit-provision.sh predates that rule, its " +
+			'release fetch is failing (PAYLOAD-REFRESH-FAILED in the mint output), or nothing has ' +
+			'minted there since the release. GitHub periodically stops accepting old runner ' +
+			'versions, and past that point every mint on this node fails; this is the early proxy ' +
+			'for that, not an official deprecation feed.',
 	};
 }
 
