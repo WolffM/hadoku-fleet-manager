@@ -4604,14 +4604,59 @@ function scheduleRemeasure(token: string, attempt = 1): void {
 	remeasureHandle.unref?.();
 }
 
-function runTick(token: string): Promise<void> {
+/**
+ * THE TICK THAT FELL IN A BLACKOUT, ASKED AGAIN WHEN IT ENDS (2026-10-25).
+ *
+ * A tick inside a spent primary budget decides nothing — every read is
+ * suppressed as "could not look" — and the next interval tick is up to ten
+ * minutes past the reset. On 2026-10-25 the budget was spent from 05:30:36 to
+ * 05:59:00Z while a package fan-out queued; the dispatcher resumed at the
+ * reset, but the backstop's next look was the 06:03 interval tick, so hokon
+ * stayed out of a queue whose oldest run was 42 minutes old.
+ *
+ * So a tick that ends with the blackout still armed schedules ONE more, just
+ * past the reset. Budget: at most one extra runner-health tick per blackout,
+ * and one blackout per hourly window, so the ceiling is one tick an hour —
+ * ~45 calls (measured 2026-10-25: runner-health 85–91 per gh-budget window
+ * holding a tick and its re-tick), spent in the first seconds of a full
+ * budget. ci-alerts is NOT re-run with it: it has no decision waiting on the
+ * reset, and it costs as much again (86–104 a window).
+ */
+export const POST_BLACKOUT_SLACK_MS = 5_000;
+let postBlackoutSlackMs = POST_BLACKOUT_SLACK_MS;
+let postBlackoutHandle: ReturnType<typeof setTimeout> | null = null;
+/** Test seam: shorten the margin past the reset. */
+export function __setPostBlackoutSlackForTesting(ms: number | null): void {
+	postBlackoutSlackMs = ms ?? POST_BLACKOUT_SLACK_MS;
+}
+
+function scheduleAfterBlackout(token: string): void {
+	if (postBlackoutHandle) return;
+	const remainingMs = ghBlackoutRemainingMs();
+	if (remainingMs <= 0) return;
+	postBlackoutHandle = setTimeout(() => {
+		postBlackoutHandle = null;
+		logger.info(
+			'[runner-health] re-tick: the last tick fell inside a spent GitHub budget and decided ' +
+				'nothing — the budget has reset, deciding now rather than at the next interval'
+		);
+		const run = (): void => void runTick(token, { alerts: false });
+		if (inFlightTick) void inFlightTick.finally(run);
+		else run();
+	}, remainingMs + postBlackoutSlackMs);
+	postBlackoutHandle.unref?.();
+}
+
+function runTick(token: string, opts: { alerts?: boolean } = {}): Promise<void> {
 	// CI-red alerting rides this cadence but runs INDEPENDENTLY of the tick.
 	// Two separate concerns sharing a timer: a GitHub blackout or a thrown error
 	// in either must not take the other down, and ci-alerts must not be able to
 	// delay runner mint/failover decisions by sitting in the same await chain.
-	void withGhCaller('ci-alerts', () => runCiAlerts(token, ghGet)).catch((err) =>
-		logger.warn(`[ci-alerts] pass failed: ${err instanceof Error ? err.message : String(err)}`)
-	);
+	if (opts.alerts !== false) {
+		void withGhCaller('ci-alerts', () => runCiAlerts(token, ghGet)).catch((err) =>
+			logger.warn(`[ci-alerts] pass failed: ${err instanceof Error ? err.message : String(err)}`)
+		);
+	}
 	inFlightTick = withGhCaller('runner-health', () => tick(token))
 		.catch((err) =>
 			logger.warn(
@@ -4620,6 +4665,7 @@ function runTick(token: string): Promise<void> {
 		)
 		.finally(() => {
 			inFlightTick = null;
+			if (started) scheduleAfterBlackout(token);
 		});
 	return inFlightTick;
 }
@@ -4637,6 +4683,8 @@ export function __stopRunnerHealthMonitorForTesting(): void {
 	intervalHandle = null;
 	if (remeasureHandle) clearTimeout(remeasureHandle);
 	remeasureHandle = null;
+	if (postBlackoutHandle) clearTimeout(postBlackoutHandle);
+	postBlackoutHandle = null;
 	lastTickEphemeralUnknown = null;
 	started = false;
 }

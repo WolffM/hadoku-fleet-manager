@@ -41,6 +41,7 @@ import {
 	__awaitInFlightTickForTesting,
 	__stopRunnerHealthMonitorForTesting,
 	__setRemeasureDelayForTesting,
+	__setPostBlackoutSlackForTesting,
 	__setTokenRetryForTesting,
 	__resetRunnerHealthAlertsForTesting,
 	__reloadAlertLedgerForTesting,
@@ -4391,6 +4392,53 @@ test('start: an UNMEASURED first tick is followed by a re-tick once the probe la
 	} finally {
 		__stopRunnerHealthMonitorForTesting();
 		__setRemeasureDelayForTesting(null);
+		__setHostForTesting(testHost);
+	}
+});
+
+test('start: a tick that falls in a spent budget is re-run just past the reset, not at the next interval', async () => {
+	// 2026-10-25: budget spent 05:30:36 -> 05:59:00Z; the backstop's next look
+	// was the 06:03 interval tick while the oldest queued run was 42 minutes old.
+	installFetch({ runners: FLEET_ALL_UP });
+	const inner = globalThis.fetch;
+	const resetAtSec = Math.ceil(Date.now() / 1000) + 1;
+	let spent = true;
+	let reads = 0;
+	globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+		const url = String(input);
+		if (url.includes('api.github.com') && url.includes('/actions/runners')) reads++;
+		if (spent && url.includes('api.github.com')) {
+			return {
+				ok: false,
+				status: 403,
+				headers: new Headers({
+					'x-ratelimit-remaining': '0',
+					'x-ratelimit-reset': String(resetAtSec),
+				}),
+				json: async () => ({}),
+				text: async () => JSON.stringify({ message: 'API rate limit exceeded for user ID 1.' }),
+			} as unknown as Response;
+		}
+		return inner(input, init);
+	}) as typeof fetch;
+	__setSupervisionCheckerForTesting(() => Promise.resolve(null));
+	__setHostForTesting({ ...testHost, githubToken: () => 'tok' });
+	__setFleetProbeForTesting({ at: new Date().toISOString(), nodes: {} });
+	__setPostBlackoutSlackForTesting(10);
+	try {
+		startRunnerHealthMonitor();
+		await __awaitInFlightTickForTesting();
+		assert.notEqual(getRunnerHealthSnapshot()?.runnersChecked, true, 'the blind tick read nothing');
+		spent = false;
+		const blindReads = reads;
+		await new Promise((r) => setTimeout(r, resetAtSec * 1000 - Date.now() + 200));
+		await __awaitInFlightTickForTesting();
+		assert.ok(reads > blindReads, 'a tick went out once the budget reset');
+		assert.equal(getRunnerHealthSnapshot()?.runnersChecked, true, 'and it read the fleet');
+	} finally {
+		__stopRunnerHealthMonitorForTesting();
+		__setPostBlackoutSlackForTesting(null);
+		__resetGhBlackoutForTesting();
 		__setHostForTesting(testHost);
 	}
 });
