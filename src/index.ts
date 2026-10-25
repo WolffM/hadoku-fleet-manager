@@ -45,6 +45,49 @@ export { noteCronStart, noteCronEnd, inFlightCronJobs } from './node-reservation
  *  one does not build a second — it has no non-fleet consumers today. */
 export { ghGet, ghWrite } from './runner-health.js';
 
+/**
+ * THE BACKSTOP DECISION, as a pure library. hokon is the emergency backstop
+ * for cardtable's Forge matches with the CI backstop's rules (operator,
+ * 2026-10-25; hadoku-cardtable FLEET_MANAGER_FORGE_HOSTING.md §6), and
+ * cardtable calls these with its own inputs rather than copying them — so a
+ * rule changed here reaches both backstops in one publish. Pure functions and
+ * constants only: the force record's file I/O (`readForce`/`writeForce`)
+ * stays inside, because it is THIS fleet's state, not a rule.
+ */
+export {
+	BACKLOG_QUEUE_SECONDS,
+	BACKSTOP_CALM_TICKS,
+	BACKSTOP_IDLE_MAX_LOAD_PER_CORE,
+	BACKSTOP_IDLE_MIN_AVAILABLE_MB,
+	SATURATION_QUEUE_SECONDS,
+	clawsAreHealthy,
+	decideBackstop,
+	describeSaturationHost,
+	explainBackstop,
+	hostMayTakeSaturation,
+	isAtCapacity,
+	isHostIdle,
+} from './runners/backstop.js';
+export type {
+	BackstopDecision,
+	BackstopInput,
+	BackstopState,
+	SaturationHostVerdict,
+} from './runners/backstop.js';
+export {
+	FORCE_DEFAULT_MINUTES,
+	FORCE_MAX_MINUTES,
+	activeForces,
+	describeForce,
+	forceRecord,
+	isForced,
+	parseForceMinutes,
+	pruneForce,
+} from './runners/backstop-force.js';
+export type { ForceRecord, ForceState } from './runners/backstop-force.js';
+/** The /tmp floor the idle gate's caller applies beside `isHostIdle`. */
+export { TMP_FREE_FLOOR_MB } from './runners/ephemeral.js';
+
 export interface FleetManager {
 	/** Mount at `/api`. Serves `GET /fleet`. Works whether or not `start()` was
 	 *  ever called — a passive host (`host.controller === false`) still serves
