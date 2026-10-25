@@ -184,8 +184,26 @@ function ensureMirror(repo) {
 			rmSync(tmp, { recursive: true, force: true }); // another process won the race
 		}
 	}
-	// Set every time, so a changed FLEET_SOURCE_URL takes effect on the next read.
-	git(dir, ['config', 'remote.origin.url', remoteUrl(repo)]);
+	// Checked every time, so a changed FLEET_SOURCE_URL takes effect on the next
+	// read — but WRITTEN only when it differs. Writing unconditionally took
+	// git's config lock on every read, and concurrent readers of one mirror
+	// (ci:audit-gates beside a pre-push) failed with "could not lock config
+	// file". A URL that really did change is retried past a concurrent writer.
+	const want = remoteUrl(repo);
+	let have = '';
+	try {
+		have = git(dir, ['config', '--get', 'remote.origin.url']).trim();
+	} catch (err) {
+		// `git config --get` exits 1 for an unset key, which is written below.
+		// Anything else is a mirror we cannot read, and says so.
+		if (err?.status !== 1) throw new UnreadableRepo(repo, reasonOf(err));
+	}
+	if (have !== want) {
+		const failure = attempt(() => git(dir, ['config', 'remote.origin.url', want]));
+		if (failure && git(dir, ['config', '--get', 'remote.origin.url']).trim() !== want) {
+			throw new UnreadableRepo(repo, `could not set the mirror's remote: ${failure}`);
+		}
+	}
 	return dir;
 }
 
