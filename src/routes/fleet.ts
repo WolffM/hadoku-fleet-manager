@@ -44,6 +44,8 @@ import {
 	type JobHistorySummary,
 } from '../job-history.js';
 import { ephemeralState } from '../runners/claw-state.js';
+import { isBackstopHeld } from '../runners/backstop-hold.js';
+import { mintsOnDemand } from '../lib/node-role.js';
 import { mintableCapacity } from '../runners/census.js';
 import {
 	BACKSTOP_LABEL,
@@ -85,6 +87,7 @@ import type {
 	AdmissionBasis,
 	AdmissionCaveat,
 	CapacitySlice,
+	ClawState,
 	FleetMachine,
 	FleetMachineLedger,
 	FleetMachineMeasured,
@@ -112,6 +115,9 @@ interface ManifestNode {
 	excludeRepos?: Record<string, string>;
 	/** This node mints a runner per job and holds no standing registration. */
 	ephemeral?: boolean;
+	/** `guest` + `mint: 'on-demand'` — read through `mintsOnDemand`, never directly. */
+	role?: unknown;
+	mint?: unknown;
 	/** Bootcamp's record — read through `bootcampFacet`, never directly. */
 	$capabilities?: unknown;
 	/** Onboarding's hardware/OS measurement — read through `trimMeasured`. */
@@ -417,6 +423,18 @@ export function buildFleetReport(
 	});
 	const live = health?.runner_state ?? [];
 	const vocabulary = buildVocabulary(manifest);
+	// A HELD ON-DEMAND GUEST IS MINTABLE, whatever the census says. The census
+	// reads the runner listing, and a guest's one standing registration is a
+	// deploy runner the backstop never labels `hadoku-builder` (#120) — so it
+	// wrote `demoted` for hokon on every tick since 2026-10-19, promoted or not.
+	// On 2026-10-25 the panel showed hokon demoted beside 13 queued jobs while
+	// the dispatcher was minting onto it. The hold is this process's own record
+	// of the promotion, read here at request time like the probe is; an
+	// unheld guest keeps the census's word, which is correct for it.
+	const stateOf = (name: string, m: ManifestNode, p: NodeProbe | undefined): ClawState | null => {
+		if (m.ephemeral || (mintsOnDemand(m) && isBackstopHeld(name))) return ephemeralState(p);
+		return health?.claw_state?.[name] ?? null;
+	};
 
 	// RE-BASE THE MINTABLE HALF ONTO THE FRESH PROBE.
 	//
@@ -624,7 +642,7 @@ export function buildFleetReport(
 			// jobs were running, and a negative "free" renders as a bar running
 			// backwards.
 			...admission(m, p),
-			state: m.ephemeral ? ephemeralState(p) : (health?.claw_state?.[name] ?? null),
+			state: stateOf(name, m, p),
 			ephemeral: m.ephemeral === true,
 			...admissionRefusalField,
 			// The DISPATCHER's own in-flight number for this node, with its
@@ -681,7 +699,19 @@ export function buildFleetReport(
 			// Per-node, because a count cannot be diagnosed. `demoted`,
 			// `offline` and `absent` all render as a smaller clawsOnline and have
 			// three different fixes.
-			clawState: health?.claw_state ?? null,
+			// The census's map, with every held on-demand guest re-read the way
+			// `machines[].state` is — two answers for one node in one payload is
+			// the bug `stateOf` exists to end.
+			// A null answer OMITS the key, as the census does for "not looked at".
+			clawState: health?.claw_state
+				? Object.fromEntries(
+						Object.entries(health.claw_state).flatMap(([n, st]) => {
+							if (!(mintsOnDemand(manifest[n]) && isBackstopHeld(n))) return [[n, st]];
+							const fresh = ephemeralState(probe?.nodes[n]);
+							return fresh ? [[n, fresh]] : [];
+						})
+					)
+				: null,
 			backstopReason: health?.backstop_reason ?? null,
 			backstopForced: forcedForReport(),
 			queuedNow: health?.queued_now ?? null,

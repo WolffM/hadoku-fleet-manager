@@ -30,6 +30,7 @@ import {
 	type RecentJobRecord,
 } from '../job-history.js';
 import { testStateDir } from './install-test-host.js';
+import { setBackstopHold } from '../runners/backstop-hold.js';
 
 /**
  * An EMPTY job history, passed explicitly.
@@ -436,6 +437,59 @@ test('a STANDING node still takes its state from the census', async () => {
 	const hokon = r.machines.find((m) => m.name === 'hokon')!;
 	assert.equal(hokon.state, 'demoted');
 	assert.equal(hokon.ephemeral, false);
+});
+
+const GUEST_MANIFEST = {
+	...EPHEMERAL_MANIFEST,
+	hokon: { ...EPHEMERAL_MANIFEST.hokon, role: 'guest', mint: 'on-demand' },
+};
+
+test('a HELD on-demand guest reads mintable, not the census demoted', async () => {
+	// 2026-10-25: hokon showed `demoted` beside 13 queued jobs while the
+	// dispatcher minted onto it. Its one standing registration is a deploy runner
+	// the backstop never labels, so the census says `demoted` held or not; the
+	// hold is the record of the promotion. Both halves of the payload must agree.
+	setBackstopHold(['hokon']);
+	try {
+		const r = buildFleetReport(
+			health({ claw_state: { hokon: 'demoted' } }),
+			{ at: 'now', nodes: { hokon: upProbe() } },
+			GUEST_MANIFEST,
+			NO_JOBS
+		);
+		assert.equal(r.machines.find((m) => m.name === 'hokon')!.state, 'mintable');
+		assert.equal(r.fleet.clawState?.hokon, 'mintable');
+	} finally {
+		setBackstopHold([]);
+	}
+});
+
+test('an UNHELD on-demand guest keeps the census word', async () => {
+	setBackstopHold([]);
+	const r = buildFleetReport(
+		health({ claw_state: { hokon: 'demoted' } }),
+		{ at: 'now', nodes: { hokon: upProbe() } },
+		GUEST_MANIFEST,
+		NO_JOBS
+	);
+	assert.equal(r.machines.find((m) => m.name === 'hokon')!.state, 'demoted');
+	assert.equal(r.fleet.clawState?.hokon, 'demoted');
+});
+
+test('a held guest with no probe is UNKNOWN, never the stale census word', async () => {
+	setBackstopHold(['hokon']);
+	try {
+		const r = buildFleetReport(
+			health({ claw_state: { hokon: 'demoted' } }),
+			{ at: 'now', nodes: {} },
+			GUEST_MANIFEST,
+			NO_JOBS
+		);
+		assert.equal(r.machines.find((m) => m.name === 'hokon')!.state, null);
+		assert.ok(!('hokon' in (r.fleet.clawState ?? {})), 'omitted, as the census omits unknowns');
+	} finally {
+		setBackstopHold([]);
+	}
 });
 
 test('an ephemeral node the probe has not reached is UNKNOWN, not unreachable', async () => {
