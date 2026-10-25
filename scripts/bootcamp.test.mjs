@@ -1608,3 +1608,58 @@ test('the idle measurement entry moves only with the VERDICT: a second idle run 
 		rmSync(f.root, { recursive: true, force: true });
 	}
 });
+
+// --- --check-only installs and seeds nothing (2026-10-25 audit) -------------
+//
+// `fleet provision`'s "DRY RUN" ran bootcamp with no flags, and bootcamp's
+// default installs. `ssh` here is a stand-in: every tool's detect answers
+// present EXCEPT pm2 (absent), and any script carrying pm2's install is
+// recorded. pm2 is presence-only (no release lookup), so nothing leaves the box.
+
+function pm2Fixture() {
+	const f = fixture();
+	const doc = JSON.parse(readFileSync(f.manifestPath, 'utf8'));
+	doc.machines[CLAW] = { ...doc.machines[CLAW], services: 'pm2' };
+	writeFileSync(f.manifestPath, JSON.stringify(doc, null, 2));
+	const bin = join(f.root, 'bin');
+	mkdirSync(bin);
+	const log = join(f.root, 'installs.log');
+	writeFileSync(
+		join(bin, 'ssh'),
+		[
+			'#!/bin/sh',
+			'script=$(cat)',
+			'case "$script" in',
+			`  *"npm install -g"*pm2*) echo "INSTALL pm2" >> "${log}" ;;`,
+			'  *"command -v pm2 >/dev/null 2>&1 && pm2 --version"*) : ;;',
+			'  *"echo OK"*) echo OK ;;',
+			'esac',
+			'exit 0',
+			'',
+		].join('\n')
+	);
+	chmodSync(join(bin, 'ssh'), 0o755);
+	return { ...f, log, env: { ...f.env, PATH: `${bin}:${process.env.PATH}` } };
+}
+
+test('the default run INSTALLS a missing tool — the baseline that makes the next test meaningful', () => {
+	const f = pm2Fixture();
+	try {
+		run(['--machine', CLAW, '--json'], f.env);
+		assert.match(existsSync(f.log) ? readFileSync(f.log, 'utf8') : '', /INSTALL pm2/);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('--check-only probes the same node and installs NOTHING', () => {
+	const f = pm2Fixture();
+	try {
+		const r = run(['--machine', CLAW, '--json', '--check-only'], f.env);
+		assert.equal(existsSync(f.log) ? readFileSync(f.log, 'utf8') : '', '', 'nothing installed');
+		const report = JSON.parse(r.out);
+		assert.deepEqual(report.tools[CLAW], [], 'no install was even attempted');
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});

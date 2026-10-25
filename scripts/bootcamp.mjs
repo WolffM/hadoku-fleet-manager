@@ -255,6 +255,15 @@ const ONLY = machineArg(process.argv.slice(2), { valueFlags: ['--due', '--idle-w
  * REGISTRY, not of one run's patience.
  */
 const PROVE = process.argv.includes('--prove');
+/**
+ * `--check-only`: probe and judge every node, INSTALL AND SEED NOTHING. The
+ * default installs missing tools and seeds artifacts, which made `fleet
+ * provision`'s "DRY RUN" install packages through its verify step (2026-10-25
+ * audit). Capabilities are still EXECUTED here, unlike a guest's presence-only
+ * check: verifying by execution is the point of a verify pass.
+ */
+const CHECK_ONLY = process.argv.includes('--check-only');
+const installsOn = (name) => !CHECK_ONLY && !checkOnly.has(name);
 const dueFlagAt = process.argv.indexOf('--due');
 const DUE_DAYS =
 	dueFlagAt > -1 && Number.isFinite(Number(process.argv[dueFlagAt + 1]))
@@ -515,9 +524,13 @@ await Promise.all(
 	nodes.map(async ([name, m]) => {
 		// BEFORE THE PROBE, so what the probe executes is what the node now has —
 		// except on a check-only node, where nothing is installed.
-		if (checkOnly.has(name)) {
+		if (!installsOn(name)) {
 			toolResults[name] = [];
-			log(`── ${name}  check-only: nothing will be installed here; installs are approved by hand`);
+			log(
+				CHECK_ONLY
+					? `── ${name}  --check-only: nothing will be installed or seeded`
+					: `── ${name}  check-only: nothing will be installed here; installs are approved by hand`
+			);
 		} else {
 			toolResults[name] = await ensureTools(name, m);
 		}
@@ -801,7 +814,7 @@ await Promise.all(
 		// `earned` here is THIS RUN's fresh proof, not the manifest's possibly
 		// stale `$capabilities` facet, so the synthetic node below carries it
 		// directly rather than asking `seedNode` to re-derive it from `m`.
-		seedResultsByNode[name] = checkOnly.has(name)
+		seedResultsByNode[name] = !installsOn(name)
 			? []
 			: await seedNode(name, { ...m, $capabilities: { earned, prereqs } }, manifest, seedDeps);
 	})

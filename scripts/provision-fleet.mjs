@@ -634,7 +634,7 @@ const FLEET_APPLY = [
 	},
 ];
 
-const VERIFY = [
+export const VERIFY = [
 	{ name: 'coverage', script: 'reconcile-fleet-runners.mjs', args: ['--check-coverage'] },
 	{ name: 'runner identity', script: 'reconcile-runner-identity.mjs', args: [] },
 	{ name: 'throttle + tool cache', script: 'deploy-ci-throttle.mjs', args: ['--check'] },
@@ -642,8 +642,20 @@ const VERIFY = [
 	// VERIFIED BY EXECUTING THE CAPABILITY, not by checking the copy landed.
 	// bootcamp launches a browser and runs an interpreter; a seed step that
 	// verified its own rsync would be a writer reading its own artefact.
-	{ name: 'capabilities (bootcamp)', script: 'bootcamp.mjs', args: [] },
+	// `--check-only` unless --confirm: a dry run must not install (2026-10-25 audit:
+	// this row ran a full bootcamp, which installs and seeds, inside the DRY RUN).
+	{ name: 'capabilities (bootcamp)', script: 'bootcamp.mjs', args: [], dryArgs: ['--check-only'] },
 ];
+
+/** A verify step's arguments: its dry-run form unless --confirm (a dry run installs nothing). */
+export function verifyStepArgs(step, { confirm }) {
+	return confirm ? step.args : (step.dryArgs ?? step.args);
+}
+
+/** The onboarding chain's bootcamp probe: `--check-only` unless --confirm, for the same reason. */
+export function bootcampProbeArgs(node, { confirm }) {
+	return ['--machine', node, '--json', ...(confirm ? [] : ['--check-only'])];
+}
 
 // ── execution helpers ────────────────────────────────────────────────────────
 
@@ -776,7 +788,7 @@ function convergePhase(node, { confirm }) {
 function bootcampPhase(node, { confirm, noPush }) {
 	const probe = run(
 		process.execPath,
-		[resolve(HERE, 'bootcamp.mjs'), '--machine', node, '--json'],
+		[resolve(HERE, 'bootcamp.mjs'), ...bootcampProbeArgs(node, { confirm })],
 		{ captureJson: true }
 	);
 	const probeReport = safeJson(probe.text)?.report?.[node] ?? null;
@@ -812,9 +824,7 @@ function bootcampPhase(node, { confirm, noPush }) {
 		process.execPath,
 		[
 			resolve(HERE, 'bootcamp.mjs'),
-			'--machine',
-			node,
-			'--json',
+			...bootcampProbeArgs(node, { confirm }),
 			...(confirm ? ['--write'] : []),
 			...(noPush ? ['--no-push'] : []),
 		],
@@ -1069,7 +1079,7 @@ async function onboardingRun(node, { confirm, verifyOnly, noPush, address }) {
 		}
 	}
 
-	if (!failures.length) await verifyPass(node);
+	if (!failures.length) await verifyPass(node, { confirm });
 	return report(failures, { confirm, verifyOnly });
 }
 
@@ -1105,17 +1115,21 @@ async function fleetRun({ confirm, verifyOnly }) {
 			}
 		}
 	}
-	if (!failures.length) await verifyPass(null);
+	if (!failures.length) await verifyPass(null, { confirm });
 	return report(failures, { confirm, verifyOnly });
 }
 
-async function verifyPass(only) {
+async function verifyPass(only, { confirm }) {
 	const machineFlag = only ? ['--machine', only] : [];
 	P(`\n\x1b[1m═══ verify (each step re-reads OBSERVED state) ═══\x1b[0m`);
 	for (const step of VERIFY) {
 		P(`\n\x1b[1m── verify: ${step.name}\x1b[0m`);
 		if (
-			run(process.execPath, [resolve(HERE, step.script), ...step.args, ...machineFlag]).status !== 0
+			run(process.execPath, [
+				resolve(HERE, step.script),
+				...verifyStepArgs(step, { confirm }),
+				...machineFlag,
+			]).status !== 0
 		)
 			verifyFailed.push(step.name);
 	}

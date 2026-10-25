@@ -36,6 +36,9 @@ const {
 	applyPlacementWrite,
 	BENCHMARK_DUE_DAYS,
 	HEALTH_FRESH_DAYS,
+	VERIFY,
+	bootcampProbeArgs,
+	verifyStepArgs,
 } = await import('./provision-fleet.mjs');
 
 const made = [];
@@ -523,4 +526,38 @@ test('fastForward uses --ff-only — it cannot lose local work', () => {
 	assert.equal(ff.ok, false);
 	assert.match(ff.why, /cannot be fast-forwarded/);
 	assert.match(ff.why, /by hand/);
+});
+
+// --- a dry run installs nothing (2026-10-25 audit) ---------------------------
+//
+// provision printed "DRY RUN" and then ran bootcamp with no flags in its verify
+// step, and bootcamp's default installs tools and seeds artifacts.
+
+test('no verify step of a DRY RUN invokes bootcamp without --check-only', () => {
+	const bootcampRows = VERIFY.filter((s) => s.script === 'bootcamp.mjs');
+	assert.ok(
+		bootcampRows.length > 0,
+		'the verify pass still runs bootcamp — this test would be vacuous otherwise'
+	);
+	for (const step of bootcampRows) {
+		assert.ok(verifyStepArgs(step, { confirm: false }).includes('--check-only'), step.name);
+		assert.ok(
+			!verifyStepArgs(step, { confirm: true }).includes('--check-only'),
+			'an applied run installs, as asked'
+		);
+	}
+});
+
+test('the onboarding chain probes with --check-only unless --confirm', () => {
+	assert.deepEqual(bootcampProbeArgs('claw-7', { confirm: false }), [
+		'--machine',
+		'claw-7',
+		'--json',
+		'--check-only',
+	]);
+	assert.deepEqual(bootcampProbeArgs('claw-7', { confirm: true }), [
+		'--machine',
+		'claw-7',
+		'--json',
+	]);
 });

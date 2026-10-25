@@ -74,6 +74,17 @@ interface Command {
 	 * them. Absent, `--help` never reaches the script — see the door below.
 	 */
 	help?: true;
+	/**
+	 * Every flag the script reads from its OWN argv; a trailing `=` marks one
+	 * that takes a value (`--machine=` accepts `--machine claw-3`). Declared on
+	 * each subcommand whose NO-FLAG default changes something, because those
+	 * scripts ignore a flag they do not know and fall through to the default:
+	 * `fleet bootcamp --dryrun` installs. The door refuses anything else with
+	 * exit 2 before running. Flags a script only PASSES to its children are not
+	 * listed: converge-provisioning calls its children with `--check`, and
+	 * accepting it here would keep its most natural typo live.
+	 */
+	flags?: string[];
 }
 
 /**
@@ -95,8 +106,9 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'converge-provisioning': {
 		script: 'converge-provisioning.mjs',
+		flags: ['--dry-run', '--json'],
 		summary:
-			'repair drifted throttle env + slice placement on idle runners and claw security upgrades, then re-check',
+			'REPAIRS by default: drifted throttle env + slice placement on idle runners and claw security upgrades, then re-check (--dry-run: report only)',
 	},
 	'apt-security': {
 		script: 'apt-security.mjs',
@@ -152,6 +164,7 @@ const COMMANDS: Record<string, Command> = {
 	},
 	stress: {
 		script: 'stress-node.sh',
+		flags: ['--minutes=', '--quick', '--force'],
 		summary: 'semi-annual wear check: RAM, CPU/thermal, SMART (runs ON the node)',
 	},
 	capabilities: {
@@ -206,7 +219,18 @@ const COMMANDS: Record<string, Command> = {
 	},
 	bootcamp: {
 		script: 'bootcamp.mjs',
-		summary: 'a node EARNS its labels — probe, then compare against what it declares',
+		flags: [
+			'--json',
+			'--write',
+			'--no-push',
+			'--prove',
+			'--check-only',
+			'--machine=',
+			'--due=',
+			'--idle-wait=',
+		],
+		summary:
+			'a node EARNS its labels — INSTALLS missing tools and seeds artifacts, then probes (--check-only: install nothing)',
 	},
 	'capability-schema': {
 		script: 'check-capability-schema.mjs',
@@ -310,7 +334,9 @@ const COMMANDS: Record<string, Command> = {
 	},
 	provision: {
 		script: 'provision-fleet.mjs',
-		summary: 'bring a node up from bare (ordered steps)',
+		flags: ['--confirm', '--verify-only', '--no-push', '--address=', '--machine='],
+		summary:
+			'bring a node up from bare (ordered steps; a dry run unless --confirm, and installs nothing)',
 	},
 	cleanup: {
 		script: 'clean-runner-debris.mjs',
@@ -328,6 +354,7 @@ const COMMANDS: Record<string, Command> = {
 	'mem-report': { script: 'runner-mem-report.py', summary: 'per-runner memory report' },
 	'mem-harvest': {
 		script: 'runner-mem-harvest.py',
+		flags: [],
 		summary: 'sample runner anon memory (systemd unit)',
 	},
 	doctor: { script: 'lib/doctor-run.mjs', summary: 'one-shot health triage on a claw' },
@@ -365,6 +392,7 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'add-dvd': {
 		script: 'add-dvd.sh',
+		flags: [],
 		summary: 'put a full Debian DVD on the stick for a node with no network during install',
 	},
 	'verify-stick': {
@@ -373,6 +401,7 @@ const COMMANDS: Record<string, Command> = {
 	},
 	refresh: {
 		script: 'refresh-preseed.sh',
+		flags: ['--reset'],
 		summary:
 			'bring a built stick up to date — payload and preseed, no erase (--reset re-asks wifi)',
 	},
@@ -398,6 +427,7 @@ const COMMANDS: Record<string, Command> = {
 	},
 	register: {
 		script: 'register-fleet-runner.sh',
+		flags: [],
 		summary: 'register one runner by hand (legacy system unit)',
 	},
 };
@@ -444,6 +474,31 @@ if (!cmd.help && rest.some((a) => a === '--help' || a === '-h')) {
 	console.log(`fleet ${name} — ${cmd.summary}`);
 	console.log(`\n(no detailed --help for this subcommand; nothing was run)`);
 	process.exit(0);
+}
+
+// A SUBCOMMAND THAT CHANGES THINGS BY DEFAULT GETS NO UNKNOWN FLAG. See
+// `Command.flags`. Checked after --help and before anything runs.
+if (cmd.flags) {
+	const bare = new Set(cmd.flags.filter((f) => !f.endsWith('=')));
+	const valued = new Set(cmd.flags.filter((f) => f.endsWith('=')).map((f) => f.slice(0, -1)));
+	const unknown: string[] = [];
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i];
+		if (a === '--') break;
+		if (!a.startsWith('-')) continue;
+		const nameOnly = a.split('=')[0];
+		if (valued.has(nameOnly)) {
+			if (!a.includes('=')) i++;
+		} else if (!bare.has(a)) unknown.push(a);
+	}
+	if (unknown.length) {
+		console.error(
+			`fleet ${name}: unknown flag(s) ${unknown.join(' ')} — nothing was run.\n` +
+				`  This subcommand changes things when run with no flags, so it accepts only: ` +
+				`${cmd.flags.length ? cmd.flags.map((f) => (f.endsWith('=') ? `${f.slice(0, -1)} <v>` : f)).join(' ') : '(no flags)'}`
+		);
+		process.exit(2);
+	}
 }
 
 // WHICH TREE, AND WHICH VERSION. Before the packaging check below, so a

@@ -88,3 +88,70 @@ for (const sub of [...commands.keys()].sort()) {
 		assert.ok((r.stdout + r.stderr).trim().length > 0, `fleet ${sub} --help printed nothing`);
 	});
 }
+
+// --- a subcommand that changes things by default refuses an unknown flag ----
+//
+// `fleet bootcamp --dryrun` used to install packages: the script ignores a
+// flag it does not know and runs its default. These are the subcommands whose
+// no-flag default changes state (the 2026-10-25 audit); the door holds each to
+// its declared flags.
+
+/** Run through the door in the sandbox; returns status, output, and what was touched. */
+function door(...args) {
+	const sb = sandbox();
+	const r = spawnSync(process.execPath, [CLI, ...args], {
+		encoding: 'utf8',
+		timeout: 15_000,
+		env: {
+			PATH: `${sb.bin}:${process.env.PATH}`,
+			HOME: join(sb.dir, 'home'),
+			HADOKU_STATE_DIR: join(sb.dir, 'state'),
+			FLEET_MANIFEST_DIR: join(sb.dir, 'no-manifests'),
+			HADOKU_SITE_ROOT: join(sb.dir, 'no-site'),
+			REPOS_DIR: join(sb.dir, 'no-repos'),
+			MGMT_API_URL: 'http://127.0.0.1:9',
+			FLEET_NO_BANNER: '1',
+		},
+	});
+	const touched = existsSync(sb.log) ? readFileSync(sb.log, 'utf8').trim() : '';
+	return { status: r.status, out: r.stdout + r.stderr, touched };
+}
+
+const MUTATES_BY_DEFAULT = [
+	'bootcamp',
+	'provision',
+	'converge-provisioning',
+	'stress',
+	'register',
+	'refresh',
+	'add-dvd',
+	'mem-harvest',
+];
+
+for (const sub of MUTATES_BY_DEFAULT) {
+	test(`fleet ${sub} --dryrun is refused at the door, and nothing runs`, () => {
+		assert.ok(commands.has(sub), `${sub} is not a subcommand any more — update this list`);
+		const r = door(sub, '--dryrun');
+		assert.equal(r.status, 2, r.out);
+		assert.match(r.out, /unknown flag\(s\) --dryrun — nothing was run/);
+		assert.equal(r.touched, '', r.touched);
+	});
+}
+
+test('converge-provisioning --check is refused: the flag it passes its children is not its own', () => {
+	const r = door('converge-provisioning', '--check');
+	assert.equal(r.status, 2, r.out);
+	assert.match(r.out, /unknown flag\(s\) --check/);
+});
+
+test('the declared flags pass the door, value flags in both spellings', () => {
+	for (const args of [
+		['bootcamp', '--write', '--json', '--due', '7d', '--machine', 'claw-x'],
+		['bootcamp', '--machine=claw-x', '--idle-wait=30'],
+		['provision', '--confirm', '--address', '192.0.2.9', '--machine', 'claw-x'],
+		['converge-provisioning', '--dry-run', '--json'],
+	]) {
+		const r = door(...args);
+		assert.doesNotMatch(r.out, /unknown flag/, `${args.join(' ')}: ${r.out}`);
+	}
+});

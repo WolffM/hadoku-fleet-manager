@@ -73,7 +73,17 @@ test('the chain fixes what bootcamp reports and RE-RUNS bootcamp (the 3-6 loop)'
 		src.indexOf('function bootcampPhase'),
 		src.indexOf('async function placementPhase')
 	);
-	const probeAt = phase.indexOf("'--json'");
+	const probeAt = phase.indexOf('bootcampProbeArgs(');
+	// EVERY bootcamp run in the phase goes through bootcampProbeArgs, which adds
+	// --check-only unless --confirm: a dry run must not install (2026-10-25: the
+	// probe AND the judge both ran bootcamp's installing default).
+	const runs = phase.split("'bootcamp.mjs')").length - 1;
+	assert.ok(runs >= 2, `expected the probe and the judge, found ${runs} bootcamp run(s)`);
+	assert.equal(
+		phase.split('bootcampProbeArgs(').length - 1,
+		runs,
+		'a bootcamp run bypasses bootcampProbeArgs'
+	);
 	const seedAt = phase.indexOf('r.argsFor(node)');
 	const judgeAt = phase.indexOf('judgeReport.earned');
 	assert.ok(
