@@ -73,6 +73,12 @@ function installedRamAtLeast(mb) {
  * without being the hub; see `hostsPm2Services` in src/lib/node-role.ts.
  */
 const pm2ServicesHost = (node) => hostsPm2Services(node);
+/**
+ * Every service host's `stateRoot`, relative to the fleet user's HOME. ONE value
+ * on purpose: `fleet capability-schema` refuses a pm2-hosts.json host whose
+ * stateRoot is anything else.
+ */
+export const SERVICE_STATE_DIR = 'srv-data';
 /** Every node `toolAppliesTo` lets through — a guest is already filtered out before `when` runs. */
 const everyClaw = () => true;
 everyClaw.toString = () => 'every claw';
@@ -306,6 +312,23 @@ export const REPAIRS = {
 			'set -e',
 			'u="$(id -un)"',
 			'sudo -n env PATH="$PATH" "$(command -v pm2)" startup systemd -u "$u" --hp "$HOME" >/dev/null',
+			// ONE DAEMON, AND THE UNIT OWNS IT. Any `pm2` command spawns a daemon
+			// if none answers, so by now one may be running OUTSIDE the unit; the
+			// unit's `pm2 resurrect` then attaches to it instead of forking, never
+			// writes pm2.pid, and systemd fails it (`Failed with result 'protocol'`)
+			// — claw-6, 2026-10-25, and the reason claw-4's daemon was moved by
+			// hand on 2026-10-12. Moved here only while it supervises NOTHING:
+			// killing a daemon with services under it restarts them, which is an
+			// operator's call on a production host.
+			'if ! systemctl is-active --quiet "pm2-$u.service"; then',
+			'  n="$(pm2 jlist 2>/dev/null | tr -cd "{" | wc -c)"',
+			'  if [ "$n" -gt 0 ]; then',
+			'    echo "a pm2 daemon outside pm2-$u.service supervises processes; moving it under the unit restarts them" >&2',
+			'    exit 1',
+			'  fi',
+			'  pm2 kill >/dev/null 2>&1 || true',
+			'  sudo -n systemctl reset-failed "pm2-$u.service" 2>/dev/null || true',
+			'fi',
 			// Saving an EMPTY list over a populated dump would make the next boot
 			// resurrect nothing, so only save when pm2 is supervising something.
 			'[ "$(pm2 jlist 2>/dev/null | tr -cd "{" | wc -c)" -gt 0 ] && pm2 save >/dev/null || true',
@@ -331,6 +354,38 @@ export const REPAIRS = {
 			'fi',
 			'command -v cloudflared >/dev/null 2>&1 || { sudo -n apt-get update -qq && sudo -n apt-get install -y cloudflared; }',
 		].join('\n'),
+	},
+	/*
+	 * THE STATE ROOT (2026-10-25, service-hosts plan P1). hadoku_site's
+	 * pm2-hosts.json names each host's `stateRoot` and says this package "owns
+	 * stateRoot's location on disk", but nothing created it: claw-4's was made by
+	 * the hand-run script. A wrapper refuses to start over a missing one, and a
+	 * move refuses to land on it. `fleet capability-schema` holds every declared
+	 * host's `stateRoot` to SERVICE_STATE_ROOT, so the two cannot drift apart.
+	 */
+	'service-state-root': {
+		when: pm2ServicesHost,
+		why:
+			"where a service host's services keep their state (pm2-hosts.json `stateRoot`); a stateful " +
+			'wrapper refuses to start without it. Created empty and owned by the fleet user.',
+		detect: `d="${'$'}HOME/${SERVICE_STATE_DIR}"; [ -d "$d" ] && [ -w "$d" ] && echo OK`,
+		repair: `set -e\nmkdir -p "${'$'}HOME/${SERVICE_STATE_DIR}"`,
+	},
+	/*
+	 * A WORD LIST (2026-10-25). pygmalion's menu-decay detector reads
+	 * /usr/share/dict/words and silently turns itself off without it
+	 * (engine/prompt/menu.py). hokon has it and claw-4 did not, so the same
+	 * service behaved differently by host. A service host is a place a service
+	 * may move to; it must not change what the service does.
+	 */
+	'dict-words': {
+		when: pm2ServicesHost,
+		why:
+			'pygmalion reads /usr/share/dict/words; without it a feature switches off silently, so a ' +
+			'service would behave differently on each host it moves between.',
+		detect: '[ -r /usr/share/dict/words ] && echo OK',
+		repair:
+			'set -e\n[ -r /usr/share/dict/words ] || { sudo -n apt-get update -qq && sudo -n apt-get install -y wamerican; }',
 	},
 	/*
 	 * JDK21 + MAVEN (cardtable#5, added 2026-10-05): forge-e2e/forge-jvm move

@@ -259,7 +259,7 @@ test('capability-schema: mint on a claw, mint beside ephemeral, and a malformed 
 
 const servicesRules = (findings) =>
 	findings
-		.filter((f) => /services|pm2-host-unprovisioned/.test(f.rule))
+		.filter((f) => /services|pm2-host-unprovisioned|state-root/.test(f.rule))
 		.map((x) => [x.rule, x.machine]);
 
 function withHosts(f, hosts) {
@@ -270,9 +270,25 @@ function withHosts(f, hosts) {
 test('capability-schema #6: a services host declared in both places passes', () => {
 	const f = fixture({ 'claw-4': { ...CLAW, services: 'pm2' }, hokon: GUEST });
 	try {
-		withHosts(f, { hokon: {}, 'claw-4': { deployRoot: '/x' } });
+		withHosts(f, { hokon: {}, 'claw-4': { deployRoot: '/x', stateRoot: '/home/hadoku/srv-data' } });
 		const r = run('check-capability-schema.mjs', ['--manifest', f.manifestPath, '--json'], f.env);
 		assert.deepEqual(servicesRules(JSON.parse(r.out).findings), []);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('capability-schema #6: a host whose stateRoot the floor does not provision is named', () => {
+	// The toolchain floor creates ~/srv-data and nothing else; a host placed
+	// anywhere else would have a wrapper refusing to start over an absent root.
+	const f = fixture({ 'claw-4': { ...CLAW, services: 'pm2' }, hokon: GUEST });
+	try {
+		withHosts(f, { hokon: {}, 'claw-4': { deployRoot: '/x', stateRoot: '/srv/data' } });
+		const r = run('check-capability-schema.mjs', ['--manifest', f.manifestPath, '--json'], f.env);
+		assert.deepEqual(servicesRules(JSON.parse(r.out).findings), [
+			['state-root-elsewhere', 'claw-4'],
+		]);
+		assert.equal(r.code, 1);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -282,7 +298,7 @@ test('capability-schema #6: a pm2-hosts host the manifest does not provision is 
 	// MUTATION: drop the hosts -> declared loop and this passes clean.
 	const f = fixture({ 'claw-4': CLAW, hokon: GUEST });
 	try {
-		withHosts(f, { hokon: {}, 'claw-4': { deployRoot: '/x' } });
+		withHosts(f, { hokon: {}, 'claw-4': { deployRoot: '/x', stateRoot: '/home/hadoku/srv-data' } });
 		const r = run('check-capability-schema.mjs', ['--manifest', f.manifestPath, '--json'], f.env);
 		assert.deepEqual(servicesRules(JSON.parse(r.out).findings), [
 			['pm2-host-unprovisioned', 'claw-4'],

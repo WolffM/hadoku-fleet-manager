@@ -63,6 +63,7 @@ import {
 	mintsOnDemand,
 } from '../dist/lib/node-role.js';
 import { keepStdoutWhole } from './lib/emit.mjs';
+import { SERVICE_STATE_DIR } from './lib/toolchain-floor.mjs';
 import { validateSeeds } from './lib/capability-seeds.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
@@ -249,6 +250,10 @@ function mintFindings(m) {
  *   pm2-host-unprovisioned  a non-hub host in pm2-hosts.json without the key:
  *                           nothing would rebuild it on a fresh image — claw-4's
  *                           state from 2026-10-12 to this rule.
+ *   state-root-elsewhere    a non-hub host whose `stateRoot` is not
+ *                           `~/<SERVICE_STATE_DIR>`, the one directory the
+ *                           toolchain floor creates: the wrapper would refuse to
+ *                           start over a root nothing provisioned.
  *
  * pm2-hosts.json missing while a node declares `services` is a finding: "I
  * could not look" is not agreement. Missing with nothing declared has nothing
@@ -289,8 +294,9 @@ function servicesFindings(m) {
 		return out;
 	}
 	let hosts;
+	let doc;
 	try {
-		const doc = JSON.parse(readFileSync(file, 'utf8'));
+		doc = JSON.parse(readFileSync(file, 'utf8'));
 		hosts = Object.keys(doc.hosts ?? {}).filter((h) => h !== doc.hub);
 	} catch (err) {
 		finding(
@@ -307,6 +313,17 @@ function servicesFindings(m) {
 				name,
 				`declares services "pm2" but ${file} lists no such host: it would be provisioned to host nothing.`
 			);
+	const stateRootShape = new RegExp(`^/home/[^/]+/${SERVICE_STATE_DIR}$`);
+	for (const host of hosts) {
+		const root = doc.hosts[host]?.stateRoot;
+		if (!stateRootShape.test(String(root ?? '')))
+			finding(
+				'state-root-elsewhere',
+				m.machines?.[host] ? host : null,
+				`${file} gives ${host} stateRoot ${JSON.stringify(root ?? null)}; the toolchain floor ` +
+					`provisions only ~/${SERVICE_STATE_DIR}, so nothing would create it.`
+			);
+	}
 	for (const host of hosts)
 		if (!declared.includes(host))
 			finding(

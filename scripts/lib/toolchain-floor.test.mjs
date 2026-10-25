@@ -1252,6 +1252,45 @@ test('#6: pm2, its boot unit and cloudflared apply to a services host only — n
 			assert.ok(!ids(node).includes(id), `${id} on ${JSON.stringify(node)}`);
 });
 
+/** Runs the pm2-boot repair against stub `pm2`, `sudo` and `systemctl`; returns what each was asked. */
+function runPm2Boot({ supervised }) {
+	const dir = tempDir('pm2-boot-');
+	const log = join(dir, 'calls');
+	const stub = (name, body) =>
+		writeFileSync(join(dir, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\n${body}\n`, {
+			mode: 0o755,
+		});
+	stub(
+		'pm2',
+		`[ "$1" = jlist ] && printf '%s' '${supervised ? '[{"name":"pygmalion"}]' : '[]'}'; exit 0`
+	);
+	stub('systemctl', '[ "$1" = is-active ] && exit 3; exit 0');
+	stub('sudo', '[ "$1" = -n ] && shift; "$@"');
+	const r = spawnSync('bash', ['-c', REPAIRS['pm2-boot'].repair], {
+		env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+		encoding: 'utf8',
+	});
+	return { code: r.status, err: r.stderr, calls: readFileSync(log, 'utf8').trim().split('\n') };
+}
+
+test('pm2-boot: a stray daemon supervising nothing is killed so the UNIT owns pm2 (claw-6, 2026-10-25)', () => {
+	// The unit's `pm2 resurrect` attaches to a daemon it did not fork, never
+	// writes pm2.pid, and systemd fails it on 'protocol'. MUTATION: drop the
+	// kill and the enable below starts a unit that fails.
+	const r = runPm2Boot({ supervised: false });
+	assert.equal(r.code, 0, r.err);
+	const kill = r.calls.indexOf('pm2 kill');
+	assert.ok(kill >= 0, r.calls.join('\n'));
+	assert.ok(kill < r.calls.findIndex((c) => c.startsWith('systemctl enable --now')));
+});
+
+test('pm2-boot: a stray daemon WITH services under it is refused, never killed', () => {
+	const r = runPm2Boot({ supervised: true });
+	assert.notEqual(r.code, 0);
+	assert.match(r.err, /supervises processes/);
+	assert.equal(r.calls.includes('pm2 kill'), false);
+});
+
 test('#6: neither pm2 nor cloudflared is version-managed — an upgrade restarts production', () => {
 	// MUTATION: give either a `latest` and the daily refresh would restart every
 	// service on the box (pm2 update) or the tunnel (cloudflared postinst).
