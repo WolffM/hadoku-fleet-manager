@@ -594,7 +594,8 @@ export function busyCount(node) {
 	return Number.isFinite(n) ? n : null;
 }
 
-function drainCli(args) {
+/** `fleet drain <args>`, as `{ ok, reason? }`. Also the reboot cycle's (lib/reboot-cycle.mjs) one way to drain. */
+export function drainCli(args) {
 	try {
 		execFileSync(process.execPath, [join(SCRIPTS, 'drain-node.mjs'), ...args], {
 			encoding: 'utf8',
@@ -639,7 +640,8 @@ export function judgePressure(doc) {
 	return { pressured: false };
 }
 
-function liveQueuePressure() {
+/** {@link judgePressure} over a live `check-queue-health --json`. Shared with the reboot cycle. */
+export function liveQueuePressure() {
 	const r = spawnSync(process.execPath, [join(SCRIPTS, 'check-queue-health.mjs'), '--json'], {
 		encoding: 'utf8',
 		timeout: 300_000,

@@ -96,6 +96,11 @@ const COMMANDS: Record<string, Command> = {
 		summary:
 			'will each claw install Debian security updates — RUNS the dry run (--confirm repairs)',
 	},
+	'reboot-claws': {
+		script: 'reboot-claws.mjs',
+		summary:
+			'reboot ONE claw that needs it: drain, wait idle, reboot, verify kernel + runners, undrain',
+	},
 	identity: { script: 'reconcile-runner-identity.mjs', summary: 'runner identity/ownership drift' },
 	traffic: {
 		script: 'traffic-status.mjs',
