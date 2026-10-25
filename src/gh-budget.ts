@@ -33,10 +33,14 @@
  * way to name a spender this code cannot see.
  *
  * ONE TOKEN, MORE THAN ONE WINDOW (measured 2026-10-25). Every response says
- * `x-ratelimit-resource: core`, but `/actions/runners*` is counted in a bucket
- * of its own, with its own `used` and its own reset: at 06:53Z a `/user` call
- * read used 4699, reset 06:59:02, and the next call, a runner listing, read
- * used 1771, reset 07:02:35. Until then this module kept ONE window per
+ * `x-ratelimit-resource: core`, but some endpoints are counted in a second
+ * bucket with its own `used` and its own reset: at 06:53Z a `/user` call read
+ * used 4699, reset 06:59:02, and the next call, a runner listing, read used
+ * 1771, reset 07:02:35. Seen in the second bucket so far: `/actions/runners`
+ * and `/actions/workflows/{id}/runs` (ci-alerts); in the first, `/user`,
+ * `/repos/{repo}` and `/actions/runs?status=queued` (the dispatcher's poll).
+ * Which endpoint lands where is GitHub's, not a rule this code relies on —
+ * the reset in each response is what tells the windows apart. Until then this module kept ONE window per
  * (token, resource) and treated a later reset as a new window. So every time
  * the two buckets' resets crossed, the window holding the real spend was
  * closed with a fraction of its count, and the general bucket's readings were

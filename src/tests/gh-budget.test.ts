@@ -197,9 +197,9 @@ test('a response with no headers is ignored — the meter never breaks the call 
 });
 
 /**
- * 2026-10-25: one token, two windows. `/actions/runners*` is counted in a bucket
- * of its own with its own reset, and every response still says `core`. Read as
- * one window, each crossing closed the window holding the real spend, and the
+ * 2026-10-25: one token, two windows. Some endpoints (the runner listing among
+ * them) are counted in a bucket of their own with its own reset, and every
+ * response still says `core`. Read as one window, each crossing closed the window holding the real spend, and the
  * general bucket's readings were then dropped as late — `GET /fleet` showed 65%
  * left while dispatch was about to be refused.
  */
