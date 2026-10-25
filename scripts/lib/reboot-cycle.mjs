@@ -289,16 +289,34 @@ export async function runRebootCycle({
 	const nodes = [];
 	const findings = [];
 	const finding = (node, kind, reason) => findings.push({ node, kind, reason });
-	const state = { inFlight: null, last: {}, ...(deps.readState() ?? {}) };
+	const state = { inFlight: null, last: {}, decisions: {}, ...(deps.readState() ?? {}) };
 	const save = () => deps.writeState(state);
-	const done = (extra = {}) => ({
-		ok: findings.length === 0,
-		plan,
-		nodes,
-		findings,
-		rebooted: nodes.filter((n) => n.status === 'rebooted').map((n) => n.node),
-		...extra,
-	});
+	const done = (extra = {}) => {
+		// WHAT THIS PASS DECIDED, PER NODE, ON DISK. `fleet doctor` reads it, so
+		// its pending-reboot finding says what the cycle will do and why (the
+		// DKMS build, the service host, the halt) instead of only that a reboot
+		// is staged. A plan pass decides nothing and records nothing.
+		if (!plan) {
+			const at = iso(deps.now());
+			for (const n of nodes) {
+				state.decisions[n.node] = {
+					status: n.status ?? 'unknown',
+					why: n.why ?? n.reason ?? null,
+					at,
+					...(n.kernel ? { kernel: n.kernel } : {}),
+				};
+			}
+			save();
+		}
+		return {
+			ok: findings.length === 0,
+			plan,
+			nodes,
+			findings,
+			rebooted: nodes.filter((n) => n.status === 'rebooted').map((n) => n.node),
+			...extra,
+		};
+	};
 
 	// RESUME. A reboot in flight is finished before anything new starts.
 	if (state.inFlight) {

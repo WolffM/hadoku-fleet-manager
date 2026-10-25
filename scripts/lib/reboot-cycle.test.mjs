@@ -475,6 +475,34 @@ test("oursOn never claims a FAILED hold, though it starts with the cycle's prefi
 	assert.equal(oursOn(doc, 'claw-9'), false);
 });
 
+test('a real pass records its decision per node on disk; a plan pass records nothing', async () => {
+	const w = world({
+		nodes: { 'claw-8': box({ newest: NEW }), 'claw-4': box({ flag: true, pm2: ['pygmalion'] }) },
+	});
+	await runRebootCycle({
+		machines: [
+			['claw-8', {}],
+			['claw-4', {}],
+		],
+		deps: w.deps,
+		plan: true,
+	});
+	assert.equal(w.state()?.decisions, undefined, 'a plan decides nothing');
+	await runRebootCycle({
+		machines: [
+			['claw-8', {}],
+			['claw-4', {}],
+		],
+		deps: w.deps,
+	});
+	const d = w.state().decisions;
+	assert.equal(d['claw-8'].status, 'rebooted');
+	assert.deepEqual(d['claw-8'].kernel, { from: OLD, to: NEW });
+	assert.equal(d['claw-4'].status, 'deferred');
+	assert.match(d['claw-4'].why, /service host: it serves pygmalion/);
+	assert.ok(d['claw-4'].at);
+});
+
 // --- a reboot must not lose a driver (claw-1, 2026-10-25) --------------------
 
 const NV = ['nvidia-current.ko.xz', 'nvidia-current-uvm.ko.xz'];

@@ -1604,7 +1604,27 @@ export function doctorFindings(health, { nowMs = Date.now() } = {}) {
 		},
 		{ nowMs }
 	);
-	if (reboot) out.push({ ...reboot, node: health.node });
+	// WHAT THE REBOOT CYCLE DECIDED (fleet reboot-claws, hourly), attached by
+	// doctor-run from the cycle's own state. The staged flag says a reboot is
+	// owed; this says whether one is coming, and if not, what is stopping it.
+	const cycle = health.reboot?.cycle ?? null;
+	const cycleNote = cycle
+		? ` The reboot cycle last looked at ${cycle.at}: ${cycle.status}${cycle.why ? ` — ${cycle.why}` : ''}.`
+		: '';
+	if (reboot) out.push({ ...reboot, node: health.node, why: `${reboot.why}${cycleNote}` });
+	if (cycle?.status === 'held') {
+		out.push(
+			f(
+				health,
+				'reboot-held',
+				BLOCKING,
+				'held',
+				`${health.node} was rebooted by the reboot cycle and FAILED verification, so it is held ` +
+					`out of service and no other claw reboots until a human lifts it:${cycleNote} ` +
+					`Check it, then \`fleet drain ${health.node} --undo\`.`
+			)
+		);
+	}
 
 	// ── failed CI units ───────────────────────────────────────────────────────
 	if ((health.runners?.failed ?? 0) > 0) {

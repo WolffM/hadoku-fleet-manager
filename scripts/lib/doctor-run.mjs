@@ -67,6 +67,8 @@
  *     `fleet health-freshness`'s 14 days, with the reason.
  *   - A GUEST IS NEVER LOADED. See `GUEST_CADENCE_NO_LOAD_WHY` in doctor.mjs.
  */
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import process from 'node:process';
 
 import { loadManifest, machineArg, runOn, selectMachines } from './fleet-exec.mjs';
@@ -87,6 +89,8 @@ import {
 	parseDoctor,
 } from './doctor.mjs';
 import { guestNodeNames } from '../../dist/lib/node-role.js';
+import { heldByCycle } from './reboot-cycle.mjs';
+import { stateDir } from './paths.mjs';
 import { measuredFacets, writeFacet } from '../../dist/lib/measured.js';
 
 // Through the shared emitter, which every subcommand under the `--json`
@@ -250,8 +254,36 @@ const deferred = new Set(
 		: []
 );
 
-// ── findings ─────────────────────────────────────────────────────────────────
+// ── the reboot cycle's decisions ─────────────────────────────────────────────
+// The cycle (fleet reboot-claws, run hourly by the controller) acts; this
+// reports what it last decided beside the staged flag. A held node stays
+// visible after its flag clears, which is exactly when it needs a human.
+// A `held` decision counts only while the drain file still carries the hold:
+// a human who lifted it has answered it, whatever the last pass wrote.
 const drains = readDrains();
+const cycleDecisions = readCycleDecisions();
+for (const [name, h] of Object.entries(health)) {
+	const d = cycleDecisions[name];
+	if (!d || h.reachable === false) continue;
+	if (d.status === 'held' && !heldByCycle(drains[name])) continue;
+	if (h.reboot?.required || d.status === 'held') h.reboot = { ...h.reboot, cycle: d };
+}
+
+/** The cycle's per-node decisions, or `{}` when it has never run here. */
+function readCycleDecisions() {
+	const path = join(stateDir(), 'claw-reboot.json');
+	if (!existsSync(path)) return {};
+	try {
+		return JSON.parse(readFileSync(path, 'utf8')).decisions ?? {};
+	} catch (e) {
+		log(
+			`\n· the reboot cycle's state at ${path} is unreadable (${e.message}); its decisions are not shown`
+		);
+		return {};
+	}
+}
+
+// ── findings ─────────────────────────────────────────────────────────────────
 const findings = [];
 for (const [name, h] of Object.entries(health).sort()) {
 	// A NODE A HUMAN POWERED OFF, IN WRITING, RECENTLY. Same narrow exception

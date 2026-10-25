@@ -673,6 +673,21 @@ void test('a staged reboot is judged by preflight, not by a second copy of the r
 	assert.equal(find(later, 'pending-reboot')[0].class, BLOCKING);
 });
 
+void test("a staged reboot names the reboot cycle's last decision, and a held node blocks", () => {
+	const h = facetOf(HOKON);
+	h.reboot.cycle = { status: 'deferred', why: 'dkms missing for 6.12.113: wl.ko.xz', at: 'T1' };
+	const fs = find(doctorFindings(h, { nowMs: NOW }), 'pending-reboot');
+	assert.match(
+		fs[0].why,
+		/last looked at T1: deferred — dkms missing for 6\.12\.113: wl\.ko\.xz\./
+	);
+	assert.equal(find(doctorFindings(h, { nowMs: NOW }), 'reboot-held').length, 0);
+	h.reboot.cycle = { status: 'held', why: 'booted the old kernel', at: 'T2' };
+	const held = find(doctorFindings(h, { nowMs: NOW }), 'reboot-held');
+	assert.equal(held[0].class, BLOCKING);
+	assert.match(held[0].why, /fleet drain .* --undo/);
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // THE THRESHOLDS — MUTATION TESTS, WITH ABSOLUTE NUMBERS
 // ═══════════════════════════════════════════════════════════════════════════

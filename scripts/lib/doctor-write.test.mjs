@@ -412,3 +412,56 @@ void test('a probe that never finishes is tried TWICE before the node is called 
 	assert.match(doc.health[NODE].why, /in 2 attempts/);
 	assert.equal(r.code, 1, 'two failures are still a finding');
 });
+
+// ── the reboot cycle's decision rides beside the staged flag ─────────────────
+
+void test("the reboot cycle's decision is attached to a staged reboot, and a held node is BLOCKING while its hold stands", () => {
+	const staged = {
+		...EXISTING,
+		reboot: { required: true, stagedAt: null, packages: ['linux-image'] },
+	};
+	const fx = scratch({ [NODE]: { cores: 4 } }, { health: { [NODE]: staged } });
+	writeFileSync(
+		join(fx.state, 'claw-reboot.json'),
+		JSON.stringify({
+			inFlight: null,
+			last: {},
+			decisions: {
+				[NODE]: { status: 'deferred', why: 'service host: it serves pygmalion', at: 'T1' },
+			},
+		})
+	);
+	const out = JSON.parse(run(fx, ['--from-record', '--json']).stdout);
+	const pending = out.findings.find((x) => x.category === 'pending-reboot');
+	assert.match(
+		pending?.why ?? '',
+		/The reboot cycle last looked at T1: deferred — service host: it serves pygmalion\./
+	);
+
+	// Held after a failed verification: the flag is gone, the hold is not.
+	const back = { ...EXISTING, reboot: { required: false, stagedAt: null, packages: [] } };
+	const held = scratch({ [NODE]: { cores: 4 } }, { health: { [NODE]: back } });
+	writeFileSync(
+		join(held.state, 'claw-reboot.json'),
+		JSON.stringify({
+			decisions: { [NODE]: { status: 'held', why: 'booted the old kernel', at: 'T2' } },
+		})
+	);
+	const hold = {
+		kind: 'maintenance',
+		reason: 'automated reboot FAILED verification: booted the old kernel',
+	};
+	writeFileSync(join(held.state, 'fleet-drain.json'), JSON.stringify({ nodes: { [NODE]: hold } }));
+	const h = run(held, ['--from-record', '--json']);
+	const f = JSON.parse(h.stdout).findings.find((x) => x.category === 'reboot-held');
+	assert.equal(f?.class, 'blocking', h.stdout);
+	assert.equal(h.code, 1);
+
+	// A human lifted the hold: the last pass's `held` is answered, not current.
+	writeFileSync(join(held.state, 'fleet-drain.json'), JSON.stringify({ nodes: {} }));
+	const lifted = JSON.parse(run(held, ['--from-record', '--json']).stdout);
+	assert.equal(
+		lifted.findings.find((x) => x.category === 'reboot-held'),
+		undefined
+	);
+});
