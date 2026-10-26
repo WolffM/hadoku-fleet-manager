@@ -67,6 +67,7 @@ import { isGuestNode } from '../dist/lib/node-role.js';
 // already ruled the flat one wrong, and two provisioning paths with two rules
 // is how only one of them got the ruling.
 import { unitMemoryMaxMb } from '../dist/runners/ephemeral.js';
+import { CI_OOM_SCORE_ADJ } from '../dist/runners/hosting-record.js';
 
 const DRAINS = readDrains();
 import {
@@ -269,6 +270,8 @@ function payload(sliceCfg, minFreeMb, apply, unitMb) {
 		// installer refuses a run that supplies no UNIT_MB rather than falling
 		// back to the flat 4096 it used to.
 		`UNIT_MB=${unitMb}`,
+		// CI's OOM rank, the same constant every minted unit carries.
+		`CI_OOM=${CI_OOM_SCORE_ADJ}`,
 		// Default 1. `manageUnit: false` means the slice unit is hand-authored and
 		// carries properties this tool does not model — hokon's has MemoryHigh,
 		// CPUWeight and IOWeight — so it is placed into and audited, never written.

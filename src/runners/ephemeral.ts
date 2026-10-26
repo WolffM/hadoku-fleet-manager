@@ -20,6 +20,7 @@
  */
 
 import { isGuestNode } from '../lib/node-role.js';
+import { CI_OOM_SCORE_ADJ } from './hosting-record.js';
 
 /** Every JIT runner name starts with this. The sweep keys its reaping on it. */
 export const JIT_PREFIX = 'jit-';
@@ -1578,6 +1579,26 @@ export interface SpawnPlan {
 }
 
 /**
+ * The containment every CI unit carries: a JIT runner, a warm listener, and
+ * the `--ci-shaped` test unit `fleet hosting` starts. ONE list, so a test unit
+ * is contained exactly the way a real job is, and the two cannot drift.
+ */
+export function ciUnitProperties(o: { memoryMaxMb: number; sliceName?: string | null }): string[] {
+	return [
+		// THE GROUP CEILING. Without it systemd puts a `--user` transient unit in
+		// `app.slice`, which is MemoryMax=infinity — see DEFAULT_RUNNER_SLICE.
+		`--property=Slice=${resolveSliceName(o.sliceName)}`,
+		`--property=MemoryMax=${o.memoryMaxMb}M`,
+		// Swap is `infinity` on every runner unit today. A job allowed to swap
+		// freely thrashes claw-1's 7200rpm disk rather than failing fast.
+		'--property=MemorySwapMax=0',
+		// CI is the first thing a global OOM takes, before pm2, sshd or a
+		// hosting tenant (src/runners/hosting-record.ts).
+		`--property=OOMScoreAdjust=${CI_OOM_SCORE_ADJ}`,
+	];
+}
+
+/**
  * The `systemd-run` invocation for one mint.
  *
  * A transient USER unit rather than a child process, because mgmt-api restarts
@@ -1650,13 +1671,7 @@ export function buildSpawnPlan(o: {
 			...(description ? [`--description=${description}`] : []),
 			'--collect',
 			`--property=RuntimeMaxSec=${runtimeMaxSec}`,
-			// THE GROUP CEILING. Without it systemd puts a `--user` transient unit in
-			// `app.slice`, which is MemoryMax=infinity — see DEFAULT_RUNNER_SLICE.
-			`--property=Slice=${resolveSliceName(o.sliceName)}`,
-			`--property=MemoryMax=${o.memoryMaxMb}M`,
-			// Swap is `infinity` on every runner unit today. A job allowed to swap
-			// freely thrashes claw-1's 7200rpm disk rather than failing fast.
-			'--property=MemorySwapMax=0',
+			...ciUnitProperties(o),
 			'/bin/sh',
 			'-c',
 			// `exec` so the listener replaces the shell and systemd supervises the
@@ -1713,9 +1728,7 @@ export function buildWarmSpawnPlan(o: {
 			'--user',
 			`--unit=${o.unit}`,
 			'--collect',
-			`--property=Slice=${resolveSliceName(o.sliceName)}`,
-			`--property=MemoryMax=${o.memoryMaxMb}M`,
-			'--property=MemorySwapMax=0',
+			...ciUnitProperties(o),
 			`${o.slot}/bin/Runner.Listener`,
 			'run',
 		],

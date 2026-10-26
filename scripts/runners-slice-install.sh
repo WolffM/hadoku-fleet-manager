@@ -172,6 +172,7 @@ RESTART="${RESTART:-0}"
 MAX_MB="${MAX_MB:-0}"
 SWAP_MB="${SWAP_MB:-0}"
 UNIT_MB="${UNIT_MB-}"
+CI_OOM="${CI_OOM-}"
 SLICE_NAME="${SLICE_NAME:-runners.slice}"
 MIN_FREE_MB="${MIN_FREE_MB:-0}"
 MANAGE_UNIT="${MANAGE_UNIT:-1}"
@@ -186,7 +187,12 @@ esac
 case "$UNIT_MB" in
 '') echo "SLICE-FAIL UNIT_MB is required and has no default — the caller computes it with unitMemoryMaxMb() (the node's slice ceiling); pass 0 to leave the per-unit cap unset"; exit 0 ;;
 esac
-for v in MAX_MB SWAP_MB UNIT_MB MIN_FREE_MB; do
+# The OOM rank has no default either: it is CI_OOM_SCORE_ADJ in
+# src/runners/hosting-record.ts, and the caller imports it from there.
+case "$CI_OOM" in
+'') echo "SLICE-FAIL CI_OOM is required and has no default — the caller passes CI_OOM_SCORE_ADJ"; exit 0 ;;
+esac
+for v in MAX_MB SWAP_MB UNIT_MB MIN_FREE_MB CI_OOM; do
 	eval "val=\${$v}"
 	case "$val" in '' | *[!0-9]*) echo "SLICE-FAIL $v='$val' is not a number"; exit 0 ;; esac
 done
@@ -409,7 +415,15 @@ place() { # $1=unit $2=scope(system|user)
 		cur_mem=$(kernelmax "$unit")
 		[ -n "$cur_mem" ] || cur_mem=$(systemctl --user show "$unit" -p MemoryMax --value 2>/dev/null)
 	fi
-	[ "$cur" = "$SLICE_NAME" ] && [ "$cur_mem" = "$want_unit" ] && return 0
+	# The OOM rank, from the KERNEL: the main process's oom_score_adj, not the
+	# drop-in. CI is the first thing a global OOM takes (CI_OOM in
+	# src/runners/hosting-record.ts). A unit with no main process has nothing to
+	# rank, and its drop-in carries the score into the next start.
+	if [ "$scope" = system ]; then pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null)
+	else pid=$(systemctl --user show "$unit" -p MainPID --value 2>/dev/null); fi
+	cur_oom=$CI_OOM
+	[ -n "$pid" ] && [ "$pid" != 0 ] && cur_oom=$(cat "/proc/$pid/oom_score_adj" 2>/dev/null || echo "$CI_OOM")
+	[ "$cur" = "$SLICE_NAME" ] && [ "$cur_mem" = "$want_unit" ] && [ "$cur_oom" -ge "$CI_OOM" ] && return 0
 	changed=$((changed + 1))
 	[ "$APPLY" = 1 ] || return 0
 	# STEP 6, the per-unit cap. The slice ceiling protects the HOST; this stops one
@@ -428,6 +442,7 @@ place() { # $1=unit $2=scope(system|user)
 "
 	body="[Service]
 Slice=${SLICE_NAME}
+OOMScoreAdjust=${CI_OOM}
 ${unit_cap}"
 	if [ "$scope" = system ]; then
 		# A system drop-in needs root. On a node without passwordless sudo
@@ -459,6 +474,22 @@ ${unit_cap}"
 		else
 			XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user set-property --runtime "$unit" "MemoryMax=${UNIT_MB}M" >/dev/null 2>&1
 		fi
+	fi
+
+	# RAISE THE LIVE PROCESSES' OOM RANK. OOMScoreAdjust= applies only at the next
+	# start, and a restart kills the job, so every process already in the unit's
+	# cgroup is raised in place. Raising needs no privilege; children inherit.
+	if [ "$scope" = system ]; then cg=$(systemctl show "$unit" -p ControlGroup --value 2>/dev/null)
+	else cg=$(systemctl --user show "$unit" -p ControlGroup --value 2>/dev/null); fi
+	# The cgroup is read under CGROOT, so a fixture's cgroup tree names the
+	# fixture's pids and never a real process on the box running the test.
+	# A process that is not the CI user's own is left alone; this never sudos.
+	if [ -n "$cg" ]; then
+		for p in $(cat "$CGROOT$cg/cgroup.procs" 2>/dev/null); do
+			[ -O "/proc/$p" ] || continue
+			cur=$(cat "/proc/$p/oom_score_adj" 2>/dev/null) || continue
+			[ "$cur" -lt "$CI_OOM" ] && { echo "$CI_OOM" >"/proc/$p/oom_score_adj"; } 2>/dev/null || true
+		done
 	fi
 
 	# Slice= only takes effect on a fresh start, and restarting a runner mid-job

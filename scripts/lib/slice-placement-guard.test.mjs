@@ -831,6 +831,7 @@ function runIoInstaller({
 			MAX_MB: '1000',
 			SWAP_MB: '4096',
 			...(unitMb === null ? {} : { UNIT_MB: unitMb }),
+			CI_OOM: '500',
 			SLICE_NAME: 'runners.slice',
 		},
 	});
@@ -1925,6 +1926,7 @@ function runCheckInstaller({ db = {}, cg = {}, unitMb = '4096', maxMb = '1000' }
 		MAX_MB: maxMb,
 		SWAP_MB: '4096',
 		UNIT_MB: unitMb,
+		CI_OOM: '500',
 		SLICE_NAME: 'runners.slice',
 	};
 	for (const k of ['HOME', 'SYS_DIR', 'USER_CONF_DIR', 'CGROUP_ROOT', 'SHIM_DB', 'SHIM_REC']) {

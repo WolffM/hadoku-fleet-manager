@@ -44,6 +44,7 @@ import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest, runOn, selectNodes } from './lib/fleet-exec.mjs';
 import { judgeHosting, observeScript, parseObserved } from './lib/hosting.mjs';
 import { readRevocations } from '../dist/capability-revocations.js';
+import { readHostingDoc } from '../dist/runners/hosting-record.js';
 import { stateDir } from './lib/paths.mjs';
 
 /** The health writer runs daily; a day and a half covers one late run and no more. */
@@ -90,7 +91,43 @@ function readHealth() {
 
 const doc = readDrainDoc();
 const held = effectiveDrains(doc, NOW);
-const notices = drainNotices(doc, NOW);
+// Shared hosting slices. An unreadable record is "could not look": every node
+// is blocked on it, because no reader can tell which tenant is where.
+let hostingDoc = { nodes: {} };
+let hostingUnreadable = null;
+try {
+	hostingDoc = readHostingDoc(stateDir());
+} catch (err) {
+	hostingUnreadable = err.message;
+}
+const notices = [
+	...drainNotices(doc, NOW),
+	...Object.entries(hostingDoc.nodes)
+		.filter(([, r]) => Number.isFinite(Date.parse(r.until ?? '')) && Date.parse(r.until) > NOW)
+		.map(([node, r]) => ({ node, event: 'ends', at: r.until, kind: 'hosting', reason: r.reason })),
+].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+
+/**
+ * Boots seen per node, to catch a hosting node rebooted WITHOUT notice
+ * (cardtable §7, A8). A reboot is announced when the previous observation saw
+ * a `reboot` drain on the node, in force or planned. The reboot cycle and a
+ * planned `fleet drain --kind reboot` both write one; a `--force` or a hand
+ * reboot does not, and that is the case the tenant alerts on.
+ */
+const BOOTS_FILE = join(stateDir(), 'node-status-boots.json');
+const UNANNOUNCED_REPORT_MS = 24 * 3_600_000;
+function readBoots() {
+	if (!existsSync(BOOTS_FILE)) return {};
+	try {
+		return JSON.parse(readFileSync(BOOTS_FILE, 'utf8'));
+	} catch (err) {
+		out.warn(`${BOOTS_FILE} is unreadable (${err.message}); reboot history starts over.`);
+		return {};
+	}
+}
+const boots = readBoots();
+const rebootDrainOn = (name) =>
+	held[name]?.kind === 'reboot' || doc.planned.some((p) => p.node === name && p.kind === 'reboot');
 const health = readHealth();
 const revocationRead = readRevocations(stateDir());
 const seen = readSeen();
@@ -163,12 +200,54 @@ const rows = await Promise.all(
 		}
 
 		const rec = held[name] ?? null;
-		const hostingRec = doc.nodes[name]?.kind === 'hosting' ? doc.nodes[name] : null;
+		const wholeRec = doc.nodes[name]?.kind === 'hosting' ? doc.nodes[name] : null;
+		const sharedRec = hostingDoc.nodes[name] ?? null;
 		let hosting = null;
-		if (hostingRec) {
-			const judged = judgeHosting(hostingRec.hosting ?? {}, obs);
-			hosting = { declared: hostingRec.hosting ?? null, observed: judged.observed };
+		if (hostingUnreadable) {
+			findings.push({
+				class: 'blocking',
+				category: 'hosting-unreadable',
+				why: `the shared hosting record is unreadable (${hostingUnreadable}), so whether a tenant is here is unknown`,
+			});
+		}
+		if (wholeRec || sharedRec) {
+			const mode = wholeRec ? 'whole' : 'shared';
+			const r0 = wholeRec ?? sharedRec;
+			const declared = wholeRec
+				? (wholeRec.hosting ?? {})
+				: { tenant: r0.tenant, memoryMb: r0.memoryMb, cores: r0.cores, port: r0.port };
+			const judged = judgeHosting(declared, obs, mode);
+			hosting = { mode, declared, until: r0.until ?? null, observed: judged.observed };
 			findings.push(...judged.findings);
+		}
+
+		// A hosting node rebooted without notice. Recorded for every node, so a
+		// node that becomes a host already has a boot to compare against.
+		const prev = boots[name];
+		if (obs?.bootId) {
+			let unannounced = prev?.unannounced ?? null;
+			if (prev?.bootId && prev.bootId !== obs.bootId && prev.hosting && !prev.rebootDrain) {
+				unannounced = {
+					at: observedAt,
+					from: prev.bootId,
+					to: obs.bootId,
+					lastSeenBefore: prev.at,
+				};
+			}
+			boots[name] = {
+				bootId: obs.bootId,
+				at: observedAt,
+				hosting: Boolean(wholeRec || sharedRec),
+				rebootDrain: rebootDrainOn(name),
+				...(unannounced ? { unannounced } : {}),
+			};
+			if (unannounced && NOW - Date.parse(unannounced.at) < UNANNOUNCED_REPORT_MS) {
+				findings.push({
+					class: 'advisory',
+					category: 'hosting-unannounced-reboot',
+					why: `rebooted while hosting with no reboot drain ahead of it (seen ${unannounced.at}, previous answer ${unannounced.lastSeenBefore})`,
+				});
+			}
 		}
 
 		return {
@@ -200,6 +279,7 @@ const rows = await Promise.all(
 try {
 	mkdirSync(dirname(SEEN_FILE), { recursive: true });
 	writeFileSync(SEEN_FILE, `${JSON.stringify(seen, null, 2)}\n`);
+	writeFileSync(BOOTS_FILE, `${JSON.stringify(boots, null, 2)}\n`);
 } catch (err) {
 	out.warn(`could not record last-seen times: ${err.message}`);
 }

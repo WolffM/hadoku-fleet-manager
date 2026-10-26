@@ -56,7 +56,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
-import { manifest } from './lib/paths.mjs';
+import { manifest, stateDir } from './lib/paths.mjs';
 import { isLocalNode } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
@@ -76,6 +76,7 @@ import {
 	noticeRefusal,
 	parseWhen,
 } from '../dist/runners/drain.js';
+import { readHostingDoc } from '../dist/runners/hosting-record.js';
 import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
 // Retried per READ_ATTEMPTS before a `gh api` read is called could-not-look —
 // the same shape `check-label-floor.mjs`, `check-fleet-preflight.mjs` and
@@ -569,7 +570,11 @@ if (endMs !== null && endMs <= startMs) {
 	console.error(`drain: it would end (${iso(endMs)}) before it starts (${iso(startMs)}).`);
 	process.exit(1);
 }
-const refusal = noticeRefusal(node, startMs, doc, NOW);
+// A shared hosting slice is owed notice of a reboot, not of CI coming off.
+const refusal = noticeRefusal(node, startMs, doc, NOW, {
+	hostingDoc: readHostingDoc(stateDir()),
+	kind,
+});
 if (refusal && !has('--force')) {
 	console.error(
 		`${R}drain: ${refusal}${N}\n  Schedule it with --in 15m (or later), or --force if the box is failing.`

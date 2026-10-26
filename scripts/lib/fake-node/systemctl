@@ -69,6 +69,10 @@ start_unit() {
 		sleep 600 </dev/null >/dev/null 2>&1 &
 		pid=$!
 		echo "$pid" >>"$S/pids"
+		# OOMScoreAdjust= applies at start, as systemd applies it; raising our own
+		# child's score needs no privilege.
+		oom=$(fileprop "$u" OOMScoreAdjust)
+		[ -n "$oom" ] && echo "$oom" >"/proc/$pid/oom_score_adj" 2>/dev/null
 	fi
 	printf 'slice=%s\ncg=%s\npid=%s\nlistener=%s\n' "$sl" "$cg" "$pid" "${pid:+$dir/bin/Runner.Listener}" >"$S/$scope/$u.active"
 	printf '%s\n' "START $u slice=$sl" >>"$S/starts.log"

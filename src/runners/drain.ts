@@ -46,6 +46,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, join } from 'node:path';
 
 import { manifest, stateDir } from '../host.js';
+import { effectiveHosting, type HostingDoc } from './hosting-record.js';
 
 /**
  * What a drain is FOR, which decides how it ends.
@@ -235,21 +236,30 @@ export function pruneDrainDoc(doc: DrainDoc, nowMs: number = Date.now()): DrainD
 }
 
 /**
- * Must this change wait for notice? A node whose CURRENT record is `hosting`
- * has a tenant on it, and anything that takes the node away from that tenant
- * gives it {@link HOSTING_NOTICE_MS} first. Returns why it may not happen at
- * `atMs`, or null when it may.
+ * Must this change wait for notice? A node with a tenant on it is owed
+ * {@link HOSTING_NOTICE_MS} before anything takes the node away from that
+ * tenant. Returns why it may not happen at `atMs`, or null when it may.
+ *
+ * Whole-box hosting (a `kind: 'hosting'` record) loses the node to ANY new
+ * drain. A shared slice (`hostingDoc`) loses it only to a `reboot` or to its
+ * own `end`: a maintenance drain takes CI off and leaves the slice serving.
  */
 export function noticeRefusal(
 	node: string,
 	atMs: number,
 	doc: DrainDoc,
-	nowMs: number = Date.now()
+	nowMs: number = Date.now(),
+	shared?: { hostingDoc: HostingDoc; kind: DrainKind | 'end' }
 ): string | null {
 	const rec = doc.nodes[node];
-	if (!rec || rec.kind !== 'hosting' || lapsed(rec, nowMs)) return null;
+	const whole = rec?.kind === 'hosting' && !lapsed(rec, nowMs);
+	const slice =
+		!whole && shared && (shared.kind === 'reboot' || shared.kind === 'end')
+			? effectiveHosting(shared.hostingDoc, nowMs)[node]
+			: undefined;
+	if (!whole && !slice) return null;
 	if (atMs - nowMs >= HOSTING_NOTICE_MS) return null;
-	const tenant = rec.hosting?.tenant ?? 'its tenant';
+	const tenant = (whole ? rec.hosting?.tenant : slice?.tenant) ?? 'its tenant';
 	return (
 		`${node} is hosting for ${tenant}, which is owed ${HOSTING_NOTICE_MS / 60_000} min notice ` +
 		`before the node is taken away; this would take effect in ${Math.max(0, Math.round((atMs - nowMs) / 60_000))} min.`

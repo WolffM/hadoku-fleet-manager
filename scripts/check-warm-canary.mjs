@@ -64,6 +64,7 @@ import {
 	warmRunnerName,
 } from '../dist/runners/ephemeral.js';
 import { jobReserve } from '../dist/runners/ephemeral-tick.js';
+import { effectiveHosting, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { buildSpeedModel } from '../dist/runners/speed-tier.js';
 
 const JSON_OUT = process.argv.includes('--json');
@@ -103,8 +104,14 @@ function readJobHistory() {
 	return records;
 }
 
+/** Shared hosting slices: the warm tick plans around installed memory less each one. */
+const SHARED_HOSTING = effectiveHosting(readHostingDoc(stateDir()));
+
 function measure(node, m) {
-	const minFreeMb = m.minFreeMb ?? 1536;
+	const floorMb = m.minFreeMb ?? 1536;
+	// The verdict's floor carries the slice, as the warm tick's `usableMb`
+	// does; the per-unit cap below does not, as the minter's does not.
+	const minFreeMb = floorMb + (SHARED_HOSTING[node]?.memoryMb ?? 0);
 	const unmeasured = { node, reachable: false, totalMb: null, minFreeMb, jobMb: 0, role: m.role };
 	const mem = runOnSync(node, "free -m | awk '/^Mem:/{print $2}'");
 	if (!mem.ok) return { ...unmeasured, activeRepo: null };
@@ -116,7 +123,7 @@ function measure(node, m) {
 		nodeJobP95Mb: m.jobP95Mb,
 		capMb: unitMemoryMaxMb({
 			requestedMb: m.slice?.unitMaxMb,
-			sliceCeilingMb: totalMb - minFreeMb,
+			sliceCeilingMb: totalMb - floorMb,
 		}),
 	}).mb;
 

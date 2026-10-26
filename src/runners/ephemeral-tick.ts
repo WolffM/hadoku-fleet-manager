@@ -18,6 +18,13 @@ import { join } from 'node:path';
 
 import { isDraining, readDrain } from './drain.js';
 import {
+	effectiveHosting,
+	heldBackMb,
+	readHostingDoc,
+	sliceUsageProbe,
+	takeSliceUsage,
+} from './hosting-record.js';
+import {
 	admitMint,
 	DEFAULT_RUNNER_SLICE,
 	guestUnitMemoryMaxMb,
@@ -1391,6 +1398,9 @@ export async function dispatchWarmCache(
 	// a drain is operator state on disk, and re-reading it per node would let a
 	// node change status mid-pass.
 	const drainState = readDrain();
+	// Shared hosting slices, read once with it. Unreadable THROWS, as the drain
+	// does: a tick that cannot tell what a tenant was promised mints nothing.
+	const sharedHosting = effectiveHosting(readHostingDoc());
 
 	const observed = (
 		await Promise.all(
@@ -1419,6 +1429,10 @@ export async function dispatchWarmCache(
 						"free -m | awk '/^Mem:/{print $2}'; " + SPACE_PROBE_DF_CMD
 					);
 					const { first, tmpFreeMb, workFreeMb } = parseSpaceProbe(totalOut);
+					// A SHARED HOSTING SLICE is not CI's to count on: installed memory
+					// includes it, so the whole declaration comes off what a listener
+					// may plan around (src/runners/hosting-record.ts).
+					const hostedMb = sharedHosting[node]?.memoryMb ?? 0;
 					const installedMb = Number(first);
 					if (!Number.isFinite(installedMb) || installedMb <= 0) {
 						logger.warn(
@@ -1436,7 +1450,7 @@ export async function dispatchWarmCache(
 					// if the two ever disagreed, the node would carry a listener nobody
 					// reserved for, which is the 48 four-concurrent starts on claw-3.
 					const slots = warmListenerSlots({
-						usableMb: installedMb - minFreeMb,
+						usableMb: installedMb - minFreeMb - hostedMb,
 						role: m.role,
 						maxConcurrent: m.maxConcurrent,
 						// A MINT's worth — the same figure admission reserves below for a
@@ -2064,9 +2078,27 @@ export async function dispatchEphemeral(
 	const tmpFreeMbByNode = new Map<string, number | null>();
 	const tmpSizeMbByNode = new Map<string, number | null>();
 	const workFreeMbByNode = new Map<string, number | null>();
+	// SHARED HOSTING (src/runners/hosting-record.ts): a hosting node's probe also
+	// reads the tenant slice's usage, on the same ssh, so admission can hold back
+	// exactly the part of the slice the tenant is not using yet.
+	const sharedHosting = effectiveHosting(readHostingDoc());
+	const heldBackMbByNode = new Map<string, number>();
 	await Promise.all(
 		minting.map(async (name) => {
-			const out = await sh(name, "free -m | awk '/^Mem:/{print $7, $2}'; " + SPACE_PROBE_DF_CMD);
+			const hosted = sharedHosting[name];
+			const raw = await sh(
+				name,
+				"free -m | awk '/^Mem:/{print $7, $2}'; " +
+					SPACE_PROBE_DF_CMD +
+					(hosted ? `; ${sliceUsageProbe(hosted.tenant)}` : '')
+			);
+			const { rest: out, sliceCurrentMb } = takeSliceUsage(raw);
+			if (hosted) {
+				heldBackMbByNode.set(
+					name,
+					heldBackMb({ declaredMb: hosted.memoryMb, sliceCurrentMb, since: hosted.since })
+				);
+			}
 			const { first, tmpFreeMb, tmpSizeMb, workFreeMb } = parseSpaceProbe(out);
 			const [free, total] = first.split(/\s+/).map(Number);
 			if (Number.isFinite(free) && free > 0) freeMbByNode.set(name, free);
@@ -2354,7 +2386,9 @@ export async function dispatchEphemeral(
 			// queued run's own figure is `jobReserve` with its `repoReserve`, read
 			// via `requiredMbByRepo` below.
 			requiredMb,
-			minFreeMb: m.minFreeMb ?? 1536,
+			// A shared hosting slice's unused share is held back on top of the floor,
+			// so no job is admitted into memory the tenant was promised.
+			minFreeMb: (m.minFreeMb ?? 1536) + (heldBackMbByNode.get(name) ?? 0),
 			// #76: `refusalFor` (placement.ts) looks this up by the queued job's
 			// repo and overrides `requiredMb`/`requiredIsLowerBound` with it when
 			// present. A repo not in the map (never measured) leaves `requiredMb`
