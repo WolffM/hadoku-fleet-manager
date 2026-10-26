@@ -53,6 +53,7 @@ function world({
 	bootsInto = {},
 	reprove = {},
 	noReprove = false,
+	hosting = {},
 }) {
 	const calls = [];
 	const doc = { nodes: { ...drains }, planned };
@@ -68,19 +69,41 @@ function world({
 			return { ok: true, ...b };
 		},
 		drainDoc: () => doc,
-		drain: (node, reason) => {
-			calls.push(`drain ${node}`);
-			doc.nodes[node] = { kind: 'reboot', reason, since: 'x', until: 'y' };
+		// As `fleet drain` does: a drain laid over a whole-box hosting record
+		// goes to `planned`, from now, and never erases the tenant's record.
+		drain: (node, reason, { force = false } = {}) => {
+			calls.push(`drain ${node}${force ? ' --force' : ''}`);
+			const rec = { kind: 'reboot', reason, since: 'x', until: 'y' };
+			if (doc.nodes[node]?.kind === 'hosting')
+				doc.planned.push({ node, from: new Date(clock).toISOString(), ...rec });
+			else doc.nodes[node] = rec;
 			return { ok: true };
 		},
+		announce: (node, reason, min) => {
+			calls.push(`announce ${node} ${min}m`);
+			doc.planned.push({
+				node,
+				from: new Date(clock + min * 60_000).toISOString(),
+				kind: 'reboot',
+				reason,
+			});
+			return { ok: true };
+		},
+		noticeMs: 15 * 60_000,
+		hostingOn: (node) => hosting[node] ?? null,
 		hold: (node, reason) => {
 			calls.push(`hold ${node}`);
-			doc.nodes[node] = { kind: 'maintenance', reason };
+			const rec = { kind: 'maintenance', reason };
+			if (doc.nodes[node]?.kind === 'hosting')
+				doc.planned.push({ node, from: new Date(clock).toISOString(), ...rec });
+			else doc.nodes[node] = rec;
 			return { ok: true };
 		},
+		// `fleet drain --undo`: cancels anything planned; a hosting record stays.
 		undrain: (node) => {
 			calls.push(`undrain ${node}`);
-			delete doc.nodes[node];
+			doc.planned = doc.planned.filter((p) => p.node !== node);
+			if (doc.nodes[node]?.kind !== 'hosting') delete doc.nodes[node];
 			return { ok: true };
 		},
 		waitDrained: (node) => {
@@ -116,6 +139,7 @@ function world({
 					},
 				}),
 		sleep: (ms) => {
+			calls.push(`sleep ${ms}`);
 			clock += ms;
 		},
 		now: () => clock,
@@ -190,7 +214,7 @@ test('a staged kernel: drained as a reboot, idle, rebooted, verified, undrained 
 	assert.equal(r.ok, true, JSON.stringify(r.findings));
 	assert.deepEqual(r.rebooted, ['claw-4']);
 	assert.deepEqual(
-		w.calls.filter((c) => !c.startsWith('probe')),
+		w.calls.filter((c) => !c.startsWith('probe') && !c.startsWith('sleep')),
 		['drain claw-4', 'wait claw-4', 'reboot claw-4', 'reprove claw-4', 'undrain claw-4']
 	);
 	assert.equal(w.calls.includes('probe hokon'), false, 'a guest is never probed');
@@ -501,6 +525,151 @@ test('a real pass records its decision per node on disk; a plan pass records not
 	assert.equal(d['claw-4'].status, 'deferred');
 	assert.match(d['claw-4'].why, /service host: it serves pygmalion/);
 	assert.ok(d['claw-4'].at);
+});
+
+// --- a tenant is owed notice (cardtable §7) ---------------------------------
+
+const SHARED = { mode: 'shared', tenant: 'cardtable', memoryMb: 4096, cores: 2, port: 25565 };
+
+test('a SHARED hosting node is announced 15 min ahead, the pass waits it out, then reboots', async () => {
+	const w = world({ nodes: { 'claw-8': box({ newest: NEW }) }, hosting: { 'claw-8': SHARED } });
+	const r = await runRebootCycle({ machines: [['claw-8', {}]], deps: w.deps });
+	assert.equal(r.ok, true, JSON.stringify(r.findings));
+	assert.deepEqual(r.rebooted, ['claw-8']);
+	const steps = w.calls.filter((c) => !c.startsWith('probe') && !c.startsWith('sleep 15000'));
+	assert.deepEqual(steps.slice(0, 4), [
+		'announce claw-8 15m',
+		'sleep 900000',
+		'wait claw-8',
+		'reboot claw-8',
+	]);
+	assert.equal(w.calls.includes('drain claw-8'), false, 'the notice IS the drain; no second one');
+	assert.deepEqual(
+		w.doc.planned,
+		[],
+		'undrained after the verified reboot: the notice is cancelled'
+	);
+});
+
+test('a WHOLE-box hosting node: the notice sits over the hosting record, which survives the reboot', async () => {
+	const hostingRec = { kind: 'hosting', reason: 'cardtable', hosting: { tenant: 'cardtable' } };
+	const w = world({
+		nodes: { 'claw-9': box({ newest: NEW }) },
+		drains: { 'claw-9': hostingRec },
+		hosting: { 'claw-9': { ...SHARED, mode: 'whole' } },
+	});
+	const r = await runRebootCycle({ machines: [['claw-9', {}]], deps: w.deps });
+	assert.deepEqual(r.rebooted, ['claw-9'], JSON.stringify(r.nodes));
+	assert.ok(w.calls.includes('announce claw-9 15m'));
+	assert.deepEqual(w.doc.nodes['claw-9'], hostingRec, "the tenant's record is untouched");
+});
+
+test('a notice already announced and still in the future defers the node, and nothing is drained', async () => {
+	const from = new Date(1_800_000_000_000 + 10 * 60_000).toISOString();
+	const w = world({
+		nodes: { 'claw-8': box({ newest: NEW }) },
+		hosting: { 'claw-8': SHARED },
+		planned: [{ node: 'claw-8', from, kind: 'reboot', reason: `${REASON_PREFIX}: x` }],
+	});
+	const r = await runRebootCycle({ machines: [['claw-8', {}]], deps: w.deps });
+	assert.equal(r.nodes[0].status, 'deferred');
+	assert.match(r.nodes[0].why, /announced: reboot drain starts .* \(hosting cardtable\)/);
+	assert.deepEqual(
+		w.calls.filter((c) => !c.startsWith('probe')),
+		[]
+	);
+});
+
+test('a notice in force is the drain: the pass reboots without announcing again', async () => {
+	const from = new Date(1_800_000_000_000 - 60_000).toISOString();
+	const w = world({
+		nodes: { 'claw-8': box({ newest: NEW }) },
+		hosting: { 'claw-8': SHARED },
+		planned: [{ node: 'claw-8', from, kind: 'reboot', reason: `${REASON_PREFIX}: x` }],
+	});
+	const r = await runRebootCycle({ machines: [['claw-8', {}]], deps: w.deps });
+	assert.deepEqual(r.rebooted, ['claw-8'], JSON.stringify(r.nodes));
+	assert.equal(
+		w.calls.some((c) => c.startsWith('announce') || c.startsWith('drain')),
+		false
+	);
+});
+
+test('--force skips the notice and drains at once, forced past the refusal', async () => {
+	const w = world({ nodes: { 'claw-8': box({ newest: NEW }) }, hosting: { 'claw-8': SHARED } });
+	const r = await runRebootCycle({ machines: [['claw-8', {}]], deps: w.deps, force: true });
+	assert.deepEqual(r.rebooted, ['claw-8']);
+	assert.ok(w.calls.includes('drain claw-8 --force'), w.calls.join(', '));
+	assert.equal(
+		w.calls.some((c) => c.startsWith('announce')),
+		false
+	);
+});
+
+test('queue pressure with a notice in force cancels the notice rather than holding the node', async () => {
+	const from = new Date(1_800_000_000_000 - 60_000).toISOString();
+	const w = world({
+		nodes: { 'claw-8': box({ newest: NEW }) },
+		hosting: { 'claw-8': SHARED },
+		planned: [{ node: 'claw-8', from, kind: 'reboot', reason: `${REASON_PREFIX}: x` }],
+		pressure: { pressured: true, reason: '9 queued' },
+	});
+	await runRebootCycle({ machines: [['claw-8', {}]], deps: w.deps });
+	assert.deepEqual(w.doc.planned, []);
+	assert.equal(w.calls.includes('reboot claw-8'), false);
+});
+
+test('a pass killed during the notice cancels it on resume, like one killed while draining', async () => {
+	const w = world({ nodes: { 'claw-8': box({ newest: NEW }) }, hosting: { 'claw-8': SHARED } });
+	w.deps.announce('claw-8', `${REASON_PREFIX}: x`, 15);
+	w.deps.writeState({ inFlight: { node: 'claw-8', phase: 'notice' }, last: {} });
+	const r = await runRebootCycle({ machines: [['claw-8', {}]], deps: w.deps });
+	assert.equal(r.nodes[0].status, 'abandoned');
+	assert.deepEqual(w.doc.planned, []);
+});
+
+test('a FAILED hold on a whole-box host (in `planned`) still halts the rollout', async () => {
+	const w = world({
+		nodes: { 'claw-8': box({ newest: NEW }), 'claw-9': box({ running: NEW, newest: NEW }) },
+		drains: { 'claw-9': { kind: 'hosting', reason: 'cardtable' } },
+		planned: [
+			{ node: 'claw-9', from: inDays(-0.01), kind: 'maintenance', reason: `${HELD_PREFIX}: x` },
+		],
+	});
+	const r = await runRebootCycle({
+		machines: [
+			['claw-8', {}],
+			['claw-9', {}],
+		],
+		deps: w.deps,
+	});
+	assert.ok(
+		r.findings.some((f) => f.kind === 'halted' && f.node === 'claw-9'),
+		JSON.stringify(r.findings)
+	);
+	assert.equal(
+		w.calls.some((c) => c.startsWith('drain') || c.startsWith('announce')),
+		false
+	);
+});
+
+test('--plan names the notice a hosting node would get, and announces nothing', async () => {
+	const w = world({ nodes: { 'claw-8': box({ newest: NEW }) }, hosting: { 'claw-8': SHARED } });
+	const lines = [];
+	await runRebootCycle({
+		machines: [['claw-8', {}]],
+		deps: w.deps,
+		plan: true,
+		log: (l) => lines.push(l),
+	});
+	assert.ok(
+		lines.some((l) => /after 15 min notice to cardtable/.test(l)),
+		lines.join('\n')
+	);
+	assert.equal(
+		w.calls.some((c) => c.startsWith('announce')),
+		false
+	);
 });
 
 // --- a reboot must not lose a driver (claw-1, 2026-10-25) --------------------

@@ -33,12 +33,15 @@ import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, readDrainDoc, readDrains } from './lib/expected-down.mjs';
 import { loadManifest, machineArg, runOnSync } from './lib/fleet-exec.mjs';
 import { stateDir } from './lib/paths.mjs';
+import { HOSTING_NOTICE_MS } from '../dist/runners/drain.js';
+import { hostingOn, readHostingDoc } from '../dist/runners/hosting-record.js';
 import {
 	REBOOT_PROBE,
 	oursOn,
 	parseRebootProbe,
 	judgeReprove,
 	rebootDrainArgs,
+	rebootNoticeArgs,
 	runRebootCycle,
 } from './lib/reboot-cycle.mjs';
 import { busyCount, drainCli, liveQueuePressure, waitUntilDrained } from './lib/refresh-cycle.mjs';
@@ -51,8 +54,9 @@ const argv = process.argv.slice(2);
 // --help` ran a live pass and rebooted claw-4, taking pygmalion down with it.
 // Checked before anything is read or probed.
 const USAGE =
-	'fleet reboot-claws [--plan] [--machine <claw>] [--json]\n' +
+	'fleet reboot-claws [--plan] [--machine <claw>] [--force] [--json]\n' +
 	'  --plan     what would be rebooted, and why; touches nothing\n' +
+	"  --force    skip the notice a hosting node's tenant is owed\n" +
 	'  (no flag)  one REAL pass: drain one claw, reboot it, verify, undrain';
 if (argv.includes('--help') || argv.includes('-h')) {
 	console.log(USAGE);
@@ -61,7 +65,7 @@ if (argv.includes('--help') || argv.includes('-h')) {
 const unknown = argv.filter(
 	(a, i) =>
 		a.startsWith('-') &&
-		!['--plan', '--json', '--machine'].includes(a) &&
+		!['--plan', '--json', '--machine', '--force'].includes(a) &&
 		argv[i - 1] !== '--machine'
 );
 if (unknown.length) {
@@ -70,6 +74,7 @@ if (unknown.length) {
 }
 
 const PLAN = argv.includes('--plan');
+const FORCE = argv.includes('--force');
 const ONLY = machineArg(argv);
 const emitter = createEmitter({ argv: process.argv });
 const log = (...a) => emitter.log(...a);
@@ -99,8 +104,16 @@ const deps = {
 	},
 	expectedDown: (node) => deferralFor(node, readDrains()).deferred,
 	drainDoc: () => readDrainDoc(),
-	drain: (node, reason) => drainCli(rebootDrainArgs(node, reason)),
-	hold: (node, reason) => drainCli([node, '--kind', 'maintenance', '--reason', reason]),
+	drain: (node, reason, { force = false } = {}) =>
+		drainCli([...rebootDrainArgs(node, reason), ...(force ? ['--force'] : [])]),
+	// A tenant on the node: the reboot drain is PLANNED, `noticeMin` out, so
+	// `fleet drain` (and node-status) carry it as a notice from now.
+	announce: (node, reason, noticeMin) => drainCli(rebootNoticeArgs(node, reason, noticeMin)),
+	noticeMs: HOSTING_NOTICE_MS,
+	hostingOn: (node) => hostingOn(node, readDrainDoc(), readHostingDoc(stateDir()), Date.now()),
+	// --force: the node has ALREADY rebooted and failed, so a hosting node's
+	// notice cannot apply to holding it, and a broken box is held regardless.
+	hold: (node, reason) => drainCli([node, '--kind', 'maintenance', '--reason', reason, '--force']),
 	undrain: (node) => drainCli([node, '--undo']),
 	waitDrained: (node) => waitUntilDrained({ node, busy: busyCount, clock }),
 	queuePressure: () => liveQueuePressure(),
@@ -143,7 +156,7 @@ const deps = {
 for (const sig of ['SIGTERM', 'SIGINT']) {
 	process.on(sig, () => {
 		const f = readState()?.inFlight;
-		if (f?.phase === 'draining') {
+		if (f?.phase === 'draining' || f?.phase === 'notice') {
 			if (oursOn(readDrainDoc(), f.node)) {
 				const r = deps.undrain(f.node);
 				log(`${sig}: ${f.node} ${r.ok ? 'undrained' : `STILL DRAINED (${r.reason})`}`);
@@ -167,7 +180,14 @@ async function main() {
 	log(
 		PLAN ? 'MODE: --plan (probe and pick only; nothing is drained or rebooted)' : 'MODE: one pass'
 	);
-	const report = await runRebootCycle({ machines, deps, plan: PLAN, only: ONLY, log });
+	const report = await runRebootCycle({
+		machines,
+		deps,
+		plan: PLAN,
+		only: ONLY,
+		force: FORCE,
+		log,
+	});
 	for (const f of report.findings) log(`FINDING ${f.node ?? '-'} [${f.kind}] ${f.reason}`);
 	if (!report.rebooted.length && !report.findings.length) {
 		log(PLAN ? 'Plan clean.' : 'Nothing rebooted this pass.');

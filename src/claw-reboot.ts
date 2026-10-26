@@ -42,11 +42,12 @@ export const FAIL_PAGE_MS = 6 * 60 * 60_000;
 /** A held node that stays held pages again after this long. */
 export const REPAGE_MS = 24 * 60 * 60_000;
 /**
- * Longest pass: a 45-minute idle wait, a 12-minute boot window and a 6-minute
- * services window, with room. Past it the script is killed, and its signal
- * handler puts back a node it had not rebooted yet.
+ * Longest pass: a hosting node's 15-minute notice, a 45-minute idle wait, a
+ * 12-minute boot window, a 6-minute services window and the re-prove, with
+ * room. Past it the script is killed, and its signal handler puts back a node
+ * it had not rebooted yet.
  */
-const RUN_TIMEOUT_MS = 80 * 60_000;
+const RUN_TIMEOUT_MS = 100 * 60_000;
 const SELF_KEY = 'reboot-cycle';
 
 export interface RebootNode {

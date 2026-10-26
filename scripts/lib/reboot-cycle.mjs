@@ -251,8 +251,36 @@ export function rebootDrainArgs(node, reason) {
  */
 export function oursOn(doc, node) {
 	const rec = doc?.nodes?.[node];
+	if (rebootNotice(doc, node)) return true;
 	if (heldByCycle(rec)) return false;
 	return rec?.kind === 'reboot' || String(rec?.reason ?? '').startsWith(REASON_PREFIX);
+}
+
+/**
+ * The cycle's PLANNED reboot drain on a node, or undefined: the notice a
+ * hosting node's tenant is owed. On a whole-box host it sits in `planned`
+ * over the hosting record, so `fleet drain --undo` cancels it and leaves the
+ * tenant's record alone.
+ */
+export function rebootNotice(doc, node) {
+	return (doc?.planned ?? []).find(
+		(p) => p.node === node && p.kind === 'reboot' && !heldByCycle(p)
+	);
+}
+
+/** The `fleet drain` arguments that announce a reboot `noticeMin` minutes out. */
+export function rebootNoticeArgs(node, reason, noticeMin) {
+	return [
+		node,
+		'--kind',
+		'reboot',
+		'--in',
+		`${noticeMin}m`,
+		'--for',
+		REBOOT_LEASE,
+		'--reason',
+		reason,
+	];
 }
 
 /** A node this cycle rebooted and could not verify is held under this; a human lifts it. */
@@ -273,9 +301,11 @@ export function heldByCycle(rec) {
  * @param {object} p
  * @param {Array<[string, object]>} p.machines  manifest `[name, entry]` pairs
  * @param {object} p.deps  isGuest, isLocal, probe, expectedDown, drainDoc, drain, hold, undrain,
+ *                         hostingOn, announce, noticeMs,
  *                         waitDrained, queuePressure, reboot, sleep, now,
  *                         readState, writeState
  * @param {boolean} [p.plan]  probe and pick only; drain and reboot nothing
+ * @param {boolean} [p.force]  skip a hosting node's notice (the operator's call)
  * @param {string|null} [p.only]  restrict the pick to this node
  * @param {(line: string) => void} [p.log]
  */
@@ -284,6 +314,7 @@ export async function runRebootCycle({
 	deps,
 	plan = false,
 	only = null,
+	force = false,
 	log = () => {},
 }) {
 	const nodes = [];
@@ -329,7 +360,7 @@ export async function runRebootCycle({
 		log(`── ${f.node}  [resuming: ${f.phase}]`);
 		const rec = { node: f.node, resumed: true, reason: f.reason };
 		nodes.push(rec);
-		if (f.phase === 'draining') {
+		if (f.phase === 'draining' || f.phase === 'notice') {
 			// Drained, never rebooted. Put it back and stop; the next pass starts over.
 			await putBack(f.node, rec, deps, finding, log);
 			rec.status = 'abandoned';
@@ -371,8 +402,14 @@ export async function runRebootCycle({
 			nodes.push({ node: name, status: 'current', kernel: probe.running });
 			continue;
 		}
-		const held = doc.nodes?.[name];
-		const planned = (doc.planned ?? []).find((d) => d.node === name);
+		// A TENANT IS OWED NOTICE (cardtable §7). `hosting` is whole-box (the drain
+		// record) or shared (a slice beside CI, with NO drain record at all), so it
+		// is asked of the hosting predicate, never inferred from the drain file.
+		const hosting = deps.hostingOn ? deps.hostingOn(name) : null;
+		const notice = rebootNotice(doc, name);
+		const rec = doc.nodes?.[name];
+		const held = rec && !(hosting?.mode === 'whole' && rec.kind === 'hosting') ? rec : null;
+		const planned = (doc.planned ?? []).find((d) => d.node === name && d !== notice);
 		if (held || planned) {
 			const by = held
 				? `drained (${held.kind ?? 'maintenance'}: ${held.reason})`
@@ -422,7 +459,13 @@ export async function runRebootCycle({
 			);
 			continue;
 		}
-		candidates.push({ name, probe, why });
+		if (notice && Date.parse(notice.from) > deps.now()) {
+			const w = `announced: reboot drain starts ${notice.from}${hosting ? ` (hosting ${hosting.tenant})` : ''}`;
+			log(`── ${name}  [deferred] needs a reboot (${why}); ${w}`);
+			nodes.push({ node: name, status: 'deferred', reason: why, why: w });
+			continue;
+		}
+		candidates.push({ name, probe, why, hosting, noticed: Boolean(notice) });
 	}
 
 	if (!candidates.length) return done();
@@ -430,7 +473,10 @@ export async function runRebootCycle({
 	// held that node may hold the next one too, and two nodes out at once is
 	// what one-at-a-time exists to prevent. On 2026-10-25 claw-9 was held at
 	// 17:31Z and the next pass took claw-8 at 18:32Z for the same false reason.
-	const failed = Object.entries(doc.nodes ?? {}).filter(([, rec]) => heldByCycle(rec));
+	const failed = [
+		...Object.entries(doc.nodes ?? {}),
+		...(doc.planned ?? []).map((p) => [p.node, { ...p, since: p.since ?? p.from }]),
+	].filter(([, rec]) => heldByCycle(rec));
 	if (failed.length) {
 		const by = failed.map(([n, rec]) => `${n} (since ${rec.since ?? '?'})`).join(', ');
 		const why = `halted: ${by} failed reboot verification and is still held; lift it with \`fleet drain <node> --undo\` once it is checked`;
@@ -452,7 +498,11 @@ export async function runRebootCycle({
 	nodes.push(rec);
 	if (plan) {
 		rec.status = 'planned';
-		log(`── ${pick.name}  [would reboot] ${pick.why}`);
+		const owed =
+			pick.hosting && !pick.noticed && !force
+				? `, after ${Math.round((deps.noticeMs ?? 15 * 60_000) / 60_000)} min notice to ${pick.hosting.tenant}`
+				: '';
+		log(`── ${pick.name}  [would reboot] ${pick.why}${owed}`);
 		return done();
 	}
 
@@ -467,17 +517,40 @@ export async function runRebootCycle({
 			: `queue under pressure: ${pr.reason}`;
 		if (pr.unknown) finding(pick.name, 'queue-unreadable', rec.why);
 		log(`── ${pick.name}  [deferred] ${rec.why}`);
+		if (pick.noticed) await putBack(pick.name, rec, deps, finding, log);
 		return done();
 	}
 
 	// DRAIN, as a lease. From here every path ends in undrain, or hold-and-halt.
 	const reason = `${REASON_PREFIX}: ${pick.why}`.slice(0, 300);
-	const d = await attempt(() => deps.drain(pick.name, reason));
-	if (!d.ok || d.value?.ok === false) {
-		rec.status = 'finding';
-		finding(pick.name, 'drain-failed', d.ok ? d.value.reason : d.reason);
-		if (oursOn(deps.drainDoc(), pick.name)) await putBack(pick.name, rec, deps, finding, log);
-		return done();
+	if (pick.hosting && !pick.noticed && !force) {
+		// NOTICE FIRST. The drain is written now, starting `noticeMs` out, so it
+		// shows in node-status `notices` from this moment; this pass waits it out
+		// rather than leaving the node drained until the next hourly pass.
+		const noticeMs = deps.noticeMs ?? 15 * 60_000;
+		const startsAt = deps.now() + noticeMs;
+		const n = await attempt(() => deps.announce(pick.name, reason, Math.ceil(noticeMs / 60_000)));
+		if (!n.ok || n.value?.ok === false) {
+			rec.status = 'finding';
+			finding(pick.name, 'notice-failed', n.ok ? n.value.reason : n.reason);
+			return done();
+		}
+		rec.noticeFrom = iso(startsAt);
+		log(
+			`── ${pick.name}  [announced] hosting ${pick.hosting.tenant} (${pick.hosting.mode}); ` +
+				`reboot drain starts ${iso(startsAt)}`
+		);
+		state.inFlight = { node: pick.name, phase: 'notice', reason: pick.why, since: iso(deps.now()) };
+		save();
+		await deps.sleep(Math.max(0, startsAt - deps.now()));
+	} else if (!pick.noticed) {
+		const d = await attempt(() => deps.drain(pick.name, reason, { force }));
+		if (!d.ok || d.value?.ok === false) {
+			rec.status = 'finding';
+			finding(pick.name, 'drain-failed', d.ok ? d.value.reason : d.reason);
+			if (oursOn(deps.drainDoc(), pick.name)) await putBack(pick.name, rec, deps, finding, log);
+			return done();
+		}
 	}
 	state.inFlight = { node: pick.name, phase: 'draining', reason: pick.why, since: iso(deps.now()) };
 	save();
