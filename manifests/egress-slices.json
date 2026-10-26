@@ -25,6 +25,16 @@
       "cgroup": "/user.slice/user-1000.slice/user@1000.service/vpnbypass.slice",
       "holds": "Discord and the Battle.net launcher, placed there by their own launchers",
       "why": "The third reason for direct egress, and the first that is not about fleet role: these destinations REFUSE a VPN exit. Phase 4 moved unclassified Cloudflare traffic onto the tunnel as designed, and Discord then answered every API call 403 / code 40333 and hung on its \"Starting\" splash; Battle.net rejected the login as a VPN. Measured 2026-09-13. Nothing malfunctioned -- the taxonomy only encoded \"this is fleet infrastructure\" as a reason to stay direct, so the operator's own apps fell into \"everything else\". Membership is a named decision, as hokonLocal is: everything in this slice wears the real WAN address. Add an app only when the service actually blocks the tunnel."
+    },
+    {
+      "cgroup": "/system.slice/tailscaled.service",
+      "holds": "tailscaled",
+      "why": "Its WireGuard UDP already escapes the tunnel by fwmark, but its DERP relay connections (TCP 443) did not, so hokon could reach only the Seattle relays — the one /24 allowlisted. On 2026-10-25 an Enshrouded player whose home relay is iad lost their direct path three times between 21:16 and 21:37 PT; each time tailscaled fell back to derp-27 (iad), timed out through nordlynx, and the player was dropped. This settles local-hawk's 2026-09-05 DERP question by identity rather than by maintaining 47 churning relay CIDRs. Everything it sends is WireGuard-encrypted either way; relays see the real WAN address, as Seattle already did."
+    },
+    {
+      "cgroup": "/gameservers.slice",
+      "holds": "the Enshrouded and Valheim dedicated-server containers, placed there by cgroup_parent in their docker-compose.yml",
+      "why": "Game servers are hokon-local, not fleet work, and egress direct for the same kind of reason as vpnbypass: the tunnel only hurts them. Through nordlynx, Steam registered the server under the NordVPN exit address and every Steam-relay player's traffic took an extra consumer-VPN hop. Named decision 2026-10-25: the real WAN address appears in the Steam server listing."
     }
   ],
   "$comment_ecosystemRoot": [
@@ -64,6 +74,11 @@
       "app": "valheim-panel",
       "class": "hokon-local",
       "why": "The admin web panel beside it (panel/panel.py, same root). Same classification and the same reason: it fronts the game server only, not anything on hadoku.me."
+    },
+    {
+      "app": "enshrouded",
+      "class": "hokon-local",
+      "why": "Enshrouded dedicated game server under /mnt/games/enshrouded-server, same pattern as valheim. The PM2 app is only the docker lifecycle wrapper; the game itself runs in /gameservers.slice (see directEgress). The operator's game box, no fleet role."
     },
     {
       "app": "pm2-logrotate",
