@@ -24,6 +24,9 @@ import { ciIsSeparate } from '../../dist/lib/node-users.js';
 /** CI jobs a hosting node keeps by default. The operator's dial; see the header. */
 export const CI_KEEP_JOBS = 1;
 
+/** The routing labels that name a GPU, shown on their own and matched by `gpu:<label>`. */
+const GPU_LABEL = /nvenc|cuda|nvdec|av1/;
+
 /** Where tenant state lives: the agent homes and the pm2 state roots sit on this filesystem. */
 const STATE_FS = '/var/lib';
 
@@ -80,9 +83,19 @@ export function parseOfferProbe(stdout) {
  * One node's offer. `facts` is {@link parseOfferProbe}'s (null: could not
  * look); `machine` its manifest entry; `tenants` the hosting declarations on
  * it (`{ tenant, memoryMb, cores, mode }`); `pm2Peer` whether the app layer
- * declares it a pm2 host (null: could not read); `drain` its drain record.
+ * declares it a pm2 host (null: could not read); `drain` its drain record;
+ * `labels` the routing labels it offers now, as `nodeOffer` decides them
+ * (null: could not read the proof or revocation records).
  */
-export function offerFor({ node, machine, facts, tenants = [], pm2Peer = null, drain = null }) {
+export function offerFor({
+	node,
+	machine,
+	facts,
+	tenants = [],
+	pm2Peer = null,
+	drain = null,
+	labels = null,
+}) {
 	const unknown = [];
 	if (!facts) {
 		return {
@@ -99,6 +112,7 @@ export function offerFor({ node, machine, facts, tenants = [], pm2Peer = null, d
 	if (facts.nproc === null) unknown.push('core count unreadable');
 	if (facts.link === null) unknown.push('no default route: wired or Wi-Fi unknown');
 	if (pm2Peer === null) unknown.push("the app layer's pm2 host list was unreadable");
+	if (labels === null) unknown.push('the labels it offers are unknown');
 
 	const minFreeMb = machine?.minFreeMb ?? 1024;
 	const tenantMb = tenants.reduce((s, t) => s + t.memoryMb, 0);
@@ -129,7 +143,8 @@ export function offerFor({ node, machine, facts, tenants = [], pm2Peer = null, d
 		pm2: { present: facts.pm2.length > 0, unbounded: unbounded.map((p) => p.unit), unboundedMb },
 		pm2Peer,
 		drain: drain ? { kind: drain.kind ?? 'maintenance', until: drain.until ?? null } : null,
-		gpu: (machine?.$capabilities?.earned ?? []).filter((c) => /nvenc|cuda|nvdec|av1/.test(c)),
+		labels,
+		gpu: (labels ?? []).filter((c) => GPU_LABEL.test(c)),
 		unknown,
 	};
 }

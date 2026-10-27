@@ -24,12 +24,26 @@ test('the offer is MemTotal less the floor, the CI it keeps, the tenants and any
 		facts: parseOfferProbe(probe()),
 		tenants: [{ tenant: 'cardtable', memoryMb: 4096, cores: 4, mode: 'shared' }],
 		pm2Peer: false,
+		labels: ['cuda', 'nvenc-h264', 'rust'],
 	});
 	assert.equal(CI_KEEP_JOBS, 1);
 	assert.equal(o.hostable.memoryMb, 32000 - 4096 - 4096 * CI_KEEP_JOBS - 4096);
 	assert.equal(o.hostable.cores, 12 - 4 - 1, 'CI keeps a core');
 	assert.equal(o.link, 'wired');
 	assert.deepEqual(o.unknown, []);
+	assert.deepEqual(o.gpu, ['cuda', 'nvenc-h264'], 'GPU labels come from what the node offers');
+});
+
+test('labels it could not read are unknown, and offer no GPU', () => {
+	const o = offerFor({
+		node: 'n',
+		machine: MACHINE,
+		facts: parseOfferProbe(probe()),
+		pm2Peer: false,
+	});
+	assert.equal(o.labels, null);
+	assert.deepEqual(o.gpu, []);
+	assert.ok(o.unknown.includes('the labels it offers are unknown'));
 });
 
 test('an unbounded pm2 is charged at what it holds, and named; a bounded one is not', () => {

@@ -2,8 +2,8 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 
-import { STRICT_AFTER_CUT_OVER, planFor } from './hosting-plan.mjs';
-import { validateHostingRequest } from './hosting-request.mjs';
+import { planFor } from './hosting-plan.mjs';
+import { ADVISORY_UNTIL_DEFAULT, validateHostingRequest } from './hosting-request.mjs';
 
 const request = (name) =>
 	validateHostingRequest(
@@ -25,6 +25,7 @@ const offer = (node, over = {}) => ({
 	pm2: { present: false, unbounded: [], unboundedMb: 0 },
 	pm2Peer: false,
 	drain: null,
+	labels: [],
 	gpu: [],
 	unknown: [],
 	...over,
@@ -72,11 +73,34 @@ test('ciMayRead:false is advisory until enough candidates are cut over, then a f
 	assert.match(advisory.ranked[1].risk, /still runs with sudo/);
 
 	const cut = (n) => offer(n, { ci: { ...offer(n).ci, cutOver: true } });
-	const many = Array.from({ length: STRICT_AFTER_CUT_OVER }, (_, i) => cut(`c${i}`));
+	const many = Array.from({ length: ADVISORY_UNTIL_DEFAULT }, (_, i) => cut(`c${i}`));
 	const strict = planFor(CARDTABLE, [...many, offer('root-claw')]);
 	assert.equal(strict.ciMayReadPolicy, 'filter');
 	assert.ok(!nodes(strict).includes('root-claw'));
 	assert.match(why(strict, 'root-claw'), /not cut over/);
+});
+
+test("the strictness is the tenant's: advisoryUntil 0 filters with no claw cut over", () => {
+	const strictBot = { ...ARCHIVEBOT, isolation: { ciMayRead: false, advisoryUntil: 0 } };
+	const peers = [offer('claw-4', { pm2Peer: true }), offer('claw-6', { pm2Peer: true })];
+	const plan = planFor(strictBot, peers);
+	assert.equal(plan.ciMayReadPolicy, 'filter');
+	assert.deepEqual(nodes(plan), []);
+	assert.match(why(plan, 'claw-4'), /not cut over/);
+	// cardtable, against the same claws, keeps its own ruling.
+	assert.equal(planFor(CARDTABLE, peers).ciMayReadPolicy, 'advisory');
+});
+
+test('label:<id> reads the labels the node offers now; unreadable labels refuse, never pass', () => {
+	const forge = { ...CARDTABLE, placement: { require: ['label:jdk21'] } };
+	const plan = planFor(forge, [
+		offer('claw-8', { labels: ['jdk21', 'rust'] }),
+		offer('claw-1', { labels: ['rust'] }),
+		offer('claw-2', { labels: null }),
+	]);
+	assert.deepEqual(nodes(plan), ['claw-8']);
+	assert.match(why(plan, 'claw-1'), /fails "label:jdk21"/);
+	assert.match(why(plan, 'claw-2'), /cannot tell whether "label:jdk21" holds/);
 });
 
 test('a tenant at its max is offered nothing', () => {

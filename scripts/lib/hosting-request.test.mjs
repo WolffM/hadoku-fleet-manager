@@ -2,7 +2,11 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 
-import { NOTICE_FLOOR_MIN, validateHostingRequest } from './hosting-request.mjs';
+import {
+	ADVISORY_UNTIL_DEFAULT,
+	NOTICE_FLOOR_MIN,
+	validateHostingRequest,
+} from './hosting-request.mjs';
 
 const fixture = (name) =>
 	JSON.parse(readFileSync(new URL(`./fixtures/hosting-${name}.json`, import.meta.url), 'utf8'));
@@ -92,9 +96,38 @@ test('notice is never below the fleet floor; an unknown placement rule is refuse
 	assert.equal(
 		validateHostingRequest({
 			...CARDTABLE,
-			placement: { require: ['gpu:nvenc-h264', 'not-with:archivebot'] },
+			placement: { require: ['gpu:nvenc-h264', 'label:jdk21', 'not-with:archivebot'] },
 		}).ok,
 		true
+	);
+	// A label argument that names no capability could never match: refused, with the rule named.
+	for (const rule of ['label:jdk-21', 'gpu:nvenc'])
+		assert.match(
+			validateHostingRequest({ ...CARDTABLE, placement: { require: [rule] } }).problems[0].why,
+			new RegExp(`"${rule}"`)
+		);
+});
+
+test("isolation.advisoryUntil is the tenant's number; cardtable's ruling is the default", () => {
+	assert.deepEqual(validateHostingRequest(CARDTABLE).request.isolation, {
+		ciMayRead: false,
+		advisoryUntil: ADVISORY_UNTIL_DEFAULT,
+	});
+	assert.equal(ADVISORY_UNTIL_DEFAULT, 3);
+	assert.equal(
+		validateHostingRequest({ ...ARCHIVEBOT, isolation: { ciMayRead: false, advisoryUntil: 0 } })
+			.request.isolation.advisoryUntil,
+		0
+	);
+	assert.ok(
+		paths({ ...CARDTABLE, isolation: { ciMayRead: false, advisoryUntil: -1 } }).includes(
+			'isolation.advisoryUntil'
+		)
+	);
+	assert.ok(
+		paths({ ...CARDTABLE, isolation: { ciMayRead: true, advisoryUntil: 0 } }).includes(
+			'isolation.advisoryUntil'
+		)
 	);
 });
 

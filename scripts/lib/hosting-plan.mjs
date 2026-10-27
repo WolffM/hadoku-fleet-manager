@@ -15,34 +15,20 @@
  *   - the unit fits the offer: memory, cores, and disk for `stateGb`;
  *   - every `placement.require` rule holds.
  *
- * `isolation.ciMayRead: false` is ADVISORY until {@link STRICT_AFTER_CUT_OVER}
- * candidates are cut over to their own CI user, and a filter from then on
- * (cardtable's ruling: a filter today would take away its base claw). Until
- * then a not-cut-over claw is still offered, ranked after every cut-over one,
- * and carries the risk in words.
+ * `isolation.ciMayRead: false` is ADVISORY until `isolation.advisoryUntil`
+ * fitting candidates are cut over to their own CI user, and a filter from
+ * then on. The number is the tenant's (lib/hosting-request.mjs): cardtable
+ * keeps 3, a tenant that must never sit beside root CI says 0. Until then a
+ * not-cut-over claw is still offered, ranked after every cut-over one, and
+ * carries the risk in words.
+ *
+ * Placement rules are lib/hosting-placement.mjs's; this file only applies them.
  *
  * RANK among the claws that fit: cut over first, then the fewest CI jobs
  * lost, then the most memory left.
  */
 import { ciJobsAfter } from './hosting-offers.mjs';
-
-/** How many fitting, cut-over claws make `ciMayRead: false` a filter instead of a preference. */
-export const STRICT_AFTER_CUT_OVER = 3;
-
-const LINK_RULE = { wired: (o) => (o.link === null ? null : o.link === 'wired') };
-
-/** Does a node satisfy one placement rule? true / false / null (could not tell). */
-function ruleHolds(rule, offer) {
-	if (rule in LINK_RULE) return LINK_RULE[rule](offer);
-	if (rule === 'not-beside-unbounded') return offer.pm2.unbounded.length === 0;
-	if (rule === 'pm2-peer') return offer.pm2Peer;
-	if (rule === 'low-reboot-churn') return true; // a preference with no data behind it yet; never refuses
-	const gpu = /^gpu:(.+)$/.exec(rule);
-	if (gpu) return offer.gpu.includes(gpu[1]);
-	const notWith = /^not-with:(.+)$/.exec(rule);
-	if (notWith) return !offer.tenants.some((t) => t.tenant === notWith[1]);
-	return null;
-}
+import { ruleHolds } from './hosting-placement.mjs';
 
 /** Plan `request` (a NORMALIZED hosting request) against `offers` (from collectOffers). */
 export function planFor(request, offers) {
@@ -88,14 +74,14 @@ export function planFor(request, offers) {
 
 	const fitting = rows.filter((r) => r.fits);
 	const cutOverFitting = fitting.filter((r) => r.cutOver).length;
-	const strict = !isolation.ciMayRead && cutOverFitting >= STRICT_AFTER_CUT_OVER;
+	const strict = !isolation.ciMayRead && cutOverFitting >= isolation.advisoryUntil;
 	for (const r of fitting) {
 		if (isolation.ciMayRead || r.cutOver) continue;
 		if (strict) {
 			r.fits = false;
 			r.reasons.push(`CI here is not cut over to its own user, and ${app} may not be read by CI`);
 		} else {
-			r.risk = `CI here still runs with sudo, so a job could read ${app}; offered because fewer than ${STRICT_AFTER_CUT_OVER} candidates are cut over`;
+			r.risk = `CI here still runs with sudo, so a job could read ${app}; offered because fewer than ${isolation.advisoryUntil} candidates are cut over`;
 		}
 	}
 

@@ -15,12 +15,26 @@
  *            user (cardtable).
  *   service  an app hadoku_site deploys (pm2). The fleet gives it the same
  *            user, slice and guarantees; hadoku_site keeps the app layer.
+ *
+ * Placement rules live in lib/hosting-placement.mjs: one entry per rule, read
+ * by this validator and by the planner alike.
  */
+import { checkRule } from './hosting-placement.mjs';
 
 /** The fleet will not promise less notice than this, whatever a request says. */
 export const NOTICE_FLOOR_MIN = 15;
 
 export const KINDS = ['agent', 'service'];
+
+/**
+ * `isolation.advisoryUntil`: how many fitting claws must be cut over to their
+ * own CI user before `ciMayRead: false` stops being a preference and becomes a
+ * filter. The TENANT's number. 3 is cardtable's ruling (a filter while no
+ * claw is cut over would take away its base claw), kept as the default so a
+ * request written before the field existed plans as it did. A tenant whose
+ * data must never sit beside root CI says 0.
+ */
+export const ADVISORY_UNTIL_DEFAULT = 3;
 
 /** How traffic reaches the tenant. A closed set: each one is a firewall shape the fleet knows. */
 export const INGRESS = {
@@ -30,17 +44,6 @@ export const INGRESS = {
 	tunnel: "reached through the node's cloudflared tunnel; the port binds loopback only",
 	none: 'takes no inbound connections',
 };
-
-/** Placement rules a tenant may state. A rule outside this set is refused, never ignored. */
-export const PLACEMENT_RULES = {
-	wired: 'the node reaches the network over a cable, not Wi-Fi',
-	'not-beside-unbounded':
-		'nothing else on the node may hold memory without a ceiling (an unbounded pm2, for one)',
-	'pm2-peer':
-		'the node is a declared pm2 host of the app layer (its data endpoint and secrets listener answer it)',
-	'low-reboot-churn': 'prefer nodes the reboot cycle touches rarely',
-};
-const PARAM_RULES = [/^gpu:[a-z0-9-]+$/, /^not-with:[a-z0-9-]+$/];
 
 /**
  * What `runtime.workersOutliveRestart` MEANS, said once (cardtable asked for it
@@ -145,17 +148,20 @@ export function validateHostingRequest(raw) {
 			bad(`placement.${k}`, 'a list of rules');
 			continue;
 		}
-		for (const r of list)
-			if (!(r in PLACEMENT_RULES) && !PARAM_RULES.some((re) => re.test(r)))
-				bad(
-					`placement.${k}`,
-					`unknown rule "${r}"; known: ${Object.keys(PLACEMENT_RULES).join(', ')}, gpu:<label>, not-with:<app>`
-				);
+		for (const r of list) {
+			const c = checkRule(r);
+			if (!c.ok) bad(`placement.${k}`, c.why);
+		}
 	}
 
 	const iso = isObj(raw.isolation) ? raw.isolation : {};
 	if (iso.ciMayRead !== undefined && typeof iso.ciMayRead !== 'boolean')
 		bad('isolation.ciMayRead', 'true or false');
+	const advisoryUntil = iso.advisoryUntil ?? ADVISORY_UNTIL_DEFAULT;
+	if (!(Number.isInteger(advisoryUntil) && advisoryUntil >= 0))
+		bad('isolation.advisoryUntil', 'a whole number of cut-over claws, 0 or more (0: a filter now)');
+	if (iso.ciMayRead === true && iso.advisoryUntil !== undefined)
+		bad('isolation.advisoryUntil', 'only means something when ciMayRead is false');
 
 	if (problems.length) return { ok: false, request: null, problems };
 	return {
@@ -179,7 +185,7 @@ export function validateHostingRequest(raw) {
 			},
 			placement: { require, prefer },
 			// Defaults to false: a tenant has to SAY CI may read it.
-			isolation: { ciMayRead: iso.ciMayRead === true },
+			isolation: iso.ciMayRead === true ? { ciMayRead: true } : { ciMayRead: false, advisoryUntil },
 			...(raw.contact ? { contact: raw.contact } : {}),
 		},
 	};

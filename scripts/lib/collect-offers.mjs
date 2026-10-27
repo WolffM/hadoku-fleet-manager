@@ -7,6 +7,14 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import {
+	nodeOffer,
+	revokedFor,
+	workloadGateContext,
+	workloadGatedCapabilities,
+} from '../../dist/capabilities.js';
+import { readRevocations, revokedSets } from '../../dist/capability-revocations.js';
+import { proofFileStatus, readProofsForCapability } from '../../dist/lib/measured.js';
 import { readHostingDoc } from '../../dist/runners/hosting-record.js';
 import { deferralFor, readDrainDoc, readDrains } from './expected-down.mjs';
 import { runOn, selectNodes } from './fleet-exec.mjs';
@@ -37,6 +45,34 @@ export function tenantsByNode(drainDoc, hostingDoc) {
 }
 const pick = ({ tenant, memoryMb, cores }) => ({ tenant, memoryMb, cores });
 
+/**
+ * The routing labels each node offers now, by the mint's own rule: `nodeOffer`
+ * with the workload gate and the revocations, so a label a probe saw fail is
+ * not offered to a tenant either. A corrupt `$proof` withholds every gated
+ * label, as it does at the mint.
+ */
+export function offeredLabels(machines) {
+	const dir = stateDir();
+	const status = proofFileStatus({ dir });
+	const proofs = Object.fromEntries(
+		workloadGatedCapabilities().map((id) => [
+			id,
+			status.corrupt ? [] : readProofsForCapability(id, { dir }),
+		])
+	);
+	const gate = workloadGateContext(Object.keys(machines), proofs, {
+		corrupt: status.corrupt,
+		revoked: revokedSets(readRevocations(dir)),
+	});
+	return (node) =>
+		nodeOffer(machines[node] ?? {}, {
+			eligible: false,
+			workloadProofs: gate.byNode[node] ?? {},
+			provenCounts: gate.provenCounts,
+			revoked: revokedFor(gate, node),
+		});
+}
+
 /** `{ offers, skippedByRole }` for every claw the manifest selects. */
 export async function collectOffers(manifest) {
 	const { nodes, skippedByRole } = selectNodes(manifest);
@@ -45,6 +81,7 @@ export async function collectOffers(manifest) {
 	const tenants = tenantsByNode(drainDoc, hostingDoc);
 	const peers = pm2Peers();
 	const drains = readDrains();
+	const labelsOf = offeredLabels(manifest.machines ?? {});
 
 	const offers = await Promise.all(
 		nodes.map(async ([node, machine]) => {
@@ -60,6 +97,7 @@ export async function collectOffers(manifest) {
 				tenants: tenants.get(node) ?? [],
 				pm2Peer: peers.set === null ? null : peers.set.has(node),
 				drain: drainDoc.nodes[node] ?? null,
+				labels: labelsOf(node),
 			});
 			if (!offer.reachable) {
 				offer.unknown.push(r.error ?? 'no answer');
