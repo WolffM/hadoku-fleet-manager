@@ -35,8 +35,13 @@
  *   4. CI RANKS BELOW. Every CI process sits in `runners.slice` at
  *      `oom_score_adj` ≥ 500 (src/runners/ephemeral.ts `ciUnitProperties`).
  *      Read from `/proc` for every Runner process on the box.
- *   5. ONE LAN PORT, from the controller only. A ufw rule, read back from
- *      `ufw status`.
+ *   5. ONE PORT, FROM THE CONTROLLER ONLY. On the LAN, a ufw rule from its
+ *      reserved address. On the tailnet, an allow from the controller's own
+ *      tailnet addresses and a deny for everyone else, both PREPENDED above
+ *      the mesh's blanket `Anywhere on tailscale0` allow, which otherwise lets
+ *      every node in (cardtable found claw-8 reaching claw-9's agent,
+ *      2026-10-27). Read back by CONNECTING: from the controller, which must
+ *      get through, and from another node, which must not ({@link probeReach}).
  *
  * THE CI USER KEEPS NOPASSWD SUDO on the claws (operator, 2026-10-25). The
  * agent's own user stops a job reaching it without sudo, not one that
@@ -55,6 +60,7 @@ import {
 	hostingSliceName,
 } from '../../dist/runners/hosting-record.js';
 import { ciUnitProperties } from '../../dist/runners/ephemeral.js';
+import { isGuestNode } from '../../dist/lib/node-role.js';
 
 /**
  * Every tenant the fleet can host for. A table, not a parameter, so the unit
@@ -153,12 +159,42 @@ for f in $(find /sys/fs/cgroup/user.slice -path '*/runners.slice*' -name cgroup.
 	done
 done`;
 
+/** Delete every rule for the port on tailscale0, by number, one at a time: numbers shift after each. */
+const DROP_TAILNET_RULES = `
+while n=$($S ufw status numbered | grep -E "^\\[ *[0-9]+\\] $PORT/tcp( \\(v6\\))? on tailscale0 " | head -n1 | sed -E 's/^\\[ *([0-9]+)\\].*/\\1/'); [ -n "$n" ]; do
+	$S ufw --force delete "$n" >/dev/null
+done`;
+
+/**
+ * The tailnet half of "from the controller only". ufw matches rules in order
+ * and the mesh's \`Anywhere on tailscale0\` allow comes first, so a rule
+ * appended after it is never reached. \`prepend\` puts a rule at the top of
+ * its own address family's list. Rewritten only when the head of either list
+ * is not already exactly these rules, so a re-deploy changes nothing.
+ */
+const TAILNET_RULES = `
+tailnet_head() { $S ufw status | sed 's/ *#.*//' | awk 'NF{$1=$1;print}' | grep ' on tailscale0 ' | grep $1 '(v6)' | head -n "$2"; }
+want4=$(printf '%s\\n' "$PORT/tcp on tailscale0 ALLOW $CTL_TS4" "$PORT/tcp on tailscale0 DENY Anywhere")
+if [ -n "$CTL_TS6" ]; then
+	want6=$(printf '%s\\n' "$PORT/tcp (v6) on tailscale0 ALLOW $CTL_TS6" "$PORT/tcp (v6) on tailscale0 DENY Anywhere (v6)")
+else
+	want6="$PORT/tcp (v6) on tailscale0 DENY Anywhere (v6)"
+fi
+if [ "$(tailnet_head -v "$(echo "$want4" | wc -l)")" != "$want4" ] || [ "$(tailnet_head -e "$(echo "$want6" | wc -l)")" != "$want6" ]; then
+${DROP_TAILNET_RULES}
+	$S ufw prepend deny in on tailscale0 to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent, closed to the tailnet" >/dev/null
+	if [ -n "$CTL_TS6" ]; then
+		$S ufw prepend allow in on tailscale0 from "$CTL_TS6" to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent, controller" >/dev/null
+	fi
+	$S ufw prepend allow in on tailscale0 from "$CTL_TS4" to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent, controller" >/dev/null
+fi`;
+
 /**
  * The deploy script. Idempotent: a re-run with the same declaration rewrites
  * the same files, keeps the user and adds no second ufw rule. Run as the CI
  * user over ssh, with every privileged step through `sudo -n`.
  */
-export function deployScript(tenantName, { memoryMb, cores }, controllerIp) {
+export function deployScript(tenantName, { memoryMb, cores }, controller) {
 	const t = TENANTS[tenantName];
 	return `${assign({
 		...tenantVars(t, tenantName),
@@ -167,7 +203,9 @@ export function deployScript(tenantName, { memoryMb, cores }, controllerIp) {
 		WEIGHT: HOSTING_CPU_WEIGHT,
 		AGENT_OOM: AGENT_OOM_SCORE_ADJ,
 		CI_OOM: CI_OOM_SCORE_ADJ,
-		CONTROLLER_IP: controllerIp,
+		CONTROLLER_IP: controller.lan,
+		CTL_TS4: controller.tailnet4,
+		CTL_TS6: controller.tailnet6 ?? '',
 	})}
 set -eu
 S="sudo -n"
@@ -245,6 +283,7 @@ ${RAISE_CI_OOM}
 if ! $S ufw status 2>/dev/null | grep -Eq "^$PORT/tcp +ALLOW +$CONTROLLER_IP( |$)"; then
 	$S ufw allow from "$CONTROLLER_IP" to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent" >/dev/null
 fi
+${TAILNET_RULES}
 echo HOSTING-DEPLOYED
 `;
 }
@@ -267,6 +306,7 @@ $S systemctl daemon-reload
 while $S ufw status 2>/dev/null | grep -Eq "^$PORT/tcp +ALLOW +$CONTROLLER_IP( |$)"; do
 	$S ufw delete allow from "$CONTROLLER_IP" to any port "$PORT" proto tcp >/dev/null
 done
+${DROP_TAILNET_RULES}
 echo HOSTING-REMOVED
 `;
 }
@@ -402,8 +442,8 @@ echo "ciProcs=$n"
 echo "ciOutsideRunners=$out"
 echo "ciBelowOom=$low"
 echo "ciMinOom=$min"
-echo "ufwPort=$(sudo -n ufw status 2>/dev/null | grep -Ec "^$PORT/tcp +ALLOW" || true)"
-echo "ufwReadable=$(sudo -n ufw status >/dev/null 2>&1 && echo yes || echo no)"
+echo "tailnet4=$(tailscale ip -4 2>/dev/null | head -n1)"
+echo "tailnet6=$(tailscale ip -6 2>/dev/null | head -n1)"
 echo OBSERVE-END
 `;
 }
@@ -455,9 +495,90 @@ export function parseObserved(stdout) {
 		ciOutsideRunners: num('ciOutsideRunners'),
 		ciBelowOom: num('ciBelowOom'),
 		ciMinOom: num('ciMinOom'),
-		ufwPortRules: num('ufwPort'),
-		ufwReadable: kv.ufwReadable === 'yes',
+		tailnet4: str('tailnet4'),
+		tailnet6: str('tailnet6'),
 	};
+}
+
+/** How long a probe waits for an answer. ufw DROPS, so a closed port is a timeout, not a refusal. */
+const PROBE_TIMEOUT_S = 3;
+
+/**
+ * Try to CONNECT to the port on each address, from whichever node this runs
+ * on. `PROBE <label> <how>` per target, then `PROBE-END`. `how` is what the
+ * connection did: `connected`, `refused` (the packet reached the box and
+ * nothing listens, so the firewall let it in), `timeout`, `noroute`, or
+ * `error`.
+ */
+export function portProbeScript(targets, port) {
+	const lines = Object.entries(targets).map(
+		([label, addr]) => `probe ${shellQuote(label)} ${shellQuote(addr)}`
+	);
+	return `${assign({ PORT: port })}
+probe() {
+	out=$(timeout ${PROBE_TIMEOUT_S} bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$2" "$PORT" 2>&1); rc=$?
+	if [ $rc -eq 0 ]; then how=connected
+	elif [ $rc -eq 124 ]; then how=timeout
+	else case "$out" in
+		*"Connection refused"*) how=refused ;;
+		*"No route to host"*|*"Network is unreachable"*) how=noroute ;;
+		*) how=error ;;
+	esac; fi
+	echo "PROBE $1 $how"
+}
+${lines.join('\n')}
+echo PROBE-END
+`;
+}
+
+/** `{ label: 'open' | 'filtered' | 'unknown' }` from {@link portProbeScript}, or null if it never finished. */
+export function parsePortProbe(stdout) {
+	const text = String(stdout ?? '');
+	if (!text.includes('PROBE-END')) return null;
+	const out = {};
+	for (const m of text.matchAll(/^PROBE (\S+) (\S+)$/gm)) {
+		out[m[1]] = ['connected', 'refused'].includes(m[2])
+			? 'open'
+			: ['timeout', 'noroute'].includes(m[2])
+				? 'filtered'
+				: 'unknown';
+	}
+	return out;
+}
+
+/** How many other nodes are asked before "nobody could look" is the answer. */
+const PEER_TRIES = 3;
+
+/** Non-guest nodes other than `node` and the controller: who may try the port from outside. */
+export function peerCandidates(manifest, node) {
+	return Object.entries(manifest.machines ?? {})
+		.filter(([n, m]) => n !== node && n !== CONTROLLER_NODE && !isGuestNode(m))
+		.map(([n]) => n);
+}
+
+/**
+ * Is the port reachable from the controller, and from nothing else? Measured
+ * by connecting, never by reading ufw: the rule that was written is not the
+ * path a packet takes (the mesh allow sat above it). The controller tries
+ * every address; then other nodes, in turn, until one answers.
+ *
+ * `addrs` is `{ lan, tailnet4, tailnet6 }`; a null address is not probed and
+ * {@link judgeHosting} says so. `run` is `runOn`.
+ */
+export async function probeReach({ port, addrs, peers, run }) {
+	const targets = Object.fromEntries(Object.entries(addrs).filter(([, a]) => a));
+	const script = portProbeScript(targets, port);
+	const opts = { timeoutMs: 30_000, connectTimeout: 6 };
+	const controller = parsePortProbe((await run(CONTROLLER_NODE, script, opts)).stdout);
+	let peer = null;
+	for (const name of peers.slice(0, PEER_TRIES)) {
+		const got = parsePortProbe((await run(name, script, opts)).stdout);
+		if (got) {
+			peer = { node: name, ...got };
+			break;
+		}
+	}
+	return { addrs, controller, peer };
 }
 
 /** `cpu.max` is `<quota> <period>` or `max <period>`. Cores = quota / period; unlimited is null. */
@@ -495,7 +616,7 @@ const parseStat = (s) => {
  * match may go, and "I could not see the cgroup" must not read as "the cgroup
  * is fine".
  */
-export function judgeHosting(declared, obs, mode = 'whole') {
+export function judgeHosting(declared, obs, mode = 'whole', reach = null) {
 	const findings = [];
 	const block = (category, why) => findings.push({ class: 'blocking', category, why });
 	const advise = (category, why) => findings.push({ class: 'advisory', category, why });
@@ -556,7 +677,13 @@ export function judgeHosting(declared, obs, mode = 'whole') {
 		},
 		slice: { oomKills: obs.oomKills, throttledUsec: obs.throttledUsec },
 		port: t.port,
-		portOpenToController: obs.ufwReadable ? obs.ufwPortRules > 0 : null,
+		portOpenToController: reach?.controller ? reach.controller.lan === 'open' : null,
+		portReach: reach
+			? {
+					controller: reach.controller,
+					peer: reach.peer,
+				}
+			: null,
 		bootId: obs.bootId,
 	};
 
@@ -662,14 +789,50 @@ export function judgeHosting(declared, obs, mode = 'whole') {
 			);
 	}
 
-	// 5. the port
-	if (!obs.ufwReadable)
-		block(
-			'hosting-port',
-			'could not read ufw, so whether the controller can reach the agent is unknown'
-		);
-	else if (!(obs.ufwPortRules > 0))
-		block('hosting-port', `no ufw rule opens ${t.port}/tcp to the controller`);
+	// 5. the port: open to the controller, and to nothing else.
+	if (!reach) {
+		block('hosting-port', `${t.port}/tcp was not probed, so who can reach the agent is unknown`);
+	} else {
+		const ctl = reach.controller;
+		if (!ctl) block('hosting-port', `the controller did not finish probing ${t.port}/tcp`);
+		else if (ctl.lan !== 'open')
+			block(
+				'hosting-port',
+				`the controller cannot reach ${t.port}/tcp on the node's LAN address (${ctl.lan ?? 'not probed'})`
+			);
+		else if (reach.addrs.tailnet4 && ctl.tailnet4 !== 'open')
+			advise(
+				'hosting-port',
+				`the controller reaches ${t.port}/tcp on the LAN but not on the tailnet (${ctl.tailnet4})`
+			);
+		for (const label of ['lan', 'tailnet4'])
+			if (!reach.addrs[label])
+				block(
+					'hosting-port-exposed',
+					`the node's ${label} address is unknown, so whether ${t.port}/tcp is closed there is unknown`
+				);
+		if (!reach.peer) {
+			block(
+				'hosting-port-exposed',
+				`no other node finished probing ${t.port}/tcp, so whether it is closed to the fleet is unknown`
+			);
+		} else {
+			for (const [label, addr] of Object.entries(reach.addrs)) {
+				if (!addr) continue;
+				const v = reach.peer[label];
+				if (v === 'open')
+					block(
+						'hosting-port-exposed',
+						`${reach.peer.node} reaches ${t.port}/tcp on the ${label} address: only the controller may`
+					);
+				else if (v !== 'filtered')
+					block(
+						'hosting-port-exposed',
+						`${reach.peer.node} could not tell whether ${t.port}/tcp on the ${label} address is closed (${v ?? 'not probed'})`
+					);
+			}
+		}
+	}
 
 	// Information for the tenant, not a fault in what is served.
 	if (obs.oomKills > 0)

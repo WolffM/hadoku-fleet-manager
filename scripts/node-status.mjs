@@ -42,7 +42,13 @@ import { doctorFindings } from './lib/doctor.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest, runOn, selectNodes } from './lib/fleet-exec.mjs';
-import { judgeHosting, observeScript, parseObserved } from './lib/hosting.mjs';
+import {
+	judgeHosting,
+	observeScript,
+	parseObserved,
+	peerCandidates,
+	probeReach,
+} from './lib/hosting.mjs';
 import { readRevocations } from '../dist/capability-revocations.js';
 import { readHostingDoc } from '../dist/runners/hosting-record.js';
 import { stateDir } from './lib/paths.mjs';
@@ -216,7 +222,20 @@ const rows = await Promise.all(
 			const declared = wholeRec
 				? (wholeRec.hosting ?? {})
 				: { tenant: r0.tenant, memoryMb: r0.memoryMb, cores: r0.cores, port: r0.port };
-			const judged = judgeHosting(declared, obs, mode);
+			const reach =
+				obs && declared.port
+					? await probeReach({
+							port: declared.port,
+							addrs: {
+								lan: m.lan?.ip ?? null,
+								tailnet4: obs.tailnet4,
+								tailnet6: obs.tailnet6,
+							},
+							peers: peerCandidates(manifest, name),
+							run: runOn,
+						})
+					: null;
+			const judged = judgeHosting(declared, obs, mode, reach);
 			hosting = { mode, declared, until: r0.until ?? null, observed: judged.observed };
 			findings.push(...judged.findings);
 		}

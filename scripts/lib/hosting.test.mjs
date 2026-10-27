@@ -3,12 +3,17 @@ import { test } from 'node:test';
 
 import {
 	coresFromCpuMax,
+	deployScript,
 	fitProblems,
 	judgeHosting,
 	mibFromMemoryMax,
 	parseCores,
 	parseMemoryMb,
 	parseObserved,
+	parsePortProbe,
+	peerCandidates,
+	portProbeScript,
+	probeReach,
 	TENANTS,
 } from './hosting.mjs';
 
@@ -59,14 +64,21 @@ const answer = (over = {}) =>
 			ciOutsideRunners: 0,
 			ciBelowOom: 0,
 			ciMinOom: '',
-			ufwPort: 1,
-			ufwReadable: 'yes',
+			tailnet4: '198.51.100.9',
+			tailnet6: '2001:db8::9',
 			...over,
 		}).map(([k, v]) => `${k}=${v}`),
 		'OBSERVE-END',
 	].join('\n');
 
-const judge = (over, mode = 'whole') => judgeHosting(DECLARED, parseObserved(answer(over)), mode);
+/** The port as it should be: the controller gets in on every address, another node on none. */
+const REACH = {
+	addrs: { lan: '192.0.2.9', tailnet4: '198.51.100.9', tailnet6: '2001:db8::9' },
+	controller: { lan: 'open', tailnet4: 'open', tailnet6: 'open' },
+	peer: { node: 'claw-8', lan: 'filtered', tailnet4: 'filtered', tailnet6: 'filtered' },
+};
+const judge = (over, mode = 'whole', reach = REACH) =>
+	judgeHosting(DECLARED, parseObserved(answer(over)), mode, reach);
 const categories = (r) => r.findings.filter((f) => f.class === 'blocking').map((f) => f.category);
 
 test('a node serving exactly what was declared has no findings', () => {
@@ -151,9 +163,100 @@ test('CI on a hosting node is BLOCKING, and so is not being able to count it', (
 	assert.deepEqual(categories(judge({ ciWorkers: '' })), ['hosting-ci']);
 });
 
-test('an unreadable firewall is not an open port', () => {
-	assert.deepEqual(categories(judge({ ufwReadable: 'no', ufwPort: 0 })), ['hosting-port']);
-	assert.deepEqual(categories(judge({ ufwPort: 0 })), ['hosting-port']);
+test('the port is judged by connecting: the controller gets in, and nothing else does', () => {
+	assert.equal(judge().observed.portOpenToController, true);
+	// Not probed at all is not "closed".
+	assert.deepEqual(categories(judge({}, 'whole', null)), ['hosting-port']);
+	assert.deepEqual(categories(judge({}, 'whole', { ...REACH, controller: null })), [
+		'hosting-port',
+	]);
+	const ctl = (over) => ({ ...REACH, controller: { ...REACH.controller, ...over } });
+	assert.deepEqual(categories(judge({}, 'whole', ctl({ lan: 'filtered' }))), ['hosting-port']);
+	// The tailnet path missing while the LAN works is worth saying, not blocking.
+	const tsOnly = judge({}, 'whole', ctl({ tailnet4: 'filtered' }));
+	assert.deepEqual(categories(tsOnly), []);
+	assert.equal(tsOnly.findings[0].category, 'hosting-port');
+});
+
+test('another node reaching the port is EXPOSED, and so is nobody being able to look', () => {
+	const peer = (over) => ({ ...REACH, peer: { ...REACH.peer, ...over } });
+	// cardtable 2026-10-27: claw-8 reached claw-9's agent through the mesh allow.
+	const mesh = judge({}, 'shared', peer({ tailnet4: 'open' }));
+	assert.deepEqual(categories(mesh), ['hosting-port-exposed']);
+	assert.match(mesh.findings[0].why, /claw-8 reaches 7621\/tcp on the tailnet4 address/);
+	assert.deepEqual(categories(judge({}, 'shared', peer({ tailnet6: 'open' }))), [
+		'hosting-port-exposed',
+	]);
+	assert.deepEqual(categories(judge({}, 'shared', peer({ lan: 'unknown' }))), [
+		'hosting-port-exposed',
+	]);
+	assert.deepEqual(categories(judge({}, 'shared', { ...REACH, peer: null })), [
+		'hosting-port-exposed',
+	]);
+	const noTailnet = { ...REACH, addrs: { ...REACH.addrs, tailnet4: null } };
+	assert.deepEqual(categories(judge({}, 'shared', noTailnet)), ['hosting-port-exposed']);
+});
+
+test('a probe line says what the connection did; only a finished probe is an answer', () => {
+	const out = [
+		'PROBE lan connected',
+		'PROBE tailnet4 refused',
+		'PROBE tailnet6 timeout',
+		'PROBE x noroute',
+		'PROBE y error',
+		'PROBE-END',
+	].join('\n');
+	assert.deepEqual(parsePortProbe(out), {
+		lan: 'open',
+		tailnet4: 'open',
+		tailnet6: 'filtered',
+		x: 'filtered',
+		y: 'unknown',
+	});
+	assert.equal(parsePortProbe('PROBE lan timeout\n'), null);
+	const script = portProbeScript({ lan: '192.0.2.9', tailnet6: '2001:db8::9' }, 7621);
+	assert.match(script, /probe 'lan' '192\.0\.2\.9'/);
+	assert.match(script, /probe 'tailnet6' '2001:db8::9'/);
+});
+
+test('probeReach asks the controller, then other nodes until one finishes', async () => {
+	const asked = [];
+	const run = async (node) => {
+		asked.push(node);
+		if (node === 'claw-2') return { stdout: '' };
+		return { stdout: 'PROBE lan timeout\nPROBE tailnet4 timeout\nPROBE-END\n' };
+	};
+	const r = await probeReach({
+		port: 7621,
+		addrs: { lan: '192.0.2.9', tailnet4: '198.51.100.9', tailnet6: null },
+		peers: ['claw-2', 'claw-3', 'claw-4'],
+		run,
+	});
+	assert.deepEqual(asked, ['hokon', 'claw-2', 'claw-3']);
+	assert.equal(r.peer.node, 'claw-3');
+	assert.equal(r.controller.lan, 'filtered');
+});
+
+test('the peers are other non-guest nodes, never the node itself or the controller', () => {
+	const manifest = {
+		machines: { hokon: {}, 'claw-9': {}, 'claw-8': {}, guesty: { role: 'guest' } },
+	};
+	assert.deepEqual(peerCandidates(manifest, 'claw-9'), ['claw-8']);
+});
+
+test('the deploy closes the port to the tailnet ABOVE the mesh allow, controller first', () => {
+	const s = deployScript(
+		'cardtable',
+		{ memoryMb: 4096, cores: 4 },
+		{ lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: '2001:db8::1' }
+	);
+	const deny = s.indexOf('ufw prepend deny in on tailscale0');
+	const allow6 = s.indexOf('ufw prepend allow in on tailscale0 from "$CTL_TS6"');
+	const allow4 = s.indexOf('ufw prepend allow in on tailscale0 from "$CTL_TS4"');
+	// Each prepend lands on top, so the last one written is the first matched.
+	assert.ok(deny > 0 && deny < allow6 && allow6 < allow4);
+	assert.match(s, /CTL_TS4='198\.51\.100\.1'/);
+	assert.doesNotMatch(s, /ufw (allow|insert|append) .*tailscale0/);
 });
 
 test('an agent outside the slice escapes the limits — BLOCKING; one not yet installed is the tenant’s step', () => {

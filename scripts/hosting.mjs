@@ -60,6 +60,8 @@ import {
 	parseCores,
 	parseMemoryMb,
 	parseObserved,
+	peerCandidates,
+	probeReach,
 	removeScript,
 	restartScript,
 } from './lib/hosting.mjs';
@@ -186,6 +188,26 @@ function controllerIp() {
 	return ip;
 }
 
+/**
+ * The controller's addresses: its reserved LAN address from the manifest, and
+ * its tailnet addresses as tailscale reports them on the controller itself.
+ * The tailnet ones are opened above the mesh allow, so they must be read.
+ */
+async function controllerAddrs() {
+	const lan = controllerIp();
+	const r = await runOn(CONTROLLER_NODE, 'tailscale ip -4; tailscale ip -6', { timeoutMs: 15_000 });
+	const ips = r.stdout.split('\n').map((l) => l.trim());
+	const tailnet4 = ips.find((l) => /^\d+\.\d+\.\d+\.\d+$/.test(l)) ?? null;
+	const tailnet6 = ips.find((l) => l.includes(':')) ?? null;
+	if (!tailnet4) {
+		refuse(
+			`could not read ${CONTROLLER_NODE}'s tailnet address (${r.error ?? r.stderr.trim() ?? 'no answer'}), ` +
+				'so the tailnet rule would shut the controller out with everyone else.'
+		);
+	}
+	return { lan, tailnet4, tailnet6 };
+}
+
 async function observe(name, tenant) {
 	const r = await runOn(name, observeScript(tenant), { timeoutMs: 30_000, connectTimeout: 6 });
 	return { obs: parseObserved(r.stdout), error: r.ok ? null : (r.error ?? r.stderr.trim()) };
@@ -213,7 +235,19 @@ function hostingNodes() {
 /** What `--check` and a declaration both report: declared vs observed, judged. */
 async function checkOne({ name, mode, declared, until }) {
 	const { obs, error } = await observe(name, declared.tenant);
-	const judged = judgeHosting(declared, obs, mode);
+	const reach = obs
+		? await probeReach({
+				port: declared.port,
+				addrs: {
+					lan: manifest.machines?.[name]?.lan?.ip ?? null,
+					tailnet4: obs.tailnet4,
+					tailnet6: obs.tailnet6,
+				},
+				peers: peerCandidates(manifest, name),
+				run: runOn,
+			})
+		: null;
+	const judged = judgeHosting(declared, obs, mode, reach);
 	if (!obs && error) judged.findings[0].why += ` (${error})`;
 	const blocking = judged.findings.some((f) => f.class === 'blocking');
 	return {
@@ -399,7 +433,7 @@ if (!shared && drained && !['hosting', 'lease'].includes(drained.kind) && !has('
 			'Somebody took it out for a reason; --force if hosting should replace that.'
 	);
 }
-const ip = controllerIp();
+const controller = await controllerAddrs();
 
 // The node's own measurement, never the manifest's rounded ramGb.
 const before = await observe(node, tenant);
@@ -431,7 +465,7 @@ if (shared) {
 // The dispatcher re-reads the record every pass (15 s).
 const admissionFrom = new Date(NOW + 15_000).toISOString();
 
-const r = await runOn(node, deployScript(tenant, resources, ip), { timeoutMs: 120_000 });
+const r = await runOn(node, deployScript(tenant, resources, controller), { timeoutMs: 120_000 });
 if (!r.stdout.includes('HOSTING-DEPLOYED')) {
 	finish(false, {
 		state: 'not-guaranteed',

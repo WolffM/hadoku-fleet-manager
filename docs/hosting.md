@@ -74,18 +74,18 @@ or one the tenant wants free of CI.
 
 Nothing is read from a unit file the fleet wrote.
 
-| fact                 | written by                                                                       | read back from                                                      |
-| -------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| memory               | `MemoryMax`, `MemoryMin`, `MemorySwapMax=0` on `hosting.slice/hosting-<t>.slice` | `memory.max`, `memory.min`, `memory.swap.max` in its cgroup         |
-| protection reaches   | `MemoryMin` on `hosting.slice`                                                   | the parent's `memory.min` (a parent at 0 caps the child at 0)       |
-| cores                | `CPUQuota=N*100%`                                                                | `cpu.max`                                                           |
-| priority             | `CPUWeight=10000` on `hosting.slice`                                             | the parent's `cpu.weight`                                           |
-| the agent's own user | `useradd --system`, nologin, its own group                                       | `getent`, `id -G` against the CI user's groups, `sudo -l -U`        |
-| files                | home 0700 owned by the agent; executable and its dir root-owned                  | `stat`                                                              |
-| agent supervised     | system unit, `User=`, `Restart=always`, started by a `.path` unit                | the process on the port: its uid, cgroup and `oom_score_adj`        |
-| CI ranks below       | `ciUnitProperties` on every CI unit, and the standing units' drop-in             | every `Runner.*` process: in `runners.slice`, `oom_score_adj ≥ 500` |
-| no CI (whole only)   | drain record `kind: hosting`                                                     | the process tree: no `Runner.Listener`, no `Runner.Worker`          |
-| one LAN port         | ufw: the controller's reserved LAN address to the port                           | `ufw status`                                                        |
+| fact                 | written by                                                                                                    | read back from                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| memory               | `MemoryMax`, `MemoryMin`, `MemorySwapMax=0` on `hosting.slice/hosting-<t>.slice`                              | `memory.max`, `memory.min`, `memory.swap.max` in its cgroup                         |
+| protection reaches   | `MemoryMin` on `hosting.slice`                                                                                | the parent's `memory.min` (a parent at 0 caps the child at 0)                       |
+| cores                | `CPUQuota=N*100%`                                                                                             | `cpu.max`                                                                           |
+| priority             | `CPUWeight=10000` on `hosting.slice`                                                                          | the parent's `cpu.weight`                                                           |
+| the agent's own user | `useradd --system`, nologin, its own group                                                                    | `getent`, `id -G` against the CI user's groups, `sudo -l -U`                        |
+| files                | home 0700 owned by the agent; executable and its dir root-owned                                               | `stat`                                                                              |
+| agent supervised     | system unit, `User=`, `Restart=always`, started by a `.path` unit                                             | the process on the port: its uid, cgroup and `oom_score_adj`                        |
+| CI ranks below       | `ciUnitProperties` on every CI unit, and the standing units' drop-in                                          | every `Runner.*` process: in `runners.slice`, `oom_score_adj ≥ 500`                 |
+| no CI (whole only)   | drain record `kind: hosting`                                                                                  | the process tree: no `Runner.Listener`, no `Runner.Worker`                          |
+| controller-only port | ufw: the controller's LAN address; its tailnet addresses, then a tailnet deny, prepended above the mesh allow | connecting: the controller must get in, another node must time out on every address |
 
 **The agent runs as its own system user** (cardtable §9). The fleet supervises
 it and never ships it: `--install` streams the tenant's file over ssh straight
@@ -94,6 +94,16 @@ passes through anything the CI user can write. **The CI user keeps NOPASSWD
 sudo on the claws** (operator ruling, 2026-10-25), so the separate user stops a
 job reaching the agent without sudo. It does not stop a job that deliberately
 becomes root.
+
+**The port is open to the controller and nothing else, and that is tested by
+connecting.** Every claw's ufw carries a blanket `Anywhere on tailscale0`
+allow, and ufw matches in order, so a port rule appended below it never
+applies: on 2026-10-27 claw-8 reached claw-9's agent over the tailnet while
+`ufw status` showed the controller-only rule. The deploy now prepends the
+tailnet rules, and `--check` and `node-status` probe the port from the
+controller (must connect or be refused) and from another node, tried in turn
+until one answers (must time out on the LAN and both tailnet addresses). No
+node able to look is blocking, not a pass.
 
 **Cores are a quota, not pinned CPUs.** A JVM may not read a nested cgroup's
 quota, so size thread pools explicitly (`-XX:ActiveProcessorCount=N`).
