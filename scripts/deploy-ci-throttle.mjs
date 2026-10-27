@@ -91,7 +91,12 @@ import {
 	selectMachines,
 } from './lib/fleet-exec.mjs';
 import { manifest as manifestFile } from './lib/paths.mjs';
-import { NODE_SIDE_FILES, provenanceDrift, shippedHashes } from './lib/script-provenance.mjs';
+import {
+	NODE_SIDE_FILES,
+	OBSOLETE_NODE_FILES,
+	provenanceDrift,
+	shippedHashes,
+} from './lib/script-provenance.mjs';
 import {
 	runnerEnvDrift,
 	staleRemainingFindings,
@@ -657,6 +662,20 @@ for (const [name, m] of nodes) {
 				drift.push(d);
 				scriptDrift.push(file);
 			}
+		}
+		// A dead file still on the node is drift too, so the converger's
+		// redeploy deletes it. Unreadable is drift as well: could not look.
+		for (const { file, summaryKey } of OBSOLETE_NODE_FILES) {
+			const v = kv[summaryKey];
+			if (v === '0') continue;
+			drift.push(
+				v === '1'
+					? `${name}: ~/.hadoku/${file} is obsolete and still on the node — nothing runs ` +
+							`it any more (fix: fleet throttle --confirm deletes it)`
+					: `${name}: could not read whether the obsolete ~/.hadoku/${file} is still there ` +
+							`(SUMMARY carried ${summaryKey}=${v ?? '(absent)'})`
+			);
+			scriptDrift.push(file);
 		}
 	}
 	// #102: a stale listener this run did NOT clear — busy, a failed restart

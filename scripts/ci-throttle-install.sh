@@ -751,5 +751,9 @@ harvest_active=0
 systemctl --user is-active --quiet runner-mem-harvest.service 2>/dev/null && harvest_active=1
 harvest_sha=$(sha_of "$NODE_DIR/runner-mem-harvest.py")
 harvest_unit_sha=$(sha_of "$HOME/.config/systemd/user/runner-mem-harvest.service")
+# OBSOLETE_NODE_FILES (lib/script-provenance.mjs): deleted above, and still
+# present only on a --check run or a failed delete.
+jit_left=0
+[ -e "$NODE_DIR/jit-provision.sh" ] && jit_left=1
 
-echo "SUMMARY conf=$conf_ok conf_max=$conf_max conf_minfree=$conf_minfree confsha=$conf_sha payload=$jit_payload wired=$already newly=$changed stale=$stalecount stale_remaining=$stale_remaining nolistener=$nolistener restarted=$restarted busy=$busy skipped=$skipped hooksha=$hook_sha metricssha=$metrics_sha harvest=$harvest_active harvestsha=$harvest_sha harvestunitsha=$harvest_unit_sha runnerenv=$runnerenv_present runnerenvkeys=$runnerenv_keys_ok jobtmpseen=$jobtmp_seen jobtmpbad=$jobtmp_bad jobtmpunread=$jobtmp_unread"
+echo "SUMMARY conf=$conf_ok conf_max=$conf_max conf_minfree=$conf_minfree confsha=$conf_sha payload=$jit_payload wired=$already newly=$changed stale=$stalecount stale_remaining=$stale_remaining nolistener=$nolistener restarted=$restarted busy=$busy skipped=$skipped hooksha=$hook_sha metricssha=$metrics_sha harvest=$harvest_active harvestsha=$harvest_sha harvestunitsha=$harvest_unit_sha jitleft=$jit_left runnerenv=$runnerenv_present runnerenvkeys=$runnerenv_keys_ok jobtmpseen=$jobtmp_seen jobtmpbad=$jobtmp_bad jobtmpunread=$jobtmp_unread"

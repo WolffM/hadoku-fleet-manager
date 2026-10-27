@@ -83,6 +83,17 @@ export const RENDERED_NOT_SHIPPED = [
 	},
 ];
 
+/**
+ * Files an older payload left on nodes that nothing reads any more.
+ *
+ * The node half deletes each on every deploy and reports whether it is still
+ * there as `summaryKey`. A copy still present is drift, so the converger
+ * redeploys the node and the file goes without waiting for an unrelated
+ * change. Without this, the 2026-10-27 release that stopped shipping
+ * jit-provision.sh left a dead copy on all eight claws.
+ */
+export const OBSOLETE_NODE_FILES = [{ file: 'jit-provision.sh', summaryKey: 'jitleft' }];
+
 /** sha256 of a file, as hex. The same bytes the payload base64s. */
 export function sha256File(path) {
 	return createHash('sha256').update(readFileSync(path)).digest('hex');

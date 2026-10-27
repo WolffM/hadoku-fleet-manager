@@ -202,7 +202,12 @@ void test('install deletes the jit-provision.sh earlier versions left on the nod
 	writeFileSync(join(home, '.hadoku', 'jit-provision.sh'), '#!/bin/sh\necho old\n', {
 		mode: 0o755,
 	});
-	assertEmptyFixtureSummary(runInstall(home, { env: { MINTS: '1' } }));
+	// --check sees it and deletes nothing: the converger reads this as drift.
+	assert.match(runInstall(home, { apply: 0 }), /\bjitleft=1\b/);
+	assert.equal(existsSync(join(home, '.hadoku', 'jit-provision.sh')), true);
+	const out = runInstall(home, { env: { MINTS: '1' } });
+	assertEmptyFixtureSummary(out);
+	assert.match(out, /\bjitleft=0\b/);
 	assert.equal(existsSync(join(home, '.hadoku', 'jit-provision.sh')), false);
 });
 

@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
 	NODE_SIDE_FILES,
+	OBSOLETE_NODE_FILES,
 	RENDERED_NOT_SHIPPED,
 	provenanceDrift,
 	sha256File,
@@ -104,6 +105,24 @@ void test('every hashed file exists in the package and the driver reports its ke
 				`reads undefined for ${file}.`
 		);
 	}
+});
+
+void test('every obsolete node file is deleted AND reported by the node half', () => {
+	// Reported but never deleted, the converger redeploys the node every pass
+	// and the drift never clears. Deleted but never reported, the driver reads
+	// undefined and calls every node unreadable.
+	for (const { file, summaryKey } of OBSOLETE_NODE_FILES) {
+		assert.ok(
+			nodeHalf.includes(`rm -f "$NODE_DIR/${file}"`),
+			`the node half never deletes ~/.hadoku/${file}`
+		);
+		assert.ok(nodeHalf.includes(`${summaryKey}=`), `the SUMMARY never carries ${summaryKey}=`);
+		assert.ok(
+			!NODE_SIDE_FILES.some((f) => f.file === file),
+			`${file} is both shipped and obsolete`
+		);
+	}
+	assert.match(driver, /OBSOLETE_NODE_FILES/, 'the driver never reads the obsolete list');
 });
 
 void test('the driver ships exactly the files it hashes', () => {
