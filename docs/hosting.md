@@ -74,18 +74,18 @@ or one the tenant wants free of CI.
 
 Nothing is read from a unit file the fleet wrote.
 
-| fact                 | written by                                                                                                    | read back from                                                                      |
-| -------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| memory               | `MemoryMax`, `MemoryMin`, `MemorySwapMax=0` on `hosting.slice/hosting-<t>.slice`                              | `memory.max`, `memory.min`, `memory.swap.max` in its cgroup                         |
-| protection reaches   | `MemoryMin` on `hosting.slice`                                                                                | the parent's `memory.min` (a parent at 0 caps the child at 0)                       |
-| cores                | `CPUQuota=N*100%`                                                                                             | `cpu.max`                                                                           |
-| priority             | `CPUWeight=10000` on `hosting.slice`                                                                          | the parent's `cpu.weight`                                                           |
-| the agent's own user | `useradd --system`, nologin, its own group                                                                    | `getent`, `id -G` against the CI user's groups, `sudo -l -U`                        |
-| files                | home 0700 owned by the agent; executable and its dir root-owned                                               | `stat`                                                                              |
-| agent supervised     | system unit, `User=`, `Restart=always`, started by a `.path` unit                                             | the process on the port: its uid, cgroup and `oom_score_adj`                        |
-| CI ranks below       | `ciUnitProperties` on every CI unit, and the standing units' drop-in                                          | every `Runner.*` process: in `runners.slice`, `oom_score_adj ≥ 500`                 |
-| no CI (whole only)   | drain record `kind: hosting`                                                                                  | the process tree: no `Runner.Listener`, no `Runner.Worker`                          |
-| controller-only port | ufw: the controller's LAN address; its tailnet addresses, then a tailnet deny, prepended above the mesh allow | connecting: the controller must get in, another node must time out on every address |
+| fact                 | written by                                                                                                                                                       | read back from                                                                      |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| memory               | `MemoryMax`, `MemoryMin`, `MemorySwapMax=0` on `hosting.slice/hosting-<t>.slice`                                                                                 | `memory.max`, `memory.min`, `memory.swap.max` in its cgroup                         |
+| protection reaches   | `MemoryMin` on `hosting.slice`                                                                                                                                   | the parent's `memory.min` (a parent at 0 caps the child at 0)                       |
+| cores                | `CPUQuota=N*100%`                                                                                                                                                | `cpu.max`                                                                           |
+| priority             | `CPUWeight=10000` on `hosting.slice`                                                                                                                             | the parent's `cpu.weight`                                                           |
+| the agent's own user | `useradd --system`, nologin, its own group                                                                                                                       | `getent`, `id -G` against the CI user's groups, `sudo -l -U`                        |
+| files                | home 0700 owned by the agent; executable and its dir root-owned                                                                                                  | `stat`                                                                              |
+| agent supervised     | system unit, `User=`, `Restart=always`, started by a `.path` unit                                                                                                | the process on the port: its uid, cgroup and `oom_score_adj`                        |
+| CI ranks below       | `ciUnitProperties` on every CI unit, and the standing units' drop-in                                                                                             | every `Runner.*` process: in `runners.slice`, `oom_score_adj ≥ 500`                 |
+| no CI (whole only)   | drain record `kind: hosting`                                                                                                                                     | the process tree: no `Runner.Listener`, no `Runner.Worker`                          |
+| controller-only port | ufw: the controller's LAN address. Tailnet: `hosting-<t>-port.service` drops the port in the `raw` table for every source but the controller's tailnet addresses | connecting: the controller must get in, another node must time out on every address |
 
 **The agent runs as its own system user** (cardtable §9). The fleet supervises
 it and never ships it: `--install` streams the tenant's file over ssh straight
@@ -96,14 +96,21 @@ job reaching the agent without sudo. It does not stop a job that deliberately
 becomes root.
 
 **The port is open to the controller and nothing else, and that is tested by
-connecting.** Every claw's ufw carries a blanket `Anywhere on tailscale0`
-allow, and ufw matches in order, so a port rule appended below it never
-applies: on 2026-10-27 claw-8 reached claw-9's agent over the tailnet while
-`ufw status` showed the controller-only rule. The deploy now prepends the
-tailnet rules, and `--check` and `node-status` probe the port from the
-controller (must connect or be refused) and from another node, tried in turn
-until one answers (must time out on the LAN and both tailnet addresses). No
-node able to look is blocking, not a pass.
+connecting.** tailscaled puts its own `ts-input` chain first in INPUT, and it
+ACCEPTs everything on `tailscale0`, so ufw never sees tailnet traffic. Any ufw
+rule for the tailnet, the mesh allow included, is decoration. On 2026-10-27
+claw-8 reached claw-9's agent over the tailnet while `ufw status` showed a
+controller-only rule; 0.34.91 then prepended tailnet rules to ufw, and claw-1
+still got in. The drop now lives in the `raw` table's PREROUTING, which runs
+before every filter chain and which tailscaled never touches, held by a oneshot
+unit that re-asserts it at boot and on every deploy. `--check` and
+`node-status` probe the port from the controller (must connect or be refused)
+and from another node, tried in turn until one answers (must time out on the
+LAN and both tailnet addresses). No node able to look is blocking, not a pass.
+
+**A re-deploy that changes no unit leaves the agent running.** A restart kills
+the tenant's JVMs, so the agent restarts only when its slice or service unit
+actually changed.
 
 **The firewall does not reach loopback.** A CI job on the same node connects to
 the agent over `127.0.0.1`, which ufw never filters. So the port being closed to

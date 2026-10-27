@@ -36,10 +36,10 @@
  *      `oom_score_adj` ≥ 500 (src/runners/ephemeral.ts `ciUnitProperties`).
  *      Read from `/proc` for every Runner process on the box.
  *   5. ONE PORT, FROM THE CONTROLLER ONLY. On the LAN, a ufw rule from its
- *      reserved address. On the tailnet, an allow from the controller's own
- *      tailnet addresses and a deny for everyone else, both PREPENDED above
- *      the mesh's blanket `Anywhere on tailscale0` allow, which otherwise lets
- *      every node in (cardtable found claw-8 reaching claw-9's agent,
+ *      reserved address. On the tailnet, a `raw`-table drop for every source
+ *      but the controller's tailnet addresses, held by a unit
+ *      ({@link TAILNET_PORT_UNIT}); tailscaled accepts all tailnet traffic
+ *      before ufw sees it (cardtable found claw-8 reaching claw-9's agent,
  *      2026-10-27). Read back by CONNECTING: from the controller, which must
  *      get through, and from another node, which must not ({@link probeReach}).
  *
@@ -139,6 +139,7 @@ const tenantVars = (t, tenantName) => ({
 	SLICE: t.slice,
 	SERVICE: t.service,
 	PATH_UNIT: t.pathUnit,
+	PORT_UNIT: `hosting-${tenantName}-port.service`,
 	AGENT_USER: t.user,
 	AGENT_HOME: t.home,
 	EXEC: t.exec,
@@ -159,35 +160,49 @@ for f in $(find /sys/fs/cgroup/user.slice -path '*/runners.slice*' -name cgroup.
 	done
 done`;
 
-/** Delete every rule for the port on tailscale0, by number, one at a time: numbers shift after each. */
+/**
+ * Delete every ufw rule for the port on tailscale0, by number, one at a time:
+ * numbers shift after each. 0.34.91 wrote these; they were never reached (see
+ * {@link TAILNET_PORT_UNIT}), so the deploy and the teardown both drop them.
+ */
 const DROP_TAILNET_RULES = `
 while n=$($S ufw status numbered | grep -E "^\\[ *[0-9]+\\] $PORT/tcp( \\(v6\\))? on tailscale0 " | head -n1 | sed -E 's/^\\[ *([0-9]+)\\].*/\\1/'); [ -n "$n" ]; do
 	$S ufw --force delete "$n" >/dev/null
 done`;
 
 /**
- * The tailnet half of "from the controller only". ufw matches rules in order
- * and the mesh's \`Anywhere on tailscale0\` allow comes first, so a rule
- * appended after it is never reached. \`prepend\` puts a rule at the top of
- * its own address family's list. Rewritten only when the head of either list
- * is not already exactly these rules, so a re-deploy changes nothing.
+ * The tailnet half of "from the controller only", as a system unit.
+ *
+ * NOT A UFW RULE. tailscaled puts its own `ts-input` chain FIRST in INPUT, and
+ * that chain ACCEPTs everything arriving on tailscale0, so no ufw rule ever
+ * sees tailnet traffic. 0.34.91 prepended ufw rules above the mesh allow;
+ * they were in place, in order, and claw-1 still reached claw-9's agent.
+ * The `raw` table's PREROUTING runs before any filter chain, and tailscaled
+ * never touches it, so the drop lives there. A oneshot unit re-asserts it at
+ * boot and on every deploy (delete, then insert, so it is never doubled).
  */
-const TAILNET_RULES = `
-tailnet_head() { $S ufw status | sed 's/ *#.*//' | awk 'NF{$1=$1;print}' | grep ' on tailscale0 ' | grep $1 '(v6)' | head -n "$2"; }
-want4=$(printf '%s\\n' "$PORT/tcp on tailscale0 ALLOW $CTL_TS4" "$PORT/tcp on tailscale0 DENY Anywhere")
-if [ -n "$CTL_TS6" ]; then
-	want6=$(printf '%s\\n' "$PORT/tcp (v6) on tailscale0 ALLOW $CTL_TS6" "$PORT/tcp (v6) on tailscale0 DENY Anywhere (v6)")
-else
-	want6="$PORT/tcp (v6) on tailscale0 DENY Anywhere (v6)"
-fi
-if [ "$(tailnet_head -v "$(echo "$want4" | wc -l)")" != "$want4" ] || [ "$(tailnet_head -e "$(echo "$want6" | wc -l)")" != "$want6" ]; then
-${DROP_TAILNET_RULES}
-	$S ufw prepend deny in on tailscale0 to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent, closed to the tailnet" >/dev/null
-	if [ -n "$CTL_TS6" ]; then
-		$S ufw prepend allow in on tailscale0 from "$CTL_TS6" to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent, controller" >/dev/null
-	fi
-	$S ufw prepend allow in on tailscale0 from "$CTL_TS4" to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent, controller" >/dev/null
-fi`;
+const TAILNET_PORT_UNIT = `
+R4="-i tailscale0 -p tcp --dport $PORT ! -s $CTL_TS4 -j DROP"
+if [ -n "$CTL_TS6" ]; then R6="-i tailscale0 -p tcp --dport $PORT ! -s $CTL_TS6 -j DROP"; else R6="-i tailscale0 -p tcp --dport $PORT -j DROP"; fi
+unit "$PORT_UNIT" <<EOF
+[Unit]
+Description=fleet hosting: $TENANT agent port, closed to the tailnet except the controller
+After=tailscaled.service
+Before=$SERVICE
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/sbin/iptables -t raw -D PREROUTING $R4
+ExecStartPre=-/usr/sbin/ip6tables -t raw -D PREROUTING $R6
+ExecStart=/usr/sbin/iptables -t raw -I PREROUTING 1 $R4
+ExecStart=/usr/sbin/ip6tables -t raw -I PREROUTING 1 $R6
+ExecStop=-/usr/sbin/iptables -t raw -D PREROUTING $R4
+ExecStop=-/usr/sbin/ip6tables -t raw -D PREROUTING $R6
+
+[Install]
+WantedBy=multi-user.target
+EOF`;
 
 /**
  * The deploy script. Idempotent: a re-run with the same declaration rewrites
@@ -214,7 +229,16 @@ if ! id -u "$AGENT_USER" >/dev/null 2>&1; then
 fi
 $S install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$AGENT_HOME"
 $S install -d -o root -g root -m 0755 "$(dirname "$EXEC")"
-unit() { $S tee "/etc/systemd/system/$1" >/dev/null; }
+# Write a unit only when its text changed, and remember which did: a re-deploy
+# that changes nothing must not restart the agent (it kills the tenant's JVMs).
+CHANGED=" "
+unit() {
+	new=$(cat)
+	if [ "$($S cat "/etc/systemd/system/$1" 2>/dev/null)" != "$new" ]; then
+		printf '%s\n' "$new" | $S tee "/etc/systemd/system/$1" >/dev/null
+		CHANGED="$CHANGED$1 "
+	fi
+}
 unit "$PARENT" <<EOF
 [Unit]
 Description=fleet hosting: every tenant slice, weighed against user.slice (CI) and system.slice
@@ -274,16 +298,24 @@ Unit=$SERVICE
 [Install]
 WantedBy=multi-user.target
 EOF
+${TAILNET_PORT_UNIT}
 $S systemctl daemon-reload
 $S systemctl start "$PARENT" "$SLICE"
+$S systemctl enable "$PORT_UNIT" >/dev/null 2>&1
+case "$CHANGED" in *" $PORT_UNIT "*) $S systemctl restart "$PORT_UNIT" ;; *) $S systemctl start "$PORT_UNIT" ;; esac
 $S systemctl enable --now "$PATH_UNIT" >/dev/null 2>&1
 $S systemctl enable "$SERVICE" >/dev/null 2>&1
-if [ -x "$EXEC" ]; then $S systemctl restart "$SERVICE"; fi
+if [ -x "$EXEC" ]; then
+	case "$CHANGED" in
+		*" $SLICE "*|*" $SERVICE "*) $S systemctl restart "$SERVICE" ;;
+		*) $S systemctl start "$SERVICE" ;;
+	esac
+fi
 ${RAISE_CI_OOM}
 if ! $S ufw status 2>/dev/null | grep -Eq "^$PORT/tcp +ALLOW +$CONTROLLER_IP( |$)"; then
 	$S ufw allow from "$CONTROLLER_IP" to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent" >/dev/null
 fi
-${TAILNET_RULES}
+${DROP_TAILNET_RULES}
 echo HOSTING-DEPLOYED
 `;
 }
@@ -298,9 +330,9 @@ export function removeScript(tenantName, controllerIp) {
 	return `${assign({ ...tenantVars(t, tenantName), CONTROLLER_IP: controllerIp })}
 set -eu
 S="sudo -n"
-$S systemctl disable --now "$PATH_UNIT" "$SERVICE" >/dev/null 2>&1 || true
+$S systemctl disable --now "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" >/dev/null 2>&1 || true
 $S systemctl stop "$SLICE" "$PARENT" >/dev/null 2>&1 || true
-for u in "$PATH_UNIT" "$SERVICE" "$SLICE" "$PARENT"; do $S rm -f "/etc/systemd/system/$u"; done
+for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" "$SLICE" "$PARENT"; do $S rm -f "/etc/systemd/system/$u"; done
 $S rm -f "$EXEC" "$EXEC.new"
 $S systemctl daemon-reload
 while $S ufw status 2>/dev/null | grep -Eq "^$PORT/tcp +ALLOW +$CONTROLLER_IP( |$)"; do

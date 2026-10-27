@@ -244,19 +244,29 @@ test('the peers are other non-guest nodes, never the node itself or the controll
 	assert.deepEqual(peerCandidates(manifest, 'claw-9'), ['claw-8']);
 });
 
-test('the deploy closes the port to the tailnet ABOVE the mesh allow, controller first', () => {
+test('the deploy closes the port to the tailnet BEFORE tailscale accepts it, controller excepted', () => {
 	const s = deployScript(
 		'cardtable',
 		{ memoryMb: 4096, cores: 4 },
 		{ lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: '2001:db8::1' }
 	);
-	const deny = s.indexOf('ufw prepend deny in on tailscale0');
-	const allow6 = s.indexOf('ufw prepend allow in on tailscale0 from "$CTL_TS6"');
-	const allow4 = s.indexOf('ufw prepend allow in on tailscale0 from "$CTL_TS4"');
-	// Each prepend lands on top, so the last one written is the first matched.
-	assert.ok(deny > 0 && deny < allow6 && allow6 < allow4);
+	// tailscaled's ts-input ACCEPTs all of tailscale0 ahead of ufw, so the drop is in raw.
+	assert.match(s, /ExecStart=\/usr\/sbin\/iptables -t raw -I PREROUTING 1 \$R4/);
+	assert.match(s, /R4="-i tailscale0 -p tcp --dport \$PORT ! -s \$CTL_TS4 -j DROP"/);
 	assert.match(s, /CTL_TS4='198\.51\.100\.1'/);
-	assert.doesNotMatch(s, /ufw (allow|insert|append) .*tailscale0/);
+	assert.doesNotMatch(s, /ufw (allow|prepend|insert) .*tailscale0/);
+	// The never-reached ufw rules from 0.34.91 are dropped, not kept.
+	assert.match(s, /ufw --force delete/);
+});
+
+test('a re-deploy that changes no unit does not restart the agent', () => {
+	const s = deployScript(
+		'cardtable',
+		{ memoryMb: 4096, cores: 4 },
+		{ lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null }
+	);
+	assert.match(s, /\*" \$SLICE "\*\|\*" \$SERVICE "\*\) \$S systemctl restart "\$SERVICE"/);
+	assert.doesNotMatch(s, /then \$S systemctl restart "\$SERVICE"; fi/);
 });
 
 test('an agent outside the slice escapes the limits — BLOCKING; one not yet installed is the tenant’s step', () => {
