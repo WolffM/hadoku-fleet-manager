@@ -8,7 +8,9 @@ import assert from 'node:assert/strict';
 
 import {
 	buildSpeedModel,
+	MIN_KIND_SAMPLES,
 	MIN_KINDS,
+	MIN_OTHER_NODES,
 	MIN_SAMPLES,
 	SLOW_P25,
 	TRIVIAL_SEC,
@@ -509,4 +511,138 @@ test('without `nodes`, JIT-named records fail SAFE (unknown, never slow, never a
 	const model = buildSpeedModel(records, { nowMs: NOW });
 	assert.equal(model.tierOf('claw-5'), 'unknown');
 	assert.equal(model.expectedExtraSec('claw-5', repo, 'check'), null);
+});
+
+// ---------------------------------------------------------------------------
+// #8: one kind, read on its own — a normal node can be slow at one job
+// ---------------------------------------------------------------------------
+
+const E2E_REPO = 'WolffM/hadoku-dataplatform';
+
+/** The other claws' baseline for one kind: MIN_SAMPLES successes each on two
+ * nodes, at 1500s (the ~25-minute e2e). */
+function e2eBaseline(): JobRecord[] {
+	return [
+		...kindSamples(E2E_REPO, 'e2e', 'claw-2', 1500),
+		...kindSamples(E2E_REPO, 'e2e', 'claw-4', 1500),
+	];
+}
+
+test('#8: kindSlowness reads one kind from successes, with no tier needed', () => {
+	const records = [...e2eBaseline(), ...kindSamples(E2E_REPO, 'e2e', 'claw-1', 4500, 2)];
+	const model = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
+	assert.equal(model.tierOf('claw-1'), 'unknown', 'one kind is far below MIN_KINDS');
+	const k = model.kindSlowness?.('claw-1', E2E_REPO, 'e2e');
+	assert.deepEqual(k, {
+		repo: E2E_REPO,
+		job: 'e2e',
+		ratio: 3,
+		extraSec: 3000,
+		samples: 2,
+		lowerBounds: 0,
+	});
+});
+
+test('#8: a timeout and a long failure count as lower bounds — the worst node is not the unmeasured one', () => {
+	// claw-1's real shape on 2026-10-27: a 60-minute timeout and an 82-minute
+	// failure, no success. Successes alone would leave it unreadable.
+	const records = [
+		...e2eBaseline(),
+		rec({ repo: E2E_REPO, name: 'e2e', runner: 'claw-1', runSec: 3600, conclusion: 'cancelled' }),
+		rec({ repo: E2E_REPO, name: 'e2e', runner: 'claw-1', runSec: 4920, conclusion: 'failure' }),
+	];
+	const model = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
+	const k = model.kindSlowness?.('claw-1', E2E_REPO, 'e2e');
+	assert.ok(k, 'two lower bounds clear MIN_KIND_SAMPLES');
+	assert.equal(k.lowerBounds, 2);
+	assert.equal(k.ratio, (3600 + 4920) / 2 / 1500);
+	// The tier never sees them: a failure is not a speed sample there.
+	assert.equal(model.describe('claw-1').kinds, 0);
+});
+
+test('#8: a failure SHORTER than the others-median says nothing about speed', () => {
+	const records = [
+		...e2eBaseline(),
+		rec({ repo: E2E_REPO, name: 'e2e', runner: 'claw-1', runSec: 200, conclusion: 'failure' }),
+		rec({ repo: E2E_REPO, name: 'e2e', runner: 'claw-1', runSec: 300, conclusion: 'failure' }),
+	];
+	const model = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
+	assert.equal(model.kindSlowness?.('claw-1', E2E_REPO, 'e2e'), null);
+});
+
+test('#8: kindSlowness is null below MIN_KIND_SAMPLES, below MIN_SAMPLES of others, and under TRIVIAL_SEC', () => {
+	const one = buildSpeedModel(
+		[...e2eBaseline(), ...kindSamples(E2E_REPO, 'e2e', 'claw-1', 4500, MIN_KIND_SAMPLES - 1)],
+		{ nowMs: NOW, nodes: FLEET_NODES }
+	);
+	assert.equal(one.kindSlowness?.('claw-1', E2E_REPO, 'e2e'), null);
+
+	// Two other claws, so only the sample count is short.
+	const thinOthers = buildSpeedModel(
+		[
+			...kindSamples(E2E_REPO, 'e2e', 'claw-2', 1500, 2),
+			...kindSamples(E2E_REPO, 'e2e', 'claw-4', 1500, MIN_SAMPLES - 3),
+			...kindSamples(E2E_REPO, 'e2e', 'claw-1', 4500, 3),
+		],
+		{ nowMs: NOW, nodes: FLEET_NODES }
+	);
+	assert.equal(thinOthers.kindSlowness?.('claw-1', E2E_REPO, 'e2e'), null);
+
+	const trivial = buildSpeedModel(
+		[
+			...kindSamples(E2E_REPO, 'ping', 'claw-2', TRIVIAL_SEC - 1),
+			...kindSamples(E2E_REPO, 'ping', 'claw-1', 100, 3),
+		],
+		{ nowMs: NOW, nodes: FLEET_NODES }
+	);
+	assert.equal(trivial.kindSlowness?.('claw-1', E2E_REPO, 'ping'), null);
+});
+
+test('#8: kindsOn lists every readable kind on a node, matrix shards folded', () => {
+	const records = [
+		...e2eBaseline(),
+		...kindSamples(E2E_REPO, 'e2e (3)', 'claw-1', 4500, 2),
+		...kindSamples(E2E_REPO, 'lint', 'claw-2', 60),
+		...kindSamples(E2E_REPO, 'lint', 'claw-4', 60),
+		...kindSamples(E2E_REPO, 'lint', 'claw-1', 60, 2),
+	];
+	const model = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
+	const kinds = (model.kindsOn?.('claw-1') ?? []).map((k) => `${k.job}:${k.ratio}`).sort();
+	assert.deepEqual(kinds, ['e2e:3', 'lint:1']);
+});
+
+test('#8: one other claw is not a baseline — a kind run by two claws reads nothing', () => {
+	assert.equal(MIN_OTHER_NODES, 2);
+	const records = [
+		...kindSamples(E2E_REPO, 'forge-e2e', 'claw-8', 200, 20),
+		...kindSamples(E2E_REPO, 'forge-e2e', 'claw-9', 400, 20),
+	];
+	const model = buildSpeedModel(records, {
+		nowMs: NOW,
+		nodes: [...FLEET_NODES, 'claw-8', 'claw-9'],
+	});
+	assert.equal(model.kindSlowness?.('claw-9', E2E_REPO, 'forge-e2e'), null);
+});
+
+test('#8: the guest is never read per kind, however slow', () => {
+	const records = [...e2eBaseline(), ...kindSamples(E2E_REPO, 'e2e', 'hokon', 6000, 5)];
+	const model = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
+	assert.equal(model.kindSlowness?.('hokon', E2E_REPO, 'e2e'), null);
+	assert.deepEqual(model.kindsOn?.('hokon'), []);
+});
+
+test('#8: a node with enough successes is read from them — long failures of a flaky kind do not count', () => {
+	// The baseline is successes only. Adding one side's failures would read a
+	// kind that fails often everywhere as slow on whichever node is asked.
+	const records = [
+		...e2eBaseline(),
+		...kindSamples(E2E_REPO, 'e2e', 'claw-1', 1600, MIN_SAMPLES),
+		...Array.from({ length: 10 }, () =>
+			rec({ repo: E2E_REPO, name: 'e2e', runner: 'claw-1', runSec: 5000, conclusion: 'failure' })
+		),
+	];
+	const model = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
+	const k = model.kindSlowness?.('claw-1', E2E_REPO, 'e2e');
+	assert.equal(k?.lowerBounds, 0);
+	assert.equal(k?.ratio, 1600 / 1500);
 });

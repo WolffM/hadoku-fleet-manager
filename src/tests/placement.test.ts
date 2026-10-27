@@ -8,10 +8,12 @@ import {
 	choosePlacement,
 	isForkSafe,
 	HEAVY_HOLD_SEC,
+	slowKind,
+	slowReposOn,
 	SPILL_FLOOR_SEC,
 	type NodeState,
 } from '../runners/placement.js';
-import type { SpeedModel, SpeedTier } from '../runners/speed-tier.js';
+import { buildSpeedModel, type SpeedModel, type SpeedTier } from '../runners/speed-tier.js';
 import type { HeavyModel } from '../runners/traffic.js';
 import { planTick, type PendingRun } from '../runners/dispatcher.js';
 import {
@@ -33,7 +35,11 @@ import {
 } from '../runners/dispatch-pass.js';
 import { warmRunnerName, TMP_FREE_FLOOR_MB, WORK_FREE_FLOOR_MB } from '../runners/ephemeral.js';
 import { __resetTarballCacheForTesting } from '../runners/ephemeral-exec.js';
-import { __resetJobHistoryForTesting, __setHistoryPathForTesting } from '../job-history.js';
+import {
+	__resetJobHistoryForTesting,
+	__setHistoryPathForTesting,
+	type JobRecord,
+} from '../job-history.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 
 // --- B8: fork safety --------------------------------------------------------
@@ -1637,4 +1643,160 @@ test('a slow node that is ALSO full refuses on capacity, not on the spill wait',
 	const p = choosePlacement(['claw-5'], [node], [], 'WolffM/x', { queuedSec: 500 });
 	assert.equal(p.node, undefined);
 	assert.match(p.passed[0].reason, /at capacity/);
+});
+
+// ---------------------------------------------------------------------------
+// #8: a NORMAL node that is slow at ONE kind holds that kind, not the rest
+// ---------------------------------------------------------------------------
+
+const KIND_REPO = 'WolffM/hadoku-dataplatform';
+
+/** History where claw-1 runs `e2e` at ~3x the others (a timeout and a long
+ * failure) and `lint` at par; claw-2/claw-4 are the baseline. The REAL model:
+ * the thresholds under test are placement's, over the model's own reading. */
+function kindHistory(startedAt: string): JobRecord[] {
+	let id = 1;
+	const r = (name: string, runner: string, runSec: number, conclusion = 'success'): JobRecord => ({
+		repo: KIND_REPO,
+		runId: id,
+		jobId: id++,
+		name,
+		runner,
+		labels: [],
+		startedAt,
+		durationSec: runSec,
+		runSec,
+		conclusion,
+	});
+	const out: JobRecord[] = [];
+	for (const node of ['claw-2', 'claw-4']) {
+		for (let i = 0; i < 5; i++) out.push(r('e2e', node, 1500), r('lint', node, 60));
+	}
+	out.push(r('e2e', 'claw-1', 3600, 'cancelled'), r('e2e', 'claw-1', 4920, 'failure'));
+	out.push(r('lint', 'claw-1', 61), r('lint', 'claw-1', 59));
+	return out;
+}
+
+const KIND_NOW = Date.parse('2026-10-27T12:00:00Z');
+const kindModel = () =>
+	buildSpeedModel(kindHistory('2026-10-26T12:00:00Z'), {
+		nowMs: KIND_NOW,
+		nodes: ['claw-1', 'claw-2', 'claw-4'],
+	});
+
+test('#8: a normal-tier node holds the ONE kind it runs slowly, for as long as it would cost', () => {
+	const speedModel = kindModel();
+	assert.notEqual(speedModel.tierOf('claw-1'), 'slow', 'the tier gate is not what holds it');
+	const claw1 = m('claw-1', { speedModel });
+	const claw2 = m('claw-2', { speedModel });
+	const p = choosePlacement(['claw-1', 'claw-2'], [claw1, claw2], [], KIND_REPO, {
+		queuedSec: 30,
+		jobName: 'e2e',
+	});
+	assert.equal(p.node, 'claw-2');
+	assert.match(
+		p.passed[0].reason,
+		/slow kind: holding for a faster node \(queued 30s < 2760s; e2e runs 2\.84x here \(\+2760s, 2 run\(s\), 2 unfinished\)\)/
+	);
+	assert.equal(p.passed[0].holdSec, 2760);
+});
+
+test('#8: the same node takes the kinds it runs at par, and the slow kind once it has waited', () => {
+	const speedModel = kindModel();
+	const claw1 = m('claw-1', { speedModel });
+	const lint = choosePlacement(['claw-1'], [claw1], [], KIND_REPO, {
+		queuedSec: 0,
+		jobName: 'lint',
+	});
+	assert.equal(lint.node, 'claw-1');
+	const e2eLate = choosePlacement(['claw-1'], [claw1], [], KIND_REPO, {
+		queuedSec: 2761,
+		jobName: 'e2e',
+	});
+	assert.equal(
+		e2eLate.node,
+		'claw-1',
+		'past what it costs here, waiting longer is the worse trade'
+	);
+});
+
+test('#8: an unknown queue age never spills onto a slow kind', () => {
+	const claw1 = m('claw-1', { speedModel: kindModel() });
+	const p = choosePlacement(['claw-1'], [claw1], [], KIND_REPO, { jobName: 'e2e' });
+	assert.equal(p.node, undefined);
+	assert.match(p.passed[0].reason, /queued unknown/);
+});
+
+test('#8: a kind slow by less than SPILL_FLOOR_SEC is never held — the hold would cost more', () => {
+	const speedModel = fakeSpeedModel();
+	speedModel.kindSlowness = (_n, repo, job) => ({
+		repo,
+		job,
+		ratio: 5,
+		extraSec: SPILL_FLOOR_SEC - 1,
+		samples: 5,
+		lowerBounds: 0,
+	});
+	assert.equal(slowKind(speedModel, 'claw-1', KIND_REPO, 'lint'), null);
+	speedModel.kindSlowness = (_n, repo, job) => ({
+		repo,
+		job,
+		ratio: 1.7,
+		extraSec: 600,
+		samples: 5,
+		lowerBounds: 0,
+	});
+	assert.equal(slowKind(speedModel, 'claw-1', KIND_REPO, 'lint'), null, 'below SLOW_P25');
+});
+
+test('#8: slowReposOn names the repo with its slow kind, and nothing for a node at par', () => {
+	const model = kindModel();
+	assert.deepEqual(
+		[...slowReposOn(model, 'claw-1')],
+		[[KIND_REPO, 'slow kind: e2e runs 2.84x here (+2760s, 2 run(s), 2 unfinished)']]
+	);
+	assert.equal(slowReposOn(model, 'claw-2').size, 0);
+	assert.equal(slowReposOn(undefined, 'claw-1').size, 0);
+});
+
+/** `kindHistory` written where the warm path's `getSpeedModel` reads it. */
+function seedKindHistory(path: string, startedAt: string): void {
+	for (const r of kindHistory(startedAt)) appendFileSync(path, JSON.stringify(r) + '\n');
+}
+
+test('WARM PATH, #8: a listener for a repo with a slow kind on this node is evicted', async () => {
+	seedKindHistory(join(wireTmp, 'job-history.jsonl'), SPEED_DEMAND_AT);
+	const unit = warmRunnerName('claw-1', KIND_REPO);
+	const sims: Record<string, NodeSim> = {
+		'claw-1': { marker: `${KIND_REPO} 1000`, active: new Set([unit]) },
+	};
+	const gh = fakeGh({ runners: [{ id: 1, name: unit, status: 'online', busy: false }] });
+	const input: EphemeralTickInput = {
+		fleetProbe: new Map([['claw-1', { reachable: true, busyRepos: null }]]),
+		ephemeral: new Set(['claw-1']),
+		nodes: { 'claw-1': WIRE_NODE, 'claw-2': WIRE_NODE, 'claw-4': WIRE_NODE },
+		isSick: () => false,
+		repos: [KIND_REPO],
+		standingEligible: new Set(),
+	};
+	const res = await dispatchWarmCache(input, 'tok', gh, simShell(sims), SPEED_NOW);
+	assert.equal(res.evicted, 1, 'a zero-wait listener would take the e2e the mint path holds');
+	assert.equal(res.filled, 0, 'and the same repo is not put straight back');
+});
+
+test('WARM PATH, #8: a fill onto a node where the repo has a slow kind is withheld, never minted', async () => {
+	seedKindHistory(join(wireTmp, 'job-history.jsonl'), SPEED_DEMAND_AT);
+	const sims: Record<string, NodeSim> = { 'claw-1': { marker: null, active: new Set() } };
+	const input: EphemeralTickInput = {
+		fleetProbe: new Map([['claw-1', { reachable: true, busyRepos: null }]]),
+		ephemeral: new Set(['claw-1']),
+		nodes: { 'claw-1': WIRE_NODE, 'claw-2': WIRE_NODE, 'claw-4': WIRE_NODE },
+		isSick: () => false,
+		repos: [KIND_REPO],
+		standingEligible: new Set(),
+	};
+	const res = await dispatchWarmCache(input, 'tok', fakeGh({}), simShell(sims), SPEED_NOW);
+	assert.equal(res.filled, 0);
+	assert.equal(res.locked, 1, 'counted where #82 counts a withheld fill');
+	assert.equal(sims['claw-1'].marker, null);
 });

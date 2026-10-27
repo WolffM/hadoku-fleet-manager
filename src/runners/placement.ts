@@ -7,7 +7,7 @@
  */
 import { IMPLICIT_LABELS as REGISTRY_IMPLICIT_LABELS } from '../capabilities.js';
 import { admitMint, type AdmissionInput, type AdmissionResult } from './ephemeral.js';
-import type { SpeedModel } from './speed-tier.js';
+import { SLOW_P25, type KindSlowness, type SpeedModel } from './speed-tier.js';
 import type { HeavyModel } from './traffic.js';
 
 // ---------------------------------------------------------------------------
@@ -297,6 +297,50 @@ export const HEAVY_HOLD_SEC = 3600;
  */
 export const SPILL_FLOOR_SEC = 100;
 
+/**
+ * Is THIS kind slow enough on `node` to hold it for a faster one (#8)? The
+ * node's own tier says nothing here: a node can be normal overall and several
+ * times slower on one kind (claw-1's spinning disk under dataplatform's
+ * browser e2e). The same two bars the slow tier already uses, applied to one
+ * kind:
+ *
+ * - `ratio >= SLOW_P25`, the line that separates claw-5 from the rest;
+ * - `extraSec >= SPILL_FLOOR_SEC`. Holding a job for 100s to save it 25s is a
+ *   loss, so a kind that is only slow by seconds is never held.
+ *
+ * ONE definition, read by the mint path (`refusalFor`) and by the warm path
+ * (`slowReposOn`), which GitHub assigns to without asking placement.
+ */
+export function slowKind(
+	model: SpeedModel | undefined,
+	node: string,
+	repo: string,
+	jobName: string
+): KindSlowness | null {
+	const k = model?.kindSlowness?.(node, repo, jobName) ?? null;
+	return k && k.ratio >= SLOW_P25 && k.extraSec >= SPILL_FLOOR_SEC ? k : null;
+}
+
+/**
+ * The repos `node` must not hold a WARM listener for, with the reason (#8). A
+ * warm listener takes any job of its repo with zero queue wait, so the per-kind
+ * hold above cannot reach it; a repo with even one slow kind here goes to the
+ * mint path instead, where it can be held.
+ */
+export function slowReposOn(model: SpeedModel | undefined, node: string): Map<string, string> {
+	const out = new Map<string, string>();
+	for (const k of model?.kindsOn?.(node) ?? []) {
+		if (k.ratio < SLOW_P25 || k.extraSec < SPILL_FLOOR_SEC || out.has(k.repo)) continue;
+		out.set(k.repo, `slow kind: ${describeKind(k)}`);
+	}
+	return out;
+}
+
+function describeKind(k: KindSlowness): string {
+	const lb = k.lowerBounds ? `, ${k.lowerBounds} unfinished` : '';
+	return `${k.job} runs ${k.ratio.toFixed(2)}x here (+${Math.round(k.extraSec)}s, ${k.samples} run(s)${lb})`;
+}
+
 export interface Placement {
 	node?: string;
 	/** Why each node ahead of the chosen one was passed over. Kept because a
@@ -512,6 +556,26 @@ function refusalFor(
 					`slow tier: holding for a faster node (queued ${waited} < ${Math.round(thresholdSec)}s; ` +
 					`${m.name} p25 ${p25 ?? 'null'})`,
 				holdSec: thresholdSec,
+			};
+		}
+	}
+
+	// THE PER-KIND HOLD (#8). Same shape as the slow tier above, keyed on this
+	// exact job: hold until the job has waited as long as running here would
+	// cost it, then spill. A slow-tier node already held above.
+	const kind =
+		repo !== undefined && spill?.jobName !== undefined
+			? slowKind(m.speedModel, m.name, repo, spill.jobName)
+			: null;
+	if (kind) {
+		const queuedSec = spill?.queuedSec;
+		if (queuedSec === undefined || queuedSec < kind.extraSec) {
+			const waited = queuedSec === undefined ? 'unknown' : `${Math.round(queuedSec)}s`;
+			return {
+				reason:
+					`slow kind: holding for a faster node (queued ${waited} < ${Math.round(kind.extraSec)}s; ` +
+					`${describeKind(kind)})`,
+				holdSec: kind.extraSec,
 			};
 		}
 	}

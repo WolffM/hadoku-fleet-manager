@@ -73,6 +73,22 @@ export interface SpeedModel {
 	 * only ever reached by a test's incomplete mock.
 	 */
 	factorOf?(node: string): number | null;
+	/**
+	 * How THIS node runs ONE exact (repo, job) kind against the other claws
+	 * (#8): a node's tier is one number, and a node can be normal overall and
+	 * still several times slower on one kind. claw-1 (median 1.14x, normal)
+	 * ran hadoku-dataplatform's browser e2e at ~3x, on a spinning disk.
+	 *
+	 * `null` when there is not enough to compare: fewer than MIN_SAMPLES
+	 * successful runs on the other claws, an others-median under TRIVIAL_SEC,
+	 * or fewer than MIN_KIND_SAMPLES on this node. A judgement, not a verdict:
+	 * the caller decides what ratio and extra are worth holding a job for.
+	 *
+	 * OPTIONAL ON THE INTERFACE for the same reason as `factorOf`.
+	 */
+	kindSlowness?(node: string, repo: string, jobName: string): KindSlowness | null;
+	/** Every kind this node has a {@link kindSlowness} reading for. */
+	kindsOn?(node: string): KindSlowness[];
 	/** For logs and reports: the inputs behind the tier. */
 	describe(node: string): {
 		tier: SpeedTier;
@@ -80,6 +96,21 @@ export interface SpeedModel {
 		p50: number | null;
 		kinds: number;
 	};
+}
+
+/** One node's reading on one (repo, job) kind — see {@link SpeedModel.kindSlowness}. */
+export interface KindSlowness {
+	repo: string;
+	/** The job KIND (`jobKind`), so matrix shards share one reading. */
+	job: string;
+	/** Node median / other claws' median. */
+	ratio: number;
+	/** Node median - other claws' median, in seconds. */
+	extraSec: number;
+	/** Samples on this node, lower bounds included. */
+	samples: number;
+	/** How many of `samples` are runs that did not succeed (see MIN_KIND_SAMPLES). */
+	lowerBounds: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +213,40 @@ export const MIN_SAMPLES = 5;
  */
 export const TRIVIAL_SEC = 20;
 
+/**
+ * Samples a node needs on ONE kind before {@link SpeedModel.kindSlowness}
+ * reads it (#8). Lower than MIN_SAMPLES on purpose. A per-kind hold only
+ * delays a job by at most the extra it would cost on this node, so a false
+ * reading costs a bounded wait. Waiting for five runs of a job that times out
+ * here would mean five lost runs.
+ *
+ * LOWER BOUNDS COUNT. A run that did not succeed but outlasted the other
+ * claws' median took AT LEAST that long, so it is a sample at its runSec.
+ * Without this the gate gets easier to pass the worse the node is: claw-1's
+ * two dataplatform e2e runs as of 2026-10-27 were a 60-minute timeout and an
+ * 82-minute failure, against an others-median of ~25 minutes, and neither
+ * was a success. A run that failed sooner than that median says nothing about
+ * speed and is ignored.
+ *
+ * ONLY WHERE SUCCESSES ARE MISSING: below MIN_SAMPLES successes on this node.
+ * The baseline is successes only, so adding long failures to one side alone
+ * biases a flaky kind upward. Measured 2026-10-27: cardtable's forge-e2e fails
+ * ~35% of runs on every claw, and claw-9 read 1.30x on its 306 successes but
+ * 1.86x with its 93 long failures added. A node that keeps finishing a job is
+ * measured by those finishes; one that cannot is measured by how long it ran.
+ */
+export const MIN_KIND_SAMPLES = 2;
+
+/**
+ * Distinct OTHER claws a kind's baseline must come from before
+ * {@link SpeedModel.kindSlowness} reads it. A kind only two claws run compares
+ * one node against ONE other, which measures that other node, not the fleet.
+ * Measured 2026-10-27: claw-9 read 1.86x on hadoku-cardtable's forge-e2e
+ * against claw-8 alone, the fastest claw, and would have lost cardtable's warm
+ * listener for it.
+ */
+export const MIN_OTHER_NODES = 2;
+
 // ---------------------------------------------------------------------------
 // Node attribution — delegated, not parsed here.
 // ---------------------------------------------------------------------------
@@ -210,6 +275,19 @@ const CLAW_NODE = /^claw-\d+$/;
 function isUsable(r: JobRecord, cutoffIso: string): r is JobRecord & { runSec: number } {
 	return (
 		r.conclusion === 'success' &&
+		typeof r.runSec === 'number' &&
+		Number.isFinite(r.runSec) &&
+		!r.probe &&
+		r.startedAt >= cutoffIso
+	);
+}
+
+/** A finished run that did NOT succeed — a lower bound on how long the job
+ * takes there, read only by `kindSlowness` (see MIN_KIND_SAMPLES). */
+function isLowerBound(r: JobRecord, cutoffIso: string): r is JobRecord & { runSec: number } {
+	return (
+		r.conclusion !== 'success' &&
+		r.conclusion !== 'skipped' &&
 		typeof r.runSec === 'number' &&
 		Number.isFinite(r.runSec) &&
 		!r.probe &&
@@ -276,6 +354,9 @@ export function buildSpeedModel(
 	// TIME through this index rather than pooling raw rows across job names
 	// (see that fallback's own comment for why pooling was wrong).
 	const byKindNode = new Map<string, Map<string, number[]>>();
+	// Runs that finished without success, same window and probe rules, kept
+	// apart: only `kindSlowness` reads them, and only as lower bounds.
+	const lowerByKindNode = new Map<string, Map<string, number[]>>();
 	const kindsByRepo = new Map<string, Set<string>>();
 	const clawNodes = new Set<string>();
 
@@ -292,6 +373,10 @@ export function buildSpeedModel(
 	// no list at all, because `nodeOf` returns an unprefixed name unchanged.
 	// Nothing is ever held back by a missing list; see the test pinning this.
 	for (const r of records) {
+		if (isLowerBound(r, cutoffIso)) {
+			pushSample(lowerByKindNode, kindKey(r.repo, r.name), nodeOf(r.runner, nodes), r.runSec);
+			continue;
+		}
 		if (!isUsable(r, cutoffIso)) continue;
 		const node = nodeOf(r.runner, nodes);
 		if (CLAW_NODE.test(node)) clawNodes.add(node);
@@ -455,5 +540,49 @@ export function buildSpeedModel(
 		return (overallRatio - 1) * othersMed;
 	}
 
-	return { tierOf, expectedExtraSec, factorOf, describe };
+	function slownessOf(node: string, kk: string): KindSlowness | null {
+		// Claws only, like the tier: the guest is judged by the backstop, not here.
+		if (!CLAW_NODE.test(node)) return null;
+		const nodeMap = byKindNode.get(kk);
+		if (!nodeMap) return null;
+		const otherNodes = [...clawNodes].filter((n) => n !== node && nodeMap.has(n));
+		if (otherNodes.length < MIN_OTHER_NODES) return null;
+		const othersSamples = othersFor(nodeMap, clawNodes, node);
+		if (othersSamples.length < MIN_SAMPLES) return null;
+		const othersMed = median(othersSamples);
+		if (othersMed === null || othersMed < TRIVIAL_SEC) return null;
+		const ok = nodeMap.get(node) ?? [];
+		const lower =
+			ok.length < MIN_SAMPLES
+				? (lowerByKindNode.get(kk)?.get(node) ?? []).filter((sec) => sec > othersMed)
+				: [];
+		const samples = [...ok, ...lower];
+		if (samples.length < MIN_KIND_SAMPLES) return null;
+		const nodeMed = median(samples);
+		if (nodeMed === null) return null;
+		const [repo, job] = kk.split('\u0000');
+		return {
+			repo,
+			job,
+			ratio: nodeMed / othersMed,
+			extraSec: nodeMed - othersMed,
+			samples: samples.length,
+			lowerBounds: lower.length,
+		};
+	}
+
+	function kindSlowness(node: string, repo: string, jobName: string): KindSlowness | null {
+		return slownessOf(node, kindKey(repo, jobName));
+	}
+
+	function kindsOn(node: string): KindSlowness[] {
+		const out: KindSlowness[] = [];
+		for (const kk of byKindNode.keys()) {
+			const k = slownessOf(node, kk);
+			if (k) out.push(k);
+		}
+		return out;
+	}
+
+	return { tierOf, expectedExtraSec, factorOf, kindSlowness, kindsOn, describe };
 }

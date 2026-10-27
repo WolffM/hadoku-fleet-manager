@@ -81,7 +81,7 @@ import { runDispatchTick } from './dispatch-tick.js';
 import { SATURATED_QUEUED_MS } from './queue-discovery.js';
 import { buildSpeedModel, type SpeedModel } from './speed-tier.js';
 import { heavyMarkedRecently, type DispatchPassResult } from './dispatch-pass.js';
-import type { NodeState } from './placement.js';
+import { slowReposOn, type NodeState } from './placement.js';
 import { chargedLikeDispatch, getCapacityLedger } from './capacity-ledger.js';
 
 /** The half of the fast loop's probe this needs. Declared locally, not imported,
@@ -1558,6 +1558,20 @@ export async function dispatchWarmCache(
 	// deliberate, permanent hold-back as an ordinary quiet tick.
 	const neverWarm = new Set<string>();
 	const planNodes: WarmFleetNode[] = [];
+	// The repos a node must not hold a listener for: the manifest's
+	// `excludeRepos` (#82), then any repo with a kind this node runs slowly
+	// (#8, `slowReposOn`). Both check points below read this, never one alone.
+	const slowRepos = new Map(observed.map((o) => [o.node, slowReposOn(speedModel, o.node)]));
+	const warmExcluded = (
+		node: string,
+		m: { excludeRepos?: Record<string, string> },
+		repo: string
+	): string | undefined => {
+		const manifest = (m.excludeRepos ?? {})[repo];
+		if (manifest !== undefined) return `repo excluded here: ${manifest} (#82)`;
+		const slow = slowRepos.get(node)?.get(repo);
+		return slow !== undefined ? `${slow} (#8)` : undefined;
+	};
 	for (const o of observed) {
 		const tier = speedModel.tierOf(o.node);
 		// THE THIRD ENFORCEMENT POINT (#90, drain-node.mjs's header). A warm
@@ -1680,7 +1694,7 @@ export async function dispatchWarmCache(
 			// here does) and offer the node up with `current: null` — it still
 			// competes for a DIFFERENT, allowed repo below, exactly like a node
 			// whose listener was just found dead by the reap check above.
-			const excludedReason = o.current ? (o.m.excludeRepos ?? {})[o.current.repo] : undefined;
+			const excludedReason = o.current ? warmExcluded(o.node, o.m, o.current.repo) : undefined;
 			if (
 				o.current &&
 				excludedReason !== undefined &&
@@ -1692,8 +1706,7 @@ export async function dispatchWarmCache(
 				})
 			) {
 				logger.info(
-					`[warm-cache] ${o.node}: evicting its warm listener for ${o.current.repo} — repo excluded ` +
-						`here: ${excludedReason} (#82)`
+					`[warm-cache] ${o.node}: evicting its warm listener for ${o.current.repo} — ${excludedReason}`
 				);
 				const evicted = await evictWarmListener(
 					o.node,
@@ -1773,12 +1786,11 @@ export async function dispatchWarmCache(
 							? decision.to
 							: null;
 				if (target !== null) {
-					const reason = (m.excludeRepos ?? {})[target];
+					const reason = warmExcluded(node, m, target);
 					if (reason !== undefined) {
 						result.locked++;
 						logger.info(
-							`[warm-cache] ${node}: withholding a ${decision.action} onto ${target} — repo ` +
-								`excluded here: ${reason} (#82)`
+							`[warm-cache] ${node}: withholding a ${decision.action} onto ${target} — ${reason}`
 						);
 						return;
 					}
