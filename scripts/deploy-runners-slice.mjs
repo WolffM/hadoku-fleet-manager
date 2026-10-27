@@ -560,7 +560,7 @@ for (const [name, m] of nodes) {
 		// to re-exec had been skipped on five nodes because they were mid-job.
 		// The guard beside this file asserts each of these prefixes on BOTH
 		// sides for exactly this reason.
-		/^(BUSY|NEEDS-OPERATOR|UNIT-CAP-DRIFT|SLICE-PLACEMENT-DRIFT|MINT-PLACEMENT-DRIFT|MINT-CAP-DRIFT|SUPERVISION-DRIFT|PLACE-FAILED|SLICE-WARN|SLICE-FAIL|IO-REEXEC-DEFERRED|IO-REEXEC-FAILED|IO-DELEGATE-PENDING) /.test(
+		/^(BUSY|NEEDS-OPERATOR|UNIT-CAP-DRIFT|OOM-RANK-DRIFT|SLICE-PLACEMENT-DRIFT|MINT-PLACEMENT-DRIFT|MINT-CAP-DRIFT|SUPERVISION-DRIFT|PLACE-FAILED|SLICE-WARN|SLICE-FAIL|IO-REEXEC-DEFERRED|IO-REEXEC-FAILED|IO-DELEGATE-PENDING) /.test(
 			l
 		)
 	);
@@ -595,6 +595,12 @@ for (const [name, m] of nodes) {
 	}
 	const capDrift = notes.filter((n) => n.startsWith('UNIT-CAP-DRIFT')).length;
 	if (capDrift) problems.push(`${capDrift} unit(s) below the per-unit ceiling`);
+	const oomDrift = notes.filter((n) => n.startsWith('OOM-RANK-DRIFT'));
+	if (oomDrift.length)
+		problems.push(
+			`${oomDrift.length} unit(s) below the CI OOM rank, so a global OOM would take ` +
+				`something else first: ${oomDrift.map((n) => n.split(/\s+/).slice(1, 3).join(' ')).join(', ')}`
+		);
 	// EFFECTIVE placement, which nothing asserted until 2026-09-01.
 	//
 	// `capped_live` reads the per-unit ceiling from the kernel and was always

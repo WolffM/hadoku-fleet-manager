@@ -218,6 +218,9 @@ fi
 SYS_DIR="${SYS_DIR:-/etc/systemd/system}"
 USER_CONF_DIR="${USER_CONF_DIR:-/etc/systemd/user.conf.d}"
 CGROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
+# /proc, for the OOM rank, with a seam for the same reason: a fixture's pids
+# must name fixture files, never a real process on the box running the test.
+PROCROOT="${PROC_ROOT:-/proc}"
 # How long to wait for the system manager's realize queue to hand io to the
 # user manager before giving up and saying so. Seconds, polled once per second.
 IO_WAIT_SECS="${IO_WAIT_SECS:-10}"
@@ -331,6 +334,16 @@ unitprop() { # $1=unit $2=prop
 	fi
 	XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user show "$1" -p "$2" --value 2>/dev/null
 }
+# The LOWEST OOM rank among a unit's live processes, from the kernel; empty
+# when the unit has no process. Every process counts, not the main one: the
+# repair raises them all, and a job's worker is not the unit's MainPID.
+minoom() { # $1=unit
+	mo_cg=$(unitprop "$1" ControlGroup)
+	[ -n "$mo_cg" ] || return 0
+	for mo_p in $(cat "${CGROOT}${mo_cg}/cgroup.procs" 2>/dev/null); do
+		cat "${PROCROOT}/${mo_p}/oom_score_adj" 2>/dev/null
+	done | sort -n | head -n 1
+}
 syslist() { systemctl list-units "$@" --all --no-legend 2>/dev/null | awk '{print $1}'; }
 usrlist() { XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user list-units "$@" --all --no-legend 2>/dev/null | awk '{print $1}'; }
 # Transient minted runners, USER manager only — `systemd-run --user` is the only
@@ -418,14 +431,12 @@ place() { # $1=unit $2=scope(system|user)
 		cur_mem=$(kernelmax "$unit")
 		[ -n "$cur_mem" ] || cur_mem=$(systemctl --user show "$unit" -p MemoryMax --value 2>/dev/null)
 	fi
-	# The OOM rank, from the KERNEL: the main process's oom_score_adj, not the
-	# drop-in. CI is the first thing a global OOM takes (CI_OOM in
-	# src/runners/hosting-record.ts). A unit with no main process has nothing to
+	# The OOM rank, from the KERNEL: the lowest oom_score_adj in the unit, not
+	# the drop-in. CI is the first thing a global OOM takes (CI_OOM in
+	# src/runners/hosting-record.ts). A unit with no process has nothing to
 	# rank, and its drop-in carries the score into the next start.
-	if [ "$scope" = system ]; then pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null)
-	else pid=$(systemctl --user show "$unit" -p MainPID --value 2>/dev/null); fi
-	cur_oom=$CI_OOM
-	[ -n "$pid" ] && [ "$pid" != 0 ] && cur_oom=$(cat "/proc/$pid/oom_score_adj" 2>/dev/null || echo "$CI_OOM")
+	cur_oom=$(minoom "$unit")
+	[ -n "$cur_oom" ] || cur_oom=$CI_OOM
 	[ "$cur" = "$SLICE_NAME" ] && [ "$cur_mem" = "$want_unit" ] && [ "$cur_oom" -ge "$CI_OOM" ] && return 0
 	changed=$((changed + 1))
 	[ "$APPLY" = 1 ] || return 0
@@ -489,9 +500,9 @@ ${unit_cap}"
 	# A process that is not the CI user's own is left alone; this never sudos.
 	if [ -n "$cg" ]; then
 		for p in $(cat "$CGROOT$cg/cgroup.procs" 2>/dev/null); do
-			[ -O "/proc/$p" ] || continue
-			cur=$(cat "/proc/$p/oom_score_adj" 2>/dev/null) || continue
-			[ "$cur" -lt "$CI_OOM" ] && { echo "$CI_OOM" >"/proc/$p/oom_score_adj"; } 2>/dev/null || true
+			[ -O "$PROCROOT/$p" ] || continue
+			cur=$(cat "$PROCROOT/$p/oom_score_adj" 2>/dev/null) || continue
+			[ "$cur" -lt "$CI_OOM" ] && { echo "$CI_OOM" >"$PROCROOT/$p/oom_score_adj"; } 2>/dev/null || true
 		done
 	fi
 
@@ -812,6 +823,16 @@ if [ "$UNIT_MB" -ge 0 ]; then
 			echo "SLICE-PLACEMENT-DRIFT $u effective=${ucg:-unknown} declared=$(unitprop "$u" Slice) want=under-$SLICE_NAME (needs a unit RESTART, not a reload)"
 			;;
 		esac
+
+		# THE OOM RANK, asserted like the cap. The repair above raises it, and
+		# until 2026-10-27 nothing here checked the result, so `changed` was the
+		# only trace: the gate went red and the converger, which repairs what a
+		# DRIFT note names, saw nothing. claw-4 and claw-6 held a standing runner
+		# at 200 for 29 hours after CI_OOM became 500.
+		low=$(minoom "$u")
+		if [ -n "$low" ] && [ "$low" -lt "$CI_OOM" ]; then
+			echo "OOM-RANK-DRIFT $u kernel=$low want>=$CI_OOM"
+		fi
 
 		[ "$UNIT_MB" -gt 0 ] || continue
 		got=$(kernelmax "$u")

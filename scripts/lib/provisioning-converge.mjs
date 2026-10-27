@@ -24,10 +24,11 @@
  *     already running keeps the env it started with, so the re-check defers
  *     exactly the jobs that were already bad before the repair, and a NEW bad
  *     one after it is unconverged.
- *   slice — a standing unit runs outside its slice or above or below its cap
- *     (SLICE-PLACEMENT-DRIFT / UNIT-CAP-DRIFT). `slice --confirm --restart`
- *     writes the drop-in, sets the cap live, and restarts only idle units. A
- *     busy one is reported BUSY and moved on a later pass.
+ *   slice — a standing unit runs outside its slice, above or below its cap, or
+ *     below the CI OOM rank (SLICE-PLACEMENT-DRIFT / UNIT-CAP-DRIFT /
+ *     OOM-RANK-DRIFT). `slice --confirm --restart` writes the drop-in, sets the
+ *     cap and raises the rank live, and restarts only idle units. A busy one is
+ *     reported BUSY and moved on a later pass; its rank needs no restart.
  *   apt-security — a claw whose unattended-upgrades would not install a
  *     pending Debian security update (2026-10-25: every claw's origin pattern
  *     matched nothing). `apt-security --confirm` writes two apt conf files and
@@ -79,9 +80,9 @@ function jobTmpWhy(kv) {
 	return why;
 }
 
-const SLICE_DRIFT = ['SLICE-PLACEMENT-DRIFT', 'UNIT-CAP-DRIFT'];
+const SLICE_DRIFT = ['SLICE-PLACEMENT-DRIFT', 'UNIT-CAP-DRIFT', 'OOM-RANK-DRIFT'];
 
-/** The standing units a slice result names as misplaced or miscapped. */
+/** The standing units a slice result names as misplaced, miscapped or under-ranked. */
 export function sliceDriftUnits(result) {
 	return [...new Set(SLICE_DRIFT.flatMap((p) => subjects(result?.notes, p)))].sort();
 }
@@ -300,7 +301,7 @@ export function classifyRepair(facet, confirms, recheck) {
 		outcome: 'unconverged',
 		changed,
 		why:
-			`after slice --confirm --restart, still outside the slice or off its cap: ${left.join(', ')}` +
+			`after slice --confirm --restart, still outside the slice, off its cap or below the OOM rank: ${left.join(', ')}` +
 			(failed.length ? ` (${failed.join('; ')})` : ''),
 		busy,
 	};

@@ -724,6 +724,22 @@ exec "$@"
  */
 const SYSTEMCTL_SHIM = `#!/bin/sh
 echo "systemctl $*" >>"$SHIM_REC"
+# ONE STANDING RUNNER in the user manager, only when a test asks for it.
+if [ -n "\${SHIM_STANDING:-}" ]; then
+	case " $* " in
+	*" --user "*"list-units"*"actions-runner-"*) echo "$SHIM_STANDING loaded active running x"; exit 0 ;;
+	*"--user"*" show $SHIM_STANDING "*)
+		case " $* " in
+		*" -p ControlGroup "*) echo "/fake/user-manager/runners.slice/$SHIM_STANDING" ;;
+		*" -p KillMode "*) echo mixed ;;
+		*" -p Restart "*) echo always ;;
+		*" -p Slice "*) echo runners.slice ;;
+		*" -p MemoryMax "*) echo 4294967296 ;;
+		*) echo "" ;;
+		esac
+		exit 0 ;;
+	esac
+fi
 case " $* " in
 *" show "*)
 	case " $* " in
@@ -764,6 +780,8 @@ exit 0
  */
 const pgrepShim = (busy) => (busy ? `#!/bin/sh\necho ${process.pid}\n` : '#!/bin/sh\nexit 1\n');
 
+const STANDING = 'actions-runner-fixture.service';
+
 /**
  * Run the installer against a scratch /etc and a scratch cgroup tree.
  *
@@ -789,6 +807,9 @@ function runIoInstaller({
 	// re-exec waits on this, so the default is the converged state; the pending
 	// test passes a set without io.
 	mgrControllers = 'cpu io memory pids',
+	// A standing runner whose one process holds this oom_score_adj, or none.
+	standingOom = null,
+	apply = '1',
 } = {}) {
 	const dir = root ?? mkdtempSync(join(tmpdir(), 'fleet-slice-io-'));
 	const bin = join(dir, 'bin');
@@ -809,6 +830,14 @@ function runIoInstaller({
 		writeFileSync(join(slice, 'cgroup.subtree_control'), subtree ? `${subtree}\n` : '');
 		for (const c of children) mkdirSync(join(slice, c), { recursive: true });
 	}
+	if (standingOom !== null) {
+		const unit = join(slice, STANDING);
+		mkdirSync(unit, { recursive: true });
+		writeFileSync(join(unit, 'memory.max'), `${4096 * 1024 * 1024}\n`);
+		writeFileSync(join(unit, 'cgroup.procs'), '4242\n');
+		mkdirSync(join(dir, 'proc', '4242'), { recursive: true });
+		writeFileSync(join(dir, 'proc', '4242', 'oom_score_adj'), `${standingOom}\n`);
+	}
 	const rec = join(dir, 'calls.txt');
 	writeFileSync(rec, '');
 	// Through the same capture as everything else: this child's whole output is
@@ -823,11 +852,13 @@ function runIoInstaller({
 			SYS_DIR: join(dir, 'etc', 'systemd', 'system'),
 			USER_CONF_DIR: join(dir, 'etc', 'systemd', 'user.conf.d'),
 			CGROUP_ROOT: join(dir, 'cg'),
+			PROC_ROOT: join(dir, 'proc'),
+			...(standingOom === null ? {} : { SHIM_STANDING: STANDING }),
 			SHIM_REC: rec,
 			SHIM_IOACCT: ioAcct,
 			// One second, not ten: the fixture answers immediately or not at all.
 			IO_WAIT_SECS: '1',
-			APPLY: '1',
+			APPLY: apply,
 			MAX_MB: '1000',
 			SWAP_MB: '4096',
 			...(unitMb === null ? {} : { UNIT_MB: unitMb }),
@@ -2158,4 +2189,46 @@ test('run for real: a GUEST with no slice block is not reported as unbounded', (
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
+});
+
+// ---------------------------------------------------------------------------
+// The OOM rank is asserted like the cap (2026-10-27)
+// ---------------------------------------------------------------------------
+//
+// claw-4 and claw-6 held a standing runner at oom_score_adj 200 for 29 hours
+// after CI_OOM became 500. The installer counted it in `changed` and printed no
+// note, and the converger repairs only what a DRIFT note names.
+
+test('a standing runner below the CI OOM rank is named OOM-RANK-DRIFT, from the kernel', () => {
+	const r = runIoInstaller({ standingOom: '200', apply: '0' });
+	try {
+		assert.match(r.out, new RegExp(`^OOM-RANK-DRIFT ${STANDING} kernel=200 want>=500$`, 'm'));
+		assert.equal(r.summary.changed, '1', 'and still counted as a change to make');
+	} finally {
+		rmSync(r.dir, { recursive: true, force: true });
+	}
+});
+
+test('a standing runner AT the rank is not drift', () => {
+	const r = runIoInstaller({ standingOom: '500', apply: '0' });
+	try {
+		assert.doesNotMatch(r.out, /OOM-RANK-DRIFT/);
+	} finally {
+		rmSync(r.dir, { recursive: true, force: true });
+	}
+});
+
+test('--confirm raises the live rank in place, and the same run asserts it fixed', () => {
+	const r = runIoInstaller({ standingOom: '200' });
+	try {
+		assert.equal(readFileSync(join(r.dir, 'proc', '4242', 'oom_score_adj'), 'utf8').trim(), '500');
+		assert.doesNotMatch(r.out, /OOM-RANK-DRIFT/, 'the outcome loop reads after the repair');
+	} finally {
+		rmSync(r.dir, { recursive: true, force: true });
+	}
+});
+
+test('the driver keeps OOM-RANK-DRIFT and names the unit in its problems', () => {
+	assert.match(mjs(), /\|OOM-RANK-DRIFT\|/, 'the note filter must pass the prefix');
+	assert.match(mjs(), /below the CI OOM rank/);
 });

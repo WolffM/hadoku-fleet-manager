@@ -173,6 +173,33 @@ test('classifyRepair slice: restarted into the slice -> converged; still misplac
 	assert.deepEqual(later.busy, [UNIT]);
 });
 
+// 2026-10-27: claw-4 and claw-6 each held this repo's standing runner at
+// oom_score_adj 200 for 29 hours after CI_OOM became 500. The gate went red on
+// `changed=1`; the converger keys on DRIFT notes and none named the rank.
+const OOM_LOW = `OOM-RANK-DRIFT ${UNIT} kernel=200 want>=500`;
+
+test('a standing unit below the CI OOM rank is planned as a slice repair', () => {
+	const plan = planRepairs(null, { results: [sl('claw-6', { changed: '1' }, [OOM_LOW])] });
+	assert.deepEqual(plan.repair, [{ node: 'claw-6', facet: 'slice', before: UNIT }]);
+});
+
+test('classifyRepair slice: a BUSY unit whose rank was raised live is converged, not deferred', () => {
+	// The rank needs no restart, so a mid-job runner is fixed by the same pass.
+	const v = classifyRepair(
+		'slice',
+		[sl('claw-6', { changed: '1', busy: '1' }, [`BUSY ${UNIT}`])],
+		sl('claw-6')
+	);
+	assert.equal(v.outcome, 'converged');
+	const stuck = classifyRepair(
+		'slice',
+		[sl('claw-6', { changed: '1' })],
+		sl('claw-6', {}, [OOM_LOW])
+	);
+	assert.equal(stuck.outcome, 'unconverged');
+	assert.match(stuck.why, /below the OOM rank/);
+});
+
 test('classifyRepair slice: idle and still outside the slice -> unconverged, carrying PLACE-FAILED', () => {
 	const v = classifyRepair(
 		'slice',
