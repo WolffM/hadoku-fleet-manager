@@ -126,6 +126,9 @@ if (has('--help') || has('-h')) {
 			'              and the exit status is 1 — declaration is a human act.',
 			'  --update    refresh only the MEASURED fields of a node already declared.',
 			'              Never touches labels, capacity, excludeRepos or any $why.',
+			'  --hardware-changed memTotalKb|cores --reason "<why>"',
+			'              with --update: accept a KNOWN hardware change in that field',
+			'              (a RAM upgrade) instead of refusing it; recorded in $measured.',
 			'  --file      a saved capture. No re-probe is possible, and it says so.',
 			'  --stdin     read the capture from stdin.',
 			'  --json      machine-readable result.',
@@ -157,6 +160,23 @@ const ADDRESS = process.argv.includes('--address')
 	? process.argv[process.argv.indexOf('--address') + 1]
 	: null;
 const UPDATE = has('--update');
+/**
+ * A KNOWN HARDWARE CHANGE, acknowledged by name. MemTotal is fixed hardware
+ * between bootstrap and enroll, and a mismatch is fatal because the failure it
+ * catches (a spliced capture, the wrong ssh target) differs by gigabytes. A RAM
+ * upgrade differs by gigabytes too, and is legitimate: claw-6 went 8 -> 16 GB
+ * on 2026-10-27 and `--update` refused it as "not the box that was
+ * bootstrapped". `--hardware-changed memTotalKb --reason "<why>"` accepts the
+ * named field ONLY, with --update ONLY, and records from/to/why in
+ * `$measured.hardwareChanges`. hostname never qualifies: a new name is a new
+ * node (node names are immutable). Not a --force: it names what changed.
+ */
+const HARDWARE_CHANGED = (valueOf('--hardware-changed') ?? '')
+	.split(',')
+	.map((x) => x.trim())
+	.filter(Boolean);
+const HARDWARE_REASON = valueOf('--reason');
+const HARDWARE_FIELDS = ['memTotalKb', 'cores'];
 const FILE = valueOf('--file');
 const STDIN = has('--stdin');
 // THE NODE NAME IS A POSITIONAL HERE, and that is enrolment's one deliberate
@@ -168,7 +188,7 @@ const STDIN = has('--stdin');
 // takes one: `fleet enroll --address 1.2.3.4 claw-8` would enrol a node called
 // "1.2.3.4". The values of known value-flags are skipped, which is what
 // `unconsumedArgs` does for every other command.
-const VALUE_FLAGS = new Set(['--address', '--file']);
+const VALUE_FLAGS = new Set(['--address', '--file', '--hardware-changed', '--reason']);
 const NODE =
 	args.find((a, i) => {
 		if (a.startsWith('--') || a === FILE) return false;
@@ -192,6 +212,15 @@ function die(message, extra = {}) {
 if (!NODE && !FILE && !STDIN) {
 	die('name a node, or pass --file <capture> / --stdin. See --help.');
 }
+if (HARDWARE_CHANGED.length) {
+	if (!UPDATE) die('--hardware-changed only refreshes a node already declared: pass --update.');
+	const bad = HARDWARE_CHANGED.filter((f) => !HARDWARE_FIELDS.includes(f));
+	if (bad.length)
+		die(`--hardware-changed accepts ${HARDWARE_FIELDS.join(', ')}; not ${bad.join(', ')}.`);
+	if (!HARDWARE_REASON) die('--hardware-changed needs --reason "<what was changed, and when>".');
+}
+/** Changes accepted this run: `{ field, from, to, reason, at }`. */
+const hardwareChanges = [];
 
 /**
  * A GUEST IS NOT RE-MEASURED, AND THE REFUSAL IS LOUD.
@@ -374,7 +403,22 @@ if (probed) {
 		log(
 			`  ${key.padEnd(14)} ${String(d ?? '—').padEnd(12)} ${String(o ?? '—').padEnd(12)} ${verdict}`
 		);
-		if (same === false) {
+		if (same === false && HARDWARE_CHANGED.includes(key)) {
+			// The box as it is NOW is the measurement: every derived field
+			// (memTotalMb, ramGb) is built from `declared`, so it takes the probe.
+			const now = Number.isFinite(Number(o)) ? Number(o) : o;
+			declared[key] = now;
+			hardwareChanges.push({
+				field: key,
+				from: d,
+				to: now,
+				reason: HARDWARE_REASON,
+				at: new Date().toISOString(),
+			});
+			warn(
+				`${key} changed: ${d} -> ${o}, accepted as a known hardware change (${HARDWARE_REASON})`
+			);
+		} else if (same === false) {
 			if (FATAL.includes(key) || key === 'memTotalKb')
 				conflicts.push({ key, declared: d, observed: o });
 			// diskFreeGb is EXPECTED to differ — it is silently refreshed below.
@@ -842,6 +886,11 @@ if (!enrollTarget.ok) {
 	});
 }
 
+// A hardware change is history: every accepted one is kept, newest last, and
+// rides in $measured so the surgical assignment below stays one line.
+const priorChanges = doc.machines[name]?.$measured?.hardwareChanges ?? [];
+if (priorChanges.length || hardwareChanges.length)
+	measured.$measured.hardwareChanges = [...priorChanges, ...hardwareChanges];
 copyFileSync(MANIFEST, `${MANIFEST}.bak`);
 if (exists) {
 	// SURGICAL, AND THAT NOW COVERS THE OTHER SUPPLY FACETS TOO.

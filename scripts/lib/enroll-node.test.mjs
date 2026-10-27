@@ -480,3 +480,32 @@ test('ssh config: an entry the operator already has is left ALONE', () => {
 	runEnroll(site(), ['--machine', 'claw-9', '--address', '192.0.2.121'], h);
 	assert.equal(readFileSync(h.cfg, 'utf8'), existing, '~/.ssh/config was rewritten');
 });
+
+test('--hardware-changed names what changed, with a reason, on --update only', () => {
+	// claw-6, 2026-10-27: 8 -> 16 GB. `--update` refused it as "not the box that
+	// was bootstrapped". The acknowledgement is by name, never a --force.
+	const err = (argv) =>
+		JSON.parse(run(site(), ['--stdin', '--json', ...argv], capture()).stdout).error;
+	assert.match(err(['--hardware-changed', 'memTotalKb', '--reason', 'upgrade']), /pass --update/);
+	assert.match(
+		err(['--update', '--hardware-changed', 'hostname', '--reason', 'x']),
+		/accepts memTotalKb, cores; not hostname/
+	);
+	assert.match(err(['--update', '--hardware-changed', 'memTotalKb']), /needs --reason/);
+	// A valid acknowledgement does not get in the way of an ordinary update.
+	const d = site();
+	const r = run(
+		d,
+		[
+			'--stdin',
+			'--update',
+			'--json',
+			'--hardware-changed',
+			'memTotalKb',
+			'--reason',
+			'RAM 8 -> 16 GB',
+		],
+		capture({ hostname: 'claw-3' })
+	);
+	assert.equal(r.status, 0, r.stderr);
+});
