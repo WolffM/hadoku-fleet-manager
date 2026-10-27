@@ -14,7 +14,7 @@ import {
 const REPOS = [
 	'WolffM/hadoku_site',
 	'WolffM/hadoku-tenhands',
-	'WolffM/hadoku-meet',
+	'WolffM/hadoku-rally',
 	'WolffM/vibecheck',
 ];
 const policy = (hot: string[]): PollPolicy => ({ ...DEFAULT_POLL_POLICY, hotRepos: new Set(hot) });

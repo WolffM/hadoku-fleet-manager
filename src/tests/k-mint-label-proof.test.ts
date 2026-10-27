@@ -37,7 +37,7 @@ import { TMP_FREE_FLOOR_MB, WORK_FREE_FLOOR_MB } from '../runners/ephemeral.js';
 
 /** What `vars.CI_RUNNER` resolves to on every covered repo. */
 const FLEET_LABELS = ['self-hosted', 'hadoku-builder'];
-const REPO = 'WolffM/hadoku-meet';
+const REPO = 'WolffM/hadoku-rally';
 
 /** The five prereqs every claw on the live manifest proves. */
 const PREREQS = ['ffmpeg', 'python-venv', 'python-toolcache', 'playwright', 'gh'].map((id) => ({

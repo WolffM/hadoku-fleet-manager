@@ -39,7 +39,7 @@ const node = (name: string, over: Partial<NodeState> = {}): NodeState => ({
 const base = (over: Partial<DispatchTickInput> = {}): DispatchTickInput => ({
 	order: ['claw-3'],
 	nodes: [node('claw-3', { labels: ['hadoku-builder'] })],
-	repos: ['WolffM/hadoku-meet'],
+	repos: ['WolffM/hadoku-rally'],
 	recentJobCounts: new Map(),
 	labelsFor: () => [],
 	memoryMaxMbFor: () => 3000,
@@ -68,8 +68,8 @@ const queued = (id: number, agoMs = 120_000) => ({
 	id,
 	status: 'queued',
 	created_at: new Date(NOW - agoMs).toISOString(),
-	repository: { full_name: 'WolffM/hadoku-meet' },
-	head_repository: { full_name: 'WolffM/hadoku-meet', fork: false },
+	repository: { full_name: 'WolffM/hadoku-rally' },
+	head_repository: { full_name: 'WolffM/hadoku-rally', fork: false },
 	event: 'push',
 });
 
@@ -133,7 +133,7 @@ test('the queue snapshot is the dispatcher listing, aged at READ time, zombies o
 	// the 15s listing; asked a minute later, the same run is a minute older.
 	const h = harness([queued(1, 44 * 60_000), unclearable(2)]);
 	await runDispatchTick(base(), 'tok', h.gh, h.sh, NOW);
-	const q = getDispatchQueueSnapshot(['WolffM/hadoku-meet', 'WolffM/never-read'], NOW + 60_000);
+	const q = getDispatchQueueSnapshot(['WolffM/hadoku-rally', 'WolffM/never-read'], NOW + 60_000);
 	assert.equal(q.runs, 1, 'the zombie is not a wait');
 	assert.equal(q.oldestQueuedMin, 45);
 	assert.equal(q.unread, 1, 'a repo never read is unread, not empty');
@@ -157,7 +157,7 @@ test('#102: a sibling already running on a WARM listener counts against its node
 		[queued(1)],
 		[
 			{ id: 1, status: 'queued', name: 'test', labels: ['self-hosted', 'hadoku-builder'] },
-			{ id: 2, status: 'in_progress', name: 'lint', runner_name: 'warm-claw-3-hadoku-meet' },
+			{ id: 2, status: 'in_progress', name: 'lint', runner_name: 'warm-claw-3-hadoku-rally' },
 		]
 	);
 	const r = await runDispatchTick(
@@ -278,7 +278,7 @@ test('a stuck run is warned about ONCE across ten ticks', async () => {
 		assert.equal(r.minted, 0, `tick ${i}: the gate must not soften`);
 	}
 	assert.equal(log.stuck().length, 1, 'ten ticks, one line');
-	assert.match(log.stuck()[0], /WolffM\/hadoku-meet#1/);
+	assert.match(log.stuck()[0], /WolffM\/hadoku-rally#1/);
 });
 
 test('ten ticks with a RESTART between every one still say it once', async () => {
@@ -294,7 +294,7 @@ test('ten ticks with a RESTART between every one still say it once', async () =>
 	assert.equal(log.stuck().length, 1, 'ten restarts, one line');
 	assert.ok(existsSync(bookPath), 'the book is on disk, not in the process');
 	const book = JSON.parse(readFileSync(bookPath, 'utf8')) as Record<string, string>;
-	assert.deepEqual(Object.keys(book), ['WolffM/hadoku-meet#1']);
+	assert.deepEqual(Object.keys(book), ['WolffM/hadoku-rally#1']);
 });
 
 test('a NEW unclearable run is announced while the old ones stay suppressed', async () => {
@@ -350,7 +350,7 @@ test('a run that LEAVES the queue is dropped from the book and re-announced if i
 	runs = [];
 	await runDispatchTick(base(), 'tok', gh as never, sh, NOW + TICK_MS);
 	assert.equal(log.cleared().length, 1, 'the drop is said out loud');
-	assert.match(log.cleared()[0], /WolffM\/hadoku-meet#1/);
+	assert.match(log.cleared()[0], /WolffM\/hadoku-rally#1/);
 	assert.deepEqual(
 		JSON.parse(readFileSync(bookPath, 'utf8')),
 		{},
@@ -389,7 +389,7 @@ test('an UNREADABLE listing does not empty the book — "I could not look" is no
 	}
 	assert.equal(log.cleared().length, 0, 'an unreadable repo clears nothing');
 	assert.deepEqual(Object.keys(JSON.parse(readFileSync(bookPath, 'utf8'))), [
-		'WolffM/hadoku-meet#1',
+		'WolffM/hadoku-rally#1',
 	]);
 
 	readable = true;
@@ -574,8 +574,8 @@ test('#89: the live path supplies jobName, which the slow-tier spill gate reads'
 		id: 1,
 		status: 'queued',
 		created_at: new Date(now - 200_000).toISOString(),
-		repository: { full_name: 'WolffM/hadoku-meet' },
-		head_repository: { full_name: 'WolffM/hadoku-meet', fork: false },
+		repository: { full_name: 'WolffM/hadoku-rally' },
+		head_repository: { full_name: 'WolffM/hadoku-rally', fork: false },
 		event: 'push',
 	};
 	// Queued 200s ago: clears a ~100s threshold (job-named extra of 1s) but not
@@ -613,8 +613,8 @@ test('#92: queue age comes from the injected clock, not the wall clock', async (
 		id: 1,
 		status: 'queued',
 		created_at: new Date(ahead - 200_000).toISOString(),
-		repository: { full_name: 'WolffM/hadoku-meet' },
-		head_repository: { full_name: 'WolffM/hadoku-meet', fork: false },
+		repository: { full_name: 'WolffM/hadoku-rally' },
+		head_repository: { full_name: 'WolffM/hadoku-rally', fork: false },
 		event: 'push',
 	};
 	const h = harness(
@@ -649,8 +649,8 @@ for (const [label, jobAgeMs, expected] of [
 			status: 'queued',
 			created_at: new Date(NOW - 600_000).toISOString(),
 			run_started_at: new Date(NOW - 600_000).toISOString(),
-			repository: { full_name: 'WolffM/hadoku-meet' },
-			head_repository: { full_name: 'WolffM/hadoku-meet', fork: false },
+			repository: { full_name: 'WolffM/hadoku-rally' },
+			head_repository: { full_name: 'WolffM/hadoku-rally', fork: false },
 			event: 'push',
 		};
 		const h = harness(
@@ -716,7 +716,7 @@ function stuckRunHarness(jobLabels: string[]) {
 	return Object.assign(self, { gh, clock, probes, runs, sh: fakeShell() });
 }
 
-const hot = new Map([['WolffM/hadoku-meet', 100]]);
+const hot = new Map([['WolffM/hadoku-rally', 100]]);
 const builder = (name: string, over: Partial<NodeState> = {}) =>
 	node(name, { labels: ['self-hosted', 'hadoku-builder'], ...over });
 

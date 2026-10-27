@@ -58,8 +58,8 @@ const GOOD = { DisableUpdate: 'True', Ephemeral: 'True', AgentName: 'jit-x' };
 // --- naming -----------------------------------------------------------------
 
 test('a JIT name carries its mint time, because the API will not give it back', () => {
-	const n = jitRunnerName('hokon', 'WolffM/hadoku-meet', 1_787_797_008_000, 4242, 77);
-	assert.equal(n, 'jit-hokon-hadoku-meet-j77-r4242-1787797008');
+	const n = jitRunnerName('hokon', 'WolffM/hadoku-rally', 1_787_797_008_000, 4242, 77);
+	assert.equal(n, 'jit-hokon-hadoku-rally-j77-r4242-1787797008');
 	// The sweep parses this trailing epoch to apply its grace. Without it a mint
 	// is ageless and therefore immediately reapable.
 	assert.match(n, /-(\d{10,})$/);
@@ -1375,7 +1375,7 @@ const served = (repo: string, atMs: number, n = 1): WarmServedJob[] =>
 
 const NOW = 1_800_000_000_000;
 const SITE = 'WolffM/hadoku_site';
-const MEET = 'WolffM/hadoku-meet';
+const MEET = 'WolffM/hadoku-rally';
 
 test('the window/half-life ratio is what makes "one never outvotes fifty" true', () => {
 	// Issue #16's requirement is absolute ("never"), so it has to hold for the
@@ -1422,7 +1422,7 @@ test('warmTargetRepo: a tie goes to the repo already in the slot', () => {
 
 test('planWarmCache: one job from a quiet repo does not evict the busy one (issue #16)', () => {
 	// The exact shape of claw-1's 2026-09-08 rotation storm: hadoku_site had been
-	// firing all hour, one hadoku-meet job landed, and MRU rotated the slot onto
+	// firing all hour, one hadoku-rally job landed, and MRU rotated the slot onto
 	// a repo that then served nothing for the next fifty minutes.
 	const jobs = [
 		...Array.from({ length: 40 }, (_, k) => ({

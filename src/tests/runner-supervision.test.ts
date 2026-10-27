@@ -252,7 +252,7 @@ test('dead units do not disturb the listener verdicts', () => {
 	const rows = parseListeners(
 		[
 			'DEAD|github-runner-tenhands.service|system|failed',
-			'actions-runner-hadoku-meet|actions-runner-hadoku-meet.service|user|active',
+			'actions-runner-hadoku-rally|actions-runner-hadoku-rally.service|user|active',
 		].join('\n')
 	);
 	const p = classify('hokon', rows);

@@ -13,8 +13,8 @@ import { GOOD_JITCONFIG, jitConfig } from './helpers/fleet-fakes.js';
 
 const REQ = {
 	node: 'hokon',
-	repo: 'WolffM/hadoku-meet',
-	runnerName: 'jit-hokon-hadoku-meet-1787797008',
+	repo: 'WolffM/hadoku-rally',
+	runnerName: 'jit-hokon-hadoku-rally-1787797008',
 	labels: ['pm2-host'],
 	slotIndex: 0,
 	homeDir: '/home/hadoku',

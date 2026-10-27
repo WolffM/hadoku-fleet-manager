@@ -667,9 +667,9 @@ test('probe: an IDLE node invents no repo from a trailing field', () => {
 });
 
 test('probe: a busy node reports its repos', () => {
-	const p = __parseProbeForTesting('2 8 0 WolffM/hadoku_site,WolffM/hadoku-meet');
+	const p = __parseProbeForTesting('2 8 0 WolffM/hadoku_site,WolffM/hadoku-rally');
 	assert.equal(p?.busyRepos?.get('WolffM/hadoku_site'), 1);
-	assert.equal(p?.busyRepos?.get('WolffM/hadoku-meet'), 1);
+	assert.equal(p?.busyRepos?.get('WolffM/hadoku-rally'), 1);
 });
 
 // --- the GitHub-DNS field (2026-10-16) ------------------------------------

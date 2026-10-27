@@ -257,7 +257,7 @@ test('planWarmCache: already warm for the right repo — keep, never re-mint', (
 test('planWarmCache: wrong repo but the busy lock holds — locked, not rotate', () => {
 	const d = planWarmCache({
 		current: { repo: 'WolffM/hadoku_site', busy: true, mintedOrRefreshedAtMs: 0 },
-		served: [{ repo: 'WolffM/hadoku-meet', startedAtMs: 0 }],
+		served: [{ repo: 'WolffM/hadoku-rally', startedAtMs: 0 }],
 		nowMs: 1000,
 	});
 	assert.deepEqual(d, { action: 'locked' });
@@ -267,10 +267,10 @@ test('planWarmCache: wrong repo, safe to evict — rotate', () => {
 	const nowMs = 1_000_000;
 	const d = planWarmCache({
 		current: { repo: 'WolffM/hadoku_site', busy: false, mintedOrRefreshedAtMs: 0 },
-		served: [{ repo: 'WolffM/hadoku-meet', startedAtMs: 0 }],
+		served: [{ repo: 'WolffM/hadoku-rally', startedAtMs: 0 }],
 		nowMs,
 	});
-	assert.deepEqual(d, { action: 'rotate', from: 'WolffM/hadoku_site', to: 'WolffM/hadoku-meet' });
+	assert.deepEqual(d, { action: 'rotate', from: 'WolffM/hadoku_site', to: 'WolffM/hadoku-rally' });
 });
 
 // --- planWarmFleet: the joint allocation (wave 3k §B) ------------------------
@@ -280,7 +280,7 @@ test('planWarmCache: wrong repo, safe to evict — rotate', () => {
 // arithmetic a reader can do in their head.
 
 const SITE = 'WolffM/hadoku_site';
-const MEET = 'WolffM/hadoku-meet';
+const MEET = 'WolffM/hadoku-rally';
 const CARD = 'WolffM/hadoku-cardtable';
 const TEN = 'WolffM/hadoku-tenhands';
 const FLEET_NOW = 50_000_000;
@@ -859,7 +859,7 @@ test('fleetServedJobs: every job in the fleet, whichever runner served it', () =
 	// takes its repo's next job wherever GitHub would otherwise have sent it, so
 	// hokon's jobs and an ineligible node's jobs are demand too.
 	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku_site', startedAt: histAt(0) });
-	writeRecord({ runner: 'hokon', repo: 'WolffM/hadoku-meet', startedAt: histAt(60) });
+	writeRecord({ runner: 'hokon', repo: 'WolffM/hadoku-rally', startedAt: histAt(60) });
 	writeRecord({
 		runner: 'jit-claw-2-hadoku-site-j1-r1-1700000000',
 		repo: 'WolffM/hadoku_site',
@@ -869,7 +869,7 @@ test('fleetServedJobs: every job in the fleet, whichever runner served it', () =
 	// it is what tells overlapping jobs from serial ones (warmUnitValues).
 	assert.deepEqual(fleetServedJobs(), [
 		{ repo: 'WolffM/hadoku_site', startedAtMs: Date.parse(histAt(0)), durationMs: 60_000 },
-		{ repo: 'WolffM/hadoku-meet', startedAtMs: Date.parse(histAt(60)), durationMs: 60_000 },
+		{ repo: 'WolffM/hadoku-rally', startedAtMs: Date.parse(histAt(60)), durationMs: 60_000 },
 		{ repo: 'WolffM/hadoku_site', startedAtMs: Date.parse(histAt(120)), durationMs: 60_000 },
 	]);
 });
@@ -1491,7 +1491,7 @@ test('dispatchWarmCache: keeps a slot already warm for the right repo', async ()
 });
 
 test('dispatchWarmCache: a busy slot for the wrong repo stays locked, never evicted mid-job', async () => {
-	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku-meet', startedAt: histAt(0) });
+	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku-rally', startedAt: histAt(0) });
 	const unit = warmRunnerName('claw-1', 'WolffM/hadoku_site');
 	const sims: Record<string, NodeSim> = {
 		'claw-1': { marker: 'WolffM/hadoku_site 1000', activeUnits: new Set([unit]) },
@@ -1505,7 +1505,7 @@ test('dispatchWarmCache: a busy slot for the wrong repo stays locked, never evic
 });
 
 test('dispatchWarmCache: rotates once the lock clears and traffic has moved on', async () => {
-	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku-meet', startedAt: histAt(0) });
+	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku-rally', startedAt: histAt(0) });
 	const oldUnit = warmRunnerName('claw-1', 'WolffM/hadoku_site');
 	// mintedOrRefreshedAtMs comes from the marker's epoch (1000s = 1_000_000ms).
 	// nowMs is far enough past 1_000_000 + WARM_ASSIGN_WINDOW_MS to be unlocked.
@@ -1518,7 +1518,7 @@ test('dispatchWarmCache: rotates once the lock clears and traffic has moved on',
 	const res = await dispatchWarmCache(baseInput(), 'tok', gh, sh, nowMs);
 	assert.equal(res.evicted, 1);
 	assert.equal(res.rotated, 1);
-	assert.equal(sims['claw-1'].marker, 'WolffM/hadoku-meet 1000');
+	assert.equal(sims['claw-1'].marker, 'WolffM/hadoku-rally 1000');
 	assert.ok(!sims['claw-1'].activeUnits.has(oldUnit));
 });
 
@@ -1528,15 +1528,15 @@ test('dispatchWarmCache: rotates once the lock clears and traffic has moved on',
 // the tick went on passing last-served MRU for twelve days, because both arms
 // typechecked and every test above drives the tick with a single job — where
 // MRU and the scored signal agree. These two drive it with a history on which
-// they DISAGREE: five hadoku_site jobs, then one hadoku-meet job that is the
-// newest thing on the node. MRU chases hadoku-meet; the scored signal holds
+// they DISAGREE: five hadoku_site jobs, then one hadoku-rally job that is the
+// newest thing on the node. MRU chases hadoku-rally; the scored signal holds
 // hadoku_site. A tick that reduced the history to its newest job fails both.
 
 function writeQuietRepoAfterBusyOne() {
 	for (let i = 0; i < 5; i++) {
 		writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku_site', startedAt: histAt(i * 60) });
 	}
-	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku-meet', startedAt: histAt(600) });
+	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku-rally', startedAt: histAt(600) });
 }
 
 test('dispatchWarmCache: one job from a quiet repo does not rotate the busy repo out (#16)', async () => {
@@ -1593,7 +1593,7 @@ function twoNodeInput(): EphemeralTickInput {
 	});
 }
 
-/** Both nodes served mostly hadoku_site and a little hadoku-meet — the shape
+/** Both nodes served mostly hadoku_site and a little hadoku-rally — the shape
  *  that put hadoku_site on every node. Every job is one second long and none
  *  overlaps another of its repo, so a second hadoku_site listener would have
  *  served nothing: the joint answer is one of each. */
@@ -1612,7 +1612,7 @@ function writeSkewedOnBothNodes() {
 		for (let i = 0; i < 2; i++)
 			writeRecord({
 				runner: node,
-				repo: 'WolffM/hadoku-meet',
+				repo: 'WolffM/hadoku-rally',
 				startedAt: histAt(i * 60 + 30 + offset),
 				durationSec: 1,
 			});
@@ -1626,7 +1626,7 @@ test('dispatchWarmCache: two empty eligible nodes fill two DIFFERENT repos (#54)
 	assert.equal(res.filled, 2);
 	assert.deepEqual(
 		[sims['claw-1'].marker, sims['claw-2'].marker].sort(),
-		['WolffM/hadoku-meet 1000', 'WolffM/hadoku_site 1000'],
+		['WolffM/hadoku-rally 1000', 'WolffM/hadoku_site 1000'],
 		'both nodes on hadoku_site is the per-node argmax this replaced'
 	);
 });
@@ -1649,7 +1649,7 @@ test('dispatchWarmCache: a BUSY holder keeps its repo and the idle duplicate mov
 	const res = await dispatchWarmCache(twoNodeInput(), 'tok', gh, simShell(sims), nowMs);
 	assert.ok(sims['claw-1'].activeUnits.has(u1), 'the busy listener must still be running');
 	assert.equal(sims['claw-1'].marker?.split(' ')[0], 'WolffM/hadoku_site');
-	assert.equal(sims['claw-2'].marker, 'WolffM/hadoku-meet 1000');
+	assert.equal(sims['claw-2'].marker, 'WolffM/hadoku-rally 1000');
 	assert.ok(!sims['claw-2'].activeUnits.has(u2));
 	assert.equal(res.rotated, 1);
 	assert.equal(res.evicted, 1);
@@ -1657,18 +1657,18 @@ test('dispatchWarmCache: a BUSY holder keeps its repo and the idle duplicate mov
 
 test("dispatchWarmCache: a repo's value is the FLEET's demand, not the node's own history", async () => {
 	// Every job ran on hokon, which is never eligible. claw-1 served nothing
-	// itself, and a warm hadoku-meet listener there would still have taken
+	// itself, and a warm hadoku-rally listener there would still have taken
 	// every one of those jobs.
 	for (let i = 0; i < 3; i++)
-		writeRecord({ runner: 'hokon', repo: 'WolffM/hadoku-meet', startedAt: histAt(i * 60) });
+		writeRecord({ runner: 'hokon', repo: 'WolffM/hadoku-rally', startedAt: histAt(i * 60) });
 	const sims: Record<string, NodeSim> = {};
 	const res = await dispatchWarmCache(baseInput(), 'tok', fakeGh({}), simShell(sims), T0);
 	assert.equal(res.filled, 1);
-	assert.equal(sims['claw-1'].marker, 'WolffM/hadoku-meet 1000');
+	assert.equal(sims['claw-1'].marker, 'WolffM/hadoku-rally 1000');
 });
 
 test('dispatchWarmCache: an unreadable busy check fails toward LOCKED, never toward eviction', async () => {
-	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku-meet', startedAt: histAt(0) });
+	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku-rally', startedAt: histAt(0) });
 	const unit = warmRunnerName('claw-1', 'WolffM/hadoku_site');
 	const sims: Record<string, NodeSim> = {
 		'claw-1': { marker: 'WolffM/hadoku_site 1000', activeUnits: new Set([unit]) },

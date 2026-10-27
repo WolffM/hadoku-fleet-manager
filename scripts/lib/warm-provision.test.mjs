@@ -322,9 +322,9 @@ void test('a key this script has never heard of is carried, and de-duped, on its
 	provision(home);
 	writeStandingEnv(home, ['SOME_FUTURE_KEY=v2']);
 	provision(home, {
-		REPO: 'WolffM/hadoku-meet',
-		URL: 'https://github.com/WolffM/hadoku-meet',
-		NAME: 'warm-claw-1-hadoku-meet',
+		REPO: 'WolffM/hadoku-rally',
+		URL: 'https://github.com/WolffM/hadoku-rally',
+		NAME: 'warm-claw-1-hadoku-rally',
 	});
 	const hits = slotEnv(home).filter((l) => l.startsWith('SOME_FUTURE_KEY='));
 	assert.deepEqual(hits, ['SOME_FUTURE_KEY=v2'], 'the stale value must not survive');
@@ -524,12 +524,12 @@ void test('a second provision reuses the slot and re-registers for the new repo'
 	provision(home);
 	const first = statSync(join(home, '.hadoku', 'warm', 'listener', 'bin', 'Runner.Listener')).ino;
 	const out = provision(home, {
-		REPO: 'WolffM/hadoku-meet',
-		URL: 'https://github.com/WolffM/hadoku-meet',
-		NAME: 'warm-claw-1-hadoku-meet',
+		REPO: 'WolffM/hadoku-rally',
+		URL: 'https://github.com/WolffM/hadoku-rally',
+		NAME: 'warm-claw-1-hadoku-rally',
 	});
 	assert.match(out, /WARM-READY /, out);
-	assert.equal(readFileSync(join(home, '.hadoku', 'warm', 'repo'), 'utf8'), 'WolffM/hadoku-meet');
+	assert.equal(readFileSync(join(home, '.hadoku', 'warm', 'repo'), 'utf8'), 'WolffM/hadoku-rally');
 	assert.equal(
 		statSync(join(home, '.hadoku', 'warm', 'listener', 'bin', 'Runner.Listener')).ino,
 		first,
@@ -555,13 +555,13 @@ void test('a slot poisoned with a leftover .runner/.credentials still registers 
 	// slot — the shape that broke on claw-3/claw-4/claw-5 starting
 	// 2026-09-08T23:04:30Z.
 	const out = provision(home, {
-		REPO: 'WolffM/hadoku-meet',
-		URL: 'https://github.com/WolffM/hadoku-meet',
-		NAME: 'warm-claw-1-hadoku-meet',
+		REPO: 'WolffM/hadoku-rally',
+		URL: 'https://github.com/WolffM/hadoku-rally',
+		NAME: 'warm-claw-1-hadoku-rally',
 	});
 	assert.match(out, /WARM-READY /, out);
 	assert.doesNotMatch(out, /already configured/, out);
-	assert.equal(readFileSync(join(home, '.hadoku', 'warm', 'repo'), 'utf8'), 'WolffM/hadoku-meet');
+	assert.equal(readFileSync(join(home, '.hadoku', 'warm', 'repo'), 'utf8'), 'WolffM/hadoku-rally');
 });
 
 void test("a slot poisoned with ONLY .runner_migrated still registers — issue #17's exact observed shape", () => {
@@ -582,13 +582,13 @@ void test("a slot poisoned with ONLY .runner_migrated still registers — issue 
 	assert.ok(existsSync(join(slot, '.runner_migrated')), 'setup: .runner_migrated must be present');
 
 	const out = provision(home, {
-		REPO: 'WolffM/hadoku-meet',
-		URL: 'https://github.com/WolffM/hadoku-meet',
-		NAME: 'warm-claw-1-hadoku-meet',
+		REPO: 'WolffM/hadoku-rally',
+		URL: 'https://github.com/WolffM/hadoku-rally',
+		NAME: 'warm-claw-1-hadoku-rally',
 	});
 	assert.match(out, /WARM-READY /, out);
 	assert.doesNotMatch(out, /already configured/, out);
-	assert.equal(readFileSync(join(home, '.hadoku', 'warm', 'repo'), 'utf8'), 'WolffM/hadoku-meet');
+	assert.equal(readFileSync(join(home, '.hadoku', 'warm', 'repo'), 'utf8'), 'WolffM/hadoku-rally');
 	assert.equal(
 		existsSync(join(slot, '.runner_migrated')),
 		false,
@@ -607,9 +607,9 @@ void test('RESET clears leftover state by ALLOW-list, not by naming files it kno
 	const slot = join(home, '.hadoku', 'warm', 'listener');
 	writeFileSync(join(slot, '.some_future_identity_file'), 'x');
 	provision(home, {
-		REPO: 'WolffM/hadoku-meet',
-		URL: 'https://github.com/WolffM/hadoku-meet',
-		NAME: 'warm-claw-1-hadoku-meet',
+		REPO: 'WolffM/hadoku-rally',
+		URL: 'https://github.com/WolffM/hadoku-rally',
+		NAME: 'warm-claw-1-hadoku-rally',
 	});
 	assert.equal(existsSync(join(slot, '.some_future_identity_file')), false);
 });
@@ -621,9 +621,9 @@ void test('RESET keeps _work — the checkout cache the slot exists to reuse', (
 	mkdirSync(join(slot, '_work'), { recursive: true });
 	writeFileSync(join(slot, '_work', 'marker'), 'x');
 	provision(home, {
-		REPO: 'WolffM/hadoku-meet',
-		URL: 'https://github.com/WolffM/hadoku-meet',
-		NAME: 'warm-claw-1-hadoku-meet',
+		REPO: 'WolffM/hadoku-rally',
+		URL: 'https://github.com/WolffM/hadoku-rally',
+		NAME: 'warm-claw-1-hadoku-rally',
 	});
 	assert.ok(existsSync(join(slot, '_work', 'marker')), '_work must survive RESET');
 });
@@ -644,9 +644,9 @@ void test('two provisions racing the same slot serialize instead of corrupting i
 	// first.
 	const fast = new Promise((res) => setTimeout(res, 100)).then(() =>
 		provisionAsync(home, {
-			REPO: 'WolffM/hadoku-meet',
-			URL: 'https://github.com/WolffM/hadoku-meet',
-			NAME: 'warm-claw-1-hadoku-meet',
+			REPO: 'WolffM/hadoku-rally',
+			URL: 'https://github.com/WolffM/hadoku-rally',
+			NAME: 'warm-claw-1-hadoku-rally',
 		})
 	);
 	return Promise.all([slow, fast]).then(([a, b]) => {
@@ -657,7 +657,10 @@ void test('two provisions racing the same slot serialize instead of corrupting i
 		// B ran second (it waited on the lock) and is the last writer, so the
 		// marker and the identity files must reflect B's repo, not a mix of
 		// both — the signature of a race that DID interleave.
-		assert.equal(readFileSync(join(home, '.hadoku', 'warm', 'repo'), 'utf8'), 'WolffM/hadoku-meet');
+		assert.equal(
+			readFileSync(join(home, '.hadoku', 'warm', 'repo'), 'utf8'),
+			'WolffM/hadoku-rally'
+		);
 		const argv = readFileSync(join(home, 'configure-argv'), 'utf8').trim().split('\n');
 		assert.equal(argv.length, 2, 'both configure calls ran, serialized');
 	});

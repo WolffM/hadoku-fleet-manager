@@ -52,9 +52,9 @@ const node = (name: string, over: Partial<NodeState> = {}): NodeState => ({
 });
 const run = (id: number) => ({
 	id,
-	repo: 'WolffM/hadoku-meet',
-	repository: { full_name: 'WolffM/hadoku-meet' },
-	head_repository: { full_name: 'WolffM/hadoku-meet', fork: false },
+	repo: 'WolffM/hadoku-rally',
+	repository: { full_name: 'WolffM/hadoku-rally' },
+	head_repository: { full_name: 'WolffM/hadoku-rally', fork: false },
 	event: 'push',
 	jobId: id * 100,
 });
@@ -109,7 +109,7 @@ test('units already on the node count against the cap', async () => {
 	// B9's real shape: after an mgmt-api restart the only truth about what is in
 	// flight lives on the nodes. Without this the first tick back would mint a
 	// second runner for work already being served.
-	const h = harness(['jit-claw-2-hadoku-meet-1787797000', 'jit-claw-2-hadoku-meet-1787797001']);
+	const h = harness(['jit-claw-2-hadoku-rally-1787797000', 'jit-claw-2-hadoku-rally-1787797001']);
 	const r = await runDispatchPass(base({ pending: [run(1), run(2)] }), 'tok', h.gh, h.sh);
 	assert.equal(r.inFlight, 2, 'both pre-existing units are seen');
 	assert.equal(r.minted, 0, 'maxConcurrent 2 is already consumed by them');
@@ -167,7 +167,7 @@ test('one failing node does not stop the pass', async () => {
  * written to prevent §12.16 came to reproduce it.
  */
 test('a run already served by a LIVE unit is not minted for again', async () => {
-	const h = harness(['jit-claw-2-hadoku-meet-r1-1787797008']);
+	const h = harness(['jit-claw-2-hadoku-rally-r1-1787797008']);
 	// maxConcurrent is deliberately generous. At the default of 2 this test
 	// PASSED with inFlightRunIds empty, because the live unit consumed capacity
 	// and the second mint was refused for being at the cap — the right counts for
@@ -238,14 +238,14 @@ test('a quiet fleet still sweeps — orphans accumulate precisely when nothing i
 		return '';
 	};
 	const gh = {
-		get: async () => ({ runners: [{ id: 5, name: 'jit-claw-2-hadoku-meet-r9-1000000000' }] }),
+		get: async () => ({ runners: [{ id: 5, name: 'jit-claw-2-hadoku-rally-r9-1000000000' }] }),
 		write: async (_m: 'POST' | 'DELETE', p: string) => {
 			swept.push(p);
 			return { ok: true, status: 204 };
 		},
 	};
 	const r = await runDispatchPass(
-		base({ pending: [], repos: ['WolffM/hadoku-meet'] }),
+		base({ pending: [], repos: ['WolffM/hadoku-rally'] }),
 		'tok',
 		gh,
 		sh
@@ -511,7 +511,7 @@ function recordInfos(): string[] {
 /** claw-2 is first in the order and cold; claw-1 holds the warm listener. */
 const warmSecond = (): Partial<DispatchPassInput> => ({
 	order: ['claw-2', 'claw-1'],
-	nodes: [node('claw-2'), node('claw-1', { warmRepo: 'WolffM/hadoku-meet' })],
+	nodes: [node('claw-2'), node('claw-1', { warmRepo: 'WolffM/hadoku-rally' })],
 	pending: [run(1), run(2), run(3)],
 });
 
@@ -693,7 +693,7 @@ test("2026-10-21: a running JIT job is ONE job — its unit, not its unit plus t
 	// Budget 2 (maxConcurrent 3 less the held listener). Before the fix this
 	// read `at capacity: 2/2 in flight` and minted nothing all afternoon.
 	const infos = recordInfos();
-	const h = harness(['jit-claw-1-hadoku-meet-j5-r9-1792560000']);
+	const h = harness(['jit-claw-1-hadoku-rally-j5-r9-1792560000']);
 	const r = await runDispatchPass(
 		base({
 			order: ['claw-1'],
@@ -756,7 +756,7 @@ test('2026-10-21: a held warm listener that is BUSY is not charged again — its
 	// `p.workers` = 2. Budget 2 (3 less the held listener). It read
 	// `at capacity: 3/2 in flight`; the box was running two of its three.
 	const infos = recordInfos();
-	const h = harness(['jit-claw-3-hadoku-meet-j5-r9-1792560000']);
+	const h = harness(['jit-claw-3-hadoku-rally-j5-r9-1792560000']);
 	const r = await runDispatchPass(
 		base({
 			order: ['claw-3'],
@@ -1003,7 +1003,7 @@ test('#102: a heavy SIBLING already running marks the node and evicts once — a
 
 // --- a runner GitHub gave to a different job --------------------------------
 
-const MINTED_FOR_100 = 'jit-claw-2-hadoku-meet-j100-r1-1791000000';
+const MINTED_FOR_100 = 'jit-claw-2-hadoku-rally-j100-r1-1791000000';
 
 test('2026-10-09 18:46Z: a runner minted for a still-queued job but BUSY elsewhere does not hold that job "in flight"', async () => {
 	const infos = recordInfos();
@@ -1014,7 +1014,7 @@ test('2026-10-09 18:46Z: a runner minted for a still-queued job but BUSY elsewhe
 			nodes: [node('claw-2', { maxConcurrent: 3 })],
 			pending: [run(1)],
 			runningJobs: [
-				{ repo: 'WolffM/hadoku-meet', runner: MINTED_FOR_100, jobName: 'other-run-shard' },
+				{ repo: 'WolffM/hadoku-rally', runner: MINTED_FOR_100, jobName: 'other-run-shard' },
 			],
 		}),
 		'tok',
@@ -1090,7 +1090,7 @@ test('a BUSY mismatched runner is serving another job — it is never deleted ou
 		base({
 			nodes: [builderNode()],
 			pending: [BUILDER_JOB],
-			runningJobs: [{ repo: 'WolffM/hadoku-meet', runner: MINTED_FOR_100, jobName: 'deploy' }],
+			runningJobs: [{ repo: 'WolffM/hadoku-rally', runner: MINTED_FOR_100, jobName: 'deploy' }],
 		}),
 		'tok',
 		gh,

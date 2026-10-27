@@ -10,7 +10,7 @@ const mins = (n: number) => n * 60_000;
 
 /** A JIT name minted `agoMs` before NOW. */
 const name = (node: string, runId: number, agoMs: number) =>
-	`jit-${node}-hadoku-meet-r${runId}-${Math.floor((NOW - agoMs) / 1000)}`;
+	`jit-${node}-hadoku-rally-r${runId}-${Math.floor((NOW - agoMs) / 1000)}`;
 
 function harness(opts: {
 	runners: { id: number; name: string; busy?: boolean }[];

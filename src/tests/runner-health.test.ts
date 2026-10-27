@@ -3143,7 +3143,7 @@ test('backstop: a single busy tick inside the calm window restarts the count', a
 // fallback could not rescue them either, because it counts hokon as capacity.
 
 test('backstop: an outage promotes hokon on every fleet repo, not just this one', async () => {
-	__setFleetReposForTesting(['WolffM/hadoku_site', 'WolffM/hadoku-meet', 'WolffM/hadoku-task']);
+	__setFleetReposForTesting(['WolffM/hadoku_site', 'WolffM/hadoku-rally', 'WolffM/hadoku-task']);
 	installFetch({
 		runners: {
 			runners: [
@@ -3159,7 +3159,7 @@ test('backstop: an outage promotes hokon on every fleet repo, not just this one'
 		.filter(Boolean);
 	assert.deepEqual(
 		[...new Set(repos)].sort(),
-		['WolffM/hadoku-meet', 'WolffM/hadoku-task', 'WolffM/hadoku_site'],
+		['WolffM/hadoku-rally', 'WolffM/hadoku-task', 'WolffM/hadoku_site'],
 		'every fleet repo gets its hokon runner promoted'
 	);
 });
@@ -3225,7 +3225,7 @@ test('backstop: a quarantined hokon ALREADY labelled is stripped, not left servi
 
 test('backstop: an outage does not fan a quarantined hokon out to the fleet', async () => {
 	markNodeSick('hokon');
-	__setFleetReposForTesting(['WolffM/hadoku_site', 'WolffM/hadoku-meet', 'WolffM/hadoku-task']);
+	__setFleetReposForTesting(['WolffM/hadoku_site', 'WolffM/hadoku-rally', 'WolffM/hadoku-task']);
 	installFetch({
 		runners: {
 			runners: [
@@ -3243,7 +3243,7 @@ test('backstop: an outage does not fan a quarantined hokon out to the fleet', as
 });
 
 test('backstop: the fan-out never touches a claw, only the hokon pool', async () => {
-	__setFleetReposForTesting(['WolffM/hadoku_site', 'WolffM/hadoku-meet']);
+	__setFleetReposForTesting(['WolffM/hadoku_site', 'WolffM/hadoku-rally']);
 	installFetch({
 		runners: {
 			runners: [
@@ -4002,11 +4002,11 @@ test('runner-health: supervision problems alert, one per broken runner', async (
 			},
 			{
 				node: 'claw-2',
-				dir: 'actions-runner-hadoku-meet',
+				dir: 'actions-runner-hadoku-rally',
 				kind: 'duplicate' as const,
 				listeners: 2,
 				scope: 'system' as const,
-				unit: 'actions.runner.WolffM-hadoku-meet.claw-2.service',
+				unit: 'actions.runner.WolffM-hadoku-rally.claw-2.service',
 				unitState: 'active',
 			},
 		],
@@ -4019,7 +4019,7 @@ test('runner-health: supervision problems alert, one per broken runner', async (
 	// going wrong must not look like a single runner going wrong.
 	assert.equal(sup.length, 2);
 	assert.ok(sup.some((p) => /hadoku-study/.test(p) && /ONLINE/.test(p)));
-	assert.ok(sup.some((p) => /hadoku-meet/.test(p) && /2 listeners/.test(p)));
+	assert.ok(sup.some((p) => /hadoku-rally/.test(p) && /2 listeners/.test(p)));
 });
 
 test('runner-health: a clean supervision report says nothing', async () => {
@@ -4650,10 +4650,10 @@ test('backstop: a demote that finds the label ALREADY GONE is converged, not fai
 	// DELETE then 404s. That is the desired state, so it must settle
 	// backstopFleetState — a "failure" here forced a second full converge on
 	// the next tick and logged that the repo would queue, which it would not.
-	__setFleetReposForTesting(['WolffM/hadoku_site', 'WolffM/hadoku-meet']);
+	__setFleetReposForTesting(['WolffM/hadoku_site', 'WolffM/hadoku-rally']);
 	installFetch({
 		runners: (repo) =>
-			repo === 'WolffM/hadoku-meet'
+			repo === 'WolffM/hadoku-rally'
 				? {
 						runners: [
 							{ id: 1, name: 'claw-1', status: 'online', busy: false, labels: clawLabels() },
@@ -4672,7 +4672,7 @@ test('backstop: a demote that finds the label ALREADY GONE is converged, not fai
 	});
 	await tick('tok');
 	assert.ok(
-		labelOps.some((o) => o.startsWith('DELETE') && o.includes('hadoku-meet')),
+		labelOps.some((o) => o.startsWith('DELETE') && o.includes('hadoku-rally')),
 		'the demote must be ATTEMPTED on the child repo — otherwise this proves nothing'
 	);
 	assert.ok(
@@ -4684,7 +4684,7 @@ test('backstop: a demote that finds the label ALREADY GONE is converged, not fai
 	runnerListings.length = 0;
 	await tick('tok');
 	assert.ok(
-		!runnerListings.includes('WolffM/hadoku-meet'),
+		!runnerListings.includes('WolffM/hadoku-rally'),
 		'a converged fleet is not re-read every tick — the 404 must have counted as done'
 	);
 });

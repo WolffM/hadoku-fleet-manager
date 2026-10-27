@@ -20,7 +20,7 @@ test('the claw-3 case: a cache whose repos all moved away is reclaimable', () =>
 	const out = reclaimableCaches({
 		node: 'claw-3',
 		caches: CACHES,
-		reposOn: on({ 'claw-3': ['WolffM/hadoku_site', 'WolffM/hadoku-meet'] }),
+		reposOn: on({ 'claw-3': ['WolffM/hadoku_site', 'WolffM/hadoku-rally'] }),
 	});
 	assert.deepEqual(
 		out.map((c) => c.name),
