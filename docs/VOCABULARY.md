@@ -57,6 +57,29 @@ node's script here, which is worse. `scripts/lib/node-identity-guard.test.mjs`
 fails the build if a sixth appears, and it blanks comments before looking —
 prose can neither trip that rule nor satisfy it.
 
+## Node users: who a command runs as
+
+> **Which user does this act as on that node?**
+
+`src/lib/node-users.ts` — `nodeUser(machine, role)`. A first-party concept since
+2026-10-27 (operator: "must be respected"). A node has users by **role**:
+
+| role       | is                                                                        | never                           |
+| ---------- | ------------------------------------------------------------------------- | ------------------------------- |
+| **admin**  | the management identity: ssh, NOPASSWD sudo, the journal, pm2             | runs a CI job                   |
+| **ci**     | runs every CI job; owns runner slots, toolchains, caches, `runners.slice` | sudo, the docker group, adm     |
+| **tenant** | a hosting agent's system user (`cardtable-agent`), in `TENANTS`           | logs in, shares a group with ci |
+
+Code names the ROLE, never a user. `runOn(node, script, { as: 'ci' })`,
+`nodeShell(node, 'ci', cmd)`, `sshDestination(node, 'admin')` and
+`nodeHome(machine, 'ci')` are the doors. The ssh LOGIN carries the role, so
+`$HOME`, `id -u` and `systemctl --user` on the far side are that role's.
+`machines.<node>.users.ci` names a node's ci user; absent means the node has
+not been cut over and its CI still runs as admin.
+`scripts/lib/node-users-guard.test.mjs` fails the build on a user literal, on a
+`runOn` call with no `as:`, or on a hand-rolled ssh that skips `sshDestination`.
+The plan and the cutover order are in `docs/planning/node-users-2026-10-27.md`.
+
 ## The axes
 
 These are already how the codebase argues; they were just never written down in

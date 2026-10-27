@@ -143,7 +143,7 @@ async function probe(node, tools) {
 				`printf '%s\\t%s\\n' "${t}" "$(command -v ${t} >/dev/null 2>&1 && echo yes || echo no)"`
 		)
 		.join('\n');
-	const r = await runOn(node, script, { timeoutMs: 60_000 });
+	const r = await runOn(node, script, { as: 'ci', timeoutMs: 60_000 });
 	if (!r.ok && !r.stdout) return null;
 	const have = new Set();
 	for (const l of r.stdout.split('\n')) {

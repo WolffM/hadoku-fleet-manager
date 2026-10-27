@@ -37,7 +37,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { manifest, PKG_SCRIPTS } from './lib/paths.mjs';
-import { isLocalNode } from './lib/fleet-exec.mjs';
+import { isLocalNode, sshDestination } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { isGuestNode } from '../dist/lib/node-role.js';
@@ -114,7 +114,18 @@ const nodes = everyNode.filter((n) => !skippedByRole.includes(n));
 function on(node, script) {
 	const argv = isLocalNode(node)
 		? ['bash', ['-c', script]]
-		: ['ssh', ['-n', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', node, script]];
+		: [
+				'ssh',
+				[
+					'-n',
+					'-o',
+					'BatchMode=yes',
+					'-o',
+					'ConnectTimeout=8',
+					sshDestination(node, 'admin'),
+					script,
+				],
+			];
 	return execFileSync(argv[0], argv[1], { encoding: 'utf8', timeout: 60_000 });
 }
 

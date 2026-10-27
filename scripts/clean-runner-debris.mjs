@@ -159,7 +159,11 @@ for (const m of nodes) {
 		// default, so a caller that forgets it sweeps nothing rather than /tmp.
 		`TMPFS_ROOT=/tmp\n` +
 		`MAX_CONCURRENT_NODE='${MAX_CONCURRENT_NODE}'\nCACHE_PATHS='${cachePaths}'\n${script}`;
-	const r = await runOn(m, payload, { timeoutMs: TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 });
+	const r = await runOn(m, payload, {
+		as: 'ci',
+		timeoutMs: TIMEOUT_MS,
+		maxBuffer: 32 * 1024 * 1024,
+	});
 	const summary = r.out.split('\n').find((l) => l.startsWith('SUMMARY ')) ?? '';
 	if (!r.ok && !summary) {
 		const defer = deferralFor(m, DRAINS);

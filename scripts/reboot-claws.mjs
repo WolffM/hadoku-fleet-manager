@@ -98,7 +98,11 @@ const deps = {
 	isGuest: (entry) => isGuestNode(entry),
 	isLocal: (node) => isLocalNode(node),
 	probe: (node) => {
-		const res = runOnSync(node, REBOOT_PROBE, { timeoutMs: 30_000, connectTimeout: 6 });
+		const res = runOnSync(node, REBOOT_PROBE, {
+			as: 'admin',
+			timeoutMs: 30_000,
+			connectTimeout: 6,
+		});
 		if (!res.ok) return { ok: false, reason: res.error || 'unreachable' };
 		return parseRebootProbe(res.stdout);
 	},
@@ -122,7 +126,7 @@ const deps = {
 		const res = runOnSync(
 			node,
 			'nohup sh -c "sleep 2; sudo -n systemctl reboot" >/dev/null 2>&1 &\necho SCHEDULED\n',
-			{ timeoutMs: 20_000, connectTimeout: 6 }
+			{ as: 'admin', timeoutMs: 20_000, connectTimeout: 6 }
 		);
 		return res.ok && res.stdout.includes('SCHEDULED')
 			? { ok: true }

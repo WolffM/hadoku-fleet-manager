@@ -176,7 +176,9 @@ function sourceFiles() {
 	for (const root of ['src', 'scripts']) walk(join(ROOT, root));
 	cachedSources = out
 		.map((abs) => ({ rel: relative(ROOT, abs), src: readFileSync(abs, 'utf8') }))
-		.filter(({ rel }) => rel !== CHOKE_POINT);
+		// node-users.ts BUILDS the ssh argv for a role; it runs nothing, and every
+		// caller that runs what it builds is classified on its own.
+		.filter(({ rel }) => rel !== CHOKE_POINT && rel !== 'src/lib/node-users.ts');
 	return cachedSources;
 }
 

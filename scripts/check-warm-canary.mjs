@@ -113,7 +113,7 @@ function measure(node, m) {
 	// does; the per-unit cap below does not, as the minter's does not.
 	const minFreeMb = floorMb + (SHARED_HOSTING[node]?.memoryMb ?? 0);
 	const unmeasured = { node, reachable: false, totalMb: null, minFreeMb, jobMb: 0, role: m.role };
-	const mem = runOnSync(node, "free -m | awk '/^Mem:/{print $2}'");
+	const mem = runOnSync(node, "free -m | awk '/^Mem:/{print $2}'", { as: 'admin' });
 	if (!mem.ok) return { ...unmeasured, activeRepo: null };
 	const totalMb = Number(mem.stdout.trim());
 	if (!Number.isFinite(totalMb) || totalMb <= 0) return { ...unmeasured, activeRepo: null };
@@ -129,14 +129,17 @@ function measure(node, m) {
 
 	// The marker `warm-provision.sh` writes at mint time — see currentWarmSlot()
 	// in src/runners/ephemeral-exec.ts for the same read, in-process.
-	const marker = runOnSync(node, 'f="$HOME/.hadoku/warm/repo"; [ -f "$f" ] && cat "$f" || true');
+	const marker = runOnSync(node, 'f="$HOME/.hadoku/warm/repo"; [ -f "$f" ] && cat "$f" || true', {
+		as: 'ci',
+	});
 	const repo = marker.ok ? marker.stdout.trim() : '';
 	let activeRepo = null;
 	if (repo) {
 		const unit = warmRunnerName(node, repo);
 		const active = runOnSync(
 			node,
-			`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user is-active ${unit} 2>/dev/null || true`
+			`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user is-active ${unit} 2>/dev/null || true`,
+			{ as: 'ci' }
 		);
 		// A marker with no live unit behind it is STALE, not evidence of a warm
 		// listener — same rule currentWarmSlot() applies in-process.

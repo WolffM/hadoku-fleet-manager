@@ -46,7 +46,8 @@ export interface DispatchPassInput {
 	pending: PendingRun[];
 	/** Labels each node must project onto anything it mints. */
 	labelsFor: (node: string) => string[];
-	homeDir: string;
+	/** The node's ci user's home (`nodeHome(machine, 'ci')`): where its slots live. */
+	homeDirFor: (node: string) => string;
 	/**
 	 * Where a node with no standing install may fetch a runner release.
 	 * Resolved once per tick by the caller — see runnerTarballUrl.
@@ -526,7 +527,7 @@ export async function runDispatchPass(
 					runnerName: action.runnerName,
 					labels: input.labelsFor(action.node),
 					slotIndex,
-					homeDir: input.homeDir,
+					homeDir: input.homeDirFor(action.node),
 					tarballUrl: input.tarballUrl ?? null,
 					memoryMaxMb: input.memoryMaxMbFor(action.repo, action.node),
 					sliceName: input.sliceNameFor?.(action.node) ?? null,

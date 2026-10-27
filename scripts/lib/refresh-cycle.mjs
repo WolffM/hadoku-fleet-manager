@@ -586,6 +586,7 @@ function finish({ nodes, findings, latestById, plan }) {
  */
 export function busyCount(node) {
 	const res = runOnSync(node, 'pgrep -c -f "[R]unner\\.Worker" || true', {
+		as: 'admin',
 		timeoutMs: 20_000,
 		connectTimeout: 6,
 	});
@@ -670,7 +671,11 @@ export function liveQueuePressure() {
 export function createLiveDeps() {
 	const lookup = createReleaseLookup();
 	const probe = (node, tools) => {
-		const res = runOnSync(node, toolProbeScript(tools), { timeoutMs: 60_000, connectTimeout: 8 });
+		const res = runOnSync(node, toolProbeScript(tools), {
+			as: 'ci',
+			timeoutMs: 60_000,
+			connectTimeout: 8,
+		});
 		const seen = parseToolProbe(res.out ?? '');
 		if (!res.ok && !Object.keys(seen).length) {
 			return { ok: false, reason: (res.error || 'unreadable').trim().slice(0, 200) };
@@ -702,7 +707,7 @@ export function createLiveDeps() {
 		update: (node, work) =>
 			work.map((w) =>
 				runWorkItem(w, (script) =>
-					runOnSync(node, script, { timeoutMs: 600_000, connectTimeout: 8 })
+					runOnSync(node, script, { as: 'admin', timeoutMs: 600_000, connectTimeout: 8 })
 				)
 			),
 		queuePressure: liveQueuePressure,

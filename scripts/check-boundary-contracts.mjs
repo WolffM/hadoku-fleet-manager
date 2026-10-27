@@ -279,7 +279,10 @@ for (const [name] of machines) {
 	// `free -m` feeds MachineState.freeMb. It was once handed FREE SLOTS instead,
 	// and admission computed `3 - 4096` and refused every mint on every machine,
 	// permanently, while logging something that reads like a full fleet.
-	const mem = await runOn(name, "free -m | awk '/^Mem:/{print $7}'", { timeoutMs: 20_000 });
+	const mem = await runOn(name, "free -m | awk '/^Mem:/{print $7}'", {
+		as: 'admin',
+		timeoutMs: 20_000,
+	});
 	if (!mem.ok) {
 		const defer = deferralFor(name, DRAINS);
 		if (defer.deferred) {
@@ -308,7 +311,7 @@ for (const [name] of machines) {
 	const units = await runOn(
 		name,
 		"XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user list-units 'jit-*' --no-legend --plain",
-		{ timeoutMs: 20_000 }
+		{ as: 'ci', timeoutMs: 20_000 }
 	);
 	if (!units.ok) bad(`${name} list-units`, 'command failed');
 	else {

@@ -160,7 +160,7 @@ let skippedLines = 0;
 let olderRows = 0;
 
 for (const [node] of machines) {
-	const read = readOutcome(node, runOnSync(node, readScript, { timeoutMs: 60_000 }));
+	const read = readOutcome(node, runOnSync(node, readScript, { as: 'ci', timeoutMs: 60_000 }));
 	reads.push(read);
 	if (read.read !== 'ok') continue;
 	skippedLines += read.skipped;

@@ -134,7 +134,7 @@ function profilesPath() {
 
 /** Run a snippet on a node. Local host runs directly — hokon refuses ssh to itself. */
 function onNode(node, script, { timeoutMs = 600_000 } = {}) {
-	return runOnSync(node, script, { timeoutMs, connectTimeout: 8 });
+	return runOnSync(node, script, { as: 'admin', timeoutMs, connectTimeout: 8 });
 }
 
 /** One read of a node's observed state. Never reports what was WRITTEN. */

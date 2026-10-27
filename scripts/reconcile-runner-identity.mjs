@@ -401,7 +401,7 @@ function activeWarmUnits(out) {
 async function probeNode(machine) {
 	let error = 'no attempt was made';
 	for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
-		const r = await runOn(machine, probe, { includeGuests: INCLUDE_GUESTS });
+		const r = await runOn(machine, probe, { as: 'ci', includeGuests: INCLUDE_GUESTS });
 		if (r.out.includes('PROBE-END')) return { ok: true, out: r.out };
 		const why =
 			r.out.trim().replace(/\s+/g, ' ').slice(0, 160) ||

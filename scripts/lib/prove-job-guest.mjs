@@ -33,7 +33,7 @@ export function proofShell({ runOn, isGuest, timeoutMs = 300_000 }) {
 				guestReached.push(node);
 				return null;
 			}
-			const r = await runOn(node, cmd, { timeoutMs, includeGuests: false, argv: [] });
+			const r = await runOn(node, cmd, { as: 'ci', timeoutMs, includeGuests: false, argv: [] });
 			return r.ok ? r.stdout : null;
 		},
 	};

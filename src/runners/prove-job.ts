@@ -182,7 +182,7 @@ export interface ProveDeps {
 	/** Resolves after `ms`, or rejects if `signal` aborts first. */
 	sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 	signal?: AbortSignal;
-	/** The node user's home. Required: a default here would be a hostname-shaped literal in a library. */
+	/** The node's ci user's home (`nodeHome(machine, 'ci')`). Required: a default would be a literal in a library. */
 	homeDir: string;
 	pollMs?: number;
 }

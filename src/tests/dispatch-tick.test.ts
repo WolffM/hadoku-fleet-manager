@@ -43,7 +43,7 @@ const base = (over: Partial<DispatchTickInput> = {}): DispatchTickInput => ({
 	recentJobCounts: new Map(),
 	labelsFor: () => [],
 	memoryMaxMbFor: () => 3000,
-	homeDir: '/home/hadoku',
+	homeDirFor: () => '/home/fixture-ci',
 	ttlSeconds: 3600,
 	...over,
 });

@@ -42,6 +42,7 @@ import { manifest as manifestFile } from './paths.mjs';
 // source checkout that has not been built fails LOUDLY on the import rather
 // than quietly taking the wrong branch.
 import { isLocalNode } from '../../dist/lib/node-identity.js';
+import { nodeCommand, nodeUser } from '../../dist/lib/node-users.js';
 // The BUILT copy for the same reason, and from the same `src/lib/` shelf: one
 // question, one answer. `nodeRole` is the operator's decision about what the
 // fleet chain may DO to a box, and it is read here so that the transport layer
@@ -104,14 +105,34 @@ function assertScript(node, script) {
 	}
 }
 
-const sshArgv = (node, connectTimeout) => [
-	'-o',
-	'BatchMode=yes',
-	'-o',
-	`ConnectTimeout=${connectTimeout}`,
-	node,
-	'bash -s',
-];
+/**
+ * `[bin, argv]` that runs a script from stdin on `node` as ROLE
+ * (`src/lib/node-users.ts`): `ssh <user>@<node> bash -s`, or `bash -c 'bash -s'`
+ * on this box. Throws when the role's user is not the one this process runs as
+ * locally, or the manifest names a malformed user.
+ */
+function scriptCommand(node, role, connectTimeout, manifest) {
+	const m = manifest ?? cachedManifest();
+	return nodeCommand(node, role, 'bash -s', m?.machines?.[node] ?? null, {
+		sshOpts: ['-o', 'BatchMode=yes', '-o', `ConnectTimeout=${connectTimeout}`],
+	});
+}
+
+/**
+ * `<user>@<node>` for a role, for the few callers that spawn ssh or rsync
+ * themselves instead of going through {@link runOn}.
+ */
+export function sshDestination(node, role, manifest) {
+	const m = manifest ?? cachedManifest();
+	return `${nodeUser(m?.machines?.[node] ?? null, role)}@${node}`;
+}
+
+let manifestCache;
+/** The manifest, read once per process: a script's run is short, and roles do not change mid-run. */
+function cachedManifest() {
+	manifestCache ??= loadManifest();
+	return manifestCache;
+}
 
 export function loadManifest(path = manifestPath()) {
 	return JSON.parse(readFileSync(path, 'utf8'));
@@ -373,6 +394,12 @@ export function machineArg(argv = process.argv.slice(2), { valueFlags = [] } = {
  * output would hand every unconverted caller a healthy fleet of one fewer
  * machine, which is the failure CLAUDE.md names first.
  */
+/** A role that cannot be acted as is a result, like an unreachable node: never a throw. */
+function roleFailure(local, err) {
+	const error = `cannot act as the role: ${err.message}`;
+	return { ok: false, stdout: '', stderr: error, out: error, local, error };
+}
+
 function guestSkipResult(node, gate) {
 	return {
 		ok: false,
@@ -418,6 +445,11 @@ function guestSkip(node, includeGuests, argv, manifest) {
  * sweep that throws on the first dead box reports nothing about the other three.
  *
  * `includeGuests` arms the role gate — see {@link guestSkip}.
+ *
+ * `as` is the NODE USER ROLE the script runs as (`src/lib/node-users.ts`):
+ * `admin` (the default: provisioning, system units, observation) or `ci`
+ * (anything that touches CI's units, slots, toolchains or `$HOME`). A role
+ * that cannot be acted as comes back as a failed result, never a throw.
  */
 export function runOn(
 	node,
@@ -429,13 +461,20 @@ export function runOn(
 		includeGuests,
 		argv: gateArgv,
 		manifest,
+		as = 'admin',
 	} = {}
 ) {
 	assertScript(node, script);
 	const gate = guestSkip(node, includeGuests, gateArgv, manifest);
 	if (gate) return Promise.resolve(guestSkipResult(node, gate));
 	const local = isLocalNode(node);
-	const [cmd, argv] = local ? ['bash', ['-s']] : ['ssh', sshArgv(node, connectTimeout)];
+	let cmd;
+	let argv;
+	try {
+		[cmd, argv] = scriptCommand(node, as, connectTimeout, manifest);
+	} catch (err) {
+		return Promise.resolve(roleFailure(local, err));
+	}
 	const opts = { timeout: timeoutMs };
 	if (maxBuffer) opts.maxBuffer = maxBuffer;
 	return new Promise((res) => {
@@ -525,16 +564,22 @@ export function runOnSync(
 		includeGuests,
 		argv: gateArgv,
 		manifest,
+		as = 'admin',
 	} = {}
 ) {
 	const gate = guestSkip(node, includeGuests, gateArgv, manifest);
 	if (gate) return guestSkipResult(node, gate);
 	const local = isLocalNode(node);
+	let cmd;
+	let argv;
+	try {
+		[cmd, argv] = scriptCommand(node, as, connectTimeout, manifest);
+	} catch (err) {
+		return { ...roleFailure(local, err), code: null, status: null };
+	}
 	const opts = { input: script, encoding: 'utf8', timeout: timeoutMs, maxBuffer };
 	try {
-		const out = local
-			? execFileSync('bash', ['-s'], opts)
-			: execFileSync('ssh', sshArgv(node, connectTimeout), opts);
+		const out = execFileSync(cmd, argv, opts);
 		return { ok: true, out, stdout: out, stderr: '', local, error: null, code: null, status: 0 };
 	} catch (err) {
 		const o = String(err.stdout ?? '');

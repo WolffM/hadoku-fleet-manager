@@ -82,11 +82,11 @@ echo '{"total_count":0,"runners":[]}'
  * It drains stdin first: the driver writes the probe script there and closes
  * it, and a shim that exits without reading gives the parent an EPIPE instead
  * of the result under test. argv is fixed by `fleet-exec`'s `sshArgv` —
- * `-o BatchMode=yes -o ConnectTimeout=N <node> bash -s` — so the node is $5.
+ * `-o BatchMode=yes -o ConnectTimeout=N <user>@<node> bash -s` — so the node is $5 after its `@`.
  */
 const SSH_SHIM = `#!/usr/bin/env bash
 cat > /dev/null
-node="\${5:-}"
+node="\${5##*@}"
 printf '%s\\n' "$node" >> "$SSH_LOG"
 if [ "$node" = "\${SSH_FAIL_NODE:-}" ]; then
 	echo "ssh: connect to host $node port 22: No route to host" >&2

@@ -866,7 +866,7 @@ async function placementPhase(node, earned, { confirm, noPush }) {
 	const doc = JSON.parse(readFileSync(MANIFEST, 'utf8'));
 	const entry = doc.machines?.[node] ?? {};
 	const backfill = placementBackfill(entry);
-	const pr = runOnSync(node, PAYLOAD_PROBE, { argv: ['--machine', node], manifest: doc });
+	const pr = runOnSync(node, PAYLOAD_PROBE, { as: 'ci', argv: ['--machine', node], manifest: doc });
 	const payloadPresent = /PAYLOAD yes/.test(pr.out ?? '');
 	const decision = flipDecision({ entry, earned, payloadPresent });
 	if (!decision.flip && decision.state !== 'already') return { status: 1, remedy: decision.remedy };
@@ -896,6 +896,7 @@ async function placementPhase(node, earned, { confirm, noPush }) {
 
 function realizePhase(node, { confirm }) {
 	const r = runOnSync(node, confirm ? REALIZE_SCRIPT : REALIZE_CHECK, {
+		as: 'ci',
 		argv: ['--machine', node],
 		manifest: loadManifest(),
 	});

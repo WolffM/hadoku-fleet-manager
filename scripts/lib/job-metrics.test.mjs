@@ -699,7 +699,10 @@ function row(ts, extra = {}) {
 
 /** The read script with the fixture HOME in front of it — the node's own $HOME, simulated. */
 function readVia(home, since) {
-	return runOnSync(LOCAL, `HOME='${home}'\n${metricsReadScript(since)}`, { timeoutMs: 60_000 });
+	return runOnSync(LOCAL, `HOME='${home}'\n${metricsReadScript(since)}`, {
+		timeoutMs: 60_000,
+		manifest: { machines: {} },
+	});
 }
 
 // Every timestamp is anchored to NOW (fixture-clock-guard): the window is
@@ -820,7 +823,10 @@ test('a 2 MiB metrics file reads whole through the sync transport (#37)', () => 
 test('an overflowed buffer is a READ-ERROR carrying ENOBUFS — the node answered', () => {
 	// The exact 2026-09-18 result, reproduced rather than typed out: a real
 	// `runOnSync` given a ceiling below its output.
-	const res = runOnSync(LOCAL, 'head -c 4096 /dev/zero | tr "\\0" x', { maxBuffer: 1024 });
+	const res = runOnSync(LOCAL, 'head -c 4096 /dev/zero | tr "\\0" x', {
+		maxBuffer: 1024,
+		manifest: { machines: {} },
+	});
 	assert.equal(res.code, 'ENOBUFS', 'the transport names its own errno');
 	const r = readOutcome('claw-1', { ...res, local: false });
 	assert.equal(r.read, 'read-error');

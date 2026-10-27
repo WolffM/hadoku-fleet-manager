@@ -136,6 +136,7 @@ import { mintEphemeralRunner, liveJitSlots } from '../dist/runners/ephemeral-exe
 import { jitRunnerName } from '../dist/runners/ephemeral.js';
 import { nodeOffer, workloadGateContext, workloadGatedCapabilities } from '../dist/capabilities.js';
 import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.js';
+import { nodeHome } from '../dist/lib/node-users.js';
 
 /**
  * The library half needs a HOST before any of it runs — `logger`, `stateDir` and
@@ -666,7 +667,7 @@ const PROBE_TTL_SECONDS = 900;
  * that answered with nothing.
  */
 const sh = async (node, command) => {
-	const r = await runOn(node, command, { timeoutMs: 120_000 });
+	const r = await runOn(node, command, { as: 'ci', timeoutMs: 120_000 });
 	return r.ok ? r.stdout : null;
 };
 
@@ -1178,7 +1179,7 @@ async function modeProbe() {
 			// fallback hid that by guessing the label for a node with none.
 			labels: mintLabelsFor(node),
 			slotIndex: PROBE_SLOT,
-			homeDir: '/home/hadoku',
+			homeDir: nodeHome(machines[node], 'ci'),
 			tarballUrl: null,
 			memoryMaxMb: machines[node]?.slice?.unitMaxMb ?? 4096,
 			ttlSeconds: PROBE_TTL_SECONDS,
@@ -1463,7 +1464,7 @@ async function modeRerun(rows) {
 			runnerName,
 			labels: mintLabelsFor(onto),
 			slotIndex: PROBE_SLOT,
-			homeDir: '/home/hadoku',
+			homeDir: nodeHome(machines[onto], 'ci'),
 			tarballUrl: null,
 			memoryMaxMb: machines[onto]?.slice?.unitMaxMb ?? 4096,
 			ttlSeconds: PROBE_TTL_SECONDS,

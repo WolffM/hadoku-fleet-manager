@@ -67,6 +67,7 @@ if (!doc.machines?.[NODE]) {
 // reads interface addresses, and recording hokon's reservation is the operator's
 // own request (#65) — it changes nothing on the box.
 const res = await runOn(NODE, INTERFACE_PROBE, {
+	as: 'admin',
 	timeoutMs: 20_000,
 	connectTimeout: 8,
 	includeGuests: true,

@@ -481,6 +481,7 @@ for (const [name, m] of nodes) {
 	let probedMemTotalMb = null;
 	if (ceilingMb === null && !guest) {
 		const probe = await runOn(name, MEMTOTAL_PROBE, {
+			as: 'admin',
 			timeoutMs: 60_000,
 			includeGuests: false,
 			argv: args,
@@ -520,6 +521,7 @@ for (const [name, m] of nodes) {
 	// did not name, including one added later by someone who never read the
 	// selection block.
 	const r = await runOn(name, payload(cfg, m.minFreeMb, apply, unitMb), {
+		as: 'admin',
 		timeoutMs: SSH_TIMEOUT_MS,
 		includeGuests: false,
 		argv: args,
@@ -542,6 +544,7 @@ for (const [name, m] of nodes) {
 	// `judgeMintPlacement` reads as "could not look" and refuses to excuse.
 	if (CHECK) {
 		const probe = await runOn(name, MINT_FACT_PROBE, {
+			as: 'ci',
 			timeoutMs: 60_000,
 			includeGuests: false,
 			argv: args,

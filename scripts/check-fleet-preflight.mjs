@@ -207,7 +207,11 @@ async function ghApi(args, timeoutMs = GH_TIMEOUT_MS) {
 
 /** The node's JIT payload version, for `jitPayloadFinding`. Its own ssh, like the LAN probe. */
 async function payloadProbe(node) {
-	const res = await runOn(node, JIT_PAYLOAD_PROBE, { timeoutMs: 20_000, connectTimeout: 8 });
+	const res = await runOn(node, JIT_PAYLOAD_PROBE, {
+		as: 'ci',
+		timeoutMs: 20_000,
+		connectTimeout: 8,
+	});
 	if (!res.ok) return { node, ok: false, error: res.error ?? (res.stderr.trim() || 'unreachable') };
 	const parsed = parseJitPayloadProbe(res.stdout);
 	if (!parsed)
@@ -216,7 +220,11 @@ async function payloadProbe(node) {
 }
 
 async function rebootProbe(node) {
-	const res = await runOn(node, REBOOT_PROBE, { timeoutMs: 20_000, connectTimeout: 8 });
+	const res = await runOn(node, REBOOT_PROBE, {
+		as: 'admin',
+		timeoutMs: 20_000,
+		connectTimeout: 8,
+	});
 	if (!res.ok) return { node, ok: false, error: res.error ?? (res.stderr.trim() || 'unreachable') };
 	const lines = res.stdout
 		.split('\n')
@@ -243,7 +251,11 @@ async function rebootProbe(node) {
 
 /** Pending security updates and the last security install, for `securityUpdateFinding`. */
 async function securityProbe(node) {
-	const res = await runOn(node, SECURITY_PROBE, { timeoutMs: 45_000, connectTimeout: 8 });
+	const res = await runOn(node, SECURITY_PROBE, {
+		as: 'admin',
+		timeoutMs: 45_000,
+		connectTimeout: 8,
+	});
 	if (!res.ok) return { node, ok: false, error: res.error ?? (res.stderr.trim() || 'unreachable') };
 	const parsed = parseSecurityProbe(res.stdout);
 	if (!parsed)
@@ -281,7 +293,11 @@ function writePendingState(doc) {
  * nightly job.
  */
 async function lanProbe(node) {
-	const res = await runOn(node, INTERFACE_PROBE, { timeoutMs: 20_000, connectTimeout: 8 });
+	const res = await runOn(node, INTERFACE_PROBE, {
+		as: 'admin',
+		timeoutMs: 20_000,
+		connectTimeout: 8,
+	});
 	if (!res.ok) return { node, ok: false, error: res.error ?? (res.stderr.trim() || 'unreachable') };
 	const ifaces = parseInterfaces(res.stdout);
 	if (!ifaces.length) {

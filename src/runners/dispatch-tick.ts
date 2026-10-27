@@ -697,7 +697,8 @@ export interface DispatchTickInput {
 	memoryMaxMbFor: (repo: string, node: string) => number;
 	/** See `DispatchPassInput.sliceNameFor`. */
 	sliceNameFor?: (node: string) => string | null | undefined;
-	homeDir: string;
+	/** See `DispatchPassInput.homeDirFor`. */
+	homeDirFor: (node: string) => string;
 	ttlSeconds: number;
 	/**
 	 * Age a run must reach before it is mintable. Omit for `MIN_QUEUED_MS`.
@@ -1065,7 +1066,7 @@ export async function runDispatchTick(
 			runningJobs,
 			repos: input.repos,
 			labelsFor: input.labelsFor,
-			homeDir: input.homeDir,
+			homeDirFor: input.homeDirFor,
 			memoryMaxMbFor: input.memoryMaxMbFor,
 			sliceNameFor: input.sliceNameFor,
 			ttlSeconds: input.ttlSeconds,

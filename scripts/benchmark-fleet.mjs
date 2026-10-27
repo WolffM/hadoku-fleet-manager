@@ -44,7 +44,7 @@ import { measuredFacets, writeFacet } from '../dist/lib/measured.js';
 // grew their own `if (node === 'hokon')` are why.
 import { guestNodeNames, nodeRole } from '../dist/lib/node-role.js';
 import { manifest } from './lib/paths.mjs';
-import { isLocalNode } from './lib/fleet-exec.mjs';
+import { isLocalNode, sshDestination } from './lib/fleet-exec.mjs';
 import { createEmitter } from './lib/emit.mjs';
 // THE SAME DRAIN `ci:toolchain-refresh` (#69) USES, reused rather than
 // reimplemented: `createLiveDeps()` already wraps drain-node.mjs and the
@@ -443,7 +443,7 @@ function measureOneNode(
 					'BatchMode=yes',
 					'-o',
 					'ConnectTimeout=8',
-					node,
+					sshDestination(node, 'admin'),
 					'sudo',
 					'sh',
 					'-s',
@@ -512,7 +512,7 @@ function measureOneNode(
 					'BatchMode=yes',
 					'-o',
 					'ConnectTimeout=8',
-					node,
+					sshDestination(node, 'admin'),
 					'sh',
 					'-s',
 					'--',

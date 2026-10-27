@@ -60,7 +60,8 @@ import {
 import { orderCandidates, buildHeavyModel, type TrafficNode, type HeavyModel } from './traffic.js';
 import { recordDiskReadings } from './disk-watch.js';
 import { isSchedulable } from './schedulable.js';
-import { isLocalNode } from '../lib/node-identity.js';
+import { nodeShell } from '../node-shell.js';
+import { nodeHome, type UserBearingNode } from '../lib/node-users.js';
 import { isGuestNode, mintsOnDemand } from '../lib/node-role.js';
 import { isBackstopHeld } from './backstop-hold.js';
 
@@ -139,6 +140,8 @@ export interface EphemeralTickInput {
 			 * every node the manifest declares no `excludeRepos` for.
 			 */
 			excludeRepos?: Record<string, string>;
+			/** The node's users by role. Read through `nodeUser`/`nodeHome`, never directly. */
+			users?: UserBearingNode['users'];
 		}
 	>;
 	isSick: (node: string) => boolean;
@@ -709,9 +712,17 @@ export function shellOnNode(node: string, cmd: string): Promise<string | null> {
 	// and `null` is UNREACHABLE, which the reaper reads as "do not touch". It
 	// would never have been reaped at all. Latent only because the one
 	// `ephemeral: true` node today is claw-3 and this runs on hokon.
-	const [bin, argv] = isLocalNode(node)
-		? (['bash', ['-c', cmd]] as const)
-		: (['ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', node, cmd]] as const);
+	// As ci: minting, the reap and the probe all act on CI's units and $HOME.
+	let bin: string;
+	let argv: string[];
+	try {
+		[bin, argv] = nodeShell(node, 'ci', cmd);
+	} catch (err) {
+		logger.warn(
+			`[ephemeral] cannot reach ${node} as ci: ${err instanceof Error ? err.message : String(err)}`
+		);
+		return Promise.resolve(null);
+	}
 	return new Promise((res) => {
 		execFile(bin, [...argv], { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) =>
 			res(err ? null : String(stdout))
@@ -1796,7 +1807,7 @@ export async function dispatchWarmCache(
 							// the ephemeral-only ones on top of this, because a warm listener
 							// is STANDING and must never be able to answer the canary.
 							labels: offerFor(input.nodes, node, workloadGate),
-							homeDir: '/home/hadoku',
+							homeDir: nodeHome(input.nodes[node], 'ci'),
 							memoryMaxMb,
 							tarballUrl: await tarballUrl(),
 						},
@@ -2544,7 +2555,7 @@ export async function dispatchEphemeral(
 			// The node's own slice, now that the mint path carries it (#120). Only
 			// the guest declares one today; every claw resolves to the default.
 			sliceNameFor: (node) => input.nodes[node]?.slice?.name,
-			homeDir: '/home/hadoku',
+			homeDirFor: (node) => nodeHome(input.nodes[node], 'ci'),
 			// NOT an orphan timeout. It was 3600 until 2026-09-14 and read as one,
 			// and systemd stopped the unit at the hour whether it held an idle
 			// listener or a build at minute 59 — issue #22. Orphans are bounded by

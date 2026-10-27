@@ -129,12 +129,12 @@ esac
 
 /**
  * An `ssh` that answers a clean probe. argv is fixed by `fleet-exec`'s
- * `sshArgv`, so the node is $5; stdin is drained first or the driver gets an
+ * `scriptCommand` (`<user>@<node>`), so the node is $5 after its `@`; stdin is drained first or the driver gets an
  * EPIPE instead of the result under test.
  */
 const SSH_SHIM = `#!/usr/bin/env bash
 cat > /dev/null
-echo "PROBE-END \${5:-} 0 0"
+echo "PROBE-END \${5##*@} 0 0"
 `;
 
 /** The ambient environment with every GIT_* variable removed. */
@@ -649,7 +649,7 @@ if [[ "$script" == *"job-metrics.jsonl"* ]]; then
   n=$(wc -l < "$METRICS_ROWS" 2>/dev/null | tr -d ' ')
   echo "#job-metrics-read-end kept=\${n:-0} older=0 files=1"
 else
-  echo "PROBE-END \${5:-} 0 0"
+  echo "PROBE-END \${5##*@} 0 0"
 fi
 `;
 

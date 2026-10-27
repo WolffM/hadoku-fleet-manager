@@ -87,6 +87,7 @@ import { landWrite, landingLine, refusalLine, writeTarget } from './lib/manifest
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { isGuestNode } from '../dist/lib/node-role.js';
+import { DEFAULT_ADMIN_USER } from '../dist/lib/node-users.js';
 import {
 	INTERFACE_PROBE,
 	chooseSshHostName,
@@ -496,7 +497,7 @@ function writeSshConfig(node, address) {
 	if (existing.includes(`# >>> fleet enroll: ${node}`)) return { state: 'already' };
 
 	// Derived from a node that already works, never invented.
-	let user = 'hadoku';
+	let user = DEFAULT_ADMIN_USER;
 	let identity = '~/.ssh/id_ed25519_hokon';
 	try {
 		const g = execFileSync('ssh', ['-G', 'claw-1'], { encoding: 'utf8' });

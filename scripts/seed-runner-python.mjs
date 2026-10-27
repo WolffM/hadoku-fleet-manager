@@ -50,11 +50,10 @@ import { loadManifest, machineArg, runOn, selectNodes } from './lib/fleet-exec.m
 /**
  * WHERE THE CACHE LIVES IS NOT THIS SCRIPT'S TO DECIDE.
  *
- * `lib/runner-toolcache.sh` states the rule once - hadoku owns
- * /opt/hostedtoolcache, openclaw needs its own under $HOME because it cannot
- * traverse /home/hadoku - and its header says it exists because the rule was
+ * `lib/runner-toolcache.sh` states the rule once - the node's ci user owns
+ * /opt/hostedtoolcache - and its header says it exists because the rule was
  * 'stated twice before, and the two copies disagreed'. This file was the third
- * copy, hardcoding the openclaw branch for every node.
+ * copy, hardcoding the (since retired) openclaw branch for every node.
  *
  * The fleet's runners all run as hadoku today; the openclaw -b pool was retired
  * on 2026-08-24. So the hardcoded path was one no runner reads, and this command
@@ -144,7 +143,7 @@ const VERSIONS = only ? [only] : DEFAULT_VERSIONS;
  * have to be right.
  */
 const ssh = (node, script) =>
-	runOn(node, script, { timeoutMs: 15 * 60_000, maxBuffer: 8 * 1024 * 1024 });
+	runOn(node, script, { as: 'ci', timeoutMs: 15 * 60_000, maxBuffer: 8 * 1024 * 1024 });
 
 function seedScript(version) {
 	const asset = `cpython-${version}+${PBS_RELEASE}-x86_64-unknown-linux-gnu-install_only.tar.gz`;

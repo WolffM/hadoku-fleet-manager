@@ -555,9 +555,7 @@ for (const [name, m] of nodes) {
 			restart: !NO_RESTART,
 			ephemeral: mintsJitRunners(m),
 		}),
-		{
-			timeoutMs: SSH_TIMEOUT_MS,
-		}
+		{ as: 'ci', timeoutMs: SSH_TIMEOUT_MS }
 	);
 	const out = (r.stdout + r.stderr).trim();
 	const summary = out.split('\n').find((l) => l.startsWith('SUMMARY')) ?? '(no summary)';

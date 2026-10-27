@@ -48,6 +48,7 @@ import { join } from 'node:path';
 import { tempDir } from './tmpdir.js';
 import { __setHostForTesting } from '../host.js';
 import { testHost } from './install-test-host.js';
+import { DEFAULT_ADMIN_USER } from '../lib/node-users.js';
 
 // ── rig ─────────────────────────────────────────────────────────────────────
 
@@ -1083,7 +1084,8 @@ test('repair: the LOCAL node runs through a local shell, never ssh-to-self', () 
 test('repair: a REMOTE node still goes over ssh, with the same command string', () => {
 	const [cmd, args] = doctorCommand('claw-2', 'bash -s -- --fix', 'hokon');
 	assert.equal(cmd, 'ssh');
-	assert.equal(args.at(-2), 'claw-2');
+	// As the ci role: claw-2's fixture names no users, so ci is the admin default.
+	assert.equal(args.at(-2), `${DEFAULT_ADMIN_USER}@claw-2`);
 	assert.equal(args.at(-1), 'bash -s -- --fix');
 });
 

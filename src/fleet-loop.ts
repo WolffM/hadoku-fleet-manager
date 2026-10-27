@@ -20,9 +20,8 @@
  * ----------
  * Per-node concurrent job count, read over SSH. NOT the GitHub API: a
  * runner's `busy` flag is per-REGISTRATION, so a claw saturated by work for one
- * repo still reports idle on the other nineteen. mgmt-api runs as `hadoku` on
- * hokon, which administers every claw since 2026-08-17; the local node is
- * probed and repaired without ssh (`probeLocal`, `doctorCommand`).
+ * repo still reports idle on the other nineteen. Every node is probed as its ci
+ * user (`src/lib/node-users.ts`); the local node without ssh (`nodeShell`).
  *
  * FAIL-OPEN, ALWAYS
  * -----------------
@@ -31,7 +30,7 @@
  * node we did not need", never "CI queued because a node was left dark".
  */
 import { execFile, spawn } from 'node:child_process';
-import { isLocalNode } from './lib/node-identity.js';
+import { nodeShell } from './node-shell.js';
 
 import { nodeReservation, getPm2HostBusy, type Reservation } from './node-reservation.js';
 import { readFileSync } from 'node:fs';
@@ -563,7 +562,8 @@ function parseProbe(stdout: string): ProbeResult | null {
 }
 
 /**
- * Probe THIS node without ssh.
+ * Probe a node, as its ci user. THIS node is probed without ssh
+ * ({@link nodeShell}'s local branch).
  *
  * mgmt-api runs on hokon, and hokon does not accept ssh to itself — sshd is not
  * listening on loopback, so `ssh hokon` is a hard `Connection refused`. That made
@@ -577,25 +577,22 @@ function parseProbe(stdout: string): ProbeResult | null {
  * reconcile-fleet-runners.mjs already had this exact special case; the fast loop
  * did not.
  */
-function probeLocal(): Promise<ProbeResult | null> {
+export async function probeNode(node: string): Promise<ProbeResult | null> {
+	let bin: string;
+	let argv: string[];
+	try {
+		// As ci: the probe reads the sick-runner marker in CI's own $HOME.
+		[bin, argv] = nodeShell(node, 'ci', PROBE_CMD);
+	} catch (err) {
+		logger.warn(
+			`[fleet-loop] cannot probe ${node}: ${err instanceof Error ? err.message : String(err)}`
+		);
+		return null;
+	}
 	return new Promise((res) => {
-		execFile('bash', ['-c', PROBE_CMD], { timeout: SSH_TIMEOUT_MS }, (err, stdout) => {
+		execFile(bin, argv, { timeout: SSH_TIMEOUT_MS }, (err, stdout) => {
 			res(err ? null : parseProbe(stdout));
 		});
-	});
-}
-
-export async function probeNode(node: string): Promise<ProbeResult | null> {
-	if (isLocalNode(node)) return probeLocal();
-	return new Promise((res) => {
-		execFile(
-			'ssh',
-			['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', node, PROBE_CMD],
-			{ timeout: SSH_TIMEOUT_MS },
-			(err, stdout) => {
-				res(err ? null : parseProbe(stdout));
-			}
-		);
 	});
 }
 
@@ -1112,7 +1109,7 @@ const DOCTOR_PATH = () => storeDoctorPath();
  * 2026-09-21 the repair always took the ssh path, so a quarantined hokon could
  * never be repaired: a marker left by an install killed mid-write on
  * 2026-09-19 kept it retired for two days while both of its stores were clean,
- * failing ~1,400 repairs with no reason logged. The probe (`probeLocal`) and
+ * failing ~1,400 repairs with no reason logged. The probe and
  * runner-supervision already special-cased the local node; this was the one
  * path that did not.
  *
@@ -1122,9 +1119,8 @@ const DOCTOR_PATH = () => storeDoctorPath();
  * way. One command string, expanded by a shell on either side.
  */
 export function doctorCommand(node: string, command: string, self?: string): [string, string[]] {
-	return isLocalNode(node, self)
-		? ['bash', ['-c', command]]
-		: ['ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', node, command]];
+	// The stores it repairs are CI's: they live under the ci user's home.
+	return nodeShell(node, 'ci', command, self);
 }
 
 /**

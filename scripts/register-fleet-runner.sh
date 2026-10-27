@@ -111,7 +111,7 @@ cd "\$RUNNER_DIR"
 chmod 600 .runner .credentials .credentials_rsaparams 2>/dev/null || true
 
 # .path so npm-global bin works for any workflow that does pnpm/wrangler/etc.
-echo "/home/hadoku/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:/usr/games" > "\$RUNNER_DIR/.path"
+echo "\$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:/usr/games" > "\$RUNNER_DIR/.path"
 
 # Clear any USER-level unit reconcile-fleet-runners.mjs left for this same
 # directory. That script supervises \$DIR via run.sh; this one supervises it via

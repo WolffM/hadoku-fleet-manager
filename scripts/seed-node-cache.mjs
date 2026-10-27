@@ -32,7 +32,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
 
-import { loadManifest, machineArg, runOn, selectNodes } from './lib/fleet-exec.mjs';
+import { loadManifest, machineArg, runOn, selectNodes, sshDestination } from './lib/fleet-exec.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
@@ -120,7 +120,7 @@ const PROBE = readFileSync(new URL('capability-probe.sh', import.meta.url), 'utf
  * unreachable box look like one needing every seed.
  */
 async function probeOf(node) {
-	const r = await runOn(node, PROBE, { timeoutMs: 180_000 });
+	const r = await runOn(node, PROBE, { as: 'ci', timeoutMs: 180_000 });
 	const caps = {};
 	for (const line of (r.out ?? '').split('\n')) {
 		const m = /^CAP\s+(\S+)\s+(\S+)/.exec(line.trim());
@@ -215,6 +215,7 @@ for (const what of wanted) {
 	for (const n of candidates) {
 		if (targets.includes(n)) continue;
 		const r = await runOn(n, `du -sk "$HOME/${spec.path}" 2>/dev/null | cut -f1`, {
+			as: 'ci',
 			timeoutMs: 60_000,
 		});
 		const kb = Number.parseInt((r.out ?? '').trim(), 10);
@@ -236,6 +237,7 @@ for (const what of wanted) {
 		let present = null;
 		if (!spec.probe) {
 			const r = await runOn(node, `test -x "$HOME/${spec.presentPath}" && echo YES || echo NO`, {
+				as: 'ci',
 				timeoutMs: 60_000,
 			});
 			present = (r.out ?? '').includes('YES') ? true : (r.out ?? '').includes('NO') ? false : null;
@@ -280,7 +282,7 @@ for (const what of wanted) {
 					'BatchMode=yes',
 					'-o',
 					'ConnectTimeout=10',
-					node,
+					sshDestination(node, 'ci'),
 					`set -e; d="$HOME/${spec.path}"; mkdir -p "$d" 2>/dev/null || { sudo -n mkdir -p "$d"; sudo -n chown -R "$USER:$USER" "$d"; }; [ -w "$d" ]`,
 				],
 				{ stdio: 'pipe', timeout: 60_000 }
@@ -300,11 +302,15 @@ for (const what of wanted) {
 			// each other and adding some for a cache copy would be a new standing
 			// permission for a one-off need.
 			const tmp = `/tmp/fleet-seed-${what}`;
-			execFileSync('rsync', ['-a', '--delete', `${source}:${spec.path}/`, `${tmp}/`], {
-				stdio: 'pipe',
-				timeout: 1_800_000,
-			});
-			execFileSync('rsync', ['-a', `${tmp}/`, `${node}:${spec.path}/`], {
+			execFileSync(
+				'rsync',
+				['-a', '--delete', `${sshDestination(source, 'ci')}:${spec.path}/`, `${tmp}/`],
+				{
+					stdio: 'pipe',
+					timeout: 1_800_000,
+				}
+			);
+			execFileSync('rsync', ['-a', `${tmp}/`, `${sshDestination(node, 'ci')}:${spec.path}/`], {
 				stdio: 'pipe',
 				timeout: 1_800_000,
 			});
@@ -324,6 +330,7 @@ for (const what of wanted) {
 			ok = Boolean(after && after[spec.probe]);
 		} else {
 			const r = await runOn(node, `test -x "$HOME/${spec.presentPath}" && echo YES || echo NO`, {
+				as: 'ci',
 				timeoutMs: 60_000,
 			});
 			ok = (r.out ?? '').includes('YES');

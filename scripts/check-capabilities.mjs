@@ -83,7 +83,7 @@ const PROBEABLE = probeableIds();
  */
 async function run(node, phase = 'all') {
 	const script = phase === 'all' ? PROBE : `export CAP_PROBE_PHASE=${phase}\n${PROBE}`;
-	const r = await runOn(node, script, { timeoutMs: 180_000 });
+	const r = await runOn(node, script, { as: 'ci', timeoutMs: 180_000 });
 	return !r.ok && !r.stdout.includes('PROBE-END') ? null : r.stdout;
 }
 

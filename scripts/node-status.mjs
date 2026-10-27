@@ -51,6 +51,7 @@ import {
 } from './lib/hosting.mjs';
 import { readRevocations } from '../dist/capability-revocations.js';
 import { readHostingDoc } from '../dist/runners/hosting-record.js';
+import { nodeUser } from '../dist/lib/node-users.js';
 import { stateDir } from './lib/paths.mjs';
 
 /** The health writer runs daily; a day and a half covers one late run and no more. */
@@ -141,7 +142,8 @@ const seen = readSeen();
 const rows = await Promise.all(
 	nodes.map(async ([name, m]) => {
 		const observedAt = iso(Date.now());
-		const r = await runOn(name, observeScript('cardtable'), {
+		const r = await runOn(name, observeScript('cardtable', nodeUser(m, 'ci')), {
+			as: 'admin',
 			timeoutMs: ANSWER_MS,
 			connectTimeout: CONNECT_S,
 		});

@@ -71,6 +71,14 @@ different things. Read it before naming anything new.
   unreachable and the true answer runs another node's script here. It had FIVE
   implementations until 2026-08-30 and only one survived an FQDN;
   `scripts/lib/node-identity-guard.test.mjs` fails the build if a sixth appears.
+- **Every command on a node acts as a ROLE: `admin` or `ci`.** Node users are
+  a first-party concept (operator, 2026-10-27). `src/lib/node-users.ts` is the
+  only place a role becomes a user name. Pass `as:` on every `runOn`/`runOnSync`,
+  use `nodeShell` in `src/`, and `sshDestination` for a hand-rolled ssh or rsync.
+  Never write a user name, `/home/<name>`, `user@1000`, or `$(id -un)` to work
+  out who a role is: until the cutover every CI job was root on its claw through
+  the one shared user. `scripts/lib/node-users-guard.test.mjs` enforces it; see
+  `docs/VOCABULARY.md` and `docs/planning/node-users-2026-10-27.md`.
 - **The reader for a facet may not read what the writer wrote.** Cgroup limits
   from `/sys/fs/cgroup/$(ControlGroup)/memory.max`, never `systemctl show`.
   Listeners from the process tree, never a `.env`. Registrations from the GitHub

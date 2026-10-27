@@ -54,7 +54,11 @@ const PROBE_TIMEOUT_MS = 120_000;
 const unreachable = (res) => res.error ?? (res.stderr.trim() || 'unreachable');
 
 async function checkNode(node, drains) {
-	const res = await runOn(node, probeScript(), { timeoutMs: PROBE_TIMEOUT_MS, connectTimeout: 8 });
+	const res = await runOn(node, probeScript(), {
+		as: 'admin',
+		timeoutMs: PROBE_TIMEOUT_MS,
+		connectTimeout: 8,
+	});
 	const parsed = res.ok ? parseProbe(res.stdout) : { ok: false, error: unreachable(res) };
 	if (!parsed.ok) {
 		const defer = deferralFor(node, drains);
@@ -94,6 +98,7 @@ async function main() {
 		for (const r of results) {
 			if (!r.ok || !r.drift.length) continue;
 			const res = await runOn(r.machine, repairScript(policy), {
+				as: 'admin',
 				timeoutMs: 60_000,
 				connectTimeout: 8,
 			});

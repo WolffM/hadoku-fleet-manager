@@ -223,7 +223,11 @@ let unitCount = 0;
 for (const [node] of machines) {
 	// runOnSync, NOT runOn: runOn returns a PROMISE, and a synchronous caller
 	// gets the string "[object Promise]" — zero installs, fleet reported clean.
-	const res = runOnSync(node, PROBE, { timeoutMs: 90_000, includeGuests: INCLUDE_GUESTS });
+	const res = runOnSync(node, PROBE, {
+		as: 'ci',
+		timeoutMs: 90_000,
+		includeGuests: INCLUDE_GUESTS,
+	});
 	if (!res.ok) {
 		if (deferralFor(node, drains).deferred) {
 			expectedDown.push(node);

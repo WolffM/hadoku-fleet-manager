@@ -34,7 +34,9 @@ const {
 	guestGate,
 	selectNodes,
 	selectMachines,
+	runOn,
 	runOnSync,
+	sshDestination,
 	LOCAL,
 	SYNC_MAX_BUFFER,
 } = await import('./fleet-exec.mjs');
@@ -386,33 +388,66 @@ test('an UNARMED call is unchanged — the default is documented debt, not a gua
 
 // ── #37: the sync transport's buffer, and a failure that says what kind ──────
 
+/** A manifest that names no users: every role is the admin default, and this box runs as-is. */
+const BARE = { machines: {} };
+
 test('runOnSync brings back 2 MiB by DEFAULT — the size that read claw-1 as unreachable', () => {
 	// Node's own default is 1 MiB. claw-1's job-metrics.jsonl was 1,136,332
 	// bytes on 2026-09-18 and `fleet job-metrics` reported the node as
 	// `spawnSync ssh ENOBUFS`. No maxBuffer is passed here: the DEFAULT is the
 	// thing under test, because that is what every caller gets.
 	const bytes = 2 * 1024 * 1024;
-	const r = runOnSync(LOCAL, `head -c ${bytes} /dev/zero | tr '\\0' x`);
+	const r = runOnSync(LOCAL, `head -c ${bytes} /dev/zero | tr '\\0' x`, { manifest: BARE });
 	assert.equal(r.ok, true, `${r.code}: ${r.error}`);
 	assert.equal(r.out.length, bytes);
 	assert.equal(SYNC_MAX_BUFFER, 64 * 1024 * 1024, 'sized for the fleet, not for one file');
 });
 
 test('a caller can still set its own ceiling, and overflowing it is ENOBUFS, not a message', () => {
-	const r = runOnSync(LOCAL, "head -c 4096 /dev/zero | tr '\\0' x", { maxBuffer: 1024 });
+	const r = runOnSync(LOCAL, "head -c 4096 /dev/zero | tr '\\0' x", {
+		maxBuffer: 1024,
+		manifest: BARE,
+	});
 	assert.equal(r.ok, false);
 	assert.equal(r.code, 'ENOBUFS', 'the errno is a field a caller can branch on');
 });
 
 test('a script that exits non-zero reports its STATUS and no errno', () => {
 	// The shape a caller needs to tell ssh's own 255 from a node-side failure.
-	const r = runOnSync(LOCAL, 'echo partial; echo why >&2; exit 3');
+	const r = runOnSync(LOCAL, 'echo partial; echo why >&2; exit 3', { manifest: BARE });
 	assert.equal(r.ok, false);
 	assert.equal(r.status, 3);
 	assert.equal(r.code, null, 'nothing failed on this side of the pipe');
 	assert.equal(r.out, 'partial\n', 'what did arrive is kept');
 	assert.match(r.error, /why/);
-	const ok = runOnSync(LOCAL, 'true');
+	const ok = runOnSync(LOCAL, 'true', { manifest: BARE });
 	assert.equal(ok.status, 0);
 	assert.equal(ok.code, null);
+});
+
+// ── node users: every call acts as a ROLE (src/lib/node-users.ts) ───────────
+
+test('a role this process cannot play locally is a failed RESULT, never a throw', () => {
+	const r = runOnSync(LOCAL, 'echo reached', {
+		as: 'ci',
+		manifest: { machines: { [LOCAL]: { users: { ci: 'nobody-ci-fixture' } } } },
+	});
+	assert.equal(r.ok, false);
+	assert.equal(r.out.includes('reached'), false, 'and it did not run as the wrong user');
+	assert.match(r.error, /cannot act as the role: .*needs nobody-ci-fixture/);
+});
+
+test('a malformed user in the manifest refuses the call instead of falling back to admin', async () => {
+	const r = await runOn(LOCAL, 'echo reached', {
+		as: 'ci',
+		manifest: { machines: { [LOCAL]: { users: { ci: 'Not A User' } } } },
+	});
+	assert.equal(r.ok, false);
+	assert.match(r.error, /users\.ci/);
+});
+
+test('sshDestination logs in as the role the node names', () => {
+	const manifest = { machines: { 'claw-5': { users: { ci: 'hadoku-ci' } } } };
+	assert.equal(sshDestination('claw-5', 'ci', manifest), 'hadoku-ci@claw-5');
+	assert.match(sshDestination('claw-5', 'admin', manifest), /^[a-z_][a-z0-9_-]*@claw-5$/);
 });

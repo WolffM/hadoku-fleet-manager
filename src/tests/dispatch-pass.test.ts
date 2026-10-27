@@ -63,7 +63,7 @@ const base = (over: Partial<DispatchPassInput> = {}): DispatchPassInput => ({
 	nodes: [node('claw-2')],
 	pending: [run(1)],
 	labelsFor: () => ['hadoku-builder'],
-	homeDir: '/home/hadoku',
+	homeDirFor: () => '/home/fixture-ci',
 	memoryMaxMbFor: () => 3000,
 	ttlSeconds: 900,
 	...over,

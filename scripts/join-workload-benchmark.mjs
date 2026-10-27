@@ -229,7 +229,7 @@ const metrics = [];
 const unreachable = [];
 const readErrors = [];
 for (const [node] of probeTargets) {
-	const read = readOutcome(node, runOnSync(node, readScript, { timeoutMs: 60_000 }));
+	const read = readOutcome(node, runOnSync(node, readScript, { as: 'ci', timeoutMs: 60_000 }));
 	if (read.read === 'unreachable') {
 		unreachable.push({ node, why: read.why });
 		continue;

@@ -208,7 +208,11 @@ if (FROM_RECORD) {
 			let r;
 			let probe;
 			for (let attempt = 1; attempt <= PROBE_ATTEMPTS; attempt++) {
-				r = await runOn(name, probeFor(name), { timeoutMs: 240_000, maxBuffer: 8 * 1024 * 1024 });
+				r = await runOn(name, probeFor(name), {
+					as: 'admin',
+					timeoutMs: 240_000,
+					maxBuffer: 8 * 1024 * 1024,
+				});
 				probe = parseDoctor(r.out);
 				if (probe.complete) break;
 			}

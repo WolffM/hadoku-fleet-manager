@@ -64,7 +64,6 @@
 import { proofDrainState } from './lib/proof-drain.mjs';
 import { execFile } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import process from 'node:process';
 
 import { loadManifest, runOn, unconsumedArgs } from './lib/fleet-exec.mjs';
@@ -74,6 +73,7 @@ import { createEmitter } from './lib/emit.mjs';
 import { recordProof } from './lib/job-proof-record.mjs';
 import { guestPostCheck, proofShell } from './lib/prove-job-guest.mjs';
 import { installCliHost } from '../dist/host.js';
+import { nodeHome } from '../dist/lib/node-users.js';
 import { isGuestNode } from '../dist/lib/node-role.js';
 import { capability, workloadGatedCapabilities } from '../dist/capabilities.js';
 import { buildProofRecord, proveJob, specFromCapability } from '../dist/runners/prove-job.js';
@@ -321,14 +321,14 @@ for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
 // See lib/prove-job-guest.mjs for why `--include-guests` would otherwise open it.
 // The call stays spelled out HERE, where the ssh-ing-script guards read for it.
 const shell = proofShell({
-	runOn: (node, cmd, opts) => runOn(node, cmd, opts),
+	runOn: (node, cmd, opts) => runOn(node, cmd, { ...opts, as: 'ci' }),
 	isGuest: (n) => isGuestNode(manifest.machines?.[n]),
 });
 const result = await proveJob(spec, {
 	gh: ports,
 	sh: shell.sh,
-	// The fleet runs one user on every node (`ephemeral-tick` assumes it the same way).
-	homeDir: homedir(),
+	// The node's ci user's home, where its slots live; never this box's own.
+	homeDir: nodeHome(manifest.machines?.[spec.node], 'ci'),
 	node: nodeEntry,
 	drained: drainState.drained,
 	now: () => Date.now(),

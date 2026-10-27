@@ -44,6 +44,7 @@ import { HOSTING_NOTICE_MS, noticeRefusal, parseWhen } from '../dist/runners/dra
 import { hostingOn, readHostingDoc, writeHostingDoc } from '../dist/runners/hosting-record.js';
 import { stateDir } from './lib/paths.mjs';
 import { isGuestNode } from '../dist/lib/node-role.js';
+import { nodeUser } from '../dist/lib/node-users.js';
 import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
@@ -195,7 +196,10 @@ function controllerIp() {
  */
 async function controllerAddrs() {
 	const lan = controllerIp();
-	const r = await runOn(CONTROLLER_NODE, 'tailscale ip -4; tailscale ip -6', { timeoutMs: 15_000 });
+	const r = await runOn(CONTROLLER_NODE, 'tailscale ip -4; tailscale ip -6', {
+		as: 'admin',
+		timeoutMs: 15_000,
+	});
 	const ips = r.stdout.split('\n').map((l) => l.trim());
 	const tailnet4 = ips.find((l) => /^\d+\.\d+\.\d+\.\d+$/.test(l)) ?? null;
 	const tailnet6 = ips.find((l) => l.includes(':')) ?? null;
@@ -209,7 +213,11 @@ async function controllerAddrs() {
 }
 
 async function observe(name, tenant) {
-	const r = await runOn(name, observeScript(tenant), { timeoutMs: 30_000, connectTimeout: 6 });
+	const r = await runOn(name, observeScript(tenant, nodeUser(manifest.machines?.[name], 'ci')), {
+		as: 'admin',
+		timeoutMs: 30_000,
+		connectTimeout: 6,
+	});
 	return { obs: parseObserved(r.stdout), error: r.ok ? null : (r.error ?? r.stderr.trim()) };
 }
 
@@ -304,6 +312,7 @@ if (action === 'install') {
 	const local = createHash('sha256').update(bytes).digest('hex');
 	if (local !== want) refuse(`${path} hashes to ${local} here, not ${want}; nothing was sent.`);
 	const r = await runOn(node, installScript(tenant, bytes.toString('base64'), want), {
+		as: 'admin',
 		timeoutMs: 120_000,
 	});
 	if (!r.stdout.includes('INSTALL-OK')) {
@@ -316,7 +325,7 @@ if (action === 'install') {
 
 if (action === 'restart') {
 	if (!TENANTS[recordTenant]) refuse(`${node} is not hosting.`);
-	const r = await runOn(node, restartScript(recordTenant), { timeoutMs: 60_000 });
+	const r = await runOn(node, restartScript(recordTenant), { as: 'admin', timeoutMs: 60_000 });
 	const m = /RESTARTED (\d+)/.exec(r.stdout);
 	if (!m) refuse(`restart on ${node} did not finish: ${r.error ?? r.stderr.trim()}`);
 	say(`✓ ${TENANTS[recordTenant].service} on ${node} restarted (pid ${m[1]}).`);
@@ -331,9 +340,7 @@ if (action === 'ci-shaped') {
 	const r = await runOn(
 		node,
 		ciShapedScript(tail.join(' '), { memoryMaxMb, wait: has('--wait') }),
-		{
-			timeoutMs: has('--wait') ? 6 * 3_600_000 : 60_000,
-		}
+		{ as: 'ci', timeoutMs: has('--wait') ? 6 * 3_600_000 : 60_000 }
 	);
 	const m = /CI-SHAPED (\S+)/.exec(r.stdout);
 	if (!m) refuse(`could not start a CI-shaped unit on ${node}: ${r.error ?? r.stderr.trim()}`);
@@ -389,7 +396,10 @@ if (action === 'remove') {
 	}
 	const tenant = recordTenant ?? valueOf('--tenant');
 	if (!TENANTS[tenant]) refuse(`which tenant? Pass --tenant (${Object.keys(TENANTS).join(', ')}).`);
-	const r = await runOn(node, removeScript(tenant, controllerIp()), { timeoutMs: 60_000 });
+	const r = await runOn(node, removeScript(tenant, controllerIp()), {
+		as: 'admin',
+		timeoutMs: 60_000,
+	});
 	if (!r.stdout.includes('HOSTING-REMOVED')) {
 		refuse(
 			`teardown on ${node} did not finish: ${r.error ?? r.stderr.trim()}. The record is kept.`
@@ -466,6 +476,7 @@ if (shared) {
 const admissionFrom = new Date(NOW + 15_000).toISOString();
 
 const r = await runOn(node, deployScript(tenant, resources, controller, { shared }), {
+	as: 'admin',
 	timeoutMs: 120_000,
 });
 if (!r.stdout.includes('HOSTING-DEPLOYED')) {

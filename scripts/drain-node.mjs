@@ -57,7 +57,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { manifest, stateDir } from './lib/paths.mjs';
-import { isLocalNode } from './lib/fleet-exec.mjs';
+import { isLocalNode, sshDestination } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { guestNodeNames, isGuestNode } from '../dist/lib/node-role.js';
@@ -188,10 +188,22 @@ function busyOn(node) {
 	try {
 		const out = isLocalNode(node)
 			? execFileSync('bash', ['-c', PROBE], { encoding: 'utf8', timeout: 20000 })
-			: execFileSync('ssh', ['-n', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=6', node, PROBE], {
-					encoding: 'utf8',
-					timeout: 20000,
-				});
+			: execFileSync(
+					'ssh',
+					[
+						'-n',
+						'-o',
+						'BatchMode=yes',
+						'-o',
+						'ConnectTimeout=6',
+						sshDestination(node, 'admin'),
+						PROBE,
+					],
+					{
+						encoding: 'utf8',
+						timeout: 20000,
+					}
+				);
 		const n = parseInt(String(out).trim().split('\n')[0], 10);
 		return Number.isFinite(n) ? n : null;
 	} catch {

@@ -51,7 +51,7 @@
  * run, in the same shape runner-health's alerts already use.
  */
 import { execFile } from 'node:child_process';
-import { isLocalNode } from './lib/node-identity.js';
+import { nodeShell } from './node-shell.js';
 
 import { logger } from './host.js';
 import { loadFleetNodeNames, loadGuestNodes } from './fleet-loop.js';
@@ -286,9 +286,17 @@ export function classify(node: string, rows: ListenerRow[]): SupervisionProblem[
 export async function probeSupervision(
 	node: string
 ): Promise<{ listeners: number; rows: ListenerRow[]; problems: SupervisionProblem[] } | null> {
-	const [cmd, args] = isLocalNode(node)
-		? (['bash', ['-c', PROBE]] as const)
-		: (['ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', node, PROBE]] as const);
+	let cmd: string;
+	let args: string[];
+	try {
+		// As ci: the listeners are CI's units, in its own manager.
+		[cmd, args] = nodeShell(node, 'ci', PROBE);
+	} catch (err) {
+		logger.warn(
+			`[supervision] cannot reach ${node} as ci: ${err instanceof Error ? err.message : String(err)}`
+		);
+		return null;
+	}
 
 	const stdout = await new Promise<string | null>((res) => {
 		execFile(cmd, [...args], { timeout: SSH_TIMEOUT_MS }, (err, out) =>

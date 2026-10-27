@@ -319,7 +319,7 @@ void test('clean-runner-debris: expected-down deferral, expiry, and a reachable 
 	const NODE = 'fixture-claw';
 	const SSH_SHIM = `#!/usr/bin/env bash
 cat > /dev/null
-node="\${5:-}"
+node="\${5##*@}"
 if [ "$node" = "\${SSH_FAIL_NODE:-}" ]; then
   echo "ssh: connect to host $node port 22: No route to host" >&2
   exit 255
@@ -404,7 +404,7 @@ esac
 `;
 	const SSH_SHIM = `#!/usr/bin/env bash
 cat > /dev/null
-node="\${5:-}"
+node="\${5##*@}"
 if [ "$node" = "\${SSH_FAIL_NODE:-}" ]; then
   echo "ssh: connect to host $node port 22: No route to host" >&2
   exit 255
@@ -470,7 +470,7 @@ void test('check-tool-inventory: expected-down deferral, expiry, and training ne
 	const NODE = 'fixture-claw';
 	const SSH_SHIM = `#!/usr/bin/env bash
 cat > /dev/null
-node="\${5:-}"
+node="\${5##*@}"
 if [ "$node" = "\${SSH_FAIL_NODE:-}" ]; then
   echo "ssh: connect to host $node port 22: No route to host" >&2
   exit 255
@@ -573,7 +573,7 @@ void test('check-warm-canary: ANY drain row removes candidacy — never sshed, w
 	// contacted at all, not merely that its failure was forgiven.
 	const SSH_SHIM = `#!/usr/bin/env bash
 script="$(cat)"
-node="\${5:-}"
+node="\${5##*@}"
 printf '%s\\n' "$node" >> "$SSH_LOG"
 if [ "$node" = "\${SSH_FAIL_NODE:-}" ]; then
   echo "ssh: connect to host $node port 22: No route to host" >&2
@@ -656,7 +656,7 @@ void test('check-warm-canary: a training-drained node must not drag a healthy ca
 	const REPO = 'WolffM/fixture-alpha';
 	const SSH_SHIM = `#!/usr/bin/env bash
 script="$(cat)"
-node="\${5:-}"
+node="\${5##*@}"
 printf '%s\\n' "$node" >> "$SSH_LOG"
 if echo "$script" | grep -q "Mem:"; then
   echo "16384"
@@ -739,7 +739,7 @@ esac
 `;
 	const SSH_SHIM = `#!/usr/bin/env bash
 cat > /dev/null
-echo "PROBE-END \${5:-} 0 0"
+echo "PROBE-END \${5##*@} 0 0"
 `;
 
 	function fixture({ drain = null } = {}) {
@@ -825,7 +825,7 @@ void test('check-runner-units: expected-down deferral, expiry, and a reachable d
 	const NODE = 'fixture-claw';
 	const SSH_SHIM = `#!/usr/bin/env bash
 cat > /dev/null
-node="\${5:-}"
+node="\${5##*@}"
 if [ "$node" = "\${SSH_FAIL_NODE:-}" ]; then
   echo "ssh: connect to host $node port 22: No route to host" >&2
   exit 255
@@ -911,7 +911,7 @@ void test('collect-job-metrics: expected-down deferral, expiry, and a read-error
 	const READ_END = '#job-metrics-read-end';
 	const SSH_SHIM = `#!/usr/bin/env bash
 cat > /dev/null
-node="\${5:-}"
+node="\${5##*@}"
 if [ "$node" = "\${SSH_FAIL_NODE:-}" ]; then
   echo "ssh: connect to host $node port 22: No route to host" >&2
   exit 255

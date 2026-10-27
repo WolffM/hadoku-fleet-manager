@@ -133,7 +133,7 @@ export const TOLERANCE_MINUTES = 3 * 24 * 60;
  * the fast loop read hokon as permanently saturated for weeks.
  */
 function onNode(node, script, { timeoutMs = 300_000 } = {}) {
-	return runOnSync(node, script, { timeoutMs, connectTimeout: 8 });
+	return runOnSync(node, script, { as: 'ci', timeoutMs, connectTimeout: 8 });
 }
 
 /** Single-quote a string for the shell. */

@@ -317,7 +317,11 @@ const NEVER_WRITTEN = new Set(
  */
 async function probe(node, phase = 'all') {
 	const script = phase === 'all' ? PROBE : `export CAP_PROBE_PHASE=${phase}\n${PROBE}`;
-	const r = await runOn(node, script, { timeoutMs: 180_000, includeGuests: checkOnly.has(node) });
+	const r = await runOn(node, script, {
+		as: 'ci',
+		timeoutMs: 180_000,
+		includeGuests: checkOnly.has(node),
+	});
 	if (!r.ok && !r.stdout.includes('PROBE-END')) return null;
 	const caps = {};
 	for (const line of r.stdout.split('\n')) {
@@ -448,7 +452,7 @@ async function ensureTools(name, m) {
 		if (!tool.when) continue;
 		// `true` makes an ABSENT tool exit 0, so a non-ok result means the node did
 		// not answer — which is the probe's to report, not a reason to install.
-		const detect = () => runOn(name, `${tool.detect}\ntrue`, { timeoutMs: 60_000 });
+		const detect = () => runOn(name, `${tool.detect}\ntrue`, { as: 'ci', timeoutMs: 60_000 });
 		const has = (r) => r.ok && /^OK$/m.test(r.stdout);
 		const before = await detect();
 		if (!before.ok) continue;
@@ -469,7 +473,7 @@ async function ensureTools(name, m) {
 			}
 			version = resolved.version;
 		}
-		const ran = await runOn(name, installScript(id, version), { timeoutMs: 600_000 });
+		const ran = await runOn(name, installScript(id, version), { as: 'admin', timeoutMs: 600_000 });
 		if (!ran.ok) {
 			results.push({ id, action: 'failed', detail: `install failed: ${reasonOf(ran)}` });
 			continue;

@@ -448,17 +448,17 @@ export function ciShapedScript(
  * The OBSERVATION. One ssh, every fact from the place the kernel keeps it.
  * `KEY=value` lines between markers so a truncated answer is detectable.
  * Cgroup values from `/sys/fs/cgroup`, identities and scores from `/proc`,
- * modes from `stat`. Nothing from a unit file.
+ * modes from `stat`. Nothing from a unit file. `ciUser` is the node's ci
+ * role (`nodeUser(machine, 'ci')`), never inferred from who logged in.
  */
-export function observeScript(tenantName) {
+export function observeScript(tenantName, ciUser) {
 	const t = TENANTS[tenantName] ?? TENANTS.cardtable;
 	return `${assign({
 		...tenantVars(t, tenantName),
+		CI_USER: ciUser,
 		SLICE_CG: hostingSliceCgroup(tenantName),
 		PARENT_CG: `/${HOSTING_PARENT_SLICE}`,
 	})}
-# The CI user is the one this ssh runs as: it owns every runner on the box.
-CI_USER=$(id -un)
 r() { cat "$1" 2>/dev/null; }
 echo OBSERVE-BEGIN
 echo "memTotalMb=$(awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo)"
@@ -646,7 +646,7 @@ export function peerCandidates(manifest, node) {
 export async function probeReach({ port, addrs, peers, run }) {
 	const targets = Object.fromEntries(Object.entries(addrs).filter(([, a]) => a));
 	const script = portProbeScript(targets, port);
-	const opts = { timeoutMs: 30_000, connectTimeout: 6 };
+	const opts = { as: 'admin', timeoutMs: 30_000, connectTimeout: 6 };
 	const controller = parsePortProbe((await run(CONTROLLER_NODE, script, opts)).stdout);
 	let peer = null;
 	for (const name of peers.slice(0, PEER_TRIES)) {

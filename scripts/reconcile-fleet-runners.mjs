@@ -905,7 +905,7 @@ function readJobReserves(manifest, repos, previousByRepo = {}) {
 	const rows = [];
 	const unreadable = [];
 	for (const [node] of nodes) {
-		const read = readOutcome(node, runOnSync(node, readScript, { timeoutMs: 60_000 }));
+		const read = readOutcome(node, runOnSync(node, readScript, { as: 'ci', timeoutMs: 60_000 }));
 		if (read.read !== 'ok') {
 			unreadable.push({
 				node,
@@ -1224,6 +1224,7 @@ const INCLUDE_GUESTS = true;
  */
 async function ssh(claw, script) {
 	const r = await runOn(claw, script, {
+		as: 'admin',
 		timeoutMs: 15 * 60_000,
 		maxBuffer: 8 * 1024 * 1024,
 		includeGuests: INCLUDE_GUESTS,

@@ -218,10 +218,10 @@
 # here: "I could not look" must refuse to BUILD a finding, not invent one.
 set -u
 
-# $HOME, not a hardcoded /home/hadoku. The hook runs AS the runner's user, and
-# /home/hadoku is mode 0700 — so a runner owned by any other user (the retired
-# `-b` pool ran as openclaw, and runner-toolcache.sh still branches on it) could
-# not read the config at all. It would then fall through to the permissive
+# $HOME, not a hardcoded admin home. The hook runs AS the runner's user (the
+# node's ci role, src/lib/node-users.ts), and another user's home may be 0700 —
+# so a runner owned by any other user (the retired `-b` pool ran as openclaw)
+# could not read the config at all. It would then fall through to the permissive
 # defaults below: MAX_CONCURRENT=99 and MIN_FREE_MB=0, i.e. NO LIMIT, silently —
 # an unreadable config is uncertainty, and this hook only ever refuses a job on
 # a CONFIRMED breach of an intentional limit, never on not knowing what the
