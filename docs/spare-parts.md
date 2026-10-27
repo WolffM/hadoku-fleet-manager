@@ -5,15 +5,13 @@ what the fleet measurably needs. A part leaves the shelf when it is INSTALLED
 and the node's `fleet benchmark --write` / `fleet bootcamp --write` has
 re-measured it — not when someone decides where it goes.
 
-## Shelf — lives in the parts database, not here
+## Shelf — lives in the private repo, not here
 
-Every physical part, installed or loose, is one document in the `parts`
-collection of the operator's private Fleet Inventory page.
-
-`location` is `shelf` or a node name, `slot` is where in the node. Edit a row
-on the page (a move appends to that part's `history`), or query it:
-`ArtifactData query parts where location == shelf`. Soldered parts (claw-2 and
-claw-3 RAM, laptop GPUs) are not in it; claw-8 and hokon are not seeded yet.
+Every physical part, installed or loose, is one row in
+`docs/planning/inventory/parts.json` in `WolffM/hadoku-fleet-manager-private`
+(at the same path here once `scripts/attach-private.sh` has run). `location`
+is `shelf` or a node name, `slot` is where in the node. The claws' rows were
+read with dmidecode/lsblk/lspci on 2026-10-27; hokon is not read yet.
 
 ## Slots — read 2026-09-18 with dmidecode / lsblk / lspci
 
