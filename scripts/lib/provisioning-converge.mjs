@@ -92,7 +92,7 @@ export function sliceDriftUnits(result) {
  * check: `scriptDrift` from the throttle driver, plus `standing.env` when it
  * is absent or stale. `throttle --confirm` redeploys all of them, atomically
  * (ci-throttle-install.sh's put_b64), so a running hook is never truncated.
- * This is how a fixed jit-provision.sh reaches the nodes without anyone running
+ * This is how a fixed ci-throttle.sh reaches the nodes without anyone running
  * the deploy by hand. The package the controller runs is the reference, as it
  * is for the nightly check; a node hand-deployed AHEAD of it is put back.
  */

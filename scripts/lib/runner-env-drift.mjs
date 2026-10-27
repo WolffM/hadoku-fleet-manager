@@ -97,7 +97,7 @@ export function staleRemainingFindings({ name, staleRemaining, notes }) {
  * of deploy-ci-throttle.mjs for the same reason as the two above.
  *
  * EVERY RULE REQUIRES THE GOOD VALUE. Until #98's mutation pass these tested
- * for the BAD one — `/conf=0/`, `/harvest=0/`, `/jit=0/` — so a token that was
+ * for the BAD one — `/conf=0/`, `/harvest=0/`, `/payload=0/` — so a token that was
  * missing, empty or garbage matched none of them and the node passed. A node
  * half that crashed between two echoes, or a SUMMARY that lost a token to a
  * rename, read as a clean node. Now `1` passes, `0` is the finding it always
@@ -195,21 +195,14 @@ export function throttleSummaryDrift({ name, m, kv, wantConfSha }) {
 	// `mintsJitRunners`, not `ephemeral === true`: an on-demand guest (#120) is
 	// minted for exactly like a claw and fails at step one exactly the same way.
 	if (mintsJitRunners(m)) {
-		// An ephemeral node with no provisioner fails EVERY mint at step one, and
-		// the dispatcher reports that as a mint failure on a healthy-looking box.
-		if (kv.jit === '0') {
+		// The provisioner travels with each mint (src/runners/node-script.ts), so
+		// the payload is the one thing a minting node must already hold. It is
+		// self-healing (jit-provision.sh fetches a release when the caller
+		// supplies RUNNER_TARBALL_URL), so this is drift rather than a hard
+		// failure.
+		if (kv.payload === '0') {
 			findings.push(
-				`${name}: declares ephemeral but has no ~/.hadoku/jit-provision.sh — every mint would fail`
-			);
-		} else if (kv.jit !== '1') {
-			unread('jit', 'whether the JIT provisioner is installed');
-		} else if (kv.payload === '0') {
-			// The provisioner being present is not the same as the node being able
-			// to mint. A payload is self-healing (jit-provision.sh fetches a release
-			// when the caller supplies RUNNER_TARBALL_URL), so this is drift rather
-			// than a hard failure.
-			findings.push(
-				`${name}: declares ephemeral and has the provisioner, but NO JIT payload ` +
+				`${name}: declares ephemeral but has NO JIT payload ` +
 					`(~/.hadoku/jit/payload/bin/Runner.Listener). Its next mint must bootstrap one ` +
 					`from a runner release; if that URL cannot be resolved every mint fails at step one`
 			);

@@ -49,7 +49,6 @@ import {
 	isRunnerBusy,
 	mintWarmListener,
 	__resetTarballCacheForTesting,
-	__resetWarmProvisionScriptCacheForTesting,
 } from '../runners/ephemeral-exec.js';
 import {
 	admissionVerdictsForReport,
@@ -543,7 +542,7 @@ test('the warm spawn plan has no RuntimeMaxSec and no jitconfig — it must outl
 function warmHarness(over: { prov?: string | null; spawn?: string | null; regOk?: boolean } = {}) {
 	const calls: string[] = [];
 	const sh = async (_node: string, cmd: string): Promise<string | null> => {
-		if (cmd.includes('.warm-provision.sh')) {
+		if (cmd.includes('warm-provision.sh')) {
 			calls.push('provision');
 			return over.prov === undefined
 				? 'WARM-READY /home/hadoku/.hadoku/warm/listener 2.336.0'
@@ -640,7 +639,7 @@ test('mintWarmListener: labels are self-hosted plus what the node EARNED — nev
 	// that produced the canary failures.
 	await mintWarmListener({ ...WARM_REQ, labels: ['hadoku-builder', ...forbidden] }, 'tok', gh, spy);
 	const labels =
-		/LABELS='([^']*)'/.exec(seen.find((c) => c.includes('.warm-provision.sh')) ?? '')?.[1] ?? '';
+		/LABELS='([^']*)'/.exec(seen.find((c) => c.includes('warm-provision.sh')) ?? '')?.[1] ?? '';
 	const sent = labels.split(',');
 	assert.ok(sent.includes('self-hosted'), `self-hosted is missing: ${labels}`);
 	assert.ok(sent.includes('hadoku-builder'), `the earned consumer label is missing: ${labels}`);
@@ -783,7 +782,6 @@ beforeEach(() => {
 	__resetJobHistoryForTesting();
 	__setHistoryPathForTesting(join(tmp, 'job-history.jsonl'));
 	__resetWarmCacheClockForTesting();
-	__resetWarmProvisionScriptCacheForTesting();
 	__resetWarmBackoffForTesting();
 	// Module-global and memoised for a DAY, so one test resolving it would
 	// otherwise decide what every later test in this file sees.
@@ -997,7 +995,7 @@ interface NodeSim {
 	 * eligible (16 GB-class) so tests that are not exercising eligibility
 	 * itself do not have to think about it. */
 	installedMb?: number;
-	/** When set, every `.warm-provision.sh` fill on this node fails with this
+	/** When set, every `warm-provision.sh` fill on this node fails with this
 	 * reason instead of succeeding — for the backoff tests. */
 	provisionFails?: string;
 	/** #101: free MB this sim reports for `/tmp` and for `~/.hadoku/jit`, off
@@ -1047,7 +1045,7 @@ function simShell(sims: Record<string, NodeSim>) {
 			// elements, which with this newline present is `[tmp, work, '']`.
 			return `${freeLine}\n${tmp}\n${work}\n`;
 		}
-		if (cmd.includes('.warm-provision.sh')) {
+		if (cmd.includes('warm-provision.sh')) {
 			if (s.provisionFails) return `WARM-FAIL ${s.provisionFails}`;
 			const repo = /REPO='([^']*)'/.exec(cmd)?.[1] ?? '';
 			s.marker = `${repo} 1000`;
@@ -1182,7 +1180,7 @@ async function fillAndReadLabels(
 		'the fixture itself is only meaningful if the fill actually happened'
 	);
 	const labels =
-		/LABELS='([^']*)'/.exec(seen.find((c) => c.includes('.warm-provision.sh')) ?? '')?.[1] ?? '';
+		/LABELS='([^']*)'/.exec(seen.find((c) => c.includes('warm-provision.sh')) ?? '')?.[1] ?? '';
 	return labels.split(',').filter(Boolean);
 }
 
@@ -1278,7 +1276,7 @@ test('dispatchWarmCache: an IDLE listener registered with jdk21 is ROTATED once 
 	// `gh.mintedLabels` is the EPHEMERAL/JIT mint's own capture
 	// (`generate-jitconfig`'s body) — a warm listener never calls that
 	// endpoint at all, so the re-mint's labels can only be read the way
-	// `fillAndReadLabels` above reads them: off the `.warm-provision.sh`
+	// `fillAndReadLabels` above reads them: off the `warm-provision.sh`
 	// shell command's own `LABELS='...'`.
 	const seen: string[] = [];
 	const sh = async (n: string, cmd: string) => {
@@ -1305,7 +1303,7 @@ test('dispatchWarmCache: an IDLE listener registered with jdk21 is ROTATED once 
 	assert.equal(res.rotated, 1, JSON.stringify(res));
 	assert.equal(res.kept, 0, JSON.stringify(res));
 	const labels =
-		/LABELS='([^']*)'/.exec(seen.find((c) => c.includes('.warm-provision.sh')) ?? '')?.[1] ?? '';
+		/LABELS='([^']*)'/.exec(seen.find((c) => c.includes('warm-provision.sh')) ?? '')?.[1] ?? '';
 	const sent = labels.split(',');
 	assert.ok(!sent.includes('jdk21'), `re-mint must drop jdk21: ${labels}`);
 	assert.ok(
@@ -2200,7 +2198,7 @@ test('a warm fill carries RUNNER_TARBALL_URL — the fallback was hard-coded nul
 	const gh = ghWithDownloads({});
 	const res = await dispatchWarmCache(baseInput(), 'tok', gh, sh, T0);
 	assert.equal(res.filled, 1);
-	const prov = seen.find((c) => c.includes('.warm-provision.sh'));
+	const prov = seen.find((c) => c.includes('warm-provision.sh'));
 	assert.ok(prov, 'nothing provisioned');
 	// linux/x64, not whatever came first — an osx-arm64 tarball unpacks fine
 	// and then fails at `Runner.Listener --version`.

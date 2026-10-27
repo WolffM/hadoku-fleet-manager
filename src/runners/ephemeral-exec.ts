@@ -7,10 +7,6 @@
  * way `setTierEligibility` takes `gh`, so the ORDER of operations — which is
  * where the leaks and the clobbers live — is testable without a node.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { IMPLICIT_LABELS, ephemeralOnlyLabels } from '../capabilities.js';
 import { logger } from '../host.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
@@ -26,6 +22,7 @@ import {
 	warmSlotDir,
 	type AdmissionResult,
 } from './ephemeral.js';
+import { nodeScriptCommand } from './node-script.js';
 
 export interface GhLike {
 	write: (
@@ -167,10 +164,13 @@ export async function mintEphemeralRunner(
 	// value with a space or a backtick in it would otherwise be command
 	// injection into a root-capable box.
 	const tarball = req.tarballUrl ? ` RUNNER_TARBALL_URL='${shellSingleQuote(req.tarballUrl)}'` : '';
-	const prov = await sh(
-		req.node,
-		`SLOT=${req.slotIndex} RESET=1${tarball} bash ~/.hadoku/jit-provision.sh`
-	);
+	let provision: string;
+	try {
+		provision = nodeScriptCommand('jit-provision.sh', `SLOT=${req.slotIndex} RESET=1${tarball}`);
+	} catch (err) {
+		return { ok: false, reason: `could not read jit-provision.sh: ${(err as Error).message}` };
+	}
+	const prov = await sh(req.node, provision);
 	if (!prov || !prov.includes('SLOT-READY')) {
 		return { ok: false, reason: `slot ${req.slotIndex}: ${prov?.trim() || 'unreachable'}` };
 	}
@@ -418,46 +418,6 @@ export async function retireStrandedJit(
 
 // --- warm cache of one (P4.1) -------------------------------------------
 
-/**
- * The warm-provision script's own text, read from THIS package rather than
- * from a copy pre-deployed onto the node.
- *
- * jit-provision.sh is deployed by `scripts/deploy-ci-throttle.mjs` — a
- * different lane's file (WS-A provenance) — which base64-embeds it into
- * `ci-throttle-install.sh`. Wiring warm-provision.sh into that same pipeline
- * needs a change there, out of scope for this lane. So the warm construction
- * path takes the SEPARATE path the brief asked for in the fullest sense: it
- * carries its own script inline on every mint (see {@link mintWarmListener})
- * rather than depending on a deploy step that has not run yet — an
- * `ephemeral: true` node the JIT deploy pipeline has never reached can still
- * host a warm listener the first time this code asks it to.
- *
- * Memoised because the file never changes within one process's lifetime; a
- * fresh read costs nothing on the rare mint, but there is no reason to stat
- * the disk on every tick either.
- */
-let warmProvisionScript: string | null = null;
-
-export function __resetWarmProvisionScriptCacheForTesting(): void {
-	warmProvisionScript = null;
-}
-
-function loadWarmProvisionScript(): string {
-	if (warmProvisionScript !== null) return warmProvisionScript;
-	// dist/runners/ephemeral-exec.js -> dist -> package root -> scripts/. Same
-	// two-level-up shape src/cli.ts uses to find its own SCRIPTS dir, adjusted
-	// for this file living one directory deeper.
-	const path = resolve(
-		dirname(fileURLToPath(import.meta.url)),
-		'..',
-		'..',
-		'scripts',
-		'warm-provision.sh'
-	);
-	warmProvisionScript = readFileSync(path, 'utf8');
-	return warmProvisionScript;
-}
-
 export interface WarmMintRequest {
 	node: string;
 	repo: string;
@@ -506,24 +466,21 @@ export async function mintWarmListener(
 		};
 	}
 
-	// 2. Provision + register on the node. See loadWarmProvisionScript for why
-	// the script travels with this call instead of living on the node already.
-	let script: string;
+	// 2. Provision + register on the node. The script travels with this call;
+	// see node-script.ts.
+	const url = `https://github.com/${req.repo}`;
+	const tarball = req.tarballUrl ? ` RUNNER_TARBALL_URL='${shellSingleQuote(req.tarballUrl)}'` : '';
+	let cmd: string;
 	try {
-		script = loadWarmProvisionScript();
+		cmd = nodeScriptCommand(
+			'warm-provision.sh',
+			`RESET=1 URL='${shellSingleQuote(url)}' REPO='${shellSingleQuote(req.repo)}' ` +
+				`REG_TOKEN='${shellSingleQuote(regToken)}' NAME='${shellSingleQuote(req.runnerName)}' ` +
+				`LABELS='${shellSingleQuote(warmLabels(req.labels).join(','))}'${tarball}`
+		);
 	} catch (err) {
 		return { ok: false, reason: `could not read warm-provision.sh: ${(err as Error).message}` };
 	}
-	const scriptB64 = Buffer.from(script, 'utf8').toString('base64');
-	const url = `https://github.com/${req.repo}`;
-	const tarball = req.tarballUrl ? ` RUNNER_TARBALL_URL='${shellSingleQuote(req.tarballUrl)}'` : '';
-	const dest = '$HOME/.hadoku/.warm-provision.sh';
-	const cmd =
-		`mkdir -p "$HOME/.hadoku" && printf %s '${scriptB64}' | base64 -d > ${dest} && ` +
-		`RESET=1 URL='${shellSingleQuote(url)}' REPO='${shellSingleQuote(req.repo)}' ` +
-		`REG_TOKEN='${shellSingleQuote(regToken)}' NAME='${shellSingleQuote(req.runnerName)}' ` +
-		`LABELS='${shellSingleQuote(warmLabels(req.labels).join(','))}'${tarball} bash ${dest}; ` +
-		`rm -f ${dest}`;
 	const prov = await sh(req.node, cmd);
 	if (!prov || !prov.includes('WARM-READY')) {
 		return { ok: false, reason: `warm slot: ${prov?.trim() || 'unreachable'}` };

@@ -717,7 +717,7 @@ void test('deploy-ci-throttle.mjs: the stale/NOT-LOADED text names --confirm for
 // --- throttleSummaryDrift (#98): every rule requires the GOOD value --------
 //
 // The mutation pass found these rules testing for the BAD token (`/conf=0/`,
-// `/harvest=0/`, `/jit=0/`), so a SUMMARY that lost a token passed, and the
+// `/harvest=0/`, `/payload=0/`), so a SUMMARY that lost a token passed, and the
 // conf was judged by the PRESENCE of a MAX_CONCURRENT line, not its value.
 
 const CLAW = { maxConcurrent: 3, minFreeMb: 2048, ephemeral: true };
@@ -725,7 +725,7 @@ const CONF_SHA = 'a'.repeat(64);
 const HEALTHY =
 	'SUMMARY conf=1 conf_max=3 conf_minfree=2048 confsha=' +
 	CONF_SHA +
-	' jit=1 payload=1 wired=4 newly=0 stale=0 stale_remaining=0 nolistener=0 harvest=1' +
+	' payload=1 wired=4 newly=0 stale=0 stale_remaining=0 nolistener=0 harvest=1' +
 	' jobtmpseen=2 jobtmpbad=0 jobtmpunread=0';
 
 /** `HEALTHY` with one token replaced (`value === null` drops it entirely). */
@@ -754,7 +754,6 @@ void test('throttleSummaryDrift: no SUMMARY at all is a finding, not a pass', ()
 for (const token of [
 	'conf',
 	'harvest',
-	'jit',
 	'payload',
 	'newly',
 	'stale',
@@ -776,7 +775,6 @@ for (const token of [
 void test('throttleSummaryDrift: the bad values keep their own findings', () => {
 	assert.match(summaryDrift(withToken('conf', '0')).join('\n'), /cannot load its config/);
 	assert.match(summaryDrift(withToken('harvest', '0')).join('\n'), /harvester unit is not active/);
-	assert.match(summaryDrift(withToken('jit', '0')).join('\n'), /no ~\/\.hadoku\/jit-provision\.sh/);
 	assert.match(summaryDrift(withToken('payload', '0')).join('\n'), /NO JIT payload/);
 });
 
@@ -793,10 +791,10 @@ void test('throttleSummaryDrift: a live job on RAM, or one whose temp could not 
 	assert.deepEqual(summaryDrift(withToken('jobtmpseen', '0')), []);
 });
 
-void test('throttleSummaryDrift: jit/payload are not judged on a non-ephemeral node', () => {
+void test('throttleSummaryDrift: the payload is not judged on a non-ephemeral node', () => {
 	const m = { ...CLAW, ephemeral: false };
-	assert.deepEqual(summaryDrift(withToken('jit', null), m), []);
-	assert.deepEqual(summaryDrift(withToken('jit', '0'), m), []);
+	assert.deepEqual(summaryDrift(withToken('payload', null), m), []);
+	assert.deepEqual(summaryDrift(withToken('payload', '0'), m), []);
 });
 
 void test('throttleSummaryDrift: stale is judged even when the newly token is missing', () => {

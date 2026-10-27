@@ -48,9 +48,11 @@
  * the scripts beside it were current. A published version is a claim about a
  * registry; a hash match is evidence about a machine.
  *
- * Three files, all copied VERBATIM out of this package: `ci-throttle.sh`,
- * `job-metrics.sh` (every node) and `jit-provision.sh` (minting nodes only — an
- * ephemeral claw or an on-demand guest).
+ * Every file in `NODE_SIDE_FILES`, copied VERBATIM out of this package to every
+ * node: the two runner hooks and the memory harvester. The runner runs the hooks
+ * itself, so they have to be on the box. The minters are not: they travel with
+ * each mint (src/runners/node-script.ts), and this deploy deletes the
+ * `jit-provision.sh` it used to leave behind.
  * `ci-throttle.conf` is deliberately NOT among them — it is RENDERED per node
  * from the manifest, so a difference there means the manifest moved, which is a
  * different question with a different fix, and folding it in would make one
@@ -122,7 +124,6 @@ const TOOLCACHE_RULE = resolve(__dirname, 'lib', 'runner-toolcache.sh');
 // `$LINE`/`$TCLINE`/`$MLINE` the walker writes into a standing runner's .env.
 // One derivation, two destinations — see the file's own header.
 const STANDING_ENV_RULE = resolve(__dirname, 'lib', 'standing-runner-env.sh');
-const JIT_SRC = resolve(__dirname, 'jit-provision.sh');
 const METRICS_SRC = resolve(__dirname, 'job-metrics.sh');
 // THE MEMORY HARVESTER (#47): sampler + its user unit, installed and STARTED by
 // this same payload on EVERY bounded node. Until 2026-09-22 these were copied
@@ -265,11 +266,10 @@ function remotePayload({ hook, conf, apply, restart, ephemeral }) {
 		`RESTART=${restart ? 1 : 0}`,
 		`HOOK_B64=${b64(hook)}`,
 		`CONF_B64=${b64(conf)}`,
-		// Only for nodes that can mint. Shipping it everywhere would put an
-		// unused executable on every box and make "is this node ephemeral"
-		// answerable in two places.
-		`JIT_B64=${ephemeral ? b64(readFileSync(JIT_SRC, 'utf8')) : ''}`,
-		// Shipped to EVERY node, unlike the provisioner. A standing runner and a
+		// A node that mints gets runner.env for its slots. The minters themselves
+		// are not shipped: they travel with each mint (src/runners/node-script.ts).
+		`MINTS=${ephemeral ? 1 : 0}`,
+		// Shipped to EVERY node. A standing runner and a
 		// JIT slot both complete jobs, and the memory question is asked of the
 		// whole fleet — a hook present on only half of it would produce a
 		// comparison between measured and unmeasured boxes, which is the shape
@@ -648,20 +648,10 @@ for (const [name, m] of nodes) {
 	// A missing SUMMARY is already throttleSummaryDrift()'s finding above.
 	// The drifted file names are carried on the result too, so the provisioning
 	// converger can redeploy a node whose scripts lag this package (#1)
-	// without parsing prose. jit-provision.sh is the one that keeps the JIT
-	// payload current, so it matters most.
+	// without parsing prose.
 	const scriptDrift = [];
 	if (CHECK && kv) {
-		for (const { file, summaryKey, everyNode, dest } of NODE_SIDE_FILES) {
-			// A file the manifest does not send here is not drift. The
-			// provisioner ships to minting nodes ONLY, and the
-			// `jit=0` rule above already owns the ephemeral-but-missing case
-			// with a better message — so what the hash adds for it is the
-			// state nothing could see before: present, and STALE.
-			if (!everyNode) {
-				if (!mintsJitRunners(m)) continue;
-				if (kv.jit !== '1') continue;
-			}
+		for (const { file, summaryKey, dest } of NODE_SIDE_FILES) {
 			const d = fileDrift(name, file, kv[summaryKey], SHIPPED[file], dest);
 			if (d) {
 				drift.push(d);

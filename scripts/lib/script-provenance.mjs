@@ -37,11 +37,6 @@ import { join } from 'node:path';
  * its sha256 as. Both are named here so the gate can hold the three halves —
  * driver, node script, and this list — in step.
  *
- * `everyNode: false` means the manifest decides. The provisioner ships only to
- * nodes marked `ephemeral: true`, so its ABSENCE elsewhere is correct and only
- * the driver, which has the manifest, can tell absent-and-fine from absent-and-
- * broken.
- *
  * `dest` is where the node half writes the file. Everything defaults to
  * `~/.hadoku/<file>`; the one exception is the harvester's USER UNIT, because
  * the user manager only reads `~/.config/systemd/user` — a drift finding must
@@ -49,9 +44,8 @@ import { join } from 'node:path';
  * finds nothing and concludes the check lied.
  */
 export const NODE_SIDE_FILES = [
-	{ file: 'ci-throttle.sh', b64: 'HOOK_B64', summaryKey: 'hooksha', everyNode: true },
-	{ file: 'job-metrics.sh', b64: 'METRICS_B64', summaryKey: 'metricssha', everyNode: true },
-	{ file: 'jit-provision.sh', b64: 'JIT_B64', summaryKey: 'jitsha', everyNode: false },
+	{ file: 'ci-throttle.sh', b64: 'HOOK_B64', summaryKey: 'hooksha' },
+	{ file: 'job-metrics.sh', b64: 'METRICS_B64', summaryKey: 'metricssha' },
 	// THE MEMORY HARVESTER (#47), sampler + unit, every node. Until 2026-09-22
 	// these were hand-installed on three claws and absent from the other five,
 	// and the harvest behind every memory cap on the fleet was weeks stale with
@@ -59,12 +53,11 @@ export const NODE_SIDE_FILES = [
 	// path that already reaches every node with `job-metrics.sh`.
 	// No `dest`: the sampler lands at the default `~/.hadoku/<file>`, and
 	// spelling that out again would be a second copy of one path.
-	{ file: 'runner-mem-harvest.py', b64: 'HARVEST_B64', summaryKey: 'harvestsha', everyNode: true },
+	{ file: 'runner-mem-harvest.py', b64: 'HARVEST_B64', summaryKey: 'harvestsha' },
 	{
 		file: 'units/runner-mem-harvest.service',
 		b64: 'HARVEST_UNIT_B64',
 		summaryKey: 'harvestunitsha',
-		everyNode: true,
 		dest: '~/.config/systemd/user/runner-mem-harvest.service',
 	},
 ];

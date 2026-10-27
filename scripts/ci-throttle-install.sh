@@ -14,7 +14,7 @@
 #   HOOK_B64        base64 of scripts/admin/ci-throttle.sh
 #   CONF_B64        base64 of this node's rendered ci-throttle.conf
 #   METRICS_B64     base64 of scripts/job-metrics.sh (every node)
-#   JIT_B64         base64 of scripts/jit-provision.sh (ephemeral nodes only)
+#   MINTS=0|1       this node mints JIT/warm runners, so write runner.env for its slots
 #   HARVEST_B64     base64 of scripts/runner-mem-harvest.py (every node)
 #   HARVEST_UNIT_B64 base64 of scripts/units/runner-mem-harvest.service
 set -u
@@ -100,7 +100,7 @@ if [ "$APPLY" = 1 ]; then
 	mkdir -p "$RUNNER_TMPDIR" && chmod 0700 "$RUNNER_TMPDIR"
 	mkdir -p "$RUNNER_COMPILE_CACHE"
 	# REPLACED, NEVER REWRITTEN IN PLACE. `>` truncates the file a running job's
-	# hook, or a mint's jit-provision.sh, is reading at that moment, and bash
+	# hook is reading at that moment, and bash
 	# reads a script as it goes. Since #1 the controller redeploys these
 	# unattended, so a deploy must be safe mid-job: identical bytes are left
 	# untouched, and anything else is written beside the file and renamed over
@@ -120,13 +120,11 @@ if [ "$APPLY" = 1 ]; then
 	if [ -n "${METRICS_B64:-}" ]; then
 		put_b64 "$METRICS" 0755 "$METRICS_B64"
 	fi
-	# The JIT provisioner, for nodes the manifest marks `ephemeral: true`.
-	# It ships from here because this script already owns ~/.hadoku and creates
-	# it; a second deployer for one file would be a third copy of the harness for
-	# no gain. It is INERT on arrival — nothing runs it until the dispatcher
-	# mints, and nothing mints until `ephemeral: true` is set.
-	if [ -n "${JIT_B64:-}" ]; then
-		put_b64 "$NODE_DIR/jit-provision.sh" 0755 "$JIT_B64"
+	# The JIT provisioner used to be copied here. It now travels with each mint
+	# (src/runners/node-script.ts), and a copy left on disk is a second source
+	# that nothing updates, so it goes.
+	rm -f "$NODE_DIR/jit-provision.sh"
+	if [ "${MINTS:-0}" = 1 ]; then
 		# THE TOOL CACHE, for jit-provision.sh to stamp into each slot.
 		#
 		# It is written as a FILE rather than baked into the provisioner because
@@ -611,11 +609,8 @@ if [ "$conf_ok" = 1 ]; then
 	conf_max="${conf_vals%% *}"
 	conf_minfree="${conf_vals##* }"
 fi
-jit_installed=0
-[ -x "$NODE_DIR/jit-provision.sh" ] && jit_installed=1
-# The PAYLOAD, separately from the script. A deployed provisioner on a node
-# with no payload is the bootstrap deadlock: every mint fails at step one, and
-# `jit=1` reported the node as ready the whole time. It is reported rather
+# The JIT PAYLOAD. A minting node with no payload is the bootstrap deadlock:
+# every mint fails at step one while the node looks ready. It is reported rather
 # than asserted here because a node that has never minted legitimately has
 # none yet — the caller decides whether that is drift.
 jit_payload=0
@@ -740,7 +735,6 @@ sha_of() {
 	h=$(sha256sum "$1" 2>/dev/null | cut -d' ' -f1)
 	if [ -n "$h" ]; then printf '%s' "$h"; else printf 'unreadable'; fi
 }
-jit_sha=$(sha_of "$NODE_DIR/jit-provision.sh")
 metrics_sha=$(sha_of "$METRICS")
 hook_sha=$(sha_of "$HOOK")
 # The conf's bytes too, though it is RENDERED rather than shipped: the driver
@@ -758,4 +752,4 @@ systemctl --user is-active --quiet runner-mem-harvest.service 2>/dev/null && har
 harvest_sha=$(sha_of "$NODE_DIR/runner-mem-harvest.py")
 harvest_unit_sha=$(sha_of "$HOME/.config/systemd/user/runner-mem-harvest.service")
 
-echo "SUMMARY conf=$conf_ok conf_max=$conf_max conf_minfree=$conf_minfree confsha=$conf_sha jit=$jit_installed payload=$jit_payload wired=$already newly=$changed stale=$stalecount stale_remaining=$stale_remaining nolistener=$nolistener restarted=$restarted busy=$busy skipped=$skipped hooksha=$hook_sha metricssha=$metrics_sha jitsha=$jit_sha harvest=$harvest_active harvestsha=$harvest_sha harvestunitsha=$harvest_unit_sha runnerenv=$runnerenv_present runnerenvkeys=$runnerenv_keys_ok jobtmpseen=$jobtmp_seen jobtmpbad=$jobtmp_bad jobtmpunread=$jobtmp_unread"
+echo "SUMMARY conf=$conf_ok conf_max=$conf_max conf_minfree=$conf_minfree confsha=$conf_sha payload=$jit_payload wired=$already newly=$changed stale=$stalecount stale_remaining=$stale_remaining nolistener=$nolistener restarted=$restarted busy=$busy skipped=$skipped hooksha=$hook_sha metricssha=$metrics_sha harvest=$harvest_active harvestsha=$harvest_sha harvestunitsha=$harvest_unit_sha runnerenv=$runnerenv_present runnerenvkeys=$runnerenv_keys_ok jobtmpseen=$jobtmp_seen jobtmpbad=$jobtmp_bad jobtmpunread=$jobtmp_unread"

@@ -197,20 +197,21 @@ fails the gate rather than drifting unnoticed the way the `--json` consumer
 count itself did twice before (`scripts/lib/json-contract.mjs`'s own header
 comment).
 
-## 5. Per-node state: `~/.hadoku/jit/*`, `standing.env`, `jit-provision.sh`
+## 5. Per-node state: `~/.hadoku/jit/*`, `standing.env`
 
 None of this is controller-local, and none of it is read or written by the
 process running the loops — it lives and is resolved entirely ON the target
 node, which is exactly why a controller switch does not need to touch it.
 
-- **Minting.** `mintEphemeralRunner` (`src/runners/ephemeral-exec.ts:151-167`)
-  runs `SLOT=… bash ~/.hadoku/jit-provision.sh` via the injected `sh:
-ShellLike`, whose real implementation is the same `isLocalNode`-or-`ssh`
-  branch as §1. `~` is expanded by the shell ON THE TARGET — local via `bash
--s`/`bash -c`, remote via `ssh node …` — so `~/.hadoku/jit-provision.sh` and
-  the slot directories under it (`src/runners/ephemeral.ts:137`:
+- **Minting.** `mintEphemeralRunner` (`src/runners/ephemeral-exec.ts`) sends
+  `jit-provision.sh`, with `runner-payload.sh` ahead of it, inside the command
+  itself (`src/runners/node-script.ts`), via the injected `sh: ShellLike`,
+  whose real implementation is the same `isLocalNode`-or-`ssh` branch as §1.
+  No copy of the script lives on the node. `$HOME` is expanded by the shell ON
+  THE TARGET — local via `bash -c`, remote via `ssh node …` — so the slot
+  directories (`src/runners/ephemeral.ts:137`:
   `` `${home}/.hadoku/jit/slot${index}` ``) resolve against the TARGET node's
-  home directory, never the controller's. `scripts/jit-provision.sh:40`
+  home directory, never the controller's. `scripts/jit-provision.sh`
   confirms the same thing from the other side: `ROOT="$HOME/.hadoku/jit"`,
   evaluated once the script is already running on the node.
 - **The standing runner's environment.** `~/.hadoku/standing.env`

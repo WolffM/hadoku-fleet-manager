@@ -135,6 +135,57 @@ async function main() {
 		}
 	}
 
+	// GUESTS: THE FLEET'S OWN SCRIPTS, AND NOTHING ELSE. `fleet throttle` skips
+	// a guest by role, so nothing kept hokon's hooks current: on 2026-10-27 its
+	// ci-throttle.sh was the 10-10 build and the #12 fix was inert there. The
+	// operator ruled the same day that updating these files is routine. So each
+	// guest is checked through the one-node override and redeployed only when a
+	// file in NODE_SIDE_FILES lags, with --no-restart. Any other drift on a guest
+	// stays out of scope, as before.
+	for (const guest of thr.json?.skippedGuests ?? []) {
+		const pass = async (extra) =>
+			resultFor(
+				await runFleetScript(THROTTLE, [
+					'--machine',
+					guest,
+					'--include-guests',
+					...extra,
+					'--json',
+				]),
+				guest
+			);
+		const first = await pass(['--check']);
+		if (!Array.isArray(first.scriptDrift)) {
+			unreadable.push({ node: guest, facet: 'throttle', why: first.error ?? 'no scriptDrift' });
+			continue;
+		}
+		if (!first.scriptDrift.length) continue;
+		// Reported as `throttle`: it is that driver, and the controller keys and
+		// words its pages by facet (src/provisioning-converge.ts).
+		const item = {
+			node: guest,
+			facet: 'throttle',
+			before: `node-side files behind this package: ${first.scriptDrift.join(', ')}`,
+		};
+		plan.repair.push(item);
+		if (DRY_RUN) continue;
+		await pass(['--no-restart', '--confirm']);
+		const after = await pass(['--check']);
+		const row = { ...item, changed: `redeployed ${first.scriptDrift.join(', ')}` };
+		changed.push({ node: guest, facet: item.facet, changed: row.changed });
+		if (Array.isArray(after.scriptDrift) && after.scriptDrift.length === 0) {
+			converged.push({ ...row, outcome: 'converged' });
+			log(`converged   ${guest} ${item.facet}: ${item.before}`);
+		} else {
+			let why = Array.isArray(after.scriptDrift)
+				? `still behind: ${after.scriptDrift.join(', ')}`
+				: (after.error ?? 'the re-check returned no scriptDrift');
+			why += ` (a guest: fleet throttle --machine ${guest} --include-guests --check)`;
+			unconverged.push({ ...row, outcome: 'unconverged', why });
+			log(`unconverged ${guest} ${item.facet}: ${item.before} (${why})`);
+		}
+	}
+
 	if (DRY_RUN) {
 		for (const r of plan.repair) log(`would repair ${r.node} ${r.facet}: ${r.before}`);
 	}

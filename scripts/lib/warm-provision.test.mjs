@@ -65,7 +65,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const SCRIPT = join(ROOT, 'scripts', 'warm-provision.sh');
+// The text production sends (src/runners/node-script.ts): the payload library,
+// then the minter, run as `bash -c <text> warm-provision.sh`.
+const { nodeScriptText } = await import('../../dist/runners/node-script.js');
+const SCRIPT_ARGV = ['-c', nodeScriptText('warm-provision.sh'), 'warm-provision.sh'];
 
 /**
  * A stand-in for `bin/Runner.Listener` that behaves like the real one for the
@@ -162,7 +165,7 @@ function jitOnlyHome() {
 }
 
 function provision(home, env = {}) {
-	return execFileSync('bash', [SCRIPT], {
+	return execFileSync('bash', SCRIPT_ARGV, {
 		encoding: 'utf8',
 		env: {
 			PATH: process.env.PATH,
@@ -183,7 +186,7 @@ const execFileP = promisify(execFile);
 /** Same as `provision`, but returns a promise instead of blocking — the only
  *  way to make two provisions genuinely overlap in one test. */
 function provisionAsync(home, env = {}) {
-	return execFileP('bash', [SCRIPT], {
+	return execFileP('bash', SCRIPT_ARGV, {
 		encoding: 'utf8',
 		env: {
 			PATH: process.env.PATH,

@@ -298,7 +298,33 @@ test('the provision command carries a tarball URL only when one is offered', asy
 
 	await mintEphemeralRunner({ ...REQ, tarballUrl: 'https://example/r.tar.gz' }, 'tok', h.gh, sh);
 	assert.match(seen[1], /RUNNER_TARBALL_URL='https:\/\/example\/r\.tar\.gz'/);
-	assert.match(seen[1], /^SLOT=0 RESET=1 .*bash ~\/\.hadoku\/jit-provision\.sh$/);
+	assert.match(
+		seen[1],
+		/^SLOT=0 RESET=1 .* bash -c "\$\(printf %s '[A-Za-z0-9+/=]+' \| base64 -d\)" jit-provision\.sh$/
+	);
+});
+
+test('the provision command carries the minter AND the payload library, not a path on the node', async () => {
+	// The node keeps no copy of jit-provision.sh: a copy is a second source,
+	// and hokon's was a release behind on 2026-10-27. What runs is decoded
+	// from the command itself.
+	const seen: string[] = [];
+	const sh = async (_h: string, cmd: string) => {
+		if (cmd.includes('CFG-OK')) return 'CFG-OK';
+		if (cmd.includes('jit-provision')) seen.push(cmd);
+		return cmd.includes('jit-provision') ? 'SLOT-READY /x 2.336.0' : 'Running as unit: x.service';
+	};
+	await mintEphemeralRunner(REQ, 'tok', harness().gh, sh);
+	assert.doesNotMatch(seen[0], /~\/\.hadoku\/jit-provision\.sh/);
+	const b64 = /printf %s '([^']+)'/.exec(seen[0])?.[1] ?? '';
+	const text = Buffer.from(b64, 'base64').toString('utf8');
+	assert.match(text, /^#!\/usr\/bin\/env bash\n# runner-payload/);
+	assert.match(text, /^payload_ensure\(\) \{/m);
+	assert.match(text, /^# jit-provision — /m);
+	assert.ok(
+		text.indexOf('payload_ensure() {') < text.indexOf('payload_ensure || exit 0'),
+		'the library is defined before the minter calls it'
+	);
 });
 
 test('a URL with a quote in it cannot break out of the shell word', async () => {

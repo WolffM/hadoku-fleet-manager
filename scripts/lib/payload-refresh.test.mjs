@@ -15,10 +15,10 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
 	chmodSync,
-	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -28,8 +28,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPTS = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const JIT = join(SCRIPTS, 'jit-provision.sh');
-const WARM = join(SCRIPTS, 'warm-provision.sh');
+// The text production sends (src/runners/node-script.ts), run the way it runs it.
+const { nodeScriptText } = await import('../../dist/runners/node-script.js');
 
 const cleanups = [];
 test.after(() => {
@@ -90,14 +90,14 @@ function node(have) {
 const MINTERS = [
 	{
 		name: 'jit-provision.sh',
-		script: JIT,
+		script: 'jit-provision.sh',
 		slot: (h) => join(h, '.hadoku', 'jit', 'slot0'),
 		ready: 'SLOT-READY',
 		env: { SLOT: '0' },
 	},
 	{
 		name: 'warm-provision.sh',
-		script: WARM,
+		script: 'warm-provision.sh',
 		slot: (h) => join(h, '.hadoku', 'warm', 'listener'),
 		ready: 'WARM-READY',
 		env: {
@@ -111,7 +111,7 @@ const MINTERS = [
 ];
 
 function mint(m, home, url) {
-	return execFileSync('bash', [m.script], {
+	return execFileSync('bash', ['-c', nodeScriptText(m.script), m.script], {
 		encoding: 'utf8',
 		env: { PATH: process.env.PATH, HOME: home, RESET: '1', RUNNER_TARBALL_URL: url, ...m.env },
 	});
@@ -185,14 +185,13 @@ test('a slot still linked to the OLD payload keeps working: removing the old tre
 	assert.equal(version(other), '2.336.0');
 });
 
-test('the payload block is byte-identical in both minters', () => {
-	const block = (f) => {
-		const s = readFileSync(f, 'utf8');
-		const a = s.indexOf('# >>> payload');
-		const b = s.indexOf('# <<< payload');
-		assert.ok(a >= 0 && b > a, `${f} has no marked payload block`);
-		return s.slice(a, b);
-	};
-	assert.equal(block(JIT), block(WARM), 'edit both copies together: one rule, two shipping paths');
-	assert.ok(!existsSync(join(SCRIPTS, 'lib', 'payload-block.sh')), 'there is no third copy');
+test('the payload functions are defined once, in runner-payload.sh', () => {
+	// They were pasted into both minters until 2026-10-27, held together by a
+	// byte-equality test. One definition needs no such test; this one fails if
+	// a second appears anywhere in scripts/.
+	const defines = /^payload_(want|fetch|ensure|link)\(\) \{/m;
+	const holders = readdirSync(SCRIPTS).filter(
+		(f) => f.endsWith('.sh') && defines.test(readFileSync(join(SCRIPTS, f), 'utf8'))
+	);
+	assert.deepEqual(holders, ['runner-payload.sh']);
 });

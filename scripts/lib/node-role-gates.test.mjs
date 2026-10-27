@@ -337,18 +337,19 @@ test('capability-schema #6: a typo, a guest, a non-host and an unreadable pm2-ho
 	}
 });
 
-test('#120: fleet throttle asks the MINT predicate, never `ephemeral` — or an on-demand guest gets no provisioner', () => {
+test('#120: fleet throttle asks the MINT predicate, never `ephemeral` — or an on-demand guest gets no slot env', () => {
 	// Shipped 0.34.0 with one call site still reading `m.ephemeral === true`:
 	// the dry run reported "hokon has no jit-provision.sh", --confirm wrote
 	// nothing, and every mint on the guest would have failed at step one. The
-	// provisioner, the slot env and the stale-hash check are all questions about
-	// the MINT PATH, which an on-demand guest is on and `ephemeral` does not see.
+	// slot env and the payload check are questions about the MINT PATH, which
+	// an on-demand guest is on and `ephemeral` does not see. (The provisioner
+	// itself has travelled with each mint since 2026-10-27.)
 	const src = blankComments(readFileSync(join(SCRIPTS, 'deploy-ci-throttle.mjs'), 'utf8'));
 	assert.deepEqual(src.match(/\.ephemeral\s*[!=]==/g) ?? [], []);
 	assert.equal(
 		(src.match(/mintsJitRunners\(m\)/g) ?? []).length,
-		3,
-		'payload, runner.env, provenance'
+		2,
+		'the slot env (MINTS) and the payload check'
 	);
 });
 

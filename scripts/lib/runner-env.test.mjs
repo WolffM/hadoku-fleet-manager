@@ -26,7 +26,10 @@ import { runnerEnvDrift } from './runner-env-drift.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..');
 const INSTALL_SRC = join(ROOT, 'scripts', 'ci-throttle-install.sh');
-const JIT_SRC = join(ROOT, 'scripts', 'jit-provision.sh');
+// The minter as production sends it (src/runners/node-script.ts): the payload
+// library, then the script, run as `bash -c <text> jit-provision.sh`.
+const { nodeScriptText } = await import('../../dist/runners/node-script.js');
+const JIT_ARGV = ['-c', nodeScriptText('jit-provision.sh'), 'jit-provision.sh'];
 
 const cleanups = [];
 function take(home) {
@@ -101,7 +104,8 @@ const REAL_HOME = process.env.HOME;
  * with the stub dir first so pgrep/systemctl/sudo/loginctl/systemd-run/ps
  * cannot reach the real host no matter what the script does.
  */
-function runHermetic(scriptPath, home, extraEnv = {}) {
+/** `script` is a path, or the argv `bash` gets (see JIT_ARGV). */
+function runHermetic(script, home, extraEnv = {}) {
 	if (!home || home === REAL_HOME || !home.startsWith(tmpdir())) {
 		throw new Error(
 			`runHermetic refuses: HOME must be a mkdtemp fixture under tmpdir(), got ${home}`
@@ -111,7 +115,7 @@ function runHermetic(scriptPath, home, extraEnv = {}) {
 	if (!path.startsWith(STUB_DIR)) {
 		throw new Error('runHermetic refuses: PATH must start with the stub dir');
 	}
-	return execFileSync('bash', [scriptPath], {
+	return execFileSync('bash', Array.isArray(script) ? script : [script], {
 		encoding: 'utf8',
 		env: { PATH: path, HOME: home, ...extraEnv },
 	});
@@ -155,8 +159,7 @@ function runInstall(home, { apply = 1, env = {} } = {}) {
 
 void test('install renders ~/.hadoku/runner.env with TMPDIR and NODE_COMPILE_CACHE pointing at disk', () => {
 	const home = take(mkdtempSync(join(tmpdir(), 'runner-env-')));
-	const jit = Buffer.from(readFileSync(JIT_SRC, 'utf8'), 'utf8').toString('base64');
-	const out = runInstall(home, { env: { JIT_B64: jit } });
+	const out = runInstall(home, { env: { MINTS: '1' } });
 	assertEmptyFixtureSummary(out);
 
 	const envText = readFileSync(join(home, '.hadoku', 'runner.env'), 'utf8');
@@ -190,10 +193,22 @@ void test('install renders ~/.hadoku/runner.env with TMPDIR and NODE_COMPILE_CAC
 	assert.equal(existsSync(join(home, '.cache', 'node-compile-cache')), true);
 });
 
+void test('install deletes the jit-provision.sh earlier versions left on the node', () => {
+	// The minter travels with each mint now (src/runners/node-script.ts). A copy
+	// left on disk is a second source nothing updates, which is how hokon's fell
+	// a release behind.
+	const home = take(mkdtempSync(join(tmpdir(), 'runner-env-')));
+	mkdirSync(join(home, '.hadoku'), { recursive: true });
+	writeFileSync(join(home, '.hadoku', 'jit-provision.sh'), '#!/bin/sh\necho old\n', {
+		mode: 0o755,
+	});
+	assertEmptyFixtureSummary(runInstall(home, { env: { MINTS: '1' } }));
+	assert.equal(existsSync(join(home, '.hadoku', 'jit-provision.sh')), false);
+});
+
 void test('runner-tmp is created 0700; node-compile-cache has no such requirement', () => {
 	const home = take(mkdtempSync(join(tmpdir(), 'runner-env-')));
-	const jit = Buffer.from(readFileSync(JIT_SRC, 'utf8'), 'utf8').toString('base64');
-	const out = runInstall(home, { env: { JIT_B64: jit } });
+	const out = runInstall(home, { env: { MINTS: '1' } });
 	assertEmptyFixtureSummary(out);
 	const mode = statSync(join(home, 'runner-tmp')).mode & 0o777;
 	assert.equal(mode, 0o700);
@@ -208,9 +223,8 @@ void test('--check (APPLY=0) creates NOTHING — a verifier must not write what 
 
 void test('a re-install REPLACES the old TMPDIR/NODE_COMPILE_CACHE lines, never duplicates them', () => {
 	const home = take(mkdtempSync(join(tmpdir(), 'runner-env-')));
-	const jit = Buffer.from(readFileSync(JIT_SRC, 'utf8'), 'utf8').toString('base64');
-	runInstall(home, { env: { JIT_B64: jit } });
-	const out = runInstall(home, { env: { JIT_B64: jit } }); // second install, same node
+	runInstall(home, { env: { MINTS: '1' } });
+	const out = runInstall(home, { env: { MINTS: '1' } }); // second install, same node
 	assertEmptyFixtureSummary(out);
 
 	const lines = readFileSync(join(home, '.hadoku', 'runner.env'), 'utf8')
@@ -224,19 +238,18 @@ void test('a re-install REPLACES the old TMPDIR/NODE_COMPILE_CACHE lines, never 
 
 void test('the SUMMARY reports runner.env presence and key-completeness as separate facts', () => {
 	const home = take(mkdtempSync(join(tmpdir(), 'runner-env-')));
-	const jit = Buffer.from(readFileSync(JIT_SRC, 'utf8'), 'utf8').toString('base64');
 
-	// No JIT_B64 at all (a non-ephemeral node): runner.env is never written.
+	// MINTS unset (a non-ephemeral node): runner.env is never written.
 	let out = runInstall(home);
 	assert.match(out, /runnerenv=0 runnerenvkeys=0/);
 
 	// Install it: present and complete.
-	out = runInstall(home, { env: { JIT_B64: jit } });
+	out = runInstall(home, { env: { MINTS: '1' } });
 	assert.match(out, /runnerenv=1 runnerenvkeys=1/);
 
 	// Mutate: strip the new keys the way an OLDER package would have left them.
 	writeFileSync(join(home, '.hadoku', 'runner.env'), 'RUNNER_TOOL_CACHE=/opt/hostedtoolcache\n');
-	out = runInstall(home); // no JIT_B64 this run — must not overwrite the file
+	out = runInstall(home); // MINTS unset this run — must not overwrite the file
 	assert.match(out, /runnerenv=1 runnerenvkeys=0/);
 });
 
@@ -256,7 +269,7 @@ void test('SUMMARY reads runnerenvkeys=0 for a node carrying only the two OLD li
 	mkdirSync(join(home, '.hadoku'), { recursive: true });
 	writeFileSync(join(home, '.hadoku', 'runner.env'), `${L.tc}\n${L.m}\n`);
 
-	const out = runInstall(home); // no JIT_B64 — must not rewrite the file
+	const out = runInstall(home); // MINTS unset — must not rewrite the file
 	assert.match(out, /runnerenv=1 runnerenvkeys=0/);
 });
 
@@ -330,7 +343,7 @@ void test('jit-provision.sh merges TMPDIR/NODE_COMPILE_CACHE into a slot .env ex
 	writeFileSync(join(dir, '.env'), `TMPDIR=/tmp\nSOME_OTHER_KEY=v\n`);
 
 	for (let i = 0; i < 2; i++) {
-		runHermetic(JIT_SRC, home, { SLOT: '1', RESET: '0' });
+		runHermetic(JIT_ARGV, home, { SLOT: '1', RESET: '0' });
 	}
 
 	const lines = readFileSync(join(dir, '.env'), 'utf8').trim().split('\n');
@@ -358,7 +371,7 @@ void test('the installer WALKER merges TMPDIR/NODE_COMPILE_CACHE into a standing
 	writeFileSync(join(runnerDir, '.runner'), '{}');
 	writeFileSync(join(runnerDir, '.env'), 'TMPDIR=/tmp\nUNRELATED_KEY=keep-me\n');
 
-	runInstall(home); // no JIT_B64 — this is the standing-runner path, not JIT
+	runInstall(home); // MINTS unset — this is the standing-runner path, not JIT
 
 	const lines = readFileSync(join(runnerDir, '.env'), 'utf8').trim().split('\n');
 	const tmpdirLines = lines.filter((l) => l.startsWith('TMPDIR='));
@@ -419,7 +432,7 @@ void test('runnerEnvDrift: a SUMMARY with NO runnerenv=/runnerenvkeys= token at 
 	const finding = runnerEnvDrift({
 		name: 'claw-3',
 		ephemeral: true,
-		summary: 'SUMMARY conf=1 jit=1 payload=1',
+		summary: 'SUMMARY conf=1 payload=1',
 	});
 	assert.match(finding, /claw-3: could not read runner\.env state/);
 

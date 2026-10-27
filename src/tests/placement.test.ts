@@ -32,10 +32,7 @@ import {
 	__resetHeavyMarksForTesting,
 } from '../runners/dispatch-pass.js';
 import { warmRunnerName, TMP_FREE_FLOOR_MB, WORK_FREE_FLOOR_MB } from '../runners/ephemeral.js';
-import {
-	__resetTarballCacheForTesting,
-	__resetWarmProvisionScriptCacheForTesting,
-} from '../runners/ephemeral-exec.js';
+import { __resetTarballCacheForTesting } from '../runners/ephemeral-exec.js';
 import { __resetJobHistoryForTesting, __setHistoryPathForTesting } from '../job-history.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 
@@ -886,7 +883,7 @@ function simShell(sims: Record<string, NodeSim>) {
 		// warm-path #82/#83 tests below, which are the first in this file to
 		// exercise a listener actually being minted rather than only observed.
 		// Mirrors warm-cache.test.ts's own fake for the same two commands.
-		if (cmd.includes('.warm-provision.sh')) {
+		if (cmd.includes('warm-provision.sh')) {
 			const repo = /REPO='([^']*)'/.exec(cmd)?.[1] ?? '';
 			s.marker = `${repo} 1000`;
 			return 'WARM-READY /home/hadoku/.hadoku/warm/listener 2.336.0';
@@ -935,7 +932,6 @@ beforeEach(() => {
 	__resetWarmCacheClockForTesting();
 	__resetWarmReposForTesting();
 	__resetWarmBackoffForTesting();
-	__resetWarmProvisionScriptCacheForTesting();
 	__resetTarballCacheForTesting();
 	__resetReapClockForTesting();
 	// #83: the speed model is cached across calls on its own 10-minute clock

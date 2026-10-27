@@ -143,8 +143,10 @@ silences it.
 
 `fleet throttle --check` answers the other half — whether the node-side scripts
 on each claw are the ones this package ships — by sha256 of `ci-throttle.sh`,
-`job-metrics.sh` and (on ephemeral nodes) `jit-provision.sh` against
-`~/.hadoku/`. A hash, not a version marker written into the file: a marker says
+`job-metrics.sh` and the memory harvester against `~/.hadoku/`. The minters
+(`jit-provision.sh`, `warm-provision.sh`) are not kept on nodes at all: each
+mint sends them, with `runner-payload.sh`, in the command that runs them
+([`src/runners/node-script.ts`](src/runners/node-script.ts)). A hash, not a version marker written into the file: a marker says
 what the last editor believed, and `job-metrics.sh` has two editors.
 [`scripts/lib/script-provenance.mjs`](scripts/lib/script-provenance.mjs) declares
 which files are covered, and the test beside it fails the build if the payload

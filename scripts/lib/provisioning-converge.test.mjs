@@ -231,13 +231,13 @@ test('classifyRepair: a confirm or re-check that could not run is unconverged, w
 	assert.match(noRead.why, /could not be re-read: timeout/);
 });
 
-// The JIT payload follow-up: a node-side script behind the package is itself
-// drift to repair, because jit-provision.sh is what keeps the payload current.
-test('planRepairs: a node whose jit-provision.sh or standing.env lags the package is planned for throttle', () => {
+// A node-side script behind the package is itself drift to repair: a hook
+// fixed in the package does nothing until the node runs it.
+test('planRepairs: a node whose ci-throttle.sh or standing.env lags the package is planned for throttle', () => {
 	const plan = planRepairs(
 		{
 			results: [
-				{ ...thr('claw-1', { wired: 2 }), scriptDrift: ['jit-provision.sh'], standingEnv: 'ok' },
+				{ ...thr('claw-1', { wired: 2 }), scriptDrift: ['ci-throttle.sh'], standingEnv: 'ok' },
 				{ ...thr('claw-2', { wired: 2 }), scriptDrift: [], standingEnv: 'stale' },
 				{ ...thr('claw-3', { wired: 2 }), scriptDrift: [], standingEnv: 'ok' },
 			],
@@ -247,7 +247,7 @@ test('planRepairs: a node whose jit-provision.sh or standing.env lags the packag
 	assert.deepEqual(
 		plan.repair.map((r) => `${r.node}: ${r.before}`),
 		[
-			'claw-1: node-side files behind this package: jit-provision.sh',
+			'claw-1: node-side files behind this package: ci-throttle.sh',
 			'claw-2: node-side files behind this package: standing.env',
 		]
 	);
@@ -256,10 +256,10 @@ test('planRepairs: a node whose jit-provision.sh or standing.env lags the packag
 test('classifyRepair throttle: scripts still behind after the redeploy is unconverged, never converged', () => {
 	const v = classifyRepair('throttle', [thr('claw-1', { wired: 2 })], {
 		...thr('claw-1', { wired: 2 }),
-		scriptDrift: ['jit-provision.sh'],
+		scriptDrift: ['ci-throttle.sh'],
 	});
 	assert.equal(v.outcome, 'unconverged');
-	assert.match(v.why, /node-side files still differ from this package: jit-provision\.sh/);
+	assert.match(v.why, /node-side files still differ from this package: ci-throttle\.sh/);
 	const ok = classifyRepair('throttle', [thr('claw-1', { wired: 2 })], {
 		...thr('claw-1', { wired: 2 }),
 		scriptDrift: [],

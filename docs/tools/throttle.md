@@ -163,8 +163,13 @@ nodes that drifted (throttle env, node-side scripts behind the package,
 standing-unit slice placement and cap), and reads those nodes again. Node-side
 scripts are replaced by rename, never rewritten in place, so a redeploy is
 safe while a job runs the hook. The package mgmt-api runs is the reference: a
-node hand-deployed ahead of it is put back. That is how a fixed
-`jit-provision.sh` reaches every node, and `jit-provision.sh` now rebuilds a
+node hand-deployed ahead of it is put back. A guest (hokon) is skipped by
+`fleet throttle`, so the converger checks each guest separately through
+`--machine <guest> --include-guests` and redeploys it, with `--no-restart`,
+only when a node-side script lags. Nothing else about a guest is repaired. The
+minters are not node-side scripts any more: each mint sends
+`jit-provision.sh` or `warm-provision.sh` with the command, and the deploy
+deletes the old `~/.hadoku/jit-provision.sh`. `jit-provision.sh` rebuilds a
 JIT payload that is behind the release it is handed, relinking any idle slot
 built from the old one. Idle units only; a node drifting on both facets
 restarts each unit once. It logs what it changed and pages only on a repair

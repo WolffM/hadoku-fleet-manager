@@ -107,7 +107,7 @@ void test('every hashed file exists in the package and the driver reports its ke
 });
 
 void test('the driver ships exactly the files it hashes', () => {
-	// `remotePayload` reads HOOK_SRC / METRICS_SRC / JIT_SRC and `shippedHashes`
+	// `remotePayload` reads HOOK_SRC / METRICS_SRC / HARVEST_SRC and `shippedHashes`
 	// re-derives the same paths from the names below. Two spellings of one fact,
 	// so pin them together: a rename on one side alone would leave --check
 	// hashing a file the payload no longer sends, and saying nothing about the
