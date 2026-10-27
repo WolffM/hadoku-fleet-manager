@@ -602,6 +602,22 @@ export const TENANT_CONTRACT = [
 		consumer: 'hadoku-cardtable apps/server/src/play/remote/ (lane D)',
 		fields: ['ok', 'nodes[].node', 'nodes[].state', 'nodes[].findings', 'nodes[].declared'],
 	},
+	{
+		sub: 'hosting-plan',
+		argv: ['WolffM/hadoku-cardtable', '--json'],
+		consumer:
+			'hadoku-cardtable lane D: names the next slice in its Capacity alert (never declares one)',
+		fields: [
+			'plan.ranked[].node',
+			'plan.ranked[].ciJobs.before',
+			'plan.ranked[].ciJobs.after',
+			'plan.ranked[].memoryLeftMb',
+			'plan.ranked[].cutOver',
+			'plan.ranked[].risk',
+			'plan.refused[].node',
+			'plan.refused[].reasons',
+		],
+	},
 ];
 
 /**

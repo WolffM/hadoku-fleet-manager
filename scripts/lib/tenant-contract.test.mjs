@@ -19,10 +19,10 @@ import { parseCliCommands, TENANT_CONTRACT } from './json-contract.mjs';
 import { judgeHosting, parseObserved } from './hosting.mjs';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-/** Source with comments AND quoted strings blanked: a help line saying "reachable," builds nothing. */
+/** Source with comments, quoted strings AND template literals blanked: a log line saying "risk:" builds nothing. */
 const read = (rel) =>
 	blankComments(readFileSync(join(ROOT, rel), 'utf8')).replace(
-		/'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"/g,
+		/'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/g,
 		"''"
 	);
 
@@ -35,11 +35,13 @@ const PRODUCERS = {
 		'src/runners/drain.ts',
 	],
 	hosting: ['scripts/hosting.mjs', 'scripts/lib/hosting.mjs'],
+	'hosting-plan': ['scripts/hosting-plan.mjs', 'scripts/lib/hosting-plan.mjs'],
 };
 
 const keyOf = (path) => path.split('.').at(-1).replace('[]', '');
-/** A property `key:`, or the shorthand `{ key,` / `, key }`. */
-const builds = (src, key) => new RegExp(`\\b${key}\\s*:|[{,]\\s*${key}\\s*[,}]`).test(src);
+/** A property `key:`, the shorthand `{ key,` / `, key }`, or an assignment `.key =`. */
+const builds = (src, key) =>
+	new RegExp(`\\b${key}\\s*:|[{,]\\s*${key}\\s*[,}]|\\.${key}\\s*=(?!=)`).test(src);
 
 void test('every tenant-read subcommand is still in the CLI', () => {
 	const commands = parseCliCommands(blankComments(readFileSync(join(ROOT, 'src/cli.ts'), 'utf8')));
@@ -70,6 +72,8 @@ void test('the guard sees a key that is gone', () => {
 	assert.equal(builds('{ reachable: true }', 'reachable'), true);
 	assert.equal(builds('{ reachableNow: true }', 'reachable'), false);
 	assert.equal(builds('return { node, ok }', 'node'), true);
+	assert.equal(builds('r.risk = why;', 'risk'), true);
+	assert.equal(builds('if (r.risk === why)', 'risk'), false);
 	assert.equal(
 		builds("log('per node: reachable, health')".replace(/'[^']*'/g, "''"), 'reachable'),
 		false
