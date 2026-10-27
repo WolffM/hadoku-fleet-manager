@@ -13,13 +13,16 @@
  * TWO KINDS, one layer:
  *   agent    a binary the fleet supervises as a system unit as the app's own
  *            user (cardtable).
- *   service  an app hadoku_site deploys (pm2). The fleet gives it the same
- *            user, slice and guarantees; hadoku_site keeps the app layer.
+ *   service  an app hadoku_site deploys, into a manager the fleet runs
+ *            (`runtime.manager`, one of lib/hosting-runtimes.mjs's). The
+ *            fleet gives it the same user, slice and guarantees; hadoku_site
+ *            keeps the app layer.
  *
  * Placement rules live in lib/hosting-placement.mjs: one entry per rule, read
  * by this validator and by the planner alike.
  */
 import { checkRule } from './hosting-placement.mjs';
+import { SERVICE_MANAGERS } from './hosting-runtimes.mjs';
 
 /** The fleet will not promise less notice than this, whatever a request says. */
 export const NOTICE_FLOOR_MIN = 15;
@@ -99,8 +102,8 @@ export function validateHostingRequest(raw) {
 			'runtime.manager',
 			'an agent is supervised by the fleet; a process manager is a service field'
 		);
-	if (raw.kind === 'service' && rt.manager !== 'pm2')
-		bad('runtime.manager', 'a service names its manager: "pm2"');
+	if (raw.kind === 'service' && !SERVICE_MANAGERS.includes(rt.manager))
+		bad('runtime.manager', `a service names its manager: one of ${SERVICE_MANAGERS.join(', ')}`);
 	if (rt.workersOutliveRestart !== undefined && typeof rt.workersOutliveRestart !== 'boolean')
 		bad('runtime.workersOutliveRestart', 'true or false');
 

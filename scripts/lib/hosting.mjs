@@ -60,6 +60,7 @@ import {
 	hostingSliceName,
 } from '../../dist/runners/hosting-record.js';
 import { ciUnitProperties } from '../../dist/runners/ephemeral.js';
+import { runtimeFor } from './hosting-runtimes.mjs';
 import { isGuestNode } from '../../dist/lib/node-role.js';
 
 /**
@@ -76,6 +77,7 @@ import { isGuestNode } from '../../dist/lib/node-role.js';
 export const NO_TENANT = {
 	app: 'none',
 	kind: 'agent',
+	runtime: 'agent',
 	slice: hostingSliceName('none'),
 	service: 'none-agent.service',
 	pathUnit: 'none-agent.path',
@@ -250,95 +252,13 @@ const CONTROLLER_LAN_RULE = `if ! $S ufw status 2>/dev/null | grep -Eq "^$PORT/t
 	$S ufw allow from "$CONTROLLER_IP" to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent" >/dev/null
 fi`;
 
-/** `cardtable` → `CARDTABLE`: the prefix of the environment a tenant's unit hands it. */
-const envPrefix = (app) => app.toUpperCase().replace(/-/g, '_');
-
-/** Lines every tenant unit carries, whatever runs in it. */
-const hardening = (t) => `OOMScoreAdjust=${AGENT_OOM_SCORE_ADJ}
-UMask=0077
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-ReadWritePaths=${t.home}`;
-
 /**
- * The unit that runs a tenant. Rendered whole here and written verbatim (a
- * quoted heredoc), so what is on the node is exactly this text.
- *
- *   agent    the tenant's own executable, supervised, as its user. With
- *            `workersOutliveRestart` (WORKERS_OUTLIVE_RESTART in
- *            lib/hosting-request.mjs) the agent gets its subtree and a
- *            restart signals only the agent.
- *   service  a pm2 daemon as the tenant's user, its PM2_HOME inside that
- *            user's 0700 home. The app layer deploys INTO it; the fleet only
- *            supervises the daemon. Shaped like the pm2-<user> units
- *            `pm2 startup` writes on claw-4.
+ * The unit that runs a tenant, and an agent's path unit: its runtime's
+ * (lib/hosting-runtimes.mjs). Rendered whole and written verbatim (a quoted
+ * heredoc), so what is on the node is exactly this text.
  */
-export function tenantUnit(t) {
-	const base = `User=${t.user}
-Group=${t.user}
-Slice=${t.slice}
-WorkingDirectory=${t.home}`;
-	if (t.kind === 'service') {
-		return `[Unit]
-Description=fleet hosting: ${t.app} pm2 daemon, as ${t.user}
-
-[Service]
-Type=forking
-${base}
-Environment=PM2_HOME=${t.home}/.pm2
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
-PIDFile=${t.home}/.pm2/pm2.pid
-ExecStart=/usr/bin/env pm2 resurrect
-ExecReload=/usr/bin/env pm2 reload all
-ExecStop=/usr/bin/env pm2 kill
-Restart=on-failure
-${hardening(t)}
-
-[Install]
-WantedBy=multi-user.target`;
-	}
-	const outlive = t.workersOutliveRestart
-		? `
-# The tenant's workers (cardtable: one JVM per match group) outlive an agent
-# restart: the agent gets its own cgroup subtree to place them in, and a
-# restart signals only the agent. The slice still bounds the whole subtree.
-Delegate=yes
-KillMode=process`
-		: '';
-	return `[Unit]
-Description=fleet hosting: ${t.app} agent, as ${t.user}, supervised
-ConditionPathIsExecutable=${t.exec}
-StartLimitIntervalSec=0
-
-[Service]
-User=${t.user}
-Group=${t.user}
-Slice=${t.slice}
-ExecStart=${t.exec}
-WorkingDirectory=${t.home}
-Environment=${envPrefix(t.app)}_AGENT_PORT=${t.port}
-Restart=always
-RestartSec=2${outlive}
-${hardening(t)}
-
-[Install]
-WantedBy=multi-user.target`;
-}
-
-/** An agent starts once its executable exists (`--install`). */
-export function pathUnit(t) {
-	return `[Unit]
-Description=fleet hosting: start the ${t.app} agent once it is installed
-
-[Path]
-PathExists=${t.exec}
-Unit=${t.service}
-
-[Install]
-WantedBy=multi-user.target`;
-}
+export const tenantUnit = (t) => runtimeFor(t).unit(t);
+export const pathUnit = (t) => runtimeFor(t).pathUnit(t);
 
 /**
  * The deploy script. Idempotent: a re-run with the same declaration rewrites

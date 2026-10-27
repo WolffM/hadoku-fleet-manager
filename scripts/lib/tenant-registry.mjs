@@ -19,30 +19,34 @@ import { dirname, join } from 'node:path';
 
 import { hostingSliceName } from '../../dist/runners/hosting-record.js';
 import { validateHostingRequest } from './hosting-request.mjs';
+import { RUNTIMES, runtimeOf } from './hosting-runtimes.mjs';
 
 const FILE = 'hosting-tenants.json';
 
 /**
  * The names and facts a node carries for one tenant, from its normalized
- * request. An `agent` runs as `<app>-agent`; a `service` as `<app>-svc`, the
- * user its pm2 daemon runs as. Units, home and executable follow the user.
+ * request. The user, unit names and executable are its runtime's
+ * (lib/hosting-runtimes.mjs): an `agent` runs as `<app>-agent`, a pm2
+ * `service` as `<app>-svc`. The home follows the user.
  */
 export function tenantSpecFrom(request) {
 	const { app, kind } = request;
-	const user = kind === 'agent' ? `${app}-agent` : `${app}-svc`;
+	const runtime = runtimeOf(request);
+	const names = RUNTIMES[runtime].names(app);
 	return {
 		app,
 		kind,
+		runtime,
 		slice: hostingSliceName(app),
-		/** The unit that runs the tenant: the agent itself, or the pm2 daemon of a service. */
-		service: kind === 'agent' ? `${app}-agent.service` : `pm2-${user}.service`,
+		/** The unit that runs the tenant: the agent itself, or the manager daemon of a service. */
+		service: names.service,
 		/** An agent waits for its executable; a service is started by its app layer's deploy. */
-		pathUnit: kind === 'agent' ? `${app}-agent.path` : null,
+		pathUnit: names.pathUnit,
 		portUnit: `hosting-${app}-port.service`,
-		user,
-		home: `/var/lib/${user}`,
+		user: names.user,
+		home: `/var/lib/${names.user}`,
 		/** Root-owned, written only by `--install`. A service has none: its app layer deploys it. */
-		exec: kind === 'agent' ? `/opt/hosting/${app}/run` : null,
+		exec: names.exec,
 		port: request.network.ports[0] ?? null,
 		ingress: request.network.ingress,
 		workersOutliveRestart: request.runtime.workersOutliveRestart === true,

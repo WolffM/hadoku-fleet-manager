@@ -1,11 +1,19 @@
 import { strict as assert } from 'node:assert';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { validateHostingRequest } from './hosting-request.mjs';
-import { NO_TENANT, deployScript, judgeHosting, parseObserved, tenantUnit } from './hosting.mjs';
+import {
+	NO_TENANT,
+	deployScript,
+	judgeHosting,
+	parseObserved,
+	pathUnit,
+	tenantUnit,
+} from './hosting.mjs';
 import {
 	readTenantRegistry,
 	registerTenant,
@@ -27,6 +35,7 @@ test("cardtable's derived names are exactly the ones the hand-written table held
 		{
 			app: 'cardtable',
 			kind: 'agent',
+			runtime: 'agent',
 			slice: 'hosting-cardtable.slice',
 			service: 'cardtable-agent.service',
 			pathUnit: 'cardtable-agent.path',
@@ -48,6 +57,29 @@ test("cardtable's derived names are exactly the ones the hand-written table held
 	);
 	assert.match(unit, /^Delegate=yes$/m);
 	assert.match(unit, /^KillMode=process$/m);
+});
+
+/**
+ * The bytes on the node. A re-declare rewrites a unit whose text changed and
+ * restarts the tenant, so a render that drifts by one byte restarts
+ * cardtable's agent (and every JVM it supervises). The cardtable hashes are
+ * of `/etc/systemd/system/cardtable-agent.{service,path}` as read from claw-9
+ * on 2026-10-27; the pm2 one is the unit hadoku_site#490 deploys against.
+ */
+test('the rendered units are byte-identical to what is deployed', () => {
+	const sha = (s) => createHash('sha256').update(s).digest('hex');
+	assert.equal(
+		sha(tenantUnit(CARDTABLE)),
+		'cf9213891c8475e1a52f7a14395932841c5e80af4add3d1e9236c5d1579842c4'
+	);
+	assert.equal(
+		sha(pathUnit(CARDTABLE)),
+		'e579b912fd9417d43b760b536e1af6763527accdfe10b3962d2c093e3f208ddc'
+	);
+	assert.equal(
+		sha(tenantUnit(ARCHIVEBOT)),
+		'ed603ed637ffe1aac0c853c36191325885d46707266c141cc4a9507968c57c96'
+	);
 });
 
 test('without workersOutliveRestart an agent is killed whole on restart', () => {

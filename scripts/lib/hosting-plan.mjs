@@ -29,6 +29,7 @@
  */
 import { ciJobsAfter } from './hosting-offers.mjs';
 import { ruleHolds } from './hosting-placement.mjs';
+import { ADVISORY_UNTIL_DEFAULT } from './hosting-request.mjs';
 
 /** Plan `request` (a NORMALIZED hosting request) against `offers` (from collectOffers). */
 export function planFor(request, offers) {
@@ -74,14 +75,16 @@ export function planFor(request, offers) {
 
 	const fitting = rows.filter((r) => r.fits);
 	const cutOverFitting = fitting.filter((r) => r.cutOver).length;
-	const strict = !isolation.ciMayRead && cutOverFitting >= isolation.advisoryUntil;
+	// A request stored before the field existed has none: it means the default, never "no bar".
+	const advisoryUntil = isolation.advisoryUntil ?? ADVISORY_UNTIL_DEFAULT;
+	const strict = !isolation.ciMayRead && cutOverFitting >= advisoryUntil;
 	for (const r of fitting) {
 		if (isolation.ciMayRead || r.cutOver) continue;
 		if (strict) {
 			r.fits = false;
 			r.reasons.push(`CI here is not cut over to its own user, and ${app} may not be read by CI`);
 		} else {
-			r.risk = `CI here still runs with sudo, so a job could read ${app}; offered because fewer than ${isolation.advisoryUntil} candidates are cut over`;
+			r.risk = `CI here still runs with sudo, so a job could read ${app}; offered because fewer than ${advisoryUntil} candidates are cut over`;
 		}
 	}
 

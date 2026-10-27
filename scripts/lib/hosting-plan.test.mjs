@@ -91,6 +91,13 @@ test("the strictness is the tenant's: advisoryUntil 0 filters with no claw cut o
 	assert.equal(planFor(CARDTABLE, peers).ciMayReadPolicy, 'advisory');
 });
 
+test('a request stored without advisoryUntil means the default, never no bar', () => {
+	const stored = { ...CARDTABLE, isolation: { ciMayRead: false } };
+	const cut = (n) => offer(n, { ci: { ...offer(n).ci, cutOver: true } });
+	const many = Array.from({ length: ADVISORY_UNTIL_DEFAULT }, (_, i) => cut(`c${i}`));
+	assert.equal(planFor(stored, [...many, offer('root-claw')]).ciMayReadPolicy, 'filter');
+});
+
 test('label:<id> reads the labels the node offers now; unreadable labels refuse, never pass', () => {
 	const forge = { ...CARDTABLE, placement: { require: ['label:jdk21'] } };
 	const plan = planFor(forge, [
