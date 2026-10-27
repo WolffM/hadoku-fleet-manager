@@ -1,0 +1,26 @@
+{
+  "app": "archivebot",
+  "kind": "service",
+  "slices": { "unit": { "memoryMb": 1024, "cores": 1, "steadyMb": 180 }, "max": 1 },
+  "runtime": { "manager": "pm2", "node": ">=22.12", "native": ["canvas", "sqlite3"] },
+  "network": {
+    "ingress": "tunnel",
+    "hostname": "archivebot.hadoku.me",
+    "ports": [3004],
+    "egress": [
+      "discord.com",
+      "gateway.discord.gg",
+      "cdn.discordapp.com",
+      "media.discordapp.net",
+      "scraper.hadoku.me",
+      "hadoku.me",
+      "hub:data",
+      "hub:secrets"
+    ]
+  },
+  "disk": { "stateGb": 10, "growthGbPerMonth": 2 },
+  "availability": { "noticeMin": 15, "stateful": true, "singleton": true, "coldStartS": 120 },
+  "placement": { "require": ["wired", "pm2-peer"] },
+  "isolation": { "ciMayRead": false },
+  "contact": "WolffM/hadoku-fleet-manager-private#136"
+}

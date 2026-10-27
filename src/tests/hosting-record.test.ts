@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { buildSpawnPlan, buildWarmSpawnPlan, ciUnitProperties } from '../runners/ephemeral.js';
-import { noticeRefusal, type DrainDoc } from '../runners/drain.js';
+import { drainNotices, noticeRefusal, type DrainDoc } from '../runners/drain.js';
 import {
 	AGENT_UP_MIN_MB,
 	CI_OOM_SCORE_ADJ,
@@ -222,4 +222,42 @@ test('A4: the dispatcher holds back the unused share, read on the same ssh as fr
 	assert.equal((await tickFloor(3000, 60_000)).floor, 1536 + 4096);
 	// Could not read the slice: everything.
 	assert.equal((await tickFloor(null, settled)).floor, 1536 + 4096);
+});
+
+// cardtable's lane D drains its matches off a node from `notices` (asks a and b,
+// 2026-10-27): every scheduled drain, whatever its kind, is visible from the
+// moment it is scheduled, and so is its end.
+test('lane D: a planned drain of ANY kind is a notice the moment it is scheduled', () => {
+	for (const kind of ['maintenance', 'reboot', 'hosting', 'lease'] as const) {
+		const doc: DrainDoc = {
+			nodes: {},
+			planned: [
+				{
+					node: 'claw-9',
+					from: ahead(40 * 60_000),
+					until: ahead(100 * 60_000),
+					since: ago(1),
+					reason: 'r',
+					by: 't',
+					kind,
+				},
+			],
+		};
+		const n = drainNotices(doc, NOW);
+		assert.deepEqual(
+			n.map((x) => [x.node, x.event, x.kind]),
+			[
+				['claw-9', 'starts', kind],
+				['claw-9', 'ends', kind],
+			]
+		);
+	}
+	// A drain already in force with an end ahead shows that end.
+	const held: DrainDoc = {
+		nodes: {
+			'claw-9': { since: ago(1), until: ahead(60_000), reason: 'r', by: 't', kind: 'maintenance' },
+		},
+		planned: [],
+	};
+	assert.equal(drainNotices(held, NOW)[0].event, 'ends');
 });

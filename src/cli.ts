@@ -197,6 +197,11 @@ const COMMANDS: Record<string, Command> = {
 		help: true,
 		summary: 'lend a node to a tenant: CI off, declared resources served, agent supervised',
 	},
+	'hosting-request': {
+		script: 'hosting-request.mjs',
+		summary:
+			"read an app's hosting.json the way the fleet will: normalized, or every problem with its reason",
+	},
 	'node-users': {
 		script: 'node-users.mjs',
 		summary:

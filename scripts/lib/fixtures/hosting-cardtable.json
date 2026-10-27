@@ -1,0 +1,16 @@
+{
+  "app": "cardtable",
+  "kind": "agent",
+  "slices": { "unit": { "memoryMb": 4096, "cores": 4 }, "min": 1, "max": 4 },
+  "runtime": {
+    "install": "launcher",
+    "workersOutliveRestart": true,
+    "holdOnCoordinatorLoss": true
+  },
+  "network": { "ingress": "controller", "ports": [7621], "egress": [] },
+  "disk": { "stateGb": 2 },
+  "availability": { "noticeMin": 15, "stateful": false },
+  "placement": { "require": ["wired", "not-beside-unbounded"] },
+  "isolation": { "ciMayRead": false },
+  "contact": "WolffM/hadoku-cardtable docs/requests/FLEET_MANAGER_FORGE_HOSTING.md"
+}
