@@ -428,7 +428,18 @@ function recordUnreadable(name, guest, why, out, deferrable) {
 	const defer = deferrable ? deferralFor(name, DRAINS) : { deferred: false };
 	if (defer.deferred) {
 		log(`   · ${deferralNote(name, defer)} — not audited`);
-		results.push({ machine: name, ok: true, expectedDown: true, skipped: 'expected down' });
+		// The same shape as an audited result, with nothing in it. Every reader
+		// below walks `notes` and `problems`; without them a drained, unreachable
+		// node crashed the whole --check (2026-10-27, claw-6), and the converger
+		// read the slice facet as unreadable fleet-wide.
+		results.push({
+			machine: name,
+			ok: true,
+			expectedDown: true,
+			skipped: 'expected down',
+			notes: [],
+			problems: [],
+		});
 		return;
 	}
 	log(`   ✗ ${why}: ${out.slice(0, 200)}`);

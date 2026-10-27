@@ -619,6 +619,32 @@ const FX_CLAW = {
 /** Identical but for the role, so only the role can be what decides. */
 const FX_GUEST = { ...FX_CLAW, role: 'guest' };
 
+test('run for real: a DRAINED unreachable node is deferred, and --check still reports', () => {
+	// The deferred result once carried no notes/problems, and the mint-placement
+	// judge read both: one drained, unreachable node crashed the whole check
+	// with a TypeError and empty stdout (claw-6, 2026-10-27).
+	const f = sliceFixture({ 'fx-drained.invalid': FX_CLAW, 'fx-claw.invalid': FX_CLAW });
+	try {
+		writeFileSync(
+			join(f.root, 'state', 'fleet-drain.json'),
+			JSON.stringify({
+				nodes: {
+					'fx-drained.invalid': { since: new Date().toISOString(), kind: 'maintenance' },
+				},
+			})
+		);
+		const r = runSlice(['--check', '--json'], f.env);
+		assert.doesNotMatch(r.err, /TypeError/, r.err);
+		const report = r.json();
+		const drained = report.results.find((x) => x.machine === 'fx-drained.invalid');
+		assert.equal(drained?.expectedDown, true, JSON.stringify(report.results));
+		// The control: the undrained, unreachable claw is still a failure.
+		assert.equal(report.results.find((x) => x.machine === 'fx-claw.invalid')?.ok, false);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
 test('run for real: a guest is skipped and REPORTED, and the claw is still audited', () => {
 	const f = sliceFixture({ 'fx-claw.invalid': FX_CLAW, 'fx-guest.invalid': FX_GUEST });
 	try {
