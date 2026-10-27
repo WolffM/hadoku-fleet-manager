@@ -465,7 +465,9 @@ if (shared) {
 // The dispatcher re-reads the record every pass (15 s).
 const admissionFrom = new Date(NOW + 15_000).toISOString();
 
-const r = await runOn(node, deployScript(tenant, resources, controller), { timeoutMs: 120_000 });
+const r = await runOn(node, deployScript(tenant, resources, controller, { shared }), {
+	timeoutMs: 120_000,
+});
 if (!r.stdout.includes('HOSTING-DEPLOYED')) {
 	finish(false, {
 		state: 'not-guaranteed',

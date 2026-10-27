@@ -67,6 +67,8 @@ const answer = (over = {}) =>
 			ciMinOom: '',
 			tailnet4: '198.51.100.9',
 			tailnet6: '2001:db8::9',
+			ciSliceMax: String(27904 * MIB),
+			ciSliceHigh: String((27904 - 8192) * MIB),
 			...over,
 		}).map(([k, v]) => `${k}=${v}`),
 		'OBSERVE-END',
@@ -340,4 +342,33 @@ test("the tenant's workers outlive an agent restart, and not a teardown", () => 
 		r.indexOf('--kill-whom=all --signal=SIGKILL') < r.indexOf('disable --now'),
 		'the workers are killed before the unit goes'
 	);
+});
+
+test('shared: CI is throttled below its ceiling by the slice, so it cannot push the box into reclaim', () => {
+	assert.deepEqual(categories(judge({}, 'shared')), []);
+	assert.deepEqual(categories(judge({ ciSliceHigh: 'max' }, 'shared')), ['hosting-ci-headroom']);
+	assert.deepEqual(categories(judge({ ciSliceHigh: String(27904 * MIB) }, 'shared')), [
+		'hosting-ci-headroom',
+	]);
+	// Lower than needed is fine: the deploy took the slice from a smaller ceiling.
+	assert.deepEqual(categories(judge({ ciSliceHigh: String(10000 * MIB) }, 'shared')), []);
+	// A ceiling we cannot read is a headroom we cannot check.
+	assert.deepEqual(categories(judge({ ciSliceMax: 'max' }, 'shared')), ['hosting-ci-headroom']);
+	assert.deepEqual(categories(judge({ ciSliceMax: '' }, 'shared')), ['hosting-ci-headroom']);
+	// Whole-box: CI is not on the node, so its slice is not judged.
+	assert.deepEqual(categories(judge({ ciSliceHigh: 'max' }, 'whole')), []);
+});
+
+test('only a shared deploy takes the slice out of CI; whole and remove put it back', () => {
+	const ctl = { lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null };
+	const res = { memoryMb: 4096, cores: 4 };
+	assert.match(
+		deployScript('cardtable', res, ctl, { shared: true }),
+		/set-property runners\.slice "MemoryHigh=\$\(\( ci_max \/ 1048576 - MEMORY_MB \)\)M"/
+	);
+	assert.match(
+		deployScript('cardtable', res, ctl),
+		/set-property runners\.slice MemoryHigh=infinity/
+	);
+	assert.match(removeScript('cardtable', '192.0.2.10'), /MemoryHigh=infinity/);
 });

@@ -74,18 +74,19 @@ or one the tenant wants free of CI.
 
 Nothing is read from a unit file the fleet wrote.
 
-| fact                 | written by                                                                                                                                                       | read back from                                                                      |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| memory               | `MemoryMax`, `MemoryMin`, `MemorySwapMax=0` on `hosting.slice/hosting-<t>.slice`                                                                                 | `memory.max`, `memory.min`, `memory.swap.max` in its cgroup                         |
-| protection reaches   | `MemoryMin` on `hosting.slice`                                                                                                                                   | the parent's `memory.min` (a parent at 0 caps the child at 0)                       |
-| cores                | `CPUQuota=N*100%`                                                                                                                                                | `cpu.max`                                                                           |
-| priority             | `CPUWeight=10000` on `hosting.slice`                                                                                                                             | the parent's `cpu.weight`                                                           |
-| the agent's own user | `useradd --system`, nologin, its own group                                                                                                                       | `getent`, `id -G` against the CI user's groups, `sudo -l -U`                        |
-| files                | home 0700 owned by the agent; executable and its dir root-owned                                                                                                  | `stat`                                                                              |
-| agent supervised     | system unit, `User=`, `Restart=always`, started by a `.path` unit                                                                                                | the process on the port: its uid, cgroup and `oom_score_adj`                        |
-| CI ranks below       | `ciUnitProperties` on every CI unit, and the standing units' drop-in                                                                                             | every `Runner.*` process: in `runners.slice`, `oom_score_adj ≥ 500`                 |
-| no CI (whole only)   | drain record `kind: hosting`                                                                                                                                     | the process tree: no `Runner.Listener`, no `Runner.Worker`                          |
-| controller-only port | ufw: the controller's LAN address. Tailnet: `hosting-<t>-port.service` drops the port in the `raw` table for every source but the controller's tailnet addresses | connecting: the controller must get in, another node must time out on every address |
+| fact                   | written by                                                                                                                                                       | read back from                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| memory                 | `MemoryMax`, `MemoryMin`, `MemorySwapMax=0` on `hosting.slice/hosting-<t>.slice`                                                                                 | `memory.max`, `memory.min`, `memory.swap.max` in its cgroup                         |
+| protection reaches     | `MemoryMin` on `hosting.slice`                                                                                                                                   | the parent's `memory.min` (a parent at 0 caps the child at 0)                       |
+| cores                  | `CPUQuota=N*100%`                                                                                                                                                | `cpu.max`                                                                           |
+| priority               | `CPUWeight=10000` on `hosting.slice`                                                                                                                             | the parent's `cpu.weight`                                                           |
+| the agent's own user   | `useradd --system`, nologin, its own group                                                                                                                       | `getent`, `id -G` against the CI user's groups, `sudo -l -U`                        |
+| files                  | home 0700 owned by the agent; executable and its dir root-owned                                                                                                  | `stat`                                                                              |
+| agent supervised       | system unit, `User=`, `Restart=always`, started by a `.path` unit                                                                                                | the process on the port: its uid, cgroup and `oom_score_adj`                        |
+| CI ranks below         | `ciUnitProperties` on every CI unit, and the standing units' drop-in                                                                                             | every `Runner.*` process: in `runners.slice`, `oom_score_adj ≥ 500`                 |
+| CI's headroom (shared) | `MemoryHigh` on `runners.slice` = its `MemoryMax` less the declared slice                                                                                        | `memory.high` against `memory.max` in its cgroup                                    |
+| no CI (whole only)     | drain record `kind: hosting`                                                                                                                                     | the process tree: no `Runner.Listener`, no `Runner.Worker`                          |
+| controller-only port   | ufw: the controller's LAN address. Tailnet: `hosting-<t>-port.service` drops the port in the `raw` table for every source but the controller's tailnet addresses | connecting: the controller must get in, another node must time out on every address |
 
 **The agent runs as its own system user** (cardtable §9). The fleet supervises
 it and never ships it: `--install` streams the tenant's file over ssh straight
@@ -115,6 +116,16 @@ actually changed. And a restart signals only the agent: the unit carries
 own sub-cgroups and they outlive the agent (cardtable's JVMs keep their
 matches). The slice's `MemoryMax` and `CPUQuota` still bound the whole subtree.
 `--remove` kills the workers before it removes the unit.
+
+**Protection keeps pages, not latency.** In cardtable's A6 (2026-10-27) a
+global memory squeeze left every one of the slice's pages in place, because
+`memory.min` held, and its threads still stalled 66 s in direct reclaim. CI's
+ceiling is the node's RAM less its floor and does not subtract the slice, so CI
+alone can cause that squeeze. On a shared node the deploy therefore gives
+`runners.slice` a `MemoryHigh` of its `MemoryMax` less the slice: past that, CI
+reclaims its own cache and is throttled before the box is. Minted units run at
+`MemorySwapMax=0`, so this cannot become the swap thrash that keeps
+`MemoryHigh` off `runners.slice` everywhere else.
 
 **The firewall does not reach loopback.** A CI job on the same node connects to
 the agent over `127.0.0.1`, which ufw never filters. So the port being closed to

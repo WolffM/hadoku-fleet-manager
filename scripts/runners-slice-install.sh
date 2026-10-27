@@ -78,6 +78,9 @@
 # NO MemoryHigh. It would throttle by reclaiming into swap, and on claw-1's
 # 7200rpm disk at 13.6% iowait that thrashes rather than protects — the same
 # reasoning the plan gives for not using MemoryHigh-driven sampling there.
+# One exception, owned elsewhere: a SHARED HOSTING node's runners.slice gets a
+# MemoryHigh from `fleet hosting` (scripts/lib/hosting.mjs CI_HEADROOM), where
+# every minted unit runs at MemorySwapMax=0. This script never writes or resets it.
 #
 # BOTH MANAGERS. claw-2 runs 24 units under system.slice and 3 under user@1000,
 # and BOTH produced OOM victims. A slice created only in the system manager

@@ -204,12 +204,42 @@ ExecStop=-/usr/sbin/ip6tables -t raw -D PREROUTING $R6
 WantedBy=multi-user.target
 EOF`;
 
+/** CI's slice in the user manager, where every minted runner unit lands. */
+const CI_SLICE_CG = `CI_CG=$(find /sys/fs/cgroup/user.slice -maxdepth 4 -type d -name runners.slice 2>/dev/null | head -n1)`;
+const USER_SYSTEMCTL = 'XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user';
+
+/**
+ * HEADROOM for the tenant (cardtable A6, 2026-10-27). runners.slice's
+ * MemoryMax is the node's RAM less its own floor, and the tenant's slice is
+ * not taken out of it, so CI alone can push the box into global direct
+ * reclaim. Under that, the slice kept every page (memory.min held) and still
+ * stalled 66 s in reclaim: protection keeps pages, not latency.
+ *
+ * So on a shared node CI's slice gets `MemoryHigh` = its observed MemoryMax
+ * less the declared slice. Past it CI reclaims its own cache and is
+ * throttled, before the box is. Minted units run at `MemorySwapMax=0`
+ * (`ciUnitProperties`), so that reclaim cannot be swap thrash, the reason
+ * runners-slice-install.sh sets no MemoryHigh of its own. A persistent
+ * set-property, so it survives the slice's unit being rewritten.
+ */
+const CI_HEADROOM = `
+${CI_SLICE_CG}
+ci_max=$(cat "$CI_CG/memory.max" 2>/dev/null || echo max)
+if [ -n "$CI_CG" ] && [ "$ci_max" != max ]; then
+	${USER_SYSTEMCTL} set-property runners.slice "MemoryHigh=$(( ci_max / 1048576 - MEMORY_MB ))M"
+else
+	echo "HOSTING-NOTE runners.slice has no memory ceiling to take the slice from"
+fi`;
+
+/** Undo {@link CI_HEADROOM}. */
+const CI_HEADROOM_RESET = `${USER_SYSTEMCTL} set-property runners.slice MemoryHigh=infinity >/dev/null 2>&1 || true`;
+
 /**
  * The deploy script. Idempotent: a re-run with the same declaration rewrites
  * the same files, keeps the user and adds no second ufw rule. Run as the CI
  * user over ssh, with every privileged step through `sudo -n`.
  */
-export function deployScript(tenantName, { memoryMb, cores }, controller) {
+export function deployScript(tenantName, { memoryMb, cores }, controller, { shared = false } = {}) {
 	const t = TENANTS[tenantName];
 	return `${assign({
 		...tenantVars(t, tenantName),
@@ -317,6 +347,7 @@ if [ -x "$EXEC" ]; then
 	esac
 fi
 ${RAISE_CI_OOM}
+${shared ? CI_HEADROOM : CI_HEADROOM_RESET}
 if ! $S ufw status 2>/dev/null | grep -Eq "^$PORT/tcp +ALLOW +$CONTROLLER_IP( |$)"; then
 	$S ufw allow from "$CONTROLLER_IP" to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent" >/dev/null
 fi
@@ -346,6 +377,7 @@ while $S ufw status 2>/dev/null | grep -Eq "^$PORT/tcp +ALLOW +$CONTROLLER_IP( |
 	$S ufw delete allow from "$CONTROLLER_IP" to any port "$PORT" proto tcp >/dev/null
 done
 ${DROP_TAILNET_RULES}
+${CI_HEADROOM_RESET}
 echo HOSTING-REMOVED
 `;
 }
@@ -481,6 +513,11 @@ echo "ciProcs=$n"
 echo "ciOutsideRunners=$out"
 echo "ciBelowOom=$low"
 echo "ciMinOom=$min"
+${CI_SLICE_CG}
+if [ -n "$CI_CG" ]; then
+	echo "ciSliceMax=$(r "$CI_CG/memory.max")"
+	echo "ciSliceHigh=$(r "$CI_CG/memory.high")"
+fi
 echo "tailnet4=$(tailscale ip -4 2>/dev/null | head -n1)"
 echo "tailnet6=$(tailscale ip -6 2>/dev/null | head -n1)"
 echo OBSERVE-END
@@ -534,6 +571,8 @@ export function parseObserved(stdout) {
 		ciOutsideRunners: num('ciOutsideRunners'),
 		ciBelowOom: num('ciBelowOom'),
 		ciMinOom: num('ciMinOom'),
+		ciSliceMax: kv.ciSliceMax ?? null,
+		ciSliceHigh: kv.ciSliceHigh ?? null,
 		tailnet4: str('tailnet4'),
 		tailnet6: str('tailnet6'),
 	};
@@ -825,6 +864,18 @@ export function judgeHosting(declared, obs, mode = 'whole', reach = null) {
 			block(
 				'hosting-oom',
 				`${obs.ciBelowOom} CI process(es) have oom_score_adj below ${CI_OOM_SCORE_ADJ} (lowest ${obs.ciMinOom}), so a global OOM may not take CI first`
+			);
+		const ciMax = mibFromMemoryMax(obs.ciSliceMax);
+		const ciHigh = mibFromMemoryMax(obs.ciSliceHigh);
+		if (ciMax === null)
+			block(
+				'hosting-ci-headroom',
+				`runners.slice's memory.max reads "${obs.ciSliceMax}", so CI's headroom below the slice cannot be set or checked`
+			);
+		else if (ciHigh === null || ciHigh > ciMax - declared.memoryMb)
+			block(
+				'hosting-ci-headroom',
+				`runners.slice's memory.high reads "${obs.ciSliceHigh}", not at most ${ciMax - declared.memoryMb} MiB (its max less the slice): CI can push the box into global reclaim`
 			);
 	}
 
