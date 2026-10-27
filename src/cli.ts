@@ -197,6 +197,11 @@ const COMMANDS: Record<string, Command> = {
 		help: true,
 		summary: 'lend a node to a tenant: CI off, declared resources served, agent supervised',
 	},
+	'node-users': {
+		script: 'node-users.mjs',
+		summary:
+			'per node: who runs CI (the ci role), read from the node — sudo, groups, keys, every runner uid',
+	},
 	'node-status': {
 		script: 'node-status.mjs',
 		help: true,

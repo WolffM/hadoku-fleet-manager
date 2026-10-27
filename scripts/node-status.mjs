@@ -9,8 +9,11 @@
  * prints. Nothing here ranks or recommends a node.
  *
  * WHAT IS LIVE AND WHAT IS RECORDED, said in the document itself:
- *   - `reachable`, `ci`, `hosting.observed` — LIVE, one ssh per node in
- *     parallel during THIS call. `observedAt` is when.
+ *   - `reachable`, `ci`, `hosting.observed`, `ciUser` — LIVE, ssh to each
+ *     node in parallel during THIS call. `observedAt` is when. `ciUser` is
+ *     who runs CI there (`lib/node-users-facet.mjs`): `not-cut-over` is the
+ *     advisory that jobs run as the admin user, with its sudo; a cut-over
+ *     node that drifted is BLOCKING.
  *   - `health` — the daily `fleet doctor --cadence` record (ci:health-refresh,
  *     12:00Z). Its own `recordedAt` and age ride along, and a record past
  *     HEALTH_STALE_HOURS is a BLOCKING finding: an old verdict is not a
@@ -52,6 +55,11 @@ import {
 import { readRevocations } from '../dist/capability-revocations.js';
 import { readHostingDoc } from '../dist/runners/hosting-record.js';
 import { nodeUser } from '../dist/lib/node-users.js';
+import {
+	judgeNodeUsers,
+	parseUsersObservation,
+	usersObserveScript,
+} from './lib/node-users-facet.mjs';
 import { stateDir } from './lib/paths.mjs';
 
 /** The health writer runs daily; a day and a half covers one late run and no more. */
@@ -148,6 +156,12 @@ const rows = await Promise.all(
 			connectTimeout: CONNECT_S,
 		});
 		const obs = parseObserved(r.stdout);
+		const usersRun = await runOn(name, usersObserveScript(m), {
+			as: 'admin',
+			timeoutMs: ANSWER_MS,
+			connectTimeout: CONNECT_S,
+		});
+		const users = judgeNodeUsers(m, parseUsersObservation(usersRun.stdout));
 		const findings = [];
 		if (!obs) {
 			findings.push({
@@ -242,6 +256,10 @@ const rows = await Promise.all(
 			findings.push(...judged.findings);
 		}
 
+		// Unreachable is already one blocking finding above; the users facet adds its
+		// own only when the node answered.
+		if (obs) findings.push(...users.findings);
+
 		// A hosting node rebooted without notice. Recorded for every node, so a
 		// node that becomes a host already has a boot to compare against.
 		const prev = boots[name];
@@ -289,6 +307,7 @@ const rows = await Promise.all(
 				: null,
 			notices: notices.filter((n) => n.node === name).map(({ node: _, ...n }) => n),
 			hosting,
+			ciUser: { name: nodeUser(m, 'ci'), state: users.state },
 			capabilities: m.$capabilities?.earned ?? [],
 			revoked,
 			health: healthOut,

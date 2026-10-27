@@ -465,8 +465,12 @@ echo "memTotalMb=$(awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo)"
 echo "nproc=$(nproc 2>/dev/null)"
 echo "uptimeSec=$(cut -d. -f1 /proc/uptime)"
 echo "bootId=$(r /proc/sys/kernel/random/boot_id)"
-echo "ciWorkers=$(pgrep -c -f '[R]unner\\.Worker' || true)"
-echo "ciListeners=$(pgrep -c -f '[R]unner\\.Listener' || true)"
+# By PROCESS NAME (-x), never the command line (-f): mgmt-api's own probes run
+# here as \`bash -c '... pgrep -ax Runner.Worker ...'\`, in the ssh session's
+# scope at oom 0, and a command-line match counted them as unranked CI
+# (claw-9, 2026-10-27 06:57Z, during cardtable's A6).
+echo "ciWorkers=$(pgrep -cx 'Runner\\.Worker' || true)"
+echo "ciListeners=$(pgrep -cx 'Runner\\.Listener' || true)"
 c=/sys/fs/cgroup$SLICE_CG
 p=/sys/fs/cgroup$PARENT_CG
 if [ -d "$c" ]; then
@@ -502,7 +506,7 @@ if [ -n "$pid" ]; then
 	echo "listenerOom=$(sudo -n cat "/proc/$pid/oom_score_adj" 2>/dev/null)"
 fi
 n=0; out=0; low=0; min=
-for q in $(pgrep -f '[R]unner\\.(Listener|Worker)'); do
+for q in $(pgrep -x 'Runner\\.(Listener|Worker)'); do
 	n=$((n+1))
 	grep -q '/runners.slice/' "/proc/$q/cgroup" 2>/dev/null || out=$((out+1))
 	a=$(cat "/proc/$q/oom_score_adj" 2>/dev/null || echo 0)

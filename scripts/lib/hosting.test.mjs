@@ -7,6 +7,7 @@ import {
 	fitProblems,
 	judgeHosting,
 	mibFromMemoryMax,
+	observeScript,
 	parseCores,
 	parseMemoryMb,
 	parseObserved,
@@ -371,4 +372,14 @@ test('only a shared deploy takes the slice out of CI; whole and remove put it ba
 		/set-property runners\.slice MemoryHigh=infinity/
 	);
 	assert.match(removeScript('cardtable', '192.0.2.10'), /MemoryHigh=infinity/);
+});
+
+test('CI is counted by PROCESS NAME: a probe whose command line says Runner.Worker is not CI', () => {
+	// claw-9, 2026-10-27 06:57Z: mgmt-api's own probe, running as
+	// `bash -c '... pgrep -ax Runner.Worker ...'` in the ssh session at oom 0,
+	// was counted as an unranked CI process outside runners.slice.
+	const s = observeScript('cardtable', 'hadoku');
+	assert.doesNotMatch(s, /pgrep -[a-z]*f/);
+	assert.match(s, /pgrep -x 'Runner\\.\(Listener\|Worker\)'/);
+	assert.match(s, /^CI_USER='hadoku'$/m);
 });
