@@ -79,6 +79,18 @@ commands. A guest still starts at registration, because both drivers refuse
 it by role. `scripts/registration-provisioning.test.mjs` registers on a fake
 node and runs the real `--check` of both afterwards, with nothing between.
 
+## It holds 1,500 GitHub calls back (fleet-manager#9)
+
+The 5,000/h core limit belongs to the GitHub user, so every token and the
+host `gh` login spend one pool with runner-health, dispatch and minting. A
+`--check-coverage` run costs ~440 of it. Before spending, `reconcile`,
+`check-history-coverage` and `reconcile-runner-identity` read `/rate_limit`
+(free) through `scripts/lib/gh-reserve.mjs`, and under 1,500 left they are
+**not run** and fail with the reason and the reset time. That is "could not
+look", not a pass. An unreadable `/rate_limit` does not refuse: the gate's
+own first call fails and names the real fault. `FLEET_GH_RESERVE=<n>` sets
+the floor for one run, and `0` turns it off.
+
 ## Machine-centric since 2026-08-23
 
 The manifest used to be repo-centric: ten repo entries each carried a `claws`

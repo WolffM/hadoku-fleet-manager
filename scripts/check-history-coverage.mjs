@@ -75,6 +75,7 @@ import process from 'node:process';
 
 import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
+import { checkGhReserve } from './lib/gh-reserve.mjs';
 import { describeReadFailure, readQueuedWithRetry } from './lib/queue-health.mjs';
 
 const JSON_OUT = process.argv.includes('--json');
@@ -242,6 +243,11 @@ for (const line of readFileSync(historyPath, 'utf8').split('\n')) {
 	if (Number.isFinite(started)) oldest = Math.min(oldest, started);
 }
 if (!seen.size) fail('job-history holds no run ids — the recorder is not running at all');
+
+// One `gh api` call per repo and per classified miss, ~170 a night: under the
+// shared reserve it is not run (#9).
+const reserve = checkGhReserve('history-coverage');
+if (!reserve.ok) fail(reserve.reason);
 
 const cutoffNew = Date.now() - GRACE_MIN * 60_000;
 const cutoffOld = Date.now() - LOOKBACK_H * 3600_000;

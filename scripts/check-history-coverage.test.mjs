@@ -8,7 +8,7 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,7 +28,12 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'check-history-cove
  * `'ran'` (a job reached a runner — recordable), `'never'` (no job reached a
  * runner — unrecordable) or `'fail'` (the lookup itself fails with `stderr`).
  */
-function run(repos, failures, stderr = 'HTTP 502: Bad Gateway', { missed = 0, jobs = 'ran' } = {}) {
+function run(
+	repos,
+	failures,
+	stderr = 'HTTP 502: Bad Gateway',
+	{ missed = 0, jobs = 'ran', rateRemaining = '' } = {}
+) {
 	const dir = tempDir('history-coverage-');
 	const bin = join(dir, 'bin');
 	mkdirSync(bin);
@@ -69,6 +74,11 @@ function run(repos, failures, stderr = 'HTTP 502: Bad Gateway', { missed = 0, jo
 		gh,
 		[
 			'#!/usr/bin/env bash',
+			'# gh api rate_limit -q <jq>: the reserve read (#9); unset answers nothing, as a broken gh would',
+			'if [ "$2" = rate_limit ]; then',
+			'  [ -n "$RATE_REMAINING" ] || exit 1',
+			'  echo "$RATE_REMAINING 1761371940"; exit 0',
+			'fi',
 			'# gh api repos/WolffM/<repo>/actions/runs?per_page=100 -q <jq>',
 			'case "$2" in */jobs)',
 			'  case "$JOBS" in',
@@ -97,9 +107,11 @@ function run(repos, failures, stderr = 'HTTP 502: Bad Gateway', { missed = 0, jo
 			FAKE_STDERR: stderr,
 			JOBS: jobs,
 			JOB_AT: ran,
+			RATE_REMAINING: String(rateRemaining),
 		},
 	});
-	return { status: r.status, doc: JSON.parse(r.stdout || '{}'), stderr: r.stderr };
+	const listed = repos.filter((repo) => existsSync(join(dir, `calls-${repo}`)));
+	return { status: r.status, doc: JSON.parse(r.stdout || '{}'), stderr: r.stderr, listed };
 }
 
 test('a clean fleet passes', () => {
@@ -155,4 +167,19 @@ test('a lookup that ANSWERS is not a failed lookup, whatever it says', () => {
 	assert.equal(never.doc.lookupFailed, 0);
 	assert.equal(never.doc.unrecordable, 25);
 	assert.equal(never.status, 0, JSON.stringify(never.doc));
+});
+
+test('#9: under the shared GitHub reserve the gate is NOT RUN, fails, and spends nothing', () => {
+	const r = run(['alpha', 'beta'], {}, undefined, { rateRemaining: 1499 });
+	assert.equal(r.status, 1, r.stderr);
+	assert.equal(r.doc.ok, false);
+	assert.match(r.doc.error, /history-coverage NOT RUN: 1499 GitHub calls left/);
+	assert.deepEqual(r.listed, [], 'not one repo listing was spent');
+});
+
+test('#9: at the reserve the gate runs as normal', () => {
+	const r = run(['alpha', 'beta'], {}, undefined, { rateRemaining: 1500 });
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(r.doc.ok, true);
+	assert.deepEqual(r.listed, ['alpha', 'beta']);
 });

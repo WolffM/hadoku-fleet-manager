@@ -95,6 +95,7 @@
  *   fleet identity --json
  */
 import { execFile } from 'node:child_process';
+import { checkGhReserve } from './lib/gh-reserve.mjs';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -340,6 +341,14 @@ if (!nodes.length) {
 				: ' — the manifest declares no machines, so no listener anywhere could be seen.') +
 			' Probing nothing is not a pass.'
 	);
+	process.exit(1);
+}
+
+// Under the shared GitHub reserve this sweep is not run (#9).
+const reserve = checkGhReserve('runner-identity');
+if (!reserve.ok) {
+	if (JSON_OUT) console.log(JSON.stringify({ ok: false, error: reserve.reason }, null, 2));
+	else console.error(`reconcile-runner-identity: ${reserve.reason}`);
 	process.exit(1);
 }
 
