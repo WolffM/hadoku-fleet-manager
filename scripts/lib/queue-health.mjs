@@ -312,7 +312,10 @@ export function summariseQueue(
  * 40123491036 was created while the previous push held its
  * `cancel-in-progress` concurrency group. That run was cancelled, and this one
  * stayed `pending` with three jobs `queued` on the fleet labels. The dispatcher
- * never minted for it, and this gate reported `queued: 0` for 15 minutes.
+ * never minted for it, and this gate reported `queued: 0` for 15 minutes. The
+ * dispatcher has listed pending runs too since fleet-manager#11, and makes this
+ * same split with its jobs probe; a run here past the floor is one it did not
+ * manage to serve.
  *
  * A pending run is usually fine. Without `cancel-in-progress`, the next run of
  * a deploy or update workflow is `pending` for the current one's whole duration.
@@ -325,8 +328,7 @@ export function summariseQueue(
  *   - a job started: the run status lags its jobs, as for queued runs. Dropped.
  *   - jobs queued, or jobs UNREADABLE: `invisible`, a finding past `failSeconds`,
  *     measured from the first queued job like summariseQueue. An unread run is
- *     counted here because the strict direction is the only safe one when this
- *     gate is the sole reader that can see it.
+ *     counted here because the strict direction is the only safe one for a gate.
  *
  * No zombie band, unlike queued runs: a pending run can be cancelled, so a run
  * here is always something an operator can clear (cancel, then re-run).
@@ -379,15 +381,15 @@ export function queueFindings(summary, unreadable = [], failSeconds = FAIL_SECON
 					.join(', ')
 		);
 	}
-	// INVISIBLE IS A FINDING. Nothing mints for these runs, so they never age out
-	// on their own, and before #6 this gate could not see them either. See
-	// summarisePending.
+	// INVISIBLE IS A FINDING. The dispatcher lists pending runs on its own clock
+	// since fleet-manager#11 and serves one well inside the floor, so a run still
+	// here past it is one that minting did not help. See summarisePending.
 	const invisible = summary.invisible ?? [];
 	if (invisible.length) {
 		findings.push(
-			`${invisible.length} run(s) listed \`pending\` with jobs waiting for a runner — the ` +
-				`dispatcher lists only \`queued\` runs and will never mint for them ` +
-				`(cancel, then \`gh run rerun\`): ` +
+			`${invisible.length} run(s) listed \`pending\` with jobs waiting for a runner past ` +
+				`the dispatcher's pending pass — check its \`[dispatch-tick]\` skip lines, or ` +
+				`cancel, then \`gh run rerun\`: ` +
 				invisible
 					.slice(0, 5)
 					.map((s) => `${s.repo} run ${s.id} ${s.ageSec}s`)

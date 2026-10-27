@@ -35,6 +35,8 @@ import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
 import {
 	DEFAULT_POLL_POLICY,
 	deriveHotRepos,
+	jobQueuedSinceMs,
+	MIN_QUEUED_MS,
 	ZOMBIE_MS,
 	mintableRuns,
 	queuedSinceMs,
@@ -67,6 +69,10 @@ const cachedRunsByRepo = new Map<string, { workflow_runs?: QueuedRun[] }>();
 const POLL_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const runsDisk = conditionalCacheStore('dispatch-runs', { maxBytes: POLL_CACHE_MAX_BYTES });
 const jobsDisk = conditionalCacheStore('dispatch-jobs', { maxBytes: POLL_CACHE_MAX_BYTES });
+/** The pending listing's ETag and body (fleet-manager#11), kept exactly like the queued one's. */
+const pendingEtagByRepo = new Map<string, string>();
+const cachedPendingByRepo = new Map<string, { workflow_runs?: QueuedRun[] }>();
+const pendingDisk = conditionalCacheStore('dispatch-pending', { maxBytes: POLL_CACHE_MAX_BYTES });
 let pollCacheHydrated = false;
 /** `${token fingerprint}\n${repo or repo#runId}` — an ETag is answered per credential. */
 const diskKey = (token: string, key: string): string => `${ghTokenFingerprint(token)}\n${key}`;
@@ -99,6 +105,10 @@ function hydratePollCache(token: string): void {
 	restore(runsDisk, (repo, etag, body) => {
 		etagByRepo.set(repo, etag);
 		cachedRunsByRepo.set(repo, body as { workflow_runs?: QueuedRun[] });
+	});
+	restore(pendingDisk, (repo, etag, body) => {
+		pendingEtagByRepo.set(repo, etag);
+		cachedPendingByRepo.set(repo, body as { workflow_runs?: QueuedRun[] });
 	});
 	restore(jobsDisk, (key, etag, body) => {
 		jobsCacheByRun.set(key, { etag, body: body as { jobs?: QueuedJob[] } });
@@ -462,6 +472,45 @@ function repoOfStuckKey(key: string): string {
  */
 export const RECOVERY_INTERVAL_MS = 600_000;
 
+/**
+ * How often the dispatcher lists `?status=pending` runs (fleet-manager#11).
+ *
+ * The queued listing cannot see a run GitHub leaves `pending` with jobs
+ * `queued` on fleet labels, and nothing minted for one: hadoku-cardtable run
+ * 40285146065's `changes` job was created 2026-10-26 08:12:03Z and waited 55
+ * minutes until a JIT minted for a DIFFERENT run (r40297104081) happened to be
+ * idle and took it. So GitHub does assign these jobs; nothing was asked to
+ * serve them. queue-health has called the state `invisible` since #6.
+ *
+ * ON ITS OWN CLOCK, and sized as if every call were charged. A pending run's
+ * listing rarely changes, so most polls should be 304s, but that lowers the
+ * typical bill and leaves the ceiling alone. At the 15 s tick, 27 repos is
+ * 6,480 calls/hr, which is more than the whole budget. At 4 minutes it is
+ * 405/hr plus at most MAX_PENDING_PROBES jobs reads per pass (150/hr).
+ *
+ * BELOW queue-health's floor, not at it. That gate calls a pending run
+ * invisible once its first queued job is FAIL_SECONDS (300 s) old; the worst
+ * serve here is one interval, one tick and a ~9 s mint, 264 s. At 300 s it was
+ * 324 s and the gate would flag runs the dispatcher was about to serve.
+ * `queue-cadence.test.mjs` asserts the relationship.
+ */
+export const PENDING_INTERVAL_MS = 240_000;
+
+/**
+ * Jobs reads per pending pass, fleet-wide. Most pending runs are HELD (zero
+ * jobs, waiting on their own concurrency group) and their jobs listing does not
+ * move, so the ETag answers 304. The cap bounds the ceiling anyway.
+ */
+export const MAX_PENDING_PROBES = 10;
+
+let lastPendingPollMs = 0;
+/**
+ * `repo#runId` of the runs each repo's last pending listing returned. Their
+ * jobs cache and backoff must outlive the ticks between pending polls, or every
+ * probe would be a full read; they are dropped once a listing no longer has them.
+ */
+const pendingKeysByRepo = new Map<string, Set<string>>();
+
 // ---------------------------------------------------------------------------
 // The probe's declared intent — the one thing that stops the wasted competitor
 // ---------------------------------------------------------------------------
@@ -738,69 +787,64 @@ export async function runDispatchTick(
 	const candidateKeys = new Set<string>();
 	/** Candidates not probed this tick because no node could take them (#117). */
 	const backedOff: string[] = [];
-	// BOUNDED, not `Promise.all`. One token serves the dispatcher, the fleet loop
-	// and runner-health, and a wide simultaneous burst trips GitHub's SECONDARY
-	// rate limit — which returns 403 and stalls all three, not just this sweep.
-	//
-	// This was unbounded and survived only because most repos were COLD, so few
-	// came due per tick. Once the poll interval went below the tick every repo
-	// came due EVERY tick, and `ci:queue-health` started failing with "could not
-	// read the queue for 26 repo(s)" — all 26 at once, which is a burst
-	// signature rather than 26 independent faults.
-	//
-	// Costs no discovery latency: 26 listings at six-wide is five rounds of
-	// single-digit seconds inside a 60s tick.
-	await mapConcurrent(due, SWEEP_CONCURRENCY, async (repo) => {
-		lastPolledMs.set(repo, nowMs);
-		type RunsResponse = { workflow_runs?: QueuedRun[] } | null;
-		let resp: RunsResponse = null;
-		const PATH = '/actions/runs?status=queued&per_page=30';
+	type RunsResponse = { workflow_runs?: QueuedRun[] };
+	/**
+	 * One runs listing for one repo, CONDITIONAL when the caller can be: the
+	 * queued listing is 26 calls a tick, and on 2026-09-04 it exhausted the
+	 * 5,000/hr budget, with 424 of 478 rate-limited calls on that one path.
+	 * Sending If-None-Match makes the unchanged case free and keeps the discovery
+	 * cadence that got queue time down.
+	 *
+	 * `null` is the error return, NOT an empty queue. Treating the two the same
+	 * is how a fleet-wide API failure reads as "nothing to do".
+	 */
+	const readListing = async (
+		path: string,
+		repo: string,
+		etags: Map<string, string>,
+		bodies: Map<string, RunsResponse>,
+		disk: typeof runsDisk
+	): Promise<QueuedRun[] | null> => {
 		try {
-			if (gh.getConditional) {
-				// CONDITIONAL, because a 304 is free and almost every poll is one.
-				// This listing is 26 calls a tick; on 2026-09-04 it exhausted the
-				// 5,000/hr budget and 424 of 478 rate-limited calls were this exact
-				// path. Sending If-None-Match makes the unchanged case cost nothing
-				// while keeping the discovery cadence that got queue time down.
-				const c = await gh.getConditional<NonNullable<RunsResponse>>(
-					PATH,
-					token,
-					repo,
-					etagByRepo.get(repo) ?? null
-				);
-				if (c.status === 'unchanged') {
-					// The listing is IDENTICAL to last tick — but runs AGE, so a run
-					// that was too young then may be mintable now. Re-evaluate the
-					// cached body rather than skipping the repo, or a job discovered
-					// inside the age gate would wait for its content to change.
-					resp = cachedRunsByRepo.get(repo) ?? null;
-				} else if (c.status === 'ok') {
-					resp = c.body;
-					if (c.etag) {
-						etagByRepo.set(repo, c.etag);
-						runsDisk.save(diskKey(token, repo), c.etag, JSON.stringify(c.body));
-					} else {
-						etagByRepo.delete(repo);
-						runsDisk.remove(diskKey(token, repo));
-					}
-					cachedRunsByRepo.set(repo, c.body);
-				} else {
-					// An error must NOT reuse the cache: stale queued runs would be
-					// minted for again on every tick while the API is down.
-					resp = null;
-				}
-			} else {
-				resp = (await gh.get(PATH, token, repo)) as RunsResponse;
+			if (!gh.getConditional) {
+				return ((await gh.get(path, token, repo)) as RunsResponse | null)?.workflow_runs ?? null;
 			}
+			const c = await gh.getConditional<RunsResponse>(path, token, repo, etags.get(repo) ?? null);
+			// The listing is IDENTICAL to last tick — but runs AGE, so a run that was
+			// too young then may be mintable now. Re-evaluate the cached body rather
+			// than skipping the repo, or a job discovered inside the age gate would
+			// wait for its content to change.
+			if (c.status === 'unchanged') return bodies.get(repo)?.workflow_runs ?? null;
+			// An error must NOT reuse the cache: stale queued runs would be minted
+			// for again on every tick while the API is down.
+			if (c.status !== 'ok') return null;
+			if (c.etag) {
+				etags.set(repo, c.etag);
+				disk.save(diskKey(token, repo), c.etag, JSON.stringify(c.body));
+			} else {
+				etags.delete(repo);
+				disk.remove(diskKey(token, repo));
+			}
+			bodies.set(repo, c.body);
+			return c.body.workflow_runs ?? null;
 		} catch {
-			resp = null;
+			return null;
 		}
-		// `null` is the error return, NOT an empty queue. Treating the two the
-		// same is how a fleet-wide API failure reads as "nothing to do".
-		if (!resp?.workflow_runs) return;
+	};
+
+	const queuedCandidates = async (repo: string): Promise<QueuedRun[]> => {
+		lastPolledMs.set(repo, nowMs);
+		const runs = await readListing(
+			'/actions/runs?status=queued&per_page=30',
+			repo,
+			etagByRepo,
+			cachedRunsByRepo,
+			runsDisk
+		);
+		if (!runs) return [];
 		polledOk.add(repo);
-		lastReadByRepo.set(repo, { atMs: nowMs, runs: resp.workflow_runs });
-		const { mintable, stuck, stranded } = mintableRuns(resp.workflow_runs, {
+		lastReadByRepo.set(repo, { atMs: nowMs, runs });
+		const { mintable, stuck, stranded } = mintableRuns(runs, {
 			nowMs,
 			minQueuedMs: input.minQueuedMs,
 		});
@@ -812,15 +856,84 @@ export async function runDispatchTick(
 		// into the same list rather than writing a second path is deliberate —
 		// two probe paths would be two places for the "no jobs" guard to be
 		// forgotten, and forgetting it is what burns a slot an hour forever.
-		const candidates = recoveryDue
-			? [...mintable, ...stranded.slice(0, MAX_RECOVERY_PROBES)]
-			: mintable;
+		return recoveryDue ? [...mintable, ...stranded.slice(0, MAX_RECOVERY_PROBES)] : mintable;
+	};
+
+	/**
+	 * Runs GitHub lists as `pending`, for the SAME jobs probe to sort
+	 * (fleet-manager#11) — the split queue-health makes in `summarisePending`:
+	 * zero jobs is HELD by its own concurrency group and never minted for; a
+	 * queued job is waiting on the fleet and is.
+	 *
+	 * No run-level age gate. A pending run's age includes however long its group
+	 * held it with no jobs at all — 52 minutes for cardtable 40285146065 — which
+	 * is not time spent waiting for a runner. Each JOB is aged instead, in
+	 * `waitingJobs`.
+	 */
+	/** Fleet-wide count against MAX_PENDING_PROBES; the fan-out shares it. */
+	let pendingProbes = 0;
+	const pendingCandidates = async (repo: string): Promise<QueuedRun[]> => {
+		const runs = await readListing(
+			'/actions/runs?status=pending&per_page=30',
+			repo,
+			pendingEtagByRepo,
+			cachedPendingByRepo,
+			pendingDisk
+		);
+		// Unread keeps the last keys, so their caches are not pruned on a blip.
+		if (!runs) return [];
+		const listed = runs.filter((r) => r.status === 'pending');
+		pendingKeysByRepo.set(repo, new Set(listed.map((r) => `${repo}#${r.id}`)));
+		const take = Math.max(0, Math.min(listed.length, MAX_PENDING_PROBES - pendingProbes));
+		pendingProbes += take;
+		return listed.slice(0, take);
+	};
+
+	/**
+	 * The jobs worth a runner. For a pending run, only those past the same floor
+	 * a queued run must clear and inside the zombie band, both measured from the
+	 * job's own creation: a pending run is never listed `queued`, so the run-level
+	 * gates in `mintableRuns` never saw it.
+	 */
+	const waitingJobs = (r: QueuedRun, jobs: readonly QueuedJob[], isPending: boolean) =>
+		runnableJobs(jobs).filter((j) => {
+			if (!isPending) return true;
+			const since = jobQueuedSinceMs(r, j.created_at);
+			if (since === undefined) return false;
+			const age = nowMs - since;
+			return age >= (input.minQueuedMs ?? MIN_QUEUED_MS) && age <= ZOMBIE_MS;
+		});
+
+	const pendingDue = nowMs - lastPendingPollMs >= PENDING_INTERVAL_MS;
+	if (pendingDue) lastPendingPollMs = nowMs;
+	const dueSet = new Set(due);
+	// BOUNDED, not `Promise.all`. One token serves the dispatcher, the fleet loop
+	// and runner-health, and a wide simultaneous burst trips GitHub's SECONDARY
+	// rate limit — which returns 403 and stalls all three, not just this sweep.
+	//
+	// This was unbounded and survived only because most repos were COLD, so few
+	// came due per tick. Once the poll interval went below the tick every repo
+	// came due EVERY tick, and `ci:queue-health` started failing with "could not
+	// read the queue for 26 repo(s)" — all 26 at once, which is a burst
+	// signature rather than 26 independent faults.
+	//
+	// Costs no discovery latency: 26 listings at six-wide is five rounds of
+	// single-digit seconds inside a 60s tick. A pending pass adds one listing per repo
+	// every PENDING_INTERVAL_MS, through the same six-wide gate.
+	await mapConcurrent(pendingDue ? input.repos : due, SWEEP_CONCURRENCY, async (repo) => {
+		const candidates: { r: QueuedRun; isPending: boolean }[] = [];
+		if (dueSet.has(repo)) {
+			for (const r of await queuedCandidates(repo)) candidates.push({ r, isPending: false });
+		}
+		if (pendingDue) {
+			for (const r of await pendingCandidates(repo)) candidates.push({ r, isPending: true });
+		}
 
 		// One call per CANDIDATE run — only runs already past the age gate, which
 		// is a small set — to find out what is actually waiting for a runner and
 		// what it asked for. A run's own `queued` answers neither question.
 		await Promise.all(
-			candidates.map(async (r) => {
+			candidates.map(async ({ r, isPending }) => {
 				type JobsResponse = { jobs?: QueuedJob[] } | null;
 				const key = `${repo}#${r.id}`;
 				candidateKeys.add(key);
@@ -839,7 +952,7 @@ export async function runDispatchTick(
 							runningJobs.push({ repo, runner: j.runner_name, jobName: j.name });
 						}
 					}
-					for (const j of runnableJobs(cachedJobs)) {
+					for (const j of waitingJobs(r, cachedJobs, isPending)) {
 						if (typeof j.name === 'string' && declared.has(`${repo}${INTENT_KEY_SEP}${j.name}`)) {
 							continue;
 						}
@@ -893,9 +1006,11 @@ export async function runDispatchTick(
 						runningJobs.push({ repo, runner: j.runner_name, jobName: j.name });
 					}
 				}
-				const waiting = runnableJobs(jobs.jobs);
+				const waiting = waitingJobs(r, jobs.jobs, isPending);
 				if (!waiting.length) {
-					blockedRuns.push(`${repo}#${r.id}`);
+					// A pending run with nothing waiting is held by its own group or
+					// not old enough yet. Neither is news; queue-health reports both.
+					if (!isPending) blockedRuns.push(`${repo}#${r.id}`);
 					return;
 				}
 				// One mint serves one job. Labels come from the job that is waiting,
@@ -969,9 +1084,11 @@ export async function runDispatchTick(
 	for (const k of res.reserved ?? []) probeBackoff.delete(k);
 	// Forget runs that have left the queue, so neither book grows for ever. Only
 	// for repos read this tick: a repo not polled has not shown its runs gone.
+	// A run the last pending listing still holds is kept between pending polls.
 	for (const book of [jobsCacheByRun, probeBackoff]) {
 		for (const k of book.keys()) {
-			if (polledOk.has(k.slice(0, k.lastIndexOf('#'))) && !candidateKeys.has(k)) {
+			const repo = k.slice(0, k.lastIndexOf('#'));
+			if (polledOk.has(repo) && !candidateKeys.has(k) && !pendingKeysByRepo.get(repo)?.has(k)) {
 				book.delete(k);
 				if (book === jobsCacheByRun) jobsDisk.remove(diskKey(token, k));
 			}
@@ -1144,10 +1261,15 @@ export function __resetPollStateForTesting(): void {
 	lastReadByRepo.clear();
 	jobsCacheByRun.clear();
 	probeBackoff.clear();
+	pendingEtagByRepo.clear();
+	cachedPendingByRepo.clear();
+	pendingKeysByRepo.clear();
+	lastPendingPollMs = 0;
 	// And its disk half, for the same reason. Marked hydrated so a test reads
 	// disk only through `__restartPollCacheForTesting`, which means to.
 	runsDisk.clear();
 	jobsDisk.clear();
+	pendingDisk.clear();
 	pollCacheHydrated = true;
 	// The reap clock is the OTHER cadence a tick carries. Left behind, the first
 	// test's sweep gates every later test's, and they assert `reaped: skipped`
@@ -1167,6 +1289,10 @@ export function __restartPollCacheForTesting(): void {
 	etagByRepo.clear();
 	cachedRunsByRepo.clear();
 	jobsCacheByRun.clear();
+	pendingEtagByRepo.clear();
+	cachedPendingByRepo.clear();
+	pendingKeysByRepo.clear();
+	lastPendingPollMs = 0;
 	pollCacheHydrated = false;
 }
 

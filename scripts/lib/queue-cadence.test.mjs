@@ -7,6 +7,7 @@ import {
 	SATURATED_QUEUED_MS,
 	MIN_QUEUED_MS,
 } from '../../dist/runners/queue-discovery.js';
+import { PENDING_INTERVAL_MS } from '../../dist/runners/dispatch-tick.js';
 
 /**
  * THE TWO NUMBERS THAT CONTRADICTED EACH OTHER.
@@ -73,4 +74,17 @@ test('the poll interval is strictly below the tick period', () => {
 
 test('hot repos are polled at least as often as cold ones', () => {
 	assert.ok(DEFAULT_POLL_POLICY.hotIntervalMs <= DEFAULT_POLL_POLICY.coldIntervalMs);
+});
+
+test('a PENDING run with a job waiting is served before queue-health calls it invisible', () => {
+	// fleet-manager#11. The pending listing has its own slower clock, so its
+	// worst case is that clock plus the tick it fires on, not the poll interval.
+	// The job must also clear the full age gate, which the interval already
+	// covers as long as it is the longer of the two.
+	const worst = Math.max(PENDING_INTERVAL_MS, MIN_QUEUED_MS) / 1000 + TICK_SECONDS + MINT_SECONDS;
+	assert.ok(
+		worst < FAIL_SECONDS,
+		`a pending run's job can wait ${worst}s for the dispatcher but ci:queue-health calls it ` +
+			`invisible at ${FAIL_SECONDS}s. Lower PENDING_INTERVAL_MS (${PENDING_INTERVAL_MS}ms).`
+	);
 });

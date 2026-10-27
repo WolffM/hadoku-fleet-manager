@@ -372,8 +372,8 @@ if (saturated.length) {
 
 if (invisible.length) {
 	log(
-		`  invisible=${invisible.length} (listed pending with jobs waiting for a runner — ` +
-			'the dispatcher lists only queued runs and will never mint for these)'
+		`  invisible=${invisible.length} (listed pending with jobs waiting for a runner past ` +
+			"the dispatcher's pending pass, so minting did not help these)"
 	);
 	for (const s of invisible.slice(0, 5)) log(`    ${s.repo}  run ${s.id}  ${s.ageSec}s`);
 }
