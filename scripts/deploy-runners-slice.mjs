@@ -67,6 +67,8 @@ import { isGuestNode } from '../dist/lib/node-role.js';
 // already ruled the flat one wrong, and two provisioning paths with two rules
 // is how only one of them got the ruling.
 import { unitMemoryMaxMb } from '../dist/runners/ephemeral.js';
+import { ciIsSeparate } from '../dist/lib/node-users.js';
+import { ciNotes, mergeSplitSummary } from './lib/slice-split.mjs';
 import { CI_OOM_SCORE_ADJ } from '../dist/runners/hosting-record.js';
 
 const DRAINS = readDrains();
@@ -538,8 +540,8 @@ for (const [name, m] of nodes) {
 		argv: args,
 		manifest,
 	});
-	const out = (r.stdout + r.stderr).trim();
-	const kv = parseSummary(out);
+	let out = (r.stdout + r.stderr).trim();
+	let kv = parseSummary(out);
 
 	if (!r.ok || !kv) {
 		// Deliberately powered off => expected, printed, not counted. Only when
@@ -547,6 +549,33 @@ for (const [name, m] of nodes) {
 		// different fault and still drifts.
 		recordUnreadable(name, guest, !r.ok ? 'unreachable or failed' : 'no SUMMARY line', out, !r.ok);
 		continue;
+	}
+
+	// A node whose CI has its own user: the user-manager half of the slice is
+	// that user's, so the same payload runs again AS ci and that half is judged
+	// from its run (lib/slice-split.mjs). Admin's run above owns the system half.
+	if (ciIsSeparate(m)) {
+		const rc = await runOn(name, payload(cfg, m.minFreeMb, apply, unitMb), {
+			as: 'ci',
+			timeoutMs: SSH_TIMEOUT_MS,
+			includeGuests: false,
+			argv: args,
+			manifest,
+		});
+		const ciOut = (rc.stdout + rc.stderr).trim();
+		const ciKv = parseSummary(ciOut);
+		if (!rc.ok || !ciKv) {
+			recordUnreadable(
+				name,
+				guest,
+				`the ci user's manager ${!rc.ok ? 'did not answer' : 'gave no SUMMARY line'}`,
+				ciOut,
+				!rc.ok
+			);
+			continue;
+		}
+		kv = mergeSplitSummary(kv, ciKv);
+		out = `${out}\n${ciNotes(ciOut.split('\n')).join('\n')}`;
 	}
 
 	// Only under --check, and only after the node has proven it answers: the
