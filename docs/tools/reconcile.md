@@ -91,6 +91,16 @@ look", not a pass. An unreadable `/rate_limit` does not refuse: the gate's
 own first call fails and names the real fault. `FLEET_GH_RESERVE=<n>` sets
 the floor for one run, and `0` turns it off.
 
+Who spent the pool is in mgmt-api's hourly `[gh-budget] window ended` line.
+Beyond its own loops, it names each cron by what the pool rose while it ran
+(`crons while running`, upper bounds that overlap; mgmt-api wraps each
+dispatch in `meterGhPool`), and the busiest five-minute slices of spend that
+was not mgmt-api's. If a blackout makes runs scroll out of a repo's listing
+before job-history reads them, runner-health pages back to recover them once
+the budget returns (`src/run-listing-gap.ts`). It says in the log when a gap
+was too long to close, so a `check-history-coverage` failure afterwards
+counts runs that were really lost.
+
 ## Machine-centric since 2026-08-23
 
 The manifest used to be repo-centric: ten repo entries each carried a `claws`

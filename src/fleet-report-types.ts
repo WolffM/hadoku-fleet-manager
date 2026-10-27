@@ -1049,6 +1049,15 @@ export interface FleetGithubBudget {
 	/** Charged calls (non-304) and free 304s per caller, most charged first. */
 	byCaller: { caller: GhCaller; charged: number; notModified: number }[];
 	otherSinceFirst: number;
+	/**
+	 * What each metered caller (`meterGhPool`; mgmt-api's crons) moved the pool
+	 * by while it ran, net of this process, most first. Upper bounds that
+	 * overlap: a cron is charged with whatever else ran beside it. Optional only
+	 * for readers built against an older report.
+	 */
+	metered?: { caller: string; runs: number; spent: number; unread: number }[];
+	/** Spend that was not this process's, per five minutes, oldest first. */
+	outsideTimeline?: { at: string; outside: number }[];
 	/** The low-budget alert has fired for this window. */
 	alerted: boolean;
 	/**

@@ -788,6 +788,12 @@ export function jobRecords(): readonly JobRecord[] {
 	return records;
 }
 
+/** Has this run been recorded, or claimed for a fetch this process? */
+export function jobHistoryHasRun(runId: number): boolean {
+	loadHistory();
+	return seenRuns.has(runId);
+}
+
 function remember(runId: number): void {
 	seenRuns.add(runId);
 	if (seenRuns.size > MAX_SEEN_RUNS) {
@@ -1012,12 +1018,17 @@ export class FetchBudget {
  *
  * `budget` is either this call's own allowance or a {@link FetchBudget} shared
  * with the other repos of the same tick. Returns how many fetches this call made.
+ *
+ * `atRisk: false` is for runs that are NOT a listing: the backfill backlog
+ * (`run-listing-gap.ts`), which is held until the horizon and so can wait for
+ * the slots the listings' at-risk tails do not need.
  */
 export async function ingestRuns(
 	repo: string,
 	runs: { id?: number; status?: string; created_at?: string; updated_at?: string }[],
 	fetchJobs: (repo: string, runId: number) => Promise<{ jobs?: GhJob[] } | null>,
-	budget: number | FetchBudget = MAX_FETCH_PER_TICK
+	budget: number | FetchBudget = MAX_FETCH_PER_TICK,
+	opts: { atRisk?: false } = {}
 ): Promise<number> {
 	// Read the window back BEFORE deciding what is new. Without this a restart
 	// would re-fetch every run it had already recorded, and the dedupe that keeps
@@ -1120,7 +1131,7 @@ export async function ingestRuns(
 		// `ordered` is ascending id and at-risk is the oldest third by id, so every
 		// at-risk run comes first. Once one SAFE run is refused, every run left in
 		// this repo is safe and would be refused for the same reason.
-		if (!allowance.take(id <= atRiskThrough)) break;
+		if (!allowance.take(opts.atRisk !== false && id <= atRiskThrough)) break;
 		remember(id);
 		// Spent at the moment the fetch is claimed, NOT when it succeeds. A forced
 		// entry whose fetch comes back null has still had its one lift: the run is

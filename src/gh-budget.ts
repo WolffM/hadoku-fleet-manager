@@ -55,12 +55,28 @@
  * `GH_BUDGET_SAVE_MS` and on every open or close, and restored by the next
  * process, which counts itself in `restarts`. What a restart still loses is
  * the calls made after the last save, which then read as `not this process`.
+ *
+ * NAMING WHAT IS NOT THIS PROCESS (fleet-manager#9, 2026-10-27). Over 10-25..27
+ * `not this process` was most of nearly every general-bucket window: ~450/h
+ * overnight, 1,100-1,900/h by day, and the whole of the 10-25 blackout. Two
+ * things now narrow it, and neither guesses:
+ *
+ *   - `meterGhPool(caller, fn)`. mgmt-api wraps each cron dispatch in it. It
+ *     reads `GET /rate_limit` (which GitHub does not charge) before and after,
+ *     and books the rise minus this process's own charged calls in between.
+ *     Crons overlap, and a cron is charged with whatever else ran beside it, so
+ *     the figures are upper bounds per cron and do not sum to anything.
+ *   - A five-minute timeline of the pool against this process's own spend. When
+ *     nothing can say WHO, the `window ended` line still says WHEN, and that is
+ *     what an execution log or a workflow-run listing can be read against.
+ *     The 10-25 question ("~1,220 at 05:26-05:30 with no audit running") was
+ *     answered by hand from `rate=` log lines; this records it.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { logger, postDiscord, stateDir } from './host.js';
+import { githubToken, logger, postDiscord, stateDir } from './host.js';
 import type { FleetGithubBudget, GhCaller } from './fleet-report-types.js';
 
 export type { GhCaller } from './fleet-report-types.js';
@@ -96,6 +112,25 @@ interface CallerCount {
 	notModified: number;
 }
 
+/** What one metered caller (a cron) moved the pool by, net of this process. */
+interface MeteredSpend {
+	runs: number;
+	spent: number;
+	/** Runs whose before or after reading could not be taken — counted, never guessed. */
+	unread: number;
+}
+
+/** One {@link TIMELINE_BUCKET_MS} slice: the highest `used` seen in it, and our own charges. */
+interface TimelineBucket {
+	used: number;
+	own: number;
+}
+
+/** The timeline's resolution. Twelve per window. */
+export const TIMELINE_BUCKET_MS = 5 * 60_000;
+/** A slice of outside spend under this is not worth a word in the `window ended` line. */
+const BUSIEST_MIN = 50;
+
 interface BudgetWindow {
 	fingerprint: string;
 	resource: string;
@@ -110,6 +145,10 @@ interface BudgetWindow {
 	/** Charged calls AFTER the first observation — the first is inside `usedAtFirst`. */
 	chargedAfterFirst: number;
 	byCaller: Map<GhCaller, CallerCount>;
+	/** Keyed by the name handed to {@link meterGhPool}, e.g. `cron:ci:audit-gates`. */
+	metered: Map<string, MeteredSpend>;
+	/** Keyed by bucket start, epoch ms. */
+	timeline: Map<number, TimelineBucket>;
 	alerted: boolean;
 	/** Processes that took this window over from a predecessor. */
 	restarts: number;
@@ -190,34 +229,13 @@ export function recordGhResponse(
 		const resetAtMs = reset * 1000;
 		closeSuperseded(fingerprint, resource, resetAtMs, nowMs);
 		w = windowFor(fingerprint, resource, resetAtMs);
+		const usedNow = Number.isFinite(used) ? used : limit - remaining;
 		if (w) {
-			count(w, caller, status, true);
-			// Concurrent responses arrive out of order; the budget only falls
-			// inside a window, so the lowest remaining is the current one.
-			w.limit = limit;
-			w.remaining = Math.min(w.remaining, remaining);
-			if (Number.isFinite(used)) w.used = Math.max(w.used, used);
-			w.observedAtMs = nowMs;
+			const charged = count(w, caller, status, true);
+			absorbReading(w, limit, remaining, usedNow, nowMs, charged ? 1 : 0);
 		} else if (!isLate(fingerprint, resource, resetAtMs, nowMs)) {
-			const usedNow = Number.isFinite(used) ? used : limit - remaining;
-			w = {
-				fingerprint,
-				resource,
-				limit,
-				remaining,
-				used: usedNow,
-				resetAtMs,
-				observedAtMs: nowMs,
-				firstAtMs: nowMs,
-				usedAtFirst: usedNow,
-				chargedAfterFirst: 0,
-				byCaller: new Map(),
-				alerted: false,
-				restarts: 0,
-			};
-			windows.set(`${fingerprint}:${resource}:${resetAtMs}`, w);
+			w = openWindow(fingerprint, resource, limit, remaining, usedNow, resetAtMs, nowMs);
 			count(w, caller, status, false);
-			lastSaveMs = 0; // an opened window is saved at once
 		} else {
 			// A response from a window that has already reset, landing late. The
 			// call happened, so it is counted where this token was last charged;
@@ -234,6 +252,62 @@ export function recordGhResponse(
 	lastWindowByToken.set(fingerprint, `${w.fingerprint}:${w.resource}:${w.resetAtMs}`);
 	maybeAlert(w, nowMs);
 	saveBooks(nowMs);
+}
+
+function openWindow(
+	fingerprint: string,
+	resource: string,
+	limit: number,
+	remaining: number,
+	used: number,
+	resetAtMs: number,
+	nowMs: number
+): BudgetWindow {
+	const w: BudgetWindow = {
+		fingerprint,
+		resource,
+		limit,
+		remaining,
+		used,
+		resetAtMs,
+		observedAtMs: nowMs,
+		firstAtMs: nowMs,
+		usedAtFirst: used,
+		chargedAfterFirst: 0,
+		byCaller: new Map(),
+		metered: new Map(),
+		timeline: new Map(),
+		alerted: false,
+		restarts: 0,
+	};
+	windows.set(`${fingerprint}:${resource}:${resetAtMs}`, w);
+	lastSaveMs = 0; // an opened window is saved at once
+	return w;
+}
+
+/**
+ * Fold one reading into an open window. `own` is how many of this process's
+ * charged calls the reading includes (the call that carried it, or none).
+ */
+function absorbReading(
+	w: BudgetWindow,
+	limit: number,
+	remaining: number,
+	used: number,
+	nowMs: number,
+	own: number
+): void {
+	// Concurrent responses arrive out of order; the budget only falls inside a
+	// window, so the lowest remaining is the current one.
+	w.limit = limit;
+	w.remaining = Math.min(w.remaining, remaining);
+	w.used = Math.max(w.used, used);
+	w.observedAtMs = nowMs;
+	const at = nowMs - (nowMs % TIMELINE_BUCKET_MS);
+	const b = w.timeline.get(at) ?? { used: 0, own: 0 };
+	b.used = Math.max(b.used, used);
+	b.own += own;
+	w.timeline.set(at, b);
 }
 
 function windowFor(fingerprint: string, resource: string, resetAtMs: number) {
@@ -287,12 +361,19 @@ function isLate(fingerprint: string, resource: string, resetAtMs: number, nowMs:
 	return false;
 }
 
-function count(w: BudgetWindow, caller: GhCaller, status: number, afterFirst: boolean): void {
+/** This process's charged calls, ever. {@link meterGhPool} subtracts its own share with it. */
+let chargedByThisProcess = 0;
+
+/** Count one call; true when it was charged. */
+function count(w: BudgetWindow, caller: GhCaller, status: number, afterFirst: boolean): boolean {
 	const c = w.byCaller.get(caller) ?? { calls: 0, notModified: 0 };
 	c.calls++;
+	const charged = status !== 304;
+	if (charged) chargedByThisProcess++;
 	if (status === 304) c.notModified++;
 	else if (afterFirst) w.chargedAfterFirst++;
 	w.byCaller.set(caller, c);
+	return charged;
 }
 
 /** Charged calls by caller, most first. A 304 is not a charge. */
@@ -310,6 +391,32 @@ function otherSinceFirst(w: BudgetWindow): number {
 	return Math.max(0, w.used - w.usedAtFirst - w.chargedAfterFirst);
 }
 
+/** Metered callers, most spent first. */
+function meteredSpenders(
+	w: BudgetWindow
+): { caller: string; runs: number; spent: number; unread: number }[] {
+	return [...w.metered.entries()]
+		.map(([caller, m]) => ({ caller, ...m }))
+		.sort((a, b) => b.spent - a.spent || a.caller.localeCompare(b.caller));
+}
+
+/**
+ * Spend that was not this process's, per timeline slice, in time order. A
+ * slice is measured against the highest `used` before it, so a slice with no
+ * reading costs nothing and the next one carries the gap.
+ */
+function outsideTimeline(w: BudgetWindow): { at: number; outside: number }[] {
+	let prev = w.usedAtFirst;
+	const out: { at: number; outside: number }[] = [];
+	for (const [at, b] of [...w.timeline.entries()].sort((x, y) => x[0] - y[0])) {
+		out.push({ at, outside: Math.max(0, b.used - prev - b.own) });
+		prev = Math.max(prev, b.used);
+	}
+	return out;
+}
+
+const hhmm = (ms: number): string => new Date(ms).toISOString().slice(11, 16);
+
 function spenderLine(w: BudgetWindow, top = 5): string {
 	const all = spenders(w);
 	const s = all.filter((x) => x.charged > 0);
@@ -318,10 +425,23 @@ function spenderLine(w: BudgetWindow, top = 5): string {
 		.map((x) => `${x.caller} ${x.charged}`)
 		.join(', ');
 	const free = all.reduce((n, x) => n + x.notModified, 0);
+	const metered = meteredSpenders(w).filter((m) => m.spent > 0);
+	const crons = metered.length
+		? `; crons while running (overlapping): ${metered
+				.slice(0, top)
+				.map((m) => `${m.caller} ${m.spent}${m.runs > 1 ? ` (${m.runs} runs)` : ''}`)
+				.join(', ')}${metered.length > top ? ` (+${metered.length - top} more)` : ''}`
+		: '';
+	const busiest = outsideTimeline(w)
+		.filter((b) => b.outside >= BUSIEST_MIN)
+		.sort((a, b) => b.outside - a.outside)
+		.slice(0, 3)
+		.map((b) => `${hhmm(b.at)}Z +${b.outside}`);
 	return (
 		`${shown || 'none'}${s.length > top ? ` (+${s.length - top} more)` : ''}; ` +
 		`${free} free 304s; not this process: ~${otherSinceFirst(w)} ` +
-		`(since ${new Date(w.firstAtMs).toISOString().slice(11, 16)}Z)`
+		`(since ${hhmm(w.firstAtMs)}Z)${crons}` +
+		(busiest.length ? `; busiest outside, per 5 min: ${busiest.join(', ')}` : '')
 	);
 }
 
@@ -340,8 +460,11 @@ function closeWindow(w: BudgetWindow): void {
 	);
 }
 
-interface SavedWindow extends Omit<BudgetWindow, 'byCaller'> {
+interface SavedWindow extends Omit<BudgetWindow, 'byCaller' | 'metered' | 'timeline'> {
 	byCaller: Record<string, CallerCount>;
+	/** Absent in books written before the meter existed. */
+	metered?: Record<string, MeteredSpend>;
+	timeline?: Record<string, TimelineBucket>;
 }
 
 const booksPath = (): string => join(stateDir(), GH_BUDGET_FILE);
@@ -385,6 +508,10 @@ function loadBooks(nowMs: number): void {
 		const w: BudgetWindow = {
 			...saved,
 			byCaller: new Map(Object.entries(saved.byCaller ?? {}) as [GhCaller, CallerCount][]),
+			metered: new Map(Object.entries(saved.metered ?? {})),
+			timeline: new Map(
+				Object.entries(saved.timeline ?? {}).map(([at, b]) => [Number(at), b] as const)
+			),
 			alerted: saved.alerted === true,
 			restarts: (Number.isFinite(saved.restarts) ? saved.restarts : 0) + 1,
 		};
@@ -408,6 +535,8 @@ function saveBooks(nowMs: number): void {
 	const saved: SavedWindow[] = [...windows.values()].map((w) => ({
 		...w,
 		byCaller: Object.fromEntries(w.byCaller),
+		metered: Object.fromEntries(w.metered),
+		timeline: Object.fromEntries(w.timeline),
 	}));
 	try {
 		mkdirSync(stateDir(), { recursive: true });
@@ -461,9 +590,132 @@ export function getGhBudgetSnapshot(nowMs = Date.now()): FleetGithubBudget[] {
 		countedSince: new Date(w.firstAtMs).toISOString(),
 		byCaller: spenders(w),
 		otherSinceFirst: otherSinceFirst(w),
+		metered: meteredSpenders(w),
+		outsideTimeline: outsideTimeline(w).map((b) => ({
+			at: new Date(b.at).toISOString(),
+			outside: b.outside,
+		})),
 		alerted: w.alerted,
 		restarts: w.restarts,
 	}));
+}
+
+/** The shared pool as `GET /rate_limit` reports it. */
+export interface GhPoolReading {
+	limit: number;
+	remaining: number;
+	used: number;
+	resetAtMs: number;
+}
+
+const POOL_READ_TIMEOUT_MS = 10_000;
+
+/**
+ * `GET /rate_limit` with the host's token. GitHub does not charge it, and it
+ * does not pass through {@link recordGhResponse}, which would book it as a
+ * charged call. It reports the GENERAL bucket (checked 2026-10-27: its reset
+ * matched the :02 window, not the runner listings' :27 one), which is the
+ * bucket the outside spend lands in. Null when it cannot be read.
+ */
+export async function readGhPool(): Promise<GhPoolReading | null> {
+	const token = githubToken();
+	if (!token) return null;
+	try {
+		const resp = await fetch('https://api.github.com/rate_limit', {
+			headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+			signal: AbortSignal.timeout(POOL_READ_TIMEOUT_MS),
+		});
+		if (!resp.ok) {
+			logger.warn(`[gh-budget] GET /rate_limit answered ${resp.status}; this run is booked unread`);
+			return null;
+		}
+		const body = (await resp.json()) as {
+			resources?: { core?: { limit?: number; remaining?: number; used?: number; reset?: number } };
+		};
+		const c = body.resources?.core;
+		const nums = [c?.limit, c?.remaining, c?.used, c?.reset];
+		if (!c || !nums.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+			logger.warn('[gh-budget] GET /rate_limit carried no core reading; this run is booked unread');
+			return null;
+		}
+		return { limit: c.limit!, remaining: c.remaining!, used: c.used!, resetAtMs: c.reset! * 1000 };
+	} catch (e) {
+		logger.warn(
+			`[gh-budget] could not read GET /rate_limit: ${e instanceof Error ? e.message : String(e)}; ` +
+				'this run is booked unread'
+		);
+		return null;
+	}
+}
+
+/**
+ * Run `fn` and book what the shared pool rose by while it ran, net of this
+ * process's own charged calls in that time, against `caller` (fleet-manager#9).
+ *
+ * For a caller whose spend happens OUTSIDE this process: mgmt-api wraps each
+ * cron dispatch, because a cron's `fleet` CLI, Python script or worker spends
+ * the same user pool and was until now one undifferentiated `not this process`.
+ * Anything else running at the same time is charged to the cron too, so a
+ * figure is an upper bound for that cron, and two overlapping crons share it.
+ *
+ * Never changes `fn`'s outcome: its value or its throw passes through, and a
+ * reading that cannot be taken books the run as `unread`.
+ *
+ * A run that straddles a reset books only what it saw of the new window: the
+ * `used` it read after, which GitHub counts from that reset.
+ */
+export async function meterGhPool<T>(
+	caller: string,
+	fn: () => Promise<T>,
+	opts: { read?: () => Promise<GhPoolReading | null>; now?: () => number } = {}
+): Promise<T> {
+	const read = opts.read ?? readGhPool;
+	const before = await read();
+	const ownBefore = chargedByThisProcess;
+	try {
+		return await fn();
+	} finally {
+		const after = await read();
+		bookMetered(caller, before, after, chargedByThisProcess - ownBefore, (opts.now ?? Date.now)());
+	}
+}
+
+function bookMetered(
+	caller: string,
+	before: GhPoolReading | null,
+	after: GhPoolReading | null,
+	own: number,
+	nowMs: number
+): void {
+	const token = githubToken();
+	// Without an after reading there is no window to book into; readGhPool has
+	// already said why.
+	if (!token || !after) return;
+	loadBooks(nowMs);
+	const fingerprint = ghTokenFingerprint(token);
+	closeSuperseded(fingerprint, 'core', after.resetAtMs, nowMs);
+	const w =
+		windowFor(fingerprint, 'core', after.resetAtMs) ??
+		openWindow(
+			fingerprint,
+			'core',
+			after.limit,
+			after.remaining,
+			after.used,
+			after.resetAtMs,
+			nowMs
+		);
+	absorbReading(w, after.limit, after.remaining, after.used, nowMs, 0);
+	const m = w.metered.get(caller) ?? { runs: 0, spent: 0, unread: 0 };
+	m.runs++;
+	if (!before) m.unread++;
+	else {
+		const sameWindow = Math.abs(before.resetAtMs - after.resetAtMs) <= RESET_TOLERANCE_MS;
+		m.spent += Math.max(0, (sameWindow ? after.used - before.used : after.used) - own);
+	}
+	w.metered.set(caller, m);
+	lastWindowByToken.set(fingerprint, `${w.fingerprint}:${w.resource}:${w.resetAtMs}`);
+	saveBooks(nowMs);
 }
 
 /** The top spenders across every open window, for a line that has no room for more. */
@@ -489,6 +741,7 @@ export function __resetGhBudgetForTesting(): void {
 	loaded = true;
 	lastSaveMs = 0;
 	saveComplained = false;
+	chargedByThisProcess = 0;
 }
 
 /** Drop the process's books and keep the file, which is what a deploy does. Test seam. */

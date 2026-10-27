@@ -120,6 +120,7 @@ import {
 	RETENTION_DAYS,
 	jobRecords,
 } from './job-history.js';
+import { closeListingGap, LISTING_PAGE } from './run-listing-gap.js';
 import { isProofRunnerName } from './runners/prove-job.js';
 import { CI_ALERTS_BOOT_SKIP_MS, ciAlertsBootPassDue, runCiAlerts } from './ci-alerts.js';
 import { conditionalCacheStore } from './conditional-cache-store.js';
@@ -3827,7 +3828,7 @@ async function checkRunsAndFailover(
 	// so the per-repo rerun and alert ordering is exactly what it was.
 	const sweepRepo = async (repo: string): Promise<void> => {
 		const runsResp = await ghGet<{ workflow_runs?: GhRun[] }>(
-			'/actions/runs?per_page=30',
+			`/actions/runs?per_page=${LISTING_PAGE}`,
 			token,
 			repo
 		);
@@ -3839,12 +3840,22 @@ async function checkRunsAndFailover(
 		// Feed the job-history window off the listing we just paid for. Only
 		// newly-COMPLETED runs cost anything (one jobs call each, capped per tick),
 		// so a quiet fleet adds nothing and a burst simply catches up next tick.
-		await ingestRuns(
-			repo,
-			runsResp.workflow_runs,
-			(r, runId) => ghGet<{ jobs?: unknown[] }>(`/actions/runs/${runId}/jobs`, token, r) as never,
-			jobFetchBudget
-		);
+		const fetchJobs = (r: string, runId: number) =>
+			ghGet<{ jobs?: unknown[] }>(`/actions/runs/${runId}/jobs`, token, r) as never;
+		await ingestRuns(repo, runsResp.workflow_runs, fetchJobs, jobFetchBudget);
+		// Runs that scrolled past the end of this listing while it could not be
+		// read (a budget blackout), found by paging back. See run-listing-gap.ts.
+		const backlog = await closeListingGap(repo, runsResp.workflow_runs, async (page) => {
+			const r = await ghGet<{ workflow_runs?: GhRun[] }>(
+				`/actions/runs?per_page=${LISTING_PAGE}&page=${page}`,
+				token,
+				repo
+			);
+			return Array.isArray(r?.workflow_runs) ? r.workflow_runs : null;
+		});
+		if (backlog.length) {
+			await ingestRuns(repo, backlog, fetchJobs, jobFetchBudget, { atRisk: false });
+		}
 
 		for (const run of runsResp.workflow_runs) {
 			// THIS attempt's clock, not the original run's — see `run_started_at`.

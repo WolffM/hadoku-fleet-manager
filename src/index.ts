@@ -38,9 +38,14 @@ export type { Reservation } from './node-reservation.js';
 export type * from './fleet-report-types.js';
 
 // mgmt-api's cron dispatch reports into the same reservation this component
-// reads, so these two stay part of the public surface. They are the ONLY
-// inbound calls: everything else here is an output port.
+// reads, so these two stay part of the public surface. With `meterGhPool`
+// below they are the ONLY inbound calls: everything else here is an output port.
 export { noteCronStart, noteCronEnd, inFlightCronJobs } from './node-reservation.js';
+
+/** mgmt-api wraps each cron dispatch in this, so the GitHub budget's books can
+ *  name what a cron spent outside this process (fleet-manager#9). */
+export { meterGhPool } from './gh-budget.js';
+export type { GhPoolReading } from './gh-budget.js';
 
 /** The GitHub client the component already owns. Exported so a host that needs
  *  one does not build a second — it has no non-fleet consumers today. */

@@ -12,6 +12,7 @@ import {
 	__restartGhBudgetForTesting,
 	BUDGET_ALERT_MIN_LEFT_MS,
 	GH_BUDGET_SAVE_MS,
+	meterGhPool,
 } from '../gh-budget.js';
 import { ghGet, ghGetConditional, __resetGhBlackoutForTesting } from '../runner-health.js';
 
@@ -284,4 +285,136 @@ test('a page that fired before a restart does not fire again after it', () => {
 	__restartGhBudgetForTesting();
 	recordGhResponse('tok', 200, headers(890), T0 + 1000);
 	assert.equal(posts.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// fleet-manager#9: naming what is NOT this process
+// ---------------------------------------------------------------------------
+
+function withToken(): void {
+	__setHostForTesting({
+		...testHost,
+		githubToken: () => 'tok',
+		logger: { info: (m: string) => infos.push(m), warn() {}, error() {} },
+		alerts: { post: async () => ({ posted: true, sinkRecorded: true }), recordQuietly() {} },
+	});
+}
+
+/** A scripted `/rate_limit`: each read returns the next `used`, in the window ending at RESET_S. */
+function pool(...used: (number | null)[]) {
+	return async () => {
+		const u = used.shift();
+		if (u === null || u === undefined) return null;
+		return { limit: 5000, remaining: 5000 - u, used: u, resetAtMs: RESET_S * 1000 };
+	};
+}
+
+test('a metered cron is charged what the pool rose while it ran, net of this process', async () => {
+	withToken();
+	const value = await meterGhPool(
+		'cron:ci:audit-gates',
+		async () => {
+			// mgmt-api's own loop spends 2 charged calls while the cron runs.
+			recordGhResponse('tok', 200, headers(4699), T0);
+			recordGhResponse('tok', 200, headers(4350), T0);
+			return 'gate result';
+		},
+		{ read: pool(300, 650), now: () => T0 }
+	);
+	assert.equal(value, 'gate result', 'the dispatch result passes through untouched');
+	const [w] = getGhBudgetSnapshot(T0);
+	assert.deepEqual(w.metered, [{ caller: 'cron:ci:audit-gates', runs: 1, spent: 348, unread: 0 }]);
+});
+
+test('a cron that throws is still metered, and the throw reaches the caller', async () => {
+	withToken();
+	await assert.rejects(
+		meterGhPool(
+			'cron:ci:fleet-coverage',
+			async () => {
+				throw new Error('finding');
+			},
+			{ read: pool(100, 540), now: () => T0 }
+		),
+		/finding/
+	);
+	assert.deepEqual(getGhBudgetSnapshot(T0)[0].metered?.[0], {
+		caller: 'cron:ci:fleet-coverage',
+		runs: 1,
+		spent: 440,
+		unread: 0,
+	});
+});
+
+test('a run whose first reading failed is counted unread, never as zero spend', async () => {
+	withToken();
+	await meterGhPool('cron:repos:main-sync', async () => undefined, {
+		read: pool(null, 900),
+		now: () => T0,
+	});
+	assert.deepEqual(getGhBudgetSnapshot(T0)[0].metered?.[0], {
+		caller: 'cron:repos:main-sync',
+		runs: 1,
+		spent: 0,
+		unread: 1,
+	});
+});
+
+test('a run across a reset books only the new window, from its reset', async () => {
+	withToken();
+	const reads = [
+		{ limit: 5000, remaining: 100, used: 4900, resetAtMs: RESET_S * 1000 },
+		{ limit: 5000, remaining: 4880, used: 120, resetAtMs: (RESET_S + 3600) * 1000 },
+	];
+	await meterGhPool('cron:ci:fleet-benchmark', async () => undefined, {
+		read: async () => reads.shift() ?? null,
+		now: () => RESET_S * 1000 + 60_000,
+	});
+	const w = getGhBudgetSnapshot(RESET_S * 1000 + 60_000).find(
+		(x) => x.resetAt === new Date((RESET_S + 3600) * 1000).toISOString()
+	);
+	assert.deepEqual(w?.metered?.[0], {
+		caller: 'cron:ci:fleet-benchmark',
+		runs: 1,
+		spent: 120,
+		unread: 0,
+	});
+});
+
+test('the window-ended line names the crons and the busiest five minutes outside', async () => {
+	withToken();
+	await withGhCaller('reap', async () => recordGhResponse('tok', 200, headers(4000), T0));
+	// 05:20-ish: 900 spent outside, of which a cron ran for 650.
+	await meterGhPool('cron:ci:audit-gates', async () => undefined, {
+		read: pool(1000, 1650),
+		now: () => T0 + 5 * 60_000,
+	});
+	recordGhResponse('tok', 200, headers(5000 - 1900), T0 + 6 * 60_000);
+	// A quiet slice, then 1,220 with no cron running.
+	recordGhResponse('tok', 200, headers(5000 - 1910), T0 + 12 * 60_000);
+	recordGhResponse('tok', 200, headers(5000 - 3130), T0 + 17 * 60_000);
+	recordGhResponse('tok', 200, headers(4999, RESET_S + 3600), T0 + 46 * 60_000);
+	const line = infos.find((l) => l.startsWith('[gh-budget] window ended'));
+	assert.ok(line);
+	assert.match(line, /crons while running \(overlapping\): cron:ci:audit-gates 650/);
+	const slice = (ms: number) => new Date(ms - (ms % (5 * 60_000))).toISOString().slice(11, 16);
+	assert.match(line, new RegExp(`busiest outside, per 5 min: ${slice(T0 + 17 * 60_000)}Z \\+1219`));
+	assert.doesNotMatch(
+		line,
+		new RegExp(`${slice(T0 + 12 * 60_000)}Z \\+`),
+		'a quiet slice is not named'
+	);
+});
+
+test('metered spend and the timeline survive a restart', async () => {
+	withToken();
+	await meterGhPool('cron:ci:audit-gates', async () => undefined, {
+		read: pool(1000, 1650),
+		now: () => T0,
+	});
+	__restartGhBudgetForTesting();
+	withToken();
+	const [w] = getGhBudgetSnapshot(T0 + 1000);
+	assert.equal(w.metered?.[0]?.spent, 650);
+	assert.ok(w.outsideTimeline?.length, 'the timeline came back with the books');
 });
