@@ -202,6 +202,11 @@ const COMMANDS: Record<string, Command> = {
 		summary:
 			'what each claw can lend to hosting, measured: memory, cores, disk, link, CI cost, neighbours',
 	},
+	'hosting-plan': {
+		script: 'hosting-plan.mjs',
+		summary:
+			"where could a tenant's next slice go: its hosting.json against every claw's offer, ranked with reasons",
+	},
 	'hosting-request': {
 		script: 'hosting-request.mjs',
 		summary:
