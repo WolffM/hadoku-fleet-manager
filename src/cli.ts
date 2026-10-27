@@ -197,6 +197,11 @@ const COMMANDS: Record<string, Command> = {
 		help: true,
 		summary: 'lend a node to a tenant: CI off, declared resources served, agent supervised',
 	},
+	'hosting-offers': {
+		script: 'hosting-offers.mjs',
+		summary:
+			'what each claw can lend to hosting, measured: memory, cores, disk, link, CI cost, neighbours',
+	},
 	'hosting-request': {
 		script: 'hosting-request.mjs',
 		summary:
