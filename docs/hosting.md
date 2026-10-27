@@ -105,6 +105,11 @@ controller (must connect or be refused) and from another node, tried in turn
 until one answers (must time out on the LAN and both tailnet addresses). No
 node able to look is blocking, not a pass.
 
+**The firewall does not reach loopback.** A CI job on the same node connects to
+the agent over `127.0.0.1`, which ufw never filters. So the port being closed to
+other nodes is not authentication: the tenant authenticates every request
+(cardtable signs them).
+
 **Cores are a quota, not pinned CPUs.** A JVM may not read a nested cgroup's
 quota, so size thread pools explicitly (`-XX:ActiveProcessorCount=N`).
 
