@@ -57,9 +57,11 @@ import {
 	fitProblems,
 	installScript,
 	judgeHosting,
+	leftoversScript,
 	observeScript,
 	parseCores,
 	parseMemoryMb,
+	parseLeftovers,
 	parseObserved,
 	peerCandidates,
 	probeReach,
@@ -405,6 +407,24 @@ if (action === 'remove') {
 			`teardown on ${node} did not finish: ${r.error ?? r.stderr.trim()}. The record is kept.`
 		);
 	}
+	// Read back what survived, from the node (cardtable A11). The record stays
+	// until nothing does: a removed slice whose firewall rule or cgroup lingers
+	// is not removed.
+	const back = await runOn(node, leftoversScript(tenant), {
+		as: 'admin',
+		timeoutMs: 30_000,
+		connectTimeout: 6,
+	});
+	const leftovers = parseLeftovers(back.stdout);
+	if (!leftovers.complete || leftovers.left.length) {
+		finish(false, {
+			state: 'remove-incomplete',
+			reason: leftovers.complete
+				? `teardown left: ${leftovers.left.join('; ')}. The record is kept; re-run --remove.`
+				: `could not read back ${node} after the teardown (${back.error ?? 'no answer'}). The record is kept.`,
+			left: leftovers.left,
+		});
+	}
 	if (wholeRec) {
 		const nodes = { ...drainDoc.nodes };
 		delete nodes[node];
@@ -418,7 +438,7 @@ if (action === 'remove') {
 	say(
 		`✓ ${node} is no longer hosting; units, executable and port ${TENANTS[tenant].port} removed.`
 	);
-	finish(true, { state: 'removed' });
+	finish(true, { state: 'removed', left: [] });
 }
 
 // ── declare ──────────────────────────────────────────────────────────────────

@@ -394,6 +394,19 @@ export function machineArg(argv = process.argv.slice(2), { valueFlags = [] } = {
  * output would hand every unconverted caller a healthy fleet of one fewer
  * machine, which is the failure CLAUDE.md names first.
  */
+/**
+ * Why a call failed, in words a finding can carry. `execFile` reports a call
+ * IT killed at the timeout as a bare "Command failed: <argv>", the same text
+ * as any other failure, and the process it killed never got to say why (an
+ * ssh stuck resolving a name prints nothing). So a kill says it was one, and
+ * otherwise the far side's own last words win over the argv.
+ */
+function failureReason(err, timeoutMs, stderr) {
+	if (err.killed)
+		return `no answer within ${Math.round(timeoutMs / 1000)}s (killed by ${err.signal ?? 'timeout'})`;
+	return stderr.trim().split('\n').at(-1) || String(err.message);
+}
+
 /** A role that cannot be acted as is a result, like an unreachable node: never a throw. */
 function roleFailure(local, err) {
 	const error = `cannot act as the role: ${err.message}`;
@@ -488,7 +501,7 @@ export function runOn(
 				stderr: e,
 				out: o + e,
 				local,
-				error: err ? String(err.message) : stdinError,
+				error: err ? failureReason(err, timeoutMs, e) : stdinError,
 			});
 		});
 		/*
@@ -589,7 +602,10 @@ export function runOnSync(
 			stdout: o,
 			stderr: String(err.stderr ?? ''),
 			local,
-			error: String(err.stderr || err.message)
+			error: (err.code === 'ETIMEDOUT'
+				? `no answer within ${Math.round(timeoutMs / 1000)}s (killed by ${err.signal ?? 'timeout'})`
+				: String(err.stderr || err.message)
+			)
 				.trim()
 				.slice(0, 200),
 			code: typeof err.code === 'string' ? err.code : null,

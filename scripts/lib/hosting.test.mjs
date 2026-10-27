@@ -6,7 +6,9 @@ import {
 	deployScript,
 	fitProblems,
 	judgeHosting,
+	leftoversScript,
 	mibFromMemoryMax,
+	parseLeftovers,
 	observeScript,
 	parseCores,
 	parseMemoryMb,
@@ -382,4 +384,26 @@ test('CI is counted by PROCESS NAME: a probe whose command line says Runner.Work
 	assert.doesNotMatch(s, /pgrep -[a-z]*f/);
 	assert.match(s, /pgrep -x 'Runner\\.\(Listener\|Worker\)'/);
 	assert.match(s, /^CI_USER='hadoku'$/m);
+});
+
+test('A11: a teardown is read back, and a cut-off answer is not "nothing left"', () => {
+	assert.deepEqual(parseLeftovers('LEFTOVERS-END\n'), { complete: true, left: [] });
+	assert.deepEqual(
+		parseLeftovers(
+			'LEFT cgroup /sys/fs/cgroup/hosting.slice\nLEFT-UNKNOWN sudo is not available\nLEFTOVERS-END'
+		),
+		{ complete: true, left: ['cgroup /sys/fs/cgroup/hosting.slice', 'sudo is not available'] }
+	);
+	assert.equal(parseLeftovers('LEFT unit file x\n').complete, false);
+	const s = leftoversScript('cardtable');
+	for (const what of [
+		'unit file',
+		'cgroup',
+		'executable',
+		'running as',
+		'ufw rule',
+		'raw rule',
+		'memory.high',
+	])
+		assert.ok(s.includes(what), `the read-back looks for: ${what}`);
 });

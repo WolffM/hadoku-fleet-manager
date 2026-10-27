@@ -161,19 +161,24 @@ test('every CI unit ranks below the tenant: JIT, warm and the --ci-shaped test u
 	);
 });
 
-test('the dispatcher holds back the unused share, read on the same ssh as free memory', async () => {
+/** One dispatcher tick against claw-3 hosting a 4096 MiB slice whose cgroup reads `sliceMb`. */
+async function tickFloor(
+	sliceMb: number | null,
+	declaredAgoMs: number
+): Promise<{ floor: number; cmds: string[] }> {
 	const { dispatchEphemeral } = await import('../runners/ephemeral-tick.js');
 	const { stateDir } = await import('../host.js');
 	const file = join(stateDir(), 'fleet-hosting.json');
-	const rec = slice({ since: new Date(Date.now() - HOLD_FULL_MS - 60_000).toISOString() });
-	writeHostingDoc({ nodes: { 'claw-3': rec } });
+	writeHostingDoc({
+		nodes: { 'claw-3': slice({ since: new Date(Date.now() - declaredAgoMs).toISOString() }) },
+	});
 	try {
 		const seen: { minFreeMb: number }[][] = [];
 		const cmds: string[] = [];
 		const sh = async (_n: string, cmd: string) => {
 			cmds.push(cmd);
 			if (!cmd.includes('$7, $2')) return '9000';
-			return `9000 16000\n4000 8000\n90000\nhosting-slice ${1200 * 1048576}\n`;
+			return `9000 16000\n4000 8000\n90000\nhosting-slice ${sliceMb === null ? '-' : sliceMb * 1048576}\n`;
 		};
 		await dispatchEphemeral(
 			{
@@ -192,11 +197,29 @@ test('the dispatcher holds back the unused share, read on the same ssh as free m
 				return { minted: 0, failed: 0, skipped: 0, inFlight: 0, reaped: 0 };
 			}) as never
 		);
-		assert.ok(cmds.some((c) => c.includes('hosting-cardtable.slice/memory.current')));
 		assert.equal(seen.length, 1, 'the tick must actually run');
-		// The floor, plus the 4096 MiB slice less the 1200 MiB the agent already holds.
-		assert.equal(seen[0][0].minFreeMb, 1536 + 4096 - 1200);
+		return { floor: seen[0][0].minFreeMb, cmds };
 	} finally {
 		rmSync(file, { force: true });
 	}
+}
+
+// cardtable A4: "no new CI job admitted into the declared share at any point,
+// including before our JVMs start". The floor is the node's own 1536 MiB plus
+// the part of the 4096 MiB slice the tenant is not yet using.
+test('A4: the dispatcher holds back the unused share, read on the same ssh as free memory', async () => {
+	const settled = HOLD_FULL_MS + 60_000;
+	const { floor, cmds } = await tickFloor(1200, settled);
+	assert.ok(cmds.some((c) => c.includes('hosting-cardtable.slice/memory.current')));
+	assert.equal(floor, 1536 + 4096 - 1200);
+	// Empty: the agent's JVMs are not up, so all of it is held.
+	assert.equal((await tickFloor(0, settled)).floor, 1536 + 4096);
+	// Half full.
+	assert.equal((await tickFloor(2048, settled)).floor, 1536 + 2048);
+	// Full: the tenant's own pages already left the node's free memory; nothing more to hold.
+	assert.equal((await tickFloor(4096, settled)).floor, 1536);
+	// Before the JVMs start: a fresh declaration holds everything, whatever the cgroup reads.
+	assert.equal((await tickFloor(3000, 60_000)).floor, 1536 + 4096);
+	// Could not read the slice: everything.
+	assert.equal((await tickFloor(null, settled)).floor, 1536 + 4096);
 });

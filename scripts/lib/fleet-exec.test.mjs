@@ -451,3 +451,36 @@ test('sshDestination logs in as the role the node names', () => {
 	assert.equal(sshDestination('claw-5', 'ci', manifest), 'hadoku-ci@claw-5');
 	assert.match(sshDestination('claw-5', 'admin', manifest), /^[a-z_][a-z0-9_-]*@claw-5$/);
 });
+
+test('a call killed at its timeout SAYS it timed out, not just "Command failed"', async () => {
+	const r = await runOn(LOCAL, 'sleep 5', {
+		as: 'admin',
+		timeoutMs: 300,
+		manifest: { machines: {} },
+	});
+	assert.equal(r.ok, false);
+	assert.match(r.error, /^no answer within 0s \(killed by SIGTERM\)$/);
+});
+
+test("otherwise the far side's last words are the reason", async () => {
+	const r = await runOn(
+		LOCAL,
+		'echo first >&2; echo "ssh: Could not resolve hostname x" >&2; exit 255',
+		{
+			as: 'admin',
+			manifest: { machines: {} },
+		}
+	);
+	assert.equal(r.error, 'ssh: Could not resolve hostname x');
+});
+
+test('the sync transport says so too, and keeps ETIMEDOUT as the branchable code', () => {
+	const r = runOnSync(LOCAL, 'sleep 5', {
+		as: 'admin',
+		timeoutMs: 300,
+		manifest: { machines: {} },
+	});
+	assert.equal(r.ok, false);
+	assert.equal(r.code, 'ETIMEDOUT');
+	assert.match(r.error, /^no answer within 0s/);
+});

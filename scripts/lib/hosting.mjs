@@ -383,6 +383,48 @@ echo HOSTING-REMOVED
 }
 
 /**
+ * What a teardown must leave behind: NOTHING the tenant was given, read back
+ * from the node (cardtable A11). The agent's user and home are kept on
+ * purpose (see {@link removeScript}); everything else is listed here if it
+ * survived, one `LEFT <what>` line each, then `LEFTOVERS-END`.
+ */
+export function leftoversScript(tenantName) {
+	const t = TENANTS[tenantName];
+	return `${assign({ ...tenantVars(t, tenantName), SLICE_CG: hostingSliceCgroup(tenantName) })}
+S="sudo -n"
+for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" "$SLICE" "$PARENT"; do
+	[ -e "/etc/systemd/system/$u" ] && echo "LEFT unit file /etc/systemd/system/$u"
+	systemctl is-active -q "$u" 2>/dev/null && echo "LEFT active unit $u"
+done
+[ -d "/sys/fs/cgroup/$PARENT" ] && echo "LEFT cgroup /sys/fs/cgroup/$PARENT"
+[ -e "$EXEC" ] && echo "LEFT executable $EXEC"
+uid=$(id -u "$AGENT_USER" 2>/dev/null)
+[ -n "$uid" ] && n=$(pgrep -c -U "$uid" 2>/dev/null) && [ "$n" -gt 0 ] && echo "LEFT $n process(es) running as $AGENT_USER"
+$S ufw status 2>/dev/null | grep -E "^$PORT/tcp" | sed "s/^/LEFT ufw rule: /"
+for ipt in iptables ip6tables; do
+	$S /usr/sbin/$ipt -t raw -S PREROUTING 2>/dev/null | grep -- "--dport $PORT " | sed "s/^/LEFT $ipt raw rule: /"
+done
+${CI_SLICE_CG}
+h=$(cat "$CI_CG/memory.high" 2>/dev/null)
+[ -n "$CI_CG" ] && [ "$h" != max ] && echo "LEFT runners.slice memory.high $h, not max"
+$S true 2>/dev/null || echo "LEFT-UNKNOWN sudo is not available, so the firewall could not be read"
+echo LEFTOVERS-END
+`;
+}
+
+/** `{ complete, left }` from {@link leftoversScript}: `complete` false means the answer was cut off. */
+export function parseLeftovers(stdout) {
+	const text = String(stdout ?? '');
+	const lines = text.split('\n');
+	return {
+		complete: text.includes('LEFTOVERS-END'),
+		left: lines
+			.filter((l) => /^LEFT(-UNKNOWN)? /.test(l))
+			.map((l) => l.replace(/^LEFT(-UNKNOWN)? /, '')),
+	};
+}
+
+/**
  * Put the tenant's executable in place, never through a CI-writable path.
  *
  * The bytes travel in this script's own heredoc and are written by root into
