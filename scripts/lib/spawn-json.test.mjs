@@ -56,16 +56,19 @@ test('exit 0 with empty stdout names the status, the elapsed time and the stderr
 
 test('a timeout kill says it was killed, by which signal, and at which ceiling', () => {
 	// Sleeps far past the ceiling. The stderr is written first, so the message
-	// has to carry output from a child that never finished.
+	// has to carry output from a child that never finished. The ceiling only
+	// has to outlast node's own startup: at 400ms a loaded hokon (1-min load
+	// 41, 2026-10-27) killed the child before it wrote a byte, and the
+	// pre-push gate failed on "a killed child still said something".
 	const e = threw(
 		child('process.stderr.write("started, now hanging\\n"); setTimeout(() => {}, 60_000)', {
-			timeout: 400,
+			timeout: 2_000,
 		})
 	);
 	assert.match(e.message, /was KILLED/);
 	assert.match(e.message, /signal: SIGTERM/);
-	assert.match(e.message, /timeout: 400ms/);
-	assert.match(e.message, /killed at the 400ms TIMEOUT/);
+	assert.match(e.message, /timeout: 2000ms/);
+	assert.match(e.message, /killed at the 2000ms TIMEOUT/);
 	assert.match(e.message, /started, now hanging/, 'a killed child still said something');
 	assert.doesNotMatch(e.message, /Unexpected end of JSON input/);
 });
