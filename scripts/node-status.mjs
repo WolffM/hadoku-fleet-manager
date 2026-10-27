@@ -252,7 +252,12 @@ const rows = await Promise.all(
 						})
 					: null;
 			const judged = judgeHosting(declared, obs, mode, reach);
-			hosting = { mode, declared, until: r0.until ?? null, observed: judged.observed };
+			// `state` is hosting --check's word for the same judgement, so a tenant
+			// reads one vocabulary from both (cardtable lane D, TENANT_CONTRACT).
+			const state = judged.findings.some((f) => f.class === 'blocking')
+				? 'not-guaranteed'
+				: 'guaranteed';
+			hosting = { mode, state, declared, until: r0.until ?? null, observed: judged.observed };
 			findings.push(...judged.findings);
 		}
 

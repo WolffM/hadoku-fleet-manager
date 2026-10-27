@@ -560,6 +560,51 @@ export const PROSE_CONTRACT = [
 ];
 
 /**
+ * A TENANT reads these, not a cron job: hadoku-cardtable's coordinator (lane D,
+ * placement and failover, `apps/server/src/play/remote/`), declared by it on
+ * 2026-10-27. It drains matches off a node before a hosting end or a reboot
+ * from `notices`, and places by `ok`, `hosting.state` and `ciUser.state`.
+ *
+ * Each `fields` entry is a dotted path into the document, `[]` marking an
+ * array. Renaming or dropping one breaks a live game's failover, so the
+ * contract is: TELL CARDTABLE FIRST. `json-contract.test.mjs` pins every
+ * path against the producing source and, for the hosting judgement, against
+ * the function's output.
+ */
+export const TENANT_CONTRACT = [
+	{
+		sub: 'node-status',
+		argv: ['--json'],
+		consumer: 'hadoku-cardtable apps/server/src/play/remote/ (lane D)',
+		fields: [
+			'nodes[].node',
+			'nodes[].reachable',
+			'nodes[].ok',
+			'nodes[].findings[].class',
+			'nodes[].findings[].category',
+			'nodes[].notices[].event',
+			'nodes[].notices[].at',
+			'nodes[].notices[].kind',
+			'nodes[].ciUser.state',
+			'nodes[].hosting.state',
+			'nodes[].hosting.declared.memoryMb',
+			'nodes[].hosting.declared.cores',
+			'nodes[].hosting.declared.port',
+			'nodes[].hosting.observed.agent',
+			'nodes[].hosting.observed.portReach',
+			'nodes[].hosting.observed.memoryInUseMb',
+			'nodes[].hosting.until',
+		],
+	},
+	{
+		sub: 'hosting',
+		argv: ['--check', '--json'],
+		consumer: 'hadoku-cardtable apps/server/src/play/remote/ (lane D)',
+		fields: ['ok', 'nodes[].node', 'nodes[].state', 'nodes[].findings', 'nodes[].declared'],
+	},
+];
+
+/**
  * The `GATES` table in hadoku_site's `audit-gates.ts`, as
  * `[{ id, script, sub, evidence }]`.
  *
