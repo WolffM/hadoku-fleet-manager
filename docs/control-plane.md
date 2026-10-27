@@ -243,6 +243,12 @@ So hokon is an **on-demand guest** (`"mint": "on-demand"` in the manifest):
 - **Its own work is always minted for.** `taskauto` and `av1-nvenc` exist
   nowhere else, so a job asking for them mints on hokon whether or not the
   backstop holds it.
+- **Overflow never takes its last slot (fleet-manager#15).** A job that some
+  healthy, undrained claw offers the labels for is overflow on hokon. It may
+  hold every slot but one, and must leave one more job reserve
+  (`requiredMb`) above the memory floor (`GUEST_SOLE_CARRIER_SLOTS` in
+  `runners/placement.ts`). On 2026-10-27 three Forge e2e units filled hokon
+  for 40 minutes while an `av1-nvenc` job waited 24 of them.
 - **Demotion leaves nothing listening.** A JIT unit serves one job and exits,
   in `ci-runner.slice`, capped at the guest's own `slice.unitMaxMb`.
 - **The red light is `fleet drain hokon`.** A drained node is never held

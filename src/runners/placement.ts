@@ -84,6 +84,13 @@ export interface NodeState extends AdmissionInput {
 	name: string;
 	/** What this node advertises. A job wanting more than this cannot run here. */
 	labels?: readonly string[];
+	/**
+	 * An on-demand guest (#120): minted for the work only it can do, and given
+	 * `hadoku-builder` only while the backstop holds it. On such a node,
+	 * OVERFLOW work is capped below the node's own capacity (#15, see
+	 * {@link GUEST_SOLE_CARRIER_SLOTS}). Absent means a claw.
+	 */
+	onDemandGuest?: boolean;
 	/** The node is reachable and not quarantined. */
 	healthy: boolean;
 	/**
@@ -298,6 +305,24 @@ export const HEAVY_HOLD_SEC = 3600;
 export const SPILL_FLOOR_SEC = 100;
 
 /**
+ * Slots, and job reserves of memory, an on-demand guest keeps free for work no
+ * other node can carry (#15).
+ *
+ * The backstop grants a guest `hadoku-builder` when the claws saturate. Before
+ * this, that OVERFLOW (jobs some claw also offers the labels for) could take
+ * every guest slot and memory down to the floor. On 2026-10-27, three cardtable
+ * Forge e2e units held hokon from 19:42 (4/4 slots, then 8-9 GB free against
+ * an 8,192 MB floor), and dataplatform's `pytest (gpu)` waited 24 minutes for
+ * `av1-nvenc`, a label only hokon carries. `ci:queue-health` paged four times.
+ *
+ * Overflow may take every slot but the last ONE, and must leave one more job
+ * reserve (the node's own `requiredMb`) above its floor. Work only the guest
+ * can run is admitted exactly as before. A guest with a single slot keeps
+ * nothing back: it would never serve overflow at all.
+ */
+export const GUEST_SOLE_CARRIER_SLOTS = 1;
+
+/**
  * Is THIS kind slow enough on `node` to hold it for a faster one (#8)? The
  * node's own tier says nothing here: a node can be normal overall and several
  * times slower on one kind (claw-1's spinning disk under dataplatform's
@@ -449,7 +474,9 @@ function refusalFor(
 	wantedLabels: readonly string[],
 	repo?: string,
 	spill?: SpillContext,
-	heavy = false
+	heavy = false,
+	/** Some other, non-guest node offers this job's labels (#15). */
+	overflow = false
 ): {
 	reason: string | null;
 	requiredMb?: number;
@@ -500,6 +527,30 @@ function refusalFor(
 		requiredMb !== undefined ? { ...m, requiredMb, requiredIsLowerBound: true } : m
 	);
 	if (!admit.ok) return { reason: admit.reason ?? 'refused' };
+
+	// THE GUEST'S SOLE-CARRIER RESERVE (#15) — see GUEST_SOLE_CARRIER_SLOTS.
+	// After admission, so a guest that is plainly full still says so.
+	if (m.onDemandGuest && overflow && m.maxConcurrent > GUEST_SOLE_CARRIER_SLOTS) {
+		const reserved = `reserved for work only ${m.name} can run`;
+		const inFlight = m.liveUnits + m.standingBusy;
+		const overflowSlots = m.maxConcurrent - GUEST_SOLE_CARRIER_SLOTS;
+		if (inFlight >= overflowSlots) {
+			return {
+				reason:
+					`${reserved}: overflow may hold ${overflowSlots} of ${m.maxConcurrent} slot(s), ` +
+					`${inFlight} in flight, and another node offers this job's labels`,
+			};
+		}
+		const after = m.freeMb - (requiredMb ?? m.requiredMb) - m.requiredMb * GUEST_SOLE_CARRIER_SLOTS;
+		if (after < m.minFreeMb) {
+			return {
+				reason:
+					`${reserved}: memory: ${m.freeMb}MB free, this job peaks at ` +
+					`${requiredMb ?? m.requiredMb}MB and ${m.requiredMb}MB stays free for one more, ` +
+					`would leave ${after}MB against a ${m.minFreeMb}MB floor`,
+			};
+		}
+	}
 
 	// THE HEAVY HOLD (#102) — see HEAVY_HOLD_SEC. Exact counts only
 	// (`heavyJobs`, never the repo-level `runningHeavy`), and an unknown queue
@@ -753,6 +804,17 @@ export function choosePlacement(
 		return posOf.get(a)! - posOf.get(b)!;
 	});
 
+	// OVERFLOW OR SOLE-CARRIER (#15): could a node that is not a guest take this
+	// job, by its labels? Asked of nodes that could take work at all: a claw
+	// that is down or drained is no home for it. Only a guest reads the answer.
+	const overflow = nodes.some(
+		(n) =>
+			!n.onDemandGuest &&
+			n.healthy &&
+			!n.drained &&
+			(!wantedLabels.length || satisfiesLabels(n.labels ?? [], wantedLabels))
+	);
+
 	const passed: Placement['passed'] = [];
 	const note = (node: string, reason: string, holdSec?: number): void => {
 		passed.push(holdSec === undefined ? { node, reason } : { node, reason, holdSec });
@@ -763,7 +825,14 @@ export function choosePlacement(
 			note(name, 'not in the fleet');
 			continue;
 		}
-		const { reason, requiredMb, holdSec } = refusalFor(m, wantedLabels, repo, spill, heavy);
+		const { reason, requiredMb, holdSec } = refusalFor(
+			m,
+			wantedLabels,
+			repo,
+			spill,
+			heavy,
+			overflow
+		);
 		if (reason) {
 			note(name, reason, holdSec);
 			continue;

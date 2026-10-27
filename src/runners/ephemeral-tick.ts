@@ -2316,6 +2316,8 @@ export async function dispatchEphemeral(
 			// inside `choosePlacement`: placement.ts is pure on purpose and is
 			// handed a label list, exactly like `drained` above.
 			labels: offerFor(input.nodes, name, workloadGate, eligibleFor(name)),
+			// #15: placement keeps part of a guest back from overflow work.
+			onDemandGuest: isGuest(name),
 			// P5.1 (`warm-listener-cache-2026-09-05.md`): "placement must gain
 			// warm-affinity as a first-order term ahead of least-loaded". The term
 			// shipped in `a6a19a4` and was INERT for five days and ~2,000 jobs

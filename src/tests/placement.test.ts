@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import {
 	choosePlacement,
 	isForkSafe,
+	GUEST_SOLE_CARRIER_SLOTS,
 	HEAVY_HOLD_SEC,
 	slowKind,
 	slowReposOn,
@@ -1799,4 +1800,78 @@ test('WARM PATH, #8: a fill onto a node where the repo has a slow kind is withhe
 	assert.equal(res.filled, 0);
 	assert.equal(res.locked, 1, 'counted where #82 counts a withheld fill');
 	assert.equal(sims['claw-1'].marker, null);
+});
+
+// ---------------------------------------------------------------------------
+// #15: overflow may not take a guest's last slot, or its last job of memory
+// ---------------------------------------------------------------------------
+
+/** hokon as the backstop holds it: offered `hadoku-builder` beside its own labels. */
+const guest = (over: Partial<NodeState> = {}): NodeState =>
+	m('hokon', {
+		onDemandGuest: true,
+		labels: ['self-hosted', 'hadoku-builder', 'jdk21', 'av1-nvenc', 'pm2-host'],
+		maxConcurrent: 4,
+		freeMb: 40_000,
+		requiredMb: 4096,
+		minFreeMb: 8192,
+		...over,
+	});
+/** A claw with no room: full, but a home for `hadoku-builder` by its labels. */
+const fullClaw = (over: Partial<NodeState> = {}): NodeState =>
+	m('claw-8', { labels: ['self-hosted', 'hadoku-builder', 'jdk21'], liveUnits: 3, ...over });
+
+test('#15: a guest at 3/4 refuses overflow, and still admits the job only it can run', () => {
+	assert.equal(GUEST_SOLE_CARRIER_SLOTS, 1);
+	const nodes = [fullClaw(), guest({ liveUnits: 3 })];
+	const order = ['claw-8', 'hokon'];
+
+	const forge = choosePlacement(order, nodes, ['self-hosted', 'hadoku-builder', 'jdk21']);
+	assert.equal(forge.node, undefined, 'claw-8 carries jdk21, so this is overflow');
+	assert.equal(
+		forge.passed.find((p) => p.node === 'hokon')?.reason,
+		'reserved for work only hokon can run: overflow may hold 3 of 4 slot(s), 3 in flight, ' +
+			"and another node offers this job's labels"
+	);
+
+	const gpu = choosePlacement(order, nodes, ['self-hosted', 'av1-nvenc']);
+	assert.equal(gpu.node, 'hokon', 'no other node offers av1-nvenc');
+});
+
+test('#15: under 3/4, overflow still lands on the guest — the backstop keeps working', () => {
+	const p = choosePlacement(
+		['claw-8', 'hokon'],
+		[fullClaw(), guest({ liveUnits: 2 })],
+		['self-hosted', 'hadoku-builder']
+	);
+	assert.equal(p.node, 'hokon');
+});
+
+test('#15: overflow must leave one more job of memory above the guest floor', () => {
+	// The 10-27 shape: 9,120 MB free against an 8,192 MB floor.
+	const tight = guest({ liveUnits: 1, freeMb: 16_000 });
+	const p = choosePlacement(['claw-8', 'hokon'], [fullClaw(), tight], ['hadoku-builder']);
+	assert.equal(p.node, undefined);
+	assert.equal(
+		p.passed.find((x) => x.node === 'hokon')?.reason,
+		'reserved for work only hokon can run: memory: 16000MB free, this job peaks at 4096MB ' +
+			'and 4096MB stays free for one more, would leave 7808MB against a 8192MB floor'
+	);
+	const gpu = choosePlacement(['hokon'], [fullClaw(), tight], ['av1-nvenc']);
+	assert.equal(gpu.node, 'hokon', 'the sole-carrier job gets the memory the reserve kept');
+});
+
+test('#15: a claw that is down or drained is no home — the job is the guest’s alone, and admitted', () => {
+	for (const claw of [fullClaw({ healthy: false }), fullClaw({ drained: true })]) {
+		const p = choosePlacement(['claw-8', 'hokon'], [claw, guest({ liveUnits: 3 })], ['jdk21']);
+		assert.equal(p.node, 'hokon');
+	}
+});
+
+test('#15: a claw is never reserved, and a single-slot guest keeps nothing back', () => {
+	const claw = m('claw-2', { labels: ['hadoku-builder'], liveUnits: 2, maxConcurrent: 3 });
+	const other = fullClaw();
+	assert.equal(choosePlacement(['claw-2'], [claw, other], ['hadoku-builder']).node, 'claw-2');
+	const one = guest({ maxConcurrent: 1 });
+	assert.equal(choosePlacement(['hokon'], [other, one], ['hadoku-builder']).node, 'hokon');
 });

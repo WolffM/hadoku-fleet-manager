@@ -1306,6 +1306,24 @@ test('#120: the guest offers hadoku-builder ONLY while the backstop holds it', a
 	}
 });
 
+test('#15: placement is told which node is the on-demand guest — the reserve is not inert', async () => {
+	const g = guestRig();
+	let seen: { name: string; onDemandGuest?: boolean }[] = [];
+	const run = async (i: { nodes: { name: string; onDemandGuest?: boolean }[] }) => {
+		seen = i.nodes;
+		return { minted: 0, failed: 0, skipped: 0, inFlight: 0, reaped: 0 };
+	};
+	setBackstopHold([]);
+	await dispatchEphemeral(g.input as never, 'tok', GH, g.sh as never, run as never);
+	assert.deepEqual(
+		seen.map((n) => [n.name, n.onDemandGuest]),
+		[
+			['claw-3', false],
+			['hokon', true],
+		]
+	);
+});
+
 test('a backstop demotion MID-TICK cannot strip a label from a mint placement already chose (2026-10-23)', async () => {
 	const g = guestRig();
 	let placed: string[] = [];
