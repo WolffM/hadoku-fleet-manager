@@ -146,7 +146,14 @@ function hookEnv(env) {
  * script exposes for exactly this purpose. Never throws on a non-zero exit —
  * refusing IS the behaviour under test.
  */
-function run({ conf = {}, others = 0, memAvailableMb = 999_999, memSwing, env = {} } = {}) {
+function run({
+	conf = {},
+	others = 0,
+	memAvailableMb = 999_999,
+	memSwing,
+	env = {},
+	timeout = 15_000,
+} = {}) {
 	const dir = tempDir(`${FIXTURE_PREFIX}run-`);
 	let writer;
 	try {
@@ -160,6 +167,13 @@ function run({ conf = {}, others = 0, memAvailableMb = 999_999, memSwing, env = 
 		const meminfo = join(dir, 'meminfo');
 		writeFileSync(meminfo, `MemAvailable:   ${memAvailableMb * 1024} kB\n`);
 		if (memSwing) writer = swingMeminfo(meminfo, memSwing);
+		// The host's real load and PSI only feed the "host load:" line, but a
+		// fixture that reads them is not isolated (fleet-manager#13). Tests that
+		// care about that line pass their own in `env`.
+		const loadavg = join(dir, 'loadavg');
+		writeFileSync(loadavg, '0.10 0.10 0.10 1/100 1\n');
+		const pressure = join(dir, 'pressure-cpu');
+		writeFileSync(pressure, 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n');
 		// wave 4b: the hook's own prune root, inside THIS fixture's mkdtemp dir
 		// — never the real host /tmp (the leak hookEnv() exists to seal).
 		const pruneRoot = join(dir, 'prune-root');
@@ -171,13 +185,15 @@ function run({ conf = {}, others = 0, memAvailableMb = 999_999, memSwing, env = 
 		// enforcement these cases exist to prove. `spawnCapture` throws on a
 		// signal instead, naming the ceiling (#45).
 		return spawnCapture('bash', [HOOK], {
-			timeout: 15_000,
+			timeout,
 			label: 'ci-throttle.sh',
 			env: hookEnv({
 				...ambient(),
 				HOME: dir,
 				CI_THROTTLE_CONF: confPath,
 				CI_THROTTLE_MEMINFO: meminfo,
+				CI_THROTTLE_LOADAVG: loadavg,
+				CI_THROTTLE_PRESSURE_CPU: pressure,
 				CI_THROTTLE_TEST_OTHERS: String(others),
 				CI_THROTTLE_PRUNE_ROOT: pruneRoot,
 				...env,
@@ -191,22 +207,31 @@ function run({ conf = {}, others = 0, memAvailableMb = 999_999, memSwing, env = 
 
 /**
  * fleet-manager#12: a MemAvailable that MOVES while the hook waits. A separate
- * process ramps the fixture from `fromMb` toward `toMb` by `stepMb` every 0.3s
+ * process ramps the fixture from `fromMb` toward `toMb` at `stepMb` per 0.3s
  * and then holds there; after `settleAfterS` (if given) it writes `settledMb`
  * and stops. A ramp, not a cycle: the hook samples every 1.5-3.5s, and a
  * cycling value can read the same at two samples by chance. The hook runs
  * under a synchronous spawn, so the writer has to be its own process. Each
  * write is a rename: a half-written meminfo reads as "no MemAvailable", which
  * the hook treats as unlimited and would admit on.
+ *
+ * Both the ramp and the settle are functions of WALL-CLOCK time since the
+ * writer started, in milliseconds (fleet-manager#14). Counting loop
+ * iterations let a loaded host starve the ramp, so the hook's first looks saw
+ * flat memory; bash's `$SECONDS` is whole seconds from a whole-second start,
+ * so a settle "at 4s" could land 3.0s in, ahead of the hook's first sample past
+ * MAX_WAIT_S.
  */
 function swingMeminfo(meminfo, { fromMb, toMb, stepMb = 500, settleAfterS, settledMb }) {
 	const write = (mb) =>
 		`printf 'MemAvailable:   %s kB\\n' $((${mb} * 1024)) >"$f.tmp" && mv "$f.tmp" "$f"`;
+	// EPOCHREALTIME's separator follows the locale; strip it, keep microseconds.
+	const nowMs = '$(( ${EPOCHREALTIME//[!0-9]/} / 1000 ))';
 	const settle =
 		settleAfterS === undefined
 			? ''
-			: `[ "$SECONDS" -ge ${settleAfterS} ] && { ${write(settledMb)}; exit 0; };`;
-	const script = `f="$0"; mb=${fromMb}; while :; do ${settle} ${write('mb')}; [ "$mb" -lt ${toMb} ] && mb=$((mb + ${stepMb})); [ "$mb" -gt ${toMb} ] && mb=${toMb}; sleep 0.3; done`;
+			: `[ "$el" -ge ${settleAfterS * 1000} ] && { ${write(settledMb)}; exit 0; };`;
+	const script = `f="$0"; t0=${nowMs}; while :; do el=$((${nowMs} - t0)); ${settle} mb=$((${fromMb} + el / 300 * ${stepMb})); [ "$mb" -gt ${toMb} ] && mb=${toMb}; ${write('mb')}; sleep 0.1; done`;
 	return spawn('bash', ['-c', script, meminfo], { stdio: 'ignore' });
 }
 
@@ -750,17 +775,23 @@ test('#67: a node that can admit NO job says so, rather than naming a free slot'
 const HOKON_12 = { MAX_CONCURRENT: 4, MIN_FREE_MB: 8192, MAX_WAIT_S: 2, MAX_HOLD_S: 6 };
 
 test('#12: memory MOVING with free slots holds past MAX_WAIT_S and admits once it settles', () => {
+	// The hook's sleep is seeded by its PID, so every pass sleeps the same
+	// 1.5-3.5s and its first sample past MAX_WAIT_S lands by ~3.8s unloaded.
+	// Settling at 8s leaves that sample 4s of slack on a busy host; it settled
+	// at 4s until fleet-manager#13/#14, which left ~0.2s. The hold and the
+	// spawn ceiling grow to cover the later admission.
 	const r = run({
-		conf: HOKON_12,
+		conf: { ...HOKON_12, MAX_HOLD_S: 20 },
 		others: 0,
 		memAvailableMb: 1732,
-		memSwing: { fromMb: 1732, toMb: 7065, settleAfterS: 4, settledMb: 19_000 },
+		memSwing: { fromMb: 1732, toMb: 7065, settleAfterS: 8, settledMb: 19_000 },
+		timeout: 30_000,
 	});
 	const all = r.out + r.err;
 	assert.equal(r.code, 0, `a settling transient must be admitted, not refused: ${all}`);
-	assert.match(all, /a transient, not a baseline; holding up to 6s/, all);
+	assert.match(all, /a transient, not a baseline; holding up to 20s/, all);
 	assert.match(all, /slot free after \d+s/, all);
-	assert.ok(r.elapsedMs >= 3_500, `admitted before the swing could settle: ${r.elapsedMs}ms`);
+	assert.ok(r.elapsedMs >= 7_500, `admitted before the swing could settle: ${r.elapsedMs}ms`);
 });
 
 test('#12: memory MOVING that never settles refuses at MAX_HOLD_S, and does NOT call it placement', () => {
