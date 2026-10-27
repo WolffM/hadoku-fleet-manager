@@ -2086,6 +2086,23 @@ elif [ -z "$WLAN_IF" ]; then
 	log "  policy declares a wireless fallback, but this box has NO wireless hardware (no /sys/class/net/*/wireless)."
 	log "  That is a statement about the box, not a fault. It will be reachable on ethernet only."
 	WIFI_STATE="none no-wireless-hardware"
+	# THE PRESEED'S RADIO CONFIG, ON A BOX WITH NO RADIO. Before c4a5589
+	# (2026-09-07) WIFI_LATE wrote 25-wireless.network and enabled
+	# systemd-networkd whenever the stick carried wifi credentials, radio or not.
+	# claw-5 and claw-6 were imaged that way: networkd managed no link, so
+	# systemd-networkd-wait-online failed on every boot and held
+	# network-online.target — and docker behind it — for its full two minutes,
+	# until 2026-10-27. The radio branch below already stops networkd; this branch
+	# never did. Removed only when the file is byte-for-byte the preseed's own
+	# and is alone in the directory: anything else is somebody else's config.
+	_NETD=/etc/systemd/network
+	if [ "$(ls -A "$_NETD" 2>/dev/null)" = 25-wireless.network ] &&
+		[ "$(cat "$_NETD/25-wireless.network")" = "$(printf '%s\n' '[Match]' 'Name=wl*' '' '[Network]' 'DHCP=yes')" ]; then
+		run rm -f "$_NETD/25-wireless.network"
+		run systemctl disable --now systemd-networkd-wait-online.service systemd-networkd.service systemd-networkd.socket >/dev/null 2>&1 || true
+		run systemctl reset-failed systemd-networkd-wait-online.service >/dev/null 2>&1 || true
+		log "  removed the installer's wifi config and stopped systemd-networkd — no radio for it to manage"
+	fi
 else
 	WIFI_DRIVER="$(basename "$(readlink -f "/sys/class/net/$WLAN_IF/device/driver" 2>/dev/null)" 2>/dev/null || true)"
 	WIFI_MAC="$(cat "/sys/class/net/$WLAN_IF/address" 2>/dev/null || true)"
@@ -2499,6 +2516,20 @@ if [ -n "$HOME_FOREIGN" ]; then
 	log "  ownership repaired"
 fi
 
+# FAILED UNITS, AT ENROLLMENT. Bootstrap runs after the first boot, so anything
+# the install left broken has already failed by now — claw-5 and claw-6 enrolled
+# with systemd-networkd-wait-online failed and carried it for eight weeks.
+# Reported, not a readiness gate: `fleet doctor` keeps judging it afterwards
+# (`failed-units`, advisory), and a leftover unit is not a reason to refuse a node.
+if _fu="$(systemctl list-units --state=failed --no-legend --no-pager --plain 2>/dev/null)"; then
+	FAILED_UNITS="$(printf '%s\n' "$_fu" | awk 'NF{print $1}' | paste -sd, -)"
+	[ -n "$FAILED_UNITS" ] || FAILED_UNITS=none
+	[ "$FAILED_UNITS" = none ] ||
+		warn "systemd units failed on this box: $FAILED_UNITS — 'systemctl status <unit>' says why"
+else
+	FAILED_UNITS=""
+fi
+
 READY=ok
 READY_DETAIL="converged"
 unready() {
@@ -2591,6 +2622,7 @@ echo "ENROLL wirelessIf $(u "${WLAN_IF:-}" 'no wireless hardware on this box')"
 echo "ENROLL wirelessMac $(u "${WIFI_MAC:-}" 'no wireless hardware on this box')"
 echo "ENROLL wirelessDriver $(u "${WIFI_DRIVER:-}" 'no wireless hardware, or no driver bound to it')"
 echo "ENROLL wirelessFallback ${WIFI_STATE:-unknown section-11b-did-not-run}"
+echo "ENROLL failedUnits $(u "$FAILED_UNITS" 'systemctl could not list units')"
 echo "ENROLL fleetUser $FLEET_USER"
 echo "ENROLL sshPort $SSH_PORT"
 echo "ENROLL authMode $AUTH_MODE"

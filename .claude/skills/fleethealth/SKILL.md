@@ -33,23 +33,28 @@ bad source. Run the gates.
 
 Run in this order. Each line is the whole invocation; all read observed state.
 
-| #   | command               | reads                          | ~time |
-| --- | --------------------- | ------------------------------ | ----- |
-| 1   | `capability-schema`   | manifest only, offline         | <1s   |
-| 2   | `label-floor`         | manifest + GitHub              | ~2s   |
-| 3   | `ci-watch --check`    | roster + workflows on disk     | ~5s   |
-| 4   | `reconcile --json`    | GitHub API — registrations     | ~30s  |
-| 5   | `identity`            | ssh, all nodes                 | ~30s  |
-| 6   | `capabilities`        | ssh — EXECUTES each capability | ~60s  |
-| 7   | `toolchain`           | ssh, all nodes                 | ~60s  |
-| 8   | `slice --check`       | ssh — cgroup ceilings          | ~60s  |
-| 9   | `throttle --check`    | ssh — concurrency hook         | ~60s  |
-| 10  | `tool-inventory`      | workflows + ssh                | ~60s  |
-| 11  | `tier-fleet`          | 25 sibling checkouts           | ~90s  |
-| 12  | `header-audit --json` | 15 checkouts + npm registry    | ~60s  |
-| 13  | `identity-model`      | hadoku_site                    | ~10s  |
-| 14  | `mf-externals`        | micro-frontend builds          | ~20s  |
-| 15  | `check-runner-var`    | sibling checkouts + GitHub API | ~30s  |
+| #   | command                       | reads                                | ~time |
+| --- | ----------------------------- | ------------------------------------ | ----- |
+| 1   | `capability-schema`           | manifest only, offline               | <1s   |
+| 2   | `label-floor`                 | manifest + GitHub                    | ~2s   |
+| 3   | `ci-watch --check`            | roster + workflows on disk           | ~5s   |
+| 4   | `reconcile --json`            | GitHub API — registrations           | ~30s  |
+| 5   | `identity`                    | ssh, all nodes                       | ~30s  |
+| 6   | `capabilities`                | ssh — EXECUTES each capability       | ~60s  |
+| 7   | `toolchain`                   | ssh, all nodes                       | ~60s  |
+| 8   | `slice --check`               | ssh — cgroup ceilings                | ~60s  |
+| 9   | `throttle --check`            | ssh — concurrency hook               | ~60s  |
+| 10  | `tool-inventory`              | workflows + ssh                      | ~60s  |
+| 11  | `tier-fleet`                  | 25 sibling checkouts                 | ~90s  |
+| 12  | `header-audit --json`         | 15 checkouts + npm registry          | ~60s  |
+| 13  | `identity-model`              | hadoku_site                          | ~10s  |
+| 14  | `mf-externals`                | micro-frontend builds                | ~20s  |
+| 15  | `check-runner-var`            | sibling checkouts + GitHub API       | ~30s  |
+| 16  | `doctor --from-record --json` | the nightly `$health` record, no ssh | <1s   |
+
+Gate 16 is where node ADVISORIES live (`failed-units`,
+`bootcamp-record`, `pending-reboot`…): `node-status` prints only blocking categories, so read
+them here. Its exit code follows blocking findings only.
 
 Batch 1–3 together, then 4–5, then the ssh-heavy ones in pairs. Do not run all
 fourteen in one Bash call — one hang takes the whole sweep's output with it.

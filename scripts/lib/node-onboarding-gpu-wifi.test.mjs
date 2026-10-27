@@ -725,3 +725,39 @@ test('the apt component edit is verified, not asserted', () => {
 		'the component must be read back AFTER the edit, by a different reader'
 	);
 });
+
+test("a box with no radio loses the preseed's networkd config — and ONLY the preseed's", () => {
+	// claw-5 and claw-6 were imaged before c4a5589 (2026-09-07), when WIFI_LATE
+	// wrote 25-wireless.network and enabled systemd-networkd on any stick with
+	// wifi credentials. Neither has a radio, so systemd-networkd-wait-online
+	// failed every boot and held network-online.target for two minutes. The
+	// cleanup recognises the file by its exact content; if that ever stops
+	// matching what the preseed writes, the cleanup goes quietly inert.
+	const printfArgs = (src, label) => {
+		const m = /printf '%s\\{1,2}n' ('\[Match\]' 'Name=wl\*' [^>]*?)\s*(?:>|\)")/.exec(src);
+		assert.ok(m, `could not find the 25-wireless.network content in ${label}`);
+		return m[1].trim();
+	};
+	const preseed = readFileSync(resolve(ROOT, 'scripts', 'lib', 'make-preseed.sh'), 'utf8');
+	const branch = code.slice(
+		code.indexOf('WIFI_STATE="none no-wireless-hardware"'),
+		code.indexOf('WIFI_DRIVER="$(basename')
+	);
+	assert.ok(branch.length > 50, 'could not find the no-wireless-hardware branch');
+	assert.equal(
+		printfArgs(branch, 'the no-radio branch'),
+		printfArgs(preseed, 'make-preseed.sh'),
+		'the cleanup must recognise exactly the file the preseed writes'
+	);
+	assert.match(branch, /systemctl disable --now systemd-networkd-wait-online/);
+	assert.match(
+		branch,
+		/= 25-wireless\.network \]/,
+		'only when that file is alone in the directory'
+	);
+});
+
+test('the enrollment record carries the failed units the install left behind', () => {
+	assert.match(code, /^echo "ENROLL failedUnits \$\(u "\$FAILED_UNITS" /m);
+	assert.match(code, /FAILED_UNITS=none/, 'a counted zero is "none", never an empty field');
+});

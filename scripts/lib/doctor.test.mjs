@@ -1730,3 +1730,101 @@ test('a --cadence guest probe never loads the box, and says why in the record', 
 	assert.ok(probe.includes(GUEST_CADENCE_NO_LOAD_WHY));
 	assert.throws(() => doctorProbe({ loadSeconds: 0, noLoadWhy: 'x"; rm -rf ~; "' }), /unsafe/);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FAILED UNITS — every failed system unit, not only actions.runner.*
+// ═══════════════════════════════════════════════════════════════════════════
+
+// VERBATIM, 2026-10-27, from the real `doctorProbe({ loadSeconds: 0 })` run on
+// each node. claw-3's unit is cktest-runner, retired 07-30 and left enabled;
+// claw-1's is modules-load from the 10-25 boot before DKMS rebuilt nvidia.
+const FAILED_CLAW3 = ['D failedUnits.count 1', 'D failedUnit.cktest-runner.service 1792941799'];
+const FAILED_CLAW1 = [
+	'D failedUnits.count 1',
+	'D failedUnit.systemd-modules-load.service 1792938169',
+];
+const FAILED_CLAW4 = ['D failedUnits.count 0'];
+
+const failedFacet = (lines) =>
+	healthFacet({ node: 'claw-x', probe: parseDoctor(workProbe(lines)) });
+
+void test('healthFacet: failedUnits names each unit and when it failed, off the real capture', () => {
+	assert.deepEqual(failedFacet(FAILED_CLAW3).failedUnits, {
+		units: [{ unit: 'cktest-runner.service', since: '2026-10-25T15:23:19.000Z' }],
+		why: null,
+	});
+	assert.deepEqual(failedFacet(FAILED_CLAW1).failedUnits.units, [
+		{ unit: 'systemd-modules-load.service', since: '2026-10-25T14:22:49.000Z' },
+	]);
+});
+
+void test('healthFacet: a counted zero is [], and an unlistable node is null with the reason', () => {
+	assert.deepEqual(failedFacet(FAILED_CLAW4).failedUnits, { units: [], why: null });
+	const blind = failedFacet(["U failedUnits systemctl could not list this node's units"]);
+	assert.equal(blind.failedUnits.units, null, 'could not look is never an empty list');
+	assert.match(blind.failedUnits.why, /could not list/);
+});
+
+void test('healthFacet: a failed unit whose timestamp the node withheld is kept, with since null', () => {
+	const h = failedFacet([
+		'D failedUnits.count 1',
+		'U failedUnit.cktest-runner.service the node produced no value for this',
+	]);
+	assert.deepEqual(h.failedUnits.units, [{ unit: 'cktest-runner.service', since: null }]);
+});
+
+void test('a failed unit is an ADVISORY finding that names the unit and its age', () => {
+	const fs = find(doctorFindings(failedFacet(FAILED_CLAW3), { nowMs: NOW }), 'failed-units');
+	assert.equal(fs.length, 1);
+	assert.equal(fs[0].class, ADVISORY);
+	assert.equal(fs[0].status, 'failed');
+	assert.match(fs[0].why, /cktest-runner\.service \(since 2026-10-25T15:23:19\.000Z\)/);
+	assert.equal(
+		blockingFindings(doctorFindings(failedFacet(FAILED_CLAW3), { nowMs: NOW })).some(
+			(f) => f.category === 'failed-units'
+		),
+		false,
+		'a leftover unit must not refuse a node work'
+	);
+});
+
+void test('no failed unit draws no finding; an unlistable node draws an advisory, never silence', () => {
+	assert.equal(
+		find(doctorFindings(failedFacet(FAILED_CLAW4), { nowMs: NOW }), 'failed-units').length,
+		0
+	);
+	const blind = find(
+		doctorFindings(failedFacet(["U failedUnits systemctl could not list this node's units"]), {
+			nowMs: NOW,
+		}),
+		'failed-units'
+	);
+	assert.equal(blind.length, 1);
+	assert.equal(blind[0].class, ADVISORY);
+	assert.equal(blind[0].status, 'unknown');
+});
+
+void test('a failed actions.runner unit is left to runner-units, not reported twice', () => {
+	const fs = doctorFindings(
+		failedFacet([
+			'D failedUnits.count 1',
+			'D failedUnit.actions.runner.WolffM-hadoku_site.claw-x.service 1792941799',
+			'D runners.failed 1',
+		]),
+		{ nowMs: NOW }
+	);
+	assert.equal(find(fs, 'failed-units').length, 0);
+	assert.equal(find(fs, 'runner-units').length, 1);
+});
+
+void test('a STORED record from before this probe draws nothing; a fresh probe that skipped it is unknown', () => {
+	// node-status re-judges stored `$health` records, and one written before
+	// 2026-10-27 has no `failedUnits` key at all: it never asked.
+	const { failedUnits: _, ...stored } = facetOf(CLAW1);
+	assert.equal(find(doctorFindings(stored, { nowMs: NOW }), 'failed-units').length, 0);
+	// A probe output parsed NOW without the count line did not answer — the
+	// 2026-09-10 claw-1 capture is exactly that — and may not read as clean.
+	const fresh = find(doctorFindings(facetOf(CLAW1), { nowMs: NOW }), 'failed-units');
+	assert.equal(fresh.length, 1);
+	assert.equal(fresh[0].status, 'unknown');
+});

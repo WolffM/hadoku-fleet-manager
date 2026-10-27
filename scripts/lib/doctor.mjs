@@ -512,6 +512,21 @@ export function doctorProbe({
 		'BUSY=$(pgrep -c -f "[R]unner\\.Worker" 2>/dev/null | head -1)',
 		'BUSY=${BUSY:-0}',
 		'say runners.busy "$BUSY"',
+		// ── every failed system unit, and since when ──────────────────────────
+		//
+		// Not just `actions.runner.*`. claw-5 and claw-6 failed
+		// systemd-networkd-wait-online on EVERY boot from their 2026-08-31/09-01
+		// install until 10-27 — a preseed-era networkd config for a radio neither
+		// box has, costing each boot two minutes — and `fleet benchmark` printed
+		// `failed units: 1` for claw-6 on 10-04 without anything turning it into
+		// a finding. The timestamp is what tells a leftover from something new.
+		// A COUNTED zero is emitted as 0; a systemctl that cannot list is `U`.
+		'if FU=$(systemctl list-units --state=failed --no-legend --no-pager --plain 2>/dev/null); then',
+		'  say failedUnits.count "$(printf "%s\\n" "$FU" | grep -c .)"',
+		'  for u in $(printf "%s\\n" "$FU" | awk "NF{print \\$1}"); do',
+		'    say "failedUnit.$u" "$(systemctl show -P StateChangeTimestamp --timestamp=unix "$u" 2>/dev/null | tr -d @)"',
+		'  done',
+		'else unk failedUnits "systemctl could not list this node\'s units"; fi',
 		'if E=$(journalctl -b 0 -p err --no-pager 2>/dev/null); then say errorsThisBoot "$(printf "%s\\n" "$E" | grep -vcE "ACPI|Bluetooth")"; else unk errorsThisBoot "the journal could not be read by this user"; fi',
 		// ── which stack owns the radio. node-interfaces.mjs owns the question. ─
 		//
@@ -1081,12 +1096,45 @@ export function healthFacet({
 			failed: num('runners.failed'),
 			busy: num('runners.busy'),
 		},
+		failedUnits: failedUnits(facts, unknown),
 		crashes: num('crashes'),
 		errorsThisBoot: num('errorsThisBoot'),
 		// A POINTER AT ANOTHER FACET, NOT EVIDENCE DOCTOR GATHERED. See the file
 		// header and {@link bootcampPointer}.
 		bootcamp: bootcampPointer(capabilities),
 	};
+}
+
+/**
+ * The probe's failed system units, each with when it entered that state.
+ *
+ * `units: null` with a `why` is "could not look"; `units: []` is a counted
+ * zero. A unit whose timestamp the node did not give keeps `since: null`
+ * rather than being dropped — the unit is the finding, the time is detail.
+ *
+ * @returns {{units: {unit: string, since: string|null}[]|null, why: string|null}}
+ */
+function failedUnits(facts, unknown) {
+	if (facts['failedUnits.count'] === undefined) {
+		return {
+			units: null,
+			why:
+				unknown.failedUnits ?? unknown['failedUnits.count'] ?? 'the probe reported no unit count',
+		};
+	}
+	const names = new Set(
+		[...Object.keys(facts), ...Object.keys(unknown)]
+			.filter((k) => k.startsWith('failedUnit.'))
+			.map((k) => k.slice('failedUnit.'.length))
+	);
+	const units = [...names].sort().map((unit) => {
+		const epoch = Number(facts[`failedUnit.${unit}`]);
+		return {
+			unit,
+			since: Number.isFinite(epoch) && epoch > 0 ? new Date(epoch * 1000).toISOString() : null,
+		};
+	});
+	return { units, why: null };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1638,6 +1686,44 @@ export function doctorFindings(health, { nowMs = Date.now() } = {}) {
 				{ failed: health.runners.failed }
 			)
 		);
+	}
+
+	// ── every other failed unit ───────────────────────────────────────────────
+	// ADVISORY, both ways. The first three this found (claw-5/6 networkd, claw-3's
+	// cktest-runner retired 07-30, claw-1's modules-load from a boot before DKMS
+	// rebuilt nvidia) were leftovers, not outages, and none is a reason to refuse
+	// a node work. Being unable to list units is advisory for the same reason: it
+	// may not render as clean, and it is no worse than finding one. `actions.runner.*`
+	// is left to the BLOCKING `runner-units` finding above. A record written before
+	// this probe existed has no `failedUnits` and draws nothing — it never asked.
+	const fu = health.failedUnits;
+	if (fu && fu.units === null) {
+		out.push(
+			f(
+				health,
+				'failed-units',
+				ADVISORY,
+				'unknown',
+				`whether any systemd unit has failed on this node could not be read: ${fu.why}.`
+			)
+		);
+	} else if (fu) {
+		const units = fu.units.filter((u) => !u.unit.startsWith('actions.runner.'));
+		if (units.length > 0) {
+			out.push(
+				f(
+					health,
+					'failed-units',
+					ADVISORY,
+					'failed',
+					`${units.length} systemd unit(s) failed: ` +
+						units.map((u) => `${u.unit} (since ${u.since ?? 'an unreported time'})`).join(', ') +
+						'. `systemctl status <unit>` on the node says why; `systemctl reset-failed` clears a ' +
+						'stale one only once its cause is gone.',
+					{ units }
+				)
+			);
+		}
 	}
 
 	// ── the bootcamp pointer, aged ────────────────────────────────────────────
