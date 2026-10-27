@@ -276,6 +276,11 @@ WorkingDirectory=$AGENT_HOME
 Environment=CARDTABLE_AGENT_PORT=$PORT
 Restart=always
 RestartSec=2
+# The tenant's workers (cardtable: one JVM per match group) outlive an agent
+# restart: the agent gets its own cgroup subtree to place them in, and a
+# restart signals only the agent. The slice still bounds the whole subtree.
+Delegate=yes
+KillMode=process
 OOMScoreAdjust=$AGENT_OOM
 UMask=0077
 NoNewPrivileges=yes
@@ -330,6 +335,8 @@ export function removeScript(tenantName, controllerIp) {
 	return `${assign({ ...tenantVars(t, tenantName), CONTROLLER_IP: controllerIp })}
 set -eu
 S="sudo -n"
+# KillMode=process leaves the tenant's workers running when the agent stops; a teardown takes them too.
+$S systemctl kill --kill-whom=all --signal=SIGKILL "$SERVICE" >/dev/null 2>&1 || true
 $S systemctl disable --now "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" >/dev/null 2>&1 || true
 $S systemctl stop "$SLICE" "$PARENT" >/dev/null 2>&1 || true
 for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" "$SLICE" "$PARENT"; do $S rm -f "/etc/systemd/system/$u"; done

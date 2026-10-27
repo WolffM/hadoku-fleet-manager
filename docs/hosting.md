@@ -110,7 +110,11 @@ LAN and both tailnet addresses). No node able to look is blocking, not a pass.
 
 **A re-deploy that changes no unit leaves the agent running.** A restart kills
 the tenant's JVMs, so the agent restarts only when its slice or service unit
-actually changed.
+actually changed. And a restart signals only the agent: the unit carries
+`Delegate=yes` and `KillMode=process`, so the tenant places its workers in its
+own sub-cgroups and they outlive the agent (cardtable's JVMs keep their
+matches). The slice's `MemoryMax` and `CPUQuota` still bound the whole subtree.
+`--remove` kills the workers before it removes the unit.
 
 **The firewall does not reach loopback.** A CI job on the same node connects to
 the agent over `127.0.0.1`, which ufw never filters. So the port being closed to

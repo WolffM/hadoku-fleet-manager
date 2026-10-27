@@ -14,6 +14,7 @@ import {
 	peerCandidates,
 	portProbeScript,
 	probeReach,
+	removeScript,
 	TENANTS,
 } from './hosting.mjs';
 
@@ -323,5 +324,20 @@ test('a declaration must fit the node as measured, with its own floor kept', () 
 	assert.equal(
 		fitProblems({ memoryMb: 8192, cores: 4 }, { memTotalMb: null, nproc: null }).length,
 		2
+	);
+});
+
+test("the tenant's workers outlive an agent restart, and not a teardown", () => {
+	const s = deployScript(
+		'cardtable',
+		{ memoryMb: 4096, cores: 4 },
+		{ lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null }
+	);
+	assert.match(s, /^Delegate=yes$/m);
+	assert.match(s, /^KillMode=process$/m);
+	const r = removeScript('cardtable', '192.0.2.10');
+	assert.ok(
+		r.indexOf('--kill-whom=all --signal=SIGKILL') < r.indexOf('disable --now'),
+		'the workers are killed before the unit goes'
 	);
 });
