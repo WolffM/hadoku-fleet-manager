@@ -137,6 +137,38 @@
 # MemAvailable moving over time shows it at all. The wait is the second look
 # that earns the word "cannot".
 #
+# A MOVING FLOOR IS NOT A PLACEMENT FINDING (fleet-manager#12)
+# ------------------------------------------------------------
+# That second look was taken and then ignored. On 2026-10-27 04:56 hokon
+# refused hadoku_site's `Redeploy PM2 Service` for bomberman with:
+#
+#   waited 91s and REFUSING the job — this node cannot host it (0 of 4 slot(s)
+#   in use for the whole wait, 1732-7065MB available, floor 8192MB)
+#   ... re-running will refuse again. This is a placement problem ...
+#
+# MemAvailable swung over 5GB inside the wait. Every PM2 service on hokon had
+# restarted together ~7 minutes earlier, and an hour later the box had ~19GB
+# free and a hand re-run passed first time. Nothing retried it, so bomberman
+# ran one commit behind for ~70 minutes, and the advice was wrong twice: hokon
+# was the only node that could run a deploy, and re-running did not refuse.
+#
+# The range was already in hand (FREE_MIN/FREE_MAX) and said "transient". So
+# the placement path now reads it before deciding:
+#
+#   FLAT     MemAvailable moved less than MEM_SWING_MB across the whole wait.
+#            That is a baseline; refuse at MAX_WAIT_S exactly as before, and
+#            "re-running will refuse again" is true.
+#   MOVING   it moved at least MEM_SWING_MB. Something on the box is claiming
+#            or releasing memory, so keep holding — up to MAX_HOLD_S, not
+#            MAX_WAIT_S — while it settles. If the ceiling still arrives short
+#            of the floor, refuse, but say it was moving and that a later
+#            re-run may pass. It is not a placement finding and must not say so.
+#
+# Only on the placement path. With another admitted job in the wait the wait
+# is already the right one (CONTENTION), and an unreadable count never earns
+# either finding. The longer hold is bounded, so a node that swings forever
+# still ends; it just ends with the right words.
+#
 # A THIRD FINDING, STATIC: KNOWN NEED VS THIS UNIT'S CAP (#76's hokon half)
 # --------------------------------------------------------------------------
 # In an outage the backstop promotes hokon onto `hadoku-builder`, and GitHub
@@ -248,6 +280,11 @@ LOCK_FILE="$THROTTLE_DIR/admit.lock"
 MAX_CONCURRENT=99
 MIN_FREE_MB=0
 MAX_WAIT_S=90
+# fleet-manager#12: the hold for a placement-shaped wait whose MemAvailable is
+# MOVING — see "A MOVING FLOOR" in the header. A swing smaller than
+# MEM_SWING_MB over the whole wait is a flat baseline and refuses at MAX_WAIT_S.
+MAX_HOLD_S=600
+MEM_SWING_MB=1024
 # Matched against GITHUB_WORKFLOW, which carries the workflow's DISPLAY NAME
 # ("Runner smoke test"), not its file slug ("runner-smoke"). The first version
 # matched only the slug, so neither exempt workflow was actually exempt — caught
@@ -564,13 +601,15 @@ maybe_prune_tmp() {
 # the script a deliberately malformed config: it held a job for 91s on a
 # completely idle node. Anything unparseable is discarded for the permissive
 # default, loudly.
-for _v in MAX_CONCURRENT MIN_FREE_MB MAX_WAIT_S; do
+for _v in MAX_CONCURRENT MIN_FREE_MB MAX_WAIT_S MAX_HOLD_S MEM_SWING_MB; do
 	eval "_val=\${$_v}"
 	case "$_val" in
 	'' | *[!0-9]*)
 		case "$_v" in
 		MAX_CONCURRENT) _def=99 ;;
 		MIN_FREE_MB) _def=0 ;;
+		MAX_HOLD_S) _def=600 ;;
+		MEM_SWING_MB) _def=1024 ;;
 		*) _def=90 ;;
 		esac
 		echo "ci-throttle: ${_v}='${_val}' is not a non-negative integer — using ${_def}" >&2
@@ -856,6 +895,7 @@ PEAK_OTHERS=0     # the most admitted jobs seen at once; 0 for the whole wait is
 FREE_MIN=''       # how MemAvailable moved. A floor breach that never moved is a baseline,
 FREE_MAX=''       # not a burst draining.
 COUNT_TRUSTED=1   # cleared for the whole run the first time the count could not be taken
+EXTEND_SAID=0     # fleet-manager#12: has the "memory is moving, holding longer" line been said
 HOLDING_SAID=0    # #73: has the "holding:" line already been said. A flag set the instant
                   # it is, never re-derived from $SECONDS — see below for why.
 while :; do
@@ -889,6 +929,21 @@ while :; do
 	fi
 	[ "$held" = 1 ] && flock -u 9
 
+	# fleet-manager#12. Past MAX_WAIT_S on the placement path with MemAvailable
+	# MOVING: hold on, up to MAX_HOLD_S. Every condition is the placement
+	# branch's own, plus the swing — see "A MOVING FLOOR" in the header.
+	swing=$((FREE_MAX - FREE_MIN))
+	if [ "$waited" -ge "$MAX_WAIT_S" ] && [ "$waited" -lt "$MAX_HOLD_S" ] &&
+		[ "$COUNT_TRUSTED" = 1 ] && [ "$PEAK_OTHERS" -eq 0 ] &&
+		[ "$f" -lt "$MIN_FREE_MB" ] && [ "$swing" -ge "$MEM_SWING_MB" ]; then
+		if [ "$EXTEND_SAID" = 0 ]; then
+			say "MemAvailable moved ${FREE_MIN}-${FREE_MAX}MB in ${waited}s with 0 of ${MAX_CONCURRENT} slot(s) in use — a transient, not a baseline; holding up to ${MAX_HOLD_S}s for it to settle"
+			EXTEND_SAID=1
+		fi
+		sleep "$(awk -v s=$$ 'BEGIN{srand(s); printf "%.2f", 1.5 + rand()*2.0}')"
+		continue
+	fi
+
 	if [ "$waited" -ge "$MAX_WAIT_S" ]; then
 		# REFUSED, not admitted — see the header. The wait held the full
 		# MAX_WAIT_S and the node is STILL over its declared limit, which is a
@@ -909,6 +964,20 @@ while :; do
 		# outside what this hook manages, and re-running lands in exactly the
 		# same state.
 		if [ "$COUNT_TRUSTED" = 1 ] && [ "$PEAK_OTHERS" -eq 0 ]; then
+			verdict="Concurrency was never the constraint: 0 of ${MAX_CONCURRENT} slot(s) were in use at any point in the wait, so there is no free slot to wait for and re-running will refuse again. This is a placement problem, not a throttling one."
+			if [ "$f" -lt "$MIN_FREE_MB" ] && [ "$swing" -ge "$MEM_SWING_MB" ]; then
+				# MOVING (fleet-manager#12): the longer hold ran out with the
+				# floor still unmet. Refused, but not "cannot host" — the range
+				# says the memory is in flux, so a later re-run may well pass.
+				short=$((MIN_FREE_MB - f))
+				why="it is ${short}MB short of its ${MIN_FREE_MB}MB memory floor, but MemAvailable moved ${span} during the wait, so something on this node was claiming or releasing memory the whole time — a transient, not a baseline"
+				verdict="0 of ${MAX_CONCURRENT} slot(s) were in use at any point in the wait, so this is not contention, and the moving range says the node is not simply too small for it."
+				fix="Re-run once the node's memory settles. If it refuses again with MemAvailable flat, that is the placement finding."
+				say "waited ${waited}s and REFUSING the job — memory never settled above the floor" \
+					"(0 of ${MAX_CONCURRENT} slot(s) in use for the whole wait, ${span} available, floor ${MIN_FREE_MB}MB)"
+				echo "::error::ci-throttle: refused on $(hostname) after ${waited}s — ${why}. ${verdict} ${fix}"
+				exit 1
+			fi
 			if [ "$f" -lt "$MIN_FREE_MB" ]; then
 				short=$((MIN_FREE_MB - f))
 				# NOT "held by the node's resident load" — that is a guess. A JIT
@@ -927,7 +996,7 @@ while :; do
 			fi
 			say "waited ${waited}s and REFUSING the job — this node cannot host it" \
 				"(0 of ${MAX_CONCURRENT} slot(s) in use for the whole wait, ${span} available, floor ${MIN_FREE_MB}MB)"
-			echo "::error::ci-throttle: refused on $(hostname) after ${waited}s — this node cannot host this job: ${why}. Concurrency was never the constraint: 0 of ${MAX_CONCURRENT} slot(s) were in use at any point in the wait, so there is no free slot to wait for and re-running will refuse again. This is a placement problem, not a throttling one. ${fix}"
+			echo "::error::ci-throttle: refused on $(hostname) after ${waited}s — this node cannot host this job: ${why}. ${verdict} ${fix}"
 			exit 1
 		fi
 

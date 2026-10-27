@@ -146,8 +146,9 @@ function hookEnv(env) {
  * script exposes for exactly this purpose. Never throws on a non-zero exit —
  * refusing IS the behaviour under test.
  */
-function run({ conf = {}, others = 0, memAvailableMb = 999_999, env = {} } = {}) {
+function run({ conf = {}, others = 0, memAvailableMb = 999_999, memSwing, env = {} } = {}) {
 	const dir = tempDir(`${FIXTURE_PREFIX}run-`);
+	let writer;
 	try {
 		const confPath = join(dir, 'ci-throttle.conf');
 		writeFileSync(
@@ -158,6 +159,7 @@ function run({ conf = {}, others = 0, memAvailableMb = 999_999, env = {} } = {})
 		);
 		const meminfo = join(dir, 'meminfo');
 		writeFileSync(meminfo, `MemAvailable:   ${memAvailableMb * 1024} kB\n`);
+		if (memSwing) writer = swingMeminfo(meminfo, memSwing);
 		// wave 4b: the hook's own prune root, inside THIS fixture's mkdtemp dir
 		// — never the real host /tmp (the leak hookEnv() exists to seal).
 		const pruneRoot = join(dir, 'prune-root');
@@ -182,8 +184,30 @@ function run({ conf = {}, others = 0, memAvailableMb = 999_999, env = {} } = {})
 			}),
 		});
 	} finally {
+		writer?.kill('SIGKILL');
 		rmSync(dir, { recursive: true, force: true });
 	}
+}
+
+/**
+ * fleet-manager#12: a MemAvailable that MOVES while the hook waits. A separate
+ * process ramps the fixture from `fromMb` toward `toMb` by `stepMb` every 0.3s
+ * and then holds there; after `settleAfterS` (if given) it writes `settledMb`
+ * and stops. A ramp, not a cycle: the hook samples every 1.5-3.5s, and a
+ * cycling value can read the same at two samples by chance. The hook runs
+ * under a synchronous spawn, so the writer has to be its own process. Each
+ * write is a rename: a half-written meminfo reads as "no MemAvailable", which
+ * the hook treats as unlimited and would admit on.
+ */
+function swingMeminfo(meminfo, { fromMb, toMb, stepMb = 500, settleAfterS, settledMb }) {
+	const write = (mb) =>
+		`printf 'MemAvailable:   %s kB\\n' $((${mb} * 1024)) >"$f.tmp" && mv "$f.tmp" "$f"`;
+	const settle =
+		settleAfterS === undefined
+			? ''
+			: `[ "$SECONDS" -ge ${settleAfterS} ] && { ${write(settledMb)}; exit 0; };`;
+	const script = `f="$0"; mb=${fromMb}; while :; do ${settle} ${write('mb')}; [ "$mb" -lt ${toMb} ] && mb=$((mb + ${stepMb})); [ "$mb" -gt ${toMb} ] && mb=${toMb}; sleep 0.3; done`;
+	return spawn('bash', ['-c', script, meminfo], { stdio: 'ignore' });
 }
 
 test('under the limit: admits immediately, exit 0', () => {
@@ -712,6 +736,90 @@ test('#67: a node that can admit NO job says so, rather than naming a free slot'
 	assert.match(all, /declared concurrency limit is 0, so no job can be admitted here at all/, all);
 	assert.doesNotMatch(all, /Re-run once the node has a free slot/, all);
 	assert.match(all, /Raise maxConcurrent/, all);
+});
+
+// ── fleet-manager#12: a MOVING floor is a transient, not a placement finding ──
+//
+// hokon refused bomberman's redeploy at 04:56 on 2026-10-27 with 0 of 4 slots
+// in use and MemAvailable swinging 1732-7065MB across the 91s wait — every PM2
+// service had restarted ~7 minutes earlier. It said "re-running will refuse
+// again", and a re-run an hour later passed first time. The A/B below keeps
+// the flat half: the SAME conf with memory that does not move still refuses at
+// MAX_WAIT_S, fast, as placement.
+
+const HOKON_12 = { MAX_CONCURRENT: 4, MIN_FREE_MB: 8192, MAX_WAIT_S: 2, MAX_HOLD_S: 6 };
+
+test('#12: memory MOVING with free slots holds past MAX_WAIT_S and admits once it settles', () => {
+	const r = run({
+		conf: HOKON_12,
+		others: 0,
+		memAvailableMb: 1732,
+		memSwing: { fromMb: 1732, toMb: 7065, settleAfterS: 4, settledMb: 19_000 },
+	});
+	const all = r.out + r.err;
+	assert.equal(r.code, 0, `a settling transient must be admitted, not refused: ${all}`);
+	assert.match(all, /a transient, not a baseline; holding up to 6s/, all);
+	assert.match(all, /slot free after \d+s/, all);
+	assert.ok(r.elapsedMs >= 3_500, `admitted before the swing could settle: ${r.elapsedMs}ms`);
+});
+
+test('#12: memory MOVING that never settles refuses at MAX_HOLD_S, and does NOT call it placement', () => {
+	const r = run({
+		conf: HOKON_12,
+		others: 0,
+		memAvailableMb: 1732,
+		memSwing: { fromMb: 1732, toMb: 7065 },
+	});
+	const all = r.out + r.err;
+	assert.notEqual(r.code, 0, `the floor was never met, so the job is still refused: ${all}`);
+	assert.match(all, /::error::ci-throttle: refused/, all);
+	// $SECONDS is whole seconds, so `waited >= 6` can read true ~5.0s in.
+	assert.ok(r.elapsedMs >= 5_000, `refused before MAX_HOLD_S: ${r.elapsedMs}ms`);
+	// The two claims #12 caught being false.
+	assert.doesNotMatch(all, /re-running will refuse again/, all);
+	assert.doesNotMatch(all, /placement problem|cannot host this job/, all);
+	assert.match(all, /a transient, not a baseline/, all);
+	assert.match(all, /Re-run once the node's memory settles/, all);
+});
+
+test('#12: the SAME conf with FLAT memory still refuses fast, as placement', () => {
+	const r = run({ conf: { ...HOKON_12, MAX_HOLD_S: 600 }, others: 0, memAvailableMb: 7120 });
+	const all = r.out + r.err;
+	assert.notEqual(r.code, 0, all);
+	assert.ok(
+		r.elapsedMs < 5_000,
+		`a flat floor breach must not take the long hold: ${r.elapsedMs}ms`
+	);
+	assert.match(all, /re-running will refuse again/, all);
+	assert.match(all, /placement problem, not a throttling one/, all);
+	assert.doesNotMatch(all, /holding up to/, all);
+});
+
+test('#12: a swing below MEM_SWING_MB is still flat', () => {
+	const r = run({
+		conf: { ...HOKON_12, MAX_HOLD_S: 600 },
+		others: 0,
+		memAvailableMb: 7120,
+		memSwing: { fromMb: 7120, toMb: 7600, stepMb: 100 },
+	});
+	const all = r.out + r.err;
+	assert.notEqual(r.code, 0, all);
+	assert.ok(r.elapsedMs < 5_000, `480MB of noise is not a transient: ${r.elapsedMs}ms`);
+	assert.match(all, /placement problem/, all);
+});
+
+test('#12: moving memory with a job RUNNING is contention, refused at MAX_WAIT_S, not held longer', () => {
+	const r = run({
+		conf: { ...HOKON_12, MAX_HOLD_S: 600 },
+		others: 1,
+		memAvailableMb: 1732,
+		memSwing: { fromMb: 1732, toMb: 7065 },
+	});
+	const all = r.out + r.err;
+	assert.notEqual(r.code, 0, all);
+	assert.ok(r.elapsedMs < 5_000, `contention already has the right wait: ${r.elapsedMs}ms`);
+	assert.match(all, /Re-run once the node has a free slot/, all);
+	assert.doesNotMatch(all, /holding up to/, all);
 });
 
 test('#67: an UNREADABLE admitted-job count never becomes a placement finding', () => {
