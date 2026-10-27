@@ -18,11 +18,21 @@ import {
 	portProbeScript,
 	probeReach,
 	removeScript,
-	TENANTS,
 } from './hosting.mjs';
 
+import { readFileSync } from 'node:fs';
+import { validateHostingRequest } from './hosting-request.mjs';
+import { tenantSpecFrom } from './tenant-registry.mjs';
+
+/** cardtable's spec, derived from its real request: the names the old TENANTS row held. */
+const CARDTABLE = tenantSpecFrom(
+	validateHostingRequest(
+		JSON.parse(readFileSync(new URL('./fixtures/hosting-cardtable.json', import.meta.url), 'utf8'))
+	).request
+);
+
 const DECLARED = { tenant: 'cardtable', memoryMb: 8192, cores: 4, port: 7621 };
-const SLICE_CG = `/hosting.slice/${TENANTS.cardtable.slice}`;
+const SLICE_CG = `/hosting.slice/${CARDTABLE.slice}`;
 const MIB = 1048576;
 
 /**
@@ -61,7 +71,7 @@ const answer = (over = {}) =>
 			execStat: 'root:root:755',
 			agentInstalled: 'yes',
 			listenerPid: 4242,
-			listenerCgroup: `${SLICE_CG}/${TENANTS.cardtable.service}`,
+			listenerCgroup: `${SLICE_CG}/${CARDTABLE.service}`,
 			listenerUid: 996,
 			listenerOom: -500,
 			ciProcs: 0,
@@ -84,7 +94,7 @@ const REACH = {
 	peer: { node: 'claw-8', lan: 'filtered', tailnet4: 'filtered', tailnet6: 'filtered' },
 };
 const judge = (over, mode = 'whole', reach = REACH) =>
-	judgeHosting(DECLARED, parseObserved(answer(over)), mode, reach);
+	judgeHosting(DECLARED, parseObserved(answer(over)), mode, reach, CARDTABLE);
 const categories = (r) => r.findings.filter((f) => f.class === 'blocking').map((f) => f.category);
 
 test('a node serving exactly what was declared has no findings', () => {
@@ -252,7 +262,7 @@ test('the peers are other non-guest nodes, never the node itself or the controll
 
 test('the deploy closes the port to the tailnet BEFORE tailscale accepts it, controller excepted', () => {
 	const s = deployScript(
-		'cardtable',
+		CARDTABLE,
 		{ memoryMb: 4096, cores: 4 },
 		{ lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: '2001:db8::1' }
 	);
@@ -267,7 +277,7 @@ test('the deploy closes the port to the tailnet BEFORE tailscale accepts it, con
 
 test('a re-deploy that changes no unit does not restart the agent', () => {
 	const s = deployScript(
-		'cardtable',
+		CARDTABLE,
 		{ memoryMb: 4096, cores: 4 },
 		{ lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null }
 	);
@@ -287,12 +297,22 @@ test('an agent outside the slice escapes the limits — BLOCKING; one not yet in
 
 test('an answer cut off before its end marker is unobserved, never a pass', () => {
 	assert.equal(parseObserved(answer().replace('OBSERVE-END', '')), null);
-	assert.deepEqual(categories(judgeHosting(DECLARED, null)), ['hosting-unobserved']);
+	assert.deepEqual(categories(judgeHosting(DECLARED, null, 'whole', null, CARDTABLE)), [
+		'hosting-unobserved',
+	]);
 });
 
 test('an unknown tenant is refused rather than judged against nothing', () => {
 	assert.deepEqual(
-		categories(judgeHosting({ ...DECLARED, tenant: 'nobody' }, parseObserved(answer()))),
+		categories(
+			judgeHosting(
+				{ ...DECLARED, tenant: 'nobody' },
+				parseObserved(answer()),
+				'whole',
+				null,
+				CARDTABLE
+			)
+		),
 		['hosting-tenant']
 	);
 });
@@ -334,13 +354,13 @@ test('a declaration must fit the node as measured, with its own floor kept', () 
 
 test("the tenant's workers outlive an agent restart, and not a teardown", () => {
 	const s = deployScript(
-		'cardtable',
+		CARDTABLE,
 		{ memoryMb: 4096, cores: 4 },
 		{ lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null }
 	);
 	assert.match(s, /^Delegate=yes$/m);
 	assert.match(s, /^KillMode=process$/m);
-	const r = removeScript('cardtable', '192.0.2.10');
+	const r = removeScript(CARDTABLE, '192.0.2.10');
 	assert.ok(
 		r.indexOf('--kill-whom=all --signal=SIGKILL') < r.indexOf('disable --now'),
 		'the workers are killed before the unit goes'
@@ -366,21 +386,21 @@ test('only a shared deploy takes the slice out of CI; whole and remove put it ba
 	const ctl = { lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null };
 	const res = { memoryMb: 4096, cores: 4 };
 	assert.match(
-		deployScript('cardtable', res, ctl, { shared: true }),
+		deployScript(CARDTABLE, res, ctl, { shared: true }),
 		/set-property runners\.slice "MemoryHigh=\$\(\( ci_max \/ 1048576 - MEMORY_MB \)\)M"/
 	);
 	assert.match(
-		deployScript('cardtable', res, ctl),
+		deployScript(CARDTABLE, res, ctl),
 		/set-property runners\.slice MemoryHigh=infinity/
 	);
-	assert.match(removeScript('cardtable', '192.0.2.10'), /MemoryHigh=infinity/);
+	assert.match(removeScript(CARDTABLE, '192.0.2.10'), /MemoryHigh=infinity/);
 });
 
 test('CI is counted by PROCESS NAME: a probe whose command line says Runner.Worker is not CI', () => {
 	// claw-9, 2026-10-27 06:57Z: mgmt-api's own probe, running as
 	// `bash -c '... pgrep -ax Runner.Worker ...'` in the ssh session at oom 0,
 	// was counted as an unranked CI process outside runners.slice.
-	const s = observeScript('cardtable', 'hadoku');
+	const s = observeScript(CARDTABLE, 'hadoku');
 	assert.doesNotMatch(s, /pgrep -[a-z]*f/);
 	assert.match(s, /pgrep -x 'Runner\\.\(Listener\|Worker\)'/);
 	assert.match(s, /^CI_USER='hadoku'$/m);
@@ -395,7 +415,7 @@ test('A11: a teardown is read back, and a cut-off answer is not "nothing left"',
 		{ complete: true, left: ['cgroup /sys/fs/cgroup/hosting.slice', 'sudo is not available'] }
 	);
 	assert.equal(parseLeftovers('LEFT unit file x\n').complete, false);
-	const s = leftoversScript('cardtable');
+	const s = leftoversScript(CARDTABLE);
 	for (const what of [
 		'unit file',
 		'cgroup',

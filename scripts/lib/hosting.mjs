@@ -63,23 +63,30 @@ import { ciUnitProperties } from '../../dist/runners/ephemeral.js';
 import { isGuestNode } from '../../dist/lib/node-role.js';
 
 /**
- * Every tenant the fleet can host for. A table, not a parameter, so the unit
- * names, the user, the executable path and the port are reviewed facts rather
- * than whatever somebody typed. Adding a tenant is adding a row.
+ * A tenant is a SPEC (`tenantSpecFrom` in lib/tenant-registry.mjs), derived
+ * from its registered hosting request: unit names, user, home, executable,
+ * port. Every function below takes the spec, never a name it would look up.
+ * The hand-written `TENANTS` table this replaced held exactly cardtable's
+ * derived names.
+ *
+ * {@link NO_TENANT} is the spec for a node that hosts nothing, so the one
+ * observation script can still read its base facts (memory, CI, boot id):
+ * every tenant line in it then finds nothing.
  */
-export const TENANTS = {
-	cardtable: {
-		slice: hostingSliceName('cardtable'),
-		service: 'cardtable-agent.service',
-		pathUnit: 'cardtable-agent.path',
-		/** The agent's own system user (§9). */
-		user: 'cardtable-agent',
-		home: '/var/lib/cardtable-agent',
-		/** Root-owned; written only by `--install`. */
-		exec: '/opt/hosting/cardtable/run',
-		/** Handed to the agent as CARDTABLE_AGENT_PORT. Checked free on every node 2026-10-24. */
-		port: 7621,
-	},
+export const NO_TENANT = {
+	app: 'none',
+	kind: 'agent',
+	slice: hostingSliceName('none'),
+	service: 'none-agent.service',
+	pathUnit: 'none-agent.path',
+	portUnit: 'hosting-none-port.service',
+	user: 'none-agent',
+	home: '/var/lib/none-agent',
+	exec: '/opt/hosting/none/run',
+	port: 0,
+	ingress: 'none',
+	workersOutliveRestart: false,
+	noticeMin: 15,
 };
 
 /** The node whose LAN address may reach a hosting port: the tenant's coordinator runs there. */
@@ -133,16 +140,16 @@ const assign = (vars) =>
 /** Single-quote for bash. Every value here is ours, but a quote costs nothing. */
 export const shellQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-const tenantVars = (t, tenantName) => ({
-	TENANT: tenantName,
+const tenantVars = (t) => ({
+	TENANT: t.app,
 	PARENT: HOSTING_PARENT_SLICE,
 	SLICE: t.slice,
 	SERVICE: t.service,
 	PATH_UNIT: t.pathUnit,
-	PORT_UNIT: `hosting-${tenantName}-port.service`,
+	PORT_UNIT: t.portUnit,
 	AGENT_USER: t.user,
 	AGENT_HOME: t.home,
-	EXEC: t.exec,
+	EXEC: t.exec ?? '',
 	PORT: t.port,
 });
 
@@ -234,15 +241,113 @@ fi`;
 /** Undo {@link CI_HEADROOM}. */
 const CI_HEADROOM_RESET = `${USER_SYSTEMCTL} set-property runners.slice MemoryHigh=infinity >/dev/null 2>&1 || true`;
 
+/** Start (or re-assert) the raw-table port drop: a `controller` ingress only. */
+const CONTROLLER_PORT_START = `$S systemctl enable "$PORT_UNIT" >/dev/null 2>&1
+case "$CHANGED" in *" $PORT_UNIT "*) $S systemctl restart "$PORT_UNIT" ;; *) $S systemctl start "$PORT_UNIT" ;; esac`;
+
+/** Open the port to the controller's reserved LAN address: a `controller` ingress only. */
+const CONTROLLER_LAN_RULE = `if ! $S ufw status 2>/dev/null | grep -Eq "^$PORT/tcp +ALLOW +$CONTROLLER_IP( |$)"; then
+	$S ufw allow from "$CONTROLLER_IP" to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent" >/dev/null
+fi`;
+
+/** `cardtable` → `CARDTABLE`: the prefix of the environment a tenant's unit hands it. */
+const envPrefix = (app) => app.toUpperCase().replace(/-/g, '_');
+
+/** Lines every tenant unit carries, whatever runs in it. */
+const hardening = (t) => `OOMScoreAdjust=${AGENT_OOM_SCORE_ADJ}
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=${t.home}`;
+
+/**
+ * The unit that runs a tenant. Rendered whole here and written verbatim (a
+ * quoted heredoc), so what is on the node is exactly this text.
+ *
+ *   agent    the tenant's own executable, supervised, as its user. With
+ *            `workersOutliveRestart` (WORKERS_OUTLIVE_RESTART in
+ *            lib/hosting-request.mjs) the agent gets its subtree and a
+ *            restart signals only the agent.
+ *   service  a pm2 daemon as the tenant's user, its PM2_HOME inside that
+ *            user's 0700 home. The app layer deploys INTO it; the fleet only
+ *            supervises the daemon. Shaped like the pm2-<user> units
+ *            `pm2 startup` writes on claw-4.
+ */
+export function tenantUnit(t) {
+	const base = `User=${t.user}
+Group=${t.user}
+Slice=${t.slice}
+WorkingDirectory=${t.home}`;
+	if (t.kind === 'service') {
+		return `[Unit]
+Description=fleet hosting: ${t.app} pm2 daemon, as ${t.user}
+
+[Service]
+Type=forking
+${base}
+Environment=PM2_HOME=${t.home}/.pm2
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+PIDFile=${t.home}/.pm2/pm2.pid
+ExecStart=/usr/bin/env pm2 resurrect
+ExecReload=/usr/bin/env pm2 reload all
+ExecStop=/usr/bin/env pm2 kill
+Restart=on-failure
+${hardening(t)}
+
+[Install]
+WantedBy=multi-user.target`;
+	}
+	const outlive = t.workersOutliveRestart
+		? `
+# The tenant's workers (cardtable: one JVM per match group) outlive an agent
+# restart: the agent gets its own cgroup subtree to place them in, and a
+# restart signals only the agent. The slice still bounds the whole subtree.
+Delegate=yes
+KillMode=process`
+		: '';
+	return `[Unit]
+Description=fleet hosting: ${t.app} agent, as ${t.user}, supervised
+ConditionPathIsExecutable=${t.exec}
+StartLimitIntervalSec=0
+
+[Service]
+User=${t.user}
+Group=${t.user}
+Slice=${t.slice}
+ExecStart=${t.exec}
+WorkingDirectory=${t.home}
+Environment=${envPrefix(t.app)}_AGENT_PORT=${t.port}
+Restart=always
+RestartSec=2${outlive}
+${hardening(t)}
+
+[Install]
+WantedBy=multi-user.target`;
+}
+
+/** An agent starts once its executable exists (`--install`). */
+export function pathUnit(t) {
+	return `[Unit]
+Description=fleet hosting: start the ${t.app} agent once it is installed
+
+[Path]
+PathExists=${t.exec}
+Unit=${t.service}
+
+[Install]
+WantedBy=multi-user.target`;
+}
+
 /**
  * The deploy script. Idempotent: a re-run with the same declaration rewrites
  * the same files, keeps the user and adds no second ufw rule. Run as the CI
  * user over ssh, with every privileged step through `sudo -n`.
  */
-export function deployScript(tenantName, { memoryMb, cores }, controller, { shared = false } = {}) {
-	const t = TENANTS[tenantName];
+export function deployScript(t, { memoryMb, cores }, controller, { shared = false } = {}) {
 	return `${assign({
-		...tenantVars(t, tenantName),
+		...tenantVars(t),
 		MEMORY_MB: memoryMb,
 		CPU_PCT: cores * 100,
 		WEIGHT: HOSTING_CPU_WEIGHT,
@@ -258,7 +363,7 @@ if ! id -u "$AGENT_USER" >/dev/null 2>&1; then
 	$S useradd --system --user-group --home-dir "$AGENT_HOME" --no-create-home --shell /usr/sbin/nologin "$AGENT_USER"
 fi
 $S install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$AGENT_HOME"
-$S install -d -o root -g root -m 0755 "$(dirname "$EXEC")"
+${t.exec ? '$S install -d -o root -g root -m 0755 "$(dirname "$EXEC")"' : ''}
 # Write a unit only when its text changed, and remember which did: a re-deploy
 # that changes nothing must not restart the agent (it kills the tenant's JVMs).
 CHANGED=" "
@@ -291,56 +396,17 @@ MemorySwapMax=0
 CPUAccounting=yes
 CPUQuota=\${CPU_PCT}%
 EOF
-unit "$SERVICE" <<EOF
-[Unit]
-Description=fleet hosting: $TENANT agent, as $AGENT_USER, supervised
-ConditionPathIsExecutable=$EXEC
-StartLimitIntervalSec=0
-
-[Service]
-User=$AGENT_USER
-Group=$AGENT_USER
-Slice=$SLICE
-ExecStart=$EXEC
-WorkingDirectory=$AGENT_HOME
-Environment=CARDTABLE_AGENT_PORT=$PORT
-Restart=always
-RestartSec=2
-# The tenant's workers (cardtable: one JVM per match group) outlive an agent
-# restart: the agent gets its own cgroup subtree to place them in, and a
-# restart signals only the agent. The slice still bounds the whole subtree.
-Delegate=yes
-KillMode=process
-OOMScoreAdjust=$AGENT_OOM
-UMask=0077
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-ReadWritePaths=$AGENT_HOME
-
-[Install]
-WantedBy=multi-user.target
-EOF
-unit "$PATH_UNIT" <<EOF
-[Unit]
-Description=fleet hosting: start the $TENANT agent once it is installed
-
-[Path]
-PathExists=$EXEC
-Unit=$SERVICE
-
-[Install]
-WantedBy=multi-user.target
-EOF
-${TAILNET_PORT_UNIT}
+unit "$SERVICE" <<'UNIT'
+${tenantUnit(t)}
+UNIT
+${t.pathUnit ? `unit "$PATH_UNIT" <<'UNIT'\n${pathUnit(t)}\nUNIT` : ''}
+${t.ingress === 'controller' ? TAILNET_PORT_UNIT : ''}
 $S systemctl daemon-reload
 $S systemctl start "$PARENT" "$SLICE"
-$S systemctl enable "$PORT_UNIT" >/dev/null 2>&1
-case "$CHANGED" in *" $PORT_UNIT "*) $S systemctl restart "$PORT_UNIT" ;; *) $S systemctl start "$PORT_UNIT" ;; esac
-$S systemctl enable --now "$PATH_UNIT" >/dev/null 2>&1
+${t.ingress === 'controller' ? CONTROLLER_PORT_START : ''}
+${t.pathUnit ? '$S systemctl enable --now "$PATH_UNIT" >/dev/null 2>&1' : ''}
 $S systemctl enable "$SERVICE" >/dev/null 2>&1
-if [ -x "$EXEC" ]; then
+if ${t.exec ? '[ -x "$EXEC" ]' : 'true'}; then
 	case "$CHANGED" in
 		*" $SLICE "*|*" $SERVICE "*) $S systemctl restart "$SERVICE" ;;
 		*) $S systemctl start "$SERVICE" ;;
@@ -348,9 +414,7 @@ if [ -x "$EXEC" ]; then
 fi
 ${RAISE_CI_OOM}
 ${shared ? CI_HEADROOM : CI_HEADROOM_RESET}
-if ! $S ufw status 2>/dev/null | grep -Eq "^$PORT/tcp +ALLOW +$CONTROLLER_IP( |$)"; then
-	$S ufw allow from "$CONTROLLER_IP" to any port "$PORT" proto tcp comment "fleet hosting: $TENANT agent" >/dev/null
-fi
+${t.ingress === 'controller' ? CONTROLLER_LAN_RULE : '# No firewall rule: this tenant binds loopback only.'}
 ${DROP_TAILNET_RULES}
 echo HOSTING-DEPLOYED
 `;
@@ -361,9 +425,8 @@ echo HOSTING-DEPLOYED
  * executable. The agent's user and home stay: they hold what the tenant
  * fetched, and a user id is cheap to keep and costly to reuse by accident.
  */
-export function removeScript(tenantName, controllerIp) {
-	const t = TENANTS[tenantName];
-	return `${assign({ ...tenantVars(t, tenantName), CONTROLLER_IP: controllerIp })}
+export function removeScript(t, controllerIp) {
+	return `${assign({ ...tenantVars(t), CONTROLLER_IP: controllerIp })}
 set -eu
 S="sudo -n"
 # KillMode=process leaves the tenant's workers running when the agent stops; a teardown takes them too.
@@ -388,9 +451,8 @@ echo HOSTING-REMOVED
  * purpose (see {@link removeScript}); everything else is listed here if it
  * survived, one `LEFT <what>` line each, then `LEFTOVERS-END`.
  */
-export function leftoversScript(tenantName) {
-	const t = TENANTS[tenantName];
-	return `${assign({ ...tenantVars(t, tenantName), SLICE_CG: hostingSliceCgroup(tenantName) })}
+export function leftoversScript(t) {
+	return `${assign({ ...tenantVars(t), SLICE_CG: hostingSliceCgroup(t.app) })}
 S="sudo -n"
 for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" "$SLICE" "$PARENT"; do
 	[ -e "/etc/systemd/system/$u" ] && echo "LEFT unit file /etc/systemd/system/$u"
@@ -433,9 +495,8 @@ export function parseLeftovers(stdout) {
  * node can swap it unseen. Only then is it chmodded and renamed over the old
  * one, and the agent restarted.
  */
-export function installScript(tenantName, base64, sha256) {
-	const t = TENANTS[tenantName];
-	return `${assign({ ...tenantVars(t, tenantName), WANT: sha256 })}
+export function installScript(t, base64, sha256) {
+	return `${assign({ ...tenantVars(t), WANT: sha256 })}
 set -eu
 S="sudo -n"
 [ -d "$(dirname "$EXEC")" ] || { echo "INSTALL-FAIL not deployed: $(dirname "$EXEC") is missing"; exit 1; }
@@ -453,8 +514,7 @@ echo "INSTALL-OK $got"
 }
 
 /** Restart the agent: what a coordinator runs after the agent upgrades itself. */
-export function restartScript(tenantName) {
-	const t = TENANTS[tenantName];
+export function restartScript(t) {
 	return `${assign({ SERVICE: t.service })}
 set -eu
 sudo -n systemctl restart "$SERVICE"
@@ -493,12 +553,11 @@ export function ciShapedScript(
  * modes from `stat`. Nothing from a unit file. `ciUser` is the node's ci
  * role (`nodeUser(machine, 'ci')`), never inferred from who logged in.
  */
-export function observeScript(tenantName, ciUser) {
-	const t = TENANTS[tenantName] ?? TENANTS.cardtable;
+export function observeScript(t, ciUser) {
 	return `${assign({
-		...tenantVars(t, tenantName),
+		...tenantVars(t),
 		CI_USER: ciUser,
-		SLICE_CG: hostingSliceCgroup(tenantName),
+		SLICE_CG: hostingSliceCgroup(t.app),
 		PARENT_CG: `/${HOSTING_PARENT_SLICE}`,
 	})}
 r() { cat "$1" 2>/dev/null; }
@@ -542,6 +601,7 @@ echo "execStat=$(stat -c '%U:%G:%a' "$EXEC" 2>/dev/null)"
 echo "agentInstalled=$([ -x "$EXEC" ] && echo yes || echo no)"
 pid=$(sudo -n ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | head -n1 | cut -d= -f2)
 echo "listenerPid=$pid"
+echo "listenerAddrs=$(ss -ltnH "sport = :$PORT" 2>/dev/null | awk '{print $4}' | tr '\n' ' ')"
 if [ -n "$pid" ]; then
 	echo "listenerCgroup=$(cut -d: -f3 "/proc/$pid/cgroup" 2>/dev/null)"
 	echo "listenerUid=$(awk '/^Uid:/{print $2}' "/proc/$pid/status" 2>/dev/null)"
@@ -613,6 +673,7 @@ export function parseObserved(stdout) {
 		listenerCgroup: str('listenerCgroup'),
 		listenerUid: num('listenerUid'),
 		listenerOom: num('listenerOom'),
+		listenerAddrs: str('listenerAddrs')?.split(/\s+/).filter(Boolean) ?? [],
 		ciProcs: num('ciProcs'),
 		ciOutsideRunners: num('ciOutsideRunners'),
 		ciBelowOom: num('ciBelowOom'),
@@ -740,13 +801,15 @@ const parseStat = (s) => {
  * match may go, and "I could not see the cgroup" must not read as "the cgroup
  * is fine".
  */
-export function judgeHosting(declared, obs, mode = 'whole', reach = null) {
+export function judgeHosting(declared, obs, mode = 'whole', reach = null, t = null) {
 	const findings = [];
 	const block = (category, why) => findings.push({ class: 'blocking', category, why });
 	const advise = (category, why) => findings.push({ class: 'advisory', category, why });
-	const t = TENANTS[declared.tenant];
-	if (!t) {
-		block('hosting-tenant', `declared tenant "${declared.tenant}" is not in the TENANTS table`);
+	if (!t || t.app !== declared.tenant) {
+		block(
+			'hosting-tenant',
+			`declared tenant "${declared.tenant}" is not registered (fleet hosting-request <repo> --register)`
+		);
 		return { observed: null, findings };
 	}
 	if (!obs) {
@@ -854,10 +917,12 @@ export function judgeHosting(declared, obs, mode = 'whole', reach = null) {
 	}
 	if (!home || home.owner !== t.user || home.mode !== '700')
 		block('hosting-files', `${t.home} is ${obs.homeStat ?? 'missing'}, not ${t.user}-owned 0700`);
-	for (const [path, s] of [
-		[t.exec.replace(/\/[^/]+$/, ''), execDir],
-		[t.exec, exec],
-	]) {
+	for (const [path, s] of t.exec
+		? [
+				[t.exec.replace(/\/[^/]+$/, ''), execDir],
+				[t.exec, exec],
+			]
+		: []) {
 		if (s === null && path === t.exec) continue; // not installed yet: the agent advisory says so
 		if (!s || s.owner !== 'root' || s.othersWrite)
 			block(
@@ -925,8 +990,17 @@ export function judgeHosting(declared, obs, mode = 'whole', reach = null) {
 			);
 	}
 
-	// 5. the port: open to the controller, and to nothing else.
-	if (!reach) {
+	// 5. the port. A `tunnel` (or `none`) tenant binds loopback only, and that
+	// is read from the socket; reach rules belong to a `controller` ingress.
+	const loopback = (a) => /^(127\.|\[::1\]|::1)/.test(a);
+	if (t.ingress !== 'controller') {
+		const wide = (obs.listenerAddrs ?? []).filter((a) => !loopback(a));
+		if (wide.length)
+			block(
+				'hosting-port-exposed',
+				`${t.port}/tcp is bound on ${wide.join(', ')}: a ${t.ingress} tenant binds loopback only`
+			);
+	} else if (!reach) {
 		block('hosting-port', `${t.port}/tcp was not probed, so who can reach the agent is unknown`);
 	} else {
 		const ctl = reach.controller;

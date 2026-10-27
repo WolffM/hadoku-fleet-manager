@@ -46,6 +46,7 @@ import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest, runOn, selectNodes } from './lib/fleet-exec.mjs';
 import {
+	NO_TENANT,
 	judgeHosting,
 	observeScript,
 	parseObserved,
@@ -61,6 +62,7 @@ import {
 	usersObserveScript,
 } from './lib/node-users-facet.mjs';
 import { stateDir } from './lib/paths.mjs';
+import { readTenantRegistry, tenantSpec } from './lib/tenant-registry.mjs';
 
 /** The health writer runs daily; a day and a half covers one late run and no more. */
 export const HEALTH_STALE_HOURS = 36;
@@ -115,6 +117,19 @@ try {
 } catch (err) {
 	hostingUnreadable = err.message;
 }
+// The registered tenants: what each hosted tenant's units, user and port are.
+// Unreadable is the same "could not look" as an unreadable hosting record.
+let registry = { tenants: {} };
+try {
+	registry = readTenantRegistry(stateDir());
+} catch (err) {
+	hostingUnreadable = hostingUnreadable ?? `tenant registry: ${err.message}`;
+}
+/** The tenant hosted on a node, whole-box or shared, or null. */
+const hostedTenant = (name) =>
+	(doc.nodes[name]?.kind === 'hosting' ? doc.nodes[name].hosting?.tenant : null) ??
+	hostingDoc.nodes[name]?.tenant ??
+	null;
 const notices = [
 	...drainNotices(doc, NOW),
 	...Object.entries(hostingDoc.nodes)
@@ -150,7 +165,8 @@ const seen = readSeen();
 const rows = await Promise.all(
 	nodes.map(async ([name, m]) => {
 		const observedAt = iso(Date.now());
-		const r = await runOn(name, observeScript('cardtable', nodeUser(m, 'ci')), {
+		const spec = hostedTenant(name) ? tenantSpec(registry, hostedTenant(name)) : null;
+		const r = await runOn(name, observeScript(spec ?? NO_TENANT, nodeUser(m, 'ci')), {
 			as: 'admin',
 			timeoutMs: ANSWER_MS,
 			connectTimeout: CONNECT_S,
@@ -238,8 +254,9 @@ const rows = await Promise.all(
 			const declared = wholeRec
 				? (wholeRec.hosting ?? {})
 				: { tenant: r0.tenant, memoryMb: r0.memoryMb, cores: r0.cores, port: r0.port };
+			// Reach is a `controller` ingress's question; a loopback tenant is judged from its socket.
 			const reach =
-				obs && declared.port
+				obs && spec?.ingress === 'controller'
 					? await probeReach({
 							port: declared.port,
 							addrs: {
@@ -251,7 +268,7 @@ const rows = await Promise.all(
 							run: runOn,
 						})
 					: null;
-			const judged = judgeHosting(declared, obs, mode, reach);
+			const judged = judgeHosting(declared, obs, mode, reach, spec);
 			// `state` is hosting --check's word for the same judgement, so a tenant
 			// reads one vocabulary from both (cardtable lane D, TENANT_CONTRACT).
 			const state = judged.findings.some((f) => f.class === 'blocking')

@@ -4,7 +4,10 @@
  *
  *   fleet hosting-request WolffM/hadoku-cardtable     # its shipped hosting.json
  *   fleet hosting-request ./hosting.json              # a draft on disk
- *   (both take --json)
+ *   fleet hosting-request WolffM/hadoku-cardtable --register
+ *                                                   # accept it: the fleet's runtime reads the
+ *                                                   # registered copy (lib/tenant-registry.mjs)
+ *   (all take --json)
  *
  * The schema and every rule are `lib/hosting-request.mjs`. This prints the
  * NORMALIZED request (defaults filled in, what the planner reads) or every
@@ -17,6 +20,8 @@ import process from 'node:process';
 import { createEmitter } from './lib/emit.mjs';
 import { shipped } from './lib/fleet-source.mjs';
 import { validateHostingRequest } from './lib/hosting-request.mjs';
+import { stateDir } from './lib/paths.mjs';
+import { registerTenant } from './lib/tenant-registry.mjs';
 
 const target = process.argv.slice(2).find((a) => !a.startsWith('-'));
 const emitter = createEmitter({ argv: process.argv });
@@ -69,5 +74,16 @@ if (ok) {
 	log(`✗ ${source}:`);
 	for (const p of problems) log(`  ${p.path || '(root)'}: ${p.why}`);
 }
-if (emitter.json) emitter.emit({ ok, source, request, problems });
+let registered = false;
+if (ok && process.argv.includes('--register')) {
+	registerTenant(stateDir(), request, {
+		source,
+		by: process.env.SUDO_USER || process.env.USER || 'unknown',
+	});
+	registered = true;
+	log(
+		`  registered: ${request.app} is now a tenant the fleet can host (fleet hosting <node> --tenant ${request.app} …).`
+	);
+}
+if (emitter.json) emitter.emit({ ok, source, request, problems, registered });
 process.exitCode = ok ? 0 : 1;

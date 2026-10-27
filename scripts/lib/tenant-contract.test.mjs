@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 import { blankComments } from './blank-comments.mjs';
 import { parseCliCommands, TENANT_CONTRACT } from './json-contract.mjs';
-import { judgeHosting, parseObserved } from './hosting.mjs';
+import { NO_TENANT, judgeHosting, parseObserved } from './hosting.mjs';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 /** Source with comments, quoted strings AND template literals blanked: a log line saying "risk:" builds nothing. */
@@ -61,7 +61,8 @@ void test("the hosting judgement's observed fields come out of the function itse
 	const declared = { tenant: 'cardtable', memoryMb: 4096, cores: 4, port: 7621 };
 	const obs = parseObserved('OBSERVE-BEGIN\nmemoryCurrent=1048576\nOBSERVE-END');
 	const reach = { addrs: {}, controller: { lan: 'open' }, peer: null };
-	const { observed } = judgeHosting(declared, obs, 'shared', reach);
+	const spec = { ...NO_TENANT, app: 'cardtable', port: 7621, ingress: 'controller' };
+	const { observed } = judgeHosting(declared, obs, 'shared', reach, spec);
 	const fields = TENANT_CONTRACT.find((c) => c.sub === 'node-status').fields;
 	for (const f of fields.filter((p) => p.startsWith('nodes[].hosting.observed.')))
 		assert.ok(keyOf(f) in observed, `judgeHosting no longer reports ${keyOf(f)}`);

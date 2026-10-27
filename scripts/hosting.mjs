@@ -43,6 +43,7 @@ import process from 'node:process';
 import { HOSTING_NOTICE_MS, noticeRefusal, parseWhen } from '../dist/runners/drain.js';
 import { hostingOn, readHostingDoc, writeHostingDoc } from '../dist/runners/hosting-record.js';
 import { stateDir } from './lib/paths.mjs';
+import { readTenantRegistry, tenantSpec } from './lib/tenant-registry.mjs';
 import { isGuestNode } from '../dist/lib/node-role.js';
 import { nodeUser } from '../dist/lib/node-users.js';
 import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
@@ -51,7 +52,7 @@ import { loadManifest, runOn } from './lib/fleet-exec.mjs';
 import {
 	CONTROLLER_NODE,
 	INSTALL_MAX_BYTES,
-	TENANTS,
+	NO_TENANT,
 	ciShapedScript,
 	deployScript,
 	fitProblems,
@@ -134,9 +135,7 @@ if (has('--help') || has('-h')) {
 			'        declared vs observed, from the kernel, for every hosting node.',
 			'Every action takes --json: one document on stdout, exit 0 only when it was done.',
 			'',
-			`tenants: ${Object.entries(TENANTS)
-				.map(([n, t]) => `${n} (port ${t.port}, user ${t.user}, agent ${t.exec})`)
-				.join(', ')}`,
+			'tenants: every request registered with `fleet hosting-request <repo> --register`.',
 		].join('\n')
 	);
 	process.exit(0);
@@ -170,10 +169,12 @@ const refuse = (reason, extra = {}) => finish(false, { state: 'refused', reason,
 let manifest;
 let drainDoc;
 let hostingDoc;
+let registry;
 try {
 	manifest = loadManifest();
 	drainDoc = readDrainDoc();
 	hostingDoc = readHostingDoc(stateDir());
+	registry = readTenantRegistry(stateDir());
 } catch (err) {
 	refuse(`cannot read fleet state: ${err.message}`);
 }
@@ -214,12 +215,19 @@ async function controllerAddrs() {
 	return { lan, tailnet4, tailnet6 };
 }
 
-async function observe(name, tenant) {
-	const r = await runOn(name, observeScript(tenant, nodeUser(manifest.machines?.[name], 'ci')), {
-		as: 'admin',
-		timeoutMs: 30_000,
-		connectTimeout: 6,
-	});
+/** A registered tenant's spec (lib/tenant-registry.mjs), or null. */
+const specOf = (tenant) => (tenant ? tenantSpec(registry, tenant) : null);
+
+async function observe(name, spec) {
+	const r = await runOn(
+		name,
+		observeScript(spec ?? NO_TENANT, nodeUser(manifest.machines?.[name], 'ci')),
+		{
+			as: 'admin',
+			timeoutMs: 30_000,
+			connectTimeout: 6,
+		}
+	);
 	return { obs: parseObserved(r.stdout), error: r.ok ? null : (r.error ?? r.stderr.trim()) };
 }
 
@@ -244,20 +252,23 @@ function hostingNodes() {
 
 /** What `--check` and a declaration both report: declared vs observed, judged. */
 async function checkOne({ name, mode, declared, until }) {
-	const { obs, error } = await observe(name, declared.tenant);
-	const reach = obs
-		? await probeReach({
-				port: declared.port,
-				addrs: {
-					lan: manifest.machines?.[name]?.lan?.ip ?? null,
-					tailnet4: obs.tailnet4,
-					tailnet6: obs.tailnet6,
-				},
-				peers: peerCandidates(manifest, name),
-				run: runOn,
-			})
-		: null;
-	const judged = judgeHosting(declared, obs, mode, reach);
+	const spec = specOf(declared.tenant);
+	const { obs, error } = await observe(name, spec);
+	// Reach is a `controller` ingress's question; a loopback tenant is judged from its socket.
+	const reach =
+		obs && spec?.ingress === 'controller'
+			? await probeReach({
+					port: declared.port,
+					addrs: {
+						lan: manifest.machines?.[name]?.lan?.ip ?? null,
+						tailnet4: obs.tailnet4,
+						tailnet6: obs.tailnet6,
+					},
+					peers: peerCandidates(manifest, name),
+					run: runOn,
+				})
+			: null;
+	const judged = judgeHosting(declared, obs, mode, reach, spec);
 	if (!obs && error) judged.findings[0].why += ` (${error})`;
 	const blocking = judged.findings.some((f) => f.class === 'blocking');
 	return {
@@ -297,7 +308,12 @@ const recordTenant = wholeRec?.hosting?.tenant ?? sharedRec?.tenant ?? null;
 
 if (action === 'install') {
 	const tenant = recordTenant ?? valueOf('--tenant');
-	if (!TENANTS[tenant]) refuse(`${node} is not hosting, so there is nothing to install into.`);
+	const spec = specOf(tenant);
+	if (!spec) refuse(`${node} is not hosting, so there is nothing to install into.`);
+	if (!spec.exec)
+		refuse(
+			`${tenant} is a ${spec.kind}: its app layer deploys it, so the fleet installs no executable.`
+		);
 	const path = valueOf('--install');
 	const want = String(valueOf('--sha256') ?? '').toLowerCase();
 	if (!/^[0-9a-f]{64}$/.test(want)) refuse('--install needs --sha256 <64 hex digits>.');
@@ -313,7 +329,7 @@ if (action === 'install') {
 	}
 	const local = createHash('sha256').update(bytes).digest('hex');
 	if (local !== want) refuse(`${path} hashes to ${local} here, not ${want}; nothing was sent.`);
-	const r = await runOn(node, installScript(tenant, bytes.toString('base64'), want), {
+	const r = await runOn(node, installScript(spec, bytes.toString('base64'), want), {
 		as: 'admin',
 		timeoutMs: 120_000,
 	});
@@ -321,16 +337,17 @@ if (action === 'install') {
 		const line = r.stdout.split('\n').find((l) => l.startsWith('INSTALL-FAIL'));
 		refuse(line ?? `install on ${node} did not finish: ${r.error ?? r.stderr.trim()}`);
 	}
-	say(`✓ ${TENANTS[tenant].exec} on ${node} is ${want}, root-owned; the agent restarted.`);
-	finish(true, { state: 'installed', sha256: want, exec: TENANTS[tenant].exec });
+	say(`✓ ${spec.exec} on ${node} is ${want}, root-owned; the agent restarted.`);
+	finish(true, { state: 'installed', sha256: want, exec: spec.exec });
 }
 
 if (action === 'restart') {
-	if (!TENANTS[recordTenant]) refuse(`${node} is not hosting.`);
-	const r = await runOn(node, restartScript(recordTenant), { as: 'admin', timeoutMs: 60_000 });
+	const spec = specOf(recordTenant);
+	if (!spec) refuse(`${node} is not hosting.`);
+	const r = await runOn(node, restartScript(spec), { as: 'admin', timeoutMs: 60_000 });
 	const m = /RESTARTED (\d+)/.exec(r.stdout);
 	if (!m) refuse(`restart on ${node} did not finish: ${r.error ?? r.stderr.trim()}`);
-	say(`✓ ${TENANTS[recordTenant].service} on ${node} restarted (pid ${m[1]}).`);
+	say(`✓ ${spec.service} on ${node} restarted (pid ${m[1]}).`);
 	finish(true, { state: 'restarted', pid: Number(m[1]) || null });
 }
 
@@ -397,8 +414,12 @@ if (action === 'remove') {
 		);
 	}
 	const tenant = recordTenant ?? valueOf('--tenant');
-	if (!TENANTS[tenant]) refuse(`which tenant? Pass --tenant (${Object.keys(TENANTS).join(', ')}).`);
-	const r = await runOn(node, removeScript(tenant, controllerIp()), {
+	const spec = specOf(tenant);
+	if (!spec)
+		refuse(
+			`which tenant? Pass --tenant with a registered one (${Object.keys(registry.tenants).join(', ') || 'none registered'}).`
+		);
+	const r = await runOn(node, removeScript(spec, controllerIp()), {
 		as: 'admin',
 		timeoutMs: 60_000,
 	});
@@ -410,7 +431,7 @@ if (action === 'remove') {
 	// Read back what survived, from the node (cardtable A11). The record stays
 	// until nothing does: a removed slice whose firewall rule or cgroup lingers
 	// is not removed.
-	const back = await runOn(node, leftoversScript(tenant), {
+	const back = await runOn(node, leftoversScript(spec), {
 		as: 'admin',
 		timeoutMs: 30_000,
 		connectTimeout: 6,
@@ -435,16 +456,18 @@ if (action === 'remove') {
 		delete nodes[node];
 		writeHostingDoc({ nodes }, stateDir());
 	}
-	say(
-		`✓ ${node} is no longer hosting; units, executable and port ${TENANTS[tenant].port} removed.`
-	);
+	say(`✓ ${node} is no longer hosting; units, executable and port ${spec.port} removed.`);
 	finish(true, { state: 'removed', left: [] });
 }
 
 // ── declare ──────────────────────────────────────────────────────────────────
 const shared = has('--shared');
 const tenant = valueOf('--tenant');
-if (!TENANTS[tenant]) refuse(`--tenant must be one of ${Object.keys(TENANTS).join(', ')}.`);
+const spec = specOf(tenant);
+if (!spec)
+	refuse(
+		`${tenant ?? '(none)'} is not a registered tenant. Register its hosting.json first: fleet hosting-request <owner/repo> --register.`
+	);
 let resources;
 try {
 	resources = {
@@ -476,7 +499,7 @@ const base = {
 	reason: valueOf('--reason') ?? `${tenant} hosting node`,
 	by,
 };
-const declared = { tenant, ...resources, port: TENANTS[tenant].port };
+const declared = { tenant, ...resources, port: spec.port };
 // A resize restarts the hold-back's grace: the new size is not in use yet.
 if (current && (current.memoryMb !== declared.memoryMb || current.cores !== declared.cores))
 	base.since = new Date(NOW).toISOString();
@@ -495,7 +518,7 @@ if (shared) {
 // The dispatcher re-reads the record every pass (15 s).
 const admissionFrom = new Date(NOW + 15_000).toISOString();
 
-const r = await runOn(node, deployScript(tenant, resources, controller, { shared }), {
+const r = await runOn(node, deployScript(spec, resources, controller, { shared }), {
 	as: 'admin',
 	timeoutMs: 120_000,
 });
@@ -516,7 +539,7 @@ say(
 	`  served:  ${row.observed?.memoryMb ?? '?'} MiB (min ${row.observed?.memoryMinMb ?? '?'}), ${row.observed?.cores ?? '?'} cores`
 );
 say(
-	`  agent:   ${row.observed?.agent ?? '?'} as ${TENANTS[tenant].user} (port ${TENANTS[tenant].port}, ${TENANTS[tenant].exec})`
+	`  agent:   ${row.observed?.agent ?? '?'} as ${spec.user} (port ${spec.port}, ${spec.exec ?? `${spec.kind}, deployed by its app layer`})`
 );
 for (const f of row.findings) say(`  ${f.class.padEnd(9)} ${f.category}: ${f.why}`);
 if (!shared && row.state !== 'guaranteed')
