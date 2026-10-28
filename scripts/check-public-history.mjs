@@ -23,8 +23,8 @@
  *   node scripts/check-public-history.mjs   # pre-push; reads git's ref lines on stdin
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { readStdinWhole } from './lib/stdin.mjs';
 
 export const PUBLIC_ROOT = '50a64a9ef82510cecce27f53e0e80acbada97a16';
 
@@ -56,7 +56,7 @@ export function foreignRoots(stdin, { root = PUBLIC_ROOT, cwd, env } = {}) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-	const bad = foreignRoots(readFileSync(0, 'utf8'));
+	const bad = foreignRoots(readStdinWhole());
 	if (bad.length) {
 		console.error('❌ This push reaches history that is not this public repo:');
 		for (const b of bad) {

@@ -97,6 +97,7 @@ import {
 	sshNameCandidates,
 } from './lib/node-interfaces.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
+import { readStdinWhole } from './lib/stdin.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
 // and on a pipe `process.exit` throws away whatever the stream still had
@@ -281,7 +282,7 @@ let recordText = '';
 let probed = null;
 
 if (STDIN) {
-	recordText = readFileSync(0, 'utf8');
+	recordText = readStdinWhole();
 	log(`[enroll] record from stdin${NODE ? '' : ' (no re-probe possible)'}`);
 } else if (FILE) {
 	if (!existsSync(FILE)) die(`no such capture: ${FILE}`);
