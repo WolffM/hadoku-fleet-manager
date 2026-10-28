@@ -45,14 +45,17 @@
  */
 
 import { writeFileSync } from 'node:fs';
-import { loadManifest, machineArg, runOnSync } from './lib/fleet-exec.mjs';
+import { loadManifest, machineArg, runOnSync, separateCiUser } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import {
 	REPAIRS,
 	applicableRepairs,
 	declaredPackages,
+	installScript,
+	isVersionManaged,
 	parseObservation,
+	resolveInstallTarget,
 } from './lib/toolchain-floor.mjs';
 import { createLiveDeps, runRefreshCycle } from './lib/refresh-cycle.mjs';
 import { defaultSeedDeps, isSeedFinding, seedNode } from './lib/capability-seeds.mjs';
@@ -140,9 +143,15 @@ function profilesPath() {
 	return process.env.FLEET_NODE_PROFILES || profileManifestPath();
 }
 
-/** Run a snippet on a node. Local host runs directly — hokon refuses ssh to itself. */
-function onNode(node, script, { timeoutMs = 600_000 } = {}) {
-	return runOnSync(node, script, { as: 'admin', timeoutMs, connectTimeout: 8 });
+/**
+ * Run a snippet on a node as ROLE. Local host runs directly — hokon refuses ssh
+ * to itself. The READ is as ci, the user every job runs as, and the INSTALL is
+ * as admin, who has sudo: on a cut-over node admin cannot reach ci's tools and
+ * has a daemon ci does not, so an admin read was wrong both ways (claw-5,
+ * 2026-10-28: jdk21/maven "broken", docker "fine").
+ */
+function onNode(node, script, { role, timeoutMs = 600_000 }) {
+	return runOnSync(node, script, { as: role, timeoutMs, connectTimeout: 8 });
 }
 
 /** One read of a node's observed state. Never reports what was WRITTEN. */
@@ -156,7 +165,7 @@ function observe(node, packages, repairs) {
 		done
 		${detects}
 	`;
-	const res = onNode(node, script);
+	const res = onNode(node, script, { role: 'ci' });
 	if (!res.ok) {
 		// "I could not look" is a FAILURE, and it says which kind. A node that is
 		// unreachable, one whose dpkg is broken and one that timed out are three
@@ -170,20 +179,43 @@ function observe(node, packages, repairs) {
 	return { readable: true, missingPkgs: missingPackages, brokenCaps: brokenCapabilities };
 }
 
-function converge(node, missingPkgs, brokenCaps) {
+/**
+ * Install what the read found missing, as admin. A capability goes through
+ * `installScript`, as bootcamp and the refresh cycle do: a version-managed tool
+ * (jdk21, maven, claude) installs the debounced release `resolveInstallTarget`
+ * names, and a repair that installs FOR the ci user (docker) is told who that
+ * is. The raw repair text has neither and died on `TARGET_VERSION: unbound`.
+ */
+async function converge(node, missingPkgs, brokenCaps, manifest) {
 	const steps = [];
+	const failed = [];
 	if (missingPkgs.length) {
 		steps.push(
 			`sudo -n apt-get update -qq && sudo -n apt-get install -y -qq --no-install-recommends ${missingPkgs.join(' ')}`
 		);
 	}
-	for (const id of brokenCaps) steps.push(REPAIRS[id].repair);
-	if (!steps.length) return { ok: true, reason: null };
-	const res = onNode(node, `set -u\nexport DEBIAN_FRONTEND=noninteractive\n${steps.join('\n')}`);
-	return {
-		ok: res.ok,
-		reason: res.ok ? null : (res.stderr || res.error || 'repair failed').trim().slice(0, 300),
-	};
+	const ciUser = separateCiUser(node, manifest);
+	for (const id of brokenCaps) {
+		let version;
+		if (isVersionManaged(REPAIRS[id])) {
+			const resolved = await resolveInstallTarget(REPAIRS[id]);
+			if (resolved.status !== 'known') {
+				failed.push(
+					`${id}: could not determine the debounced release to install: ${resolved.reason}`
+				);
+				continue;
+			}
+			version = resolved.version;
+		}
+		steps.push(installScript(id, version, { ciUser }));
+	}
+	if (!steps.length) return { ok: !failed.length, reason: failed.join('; ') || null };
+	const res = onNode(node, `set -u\nexport DEBIAN_FRONTEND=noninteractive\n${steps.join('\n')}`, {
+		role: 'admin',
+	});
+	const reasons = [...failed];
+	if (!res.ok) reasons.push((res.stderr || res.error || 'repair failed').trim().slice(0, 300));
+	return { ok: res.ok && !failed.length, reason: reasons.join('; ') || null };
 }
 
 /**
@@ -302,14 +334,14 @@ async function serviceTunnels(manifest) {
 		write: !PLAN,
 		deps: {
 			cf: cloudflare(token),
-			onNode: (node, script) => onNode(node, script, { timeoutMs: 120_000 }),
+			onNode: (node, script) => onNode(node, script, { role: 'admin', timeoutMs: 120_000 }),
 			health: healthStatus,
 		},
 		log,
 	});
 }
 
-function main() {
+async function main() {
 	const manifest = loadManifest();
 	const machines = Object.keys(manifest.machines ?? {}).filter((m) => !m.startsWith('$'));
 	const nodes = ONLY ? machines.filter((m) => m === ONLY) : machines;
@@ -392,7 +424,7 @@ function main() {
 		let { missingPkgs, brokenCaps } = state;
 		let repair = null;
 		if (WRITE && (missingPkgs.length || brokenCaps.length)) {
-			repair = converge(node, missingPkgs, brokenCaps);
+			repair = await converge(node, missingPkgs, brokenCaps, manifest);
 			// RE-PROBE. The install's exit code is the writer describing itself.
 			state = observe(node, common, repairs);
 			if (!state.readable) {
@@ -459,4 +491,4 @@ function main() {
 }
 
 if (REFRESH) await refresh();
-else main();
+else await main();

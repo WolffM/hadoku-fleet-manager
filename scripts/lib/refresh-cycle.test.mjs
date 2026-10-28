@@ -571,6 +571,25 @@ test('converge-toolchain filters REPAIRS through applicableRepairs — claude mu
 	);
 });
 
+test('converge-toolchain reads as ci and installs through installScript, never the raw repair', async () => {
+	// claw-5, 2026-10-28: read as admin it called ci's jdk21/maven broken and
+	// admin's docker fine, then ran REPAIRS[id].repair with no TARGET_VERSION
+	// and died on `unbound variable`.
+	const { readFileSync } = await import('node:fs');
+	const { blankComments } = await import('./blank-comments.mjs');
+	const src = blankComments(
+		readFileSync(new URL('../converge-toolchain.mjs', import.meta.url), 'utf8')
+	);
+	assert.match(src, /onNode\(node, script, \{ role: 'ci' \}\)/, 'the read is as ci');
+	assert.match(src, /installScript\(id, version, \{ ciUser \}\)/);
+	assert.match(src, /resolveInstallTarget\(/);
+	assert.doesNotMatch(
+		src,
+		/REPAIRS\[id\]\.repair/,
+		'the raw repair text has no version and no ci user'
+	);
+});
+
 test('state.held names the node we hold so a signal can put it back — and is clear after undrain, and after a deliberate hold', async () => {
 	const world = { 'claw-b': seenFor(TASKAUTO, { claude: '2.1.284' }) };
 	const h = harness([['claw-b', TASKAUTO]], world);

@@ -2258,3 +2258,15 @@ test('the driver keeps OOM-RANK-DRIFT and names the unit in its problems', () =>
 	assert.match(mjs(), /\|OOM-RANK-DRIFT\|/, 'the note filter must pass the prefix');
 	assert.match(mjs(), /below the CI OOM rank/);
 });
+
+test('a cut-over node: io is delegated on the user@ TEMPLATE, and the system slice is written only when it differs', () => {
+	// claw-5, 2026-10-28: admin (the only role with sudo) wrote user@<its own
+	// uid>.service.d, ci's manager never got io, and ci's run warned that it
+	// could not write a system slice admin had already written.
+	const src = sh();
+	assert.match(src, /^IO_DELEGATE_DIR="\$SYS_DIR\/user@\.service\.d"$/m);
+	assert.doesNotMatch(src, /IO_DELEGATE_DIR="\$SYS_DIR\/\$USER_UNIT\.d"/);
+	const write = src.indexOf('echo "SLICE-WARN could not write the system slice');
+	const guard = src.lastIndexOf('!= "$(printf \'%s\' "$UNIT_BODY")"', write);
+	assert.ok(guard > -1 && write - guard < 400, 'the SLICE-WARN write sits inside a differs check');
+});

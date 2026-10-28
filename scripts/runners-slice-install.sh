@@ -384,9 +384,13 @@ write_if_changed() { # $1=path $2=content
 # them, but do not author it. The ceilings are still ASSERTED against the
 # manifest below, so a hand-authored unit cannot silently drift either.
 if [ "$APPLY" = 1 ] && [ "$MANAGE_UNIT" = 1 ]; then
-	sudo -n mkdir -p "$SYS_DIR" 2>/dev/null
-	printf '%s' "$UNIT_BODY" | sudo -n tee "$SYS_DIR/$SLICE_NAME" >/dev/null 2>&1 ||
-		echo "SLICE-WARN could not write the system slice (no passwordless sudo?)"
+	# Written only when it differs: on a cut-over node admin's run writes it and
+	# ci's run, which has no sudo, finds it already right.
+	if [ "$(cat "$SYS_DIR/$SLICE_NAME" 2>/dev/null)" != "$(printf '%s' "$UNIT_BODY")" ]; then
+		sudo -n mkdir -p "$SYS_DIR" 2>/dev/null
+		printf '%s' "$UNIT_BODY" | sudo -n tee "$SYS_DIR/$SLICE_NAME" >/dev/null 2>&1 ||
+			echo "SLICE-WARN could not write the system slice (no passwordless sudo?)"
+	fi
 	mkdir -p "$USR_DIR"
 	printf '%s' "$UNIT_BODY" >"$USR_DIR/$SLICE_NAME"
 	sudo -n systemctl daemon-reload 2>/dev/null
@@ -569,7 +573,10 @@ fi
 # also the guest door — `deploy-runners-slice.mjs` forces `apply` off for a guest
 # whether or not the operator named it, so nothing here can converge one.
 USER_UNIT="user@$(id -u).service"
-IO_DELEGATE_DIR="$SYS_DIR/$USER_UNIT.d"
+# The TEMPLATE's drop-in, for every user manager: on a cut-over node only admin
+# has sudo, and a per-uid drop-in written by admin's run named admin's own
+# manager, never ci's (claw-5, 2026-10-28: IO-DELEGATE-PENDING on user@ci).
+IO_DELEGATE_DIR="$SYS_DIR/user@.service.d"
 IO_DELEGATE_FILE="$IO_DELEGATE_DIR/10-runners-io.conf"
 # THE FULL LIST, not `Delegate=io` alone. systemd ORs a controller list into the
 # mask the unit already carries, so either spelling reaches the same place today
