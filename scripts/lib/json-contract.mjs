@@ -578,6 +578,12 @@ export const TENANT_CONTRACT = [
 		argv: ['--json'],
 		consumer: 'hadoku-cardtable apps/server/src/play/remote/ (lane D)',
 		fields: [
+			// Added 2026-10-28 (fleet-manager#16), agreed with cardtable: the
+			// version it pins, when the document was observed, and whether it is
+			// a `--max-age` copy.
+			'contract',
+			'generatedAt',
+			'cached',
 			'nodes[].node',
 			'nodes[].reachable',
 			'nodes[].ok',

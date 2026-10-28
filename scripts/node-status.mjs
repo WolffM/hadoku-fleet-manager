@@ -35,6 +35,7 @@
  * USAGE
  *   fleet node-status            human summary
  *   fleet node-status --json     the document
+ *   fleet node-status --json --max-age 60   the last live document, if younger
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -74,13 +75,57 @@ const out = createEmitter();
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
 	out.log('fleet node-status [--json] — per node: reachable, health, drains and notices, hosting.');
 	out.log('Live per call (one ssh per node, in parallel); health is the daily doctor record.');
+	out.log(
+		'--max-age <sec>: the last whole-fleet document instead, when it is younger (cached: true).'
+	);
 	process.exit(0);
 }
+
+/**
+ * The document's version. A tenant pins it (cardtable, 2026-10-28). The rule
+ * a reader holds: stdout that parses AND carries `contract` is readable, and
+ * anything else is not. The exit code reports findings only, never "could
+ * not look". Every change to this document is ADDITIVE; a rename or a retype
+ * is a new contract number, told to the tenant first.
+ */
+export const NODE_STATUS_CONTRACT = 1;
 
 const NOW = Date.now();
 const iso = (ms) => new Date(ms).toISOString();
 const manifest = loadManifest();
 const { nodes, skippedByRole } = selectNodes(manifest, { argv: process.argv });
+
+/**
+ * `--max-age <sec>`: a tenant that polls every cycle may take the last live
+ * document instead of ~10 s of ssh, when it is younger than that. Only a
+ * WHOLE-FLEET call writes or serves it, so a `--machine` answer is never a
+ * different selection's. A served copy says `cached: true` and keeps its own
+ * `generatedAt`; one that cannot be read is simply not served.
+ */
+const LAST_FILE = join(stateDir(), 'node-status-last.json');
+const maxAgeAt = process.argv.indexOf('--max-age');
+const MAX_AGE_S = maxAgeAt > -1 ? Number(process.argv[maxAgeAt + 1]) : null;
+if (MAX_AGE_S !== null && !(MAX_AGE_S > 0)) {
+	console.error('fleet node-status: --max-age takes a number of seconds above 0');
+	process.exit(2);
+}
+const WHOLE_FLEET =
+	nodes.length + skippedByRole.length === Object.keys(manifest.machines ?? {}).length;
+if (out.json && MAX_AGE_S !== null && WHOLE_FLEET && existsSync(LAST_FILE)) {
+	let last = null;
+	try {
+		last = JSON.parse(readFileSync(LAST_FILE, 'utf8'));
+	} catch (err) {
+		out.warn(`${LAST_FILE} is unreadable (${err.message}); answering live.`);
+	}
+	if (
+		last?.contract === NODE_STATUS_CONTRACT &&
+		NOW - Date.parse(last.generatedAt) <= MAX_AGE_S * 1000
+	) {
+		out.emit({ ...last, cached: true });
+		process.exit(last.ok ? 0 : 1);
+	}
+}
 
 /** Every node's last successful answer, so an unreachable one says how long it has been gone. */
 const SEEN_FILE = join(stateDir(), 'node-status-seen.json');
@@ -363,7 +408,8 @@ for (const s of skippedByRole) out.log(`${s.node.padEnd(8)} not probed: ${s.why}
 
 const ok = rows.length > 0 && rows.every((r) => r.ok);
 if (out.json) {
-	out.emit({
+	const document = {
+		contract: NODE_STATUS_CONTRACT,
 		ok,
 		generatedAt: iso(NOW),
 		freshness: {
@@ -374,6 +420,14 @@ if (out.json) {
 		nodes: rows,
 		skippedByRole,
 		lines: out.held(),
-	});
+	};
+	if (WHOLE_FLEET) {
+		try {
+			writeFileSync(LAST_FILE, `${JSON.stringify(document)}\n`);
+		} catch (err) {
+			out.warn(`could not keep the document for --max-age: ${err.message}`);
+		}
+	}
+	out.emit({ ...document, cached: false });
 }
 process.exit(ok ? 0 : 1);
