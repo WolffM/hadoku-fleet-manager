@@ -174,7 +174,8 @@ export const JSON_CONTRACT = [
 			'FINDING, not a crash, and parseable stdout wins: a node that failed its ' +
 			're-probe STAYS DRAINED and arrives as `findings[].kind === "reprobe-failed"`, ' +
 			'and `nodes[].status === "deferred"` (queue under pressure, or a hold that ' +
-			'is not ours) is reported but is not a failure. Plain `converge-toolchain ' +
+			'is not ours) is reported but is not a failure. `tunnels[]` (additive) is each ' +
+			"service host's own Cloudflare tunnel; its findings are `tunnel-*` kinds. Plain `converge-toolchain " +
 			'--json` (no --refresh) is not under contract.',
 	},
 	{

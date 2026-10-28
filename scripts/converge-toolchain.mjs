@@ -56,6 +56,14 @@ import {
 } from './lib/toolchain-floor.mjs';
 import { createLiveDeps, runRefreshCycle } from './lib/refresh-cycle.mjs';
 import { defaultSeedDeps, isSeedFinding, seedNode } from './lib/capability-seeds.mjs';
+import {
+	TOKEN_ENV,
+	cloudflare,
+	convergeTunnels,
+	healthStatus,
+	readSiteDocs,
+} from './lib/service-tunnels.mjs';
+import { siteRoot } from './lib/paths.mjs';
 // THE PROFILE MANIFEST IS OPERATOR CONFIG, SO IT IS RESOLVED THE WAY EVERY
 // OTHER MANIFEST IS — see `profilesPath()` below.
 import { profileManifestPath } from './lib/node-profiles.mjs';
@@ -241,6 +249,14 @@ async function refresh() {
 		report.ok = report.findings.length === 0;
 	}
 
+	// EACH SERVICE HOST'S OWN TUNNEL (service-hosts plan P1), on the same
+	// nightly cadence. Additive to `report`, like `seeds`. `--plan` checks
+	// without creating or writing anything. See scripts/lib/service-tunnels.mjs.
+	const tunnelRun = await serviceTunnels(manifest);
+	report.tunnels = tunnelRun.tunnels;
+	report.findings.push(...tunnelRun.findings);
+	report.ok = report.findings.length === 0;
+
 	log('');
 	for (const f of report.findings) log(`FINDING ${f.node ?? '-'} [${f.kind}] ${f.reason}`);
 	for (const r of report.seeds ?? []) {
@@ -260,6 +276,37 @@ async function refresh() {
 	if (OUT) writeFileSync(OUT, `${JSON.stringify(report, null, 2)}\n`);
 	if (JSON_OUT) emitter.emit(report);
 	process.exit(report.ok ? 0 : 1);
+}
+
+async function serviceTunnels(manifest) {
+	let docs;
+	try {
+		docs = readSiteDocs(siteRoot());
+	} catch (err) {
+		return {
+			tunnels: [],
+			findings: [
+				{ node: null, kind: 'tunnel-unverified', reason: `the site's placements: ${err.message}` },
+			],
+		};
+	}
+	const hosts = Object.fromEntries(
+		Object.entries(docs.hostsDoc.hosts ?? {}).filter(([n]) => !ONLY || n === ONLY)
+	);
+	const token = process.env[TOKEN_ENV];
+	return convergeTunnels({
+		manifest,
+		hostsDoc: { ...docs.hostsDoc, hosts },
+		childApps: docs.childApps,
+		token,
+		write: !PLAN,
+		deps: {
+			cf: cloudflare(token),
+			onNode: (node, script) => onNode(node, script, { timeoutMs: 120_000 }),
+			health: healthStatus,
+		},
+		log,
+	});
 }
 
 function main() {
