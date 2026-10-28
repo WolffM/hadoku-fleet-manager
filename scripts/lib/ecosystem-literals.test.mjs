@@ -237,15 +237,11 @@ const BASELINE = {
 	// same pattern, one more declared repo.
 	WolffM: 9,
 	hokon: 39,
-	// 114: `watchparty-media`'s probe reads `$HOME/srv/hadoku-watchparty/media`
-	// (fleet-manager#3, 2026-10-23). That path IS the capability: it is the
-	// value of watchparty's `INGEST_MEDIA_ROOT`, a cross-repo contract the probe
-	// names, and a node has no environment the probe could resolve it from.
-	// 115: preflight's JIT_PAYLOAD_DIR, `.hadoku/jit/payload` (fleet-manager#1,
+	// 114: preflight's JIT_PAYLOAD_DIR, `.hadoku/jit/payload` (fleet-manager#1,
 	// 2026-10-24). It is where jit-provision.sh builds the payload on the node,
 	// read over ssh in the node's own $HOME; there is no controller-side
 	// environment that could name it. Spelled once, and the probe uses it.
-	hadoku: 115,
+	hadoku: 114,
 };
 
 /**

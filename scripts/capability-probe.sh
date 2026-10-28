@@ -330,31 +330,11 @@ say nvenc-h264 $(nvenc_try h264_nvenc)
 # shellcheck disable=SC2046
 say nvenc-hevc $(nvenc_try hevc_nvenc)
 
-# --- watchparty-media: is the library HERE, where ingest will read it --------
-# hadoku-watchparty's ingest encodes in place against `INGEST_MEDIA_ROOT`, a
-# repo variable on that side. This path is that variable's value, and it is a
-# CROSS-REPO CONTRACT: change one, change both, or the label leaves the node
-# that holds the library. Present, non-empty and writable, because the job
-# reads `input/` and writes its outputs under the root. Never a size or a
-# listing of titles — this repo is public.
-watchparty_media_try() {
-	root="$HOME/srv/hadoku-watchparty/media"
-	if [ ! -d "$root/input" ]; then
-		printf 'no no-input-dir'
-	elif [ -z "$(ls -A "$root/input" 2>/dev/null)" ]; then
-		printf 'no input-empty'
-	elif [ ! -w "$root" ]; then
-		printf 'no root-not-writable'
-	else
-		printf 'ok input-present'
-	fi
-}
-# shellcheck disable=SC2046
-say watchparty-media $(watchparty_media_try)
-
 # --- data-peer: does the data endpoint ADMIT this node -----------------------
-# dataplatform's data listener answers an undeclared peer with a bare 404
-# before it reads any key, and an admitted one with 401 "service key required".
+# dataplatform's data listener refuses a peer it has not admitted before it
+# reads any key: 403 "peer not admitted" since #28 (2026-10-28), a bare 404
+# before. An admitted one gets 401 "service key required", and nothing answers
+# 401 before the peer check (dataplatform data/AGENTS.md).
 # So an unkeyed request, sent from here, reads the listener's own verdict and
 # needs no secret. `CAP_DATA_URL` comes from the controller (the address is
 # private); without it this prints NOTHING, which is "not judged" — a probe
@@ -363,7 +343,7 @@ data_peer_try() {
 	code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$CAP_DATA_URL/data/fleet-probe/x" 2>/dev/null)
 	case "$code" in
 	401) printf 'ok admitted' ;;
-	404) printf 'no refused' ;;
+	403 | 404) printf 'no refused' ;;
 	000 | '') printf 'no unreachable' ;;
 	*) printf 'no http-%s' "$code" ;;
 	esac

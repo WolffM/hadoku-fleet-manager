@@ -70,7 +70,7 @@ async function dataPeerLine(url) {
 	return stdout.trim();
 }
 
-test('the probe reads the listener verdict: 401 is admitted, a bare 404 is refused', async () => {
+test('the probe reads the listener verdict: 401 is admitted, a 403 or a bare 404 is refused', async () => {
 	let status = 401;
 	const srv = createServer((_req, res) => {
 		res.writeHead(status);
@@ -80,6 +80,8 @@ test('the probe reads the listener verdict: 401 is admitted, a bare 404 is refus
 	const url = `http://127.0.0.1:${srv.address().port}`;
 	try {
 		assert.equal(await dataPeerLine(url), 'CAP data-peer ok admitted');
+		status = 403;
+		assert.equal(await dataPeerLine(url), 'CAP data-peer no refused');
 		status = 404;
 		assert.equal(await dataPeerLine(url), 'CAP data-peer no refused');
 		status = 500;

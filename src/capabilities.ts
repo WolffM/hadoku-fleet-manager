@@ -742,10 +742,10 @@ export const CAPABILITIES: readonly Capability[] = [
 		 * already carried `jdk21`.
 		 *
 		 * FOUR NODES DEEP, ON PURPOSE. watchparty's ingest needs only H.264, so
-		 * any of them can encode. What pins the job to one box is the DATA, and
-		 * that is a separate question with its own label — `watchparty-media`
-		 * below. Narrowing this label to hokon instead would make an encoder
-		 * capability lie about three nodes that have it.
+		 * any of them can encode. What it also needs is the data endpoint's
+		 * admission, a separate question with its own label (`data-peer`).
+		 * Narrowing this label to hokon would make an encoder capability lie
+		 * about the nodes that have it.
 		 */
 		id: 'nvenc-h264',
 		label: 'NVENC H.264 encode',
@@ -755,46 +755,23 @@ export const CAPABILITIES: readonly Capability[] = [
 		description:
 			'Hardware H.264 encoding through NVENC. The broadest NVENC codec — every ' +
 			'NVIDIA card the fleet owns can do it, back to Maxwell. Routed on by ' +
-			'watchparty’s ingest, alongside `watchparty-media`.',
-	},
-	{
-		/*
-		 * DATA LOCALITY, NOT A TOOL — and still proved by looking, not declared.
-		 *
-		 * watchparty's ingest runs IN PLACE against its ~290 GB library
-		 * (`INGEST_MEDIA_ROOT`, a repo variable there), reading sources and writing
-		 * ~1 GB outputs beside them. A node without the library refuses the job at
-		 * once (`ingest-job.sh`, exit 2). So "can encode H.264" was never enough,
-		 * and "is hokon" would be the wrong answer the day the library moves.
-		 *
-		 * The probe reads the directory the job will read. That makes the label
-		 * follow the library: move it to a claw at the same path and the next
-		 * bootcamp earns it there, with no declaration to forget. THE PATH IS A
-		 * CROSS-REPO CONTRACT with watchparty's `INGEST_MEDIA_ROOT`; the probe
-		 * names it and says why.
-		 */
-		id: 'watchparty-media',
-		label: 'Holds watchparty library',
-		kind: 'identity',
-		surface: 'label',
-		verify: 'probe',
-		description:
-			'This node holds watchparty’s media library, which ingest encodes in ' +
-			'place: `input/` is present and non-empty and the media root is writable. ' +
-			'Proved by reading the directory, so the label moves with the library rather ' +
-			'than with a hostname.',
+			'watchparty’s ingest, alongside `data-peer`.',
 	},
 	{
 		/*
 		 * ADMISSION, NOT A TOOL — proved by connecting, never by a membership list.
 		 *
-		 * dataplatform's data listener refuses a peer it has not declared with a
-		 * bare 404 BEFORE it reads a key, so "can encode" plus a key is not enough:
+		 * dataplatform's data listener refuses a peer it has not admitted BEFORE it
+		 * reads a key, so "can encode" plus a key is not enough. It replaced
+		 * `watchparty-media` (a host pin by data locality) on 2026-10-28, once the
+		 * library moved into the endpoint. Before #28 the refusal was a bare 404:
 		 * watchparty's ingest landed on claw-1 and every call 404'd (run
 		 * 40639427546, fleet-manager#16). Who is admitted is dataplatform's
 		 * decision (hadoku-dataplatform#28); this only READS the outcome, from the
 		 * node, the way the job will meet it. An unkeyed request is 401 to an
-		 * admitted peer and a bare 404 to a refused one, so no secret is needed.
+		 * admitted peer, and nothing answers 401 before the peer check
+		 * (dataplatform data/AGENTS.md). A refused one gets 403 `peer not
+		 * admitted` (a bare 404 before 2026-10-28). So no secret is needed.
 		 *
 		 * The endpoint is the controller's to name (`probe-script.mjs`), because
 		 * its address is private and this repo is public. A probe run without it
