@@ -120,6 +120,7 @@ import {
 	RETENTION_DAYS,
 	jobRecords,
 } from './job-history.js';
+import { writeClosedDays } from './job-rollups.js';
 import { closeListingGap, LISTING_PAGE } from './run-listing-gap.js';
 import { isProofRunnerName } from './runners/prove-job.js';
 import { CI_ALERTS_BOOT_SKIP_MS, ciAlertsBootPassDue, runCiAlerts } from './ci-alerts.js';
@@ -2562,6 +2563,11 @@ export async function tick(token: string): Promise<void> {
 	// Wave 4e §B (#102): a node that fails proven work loses the label — see
 	// `checkNodeRegression`'s own docblock.
 	await checkNodeRegression();
+	// T2: fold every newly CLOSED day of job-history into the durable daily
+	// rollups. Here because this tick is the one loop that owns job-history —
+	// `ingestRuns` ran above — so it adds no timer and no GitHub call; on almost
+	// every tick it finds nothing due and returns. See `job-rollups.ts`.
+	writeClosedDays({ nodes: loadFleetNodeNames() });
 
 	data.runners_checked = runnersChecked;
 	data.runs_checked = runsChecked;

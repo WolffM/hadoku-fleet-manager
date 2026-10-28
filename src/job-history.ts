@@ -56,16 +56,48 @@
  * and the in-memory window carries on.
  */
 
-import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+	appendFileSync,
+	closeSync,
+	fsyncSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	renameSync,
+	statSync,
+	writeSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { logger } from './host.js';
 import { stateDir } from './host.js';
 
-/** Records kept in the window. Bounded so a busy week cannot grow unbounded. */
-export const MAX_RECORDS = 20_000;
-/** Age cutoff. The panel is about trend, so it wants days, not job count. */
+/**
+ * THE RETENTION RULE. Records are kept by AGE, and this is the only rule that
+ * decides what the window holds. The panel is about trend, so it wants days,
+ * not job count.
+ */
 export const RETENTION_DAYS = 14;
+/**
+ * A SAFETY BUDGET, not the retention rule — it exists so a runaway ingest
+ * cannot grow the file and the heap without bound. It must never be the thing
+ * that decides what is kept.
+ *
+ * It WAS, for two weeks. This was a 20,000-row cap, and on 2026-10-28 the live
+ * file held exactly 20,000 rows spanning 2026-10-15T21:44Z to 10-28 — thirteen
+ * days, not fourteen, and shrinking: 761 rows landed on 10-18 and 2,138 on
+ * 10-27, so at that rate the cap held about seven days. Every "14-day" figure
+ * on `GET /fleet`, the speed model and node-regression was silently cut over a
+ * shorter window, and nothing said so.
+ *
+ * Sized for 14 days at FOUR TIMES the 2026-10-28 peak (~3,500 jobs/day):
+ * 14 x 3,500 x 4 = 196,000. A record is ~410 bytes on disk, so the budget is
+ * ~80 MB at its worst; at today's volume the window is ~50,000 rows.
+ *
+ * Reaching it is LOUD: {@link trimToBudget} logs how many in-window records it
+ * dropped and how many days the window actually holds, every time it trims.
+ */
+export const MAX_RECORDS = 200_000;
 /**
  * Runs whose jobs we may fetch per tick, SHARED across every repo in the sweep.
  *
@@ -259,39 +291,17 @@ export interface JobRecord {
 	 * window.
 	 */
 	probe?: ProbeOrigin;
-	/**
-	 * The node's own state at the moment this job ran, from the hooks wave 4c
-	 * (#102) added: `ci-throttle.sh` (job-STARTED) prints these four facts into
-	 * the job's own log at admission and `job-metrics.sh` (job-COMPLETED)
-	 * records them again into the node's metrics record. Slow reds were
-	 * otherwise unattributable — a 0.95s test taking >5s, a 9s match start
-	 * taking >60s, with nothing in the job saying what ELSE the host was doing
-	 * (wave4c-2026-10-07.md).
-	 *
-	 * NEITHER HOOK WRITES job-history.jsonl, and this module does not read
-	 * either hook's output either — `JobRecord` is built from the GitHub Jobs
-	 * API (`GhJob`), which has no notion of host load at all. These four fields
-	 * exist here so the SHAPE is ready for whichever future reader joins the
-	 * two (the way `job-metrics.mjs`'s `joinMetrics` already joins job-history
-	 * against the per-job memory record by `jobId`): a schema a future join has
-	 * to invent under deadline is a schema invented badly. Until that join
-	 * exists, every record on disk simply omits them, same as `probe` above
-	 * omits itself from every record that predates it — and `loadHistory`
-	 * already reads a record back `as JobRecord` with no field-by-field
-	 * validation beyond `jobId`/`startedAt`, so an old line with none of these
-	 * keys parses exactly as it did before this type gained them.
-	 *
-	 * "unreadable" (never a guessed number, never null) is the literal value
-	 * BOTH hooks emit when a read failed — see either script's own comment —
-	 * carried through here as-is rather than normalised to `undefined`, so a
-	 * reader can tell "the node tried and could not look" from "nothing joined
-	 * for this job yet" (the two are different findings; CLAUDE.md: "'I could
-	 * not look' must never render as 'nothing is wrong'").
+	/*
+	 * NO HOST-LOAD FIELDS, deliberately (removed 2026-10-28). `hostLoad1m`,
+	 * `hostCpuPressureAvg10`, `hostCoTenants` and `hostCoTenantRepos` sat here
+	 * from wave 4c (#102) and were present in 0 of 20,000 records: this record
+	 * is built from the GitHub Jobs API, and the four facts exist only ON THE
+	 * NODE — `ci-throttle.sh` prints them into the job's log and
+	 * `job-metrics.sh` writes them into that node's `job-metrics.jsonl`. Carrying
+	 * them here would cost either an ssh sweep or a log fetch per job on the
+	 * runner-health tick. They are already joinable against this record by
+	 * `jobId` where they live: `fleet job-metrics` (`joinMetrics`).
 	 */
-	hostLoad1m?: number | 'unreadable';
-	hostCpuPressureAvg10?: number | 'unreadable';
-	hostCoTenants?: number | 'unreadable';
-	hostCoTenantRepos?: string[] | 'unreadable';
 	/**
 	 * The commit this job ran at. ADDITIVE, wave 4e §B: node-regression.ts needs
 	 * to tell "the same commit failed here and passed there" (a node-specific
@@ -303,7 +313,7 @@ export interface JobRecord {
 	 * `failedStep`'s own doc comment argues for `steps`. No new call.
 	 *
 	 * Absent on every record written before this field existed, exactly like
-	 * `probe` and the `hostLoad1m` family above: `loadHistory` reads an old line
+	 * `probe` above: `loadHistory` reads an old line
 	 * back `as JobRecord` with no field-by-field validation, so a record with no
 	 * `headSha` parses exactly as it did before this type gained it. A reader
 	 * that needs the same-commit comparison (node-regression.ts) treats an
@@ -333,6 +343,7 @@ const seenRuns = new Set<number>();
 let historyPath: string | null = null;
 let loaded = false;
 let diskWarned = false;
+let recordBudget = MAX_RECORDS;
 
 export function historyFile(): string {
 	return historyPath ?? join(stateDir(), 'job-history.jsonl');
@@ -352,6 +363,12 @@ export function __resetJobHistoryForTesting(): void {
 	probeLedgerMtimeMs = -1;
 	forcedLifted.clear();
 	ledgerWarned = false;
+	recordBudget = MAX_RECORDS;
+}
+
+/** Tests shrink the budget instead of writing 200,000 fixture rows. */
+export function __setRecordBudgetForTesting(n: number): void {
+	recordBudget = n;
 }
 
 // ---------------------------------------------------------------------------
@@ -480,6 +497,82 @@ function cutoffIso(now = Date.now()): string {
 	return new Date(now - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
 }
 
+/**
+ * Drop the oldest records past the safety budget — and SAY SO.
+ *
+ * Every record this drops is younger than {@link RETENTION_DAYS} (retention has
+ * already removed the rest), so a trim means the window no longer covers the
+ * days it claims to. That is logged every time it happens, naming how many
+ * records went and how many days are actually held, because the 20,000-row cap
+ * this replaced did exactly this in silence for two weeks.
+ *
+ * Oldest by `startedAt`, not by insertion: `ingestRuns` appends a tick's records
+ * in fetch order, so the array is only roughly sorted.
+ */
+function trimToBudget(now = Date.now()): void {
+	const excess = records.length - recordBudget;
+	if (excess <= 0) return;
+	records.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+	records.splice(0, excess);
+	const oldest = Date.parse(records[0]?.startedAt ?? '');
+	const keptDays = Number.isFinite(oldest) ? ((now - oldest) / 86_400_000).toFixed(1) : '0';
+	logger.warn(
+		`[job-history] safety budget of ${recordBudget} record(s) trimmed ${excess} record(s) ` +
+			`still inside the ${RETENTION_DAYS}-day window — history now holds ${keptDays} day(s) ` +
+			`(since ${records[0]?.startedAt ?? 'nothing'}), not ${RETENTION_DAYS}`
+	);
+}
+
+/**
+ * The instant from which the in-memory window is COMPLETE, in ms — the later of
+ * the retention cutoff and the oldest record held.
+ *
+ * Before the oldest record, nothing proves the window saw everything: retention
+ * or the budget may have cut that day in half, or the file may simply have
+ * started then. A reader that turns days into durable figures (job-rollups.ts)
+ * must not treat a day that began before this as whole. `null` when the window
+ * holds nothing, which proves nothing about any day.
+ */
+export function historyCompleteSinceMs(now = Date.now()): number | null {
+	loadHistory(now);
+	let oldest = Infinity;
+	for (const r of records) {
+		const ms = Date.parse(r.startedAt);
+		if (ms < oldest) oldest = ms;
+	}
+	if (!Number.isFinite(oldest)) return null;
+	return Math.max(oldest, now - RETENTION_DAYS * 86_400_000);
+}
+
+/**
+ * Replace `path` with `data` so that a crash at any instant leaves either the
+ * old file or the new one, never a truncated mix: write a sibling temp file,
+ * fsync it, rename it over the target, then fsync the directory so the rename
+ * itself is durable.
+ *
+ * LOCAL ON PURPOSE. A shared atomic writer for every state file is its own
+ * refactor item (F3); this one exists because a `writeFileSync` that died
+ * mid-rewrite would have truncated the ONLY copy of fourteen days of history.
+ */
+function writeFileAtomic(path: string, data: string): void {
+	const tmp = `${path}.${process.pid}.tmp`;
+	const fd = openSync(tmp, 'w');
+	try {
+		let buf = Buffer.from(data, 'utf8');
+		while (buf.length) buf = buf.subarray(writeSync(fd, buf));
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
+	renameSync(tmp, path);
+	const dirFd = openSync(dirname(path), 'r');
+	try {
+		fsyncSync(dirFd);
+	} finally {
+		closeSync(dirFd);
+	}
+}
+
 function warnOnce(what: string, err: unknown): void {
 	if (diskWarned) return;
 	diskWarned = true;
@@ -517,7 +610,7 @@ export function loadHistory(now = Date.now()): void {
 			}
 		}
 		records.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-		while (records.length > MAX_RECORDS) records.shift();
+		trimToBudget(now);
 		logger.info(`[job-history] loaded ${records.length} record(s) from ${historyFile()}`);
 	} catch (err) {
 		// ENOENT on first ever run is normal and must not warn.
@@ -554,7 +647,7 @@ function appendToDisk(fresh: JobRecord[]): void {
 function persistHistory(): boolean {
 	try {
 		mkdirSync(dirname(historyFile()), { recursive: true });
-		writeFileSync(
+		writeFileAtomic(
 			historyFile(),
 			records.map((r) => JSON.stringify(r)).join('\n') + (records.length ? '\n' : '')
 		);
@@ -1249,7 +1342,7 @@ export async function ingestRuns(
 	// file every tick would turn a cheap append into O(window) IO on the same
 	// loop that talks to GitHub.
 	appendToDisk(fresh);
-	while (records.length > MAX_RECORDS) records.shift();
+	trimToBudget();
 	compactHistory();
 	return fetched;
 }
@@ -1740,7 +1833,7 @@ export function summarise(
 	const byNode = new Map<string, JobRecord[]>();
 	for (const r of history) {
 		const m = nodeOf(r.runner, nodes);
-		byNode.set(m, [...(byNode.get(m) ?? []), r]);
+		pushTo(byNode, m, r);
 	}
 	const stats: NodeJobStats[] = [...byNode.entries()]
 		.map(([node, rs]) => {
@@ -1801,12 +1894,23 @@ export function summarise(
 	};
 }
 
+/**
+ * Append to a grouped list IN PLACE. The folds below grouped by spreading a
+ * fresh copy per record, which is quadratic in a group's size — harmless at the
+ * old 20,000-row cap, seconds of CPU per `GET /fleet` at the 200,000 budget.
+ */
+function pushTo<K, V>(m: Map<K, V[]>, k: K, v: V): void {
+	const xs = m.get(k);
+	if (xs) xs.push(v);
+	else m.set(k, [v]);
+}
+
 const nums = (xs: (number | undefined)[]): number[] =>
 	xs.filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
 
 function repoStats(history: JobRecord[], nodes: string[], recentFrom: number): RepoJobStats[] {
 	const byRepo = new Map<string, JobRecord[]>();
-	for (const r of history) byRepo.set(r.repo, [...(byRepo.get(r.repo) ?? []), r]);
+	for (const r of history) pushTo(byRepo, r.repo, r);
 	return [...byRepo.entries()]
 		.map(([repo, rs]) => {
 			const durations = rs.map((r) => r.durationSec);
@@ -1820,7 +1924,7 @@ function repoStats(history: JobRecord[], nodes: string[], recentFrom: number): R
 			const kinds = new Map<string, number[]>();
 			for (const r of rs) {
 				const k = jobKind(r.name);
-				kinds.set(k, [...(kinds.get(k) ?? []), r.durationSec]);
+				pushTo(kinds, k, r.durationSec);
 			}
 			const slowest = [...kinds.entries()]
 				.filter(([, ds]) => ds.length >= SLOWEST_MIN_SAMPLES)
@@ -1864,7 +1968,7 @@ function dailyStats(
 		const ms = Date.parse(r.startedAt);
 		if (!Number.isFinite(ms)) continue;
 		const d = utcDay(ms);
-		byDay.set(d, [...(byDay.get(d) ?? []), r]);
+		pushTo(byDay, d, r);
 	}
 	const firstDay = byDay.size ? [...byDay.keys()].sort()[0] : null;
 	const today = Date.parse(`${utcDay(now)}T00:00:00Z`);

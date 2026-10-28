@@ -1217,7 +1217,7 @@ function seedDemand(path: string, repo: string, atIso: string): void {
 
 const SPEED_WARM_REPO = 'WolffM/hadoku_site';
 // All within WARM_HISTORY_WINDOW_MS (6h) of each other and of SPEED_NOW, and
-// within WINDOW_DAYS (30d) of SPEED_NOW for the speed model — both windows
+// within WINDOW_DAYS (14d) of SPEED_NOW for the speed model — both windows
 // are real-calendar, ISO-string based, so an opaque small `nowMs` (the shape
 // every other WIRING test in this file uses) would silently fall outside
 // both. ANCHORED TO Date.now(), not a literal calendar date — a fixed date

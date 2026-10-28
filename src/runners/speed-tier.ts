@@ -122,17 +122,18 @@ export interface KindSlowness {
  *
  * A TIME window, not "whatever job-history happens to hold" — so a node that
  * is repaired, upgraded or degrades mid-window is re-tiered from what it has
- * done LATELY, never pinned to its whole remembered past (§B.3). 30 days:
- * wider than `job-history.ts`'s own `RETENTION_DAYS` (14), deliberately. That
- * makes this currently a no-op against the real file — verified 2026-10-03,
- * `~/.hadoku-mgmt/job-history.jsonl` spans 2026-09-20T06:29Z to
- * 2026-10-04T06:22Z, 14 days — and that is the point: this module's notion of
- * "recent" must not be silently redefined the day someone widens job-history's
- * own retention for an unrelated reason. A node whose repair predates this
- * window by more than 30 days is exactly the case this constant exists to stop
- * mattering.
+ * done LATELY, never pinned to its whole remembered past (§B.3).
+ *
+ * 14 days: EQUAL to `job-history.ts`'s `RETENTION_DAYS`, and never wider. This
+ * was 30 until 2026-10-28, chosen so that widening job-history's retention for
+ * an unrelated reason could not silently redefine "recent" here. The price was
+ * a constant that lied: the model has only ever seen 14 days, and by
+ * 2026-10-28 job-history's old 20,000-row cap had cut that to 13 and was
+ * heading for ~7, so "30 days" described a window the model never had. The literal stays
+ * here, not an import of RETENTION_DAYS, so that independence is kept — and
+ * `speed-tier.test.ts` fails if this ever claims more than job-history keeps.
  */
-export const WINDOW_DAYS = 30;
+export const WINDOW_DAYS = 14;
 
 /**
  * The ratio a node's LOWER QUARTILE (p25, across qualifying kinds) must clear

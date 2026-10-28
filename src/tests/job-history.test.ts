@@ -10,7 +10,14 @@
  */
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	appendFileSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -35,8 +42,13 @@ import {
 	probeOriginOf,
 	__setHistoryPathForTesting,
 	__resetJobHistoryForTesting,
+	__setRecordBudgetForTesting,
+	historyCompleteSinceMs,
+	MAX_RECORDS,
 	type JobRecord,
 } from '../job-history.js';
+import { __setHostForTesting } from '../host.js';
+import { testHost } from './install-test-host.js';
 
 const NODES = ['claw-1', 'claw-2', 'claw-3', 'hokon'];
 
@@ -436,90 +448,106 @@ test('persistence: records older than retention are dropped on load', async () =
 	assert.ok(!jobRecords().some((r) => r.name === 'ancient'));
 });
 
-// ── wave 4c #102 lane C: host-load fields are additive, never required ─────
-//
-// `ci-throttle.sh`/`job-metrics.sh` carry these four facts; job-history.ts
-// does not populate them itself (see JobRecord's own doc comment) — these two
-// prove only that the TYPE's shape survives loadHistory()'s JSON.parse
-// unharmed in both directions: present and round-tripped, or absent and still
-// parsing exactly as every record before this wave did.
+// ── retention is by TIME; the record budget is a loud safety net ───────────
 
-test('persistence: a record carrying the wave 4c host-load fields round-trips', () => {
-	appendFileSync(
-		historyFile(),
-		JSON.stringify({
-			repo: 'WolffM/cardtable',
-			runId: 601,
-			jobId: 601,
-			name: 'forge-e2e',
-			runner: 'claw-9',
-			labels: [],
-			startedAt: at(0),
-			durationSec: 90,
-			conclusion: 'success',
-			hostLoad1m: 2.5,
-			hostCpuPressureAvg10: 4.2,
-			hostCoTenants: 2,
-			hostCoTenantRepos: ['cardtable', 'hadoku_site'],
-		}) + '\n'
-	);
-	const rec = jobRecords().find((r) => r.jobId === 601);
-	assert.ok(rec, 'the record must load at all');
-	assert.equal(rec?.hostLoad1m, 2.5);
-	assert.equal(rec?.hostCpuPressureAvg10, 4.2);
-	assert.equal(rec?.hostCoTenants, 2);
-	assert.deepEqual(rec?.hostCoTenantRepos, ['cardtable', 'hadoku_site']);
+test('retention: the safety budget is sized for 14 days at 4x the 2026-10-28 peak', () => {
+	// ~3,500 jobs/day measured on 2026-10-28. The old 20,000 cap held ~7 days
+	// at that rate and silently shortened every "14-day" figure.
+	assert.ok(MAX_RECORDS >= RETENTION_DAYS * 3_500 * 4, `MAX_RECORDS ${MAX_RECORDS}`);
 });
 
-test('persistence: a record carrying "unreadable" (a hook that could not look) round-trips too', () => {
-	// The sentinel BOTH hooks emit on a failed read — never null, never a
-	// guessed number (see either script's header) — must survive exactly as
-	// written, not get coerced into undefined or a number.
-	appendFileSync(
-		historyFile(),
-		JSON.stringify({
-			repo: 'WolffM/cardtable',
-			runId: 603,
-			jobId: 603,
-			name: 'forge-e2e',
-			runner: 'claw-5',
-			labels: [],
-			startedAt: at(0),
-			durationSec: 90,
-			conclusion: 'success',
-			hostLoad1m: 'unreadable',
-			hostCpuPressureAvg10: 'unreadable',
-			hostCoTenants: 'unreadable',
-			hostCoTenantRepos: 'unreadable',
-		}) + '\n'
-	);
-	const rec = jobRecords().find((r) => r.jobId === 603);
-	assert.ok(rec);
-	assert.equal(rec?.hostLoad1m, 'unreadable');
-	assert.equal(rec?.hostCoTenantRepos, 'unreadable');
+const D_MS = 86_400_000;
+const diskRecord = (jobId: number, startedAt: string) =>
+	JSON.stringify({
+		repo: 'WolffM/hadoku_site',
+		runId: jobId,
+		jobId,
+		name: 'lint',
+		runner: `jit-claw-8-hadoku_site-j${jobId}-r${jobId}-1792101627`,
+		labels: ['self-hosted', 'hadoku-builder'],
+		startedAt,
+		durationSec: 40,
+		conclusion: 'success',
+	}) + '\n';
+
+test('retention: a budget trim of IN-WINDOW records is logged with the days actually kept', () => {
+	const warns: string[] = [];
+	__setHostForTesting({
+		...testHost,
+		logger: { info() {}, warn: (m: string) => warns.push(m), error() {} },
+	});
+	try {
+		const now = Date.now();
+		// Five records, 5..1 days old — all inside the 14-day window.
+		for (let d = 5; d >= 1; d--) {
+			appendFileSync(historyFile(), diskRecord(700 + d, new Date(now - d * D_MS).toISOString()));
+		}
+		__setRecordBudgetForTesting(3);
+		loadHistory(now);
+		assert.equal(jobRecords().length, 3, 'the budget held');
+		assert.deepEqual(
+			jobRecords().map((r) => r.jobId),
+			[703, 702, 701],
+			'the OLDEST went, by startedAt'
+		);
+		const w = warns.find((m) => m.includes('safety budget'));
+		assert.ok(w, `a trim must warn; got ${JSON.stringify(warns)}`);
+		assert.match(w, /trimmed 2 record\(s\)/);
+		assert.match(w, /holds 3\.0 day\(s\)/);
+		assert.match(w, new RegExp(`not ${RETENTION_DAYS}`));
+		// And the evidence boundary moved with it: nothing before the oldest kept
+		// record may be treated as a whole day.
+		assert.equal(historyCompleteSinceMs(now), Date.parse(jobRecords()[0].startedAt));
+	} finally {
+		__setHostForTesting(testHost);
+	}
 });
 
-test('persistence: an OLD record with none of the host-load fields still parses', () => {
+test('retention: within the budget nothing is trimmed and nothing warns', () => {
+	const warns: string[] = [];
+	__setHostForTesting({
+		...testHost,
+		logger: { info() {}, warn: (m: string) => warns.push(m), error() {} },
+	});
+	try {
+		const now = Date.now();
+		appendFileSync(historyFile(), diskRecord(801, new Date(now - D_MS).toISOString()));
+		appendFileSync(historyFile(), diskRecord(802, new Date(now - 2 * D_MS).toISOString()));
+		__setRecordBudgetForTesting(2);
+		loadHistory(now);
+		assert.equal(jobRecords().length, 2);
+		assert.deepEqual(warns, []);
+	} finally {
+		__setHostForTesting(testHost);
+	}
+});
+
+test('historyCompleteSinceMs: the retention cutoff when history reaches past it; null when empty', () => {
+	const now = Date.now();
+	assert.equal(historyCompleteSinceMs(now), null, 'an empty ledger proves nothing');
+	__resetJobHistoryForTesting();
 	appendFileSync(
 		historyFile(),
-		JSON.stringify({
-			repo: 'WolffM/x',
-			runId: 602,
-			jobId: 602,
-			name: 'typecheck',
-			runner: 'claw-2',
-			labels: [],
-			startedAt: at(0),
-			durationSec: 40,
-			conclusion: 'success',
-		}) + '\n'
+		diskRecord(901, new Date(now - (RETENTION_DAYS - 1) * D_MS).toISOString())
 	);
-	const rec = jobRecords().find((r) => r.jobId === 602);
-	assert.ok(rec, 'a pre-wave-4c record must still load');
-	assert.equal(rec?.hostLoad1m, undefined, 'absent, never a fabricated 0');
-	assert.equal(rec?.hostCpuPressureAvg10, undefined);
-	assert.equal(rec?.hostCoTenants, undefined);
-	assert.equal(rec?.hostCoTenantRepos, undefined);
+	assert.equal(historyCompleteSinceMs(now), now - (RETENTION_DAYS - 1) * D_MS);
+});
+
+test('persistence: a rewrite is atomic — it replaces the file and leaves no temp file', () => {
+	const now = Date.now();
+	appendFileSync(historyFile(), diskRecord(951, new Date(now - D_MS).toISOString()));
+	appendFileSync(historyFile(), diskRecord(952, new Date(now - 10 * D_MS).toISOString()));
+	loadHistory(now);
+	// Five days on, the 10-day-old record is past retention, which forces a real rewrite.
+	assert.equal(compactHistory(now + 5 * D_MS), true);
+	assert.deepEqual(
+		readdirSync(tmp).filter((f) => f.endsWith('.tmp')),
+		[],
+		'the temp file was renamed over the target'
+	);
+	const lines = readFileSync(historyFile(), 'utf8').trim().split('\n');
+	assert.equal(lines.length, 1);
+	assert.equal((JSON.parse(lines[0]) as JobRecord).jobId, 951);
 });
 
 test('persistence: a missing file is normal, not an error', () => {

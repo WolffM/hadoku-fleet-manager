@@ -16,7 +16,7 @@ import {
 	TRIVIAL_SEC,
 	WINDOW_DAYS,
 } from '../runners/speed-tier.js';
-import type { JobRecord, ProbeOrigin } from '../job-history.js';
+import { RETENTION_DAYS, type JobRecord, type ProbeOrigin } from '../job-history.js';
 
 const NOW = Date.parse('2026-10-03T12:00:00Z');
 const RECENT_ISO = new Date(NOW - 2 * 24 * 60 * 60 * 1000).toISOString();
@@ -313,6 +313,16 @@ test('(e4) returns null for an undefined job name with no repo-level data either
 // in §B.4, but both are explicit rules in §B.2/§B.3 and both are
 // mutation-tested the same way.
 // ---------------------------------------------------------------------------
+
+test('the window never claims more days than job-history keeps', () => {
+	// It said 30 over a ledger that keeps 14 (and, under the old 20,000-row
+	// cap, held ~7). A window wider than retention is not a wider window; it is
+	// a number that describes data the model never sees.
+	assert.ok(
+		WINDOW_DAYS <= RETENTION_DAYS,
+		`WINDOW_DAYS (${WINDOW_DAYS}) exceeds job-history's RETENTION_DAYS (${RETENTION_DAYS})`
+	);
+});
 
 test('a node is re-tiered from the window, not its whole history', () => {
 	const STALE = new Date(NOW - (WINDOW_DAYS + 5) * 24 * 60 * 60 * 1000).toISOString();

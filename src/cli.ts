@@ -322,6 +322,11 @@ const COMMANDS: Record<string, Command> = {
 		script: 'check-history-coverage.mjs',
 		summary: 'is job-history actually recording the runs the fleet served',
 	},
+	'job-rollups': {
+		script: 'job-rollups.mjs',
+		help: true,
+		summary: 'daily CI rollups per node/repo/job kind, kept a year (read-only)',
+	},
 	'boundary-contracts': {
 		script: 'check-boundary-contracts.mjs',
 		summary: 'the REAL shape of every boundary our tests mock (network + ssh)',
