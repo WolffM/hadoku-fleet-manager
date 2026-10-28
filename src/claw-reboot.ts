@@ -27,11 +27,10 @@
  * a restart due at FIRST_PASS_MIN_MS rather than a whole interval later.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 import { logger, postDiscord, stateDir } from './host.js';
-import { spawnScriptJson } from './provisioning-converge.js';
+import { packageScriptPath, spawnScriptJson } from './scheduled-converger.js';
 
 /** Between passes. A pass with nothing to do is one ssh per claw. */
 export const CLAW_REBOOT_MS = 60 * 60_000;
@@ -112,9 +111,7 @@ function inFlight(): boolean {
 	}
 }
 
-export function rebootScriptPath(): string {
-	return resolve(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'reboot-claws.mjs');
-}
+export const rebootScriptPath = (): string => packageScriptPath('reboot-claws.mjs');
 
 export const runRebootScript: RebootRunner = () =>
 	spawnScriptJson<RebootDoc>(rebootScriptPath(), ['--json'], RUN_TIMEOUT_MS);

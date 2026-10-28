@@ -36,24 +36,21 @@
  * run the converger at every boot, or never run it at all if restarts come
  * faster than the interval. The last run time, the deferral clocks and what
  * has paged all live in `provisioning-converge.json` under stateDir.
+ *
+ * The schedule, the paging and the state are src/scheduled-converger.ts's,
+ * shared with every other converger. This file is the words and the clock.
  */
-import { spawn } from 'node:child_process';
 import {
-	closeSync,
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	openSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+	createConverger,
+	packageScriptPath,
+	spawnScriptJson,
+	type ConvergeDoc as Doc,
+	type ConvergeRow as Row,
+	type ConvergeRunner as Runner,
+	type ConvergeTickSummary,
+} from './scheduled-converger.js';
 
-import { logger, manifestDir, postDiscord, stateDir } from './host.js';
+export type { ConvergeTickSummary };
 
 /** Between converger passes. Each pass is two fleet-wide `--check` sweeps (~20s) and no GitHub call. */
 export const PROVISIONING_CONVERGE_MS = 30 * 60_000;
@@ -69,323 +66,65 @@ export const REPAGE_MS = 24 * 60 * 60_000;
 export const FIRST_PASS_MIN_MS = 5 * 60_000;
 /** The converger is killed past this. A pass that repairs several nodes is minutes, not this. */
 const RUN_TIMEOUT_MS = 20 * 60_000;
-/** The key for "the converger itself did not report", beside the (node, facet) keys. */
-const SELF_KEY = 'converger';
 
-export interface ConvergeRow {
-	node: string;
+export interface ConvergeRow extends Row {
 	facet: 'throttle' | 'slice' | 'apt-security';
-	before?: string;
-	changed?: string;
-	why?: string;
 }
 
 /** `fleet converge-provisioning --json`, as far as this module reads it. */
-export interface ConvergeDoc {
-	ok: boolean;
-	planned: ConvergeRow[];
-	converged: ConvergeRow[];
-	deferred: ConvergeRow[];
-	unconverged: ConvergeRow[];
-	unreadable: { node: string; facet: string; why: string }[];
-	changed: { node: string; facet: string; changed: string }[];
-}
-
-export type ConvergeRunner = () => Promise<{ doc: ConvergeDoc | null; why: string }>;
-
-interface ConvergeState {
-	lastRunAt: string | null;
-	/** When each (node, facet) was first seen deferred, this streak. */
-	deferredSince: Record<string, string>;
-	/** When each key last paged. A key here has an open page and will get a recovery. */
-	paged: Record<string, string>;
-	/** When the converger first failed to report, this streak. */
-	failingSince: string | null;
-}
-
-const statePath = (): string => join(stateDir(), 'provisioning-converge.json');
-
-function readState(): ConvergeState {
-	const empty: ConvergeState = {
-		lastRunAt: null,
-		deferredSince: {},
-		paged: {},
-		failingSince: null,
-	};
-	if (!existsSync(statePath())) return empty;
-	try {
-		return {
-			...empty,
-			...(JSON.parse(readFileSync(statePath(), 'utf8')) as Partial<ConvergeState>),
-		};
-	} catch (err) {
-		// A torn or hand-edited file must not stop the converger. It costs at
-		// most one repeated page, and the reason is logged rather than swallowed.
-		logger.warn(
-			`[provisioning] ${statePath()} unreadable, starting from empty state: ` +
-				(err instanceof Error ? err.message : String(err))
-		);
-		return empty;
-	}
-}
-
-function writeState(s: ConvergeState): void {
-	mkdirSync(dirname(statePath()), { recursive: true });
-	const tmp = `${statePath()}.tmp`;
-	writeFileSync(tmp, JSON.stringify(s, null, 2));
-	renameSync(tmp, statePath());
-}
-
-const key = (r: { node: string; facet: string }): string => `${r.node}|${r.facet}`;
+export type ConvergeDoc = Doc<ConvergeRow>;
+export type ConvergeRunner = Runner<ConvergeRow>;
 
 /** The packaged subcommand, beside this module's `dist/` in the installed package. */
-export function convergeScriptPath(): string {
-	return resolve(
-		dirname(fileURLToPath(import.meta.url)),
-		'..',
-		'scripts',
-		'converge-provisioning.mjs'
-	);
-}
-
-/**
- * Run one of this package's subcommand scripts with the HOST's manifest and
- * state directories, and read its `--json`. Its stdout goes to a file, because
- * a pipe loses everything past 8 KB from a child that prints and exits (#33).
- * Shared with the reboot cycle (claw-reboot.ts).
- */
-export function spawnScriptJson<T>(
-	script: string,
-	args: string[],
-	timeoutMs: number
-): Promise<{ doc: T | null; why: string }> {
-	// The real scripts act on the live fleet. A test that reaches one through
-	// start() must get a refusal, not a repair, because a fixture HOME is not
-	// isolation (10-06, 10-10). Tests inject a runner.
-	if (process.env.NODE_TEST_CONTEXT) {
-		return Promise.resolve({ doc: null, why: 'refused under node --test (inject a runner)' });
-	}
-	const dir = mkdtempSync(join(tmpdir(), 'fleet-controller-'));
-	const out = join(dir, 'stdout.json');
-	const fd = openSync(out, 'w');
-	return new Promise((res) => {
-		let stderr = '';
-		let settled = false;
-		const done = (why: string) => {
-			if (settled) return;
-			settled = true;
-			closeSync(fd);
-			const text = readFileSync(out, 'utf8');
-			rmSync(dir, { recursive: true, force: true });
-			let doc: T | null = null;
-			let parseErr = '';
-			try {
-				doc = text.trim() ? (JSON.parse(text) as T) : null;
-			} catch (err) {
-				parseErr = err instanceof Error ? err.message : String(err);
-			}
-			const tail = stderr.trim().split('\n').slice(-2).join(' | ');
-			res({
-				doc,
-				why: doc
-					? ''
-					: `${why}${parseErr ? `, unparseable (${parseErr})` : ', no report'}${tail ? ` — ${tail}` : ''}`,
-			});
-		};
-		const child = spawn(process.execPath, [script, ...args], {
-			env: {
-				...process.env,
-				FLEET_MANIFEST_DIR: manifestDir(),
-				HADOKU_STATE_DIR: stateDir(),
-				FLEET_NO_BANNER: '1',
-			},
-			stdio: ['ignore', fd, 'pipe'],
-			timeout: timeoutMs,
-		});
-		child.stderr?.on('data', (d: Buffer) => {
-			stderr = (stderr + d.toString()).slice(-2000);
-		});
-		child.on('error', (err) => done(`could not start: ${err.message}`));
-		child.on('close', (code, signal) =>
-			done(`exit ${code ?? 'none'}${signal ? ` (${signal})` : ''}`)
-		);
-	});
-}
+export const convergeScriptPath = (): string => packageScriptPath('converge-provisioning.mjs');
 
 export const runConvergeScript: ConvergeRunner = () =>
 	spawnScriptJson<ConvergeDoc>(convergeScriptPath(), ['--json'], RUN_TIMEOUT_MS);
 
-export interface ConvergeTickSummary {
-	ran: boolean;
-	changed: number;
-	pages: number;
-	recoveries: number;
-}
-
-const hours = (ms: number): string => `${Math.round(ms / 3_600_000)}h`;
+const converger = createConverger<ConvergeRow>({
+	name: 'provisioning',
+	stateFile: 'provisioning-converge.json',
+	intervalMs: PROVISIONING_CONVERGE_MS,
+	deferPageMs: DEFER_PAGE_MS,
+	repageMs: REPAGE_MS,
+	firstPassMinMs: FIRST_PASS_MIN_MS,
+	words: {
+		silent: (h, why) =>
+			`⚠️ fleet converge-provisioning has not produced a report for ${h} — ` +
+			`standing-runner throttle env, slice placement and claw security upgrades are not being ` +
+			`converged. Last: ${why}`,
+		reporting: '✅ fleet converge-provisioning is reporting again.',
+		deferred: (r, h) =>
+			`⚠️ ${r.node}: ${r.facet} drift on a standing runner has been deferred behind a live job for ` +
+			`${h} (${r.why ?? r.before ?? ''}). A standing runner is idle most of the ` +
+			`time, so this one is stuck rather than busy. Fix: fleet ${r.facet} --machine ${r.node} ` +
+			`--confirm${r.facet === 'slice' ? ' --restart' : ''} once it is idle.`,
+		unconverged: (r) =>
+			`🔴 ${r.node}: fleet converge-provisioning repaired ${r.facet} drift (${r.before ?? ''}) and the ` +
+			`re-check still disagrees: ${r.why ?? ''}. Needs a human: fleet ${r.facet} --machine ${r.node} --check`,
+		recovered: (node, facet) =>
+			facet === 'apt-security'
+				? `✅ ${node}: unattended security upgrades converged.`
+				: `✅ ${node}: standing-runner ${facet} provisioning converged.`,
+	},
+});
 
 /**
  * One converger pass: run it, log what it changed, and page by the rules in
  * the header. Never throws: a broken pass is logged and retried next interval.
  */
-export async function convergeProvisioningTick(
+export const convergeProvisioningTick = (
 	run: ConvergeRunner = runConvergeScript,
 	now: number = Date.now()
-): Promise<ConvergeTickSummary> {
-	const state = readState();
-	state.lastRunAt = new Date(now).toISOString();
-	const summary: ConvergeTickSummary = { ran: false, changed: 0, pages: 0, recoveries: 0 };
-	const page = async (k: string, content: string) => {
-		const last = state.paged[k] ? Date.parse(state.paged[k]) : null;
-		if (last !== null && now - last < REPAGE_MS) return;
-		state.paged[k] = new Date(now).toISOString();
-		summary.pages++;
-		await postDiscord(content, 'provisioning');
-	};
-	const recover = async (k: string, content: string) => {
-		if (!state.paged[k]) return;
-		delete state.paged[k];
-		summary.recoveries++;
-		await postDiscord(content, 'provisioning');
-	};
-
-	const { doc, why } = await run();
-	if (!doc) {
-		state.failingSince ??= state.lastRunAt;
-		const failingFor = now - Date.parse(state.failingSince);
-		logger.warn(`[provisioning] the converger produced no report: ${why}`);
-		if (failingFor >= DEFER_PAGE_MS) {
-			await page(
-				SELF_KEY,
-				`⚠️ fleet converge-provisioning has not produced a report for ${hours(failingFor)} — ` +
-					`standing-runner throttle env, slice placement and claw security upgrades are not being ` +
-					`converged. Last: ${why}`
-			);
-		}
-		writeState(state);
-		return summary;
-	}
-	summary.ran = true;
-	state.failingSince = null;
-	await recover(SELF_KEY, '✅ fleet converge-provisioning is reporting again.');
-
-	for (const c of doc.changed) {
-		summary.changed++;
-		logger.info(`[provisioning] ${c.node} ${c.facet}: ${c.changed}`);
-	}
-
-	const open = new Set<string>();
-	for (const r of doc.deferred) {
-		const k = key(r);
-		open.add(k);
-		state.deferredSince[k] ??= state.lastRunAt;
-		const deferredFor = now - Date.parse(state.deferredSince[k]);
-		logger.info(
-			`[provisioning] ${r.node} ${r.facet} deferred ${hours(deferredFor)}: ${r.why ?? ''}`
-		);
-		if (deferredFor >= DEFER_PAGE_MS) {
-			await page(
-				k,
-				`⚠️ ${r.node}: ${r.facet} drift on a standing runner has been deferred behind a live job for ` +
-					`${hours(deferredFor)} (${r.why ?? r.before ?? ''}). A standing runner is idle most of the ` +
-					`time, so this one is stuck rather than busy. Fix: fleet ${r.facet} --machine ${r.node} ` +
-					`--confirm${r.facet === 'slice' ? ' --restart' : ''} once it is idle.`
-			);
-		}
-	}
-	for (const r of doc.unconverged) {
-		const k = key(r);
-		open.add(k);
-		delete state.deferredSince[k];
-		logger.warn(`[provisioning] ${r.node} ${r.facet} did NOT converge: ${r.why ?? ''}`);
-		await page(
-			k,
-			`🔴 ${r.node}: fleet converge-provisioning repaired ${r.facet} drift (${r.before ?? ''}) and the ` +
-				`re-check still disagrees: ${r.why ?? ''}. Needs a human: fleet ${r.facet} --machine ${r.node} --check`
-		);
-	}
-	for (const u of doc.unreadable) {
-		logger.warn(`[provisioning] ${u.node} ${u.facet} could not be read: ${u.why}`);
-	}
-
-	// Anything that had a clock or a page and is neither open nor unreadable
-	// this pass was read and found clean.
-	const unread = new Set(doc.unreadable.map((u) => u.node));
-	const closed = [
-		...new Set([...Object.keys(state.deferredSince), ...Object.keys(state.paged)]),
-	].filter(
-		(k) => k !== SELF_KEY && !open.has(k) && !unread.has(k.split('|')[0]) && !unread.has('*')
-	);
-	for (const k of closed) {
-		delete state.deferredSince[k];
-		const [node, facet] = k.split('|');
-		await recover(
-			k,
-			facet === 'apt-security'
-				? `✅ ${node}: unattended security upgrades converged.`
-				: `✅ ${node}: standing-runner ${facet} provisioning converged.`
-		);
-	}
-
-	writeState(state);
-	return summary;
-}
-
-let started = false;
-let inFlight = false;
-let timers: ReturnType<typeof setTimeout>[] = [];
+): Promise<ConvergeTickSummary> => converger.tick(run, now);
 
 /** Test seam: clear the timers and the `started` guard. */
-export function __stopProvisioningConvergeForTesting(): void {
-	for (const t of timers) clearTimeout(t);
-	timers = [];
-	started = false;
-	inFlight = false;
-}
+export const __stopProvisioningConvergeForTesting = (): void => converger.stopForTesting();
 
 /**
  * Start the converger's timer. The first pass is due PROVISIONING_CONVERGE_MS
  * after the LAST one, read from disk, so a restart neither skips the interval
  * nor reruns it. Controller-only: `createFleetManager().start()` gates it.
  */
-export function startProvisioningConverge(run: ConvergeRunner = runConvergeScript): void {
-	if (started) return;
-	started = true;
-	const pass = () => {
-		if (inFlight) return;
-		inFlight = true;
-		convergeProvisioningTick(run)
-			.then((s) => {
-				if (s.changed || s.pages || s.recoveries) {
-					logger.info(
-						`[provisioning] pass: ${s.changed} change(s), ${s.pages} page(s), ${s.recoveries} recovery(ies)`
-					);
-				}
-			})
-			.catch((err: unknown) => {
-				logger.warn(
-					`[provisioning] pass threw: ${err instanceof Error ? err.message : String(err)}`
-				);
-			})
-			.finally(() => {
-				inFlight = false;
-			});
-	};
-	const last = readState().lastRunAt;
-	const sinceLast = last ? Date.now() - Date.parse(last) : Infinity;
-	const firstIn = Math.max(
-		FIRST_PASS_MIN_MS,
-		Math.min(PROVISIONING_CONVERGE_MS, PROVISIONING_CONVERGE_MS - sinceLast)
-	);
-	logger.info(
-		`[provisioning] converger every ${PROVISIONING_CONVERGE_MS / 60_000} min, next in ${Math.round(firstIn / 60_000)} min`
-	);
-	const first = setTimeout(() => {
-		pass();
-		const every = setInterval(pass, PROVISIONING_CONVERGE_MS);
-		every.unref?.();
-		timers.push(every);
-	}, firstIn);
-	first.unref?.();
-	timers.push(first);
-}
+export const startProvisioningConverge = (run: ConvergeRunner = runConvergeScript): void =>
+	converger.start(run);
