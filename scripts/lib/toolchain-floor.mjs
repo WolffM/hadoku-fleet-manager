@@ -433,6 +433,72 @@ export const REPAIRS = {
 			'set -e\n[ -r /usr/share/dict/words ] || { sudo -n apt-get update -qq && sudo -n apt-get install -y wamerican; }',
 	},
 	/*
+	 * A HOSTED SERVICE'S RUNTIME (fleet-manager#16, operator 2026-10-28).
+	 * watchparty's server names node >=24, yt-dlp and deno in its hosting.json
+	 * (`runtime.node`, `runtime.tools`), and the plan refuses a node that cannot
+	 * RUN them on the service's own PATH (lib/hosting-offers.mjs). A tenant's
+	 * pm2 unit runs with PATH=/usr/local/bin:/usr/bin:/bin, so these are
+	 * system-wide: an admin's fnm or ~/.local/bin, which is how hokon has them,
+	 * is invisible to it. Detected as any user would run them, the ci user
+	 * included.
+	 *
+	 * NODE 24 ONLY ON A SERVICES HOST. System node is also what a CI job gets
+	 * that calls bare `node` without setup-node, and the rest of the fleet runs
+	 * 22 (hokon's CI too). Apply it in a drain, never beside a live job. Moving
+	 * every node to 24 is its own decision.
+	 */
+	node24: {
+		when: pm2ServicesHost,
+		apt: 'nodejs',
+		why:
+			'a hosted service names node >=24 (watchparty); pm2 and the tenant’s pm2 unit run the ' +
+			'system node. nodesource’s 24.x line, apt-tracked so its security releases land.',
+		detect: 'node --version 2>/dev/null | grep -q "^v24\\." && echo OK',
+		// The source line moves 22.x -> 24.x, then apt installs the new major. A node
+		// with no nodesource source fails with the reason: node-bootstrap is what adds it.
+		repair: [
+			'set -e',
+			'src=/etc/apt/sources.list.d/nodesource.sources',
+			'[ -f "$src" ] || { echo "no $src: node-bootstrap installs the nodesource repo" >&2; exit 1; }',
+			'grep -q \'node_24.x\' "$src" || sudo -n sed -i \'s#/node_[0-9]*\\.x#/node_24.x#\' "$src"',
+			'sudo -n apt-get update -qq',
+			'sudo -n apt-get install -y nodejs',
+		].join('\n'),
+	},
+	'yt-dlp': {
+		when: pm2ServicesHost,
+		why:
+			'a hosted service downloads with yt-dlp (watchparty submissions and search). The ' +
+			'upstream release binary, into /usr/local/bin.',
+		detect: 'yt-dlp --version >/dev/null 2>&1 && echo OK',
+		// PRESENCE-ONLY for now: no release source in tool-release.mjs reads
+		// GitHub releases. yt-dlp goes stale against YouTube within weeks, so a
+		// currency source is owed (the toolchain consolidation).
+		repair: [
+			'set -e',
+			'tmp="$(mktemp)"',
+			'curl -fsSL -o "$tmp" https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp',
+			'sudo -n install -m 0755 "$tmp" /usr/local/bin/yt-dlp',
+			'rm -f "$tmp"',
+		].join('\n'),
+	},
+	deno: {
+		when: pm2ServicesHost,
+		why:
+			'yt-dlp runs YouTube’s player JavaScript through deno; without it, extraction fails. ' +
+			'The upstream release binary, into /usr/local/bin.',
+		detect: 'deno --version >/dev/null 2>&1 && echo OK',
+		// PRESENCE-ONLY, for the yt-dlp entry's reason.
+		repair: [
+			'set -e',
+			'tmp="$(mktemp -d)"',
+			'curl -fsSL -o "$tmp/deno.zip" https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip',
+			'python3 -m zipfile -e "$tmp/deno.zip" "$tmp"',
+			'sudo -n install -m 0755 "$tmp/deno" /usr/local/bin/deno',
+			'rm -rf "$tmp"',
+		].join('\n'),
+	},
+	/*
 	 * JDK21 + MAVEN (cardtable#5, added 2026-10-05): forge-e2e/forge-jvm move
 	 * off the production host onto whichever claws can hold their footprint. TWO entries, not
 	 * one, because Temurin and Maven are independently versioned, independently
