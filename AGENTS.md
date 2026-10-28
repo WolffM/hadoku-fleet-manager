@@ -120,9 +120,15 @@ different things. Read it before naming anything new.
   bare count instead, and was wrong twice. Renaming a subcommand under contract
   is a CROSS-REPO change; the gate names the mgmt-api file to fix in the same
   pass.
-- **Manifests are operator config, not package content.** They live in
-  `manifests/` and are resolved through `FLEET_MANIFEST_DIR` — never a
-  `__dirname` walk. A node's `maxConcurrent` is its only per-node ceiling,
+- **Manifests are operator config, not package content.** They are resolved
+  through `FLEET_MANIFEST_DIR` — never a `__dirname` walk — and it defaults to
+  `<site>/scripts/admin`. **That hadoku_site copy is the live one**: production
+  reads it, and every writer (`reconcile --write-coverage`, `enroll`,
+  `bootcamp --write`, `provision`) writes it. In THIS repo
+  `manifests/fleet-runner-{manifest,coverage}.json` are TEST FIXTURES; an edit
+  there changes nothing live. The data moves here at leave-hadoku-site Phase 2,
+  not before. `node-profiles.json` and `egress-slices.json` are the exception:
+  authored in `manifests/` and copied to the site (`manifests/README.md`). A node's `maxConcurrent` is its only per-node ceiling,
   thermal included — changing it is a safety decision, not tuning. (The tier
   ladder and `runner-tiers.json` were retired on 2026-09-21; see
   `src/fleet-loop.ts`.) Resolution must THROW on a missing directory: a
@@ -272,7 +278,7 @@ different things. Read it before naming anything new.
 | `src/lib/`     | shared helpers — `node-identity` and friends                                                                  |
 | `scripts/`     | what the subcommands spawn, plus `lib/` guards that read the source tree                                      |
 | `scripts/lib/` | `tier-detectors.mjs` is a published subpath export; hadoku_site imports it                                    |
-| `manifests/`   | machine topology, resolved coverage. NOT published.                                                           |
+| `manifests/`   | test fixtures of the live manifest + coverage; `node-profiles`/`egress-slices` authored here. NOT published.  |
 | `herdr/`       | herdr plugins (`hadoku.fleet`, `hadoku.sessions`), linked from a checkout. NOT published. See `docs/herdr.md` |
 | `docs/`        | operations + the migration plan                                                                               |
 

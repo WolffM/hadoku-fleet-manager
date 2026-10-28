@@ -3,11 +3,18 @@
 **Production does not read these.** They are copies, kept so the moved suites can
 exercise the real loaders against real manifest shapes.
 
-The authoritative copies remain `hadoku_site/scripts/admin/{fleet-runner-manifest,
-fleet-runner-coverage}.json`, because the CLIs that WRITE
-them — `reconcile-fleet-runners.mjs --write-coverage` above all — have not
-migrated. Moving the files while their writer stayed behind would leave the
-generated coverage file being produced in one repo and consumed in another.
+The authoritative copies are `hadoku_site/scripts/admin/{fleet-runner-manifest,
+fleet-runner-coverage}.json`. The CLIs that WRITE them (`reconcile
+--write-coverage`, `enroll`, `bootcamp --write`, `provision`) live in this
+package, but they write through `FLEET_MANIFEST_DIR`, which defaults to that
+site directory. So **an edit here changes nothing live**, and an agent that
+hand-edits these files has edited a fixture. The data moves into this repo at
+leave-hadoku-site Phase 2, in one window with the reader, never before: two
+live copies is the drift that plan exists to end.
+
+Each fixture carries a top-level `"$fixture"` key saying so, and
+`fixture-marker.test.mjs` fails if it goes missing — which is what a raw `cp`
+refresh does, so the refresh below puts it back.
 
 At runtime mgmt-api computes `manifestDir` from its own checkout root and passes
 it in. That is the whole point of the injection: the path is now stated once by
@@ -28,8 +35,14 @@ say so. That is an accepted, bounded cost:
 Refresh them when a test starts asserting something the real fleet no longer has:
 
 ```bash
-cp ../hadoku_site/scripts/admin/{fleet-runner-manifest,fleet-runner-coverage}.json manifests/
+for f in fleet-runner-manifest fleet-runner-coverage; do
+  jq --indent 2 '{"$fixture": "TEST FIXTURE. Production reads hadoku_site/scripts/admin/'"$f"'.json; edit nothing here. See manifests/README.md."} + .' \
+    ../hadoku_site/scripts/admin/$f.json > manifests/$f.json
+done
 ```
+
+Then re-run the publish-safety guard: the site copies carry private addresses
+the public fixtures must not.
 
 They are excluded from the published package (`files` lists `dist` and
 `README.md` only).
