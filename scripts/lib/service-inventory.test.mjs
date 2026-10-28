@@ -28,8 +28,11 @@ import {
 	millicores,
 	parseCpuStatUsec,
 	parseCronRuns,
+	parseSliceProbe,
 	parseSsSockets,
 	rowKey,
+	sliceProbe,
+	sliceRow,
 	sumColumn,
 	unmeasured,
 	validateResidentRow,
@@ -434,4 +437,89 @@ void test('a job name in two profiles throws — the ledger key would silently o
 void test('zero cron jobs is a FAILURE, not a clean box', () => {
 	assert.throws(() => flattenCronProfiles({ profiles: [] }), /ZERO cron jobs/);
 	assert.throws(() => flattenCronProfiles({}), /ZERO cron jobs/);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SLICES — `--slices`, a hosting tenant's cgroup measured from the controller
+// ═══════════════════════════════════════════════════════════════════════════
+
+// VERBATIM, 2026-10-28, `sliceProbe(cardtable, 5)` on claw-9.
+const CLAW9_SLICE = `SLICES-BEGIN
+A cardtable 270171.52 4177555456 4180393984 11132566518
+B cardtable 270176.53 4177555456 4180393984 11132586339
+SLICES-END
+`;
+const AT = '2026-10-28T20:00:00.000Z';
+const BY = 'fleet service-inventory --slices';
+
+void test('a slice row is the kernel peak and the CPU delta over the window, off the real capture', () => {
+	const row = sliceRow({
+		app: 'cardtable',
+		host: 'claw-9',
+		samples: parseSliceProbe(CLAW9_SLICE).get('cardtable'),
+		at: AT,
+		by: BY,
+	});
+	validateResidentRow(row);
+	assert.equal(row.kind, 'slice');
+	assert.equal(row.ram, 4180393984);
+	assert.equal(row.detail.sampleWindowMs, 5010);
+	assert.equal(row.cpu, millicores(19821, 5010));
+	assert.equal(row.provenance.scope, 'per-slice');
+	for (const col of ['disk', 'net', 'gpu']) assert.equal(isMeasured(row[col]), false, col);
+});
+
+void test('a missing end marker is no answer, and an absent or unreadable slice is unmeasured, never zero', () => {
+	assert.equal(parseSliceProbe(CLAW9_SLICE.replace('SLICES-END', '')), null);
+	const absent = parseSliceProbe('A x absent\nB x absent\nSLICES-END\n').get('x');
+	const row = sliceRow({ app: 'x', host: 'claw-9', samples: absent, at: AT, by: BY });
+	assert.equal(isMeasured(row.ram), false);
+	assert.equal(isMeasured(row.cpu), false);
+	const blind = parseSliceProbe('A x 10.0 U U U\nB x 15.0 U U U\nSLICES-END\n').get('x');
+	const r2 = sliceRow({ app: 'x', host: 'claw-9', samples: blind, at: AT, by: BY });
+	assert.equal(isMeasured(r2.ram), false);
+	assert.equal(isMeasured(r2.cpu), false);
+	assert.equal(
+		isMeasured(sliceRow({ app: 'x', host: 'h', samples: undefined, at: AT, by: BY }).ram),
+		false
+	);
+});
+
+void test('sliceProbe refuses anything it would have to quote', () => {
+	assert.throws(
+		() => sliceProbe([{ app: 'x; rm -rf ~', cgroup: '/hosting.slice/x' }], 5),
+		/unsafe/
+	);
+	assert.throws(() => sliceProbe([{ app: 'x', cgroup: '/a b' }], 5), /unsafe/);
+	assert.throws(() => sliceProbe([{ app: 'x', cgroup: '/hosting.slice/x' }], 0), /window/);
+});
+
+void test("a kinds-scoped merge replaces only those kinds, so hokon's pm2 rows survive a slice write", () => {
+	const pm2 = row();
+	const oldSlice = sliceRow({ app: 'x', host: 'hokon', samples: undefined, at: AT, by: BY });
+	const existing = [pm2, oldSlice].map((r) => JSON.stringify(r)).join('\n') + '\n';
+	const fresh = sliceRow({
+		app: 'x',
+		host: 'hokon',
+		samples: parseSliceProbe(CLAW9_SLICE.replaceAll('cardtable', 'x')).get('x'),
+		at: AT,
+		by: BY,
+	});
+	const m = mergeResidentRows(existing, [fresh], 'hokon', { kinds: ['slice'] });
+	assert.equal(m.replaced, 1);
+	const kept = m.text
+		.trim()
+		.split('\n')
+		.map((l) => JSON.parse(l));
+	assert.deepEqual(
+		kept.map((r) => [r.kind, r.name]),
+		[
+			['pm2', 'mgmt-api'],
+			['slice', 'x'],
+		]
+	);
+	assert.throws(
+		() => mergeResidentRows(existing, [pm2], 'hokon', { kinds: ['slice'] }),
+		/outside the kinds/
+	);
 });

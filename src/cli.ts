@@ -190,7 +190,8 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'service-inventory': {
 		script: 'service-inventory.mjs',
-		summary: 'every RESIDENT workload on this node, measured (--write merges the demand ledger)',
+		summary:
+			'every RESIDENT workload on this node, measured; --slices: every declared hosting slice (--write merges the demand ledger)',
 	},
 	hosting: {
 		script: 'hosting.mjs',

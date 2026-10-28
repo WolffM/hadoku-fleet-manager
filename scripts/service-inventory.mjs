@@ -24,7 +24,9 @@
  * the one question it is the authority on.
  *
  * Usage:
- *   fleet service-inventory [--json] [--write] [--window-ms N]
+ *   fleet service-inventory [--slices] [--json] [--write] [--window-ms N]
+ *     --slices      every DECLARED hosting slice, on its own node, from here
+ *                   (lib/slice-inventory-run.mjs); replaces only `kind: slice`
  *     --json        machine-readable rows on stdout
  *     --write       merge the resident rows into stateDir()/demand-ledger.jsonl
  *     --window-ms   CPU/net sample window (default 10000)
@@ -65,6 +67,30 @@ const ARGV = process.argv.slice(2);
 const JSON_OUT = ARGV.includes('--json');
 const WRITE = ARGV.includes('--write');
 const WINDOW_MS = Number(ARGV[ARGV.indexOf('--window-ms') + 1]) || 10_000;
+
+if (ARGV.includes('--slices')) {
+	const { runSliceInventory } = await import('./lib/slice-inventory-run.mjs');
+	const r = await runSliceInventory({ windowMs: WINDOW_MS, write: WRITE });
+	if (JSON_OUT) console.log(JSON.stringify(r, null, 2));
+	else {
+		const gb = (n) => (typeof n === 'number' ? `${(n / 1e9).toFixed(2)} GB` : 'unmeasured');
+		console.log(`hosting slices at ${r.at} (${r.declaredNodes} node(s) declare one):`);
+		for (const row of r.rows) {
+			console.log(
+				`  ${`${row.host}/${row.name}`.padEnd(28)} peak=${gb(row.ram).padEnd(10)} now=${gb(row.detail.memoryCurrent).padEnd(10)} ` +
+					`cpu=${typeof row.cpu === 'number' ? `${row.cpu}m` : 'unmeasured'}`
+			);
+		}
+		if (r.write) {
+			console.log(
+				`\nwrote ${r.write.written} slice row(s) -> ${r.write.path} (replaced ${r.write.replaced}` +
+					`${r.write.removedHosts.length ? `, removed ${r.write.removedHosts.join(', ')}` : ''})`
+			);
+		}
+	}
+	for (const f of r.findings) console.error(`  ✗ ${f}`);
+	process.exit(r.ok ? 0 : 1);
+}
 
 const HOME = homedir();
 const SRV = join(HOME, 'srv');

@@ -23,8 +23,12 @@
 /** The discriminator this module owns. Every row it writes carries it. */
 export const RESIDENT_CLASS = 'resident';
 
-/** The four migrations, and the only `kind` values a resident row may carry. */
-export const RESIDENT_KINDS = ['pm2', 'cron', 'checkout', 'mirror'];
+/**
+ * The only `kind` values a resident row may carry: the four Wave-3 migrations,
+ * and `slice`, a hosting tenant's own cgroup on whichever node declares it
+ * (`fleet service-inventory --slices`, measured from the controller).
+ */
+export const RESIDENT_KINDS = ['pm2', 'cron', 'checkout', 'mirror', 'slice'];
 
 /** The five resource columns, in schema order. */
 export const RESOURCE_COLUMNS = ['ram', 'cpu', 'disk', 'net', 'gpu'];
@@ -145,14 +149,17 @@ export function rowKey(row) {
  *
  * Idempotent by construction: the resident block for `host` is replaced, never
  * appended to, so a second run with the same input differs only in
- * `provenance.at`.
+ * `provenance.at`. `kinds` narrows the block to those kinds: the slice writer
+ * runs apart from hokon's local one, and must not delete its pm2 rows.
  */
-export function mergeResidentRows(existingText, rows, host) {
+export function mergeResidentRows(existingText, rows, host, { kinds = null } = {}) {
 	if (typeof host !== 'string' || !host.trim()) throw new Error('mergeResidentRows needs a host');
 	for (const r of rows) {
 		validateResidentRow(r);
 		if (r.host !== host)
 			throw new Error(`row ${r.kind}/${r.name} is for host ${r.host}, not ${host}`);
+		if (kinds && !kinds.includes(r.kind))
+			throw new Error(`row ${r.kind}/${r.name} is outside the kinds this write replaces`);
 	}
 	const seen = new Set();
 	for (const r of rows) {
@@ -175,7 +182,11 @@ export function mergeResidentRows(existingText, rows, host) {
 					`this cannot fully read — a partial rewrite silently deletes demand four gates consume.`
 			);
 		}
-		if (parsed.class === RESIDENT_CLASS && parsed.host === host) {
+		if (
+			parsed.class === RESIDENT_CLASS &&
+			parsed.host === host &&
+			(!kinds || kinds.includes(parsed.kind))
+		) {
 			replaced += 1;
 			continue;
 		}
@@ -455,4 +466,95 @@ export function flattenCronProfiles(profilesJson) {
 		);
 	}
 	return out;
+}
+
+/**
+ * One ssh per node: each named slice's cgroup read, a `windowS` sleep, then
+ * read again, so CPU is a delta the node measured on its own clock. The
+ * figures are the kernel's (`memory.peak`, `cpu.stat`), never the tenant's.
+ *
+ * @param {{ app: string, cgroup: string }[]} slices
+ */
+export function sliceProbe(slices, windowS) {
+	if (!Number.isInteger(windowS) || windowS < 1)
+		throw new Error('sliceProbe needs a whole-second window');
+	for (const s of slices) {
+		if (!/^[a-z0-9][a-z0-9-]*$/.test(s.app) || !/^[a-zA-Z0-9/._-]+$/.test(s.cgroup))
+			throw new Error(`unsafe slice ${JSON.stringify(s)}`);
+	}
+	const read = (tag) =>
+		slices
+			.map(
+				(s) =>
+					`c=/sys/fs/cgroup${s.cgroup}; if [ -d "$c" ]; then ` +
+					`echo "${tag} ${s.app} $(cut -d' ' -f1 /proc/uptime) $(cat $c/memory.current 2>/dev/null || echo U) ` +
+					`$(cat $c/memory.peak 2>/dev/null || echo U) $(awk '/^usage_usec /{print $2}' $c/cpu.stat 2>/dev/null || echo U)"; ` +
+					`else echo "${tag} ${s.app} absent"; fi`
+			)
+			.join('\n');
+	return `echo SLICES-BEGIN\n${read('A')}\nsleep ${windowS}\n${read('B')}\necho SLICES-END\n`;
+}
+
+/** Parse {@link sliceProbe}: `app → { a, b }` samples, or null when the end marker never arrived. */
+export function parseSliceProbe(stdout) {
+	const text = String(stdout ?? '');
+	if (!/^SLICES-END$/m.test(text)) return null;
+	const out = new Map();
+	const n = (x) => (/^\d+$/.test(x ?? '') ? Number(x) : null);
+	for (const line of text.split('\n')) {
+		const m = /^([AB]) (\S+) (.*)$/.exec(line.trim());
+		if (!m) continue;
+		const [up, current, peak, usage] = m[3].split(/\s+/);
+		const sample =
+			m[3] === 'absent'
+				? { absent: true }
+				: {
+						uptimeS: /^\d+(\.\d+)?$/.test(up ?? '') ? Number(up) : null,
+						current: n(current),
+						peak: n(peak),
+						usageUsec: n(usage),
+					};
+		out.set(m[2], { ...out.get(m[2]), [m[1].toLowerCase()]: sample });
+	}
+	return out;
+}
+
+/**
+ * A `kind: slice` resident row from two samples of one slice. RAM is the
+ * cgroup's `memory.peak` (bytes, since the slice was created: what a request
+ * must be sized for), CPU the millicores it used across the window. Disk, net
+ * and GPU are not per-slice in the kernel and are said so, never zeroed.
+ */
+export function sliceRow({ app, host, samples, at, by }) {
+	const { a, b } = samples ?? {};
+	const why = (what) => `${what} of hosting slice ${app} on ${host}`;
+	const ram =
+		b && !b.absent && b.peak !== null
+			? b.peak
+			: unmeasured(`${why('memory.peak')} was not readable`);
+	const wallMs =
+		a?.uptimeS != null && b?.uptimeS != null ? Math.round((b.uptimeS - a.uptimeS) * 1000) : null;
+	const cpu =
+		a && b && !a.absent && !b.absent && a.usageUsec !== null && b.usageUsec !== null && wallMs > 0
+			? millicores(b.usageUsec - a.usageUsec, wallMs)
+			: unmeasured(`${why('cpu.stat usage_usec')} was not readable at both ends of the window`);
+	return {
+		class: RESIDENT_CLASS,
+		kind: 'slice',
+		name: app,
+		host,
+		ram,
+		cpu,
+		disk: unmeasured('a slice has no disk figure in the kernel; its state dir is not sampled yet'),
+		net: unmeasured('a slice has no network counters in the kernel without per-cgroup accounting'),
+		gpu: unmeasured('no GPU is assigned to a hosting slice'),
+		detail: { memoryCurrent: b?.current ?? null, sampleWindowMs: wallMs },
+		provenance: {
+			at,
+			by,
+			host,
+			sources: ['memory.peak', 'cpu.stat'],
+			scope: 'per-slice',
+		},
+	};
 }
