@@ -238,6 +238,23 @@ gate that exited 0 having printed nothing reported a pass. `audit-gates.ts` now
 runs its gates with `FLEET_NO_BANNER=1` and reports provenance once for the job;
 `fleet contract-consumers` fails if it stops.
 
+### The invocation log — which doors anybody opens
+
+Every invocation through the door appends one line to
+`<state dir>/fleet-usage/usage-YYYY-MM.jsonl` (`~/.hadoku-mgmt` unless
+`HADOKU_STATE_DIR` says otherwise): subcommand, flag NAMES (never values),
+exit code, duration, host, version, and caller hints (tty, process ancestry,
+the PM2 app, `FLEET_CALLER` when a caller names itself, agent, ssh, Actions).
+The router's routes are counted into the same files, bucketed per five
+minutes. `fleet usage [--since 120d] [--json]` reads it back and lists every
+subcommand and route with zero runs — candidates for deletion, not verdicts:
+it sees this host only, and only what came through the door.
+
+It never writes stdout and never changes an exit code. A failed write says so
+once on stderr (not under `FLEET_NO_BANNER=1`). `FLEET_USAGE_DIR=<dir>` moves
+it, `FLEET_USAGE_DIR=off` stops it, and under a test runner it is off unless a
+directory is named. At least 180 days are kept, under a 128 MB cap.
+
 ### Machine scoping
 
 Every machine-scoped subcommand takes **`--machine <name>`**, never a positional.

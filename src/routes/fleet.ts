@@ -22,7 +22,7 @@
  * free slots and a fleet we have not looked at yet must not look identical.
  */
 
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { readFileSync } from 'node:fs';
 
 import {
@@ -63,6 +63,8 @@ import {
 } from '../capabilities.js';
 import { proofFileStatus, readProofsForCapability, type ProofRecord } from '../lib/measured.js';
 import { githubToken, logger, manifest, stateDir } from '../host.js';
+import { packageVersion } from '../lib/provenance.js';
+import { recordRouteHit } from '../lib/usage-log.js';
 import { getGhBudgetSnapshot, recordGhResponse, withGhCaller } from '../gh-budget.js';
 import { loadTargets, readStates, stateKey } from '../ci-alerts.js';
 import { mintBudget } from '../runners/ephemeral.js';
@@ -787,7 +789,36 @@ function trimMeasured(raw: unknown): FleetMachineMeasured | null {
 // @types path — which would make the .d.ts unportable for consumers.
 export const router: Router = Router();
 
-router.get('/fleet', (_req: Request, res: Response) => {
+/**
+ * FIRST HANDLER ON EVERY ROUTE: count the hit into the invocation log
+ * (`lib/usage-log.ts`) once the response is sent. By the route's PATTERN, not
+ * the raw path. Per route rather than `router.use`, because mgmt-api mounts
+ * this router on all of `/api` and a router-wide middleware would count every
+ * other service's requests too. `FLEET_ROUTES` must name every route below;
+ * the router test holds the two equal.
+ */
+function countHit(req: Request, res: Response, next: NextFunction): void {
+	const start = performance.now();
+	const route = (req.route as { path?: unknown } | undefined)?.path;
+	res.on('finish', () => {
+		try {
+			recordRouteHit(
+				{
+					method: req.method,
+					route: typeof route === 'string' ? route : '(unknown)',
+					status: res.statusCode,
+					ms: performance.now() - start,
+				},
+				{ stateDir, version: packageVersion }
+			);
+		} catch (err) {
+			logger.error(`[fleet] usage log: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	});
+	next();
+}
+
+router.get('/fleet', countHit, (_req: Request, res: Response) => {
 	try {
 		res.json({ success: true, ...buildFleetReport() });
 	} catch (err) {
@@ -815,7 +846,7 @@ router.get('/fleet', (_req: Request, res: Response) => {
  * GET /api/fleet/ci-state
  * Loopback/edge-gated like the rest of `/api` by mgmt-api's edgeOriginGuard.
  */
-router.get('/fleet/ci-state', (_req: Request, res: Response) => {
+router.get('/fleet/ci-state', countHit, (_req: Request, res: Response) => {
 	try {
 		const states = readStates();
 		const targets = loadTargets();
@@ -858,7 +889,7 @@ router.get('/fleet/ci-state', (_req: Request, res: Response) => {
  * POST /api/fleet/job-history/backfill?max=600&concurrency=5
  * Loopback-only in practice: mgmt-api's `edgeOriginGuard` gates all of `/api`.
  */
-router.post('/fleet/job-history/backfill', (req: Request, res: Response) => {
+router.post('/fleet/job-history/backfill', countHit, (req: Request, res: Response) => {
 	const num = (v: unknown, fallback: number): number => {
 		const n = Number(v);
 		return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;

@@ -49,7 +49,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
-import { provenanceLine } from './lib/provenance.js';
+import { stateDir } from './lib/fleet-paths.js';
+import { packageVersion, provenanceLine } from './lib/provenance.js';
+import { cliRecorder } from './lib/usage-log.js';
 
 /** dist/ -> package root -> scripts/ */
 const SCRIPTS = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'scripts');
@@ -85,6 +87,12 @@ interface Command {
 	 * accepting it here would keep its most natural typo live.
 	 */
 	flags?: string[];
+	/**
+	 * The door hands this script its own table, as `FLEET_DOOR_COMMANDS` (the
+	 * subcommand names, comma-separated). Only the door knows what it serves;
+	 * `fleet usage` needs the list to say which doors nobody opened.
+	 */
+	doorTable?: true;
 }
 
 /**
@@ -480,6 +488,14 @@ const COMMANDS: Record<string, Command> = {
 		flags: [],
 		summary: 'register one runner by hand (legacy system unit)',
 	},
+	// Reads the invocation log every door below writes (src/lib/usage-log.ts).
+	usage: {
+		script: 'fleet-usage.mjs',
+		help: true,
+		doorTable: true,
+		summary:
+			'who ran which subcommand and route, from the invocation log — and which nobody did (--since 120d)',
+	},
 };
 
 function usage(): void {
@@ -501,16 +517,31 @@ function usage(): void {
 
 const [name, ...rest] = process.argv.slice(2);
 
-if (!name || name === '--help' || name === '-h') {
-	usage();
-	process.exit(name ? 0 : 1);
+// EVERY EXIT BELOW GOES THROUGH `finish`, which appends one line to the
+// invocation log first. It writes nothing to stdout, never throws, and cannot
+// change the code it is handed — see src/lib/usage-log.ts.
+const record = cliRecorder({
+	version: packageVersion,
+	stateDir,
+	argv: process.argv.slice(2),
+	known: (sub) => Object.hasOwn(COMMANDS, sub),
+});
+type Outcome = Parameters<typeof record>[0]['outcome'];
+function finish(outcome: Outcome, code: number): never {
+	record({ outcome, exit: code });
+	process.exit(code);
 }
 
-const cmd = COMMANDS[name];
+if (!name || name === '--help' || name === '-h') {
+	usage();
+	finish('usage', name ? 0 : 1);
+}
+
+const cmd = Object.hasOwn(COMMANDS, name) ? COMMANDS[name] : undefined;
 if (!cmd) {
 	console.error(`fleet: unknown subcommand "${name}"\n`);
 	usage();
-	process.exit(1);
+	finish('unknown-subcommand', 1);
 }
 
 // --help NEVER REACHES A SCRIPT THAT HAS NOT PROVEN IT HANDLES IT. Every script
@@ -523,7 +554,7 @@ if (!cmd) {
 if (!cmd.help && rest.some((a) => a === '--help' || a === '-h')) {
 	console.log(`fleet ${name} — ${cmd.summary}`);
 	console.log(`\n(no detailed --help for this subcommand; nothing was run)`);
-	process.exit(0);
+	finish('door-help', 0);
 }
 
 // A SUBCOMMAND THAT CHANGES THINGS BY DEFAULT GETS NO UNKNOWN FLAG. See
@@ -547,7 +578,7 @@ if (cmd.flags) {
 				`  This subcommand changes things when run with no flags, so it accepts only: ` +
 				`${cmd.flags.length ? cmd.flags.map((f) => (f.endsWith('=') ? `${f.slice(0, -1)} <v>` : f)).join(' ') : '(no flags)'}`
 		);
-		process.exit(2);
+		finish('refused-flags', 2);
 	}
 }
 
@@ -565,7 +596,7 @@ if (!existsSync(target)) {
 		`fleet: ${cmd.script} is missing from the package at ${target}. ` +
 			'This is a packaging bug — check the `files` field.'
 	);
-	process.exit(1);
+	finish('missing-script', 1);
 }
 
 const runner = target.endsWith('.py')
@@ -579,14 +610,19 @@ const runner = target.endsWith('.py')
 // script instead of one script growing a near-copy of the other.
 const child = spawn(runner.cmd, [...runner.argv, ...(cmd.args ?? []), ...rest], {
 	stdio: 'inherit',
+	...(cmd.doorTable
+		? { env: { ...process.env, FLEET_DOOR_COMMANDS: Object.keys(COMMANDS).join(',') } }
+		: {}),
 });
 child.on('error', (err) => {
 	console.error(`fleet: could not run ${cmd.script}: ${err.message}`);
-	process.exit(1);
+	finish('spawn-error', 1);
 });
 // Propagate the child's fate exactly. A gate that exits 1 ON FINDINGS must keep
 // exiting 1 through this wrapper, and a signal death must not read as success.
 child.on('exit', (code, signal) => {
-	if (signal) process.kill(process.pid, signal);
-	else process.exit(code ?? 1);
+	if (signal) {
+		record({ outcome: 'ran', exit: null, signal });
+		process.kill(process.pid, signal);
+	} else finish('ran', code ?? 1);
 });
