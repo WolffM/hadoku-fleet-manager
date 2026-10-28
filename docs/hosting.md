@@ -184,6 +184,8 @@ which node the plan would pick. A singleton on a node that cannot be reached
 is never moved off unless it declares `availability.fence: "data-lease"`.
 That means a dataplatform lease, with state kept off the node, as pygmalion
 does. Two writers are worse than none.
+What a service must do to earn that fence, and how to request it, is
+[service-state.md](service-state.md).
 
 ## Status
 
