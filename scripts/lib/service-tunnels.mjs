@@ -96,6 +96,20 @@ export function placementsFor(node, childApps) {
 	return out.sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/**
+ * Where the APP LAYER runs a pm2 service today: its `host`, or the hub when it
+ * names none, for an app with a port (`tunnel` or `handWired`). `app` matches
+ * the row's `tenant` or its `id`. Null when no row is a service by that name.
+ * The hosting converger reads it before giving a service its first slice:
+ * an app already running somewhere is MOVED there, never started a second
+ * time beside itself (fleet-manager#16).
+ */
+export function appLayerHost(app, { hostsDoc, childApps }) {
+	const row = (childApps.apps ?? []).find((a) => a.tenant === app || a.id === app);
+	if (!row || !(row.tunnel?.port ?? row.handWired?.port)) return null;
+	return row.host ?? hostsDoc.hub ?? null;
+}
+
 export function renderConfig(tunnelId, placements) {
 	const rules = placements.map(
 		(p) => `  - hostname: ${p.hostname}\n    service: http://127.0.0.1:${p.port}\n`

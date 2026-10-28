@@ -17,12 +17,14 @@ const offer = (node, over = {}) => ({
 });
 const agent = {
 	app: 'cardtable',
+	kind: 'agent',
 	slices: { unit: { memoryMb: 4096, cores: 4 }, min: 1, max: 4 },
 	availability: { noticeMin: 15, stateful: false, singleton: false },
 	placement: { require: ['wired'], prefer: [] },
 };
 const service = {
 	app: 'watchparty',
+	kind: 'service',
 	slices: { unit: { memoryMb: 1024, cores: 1 }, min: 1, max: 1 },
 	availability: { noticeMin: 15, stateful: true, singleton: true },
 	placement: { require: ['wired'], prefer: [] },
@@ -278,4 +280,26 @@ test('an end goes through the door with the notice, a remove with nothing else',
 		'hosting-converge: w',
 	]);
 	assert.deepEqual(doorArgs(agent, { op: 'remove', node: 'claw-8' }), ['claw-8', '--remove']);
+});
+
+test('a service the app layer already runs is never declared beside itself: its first slice is a move', () => {
+	const args = { request: service, plan: plan('claw-6') };
+	const running = run({ ...args, appLayer: { node: 'hokon' } });
+	assert.deepEqual(running.actions, []);
+	assert.match(
+		running.blocked[0].why,
+		/runs on hokon under the app layer.*a move.*plan's node is claw-6/
+	);
+	assert.equal(running.blocked[0].node, 'hokon');
+
+	const blind = run({ ...args, appLayer: { unreadable: 'ENOENT child-apps.json' } });
+	assert.deepEqual(blind.actions, []);
+	assert.match(blind.blocked[0].why, /could not be read \(ENOENT child-apps.json\)/);
+
+	const fresh = run({ ...args, appLayer: { node: null } });
+	assert.deepEqual(
+		fresh.actions.map((a) => [a.op, a.node]),
+		[['declare', 'claw-6']],
+		'an app the app layer does not run yet gets its first slice'
+	);
 });

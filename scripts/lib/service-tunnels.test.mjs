@@ -9,6 +9,7 @@ import {
 	convergeTunnels,
 	credentialsFromRunToken,
 	parseObserve,
+	appLayerHost,
 	placementsFor,
 	renderConfig,
 	repairScript,
@@ -339,4 +340,23 @@ test('a hostname that answers 5xx through the tunnel is a finding', async () => 
 		hostsDoc: { ...hostsDoc, hosts: { 'claw-4': { tunnel: 'claw-4' } } },
 	});
 	assert.equal(findings[0].kind, 'tunnel-route');
+});
+
+test('appLayerHost: the row named by tenant or id, its host or the hub; null when it is no service', () => {
+	const hostsDoc = { hub: 'hokon', hosts: {} };
+	const childApps = {
+		apps: [
+			{ id: 'watchparty', handWired: { port: '8079' } },
+			{ id: 'archive-bot', tenant: 'archivebot', host: 'claw-4', tunnel: { port: 3004 } },
+			{ id: 'contact' },
+		],
+	};
+	assert.equal(appLayerHost('watchparty', { hostsDoc, childApps }), 'hokon');
+	assert.equal(appLayerHost('archivebot', { hostsDoc, childApps }), 'claw-4');
+	assert.equal(
+		appLayerHost('contact', { hostsDoc, childApps }),
+		null,
+		'a UI package is not a service'
+	);
+	assert.equal(appLayerHost('nobody', { hostsDoc, childApps }), null);
 });

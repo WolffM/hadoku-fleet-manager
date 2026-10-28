@@ -43,6 +43,8 @@ export const HORIZON_MARGIN_MS = 15 * 60_000;
  * @param {{node:string, until?:string}[]} i.slices  this tenant's records, in force
  * @param {string[]} i.removeDue  nodes whose slice end has passed and still has units
  * @param {object[]} i.notices drainNotices + hostingNotices
+ * @param {{node: string|null}|{unreadable: string}} [i.appLayer] for a service:
+ *        where hadoku_site runs it now (appLayerHost), or why that could not be read
  * @param {number} i.now
  */
 export function decide({
@@ -55,6 +57,7 @@ export function decide({
 	removeDue,
 	notices,
 	now,
+	appLayer = null,
 }) {
 	const { app, slices: size, availability, placement } = request;
 	const desired = Math.min(size.max, Math.max(size.min, demand?.slices ?? size.min));
@@ -74,7 +77,27 @@ export function decide({
 	const actions = removeDue.map((node) => ({ op: 'remove', node, why: 'its end has passed' }));
 	const blocked = [];
 
-	if (serving.length < desired) {
+	// A SERVICE THE APP LAYER ALREADY RUNS is adopted by a move, never declared
+	// beside itself: no slice is not "not running". Could not look is the same block.
+	const runningAt =
+		request.kind === 'service' && slices.length === 0 && appLayer
+			? (appLayer.unreadable ?? null)
+			: null;
+	const adoptFrom =
+		request.kind === 'service' && slices.length === 0 && appLayer?.node ? appLayer.node : null;
+
+	if (serving.length < desired && (adoptFrom || runningAt)) {
+		const target = plan.ranked[0]?.node ?? null;
+		blocked.push({
+			node: adoptFrom ?? '*',
+			why: adoptFrom
+				? `${app} runs on ${adoptFrom} under the app layer, outside the hosting layer; its first ` +
+					`slice is a move (the app layer's service-move), not a declare beside it` +
+					(target ? `. The plan's node is ${target}` : '')
+				: `where the app layer runs ${app} could not be read (${runningAt}); nothing is declared ` +
+					'beside an instance that may be running',
+		});
+	} else if (serving.length < desired) {
 		if (availability.singleton && slices.length > 0) {
 			for (const u of unplaceable) {
 				const target = movePlan?.ranked[0]?.node ?? null;

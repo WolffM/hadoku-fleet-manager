@@ -36,8 +36,9 @@ import { loadManifest } from './lib/fleet-exec.mjs';
 import { act, decide } from './lib/hosting-converge.mjs';
 import { readDemand } from './lib/hosting-demand.mjs';
 import { planFor } from './lib/hosting-plan.mjs';
-import { PKG_SCRIPTS, stateDir } from './lib/paths.mjs';
+import { PKG_SCRIPTS, siteRoot, stateDir } from './lib/paths.mjs';
 import { spawnCapture } from './lib/spawn-json.mjs';
+import { appLayerHost, readSiteDocs } from './lib/service-tunnels.mjs';
 import { readTenantRegistry } from './lib/tenant-registry.mjs';
 
 export const LAST_FILE = 'hosting-converge-last.json';
@@ -107,6 +108,14 @@ if (ONLY && !tenants.length) {
 }
 
 const { offers } = await collectOffers(manifest);
+// The app layer's placement, for a service's first slice. Read once; unreadable is carried, not swallowed.
+let siteDocs = null;
+let siteWhy = null;
+try {
+	siteDocs = readSiteDocs(siteRoot());
+} catch (err) {
+	siteWhy = err.message;
+}
 const notices = [...drainNotices(drainDoc, NOW), ...hostingNotices(hostingDoc, NOW)];
 const nodes = Object.keys(manifest.machines ?? {});
 
@@ -166,6 +175,12 @@ for (const [app, { request }] of tenants) {
 		removeDue,
 		notices,
 		now: NOW,
+		appLayer:
+			request.kind !== 'service'
+				? null
+				: siteDocs
+					? { node: appLayerHost(app, siteDocs) }
+					: { unreadable: siteWhy },
 	});
 	const live = request.placement.auto === true && !DRY_RUN;
 	const { rows, results } = await act(request, decision, { live, door });
