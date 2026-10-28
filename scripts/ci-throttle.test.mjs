@@ -817,12 +817,17 @@ test('#12: memory MOVING that never settles refuses at MAX_HOLD_S, and does NOT 
 	assert.match(all, /Re-run once the node's memory settles/, all);
 });
 
+// "Refused at MAX_WAIT_S (2s), not held for MAX_HOLD_S (600s)". The output
+// says which branch ran; the time bound only has to tell 2s from 600s. It was
+// 5s, and at load 60-90 the 2s wait itself took 5.3s.
+const FAST_REFUSAL_MS = 30_000;
+
 test('#12: the SAME conf with FLAT memory still refuses fast, as placement', () => {
 	const r = run({ conf: { ...HOKON_12, MAX_HOLD_S: 600 }, others: 0, memAvailableMb: 7120 });
 	const all = r.out + r.err;
 	assert.notEqual(r.code, 0, all);
 	assert.ok(
-		r.elapsedMs < 5_000,
+		r.elapsedMs < FAST_REFUSAL_MS,
 		`a flat floor breach must not take the long hold: ${r.elapsedMs}ms`
 	);
 	assert.match(all, /re-running will refuse again/, all);
@@ -839,8 +844,9 @@ test('#12: a swing below MEM_SWING_MB is still flat', () => {
 	});
 	const all = r.out + r.err;
 	assert.notEqual(r.code, 0, all);
-	assert.ok(r.elapsedMs < 5_000, `480MB of noise is not a transient: ${r.elapsedMs}ms`);
+	assert.ok(r.elapsedMs < FAST_REFUSAL_MS, `480MB of noise is not a transient: ${r.elapsedMs}ms`);
 	assert.match(all, /placement problem/, all);
+	assert.doesNotMatch(all, /holding up to/, all);
 });
 
 test('#12: moving memory with a job RUNNING is contention, refused at MAX_WAIT_S, not held longer', () => {
@@ -852,7 +858,10 @@ test('#12: moving memory with a job RUNNING is contention, refused at MAX_WAIT_S
 	});
 	const all = r.out + r.err;
 	assert.notEqual(r.code, 0, all);
-	assert.ok(r.elapsedMs < 5_000, `contention already has the right wait: ${r.elapsedMs}ms`);
+	assert.ok(
+		r.elapsedMs < FAST_REFUSAL_MS,
+		`contention already has the right wait: ${r.elapsedMs}ms`
+	);
 	assert.match(all, /Re-run once the node has a free slot/, all);
 	assert.doesNotMatch(all, /holding up to/, all);
 });
