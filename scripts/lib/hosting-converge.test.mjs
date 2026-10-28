@@ -204,7 +204,7 @@ test('not live, every action and block is planned and the door is never called',
 	assert.deepEqual(
 		rows.planned.map((r) => [r.node, r.changed]),
 		[
-			['claw-5', 'would declare'],
+			['claw-5', 'would declare and install the agent'],
 			['*', 'blocked'],
 		]
 	);
@@ -220,7 +220,7 @@ test('live: done is converged, accepted-not-guaranteed is deferred, refused is u
 	};
 	const calls = [];
 	const { rows } = await act(
-		agent,
+		{ ...agent, kind: 'service' },
 		{
 			actions: Object.keys(answers).map((node) => ({ op: 'declare', node, why: 'w' })),
 			blocked: [
@@ -397,4 +397,67 @@ test('a shortfall of standby nodes is a hard block with the plan’s reasons', (
 test('a request without a standby decides byte-for-byte as before', () => {
 	const d = run({ request: service, offers: [offer('claw-4')], slices: [{ node: 'claw-4' }] });
 	assert.ok(!('standby' in d));
+});
+
+test('an agent slice the fleet declares gets the kept agent through the same door', async () => {
+	const calls = [];
+	const door = async (args) => {
+		calls.push(args);
+		return args[1] === '--install'
+			? { doc: { ok: true, state: 'installed' }, why: '' }
+			: { doc: { ok: false, state: 'not-guaranteed', reason: 'agent not running' }, why: '' };
+	};
+	const sha = 'a'.repeat(64);
+	const { rows } = await act(
+		agent,
+		{ actions: [{ op: 'declare', node: 'claw-5', why: 'w' }], blocked: [] },
+		{ live: true, door, artifact: { ok: true, path: '/state/run', sha256: sha } }
+	);
+	assert.deepEqual(calls[1], ['claw-5', '--install', '/state/run', '--sha256', sha]);
+	assert.deepEqual(
+		rows.converged.map((r) => [r.node, r.changed]),
+		[['claw-5', 'declared, agent aaaaaaaaaaaa installed']]
+	);
+	assert.deepEqual(rows.deferred, [], 'not-guaranteed only meant "no agent yet"');
+});
+
+test('no kept agent waits (deferred, with the command); an unverifiable or refused one pages', async () => {
+	const declared = async (args) =>
+		args[1] === '--install'
+			? { doc: { ok: false, state: 'refused', reason: 'sha mismatch on node' }, why: '' }
+			: { doc: { ok: true, state: 'guaranteed' }, why: '' };
+	const one = { actions: [{ op: 'declare', node: 'claw-5', why: 'w' }], blocked: [] };
+
+	const none = await act(agent, one, { live: true, door: declared, artifact: null });
+	assert.match(none.rows.deferred[0].why, /no agent artifact kept.*fleet hosting <node> --install/);
+
+	const bad = await act(agent, one, {
+		live: true,
+		door: declared,
+		artifact: { ok: false, why: 'hashes to x' },
+	});
+	assert.match(bad.rows.unconverged[0].why, /the kept agent artifact: hashes to x/);
+
+	const refused = await act(agent, one, {
+		live: true,
+		door: declared,
+		artifact: { ok: true, path: '/p', sha256: 'b'.repeat(64) },
+	});
+	assert.match(refused.rows.unconverged[0].why, /installing the agent: sha mismatch on node/);
+});
+
+test('a dry run says the agent would be installed, and a service is never installed', async () => {
+	const one = { actions: [{ op: 'declare', node: 'claw-5', why: 'w' }], blocked: [] };
+	const dry = await act(agent, one, { live: false, door: () => assert.fail() });
+	assert.equal(dry.rows.planned[0].changed, 'would declare and install the agent');
+	const calls = [];
+	await act({ ...agent, kind: 'service' }, one, {
+		live: true,
+		door: async (args) => {
+			calls.push(args);
+			return { doc: { ok: true, state: 'guaranteed' }, why: '' };
+		},
+		artifact: { ok: true, path: '/p', sha256: 'c'.repeat(64) },
+	});
+	assert.equal(calls.length, 1, 'a service is deployed by its app layer');
 });

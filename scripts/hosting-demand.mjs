@@ -23,6 +23,7 @@ import { hostingOn, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest } from './lib/fleet-exec.mjs';
+import { readArtifact } from './lib/hosting-artifacts.mjs';
 import { demandProblems, readDemand, tenantSlices, writeDemand } from './lib/hosting-demand.mjs';
 import { stateDir } from './lib/paths.mjs';
 import { readTenantRegistry } from './lib/tenant-registry.mjs';
@@ -45,6 +46,13 @@ const valueOf = (flag) => {
 };
 const NOW = Date.now();
 const iso = new Date(NOW).toISOString();
+
+const agentView = (a) =>
+	a === null
+		? { kept: false }
+		: a.ok
+			? { kept: true, sha256: a.sha256 }
+			: { kept: false, why: a.why };
 
 const finish = (ok, fields) => {
 	if (!ok) out.warn(`hosting-demand: ${fields.reason}`);
@@ -123,4 +131,7 @@ finish(true, {
 	ending,
 	// What the converger decided on its last pass, and did (`live`) or only planned.
 	lastPass,
+	// An agent tenant: the artifact the converger installs on every slice it
+	// declares. Not kept = a declared slice waits for the tenant's first install.
+	...(request.kind === 'agent' ? { agent: agentView(readArtifact(stateDir(), app)) } : {}),
 });

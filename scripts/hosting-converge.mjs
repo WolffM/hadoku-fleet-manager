@@ -34,6 +34,7 @@ import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest } from './lib/fleet-exec.mjs';
 import { act, decide } from './lib/hosting-converge.mjs';
+import { readArtifact } from './lib/hosting-artifacts.mjs';
 import { readDemand } from './lib/hosting-demand.mjs';
 import { planFor } from './lib/hosting-plan.mjs';
 import { PKG_SCRIPTS, siteRoot, stateDir } from './lib/paths.mjs';
@@ -187,7 +188,11 @@ for (const [app, { request }] of tenants) {
 					: { unreadable: siteWhy },
 	});
 	const live = request.placement.auto === true && !DRY_RUN;
-	const { rows, results } = await act(request, decision, { live, door });
+	const { rows, results } = await act(request, decision, {
+		live,
+		door,
+		artifact: request.kind === 'agent' ? readArtifact(stateDir(), app) : null,
+	});
 	for (const k of Object.keys(rows)) doc[k].push(...rows[k]);
 	// A held slice on a node that did not answer: its facet is not read clean this pass.
 	for (const u of [...decision.unplaceable, ...(decision.standby?.unplaceable ?? [])].filter(

@@ -13,6 +13,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { validateHostingRequest } from './lib/hosting-request.mjs';
+import { keepArtifact } from './lib/hosting-artifacts.mjs';
 import { registerTenant } from './lib/tenant-registry.mjs';
 
 const SCRIPT = fileURLToPath(new URL('hosting-demand.mjs', import.meta.url));
@@ -154,5 +155,21 @@ test("declared[] and ending[] list only the tenant's own serving slices: no othe
 		);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('an agent tenant’s view says whether the converger has an agent to install', () => {
+	const f = fixture();
+	try {
+		assert.deepEqual(run(['cardtable'], f.env).doc.agent, { kept: false });
+		keepArtifact(f.root, 'cardtable', Buffer.from('agent'), {
+			by: 't',
+			nowIso: new Date().toISOString(),
+		});
+		const { agent } = run(['cardtable'], f.env).doc;
+		assert.equal(agent.kept, true);
+		assert.match(agent.sha256, /^[0-9a-f]{64}$/);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
 	}
 });

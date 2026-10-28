@@ -303,14 +303,18 @@ export function doorArgs(request, a) {
  *                         only if it stays, by the converger's clock
  *   unconverged           the door refused or failed, or a hard block: pages
  */
-export async function act(request, decision, { live, door }) {
+export async function act(request, decision, { live, door, artifact = null }) {
 	const facet = `hosting:${request.app}`;
 	const rows = { planned: [], converged: [], deferred: [], unconverged: [], changed: [] };
 	const results = [];
+	const agent = request.kind === 'agent';
 	for (const a of decision.actions) {
 		const row = { node: a.node, facet, before: a.why, op: a.op };
 		if (!live) {
-			rows.planned.push({ ...row, changed: `would ${a.op}` });
+			rows.planned.push({
+				...row,
+				changed: `would ${a.op}${a.op === 'declare' && agent ? ' and install the agent' : ''}`,
+			});
 			continue;
 		}
 		const { doc, why } = await door(doorArgs(request, a));
@@ -320,12 +324,26 @@ export async function act(request, decision, { live, door }) {
 			state: doc?.state ?? null,
 			reason: doc?.reason ?? why,
 		});
-		if (doc?.ok) {
+		const declared = a.op === 'declare' && (doc?.ok || doc?.state === 'not-guaranteed');
+		if (declared && agent) {
+			// AN AGENT'S SLICE IS EMPTY UNTIL ITS EXECUTABLE IS THERE: the deploy
+			// made the units, and only an install starts the agent. Install the
+			// tenant's kept artifact through the same door (lib/hosting-artifacts.mjs).
+			const installed = await installAgent(a.node, artifact, door, results);
+			if (installed.ok) {
+				const changed = `declared, agent ${installed.sha256.slice(0, 12)} installed`;
+				rows.converged.push({ ...row, changed });
+				rows.changed.push({ node: a.node, facet, changed });
+			} else {
+				rows.changed.push({ node: a.node, facet, changed: 'declared, agent not installed' });
+				(installed.hard ? rows.unconverged : rows.deferred).push({ ...row, why: installed.why });
+			}
+		} else if (doc?.ok) {
 			const changed =
 				a.op === 'end' ? `ends ${doc.until ?? `in ${a.inMin} min`}` : `${a.op}d (${doc.state})`;
 			rows.converged.push({ ...row, changed });
 			rows.changed.push({ node: a.node, facet, changed });
-		} else if (a.op === 'declare' && doc?.state === 'not-guaranteed') {
+		} else if (declared) {
 			rows.deferred.push({ ...row, why: doc.reason ?? 'declared, not guaranteed yet' });
 			rows.changed.push({ node: a.node, facet, changed: 'declared, not guaranteed yet' });
 		} else {
@@ -341,4 +359,35 @@ export async function act(request, decision, { live, door }) {
 		else rows.planned.push({ ...row, changed: 'blocked' });
 	}
 	return { rows, results };
+}
+
+/**
+ * Install `artifact` on `node` through the door. `{ ok, sha256 }`, or
+ * `{ ok: false, why, hard }`. With nothing kept yet the slice waits for the
+ * tenant's first install, which the converger's clock pages on if it never
+ * comes. A kept artifact that no longer verifies, or a door that refuses, is
+ * hard: it pages now.
+ */
+async function installAgent(node, artifact, door, results) {
+	if (!artifact)
+		return {
+			ok: false,
+			hard: false,
+			why:
+				'no agent artifact kept for this tenant yet: one `fleet hosting <node> --install <run> ' +
+				'--sha256 <hex>` keeps it, and every slice the fleet declares after that gets it',
+		};
+	if (!artifact.ok)
+		return { ok: false, hard: true, why: `the kept agent artifact: ${artifact.why}` };
+	const { doc, why } = await door([node, '--install', artifact.path, '--sha256', artifact.sha256]);
+	results.push({
+		op: 'install',
+		node,
+		ok: doc?.ok ?? false,
+		state: doc?.state ?? null,
+		reason: doc?.reason ?? why,
+	});
+	return doc?.ok
+		? { ok: true, sha256: artifact.sha256 }
+		: { ok: false, hard: true, why: `installing the agent: ${doc?.reason ?? why ?? 'no answer'}` };
 }

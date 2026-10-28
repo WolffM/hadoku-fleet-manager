@@ -50,6 +50,7 @@ import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
 import { collectOffers } from './lib/collect-offers.mjs';
+import { keepArtifact } from './lib/hosting-artifacts.mjs';
 import { planFor } from './lib/hosting-plan.mjs';
 import {
 	CONTROLLER_NODE,
@@ -342,7 +343,20 @@ if (action === 'install') {
 		refuse(line ?? `install on ${node} did not finish: ${r.error ?? r.stderr.trim()}`);
 	}
 	say(`✓ ${spec.exec} on ${node} is ${want}, root-owned; the agent restarted.`);
-	finish(true, { state: 'installed', sha256: want, exec: spec.exec });
+	// KEPT for the converger, so a slice it declares later gets these bytes too
+	// (lib/hosting-artifacts.mjs). The install already happened, so failing to
+	// keep it is said, never turned into a failed install.
+	let kept;
+	try {
+		kept = {
+			ok: true,
+			...keepArtifact(stateDir(), tenant, bytes, { by, nowIso: new Date(NOW).toISOString() }),
+		};
+	} catch (err) {
+		kept = { ok: false, why: err.message };
+		say(`  could not keep it for slices the fleet declares: ${err.message}`);
+	}
+	finish(true, { state: 'installed', sha256: want, exec: spec.exec, kept });
 }
 
 if (action === 'restart') {
