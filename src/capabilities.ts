@@ -785,6 +785,32 @@ export const CAPABILITIES: readonly Capability[] = [
 			'than with a hostname.',
 	},
 	{
+		/*
+		 * ADMISSION, NOT A TOOL — proved by connecting, never by a membership list.
+		 *
+		 * dataplatform's data listener refuses a peer it has not declared with a
+		 * bare 404 BEFORE it reads a key, so "can encode" plus a key is not enough:
+		 * watchparty's ingest landed on claw-1 and every call 404'd (run
+		 * 40639427546, fleet-manager#16). Who is admitted is dataplatform's
+		 * decision (hadoku-dataplatform#28); this only READS the outcome, from the
+		 * node, the way the job will meet it. An unkeyed request is 401 to an
+		 * admitted peer and a bare 404 to a refused one, so no secret is needed.
+		 *
+		 * The endpoint is the controller's to name (`probe-script.mjs`), because
+		 * its address is private and this repo is public. A probe run without it
+		 * prints nothing for this label, which is "not judged", never "no".
+		 */
+		id: 'data-peer',
+		label: 'Admitted by the data endpoint',
+		kind: 'identity',
+		surface: 'label',
+		verify: 'probe',
+		description:
+			'dataplatform’s data listener admits this node as a peer: an unkeyed request ' +
+			'from the node gets the 401 an admitted peer gets, not the bare 404 a refused ' +
+			'one does. Routed on by any job that reads or writes the data endpoint.',
+	},
+	{
 		id: 'nvenc-hevc',
 		label: 'NVENC HEVC encode',
 		kind: 'identity',

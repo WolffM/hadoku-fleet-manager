@@ -86,6 +86,12 @@ const JDK_PRESENT_CASE = `  *'javac -d "$d"'*) echo OK; exit 0 ;;`;
 const DOCKER_PRESENT_CASE = `  *'docker info >/dev/null 2>&1 && echo OK'*) echo OK; exit 0 ;;`;
 
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
+/**
+ * The discard port on loopback: `data-peer`'s probe runs and is refused there,
+ * so no fixture reaches the real data endpoint, and none goes INCONCLUSIVE for
+ * want of a `pm2-hosts.json` it has no reason to carry.
+ */
+const NO_DATA_ENDPOINT = 'http://127.0.0.1:9';
 
 /** Names that resolve NOWHERE, and are not this box. */
 const CLAW = 'fixture-claw-1.invalid';
@@ -122,6 +128,7 @@ function fixture() {
 			FLEET_MANIFEST_DIR: manifestDir,
 			HADOKU_STATE_DIR: stateDir,
 			HADOKU_SITE_ROOT: root,
+			FLEET_DATA_URL: NO_DATA_ENDPOINT,
 		},
 	};
 }
@@ -361,6 +368,7 @@ function writableFixture(
 		FLEET_MANIFEST_DIR: manifestDir,
 		HADOKU_STATE_DIR: stateDir,
 		HADOKU_SITE_ROOT: root,
+		FLEET_DATA_URL: NO_DATA_ENDPOINT,
 		PATH: `${bin}:${process.env.PATH}`,
 		FLEET_TEST_RELEASE_LOOKUP: releaseLookupFile,
 	});
@@ -419,6 +427,25 @@ test('a bootcamp that proves a revoked label CLEARS the revocation', () => {
 			r.err
 		);
 		assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).nodes, {});
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+// fleet-manager#16: a controller that cannot name the data endpoint did not
+// probe `data-peer` at all. That is INCONCLUSIVE, said and failing the run, and
+// it must not strip the label from a node that earned it.
+test('an unnamed data endpoint leaves an earned data-peer standing, and says so', () => {
+	const f = writableFixture(PROBE_ANSWER('7.1.5-0+deb13u1'));
+	try {
+		const doc = JSON.parse(readFileSync(f.manifestPath, 'utf8'));
+		doc.machines[CLAW].$capabilities = { at: 'a', earned: ['data-peer', 'ffmpeg'] };
+		writeFileSync(f.manifestPath, JSON.stringify(doc, null, 2));
+		const { FLEET_DATA_URL: _, ...env } = f.env;
+		const r = run(['--machine', CLAW, '--write', '--no-push'], env);
+		assert.notEqual(r.code, 0, 'could not look must not pass');
+		assert.match(r.out + r.err, /INCONCLUSIVE: data-peer — the data endpoint could not be named/);
+		assert.deepEqual(f.record().earned, ['data-peer', 'ffmpeg']);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -970,6 +997,7 @@ function seedingFixture({
 		FLEET_MANIFEST_DIR: manifestDir,
 		HADOKU_STATE_DIR: stateDir,
 		HADOKU_SITE_ROOT: root,
+		FLEET_DATA_URL: NO_DATA_ENDPOINT,
 		PATH: `${bin}:${process.env.PATH}`,
 		FLEET_TEST_RELEASE_LOOKUP: releaseLookupFile,
 	};
@@ -1170,6 +1198,7 @@ function proveFixture({ cores = 8 } = {}) {
 			FLEET_MANIFEST_DIR: manifestDir,
 			HADOKU_STATE_DIR: stateDir,
 			HADOKU_SITE_ROOT: root,
+			FLEET_DATA_URL: NO_DATA_ENDPOINT,
 			PATH: `${bin}:${process.env.PATH}`,
 		},
 	};
@@ -1365,6 +1394,7 @@ function idleFixture({
 		FLEET_MANIFEST_DIR: manifestDir,
 		HADOKU_STATE_DIR: stateDir,
 		HADOKU_SITE_ROOT: root,
+		FLEET_DATA_URL: NO_DATA_ENDPOINT,
 		PATH: `${bin}:${process.env.PATH}`,
 		FLEET_TEST_IDLE_TIMING: JSON.stringify({ pollMs: 20, settleMs: 0, timeoutMs: 400 }),
 	});

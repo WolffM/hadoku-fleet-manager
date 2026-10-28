@@ -941,7 +941,9 @@ test('every label the committed manifest declares is a registry entry', () => {
 	// `nvenc-h264` and `watchparty-media` joined it 2026-10-23 (fleet-manager#3)
 	// on `jdk21`'s reasoning: earned from the bootcamp record, never declared.
 	// `docker` joined it 2026-10-27 (node-users): earned by building an image.
+	// `data-peer` joined it 2026-10-27 (fleet-manager#16): earned by connecting.
 	const runtimeWritten = new Set([
+		'data-peer',
 		'docker',
 		'hokon-backstop',
 		'hadoku-builder',

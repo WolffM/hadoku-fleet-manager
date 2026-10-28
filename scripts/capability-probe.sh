@@ -352,6 +352,27 @@ watchparty_media_try() {
 # shellcheck disable=SC2046
 say watchparty-media $(watchparty_media_try)
 
+# --- data-peer: does the data endpoint ADMIT this node -----------------------
+# dataplatform's data listener answers an undeclared peer with a bare 404
+# before it reads any key, and an admitted one with 401 "service key required".
+# So an unkeyed request, sent from here, reads the listener's own verdict and
+# needs no secret. `CAP_DATA_URL` comes from the controller (the address is
+# private); without it this prints NOTHING, which is "not judged" — a probe
+# that could not look must not revoke the label from every node at once.
+data_peer_try() {
+	code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$CAP_DATA_URL/data/fleet-probe/x" 2>/dev/null)
+	case "$code" in
+	401) printf 'ok admitted' ;;
+	404) printf 'no refused' ;;
+	000 | '') printf 'no unreachable' ;;
+	*) printf 'no http-%s' "$code" ;;
+	esac
+}
+if [ -n "${CAP_DATA_URL:-}" ]; then
+	# shellcheck disable=SC2046
+	say data-peer $(data_peer_try)
+fi
+
 # --- nvdec: DECODE something, on the GPU -------------------------------------
 # Encode and decode are separate silicon and separate driver paths; a card can
 # lose one and keep the other. Generated on the CPU first so the decode is

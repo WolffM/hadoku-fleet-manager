@@ -19,7 +19,6 @@
  * self-update could remove it, and the fleet should learn that from a probe
  * rather than from a dispatcher that has quietly stopped working.
  */
-import { readFileSync } from 'node:fs';
 import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { stateDir } from './lib/paths.mjs';
 import {
@@ -42,9 +41,10 @@ import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.j
 import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { parseLoad } from './lib/idle-measure.mjs';
+import { dataEndpointUrl, probeScript, unprobed } from './lib/probe-script.mjs';
 
-// Ships WITH this package — a sibling asset, not operator config.
-const PROBE = readFileSync(new URL('capability-probe.sh', import.meta.url), 'utf8');
+const DATA = dataEndpointUrl();
+const UNPROBED = unprobed(DATA);
 const JSON_OUT = process.argv.includes('--json');
 /**
  * Every stdout write in this file goes through here.
@@ -82,8 +82,7 @@ const PROBEABLE = probeableIds();
  * end marker is genuinely unreachable.
  */
 async function run(node, phase = 'all') {
-	const script = phase === 'all' ? PROBE : `export CAP_PROBE_PHASE=${phase}\n${PROBE}`;
-	const r = await runOn(node, script, { as: 'ci', timeoutMs: 180_000 });
+	const r = await runOn(node, probeScript(phase, DATA), { as: 'ci', timeoutMs: 180_000 });
 	return !r.ok && !r.stdout.includes('PROBE-END') ? null : r.stdout;
 }
 
@@ -365,9 +364,11 @@ await Promise.all(
 			// not "it passed" — `meetsBar` is the one judge, same as bootcamp's,
 			// and `judgeMeasurement` declines to judge an idle-only one that was
 			// measured beside a live job.
-			const verdict = caps[label]
-				? judgeMeasurement(cap, caps[label].ok, caps[label].detail, load[label])
-				: { proven: false, judged: true, reason: 'no result' };
+			const verdict = UNPROBED[label]
+				? { proven: false, judged: false, reason: UNPROBED[label] }
+				: caps[label]
+					? judgeMeasurement(cap, caps[label].ok, caps[label].detail, load[label])
+					: { proven: false, judged: true, reason: 'no result' };
 			if (!verdict.judged) {
 				notJudged.push({ node: name, capability: label, reason: verdict.reason });
 				continue;

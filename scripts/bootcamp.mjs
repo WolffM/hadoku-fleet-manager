@@ -165,6 +165,7 @@ import {
 } from '../dist/capability-revocations.js';
 import { describeProof, proofKey, readProofs } from './lib/job-proof-record.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { dataEndpointUrl, probeScript, unprobed } from './lib/probe-script.mjs';
 import { renderJson } from './lib/prettier-json.mjs';
 import { landWrite, landingLine, refusalLine, writeTarget } from './lib/manifest-target.mjs';
 import { sameCapabilityRecord } from './lib/bootcamp-required.mjs';
@@ -195,7 +196,8 @@ import {
 // emitter calls the same function for the scripts that use it.
 keepStdoutWhole();
 
-const PROBE = readFileSync(new URL('capability-probe.sh', import.meta.url), 'utf8');
+const DATA = dataEndpointUrl();
+const UNPROBED = unprobed(DATA);
 
 /**
  * ONE release lookup for the whole run, shared by every node's `ensureTools`
@@ -322,8 +324,7 @@ const NEVER_WRITTEN = new Set(
  * LOAD the probe observed while measuring.
  */
 async function probe(node, phase = 'all') {
-	const script = phase === 'all' ? PROBE : `export CAP_PROBE_PHASE=${phase}\n${PROBE}`;
-	const r = await runOn(node, script, {
+	const r = await runOn(node, probeScript(phase, DATA), {
 		as: 'ci',
 		timeoutMs: 180_000,
 		includeGuests: checkOnly.has(node),
@@ -715,6 +716,13 @@ await Promise.all(
 				});
 				if (prevEarned.has(id)) proven.add(id);
 			}
+		}
+		// A capability this controller could not enable was never probed: the
+		// record on disk stands, and it is said.
+		for (const [id, reason] of Object.entries(UNPROBED)) {
+			if (caps[id]) continue;
+			inconclusive.push({ id, reason, kept: prevEarned.has(id) ? 'earned' : 'not earned' });
+			if (prevEarned.has(id)) proven.add(id);
 		}
 
 		// EARNED IS EVERYTHING THE PROBE EXECUTED SUCCESSFULLY (settled
