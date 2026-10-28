@@ -167,3 +167,14 @@ test('a fence is for a singleton, and only data-lease is one', () => {
 		}).includes('availability.fence')
 	);
 });
+
+test('runtime.node must be a range the fleet can evaluate, and runtime.tools plain executable names', () => {
+	const rt = (r) => paths({ ...ARCHIVEBOT, runtime: { ...ARCHIVEBOT.runtime, ...r } });
+	assert.ok(!rt({ node: '>=24.0.0 <25.0.0' }).includes('runtime.node'));
+	assert.ok(!rt({ node: '>=22.12' }).includes('runtime.node'));
+	for (const node of ['^24', '24.x', 'latest', '24'])
+		assert.ok(rt({ node }).includes('runtime.node'), node);
+	assert.ok(!rt({ tools: ['yt-dlp', 'ffmpeg', 'python3'] }).includes('runtime.tools'));
+	for (const tools of [['/usr/bin/x'], ['a b'], ['x;rm'], 'ffmpeg'])
+		assert.ok(rt({ tools }).includes('runtime.tools'), JSON.stringify(tools));
+});

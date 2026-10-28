@@ -18,7 +18,7 @@ import { proofFileStatus, readProofsForCapability } from '../../dist/lib/measure
 import { readHostingDoc } from '../../dist/runners/hosting-record.js';
 import { deferralFor, readDrainDoc, readDrains } from './expected-down.mjs';
 import { runOn, selectNodes } from './fleet-exec.mjs';
-import { OFFER_PROBE, offerFor, parseOfferProbe } from './hosting-offers.mjs';
+import { offerFor, offerProbe, parseOfferProbe } from './hosting-offers.mjs';
 import { siteRoot, stateDir } from './paths.mjs';
 
 /** The app layer's pm2 hosts as `{ set }`, or `{ set: null, why }`: could not look is not "none". */
@@ -74,7 +74,8 @@ export function offeredLabels(machines) {
 }
 
 /** `{ offers, skippedByRole }` for every claw the manifest selects. */
-export async function collectOffers(manifest) {
+/** `tools`: the executables the tenants being planned ask for (`runtime.tools`), run on every node. */
+export async function collectOffers(manifest, { tools = [] } = {}) {
 	const { nodes, skippedByRole } = selectNodes(manifest);
 	const drainDoc = readDrainDoc();
 	const hostingDoc = readHostingDoc(stateDir());
@@ -85,7 +86,7 @@ export async function collectOffers(manifest) {
 
 	const offers = await Promise.all(
 		nodes.map(async ([node, machine]) => {
-			const r = await runOn(node, OFFER_PROBE, {
+			const r = await runOn(node, offerProbe(tools), {
 				as: 'admin',
 				timeoutMs: 30_000,
 				connectTimeout: 8,

@@ -5,6 +5,8 @@ import {
 	DEFAULT_MIN_AGE_MINUTES,
 	parseVersion,
 	compareVersions,
+	parseRange,
+	satisfies,
 	parseInstalledVersion,
 	newestCleared,
 	lookupLatest,
@@ -388,4 +390,16 @@ test('assess never reports current when upstream or the installed version is unk
 	assert.equal(b.status, 'unknown');
 	assert.match(b.reason, /installed version/);
 	assert.equal(assess('NOT-ON-PATH', { status: 'known', version: '2.1.285' }).status, 'unknown');
+});
+
+test('a request range: every comparator holds, missing parts are 0, anything else is unreadable', () => {
+	assert.equal(satisfies('24.11.0', '>=24.0.0 <25.0.0'), true);
+	assert.equal(satisfies('25.0.0', '>=24.0.0 <25.0.0'), false);
+	assert.equal(satisfies('22.23.2', '>=22.12'), true);
+	assert.equal(satisfies('22.11.9', '>=22.12'), false);
+	assert.equal(satisfies('24.1.0', '=24.1.0'), true);
+	assert.deepEqual(parseRange('>=22.12'), [{ op: '>=', v: '22.12.0' }]);
+	for (const bad of ['^24', '24.x', '24', '', '>=a'])
+		assert.equal(parseRange(bad), null, JSON.stringify(bad));
+	assert.throws(() => satisfies('24.0.0', '^24'), /cannot read version range/);
 });

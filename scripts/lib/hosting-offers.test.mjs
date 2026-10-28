@@ -1,7 +1,13 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import { CI_KEEP_JOBS, ciJobsAfter, offerFor, parseOfferProbe } from './hosting-offers.mjs';
+import {
+	CI_KEEP_JOBS,
+	ciJobsAfter,
+	offerFor,
+	parseOfferProbe,
+	runtimeProbe,
+} from './hosting-offers.mjs';
 
 const MIB = 1048576;
 const probe = (over = '') =>
@@ -99,4 +105,17 @@ test('what a slice costs CI, in jobs', () => {
 	// A 16 GB slice leaves 11520 → 2 jobs.
 	assert.equal(ciJobsAfter(o, 16384), 2);
 	assert.equal(ciJobsAfter({ reachable: false }, 0), null);
+});
+
+test('the runtime half: node from its own --version, tools by exit status, an unasked probe is undefined', () => {
+	const f = parseOfferProbe(
+		probe().replace('OFFER-END', 'node=v24.11.0\ntool=yt-dlp ok\ntool=deno no\nOFFER-END')
+	);
+	assert.equal(f.node, '24.11.0');
+	assert.deepEqual(f.tools, { 'yt-dlp': true, deno: false });
+	assert.equal(parseOfferProbe(probe().replace('OFFER-END', 'node=\nOFFER-END')).node, null);
+	assert.equal(parseOfferProbe(probe()).node, undefined);
+	const script = runtimeProbe(['ffmpeg']);
+	assert.match(script, /env -i PATH=\/usr\/local\/bin:\/usr\/bin:\/bin ffmpeg --version/);
+	assert.match(script, /\|\| env -i PATH=\S+ ffmpeg -version/);
 });

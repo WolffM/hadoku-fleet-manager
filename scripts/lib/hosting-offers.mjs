@@ -20,6 +20,7 @@
  * node is taken from the manifest's rounded figures.
  */
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
+import { parseInstalledVersion } from './tool-release.mjs';
 
 /** CI jobs a hosting node keeps by default. The operator's dial; see the header. */
 export const CI_KEEP_JOBS = 1;
@@ -30,8 +31,33 @@ const GPU_LABEL = /nvenc|cuda|nvdec|av1/;
 /** Where tenant state lives: the agent homes and the pm2 state roots sit on this filesystem. */
 const STATE_FS = '/var/lib';
 
-/** One ssh: the node's own figures, `KEY=value` between markers. */
-export const OFFER_PROBE = `echo OFFER-BEGIN
+/**
+ * The PATH a service runs with: the pm2 runtime's unit pins it
+ * (lib/hosting-runtimes.mjs). Tools are executed with exactly this, not with
+ * the login shell's PATH, so a tool only an interactive user can find fails here.
+ */
+export const SERVICE_PATH = '/usr/local/bin:/usr/bin:/bin';
+
+/**
+ * The runtime half of the offer: node's version and each named tool, EXECUTED
+ * with the service's PATH. A tool passes when `--version` or `-version` exits
+ * 0 (ffmpeg only knows the second). Names are validated by the request schema.
+ */
+export function runtimeProbe(tools = []) {
+	const run = `env -i PATH=${SERVICE_PATH}`;
+	return [
+		`echo "node=$(${run} node --version 2>/dev/null)"`,
+		...tools.map(
+			(t) =>
+				`if ${run} ${t} --version >/dev/null 2>&1 || ${run} ${t} -version >/dev/null 2>&1; ` +
+				`then echo "tool=${t} ok"; else echo "tool=${t} no"; fi`
+		),
+	].join('\n');
+}
+
+/** One ssh: the node's own figures, `KEY=value` between markers. `tools`: what the tenants ask to run. */
+export const offerProbe = (tools = []) => `echo OFFER-BEGIN
+${runtimeProbe(tools)}
 echo "memTotalMb=$(awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo)"
 echo "nproc=$(nproc)"
 echo "diskFreeGb=$(df -BG --output=avail ${STATE_FS} 2>/dev/null | tail -1 | tr -dc 0-9)"
@@ -53,6 +79,7 @@ export function parseOfferProbe(stdout) {
 	if (a === -1 || b === -1 || b < a) return null;
 	const kv = {};
 	const pm2 = [];
+	const tools = {};
 	for (const line of text.slice(a, b).split('\n')) {
 		const i = line.indexOf('=');
 		if (i <= 0) continue;
@@ -67,6 +94,9 @@ export function parseOfferProbe(stdout) {
 				maxMb: mib(max),
 				currentMb: mib(cur),
 			});
+		} else if (k === 'tool') {
+			const [name, verdict] = v.split(/\s+/);
+			tools[name] = verdict === 'ok';
 		} else kv[k] = v;
 	}
 	const num = (k) => (/^\d+$/.test(kv[k] ?? '') ? Number(kv[k]) : null);
@@ -76,6 +106,9 @@ export function parseOfferProbe(stdout) {
 		diskFreeGb: num('diskFreeGb'),
 		link: kv.routeDev ? (kv.wireless === 'yes' ? 'wifi' : 'wired') : null,
 		pm2,
+		// Absent key: a probe that did not ask. Empty value: no node on the service PATH.
+		node: 'node' in kv ? parseInstalledVersion(kv.node) : undefined,
+		tools,
 	};
 }
 
@@ -145,6 +178,7 @@ export function offerFor({
 		drain: drain ? { kind: drain.kind ?? 'maintenance', until: drain.until ?? null } : null,
 		labels,
 		gpu: (labels ?? []).filter((c) => GPU_LABEL.test(c)),
+		runtime: { node: facts.node, tools: facts.tools ?? {} },
 		unknown,
 	};
 }

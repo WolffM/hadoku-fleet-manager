@@ -107,7 +107,9 @@ if (ONLY && !tenants.length) {
 	finish();
 }
 
-const { offers } = await collectOffers(manifest);
+// One sweep for every tenant, so it executes every tenant's tools.
+const tools = [...new Set(tenants.flatMap(([, t]) => t.request.runtime?.tools ?? []))];
+const { offers } = await collectOffers(manifest, { tools });
 // The app layer's placement, for a service's first slice. Read once; unreadable is carried, not swallowed.
 let siteDocs = null;
 let siteWhy = null;

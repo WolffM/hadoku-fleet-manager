@@ -508,8 +508,9 @@ if (misfit.length) refuse(`the declaration does not fit ${node}: ${misfit.join('
 // when it was made, and is not judged again. --force overrides, and says so.
 let placement = null;
 if (shared && !sharedRec) {
-	const { offers } = await collectOffers(manifest);
-	const plan = planFor(registry.tenants[tenant].request, offers);
+	const request = registry.tenants[tenant].request;
+	const { offers } = await collectOffers(manifest, { tools: request.runtime?.tools ?? [] });
+	const plan = planFor(request, offers);
 	// A drain is about CI, not about where a tenant may live: a slice is often
 	// declared under the tenant's own lease drain.
 	const found = plan.refused.find((r) => r.node === node);
@@ -518,9 +519,7 @@ if (shared && !sharedRec) {
 	const ranked = plan.ranked.find((r) => r.node === node);
 	placement = { policy: plan.ciMayReadPolicy, ...(ranked?.risk ? { risk: ranked.risk } : {}) };
 	if (plan.atMax)
-		refuse(
-			`${tenant} already holds ${plan.held.length} of its ${registry.tenants[tenant].request.slices.max} slices.`
-		);
+		refuse(`${tenant} already holds ${plan.held.length} of its ${request.slices.max} slices.`);
 	if (refused && !has('--force'))
 		refuse(
 			`${tenant}'s own placement refuses ${node}: ${refused.reasons.join('; ')}. --force overrides.`,

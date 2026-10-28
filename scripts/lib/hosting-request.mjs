@@ -23,6 +23,10 @@
  */
 import { checkRule } from './hosting-placement.mjs';
 import { SERVICE_MANAGERS } from './hosting-runtimes.mjs';
+import { parseRange } from './tool-release.mjs';
+
+/** An executable's name, safe to put in the offer probe's shell: no path, no quoting. */
+const TOOL_NAME = /^[a-z0-9][a-z0-9._+-]{0,63}$/;
 
 /** The fleet will not promise less notice than this, whatever a request says. */
 export const NOTICE_FLOOR_MIN = 15;
@@ -109,6 +113,16 @@ export function validateHostingRequest(raw) {
 		bad('runtime.manager', `a service names its manager: one of ${SERVICE_MANAGERS.join(', ')}`);
 	if (rt.workersOutliveRestart !== undefined && typeof rt.workersOutliveRestart !== 'boolean')
 		bad('runtime.workersOutliveRestart', 'true or false');
+	// What the app runs with, on the service's own PATH. The planner checks both on
+	// every candidate by EXECUTING them there (lib/hosting-offers.mjs), so a node
+	// that lacks them is refused with the reason, before a move finds out.
+	if (rt.node !== undefined && !parseRange(rt.node))
+		bad('runtime.node', 'a version range of comparators, like ">=24.0.0 <25.0.0" or ">=22.12"');
+	if (
+		rt.tools !== undefined &&
+		!(Array.isArray(rt.tools) && rt.tools.every((t) => typeof t === 'string' && TOOL_NAME.test(t)))
+	)
+		bad('runtime.tools', 'a list of executable names the app runs, like ["ffmpeg", "yt-dlp"]');
 
 	const net = isObj(raw.network) ? raw.network : {};
 	const ingress = net.ingress ?? 'none';

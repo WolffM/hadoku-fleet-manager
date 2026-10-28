@@ -50,7 +50,7 @@ const { ok: valid, request, problems } = validateHostingRequest(parsed);
 if (!valid)
 	fail(`the request is invalid: ${problems.map((p) => `${p.path}: ${p.why}`).join('; ')}`);
 
-const { offers } = await collectOffers(loadManifest());
+const { offers } = await collectOffers(loadManifest(), { tools: request.runtime.tools ?? [] });
 const plan = planFor(request, offers);
 const unit = request.slices.unit;
 log(

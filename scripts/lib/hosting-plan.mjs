@@ -13,7 +13,9 @@
  *   - one slice of a tenant per node;
  *   - the node answered, and is not drained or leased;
  *   - the unit fits the offer: memory, cores, and disk for `stateGb`;
- *   - every `placement.require` rule holds.
+ *   - every `placement.require` rule holds;
+ *   - the node runs what `runtime` names: node in its range and every tool,
+ *     executed on the service's PATH (lib/hosting-offers.mjs).
  *
  * `isolation.ciMayRead: false` is ADVISORY until `isolation.advisoryUntil`
  * fitting candidates are cut over to their own CI user, and a filter from
@@ -30,6 +32,7 @@
 import { ciJobsAfter } from './hosting-offers.mjs';
 import { ruleHolds } from './hosting-placement.mjs';
 import { ADVISORY_UNTIL_DEFAULT } from './hosting-request.mjs';
+import { satisfies } from './tool-release.mjs';
 
 /** Plan `request` (a NORMALIZED hosting request) against `offers` (from collectOffers). */
 export function planFor(request, offers) {
@@ -56,6 +59,18 @@ export function planFor(request, offers) {
 		if (h.diskFreeGb === null) no.push('free disk unknown');
 		else if (h.diskFreeGb < disk.stateGb)
 			no.push(`${h.diskFreeGb} GB free, state needs ${disk.stateGb}`);
+		const want = request.runtime ?? {};
+		if (want.node) {
+			const v = o.runtime?.node;
+			if (v === undefined) no.push('node version unknown');
+			else if (v === null) no.push('no node on the service PATH');
+			else if (!satisfies(v, want.node)) no.push(`node ${v} does not satisfy ${want.node}`);
+		}
+		for (const t of want.tools ?? []) {
+			const ran = o.runtime?.tools?.[t];
+			if (ran === undefined) no.push(`whether ${t} runs is unknown`);
+			else if (!ran) no.push(`${t} does not run on the service PATH`);
+		}
 		for (const rule of placement.require) {
 			const holds = ruleHolds(rule, o);
 			if (holds === false) no.push(`fails "${rule}"`);

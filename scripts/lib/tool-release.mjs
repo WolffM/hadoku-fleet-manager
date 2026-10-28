@@ -49,6 +49,48 @@ export function compareVersions(a, b) {
 	return 0;
 }
 
+const COMPARATOR = /^(>=|<=|>|<|=)?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/;
+
+/**
+ * A version range as a hosting request states one (`runtime.node`):
+ * whitespace-separated comparators, `>=24.0.0 <25.0.0` or `>=22.12`, every one
+ * of which must hold. A missing minor or patch is 0. A bare version is `=` and
+ * must be a full x.y.z. Null when any part is not that grammar: a range the
+ * fleet cannot evaluate is refused at validation, never guessed at.
+ */
+export function parseRange(range) {
+	const parts = String(range ?? '')
+		.trim()
+		.split(/\s+/)
+		.filter(Boolean);
+	if (!parts.length) return null;
+	const out = [];
+	for (const part of parts) {
+		const m = COMPARATOR.exec(part);
+		if (!m || (!m[1] && m[4] === undefined)) return null;
+		out.push({ op: m[1] ?? '=', v: `${m[2]}.${m[3] ?? 0}.${m[4] ?? 0}` });
+	}
+	return out;
+}
+
+/** Whether `version` (x.y.z) satisfies `range`. THROWS on either side unparseable, like compareVersions. */
+export function satisfies(version, range) {
+	const cs = parseRange(range);
+	if (!cs) throw new TypeError(`cannot read version range ${JSON.stringify(range)}`);
+	return cs.every(({ op, v }) => {
+		const c = compareVersions(version, v);
+		return op === '>='
+			? c >= 0
+			: op === '>'
+				? c > 0
+				: op === '<='
+					? c <= 0
+					: op === '<'
+						? c < 0
+						: c === 0;
+	});
+}
+
 /** Pull the first x.y.z out of `claude --version`-shaped output ("2.1.286 (Claude Code)"). */
 export function parseInstalledVersion(out) {
 	const m = /(\d+\.\d+\.\d+)(?![\w.-])/.exec(String(out ?? ''));

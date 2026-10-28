@@ -27,6 +27,7 @@ const offer = (node, over = {}) => ({
 	drain: null,
 	labels: [],
 	gpu: [],
+	runtime: { node: '22.23.2', tools: {} },
 	unknown: [],
 	...over,
 });
@@ -134,4 +135,25 @@ test('archivebot needs a pm2 peer; could-not-tell and could-not-look refuse, wit
 	assert.match(why(plan, 'claw-5'), /cannot tell whether "pm2-peer" holds/);
 	assert.match(why(plan, 'claw-2'), /did not answer \(ssh: timeout\)/);
 	assert.match(why(plan, 'claw-9'), /hostable memory unknown: MemTotal unreadable/);
+});
+
+test('runtime: node in its range and every tool executed on the service PATH, or refused saying which', () => {
+	const req = {
+		...ARCHIVEBOT,
+		runtime: { ...ARCHIVEBOT.runtime, node: '>=24.0.0 <25.0.0', tools: ['yt-dlp', 'deno'] },
+	};
+	const peer = { pm2Peer: true, ci: { jobMb: 4096, keepJobs: 1, maxConcurrent: 3, cutOver: true } };
+	const plan = planFor(req, [
+		offer('fits', { ...peer, runtime: { node: '24.11.0', tools: { 'yt-dlp': true, deno: true } } }),
+		offer('old', { ...peer, runtime: { node: '22.23.2', tools: { 'yt-dlp': true, deno: true } } }),
+		offer('none', { ...peer, runtime: { node: null, tools: { 'yt-dlp': true, deno: false } } }),
+		offer('unasked', { ...peer, runtime: { node: undefined, tools: {} } }),
+	]);
+	assert.deepEqual(nodes(plan), ['fits']);
+	assert.match(why(plan, 'old'), /node 22\.23\.2 does not satisfy >=24\.0\.0 <25\.0\.0/);
+	assert.match(
+		why(plan, 'none'),
+		/no node on the service PATH; deno does not run on the service PATH/
+	);
+	assert.match(why(plan, 'unasked'), /node version unknown; whether yt-dlp runs is unknown/);
 });
