@@ -47,7 +47,7 @@ import { reposDir, stateDir } from './paths.mjs';
 import { isGuestNode } from '../../dist/lib/node-role.js';
 import { judgeTool, parseToolProbe, toolProbeScript } from '../check-fleet-toolchain.mjs';
 import { deferralFor, readDrains } from './expected-down.mjs';
-import { runOnSync } from './fleet-exec.mjs';
+import { runOnSync, separateCiUser } from './fleet-exec.mjs';
 import {
 	applicableRepairs,
 	installScript,
@@ -204,7 +204,7 @@ export function verdictAfter(work, tools, seen, latestById) {
  * (when that is readable) is refused with the reason carried. A `link` runs the
  * tool's declared reachability script and nothing else.
  */
-export function runWorkItem(w, run) {
+export function runWorkItem(w, run, { ciUser } = {}) {
 	if (w.action === 'link') {
 		const script = linkScript(w.id);
 		if (!script) return { id: w.id, ok: false, reason: `${w.id} declares no link repair` };
@@ -219,7 +219,7 @@ export function runWorkItem(w, run) {
 			};
 		}
 	}
-	const script = `set -u\nexport DEBIAN_FRONTEND=noninteractive\n${installScript(w.id, w.target)}`;
+	const script = `set -u\nexport DEBIAN_FRONTEND=noninteractive\n${installScript(w.id, w.target, { ciUser })}`;
 	return settle(w.id, run(script));
 }
 
@@ -706,8 +706,11 @@ export function createLiveDeps() {
 		waitDrained: (node) => waitUntilDrained({ node, busy: busyCount, clock }),
 		update: (node, work) =>
 			work.map((w) =>
-				runWorkItem(w, (script) =>
-					runOnSync(node, script, { as: 'admin', timeoutMs: 600_000, connectTimeout: 8 })
+				runWorkItem(
+					w,
+					(script) =>
+						runOnSync(node, script, { as: 'admin', timeoutMs: 600_000, connectTimeout: 8 }),
+					{ ciUser: separateCiUser(node) }
 				)
 			),
 		queuePressure: liveQueuePressure,

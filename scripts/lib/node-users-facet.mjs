@@ -12,6 +12,7 @@
  *   no sudo                 `sudo -l -U`, read as admin
  *   ssh key restricted      the ci user's authorized_keys, every line `from=` and `restrict`
  *   CI runs as ci           the uid of every Runner.Listener/Worker in /proc
+ *   no secret in argv       no runner's /proc cmdline carries `--jitconfig`
  *
  * The last one is what catches a code path still minting as admin after a
  * cutover. Read as ADMIN: only admin may run `sudo -l -U` and read another
@@ -48,15 +49,17 @@ if pw=$(getent passwd "$CI"); then
 	echo "keyLines=$(printf '%s\\n' "$keys" | grep -c '[^[:space:]]' || true)"
 	echo "keyUnrestricted=$(printf '%s\\n' "$keys" | grep '[^[:space:]]' | grep -vc '^from="[^"]*".*\\brestrict\\b' || true)"
 fi
-n=0; wrong=0
+n=0; wrong=0; argv=0
 # By process name, not command line: see hosting.mjs observeScript.
 for q in $(pgrep -x 'Runner\\.(Listener|Worker)'); do
 	u=$(awk '/^Uid:/{print $2}' "/proc/$q/status" 2>/dev/null) || continue
 	n=$((n+1))
 	[ "$u" = "$(id -u "$CI" 2>/dev/null)" ] || wrong=$((wrong+1))
+	tr '\\0' '\\n' < "/proc/$q/cmdline" 2>/dev/null | grep -qx -- '--jitconfig' && argv=$((argv+1))
 done
 echo "runnerProcs=$n"
 echo "runnersNotCi=$wrong"
+echo "secretArgv=$argv"
 echo USERS-END
 `;
 }
@@ -88,6 +91,7 @@ export function parseUsersObservation(stdout) {
 		keyUnrestricted: num('keyUnrestricted'),
 		runnerProcs: num('runnerProcs'),
 		runnersNotCi: num('runnersNotCi'),
+		secretArgv: num('secretArgv'),
 	};
 }
 
@@ -110,6 +114,15 @@ export function judgeNodeUsers(machine, obs) {
 		return { state: 'unobserved', findings };
 	}
 	const ci = nodeUser(machine, 'ci');
+	// Every node, cut over or not: /proc/<pid>/cmdline is world-readable, so a
+	// JIT config in argv hands its private key to any local user, a hosted
+	// tenant included (0.34.125 moved it to the environment).
+	if (obs.secretArgv > 0)
+		findings.push({
+			class: 'blocking',
+			category: 'runner-secret-in-argv',
+			why: `${obs.secretArgv} runner process(es) carry --jitconfig on a world-readable command line`,
+		});
 	if (!ciIsSeparate(machine)) {
 		findings.push({
 			class: 'advisory',

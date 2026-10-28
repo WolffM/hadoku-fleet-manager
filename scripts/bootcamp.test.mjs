@@ -77,6 +77,14 @@ import { writeProof } from '../dist/lib/measured.js';
  */
 const JDK_PRESENT_CASE = `  *'javac -d "$d"'*) echo OK; exit 0 ;;`;
 
+/**
+ * The same for docker (toolchain-floor.mjs `docker`, scoped since 2026-10-27
+ * to every node whose CI is still admin, which every fixture claw is). Matched
+ * on the REPAIRS detect's `&& echo OK`, which capability-probe.sh's docker
+ * probe does not contain.
+ */
+const DOCKER_PRESENT_CASE = `  *'docker info >/dev/null 2>&1 && echo OK'*) echo OK; exit 0 ;;`;
+
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 
 /** Names that resolve NOWHERE, and are not this box. */
@@ -330,6 +338,7 @@ function writableFixture(
 			'script="$(cat)"',
 			`case "$script" in`,
 			JDK_PRESENT_CASE,
+			DOCKER_PRESENT_CASE,
 			`  *claude.ai/install.sh*)`,
 			`    echo INSTALL >>${JSON.stringify(calls)}`,
 			`    printf '%s' "$script" >${JSON.stringify(installScriptLog)}`,
@@ -903,6 +912,7 @@ function seedingFixture({
 			'script="$(cat)"',
 			'case "$script" in',
 			JDK_PRESENT_CASE,
+			DOCKER_PRESENT_CASE,
 			'  *claude.ai/install.sh*)',
 			`    echo INSTALL >>${JSON.stringify(calls)}; exit 0 ;;`,
 			'  *"claude --version"*)',
@@ -1141,6 +1151,7 @@ function proveFixture({ cores = 8 } = {}) {
 			'script="$(cat)"',
 			'case "$script" in',
 			JDK_PRESENT_CASE,
+			DOCKER_PRESENT_CASE,
 			'  *)',
 			`    echo PROBE >>${JSON.stringify(calls)}`,
 			"    printf 'CAP jdk21 ok 21.0.1\\nPROBE-END\\n' ;;",
@@ -1329,6 +1340,7 @@ function idleFixture({
 			'script="$(cat)"',
 			'case "$script" in',
 			JDK_PRESENT_CASE,
+			DOCKER_PRESENT_CASE,
 			'  *"export CAP_PROBE_PHASE=measured"*)',
 			`    echo MEASURED >>${q(files.calls)}`,
 			// What the drain file said AT THE MOMENT of the measurement.

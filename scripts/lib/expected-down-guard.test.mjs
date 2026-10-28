@@ -95,6 +95,12 @@ const DEFER_CALL = /\bdeferralFor\s*\(/;
  */
 const EXEMPT = new Map([
 	[
+		'node-users-cutover.mjs',
+		'operator-invoked against ONE named node that it REQUIRES to be drained: ' +
+			'the drain is its precondition, not a reason to defer. An unreachable node ' +
+			'there stops the cutover with the reason, and nothing is changed.',
+	],
+	[
 		'node-status.mjs',
 		'a TENANT reads this to decide whether a node can hold live work, and a node ' +
 			'drained for maintenance is exactly one that cannot. Deferring its ' +

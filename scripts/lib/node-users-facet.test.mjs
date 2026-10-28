@@ -23,6 +23,7 @@ const answer = (over = {}) =>
 			keyUnrestricted: 0,
 			runnerProcs: 4,
 			runnersNotCi: 0,
+			secretArgv: 0,
 			...over,
 		}).map(([k, v]) => `${k}=${v}`),
 		'USERS-END',
@@ -78,4 +79,16 @@ test('the observation names users from the registry and counts runners by proces
 	assert.match(s, /^CI_HOME=\/home\/hadoku-ci$/m);
 	assert.doesNotMatch(s, /pgrep -[a-z]*f/);
 	assert.match(usersObserveScript({}), /^CI=hadoku$/m);
+});
+
+test('a runner with --jitconfig on its command line is blocking, cut over or not', () => {
+	const cut = judge({ secretArgv: 1 });
+	assert.equal(cut.state, 'drift');
+	assert.match(why(cut)[0], /--jitconfig on a world-readable command line/);
+	const admin = judge({ secretArgv: 2 }, {});
+	assert.equal(admin.state, 'not-cut-over');
+	assert.ok(
+		admin.findings.some((f) => f.category === 'runner-secret-in-argv' && f.class === 'blocking')
+	);
+	assert.match(usersObserveScript(CUT), /grep -qx -- '--jitconfig'/);
 });

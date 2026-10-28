@@ -76,6 +76,14 @@ export function nodeHome(node: UserBearingNode | null | undefined, role: NodeRol
 	return `/home/${nodeUser(node, role)}`;
 }
 
+/**
+ * The ci user a cutover CREATES on a node: admin's name plus `-ci`. Only the
+ * cutover asks this; everything after it reads `users.ci` from the manifest.
+ */
+export function cutoverCiUser(node: UserBearingNode | null | undefined): string {
+	return `${nodeUser(node, 'admin')}-ci`;
+}
+
 /** Has this node's CI moved off the admin user? */
 export function ciIsSeparate(node: UserBearingNode | null | undefined): boolean {
 	return nodeUser(node, 'ci') !== nodeUser(node, 'admin');

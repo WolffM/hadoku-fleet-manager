@@ -859,7 +859,7 @@ test('probe-drift: a probeable capability the probe script never emits', () => {
 test('probe-drift: a CAP line no registry entry claims', () => {
 	// Everything the registry declares, plus one the registry does not.
 	const emits = probeableIds();
-	emits.add('docker'); // the stray
+	emits.add('not-a-capability'); // the stray
 	assert.deepEqual(rules(baseManifest({ 'claw-1': healthyClaw() }), emits), ['probe-drift']);
 });
 
@@ -940,7 +940,9 @@ test('every label the committed manifest declares is a registry entry', () => {
 	// ephemeral node, so the live manifest stopped declaring it on claw-3.
 	// `nvenc-h264` and `watchparty-media` joined it 2026-10-23 (fleet-manager#3)
 	// on `jdk21`'s reasoning: earned from the bootcamp record, never declared.
+	// `docker` joined it 2026-10-27 (node-users): earned by building an image.
 	const runtimeWritten = new Set([
+		'docker',
 		'hokon-backstop',
 		'hadoku-builder',
 		'cargo-bevy',
@@ -1334,7 +1336,7 @@ test('verificationFor narrows nothing that is not a routable label', () => {
 	assert.equal(verificationFor({ role: 'guest' }, capability('jitconfig')), 'probe');
 	// And an id the registry does not know has no verification at all, rather
 	// than a guessed one.
-	assert.equal(verificationFor({ role: 'guest' }, capability('docker')), undefined);
+	assert.equal(verificationFor({ role: 'guest' }, capability('not-a-capability')), undefined);
 });
 
 // ---------------------------------------------------------------------------

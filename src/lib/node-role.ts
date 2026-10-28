@@ -180,3 +180,23 @@ export function guestNodeNames(manifest: RoleBearingManifest | null | undefined)
 	}
 	return out;
 }
+
+/**
+ * The one `containers` value: this node's CI user runs a ROOTLESS docker
+ * daemon of its own (operator, 2026-10-27: claw-8 and claw-5).
+ *
+ * Before a node is cut over to its own ci user (src/lib/node-users.ts) CI runs
+ * as admin, which is in the `docker` group, and every claw builds images that
+ * way. After it, the ci user has no group and no sudo, so docker is something
+ * the node must be GIVEN: a rootless daemon in the ci user's manager. This key
+ * says which cut-over nodes get one. The `docker` LABEL is still earned by
+ * building an image, never by this key.
+ */
+export const CONTAINERS_DOCKER = 'docker';
+
+/** Does provisioning owe this node's ci user a rootless docker? */
+export function hostsCiDocker(
+	node: (RoleBearingNode & { containers?: unknown }) | null | undefined
+): boolean {
+	return !isGuestNode(node) && node?.containers === CONTAINERS_DOCKER;
+}

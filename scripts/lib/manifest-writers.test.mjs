@@ -87,6 +87,10 @@ const WRITERS = [
 	{ file: 'scripts/enroll-node.mjs', facet: '$measured — `fleet enroll --write`' },
 	{ file: 'scripts/lan-reserve.mjs', facet: 'lan — `fleet lan-reserve <node> --write`' },
 	{
+		file: 'scripts/node-users-cutover.mjs',
+		facet: 'users.ci + containers — `fleet node-users --cutover <node> --confirm`',
+	},
+	{
 		file: 'scripts/provision-fleet.mjs',
 		facet: 'placement + ephemeral — `fleet provision --machine <node> --confirm`',
 	},

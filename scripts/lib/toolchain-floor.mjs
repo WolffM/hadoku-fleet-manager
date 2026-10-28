@@ -10,7 +10,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 
 import { nodeOffer } from '../../dist/capabilities.js';
-import { hostsPm2Services, isGuestNode } from '../../dist/lib/node-role.js';
+import { hostsCiDocker, hostsPm2Services, isGuestNode } from '../../dist/lib/node-role.js';
+import { ciIsSeparate } from '../../dist/lib/node-users.js';
 import { DEFAULT_MIN_AGE_MINUTES, lookupLatest, parseVersion } from './tool-release.mjs';
 
 /**
@@ -81,6 +82,17 @@ const pm2ServicesHost = (node) => hostsPm2Services(node);
 export const SERVICE_STATE_DIR = 'srv-data';
 /** Every node `toolAppliesTo` lets through — a guest is already filtered out before `when` runs. */
 const everyClaw = () => true;
+
+/**
+ * Scope for `docker`: every node whose CI still runs as admin (which is in the
+ * `docker` group, so the system daemon serves it), and on a cut-over node only
+ * where the operator gave the ci user a rootless daemon (`containers:
+ * "docker"`, `hostsCiDocker`). A cut-over node without it is NOT owed docker:
+ * its ci user has no group and no sudo, and the `docker` label routes the one
+ * job that needs a daemon away from it.
+ */
+const dockerHost = (node) => !ciIsSeparate(node) || hostsCiDocker(node);
+dockerHost.toString = () => 'CI as admin, or containers: "docker"';
 everyClaw.toString = () => 'every claw';
 pm2ServicesHost.toString = () => 'services: "pm2"';
 
@@ -212,19 +224,52 @@ export const REPAIRS = {
 		repair: 'export PATH="$HOME/.cargo/bin:$PATH"; rustup target add wasm32-unknown-unknown',
 	},
 	docker: {
+		when: dockerHost,
 		why:
-			'brave-quartet’s publish-server-image job builds an image with buildx. Grants no ' +
-			'privilege the runner user did not already have — `hadoku` has NOPASSWD sudo, so ' +
-			'the docker group is not an escalation, only a convenience.',
+			'brave-quartet’s publish-server-image job builds an image with buildx, routed by the ' +
+			'`docker` label. Before a cutover CI is admin, already in the `docker` group, so the ' +
+			'group grants nothing new. After it the ci user gets a ROOTLESS daemon in its own ' +
+			'manager instead: no group, no root, and no way into the system daemon.',
 		// `docker info` rather than `command -v docker`: the CLI is present and
 		// useless when the daemon is not running, and a build needs the daemon.
+		// It runs as ci, so on a cut-over node it reaches the rootless daemon
+		// through the `rootless` context the repair selects, exactly as a job does.
 		detect: 'docker info >/dev/null 2>&1 && echo OK',
+		// Runs as ADMIN. `CI_USER` is the ci role's user (`installScript`'s
+		// `ciUser`); absent or equal to admin, the node is not cut over.
 		repair: [
-			'if ! command -v docker >/dev/null 2>&1; then',
-			'  sudo -n apt-get install -y -qq --no-install-recommends docker.io docker-cli docker-buildx',
+			'set -e',
+			'CI="${CI_USER:-$USER}"',
+			'if [ "$CI" = "$USER" ]; then',
+			'  if ! command -v docker >/dev/null 2>&1; then',
+			'    sudo -n apt-get install -y -qq --no-install-recommends docker.io docker-cli docker-buildx',
+			'  fi',
+			'  sudo -n systemctl enable --now docker',
+			'  id -nG "$USER" | tr " " "\\n" | grep -qx docker || sudo -n usermod -aG docker "$USER"',
+			'  exit 0',
 			'fi',
-			'sudo -n systemctl enable --now docker',
-			'id -nG "$USER" | tr " " "\\n" | grep -qx docker || sudo -n usermod -aG docker "$USER"',
+			'# ROOTLESS, for the ci user. Packages first, as admin.',
+			'need=""',
+			'for p in docker.io docker-cli docker-buildx rootlesskit uidmap slirp4netns dbus-user-session; do',
+			'  dpkg -s "$p" >/dev/null 2>&1 || need="$need $p"',
+			'done',
+			'# shellcheck disable=SC2086',
+			'[ -z "$need" ] || sudo -n apt-get install -y -qq --no-install-recommends $need',
+			'# useradd allocated the subordinate ids when the cutover made the user.',
+			'grep -q "^$CI:" /etc/subuid && grep -q "^$CI:" /etc/subgid || {',
+			'  echo "no /etc/subuid or /etc/subgid range for $CI: re-run the cutover\'s user step" >&2; exit 1; }',
+			'uid=$(id -u "$CI")',
+			'[ -d "/run/user/$uid" ] || { echo "$CI has no running manager: enable linger" >&2; exit 1; }',
+			'# Debian ships the rootless scripts outside PATH, and the setup tool',
+			"# finds dockerd-rootless.sh (and writes the unit's ExecStart) BY PATH.",
+			'as_ci() { sudo -n -u "$CI" -H env XDG_RUNTIME_DIR="/run/user/$uid" \\',
+			'  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \\',
+			'  PATH=/usr/share/docker.io/contrib:/usr/bin:/bin:/usr/sbin:/sbin "$@"; }',
+			'as_ci systemctl --user is-active -q docker || as_ci dockerd-rootless-setuptool.sh install',
+			'as_ci systemctl --user enable -q docker',
+			'# The context, not DOCKER_HOST: every docker CLI the ci user runs, a job or',
+			'# an ssh probe, reads it from ~/.docker without any environment.',
+			'as_ci docker context use rootless >/dev/null',
 		].join('\n'),
 	},
 	claude: {
@@ -584,9 +629,19 @@ export const REPAIRS = {
  * no vendor-latest to bypass, and `installScript(id)` with no version is the
  * only call they ever need.
  */
-export function installScript(id, version) {
+export function installScript(id, version, { ciUser } = {}) {
 	const r = REPAIRS[id];
 	if (!r) throw new Error(`unknown tool ${JSON.stringify(id)}`);
+	// The ci role's user, for a repair that installs FOR it (docker). Checked
+	// here because it lands in a shell script.
+	if (ciUser !== undefined && !/^[a-z_][a-z0-9_-]*$/.test(ciUser))
+		throw new Error(`refusing ci user ${JSON.stringify(ciUser)}`);
+	const ci = ciUser ? `CI_USER='${ciUser}'\nexport CI_USER\n` : '';
+	return ci + installBody(r, id, version);
+}
+
+/** {@link installScript} without the ci user. */
+function installBody(r, id, version) {
 	// apt installs ITS candidate — the version the probe compared against.
 	if (r.apt) return r.repair;
 	if (version === undefined || version === null) {

@@ -1006,6 +1006,30 @@ export const CAPABILITIES: readonly Capability[] = [
 			'needs to host Forge matches; carries no CI routing, unlike `jdk21`.',
 	},
 	{
+		/*
+		 * docker (2026-10-27, node-users §5.2): a daemon the CI user can BUILD
+		 * an image with. brave-quartet's publish-server-image is the one job that
+		 * needs it, and it appends this label to the fleet array.
+		 *
+		 * A LABEL, NOT TOOLCHAIN, since the CI user moved off admin. Before that
+		 * every claw's CI was in the `docker` group and docker was a requirement
+		 * of the general pool. A cut-over claw's ci user has no group and no
+		 * sudo; only the claws given a rootless daemon (`containers: "docker"`,
+		 * claw-8 and claw-5) can build, so this differentiates claws now.
+		 *
+		 * EARNED, never declared: the probe builds FROM scratch with buildx and
+		 * reads the layer back, as the ci user, the way the job does.
+		 */
+		id: 'docker',
+		label: 'Docker image builds',
+		kind: 'identity',
+		surface: 'label',
+		verify: 'probe',
+		description:
+			'The CI user can build a docker image with buildx and read it back: rootless on a ' +
+			'cut-over claw, the system daemon through the docker group before that.',
+	},
+	{
 		id: 'ffmpeg',
 		label: 'ffmpeg',
 		kind: 'identity',

@@ -42,7 +42,7 @@ import { manifest as manifestFile } from './paths.mjs';
 // source checkout that has not been built fails LOUDLY on the import rather
 // than quietly taking the wrong branch.
 import { isLocalNode } from '../../dist/lib/node-identity.js';
-import { nodeCommand, nodeUser } from '../../dist/lib/node-users.js';
+import { ciIsSeparate, nodeCommand, nodeUser } from '../../dist/lib/node-users.js';
 // The BUILT copy for the same reason, and from the same `src/lib/` shelf: one
 // question, one answer. `nodeRole` is the operator's decision about what the
 // fleet chain may DO to a box, and it is read here so that the transport layer
@@ -125,6 +125,16 @@ function scriptCommand(node, role, connectTimeout, manifest) {
 export function sshDestination(node, role, manifest) {
 	const m = manifest ?? cachedManifest();
 	return `${nodeUser(m?.machines?.[node] ?? null, role)}@${node}`;
+}
+
+/**
+ * The ci role's user on a node that has been cut over to one, else undefined.
+ * What a repair that installs FOR the ci user (`installScript`'s `ciUser`)
+ * needs; before the cutover ci IS admin and there is nobody else to name.
+ */
+export function separateCiUser(node, manifest) {
+	const m = (manifest ?? cachedManifest())?.machines?.[node] ?? null;
+	return ciIsSeparate(m) ? nodeUser(m, 'ci') : undefined;
 }
 
 let manifestCache;

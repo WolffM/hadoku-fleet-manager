@@ -901,4 +901,57 @@ java21_try() {
 # shellcheck disable=SC2046
 say java21 $(java21_try)
 
+# --- docker: BUILD an image, then read a file back out of it ----------------
+#
+# What brave-quartet's publish-server-image job needs (src/capabilities.ts
+# `docker`): a daemon this user can reach, buildx, and a storage driver that
+# round-trips a layer. `docker info` alone passes on a daemon that cannot
+# build. FROM scratch and a build-context file, so the probe needs no
+# registry and no network. Runs as the ci user, so on a cut-over node it
+# proves the ROOTLESS daemon, through the context a job uses too.
+docker_try() {
+	if ! command -v docker >/dev/null 2>&1; then
+		printf 'no no-cli'
+		return
+	fi
+	if ! docker info >/dev/null 2>&1; then
+		printf 'no no-daemon'
+		return
+	fi
+	if ! docker buildx version >/dev/null 2>&1; then
+		printf 'no no-buildx'
+		return
+	fi
+	dk_d=$(mktemp -d 2>/dev/null) || dk_d=""
+	if [ -z "$dk_d" ]; then
+		printf 'no no-tmpdir'
+		return
+	fi
+	dk_tag="cap-probe-docker:$$"
+	printf 'DOCKER-PROBE-OK\n' >"$dk_d/probe"
+	printf 'FROM scratch\nCOPY probe /probe\n' >"$dk_d/Dockerfile"
+	if ! docker buildx build --load -q -t "$dk_tag" "$dk_d" >/dev/null 2>&1; then
+		rm -rf "$dk_d"
+		printf 'no build-failed'
+		return
+	fi
+	dk_c=$(docker create "$dk_tag" /probe 2>/dev/null)
+	dk_out=""
+	[ -n "$dk_c" ] && dk_out=$(docker cp "$dk_c:/probe" - 2>/dev/null | tar -xO 2>/dev/null)
+	[ -n "$dk_c" ] && docker rm -f "$dk_c" >/dev/null 2>&1
+	docker image rm -f "$dk_tag" >/dev/null 2>&1
+	rm -rf "$dk_d"
+	if [ "$dk_out" != "DOCKER-PROBE-OK" ]; then
+		printf 'no layer-unreadable'
+		return
+	fi
+	dk_mode=rootful
+	docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless && dk_mode=rootless
+	# One word: `say` keeps only the first word of the detail.
+	printf 'ok %s-%s' "$(docker version --format '{{.Server.Version}}' 2>/dev/null)" "$dk_mode"
+}
+
+# shellcheck disable=SC2046
+say docker $(docker_try)
+
 printf 'PROBE-END %s\n' "$(hostname)"

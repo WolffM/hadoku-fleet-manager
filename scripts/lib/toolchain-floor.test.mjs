@@ -301,11 +301,40 @@ test('FLEET_NODE_PROFILES still overrides, for a stick copy or a fixture set', (
 
 const claw = (labels, extra = {}) => ({ role: 'claw', labels, ...extra });
 
-test('claude is scoped to taskauto, and rust/docker stay on every managed node', () => {
+test('claude is scoped to taskauto, and rust stays on every managed node', () => {
 	assert.equal(REPAIRS.claude.when, 'taskauto');
 	assert.equal(REPAIRS.rust.when, undefined);
-	assert.equal(REPAIRS.docker.when, undefined);
 	assert.equal(REPAIRS['rust-wasm32'].when, undefined);
+});
+
+/**
+ * docker since the node-users cutover: every node whose CI is still admin (the
+ * docker group serves it), and a cut-over node only when it declares
+ * `containers: "docker"`. A cut-over node without it is owed nothing: its ci
+ * user has no group, and the `docker` label routes the job elsewhere.
+ */
+test('docker: every node before its cutover; after it, only containers: "docker"', () => {
+	const cutOver = { users: { ci: 'hadoku-ci' } };
+	assert.equal(toolAppliesTo('docker', claw([])), true, 'CI is admin: the group path');
+	assert.equal(toolAppliesTo('docker', claw([], cutOver)), false, 'no rootless daemon declared');
+	assert.equal(toolAppliesTo('docker', claw([], { ...cutOver, containers: 'docker' })), true);
+	assert.equal(toolAppliesTo('docker', { role: 'guest', containers: 'docker' }), false);
+	assert.equal(String(REPAIRS.docker.when), 'CI as admin, or containers: "docker"');
+});
+
+test('docker repair: the group path for admin CI, a rootless daemon in the ci manager after', () => {
+	const plain = installScript('docker');
+	assert.equal(plain, REPAIRS.docker.repair, 'no ci user: nothing prepended');
+	const cut = installScript('docker', undefined, { ciUser: 'hadoku-ci' });
+	assert.match(cut, /^CI_USER='hadoku-ci'\nexport CI_USER\n/);
+	assert.match(REPAIRS.docker.repair, /if \[ "\$CI" = "\$USER" \]/);
+	assert.match(REPAIRS.docker.repair, /dockerd-rootless-setuptool\.sh install/);
+	assert.match(REPAIRS.docker.repair, /docker context use rootless/);
+	// The rootless branch never touches the group: that is the escalation it replaces.
+	const rootless = REPAIRS.docker.repair.split('# ROOTLESS')[1];
+	assert.doesNotMatch(rootless, /usermod -aG docker/);
+	for (const bad of ["x'; id; '", 'Root', '$(id)', ''])
+		assert.throws(() => installScript('docker', undefined, { ciUser: bad }), /refusing ci user/);
 });
 
 /**
