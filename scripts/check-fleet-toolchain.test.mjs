@@ -1354,3 +1354,38 @@ test('#98: a declared cache version is matched exactly or at a dot — 3.1 is no
 		rmSync(fh.home, { recursive: true, force: true });
 	}
 });
+
+// THE CATCH AROUND `runDoctor` (refactor plan §8, verified 2026-10-28). A probe
+// that threw printed its message to stderr and exited 1 with EMPTY stdout, so
+// ci:fleet-toolchain read "checker produced no JSON" — the reason never reached
+// the job record. Mutation: restore the bare `console.error; process.exit(1)`.
+test('--json: a probe that THROWS still emits one document carrying the reason', () => {
+	const root = mkdtempSync(join(tmpdir(), 'toolchain-throws-'));
+	try {
+		const dir = join(root, 'manifests');
+		mkdirSync(dir, { recursive: true });
+		// No `toolchain` section: runDoctor's first act is to refuse it.
+		writeFileSync(
+			join(dir, 'fleet-runner-manifest.json'),
+			JSON.stringify({ machines: { 'claw-1': { role: 'claw' } } })
+		);
+		const r = spawnCapture(process.execPath, [SCRIPT, '--json'], {
+			env: {
+				...process.env,
+				FLEET_MANIFEST_DIR: dir,
+				HADOKU_STATE_DIR: join(root, 'state'),
+				HADOKU_SITE_ROOT: root,
+			},
+			timeout: 60_000,
+			label: 'fleet toolchain --json (probe throws)',
+		});
+		assert.equal(r.code, 1, 'a probe that could not run is a failure');
+		const report = parseJsonStdout(r);
+		assert.equal(report.ok, false);
+		assert.match(report.error, /no `toolchain` section/);
+		assert.deepEqual(report.machines, [], 'nothing was measured, and it says so');
+		assert.equal(report.noneProbed, report.error);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});

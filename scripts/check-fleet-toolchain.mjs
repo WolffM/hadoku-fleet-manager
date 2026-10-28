@@ -958,7 +958,21 @@ async function main() {
 	try {
 		result = await runDoctor({ manifest, only: ONLY, includeGuests: INCLUDE_GUESTS });
 	} catch (err) {
-		console.error(err.message);
+		// The probe itself broke, so nothing was measured. Under `--json` that is
+		// still ONE document with the reason, never an empty stdout: the cron
+		// reads an empty stdout as "the checker broke" and discards why.
+		const error = `the toolchain probe failed before any node was judged: ${err.message}`;
+		console.error(error);
+		if (JSON_OUT) {
+			emitter.emit({
+				ok: false,
+				error,
+				toolCache: {},
+				machines: [],
+				skippedByRole: [],
+				noneProbed: error,
+			});
+		}
 		process.exit(1);
 	}
 	const { toolCache, report, skippedByRole, latest } = result;
