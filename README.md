@@ -126,12 +126,18 @@ cat > ~/.local/bin/fleet <<'EOF'
 #!/bin/sh
 : "${REPOS_DIR:=$HOME/repos}"
 export REPOS_DIR
-exec node "$HOME/srv/hadoku_site/services/mgmt-api/node_modules/@wolffm/fleet-manager/dist/cli.js" "$@"
+cli="$HOME/srv/hadoku_site/services/mgmt-api/node_modules/@wolffm/fleet-manager/dist/cli.js"
+i=0
+while [ ! -f "$cli" ] && [ "$i" -lt 60 ]; do sleep 2; i=$((i + 2)); done
+[ -f "$cli" ] || { echo "fleet: $cli is missing (a deploy did not finish?)" >&2; exit 127; }
+exec node "$cli" "$@"
 EOF
 chmod 0755 ~/.local/bin/fleet
 ```
 
-`REPOS_DIR` is defaulted, not forced, the way the cron jobs set it. So the
+A deploy replaces `node_modules`, so the CLI is briefly absent; the wrapper
+waits up to a minute for it rather than failing (2026-10-28: an install on
+claw-6 failed in exactly that window). `REPOS_DIR` is defaulted, not forced, the way the cron jobs set it. So the
 wrapper resolves the canonical checkouts from any directory, and
 `HADOKU_SITE_ROOT`, or a hadoku_site worktree you are standing in, still wins.
 The provenance line below says which install answered. To try an unpublished
