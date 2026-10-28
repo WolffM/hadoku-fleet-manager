@@ -775,6 +775,8 @@ echo "PROBE-END \${5##*@} 0 0"
 			{
 				...NO_GIT_ENV,
 				PATH: `${join(fx.root, 'bin')}:${process.env.PATH}`,
+				// A token the host may not supply: never the App's pool, never a real mint (#9).
+				GH_TOKEN: 'fixture',
 				FLEET_MANIFEST_DIR: fx.root,
 				HADOKU_STATE_DIR: fx.root,
 				GH_RUNNERS: fx.runners,

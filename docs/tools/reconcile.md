@@ -91,6 +91,23 @@ look", not a pass. An unreadable `/rate_limit` does not refuse: the gate's
 own first call fails and names the real fault. `FLEET_GH_RESERVE=<n>` sets
 the floor for one run, and `0` turns it off.
 
+**They spend a GitHub App's pool, not yours.** Before the reserve check each
+of the three calls `useAppPool` (`scripts/lib/gh-app.mjs`). With
+`FLEET_GH_APP_ID` and `FLEET_GH_APP_KEY` set (mgmt-api passes them from the
+vault), it mints a one-hour installation token for the `hadoku-fleet-gates`
+App and sets `GH_TOKEN`, so every `gh` the gate spawns, `/rate_limit`
+included, is charged to the installation: 10,050/h, separate from the user's
+5,000. Without the credentials, or when GitHub refuses the mint, the gate
+runs on the user pool under the reserve as before and says so on stderr with
+the reason. A `GH_TOKEN` already set is left alone.
+
+Measured 2026-10-27: `--check-coverage`, `identity` and `history-coverage`
+return the same results on the App token as on the user login. GitHub counts
+an installation's calls in more than one bucket, as it does the user's (see
+`gh-budget.ts`): `/rate_limit` read 18 used while a `hadoku-rally` listing in
+the same second read 246. So `/rate_limit` is one bucket's view, on either
+pool.
+
 Who spent the pool is in mgmt-api's hourly `[gh-budget] window ended` line.
 Beyond its own loops, it names each cron by what the pool rose while it ran
 (`crons while running`, upper bounds that overlap; mgmt-api wraps each

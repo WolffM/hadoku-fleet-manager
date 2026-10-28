@@ -48,3 +48,10 @@ test('FLEET_GH_RESERVE sets the floor; anything but a whole number keeps the def
 	assert.equal(reserveFloor({ FLEET_GH_RESERVE: 'lots' }), GH_RESERVE);
 	assert.equal(reserveFloor({ FLEET_GH_RESERVE: '1.5' }), GH_RESERVE);
 });
+
+test("on the App's pool the refusal names that pool, not the fleet's shared one", () => {
+	const r = checkGhReserve('reconcile', { floor: GH_RESERVE, read: pool(10), pool: 'app' });
+	assert.equal(r.ok, false);
+	assert.match(r.reason, /10 GitHub calls left in the GitHub App's pool, under the 1500 floor/);
+	assert.doesNotMatch(r.reason, /runner-health/);
+});

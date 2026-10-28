@@ -203,6 +203,8 @@ function run(fx, runners, argv = [], extraEnv = {}) {
 			env: {
 				...NO_GIT_ENV,
 				PATH: `${fx.bin}:${process.env.PATH}`,
+				// A token the host may not supply: never the App's pool, never a real mint (#9).
+				GH_TOKEN: 'fixture',
 				FLEET_MANIFEST_DIR: fx.root,
 				HADOKU_STATE_DIR: fx.root,
 				GH_RUNNERS: fx.runners,
@@ -531,6 +533,8 @@ test('a --confirm run that registers says when the builder label arrives, from t
 		const r = run(fx, [], ['--confirm'], {
 			...node.env,
 			PATH: `${node.callerBin}:${fx.bin}:${process.env.PATH}`,
+			// A token the host may not supply: never the App's pool, never a real mint (#9).
+			GH_TOKEN: 'fixture',
 			HADOKU_SITE_ROOT: '/nonexistent',
 			FLEET_NO_BANNER: '1',
 		});
@@ -749,6 +753,8 @@ function runCoverage(fx, argv, extraEnv = {}) {
 			env: {
 				...NO_GIT_ENV,
 				PATH: `${fx.bin}:${process.env.PATH}`,
+				// A token the host may not supply: never the App's pool, never a real mint (#9).
+				GH_TOKEN: 'fixture',
 				FLEET_MANIFEST_DIR: fx.root,
 				HADOKU_STATE_DIR: fx.root,
 				GH_REPOS: fx.ghRepos,

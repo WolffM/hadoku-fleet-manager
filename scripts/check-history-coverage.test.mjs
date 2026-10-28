@@ -101,6 +101,8 @@ function run(
 		env: {
 			...process.env,
 			PATH: `${bin}:${process.env.PATH}`,
+			// A token the host may not supply: never the App's pool, never a real mint (#9).
+			GH_TOKEN: 'fixture',
 			FLEET_MANIFEST_DIR: dir,
 			HADOKU_STATE_DIR: dir,
 			DIR: dir,

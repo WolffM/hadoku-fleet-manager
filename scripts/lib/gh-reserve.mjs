@@ -25,6 +25,12 @@
  * `/rate_limit` will fail the gate's own first call, and that failure names
  * the real fault. Refusing here would report a broken `gh` as a spent budget.
  *
+ * WHICH POOL: a gate first calls `useAppPool` (`gh-app.mjs`), which moves its
+ * `gh` onto a GitHub App installation token when the App is configured. Then
+ * `/rate_limit` reads the App's pool and the floor keeps one bulk gate from
+ * starving the next; without the App it is the user's pool, as above. `pool`
+ * names which, so the refusal says what it read.
+ *
  * `FLEET_GH_RESERVE` overrides the floor for one run (`0` turns it off), for
  * an operator who has decided the run is worth part of the reserve.
  */
@@ -67,20 +73,25 @@ export function readCorePool() {
  * May a bulk gate named `gate` spend now? `{ ok: true }`, or `{ ok: false,
  * reason }` with the reason to fail on.
  */
-export function checkGhReserve(gate, { floor = reserveFloor(), read = readCorePool } = {}) {
+export function checkGhReserve(
+	gate,
+	{ floor = reserveFloor(), read = readCorePool, pool = 'user' } = {}
+) {
 	if (floor === 0) return { ok: true, remaining: null, floor };
-	const pool = read();
-	if (pool === null) return { ok: true, remaining: null, floor };
-	if (pool.remaining >= floor) return { ok: true, remaining: pool.remaining, floor };
-	const reset = new Date(pool.resetAtMs).toISOString().slice(11, 16);
+	const budget = read();
+	if (budget === null) return { ok: true, remaining: null, floor };
+	if (budget.remaining >= floor) return { ok: true, remaining: budget.remaining, floor };
+	const reset = new Date(budget.resetAtMs).toISOString().slice(11, 16);
 	return {
 		ok: false,
-		remaining: pool.remaining,
+		remaining: budget.remaining,
 		floor,
 		reason:
-			`${gate} NOT RUN: ${pool.remaining} GitHub calls left in the shared pool, under the ` +
-			`${floor} held for runner-health, dispatch and minting (fleet-manager#9). This is ` +
-			`"could not look", not a pass. The pool resets at ${reset}Z; FLEET_GH_RESERVE=0 ` +
-			'overrides it for one run.',
+			`${gate} NOT RUN: ${budget.remaining} GitHub calls left in ${
+				pool === 'app'
+					? "the GitHub App's pool, under the " + floor + ' floor the bulk gates keep'
+					: 'the shared pool, under the ' + floor + ' held for runner-health, dispatch and minting'
+			} (fleet-manager#9). This is "could not look", not a pass. The pool resets at ` +
+			`${reset}Z; FLEET_GH_RESERVE=0 overrides it for one run.`,
 	};
 }

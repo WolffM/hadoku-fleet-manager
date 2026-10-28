@@ -96,6 +96,7 @@
  */
 import { execFile } from 'node:child_process';
 import { checkGhReserve } from './lib/gh-reserve.mjs';
+import { useAppPool } from './lib/gh-app.mjs';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -344,8 +345,10 @@ if (!nodes.length) {
 	process.exit(1);
 }
 
-// Under the shared GitHub reserve this sweep is not run (#9).
-const reserve = checkGhReserve('runner-identity');
+// Under the shared GitHub reserve this sweep is not run, and on the App's pool
+// it never touches the user's (#9).
+const { pool } = await useAppPool('runner-identity');
+const reserve = checkGhReserve('runner-identity', { pool });
 if (!reserve.ok) {
 	if (JSON_OUT) console.log(JSON.stringify({ ok: false, error: reserve.reason }, null, 2));
 	else console.error(`reconcile-runner-identity: ${reserve.reason}`);

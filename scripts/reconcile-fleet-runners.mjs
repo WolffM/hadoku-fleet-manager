@@ -120,6 +120,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stripYamlComments } from './lib/yaml-comments.mjs';
 import { checkGhReserve } from './lib/gh-reserve.mjs';
+import { useAppPool } from './lib/gh-app.mjs';
 import { runnerVarForm } from './lib/runner-var.mjs';
 import { autoIncludeDrop, vanishedFromUniverse } from './lib/roster-eligibility.mjs';
 import { mayRunRepo } from './lib/placement-rules.mjs';
@@ -1696,8 +1697,10 @@ function mintToken(repo, kind) {
 
 async function main() {
 	// The heaviest GitHub reader in the fleet (~440 calls with --check-coverage):
-	// under the shared reserve it is not run (#9).
-	const reserve = checkGhReserve('reconcile');
+	// under the shared reserve it is not run, and on the App's pool it never
+	// touches the user's (#9).
+	const { pool: ghPool } = await useAppPool('reconcile');
+	const reserve = checkGhReserve('reconcile', { pool: ghPool });
 	if (!reserve.ok) failEarly(reserve.reason);
 	const manifest = loadManifest();
 	log(`Manifest: ${MANIFEST}`);
