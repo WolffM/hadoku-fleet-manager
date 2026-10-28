@@ -164,6 +164,18 @@ export function validateHostingRequest(raw) {
 		bad('availability.fence', `one of ${FENCES.join(', ')}`);
 	if (av.fence !== undefined && av.singleton !== true)
 		bad('availability.fence', 'fences a singleton: set availability.singleton');
+	// `standby`: how many running copies wait on other nodes for the fence to
+	// pass to them (docs/service-state.md). Only a lease makes a second
+	// running copy safe: without one it is a second writer. Whether the fleet
+	// has that many other nodes to give is the plan's question, not this one.
+	const standby = av.standby ?? 0;
+	if (!(Number.isInteger(standby) && standby >= 0))
+		bad('availability.standby', 'a whole number of standby copies, 0 or more');
+	else if (standby > 0 && av.fence !== 'data-lease')
+		bad(
+			'availability.standby',
+			'a standby runs beside the primary, so it needs fence "data-lease" to stay a reader'
+		);
 
 	const pl = isObj(raw.placement) ? raw.placement : {};
 	// `auto`: the fleet's hosting converger declares and ends this tenant's
@@ -214,6 +226,7 @@ export function validateHostingRequest(raw) {
 				singleton: av.singleton === true,
 				...(av.coldStartS ? { coldStartS: av.coldStartS } : {}),
 				...(av.fence ? { fence: av.fence } : {}),
+				...(standby > 0 ? { standby } : {}),
 			},
 			placement: { require, prefer, ...(pl.auto === true ? { auto: true } : {}) },
 			// Defaults to false: a tenant has to SAY CI may read it.

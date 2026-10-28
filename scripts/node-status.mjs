@@ -295,7 +295,14 @@ const rows = await Promise.all(
 			const r0 = wholeRec ?? sharedRec;
 			const declared = wholeRec
 				? (wholeRec.hosting ?? {})
-				: { tenant: r0.tenant, memoryMb: r0.memoryMb, cores: r0.cores, port: r0.port };
+				: {
+						tenant: r0.tenant,
+						memoryMb: r0.memoryMb,
+						cores: r0.cores,
+						port: r0.port,
+						// A hot standby (availability.standby); absent = the primary, as before.
+						...(r0.role ? { role: r0.role } : {}),
+					};
 			// Reach is a `controller` ingress's question; a loopback tenant is judged from its socket.
 			const reach =
 				obs && spec?.ingress === 'controller'

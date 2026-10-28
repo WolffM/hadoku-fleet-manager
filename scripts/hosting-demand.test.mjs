@@ -113,3 +113,46 @@ test('the view carries the converger’s last full pass for this tenant', () => 
 		rmSync(f.root, { recursive: true, force: true });
 	}
 });
+
+test("declared[] and ending[] list only the tenant's own serving slices: no other tenant's, no standby", () => {
+	const { root, env } = fixture();
+	try {
+		const machines = Object.fromEntries(
+			['claw-5', 'claw-6', 'claw-8', 'claw-9'].map((n) => [n, {}])
+		);
+		writeFileSync(join(root, 'fleet-runner-manifest.json'), JSON.stringify({ machines }));
+		const rec = (tenant, extra = {}) => ({
+			tenant,
+			memoryMb: 4096,
+			cores: 4,
+			port: 7621,
+			since: new Date(Date.now() - 3_600_000).toISOString(),
+			by: 'test',
+			reason: 'fixture',
+			...extra,
+		});
+		writeFileSync(
+			join(root, 'fleet-hosting.json'),
+			JSON.stringify({
+				nodes: {
+					'claw-9': rec('cardtable'),
+					'claw-5': rec('cardtable', { until: new Date(Date.now() + 86_400_000).toISOString() }),
+					'claw-6': rec('cardtable', { role: 'standby' }),
+					'claw-8': rec('pygmalion'),
+				},
+			})
+		);
+		const { code, doc } = run(['cardtable'], env);
+		assert.equal(code, 0, JSON.stringify(doc));
+		assert.deepEqual(
+			doc.declared.map((d) => d.node),
+			['claw-9']
+		);
+		assert.deepEqual(
+			doc.ending.map((d) => d.node),
+			['claw-5']
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});

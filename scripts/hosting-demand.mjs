@@ -23,7 +23,7 @@ import { hostingOn, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest } from './lib/fleet-exec.mjs';
-import { demandProblems, readDemand, writeDemand } from './lib/hosting-demand.mjs';
+import { demandProblems, readDemand, tenantSlices, writeDemand } from './lib/hosting-demand.mjs';
 import { stateDir } from './lib/paths.mjs';
 import { readTenantRegistry } from './lib/tenant-registry.mjs';
 
@@ -91,14 +91,9 @@ if (valueOf('--slices') !== undefined) {
 }
 
 // What is declared now, from the records the converger and the door both read.
-const declared = [];
-const ending = [];
-for (const node of Object.keys(manifest.machines ?? {})) {
-	const h = hostingOn(node, drainDoc, hostingDoc, NOW);
-	if (h?.tenant !== app) continue;
-	if (h.until) ending.push({ node, until: h.until });
-	else declared.push({ node, mode: h.mode, memoryMb: h.memoryMb, cores: h.cores });
-}
+const { declared, ending } = tenantSlices(app, Object.keys(manifest.machines ?? {}), (node) =>
+	hostingOn(node, drainDoc, hostingDoc, NOW)
+);
 
 let lastPass = null;
 const lastPath = join(stateDir(), LAST_FILE);

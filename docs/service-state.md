@@ -83,7 +83,7 @@ ask the operator to relay it. fleet-manager checks each answer against the
 running service before the fence goes live.
 
 1. **`hosting.json`**, with `availability.singleton`, `availability.fence:
-"data-lease"` and `placement.require: ["label:data-peer"]`. A node without
+"data-lease"`, `availability.standby` (how many standbys) and `placement.require: ["label:data-peer"]`. A node without
    that label cannot reach the store.
 2. **A state inventory.** One row per path: its size, how it is written
    (append, whole rewrite, create once), whether it can be rebuilt, and who

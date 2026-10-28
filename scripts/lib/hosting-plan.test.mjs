@@ -157,3 +157,62 @@ test('runtime: node in its range and every tool executed on the service PATH, or
 	);
 	assert.match(why(plan, 'unasked'), /node version unknown; whether yt-dlp runs is unknown/);
 });
+
+/** ArchiveBot requires a pm2 peer. */
+const peer = (node, over = {}) => offer(node, { pm2Peer: true, ...over });
+const FENCED = (standby) => ({
+	...ARCHIVEBOT,
+	isolation: { ciMayRead: true },
+	availability: { ...ARCHIVEBOT.availability, fence: 'data-lease', standby },
+});
+const slice = (role) => ({
+	tenant: 'archivebot',
+	memoryMb: 1024,
+	cores: 1,
+	...(role ? { role } : {}),
+});
+
+test('a standby is its own entry: never in held, never at max, never the primary node', () => {
+	const plan = planFor(FENCED(1), [
+		peer('claw-4', { tenants: [slice()] }),
+		peer('claw-6', { tenants: [slice('standby')] }),
+		peer('claw-8'),
+	]);
+	assert.deepEqual(plan.held, ['claw-4'], 'the standby is not a primary');
+	assert.equal(plan.atMax, true);
+	assert.deepEqual(plan.standby, { wanted: 1, held: ['claw-6'], ranked: [] });
+	assert.match(why(plan, 'claw-6'), /already holds a archivebot slice/);
+
+	const fresh = planFor(FENCED(1), [peer('claw-4', { tenants: [slice()] }), peer('claw-8')]);
+	assert.deepEqual(
+		fresh.standby.ranked.map((r) => [r.node, r.role]),
+		[['claw-8', 'standby']]
+	);
+	// Nothing held yet: the first pick is the primary's, so the standby starts after it.
+	const none = planFor(FENCED(1), [peer('claw-5'), peer('claw-8')]);
+	assert.deepEqual(nodes(none), ['claw-5', 'claw-8']);
+	assert.deepEqual(
+		none.standby.ranked.map((r) => r.node),
+		['claw-8']
+	);
+});
+
+test('a standby passes the same rules as the primary, runtime included, and a shortfall says so', () => {
+	const req = { ...FENCED(2), runtime: { ...ARCHIVEBOT.runtime, tools: ['ffmpeg'] } };
+	const plan = planFor(req, [
+		peer('claw-4', { tenants: [slice()], runtime: { node: '22.23.2', tools: { ffmpeg: true } } }),
+		peer('claw-6', { runtime: { node: '22.23.2', tools: { ffmpeg: false } } }),
+		peer('claw-8', { runtime: { node: '22.23.2', tools: { ffmpeg: true } } }),
+	]);
+	assert.deepEqual(
+		plan.standby.ranked.map((r) => r.node),
+		['claw-8']
+	);
+	assert.match(why(plan, 'claw-6'), /ffmpeg does not run/);
+	assert.match(plan.standby.short, /2 standby wanted, 0 held, and only 1 other node\(s\) fit/);
+});
+
+test('a request without a standby plans byte-for-byte as before', () => {
+	const plan = planFor(ARCHIVEBOT, [peer('claw-4')]);
+	assert.ok(!('standby' in plan));
+});

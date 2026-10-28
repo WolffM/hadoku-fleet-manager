@@ -43,7 +43,12 @@ export function tenantsByNode(drainDoc, hostingDoc) {
 		add(node, { ...pick(rec), mode: 'shared' });
 	return out;
 }
-const pick = ({ tenant, memoryMb, cores }) => ({ tenant, memoryMb, cores });
+const pick = ({ tenant, memoryMb, cores, role }) => ({
+	tenant,
+	memoryMb,
+	cores,
+	...(role ? { role } : {}),
+});
 
 /**
  * The routing labels each node offers now, by the mint's own rule: `nodeOffer`

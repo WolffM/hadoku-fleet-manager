@@ -168,6 +168,32 @@ test('a fence is for a singleton, and only data-lease is one', () => {
 	);
 });
 
+test('a standby needs the data-lease fence, and is a whole count', () => {
+	const av = (a) => ({ ...ARCHIVEBOT, availability: { ...ARCHIVEBOT.availability, ...a } });
+	const ok = validateHostingRequest(av({ fence: 'data-lease', standby: 1 }));
+	assert.equal(ok.ok, true);
+	assert.equal(ok.request.availability.standby, 1);
+	assert.equal(ok.request.slices.max, 1, 'the primary stays one slice');
+	assert.ok(paths(av({ standby: 1 })).includes('availability.standby'), 'no fence');
+	assert.ok(
+		paths({ ...CARDTABLE, availability: { ...CARDTABLE.availability, standby: 1 } }).includes(
+			'availability.standby'
+		),
+		'not a singleton, so no fence can hold'
+	);
+	for (const standby of [-1, 1.5, '1'])
+		assert.ok(
+			paths(av({ fence: 'data-lease', standby })).includes('availability.standby'),
+			String(standby)
+		);
+	assert.ok(
+		!(
+			'standby' in
+			validateHostingRequest(av({ fence: 'data-lease', standby: 0 })).request.availability
+		)
+	);
+});
+
 test('runtime.node must be a range the fleet can evaluate, and runtime.tools plain executable names', () => {
 	const rt = (r) => paths({ ...ARCHIVEBOT, runtime: { ...ARCHIVEBOT.runtime, ...r } });
 	assert.ok(!rt({ node: '>=24.0.0 <25.0.0' }).includes('runtime.node'));

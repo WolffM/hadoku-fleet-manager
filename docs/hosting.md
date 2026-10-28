@@ -184,7 +184,12 @@ which node the plan would pick. A singleton on a node that cannot be reached
 is never moved off unless it declares `availability.fence: "data-lease"`.
 That means a dataplatform lease, with state kept off the node, as pygmalion
 does. Two writers are worse than none.
-What a service must do to earn that fence, and how to request it, is
+A fenced singleton may also ask for `availability.standby: N`: N more running
+copies, each on its own node, that wait on the lease. The plan lists them in
+their own `standby` entry, held to every rule the primary is, `runtime`
+included. A standby's record carries `role: "standby"`, so it never counts
+toward `slices.max`, as serving, or as a second writer. What a service must do
+to earn that fence, and how to request it, is
 [service-state.md](service-state.md).
 
 ## Status

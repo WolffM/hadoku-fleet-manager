@@ -28,6 +28,13 @@
  *
  * RANK among the claws that fit: cut over first, then the fewest CI jobs
  * lost, then the most memory left.
+ *
+ * STANDBYS (`availability.standby`, docs/service-state.md) are planned as their
+ * own entry. A slice whose record says `role: "standby"` is not one of the
+ * primary's `held`, so it never counts toward `slices.max` or as a second
+ * writer. A standby candidate passes every rule above, `runtime` included, or
+ * a failover would land where the app cannot run, and it is never the node the
+ * primary holds or is about to be given.
  */
 import { ciJobsAfter } from './hosting-offers.mjs';
 import { ruleHolds } from './hosting-placement.mjs';
@@ -37,7 +44,9 @@ import { satisfies } from './tool-release.mjs';
 /** Plan `request` (a NORMALIZED hosting request) against `offers` (from collectOffers). */
 export function planFor(request, offers) {
 	const { app, slices, disk, placement, isolation } = request;
-	const held = offers.filter((o) => o.reachable && o.tenants.some((t) => t.tenant === app));
+	const holds = (o, standby) =>
+		o.reachable && o.tenants.some((t) => t.tenant === app && (t.role === 'standby') === standby);
+	const held = offers.filter((o) => holds(o, false));
 	const atMax = held.length >= slices.max;
 
 	const rows = offers.map((o) => {
@@ -119,5 +128,31 @@ export function planFor(request, offers) {
 		ciMayReadPolicy: isolation.ciMayRead ? 'not asked' : strict ? 'filter' : 'advisory',
 		ranked: atMax ? [] : ranked,
 		refused: rows.filter((r) => !r.fits),
+		...standbyPlan(request, offers, holds, ranked, atMax),
+	};
+}
+
+/**
+ * The standby entry, only for a request that asks for one. `ranked` already
+ * excludes every node holding a slice of the app, primary or standby. While no
+ * primary is held, the primary's pick is ranked[0], so a standby starts after it.
+ */
+function standbyPlan(request, offers, holds, ranked, atMax) {
+	const wanted = request.availability.standby ?? 0;
+	if (!wanted) return {};
+	const held = offers.filter((o) => holds(o, true)).map((o) => o.node);
+	const candidates = (atMax ? ranked : ranked.slice(1)).map((r) => ({ ...r, role: 'standby' }));
+	const need = Math.max(0, wanted - held.length);
+	return {
+		standby: {
+			wanted,
+			held,
+			ranked: need ? candidates : [],
+			...(candidates.length < need
+				? {
+						short: `${wanted} standby wanted, ${held.length} held, and only ${candidates.length} other node(s) fit`,
+					}
+				: {}),
+		},
 	};
 }

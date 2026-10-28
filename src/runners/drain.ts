@@ -75,6 +75,13 @@ export interface HostingResources {
 	memoryMb: number;
 	cores: number;
 	port: number;
+	/**
+	 * `standby`: a hot standby of a fenced singleton (`availability.standby`,
+	 * docs/service-state.md). It runs and waits on the tenant's lease, so it is
+	 * never counted as serving, nor as a second writer. Absent: the primary,
+	 * which keeps every record written before the field byte-identical.
+	 */
+	role?: 'standby';
 }
 
 /** One node's drain record. Reasons are required; a drain nobody can explain gets undone. */

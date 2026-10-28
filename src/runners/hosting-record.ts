@@ -159,8 +159,16 @@ export function hostingOn(
 	}
 	const shared = effectiveHosting(hostingDoc, nowMs)[node];
 	if (!shared) return null;
-	const { tenant, memoryMb, cores, port, until } = shared;
-	return { mode: 'shared', tenant, memoryMb, cores, port, ...(until ? { until } : {}) };
+	const { tenant, memoryMb, cores, port, role, until } = shared;
+	return {
+		mode: 'shared',
+		tenant,
+		memoryMb,
+		cores,
+		port,
+		...(role ? { role } : {}),
+		...(until ? { until } : {}),
+	};
 }
 
 /**

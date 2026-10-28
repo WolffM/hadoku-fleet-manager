@@ -27,6 +27,25 @@ export function readDemand(dir) {
 	return doc;
 }
 
+/**
+ * The tenant's own slices, split as the view reports them: `declared` (serving,
+ * no end set) and `ending`. Another tenant's slice is never listed, and neither
+ * is a hot standby (`role: "standby"`): a tenant reads `declared` as the slices
+ * serving it, and the converger counts it against the demand.
+ * `hostingOn(node)` is hosting-record's answer for one node.
+ */
+export function tenantSlices(app, nodes, hostingOn) {
+	const declared = [];
+	const ending = [];
+	for (const node of nodes) {
+		const h = hostingOn(node);
+		if (h?.tenant !== app || h.role === 'standby') continue;
+		if (h.until) ending.push({ node, until: h.until });
+		else declared.push({ node, mode: h.mode, memoryMb: h.memoryMb, cores: h.cores });
+	}
+	return { declared, ending };
+}
+
 /** Problems with asking `request` for `slices`, or [] when the ask is valid. */
 export function demandProblems(request, slices, releaseOrder) {
 	const out = [];

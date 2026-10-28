@@ -94,6 +94,27 @@ test('hostingOn answers for both kinds, whole from the drain and shared from its
 	assert.equal(hostingOn('claw-4', maint, { nodes: {} }, NOW), null);
 });
 
+test('hostingOn carries a standby role, and a primary record stays without one', () => {
+	assert.equal(
+		hostingOn('claw-9', noDrains, shared(slice({ role: 'standby' })), NOW)?.role,
+		'standby'
+	);
+	assert.ok(!('role' in (hostingOn('claw-9', noDrains, shared(), NOW) ?? {})));
+	const whole: DrainDoc = {
+		nodes: {
+			'claw-8': {
+				since: ago(1),
+				reason: 'x',
+				by: 't',
+				kind: 'hosting',
+				hosting: { tenant: 'pygmalion', memoryMb: 1024, cores: 1, port: 9002, role: 'standby' },
+			},
+		},
+		planned: [],
+	};
+	assert.equal(hostingOn('claw-8', whole, { nodes: {} }, NOW)?.role, 'standby');
+});
+
 test('hold-back: the unused share once the agent is up, everything before it', () => {
 	const settled = { declaredMb: 4096, since: ago(HOLD_FULL_MS + 1), nowMs: NOW };
 	assert.equal(heldBackMb({ ...settled, sliceCurrentMb: 1200 }), 2896);
