@@ -17,10 +17,15 @@ const USERS = { admin: 'ops', ci: 'ops-ci', adminHome: '/home/ops', ciHome: '/ho
 const KEYS = { controllerKeys: ['ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfixture'] };
 const bashOk = (text) => execFileSync('bash', ['-n'], { input: text });
 
-test('all three scripts are valid bash', () => {
-	bashOk(inventoryScript(USERS));
-	bashOk(cutoverScript(USERS, KEYS));
-	bashOk(backScript(USERS));
+test('all three scripts are valid bash, and each prints its end marker last', () => {
+	for (const [text, end] of [
+		[inventoryScript(USERS), 'INVENTORY-END'],
+		[cutoverScript(USERS, KEYS), 'CUTOVER-END'],
+		[backScript(USERS), 'BACK-END'],
+	]) {
+		bashOk(text);
+		assert.equal(text.trim().split('\n').at(-1), `echo ${end}`);
+	}
 });
 
 test('the runner tree moves, and admin keeps its own ssh, kit and systemd config', () => {
