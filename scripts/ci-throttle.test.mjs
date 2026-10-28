@@ -803,7 +803,10 @@ test('#12: memory MOVING that never settles refuses at MAX_HOLD_S, and does NOT 
 		conf: HOKON_12,
 		others: 0,
 		memAvailableMb: 1732,
-		memSwing: { fromMb: 1732, toMb: 7065 },
+		// The same ~7.3s ramp as the settling case above: the default ~3.2s one
+		// had gone flat at 7065MB before a loaded hook's first sample (6.9s,
+		// load 60, 2026-10-28), so "never settles" read as a flat baseline.
+		memSwing: { fromMb: 1732, toMb: 7065, stepMb: 220 },
 	});
 	const all = r.out + r.err;
 	assert.notEqual(r.code, 0, `the floor was never met, so the job is still refused: ${all}`);
