@@ -101,6 +101,11 @@ included, is charged to the installation: 10,050/h, separate from the user's
 runs on the user pool under the reserve as before and says so on stderr with
 the reason. A `GH_TOKEN` already set is left alone.
 
+hadoku_site owns the App: its vault items, key rotation, daily probe and
+settings. This package only mints from what it is handed. Its permissions,
+consumers, failure modes and recovery are in hadoku_site's
+`docs/operations/GITHUB_APP.md`; change the App there, not here.
+
 Measured 2026-10-27: `--check-coverage`, `identity` and `history-coverage`
 return the same results on the App token as on the user login. GitHub counts
 an installation's calls in more than one bucket, as it does the user's (see

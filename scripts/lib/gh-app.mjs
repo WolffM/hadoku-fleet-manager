@@ -24,6 +24,10 @@
  * so the run that degraded names why.
  *
  * A `GH_TOKEN` already in the environment wins: whoever set it chose a token.
+ *
+ * The App (`hadoku-fleet-gates`) is hadoku_site's: it holds the key, rotates
+ * and probes it, and documents the App in docs/operations/GITHUB_APP.md. This
+ * file only mints from what it is handed.
  */
 import { createSign } from 'node:crypto';
 import { fleetOwner } from '../../dist/lib/fleet-config.js';
