@@ -1329,3 +1329,21 @@ test('#6: neither pm2 nor cloudflared is version-managed — an upgrade restarts
 	}
 	assert.match(REPAIRS['pm2-boot'].detect, /is-enabled[\s\S]*is-active/);
 });
+
+test('docker rootless: the setup tool gets one BIN holding all four, and the context is made when missing', () => {
+	// claw-5, 2026-10-28: BIN was contrib/, which holds no `docker`, so the tool
+	// died on its self-check after dockerd had started; the re-run then skipped
+	// it (daemon active) and `context use rootless` named a context nobody made.
+	const rootless = REPAIRS.docker.repair.split('# ROOTLESS')[1];
+	for (const t of [
+		'/usr/share/docker.io/contrib/dockerd-rootless.sh',
+		'/usr/share/docker.io/contrib/dockerd-rootless-setuptool.sh',
+		'/usr/bin/docker',
+		'/usr/bin/rootlesskit',
+	])
+		assert.ok(rootless.includes(t), `${t} is linked into BIN`);
+	assert.match(rootless, /PATH="\$bin:/, 'the setup tool finds dockerd-rootless.sh in BIN first');
+	const create = rootless.indexOf('docker context create rootless');
+	assert.ok(create > -1 && create < rootless.indexOf('docker context use rootless'));
+	assert.match(rootless, /docker context inspect rootless[^\n]*\|\|/, 'created only when missing');
+});
