@@ -418,3 +418,28 @@ test('metered spend and the timeline survive a restart', async () => {
 	assert.equal(w.metered?.[0]?.spent, 650);
 	assert.ok(w.outsideTimeline?.length, 'the timeline came back with the books');
 });
+
+test('the meter never changes a dispatch outcome: a failing reader, or no host at all', async () => {
+	withToken();
+	const broken = async (): Promise<null> => {
+		throw new Error('reader exploded');
+	};
+	assert.equal(await meterGhPool('cron:x', async () => 7, { read: broken, now: () => T0 }), 7);
+	await assert.rejects(
+		meterGhPool(
+			'cron:x',
+			async () => {
+				throw new Error('the job failed');
+			},
+			{ read: broken, now: () => T0 }
+		),
+		/the job failed/,
+		"the job's own error, not the meter's"
+	);
+	__setHostForTesting(null);
+	try {
+		assert.equal(await meterGhPool('cron:x', async () => 'ran'), 'ran');
+	} finally {
+		__setHostForTesting(testHost);
+	}
+});

@@ -243,6 +243,11 @@ export function installCliHost(opts: CliHostOptions): void {
 }
 
 /** Test seam. Not part of the supported API. */
+/** For an inbound call that must work in a process that never installed a host. */
+export function hostInstalled(): boolean {
+	return current !== null;
+}
+
 export function __setHostForTesting(host: FleetHost | null): void {
 	current = host;
 }

@@ -76,7 +76,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { githubToken, logger, postDiscord, stateDir } from './host.js';
+import { githubToken, hostInstalled, logger, postDiscord, stateDir } from './host.js';
 import type { FleetGithubBudget, GhCaller } from './fleet-report-types.js';
 
 export type { GhCaller } from './fleet-report-types.js';
@@ -659,7 +659,10 @@ export async function readGhPool(): Promise<GhPoolReading | null> {
  * figure is an upper bound for that cron, and two overlapping crons share it.
  *
  * Never changes `fn`'s outcome: its value or its throw passes through, and a
- * reading that cannot be taken books the run as `unread`.
+ * reading that cannot be taken books the run as `unread`. In a process with no
+ * fleet host installed there are no books, so `fn` simply runs unmetered; and
+ * a fault in the metering itself is logged, never thrown, because a throw from
+ * the `finally` below would REPLACE the dispatch's own result.
  *
  * A run that straddles a reset books only what it saw of the new window: the
  * `used` it read after, which GitHub counts from that reset.
@@ -669,14 +672,32 @@ export async function meterGhPool<T>(
 	fn: () => Promise<T>,
 	opts: { read?: () => Promise<GhPoolReading | null>; now?: () => number } = {}
 ): Promise<T> {
+	if (!hostInstalled()) return fn();
 	const read = opts.read ?? readGhPool;
-	const before = await read();
+	const meterFault = (e: unknown) =>
+		logger.warn(
+			`[gh-budget] metering ${caller} failed: ${e instanceof Error ? e.message : String(e)}`
+		);
+	const before = await read().catch((e: unknown) => {
+		meterFault(e);
+		return null;
+	});
 	const ownBefore = chargedByThisProcess;
 	try {
 		return await fn();
 	} finally {
-		const after = await read();
-		bookMetered(caller, before, after, chargedByThisProcess - ownBefore, (opts.now ?? Date.now)());
+		try {
+			const after = await read();
+			bookMetered(
+				caller,
+				before,
+				after,
+				chargedByThisProcess - ownBefore,
+				(opts.now ?? Date.now)()
+			);
+		} catch (e) {
+			meterFault(e);
+		}
 	}
 }
 
