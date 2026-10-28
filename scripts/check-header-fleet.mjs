@@ -450,6 +450,36 @@ function checkNpmAuthForm(repo, source, files) {
  * Nothing in the fleet could have reported it beforehand.
  */
 /**
+ * The scope globs a workspace's `@wolffm/*` dependencies are installed UNDER.
+ * pnpm judges the release age of an npm alias by its REAL name, so
+ * `"@wolffm/x": "npm:@hadoku/x@1.2.3"` is exempted by `@hadoku/*`, and
+ * `@wolffm/*` exempts nothing (cardtable since 359b5647, fleet-manager#19).
+ * A plain range is installed as itself. A manifest that names `@wolffm/` only
+ * outside its dependency maps, or does not parse, keeps the old demand.
+ */
+function cooldownScopes(manifestTexts) {
+	const scopes = new Set();
+	for (const text of manifestTexts) {
+		let pkg;
+		try {
+			pkg = JSON.parse(text);
+		} catch {
+			scopes.add('@wolffm/*');
+			continue;
+		}
+		for (const key of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+			for (const [name, spec] of Object.entries(pkg?.[key] ?? {})) {
+				if (!name.startsWith('@wolffm/')) continue;
+				const alias = /^npm:(@[^/]+)\//.exec(String(spec));
+				scopes.add(alias ? `${alias[1]}/*` : '@wolffm/*');
+			}
+		}
+	}
+	if (!scopes.size) scopes.add('@wolffm/*');
+	return [...scopes].sort();
+}
+
+/**
  * The text of one YAML key's value — its inline remainder plus every line that
  * belongs to it — or `null` when the key is absent. `src` must already be
  * comment-blanked.
@@ -510,14 +540,15 @@ function checkReleaseAgeCooldown(repo, source, files) {
 		// repo may carry a second workspace (a POC, a vendored sample) with no
 		// first-party dependency at all, and demanding an exemption there would
 		// be noise.
-		const consumes = files.some(
+		const manifests = files.filter(
 			(f) =>
 				f.startsWith(prefix) &&
 				f.endsWith('package.json') &&
 				!f.includes('node_modules/') &&
 				/"@wolffm\//.test(readFile(source, f) || '')
 		);
-		if (!consumes) continue;
+		if (!manifests.length) continue;
+		const scopes = cooldownScopes(manifests.map((f) => readFile(source, f) || ''));
 
 		const raw = readFile(source, ws);
 		if (raw === null) continue;
@@ -540,18 +571,19 @@ function checkReleaseAgeCooldown(repo, source, files) {
 		// `catalog` all take package globs, and any of them following an exclude
 		// list that lacks the scope satisfied the rule while pnpm still gated it.
 		const block = yamlKeyBlock(src, 'minimumReleaseAgeExclude');
-		if (block !== null && /@wolffm\/\*/.test(block)) continue;
+		const missing = scopes.filter((g) => block === null || !block.includes(g));
+		if (!missing.length) continue;
 
 		report(
 			repo,
 			'release-age-cooldown',
-			`${ws} resolves @wolffm/* but ` +
+			`${ws} resolves @wolffm/* through ${scopes.join(', ')} but ` +
 				(block !== null
-					? 'its minimumReleaseAgeExclude does not contain the scope glob, '
+					? `its minimumReleaseAgeExclude does not contain ${missing.join(', ')}, `
 					: 'declares no minimumReleaseAgeExclude, ') +
 				"so pnpm 11.5's DEFAULT 24h release-age cooldown gates them — a freshly " +
 				'published version fails install with ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION. ' +
-				`Add to ${ws}:  minimumReleaseAgeExclude: ['@wolffm/*']  ` +
+				`Add to ${ws}:  minimumReleaseAgeExclude: [${missing.map((g) => `'${g}'`).join(', ')}]  ` +
 				'(the SCOPE GLOB — a pinned name@version entry never matches).'
 		);
 	}

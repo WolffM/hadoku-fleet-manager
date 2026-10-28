@@ -527,6 +527,40 @@ test('#98: release-age-cooldown still accepts the glob in a flow sequence', () =
 	}
 });
 
+/** cardtable since 359b5647: every @wolffm package installed as an npm alias of its @hadoku twin. */
+const ALIASED = JSON.stringify({
+	name: 'fixture-app',
+	dependencies: { '@wolffm/task-ui-components': 'npm:@hadoku/task-ui-components@^1.0.0' },
+});
+
+test('#19: an npm:@hadoku alias is exempted by @hadoku/*, the name pnpm judges it by', () => {
+	const fx = appFixture({
+		'package.json': ALIASED,
+		'pnpm-workspace.yaml':
+			"packages: ['.']\nminimumReleaseAge: 10080\nminimumReleaseAgeExclude: ['@hadoku/*']\n",
+	});
+	try {
+		const { code, out } = run(fx);
+		assert.deepEqual(rulesFor(JSON.parse(out)), [], out);
+		assert.equal(code, 0);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('#19: an npm:@hadoku alias is NOT exempted by @wolffm/*, and the finding names @hadoku/*', () => {
+	const fx = appFixture({ 'package.json': ALIASED });
+	try {
+		const { code, out } = run(fx);
+		const doc = JSON.parse(out);
+		assert.deepEqual(rulesFor(doc), ['release-age-cooldown'], out);
+		assert.match(findingsFor(doc, APP)[0].detail, /does not contain @hadoku\/\*/);
+		assert.equal(code, 1);
+	} finally {
+		cleanup(fx);
+	}
+});
+
 test('#98: a COMMENTED-OUT update-wolffm step is no-landing-path', () => {
 	const fx = appFixture({
 		'.github/workflows/update-wolffm.yml':
