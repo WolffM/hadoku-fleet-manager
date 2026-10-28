@@ -52,10 +52,10 @@
  * the step test is still carried in the payload, under `nearTtl`, where a reader
  * can see what the filter excluded.
  *
- * NOT UNDER THE `--json` CONTRACT. Nothing in mgmt-api parses this yet, so it is
- * deliberately absent from `scripts/lib/json-contract.mjs`. `--json` is offered
- * because the shape is useful, not because a cron depends on it. If a cron ever
- * does, it is added there in the same pass.
+ * UNDER THE `--json` CONTRACT SINCE 2026-10-28: `ci:fleet-kills` runs
+ * `--days 2 --json` nightly (see its entry in `scripts/lib/json-contract.mjs`).
+ * Every path out of this script emits one document, the refusals included —
+ * `why: 'bad-days' | 'no-history' | 'no-records-in-window'` with `ok: false`.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

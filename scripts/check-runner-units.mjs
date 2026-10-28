@@ -81,8 +81,16 @@
  * must never render as "nothing is wrong" — and this gate found that failure in
  * ITSELF on its first run: it called `runOn`, which returns a PROMISE, so every
  * node yielded the string "[object Promise]", which parsed to zero installs and
- * reported the whole fleet clean. Hence `runOnSync`, and hence a probe that
- * fails loudly rather than returning nothing.
+ * reported the whole fleet clean. Hence every probe result is AWAITED before
+ * it is read, and a probe that fails loudly rather than returning nothing.
+ * The nodes are probed CONCURRENTLY since it went on a cron (2026-10-28): one
+ * by one, a fleet with every node down took 9 x 90 s to say so, which is most
+ * of the nightly window it now has to share.
+ *
+ * ZERO NODES IS NOT A PASS EITHER. `--machine <typo>` used to select nothing,
+ * probe nothing and print the clean line with exit 0; a manifest that could not
+ * be read threw before `--json` could answer. Both now fail with `error` in the
+ * document, because a cron reads the document, not the exit code.
  *
  * Unless a human took the node out on purpose: `deferralFor` (#71) narrows that
  * failure to a node drained with `kind: maintenance`, dated, and inside
@@ -90,27 +98,32 @@
  * `deferralNote`, it just does not page. Everything else still fails exactly as
  * before. See lib/expected-down.mjs.
  */
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
 
-import { loadManifest, runOnSync, selectMachines, machineArg } from './lib/fleet-exec.mjs';
+import { loadManifest, runOn, selectMachines, machineArg } from './lib/fleet-exec.mjs';
 import { manifest as manifestFile } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
-import { repoFromUrl, classifyInstall, classifyUnit } from './lib/runner-unit-audit.mjs';
+import {
+	repoFromUrl,
+	classifyInstall,
+	classifyUnit,
+	lookupOutcome,
+} from './lib/runner-unit-audit.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 
 const out = createEmitter();
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-	console.log(
+	out.log(
 		`fleet runner-units — audit the standing runner installs on every node\n\n` +
 			`  --json          machine-readable findings\n` +
 			`  --machine <n>   probe one node only\n\n` +
 			`Reports an install whose repo was RENAMED, deleted or archived, is off\n` +
 			`the roster, or whose unit is stray or not running. Identity comes from\n` +
 			`.runner's gitHubUrl and is compared by numeric repo id, never by name:\n` +
-			`GitHub redirects a renamed repo silently, with a 200.\n`
+			`GitHub redirects a renamed repo silently, with a 200.`
 	);
 	process.exit(0);
 }
@@ -156,28 +169,77 @@ systemctl --user list-units 'actions-runner-*' --all --no-legend --plain 2>/dev/
   printf 'UNIT\tuser\t%s\t%s\t%s\t%s\t%s\n' "$u" "$a" "$s" "$r" "$w"
 done`;
 
-/** One `gh api` call, memoised — the roster alone is 26 of them. */
+/**
+ * Two attempts per repo, the same `READ_ATTEMPTS` queue-health uses against its
+ * measured 0.13% transient rate. Retrying is not tolerating: a repo that fails
+ * both is still unread and still fails the run, with its reason.
+ */
+const LOOKUP_ATTEMPTS = 2;
+
+/** One `gh api` lookup per repo, memoised — the roster alone is 26 of them. */
 const repoCache = new Map();
-function resolveRepo(path) {
+function lookupRepo(path) {
 	if (repoCache.has(path)) return repoCache.get(path);
-	let val = null;
-	try {
-		const raw = execFileSync('gh', ['api', `repos/${path}`], {
+	let outcome = null;
+	for (let attempt = 1; attempt <= LOOKUP_ATTEMPTS; attempt++) {
+		const r = spawnSync('gh', ['api', `repos/${path}`], {
 			encoding: 'utf8',
-			stdio: ['ignore', 'pipe', 'ignore'],
 			maxBuffer: 8 << 20,
+			timeout: 30_000,
 		});
-		const j = JSON.parse(raw);
-		val = { fullName: j.full_name, id: j.id, archived: Boolean(j.archived) };
-	} catch {
-		val = null;
+		outcome = lookupOutcome({
+			ok: r.status === 0 && !r.error,
+			stdout: r.stdout ?? '',
+			stderr: r.error ? String(r.error.message) : (r.stderr ?? ''),
+		});
+		if (outcome.status !== 'error') break;
 	}
-	repoCache.set(path, val);
-	return val;
+	repoCache.set(path, outcome);
+	return outcome;
 }
 
-const manifest = loadManifest();
-const machines = selectMachines(manifest, { only: machineArg() });
+/**
+ * Anything that stops the audit before a node is probed. The document still
+ * arrives — with `error`, and with every count at zero — because a cron that
+ * gets no JSON reports its checker broken, not the fleet.
+ */
+function refuse(error) {
+	out.warn(error);
+	if (out.json)
+		out.emit({
+			error,
+			nodes: 0,
+			probed: 0,
+			installs: 0,
+			units: 0,
+			findings: [],
+			notes: [],
+			unreachable: [],
+			expectedDown: [],
+			rosterUnresolved: [],
+			lookupFailed: [],
+			lines: out.held(),
+		});
+	process.exit(1);
+}
+
+const only = machineArg();
+let manifest;
+let coverage;
+try {
+	manifest = loadManifest();
+	coverage = JSON.parse(readFileSync(manifestFile('fleet-runner-coverage.json'), 'utf8'));
+} catch (err) {
+	refuse(`could not read the fleet manifest: ${err instanceof Error ? err.message : String(err)}`);
+}
+const machines = selectMachines(manifest, { only });
+if (!machines.length) {
+	refuse(
+		only
+			? `--machine ${only} selected no node`
+			: 'the manifest declares no node; zero nodes probed is not a pass'
+	);
+}
 
 /**
  * A GUEST IS DELIBERATELY IN SCOPE HERE — `includeGuests` below, on purpose.
@@ -200,18 +262,22 @@ const machines = selectMachines(manifest, { only: machineArg() });
 const INCLUDE_GUESTS = true;
 
 /** The roster, resolved to IDS. A name here is as unreliable as a name there. */
-const coverage = JSON.parse(readFileSync(manifestFile('fleet-runner-coverage.json'), 'utf8'));
 const rosterIds = new Set();
 const rosterUnresolved = [];
 for (const name of coverage.repos ?? []) {
-	const r = resolveRepo(name);
-	if (r) rosterIds.add(r.id);
-	else rosterUnresolved.push(name);
+	const r = lookupRepo(name);
+	if (r.status === 'found') rosterIds.add(r.repo.id);
+	else
+		rosterUnresolved.push({
+			repo: name,
+			why: r.status === 'gone' ? 'GitHub answers 404' : r.why,
+		});
 }
 
 const findings = [];
 const notes = [];
 const unreachable = [];
+const lookupFailed = [];
 // A node a human powered off is EXPECTED down. It is still PRINTED, and its
 // installs are still unread — the deferral suppresses the failure, never the
 // evidence, and expires after DEFER_DAYS. See lib/expected-down.mjs.
@@ -220,14 +286,17 @@ const expectedDown = [];
 let installCount = 0;
 let unitCount = 0;
 
-for (const [node] of machines) {
-	// runOnSync, NOT runOn: runOn returns a PROMISE, and a synchronous caller
-	// gets the string "[object Promise]" — zero installs, fleet reported clean.
-	const res = runOnSync(node, PROBE, {
-		as: 'ci',
-		timeoutMs: 90_000,
-		includeGuests: INCLUDE_GUESTS,
-	});
+// Every node at once, and every result AWAITED before it is read: `runOn`
+// returns a promise, and reading one unawaited is how this gate once parsed
+// "[object Promise]" into zero installs and a clean fleet.
+const probes = await Promise.all(
+	machines.map(([node]) =>
+		runOn(node, PROBE, { as: 'ci', timeoutMs: 90_000, includeGuests: INCLUDE_GUESTS })
+	)
+);
+
+for (const [i, [node]] of machines.entries()) {
+	const res = probes[i];
 	if (!res.ok) {
 		if (deferralFor(node, drains).deferred) {
 			expectedDown.push(node);
@@ -236,7 +305,6 @@ for (const [node] of machines) {
 		unreachable.push({ node, why: res.error ? String(res.error) : 'probe failed' });
 		continue;
 	}
-
 	const installs = [];
 	const units = [];
 	for (const line of String(res.out).split('\n')) {
@@ -265,7 +333,14 @@ for (const [node] of machines) {
 
 	for (const inst of installs) {
 		const requested = repoFromUrl(inst.url);
-		const resolved = requested ? resolveRepo(requested) : null;
+		const lookup = requested ? lookupRepo(requested) : null;
+		// A lookup that FAILED is not a verdict about the repo. Judging it would
+		// call every install GONE the night GitHub rate-limits this token.
+		if (lookup?.status === 'error') {
+			lookupFailed.push({ node, dir: inst.dir, repo: requested, why: lookup.why });
+			continue;
+		}
+		const resolved = lookup?.status === 'found' ? lookup.repo : null;
 		const entry = manifest.repos?.[resolved?.fullName ?? requested ?? ''];
 		const verdict = classifyInstall({
 			requested,
@@ -317,8 +392,14 @@ out.log(`Runner installs: ${installCount}   supervising units: ${unitCount}`);
 if (rosterUnresolved.length) {
 	out.warn(
 		`ROSTER UNRESOLVED (${rosterUnresolved.length}) — cannot judge off-roster without it: ` +
-			rosterUnresolved.join(', ')
+			rosterUnresolved.map((r) => `${r.repo} (${r.why})`).join(', ')
 	);
+}
+if (lookupFailed.length) {
+	out.warn(
+		`INSTALLS UNJUDGED (${lookupFailed.length}) — GitHub could not be asked about their repo:`
+	);
+	for (const l of lookupFailed) out.warn(`  ${l.node} ${l.dir} ${l.repo}: ${l.why}`);
 }
 if (unreachable.length) {
 	out.warn(`UNREACHABLE (${unreachable.length}) — "I could not look" is not "nothing is wrong":`);
@@ -332,7 +413,12 @@ for (const f of findings) {
 }
 for (const n of notes) out.log(`note: ${n.kind} ${n.node} ${n.dir} — ${n.why}`);
 
-if (!findings.length && !unreachable.length && !rosterUnresolved.length) {
+const failed =
+	findings.length > 0 ||
+	unreachable.length > 0 ||
+	rosterUnresolved.length > 0 ||
+	lookupFailed.length > 0;
+if (!failed) {
 	out.log(
 		'✓ every runner install names a live, on-roster, unarchived repo' +
 			(expectedDown.length ? ` (${expectedDown.length} expected down)` : '')
@@ -350,8 +436,9 @@ if (out.json) {
 		unreachable,
 		expectedDown,
 		rosterUnresolved,
+		lookupFailed,
 		lines: out.held(),
 	});
 }
 
-process.exit(findings.length || unreachable.length || rosterUnresolved.length ? 1 : 0);
+process.exit(failed ? 1 : 0);

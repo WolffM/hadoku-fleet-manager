@@ -398,6 +398,58 @@ export const JSON_CONTRACT = [
 			'that could not be parsed at all must not arrive as zero findings. Both distinctions ' +
 			'exist ONLY in the JSON shape: the human output collapses each into one summary line.',
 	},
+	{
+		sub: 'node-users',
+		hostBound: false,
+		argv: ['--json'],
+		job: 'ci:node-users',
+		consumer: 'services/mgmt-api/src/routes/jobs/node-users-check.ts',
+		why:
+			'Who runs CI on each claw, read from the node (node users, 2026-10-27). Built in ' +
+			'0.34.100 and run by nothing until 2026-10-28 — the same shape as ci:fleet-inventory ' +
+			'and ci:health-freshness above. A node still running CI as admin is `state: ' +
+			'"not-cut-over"`: the state the cutover plan is moving AWAY from, reported with an ' +
+			'advisory and never a failure, so the consumer carries the count as data. `ok` is ' +
+			'false only for a node that did not answer (and is not expected down) or a cut-over ' +
+			'node that drifted. The consumer ALSO fails on any `class: "blocking"` finding on an ' +
+			'answered node, which today adds exactly one case `ok` does not cover: ' +
+			'`runner-secret-in-argv` on a node not yet cut over. Those distinctions exist ONLY in ' +
+			'the JSON shape; the human output is one line per node.',
+	},
+	{
+		sub: 'runner-units',
+		hostBound: false,
+		argv: ['--json'],
+		job: 'ci:runner-units',
+		consumer: 'services/mgmt-api/src/routes/jobs/runner-units-check.ts',
+		why:
+			'Does every standing runner install on a node name a live, on-roster, unarchived repo. ' +
+			"Reads the BOX, not GitHub: a runner whose registration died appears in no repo's " +
+			'runner list, which is how claw-1 and claw-2 carried six crash-looping installs ' +
+			'(11,126 and 8,422 restarts) while `reconcile` reported clean on 2026-09-03. Nothing ran ' +
+			'it until 2026-10-28. Its JSON separates `findings` from `unreachable`, ' +
+			'`rosterUnresolved` and `lookupFailed` (each with a reason), and a run that could not ' +
+			'start — no manifest, zero nodes selected — still emits a document with `error`, so ' +
+			'"GitHub could not be asked" never arrives as GONE and "probed nothing" never as clean.',
+	},
+	{
+		sub: 'fleet-kills',
+		hostBound: false,
+		argv: ['--days', '2', '--json'],
+		job: 'ci:fleet-kills',
+		consumer: 'services/mgmt-api/src/routes/jobs/fleet-kills-check.ts',
+		why:
+			'Did the FLEET stop a job at a unit TTL, rather than the job failing (#22). Reads only ' +
+			'job history — completed jobs, after the fact — so it is nightly in repo-sync, not ' +
+			"fleet-pulse: the evidence exists only once a job has already died, and today's TTL " +
+			"(23,400 s) sits above GitHub's own 6 h job ceiling, so a new match means a TTL " +
+			'regression shipped by a release. `--days 2` and not the default 14: history is ' +
+			'immutable, so a 14-day window would hold one kill red for a fortnight; 48 h still ' +
+			'reads every record at least once on a daily cadence (a job is written when it ends, ' +
+			'at most 6.5 h after it started). `kills` and `nearTtl` are separate, and the three ' +
+			'refusals (`bad-days`, `no-history`, `no-records-in-window`) arrive as `ok: false` ' +
+			'with `why` — zero records scanned is not a clean window.',
+	},
 ];
 
 /**

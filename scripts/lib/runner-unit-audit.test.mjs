@@ -5,7 +5,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { repoFromUrl, classifyInstall, classifyUnit, IGNORABLE } from './runner-unit-audit.mjs';
+import {
+	repoFromUrl,
+	classifyInstall,
+	classifyUnit,
+	IGNORABLE,
+	lookupOutcome,
+} from './runner-unit-audit.mjs';
 
 const roster = new Set([1129970414, 1124924177, 1116902949]); // tenhands, craft, aggregator
 
@@ -183,4 +189,30 @@ test('the same rename with a stopped install IS a finding', () => {
 	});
 	assert.equal(v.kind, 'RENAMED');
 	assert.notEqual(v.note, true);
+});
+
+test("only GitHub's own 404 is GONE — a failed lookup keeps its reason", () => {
+	assert.deepEqual(lookupOutcome({ ok: false, stderr: 'gh: Not Found (HTTP 404)\n' }), {
+		status: 'gone',
+	});
+	// The shape that used to read as GONE for every install at once.
+	const limited = lookupOutcome({
+		ok: false,
+		stderr: 'gh: API rate limit exceeded for user ID 1. (HTTP 403)\n',
+	});
+	assert.equal(limited.status, 'error');
+	assert.match(limited.why, /rate limit/);
+	assert.equal(lookupOutcome({ ok: false, stderr: '' }).status, 'error');
+});
+
+test('a lookup that answered must carry an id and a name to count as found', () => {
+	assert.deepEqual(
+		lookupOutcome({
+			ok: true,
+			stdout: JSON.stringify({ id: 1124924177, full_name: 'WolffM/hadoku-craft', archived: false }),
+		}),
+		{ status: 'found', repo: { fullName: 'WolffM/hadoku-craft', id: 1124924177, archived: false } }
+	);
+	assert.equal(lookupOutcome({ ok: true, stdout: '<html>' }).status, 'error');
+	assert.equal(lookupOutcome({ ok: true, stdout: '{"message":"x"}' }).status, 'error');
 });

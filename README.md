@@ -208,6 +208,9 @@ code first would turn every real finding into "the checker broke".
 | `fleet inventory --check --json`            | `ci:fleet-inventory`    |
 | `fleet doctor --cadence --write --json`     | `ci:health-refresh`     |
 | `fleet health-freshness --json`             | `ci:health-freshness`   |
+| `fleet node-users --json`                   | `ci:node-users`         |
+| `fleet runner-units --json`                 | `ci:runner-units`       |
+| `fleet fleet-kills --days 2 --json`         | `ci:fleet-kills`        |
 
 That table listed SIX of these ten until 2026-09-07 — `drain-check`,
 `benchmark`, `egress-slices` and `queue-health` were under contract and

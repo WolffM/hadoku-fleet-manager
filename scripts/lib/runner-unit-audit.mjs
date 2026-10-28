@@ -18,6 +18,37 @@ export function repoFromUrl(url) {
 }
 
 /**
+ * What one `gh api repos/<path>` answered: `{ status: 'found', repo }`,
+ * `{ status: 'gone' }` for a 404, or `{ status: 'error', why }` for anything
+ * else.
+ *
+ * GONE AND "COULD NOT ASK" ARE DIFFERENT FINDINGS. `classifyInstall` reads a
+ * null `resolved` as "the repo does not resolve", so a rate limit, an expired
+ * login or a network blip used to arrive as GONE for every install at once —
+ * and the roster read failed with no reason at all. Only GitHub's own 404 means
+ * gone; every other failure keeps its reason so the finding is actionable.
+ */
+export function lookupOutcome({ ok, stdout = '', stderr = '' }) {
+	if (!ok) {
+		if (/\(HTTP 404\)/.test(stderr)) return { status: 'gone' };
+		const why = stderr.trim().split('\n').pop() || 'gh api failed with no message';
+		return { status: 'error', why: why.slice(0, 200) };
+	}
+	let j;
+	try {
+		j = JSON.parse(stdout);
+	} catch {
+		return { status: 'error', why: 'gh api answered with something that is not JSON' };
+	}
+	if (typeof j?.id !== 'number' || typeof j?.full_name !== 'string')
+		return { status: 'error', why: 'gh api answered without a repo id and full_name' };
+	return {
+		status: 'found',
+		repo: { fullName: j.full_name, id: j.id, archived: Boolean(j.archived) },
+	};
+}
+
+/**
  * Classify one install.
  *
  * `resolved` is what the API returned for `requested` — `null` for a 404, and
