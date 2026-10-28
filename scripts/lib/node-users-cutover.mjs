@@ -200,6 +200,18 @@ left=$(pgrep -xc -u "$ADMIN" 'Runner\\.(Listener|Worker)' 2>/dev/null || true)
 [ "\${left:-0}" = 0 ] || die stop "$left runner process(es) still run as $ADMIN: a standing runner? stop it first"
 step stop ok "no runner runs as $ADMIN"
 
+# 3b. /tmp. A job that wrote a FIXED name there (report-job's
+#     /tmp/report-job.json) left a file ci can never overwrite: /tmp is sticky.
+#     On claw-5 that turned every green job red with "Permission denied". With
+#     admin's CI stopped, an admin-owned top-level file nothing holds open is
+#     that debris. Named, so the run says what it removed.
+swept=""
+while IFS= read -r f; do
+	sudo -n fuser -s "$f" 2>/dev/null && continue
+	rm -f "$f" && swept="$swept \${f##*/}"
+done < <(find /tmp -maxdepth 1 -type f -user "$ADMIN" 2>/dev/null)
+step tmp ok "\${swept:+removed CI leftovers of $ADMIN from /tmp:$swept}\${swept:-no admin-owned file left in /tmp}"
+
 # 4. Move. Each path is recorded BEFORE it moves, so --back knows it even if
 #    this run dies mid-mv.
 sudo -n install -d -m 0755 "\${RECORD%/*}"

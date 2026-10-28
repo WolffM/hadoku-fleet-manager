@@ -176,3 +176,12 @@ test('the inventory skips a moved path admin recreated, and still fails an unrec
 	assert.match(s, /grep -qxF "\$p" "\$RECORD".*skip "moved; \$ADMIN has its own since/);
 	assert.match(s, /step "move:\$p" fail "both homes hold it"/);
 });
+
+test("/tmp: admin's top-level files nothing holds open are removed, after admin's CI stops", () => {
+	// claw-5, 2026-10-28: admin's /tmp/report-job.json (sticky /tmp) failed
+	// every ci job's report step with "Permission denied".
+	const s = cutoverScript(USERS, KEYS);
+	assert.ok(s.indexOf('step stop ok') < s.indexOf('step tmp ok'), 'only once admin runs no CI');
+	assert.match(s, /find \/tmp -maxdepth 1 -type f -user "\$ADMIN"/);
+	assert.match(s, /fuser -s "\$f"[^\n]*&& continue/, 'a file a process holds open is kept');
+});
