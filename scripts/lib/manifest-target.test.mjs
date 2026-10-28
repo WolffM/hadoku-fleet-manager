@@ -233,19 +233,53 @@ void test('with a remote it pushes HEAD:main, and the bare repo has the commit',
 	assert.equal(git(work, ['rev-parse', 'HEAD']), landed.sha);
 });
 
-void test('a DIVERGENT branch is not pushed — HEAD:main would overwrite main', () => {
-	// The reason the guard is an ancestor test and not a branch-name test: from
-	// a worktree sitting on somebody else's feature branch, `HEAD:main` would
-	// push that whole branch onto main.
-	const { file, bare } = repo({ remote: true });
-	// main moves on the remote, behind this checkout's back.
+/** Somebody else lands a commit on the remote's main, behind this checkout's back. */
+function moveRemoteMain(bare, subject = 'somebody else') {
 	const other = mkdtempSync(join(tmpdir(), 'fleet-target-other-'));
 	made.push(other);
 	execFileSync('git', ['clone', '-q', bare, other], { env: cleanGitEnv() });
-	writeFileSync(join(other, 'elsewhere.txt'), 'x\n');
+	writeFileSync(join(other, `${subject.replace(/\W+/g, '-')}.txt`), 'x\n');
 	git(other, ['add', '-A']);
-	git(other, ['commit', '-q', '-m', 'somebody else']);
+	git(other, ['commit', '-q', '-m', subject]);
 	git(other, ['push', '-q', 'origin', 'HEAD:main']);
+}
+
+const remoteLog = (bare) =>
+	execFileSync('git', ['-C', bare, 'log', '--format=%s', 'main'], {
+		encoding: 'utf8',
+		env: cleanGitEnv(),
+	})
+		.trim()
+		.split('\n');
+
+void test('a STALE checkout is replayed onto main and lands, keeping the other commit', () => {
+	// claw-5's node-users flip, 2026-10-28: the operator's checkout was one
+	// commit behind because other writers push all day. Refusing that left the
+	// node drained with its flip local only.
+	const { work, file, bare } = repo({ remote: true });
+	moveRemoteMain(bare);
+	writeFileSync(file, `${JSON.stringify({ machines: { 'claw-9': {} } }, null, 2)}\n`);
+	const landed = landWrite(file, { writer: 'doctor', summary: 'behind by one' });
+	assert.equal(landed.ok, true, landed.why ?? '');
+	assert.equal(landed.pushed, true);
+	assert.deepEqual(remoteLog(bare).slice(0, 3), [
+		'fleet(doctor): behind by one',
+		'somebody else',
+		'base',
+	]);
+	assert.equal(landed.sha, git(work, ['rev-parse', 'HEAD']), 'sha is the REPLAYED commit');
+});
+
+void test('a DIVERGENT branch is not pushed — HEAD:main would overwrite main', () => {
+	// The reason the guard is an ancestor test and not a branch-name test: from
+	// a worktree sitting on somebody else's feature branch, `HEAD:main` would
+	// push that whole branch onto main. Their commit is not this writer's to
+	// replay, so more than one commit ahead is refused.
+	const { work, file, bare } = repo({ remote: true });
+	writeFileSync(join(work, 'feature.txt'), 'unpushed\n');
+	git(work, ['add', 'feature.txt']);
+	git(work, ['commit', '-q', '-m', "somebody's unpushed work"]);
+	moveRemoteMain(bare);
 
 	writeFileSync(file, `${JSON.stringify({ machines: { 'claw-9': {} } }, null, 2)}\n`);
 	const landed = landWrite(file, { writer: 'doctor', summary: 'mid-air collision' });
@@ -253,14 +287,37 @@ void test('a DIVERGENT branch is not pushed — HEAD:main would overwrite main',
 	assert.equal(landed.pushed, false);
 	assert.equal(landed.ok, false, 'a record that did not reach main is a finding');
 	assert.equal(landed.reason, 'not-fast-forward');
-	assert.match(landed.why, /Rebase/);
+	assert.match(landed.why, /2 commit\(s\)/);
 	assert.equal(
-		execFileSync('git', ['-C', bare, 'log', '-1', '--format=%s', 'main'], {
-			encoding: 'utf8',
-			env: cleanGitEnv(),
-		}).trim(),
+		remoteLog(bare)[0],
 		'somebody else',
 		"main must still hold the other writer's commit"
+	);
+});
+
+void test('a stale checkout with a DIRTY tree is refused and never left mid-rebase', () => {
+	const { work, file, bare } = repo({ remote: true });
+	writeFileSync(join(work, 'tracked.txt'), 'a\n');
+	git(work, ['add', 'tracked.txt']);
+	git(work, ['commit', '-q', '-m', 'tracked']);
+	git(work, ['push', '-q', 'origin', 'HEAD:main']);
+	moveRemoteMain(bare);
+	writeFileSync(join(work, 'tracked.txt'), 'somebody is editing this\n');
+
+	writeFileSync(file, `${JSON.stringify({ machines: { 'claw-9': {} } }, null, 2)}\n`);
+	const landed = landWrite(file, { writer: 'doctor', summary: 'dirty neighbour' });
+	assert.equal(landed.committed, true);
+	assert.equal(landed.ok, false);
+	assert.equal(landed.reason, 'not-fast-forward');
+	assert.equal(remoteLog(bare)[0], 'somebody else');
+	assert.equal(git(work, ['status', '--porcelain']), 'M tracked.txt', 'the edit survives');
+	assert.equal(
+		spawnSync('git', ['rev-parse', '-q', '--verify', 'REBASE_HEAD'], {
+			cwd: work,
+			env: cleanGitEnv(),
+		}).status,
+		1,
+		'no rebase left in progress'
 	);
 });
 

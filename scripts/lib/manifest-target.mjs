@@ -73,7 +73,10 @@
  * `origin/main` is an ANCESTOR of the new commit, which is true exactly when
  * this commit is a fast-forward of what main holds and false for every
  * divergent branch, every stale checkout and every mid-air collision with
- * another writer.
+ * another writer. The last two are the common case and are not divergence: when
+ * the writer's own commit is the only thing HEAD holds that main lacks, it is
+ * replayed onto main and the push retried (`replayOntoMain`). Anything more is
+ * still refused.
  *
  * NOTHING HERE FETCHES OR PUSHES UNDER `--no-push`. That is what the writers'
  * own `--no-push` flag routes to, and it is how this file's own tests run: a
@@ -248,6 +251,9 @@ export function writeTarget(files, { env = process.env, git = runGit } = {}) {
 	return { ok: true, repo, paths: abs.map((f) => relative(repo, f)) };
 }
 
+/** A push that loses a race to another writer re-fetches and replays; this many tries. */
+const PUSH_ATTEMPTS = 3;
+
 /**
  * Commit what was just written, and push it to `main`.
  *
@@ -331,36 +337,64 @@ export function landWrite(
 			why: `${repo} has no \`origin\` remote, so the commit cannot reach main from here.`,
 		};
 	}
-	const fetch = git(['fetch', 'origin', 'main'], repo, env);
-	if (fetch.status !== 0) {
-		return {
-			...committed,
-			reason: 'fetch-failed',
-			why:
-				`could not fetch origin/main in ${repo}, so whether this commit fast-forwards main ` +
-				`is UNKNOWN and pushing blind could clobber it: ${fetch.stderr.trim()}`,
-		};
+	let why = null;
+	for (let attempt = 1; attempt <= PUSH_ATTEMPTS; attempt++) {
+		const fetch = git(['fetch', 'origin', 'main'], repo, env);
+		if (fetch.status !== 0) {
+			return {
+				...committed,
+				reason: 'fetch-failed',
+				why:
+					`could not fetch origin/main in ${repo}, so whether this commit fast-forwards main ` +
+					`is UNKNOWN and pushing blind could clobber it: ${fetch.stderr.trim()}`,
+			};
+		}
+		// THE ANCESTOR TEST IS THE GUARD, not the branch name — see the header.
+		if (git(['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'], repo, env).status !== 0) {
+			const replayed = replayOntoMain(repo, env, git);
+			if (!replayed.ok) {
+				const head = git(['rev-parse', 'HEAD'], repo, env).stdout.trim() || sha;
+				return {
+					...committed,
+					sha: head,
+					reason: 'not-fast-forward',
+					why:
+						`${repo} HEAD does not contain origin/main, so \`HEAD:main\` would either be ` +
+						`rejected or push a divergent branch over main (${replayed.why}). Rebase this ` +
+						`checkout onto origin/main and push \`git -C ${repo} push origin HEAD:main\` by hand.`,
+				};
+			}
+		}
+		const pushed = git(['push', 'origin', 'HEAD:main'], repo, env);
+		const head = git(['rev-parse', 'HEAD'], repo, env).stdout.trim() || sha;
+		if (pushed.status === 0) return { ...committed, sha: head, ok: true, pushed: true };
+		why = `commit ${head.slice(0, 8)} is local only: ${pushed.stderr.trim()}`;
 	}
-	// THE ANCESTOR TEST IS THE GUARD, not the branch name — see the header.
-	if (git(['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'], repo, env).status !== 0) {
-		return {
-			...committed,
-			reason: 'not-fast-forward',
-			why:
-				`${repo} HEAD does not contain origin/main, so \`HEAD:main\` would either be ` +
-				'rejected or push a divergent branch over main. Rebase this checkout onto ' +
-				`origin/main and push \`git -C ${repo} push origin HEAD:main\` by hand.`,
-		};
-	}
-	const pushed = git(['push', 'origin', 'HEAD:main'], repo, env);
-	if (pushed.status !== 0) {
-		return {
-			...committed,
-			reason: 'push-failed',
-			why: `commit ${sha?.slice(0, 8)} is local only: ${pushed.stderr.trim()}`,
-		};
-	}
-	return { ...committed, ok: true, pushed: true };
+	return { ...committed, reason: 'push-failed', why };
+}
+
+/**
+ * Other writers push to hadoku_site main all day, so a checkout that was
+ * current when the writer started is often one commit behind by the time it
+ * commits (claw-5's node-users flip, 2026-10-28). That is a STALE checkout,
+ * not a divergent branch, and it is replayed: only when the writer's own
+ * commit is the single thing HEAD holds that main does not. Anything else
+ * (a feature branch, someone's unpushed work) is still refused. git's rebase
+ * refuses a dirty tree on its own and a conflict is aborted, so the checkout
+ * is never left mid-rebase.
+ */
+function replayOntoMain(repo, env, git) {
+	const ahead = git(['rev-list', 'FETCH_HEAD..HEAD'], repo, env);
+	const count = ahead.stdout.trim().split('\n').filter(Boolean).length;
+	if (ahead.status !== 0 || count !== 1)
+		return { ok: false, why: `HEAD holds ${count} commit(s) main does not, not just this one` };
+	const rebase = git(['rebase', '--quiet', 'FETCH_HEAD'], repo, env);
+	if (rebase.status === 0) return { ok: true };
+	git(['rebase', '--abort'], repo, env);
+	return {
+		ok: false,
+		why: `replaying this commit onto origin/main failed: ${rebase.stderr.trim() || rebase.stdout.trim()}`,
+	};
 }
 
 /**
