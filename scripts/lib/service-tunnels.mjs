@@ -91,6 +91,7 @@ export function placementsFor(node, childApps) {
 			role,
 			port: String(port),
 			hostname: app.handWired?.hostname ?? `${app.id}.${ZONE}`,
+			...(role === 'primary' && app.standby ? { standby: app.standby } : {}),
 		});
 	}
 	return out.sort((a, b) => a.id.localeCompare(b.id));
@@ -410,12 +411,27 @@ export async function convergeTunnels({ manifest, hostsDoc, childApps, token, wr
 			const dns = await deps.cf.cname(z.id, p.hostname);
 			const want = `${tunnel.id}.cfargotunnel.com`;
 			const have = dns.ok ? (dns.result?.[0]?.content ?? null) : null;
-			if (!dns.ok || have !== want) {
+			// A service with a hot standby: the site's lease follower points the name at
+			// whichever host holds the lease, so the standby's tunnel is routed too.
+			let standbyWant = null;
+			if (dns.ok && have !== want && p.standby) {
+				const sb = await deps.cf.tunnels(acct, p.standby);
+				const id = sb.ok && sb.result?.length === 1 ? sb.result[0].id : null;
+				standbyWant = id ? `${id}.cfargotunnel.com` : null;
+			}
+			if (!dns.ok || (have !== want && have !== standbyWant)) {
 				routed = false;
 				find(
 					node,
 					'tunnel-dns',
-					dns.ok ? `${p.hostname} points at ${have ?? 'nothing'}, not ${want}` : dns.why
+					dns.ok
+						? `${p.hostname} points at ${have ?? 'nothing'}, not ${want}` +
+								(p.standby
+									? standbyWant
+										? ` or its standby ${p.standby}'s ${standbyWant}`
+										: ` (its standby ${p.standby}'s tunnel could not be read)`
+									: '')
+						: dns.why
 				);
 				continue;
 			}

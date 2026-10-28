@@ -360,3 +360,32 @@ test('appLayerHost: the row named by tenant or id, its host or the hub; null whe
 	);
 	assert.equal(appLayerHost('nobody', { hostsDoc, childApps }), null);
 });
+
+test('a primary with a hot standby: a CNAME on the standby tunnel is routed, a third one is not', async () => {
+	const SB = '22222222-2222-2222-2222-222222222222';
+	const paired = {
+		...childApps,
+		apps: childApps.apps.map((a) => (a.id === 'pygmalion' ? { ...a, standby: 'claw-6' } : a)),
+	};
+	const opts = {
+		childApps: paired,
+		hostsDoc: { ...hostsDoc, hosts: { 'claw-4': { tunnel: 'claw-4' } } },
+	};
+	const failover = world({
+		tunnels: { 'claw-4': ID, 'claw-6': SB },
+		hosts: { 'claw-4': claw4Live() },
+		cname: { 'pygmalion.hadoku.me': `${SB}.cfargotunnel.com` },
+	});
+	failover.hosts['claw-4'].config = renderConfig(ID, placementsFor('claw-4', paired));
+	assert.deepEqual((await run(failover, opts)).findings, []);
+
+	const stray = world({
+		tunnels: { 'claw-4': ID, 'claw-6': SB },
+		hosts: { 'claw-4': claw4Live() },
+		cname: { 'pygmalion.hadoku.me': 'other.cfargotunnel.com' },
+	});
+	stray.hosts['claw-4'].config = renderConfig(ID, placementsFor('claw-4', paired));
+	const { findings } = await run(stray, opts);
+	assert.equal(findings[0].kind, 'tunnel-dns');
+	assert.match(findings[0].reason, /or its standby claw-6's 2222/);
+});
