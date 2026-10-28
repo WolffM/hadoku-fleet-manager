@@ -1641,18 +1641,22 @@ export function buildSpawnPlan(o: {
 }): SpawnPlan {
 	// THE JITCONFIG DOES NOT GO IN THE COMMAND LINE.
 	//
-	// It contains `.credentials` — a real OAuth token for the runner. As an argv
-	// token it lands in two places: `/proc/<pid>/cmdline`, readable by any local
-	// user unless /proc is mounted with hidepid; and the systemd journal, which records the full ExecStart at unit
-	// start and KEEPS IT. The second is the one that matters — the process dies
-	// with the job, the journal entry does not.
+	// It contains `.credentials` — a real OAuth token for the runner, private key
+	// included. As an argv token it lands in two places: the systemd journal,
+	// which records the full ExecStart at unit start and KEEPS IT; and
+	// `/proc/<pid>/cmdline`, which ANY local user can read for the whole job
+	// unless /proc is mounted hidepid. Once CI has its own user and tenants share
+	// the claw (`<app>-svc`, `<app>-agent`), the second is a tenant taking jobs
+	// and their secrets — reported from claw-4 on 2026-10-27, read off `ps`.
 	//
-	// `--jitconfig` is the only interface actions/runner exposes (it is not even
-	// in `--help` on 2.336.0), so the flag itself is unavoidable. What is
-	// avoidable is systemd ever seeing the value: the config is written to the
-	// slot at mode 0600 and the unit reads it back at exec time. systemd logs a
-	// command line with a file path in it, and the secret never enters the
-	// journal.
+	// So the config is written to the slot at mode 0600 and handed to the
+	// listener in `ACTIONS_RUNNER_INPUT_JITCONFIG`. `--jitconfig` is not the only
+	// door: actions/runner's CommandSettings reads every arg from
+	// `ACTIONS_RUNNER_INPUT_<NAME>`, masks it, and REMOVES it from its own
+	// environment before starting the worker, so job steps do not inherit it.
+	// `/proc/<pid>/environ` is readable only by the same user (and root).
+	// Executed on claw-4's payload: a bad value through the env answers the same
+	// Base-64 error as through the flag, and neither answers "Not configured".
 	const cfgPath = `${o.slot}/.jitconfig`;
 	// THE FLOOR, not the request. `Math.max` rather than a throw: this is called
 	// AFTER `generate-jitconfig` has already created the registration, so
@@ -1686,7 +1690,7 @@ export function buildSpawnPlan(o: {
 			// `rm` before `exec` is deliberate: exec replaces this shell, so
 			// anything after it never runs. If the exec fails the mint has failed
 			// anyway, and the next mint's RESET=1 rebuilds the slot from scratch.
-			`C=$(cat ${cfgPath}); rm -f ${cfgPath}; exec ${o.slot}/bin/Runner.Listener run --jitconfig "$C"`,
+			`ACTIONS_RUNNER_INPUT_JITCONFIG=$(cat ${cfgPath}); export ACTIONS_RUNNER_INPUT_JITCONFIG; rm -f ${cfgPath}; exec ${o.slot}/bin/Runner.Listener run`,
 		],
 	};
 }

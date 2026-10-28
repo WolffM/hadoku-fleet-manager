@@ -431,7 +431,16 @@ test('the spawn plan is a transient unit with a backstop and its own memory cap'
 	);
 	assert.equal(p.configContent, 'CFG', 'it is carried out-of-band for the caller to stage');
 	assert.equal(p.configPath, '/home/hadoku/.hadoku/jit/slot0/.jitconfig');
-	assert.match(p.argv.at(-1) ?? '', /Runner\.Listener run --jitconfig "\$C"/);
+	// Not even as `--jitconfig "$C"`: the shell expands it, and the listener's
+	// own argv is world-readable in /proc for the life of the job.
+	assert.match(
+		p.argv.at(-1) ?? '',
+		/export ACTIONS_RUNNER_INPUT_JITCONFIG; .*Runner\.Listener run$/
+	);
+	assert.ok(
+		!(p.argv.at(-1) ?? '').includes('--jitconfig'),
+		'the listener reads its config from its environment'
+	);
 	assert.match(
 		p.argv.at(-1) ?? '',
 		/rm -f .*\.jitconfig; exec /,
