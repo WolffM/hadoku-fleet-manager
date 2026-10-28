@@ -214,8 +214,27 @@ WantedBy=multi-user.target
 EOF`;
 
 /** CI's slice in the user manager, where every minted runner unit lands. */
-const CI_SLICE_CG = `CI_CG=$(find /sys/fs/cgroup/user.slice -maxdepth 4 -type d -name runners.slice 2>/dev/null | head -n1)`;
-const USER_SYSTEMCTL = 'XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user';
+/**
+ * CI's slice, in the manager of the node's ci user (src/lib/node-users.ts).
+ * By uid, never "the first runners.slice under user.slice": once a node is cut
+ * over to its own ci user, admin's manager may still hold a leftover one.
+ * `$CI_USER` is assigned by the caller; unassigned is the ssh user's own uid.
+ */
+const CI_SLICE_CG = `ci_uid=$(id -u "\${CI_USER:-}" 2>/dev/null || id -u)
+CI_CG=/sys/fs/cgroup/user.slice/user-$ci_uid.slice/user@$ci_uid.service/runners.slice
+[ -d "$CI_CG" ] || CI_CG=`;
+/**
+ * `ci_systemctl …` is `systemctl --user` in the ci user's manager: as itself
+ * when the ssh user IS the ci user (compared by uid), through root's
+ * `-M <user>@` when the node's CI has its own user and admin runs the deploy.
+ */
+const CI_SYSTEMCTL = `ci_systemctl() {
+	if [ -n "\${CI_USER:-}" ] && [ "$(id -u "$CI_USER" 2>/dev/null)" != "$(id -u)" ]; then
+		sudo -n systemctl --user -M "$CI_USER@" "$@"
+	else
+		XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user "$@"
+	fi
+}`;
 
 /**
  * HEADROOM for the tenant (cardtable A6, 2026-10-27). runners.slice's
@@ -232,16 +251,18 @@ const USER_SYSTEMCTL = 'XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user';
  * set-property, so it survives the slice's unit being rewritten.
  */
 const CI_HEADROOM = `
+${CI_SYSTEMCTL}
 ${CI_SLICE_CG}
 ci_max=$(cat "$CI_CG/memory.max" 2>/dev/null || echo max)
 if [ -n "$CI_CG" ] && [ "$ci_max" != max ]; then
-	${USER_SYSTEMCTL} set-property runners.slice "MemoryHigh=$(( ci_max / 1048576 - MEMORY_MB ))M"
+	ci_systemctl set-property runners.slice "MemoryHigh=$(( ci_max / 1048576 - MEMORY_MB ))M"
 else
 	echo "HOSTING-NOTE runners.slice has no memory ceiling to take the slice from"
 fi`;
 
 /** Undo {@link CI_HEADROOM}. */
-const CI_HEADROOM_RESET = `${USER_SYSTEMCTL} set-property runners.slice MemoryHigh=infinity >/dev/null 2>&1 || true`;
+const CI_HEADROOM_RESET = `${CI_SYSTEMCTL}
+ci_systemctl set-property runners.slice MemoryHigh=infinity >/dev/null 2>&1 || true`;
 
 /** Start (or re-assert) the raw-table port drop: a `controller` ingress only. */
 const CONTROLLER_PORT_START = `$S systemctl enable "$PORT_UNIT" >/dev/null 2>&1
@@ -265,7 +286,12 @@ export const pathUnit = (t) => runtimeFor(t).pathUnit(t);
  * the same files, keeps the user and adds no second ufw rule. Run as the CI
  * user over ssh, with every privileged step through `sudo -n`.
  */
-export function deployScript(t, { memoryMb, cores }, controller, { shared = false } = {}) {
+export function deployScript(
+	t,
+	{ memoryMb, cores },
+	controller,
+	{ shared = false, ciUser = '' } = {}
+) {
 	return `${assign({
 		...tenantVars(t),
 		MEMORY_MB: memoryMb,
@@ -276,6 +302,7 @@ export function deployScript(t, { memoryMb, cores }, controller, { shared = fals
 		CONTROLLER_IP: controller.lan,
 		CTL_TS4: controller.tailnet4,
 		CTL_TS6: controller.tailnet6 ?? '',
+		CI_USER: ciUser,
 	})}
 set -eu
 S="sudo -n"
@@ -345,8 +372,8 @@ echo HOSTING-DEPLOYED
  * executable. The agent's user and home stay: they hold what the tenant
  * fetched, and a user id is cheap to keep and costly to reuse by accident.
  */
-export function removeScript(t, controllerIp) {
-	return `${assign({ ...tenantVars(t), CONTROLLER_IP: controllerIp })}
+export function removeScript(t, controllerIp, { ciUser = '' } = {}) {
+	return `${assign({ ...tenantVars(t), CONTROLLER_IP: controllerIp, CI_USER: ciUser })}
 set -eu
 S="sudo -n"
 # KillMode=process leaves the tenant's workers running when the agent stops; a teardown takes them too.
@@ -371,8 +398,8 @@ echo HOSTING-REMOVED
  * purpose (see {@link removeScript}); everything else is listed here if it
  * survived, one `LEFT <what>` line each, then `LEFTOVERS-END`.
  */
-export function leftoversScript(t) {
-	return `${assign({ ...tenantVars(t), SLICE_CG: hostingSliceCgroup(t.app) })}
+export function leftoversScript(t, { ciUser = '' } = {}) {
+	return `${assign({ ...tenantVars(t), SLICE_CG: hostingSliceCgroup(t.app), CI_USER: ciUser })}
 S="sudo -n"
 for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" "$SLICE" "$PARENT"; do
 	[ -e "/etc/systemd/system/$u" ] && echo "LEFT unit file /etc/systemd/system/$u"

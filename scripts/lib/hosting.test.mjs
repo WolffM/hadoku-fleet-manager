@@ -427,3 +427,25 @@ test('A11: a teardown is read back, and a cut-off answer is not "nothing left"',
 	])
 		assert.ok(s.includes(what), `the read-back looks for: ${what}`);
 });
+
+test("after a cutover, CI's headroom is set in the ci user's manager, found by uid", () => {
+	const ctl = { lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null };
+	const s = deployScript(CARDTABLE, { memoryMb: 4096, cores: 4 }, ctl, {
+		shared: true,
+		ciUser: 'hadoku-ci',
+	});
+	assert.match(s, /^CI_USER='hadoku-ci'$/m);
+	// Through root's -M <user>@ when the ci user is not the ssh user.
+	assert.match(s, /sudo -n systemctl --user -M "\$CI_USER@" "\$@"/);
+	assert.match(s, /ci_systemctl set-property runners\.slice "MemoryHigh=/);
+	// By uid, never the first runners.slice find returns: admin's manager may keep a leftover.
+	assert.match(s, /user-\$ci_uid\.slice\/user@\$ci_uid\.service\/runners\.slice/);
+	assert.doesNotMatch(
+		s,
+		/find \/sys\/fs\/cgroup\/user\.slice -maxdepth 4 -type d -name runners\.slice/
+	);
+	assert.match(
+		removeScript(CARDTABLE, '192.0.2.10', { ciUser: 'hadoku-ci' }),
+		/^CI_USER='hadoku-ci'$/m
+	);
+});

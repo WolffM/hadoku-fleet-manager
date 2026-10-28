@@ -49,6 +49,8 @@ import { nodeUser } from '../dist/lib/node-users.js';
 import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
+import { collectOffers } from './lib/collect-offers.mjs';
+import { planFor } from './lib/hosting-plan.mjs';
 import {
 	CONTROLLER_NODE,
 	INSTALL_MAX_BYTES,
@@ -419,10 +421,14 @@ if (action === 'remove') {
 		refuse(
 			`which tenant? Pass --tenant with a registered one (${Object.keys(registry.tenants).join(', ') || 'none registered'}).`
 		);
-	const r = await runOn(node, removeScript(spec, controllerIp()), {
-		as: 'admin',
-		timeoutMs: 60_000,
-	});
+	const r = await runOn(
+		node,
+		removeScript(spec, controllerIp(), { ciUser: nodeUser(machine, 'ci') }),
+		{
+			as: 'admin',
+			timeoutMs: 60_000,
+		}
+	);
 	if (!r.stdout.includes('HOSTING-REMOVED')) {
 		refuse(
 			`teardown on ${node} did not finish: ${r.error ?? r.stderr.trim()}. The record is kept.`
@@ -431,7 +437,7 @@ if (action === 'remove') {
 	// Read back what survived, from the node (cardtable A11). The record stays
 	// until nothing does: a removed slice whose firewall rule or cgroup lingers
 	// is not removed.
-	const back = await runOn(node, leftoversScript(spec), {
+	const back = await runOn(node, leftoversScript(spec, { ciUser: nodeUser(machine, 'ci') }), {
 		as: 'admin',
 		timeoutMs: 30_000,
 		connectTimeout: 6,
@@ -489,10 +495,42 @@ if (!shared && drained && !['hosting', 'lease'].includes(drained.kind) && !has('
 const controller = await controllerAddrs();
 
 // The node's own measurement, never the manifest's rounded ramGb.
-const before = await observe(node, tenant);
+const before = await observe(node, spec);
 if (!before.obs) refuse(`could not observe ${node}: ${before.error ?? 'no answer'}`);
 const misfit = fitProblems(resources, before.obs, machine.minFreeMb ?? 1024);
 if (misfit.length) refuse(`the declaration does not fit ${node}: ${misfit.join('; ')}`);
+
+// THE TENANT'S OWN RULES, at the moment a slice is promised. The same plan
+// `fleet hosting-plan` makes (placement.require, the fit, ciMayRead's policy),
+// so a declare cannot put a tenant where its plan refuses it: archivebot on a
+// Wi-Fi claw whose CI is root went through with nothing in the way until
+// 2026-10-27. A re-declare of the slice this node already holds was judged
+// when it was made, and is not judged again. --force overrides, and says so.
+let placement = null;
+if (shared && !sharedRec) {
+	const { offers } = await collectOffers(manifest);
+	const plan = planFor(registry.tenants[tenant].request, offers);
+	// A drain is about CI, not about where a tenant may live: a slice is often
+	// declared under the tenant's own lease drain.
+	const found = plan.refused.find((r) => r.node === node);
+	const reasons = (found?.reasons ?? []).filter((r) => !/^drained /.test(r));
+	const refused = reasons.length ? { ...found, reasons } : null;
+	const ranked = plan.ranked.find((r) => r.node === node);
+	placement = { policy: plan.ciMayReadPolicy, ...(ranked?.risk ? { risk: ranked.risk } : {}) };
+	if (plan.atMax)
+		refuse(
+			`${tenant} already holds ${plan.held.length} of its ${registry.tenants[tenant].request.slices.max} slices.`
+		);
+	if (refused && !has('--force'))
+		refuse(
+			`${tenant}'s own placement refuses ${node}: ${refused.reasons.join('; ')}. --force overrides.`,
+			{
+				placement: { ...placement, reasons: refused.reasons },
+			}
+		);
+	if (refused) say(`  FORCED past ${tenant}'s placement: ${refused.reasons.join('; ')}`);
+	if (ranked?.risk) say(`  risk: ${ranked.risk}`);
+}
 
 const base = {
 	since: current ? (wholeRec?.since ?? sharedRec?.since) : new Date(NOW).toISOString(),
@@ -518,10 +556,14 @@ if (shared) {
 // The dispatcher re-reads the record every pass (15 s).
 const admissionFrom = new Date(NOW + 15_000).toISOString();
 
-const r = await runOn(node, deployScript(spec, resources, controller, { shared }), {
-	as: 'admin',
-	timeoutMs: 120_000,
-});
+const r = await runOn(
+	node,
+	deployScript(spec, resources, controller, { shared, ciUser: nodeUser(machine, 'ci') }),
+	{
+		as: 'admin',
+		timeoutMs: 120_000,
+	}
+);
 if (!r.stdout.includes('HOSTING-DEPLOYED')) {
 	finish(false, {
 		state: 'not-guaranteed',
@@ -562,4 +604,5 @@ finish(row.state === 'guaranteed', {
 	admissionFrom,
 	observed: row.observed,
 	findings: row.findings,
+	placement,
 });
