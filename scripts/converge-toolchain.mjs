@@ -66,6 +66,7 @@ import {
 	healthStatus,
 	readSiteDocs,
 } from './lib/service-tunnels.mjs';
+import { convergePeerPorts } from './lib/service-peers.mjs';
 import { siteRoot } from './lib/paths.mjs';
 // THE PROFILE MANIFEST IS OPERATOR CONFIG, SO IT IS RESOLVED THE WAY EVERY
 // OTHER MANIFEST IS — see `profilesPath()` below.
@@ -286,6 +287,7 @@ async function refresh() {
 	// without creating or writing anything. See scripts/lib/service-tunnels.mjs.
 	const tunnelRun = await serviceTunnels(manifest);
 	report.tunnels = tunnelRun.tunnels;
+	report.peers = tunnelRun.peers;
 	report.findings.push(...tunnelRun.findings);
 	report.ok = report.findings.length === 0;
 
@@ -320,25 +322,37 @@ async function serviceTunnels(manifest) {
 			findings: [
 				{ node: null, kind: 'tunnel-unverified', reason: `the site's placements: ${err.message}` },
 			],
+			peers: [],
 		};
 	}
 	const hosts = Object.fromEntries(
 		Object.entries(docs.hostsDoc.hosts ?? {}).filter(([n]) => !ONLY || n === ONLY)
 	);
 	const token = process.env[TOKEN_ENV];
-	return convergeTunnels({
+	const run = (node, script) => onNode(node, script, { role: 'admin', timeoutMs: 120_000 });
+	const tunnelRun = await convergeTunnels({
 		manifest,
 		hostsDoc: { ...docs.hostsDoc, hosts },
 		childApps: docs.childApps,
 		token,
 		write: !PLAN,
-		deps: {
-			cf: cloudflare(token),
-			onNode: (node, script) => onNode(node, script, { role: 'admin', timeoutMs: 120_000 }),
-			health: healthStatus,
-		},
+		deps: { cf: cloudflare(token), onNode: run, health: healthStatus },
 		log,
 	});
+	// A hot standby's peer port, closed to all but its pair-mate (lib/service-peers.mjs).
+	// Needs no Cloudflare token, so it runs whether or not one was passed.
+	const peerRun = await convergePeerPorts({
+		childApps: docs.childApps,
+		hostsDoc: docs.hostsDoc,
+		nodes: Object.keys(hosts).filter((n) => n !== docs.hostsDoc.hub),
+		write: !PLAN,
+		deps: { onNode: run },
+	});
+	return {
+		tunnels: tunnelRun.tunnels,
+		peers: peerRun.peers,
+		findings: [...tunnelRun.findings, ...peerRun.findings],
+	};
 }
 
 async function main() {

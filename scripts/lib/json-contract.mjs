@@ -175,7 +175,7 @@ export const JSON_CONTRACT = [
 			're-probe STAYS DRAINED and arrives as `findings[].kind === "reprobe-failed"`, ' +
 			'and `nodes[].status === "deferred"` (queue under pressure, or a hold that ' +
 			'is not ours) is reported but is not a failure. `tunnels[]` (additive) is each ' +
-			"service host's own Cloudflare tunnel; its findings are `tunnel-*` kinds. Plain `converge-toolchain " +
+			"service host's own Cloudflare tunnel; its findings are `tunnel-*` kinds. `peers[]` (additive) is each hot standby's peer port, closed to all but its pair-mate; its findings are `peer-port-*` kinds. Plain `converge-toolchain " +
 			'--json` (no --refresh) is not under contract.',
 	},
 	{
