@@ -113,6 +113,30 @@ declared. A hand-copied list here would go stale, and did.
 Each subcommand SPAWNS its script rather than importing it, so exit codes and
 stdio pass through untouched.
 
+### Install the CLI
+
+The package's `bin` is only on PATH inside a `node_modules/.bin`. So on the
+controller, `fleet` is a wrapper in `~/.local/bin` (already on PATH). It
+points at the copy production runs: mgmt-api's installed package, which every
+deploy keeps current. It does not point at a dev checkout, whose `dist/` goes
+stale after a pull.
+
+```sh
+cat > ~/.local/bin/fleet <<'EOF'
+#!/bin/sh
+: "${REPOS_DIR:=$HOME/repos}"
+export REPOS_DIR
+exec node "$HOME/srv/hadoku_site/services/mgmt-api/node_modules/@wolffm/fleet-manager/dist/cli.js" "$@"
+EOF
+chmod 0755 ~/.local/bin/fleet
+```
+
+`REPOS_DIR` is defaulted, not forced, the way the cron jobs set it. So the
+wrapper resolves the canonical checkouts from any directory, and
+`HADOKU_SITE_ROOT`, or a hadoku_site worktree you are standing in, still wins.
+The provenance line below says which install answered. To try an unpublished
+change, run the checkout directly: `node dist/cli.js …`, after `pnpm build`.
+
 ### Provenance — which tree, and which install, answered
 
 Every subcommand writes one line to **stderr** before it runs anything:
