@@ -779,12 +779,16 @@ test('#12: memory MOVING with free slots holds past MAX_WAIT_S and admits once i
 	// 1.5-3.5s and its first sample past MAX_WAIT_S lands by ~3.8s unloaded.
 	// Settling at 8s leaves that sample 4s of slack on a busy host; it settled
 	// at 4s until fleet-manager#13/#14, which left ~0.2s. The hold and the
-	// spawn ceiling grow to cover the later admission.
+	// spawn ceiling grow to cover the later admission. The ramp spans ~7.3s
+	// rather than the default ~3.2s: at load 90 the hook's first sample landed
+	// after the default ramp had gone flat, so it read no swing and refused.
+	// At 220MB per 0.3s, any two samples the hook takes 1.5s apart before ~7.3s
+	// differ by 1,100MB, over MEM_SWING_MB.
 	const r = run({
 		conf: { ...HOKON_12, MAX_HOLD_S: 20 },
 		others: 0,
 		memAvailableMb: 1732,
-		memSwing: { fromMb: 1732, toMb: 7065, settleAfterS: 8, settledMb: 19_000 },
+		memSwing: { fromMb: 1732, toMb: 7065, stepMb: 220, settleAfterS: 8, settledMb: 19_000 },
 		timeout: 30_000,
 	});
 	const all = r.out + r.err;

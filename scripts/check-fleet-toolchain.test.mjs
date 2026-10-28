@@ -174,6 +174,13 @@ test('a detect that only a LOGIN shell can satisfy is NOT a pass', async () => {
 });
 
 // --- The PATH a runner job gets (#127) ---
+
+// A stand-in listener that lives until the test kills it. It was `sleep 30`,
+// and at load 90 the doctor took 52-87s, so the probe found no listener and
+// judged the manager's PATH instead: the very mistake these tests guard.
+// The loop keeps the pid a shell running this file, which is how the probe
+// recognises a listener, and `proc.kill()` ends it within a second.
+const LISTENER_SCRIPT = '#!/bin/sh\nwhile :; do sleep 1; done\n';
 //
 // hokon, 2026-10-13→15: hadoku_site's runner failed `spawnSync gh ENOENT` five
 // times while a non-login shell over ssh found gh in ~/.local/bin. A runner's
@@ -208,7 +215,7 @@ test("#127: a LIVE listener started with an older PATH is judged by its own PATH
 	const runnerDir = join(fh.home, 'runners', 'actions-runner-hadoku-site');
 	mkdirSync(join(runnerDir, 'bin'), { recursive: true });
 	const listener = join(runnerDir, 'bin', 'Runner.Listener');
-	writeFileSync(listener, '#!/bin/sh\nsleep 30\n');
+	writeFileSync(listener, LISTENER_SCRIPT);
 	chmodSync(listener, 0o755);
 	const proc = spawn('/bin/sh', [listener], { env: { PATH: STOCK_PATH }, stdio: 'ignore' });
 	try {
@@ -238,7 +245,7 @@ test('#127: a listener whose .env sets PATH is judged by that PATH — the liste
 	mkdirSync(join(runnerDir, 'bin'), { recursive: true });
 	writeFileSync(join(runnerDir, '.env'), `LANG=C\nPATH=${STOCK_PATH}\n`);
 	const listener = join(runnerDir, 'bin', 'Runner.Listener');
-	writeFileSync(listener, '#!/bin/sh\nsleep 30\n');
+	writeFileSync(listener, LISTENER_SCRIPT);
 	chmodSync(listener, 0o755);
 	// Its environ HAS the tool; its .env, which wins, does not.
 	const proc = spawn('/bin/sh', [listener], { env: { PATH: fh.path }, stdio: 'ignore' });
