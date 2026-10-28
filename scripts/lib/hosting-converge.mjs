@@ -27,6 +27,14 @@
  *
  * Unplaceable slices are never ended here. The tenant moves its work off them
  * (it reads the same notices) and names them in its release order.
+ *
+ * STANDBYS (`availability.standby`, docs/service-state.md) are counted apart:
+ * a slice with `role: "standby"` is never serving, never in `held`, and never
+ * a second writer. They are met from the plan's own `standby` entry (every
+ * primary rule, runtime included, never the primary's node) and only beside a
+ * primary held in this layer: a standby of nothing is a second instance. One
+ * past the count is ended with the tenant's notice; it holds no authority, so
+ * no release order is needed. An unplaceable standby is replaced, not ended.
  */
 import { ruleHolds } from './hosting-placement.mjs';
 
@@ -53,13 +61,15 @@ export function decide({
 	plan,
 	movePlan,
 	offers,
-	slices,
+	slices: allSlices,
 	removeDue,
 	notices,
 	now,
 	appLayer = null,
 }) {
 	const { app, slices: size, availability, placement } = request;
+	const slices = allSlices.filter((s) => s.role !== 'standby');
+	const standbySlices = allSlices.filter((s) => s.role === 'standby');
 	const desired = Math.min(size.max, Math.max(size.min, demand?.slices ?? size.min));
 	const horizonMs = availability.noticeMin * 60_000 + HORIZON_MARGIN_MS;
 	const offerOf = new Map(offers.map((o) => [o.node, o]));
@@ -151,7 +161,93 @@ export function decide({
 			});
 	}
 
-	return { app, desired, serving, ending, unplaceable, actions, blocked };
+	const standby = meetStandby({
+		request,
+		plan,
+		standbySlices,
+		primaryHeld: slices.filter((s) => !s.until).length,
+		fault: (node) => faultOf(node, offerOf.get(node), placement.require, notices, now, horizonMs),
+		offerOf,
+		actions,
+		blocked,
+	});
+	return {
+		app,
+		desired,
+		serving,
+		ending,
+		unplaceable,
+		actions,
+		blocked,
+		...(standby ? { standby } : {}),
+	};
+}
+
+/** The standby half of a decision; pushes onto `actions`/`blocked`. Null when none is asked or held. */
+function meetStandby({
+	request,
+	plan,
+	standbySlices,
+	primaryHeld,
+	fault,
+	offerOf,
+	actions,
+	blocked,
+}) {
+	const { app, availability } = request;
+	const wanted = availability.standby ?? 0;
+	if (!wanted && !standbySlices.length) return null;
+	const ending = standbySlices
+		.filter((s) => s.until)
+		.map((s) => ({ node: s.node, until: s.until }));
+	const unplaceable = [];
+	for (const s of standbySlices.filter((x) => !x.until)) {
+		const why = fault(s.node);
+		if (why)
+			unplaceable.push({ node: s.node, why, reachable: offerOf.get(s.node)?.reachable === true });
+	}
+	const bad = new Set(unplaceable.map((u) => u.node));
+	const serving = standbySlices.filter((s) => !s.until && !bad.has(s.node)).map((s) => s.node);
+
+	if (serving.length < wanted) {
+		if (!primaryHeld) {
+			blocked.push({
+				node: '*',
+				why: `${app} holds no primary slice in the hosting layer, so a standby would stand by for nothing`,
+				soft: true,
+			});
+		} else {
+			// Never on a node this pass is already declaring on.
+			const taken = new Set(actions.filter((a) => a.op === 'declare').map((a) => a.node));
+			const picks = (plan.standby?.ranked ?? [])
+				.filter((r) => !taken.has(r.node))
+				.slice(0, wanted - serving.length);
+			for (const r of picks)
+				actions.push({
+					op: 'declare',
+					role: 'standby',
+					node: r.node,
+					why: `${serving.length} standby serving of ${wanted} wanted`,
+				});
+			if (picks.length < wanted - serving.length)
+				blocked.push({
+					node: '*',
+					why:
+						`${wanted} standby wanted, ${serving.length} serving, and only ${picks.length} more ` +
+						`node(s) fit: ${summarizeRefused(plan.refused)}`,
+				});
+		}
+	} else if (serving.length > wanted) {
+		for (const node of serving.slice(wanted))
+			actions.push({
+				op: 'end',
+				role: 'standby',
+				node,
+				inMin: availability.noticeMin,
+				why: `${serving.length} standby serving, ${wanted} wanted`,
+			});
+	}
+	return { wanted, serving, ending, unplaceable };
 }
 
 /** Why a held slice's node cannot serve, or null. */
@@ -187,6 +283,7 @@ export function doorArgs(request, a) {
 			'--cores',
 			String(cores),
 			'--shared',
+			...(a.role ? ['--role', a.role] : []),
 			...reason,
 		];
 	}

@@ -89,6 +89,7 @@ const VALUE_FLAGS = [
 	'--at',
 	'--install',
 	'--sha256',
+	'--role',
 ];
 const BOOL_FLAGS = [
 	'--shared',
@@ -121,8 +122,9 @@ const node = args.find((a, i) => !a.startsWith('-') && !VALUE_FLAGS.includes(arg
 if (has('--help') || has('-h')) {
 	console.log(
 		[
-			'fleet hosting <node> --tenant <name> --memory 4G --cores 4 [--shared] [--reason "why"]',
+			'fleet hosting <node> --tenant <name> --memory 4G --cores 4 [--shared] [--role standby] [--reason "why"]',
 			'        lend the node. --shared: CI stays and ranks below the slice; without it CI is held off.',
+			"        --role standby: one of the tenant's availability.standby copies (docs/service-state.md).",
 			'fleet hosting <node> --install <path> --sha256 <hex>',
 			"        put the tenant's executable in place, root-owned, and restart the agent.",
 			'fleet hosting <node> --restart',
@@ -469,6 +471,9 @@ if (action === 'remove') {
 // ── declare ──────────────────────────────────────────────────────────────────
 const shared = has('--shared');
 const tenant = valueOf('--tenant');
+// A hot standby: waits on the tenant's lease, never a second writer, never toward slices.max.
+const role = valueOf('--role');
+if (role !== null && role !== 'standby') refuse(`--role takes one value, standby; got ${role}.`);
 const spec = specOf(tenant);
 if (!spec)
 	refuse(
@@ -485,6 +490,11 @@ try {
 }
 if (current && current.mode !== (shared ? 'shared' : 'whole'))
 	refuse(`${node} is already hosting as ${current.mode}. End and remove that first.`);
+// Promoting a standby is the lease's job, not the record's: never flip a role in place.
+if (current && (current.role ?? null) !== role)
+	refuse(
+		`${node} already hosts ${current.tenant} as ${current.role ?? 'primary'}. End and remove that first.`
+	);
 const drained = drainDoc.nodes[node];
 if (!shared && drained && !['hosting', 'lease'].includes(drained.kind) && !has('--force')) {
 	refuse(
@@ -518,7 +528,14 @@ if (shared && !sharedRec) {
 	const refused = reasons.length ? { ...found, reasons } : null;
 	const ranked = plan.ranked.find((r) => r.node === node);
 	placement = { policy: plan.ciMayReadPolicy, ...(ranked?.risk ? { risk: ranked.risk } : {}) };
-	if (plan.atMax)
+	if (role === 'standby') {
+		const wanted = request.availability.standby ?? 0;
+		if (!wanted) refuse(`${tenant}'s hosting.json asks for no standby (availability.standby).`);
+		if (plan.standby.held.length >= wanted)
+			refuse(
+				`${tenant} already holds ${plan.standby.held.length} of its ${wanted} standby slice(s).`
+			);
+	} else if (plan.atMax)
 		refuse(`${tenant} already holds ${plan.held.length} of its ${request.slices.max} slices.`);
 	if (refused && !has('--force'))
 		refuse(
@@ -536,7 +553,7 @@ const base = {
 	reason: valueOf('--reason') ?? `${tenant} hosting node`,
 	by,
 };
-const declared = { tenant, ...resources, port: spec.port };
+const declared = { tenant, ...resources, port: spec.port, ...(role ? { role } : {}) };
 // A resize restarts the hold-back's grace: the new size is not in use yet.
 if (current && (current.memoryMb !== declared.memoryMb || current.cores !== declared.cores))
 	base.since = new Date(NOW).toISOString();

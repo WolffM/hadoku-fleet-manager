@@ -149,7 +149,9 @@ for (const [app, { request }] of tenants) {
 	const facet = `hosting:${app}`;
 	const slices = nodes.flatMap((n) => {
 		const h = hostingOn(n, drainDoc, hostingDoc, NOW);
-		return h?.tenant === app ? [{ node: n, ...(h.until ? { until: h.until } : {}) }] : [];
+		return h?.tenant === app
+			? [{ node: n, ...(h.role ? { role: h.role } : {}), ...(h.until ? { until: h.until } : {}) }]
+			: [];
 	});
 	// A slice past its end still has units until --remove. Whole-box ends are drains.
 	const removeDue = [
@@ -188,7 +190,9 @@ for (const [app, { request }] of tenants) {
 	const { rows, results } = await act(request, decision, { live, door });
 	for (const k of Object.keys(rows)) doc[k].push(...rows[k]);
 	// A held slice on a node that did not answer: its facet is not read clean this pass.
-	for (const u of decision.unplaceable.filter((x) => !x.reachable))
+	for (const u of [...decision.unplaceable, ...(decision.standby?.unplaceable ?? [])].filter(
+		(x) => !x.reachable
+	))
 		doc.unreadable.push({ node: u.node, facet, why: u.why });
 	doc.tenants[app] = {
 		auto: request.placement.auto === true,

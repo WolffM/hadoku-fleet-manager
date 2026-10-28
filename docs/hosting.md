@@ -188,7 +188,12 @@ A fenced singleton may also ask for `availability.standby: N`: N more running
 copies, each on its own node, that wait on the lease. The plan lists them in
 their own `standby` entry, held to every rule the primary is, `runtime`
 included. A standby's record carries `role: "standby"`, so it never counts
-toward `slices.max`, as serving, or as a second writer. What a service must do
+toward `slices.max`, as serving, or as a second writer. The converger meets the
+count with `fleet hosting <node> --role standby`, only beside a primary held in
+this layer (a standby of an app-layer instance would be a second instance). It
+replaces an unplaceable standby rather than ending it, and ends one past the
+count with the tenant's notice. A role never flips in place: promotion is the
+lease's job. What a service must do
 to earn that fence, and how to request it, is
 [service-state.md](service-state.md).
 

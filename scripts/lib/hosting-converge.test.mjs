@@ -303,3 +303,98 @@ test('a service the app layer already runs is never declared beside itself: its 
 		'an app the app layer does not run yet gets its first slice'
 	);
 });
+
+// availability.standby (docs/service-state.md): hot standbys of a data-lease singleton.
+const fenced = {
+	...service,
+	availability: { ...service.availability, fence: 'data-lease', standby: 1 },
+};
+const withStandby = (ranked, standbyRanked) => ({
+	...plan(...ranked),
+	standby: { ranked: standbyRanked.map((node) => ({ node, role: 'standby' })) },
+});
+
+test('a standby is met beside a held primary, from the plan’s standby entry, and never counts as serving', () => {
+	const d = run({
+		request: fenced,
+		plan: withStandby([], ['claw-6']),
+		offers: [offer('claw-4'), offer('claw-6')],
+		slices: [{ node: 'claw-4' }],
+	});
+	assert.deepEqual(d.serving, ['claw-4']);
+	assert.deepEqual(
+		d.actions.map((a) => [a.op, a.node, a.role]),
+		[['declare', 'claw-6', 'standby']]
+	);
+	assert.deepEqual(d.standby, { wanted: 1, serving: [], ending: [], unplaceable: [] });
+	assert.deepEqual(doorArgs(fenced, d.actions[0]).slice(-4, -2), ['--role', 'standby']);
+
+	const met = run({
+		request: fenced,
+		plan: withStandby([], ['claw-8']),
+		offers: [offer('claw-4'), offer('claw-6')],
+		slices: [{ node: 'claw-4' }, { node: 'claw-6', role: 'standby' }],
+	});
+	assert.deepEqual(met.actions, [], 'a held standby is enough, and is not a second primary');
+	assert.deepEqual(met.serving, ['claw-4']);
+	assert.deepEqual(met.standby.serving, ['claw-6']);
+});
+
+test('no standby without a primary in the layer, so an app-layer service never gets a second instance', () => {
+	const d = run({
+		request: fenced,
+		plan: withStandby(['claw-6'], ['claw-8']),
+		offers: [offer('claw-6'), offer('claw-8')],
+		appLayer: { node: 'claw-4' },
+	});
+	assert.ok(!d.actions.some((a) => a.role === 'standby'));
+	assert.ok(d.blocked.some((b) => /no primary slice in the hosting layer/.test(b.why) && b.soft));
+});
+
+test('an unplaceable standby is replaced, not ended; a standby past the count is ended with notice', () => {
+	const lost = run({
+		request: fenced,
+		plan: withStandby([], ['claw-8']),
+		offers: [offer('claw-4'), offer('claw-6', { reachable: false }), offer('claw-8')],
+		slices: [{ node: 'claw-4' }, { node: 'claw-6', role: 'standby' }],
+	});
+	assert.deepEqual(
+		lost.actions.map((a) => [a.op, a.node]),
+		[['declare', 'claw-8']]
+	);
+	assert.equal(lost.standby.unplaceable[0].node, 'claw-6');
+
+	const extra = run({
+		request: fenced,
+		offers: [offer('claw-4'), offer('claw-6'), offer('claw-8')],
+		slices: [
+			{ node: 'claw-4' },
+			{ node: 'claw-6', role: 'standby' },
+			{ node: 'claw-8', role: 'standby' },
+		],
+	});
+	assert.deepEqual(
+		extra.actions.map((a) => [a.op, a.node, a.inMin]),
+		[['end', 'claw-8', 15]]
+	);
+});
+
+test('a shortfall of standby nodes is a hard block with the plan’s reasons', () => {
+	const d = run({
+		request: fenced,
+		plan: {
+			...withStandby([], []),
+			refused: [{ node: 'claw-6', reasons: ['yt-dlp does not run'] }],
+		},
+		offers: [offer('claw-4')],
+		slices: [{ node: 'claw-4' }],
+	});
+	const b = d.blocked.find((x) => /standby wanted/.test(x.why));
+	assert.ok(b && !b.soft, JSON.stringify(d.blocked));
+	assert.match(b.why, /claw-6: yt-dlp does not run/);
+});
+
+test('a request without a standby decides byte-for-byte as before', () => {
+	const d = run({ request: service, offers: [offer('claw-4')], slices: [{ node: 'claw-4' }] });
+	assert.ok(!('standby' in d));
+});
