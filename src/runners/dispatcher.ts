@@ -13,6 +13,7 @@ import {
 	busyOf,
 	satisfiesLabels,
 	type NodeState,
+	type Placement,
 	type RunIdentity,
 } from './placement.js';
 import { jitRunnerName } from './ephemeral.js';
@@ -184,6 +185,30 @@ export interface TickPlan {
 }
 
 /**
+ * What {@link planTick} decided for ONE queued job, handed to an optional
+ * observer as it decides — the decision log's only input from the JIT path
+ * (`decision-log.ts`). Delivered synchronously, BEFORE a placement's capacity
+ * is consumed, so `candidates` reads exactly what the walk read. The node
+ * objects are planTick's live working copies: an observer READS them in the
+ * call and keeps nothing; mutating one would change the next placement.
+ */
+export interface PlanObservation {
+	run: PendingRun;
+	/** Where this job stood in the pass's placement order (singleNodeFirst). */
+	passIndex: number;
+	outcome: 'in-flight' | 'fork' | 'unplaceable' | 'held' | 'placed' | 'reserved';
+	/** The eligible nodes the walk was offered. Empty for in-flight and fork. */
+	candidates: readonly NodeState[];
+	placed?: Placement;
+	affinityMoved?: boolean;
+	busyAtChoice?: number;
+	/** The job's queue age the spill and heavy gates read; undefined is unknown. */
+	queuedSec?: number;
+	/** The skip line's reason, for the outcomes that are a skip. */
+	reason?: string;
+}
+
+/**
  * Decide the mints for one tick.
  *
  * Three properties this has to hold, each of which is a bug the fleet has
@@ -254,7 +279,13 @@ export function planTick(
 	nodes: readonly NodeState[],
 	order: readonly string[],
 	inFlight: InFlight,
-	nowMs: number
+	nowMs: number,
+	/**
+	 * Told every decision as it is made; see {@link PlanObservation}. Absent is
+	 * today's planTick exactly — the decision log's equivalence tests run every
+	 * scenario both ways and assert the same plan.
+	 */
+	observe?: (o: PlanObservation) => void
 ): TickPlan {
 	const mint: MintAction[] = [];
 	const skipped: SkipReason[] = [];
@@ -262,8 +293,17 @@ export function planTick(
 	// A working copy: assignments below consume capacity from it.
 	const state = new Map(nodes.map((m) => [m.name, { ...m }]));
 
+	let passIndex = -1;
 	for (const run of singleNodeFirst(pending, nodes)) {
+		passIndex++;
 		if (inFlight.jobIds.has(run.jobId) || inFlight.runIds.has(run.id)) {
+			observe?.({
+				run,
+				passIndex,
+				outcome: 'in-flight',
+				candidates: [],
+				reason: 'already has a runner in flight',
+			});
 			skipped.push({
 				runId: run.id,
 				jobId: run.jobId,
@@ -277,6 +317,13 @@ export function planTick(
 		if (!fork.ok) {
 			// Refusing is the whole point; saying so is how anyone finds out the
 			// dispatcher is declining work rather than failing to see it.
+			observe?.({
+				run,
+				passIndex,
+				outcome: 'fork',
+				candidates: [],
+				reason: `fork safety: ${fork.reason}`,
+			});
 			skipped.push({
 				runId: run.id,
 				jobId: run.jobId,
@@ -314,6 +361,15 @@ export function planTick(
 			const holds = placed.passed.flatMap((x) => (x.holdSec === undefined ? [] : [x.holdSec]));
 			const releaseAtMs =
 				queuedAt !== undefined && holds.length ? queuedAt + Math.min(...holds) * 1000 : undefined;
+			observe?.({
+				run,
+				passIndex,
+				outcome: run.held ? 'held' : 'unplaceable',
+				candidates: eligible,
+				placed,
+				queuedSec: spill.queuedSec,
+				reason: placed.reason ?? 'no placement',
+			});
 			skipped.push({
 				// A held job's refusal is the one its backoff already recorded; it
 				// is not a new observation and must not extend that backoff.
@@ -347,6 +403,16 @@ export function planTick(
 		// report (#102.4) is "what the rule did", i.e. the load the walk
 		// actually chose THIS node at, not the load it leaves behind.
 		const busyAtChoice = busyOf(chosen);
+		observe?.({
+			run,
+			passIndex,
+			outcome: run.held ? 'reserved' : 'placed',
+			candidates: eligible,
+			placed,
+			affinityMoved,
+			busyAtChoice,
+			queuedSec: spill.queuedSec,
+		});
 		chosen.liveUnits += 1;
 		// #102.4: this SAME object is what the NEXT run's `choosePlacement` call
 		// reads `runningHeavy` off (via `eligible`, which holds references into

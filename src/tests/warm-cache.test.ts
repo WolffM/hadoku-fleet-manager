@@ -80,6 +80,12 @@ import {
 	historyFile,
 } from '../job-history.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
+import {
+	__resetDecisionLogForTesting,
+	__restoreDecisionSinkForTesting,
+	__setDecisionSinkForTesting,
+	type DecisionRecord,
+} from '../runners/decision-log.js';
 
 // --- naming, eligibility, the lock, the decision table -----------------------
 
@@ -1118,6 +1124,32 @@ test('dispatchWarmCache: fills an idle eligible node from what it has served', a
 	const res = await dispatchWarmCache(baseInput(), 'tok', gh, sh, T0);
 	assert.equal(res.filled, 1);
 	assert.equal(sims['claw-1'].marker, 'WolffM/hadoku_site 1000');
+});
+
+test('dispatchWarmCache: the decision log gets the fill, and the tick does the same with it off', async () => {
+	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku_site', startedAt: histAt(0) });
+	const run = async () => {
+		const sims: Record<string, NodeSim> = {};
+		const gh = fakeGh({});
+		const res = await dispatchWarmCache(baseInput(), 'tok', gh, simShell(sims), T0);
+		return { res, marker: sims['claw-1']?.marker, calls: [...gh.calls] };
+	};
+	try {
+		__setDecisionSinkForTesting(null);
+		const off = await run();
+		__resetWarmCacheClockForTesting();
+		__resetDecisionLogForTesting();
+		const rows: DecisionRecord[] = [];
+		__setDecisionSinkForTesting((rs) => rows.push(...rs));
+		const on = await run();
+		assert.deepEqual(on, off);
+		assert.deepEqual(
+			rows.map((r) => [r.path, r.kind, r.winner, r.action, r.repo]),
+			[['warm', 'warm-listener', 'claw-1', 'fill', 'WolffM/hadoku_site']]
+		);
+	} finally {
+		__restoreDecisionSinkForTesting();
+	}
 });
 
 // ---------------------------------------------------------------------------

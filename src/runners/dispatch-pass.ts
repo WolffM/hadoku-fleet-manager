@@ -35,6 +35,7 @@ import { JIT_PREFIX, WARM_PREFIX, parseJitName, warmRunnerName } from './ephemer
 import { recordCapacityLedger } from './capacity-ledger.js';
 import { nodeOf } from './census.js';
 import { recordDispatchDay } from './dispatch-daily.js';
+import { JitDecisionBook, decisionLogEnabled, recordWarmAssignments } from './decision-log.js';
 import { satisfiesLabels, type NodeState } from './placement.js';
 import type { FleetDispatchAffinity } from '../fleet-report-types.js';
 
@@ -82,6 +83,13 @@ export interface DispatchPassInput {
 	 * source of `NodeState.heavyJobs`. Absent is "none known", today's walk.
 	 */
 	runningJobs?: readonly RunningJob[];
+	/**
+	 * `placementFingerprint` for one job's labels, from the tick that owns the
+	 * probe backoff — stamped on the decision log's rows (`decision-log.ts`)
+	 * so a row says whether the nodes that could take the job had changed.
+	 * Absent: the rows carry no fingerprint. Placement never reads it.
+	 */
+	fingerprintFor?: (repo: string, labels: readonly string[]) => string;
 }
 
 /** One in-progress job, by the runner GitHub assigned it to. */
@@ -89,6 +97,9 @@ export interface RunningJob {
 	repo: string;
 	runner: string;
 	jobName: string;
+	/** The job's and its run's ids, for the decision log's warm rows only. */
+	jobId?: number;
+	runId?: number;
 }
 
 export interface DispatchPassResult {
@@ -288,6 +299,16 @@ export async function runDispatchPass(
 		}
 	}
 
+	// THE WARM PATH'S JOBS, for the decision log: GitHub handed these straight
+	// to a `warm-*` listener, and the listings this tick already read are the
+	// only place the dispatcher sees them. Before the early return, because a
+	// run whose last job a listener just took has nothing fresh left.
+	const warmTaken = (input.runningJobs ?? []).filter((j) => j.runner.startsWith(WARM_PREFIX));
+	if (warmTaken.length) {
+		const known = input.nodes.map((m) => m.name);
+		recordWarmAssignments(warmTaken, (r) => nodeOf(r, known), input.nodes, nowMs);
+	}
+
 	// Held entries only matter when something fresh could take their slot, so
 	// a pass with nothing fresh has nothing to do.
 	if (!fresh.length) {
@@ -477,6 +498,12 @@ export async function runDispatchPass(
 		if (!e.ok) logger.warn(`[dispatch] CAPACITY INVARIANT broken on ${e.node}: ${e.why}`);
 	}
 
+	// THE DECISION LOG (T1): planTick tells it each decision as it makes it,
+	// and it writes the ones that changed after the mints below. Off, planTick
+	// gets no observer at all — the shape the equivalence tests compare against.
+	const book = decisionLogEnabled()
+		? new JitDecisionBook(nowMs, input.order, input.fingerprintFor)
+		: null;
 	const plan = planTick(
 		byPriority(input.pending),
 		nodes,
@@ -485,7 +512,8 @@ export async function runDispatchPass(
 		// The SAME injected clock the reap gate reads (#92). A second
 		// `Date.now()` here let a test on a fixed clock read every run as queued
 		// for weeks, which clears the slow-tier spill threshold trivially.
-		nowMs
+		nowMs,
+		book?.observe
 	);
 	let minted = 0;
 	let failed = 0;
@@ -538,6 +566,7 @@ export async function runDispatchPass(
 				sh
 			)
 		);
+		book?.minted(action.jobId, action.runnerName, res);
 		if (res.ok) {
 			minted++;
 			if (action.viaAffinity) mintedViaAffinity++;
@@ -555,6 +584,7 @@ export async function runDispatchPass(
 			logger.warn(`[dispatch] mint failed for ${action.repo} on ${action.node}: ${res.reason}`);
 		}
 	}
+	book?.flush();
 	await closeWarmBesideHeavy(nodes, mintedHeavyOn, heavyModel, nowMs, token, gh, sh);
 	// A held run's refusal was said when it was last probed and is said again
 	// when it is next probed; repeating it every pass is what the backoff's own

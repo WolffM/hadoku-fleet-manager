@@ -135,6 +135,11 @@ const COMMANDS: Record<string, Command> = {
 		help: true,
 		summary: 'where the next job would go, and why every other node did not get it',
 	},
+	decisions: {
+		script: 'fleet-decisions.mjs',
+		help: true,
+		summary: 'where past jobs went and why the other nodes refused them (--job|--run|--node)',
+	},
 	drain: {
 		script: 'drain-node.mjs',
 		help: true,

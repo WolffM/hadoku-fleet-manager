@@ -424,7 +424,24 @@ export interface Placement {
 	 * every caller before this wave sees no change from this field existing.
 	 */
 	heavy: boolean;
+	/**
+	 * Every node in the order this walk asked it — the re-ranked placeable
+	 * nodes, then the unschedulable, then names not in the fleet. Nodes after
+	 * the winner were never asked. For the decision log; placement reads none
+	 * of it.
+	 */
+	walk?: string[];
+	/** The node right behind the winner in the walk, and the first term that
+	 *  ranked the winner ahead of it. Absent when nothing stood behind it. */
+	rankedOver?: { node: string; key: WalkKey };
 }
+
+/**
+ * The terms of the placement walk's ranking, in the order they are compared
+ * (see {@link choosePlacement}). `baseline-order` is the tick's own
+ * `orderCandidates` position — speed, idle time, schedulability, name.
+ */
+export type WalkKey = 'heavy-jobs' | 'busy' | 'running-heavy' | 'warm-affinity' | 'baseline-order';
 
 /** This node's running jobs — standing registrations GitHub assigned directly,
  *  plus live (minted, not yet finished) units — see `traffic.ts`'s
@@ -762,9 +779,11 @@ export function choosePlacement(
 	// gave them upstream.
 	const posOf = new Map(order.map((n, i) => [n, i]));
 
-	const walkOrder = [...placeable].sort((a, b) => {
-		const x = byName.get(a)!;
-		const y = byName.get(b)!;
+	// THE COMPARATOR, NAMED so the walk and the decision log (`decision-log.ts`)
+	// read ONE ranking function: the sort takes `diff`, the log takes `key` — the
+	// first term that told two nodes apart. Same terms, same order, same signs
+	// as the inline comparator this replaced.
+	const compareWalk = (x: NodeState, y: NodeState): { key: WalkKey; diff: number } => {
 		// 1. Fewest jobs in flight — THIS is the fix for "busy counted distinct
 		//    repos, not jobs" (#102.1): `busyOf` reads the actual running+live
 		//    count, and it is read fresh here, after whatever `planTick` has
@@ -775,11 +794,11 @@ export function choosePlacement(
 		if (heavy) {
 			const xh = x.heavyJobs ?? 0;
 			const yh = y.heavyJobs ?? 0;
-			if (xh !== yh) return xh - yh;
+			if (xh !== yh) return { key: 'heavy-jobs', diff: xh - yh };
 		}
 		const xb = busyOf(x);
 		const yb = busyOf(y);
-		if (xb !== yb) return xb - yb;
+		if (xb !== yb) return { key: 'busy', diff: xb - yb };
 		// 2. Heavy avoidance (#102.4), ONLY for a job that is not itself heavy:
 		//    a node already running a heavy-kind job sorts after one that is
 		//    not. A heavy job does not apply this — it already gets what it
@@ -788,7 +807,7 @@ export function choosePlacement(
 		if (!heavy) {
 			const xh = x.runningHeavy ? 1 : 0;
 			const yh = y.runningHeavy ? 1 : 0;
-			if (xh !== yh) return xh - yh;
+			if (xh !== yh) return { key: 'running-heavy', diff: xh - yh };
 		}
 		// 3. Warm affinity (P5.1) — a TIE-BREAK among nodes equal on (1) and
 		//    (2), never an override of either. `repo === undefined` (no caller
@@ -798,11 +817,12 @@ export function choosePlacement(
 		if (repo !== undefined) {
 			const xa = x.warmRepo === repo ? 0 : 1;
 			const ya = y.warmRepo === repo ? 0 : 1;
-			if (xa !== ya) return xa - ya;
+			if (xa !== ya) return { key: 'warm-affinity', diff: xa - ya };
 		}
 		// 4. The baseline order's own position — see `posOf` above.
-		return posOf.get(a)! - posOf.get(b)!;
-	});
+		return { key: 'baseline-order', diff: posOf.get(x.name)! - posOf.get(y.name)! };
+	};
+	const walkOrder = [...placeable].sort((a, b) => compareWalk(byName.get(a)!, byName.get(b)!).diff);
 
 	// OVERFLOW OR SOLE-CARRIER (#15): could a node that is not a guest take this
 	// job, by its labels? Asked of nodes that could take work at all: a claw
@@ -819,7 +839,8 @@ export function choosePlacement(
 	const note = (node: string, reason: string, holdSec?: number): void => {
 		passed.push(holdSec === undefined ? { node, reason } : { node, reason, holdSec });
 	};
-	for (const name of [...walkOrder, ...unplaceable, ...unknown]) {
+	const walk = [...walkOrder, ...unplaceable, ...unknown];
+	for (const name of walk) {
 		const m = byName.get(name);
 		if (!m) {
 			note(name, 'not in the fleet');
@@ -837,17 +858,32 @@ export function choosePlacement(
 			note(name, reason, holdSec);
 			continue;
 		}
+		// What ranked the winner over the node right behind it in the walk — read
+		// by the decision log only, never by placement.
+		const next = walkOrder[walkOrder.indexOf(name) + 1];
+		const rankedOver =
+			walkOrder.includes(name) && next !== undefined
+				? { node: next, key: compareWalk(m, byName.get(next)!).key }
+				: undefined;
 		return {
 			node: name,
 			passed,
 			viaAffinity: repo !== undefined && m.warmRepo === repo,
 			requiredMb,
 			heavy,
+			walk,
+			...(rankedOver ? { rankedOver } : {}),
 		};
 	}
 	// QUEUE, do not force. Every node being full is the normal shape of a
 	// burst, and minting anyway is precisely the OOM this workstream exists to
 	// stop — the fleet already has a bounded smoother for jobs GitHub has already
 	// placed (§11.1), and it is not a cap.
-	return { passed, reason: 'no node can take this job right now', viaAffinity: false, heavy };
+	return {
+		passed,
+		reason: 'no node can take this job right now',
+		viaAffinity: false,
+		heavy,
+		walk,
+	};
 }

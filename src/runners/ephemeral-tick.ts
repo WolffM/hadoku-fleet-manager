@@ -83,6 +83,7 @@ import { buildSpeedModel, type SpeedModel } from './speed-tier.js';
 import { heavyMarkedRecently, type DispatchPassResult } from './dispatch-pass.js';
 import { slowReposOn, type NodeState } from './placement.js';
 import { chargedLikeDispatch, getCapacityLedger } from './capacity-ledger.js';
+import { recordWarmListenerDecisions, type WarmListenerDecision } from './decision-log.js';
 
 /** The half of the fast loop's probe this needs. Declared locally, not imported,
  *  so the dependency stays one-directional. */
@@ -1556,7 +1557,7 @@ export async function dispatchWarmCache(
 	// excluded from the act loop after this — there is nothing for `decisions`
 	// to say about it, and reading that absence as `idle` would count a
 	// deliberate, permanent hold-back as an ordinary quiet tick.
-	const neverWarm = new Set<string>();
+	const neverWarm = new Map<string, string>();
 	const planNodes: WarmFleetNode[] = [];
 	// The repos a node must not hold a listener for: the manifest's
 	// `excludeRepos` (#82), then any repo with a kind this node runs slowly
@@ -1625,7 +1626,16 @@ export async function dispatchWarmCache(
 		// it, say why with the node and the real error, move on.
 		try {
 			if (tier === 'slow' || drained || spaceRefused || runningHeavyNow) {
-				neverWarm.add(o.node);
+				neverWarm.set(
+					o.node,
+					tier === 'slow'
+						? 'slow tier'
+						: drained
+							? 'drained'
+							: spaceRefused
+								? (space?.reason ?? 'space refusal')
+								: 'running a heavy-kind job'
+				);
 				// A DRAIN MAY NOT WAIT FOR AN IDLE MOMENT. The eviction below is locked
 				// while the listener is busy, and a listener under load is busy at
 				// nearly every look — see `withholdWarmListener`. Withholding first
@@ -1757,6 +1767,33 @@ export async function dispatchWarmCache(
 		served: fleetServedJobs(),
 		nowMs,
 	});
+	// THE DECISION LOG (T1): each node's slot decision, as the act loop below
+	// will read it — the warm path's placement, which `planTick` never sees.
+	// Written only when a node's decision changes; never throws.
+	recordWarmListenerDecisions(
+		() =>
+			observed.map((o): WarmListenerDecision => {
+				const never = neverWarm.get(o.node);
+				const held = o.current?.repo ?? null;
+				if (never !== undefined) {
+					return { node: o.node, action: 'never-warm', repo: held, reason: never };
+				}
+				const d = decisions.get(o.node) ?? { action: 'idle' };
+				const target = d.action === 'fill' ? d.repo : d.action === 'rotate' ? d.to : null;
+				const withheld = target !== null ? warmExcluded(o.node, o.m, target) : undefined;
+				if (withheld !== undefined) {
+					return { node: o.node, action: 'withheld', repo: target, reason: withheld };
+				}
+				return {
+					node: o.node,
+					action: d.action,
+					repo: target ?? held,
+					from: d.action === 'rotate' ? d.from : null,
+					reason: null,
+				};
+			}),
+		nowMs
+	);
 
 	await Promise.all(
 		observed.map(async ({ node, m, installedMb, current }) => {

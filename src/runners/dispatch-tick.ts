@@ -1004,7 +1004,13 @@ export async function runDispatchTick(
 				// `DispatchPassInput.runningJobs`).
 				for (const j of jobs.jobs) {
 					if (j.status === 'in_progress' && j.runner_name && j.name) {
-						runningJobs.push({ repo, runner: j.runner_name, jobName: j.name });
+						runningJobs.push({
+							repo,
+							runner: j.runner_name,
+							jobName: j.name,
+							jobId: j.id,
+							runId: r.id,
+						});
 					}
 				}
 				const waiting = waitingJobs(r, jobs.jobs, isPending);
@@ -1064,6 +1070,7 @@ export async function runDispatchTick(
 			// alone, nothing can overtake them and the pass has nothing to do.
 			pending: pending.length ? [...pending, ...heldPending] : pending,
 			runningJobs,
+			fingerprintFor: (repo, labels) => placementFingerprint(input.nodes, repo, [labels]),
 			repos: input.repos,
 			labelsFor: input.labelsFor,
 			homeDirFor: input.homeDirFor,

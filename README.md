@@ -258,6 +258,20 @@ once on stderr (not under `FLEET_NO_BANNER=1`). `FLEET_USAGE_DIR=<dir>` moves
 it, `FLEET_USAGE_DIR=off` stops it, and under a test runner it is off unless a
 directory is named. At least 180 days are kept, under a 128 MB cap.
 
+### The dispatch decision log — why a job went where it went
+
+The dispatcher appends one row per job decision to
+`<state dir>/dispatch-decisions/YYYY-MM-DD.jsonl`: the candidate nodes in the
+order the walk asked them, every refusal with its reason, the winner and the
+ranking term that put it ahead of the next node, each node's capacity figures
+at that moment, and whether the mint worked. Warm-path rows record jobs GitHub
+handed a `warm-*` listener and each node's warm-slot decision. Rows join to
+job-history on `jobId`, and are written only when a job's decision changes —
+one row per decision, not one per 15 s pass (a restart may repeat one).
+`fleet decisions [--job ID | --run ID | --node X | --repo R] [--since 1h] [--json]`
+reads it back. 15 days are kept, under a 320 MB cap; a failed write is a
+warning and never touches the dispatch pass.
+
 ### Machine scoping
 
 Every machine-scoped subcommand takes **`--machine <name>`**, never a positional.
