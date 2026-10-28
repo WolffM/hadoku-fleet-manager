@@ -89,6 +89,12 @@ import {
 	parseDoctor,
 } from './doctor.mjs';
 import { guestNodeNames } from '../../dist/lib/node-role.js';
+import { nodeUser } from '../../dist/lib/node-users.js';
+import { readHostingDoc } from '../../dist/runners/hosting-record.js';
+import { pm2Peers, tenantsByNode } from './collect-offers.mjs';
+import { readDrainDoc } from './expected-down.mjs';
+import { claimPm2Units } from './hosting-claims.mjs';
+import { readTenantRegistry, tenantSpecFrom } from './tenant-registry.mjs';
 import { heldByCycle } from './reboot-cycle.mjs';
 import { stateDir } from './paths.mjs';
 import { measuredFacets, writeFacet } from '../../dist/lib/measured.js';
@@ -257,6 +263,45 @@ const deferred = new Set(
 				.map(([name]) => name)
 		: []
 );
+
+// ── who claims each pm2 manager ──────────────────────────────────────────────
+// A join against the controller's records, made here on every run and never
+// stored (`healthRecord`), so the render-from-record path judges the stored
+// units against the records as they are NOW.
+const claimRecords = (() => {
+	try {
+		const registry = readTenantRegistry(stateDir());
+		return {
+			tenants: Object.values(registry.tenants).map((e) => tenantSpecFrom(e.request)),
+			declared: tenantsByNode(readDrainDoc(), readHostingDoc(stateDir())),
+			unreadable: null,
+		};
+	} catch (e) {
+		return {
+			tenants: [],
+			declared: new Map(),
+			unreadable: `the hosting records are unreadable: ${e.message}`,
+		};
+	}
+})();
+const appLayerHosts = pm2Peers();
+for (const [name, h] of Object.entries(health)) {
+	if (!h.pm2Units?.units) continue;
+	h.pm2Claims = claimPm2Units({
+		units: h.pm2Units.units,
+		tenants: claimRecords.tenants,
+		declaredHere: (claimRecords.declared.get(name) ?? []).map((t) => t.tenant),
+		appLayer: {
+			unit: `pm2-${nodeUser(manifest.machines?.[name], 'admin')}.service`,
+			host: appLayerHosts.set === null ? null : appLayerHosts.set.has(name),
+		},
+		unreadable: claimRecords.unreadable,
+	});
+	if (appLayerHosts.set === null) {
+		for (const c of h.pm2Claims)
+			if (c.claim === 'unknown') c.why = `${c.why}: ${appLayerHosts.why}`;
+	}
+}
 
 // ── the reboot cycle's decisions ─────────────────────────────────────────────
 // The cycle (fleet reboot-claws, run hourly by the controller) acts; this

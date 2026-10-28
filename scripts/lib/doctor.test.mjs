@@ -1828,3 +1828,64 @@ void test('a STORED record from before this probe draws nothing; a fresh probe t
 	assert.equal(fresh.length, 1);
 	assert.equal(fresh[0].status, 'unknown');
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PM2 MANAGERS — measured here, claimed by doctor-run (lib/hosting-claims.mjs)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// VERBATIM, 2026-10-28, from `doctorProbe({ loadSeconds: 0 })` on each node.
+// claw-6 is a declared pm2 host of the app layer running nothing, uncapped.
+const PM2_HOKON = ['D pm2Units.count 1', 'D pm2Unit.pm2-hadoku.service 34359738368 28'];
+const PM2_CLAW6 = ['D pm2Units.count 1', 'D pm2Unit.pm2-hadoku.service max 0'];
+const PM2_CLAW5 = ['D pm2Units.count 0'];
+
+const pm2Facet = (lines) => healthFacet({ node: 'claw-x', probe: parseDoctor(workProbe(lines)) });
+
+void test('healthFacet: pm2Units carries each manager, its ceiling and running apps, off the real capture', () => {
+	assert.deepEqual(pm2Facet(PM2_HOKON).pm2Units, {
+		units: [{ unit: 'pm2-hadoku.service', bounded: true, apps: 28 }],
+		why: null,
+	});
+	assert.deepEqual(pm2Facet(PM2_CLAW6).pm2Units.units, [
+		{ unit: 'pm2-hadoku.service', bounded: false, apps: 0 },
+	]);
+	assert.deepEqual(pm2Facet(PM2_CLAW5).pm2Units, { units: [], why: null });
+});
+
+void test('healthFacet: an unreadable ceiling is unbounded and an uncounted manager has apps null', () => {
+	assert.deepEqual(
+		pm2Facet(['D pm2Units.count 1', 'D pm2Unit.pm2-hadoku.service U U']).pm2Units.units,
+		[{ unit: 'pm2-hadoku.service', bounded: false, apps: null }]
+	);
+	const blind = pm2Facet(["U pm2Units systemctl could not list this node's pm2 units"]);
+	assert.equal(blind.pm2Units.units, null, 'could not look is never an empty list');
+	assert.equal(find(doctorFindings(blind, { nowMs: NOW }), 'pm2-claims')[0].status, 'unknown');
+});
+
+void test('pm2 claims render by severity, and are never stored in the record', () => {
+	const h = {
+		...pm2Facet(PM2_CLAW6),
+		pm2Claims: [
+			{
+				unit: 'pm2-hadoku.service',
+				claim: 'app-layer-idle',
+				severity: 'advisory',
+				by: 'app-layer',
+				why: 'idle',
+			},
+			{ unit: 'pm2-x.service', claim: 'unclaimed', severity: 'fail', by: null, why: 'nobody' },
+			{ unit: 'pm2-y-svc.service', claim: 'tenant', severity: 'ok', by: 'y', why: 'declared' },
+		],
+	};
+	const fs = find(doctorFindings(h, { nowMs: NOW }), 'pm2-claims');
+	assert.deepEqual(
+		fs.map((f) => [f.status, f.class]),
+		[
+			['app-layer-idle', ADVISORY],
+			['unclaimed', BLOCKING],
+		]
+	);
+	assert.equal('pm2Claims' in healthRecord(h), false);
+	// A stored record re-judged without the join (node-status) draws nothing.
+	assert.equal(find(doctorFindings(healthRecord(h), { nowMs: NOW }), 'pm2-claims').length, 0);
+});

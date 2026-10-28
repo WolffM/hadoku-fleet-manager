@@ -527,6 +527,20 @@ export function doctorProbe({
 		'    say "failedUnit.$u" "$(systemctl show -P StateChangeTimestamp --timestamp=unix "$u" 2>/dev/null | tr -d @)"',
 		'  done',
 		'else unk failedUnits "systemctl could not list this node\'s units"; fi',
+		// ── every pm2 manager, its ceiling and how many apps it runs ─────────────
+		//
+		// Claimed against the tenant registry and the app layer's host list by
+		// doctor-run (lib/hosting-claims.mjs); the node only measures. The app
+		// count is the daemon's direct children, from the kernel: pm2's own list
+		// also carries stopped apps, and an "idle" manager is one RUNNING none.
+		"if PU=$(systemctl list-units --no-legend --plain 'pm2-*.service' 2>/dev/null); then",
+		'  say pm2Units.count "$(printf "%s\\n" "$PU" | grep -c .)"',
+		'  for u in $(printf "%s\\n" "$PU" | awk "NF{print \\$1}"); do',
+		'    cg=$(systemctl show -P ControlGroup "$u" 2>/dev/null); m=$(systemctl show -P MainPID "$u" 2>/dev/null)',
+		'    if [ "${m:-0}" -gt 0 ] 2>/dev/null; then a=$(ps --ppid "$m" --no-headers 2>/dev/null | wc -l); else a=U; fi',
+		'    say "pm2Unit.$u" "$(cat "/sys/fs/cgroup$cg/memory.max" 2>/dev/null || echo U) $a"',
+		'  done',
+		'else unk pm2Units "systemctl could not list this node\'s pm2 units"; fi',
 		'if E=$(journalctl -b 0 -p err --no-pager 2>/dev/null); then say errorsThisBoot "$(printf "%s\\n" "$E" | grep -vcE "ACPI|Bluetooth")"; else unk errorsThisBoot "the journal could not be read by this user"; fi',
 		// ── which stack owns the radio. node-interfaces.mjs owns the question. ─
 		//
@@ -863,11 +877,14 @@ export function bootcampPointer(capabilities) {
 }
 
 /**
- * What `fleet doctor --write` STORES: the facet minus its `bootcamp` pointer.
- * See {@link bootcampPointer} for why the pointer is re-derived on read instead.
+ * What `fleet doctor --write` STORES: the facet minus its `bootcamp` pointer and
+ * its `pm2Claims`. See {@link bootcampPointer} for why both are re-derived on
+ * read instead: each is a join against records that move without the node.
  */
 export function healthRecord(health) {
-	return Object.fromEntries(Object.entries(health).filter(([k]) => k !== 'bootcamp'));
+	return Object.fromEntries(
+		Object.entries(health).filter(([k]) => k !== 'bootcamp' && k !== 'pm2Claims')
+	);
 }
 
 /**
@@ -1097,6 +1114,7 @@ export function healthFacet({
 			busy: num('runners.busy'),
 		},
 		failedUnits: failedUnits(facts, unknown),
+		pm2Units: pm2Units(facts, unknown),
 		crashes: num('crashes'),
 		errorsThisBoot: num('errorsThisBoot'),
 		// A POINTER AT ANOTHER FACET, NOT EVIDENCE DOCTOR GATHERED. See the file
@@ -1134,6 +1152,36 @@ function failedUnits(facts, unknown) {
 			since: Number.isFinite(epoch) && epoch > 0 ? new Date(epoch * 1000).toISOString() : null,
 		};
 	});
+	return { units, why: null };
+}
+
+/**
+ * The probe's pm2 managers: `bounded` from the unit's own cgroup ceiling,
+ * `apps` the daemon's running children (null: not counted).
+ *
+ * `units: null` with a `why` is "could not look"; `units: []` is a counted zero.
+ *
+ * @returns {{units: {unit: string, bounded: boolean, apps: number|null}[]|null, why: string|null}}
+ */
+function pm2Units(facts, unknown) {
+	if (facts['pm2Units.count'] === undefined) {
+		return {
+			units: null,
+			why: unknown.pm2Units ?? unknown['pm2Units.count'] ?? 'the probe reported no pm2 unit count',
+		};
+	}
+	const units = Object.keys(facts)
+		.filter((k) => k.startsWith('pm2Unit.'))
+		.sort()
+		.map((k) => {
+			const [max, apps] = facts[k].split(/\s+/);
+			return {
+				unit: k.slice('pm2Unit.'.length),
+				// An unreadable ceiling is NOT a ceiling: `U` reads as unbounded.
+				bounded: /^\d+$/.test(max ?? ''),
+				apps: /^\d+$/.test(apps ?? '') ? Number(apps) : null,
+			};
+		});
 	return { units, why: null };
 }
 
@@ -1724,6 +1772,42 @@ export function doctorFindings(health, { nowMs = Date.now() } = {}) {
 				)
 			);
 		}
+	}
+
+	// ── pm2 managers nothing claims ───────────────────────────────────────────
+	// `pm2Claims` is ATTACHED by doctor-run from the tenant registry, the hosting
+	// declarations and the app layer's host list (lib/hosting-claims.mjs), like
+	// the bootcamp pointer: never stored, so a reader without those records
+	// draws nothing rather than a stale verdict. An unclaimed manager is memory
+	// no budget counts and keeps `not-beside-unbounded` tenants off the node, so
+	// it BLOCKS; a declared host with no apps and no ceiling is hadoku_site's
+	// call and is advisory.
+	if (health.pm2Units?.units === null) {
+		out.push(
+			f(
+				health,
+				'pm2-claims',
+				ADVISORY,
+				'unknown',
+				`which pm2 managers run on this node could not be read: ${health.pm2Units.why}.`
+			)
+		);
+	}
+	for (const c of health.pm2Claims ?? []) {
+		if (c.severity === 'ok') continue;
+		out.push(
+			f(
+				health,
+				'pm2-claims',
+				c.severity === 'advisory' ? ADVISORY : BLOCKING,
+				c.claim,
+				`${c.unit}: ${c.why}.`,
+				{
+					unit: c.unit,
+					by: c.by,
+				}
+			)
+		);
 	}
 
 	// ── the bootcamp pointer, aged ────────────────────────────────────────────
