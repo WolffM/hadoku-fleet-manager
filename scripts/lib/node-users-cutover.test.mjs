@@ -1,5 +1,9 @@
 import { strict as assert } from 'node:assert';
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import process from 'node:process';
 import { test } from 'node:test';
 
 import {
@@ -130,4 +134,45 @@ test('admin never stats inside the 0700 ci home without sudo', () => {
 		assert.doesNotMatch(s, /\[ -[eLdf] "\$CH/, 'a plain test under $CH reads "absent" as admin');
 		assert.match(s, /ci_has\(\) \{ sudo -n test -e "\$1" \|\| sudo -n test -L "\$1"; \}/);
 	}
+});
+
+/** Run the rendered script's one sed line (the one `pick` matches) against a sample sshd config. */
+function runSed(script, pick, conf) {
+	const line = script.split('\n').find((l) => pick.test(l));
+	assert.ok(line, `no line matching ${pick}`);
+	const dir = mkdtempSync(join(tmpdir(), 'node-users-sshd-'));
+	try {
+		const f = join(dir, 'fleet.conf');
+		writeFileSync(f, conf);
+		execFileSync('bash', ['-c', line.trim().replace(/^sudo -n /, '')], {
+			env: { ...process.env, CI: USERS.ci, conf: f },
+		});
+		return readFileSync(f, 'utf8');
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+test('sshd lets ci in: the cutover adds it to AllowUsers and the rollback takes it out', () => {
+	// claw-5, 2026-10-28: AllowUsers named admin alone, every ci ssh was refused
+	// before sshd read a key, and every node step had said ok.
+	const base = 'Port 22\nAllowUsers ops\nPasswordAuthentication no\n';
+	const added = runSed(cutoverScript(USERS, KEYS), /sed -i -E "s\/\^\(/, base);
+	assert.equal(added, 'Port 22\nAllowUsers ops ops-ci\nPasswordAuthentication no\n');
+	const back = runSed(backScript(USERS), /\[Uu\]sers\[\[:space:\]\]\/ s\//, added);
+	assert.equal(back, base);
+});
+
+test('the sshd step comes after the key and before admin stops CI, and is verified', () => {
+	const s = cutoverScript(USERS, KEYS);
+	assert.ok(s.indexOf('step key ok') < s.indexOf('step sshd ok'));
+	assert.ok(s.indexOf('step sshd ok') < s.indexOf('step stop ok'));
+	assert.match(s, /sshd -t/, 'the edited config is tested before the reload');
+	assert.match(s, /effective AllowUsers still leaves out/, 'read back from sshd -T, not the file');
+});
+
+test('the inventory skips a moved path admin recreated, and still fails an unrecorded one', () => {
+	const s = inventoryScript(USERS);
+	assert.match(s, /grep -qxF "\$p" "\$RECORD".*skip "moved; \$ADMIN has its own since/);
+	assert.match(s, /step "move:\$p" fail "both homes hold it"/);
 });

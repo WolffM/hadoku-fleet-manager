@@ -10,8 +10,9 @@
  * the node script refuses a running job itself. In order:
  *
  *   1. the node part, as admin (lib/node-users-cutover.mjs): the ci user, its
- *      restricted key and linger, admin's CI stopped, the trees moved and
- *      chowned, links and text re-pointed;
+ *      restricted key and linger, sshd's AllowUsers, admin's CI stopped, the
+ *      trees moved and chowned, links and text re-pointed; then this box
+ *      logs in as ci, so a node that will refuse the fleet stops here;
  *   2. the manifest: `users.ci` (and `containers: "docker"` with --docker, the
  *      operator's rootless-docker claws), committed and pushed to main;
  *   3. everything that now has to run AS ci, through the fleet's own commands:
@@ -115,6 +116,25 @@ async function writeFlip(doc, users) {
 	return landed.ok;
 }
 
+/**
+ * Log in to the node as the ci role, the way every fleet command will, and
+ * read back the user sshd gave the session. `flipped` is the node's
+ * entry as the manifest WILL say it: before the flip lands, the manifest on
+ * disk still answers ci with admin.
+ */
+async function ciLogin(ci, flipped) {
+	const res = await runOn(NODE, 'printf "LOGIN %s\\n" "$USER"', {
+		as: 'ci',
+		manifest: { machines: { [NODE]: flipped } },
+		timeoutMs: 30_000,
+		connectTimeout: 10,
+	});
+	const who = /^LOGIN (\S+)$/m.exec(res.stdout ?? '')?.[1];
+	if (who === ci) return { ok: true, detail: `the controller logs in as ${who}` };
+	const why = res.error ?? (res.stderr.trim().split('\n').pop() || 'no answer');
+	return { ok: false, detail: who ? `logged in as ${who}, not ${ci}` : why };
+}
+
 /** Does the DEPLOYED manifest (what mgmt-api mints from) agree with the flip yet? */
 function deployedAgrees(ci) {
 	const p = join(deploySiteRoot(), 'scripts', 'admin', 'fleet-runner-manifest.json');
@@ -183,6 +203,15 @@ async function main() {
 			`the node step stopped: ${steps.steps.find((s) => s.status === 'fail')?.detail ?? ran.error ?? ran.stderr.trim().split('\n').pop()}.` +
 				' Fix it and re-run --confirm; every step is idempotent.'
 		);
+	}
+
+	// 1b. Log in as ci from here, the way every fleet command will. The node
+	// step's own checks read sshd's config; this reads sshd's ANSWER, which is
+	// what claw-5 got wrong on 2026-10-28 with every node step green.
+	if (!BACK) {
+		const login = await ciLogin(ci, flipped);
+		log(`   ${login.ok ? '✓' : '✗'} login  ${login.detail}`);
+		if (!login.ok) die(`the controller cannot log in as ${ci}. Fix it and re-run --confirm.`);
 	}
 
 	// 2. The manifest.

@@ -86,6 +86,9 @@ die() { step "$1" fail "$2"; exit 1; }
 # path under $CH goes through sudo. A plain [ -e ] there reads "absent" for
 # everything (claw-5, 2026-10-27: 13 system links and 37 uv files skipped).
 ci_has() { sudo -n test -e "$1" || sudo -n test -L "$1"; }
+# The users sshd lets in, from its EFFECTIVE config; empty means no allow-list.
+allowed() { sudo -n sshd -T 2>/dev/null | awk 'tolower($1)=="allowusers"{for(i=2;i<=NF;i++) print $i}'; }
+allow_conf() { sudo -n grep -lsE '^[[:space:]]*[Aa]llow[Uu]sers[[:space:]]' /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config | head -1; }
 busy=$(pgrep -xc 'Runner\\.Worker' 2>/dev/null || true)
 `;
 }
@@ -101,7 +104,11 @@ step quiet "$([ "\${busy:-0}" = 0 ] && echo ok || echo fail)" "\${busy:-unknown}
 if getent passwd "$CI" >/dev/null; then step user ok "$CI exists (uid $(id -u "$CI"))"; else step user skip "$CI would be created"; fi
 for p in ${moveList()}; do
 	if [ -e "$AH/$p" ]; then
-		ci_has "$CH/$p" && step "move:$p" fail "both homes hold it" && continue
+		if ci_has "$CH/$p"; then
+			if grep -qxF "$p" "$RECORD" 2>/dev/null; then step "move:$p" skip "moved; $ADMIN has its own since, left there"
+			else step "move:$p" fail "both homes hold it"; fi
+			continue
+		fi
 		sz=$(timeout 20 du -sh "$AH/$p" 2>/dev/null | cut -f1)
 		step "move:$p" ok "\${sz:-size not read in 20s}"
 	elif ci_has "$CH/$p"; then step "move:$p" skip "already moved"
@@ -115,6 +122,9 @@ for c in "$AH"/.config/* "$AH"/.config/.[!.]*; do
 done
 links=$(find ${linkDirs()} -maxdepth 6 -type l -lname "$AH/*" 2>/dev/null | wc -l)
 step links ok "$links system link(s) into $AH to re-point"
+if [ -z "$(allowed)" ]; then step sshd ok "no AllowUsers list"
+elif allowed | grep -qx "$CI"; then step sshd skip "AllowUsers already names $CI"
+else step sshd ok "AllowUsers names $(allowed | tr '\\n' ' '); $CI is added"; fi
 step free ok "$(df -h "$AH" | awk 'NR==2{print $4}') free"
 echo INVENTORY-END
 `;
@@ -164,6 +174,24 @@ sudo -n install -d -m 0700 -o "$CI" -g "$CI" "$CH/.ssh"
 printf '%s\\n' "$ak" | sudo -n tee "$CH/.ssh/authorized_keys" >/dev/null
 sudo -n chown "$CI:$CI" "$CH/.ssh/authorized_keys" && sudo -n chmod 0600 "$CH/.ssh/authorized_keys"
 step key ok "$(printf '%s\\n' "$ak" | wc -l) key(s), from=$from, restrict"
+
+# 2b. sshd must LET ci in. node-bootstrap's AllowUsers names admin alone, and
+#     sshd refuses an unlisted user before it reads a key: claw-5, 2026-10-28,
+#     every controller ssh as ci was "Permission denied (publickey)".
+if [ -n "$(allowed)" ] && ! allowed | grep -qx "$CI"; then
+	conf=$(allow_conf)
+	[ -n "$conf" ] || die sshd "sshd has an AllowUsers list but no file under /etc/ssh names it"
+	sudo -n cp -p "$conf" "$conf.fleet-bak" || die sshd "could not back up $conf"
+	sudo -n sed -i -E "s/^([[:space:]]*[Aa]llow[Uu]sers[[:space:]].*)$/\\1 $CI/" "$conf"
+	if ! sudo -n sshd -t; then
+		sudo -n mv "$conf.fleet-bak" "$conf"
+		die sshd "sshd rejected $conf with $CI added; restored"
+	fi
+	sudo -n rm -f "$conf.fleet-bak"
+	sudo -n systemctl reload ssh || die sshd "ssh did not reload"
+fi
+[ -z "$(allowed)" ] || allowed | grep -qx "$CI" || die sshd "sshd's effective AllowUsers still leaves out $CI"
+step sshd ok "$CI may log in"
 
 # 3. Admin stops running CI: its harvester and any minted unit.
 systemctl --user disable --now runner-mem-harvest.service >/dev/null 2>&1 || true
@@ -261,6 +289,11 @@ left=$(pgrep -xc -u "$CI" 'Runner\\.(Listener|Worker)' 2>/dev/null || true)
 [ "\${left:-0}" = 0 ] || die stop "$left runner process(es) still run as $CI"
 sudo -n loginctl disable-linger "$CI" || true
 sudo -n rm -f "$CH/.ssh/authorized_keys"
+conf=$(allow_conf)
+if [ -n "$conf" ] && allowed | grep -qx "$CI"; then
+	sudo -n sed -i -E "/^[[:space:]]*[Aa]llow[Uu]sers[[:space:]]/ s/[[:space:]]$CI([[:space:]]|$)/\\1/" "$conf"
+	sudo -n sshd -t && sudo -n systemctl reload ssh || die stop "sshd did not take $CI out of AllowUsers"
+fi
 sudo -n usermod --lock "$CI" >/dev/null 2>&1 || true
 step stop ok "$CI has no key, no linger, and runs nothing"
 
