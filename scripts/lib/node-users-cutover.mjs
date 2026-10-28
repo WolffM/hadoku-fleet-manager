@@ -32,6 +32,9 @@ import { JIT_PAYLOAD_DIR } from './preflight.mjs';
  */
 export const MOVES = [
 	JIT_PAYLOAD_DIR.split('/')[0],
+	// Standing runners (the bootstrap guarantee keeps one per node it is
+	// resident on); their units travel with them, see STANDING.
+	'runners',
 	'.cargo',
 	'.rustup',
 	'.gradle',
@@ -65,6 +68,14 @@ export const LINK_DIRS = ['/usr/local/bin', '/opt/hostedtoolcache'];
 /** The record of what this cutover moved; `--back` reads it. Root-owned, outside both homes. */
 export const RECORD = '/var/lib/fleet-node-users/moved';
 
+/**
+ * The standing runner units the cutover took from admin's manager and gives to
+ * ci's: `--back` reads it to hand them back. A standing runner is the bootstrap
+ * guarantee (this repo's own runner, which ships the fix when minting is
+ * broken), so it is moved, never stopped and left (claw-4, 2026-10-28).
+ */
+export const STANDING = '/var/lib/fleet-node-users/standing';
+
 const NAME = /^[a-z_][a-z0-9_-]*$/;
 const KEY = /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/=]+$/;
 
@@ -80,6 +91,8 @@ CI='${ci}'
 AH='${adminHome}'
 CH='${ciHome}'
 RECORD='${RECORD}'
+STANDING='${STANDING}'
+as_ci() { sudo -n -u "$CI" XDG_RUNTIME_DIR="/run/user/$(id -u "$CI")" "$@"; }
 step() { printf 'STEP %s %s %s\\n' "$1" "$2" "\${3:-}"; }
 die() { step "$1" fail "$2"; exit 1; }
 # ci's home is 0700, so ADMIN cannot stat inside it: every existence test on a
@@ -196,9 +209,16 @@ step sshd ok "$CI may log in"
 # 3. Admin stops running CI: its harvester and any minted unit.
 systemctl --user disable --now runner-mem-harvest.service >/dev/null 2>&1 || true
 systemctl --user stop 'jit-*' 'warm-*' >/dev/null 2>&1 || true
+# A standing runner is MOVED, not left behind: recorded, stopped here, its unit
+# moved with its tree below, and started again in ci's manager at the end.
+sudo -n install -d -m 0755 "\${STANDING%/*}"
+for u in $(systemctl --user list-unit-files --no-legend 'actions-runner-*.service' 2>/dev/null | awk '{print $1}'); do
+	grep -qxF "$u" "$STANDING" 2>/dev/null || echo "$u" | sudo -n tee -a "$STANDING" >/dev/null
+	systemctl --user disable --now "$u" >/dev/null 2>&1 || die stop "could not stop standing runner $u"
+done
 left=$(pgrep -xc -u "$ADMIN" 'Runner\\.(Listener|Worker)' 2>/dev/null || true)
-[ "\${left:-0}" = 0 ] || die stop "$left runner process(es) still run as $ADMIN: a standing runner? stop it first"
-step stop ok "no runner runs as $ADMIN"
+[ "\${left:-0}" = 0 ] || die stop "$left runner process(es) still run as $ADMIN outside any unit this script knows"
+step stop ok "no runner runs as $ADMIN$([ -s "$STANDING" ] && printf '; standing, to move: %s' "$(tr '\\n' ' ' < "$STANDING")")"
 
 # 3b. /tmp. A job that wrote a FIXED name there (report-job's
 #     /tmp/report-job.json) left a file ci can never overwrite: /tmp is sticky.
@@ -244,6 +264,13 @@ if [ -d "$AH/.config" ]; then
 		mv1 ".config/$n"
 	done
 fi
+if [ -s "$STANDING" ]; then
+	sudo -n install -d -m 0755 -o "$CI" -g "$CI" "$CH/.config/systemd" "$CH/.config/systemd/user"
+	while IFS= read -r u; do
+		mv1 ".config/systemd/user/$u"
+		mv1 ".config/systemd/user/$u.d"
+	done < "$STANDING"
+fi
 step move ok "$moved path(s) moved this run\${reappeared:+; reappeared in $AH after the move, left there:$reappeared}"
 
 # 5. Own it. The whole new home, and the toolcache jobs write into.
@@ -275,12 +302,27 @@ for t in ${REWRITE_TREES.map((t) => `'${t}'`).join(' ')}; do
 		sudo -n -u "$CI" sed -i -E "s#$AH(/|\\$|[^-a-zA-Z0-9_])#$CH\\1#g" "$f" && rewritten=$((rewritten + 1))
 	done < <(sudo -n grep -rlI -- "$AH/" "$CH/$t" 2>/dev/null)
 done
+# A standing runner's .env (hook paths, TMPDIR) and .path; never its _work.
+while IFS= read -r f; do
+	sudo -n grep -qF -- "$AH/" "$f" || continue
+	sudo -n -u "$CI" sed -i -E "s#$AH(/|\\$|[^-a-zA-Z0-9_])#$CH\\1#g" "$f" && rewritten=$((rewritten + 1))
+done < <(sudo -n find "$CH/runners" -mindepth 2 -maxdepth 2 -type f \\( -name .env -o -name .path \\) 2>/dev/null)
 step rewrite ok "$rewritten file(s) re-pointed"
 
 # 8. Nothing of the moved trees may still name the old home through a link.
 stale=$(sudo -n find ${linkDirs()} -maxdepth 6 -type l -lname "$AH/*" 2>/dev/null | wc -l)
 [ "$stale" = 0 ] || die verify "$stale system link(s) still point into $AH"
 step verify ok "no system link points into $AH"
+
+# 9. The standing runners, back up in ci's manager.
+if [ -s "$STANDING" ]; then
+	as_ci systemctl --user daemon-reload || die standing "ci's manager did not reload"
+	while IFS= read -r u; do
+		as_ci systemctl --user enable --now "$u" >/dev/null 2>&1 || die standing "$u did not start as $CI"
+		as_ci systemctl --user is-active -q "$u" || die standing "$u is not active as $CI"
+	done < "$STANDING"
+	step standing ok "$(wc -l < "$STANDING") standing runner(s) run as $CI: $(tr '\\n' ' ' < "$STANDING")"
+fi
 echo CUTOVER-END
 `;
 }
@@ -297,6 +339,9 @@ step preflight ok "quiet"
 
 # ci stops running CI: every unit in its manager, then its linger and key.
 sudo -n systemctl --user -M "$CI@" stop 'jit-*' 'warm-*' runner-mem-harvest.service docker.service >/dev/null 2>&1 || true
+if [ -s "$STANDING" ]; then
+	while IFS= read -r u; do as_ci systemctl --user disable --now "$u" >/dev/null 2>&1 || true; done < "$STANDING"
+fi
 left=$(pgrep -xc -u "$CI" 'Runner\\.(Listener|Worker)' 2>/dev/null || true)
 [ "\${left:-0}" = 0 ] || die stop "$left runner process(es) still run as $CI"
 sudo -n loginctl disable-linger "$CI" || true
@@ -341,6 +386,13 @@ done
 step relink ok "links and text point home again"
 
 systemctl --user enable --now runner-mem-harvest.service >/dev/null 2>&1 || true
+if [ -s "$STANDING" ]; then
+	systemctl --user daemon-reload
+	while IFS= read -r u; do
+		systemctl --user enable --now "$u" >/dev/null 2>&1 || die standing "$u did not start as $ADMIN"
+	done < "$STANDING"
+	sudo -n mv "$STANDING" "$STANDING.back-$(date +%s)"
+fi
 sudo -n mv "$RECORD" "$RECORD.back-$(date +%s)"
 echo BACK-END
 `;

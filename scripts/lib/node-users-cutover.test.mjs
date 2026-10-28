@@ -10,6 +10,7 @@ import {
 	CONFIG_STAYS,
 	MOVES,
 	RECORD,
+	STANDING,
 	backScript,
 	cutoverScript,
 	flipManifest,
@@ -184,4 +185,28 @@ test("/tmp: admin's top-level files nothing holds open are removed, after admin'
 	assert.ok(s.indexOf('step stop ok') < s.indexOf('step tmp ok'), 'only once admin runs no CI');
 	assert.match(s, /find \/tmp -maxdepth 1 -type f -user "\$ADMIN"/);
 	assert.match(s, /fuser -s "\$f"[^\n]*&& continue/, 'a file a process holds open is kept');
+});
+
+test('a standing runner is moved with its unit and started again AS ci, never left stopped', () => {
+	// claw-4, 2026-10-28: the bootstrap runner (this repo's own) runs as a
+	// standing unit in admin's manager, and the cutover refused to go on.
+	const s = cutoverScript(USERS, KEYS);
+	assert.ok(MOVES.includes('runners'), 'the runner tree moves');
+	const at = (re) => s.search(re);
+	assert.ok(at(/list-unit-files --no-legend 'actions-runner-\*\.service'/) < at(/step stop ok/));
+	assert.ok(at(/tee -a "\$STANDING"/) < at(/disable --now "\$u"/), 'recorded before it is stopped');
+	assert.match(s, /mv1 "\.config\/systemd\/user\/\$u"/);
+	assert.match(s, /mv1 "\.config\/systemd\/user\/\$u\.d"/);
+	assert.match(
+		s,
+		/find "\$CH\/runners" -mindepth 2 -maxdepth 2 -type f \\\( -name \.env -o -name \.path \\\)/
+	);
+	assert.ok(at(/step verify ok/) < at(/as_ci systemctl --user enable --now "\$u"/), 'started last');
+	assert.match(s, /as_ci systemctl --user is-active -q "\$u" \|\| die standing/);
+	assert.equal(s.trim().split('\n').at(-1), 'echo CUTOVER-END');
+
+	const b = backScript(USERS);
+	assert.ok(b.indexOf('as_ci systemctl --user disable --now "$u"') < b.indexOf('step stop ok'));
+	assert.match(b, /systemctl --user enable --now "\$u" >\/dev\/null 2>&1 \|\| die standing/);
+	assert.match(b, new RegExp(`STANDING='${STANDING}'`));
 });
