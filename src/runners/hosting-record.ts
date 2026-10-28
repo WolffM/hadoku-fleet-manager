@@ -42,7 +42,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path';
 
 import { stateDir } from '../host.js';
-import type { DrainDoc, HostingResources } from './drain.js';
+import type { DrainDoc, DrainNotice, HostingResources } from './drain.js';
 
 /**
  * The OOM score every CI unit runs at. The kernel scores a process at roughly
@@ -161,6 +161,24 @@ export function hostingOn(
 	if (!shared) return null;
 	const { tenant, memoryMb, cores, port, until } = shared;
 	return { mode: 'shared', tenant, memoryMb, cores, port, ...(until ? { until } : {}) };
+}
+
+/**
+ * Every shared slice's scheduled end still ahead, as the notice `drainNotices`
+ * gives a drain. Whole-box hosting is a drain, so its end is already one of
+ * those. node-status and the hosting converger read the same list.
+ */
+export function hostingNotices(doc: HostingDoc, nowMs: number = Date.now()): DrainNotice[] {
+	return Object.entries(doc.nodes)
+		.filter(([, r]) => Number.isFinite(Date.parse(r.until ?? '')) && Date.parse(r.until!) > nowMs)
+		.map(([node, r]) => ({
+			node,
+			event: 'ends' as const,
+			at: r.until!,
+			kind: 'hosting' as const,
+			reason: r.reason,
+		}))
+		.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
 
 /** For this long after a declaration, the whole slice is held back whatever it holds. */

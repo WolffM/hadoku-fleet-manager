@@ -3,8 +3,11 @@
 The fleet can lend a node to a **tenant**: another repo's resident workload,
 served beside CI or on a box with no CI on it. The scope was set by the operator on 2026-10-24. The fleet
 gets nodes online, reports their status, and **serves the resources it declares**.
-The tenant decides which node runs what, and owns failover and alerting.
-Nothing here picks a node.
+The tenant decides which node runs its work INSIDE its slices, and owns
+failover and alerting. Since 2026-10-28 (operator ruling, fleet-manager#16)
+the fleet can also pick the nodes for a tenant's slices and meet its demand
+for them: see "Slices on demand" below. A tenant opts into that with
+`placement.auto: true`; without it, the fleet only plans.
 
 The first tenant is hadoku-cardtable, which hosts Forge matches. Its request is
 `docs/requests/FLEET_MANAGER_FORGE_HOSTING.md` in that repo.
@@ -144,6 +147,43 @@ must start at least 15 minutes ahead unless `--force`. On a whole-box node any
 drain is refused at short notice. On a shared node, a maintenance drain only
 takes CI off and needs no notice. `node-status` reports a hosting node that
 rebooted with no reboot drain ahead of it.
+
+## Slices on demand
+
+```sh
+fleet hosting-demand cardtable --slices 2 --release-order claw-6,claw-5 --json
+fleet hosting-demand cardtable --json        # the view only
+fleet hosting-converge --dry-run --json      # what the converger would do now
+```
+
+The tenant says how many slices it wants, as a **count**, on every poll. The
+same N is a no-op, so a restart, a lost call or a duplicate cannot drift it.
+The controller runs `fleet hosting-converge` every 5 minutes, and it meets
+the count within the request's `slices.min..max`:
+
+- **Too few:** it declares on `fleet hosting-plan`'s top picks through `fleet
+hosting`, which observes the node and applies the tenant's placement again.
+- **Too many:** it ends slices from the head of the tenant's
+  `--release-order`, always with the tenant's `noticeMin`. Only the tenant
+  knows what a slice holds, so with no order it ends nothing and says so.
+- **Past an end:** it removes the units.
+
+It **acts only for a tenant whose hosting.json says `placement.auto: true`**.
+For every other tenant it reports what it would do (`planned`), and
+`hosting-demand` returns that view, so a tenant can compare it with its own
+judgement first.
+
+A slice on a node that cannot be reached, that fails a required rule, or
+that has another drain starting within its notice is **unplaceable**. It is
+not counted as serving, and it is never ended by the converger: the tenant
+moves its work off and names the slice in its release order.
+
+**A singleton service is never given a second slice.** Its move goes through
+hadoku_site's mover (`service-move`, hadoku_site#491), and the converger says
+which node the plan would pick. A singleton on a node that cannot be reached
+is never moved off unless it declares `availability.fence: "data-lease"`.
+That means a dataplatform lease, with state kept off the node, as pygmalion
+does. Two writers are worse than none.
 
 ## Status
 

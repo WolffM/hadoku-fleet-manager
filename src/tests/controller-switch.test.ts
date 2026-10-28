@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { createFleetManager, __resetFleetManagerForTesting } from '../index.js';
 import { __resetFleetLoopForTesting } from '../fleet-loop.js';
 import { __stopClawRebootForTesting } from '../claw-reboot.js';
+import { __stopHostingConvergeForTesting } from '../hosting-converge.js';
 import { __stopProvisioningConvergeForTesting } from '../provisioning-converge.js';
 import { __stopRunnerHealthMonitorForTesting, getRunnerHealthSnapshot } from '../runner-health.js';
 import { __setHostForTesting, type FleetHost } from '../host.js';
@@ -83,6 +84,7 @@ function stopRealLoops(): void {
 	__resetFleetLoopForTesting();
 	__stopRunnerHealthMonitorForTesting();
 	__stopProvisioningConvergeForTesting();
+	__stopHostingConvergeForTesting();
 	__stopClawRebootForTesting();
 }
 

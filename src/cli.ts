@@ -207,6 +207,18 @@ const COMMANDS: Record<string, Command> = {
 		summary:
 			"where could a tenant's next slice go: its hosting.json against every claw's offer, ranked with reasons",
 	},
+	'hosting-demand': {
+		script: 'hosting-demand.mjs',
+		flags: ['--slices', '--release-order', '--json'],
+		summary:
+			"a tenant's slice count, restated every poll (same N is a no-op); returns the converger's view of it",
+	},
+	'hosting-converge': {
+		script: 'hosting-converge.mjs',
+		flags: ['--dry-run', '--tenant', '--json'],
+		summary:
+			'ACTS for placement.auto tenants: declares and ends slices through `fleet hosting` to meet demand; plans for the rest (--dry-run: decide only)',
+	},
 	'hosting-request': {
 		script: 'hosting-request.mjs',
 		summary:

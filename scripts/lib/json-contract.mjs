@@ -610,6 +610,25 @@ export const TENANT_CONTRACT = [
 		fields: ['ok', 'nodes[].node', 'nodes[].state', 'nodes[].findings', 'nodes[].declared'],
 	},
 	{
+		sub: 'hosting-demand',
+		argv: ['cardtable', '--slices', '1', '--json'],
+		consumer:
+			'hadoku-cardtable: restates its slice count every poll once placement.auto is approved (fleet-manager#16)',
+		fields: [
+			'contract',
+			'ok',
+			'at',
+			'demand',
+			'declared[].node',
+			'ending[].node',
+			'ending[].until',
+			'lastPass.live',
+			'lastPass.actions[].op',
+			'lastPass.actions[].node',
+			'lastPass.blocked[].why',
+		],
+	},
+	{
 		sub: 'hosting-plan',
 		argv: ['WolffM/hadoku-cardtable', '--json'],
 		consumer:

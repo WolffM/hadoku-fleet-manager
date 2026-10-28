@@ -55,7 +55,7 @@ import {
 	probeReach,
 } from './lib/hosting.mjs';
 import { readRevocations } from '../dist/capability-revocations.js';
-import { readHostingDoc } from '../dist/runners/hosting-record.js';
+import { hostingNotices, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { nodeUser } from '../dist/lib/node-users.js';
 import {
 	judgeNodeUsers,
@@ -175,12 +175,9 @@ const hostedTenant = (name) =>
 	(doc.nodes[name]?.kind === 'hosting' ? doc.nodes[name].hosting?.tenant : null) ??
 	hostingDoc.nodes[name]?.tenant ??
 	null;
-const notices = [
-	...drainNotices(doc, NOW),
-	...Object.entries(hostingDoc.nodes)
-		.filter(([, r]) => Number.isFinite(Date.parse(r.until ?? '')) && Date.parse(r.until) > NOW)
-		.map(([node, r]) => ({ node, event: 'ends', at: r.until, kind: 'hosting', reason: r.reason })),
-].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+const notices = [...drainNotices(doc, NOW), ...hostingNotices(hostingDoc, NOW)].sort(
+	(a, b) => Date.parse(a.at) - Date.parse(b.at)
+);
 
 /**
  * Boots seen per node, to catch a hosting node rebooted WITHOUT notice

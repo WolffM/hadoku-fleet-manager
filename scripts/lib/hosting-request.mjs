@@ -39,6 +39,9 @@ export const KINDS = ['agent', 'service'];
  */
 export const ADVISORY_UNTIL_DEFAULT = 3;
 
+/** `availability.fence`: what keeps a moved singleton from becoming two writers. */
+export const FENCES = ['data-lease'];
+
 /** How traffic reaches the tenant. A closed set: each one is a firewall shape the fleet knows. */
 export const INGRESS = {
 	/** The coordinator on the controller calls it: LAN + the controller's tailnet; everyone else dropped. */
@@ -139,8 +142,19 @@ export function validateHostingRequest(raw) {
 			bad(`availability.${k}`, 'true or false');
 	if (av.singleton && slices && slices.max !== 1)
 		bad('availability.singleton', 'a singleton holds at most one slice: max must be 1');
+	// How a singleton is fenced against a second writer (fleet-manager#16).
+	// `data-lease`: it holds a dataplatform lease and keeps its state off the
+	// node, as pygmalion does, so the converger may move it off a node it
+	// cannot reach. Without one, an unreachable node pages and is never moved off.
+	if (av.fence !== undefined && !FENCES.includes(av.fence))
+		bad('availability.fence', `one of ${FENCES.join(', ')}`);
+	if (av.fence !== undefined && av.singleton !== true)
+		bad('availability.fence', 'fences a singleton: set availability.singleton');
 
 	const pl = isObj(raw.placement) ? raw.placement : {};
+	// `auto`: the fleet's hosting converger declares and ends this tenant's
+	// slices to meet its demand (fleet-manager#16). Off unless said.
+	if (pl.auto !== undefined && typeof pl.auto !== 'boolean') bad('placement.auto', 'true or false');
 	const require = pl.require ?? [];
 	const prefer = pl.prefer ?? [];
 	for (const [k, list] of [
@@ -185,8 +199,9 @@ export function validateHostingRequest(raw) {
 				stateful: av.stateful === true,
 				singleton: av.singleton === true,
 				...(av.coldStartS ? { coldStartS: av.coldStartS } : {}),
+				...(av.fence ? { fence: av.fence } : {}),
 			},
-			placement: { require, prefer },
+			placement: { require, prefer, ...(pl.auto === true ? { auto: true } : {}) },
 			// Defaults to false: a tenant has to SAY CI may read it.
 			isolation: iso.ciMayRead === true ? { ciMayRead: true } : { ciMayRead: false, advisoryUntil },
 			...(raw.contact ? { contact: raw.contact } : {}),

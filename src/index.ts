@@ -20,6 +20,7 @@ import { startFastLoop } from './fleet-loop.js';
 import { router as fleetRouter } from './routes/fleet.js';
 import type { RunnerHealthSnapshot } from './runner-health.js';
 import { startClawReboot } from './claw-reboot.js';
+import { startHostingConverge } from './hosting-converge.js';
 import { startProvisioningConverge } from './provisioning-converge.js';
 
 export type { FleetHost, FleetHostLogger } from './host.js';
@@ -175,6 +176,9 @@ export function createFleetManager(host: FleetHost): FleetManager {
 			startProvisioningConverge();
 			// Staged kernels on the claws: one at a time, drained, verified, undrained.
 			startClawReboot();
+			// Hosted tenants' slices, to each tenant's demand (#16). Acts only for
+			// placement.auto tenants; plans for the rest.
+			startHostingConverge();
 		},
 		snapshot: () => getRunnerHealthSnapshot(),
 	};

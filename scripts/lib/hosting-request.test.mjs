@@ -137,3 +137,33 @@ test('CI may read a tenant only if the tenant SAYS so', () => {
 		false
 	);
 });
+
+test('placement.auto and availability.fence: absent normalizes byte-for-byte as before', () => {
+	const before = validateHostingRequest(CARDTABLE).request;
+	assert.ok(!('auto' in before.placement) && !('fence' in before.availability));
+	const auto = validateHostingRequest({
+		...CARDTABLE,
+		placement: { ...CARDTABLE.placement, auto: true },
+	}).request;
+	assert.equal(auto.placement.auto, true);
+	assert.ok(paths({ ...CARDTABLE, placement: { auto: 'yes' } }).includes('placement.auto'));
+});
+
+test('a fence is for a singleton, and only data-lease is one', () => {
+	const fenced = validateHostingRequest({
+		...ARCHIVEBOT,
+		availability: { ...ARCHIVEBOT.availability, fence: 'data-lease' },
+	}).request;
+	assert.equal(fenced.availability.fence, 'data-lease');
+	assert.ok(
+		paths({ ...ARCHIVEBOT, availability: { ...ARCHIVEBOT.availability, fence: 'hope' } }).includes(
+			'availability.fence'
+		)
+	);
+	assert.ok(
+		paths({
+			...CARDTABLE,
+			availability: { ...CARDTABLE.availability, fence: 'data-lease' },
+		}).includes('availability.fence')
+	);
+});

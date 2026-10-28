@@ -36,6 +36,11 @@ const PRODUCERS = {
 	],
 	hosting: ['scripts/hosting.mjs', 'scripts/lib/hosting.mjs'],
 	'hosting-plan': ['scripts/hosting-plan.mjs', 'scripts/lib/hosting-plan.mjs'],
+	'hosting-demand': [
+		'scripts/hosting-demand.mjs',
+		'scripts/hosting-converge.mjs',
+		'scripts/lib/hosting-converge.mjs',
+	],
 };
 
 const keyOf = (path) => path.split('.').at(-1).replace('[]', '');
