@@ -124,3 +124,10 @@ test('a re-run tolerates a moved path that reappeared in admin home, and only a 
 	);
 	assert.match(s, /reappeared in \$AH after the move, left there/);
 });
+
+test('admin never stats inside the 0700 ci home without sudo', () => {
+	for (const s of [inventoryScript(USERS), cutoverScript(USERS, KEYS), backScript(USERS)]) {
+		assert.doesNotMatch(s, /\[ -[eLdf] "\$CH/, 'a plain test under $CH reads "absent" as admin');
+		assert.match(s, /ci_has\(\) \{ sudo -n test -e "\$1" \|\| sudo -n test -L "\$1"; \}/);
+	}
+});

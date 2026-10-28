@@ -82,6 +82,10 @@ CH='${ciHome}'
 RECORD='${RECORD}'
 step() { printf 'STEP %s %s %s\\n' "$1" "$2" "\${3:-}"; }
 die() { step "$1" fail "$2"; exit 1; }
+# ci's home is 0700, so ADMIN cannot stat inside it: every existence test on a
+# path under $CH goes through sudo. A plain [ -e ] there reads "absent" for
+# everything (claw-5, 2026-10-27: 13 system links and 37 uv files skipped).
+ci_has() { sudo -n test -e "$1" || sudo -n test -L "$1"; }
 busy=$(pgrep -xc 'Runner\\.Worker' 2>/dev/null || true)
 `;
 }
@@ -97,10 +101,10 @@ step quiet "$([ "\${busy:-0}" = 0 ] && echo ok || echo fail)" "\${busy:-unknown}
 if getent passwd "$CI" >/dev/null; then step user ok "$CI exists (uid $(id -u "$CI"))"; else step user skip "$CI would be created"; fi
 for p in ${moveList()}; do
 	if [ -e "$AH/$p" ]; then
-		[ -e "$CH/$p" ] && step "move:$p" fail "both homes hold it" && continue
+		ci_has "$CH/$p" && step "move:$p" fail "both homes hold it" && continue
 		sz=$(timeout 20 du -sh "$AH/$p" 2>/dev/null | cut -f1)
 		step "move:$p" ok "\${sz:-size not read in 20s}"
-	elif [ -e "$CH/$p" ]; then step "move:$p" skip "already moved"
+	elif ci_has "$CH/$p"; then step "move:$p" skip "already moved"
 	else step "move:$p" skip "absent"; fi
 done
 for c in "$AH"/.config/* "$AH"/.config/.[!.]*; do
@@ -180,7 +184,7 @@ reappeared=""
 # left in place and named, never moved over ci's copy.
 mv1() {
 	if [ -e "$AH/$1" ] || [ -L "$AH/$1" ]; then
-		if [ -e "$CH/$1" ]; then
+		if ci_has "$CH/$1"; then
 			grep -qxF "$1" "$RECORD" 2>/dev/null || die "move:$1" "both homes hold $1"
 			reappeared="$reappeared $1"
 			return 0
@@ -217,7 +221,7 @@ while IFS= read -r l; do
 	rest=\${t#"$AH"/}
 	top=\${rest%%/*}
 	[ "$top" = .config ] && top=.config/$(printf '%s' "$rest" | cut -d/ -f2)
-	[ -e "$CH/$top" ] || continue
+	ci_has "$CH/$top" || continue
 	sudo -n ln -sfn "$CH/$rest" "$l" && relinked=$((relinked + 1))
 	case "$l" in "$CH"/*) sudo -n chown -h "$CI:$CI" "$l" ;; esac
 done < <(sudo -n find ${linkDirs()} "$CH" -type l -lname "$AH/*" 2>/dev/null)
@@ -226,7 +230,7 @@ step relink ok "$relinked link(s) re-pointed"
 # 7. Text that names the old home. As ci, so every file stays ci's.
 rewritten=0
 for t in ${REWRITE_TREES.map((t) => `'${t}'`).join(' ')}; do
-	[ -e "$CH/$t" ] || continue
+	ci_has "$CH/$t" || continue
 	while IFS= read -r f; do
 		sudo -n -u "$CI" sed -i -E "s#$AH(/|\\$|[^-a-zA-Z0-9_])#$CH\\1#g" "$f" && rewritten=$((rewritten + 1))
 	done < <(sudo -n grep -rlI -- "$AH/" "$CH/$t" 2>/dev/null)
@@ -264,7 +268,7 @@ step stop ok "$CI has no key, no linger, and runs nothing"
 n=0
 while IFS= read -r p; do
 	[ -n "$p" ] || continue
-	if [ -e "$CH/$p" ] || [ -L "$CH/$p" ]; then
+	if ci_has "$CH/$p"; then
 		[ -e "$AH/$p" ] && die "move:$p" "both homes hold $p"
 		sudo -n install -d -o "$ADMIN" -g "$ADMIN" "$AH/$(dirname "$p")"
 		sudo -n mv "$CH/$p" "$AH/$p" || die "move:$p" "mv failed"
