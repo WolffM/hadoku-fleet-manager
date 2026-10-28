@@ -389,3 +389,32 @@ test('a primary with a hot standby: a CNAME on the standby tunnel is routed, a t
 	assert.equal(findings[0].kind, 'tunnel-dns');
 	assert.match(findings[0].reason, /or its standby claw-6's 2222/);
 });
+
+test("a pair's public /health answered by its standby is routed; any other 5xx is not", async () => {
+	const paired = {
+		...childApps,
+		apps: childApps.apps.map((a) => (a.id === 'pygmalion' ? { ...a, standby: 'claw-6' } : a)),
+	};
+	const opts = {
+		childApps: paired,
+		hostsDoc: { ...hostsDoc, hosts: { 'claw-4': { tunnel: 'claw-4' } } },
+	};
+	const mk = (health) => {
+		const w = world({
+			tunnels: { 'claw-4': ID },
+			hosts: { 'claw-4': claw4Live() },
+			cname: { 'pygmalion.hadoku.me': `${ID}.cfargotunnel.com` },
+		});
+		w.hosts['claw-4'].config = renderConfig(ID, placementsFor('claw-4', paired));
+		w.deps.health = async () => health;
+		return w;
+	};
+	assert.deepEqual((await run(mk({ status: 503, standby: true }), opts)).findings, []);
+	const { findings } = await run(mk({ status: 503, standby: false }), opts);
+	assert.equal(findings[0].kind, 'tunnel-route');
+	// Without a standby, a 503 that says "standby" is still a broken route.
+	const solo = await run(mk({ status: 503, standby: true }), {
+		hostsDoc: { ...hostsDoc, hosts: { 'claw-4': { tunnel: 'claw-4' } } },
+	});
+	assert.equal(solo.findings[0].kind, 'tunnel-route');
+});

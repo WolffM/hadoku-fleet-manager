@@ -436,7 +436,12 @@ export async function convergeTunnels({ manifest, hostsDoc, childApps, token, wr
 				continue;
 			}
 			const h = await deps.health(`https://${p.hostname}/health`);
-			if (!(h.status < 500)) {
+			// Cloudflare's edge keeps sending some requests down the old tunnel for
+			// minutes after a switchover, so a pair's name can land on its standby,
+			// which reports itself truthfully on /health (and forwards every other
+			// route to the lease holder). That is a routed name, not a broken one.
+			const standbyAnswered = p.standby && h.status === 503 && h.standby;
+			if (!(h.status < 500) && !standbyAnswered) {
 				routed = false;
 				find(
 					node,
@@ -465,7 +470,13 @@ export async function convergeTunnels({ manifest, hostsDoc, childApps, token, wr
 export async function healthStatus(url) {
 	try {
 		const r = await fetch(url, { signal: AbortSignal.timeout(10_000), redirect: 'manual' });
-		return { status: r.status };
+		// A hot standby answers its own /health 503 by design (docs/service-state.md).
+		let standby = false;
+		if (r.status === 503) {
+			const body = await r.json().catch(() => null);
+			standby = body?.detail?.central?.state === 'standby';
+		}
+		return { status: r.status, standby };
 	} catch (err) {
 		return { error: err.message };
 	}
