@@ -723,7 +723,12 @@ test('venv: a broken one under a standing runner goes too, and a busy runner is 
 	// bin/Runner.Listener, which is how the script attributes a live job.
 	const listenerPath = join(runner, 'bin', 'Runner.Listener');
 	const childPidFile = join(fixtureRoot, 'worker.pid');
-	writeFileSync(listenerPath, `#!/bin/sh\nsleep 10 &\necho $! > ${childPidFile}\nwait\n`);
+	// Written then renamed: `echo > file` creates it empty first, and a poll that
+	// lands in that gap under load reads no pid and runs the pass with no worker.
+	writeFileSync(
+		listenerPath,
+		`#!/bin/sh\nsleep 10 &\necho $! > ${childPidFile}.tmp\nmv ${childPidFile}.tmp ${childPidFile}\nwait\n`
+	);
 	chmodSync(listenerPath, 0o755);
 	const listener = spawn(listenerPath, [], { stdio: 'ignore' });
 	try {
