@@ -1,8 +1,12 @@
 # hadoku-fleet-manager
 
 Library + CLI that manages the hadoku CI fleet. Published as
-`@wolffm/fleet-manager`, consumed **in-process by mgmt-api**. Not a service, no
-port, no PM2 entry.
+`@wolffm/fleet-manager`, consumed **in-process by mgmt-api**. Not a service,
+no port, no PM2 entry — **as deployed today**. `src/serve.ts` already ships a
+standalone entrypoint (`FLEET_PORT`, defaulting to 4010, `FLEET_LOOPS=off` for
+the cutover) meant to run as its own PM2 app once leave-hadoku-site Phase 2
+lands; it is not wired to the `fleet` CLI and nothing runs it in production
+yet (`docs/planning/fleet-manager-extraction-2026-08-29.md`).
 
 **This repo is PUBLIC. `WolffM/hadoku-fleet-manager-private` holds the rest.**
 It was cut from one squashed commit on 2026-10-22. The private repo
@@ -50,9 +54,11 @@ contract) before adding any export, and §8 (traps) before touching the fleet.
 Six fixes were correct, committed and inert because the thing running was
 not the thing changed. Read it before concluding a fix did not work.
 
-**Start at `docs/planning/handoff-2026-09-02.md`** if you are picking this up
-cold — the all-JIT conversion and the five latent assumptions it billed at
-once. `docs/planning/handoff-2026-08-30.md` is still the record for
+**Start at `docs/planning/workstreams.md`** if you are picking this up
+cold — it is the live workstream board, newest entry first, and says which
+wave is in flight. `docs/planning/handoff-2026-09-02.md` is deep background
+once you need it: the all-JIT conversion and the five latent assumptions it
+billed at once. `docs/planning/handoff-2026-08-30.md` is still the record for
 everything before it. It is the shipping loop and its five failure points, the three separate
 times a COMMENT has been read as evidence in this codebase, the invariants added
 the day the extraction was verified, two ways mutation testing gave a false pass,

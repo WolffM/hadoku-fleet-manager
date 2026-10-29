@@ -71,13 +71,35 @@ export const DECISION_LOG_DIR = 'dispatch-decisions';
 /** One day past job-history's window, so every job it holds still joins here. */
 export const DECISION_RETENTION_DAYS = RETENTION_DAYS + 1;
 /**
- * The byte cap across every day file. Sized from a measured row: a placed job
- * with nine nodes' figures is ~2.5 KB, and the fleet runs ~2,600 jobs a day at
- * about two rows each (placed, then in flight), so ~13 MB a day and ~200 MB
- * over the window at peak. The cap is above that; hitting it means the row
- * rate changed, and the warning says so.
+ * The byte cap across every day file. The original estimate (~13 MB/day from
+ * a placed-job row size times an assumed job count) missed the dominant cost:
+ * `unplaceable`/`held` rows, which carry every candidate's refusal plus the
+ * full capacity table and get rewritten on every wording flap (see
+ * `refusalCategory`). Measured live, 2026-10-29 00:00-00:35Z, BEFORE that fix:
+ * 768 rows / 2.68 MB in 35 min, ~108 MB/day — the 320 MiB cap held ~3 days,
+ * not the 15-day window.
+ *
+ * Replaying a copy of that window plus the preceding day (874 rows / 3.05 MB
+ * total) through the new, category-based signature: 661 rows / 2.23 MB, a
+ * 24% row / 27% byte cut. Replay script committed as
+ * `docs/planning/wave5a-decision-replay.mjs` (private) —
+ * `node wave5a-decision-replay.mjs 2026-10-28.jsonl 2026-10-29.jsonl` against
+ * local copies of the two files. The same replay, re-run after fixing a
+ * send-back regression (the unmatched-reason fallback hashed the RAW
+ * sentence, including its own moving digits, instead of a blanked one; two
+ * refusal shapes with no category — `slow tier`/`slow kind`'s spill hold,
+ * `placement`'s OOM-derived memory floor — would therefore have flapped on
+ * their own numbers) produced the SAME counts: neither shape collided with
+ * another in this snapshot, so the regression changed correctness, not the
+ * measured rate. Coverage check on both files: every refusal reason observed
+ * (5,737 of them) now maps to a NAMED category — zero fall to `other:`.
+ *
+ * Projected from the two measured windows, the fix leaves ~61-79 MB/day; at
+ * the higher figure {@link DECISION_RETENTION_DAYS} (15) days needs ~1.1 GB.
+ * This cap is ~1.5x that floor; hitting it means the row rate changed again,
+ * and the warning says so.
  */
-export const DECISION_LOG_MAX_BYTES = 320 * 1024 * 1024;
+export const DECISION_LOG_MAX_BYTES = 1536 * 1024 * 1024;
 
 const DAY_MS = 86_400_000;
 
@@ -230,8 +252,59 @@ function keyOf(r: DecisionRecord): string {
 }
 
 /**
+ * The refusal's CATEGORY, not its literal sentence. Three mechanisms answer
+ * the same question — "does this node have room for this job right now" —
+ * and flip between each other on their own clock as other jobs start and
+ * stop: a free-slot count (`at capacity`), hokon's reserved-overflow count
+ * (`reserved for`), and a memory headroom check (`memory:`). The 2026-10-29
+ * incident was one job whose candidate set never changed, where hokon's
+ * reason flapped `reserved` <-> `at capacity` and claw-8's flapped `memory`
+ * <-> `at capacity`: 29 rows in 32 minutes, each the full row with all nine
+ * refusals and the capacity table, because `blankDigits` alone still left the
+ * wording different. A structural refusal — a label, an exclusion, a drain,
+ * the heavy hold — is config, not a live reading, so it keeps its own
+ * category: unlike capacity it does not flap pass to pass. `slow tier`/`slow
+ * kind` (the spill gate holding a job for a faster node) and `placement`
+ * (the OOM-derived memory floor) are their own categories for the same
+ * reason — each is a HOLD whose own digits (queued seconds, the floor in MB)
+ * move every pass while the decision does not; counted across both measured
+ * snapshot day files, both were previously unmatched and fell to the
+ * fallback below, where they would have flapped on their own numbers.
+ *
+ * Unmatched text (a refusal shape nothing here has seen) is its own category
+ * too, so a genuinely new reason still writes rather than silently joining
+ * `other` across different ones — but BLANKED, like every category here:
+ * the raw sentence still carries the moving digits (`queued 123s < 456s`),
+ * and an unmatched fallback that kept them would flap worse than writing
+ * nothing changed at all, which is the bug this comment is itself a fix for
+ * (the first version of this file used the raw sentence here).
+ */
+const REFUSAL_CATEGORIES: readonly [RegExp, string][] = [
+	[/^drained:/, 'drained'],
+	[/^repo excluded here:/, 'excluded'],
+	[/^does not carry/, 'label'],
+	[/^heavy hold:/, 'heavy-hold'],
+	[/^fork/, 'fork'],
+	[/^at capacity:/, 'capacity'],
+	[/^reserved for /, 'capacity'],
+	[/^memory:/, 'capacity'],
+	[/^slow (tier|kind):/, 'slow-hold'],
+	[/^placement:/, 'placement'],
+];
+
+export function refusalCategory(reason: string | null | undefined): string {
+	const s = reason ?? '';
+	for (const [re, cat] of REFUSAL_CATEGORIES) if (re.test(s)) return cat;
+	return `other:${blankDigits(s)}`;
+}
+
+/**
  * What makes two rows the same decision. `held` is folded into `unplaceable`:
- * a backed-off job alternates the two every probe while nothing changed.
+ * a backed-off job alternates the two every probe while nothing changed. A
+ * refusal's CATEGORY is compared, not its literal text (`refusalCategory`) —
+ * the full reason stays on the row that IS written, so "why" is still
+ * queryable; only the decision of whether to write a new row ignores the
+ * capacity mechanism's wording.
  */
 export function decisionSignature(r: DecisionRecord): string {
 	return JSON.stringify([
@@ -242,7 +315,7 @@ export function decisionSignature(r: DecisionRecord): string {
 		r.runner,
 		[...r.candidates].sort(),
 		[...r.refused]
-			.map((x) => `${x.node}=${blankDigits(x.reason)}`)
+			.map((x) => `${x.node}=${refusalCategory(x.reason)}`)
 			.sort()
 			.join('|'),
 		blankDigits(r.reason),

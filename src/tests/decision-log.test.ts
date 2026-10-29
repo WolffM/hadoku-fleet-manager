@@ -457,6 +457,190 @@ test('DEDUP: held and unplaceable are one decision — a backed-off job does not
 	assert.equal(rows.length, 1);
 });
 
+test('DEDUP: a refusal flapping between capacity MECHANISMS is one decision, not one per wording', () => {
+	// The 2026-10-29 incident: hokon's refusal flapped `reserved` <-> `at
+	// capacity`, claw-8's flapped `memory` <-> `at capacity`, nothing else
+	// about the job changed, and 29 rows got written in 32 minutes.
+	const rows = capture();
+	const base: DecisionRecord = {
+		v: 1,
+		at: iso(0),
+		path: 'jit',
+		kind: 'unplaceable',
+		repo: 'WolffM/hadoku-cardtable',
+		runId: 1,
+		jobId: 2,
+		jobName: 'forge-e2e (3)',
+		labels: [],
+		event: 'push',
+		queuedSec: 12,
+		heavy: true,
+		order: [],
+		candidates: ['hokon', 'claw-8'],
+		refused: [
+			{ node: 'hokon', reason: 'at capacity: 4/4 in flight' },
+			{ node: 'claw-8', reason: 'at capacity: 2/2 in flight' },
+		],
+		winner: null,
+		rule: null,
+		outcome: null,
+		runner: null,
+		error: null,
+		reason: 'no node can take this job right now',
+		action: null,
+		capacity: [],
+		fingerprint: null,
+	};
+	emitDecisions([base], NOW);
+	emitDecisions(
+		[
+			{
+				...base,
+				refused: [
+					{
+						node: 'hokon',
+						reason:
+							"reserved for work only hokon can run: overflow may hold 3 of 4 slot(s), 3 in flight, and another node offers this job's labels",
+					},
+					{ node: 'claw-8', reason: 'at capacity: 2/2 in flight' },
+				],
+			},
+		],
+		NOW + 15_000
+	);
+	emitDecisions(
+		[
+			{
+				...base,
+				refused: [
+					{ node: 'hokon', reason: 'at capacity: 4/4 in flight' },
+					{
+						node: 'claw-8',
+						reason:
+							'memory: 9018MB free, this repo peaks at 6313MB, would leave 2705MB against a 2841MB floor',
+					},
+				],
+			},
+		],
+		NOW + 30_000
+	);
+	assert.equal(
+		rows.length,
+		1,
+		'reserved / at-capacity / memory are the same "no room right now" category'
+	);
+
+	// A genuinely different category (an exclusion replacing a capacity
+	// refusal) is still a real decision change and still writes.
+	emitDecisions(
+		[
+			{
+				...base,
+				refused: [
+					{ node: 'hokon', reason: 'at capacity: 4/4 in flight' },
+					{ node: 'claw-8', reason: 'repo excluded here: Forge OOMs on 8 GB' },
+				],
+			},
+		],
+		NOW + 45_000
+	);
+	assert.equal(rows.length, 2, 'excluded is a different category from capacity, so this writes');
+});
+
+test('DEDUP: a slow-tier hold, or any unmatched refusal, is one decision while only ITS OWN digits move', () => {
+	// The manager's send-back: `slow tier`/`slow kind` (126+2+1 refusals in the
+	// measured snapshot) and a genuinely unmatched reason both carry a moving
+	// number — `queued Ns < Ms` — in every one of their own sentences. The
+	// first cut of this fix left the unmatched fallback on the RAW (unblanked)
+	// text, which would have flapped on exactly this shape, worse than base.
+	const rows = capture();
+	const slowTierBase: DecisionRecord = {
+		v: 1,
+		at: iso(0),
+		path: 'jit',
+		kind: 'held',
+		repo: 'WolffM/hadoku-cardtable',
+		runId: 1,
+		jobId: 3,
+		jobName: 'forge-e2e (1)',
+		labels: [],
+		event: 'push',
+		queuedSec: 45,
+		heavy: false,
+		order: [],
+		candidates: ['claw-3'],
+		refused: [
+			{
+				node: 'claw-3',
+				reason: 'slow tier: holding for a faster node (queued 45s < 300s; claw-4 p10 2.04)',
+			},
+		],
+		winner: null,
+		rule: null,
+		outcome: null,
+		runner: null,
+		error: null,
+		reason: 'no node can take this job right now',
+		action: null,
+		capacity: [],
+		fingerprint: null,
+	};
+	emitDecisions([slowTierBase], NOW);
+	// A later pass: the job has waited longer, so `queued Ns` and the hold's
+	// own figures moved — the decision (still held, same candidate) has not.
+	emitDecisions(
+		[
+			{
+				...slowTierBase,
+				queuedSec: 60,
+				refused: [
+					{
+						node: 'claw-3',
+						reason: 'slow tier: holding for a faster node (queued 60s < 300s; claw-4 p10 2.04)',
+					},
+				],
+			},
+		],
+		NOW + 15_000
+	);
+	assert.equal(
+		rows.length,
+		1,
+		'slow tier is a named category; its own digits moving is not a new decision'
+	);
+
+	// An UNMATCHED reason (nothing here has a category for it yet) must still
+	// fold on digits alone, via the blanked fallback — never the raw text.
+	const unmatchedBase: DecisionRecord = {
+		...slowTierBase,
+		jobId: 4,
+		refused: [
+			{ node: 'claw-3', reason: 'a brand new refusal nobody wrote a category for: 7 of 9 slots' },
+		],
+	};
+	emitDecisions([unmatchedBase], NOW + 30_000);
+	emitDecisions(
+		[
+			{
+				...unmatchedBase,
+				refused: [
+					{
+						node: 'claw-3',
+						reason: 'a brand new refusal nobody wrote a category for: 8 of 9 slots',
+					},
+				],
+			},
+		],
+		NOW + 45_000
+	);
+	const unmatchedRows = rows.filter((r) => r.jobId === 4);
+	assert.equal(
+		unmatchedRows.length,
+		1,
+		'an unmatched reason still folds on digits alone (the fallback must blank them, not hash the raw text)'
+	);
+});
+
 test('a write that fails is retried on the next pass, not marked as written', () => {
 	let fail = true;
 	const rows: DecisionRecord[] = [];

@@ -68,7 +68,7 @@ prose can neither trip that rule nor satisfy it.
 | ---------- | ------------------------------------------------------------------------- | ------------------------------- |
 | **admin**  | the management identity: ssh, NOPASSWD sudo, the journal, pm2             | runs a CI job                   |
 | **ci**     | runs every CI job; owns runner slots, toolchains, caches, `runners.slice` | sudo, the docker group, adm     |
-| **tenant** | a hosting agent's system user (`cardtable-agent`), in `TENANTS`           | logs in, shares a group with ci |
+| **tenant** | a hosting agent's system user (`cardtable-agent`), in the tenant registry | logs in, shares a group with ci |
 
 Code names the ROLE, never a user. `runOn(node, script, { as: 'ci' })`,
 `nodeShell(node, 'ci', cmd)`, `sshDestination(node, 'admin')` and
@@ -79,6 +79,10 @@ not been cut over and its CI still runs as admin.
 `scripts/lib/node-users-guard.test.mjs` fails the build on a user literal, on a
 `runOn` call with no `as:`, or on a hand-rolled ssh that skips `sshDestination`.
 The plan and the cutover order are in `docs/planning/node-users-2026-10-27.md`.
+
+The tenant registry (`scripts/lib/tenant-registry.mjs`, `fleet hosting-request
+<repo> --register`) replaced the hand-written `TENANTS` table on 2026-10-27:
+names are derived from a tenant's normalized request, never typed by hand.
 
 ## The axes
 
@@ -123,6 +127,21 @@ once. Keeping that to ONE command, ONE direction and ONE moment is what stops it
 becoming a heartbeat protocol. `fleet enroll` therefore writes a PROPOSED entry
 and exits non-zero until an operator commits it: measurement is automated,
 declaration stays a human act.
+
+**Three more verbs sit inside PROVISION and VERIFY, not as phases of their
+own:**
+
+- **`fleet bootcamp`** is PROVISION's step 7 (`bootcampPhase`,
+  `scripts/provision-fleet.mjs`) AND VERIFY's recurring re-prove: a node EARNS
+  a capability (a routing label) by having the probe EXECUTE it, seeding an
+  artifact first when the probe says one is missing. The nightly cadence and
+  the reboot cycle's re-prove both call it directly, outside `provision`.
+- **`fleet lan-reserve`** and the **node-users cutover** (`fleet node-users`,
+  owned by d3) are today SEPARATE prerequisites `provision` does not run —
+  nightly `preflight` blocks on a missing LAN reservation, and a node with no
+  `machines.<node>.users.ci` still runs CI as admin. Plan
+  `docs/planning/refactor-plan-2026-10-28.md` §5.4 folds both into PROVISION;
+  until then, run them by hand against R1's runbook.
 
 ## The network
 
