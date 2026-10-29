@@ -1,0 +1,5 @@
+{
+  "machines": {
+    "node-a.invalid": { "role": "claw" }
+  }
+}
