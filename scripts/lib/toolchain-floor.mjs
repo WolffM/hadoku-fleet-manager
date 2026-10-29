@@ -121,6 +121,9 @@ const CLAUDE_LINK = [
  */
 export const TOOL_OPT = '/opt/fleet-tools';
 const TOOL_OPT_LINE = `opt="\${FLEET_TOOL_OPT:-${TOOL_OPT}}"`;
+/** Does `bin` on PATH resolve under the opt root? A detect's location half. */
+const UNDER_OPT = (bin) =>
+	`case "$(readlink -f "$(command -v ${bin})")" in "\${FLEET_TOOL_OPT:-${TOOL_OPT}}"/*) true ;; *) false ;; esac`;
 const extractAsRoot = (tarball) => [
 	'  sudo -n rm -rf "${dest}.incoming" "$dest"',
 	'  sudo -n mkdir -p "${dest}.incoming"',
@@ -623,7 +626,10 @@ export const REPAIRS = {
 			'\'public class Probe{public static void main(String[] a){System.out.println("JDK21-PROBE-OK");}}\' ' +
 			'> "$d/Probe.java" && javac -d "$d" "$d/Probe.java" >/dev/null 2>&1 && ' +
 			'[ "$(java -cp "$d" Probe 2>/dev/null)" = JDK21-PROBE-OK ] && ok=1; rm -rf "$d"; ' +
-			'[ "$ok" = 1 ] && echo OK',
+			// A java that works from a user's home is still not the install: the
+			// cadence put 21.0.13 in admin's home on claw-4 and claw-5 and this
+			// read OK, so nothing ever moved it. Only the opt root passes.
+			`[ "$ok" = 1 ] && ${UNDER_OPT('java')} && echo OK`,
 		// major.minor.security ONLY — never the raw banner. `check-fleet-toolchain.mjs`'s
 		// `judgeTool` reads this through the SHARED `parseInstalledVersion`
 		// (`tool-release.mjs`), which looks for the FIRST run of three dotted
@@ -715,7 +721,7 @@ export const REPAIRS = {
 			'forge-e2e/forge-jvm build with Maven, not a bare javac invocation. `command -v mvn` ' +
 			'is not proof — a `mvn` that cannot actually run (no JAVA_HOME it can resolve, a ' +
 			'corrupt wrapper) exits non-zero on `-v` the same way an absent one does.',
-		detect: 'mvn -v 2>&1 | grep -q "Apache Maven" && echo OK',
+		detect: `mvn -v 2>&1 | grep -q "Apache Maven" && ${UNDER_OPT('mvn')} && echo OK`,
 		version: 'mvn -v 2>/dev/null | head -n1',
 		latest: { source: { kind: 'maven-metadata', majorMinor: '3.9' } },
 		// Apache publishes SHA-512 for its release tarballs, not SHA-256 — the

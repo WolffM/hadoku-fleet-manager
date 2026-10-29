@@ -1137,11 +1137,11 @@ function stubBin(programs) {
 	return dir;
 }
 
-function runDetect(id, programs, scratch = tempDir('tf-tmp-')) {
+function runDetect(id, programs, scratch = tempDir('tf-tmp-'), optRoot) {
 	const dir = stubBin(programs);
 	const r = spawnSync('bash', ['--noprofile', '--norc', '-c', REPAIRS[id].detect], {
 		encoding: 'utf8',
-		env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: scratch },
+		env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: scratch, FLEET_TOOL_OPT: optRoot ?? dirname(dir) },
 	});
 	return (r.stdout ?? '').trim();
 }
@@ -1196,6 +1196,26 @@ test('jdk21 detect: a javac/java pair that actually runs the class reports OK', 
 		java: '#!/bin/sh\nshift\nd="$1"\n[ -f "$d/compiled" ] && echo JDK21-PROBE-OK\n',
 	});
 	assert.equal(out, 'OK');
+});
+
+const WORKING_JDK = {
+	javac: '#!/bin/sh\nshift\ntouch "$1/compiled"\n',
+	java: '#!/bin/sh\nshift\nd="$1"\n[ -f "$d/compiled" ] && echo JDK21-PROBE-OK\n',
+};
+
+/**
+ * A WORKING TOOL OUTSIDE THE OPT ROOT IS MISSING. The cadence installed JDK
+ * 21.0.13 into admin's home on claw-4 and claw-5, and the detect read OK, so
+ * converge never moved it. MUTATION: drop UNDER_OPT from either detect.
+ */
+test('jdk21 and maven detect: a working binary outside the opt root reports MISSING', () => {
+	const elsewhere = tempDir('tf-opt-');
+	assert.equal(runDetect('jdk21', WORKING_JDK, undefined, elsewhere), '');
+	assert.equal(
+		runDetect('maven', { mvn: '#!/bin/sh\necho "Apache Maven 3.9.16"\n' }, undefined, elsewhere),
+		''
+	);
+	assert.equal(runDetect('maven', { mvn: '#!/bin/sh\necho "Apache Maven 3.9.16"\n' }), 'OK');
 });
 
 test('maven detect: an mvn that exits 1 reports MISSING', () => {
