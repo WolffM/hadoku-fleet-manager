@@ -514,7 +514,10 @@ export function buildSpeedModel(
 		// side that still has data).
 		const ratios = ratiosByNode.get(node) ?? [];
 		if (ratios.length === 0) return null;
-		const overallRatio = median(ratios);
+		// percentile, not median(): median() rounds the mean of its two middle
+		// values to whole seconds, which on an even count of kinds turned
+		// claw-5's 2.7x into 3x.
+		const overallRatio = percentile(ratios, 50);
 		if (overallRatio === null) return null;
 
 		let othersMed: number | null = null;

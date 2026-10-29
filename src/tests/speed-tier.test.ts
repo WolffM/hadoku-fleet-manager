@@ -297,6 +297,25 @@ test("(e3) falls back to the node's overall ratio x the job's others-median", ()
 	assert.equal(model.expectedExtraSec('claw-5', target, 'publish'), 40);
 });
 
+test('(e3) the overall ratio is not rounded to a whole number on an even count of kinds', () => {
+	// median() rounds the mean of its two middle values, which is right for
+	// seconds and wrong for a ratio: an even count of 2.5x kinds read as 3x,
+	// and claw-5 (20 kinds, ~2.7x) held work about 18% longer than it should.
+	const records: JobRecord[] = [];
+	const kinds = MIN_KINDS + (MIN_KINDS % 2);
+	for (let i = 0; i < kinds; i++) {
+		const repo = `WolffM/even-${i}`;
+		records.push(...kindSamples(repo, 'check', 'claw-5', 250));
+		records.push(...kindSamples(repo, 'check', 'claw-1', 100));
+	}
+	const target = 'WolffM/never-run-by-5';
+	records.push(...kindSamples(target, 'publish', 'claw-1', 40));
+	const model = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
+	assert.equal(model.describe('claw-5').p50, 2.5);
+	// (2.5 - 1) * 40 = 60; the rounded ratio gave (3 - 1) * 40 = 80.
+	assert.equal(model.expectedExtraSec('claw-5', target, 'publish'), 60);
+});
+
 test('(e4) returns null when nothing applies', () => {
 	const model = buildSpeedModel([], { nowMs: NOW, nodes: FLEET_NODES });
 	assert.equal(model.expectedExtraSec('claw-5', 'WolffM/nothing-known', 'anything'), null);
