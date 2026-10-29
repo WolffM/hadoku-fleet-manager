@@ -22,22 +22,13 @@
  * node).
  */
 import { spawn } from 'node:child_process';
-import {
-	closeSync,
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	openSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { logger, manifestDir, postDiscord, stateDir } from './host.js';
+import { writeJsonAtomic } from './lib/atomic-json.js';
 
 /** One (node, facet) finding, as every converger's `--json` reports it. */
 export interface ConvergeRow {
@@ -212,10 +203,10 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 	}
 
 	function writeState(s: ConvergeState): void {
-		mkdirSync(dirname(statePath()), { recursive: true });
-		const tmp = `${statePath()}.tmp`;
-		writeFileSync(tmp, JSON.stringify(s, null, 2));
-		renameSync(tmp, statePath());
+		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`). `readState` above
+		// keeps its own corrupt-file-as-empty handling unchanged (recorded as a
+		// divergence for 5c, not widened here).
+		writeJsonAtomic(statePath(), s, { space: 2 });
 	}
 
 	/** One pass. Never throws: a broken pass is logged and retried next interval. */

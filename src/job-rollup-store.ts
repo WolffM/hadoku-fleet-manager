@@ -14,27 +14,19 @@
  * never a day that is half there.
  *
  * EVERY WRITE REPLACES THE FILE ATOMICALLY (temp file, fsync, rename, fsync the
- * directory). Writes are rare — once per closed day, plus one backfill — and a
- * year of days is a few tens of MB, so a full rewrite costs nothing that
- * matters and makes a crash mid-write harmless. The atomic writer is a local
- * copy, like job-history's: the shared one is refactor item F3.
+ * directory), via the shared `writeFileAtomic` (F3, `lib/atomic-json.ts`).
+ * Writes are rare — once per closed day, plus one backfill — and a year of
+ * days is a few tens of MB, so a full rewrite costs nothing that matters and
+ * makes a crash mid-write harmless.
  *
  * No logging, no host: the CLI reads this file in a process that never
  * installed one. Problems come back as data (`unreadableLines`), and the
  * caller decides who to tell.
  */
-import {
-	closeSync,
-	fsyncSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	renameSync,
-	writeSync,
-} from 'node:fs';
-import { dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
 
 import type { DayRollup } from './job-rollups.js';
+import { writeFileAtomic } from './lib/atomic-json.js';
 
 /** The file's name inside the state dir. Declared once, read by the CLI too. */
 export const ROLLUP_FILE = 'job-rollups.jsonl';
@@ -71,25 +63,6 @@ function isDayRollup(v: unknown): v is DayRollup {
 	if (typeof v !== 'object' || v === null) return false;
 	const o = v as Record<string, unknown>;
 	return typeof o.day === 'string' && DAY_RE.test(o.day) && Array.isArray(o.rows);
-}
-
-function writeFileAtomic(path: string, data: string): void {
-	const tmp = `${path}.${process.pid}.tmp`;
-	const fd = openSync(tmp, 'w');
-	try {
-		let buf = Buffer.from(data, 'utf8');
-		while (buf.length) buf = buf.subarray(writeSync(fd, buf));
-		fsyncSync(fd);
-	} finally {
-		closeSync(fd);
-	}
-	renameSync(tmp, path);
-	const dirFd = openSync(dirname(path), 'r');
-	try {
-		fsyncSync(dirFd);
-	} finally {
-		closeSync(dirFd);
-	}
 }
 
 /** The JSONL store at `path`. */
@@ -139,7 +112,6 @@ export function jsonlRollupStore(path: string): RollupStore {
 			const kept = [...held.values()]
 				.filter((d) => d.day >= keepFromDay)
 				.sort((a, b) => a.day.localeCompare(b.day));
-			mkdirSync(dirname(path), { recursive: true });
 			writeFileAtomic(
 				path,
 				kept.map((d) => JSON.stringify(d)).join('\n') + (kept.length ? '\n' : '')

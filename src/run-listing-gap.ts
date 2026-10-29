@@ -50,11 +50,12 @@
  * the backlog with a stale status. Those are lost; a 48-hour backlog of
  * in-flight runs would be the cure, and a blackout leaves a handful at most.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { logger, stateDir } from './host.js';
 import { FRESH_HORIZON_H, jobHistoryHasRun } from './job-history.js';
+import { writeJsonAtomic } from './lib/atomic-json.js';
 
 /** The listing's page size. runner-health asks for exactly this. */
 export const LISTING_PAGE = 30;
@@ -108,11 +109,9 @@ function load(): void {
 
 function save(): void {
 	const path = filePath();
-	const tmp = `${path}.tmp`;
 	try {
-		mkdirSync(stateDir(), { recursive: true });
-		writeFileSync(tmp, JSON.stringify(Object.fromEntries(marks)));
-		renameSync(tmp, path);
+		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`).
+		writeJsonAtomic(path, Object.fromEntries(marks));
 	} catch (e) {
 		if (saveComplained) return;
 		saveComplained = true;

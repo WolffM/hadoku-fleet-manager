@@ -37,10 +37,11 @@
  * STATE dir — one absolute path — never a checkout, so the CLI writes exactly
  * where the tick reads (the 2026-09-04 drain bug).
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { stateDir as hostStateDir } from '../host.js';
+import { writeFileAtomic } from '../lib/atomic-json.js';
 import { stateDir as envStateDir } from '../lib/fleet-paths.js';
 
 /**
@@ -92,8 +93,9 @@ export function readForce(): ForceState {
 
 export function writeForce(state: ForceState): void {
 	const path = forcePath();
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(
+	// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`) — this used to write
+	// the live path directly (`F3-non-atomic` debt).
+	writeFileAtomic(
 		path,
 		`${JSON.stringify(
 			{

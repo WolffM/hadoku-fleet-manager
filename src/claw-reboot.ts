@@ -26,10 +26,11 @@
  * `claw-reboot-controller.json`. A reboot in flight makes the first pass after
  * a restart due at FIRST_PASS_MIN_MS rather than a whole interval later.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { logger, postDiscord, stateDir } from './host.js';
+import { writeJsonAtomic } from './lib/atomic-json.js';
 import { packageScriptPath, spawnScriptJson } from './scheduled-converger.js';
 
 /** Between passes. A pass with nothing to do is one ssh per claw. */
@@ -94,9 +95,8 @@ function readState(): ControllerState {
 }
 
 function writeState(s: ControllerState): void {
-	mkdirSync(dirname(statePath()), { recursive: true });
-	writeFileSync(`${statePath()}.tmp`, JSON.stringify(s, null, 2));
-	renameSync(`${statePath()}.tmp`, statePath());
+	// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`).
+	writeJsonAtomic(statePath(), s, { space: 2 });
 }
 
 /** Is a reboot in flight, by the cycle's own record? Unreadable counts as yes: look soon. */

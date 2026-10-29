@@ -33,9 +33,9 @@
  * nothing.
  */
 
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync } from 'node:fs';
-import { unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
 import { STALE_STATE_MS } from '../../dist/ci-alerts.js';
 import { FAST_LOOP_SECONDS } from '../../dist/fleet-loop.js';
 import { BUDGET_ALERT_FRACTION } from '../../dist/gh-budget.js';
@@ -393,9 +393,9 @@ export async function loadSnapshot(stateDir, apiBase, deps = {}) {
 	}
 	try {
 		const snap = await fetchSnapshot(apiBase, deps);
-		const tmp = join(stateDir, `snapshot.json.${process.pid}`);
-		writeFileSync(tmp, JSON.stringify(snap));
-		renameSync(tmp, join(stateDir, 'snapshot.json'));
+		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`); the lock above
+		// already keeps two panes from racing this write.
+		writeFileAtomic(join(stateDir, 'snapshot.json'), JSON.stringify(snap));
 		return snap;
 	} finally {
 		closeSync(fd);

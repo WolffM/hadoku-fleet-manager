@@ -49,11 +49,12 @@
  * must never read as "there was nothing to find".
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
 import { readDrains } from './lib/expected-down.mjs';
 import { tryShipped } from './lib/fleet-source.mjs';
+import { writeFileAtomic } from '../dist/lib/atomic-json.js';
 import { hubRepoFull } from '../dist/lib/fleet-config.js';
 import { FLOOR_DEMAND_FILE, floorLabels, isFloorDemandLabel } from '../dist/label-floor.js';
 import { FLEET_VALUE } from '../dist/ci-runner-fallback.js';
@@ -470,8 +471,8 @@ if (holdingsError) {
 }
 
 try {
-	mkdirSync(dirname(HOLDINGS_PATH), { recursive: true });
-	writeFileSync(
+	// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`).
+	writeFileAtomic(
 		HOLDINGS_PATH,
 		`${JSON.stringify({ at: new Date().toISOString(), holdings }, null, 2)}\n`
 	);
@@ -657,8 +658,8 @@ const staticComplete =
 let floorDemandWriteError = null;
 if (staticComplete) {
 	try {
-		mkdirSync(dirname(FLOOR_DEMAND_PATH), { recursive: true });
-		writeFileSync(
+		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`).
+		writeFileAtomic(
 			FLOOR_DEMAND_PATH,
 			`${JSON.stringify({ at: new Date().toISOString(), labels: staticDemand }, null, 2)}\n`
 		);

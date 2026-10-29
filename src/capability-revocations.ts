@@ -30,8 +30,10 @@
  * next tick and be cleared just as fast, without a commit, by whichever probe
  * looked last — it is an observation, like `$proof`, not configuration.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+import { writeFileAtomic } from './lib/atomic-json.js';
 
 export const REVOCATIONS_FILE = 'capability-revocations.json';
 
@@ -78,19 +80,16 @@ export function readRevocations(dir: string): RevocationRead {
 	}
 }
 
-/** Write atomically: a reader on the 15 s tick must never see half a file. */
+/** Write atomically, fsync'd (F3, `lib/atomic-json.ts`): a reader on the 15 s tick must never see half a file. */
 export function writeRevocations(dir: string, nodes: Revocations): void {
-	mkdirSync(dir, { recursive: true });
 	const path = join(dir, REVOCATIONS_FILE);
-	const tmp = `${path}.tmp-${process.pid}`;
 	const pruned = Object.fromEntries(
 		Object.entries(nodes).filter(([, caps]) => Object.keys(caps).length)
 	);
-	writeFileSync(
-		tmp,
+	writeFileAtomic(
+		path,
 		`${JSON.stringify({ $comment: 'Labels a probe executed and judged FAILED; withheld from routing until a passing probe clears them. See src/capability-revocations.ts.', nodes: pruned }, null, 2)}\n`
 	);
-	renameSync(tmp, path);
 }
 
 /** One judged execution of an offered label. */

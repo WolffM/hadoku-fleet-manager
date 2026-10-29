@@ -13,7 +13,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { isDraining, readDrain } from './drain.js';
@@ -61,6 +61,7 @@ import { orderCandidates, buildHeavyModel, type TrafficNode, type HeavyModel } f
 import { recordDiskReadings } from './disk-watch.js';
 import { isSchedulable } from './schedulable.js';
 import { nodeShell } from '../node-shell.js';
+import { writeFileAtomic } from '../lib/atomic-json.js';
 import { nodeHome, type UserBearingNode } from '../lib/node-users.js';
 import { isGuestNode, mintsOnDemand } from '../lib/node-role.js';
 import { isBackstopHeld } from './backstop-hold.js';
@@ -991,13 +992,12 @@ function loadWarmBackoff(): Map<string, WarmBackoffEntry> {
 function saveWarmBackoff(): void {
 	const nodes = Object.fromEntries(loadWarmBackoff());
 	try {
-		mkdirSync(stateDir(), { recursive: true });
-		// Written through a temp file and renamed: a torn write here would be
-		// read back as an empty streak on the next restart, which is precisely
-		// the failure this file exists to stop.
-		const tmp = `${warmBackoffPath()}.tmp`;
-		writeFileSync(tmp, `${JSON.stringify({ nodes }, null, 2)}\n`);
-		renameSync(tmp, warmBackoffPath());
+		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`): a torn write here
+		// would be read back as an empty streak on the next restart, which is
+		// precisely the failure this file exists to stop. `loadWarmBackoff`'s own
+		// "unreadable is empty" handling is unchanged (recorded as a divergence
+		// for 5c, not widened here).
+		writeFileAtomic(warmBackoffPath(), `${JSON.stringify({ nodes }, null, 2)}\n`);
 	} catch (err) {
 		logger.warn(
 			`[warm-cache] could not persist the fill backoff: ${

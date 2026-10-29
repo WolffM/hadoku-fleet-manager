@@ -74,9 +74,10 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { githubToken, hostInstalled, logger, postDiscord, stateDir } from './host.js';
+import { writeJsonAtomic } from './lib/atomic-json.js';
 import type { FleetGithubBudget, GhCaller } from './fleet-report-types.js';
 
 export type { GhCaller } from './fleet-report-types.js';
@@ -531,7 +532,6 @@ function saveBooks(nowMs: number): void {
 	if (lastSaveMs && nowMs - lastSaveMs < GH_BUDGET_SAVE_MS) return;
 	lastSaveMs = nowMs;
 	const path = booksPath();
-	const tmp = `${path}.tmp`;
 	const saved: SavedWindow[] = [...windows.values()].map((w) => ({
 		...w,
 		byCaller: Object.fromEntries(w.byCaller),
@@ -539,9 +539,19 @@ function saveBooks(nowMs: number): void {
 		timeline: Object.fromEntries(w.timeline),
 	}));
 	try {
-		mkdirSync(stateDir(), { recursive: true });
-		writeFileSync(tmp, JSON.stringify({ labels: Object.fromEntries(tokenLabels), windows: saved }));
-		renameSync(tmp, path);
+		// Write-then-rename (F3, `lib/atomic-json.ts`), fsync SKIPPED — a RECORDED
+		// divergence (plan §4.1 step 2): this runs on the hot path of every
+		// charged GitHub call (throttled to one disk write per GH_BUDGET_SAVE_MS
+		// = 10 s, but that is still hotter than dispatch-tick's 15 s and sits
+		// inline with the call that is charging the budget it is persisting).
+		// Losing the last few seconds of this file to an unclean restart costs
+		// one hour's per-caller split, never a correctness guarantee runner-health
+		// depends on, so the extra two fsyncs are not worth paying here.
+		writeJsonAtomic(
+			path,
+			{ labels: Object.fromEntries(tokenLabels), windows: saved },
+			{ fsync: false }
+		);
 	} catch (e) {
 		if (saveComplained) return;
 		saveComplained = true;

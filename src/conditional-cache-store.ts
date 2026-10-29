@@ -32,10 +32,11 @@
  * that is unreadable is deleted and costs one charged read, never a failure.
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { logger, stateDir } from './host.js';
+import { writeJsonAtomic } from './lib/atomic-json.js';
 
 /** Under `stateDir()`. One subdirectory per cache. */
 export const CONDITIONAL_CACHE_DIR = 'gh-conditional-cache';
@@ -142,12 +143,15 @@ export function conditionalCacheStore(
 		},
 		save(key, etag, text, nowMs = Date.now()) {
 			const path = fileOf(key);
-			const tmp = `${path}.tmp`;
 			try {
-				mkdirSync(dir(), { recursive: true });
-				// Temp-and-rename: a torn write must not pair one ETag with half a body.
-				writeFileSync(tmp, JSON.stringify({ key, etag, text, savedAtMs: nowMs }));
-				renameSync(tmp, path);
+				// Temp-and-rename (F3, `lib/atomic-json.ts`): a torn write must not
+				// pair one ETag with half a body. fsync SKIPPED — a RECORDED
+				// divergence (plan §4.1 step 2): this writes once per conditional
+				// GitHub read that changed, and every entry here is disposable —
+				// losing one to an unclean restart costs exactly the one read it
+				// would have made free, nothing more, so the two extra fsyncs are
+				// not worth paying on this path.
+				writeJsonAtomic(path, { key, etag, text, savedAtMs: nowMs }, { fsync: false });
 			} catch (e) {
 				complainOnce(
 					'write',

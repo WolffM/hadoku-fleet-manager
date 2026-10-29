@@ -51,9 +51,10 @@
  */
 
 import { join } from 'node:path';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 
 import { manifest, stateDir, logger, postDiscord } from './host.js';
+import { writeJsonAtomic } from './lib/atomic-json.js';
 import { fleetOwner } from './lib/fleet-config.js';
 
 /** One watched workflow. Shape matches `fleet ci-watch --write` output. */
@@ -395,14 +396,11 @@ export function readStates(): Record<string, CiState> {
 }
 
 export function writeStates(states: Record<string, CiState>): void {
-	const p = statePath();
 	try {
-		mkdirSync(stateDir(), { recursive: true });
-		// Write-then-rename: a crash mid-write must not leave truncated JSON that
-		// the next tick reads as "no state" and re-announces every live break from.
-		const tmp = `${p}.tmp`;
-		writeFileSync(tmp, JSON.stringify(states, null, '\t'));
-		renameSync(tmp, p);
+		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`): a crash mid-write
+		// must not leave truncated JSON that the next tick reads as "no state"
+		// and re-announces every live break from.
+		writeJsonAtomic(statePath(), states, { space: '\t' });
 	} catch (err) {
 		logger.warn(`[ci-alerts] could not persist state: ${String(err)}`);
 	}
@@ -458,15 +456,8 @@ export function ciAlertsBootPassDue(nowMs = Date.now()): boolean {
 
 function recordCleanPass(s: CiTickSummary): void {
 	if (!s.targets || s.unreadable || s.errors) return;
-	const p = passPath();
 	try {
-		mkdirSync(stateDir(), { recursive: true });
-		const tmp = `${p}.tmp`;
-		writeFileSync(
-			tmp,
-			JSON.stringify({ completedAt: new Date().toISOString(), targets: s.targets })
-		);
-		renameSync(tmp, p);
+		writeJsonAtomic(passPath(), { completedAt: new Date().toISOString(), targets: s.targets });
 	} catch (err) {
 		logger.warn(
 			`[ci-alerts] could not record the pass: ${String(err)} — the next boot runs its own`

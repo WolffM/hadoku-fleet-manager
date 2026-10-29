@@ -29,7 +29,7 @@ import { tsAndMjsSources, assertDebt, loadDebt } from './lib.mjs';
 // No `g` flag: every use here is a one-shot `.test()`, and a global regex's
 // `lastIndex` would carry over between files and silently skip matches.
 const REPAGE_CONST = /\bconst\s+(?:REPAGE(?:_INTERVAL)?_MS|RE_ALERT_MS)\s*=/;
-const WRITE = /\bwriteFileSync\(/;
+const WRITE = /\b(?:writeFileSync|writeFileAtomic|writeJsonAtomic)\(/;
 const DEBOUNCE = /\bnow\s*-\s*\w+\s*<\s*[\w.]*(?:MS|Ms)\b/;
 
 function findRepageMs() {

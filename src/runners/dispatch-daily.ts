@@ -11,10 +11,11 @@
  * and {@link dispatchForDay} answers `null` for it, never zero — the history
  * starting is not the fleet having minted nothing.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { logger, stateDir } from '../host.js';
+import { writeJsonAtomic } from '../lib/atomic-json.js';
 import { RETENTION_DAYS } from '../job-history.js';
 
 export const DISPATCH_DAILY_FILE = 'dispatch-daily.json';
@@ -67,10 +68,9 @@ export function recordDispatchDay(nowMs: number, pass: DispatchDay): void {
 	const oldest = utcDay(nowMs - RETENTION_DAYS * 86_400_000);
 	for (const d of Object.keys(doc.days)) if (d < oldest) delete doc.days[d];
 	try {
-		mkdirSync(stateDir(), { recursive: true });
-		const tmp = `${path()}.tmp`;
-		writeFileSync(tmp, JSON.stringify(doc));
-		renameSync(tmp, path());
+		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`). Only reached on a
+		// pass that minted or failed, not every tick, so this is not a hot path.
+		writeJsonAtomic(path(), doc);
 	} catch (err) {
 		logger.warn(`[dispatch-daily] could not write ${path()}: ${(err as Error).message}`);
 	}

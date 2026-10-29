@@ -56,21 +56,12 @@
  * and the in-memory window carries on.
  */
 
-import {
-	appendFileSync,
-	closeSync,
-	fsyncSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	renameSync,
-	statSync,
-	writeSync,
-} from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { logger } from './host.js';
 import { stateDir } from './host.js';
+import { writeFileAtomic } from './lib/atomic-json.js';
 
 /**
  * THE RETENTION RULE. Records are kept by AGE, and this is the only rule that
@@ -542,35 +533,6 @@ export function historyCompleteSinceMs(now = Date.now()): number | null {
 	}
 	if (!Number.isFinite(oldest)) return null;
 	return Math.max(oldest, now - RETENTION_DAYS * 86_400_000);
-}
-
-/**
- * Replace `path` with `data` so that a crash at any instant leaves either the
- * old file or the new one, never a truncated mix: write a sibling temp file,
- * fsync it, rename it over the target, then fsync the directory so the rename
- * itself is durable.
- *
- * LOCAL ON PURPOSE. A shared atomic writer for every state file is its own
- * refactor item (F3); this one exists because a `writeFileSync` that died
- * mid-rewrite would have truncated the ONLY copy of fourteen days of history.
- */
-function writeFileAtomic(path: string, data: string): void {
-	const tmp = `${path}.${process.pid}.tmp`;
-	const fd = openSync(tmp, 'w');
-	try {
-		let buf = Buffer.from(data, 'utf8');
-		while (buf.length) buf = buf.subarray(writeSync(fd, buf));
-		fsyncSync(fd);
-	} finally {
-		closeSync(fd);
-	}
-	renameSync(tmp, path);
-	const dirFd = openSync(dirname(path), 'r');
-	try {
-		fsyncSync(dirFd);
-	} finally {
-		closeSync(dirFd);
-	}
 }
 
 function warnOnce(what: string, err: unknown): void {

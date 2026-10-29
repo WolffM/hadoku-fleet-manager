@@ -1,0 +1,47 @@
+{
+  "$comment": "F3 one-writer guard (plan §3.2 rule 3, §4.1 F3 step 4). `files` keys a basename literal the detector found reaching a write call's PATH argument; the array is every file detected writing it TODAY — one entry is a declared sole writer, more than one is accepted multi-writer debt until the owning lane de-dups it. `patterns` is the same idea for a state file whose name is built per-period (decision-log's `${day}.jsonl`, usage-store's `usage-${year}-${month}.jsonl`): keyed by the exact regex SOURCE text the file uses to recognise its own filenames, detected by that substring plus an append-family write call co-occurring in the same file. See f3-one-writer.test.mjs for the detector; a NEW entry here must come from re-running it, never hand-typed.",
+  "files": {
+    "artifact.json": ["scripts/lib/hosting-artifacts.mjs"],
+    "capability-revocations.json": ["src/capability-revocations.ts"],
+    "ci-alert-state.json": ["src/ci-alerts.ts"],
+    "ci-alerts-last-pass.json": ["src/ci-alerts.ts"],
+    "claw-reboot-controller.json": ["src/claw-reboot.ts"],
+    "claw-reboot.json": ["scripts/reboot-claws.mjs"],
+    "demand-ledger.jsonl": ["scripts/lib/slice-inventory-run.mjs", "scripts/service-inventory.mjs"],
+    "dispatch-daily.json": ["src/runners/dispatch-daily.ts"],
+    "dispatch-stuck-announced.json": ["src/runners/dispatch-tick.ts"],
+    "fleet-backstop-force.json": ["src/runners/backstop-force.ts"],
+    "fleet-drain.json": ["scripts/lib/expected-down.mjs", "src/runners/drain.ts"],
+    "fleet-hosting.json": ["src/runners/hosting-record.ts"],
+    "fleet-runner-coverage.json": ["scripts/reconcile-fleet-runners.mjs"],
+    "fleet-runner-manifest.json": [
+      "scripts/bootcamp.mjs",
+      "scripts/enroll-node.mjs",
+      "scripts/lan-reserve.mjs",
+      "scripts/node-users-cutover.mjs"
+    ],
+    "gh-budget.json": ["src/gh-budget.ts"],
+    "hosting-converge-last.json": ["scripts/hosting-converge.mjs"],
+    "hosting-demand.json": ["scripts/lib/hosting-demand.mjs"],
+    "hosting-tenants.json": ["scripts/lib/tenant-registry.mjs"],
+    "job-history.jsonl": ["src/job-history.ts"],
+    "job-proofs.json": ["scripts/lib/job-proof-record.mjs"],
+    "label-floor-holdings.json": ["scripts/check-label-floor.mjs"],
+    "node-status-boots.json": ["scripts/node-status.mjs"],
+    "node-status-last.json": ["scripts/node-status.mjs"],
+    "node-status-seen.json": ["scripts/node-status.mjs"],
+    "package.json": ["scripts/version-bump.mjs"],
+    "recheck-log.json": ["scripts/lib/refresh-cycle.mjs"],
+    "run-listing-marks.json": ["src/run-listing-gap.ts"],
+    "runner-health-alerts.json": ["src/runner-health.ts"],
+    "runner-health-snapshot.json": ["src/runner-health.ts"],
+    "security-pending.json": ["scripts/check-fleet-preflight.mjs"],
+    "snapshot.json": ["scripts/lib/herdr-fleet.mjs"],
+    "tool-inventory-capabilities.json": ["scripts/check-tool-inventory.mjs"],
+    "warm-backoff.json": ["src/runners/ephemeral-tick.ts"]
+  },
+  "patterns": {
+    "^(\\d{4}-\\d{2}-\\d{2})\\.jsonl$": ["src/runners/decision-log.ts"],
+    "^usage-(\\d{4})-(\\d{2})\\.jsonl$": ["src/lib/usage-store.ts"]
+  }
+}

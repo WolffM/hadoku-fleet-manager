@@ -18,10 +18,11 @@
  * one that declines simply leaves the work to the standing runners above it.
  */
 
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { logger, stateDir } from '../host.js';
+import { writeFileAtomic } from '../lib/atomic-json.js';
 import { ghTokenFingerprint, withGhCaller } from '../gh-budget.js';
 import { conditionalCacheStore } from '../conditional-cache-store.js';
 import {
@@ -432,11 +433,15 @@ function loadWarnedStuck(): void {
 function persistWarnedStuck(): void {
 	capAnnouncedStuck();
 	const path = stuckStorePath();
-	const tmp = `${path}.tmp`;
 	try {
-		mkdirSync(stateDir(), { recursive: true });
-		writeFileSync(tmp, `${JSON.stringify(Object.fromEntries(warnedStuck), null, '\t')}\n`);
-		renameSync(tmp, path);
+		// Write-then-rename (F3, `lib/atomic-json.ts`), fsync SKIPPED — a RECORDED
+		// divergence (plan §4.1 step 2): this is the 15 s dispatch tick, named
+		// explicitly in the wave brief as a site where the two extra fsyncs are
+		// not worth paying. A lost write here costs one re-announced zombie, not
+		// a lost decision.
+		writeFileAtomic(path, `${JSON.stringify(Object.fromEntries(warnedStuck), null, '\t')}\n`, {
+			fsync: false,
+		});
 	} catch (e) {
 		// SAY WHY, and say what it costs. A silent persist failure is invisibly
 		// identical to the bug this file was written to close.

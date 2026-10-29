@@ -163,6 +163,10 @@ export const LAYER_MAP = [
 	{ glob: 'src/gh-budget.ts', layer: 'access' },
 	{ glob: 'src/conditional-cache-store.ts', layer: 'access' },
 	{ glob: 'src/lib/github-client.ts', layer: 'access' },
+	// The filesystem write primitive every state file goes through (F3). Access,
+	// not state: access-layer stores (gh-budget, conditional-cache-store) persist
+	// through it, and state importing access is the legal direction.
+	{ glob: 'src/lib/atomic-json.ts', layer: 'access' },
 	{ glob: 'scripts/lib/fleet-exec.mjs', layer: 'access' },
 	{ glob: 'scripts/fleet-source.mjs', layer: 'access' },
 	{ glob: 'scripts/lib/fleet-source.mjs', layer: 'access' },

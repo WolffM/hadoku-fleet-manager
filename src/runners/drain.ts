@@ -42,10 +42,11 @@
  * safe to start maintenance on, and the difference is the entire point of the
  * word "soft" — so the two are never collapsed into one boolean.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { manifest, stateDir } from '../host.js';
+import { writeFileAtomic } from '../lib/atomic-json.js';
 import { effectiveHosting, type HostingDoc } from './hosting-record.js';
 
 /**
@@ -334,8 +335,11 @@ export function readDrainDoc(): DrainDoc {
 export function writeDrain(nodes: DrainState, planned: PlannedDrain[] = []): void {
 	const doc = { nodes, planned };
 	const path = drainPath();
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(
+	// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`) — this used to write
+	// the live path directly (`F3-non-atomic` debt), so a crash mid-write could
+	// leave a drain state nothing could parse, on a file whose own reader fails
+	// CLOSED on exactly that (see `readDrainDoc`'s comment above).
+	writeFileAtomic(
 		path,
 		`${JSON.stringify({ $comment: 'Nodes held out of service. `fleet drain` writes this; the dispatcher and the tier ladder both read it. Lives in the state dir, NOT a git checkout — see drain.ts.', ...pruneDrainDoc(doc) }, null, 2)}\n`
 	);

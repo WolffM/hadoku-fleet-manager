@@ -18,8 +18,10 @@
  * cannot read is reported with its reason — never as "no proof", which would
  * claim the question was asked and answered.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
 
 export const PROOF_FILE = 'job-proofs.json';
 
@@ -80,10 +82,8 @@ export function recordProof(dir, node, result) {
 	const next = mergeProof(read.proofs, node, result);
 	if (next === read.proofs) return { ok: true, written: false };
 	try {
-		mkdirSync(dirname(proofPath(dir)), { recursive: true });
-		const tmp = `${proofPath(dir)}.tmp`;
-		writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
-		renameSync(tmp, proofPath(dir));
+		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`).
+		writeFileAtomic(proofPath(dir), `${JSON.stringify(next, null, 2)}\n`);
 		return { ok: true, written: true };
 	} catch (err) {
 		return { ok: false, reason: `could not write ${proofPath(dir)}: ${err.message}` };
