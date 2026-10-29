@@ -18,10 +18,19 @@ test('jobKind: a numeric matrix suffix is a shard of the same job', () => {
 	assert.equal(jobKind('forge-e2e'), 'forge-e2e');
 });
 
+test('jobKind: an INDEX/TOTAL suffix is a shard of the same job', () => {
+	assert.equal(jobKind('unit (1/2)'), 'unit');
+	assert.equal(jobKind('unit (2/2)'), 'unit');
+	assert.equal(jobKind('unit (10/12)'), 'unit');
+});
+
 test('jobKind: a non-numeric matrix value is a different job and is kept', () => {
 	assert.equal(jobKind('test (ubuntu, 20)'), 'test (ubuntu, 20)');
 	assert.equal(jobKind('build (linux)'), 'build (linux)');
 	assert.equal(jobKind('a (1) b'), 'a (1) b');
+	assert.equal(jobKind('unit (1/2) b'), 'unit (1/2) b');
+	assert.equal(jobKind('test (1/)'), 'test (1/)');
+	assert.equal(jobKind('test (ubuntu/20)'), 'test (ubuntu/20)');
 });
 
 function rec(name: string, runSec: number, i: number): JobRecord {
