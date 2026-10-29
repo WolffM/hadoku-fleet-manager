@@ -50,6 +50,7 @@ import { deferralFor, readDrains } from './expected-down.mjs';
 import { runOnSync, separateCiUser } from './fleet-exec.mjs';
 import {
 	applicableRepairs,
+	byRole,
 	installScript,
 	isVersionManaged,
 	linkScript,
@@ -670,15 +671,23 @@ export function liveQueuePressure() {
 
 export function createLiveDeps() {
 	const lookup = createReleaseLookup();
+	// One read per role (`byRole`): a tool is read as the user whose state it is.
 	const probe = (node, tools) => {
-		const res = runOnSync(node, toolProbeScript(tools), {
-			as: 'ci',
-			timeoutMs: 60_000,
-			connectTimeout: 8,
-		});
-		const seen = parseToolProbe(res.out ?? '');
-		if (!res.ok && !Object.keys(seen).length) {
-			return { ok: false, reason: (res.error || 'unreadable').trim().slice(0, 200) };
+		const seen = {};
+		for (const [role, group] of byRole(tools)) {
+			const res = runOnSync(node, toolProbeScript(group), {
+				as: role,
+				timeoutMs: 60_000,
+				connectTimeout: 8,
+			});
+			const part = parseToolProbe(res.out ?? '');
+			if (!res.ok && !Object.keys(part).length) {
+				return {
+					ok: false,
+					reason: `as ${role}: ${(res.error || 'unreadable').trim().slice(0, 200)}`,
+				};
+			}
+			Object.assign(seen, part);
 		}
 		return { ok: true, seen };
 	};

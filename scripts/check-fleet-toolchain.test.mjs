@@ -1389,3 +1389,60 @@ test('--json: a probe that THROWS still emits one document carrying the reason',
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+/**
+ * claw-4's cutover, 2026-10-28: `pm2-boot` and `service-state-root` read admin's
+ * state (its pm2 unit, its HOME), and the probe ran as ci, so a healthy services
+ * host failed converge-toolchain. A tool with `role: 'admin'` is read in its own
+ * run as admin, and has no runner PATH to judge.
+ *
+ * MUTATION: probe every tool in the one ci run and the admin tools come back
+ * absent; drop the role check in `judgeTool` and they come back unknown.
+ */
+test('an admin-role tool is read as admin, in its own run, with no runner PATH', async () => {
+	const HOST = 'fixture-services.invalid';
+	const admin = Object.keys(REPAIRS).filter((id) => REPAIRS[id].role === 'admin');
+	assert.ok(admin.length, 'some tool belongs to admin');
+	const calls = [];
+	const run = (node, script, o = {}) => {
+		calls.push({ role: o.role ?? 'ci', script });
+		if ((o.role ?? 'ci') === 'ci') return { ok: true, out: 'os\tfixture\n' };
+		return {
+			ok: true,
+			out: admin.map((id) => `TOOL\t${id}\tdetect\tOK\n`).join(''),
+		};
+	};
+	const { report } = await runDoctor({
+		manifest: manifestOf({ [HOST]: { role: 'claw', labels: ['hadoku-builder'], services: 'pm2' } }),
+		run,
+		lookup: stubLookup(known('2.1.285')),
+		drains: {},
+	});
+	const adminCalls = calls.filter((c) => c.role === 'admin');
+	assert.equal(adminCalls.length, 1, 'one run as admin');
+	for (const id of admin) {
+		assert.ok(adminCalls[0].script.includes(`'${id}'`), `${id} is probed as admin`);
+		assert.ok(!calls[0].script.includes(`'${id}'\tdetect`), `${id} is not in the ci probe`);
+		const t = report[0].tools.find((x) => x.id === id);
+		assert.equal(t.status, 'ok', `${id}: ${t.reason ?? ''}`);
+	}
+	assert.doesNotMatch(adminCalls[0].script, /\\trunner\\t/, 'no runner PATH line for admin');
+});
+
+test('an admin read that fails is unknown with its reason, never "not installed"', async () => {
+	const HOST = 'fixture-services.invalid';
+	const run = (node, script, o = {}) =>
+		(o.role ?? 'ci') === 'ci'
+			? { ok: true, out: 'os\tfixture\n' }
+			: { ok: false, out: '', error: 'Permission denied (publickey)' };
+	const { report } = await runDoctor({
+		manifest: manifestOf({ [HOST]: { role: 'claw', labels: ['hadoku-builder'], services: 'pm2' } }),
+		run,
+		lookup: stubLookup(known('2.1.285')),
+		drains: {},
+	});
+	const t = report[0].tools.find((x) => x.id === 'pm2-boot');
+	assert.equal(t.status, 'unknown');
+	assert.match(t.reason, /as admin: Permission denied/);
+	assert.equal(report[0].drift, true);
+});

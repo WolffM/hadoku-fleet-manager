@@ -174,6 +174,7 @@ import {
 	applicableRepairs,
 	installScript,
 	isVersionManaged,
+	probeRole,
 	qualifiesForCanary,
 	resolveInstallTarget,
 } from './lib/toolchain-floor.mjs';
@@ -459,7 +460,8 @@ async function ensureTools(name, m) {
 		if (!tool.when) continue;
 		// `true` makes an ABSENT tool exit 0, so a non-ok result means the node did
 		// not answer — which is the probe's to report, not a reason to install.
-		const detect = () => runOn(name, `${tool.detect}\ntrue`, { as: 'ci', timeoutMs: 60_000 });
+		const role = probeRole(tool);
+		const detect = () => runOn(name, `${tool.detect}\ntrue`, { as: role, timeoutMs: 60_000 });
 		const has = (r) => r.ok && /^OK$/m.test(r.stdout);
 		const before = await detect();
 		if (!before.ok) continue;

@@ -29,6 +29,8 @@ import {
 	JDK21_CANARY_MIN_THREADS,
 	installedMb,
 	qualifiesForCanary,
+	byRole,
+	probeRole,
 } from './toolchain-floor.mjs';
 import {
 	DEFAULT_MIN_AGE_MINUTES,
@@ -1346,4 +1348,35 @@ test('docker rootless: the setup tool gets one BIN holding all four, and the con
 	const create = rootless.indexOf('docker context create rootless');
 	assert.ok(create > -1 && create < rootless.indexOf('docker context use rootless'));
 	assert.match(rootless, /docker context inspect rootless[^\n]*\|\|/, 'created only when missing');
+});
+
+/**
+ * A detect is read as the role whose state it is (2026-10-28, claw-4's cutover).
+ * One that asks who it is running as, or reads HOME, answers for whichever user
+ * ran it — so it must say which user that is meant to be, or the first cutover
+ * reads it as ci and reports a healthy admin service as missing.
+ */
+test('a detect that reads its own user declares the role it belongs to', () => {
+	for (const [id, r] of Object.entries(REPAIRS)) {
+		assert.ok(['ci', 'admin'].includes(probeRole(r)), `${id}: role ${r.role}`);
+		if (/\$HOME|id -un|whoami/.test(r.detect)) {
+			assert.equal(r.role, 'admin', `${id} reads its own user's state; declare its role`);
+		}
+	}
+});
+
+test('byRole groups tools by the role that reads them, ci by default', () => {
+	const tools = [
+		['a', { detect: 'x' }],
+		['b', { detect: 'x', role: 'admin' }],
+		['c', { detect: 'x', role: 'ci' }],
+	];
+	assert.deepEqual(
+		byRole(tools).map(([role, g]) => [role, g.map(([id]) => id)]),
+		[
+			['ci', ['a', 'c']],
+			['admin', ['b']],
+		]
+	);
+	assert.deepEqual(byRole([]), []);
 });

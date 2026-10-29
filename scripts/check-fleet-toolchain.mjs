@@ -33,7 +33,13 @@ import {
 } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
-import { applicableRepairs, isVersionManaged, minAgeOf } from './lib/toolchain-floor.mjs';
+import {
+	applicableRepairs,
+	byRole,
+	isVersionManaged,
+	minAgeOf,
+	probeRole,
+} from './lib/toolchain-floor.mjs';
 import { assess, createReleaseLookup, parseInstalledVersion } from './lib/tool-release.mjs';
 import { isGuestNode } from '../dist/lib/node-role.js';
 
@@ -132,8 +138,8 @@ export const TOLERANCE_MINUTES = 3 * 24 * 60;
  * runs on hokon and hokon refuses ssh to itself, which is the same trap that made
  * the fast loop read hokon as permanently saturated for weeks.
  */
-function onNode(node, script, { timeoutMs = 300_000 } = {}) {
-	return runOnSync(node, script, { as: 'ci', timeoutMs, connectTimeout: 8 });
+function onNode(node, script, { role = 'ci', timeoutMs = 300_000 } = {}) {
+	return runOnSync(node, script, { as: role, timeoutMs, connectTimeout: 8 });
 }
 
 /** Single-quote a string for the shell. */
@@ -221,8 +227,13 @@ export function toolProbeScript(tools) {
 			const lines = [
 				`printf 'TOOL\\t%s\\tdetect\\t%s\\n' ${shq(id)} "$(${NON_LOGIN} ${shq(t.detect)} 2>/dev/null | head -n1 | tr -d '\\t')"`,
 				`printf 'TOOL\\t%s\\tlogin\\t%s\\n' ${shq(id)} "$(bash -lc ${shq(t.detect)} 2>/dev/null | head -n1 | tr -d '\\t')"`,
-				`printf 'TOOL\\t%s\\trunner\\t%s\\n' ${shq(id)} "$(__runner_miss ${shq(t.detect)} | tr -d '\\t')"`,
 			];
+			// No job runs as admin, so an admin tool has no runner PATH to reach.
+			if (probeRole(t) === 'ci') {
+				lines.push(
+					`printf 'TOOL\\t%s\\trunner\\t%s\\n' ${shq(id)} "$(__runner_miss ${shq(t.detect)} | tr -d '\\t')"`
+				);
+			}
 			if (t.apt) {
 				// installed|candidate|behind-or-current, decided by dpkg ON the node.
 				const q = `i=$(dpkg-query -W -f='\${Version}' ${t.apt} 2>/dev/null); c=$(apt-cache policy ${t.apt} 2>/dev/null | awk '/Candidate:/{print $2}'); s=unknown; if [ -n "$i" ] && [ -n "$c" ] && [ "$c" != "(none)" ]; then if dpkg --compare-versions "$i" lt "$c"; then s=behind; else s=current; fi; fi; echo "$i|$c|$s"`;
@@ -328,26 +339,29 @@ export function judgeTool(id, tool, seen, latest) {
 		};
 	}
 	// Reachable from a non-login shell over ssh is still not reachable from a JOB
-	// (#127): the runner's PATH is read from the processes that hold it.
-	if (s.runner === undefined || s.runner === '?') {
-		return {
-			id,
-			status: 'unknown',
-			finding: true,
-			reason:
-				'could not read the PATH runner jobs get (no systemd --user manager environment ' +
-				'and no live Runner.Listener), so whether a job can reach it is unknown',
-		};
-	}
-	if (s.runner !== '') {
-		return {
-			id,
-			status: 'absent',
-			finding: true,
-			runnerPathOnly: true,
-			installed: parseInstalledVersion(s.version) ?? null,
-			reason: `installed, but not on the PATH runner jobs get — ${s.runner.replace(/;\s*$/, '')}`,
-		};
+	// (#127): the runner's PATH is read from the processes that hold it. An admin
+	// tool (`role`) is not used by jobs, so it has no runner PATH to judge.
+	if (probeRole(tool) === 'ci') {
+		if (s.runner === undefined || s.runner === '?') {
+			return {
+				id,
+				status: 'unknown',
+				finding: true,
+				reason:
+					'could not read the PATH runner jobs get (no systemd --user manager environment ' +
+					'and no live Runner.Listener), so whether a job can reach it is unknown',
+			};
+		}
+		if (s.runner !== '') {
+			return {
+				id,
+				status: 'absent',
+				finding: true,
+				runnerPathOnly: true,
+				installed: parseInstalledVersion(s.version) ?? null,
+				reason: `installed, but not on the PATH runner jobs get — ${s.runner.replace(/;\s*$/, '')}`,
+			};
+		}
 	}
 	if (tool?.apt) return judgeApt(id, s.apt);
 	if (!isVersionManaged(tool)) return { id, status: 'ok', finding: false };
@@ -845,7 +859,12 @@ export async function runDoctor({
 		// The backstop probe is ADDITIONAL lines on a guest's probe only — a claw
 		// never pays for cgroup/meminfo reads it has no use for.
 		const guest = isGuestNode(m);
-		const res = run(node, probeScript(toolCache, tools, { backstop: guest }), {
+		// The main probe reads as ci; a tool another role owns (`byRole`) is read
+		// as that role, and its lines are appended to the same output.
+		const groups = new Map(byRole(tools));
+		const ciTools = groups.get('ci') ?? [];
+		groups.delete('ci');
+		const res = run(node, probeScript(toolCache, ciTools, { backstop: guest }), {
 			timeoutMs: 60_000,
 		});
 		if (!res.ok && !res.out.includes('os\t')) {
@@ -881,7 +900,21 @@ export async function runDoctor({
 		} = parseProbe(res.out);
 		const facts = restFacts;
 		const missingCache = Object.keys(facts.cache).filter((k) => !facts.cache[k]);
-		const toolReports = judgeNode(tools, parseToolProbe(res.out), latestById);
+		const seen = parseToolProbe(res.out);
+		const unread = new Map();
+		for (const [role, group] of groups) {
+			const r = run(node, toolProbeScript(group), { role, timeoutMs: 60_000 });
+			const part = parseToolProbe(r.out ?? '');
+			if (!r.ok && !Object.keys(part).length) {
+				for (const [id] of group) unread.set(id, `could not read it as ${role}: ${r.error}`);
+			}
+			Object.assign(seen, part);
+		}
+		const toolReports = judgeNode(tools, seen, latestById).map((t) =>
+			unread.has(t.id)
+				? { id: t.id, status: 'unknown', finding: true, reason: unread.get(t.id) }
+				: t
+		);
 		const toolFindings = toolReports.filter((t) => t.finding);
 		report.push({
 			machine: node,

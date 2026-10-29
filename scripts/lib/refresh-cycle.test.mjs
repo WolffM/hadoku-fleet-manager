@@ -580,7 +580,8 @@ test('converge-toolchain reads as ci and installs through installScript, never t
 	const src = blankComments(
 		readFileSync(new URL('../converge-toolchain.mjs', import.meta.url), 'utf8')
 	);
-	assert.match(src, /onNode\(node, script, \{ role: 'ci' \}\)/, 'the read is as ci');
+	assert.match(src, /byRole\(repairs\)/, 'each tool is read as its role');
+	assert.match(src, /onNode\(node, `[^`]*`, \{ role \}\)/, 'one read per role');
 	assert.match(src, /installScript\(id, version, \{ ciUser \}\)/);
 	assert.match(src, /resolveInstallTarget\(/);
 	assert.doesNotMatch(

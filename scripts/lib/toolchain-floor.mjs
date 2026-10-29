@@ -152,6 +152,15 @@ const CLAUDE_LINK = [
  *            installed. Default {@link DEFAULT_MIN_AGE_MINUTES} (seven days;
  *            hadoku_site/pnpm-workspace.yaml:36 `minimumReleaseAge`). Read it
  *            through {@link minAgeOf}.
+ *   role     OPTIONAL node role whose state `detect` reads. Default `ci`: a
+ *            capability is something a CI job uses, so it is read as the user
+ *            jobs run as. `admin` for the few that ARE admin's — the pm2
+ *            services and their state live with admin, who stays the service
+ *            user after a node-users cutover. Read as ci, `pm2-boot` looked for
+ *            `pm2-<ci user>.service` and `service-state-root` under ci's home,
+ *            and both failed claw-4's cutover on a healthy box (2026-10-28).
+ *            Every consumer probes through {@link byRole}; a repair always runs
+ *            as admin regardless.
  */
 /**
  * APT-TRACKED TOOLS (2026-10-09). gh and ffmpeg are Debian packages, and nothing
@@ -365,6 +374,7 @@ export const REPAIRS = {
 			'with the box and takes every service with it.',
 		// Enabled AND active: an enabled unit that failed to start is a box whose
 		// services did not come back, which is the thing this entry exists for.
+		role: 'admin',
 		detect:
 			'u="$(id -un)"; systemctl is-enabled "pm2-$u.service" >/dev/null 2>&1 && ' +
 			'systemctl is-active "pm2-$u.service" >/dev/null 2>&1 && echo OK',
@@ -428,6 +438,7 @@ export const REPAIRS = {
 		why:
 			"where a service host's services keep their state (pm2-hosts.json `stateRoot`); a stateful " +
 			'wrapper refuses to start without it. Created empty and owned by the fleet user.',
+		role: 'admin',
 		detect: `d="${'$'}HOME/${SERVICE_STATE_DIR}"; [ -d "$d" ] && [ -w "$d" ] && echo OK`,
 		repair: `set -e\nmkdir -p "${'$'}HOME/${SERVICE_STATE_DIR}"`,
 	},
@@ -849,6 +860,25 @@ export function toolAppliesTo(id, node, { includeGuests = false } = {}) {
 	if (!tool.when) return true;
 	if (typeof tool.when === 'function') return tool.when(node ?? {});
 	return nodeOffer(node ?? {}, { eligible: false }).includes(tool.when);
+}
+
+/** The role a tool's `detect` runs as: its `role`, else `ci`. */
+export function probeRole(tool) {
+	return tool?.role ?? 'ci';
+}
+
+/**
+ * `[id, tool]` entries grouped by {@link probeRole}, as `[role, entries]` pairs
+ * in first-seen order, empty groups omitted. One probe per pair.
+ */
+export function byRole(tools) {
+	const groups = new Map();
+	for (const entry of tools) {
+		const role = probeRole(entry[1]);
+		if (!groups.has(role)) groups.set(role, []);
+		groups.get(role).push(entry);
+	}
+	return [...groups];
 }
 
 /** `[id, tool]` for every REPAIRS entry that applies to this node. */

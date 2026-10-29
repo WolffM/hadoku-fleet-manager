@@ -51,6 +51,7 @@ import { createEmitter } from './lib/emit.mjs';
 import {
 	REPAIRS,
 	applicableRepairs,
+	byRole,
 	declaredPackages,
 	installScript,
 	isVersionManaged,
@@ -155,28 +156,37 @@ function onNode(node, script, { role, timeoutMs = 600_000 }) {
 	return runOnSync(node, script, { as: role, timeoutMs, connectTimeout: 8 });
 }
 
-/** One read of a node's observed state. Never reports what was WRITTEN. */
+/**
+ * One read of a node's observed state. Never reports what was WRITTEN. Each
+ * capability is read as the role it belongs to (`byRole`): ci for what a job
+ * uses, admin for the pm2 services admin keeps. Either read failing is
+ * unreadable.
+ */
 function observe(node, packages, repairs) {
-	const detects = repairs
-		.map(([id, r]) => `printf 'REPAIR %s %s\\n' '${id}' "$(${r.detect} || echo MISSING)"`)
-		.join('\n');
-	const script = `
+	const pkgCheck = `
 		for p in ${packages.join(' ')}; do
 			dpkg -s "$p" >/dev/null 2>&1 || printf 'PKG-MISSING %s\\n' "$p"
-		done
-		${detects}
-	`;
-	const res = onNode(node, script, { role: 'ci' });
-	if (!res.ok) {
-		// "I could not look" is a FAILURE, and it says which kind. A node that is
-		// unreachable, one whose dpkg is broken and one that timed out are three
-		// different jobs, and a bare "drift" would make all three the same ticket.
-		return {
-			readable: false,
-			reason: (res.stderr || res.error || 'unreadable').trim().slice(0, 200),
-		};
+		done`;
+	const groups = byRole(repairs);
+	if (!groups.some(([role]) => role === 'ci')) groups.unshift(['ci', []]);
+	let out = '';
+	for (const [role, tools] of groups) {
+		const detects = tools
+			.map(([id, r]) => `printf 'REPAIR %s %s\\n' '${id}' "$(${r.detect} || echo MISSING)"`)
+			.join('\n');
+		const res = onNode(node, `${role === 'ci' ? pkgCheck : ''}\n${detects}\n`, { role });
+		if (!res.ok) {
+			// "I could not look" is a FAILURE, and it says which kind. A node that is
+			// unreachable, one whose dpkg is broken and one that timed out are three
+			// different jobs, and a bare "drift" would make all three the same ticket.
+			return {
+				readable: false,
+				reason: `as ${role}: ${(res.stderr || res.error || 'unreadable').trim().slice(0, 200)}`,
+			};
+		}
+		out += res.out ?? '';
 	}
-	const { missingPackages, brokenCapabilities } = parseObservation(res.out ?? '');
+	const { missingPackages, brokenCapabilities } = parseObservation(out);
 	return { readable: true, missingPkgs: missingPackages, brokenCaps: brokenCapabilities };
 }
 
