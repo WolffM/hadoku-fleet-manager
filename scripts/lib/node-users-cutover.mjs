@@ -24,6 +24,7 @@
  * run that did not finish, never a pass.
  */
 import { JIT_PAYLOAD_DIR } from './preflight.mjs';
+import { ciIsSeparate } from '../../dist/lib/node-users.js';
 
 /**
  * What moves from admin's home to ci's, measured on claw-5 (§8). The first is
@@ -407,6 +408,16 @@ export function parseSteps(stdout, end) {
 		if (m) steps.push({ name: m[1], status: m[2], detail: m[3] });
 	}
 	return { steps, complete: text.includes(end) };
+}
+
+/**
+ * Whether the manifest already says what this run would write. A cut-over node
+ * re-run with `--docker` still needs `containers` (claw-4, 2026-10-28: the check
+ * read `users.ci` alone and said "already says so" without writing it).
+ */
+export function manifestSays(m, { docker = false, back = false } = {}) {
+	if (back) return !ciIsSeparate(m);
+	return ciIsSeparate(m) && (!docker || m.containers === 'docker');
 }
 
 /**

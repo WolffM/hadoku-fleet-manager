@@ -14,6 +14,7 @@ import {
 	backScript,
 	cutoverScript,
 	flipManifest,
+	manifestSays,
 	inventoryScript,
 	parseSteps,
 } from './node-users-cutover.mjs';
@@ -119,6 +120,16 @@ test('flipManifest sets users.ci (and containers on --docker), and back removes 
 	assert.deepEqual(bare.machines.n, {}, 'an emptied users map is removed, not left as {}');
 	assert.throws(() => flipManifest(doc, 'nope', { ci: 'x' }), /not in the manifest/);
 	assert.throws(() => flipManifest(doc, 'claw-x', { ci: 'Bad Name' }), /refusing ci user/);
+});
+
+test('manifestSays: a cut-over node re-run with --docker still needs containers', () => {
+	const cut = { users: { admin: 'ops', ci: 'ops-ci' } };
+	assert.equal(manifestSays(cut), true);
+	assert.equal(manifestSays(cut, { docker: true }), false, 'claw-4: --docker was skipped');
+	assert.equal(manifestSays({ ...cut, containers: 'docker' }, { docker: true }), true);
+	assert.equal(manifestSays({ users: { admin: 'ops' } }), false);
+	assert.equal(manifestSays({ users: { admin: 'ops' } }, { back: true }), true);
+	assert.equal(manifestSays(cut, { back: true }), false);
 });
 
 test('a re-run tolerates a moved path that reappeared in admin home, and only a recorded one', () => {

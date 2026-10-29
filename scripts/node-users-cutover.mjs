@@ -47,6 +47,7 @@ import {
 	cutoverScript,
 	flipManifest,
 	inventoryScript,
+	manifestSays,
 	parseSteps,
 } from './lib/node-users-cutover.mjs';
 import { manifest } from './lib/paths.mjs';
@@ -102,9 +103,9 @@ async function writeFlip(doc, users) {
 		copyFileSync(`${MANIFEST}.bak`, MANIFEST);
 		die(`the manifest did not parse after writing (${err.message}); restored from .bak`);
 	}
-	if (ciIsSeparate(verify.machines[NODE]) === BACK) {
+	if (!manifestSays(verify.machines[NODE], { docker: DOCKER, back: BACK })) {
 		copyFileSync(`${MANIFEST}.bak`, MANIFEST);
-		die(`${NODE}'s users.ci did not land in the manifest; restored from .bak`);
+		die(`${NODE}'s flip did not land in the manifest; restored from .bak`);
 	}
 	const landed = landWrite(MANIFEST, {
 		writer: 'node-users',
@@ -170,7 +171,7 @@ async function main() {
 	printSteps(invSteps);
 	if (!invSteps.complete) die(`the inventory did not finish: ${inv.error ?? inv.stderr.trim()}`);
 	const target = writeTarget(MANIFEST);
-	const alreadyFlipped = ciIsSeparate(m) !== BACK;
+	const alreadyFlipped = manifestSays(m, { docker: DOCKER, back: BACK });
 	log(
 		alreadyFlipped
 			? `   · manifest  ${MANIFEST} already says so`
