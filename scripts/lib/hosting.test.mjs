@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
 import {
+	CI_RANK_SCRIPT,
 	coresFromCpuMax,
 	deployScript,
 	fitProblems,
@@ -21,7 +22,10 @@ import {
 } from './hosting.mjs';
 
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { validateHostingRequest } from './hosting-request.mjs';
 import { tenantSpecFrom } from './tenant-registry.mjs';
 
@@ -499,4 +503,58 @@ test('a pm2 tenant whose .npmrc is missing or changed is not guaranteed; the one
 		/not what the fleet wrote/
 	);
 	assert.deepEqual(files(`.npmrc:${NPMRC_SHA}`), []);
+});
+
+/** Run the CI ranking loop for real over a fixture /proc, `pgrep` answering `pids`. */
+function rankOver(pids, procs) {
+	const root = mkdtempSync(join(tmpdir(), 'ci-rank-'));
+	const bin = join(root, 'bin');
+	mkdirSync(bin);
+	writeFileSync(join(bin, 'pgrep'), `#!/bin/sh\nprintf '%s\\n' ${pids.join(' ')}\n`);
+	chmodSync(join(bin, 'pgrep'), 0o755);
+	for (const [pid, { cgroup, oom }] of Object.entries(procs)) {
+		mkdirSync(join(root, 'proc', pid), { recursive: true });
+		writeFileSync(join(root, 'proc', pid, 'cgroup'), `0::${cgroup}\n`);
+		writeFileSync(join(root, 'proc', pid, 'oom_score_adj'), `${oom}\n`);
+	}
+	const out = execFileSync('bash', ['-c', `PROC=${join(root, 'proc')}\n${CI_RANK_SCRIPT}`], {
+		env: { PATH: `${bin}:/usr/bin:/bin` },
+	}).toString();
+	return Object.fromEntries(
+		out
+			.trim()
+			.split('\n')
+			.map((l) => l.split('='))
+	);
+}
+
+test('a CI process that exits mid-read is gone, not an unranked one at oom 0', () => {
+	const ranked = {
+		cgroup: '/user.slice/user-1000.slice/user@1000.service/runners.slice/r.service',
+		oom: 500,
+	};
+	// 103 is in pgrep's answer and has no /proc entry: it exited in between
+	// (claw-6, 2026-10-29: a warm listener restarting during the declare).
+	assert.deepEqual(rankOver([101, 103], { 101: ranked }), {
+		ciProcs: '1',
+		ciOutsideRunners: '0',
+		ciBelowOom: '0',
+		ciMinOom: '500',
+		ciGone: '1',
+	});
+	// A live process outside the slice at oom 0 is still found, beside a gone one.
+	assert.deepEqual(
+		rankOver([101, 102, 103], {
+			101: ranked,
+			102: { cgroup: '/user.slice/session-7.scope', oom: 0 },
+		}),
+		{
+			ciProcs: '2',
+			ciOutsideRunners: '1',
+			ciBelowOom: '1',
+			ciMinOom: '0',
+			ciGone: '1',
+		}
+	);
+	assert.match(observeScript(CARDTABLE, 'hadoku'), /^PROC=\/proc$/m);
 });
