@@ -67,7 +67,7 @@
  * small, but reading through a pipe here would silently reintroduce the exact
  * class of false failure #33 exists to rule out.
  */
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import {
@@ -104,7 +104,7 @@ const PER_RUN_TIMEOUT_MS = 60_000;
 
 /** A fresh directory holding exactly one `fleet-runner-manifest.json`. */
 function manifestDirFor(manifestObj) {
-	const dir = mkdtempSync(join(tmpdir(), 'contract-fx-'));
+	const dir = madeDir('contract-fx-');
 	writeFileSync(join(dir, 'fleet-runner-manifest.json'), JSON.stringify(manifestObj));
 	return dir;
 }
@@ -138,11 +138,37 @@ function casesFor(entry) {
  * header. `PATH` is real (the subcommand may shell out to a real `ssh`/`gh`
  * binary; only the credentials and the destination are poisoned).
  */
+/** Every directory a run was given, removed once the file's tests end. */
+const made = [];
+after(() => {
+	// A subcommand that shells out to a daemon-starting tool (pm2 starts a God
+	// daemon on any command when none is running) would outlive this test under
+	// one of these HOMEs. Each one is stopped by its own PM2_HOME, never by a
+	// pattern that could match a real daemon, before its directory goes.
+	for (const dir of made) {
+		const pidFile = join(dir, '.pm2', 'pm2.pid');
+		if (existsSync(pidFile)) {
+			const pid = Number(readFileSync(pidFile, 'utf8').trim());
+			try {
+				process.kill(pid, 'SIGTERM');
+			} catch (err) {
+				if (err.code !== 'ESRCH') throw err;
+			}
+		}
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+const madeDir = (prefix) => {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+};
+
 function hermeticEnv(manifestDir) {
 	const env = {
 		PATH: process.env.PATH ?? '',
-		HOME: mkdtempSync(join(tmpdir(), 'contract-home-')),
-		HADOKU_STATE_DIR: mkdtempSync(join(tmpdir(), 'contract-state-')),
+		HOME: madeDir('contract-home-'),
+		HADOKU_STATE_DIR: madeDir('contract-state-'),
 		HADOKU_SITE_ROOT: '/nonexistent',
 		REPOS_DIR: '/nonexistent',
 		FLEET_MANIFEST_DIR: manifestDir,

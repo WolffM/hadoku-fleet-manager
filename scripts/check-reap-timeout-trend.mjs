@@ -27,6 +27,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 
@@ -42,8 +43,34 @@ const APP_NAME = process.env.REAP_TREND_APP ?? 'mgmt-api';
 /** Read at most this many rotated files backward — bounds one slow night. */
 const MAX_LOG_FILES = 6;
 
-/** Every live PM2 app, or `null` if PM2 itself could not be reached. */
+/**
+ * Is a PM2 daemon running for this PM2_HOME? Asked BEFORE `pm2 jlist`, because
+ * `jlist` with no daemon STARTS one: the contract behaviour test runs this
+ * under a fresh HOME per case, and on 2026-10-29 that had left 219 God daemons
+ * (13.7 GB) on hokon. A reader must not start what it reads.
+ */
+function pm2DaemonRunning() {
+	const home = process.env.PM2_HOME ?? join(homedir(), '.pm2');
+	let pid;
+	try {
+		pid = Number(readFileSync(join(home, 'pm2.pid'), 'utf8').trim());
+	} catch {
+		return { running: false, why: `no pm2.pid in ${home}` };
+	}
+	try {
+		process.kill(pid, 0);
+		return { running: true };
+	} catch (err) {
+		// EPERM is a live process this user may not signal: running, all the same.
+		if (err.code === 'EPERM') return { running: true };
+		return { running: false, why: `${home}/pm2.pid names ${pid}, which is not running` };
+	}
+}
+
+/** Every live PM2 app, or `{ why }` if PM2 itself could not be reached. */
 function pm2Apps() {
+	const daemon = pm2DaemonRunning();
+	if (!daemon.running) return { why: `no PM2 daemon is running (${daemon.why}); not starting one` };
 	try {
 		const raw = execFileSync('pm2', ['jlist'], {
 			encoding: 'utf8',
@@ -51,9 +78,9 @@ function pm2Apps() {
 			stdio: ['ignore', 'pipe', 'ignore'],
 		});
 		const parsed = JSON.parse(raw);
-		return Array.isArray(parsed) ? parsed : null;
-	} catch {
-		return null;
+		return Array.isArray(parsed) ? parsed : { why: '`pm2 jlist` did not print a list' };
+	} catch (err) {
+		return { why: `\`pm2 jlist\` failed: ${err.message.split('\n')[0]}` };
 	}
 }
 
@@ -115,8 +142,8 @@ function readRecentLogText(outLogPath, minCoverageMs, maxFiles) {
 
 function main() {
 	const apps = pm2Apps();
-	if (apps === null) {
-		const msg = 'check-reap-timeout-trend: could not read `pm2 jlist`. That is a broken scan.';
+	if (!Array.isArray(apps)) {
+		const msg = `check-reap-timeout-trend: could not read PM2's app list (${apps.why}). That is a broken scan.`;
 		if (JSON_OUT) emitter.emit({ ok: false, error: msg });
 		else console.error(msg);
 		process.exit(1);
