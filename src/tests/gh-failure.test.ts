@@ -2,7 +2,12 @@ import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { __setHostForTesting } from '../host.js';
-import { ghGet, ghWrite, ghGetConditional, __resetGhBlackoutForTesting } from '../runner-health.js';
+import {
+	ghGet,
+	ghWrite,
+	ghGetConditional,
+	__resetGhBlackoutForTesting,
+} from '../lib/github-client.js';
 
 /**
  * A 403 is THREE different problems — primary rate limiting, secondary (burst)

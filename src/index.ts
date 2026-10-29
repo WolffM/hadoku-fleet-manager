@@ -9,13 +9,8 @@
  */
 import type { Router } from 'express';
 import { installHost, type FleetHost } from './host.js';
-import {
-	ghGetConditional,
-	ghGet,
-	ghWrite,
-	startRunnerHealthMonitor,
-	getRunnerHealthSnapshot,
-} from './runner-health.js';
+import { ghGetConditional, ghGet, ghWrite } from './lib/github-client.js';
+import { startRunnerHealthMonitor, getRunnerHealthSnapshot } from './runner-health.js';
 import { startFastLoop } from './fleet-loop.js';
 import { router as fleetRouter } from './routes/fleet.js';
 import type { RunnerHealthSnapshot } from './runner-health.js';
@@ -50,7 +45,7 @@ export type { GhPoolReading } from './gh-budget.js';
 
 /** The GitHub client the component already owns. Exported so a host that needs
  *  one does not build a second — it has no non-fleet consumers today. */
-export { ghGet, ghWrite } from './runner-health.js';
+export { ghGet, ghWrite } from './lib/github-client.js';
 
 /**
  * THE BACKSTOP DECISION, as a pure library. hokon is the emergency backstop

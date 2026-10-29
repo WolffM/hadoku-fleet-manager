@@ -162,6 +162,7 @@ export const LAYER_MAP = [
 	{ glob: 'src/node-shell.ts', layer: 'access' },
 	{ glob: 'src/gh-budget.ts', layer: 'access' },
 	{ glob: 'src/conditional-cache-store.ts', layer: 'access' },
+	{ glob: 'src/lib/github-client.ts', layer: 'access' },
 	{ glob: 'scripts/lib/fleet-exec.mjs', layer: 'access' },
 	{ glob: 'scripts/fleet-source.mjs', layer: 'access' },
 	{ glob: 'scripts/lib/fleet-source.mjs', layer: 'access' },

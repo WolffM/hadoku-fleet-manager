@@ -14,7 +14,7 @@ import {
 	GH_BUDGET_SAVE_MS,
 	meterGhPool,
 } from '../gh-budget.js';
-import { ghGet, ghGetConditional, __resetGhBlackoutForTesting } from '../runner-health.js';
+import { ghGet, ghGetConditional, __resetGhBlackoutForTesting } from '../lib/github-client.js';
 
 /**
  * #119: the budget was invisible until the 403. On 2026-10-16 the first signal

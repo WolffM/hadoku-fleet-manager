@@ -1,15 +1,15 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { __resetRunnerHealthAlertsForTesting } from '../runner-health.js';
 import {
 	ghGet,
 	ghWrite,
 	readRunnerListingShared,
 	SHARED_LISTING_MAX_AGE_MS,
 	GH_CACHE_MAX_BYTES,
-	__resetRunnerHealthAlertsForTesting,
 	__resetGhBlackoutForTesting,
-} from '../runner-health.js';
+} from '../lib/github-client.js';
 import { __resetGhBudgetForTesting, getGhBudgetSnapshot, withGhCaller } from '../gh-budget.js';
 
 /**
