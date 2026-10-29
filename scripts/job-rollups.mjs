@@ -21,33 +21,23 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { stateDir } from './lib/paths.mjs';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { ROLLUP_FILE, jsonlRollupStore } from '../dist/job-rollup-store.js';
 import { FLEET_NODE, SETTLE_HOURS, utcDay } from '../dist/job-rollups.js';
 
 const argv = process.argv.slice(2);
+// F8 (plan §4.1): strict, from the one spec `argv-specs.mjs` declares and the
+// door reads too. The spec's usage carries a `{SETTLE_HOURS}` placeholder —
+// see that file's note on why a pure data module does not import a build
+// artifact just to interpolate one constant into its own help text.
+const SPEC = {
+	...ARGV_SPECS['job-rollups.mjs'],
+	usage: ARGV_SPECS['job-rollups.mjs'].usage.replace('{SETTLE_HOURS}', String(SETTLE_HOURS)),
+};
+const parsed = parseStrict(SPEC, argv);
 const out = createEmitter({ argv: process.argv });
-
-if (argv.includes('--help') || argv.includes('-h')) {
-	out.log('fleet job-rollups — the daily CI rollups mgmt-api writes from job-history');
-	out.log('');
-	out.log('  --days <n>     closed days to show, counted back from today (default 14)');
-	out.log('  --node <name>  only this node, plus the fleet row for the same repo+kind');
-	out.log('  --repo <name>  only this repo (owner/name, or just name)');
-	out.log('  --json         the rows themselves');
-	out.log('');
-	out.log(`A day is written ${SETTLE_HOURS}h after it ends, so the newest two days are`);
-	out.log('never here yet. Reads the state dir only; writes nothing.');
-	process.exit(0);
-}
-
-/** @param {string} name */
-function flag(name) {
-	const i = argv.indexOf(`--${name}`);
-	if (i >= 0) return argv[i + 1] ?? '';
-	const eq = argv.find((a) => a.startsWith(`--${name}=`));
-	return eq ? eq.slice(name.length + 3) : null;
-}
 
 /** @param {string} msg */
 function fail(msg) {
@@ -56,13 +46,26 @@ function fail(msg) {
 	process.exit(1);
 }
 
-const daysRaw = flag('days');
+/**
+ * `null` when the flag was never given; `''` when it was given with nothing
+ * after it (`fleet job-rollups --node`, trailing). `parsed.value` reads both
+ * of those as `null` — right for a script that treats "absent" and "given
+ * blank" the same, wrong here: `--days` with no value must fail loudly
+ * rather than quietly default to 14.
+ */
+function rawFlag(name) {
+	const present = argv.includes(name) || argv.some((a) => a.startsWith(`${name}=`));
+	if (!present) return null;
+	return parsed.value(name) ?? '';
+}
+
+const daysRaw = rawFlag('--days');
 const days = daysRaw === null ? 14 : Number(daysRaw);
 if (!Number.isInteger(days) || days < 1)
 	fail(`--days must be a positive integer, got "${daysRaw}"`);
-const node = flag('node');
+const node = rawFlag('--node');
 if (node === '') fail('--node needs a value');
-const repoRaw = flag('repo');
+const repoRaw = rawFlag('--repo');
 if (repoRaw === '') fail('--repo needs a value');
 /** @param {string} repo */
 const repoMatches = (repo) => repoRaw === null || repo === repoRaw || repo.endsWith(`/${repoRaw}`);

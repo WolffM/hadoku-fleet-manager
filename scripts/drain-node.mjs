@@ -56,6 +56,8 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 import { manifest, stateDir } from './lib/paths.mjs';
 import { isLocalNode, sshDestination } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
@@ -90,44 +92,15 @@ import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
 // them, so this CLI wrote to the operator's checkout while the dispatcher read
 // mgmt-api's. `writeDrainDoc` writes to the state dir and nowhere else.
 const args = process.argv.slice(2);
-const has = (f) => args.includes(f);
-const valueOf = (f) => {
-	const i = args.indexOf(f);
-	return i === -1 ? null : (args[i + 1] ?? null);
-};
+// F8 (plan §4.1): strict, from the one spec `argv-specs.mjs` declares and the
+// door reads too. `--help`/`-h` and an unknown flag are both handled before
+// anything below reads the drain doc or touches a node.
+const parsed = parseStrict(ARGV_SPECS['drain-node.mjs'], args);
 const R = '\x1b[31m',
 	G = '\x1b[32m',
 	Y = '\x1b[33m',
 	B = '\x1b[1m',
 	N = '\x1b[0m';
-
-if (has('--help') || has('-h')) {
-	console.log(
-		[
-			'fleet drain <node> --reason "why" [--kind training|maintenance|lease]',
-			'                  [--for 48h | --until <iso>] [--in 30m | --at <iso>] [--force]',
-			'fleet drain <node> --undo           put it back (and cancel anything planned for it)',
-			'',
-			'  --kind training     the node is earning its labels; it comes back when it',
-			'                      passes. Bootcamp sets this.',
-			'  --kind maintenance  (default) a human took it out and a human puts it back.',
-			'  --kind lease        lent to a tenant for a window; pair it with --for/--until.',
-			'  --for / --until     the drain lapses by itself at that time.',
-			'  --in / --at         schedule it instead of starting it now. A HOSTING node',
-			'                      (fleet hosting) is owed 15 min notice; --force skips it.',
-			'fleet drain --status                what is held, and has it gone quiet',
-			'fleet drain-check [--json]          is each drain actually being ENFORCED',
-			'',
-			'  --include-guests    a GUEST is not drained by the fleet chain. It lends a',
-			"                      registration and is otherwise none of the fleet's",
-			'                      business; pass this to hold one anyway, or to count',
-			'                      running jobs on one under --status.',
-			'',
-			'Running jobs are never killed. New assignment stops; current work finishes.',
-		].join('\n')
-	);
-	process.exit(0);
-}
 
 // The whole file, through the one reader and writer every script shares. A
 // parse failure THROWS rather than defaulting to {}: reporting "nothing is
@@ -172,7 +145,7 @@ function fleetDoc() {
  * matching `nodeRole`'s own strict default: a typo or a missing file must not be
  * able to exempt a node, and the capacity refusal below still guards the fleet.
  */
-const INCLUDE_GUESTS = has('--include-guests');
+const INCLUDE_GUESTS = parsed.has('--include-guests');
 const isGuest = (node) => isGuestNode(fleetDoc()?.machines?.[node]);
 
 /** Running jobs, OBSERVED on the node, not inferred from anything we wrote. */
@@ -351,12 +324,14 @@ const NOW = Date.now();
 const doc = readDrainDoc();
 /** What is held NOW — the view the dispatcher enforces. */
 const state = effectiveDrains(doc, NOW);
-const VALUE_FLAGS = ['--reason', '--kind', '--for', '--until', '--in', '--at'];
-const node = args.find((a, i) => !a.startsWith('--') && !VALUE_FLAGS.includes(args[i - 1]));
+// F8: the ONE positional this script takes, found by `parseStrict` against
+// the same spec that already knows which flags take a value (so a value like
+// `fleet drain --reason training` never gets mistaken for the node name).
+const node = parsed.positionals[0] ?? null;
 const iso = (ms) => new Date(ms).toISOString();
 /** `--for`/`--until`/`--in`/`--at`, read once; a typo exits rather than guessing. */
 function when(flag, baseMs = NOW) {
-	const v = valueOf(flag);
+	const v = parsed.value(flag);
 	if (v === null) return null;
 	try {
 		return parseWhen(v, baseMs);
@@ -366,7 +341,7 @@ function when(flag, baseMs = NOW) {
 	}
 }
 
-if (has('--status') || (!node && !has('--undo'))) {
+if (parsed.has('--status') || (!node && !parsed.has('--undo'))) {
 	const names = Object.keys(state);
 	const notices = drainNotices(doc, NOW);
 	if (!names.length) {
@@ -459,7 +434,7 @@ if (!node) {
 	process.exit(1);
 }
 
-if (has('--undo')) {
+if (parsed.has('--undo')) {
 	const plannedHere = doc.planned.filter((p) => p.node === node);
 	const current = doc.nodes[node];
 	if (current?.kind === 'hosting') {
@@ -536,7 +511,7 @@ if (isGuest(node) && !INCLUDE_GUESTS) {
 	process.exit(1);
 }
 
-const reason = valueOf('--reason');
+const reason = parsed.value('--reason');
 if (!reason) {
 	console.error(
 		`drain: --reason is required.\n` +
@@ -561,7 +536,7 @@ if (!reason) {
 // `reboot` is written by the reboot cycle (reboot-claws); it is settable here
 // so a hand-run cycle step and the automated one write the same record.
 const KINDS = ['training', 'maintenance', 'lease', 'reboot'];
-const kind = valueOf('--kind') ?? 'maintenance';
+const kind = parsed.value('--kind') ?? 'maintenance';
 if (kind === 'hosting') {
 	console.error(
 		`drain: a hosting node is declared with \`fleet hosting\`, which also serves its resources.`
@@ -587,7 +562,7 @@ const refusal = noticeRefusal(node, startMs, doc, NOW, {
 	hostingDoc: readHostingDoc(stateDir()),
 	kind,
 });
-if (refusal && !has('--force')) {
+if (refusal && !parsed.has('--force')) {
 	console.error(
 		`${R}drain: ${refusal}${N}\n  Schedule it with --in 15m (or later), or --force if the box is failing.`
 	);
@@ -601,7 +576,7 @@ if (remaining === null) {
 			`  Refusing. Draining blind is how a maintenance window becomes an outage.`
 	);
 	process.exit(1);
-} else if (remaining.length === 0 && !has('--force')) {
+} else if (remaining.length === 0 && !parsed.has('--force')) {
 	console.error(
 		`${R}drain: this would leave NO node able to take a job.${N}\n` +
 			`  Already held: ${Object.keys(state).join(', ') || '(none)'}\n` +
@@ -609,7 +584,7 @@ if (remaining === null) {
 			`  If that is genuinely what you want, re-run with --force.`
 	);
 	process.exit(1);
-} else if (remaining.length === 1 && !has('--force')) {
+} else if (remaining.length === 1 && !parsed.has('--force')) {
 	console.log(
 		`${Y}warning: this leaves ONE node serving the whole fleet (${remaining[0]}).${N}\n` +
 			`  Proceeding — but a single carrier is a single point of failure, which is\n` +

@@ -22,7 +22,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { blankComments } from './blank-comments.mjs';
-import { parseCliCommands } from './json-contract.mjs';
+import { JSON_CONTRACT, parseCliCommands } from './json-contract.mjs';
 import { tempDir, cleanupTempDirs } from './test-tmpdir.mjs';
 
 after(cleanupTempDirs);
@@ -114,7 +114,13 @@ function door(...args) {
 		},
 	});
 	const touched = existsSync(sb.log) ? readFileSync(sb.log, 'utf8').trim() : '';
-	return { status: r.status, out: r.stdout + r.stderr, touched };
+	return {
+		status: r.status,
+		out: r.stdout + r.stderr,
+		stdout: r.stdout,
+		stderr: r.stderr,
+		touched,
+	};
 }
 
 const MUTATES_BY_DEFAULT = [
@@ -161,5 +167,120 @@ test('the declared flags pass the door, value flags in both spellings', () => {
 	]) {
 		const r = door(...args);
 		assert.doesNotMatch(r.out, /unknown flag/, `${args.join(' ')}: ${r.out}`);
+	}
+});
+
+// --- fleet-manager#27: the door's own flags-refusal is --json-aware ---------
+//
+// `src/cli.ts`'s generic `cmd.flags` unknown-flag check (shared by every
+// hand-kept `flags:` entry AND, since F8 step 2, every migrated script's
+// derived one) used to print stderr prose and leave stdout EMPTY — so a
+// caller that spawns the door, passes `--json`, and reads stdout for a
+// document (exactly what `json-contract-behaviour.test.mjs` proved
+// `converge-toolchain`'s KNOWN_BROKEN row did) saw nothing to parse. Fixed:
+// the refusal now checks for `--json` in the CHILD's own argv and emits
+// `{ok:false, error}` on stdout instead, before the script is ever spawned.
+
+test('fleet-manager#27: an unknown flag under --json is ONE JSON document on stdout, exit 2', () => {
+	// `converge-toolchain` already carries a hand-kept `flags:` list (debt,
+	// not yet F8-migrated) — this is the ORIGINAL KNOWN_BROKEN case.
+	const r = door('converge-toolchain', '--refresh', '--json', '--zz-typo');
+	assert.equal(r.status, 2, r.out);
+	const doc = JSON.parse(r.stdout);
+	assert.equal(doc.ok, false);
+	assert.match(doc.error, /unknown flag\(s\) --zz-typo — nothing was run\./);
+	assert.equal(r.stderr, '', 'nothing else is written once the door answers under --json');
+});
+
+test('fleet-manager#27: the same refusal, for an F8-migrated command (door-derived flags)', () => {
+	// `toolpack.mjs` carries no hand-kept `flags:` in `COMMANDS` at all — its
+	// door-side list is DERIVED from `scripts/lib/argv-specs.mjs`, the same
+	// spec the script parses its own argv with (F8 step 2). Refused at the
+	// door, before `toolpack.mjs` is even spawned.
+	const r = door('toolpack', '--json', '--zz-typo');
+	assert.equal(r.status, 2, r.out);
+	const doc = JSON.parse(r.stdout);
+	assert.equal(doc.ok, false);
+	assert.match(doc.error, /unknown flag\(s\) --zz-typo — nothing was run\./);
+	assert.equal(r.touched, '', 'refused before anything ran');
+});
+
+test('fleet-manager#27: without --json, the refusal stays human-readable prose on stderr', () => {
+	const r = door('converge-toolchain', '--refresh', '--zz-typo');
+	assert.equal(r.status, 2, r.out);
+	assert.equal(r.stdout, '', 'no JSON is emitted when the caller never asked for it');
+	assert.match(r.stderr, /unknown flag\(s\) --zz-typo — nothing was run\./);
+});
+
+// --- `kind` + grouped help (wave 5b §D step 4) ------------------------------
+
+const KNOWN_KINDS = [
+	'gate',
+	'converger',
+	'recorder',
+	'mutator',
+	'operator',
+	'onboarding',
+	'node-side',
+];
+
+test('every COMMANDS entry declares a kind from the fixed vocabulary', () => {
+	const src = blankComments(readFileSync(join(ROOT, 'src', 'cli.ts'), 'utf8'));
+	const start = src.indexOf('const COMMANDS');
+	const end = src.indexOf('\n};', start);
+	const body = src.slice(start, end);
+	const kinds = [...body.matchAll(/\bkind: '([\w-]+)'/g)].map((m) => m[1]);
+	assert.equal(
+		kinds.length,
+		commands.size,
+		`found ${kinds.length} "kind:" field(s) for ${commands.size} COMMANDS entries — every entry must carry one`
+	);
+	for (const k of kinds) {
+		assert.ok(
+			KNOWN_KINDS.includes(k),
+			`"${k}" is not in the fixed Kind vocabulary (${KNOWN_KINDS.join(', ')})`
+		);
+	}
+});
+
+test('fleet --help (no subcommand) lists every command exactly once, grouped', () => {
+	const r = door();
+	const lines = r.out.split('\n').map((l) => l.trim());
+	for (const sub of commands.keys()) {
+		const occurrences = lines.filter((l) => l === sub || l.startsWith(`${sub} `)).length;
+		assert.equal(
+			occurrences,
+			1,
+			`"${sub}" appears ${occurrences} time(s) in \`fleet --help\`:\n${r.out}`
+		);
+	}
+});
+
+test('no contracted subcommand name changed, adding `kind`/`domain` touched nothing else', () => {
+	// `parseCliCommands`/`JSON_CONTRACT` both read SOURCE, never execute it, so
+	// this catches a renamed key independently of json-contract.test.mjs's own
+	// equivalent check. Plus the two tenant-contract subcommands the wave file
+	// names explicitly (cardtable: `node-status --json --max-age`,
+	// `hosting-demand --slices --json --release-order`) and the six migrated
+	// in this wave, which carry no `--json` contract but DO carry callers
+	// outside this repo (`src/claw-reboot.ts` spawns `reboot-claws.mjs`
+	// directly; see this lane's closing note for the rest).
+	for (const sub of JSON_CONTRACT.map((e) => e.sub)) {
+		assert.ok(commands.has(sub), `"${sub}" is in JSON_CONTRACT but missing from the door table`);
+	}
+	for (const sub of [
+		'node-status',
+		'hosting-demand',
+		'reboot-claws',
+		'drain',
+		'backstop',
+		'toolpack',
+		'traffic',
+		'job-rollups',
+	]) {
+		assert.ok(
+			commands.has(sub),
+			`"${sub}" is missing from the door table — a contracted name changed`
+		);
 	}
 });

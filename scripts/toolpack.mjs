@@ -41,6 +41,8 @@ import { isLocalNode, sshDestination } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { isGuestNode } from '../dist/lib/node-role.js';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 import { packsRequired } from './lib/toolpack-rules.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 
@@ -53,33 +55,16 @@ import { keepStdoutWhole } from './lib/emit.mjs';
 keepStdoutWhole();
 
 const args = process.argv.slice(2);
-const has = (f) => args.includes(f);
-const JSON_OUT = has('--json');
-const CONFIRM = has('--confirm');
+// F8 (plan §4.1): strict, from the one spec `argv-specs.mjs` declares and the
+// door reads too. `--help`/`-h` and an unknown flag are both handled before
+// anything below reads the manifest or ssh's to a node.
+const parsed = parseStrict(ARGV_SPECS['toolpack.mjs'], args);
+const JSON_OUT = parsed.has('--json');
+const CONFIRM = parsed.has('--confirm');
 const YEL = '\x1b[33m';
 const RED = '\x1b[31m';
 const GRN = '\x1b[32m';
 const OFF = '\x1b[0m';
-
-if (has('--help') || has('-h')) {
-	console.log(
-		[
-			'fleet toolpack [node...] [--confirm] [--json]',
-			'',
-			'  no nodes    every machine in the fleet manifest, GUESTS EXCLUDED',
-			'  --confirm   install what is missing (default is report only)',
-			'  --json      machine-readable',
-			'',
-			'  A guest is skipped unless you name it: the fleet chain does not apt-get',
-			'  on a box that only lends it a registration. Naming one reaches it.',
-			'',
-			'Derives each node’s packs from what the box IS, then checks the',
-			'binaries are actually there. Run it after enrollment and before the',
-			'first benchmark: the scan chooses the pack, so the scan must run first.',
-		].join('\n')
-	);
-	process.exit(0);
-}
 
 // CATEGORY 1: this file SHIPS WITH THE PACKAGE, beside the script it guards.
 // It is not operator config -- the list is fixed by what benchmark-node.sh
@@ -87,7 +72,7 @@ if (has('--help') || has('-h')) {
 // the same commit. Resolving it through FLEET_MANIFEST_DIR would let a
 // deployment carry a pack list its own readers disagree with.
 const PACKS = JSON.parse(readFileSync(join(PKG_SCRIPTS, 'toolpacks.json'), 'utf8')).packs;
-const named = args.filter((a) => !a.startsWith('--'));
+const named = parsed.positionals;
 const MANIFEST = JSON.parse(readFileSync(manifest('fleet-runner-manifest.json'), 'utf8'));
 /**
  * A GUEST IS NOT SWEPT, AND THE SKIP IS PRINTED.

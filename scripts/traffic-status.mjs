@@ -66,6 +66,8 @@ import process from 'node:process';
 import { orderCandidates } from '../dist/runners/traffic.js';
 import { idleSecondsFromRecords } from '../dist/job-history.js';
 import { buildSpeedModel } from '../dist/runners/speed-tier.js';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 import { runOnSync } from './lib/fleet-exec.mjs';
 import { manifest, stateDir } from './lib/paths.mjs';
 import { readDrains } from './lib/expected-down.mjs';
@@ -80,11 +82,10 @@ import { keepStdoutWhole } from './lib/emit.mjs';
 keepStdoutWhole();
 
 const args = process.argv.slice(2);
-const has = (f) => args.includes(f);
-const valueOf = (f) => {
-	const i = args.indexOf(f);
-	return i === -1 ? null : (args[i + 1] ?? null);
-};
+// F8 (plan §4.1): strict, from the one spec `argv-specs.mjs` declares and the
+// door reads too. `--help`/`-h` and an unknown flag are both handled before
+// anything below reads the manifest or ssh's to a node.
+const parsed = parseStrict(ARGV_SPECS['traffic-status.mjs'], args);
 const B = '\x1b[1m',
 	G = '\x1b[32m',
 	Y = '\x1b[33m',
@@ -92,27 +93,9 @@ const B = '\x1b[1m',
 	D = '\x1b[2m',
 	N = '\x1b[0m';
 
-if (has('--help') || has('-h')) {
-	console.log(
-		[
-			'fleet traffic [--labels a,b] [--live] [--json]',
-			'',
-			'  (no args)   current routing state: order, speed factor, admission, every node',
-			'  --labels    simulate a job asking for these labels',
-			'  --live      ssh each node for its actual running-job count',
-			'',
-			'Order: fewest busy, then fastest measured, then idle longest, then name.',
-			'Admission is read live from MGMT_API_URL (default http://127.0.0.1:4000),',
-			"and reads 'unknown' rather than 'admitted' when that cannot be reached.",
-			'Simulates only. Nothing here places, labels or writes.',
-		].join('\n')
-	);
-	process.exit(0);
-}
-
-const JSON_OUT = has('--json');
-const LIVE = has('--live');
-const wantLabels = (valueOf('--labels') ?? '')
+const JSON_OUT = parsed.has('--json');
+const LIVE = parsed.has('--live');
+const wantLabels = (parsed.value('--labels') ?? '')
 	.split(',')
 	.map((s) => s.trim())
 	.filter(Boolean);

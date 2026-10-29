@@ -147,6 +147,7 @@ export const LAYER_MAP = [
 	{ glob: 'src/lib/usage-store.ts', layer: 'automation' },
 	{ glob: 'scripts/fleet-usage.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/emit.mjs', layer: 'automation' },
+	{ glob: 'scripts/lib/argv.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/blank-comments.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/yaml-comments.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/stdin.mjs', layer: 'automation' },
@@ -205,6 +206,7 @@ export const LAYER_MAP = [
 	// the target shape — config is the layer for the package's own
 	// declarative inputs, which this is.
 	{ glob: 'scripts/lib/layer-map.mjs', layer: 'config' },
+	{ glob: 'scripts/lib/argv-specs.mjs', layer: 'config' },
 	{ glob: 'src/host.ts', layer: 'config' },
 	{ glob: 'src/lib/measured-paths.ts', layer: 'config' },
 

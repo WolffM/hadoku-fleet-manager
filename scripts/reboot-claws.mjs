@@ -29,6 +29,8 @@ import process from 'node:process';
 
 import { isLocalNode } from '../dist/lib/node-identity.js';
 import { isGuestNode } from '../dist/lib/node-role.js';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, readDrainDoc, readDrains } from './lib/expected-down.mjs';
 import { loadManifest, machineArg, runOnSync } from './lib/fleet-exec.mjs';
@@ -52,29 +54,12 @@ const argv = process.argv.slice(2);
 // fall through to one. fleet-exec allows unknown flags fleet-wide on purpose;
 // that is safe for a read and not for this. On 2026-10-25 `fleet reboot-claws
 // --help` ran a live pass and rebooted claw-4, taking pygmalion down with it.
-// Checked before anything is read or probed.
-const USAGE =
-	'fleet reboot-claws [--plan] [--machine <claw>] [--force] [--json]\n' +
-	'  --plan     what would be rebooted, and why; touches nothing\n' +
-	"  --force    skip the notice a hosting node's tenant is owed\n" +
-	'  (no flag)  one REAL pass: drain one claw, reboot it, verify, undrain';
-if (argv.includes('--help') || argv.includes('-h')) {
-	console.log(USAGE);
-	process.exit(0);
-}
-const unknown = argv.filter(
-	(a, i) =>
-		a.startsWith('-') &&
-		!['--plan', '--json', '--machine', '--force'].includes(a) &&
-		argv[i - 1] !== '--machine'
-);
-if (unknown.length) {
-	console.error(`✗ unknown flag(s): ${unknown.join(' ')} — nothing was touched.\n${USAGE}`);
-	process.exit(2);
-}
+// F8 (plan §4.1): `parseStrict` checks this BEFORE anything is read or probed,
+// from the one spec `argv-specs.mjs` declares and the door reads too.
+const parsed = parseStrict(ARGV_SPECS['reboot-claws.mjs'], argv);
 
-const PLAN = argv.includes('--plan');
-const FORCE = argv.includes('--force');
+const PLAN = parsed.has('--plan');
+const FORCE = parsed.has('--force');
 const ONLY = machineArg(argv);
 const emitter = createEmitter({ argv: process.argv });
 const log = (...a) => emitter.log(...a);

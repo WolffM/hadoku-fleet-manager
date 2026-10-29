@@ -361,16 +361,13 @@ export const KNOWN_BROKEN = [
 		issue: 26,
 		observed: 'converge-toolchain.mjs:241-243 log()-then-exit never calls emitter.emit(); silent',
 	},
-	//   (a) `converge-toolchain` is the one JSON_CONTRACT entry whose door
-	//       table entry (src/cli.ts) declares an allowed-flags list, so an
-	//       unrecognised flag is refused by the DOOR, before the script (and
-	//       its emitter) ever runs — stderr prose, exit 2, empty stdout.
-	{
-		entry: 'converge-toolchain',
-		case: 'a-unknown-flag',
-		issue: 27,
-		observed: "src/cli.ts's unknown-flag door refusal (cmd.flags), exit 2, empty stdout",
-	},
+	// (a) was fleet-manager#27: `converge-toolchain` is the one JSON_CONTRACT
+	// entry whose door table entry (src/cli.ts) declares an allowed-flags
+	// list, so an unrecognised flag used to be refused by the DOOR with
+	// stderr prose and empty stdout, before the script (and its emitter) ever
+	// ran. Fixed wave 5b §D: the door's flags-refusal now checks `--json` in
+	// the child's own argv and emits `{ok:false, error}` on stdout instead —
+	// closed, not catalogued here any more.
 ];
 
 const knownBrokenKey = (entry, caseName) => `${entry}\u0000${caseName}`;

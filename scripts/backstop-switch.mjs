@@ -45,6 +45,8 @@ import {
 	isHostIdle,
 } from '../dist/runners/backstop.js';
 import { TMP_FREE_FLOOR_MB } from '../dist/runners/ephemeral.js';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 import { readDrains } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 
@@ -62,35 +64,29 @@ keepStdoutWhole();
 const readDrain = () => readDrains();
 
 const args = process.argv.slice(2);
-const has = (f) => args.includes(f);
-const valueOf = (f) => {
-	const i = args.indexOf(f);
-	return i === -1 ? null : (args[i + 1] ?? null);
+// F8 (plan §4.1): strict, from the one spec `argv-specs.mjs` declares and the
+// door reads too. The spec's usage carries a `{CEILING_H}` placeholder — see
+// that file's note on why a pure data module does not import a build
+// artifact just to interpolate one constant into its own help text.
+const SPEC = {
+	...ARGV_SPECS['backstop-switch.mjs'],
+	usage: ARGV_SPECS['backstop-switch.mjs'].usage.replace(
+		'{CEILING_H}',
+		String(FORCE_MAX_MINUTES / 60)
+	),
 };
+// `fleet backstop` with NO ARGS is the same as `--help`: there is no default
+// action to protect, but a bare run printing nothing would read as a hang.
+if (args.length === 0) {
+	console.log(SPEC.usage);
+	process.exit(0);
+}
+const parsed = parseStrict(SPEC, args);
 const R = '\x1b[31m',
 	G = '\x1b[32m',
 	Y = '\x1b[33m',
 	B = '\x1b[1m',
 	N = '\x1b[0m';
-
-if (has('--help') || has('-h') || args.length === 0) {
-	console.log(
-		[
-			'fleet backstop --force <node> [--for 60m] [--reason "why"]',
-			'                                hold the node ELIGIBLE for builder work, time-boxed',
-			`                                (default 60m, ceiling ${FORCE_MAX_MINUTES / 60}h; set again if the queue outlives it)`,
-			'fleet backstop --off <node>     end a force early',
-			'fleet backstop --status [--json]',
-			'                                the switch, the live gates on this box, and the',
-			"                                controller's last verdict",
-			'',
-			'A force beats the saturation decision and the idle gate. It does NOT beat a',
-			'drain, a quarantine, the pm2-host rung, or the dispatcher’s admission',
-			'(memory, /tmp floor, maxConcurrent). Runner-health reads it on its next tick.',
-		].join('\n')
-	);
-	process.exit(0);
-}
 
 const now = Date.now();
 
@@ -102,20 +98,20 @@ function readSwitch() {
 	}
 }
 
-if (has('--force')) {
-	const node = valueOf('--force');
+if (parsed.has('--force')) {
+	const node = parsed.value('--force');
 	if (!node || node.startsWith('--')) {
 		console.error(`${R}--force needs a node name${N}`);
 		process.exit(2);
 	}
 	let minutes;
 	try {
-		minutes = parseForceMinutes(valueOf('--for'));
+		minutes = parseForceMinutes(parsed.value('--for'));
 	} catch (err) {
 		console.error(`${R}${err.message}${N}`);
 		process.exit(2);
 	}
-	const reason = valueOf('--reason') ?? 'operator: queue backed up';
+	const reason = parsed.value('--reason') ?? 'operator: queue backed up';
 	const drain = readDrain();
 	if (Object.prototype.hasOwnProperty.call(drain, node)) {
 		console.error(
@@ -142,8 +138,8 @@ if (has('--force')) {
 	process.exit(0);
 }
 
-if (has('--off')) {
-	const node = valueOf('--off');
+if (parsed.has('--off')) {
+	const node = parsed.value('--off');
 	if (!node || node.startsWith('--')) {
 		console.error(`${R}--off needs a node name${N}`);
 		process.exit(2);
@@ -163,12 +159,12 @@ if (has('--off')) {
 	process.exit(0);
 }
 
-if (has('--status')) {
+if (parsed.has('--status')) {
 	const { state, error } = readSwitch();
 	const forces = state ? activeForces(state, now) : null;
 	const local = localGates();
 	const verdict = await controllerVerdict();
-	if (has('--json')) {
+	if (parsed.has('--json')) {
 		console.log(
 			JSON.stringify(
 				{

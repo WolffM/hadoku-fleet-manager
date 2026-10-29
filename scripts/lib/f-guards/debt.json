@@ -87,31 +87,23 @@
     "scripts/reconcile-fleet-runners.mjs:reg#1"
   ],
   "F8-has": [
-    "scripts/backstop-switch.mjs:args#1",
     "scripts/benchmark-fleet.mjs:args#1",
-    "scripts/drain-node.mjs:args#1",
     "scripts/enroll-node.mjs:args#1",
     "scripts/hosting.mjs:tail#1",
     "scripts/reconcile-fleet-runners.mjs:args#1",
-    "scripts/reconcile-runner-identity.mjs:args#1",
-    "scripts/toolpack.mjs:args#1",
-    "scripts/traffic-status.mjs:args#1"
+    "scripts/reconcile-runner-identity.mjs:args#1"
   ],
   "F8-valueOf": [
-    "scripts/backstop-switch.mjs:has#1",
     "scripts/benchmark-fleet.mjs:log#1",
-    "scripts/drain-node.mjs:has#1",
     "scripts/enroll-node.mjs:has#1",
     "scripts/hosting-demand.mjs:app#1",
     "scripts/hosting.mjs:has#1",
-    "scripts/reconcile-fleet-runners.mjs:has#1",
-    "scripts/traffic-status.mjs:has#1"
+    "scripts/reconcile-fleet-runners.mjs:has#1"
   ],
   "F8-flag": [
     "scripts/backfill-failed-steps.mjs:line38#1",
     "scripts/collect-job-metrics.mjs:out#1",
     "scripts/floor-probe.mjs:log#1",
-    "scripts/job-rollups.mjs:out#1",
     "scripts/join-workload-benchmark.mjs:out#1",
     "scripts/prove-job.mjs:VALUE_FLAGS#1"
   ],
