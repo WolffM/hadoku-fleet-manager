@@ -16,6 +16,12 @@
  *             horizon. A rule that cannot be told (null) is NOT a fault.
  * serving   = held − ending − unplaceable.
  *
+ * TOO FEW, AND ONE OF ITS OWN IS ENDING: take the end back (`--keep`) before
+ * declaring anywhere new, latest in the release order first. That includes a
+ * slice past its end whose units are still there: demand that came back
+ * between one pass and the next must not cost the tenant its node. On
+ * 2026-10-28 cardtable went 2 → 1 → 2 within 14 min; the converger removed
+ * claw-9 36 s past its end and declared claw-5 beside it to make up the count.
  * TOO FEW: declare on the plan's top picks, one slice per node, never past
  * `max`. A SINGLETON whose one slice is unplaceable needs a MOVE, which is
  * the mover's (hadoku_site#491) and is not done here. It is blocked, and the
@@ -50,6 +56,7 @@ export const HORIZON_MARGIN_MS = 15 * 60_000;
  * @param {object[]} i.offers  collectOffers().offers
  * @param {{node:string, until?:string}[]} i.slices  this tenant's records, in force
  * @param {string[]} i.removeDue  nodes whose slice end has passed and still has units
+ * @param {string[]} [i.pastEnd]  the primaries among removeDue: what `--keep` may take back
  * @param {object[]} i.notices drainNotices + hostingNotices
  * @param {{node: string|null}|{unreadable: string}} [i.appLayer] for a service:
  *        where hadoku_site runs it now (appLayerHost), or why that could not be read
@@ -63,28 +70,58 @@ export function decide({
 	offers,
 	slices: allSlices,
 	removeDue,
+	pastEnd = [],
 	notices,
 	now,
 	appLayer = null,
 }) {
 	const { app, slices: size, availability, placement } = request;
-	const slices = allSlices.filter((s) => s.role !== 'standby');
-	const standbySlices = allSlices.filter((s) => s.role === 'standby');
 	const desired = Math.min(size.max, Math.max(size.min, demand?.slices ?? size.min));
 	const horizonMs = availability.noticeMin * 60_000 + HORIZON_MARGIN_MS;
 	const offerOf = new Map(offers.map((o) => [o.node, o]));
+	const fault = (node) =>
+		faultOf(node, offerOf.get(node), placement.require, notices, now, horizonMs);
+
+	const primaries = allSlices.filter((s) => s.role !== 'standby');
+	const live = primaries.filter((s) => !s.until && !fault(s.node)).length;
+	const rank = (node) => {
+		const i = (demand?.releaseOrder ?? []).indexOf(node);
+		return i === -1 ? Infinity : i;
+	};
+	const keeps = [
+		...primaries.filter((s) => s.until).map((s) => s.node),
+		...pastEnd.filter((n) => !primaries.some((s) => s.node === n)),
+	]
+		.filter((n) => !fault(n))
+		.sort((a, b) => rank(b) - rank(a))
+		.slice(0, Math.max(0, desired - live));
+	const kept = new Set(keeps);
+	const slices = [
+		...primaries.map((s) => (kept.has(s.node) ? { node: s.node } : s)),
+		...keeps.filter((n) => !primaries.some((s) => s.node === n)).map((node) => ({ node })),
+	];
+	const standbySlices = allSlices.filter((s) => s.role === 'standby');
 
 	const ending = slices.filter((s) => s.until).map((s) => ({ node: s.node, until: s.until }));
 	const unplaceable = [];
 	for (const s of slices.filter((x) => !x.until)) {
-		const why = faultOf(s.node, offerOf.get(s.node), placement.require, notices, now, horizonMs);
+		const why = fault(s.node);
 		if (why)
 			unplaceable.push({ node: s.node, why, reachable: offerOf.get(s.node)?.reachable === true });
 	}
 	const bad = new Set(unplaceable.map((u) => u.node));
 	const serving = slices.filter((s) => !s.until && !bad.has(s.node)).map((s) => s.node);
 
-	const actions = removeDue.map((node) => ({ op: 'remove', node, why: 'its end has passed' }));
+	const actions = [
+		...keeps.map((node) => ({
+			op: 'keep',
+			node,
+			why: `${live} serving of ${desired} wanted; its own slice is kept, not replaced`,
+		})),
+		...removeDue
+			.filter((node) => !kept.has(node))
+			.map((node) => ({ op: 'remove', node, why: 'its end has passed' })),
+	];
 	const blocked = [];
 
 	// A SERVICE THE APP LAYER ALREADY RUNS is adopted by a move, never declared
@@ -166,7 +203,7 @@ export function decide({
 		plan,
 		standbySlices,
 		primaryHeld: slices.filter((s) => !s.until).length,
-		fault: (node) => faultOf(node, offerOf.get(node), placement.require, notices, now, horizonMs),
+		fault,
 		offerOf,
 		actions,
 		blocked,
@@ -288,6 +325,7 @@ export function doorArgs(request, a) {
 		];
 	}
 	if (a.op === 'end') return [a.node, '--end', '--in', `${a.inMin}m`, ...reason];
+	if (a.op === 'keep') return [a.node, '--keep'];
 	return [a.node, '--remove'];
 }
 
@@ -340,7 +378,11 @@ export async function act(request, decision, { live, door, artifact = null }) {
 			}
 		} else if (doc?.ok) {
 			const changed =
-				a.op === 'end' ? `ends ${doc.until ?? `in ${a.inMin} min`}` : `${a.op}d (${doc.state})`;
+				a.op === 'end'
+					? `ends ${doc.until ?? `in ${a.inMin} min`}`
+					: a.op === 'keep'
+						? `kept, the end at ${doc.was} taken back`
+						: `${a.op}d (${doc.state})`;
 			rows.converged.push({ ...row, changed });
 			rows.changed.push({ node: a.node, facet, changed });
 		} else if (declared) {

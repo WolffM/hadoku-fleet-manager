@@ -38,6 +38,7 @@ fleet hosting claw-9 --install ./run --sha256 <hex>   # the tenant's executable,
 fleet hosting claw-9 --restart                        # after the agent upgrades itself
 fleet hosting --check                                 # declared vs observed, from the kernel
 fleet hosting claw-9 --end --in 30m                   # at least 15 min of notice
+fleet hosting claw-9 --keep                           # take the end back, units still there
 fleet hosting claw-9 --remove                         # after the end has passed
 fleet hosting claw-9 --ci-shaped [--wait] -- <cmd>    # a process contained as a CI job is (tests)
 ```

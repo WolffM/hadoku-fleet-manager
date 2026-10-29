@@ -155,17 +155,17 @@ for (const [app, { request }] of tenants) {
 			: [];
 	});
 	// A slice past its end still has units until --remove. Whole-box ends are drains.
-	const removeDue = [
+	const pastDue = [
 		...Object.entries(hostingDoc.nodes),
 		...Object.entries(drainDoc.nodes)
 			.filter(([, r]) => r.kind === 'hosting')
 			.map(([n, r]) => [n, { ...r.hosting, until: r.until }]),
-	]
-		.filter(
-			([, r]) =>
-				r.tenant === app && Number.isFinite(Date.parse(r.until ?? '')) && Date.parse(r.until) <= NOW
-		)
-		.map(([n]) => n);
+	].filter(
+		([, r]) =>
+			r.tenant === app && Number.isFinite(Date.parse(r.until ?? '')) && Date.parse(r.until) <= NOW
+	);
+	const removeDue = pastDue.map(([n]) => n);
+	const pastEnd = pastDue.filter(([, r]) => r.role !== 'standby').map(([n]) => n);
 	const plan = planFor(request, offers);
 	const movePlan = request.availability.singleton
 		? planFor({ ...request, slices: { ...request.slices, max: request.slices.max + 1 } }, offers)
@@ -178,6 +178,7 @@ for (const [app, { request }] of tenants) {
 		offers,
 		slices,
 		removeDue,
+		pastEnd,
 		notices,
 		now: NOW,
 		appLayer:

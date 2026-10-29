@@ -113,18 +113,93 @@ test('an ending slice is not serving, and a passed end is removed', () => {
 	const d = run({
 		demand: { slices: 1 },
 		plan: plan('claw-5'),
-		offers: [offer('claw-9')],
-		slices: [{ node: 'claw-9', until: at(20) }],
+		offers: [offer('claw-9'), offer('claw-6')],
+		slices: [{ node: 'claw-6' }, { node: 'claw-9', until: at(20) }],
 		removeDue: ['claw-8'],
+		pastEnd: ['claw-8'],
+	});
+	assert.deepEqual(
+		d.actions.map((a) => [a.op, a.node]),
+		[['remove', 'claw-8']]
+	);
+	assert.deepEqual(d.serving, ['claw-6']);
+	assert.deepEqual(d.ending, [{ node: 'claw-9', until: at(20) }]);
+});
+
+test('demand that comes back keeps its own ending slice rather than declaring a new one', () => {
+	// 2026-10-28: 2 -> 1 -> 2 in 14 min; claw-9 was removed 36 s past its end
+	// and claw-5 declared to make up the count.
+	const order = ['claw-9', 'claw-8'];
+	const offers = [offer('claw-8'), offer('claw-9')];
+	const ahead = run({
+		demand: { slices: 2, releaseOrder: order },
+		plan: plan('claw-5'),
+		offers,
+		slices: [{ node: 'claw-8' }, { node: 'claw-9', until: at(3) }],
+	});
+	assert.deepEqual(
+		ahead.actions.map((a) => [a.op, a.node]),
+		[['keep', 'claw-9']]
+	);
+	assert.deepEqual(ahead.serving, ['claw-8', 'claw-9']);
+	assert.deepEqual(ahead.ending, []);
+
+	const passed = run({
+		demand: { slices: 2, releaseOrder: order },
+		plan: plan('claw-5'),
+		offers,
+		slices: [{ node: 'claw-8' }],
+		removeDue: ['claw-9'],
+		pastEnd: ['claw-9'],
+	});
+	assert.deepEqual(
+		passed.actions.map((a) => [a.op, a.node]),
+		[['keep', 'claw-9']],
+		'past its end with the units still there is kept, not removed and replaced'
+	);
+	assert.deepEqual(doorArgs(agent, passed.actions[0]), ['claw-9', '--keep']);
+});
+
+test('only as many ending slices are kept as demand is short, latest in the release order first', () => {
+	const d = run({
+		demand: { slices: 2, releaseOrder: ['claw-9', 'claw-8', 'claw-6'] },
+		plan: plan('claw-5'),
+		offers: ['claw-3', 'claw-6', 'claw-8', 'claw-9'].map((n) => offer(n)),
+		slices: [
+			{ node: 'claw-3' },
+			{ node: 'claw-9', until: at(5) },
+			{ node: 'claw-8', until: at(5) },
+		],
+		removeDue: ['claw-6'],
+		pastEnd: ['claw-6'],
+	});
+	assert.deepEqual(
+		d.actions.map((a) => [a.op, a.node]),
+		[['keep', 'claw-6']],
+		'one short: the slice the tenant would release last is the one kept'
+	);
+	assert.deepEqual(
+		d.ending.map((e) => e.node),
+		['claw-9', 'claw-8']
+	);
+});
+
+test('an ending slice that can no longer serve is not kept; a standby past its end is never kept', () => {
+	const d = run({
+		demand: { slices: 2, releaseOrder: ['claw-9'] },
+		plan: plan('claw-5'),
+		offers: [offer('claw-8'), offer('claw-9', { reachable: false })],
+		slices: [{ node: 'claw-8' }, { node: 'claw-9', until: at(5) }],
+		removeDue: ['claw-6'],
+		pastEnd: [],
 	});
 	assert.deepEqual(
 		d.actions.map((a) => [a.op, a.node]),
 		[
-			['remove', 'claw-8'],
+			['remove', 'claw-6'],
 			['declare', 'claw-5'],
 		]
 	);
-	assert.deepEqual(d.ending, [{ node: 'claw-9', until: at(20) }]);
 });
 
 test('unplaceable: unreachable, a failed rule, a drain inside the horizon; a rule it cannot tell is not a fault', () => {

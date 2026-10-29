@@ -24,6 +24,9 @@
  * schedules the end (at least HOSTING_NOTICE_MS ahead unless `--force`), and
  * `fleet node-status --json` shows it coming. `--remove` then takes the units,
  * the executable and the port away. It refuses while the end is still ahead.
+ * `--keep` takes a scheduled end back while the units are still there, past
+ * the end included: the tenant asked for the slice again before `--remove`
+ * ran. It only ever gives the tenant more, so it owes no notice.
  *
  * USAGE
  *   fleet hosting claw-9 --tenant cardtable --memory 4G --cores 4 --shared
@@ -31,6 +34,7 @@
  *   fleet hosting claw-9 --install ./run --sha256 <hex>
  *   fleet hosting claw-9 --restart
  *   fleet hosting claw-9 --end --in 30m
+ *   fleet hosting claw-9 --keep
  *   fleet hosting claw-9 --remove
  *   fleet hosting claw-9 --ci-shaped [--wait] -- <command>
  *   fleet hosting --check
@@ -95,6 +99,7 @@ const VALUE_FLAGS = [
 const BOOL_FLAGS = [
 	'--shared',
 	'--end',
+	'--keep',
 	'--remove',
 	'--check',
 	'--restart',
@@ -132,6 +137,8 @@ if (has('--help') || has('-h')) {
 			'        restart the agent (after it upgraded itself).',
 			'fleet hosting <node> --end (--in 30m | --at <iso>) [--force]',
 			`        schedule the end; the tenant is owed ${HOSTING_NOTICE_MS / 60_000} min notice.`,
+			'fleet hosting <node> --keep',
+			'        take a scheduled end back, while the units are still there.',
 			'fleet hosting <node> --remove [--force]',
 			'        take the units, executable and port away once the end has passed.',
 			'fleet hosting <node> --ci-shaped [--wait] -- <command>',
@@ -155,11 +162,13 @@ const action = has('--check')
 			? 'restart'
 			: has('--end')
 				? 'end'
-				: has('--remove')
-					? 'remove'
-					: has('--ci-shaped')
-						? 'ci-shaped'
-						: 'declare';
+				: has('--keep')
+					? 'keep'
+					: has('--remove')
+						? 'remove'
+						: has('--ci-shaped')
+							? 'ci-shaped'
+							: 'declare';
 
 /** Human lines go to stderr under --json, so stdout is the one document. */
 const say = (line) => (JSON_OUT ? console.error(line) : console.log(line));
@@ -417,6 +426,18 @@ if (action === 'end') {
 	}
 	say(`✓ ${node} stops hosting at ${until}. Then: fleet hosting ${node} --remove`);
 	finish(true, { state: 'ending', until, mode: current.mode });
+}
+
+if (action === 'keep') {
+	const rec = wholeRec ?? sharedRec;
+	if (!rec) refuse(`${node} is not hosting.`);
+	if (!rec.until) refuse(`${node} has no end scheduled.`);
+	const { until: was, ...kept } = rec;
+	if (wholeRec)
+		writeDrainDoc({ nodes: { ...drainDoc.nodes, [node]: kept }, planned: drainDoc.planned });
+	else writeHostingDoc({ nodes: { ...hostingDoc.nodes, [node]: kept } }, stateDir());
+	say(`✓ ${node} keeps hosting; the end at ${was} is taken back.`);
+	finish(true, { state: 'kept', was, mode: wholeRec ? 'whole' : 'shared' });
 }
 
 if (action === 'remove') {
