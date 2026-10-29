@@ -150,8 +150,16 @@ for (const [app, { request }] of tenants) {
 	const facet = `hosting:${app}`;
 	const slices = nodes.flatMap((n) => {
 		const h = hostingOn(n, drainDoc, hostingDoc, NOW);
+		const since = hostingDoc.nodes[n]?.since ?? drainDoc.nodes[n]?.since;
 		return h?.tenant === app
-			? [{ node: n, ...(h.role ? { role: h.role } : {}), ...(h.until ? { until: h.until } : {}) }]
+			? [
+					{
+						node: n,
+						...(h.role ? { role: h.role } : {}),
+						...(h.until ? { until: h.until } : {}),
+						...(since ? { since } : {}),
+					},
+				]
 			: [];
 	});
 	// A slice past its end still has units until --remove. Whole-box ends are drains.

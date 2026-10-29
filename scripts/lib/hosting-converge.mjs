@@ -28,7 +28,11 @@
  * block says why. A singleton on a node that cannot be reached and has no
  * fence is never moved: two writers is worse than none.
  * TOO MANY: end from the head of the tenant's releaseOrder, with notice. With
- * no order, end nothing and say so.
+ * no order, end nothing and say so. While any slice it holds is younger than
+ * YOUNG_SLICE_MS, end nothing: the tenant has not judged that node yet, and
+ * cardtable puts a claw it has not canaried at the HEAD of its order. On
+ * 2026-10-29 claw-9 was re-declared and read [claw-9, claw-5, claw-8] for 81 s;
+ * a pass in that window would have ended the node just given back.
  * PAST ITS END: remove the units.
  *
  * Unplaceable slices are never ended here. The tenant moves its work off them
@@ -47,6 +51,9 @@ import { ruleHolds } from './hosting-placement.mjs';
 /** A drain of another kind starting this long past the tenant's notice counts as now. */
 export const HORIZON_MARGIN_MS = 15 * 60_000;
 
+/** A slice declared this recently is not yet in the tenant's release order on its merits. */
+export const YOUNG_SLICE_MS = 10 * 60_000;
+
 /**
  * @param {object} i
  * @param {object} i.request   normalized hosting request
@@ -54,7 +61,7 @@ export const HORIZON_MARGIN_MS = 15 * 60_000;
  * @param {object} i.plan      planFor(request, offers)
  * @param {object} [i.movePlan] planFor with max + 1, for a singleton: a move is not a second slice
  * @param {object[]} i.offers  collectOffers().offers
- * @param {{node:string, until?:string}[]} i.slices  this tenant's records, in force
+ * @param {{node:string, until?:string, since?:string}[]} i.slices  this tenant's records, in force
  * @param {string[]} i.removeDue  nodes whose slice end has passed and still has units
  * @param {string[]} [i.pastEnd]  the primaries among removeDue: what `--keep` may take back
  * @param {object[]} i.notices drainNotices + hostingNotices
@@ -97,7 +104,9 @@ export function decide({
 		.slice(0, Math.max(0, desired - live));
 	const kept = new Set(keeps);
 	const slices = [
-		...primaries.map((s) => (kept.has(s.node) ? { node: s.node } : s)),
+		...primaries.map(({ until, ...s }) =>
+			kept.has(s.node) ? s : { ...s, ...(until ? { until } : {}) }
+		),
 		...keeps.filter((n) => !primaries.some((s) => s.node === n)).map((node) => ({ node })),
 	];
 	const standbySlices = allSlices.filter((s) => s.role === 'standby');
@@ -180,22 +189,35 @@ export function decide({
 		}
 	} else if (serving.length > desired) {
 		const excess = serving.length - desired;
-		const order = (demand?.releaseOrder ?? []).filter((n) => serving.includes(n));
-		for (const node of order.slice(0, excess))
-			actions.push({
-				op: 'end',
-				node,
-				inMin: availability.noticeMin,
-				why: `${serving.length} serving, ${desired} wanted; first in ${app}'s release order`,
-			});
-		if (order.length < excess)
+		const young = slices
+			.filter((s) => !s.until && now - Date.parse(s.since ?? '') < YOUNG_SLICE_MS)
+			.map((s) => s.node);
+		if (young.length) {
 			blocked.push({
 				node: '*',
 				why:
-					`${excess} slice(s) above demand and the release order names ${order.length} serving ` +
-					`one(s); nothing else is ended, because only ${app} knows what each slice holds`,
+					`${excess} slice(s) above demand, and ${young.join(', ')} was declared under ` +
+					`${YOUNG_SLICE_MS / 60_000} min ago: nothing is ended until ${app} has judged it`,
 				soft: true,
 			});
+		} else {
+			const order = (demand?.releaseOrder ?? []).filter((n) => serving.includes(n));
+			for (const node of order.slice(0, excess))
+				actions.push({
+					op: 'end',
+					node,
+					inMin: availability.noticeMin,
+					why: `${serving.length} serving, ${desired} wanted; first in ${app}'s release order`,
+				});
+			if (order.length < excess)
+				blocked.push({
+					node: '*',
+					why:
+						`${excess} slice(s) above demand and the release order names ${order.length} serving ` +
+						`one(s); nothing else is ended, because only ${app} knows what each slice holds`,
+					soft: true,
+				});
+		}
 	}
 
 	const standby = meetStandby({

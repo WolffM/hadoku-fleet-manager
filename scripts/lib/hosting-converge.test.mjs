@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { act, decide, doorArgs } from './hosting-converge.mjs';
+import { YOUNG_SLICE_MS, act, decide, doorArgs } from './hosting-converge.mjs';
 
 const NOW = Date.now();
 /** An instant `min` minutes from NOW. */
@@ -107,6 +107,33 @@ test('too many ends ONLY from the head of the release order, with the tenant’s
 	assert.deepEqual(blind.actions, [], 'with no order nothing is ended');
 	assert.match(blind.blocked[0].why, /only cardtable knows/);
 	assert.equal(blind.blocked[0].soft, true);
+});
+
+test('a slice declared under YOUNG_SLICE_MS ago holds every end: the tenant has not judged it yet', () => {
+	// 2026-10-29: claw-9 re-declared; cardtable read [claw-9, claw-5, claw-8] until its canary passed.
+	const offers = ['claw-5', 'claw-8', 'claw-9'].map((n) => offer(n));
+	const held = (claw9Since) => [
+		{ node: 'claw-8', since: at(-600) },
+		{ node: 'claw-5', since: at(-30) },
+		{ node: 'claw-9', since: claw9Since },
+	];
+	const demand = { slices: 2, releaseOrder: ['claw-9', 'claw-5', 'claw-8'] };
+	const fresh = run({ demand, offers, slices: held(at(-1)) });
+	assert.deepEqual(fresh.actions, []);
+	assert.equal(fresh.blocked.length, 1);
+	assert.equal(fresh.blocked[0].soft, true);
+	assert.match(fresh.blocked[0].why, /claw-9 was declared under 10 min ago/);
+
+	const settled = run({
+		demand: { ...demand, releaseOrder: ['claw-5', 'claw-9', 'claw-8'] },
+		offers,
+		slices: held(at(-11)),
+	});
+	assert.deepEqual(
+		settled.actions.map((a) => [a.op, a.node]),
+		[['end', 'claw-5']]
+	);
+	assert.ok(YOUNG_SLICE_MS >= 5 * 60_000, 'at least one converger pass for the canary');
 });
 
 test('an ending slice is not serving, and a passed end is removed', () => {
