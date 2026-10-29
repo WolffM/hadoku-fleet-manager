@@ -17,6 +17,8 @@
  *             typed. cardtable's are the names claw-9 has run since 10-24.
  *   unit      the unit that runs the tenant, written verbatim to the node.
  *   pathUnit  only a runtime that waits for a fleet-installed executable.
+ *   homeFiles    files in the tenant's home, name → text, as the tenant, 0600.
+ *   systemFiles  root-owned files on the node, (spec) → { path: text }, 0644.
  *
  * Unit text is part of the contract with what is already running: a render
  * that changes by one byte makes the next re-declare restart the tenant
@@ -114,6 +116,29 @@ WantedBy=multi-user.target`,
 				'//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n' +
 				'@wolffm:registry=https://npm.pkg.github.com\n',
 		},
+		/**
+		 * Root-owned files the node must hold for the tenant, path → text: written
+		 * by the door (only when they differ), read back by the judge, removed by
+		 * the teardown. pm2 keeps every app's stdout in PM2_HOME/logs and never
+		 * trims it. hokon's pm2 runs the pm2-logrotate module; a tenant's has
+		 * nothing that would install it, and its logs grew unbounded from the day
+		 * watchparty and archivebot moved (2026-10-29). So the system logrotate
+		 * keeps them on hokon's terms: daily, seven kept, compressed, as the
+		 * tenant's user.
+		 */
+		systemFiles: (t) => ({
+			[`/etc/logrotate.d/hosting-${t.app}`]: `# fleet hosting: ${t.app}'s pm2 logs (written by fleet-manager; edits are reverted)
+${t.home}/.pm2/pm2.log ${t.home}/.pm2/logs/*.log {
+	su ${t.user} ${t.user}
+	daily
+	rotate 7
+	compress
+	missingok
+	notifempty
+	copytruncate
+}
+`,
+		}),
 		names: (app) => ({
 			user: `${app}-svc`,
 			service: `pm2-${app}-svc.service`,

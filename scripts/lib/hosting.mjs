@@ -175,6 +175,10 @@ echo "ciGone=$gone"
 /** The home files a tenant's runtime declares (lib/hosting-runtimes.mjs), name → text. */
 const homeFilesOf = (t) => (t && t.app !== NO_TENANT.app ? (runtimeFor(t).homeFiles ?? {}) : {});
 
+/** The root-owned files a tenant's runtime declares, absolute path → text. */
+const systemFilesOf = (t) =>
+	t && t.app !== NO_TENANT.app ? (runtimeFor(t).systemFiles?.(t) ?? {}) : {};
+
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 
 /**
@@ -194,6 +198,33 @@ function homeFilesScript(t) {
 		})
 		.join('\n');
 }
+
+/** Write each declared system file, root-owned 0644, only when its text differs. */
+function systemFilesScript(t) {
+	return Object.entries(systemFilesOf(t))
+		.map(([path, text]) => {
+			const q = shellQuote(path);
+			const b64 = Buffer.from(text).toString('base64');
+			return (
+				`if [ "$(sha256sum ${q} 2>/dev/null | cut -c1-64)" != "${sha256(text)}" ]; then\n` +
+				`\tprintf '%s' '${b64}' | base64 -d | $S install -m 0644 -o root -g root /dev/stdin ${q}\n` +
+				'fi'
+			);
+		})
+		.join('\n');
+}
+
+/** `name:sha,name:sha` as the observe script prints it → { name: sha | null }. */
+const parseShas = (line) =>
+	Object.fromEntries(
+		(line ?? '')
+			.split(',')
+			.filter(Boolean)
+			.map((pair) => [
+				pair.slice(0, pair.lastIndexOf(':')),
+				pair.slice(pair.lastIndexOf(':') + 1) || null,
+			])
+	);
 
 const tenantVars = (t) => ({
 	TENANT: t.app,
@@ -364,6 +395,7 @@ if ! id -u "$AGENT_USER" >/dev/null 2>&1; then
 fi
 $S install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$AGENT_HOME"
 ${homeFilesScript(t)}
+${systemFilesScript(t)}
 ${t.exec ? '$S install -d -o root -g root -m 0755 "$(dirname "$EXEC")"' : ''}
 # Write a unit only when its text changed, and remember which did: a re-deploy
 # that changes nothing must not restart the agent (it kills the tenant's JVMs).
@@ -435,7 +467,9 @@ $S systemctl kill --kill-whom=all --signal=SIGKILL "$SERVICE" >/dev/null 2>&1 ||
 $S systemctl disable --now "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" >/dev/null 2>&1 || true
 $S systemctl stop "$SLICE" "$PARENT" >/dev/null 2>&1 || true
 for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" "$SLICE" "$PARENT"; do $S rm -f "/etc/systemd/system/$u"; done
-$S rm -f "$EXEC" "$EXEC.new"
+$S rm -f "$EXEC" "$EXEC.new"${Object.keys(systemFilesOf(t))
+		.map((f) => ` ${shellQuote(f)}`)
+		.join('')}
 $S systemctl daemon-reload
 while $S ufw status 2>/dev/null | grep -Eq "^$PORT/tcp +ALLOW +$CONTROLLER_IP( |$)"; do
 	$S ufw delete allow from "$CONTROLLER_IP" to any port "$PORT" proto tcp >/dev/null
@@ -461,6 +495,9 @@ for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" "$SLICE" "$PARENT"; do
 done
 [ -d "/sys/fs/cgroup/$PARENT" ] && echo "LEFT cgroup /sys/fs/cgroup/$PARENT"
 [ -e "$EXEC" ] && echo "LEFT executable $EXEC"
+${Object.keys(systemFilesOf(t))
+	.map((f) => `[ -e ${shellQuote(f)} ] && echo ${shellQuote(`LEFT file ${f}`)}`)
+	.join('\n')}
 uid=$(id -u "$AGENT_USER" 2>/dev/null)
 [ -n "$uid" ] && n=$(pgrep -c -U "$uid" 2>/dev/null) && [ "$n" -gt 0 ] && echo "LEFT $n process(es) running as $AGENT_USER"
 $S ufw status 2>/dev/null | grep -E "^$PORT/tcp" | sed "s/^/LEFT ufw rule: /"
@@ -602,6 +639,9 @@ echo "homeFiles=${Object.keys(homeFilesOf(t))
 			(f) => `${f}:$(sudo -n sha256sum ${shellQuote(`${t.home}/${f}`)} 2>/dev/null | cut -c1-64)`
 		)
 		.join(',')}"
+echo "systemFiles=${Object.keys(systemFilesOf(t))
+		.map((f) => `${f}:$(sha256sum ${shellQuote(f)} 2>/dev/null | cut -c1-64)`)
+		.join(',')}"
 echo "execDirStat=$(stat -c '%U:%G:%a' "$(dirname "$EXEC")" 2>/dev/null)"
 echo "execStat=$(stat -c '%U:%G:%a' "$EXEC" 2>/dev/null)"
 echo "agentInstalled=$([ -x "$EXEC" ] && echo yes || echo no)"
@@ -661,15 +701,8 @@ export function parseObserved(stdout) {
 		ciGroups: str('ciGroups')?.split(/\s+/) ?? null,
 		agentSudo: num('agentSudo'),
 		homeStat: str('homeStat'),
-		homeFiles: Object.fromEntries(
-			(str('homeFiles') ?? '')
-				.split(',')
-				.filter(Boolean)
-				.map((pair) => [
-					pair.slice(0, pair.lastIndexOf(':')),
-					pair.slice(pair.lastIndexOf(':') + 1) || null,
-				])
-		),
+		homeFiles: parseShas(str('homeFiles')),
+		systemFiles: parseShas(str('systemFiles')),
 		execDirStat: str('execDirStat'),
 		execStat: str('execStat'),
 		agentInstalled: kv.agentInstalled === 'yes',
@@ -863,6 +896,7 @@ export function judgeHosting(declared, obs, mode = 'whole', reach = null, t = nu
 			execDir: obs.execDirStat,
 			exec: obs.execStat,
 			homeFiles: obs.homeFiles,
+			systemFiles: obs.systemFiles,
 		},
 		ci: {
 			workers: obs.ciWorkers,
@@ -935,6 +969,11 @@ export function judgeHosting(declared, obs, mode = 'whole', reach = null, t = nu
 				'hosting-files',
 				`${t.home}/${f} is ${seen ? 'not what the fleet wrote' : 'missing'}: the ${t.app} deploy's install needs it`
 			);
+	}
+	for (const [f, text] of Object.entries(systemFilesOf(t))) {
+		const seen = obs.systemFiles?.[f] ?? null;
+		if (seen !== sha256(text))
+			block('hosting-files', `${f} is ${seen ? 'not what the fleet wrote' : 'missing'}`);
 	}
 	for (const [path, s] of t.exec
 		? [

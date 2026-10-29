@@ -22,11 +22,19 @@ import {
 } from './hosting.mjs';
 
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	writeFileSync,
+} from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { validateHostingRequest } from './hosting-request.mjs';
+import { runtimeFor } from './hosting-runtimes.mjs';
 import { tenantSpecFrom } from './tenant-registry.mjs';
 
 /** cardtable's spec, derived from its real request: the names the old TENANTS row held. */
@@ -489,7 +497,7 @@ test('a pm2 tenant whose .npmrc is missing or changed is not guaranteed; the one
 			'shared',
 			REACH,
 			ARCHIVEBOT
-		).findings.filter((f) => f.category === 'hosting-files');
+		).findings.filter((f) => f.category === 'hosting-files' && /\.npmrc/.test(f.why));
 	assert.match(
 		files('.npmrc:')
 			.map((f) => f.why)
@@ -503,6 +511,77 @@ test('a pm2 tenant whose .npmrc is missing or changed is not guaranteed; the one
 		/not what the fleet wrote/
 	);
 	assert.deepEqual(files(`.npmrc:${NPMRC_SHA}`), []);
+});
+
+const LOGROTATE = '/etc/logrotate.d/hosting-archivebot';
+const logrotateText = (t) => runtimeFor(t).systemFiles(t)[LOGROTATE.replace('archivebot', t.app)];
+
+test("a pm2 tenant's logrotate entry is written root-owned, read back, and removed with the tenant", () => {
+	const ctl = { lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null };
+	const sha = createHash('sha256').update(logrotateText(ARCHIVEBOT)).digest('hex');
+	const s = deployScript(ARCHIVEBOT, { memoryMb: 1024, cores: 1 }, ctl, { shared: true });
+	assert.match(s, new RegExp(`!= "${sha}" \\]; then`));
+	assert.match(
+		s,
+		/install -m 0644 -o root -g root \/dev\/stdin '\/etc\/logrotate\.d\/hosting-archivebot'/
+	);
+	assert.doesNotMatch(deployScript(CARDTABLE, { memoryMb: 4096, cores: 4 }, ctl), /logrotate/);
+	assert.match(
+		observeScript(ARCHIVEBOT, 'ci'),
+		/systemFiles=\/etc\/logrotate\.d\/hosting-archivebot:/
+	);
+	assert.match(
+		removeScript(ARCHIVEBOT, '192.0.2.10'),
+		/rm -f "\$EXEC" "\$EXEC\.new" '\/etc\/logrotate\.d\/hosting-archivebot'/
+	);
+	assert.match(
+		leftoversScript(ARCHIVEBOT),
+		/\[ -e '\/etc\/logrotate\.d\/hosting-archivebot' \] && echo 'LEFT file/
+	);
+
+	const declared = { tenant: 'archivebot', memoryMb: 1024, cores: 1, port: ARCHIVEBOT.port };
+	const files = (systemFiles) =>
+		judgeHosting(
+			declared,
+			parseObserved(
+				answer({
+					homeStat: 'archivebot-svc:archivebot-svc:700',
+					homeFiles: `.npmrc:${NPMRC_SHA}`,
+					systemFiles,
+				})
+			),
+			'shared',
+			REACH,
+			ARCHIVEBOT
+		).findings.filter((f) => f.category === 'hosting-files');
+	assert.match(
+		files(`${LOGROTATE}:`)
+			.map((f) => f.why)
+			.join(),
+		/hosting-archivebot is missing/
+	);
+	assert.match(
+		files(`${LOGROTATE}:0000`)
+			.map((f) => f.why)
+			.join(),
+		/not what the fleet wrote/
+	);
+	assert.deepEqual(files(`${LOGROTATE}:${sha}`), []);
+});
+
+test('the logrotate entry, run by the real logrotate, rotates the pm2 logs in place', () => {
+	const home = mkdtempSync(join(tmpdir(), 'tenant-home-'));
+	mkdirSync(join(home, '.pm2', 'logs'), { recursive: true });
+	writeFileSync(join(home, '.pm2', 'pm2.log'), 'daemon\n');
+	writeFileSync(join(home, '.pm2', 'logs', 'archive-bot-out.log'), 'served\n');
+	const me = userInfo().username;
+	const conf = join(home, 'conf');
+	writeFileSync(conf, logrotateText({ ...ARCHIVEBOT, home, user: me }));
+	execFileSync('/usr/sbin/logrotate', ['-f', '-s', join(home, 'state'), conf]);
+	for (const log of ['.pm2/pm2.log', '.pm2/logs/archive-bot-out.log']) {
+		assert.equal(readFileSync(join(home, log), 'utf8'), '', `${log} truncated in place, not moved`);
+		assert.ok(existsSync(join(home, `${log}.1.gz`)), `${log} kept, compressed`);
+	}
 });
 
 /** Run the CI ranking loop for real over a fixture /proc, `pgrep` answering `pids`. */
