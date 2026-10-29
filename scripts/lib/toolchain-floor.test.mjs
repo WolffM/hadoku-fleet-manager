@@ -907,7 +907,9 @@ function fakeToolchainHome() {
 	writeFileSync(log, '');
 	writeFileSync(
 		join(stubs, 'sudo'),
-		`#!/bin/sh\necho "sudo $*" >> "${log}"\n[ -z "$SUDO_FAIL" ]\n`
+		// Logs every call and RUNS it, except the /usr/local/bin link: the
+		// tarball installs extract as root into FLEET_TOOL_OPT, a temp dir here.
+		`#!/bin/sh\necho "sudo $*" >> "${log}"\n[ -z "$SUDO_FAIL" ] || exit 1\n[ "$1" = -n ] && shift\n[ "$1" = ln ] && exit 0\nexec "$@"\n`
 	);
 	chmodSync(join(stubs, 'sudo'), 0o755);
 	// HIDE A REAL SYSTEM java/javac/mvn. `stubs` sits first on PATH, so a file
@@ -947,14 +949,21 @@ function fakeToolchainHome() {
 		].join('\n')
 	);
 	chmodSync(join(stubs, 'curl'), 0o755);
+	const opt = join(root, 'opt');
 	const run = (script, env = {}) => {
 		const r = spawnSync('bash', ['--noprofile', '--norc', '-c', script], {
 			encoding: 'utf8',
-			env: { PATH: `${stubs}:/usr/bin:/bin`, HOME: home, TMPDIR: tempDir('tf-tmp-'), ...env },
+			env: {
+				PATH: `${stubs}:/usr/bin:/bin`,
+				HOME: home,
+				TMPDIR: tempDir('tf-tmp-'),
+				FLEET_TOOL_OPT: opt,
+				...env,
+			},
 		});
 		return { status: r.status, stderr: r.stderr, stdout: r.stdout, log: readFileSync(log, 'utf8') };
 	};
-	return { home, run };
+	return { home, opt, stubs, run };
 }
 
 test('jdk21 repair: a tarball whose sha256 does NOT match is refused BEFORE extraction', () => {
@@ -983,7 +992,7 @@ test('jdk21 repair: a tarball whose sha256 does NOT match is refused BEFORE extr
 	assert.match(r.stderr, /sha256 mismatch/);
 	assert.doesNotMatch(r.log, /ln -sfn/, 'no symlink may be created when verification fails');
 	assert.ok(
-		!existsSync(join(fx.home, '.local', 'opt', 'jdk-21.0.12+9')),
+		!existsSync(join(fx.opt, 'jdk-21.0.12+9')),
 		'the tarball must never be extracted when its checksum is wrong'
 	);
 });
@@ -1009,40 +1018,60 @@ test('jdk21 repair: a MATCHING sha256 extracts and links java/javac onto the sto
 		CURL_CHECKSUM: sha256Of(tarball),
 	});
 	assert.equal(r.status, 0, r.stderr);
-	assert.ok(existsSync(join(fx.home, '.local', 'opt', 'jdk-21.0.12+9', 'bin', 'java')));
+	assert.ok(existsSync(join(fx.opt, 'jdk-21.0.12+9', 'bin', 'java')), 'under the opt root');
+	assert.ok(!existsSync(join(fx.home, '.local', 'opt')), 'never in the running user home');
 	assert.match(r.log, /ln -sfn .*jdk-21\.0\.12\+9\/bin\/java \/usr\/local\/bin\/java/);
 	assert.match(r.log, /ln -sfn .*jdk-21\.0\.12\+9\/bin\/javac \/usr\/local\/bin\/javac/);
 });
 
-test('jdk21 repair: an already-current-or-newer java NEVER downgrades or re-downloads', () => {
+test('jdk21 repair: a newer jdk already under the opt root NEVER downgrades or re-downloads', () => {
 	const fx = fakeToolchainHome();
-	mkdirSync(join(fx.home, '.local', 'opt', 'jdk-21.0.13+1', 'bin'), { recursive: true });
-	const javaPath = join(fx.home, '.local', 'opt', 'jdk-21.0.13+1', 'bin', 'java');
-	writeFileSync(javaPath, '#!/bin/sh\nprintf \'openjdk version "21.0.13" 2026-01-01\\n\' >&2\n');
-	chmodSync(javaPath, 0o755);
-	// The REPAIR text itself calls bare `java -version`, so the stub must be on
-	// PATH for the pin check to see it as "already ahead".
-	const binDir = join(fx.home, 'wrapperbin');
-	mkdirSync(binDir, { recursive: true });
-	writeFileSync(join(binDir, 'java'), `#!/bin/sh\nexec "${javaPath}" "$@"\n`);
-	chmodSync(join(binDir, 'java'), 0o755);
-	const r = spawnSync('bash', ['--noprofile', '--norc', '-c', installScript('jdk21', '21.0.12')], {
-		encoding: 'utf8',
-		env: {
-			PATH: `${binDir}:${join(fx.home, '..', 'stubs')}:/usr/bin:/bin`,
-			HOME: fx.home,
-			TMPDIR: tempDir('tf-tmp-'),
-			TARGET_VERSION: '21.0.12',
-			// No CURL_* vars set: if the script tried to download anyway, the
-			// stub curl would exit 7 on the first call and fail this test.
-		},
+	mkdirSync(join(fx.opt, 'jdk-21.0.13+1', 'bin'), { recursive: true });
+	// No CURL_* vars set: a download attempt makes the stub curl exit 7.
+	const r = fx.run(installScript('jdk21', '21.0.12'), { TARGET_VERSION: '21.0.12' });
+	assert.equal(r.status, 0, r.stderr);
+	assert.doesNotMatch(r.stderr, /unhandled url/, 'no curl call');
+	assert.match(r.log, /ln -sfn .*jdk-21\.0\.13\+1\/bin\/java \/usr\/local\/bin\/java/);
+});
+
+/**
+ * claw-4/claw-5, 2026-10-29: the cadence ran as admin and installed into admin's
+ * home. A current java ON PATH from a user's home is not an install under the
+ * opt root, so the repair installs there and re-links, moving the tool out.
+ * MUTATION: read `cur` from `java -version` again and this skips the download.
+ */
+test('jdk21 repair: a current java in a user home is reinstalled under the opt root', () => {
+	const fx = fakeToolchainHome();
+	writeFileSync(
+		join(fx.stubs, 'java'),
+		'#!/bin/sh\nprintf \'openjdk version "21.0.12" 2026-01-01\\n\' >&2\n'
+	);
+	const tarball = makeTarball('jdk-21.0.12+9', { java: '#!/bin/sh\n', javac: '#!/bin/sh\n' });
+	const f = join(tempDir('jdk21-feed-'), 'feed.json');
+	writeFileSync(f, JSON.stringify([{ release_name: 'jdk-21.0.12+9' }]));
+	const r = fx.run(installScript('jdk21', '21.0.12'), {
+		TARGET_VERSION: '21.0.12',
+		CURL_FEED_FILE: f,
+		CURL_LOCATION: 'https://github.com/example/jdk-21.0.12+9/OpenJDK.tar.gz',
+		CURL_TARBALL_FILE: tarball,
+		CURL_CHECKSUM: sha256Of(tarball),
 	});
 	assert.equal(r.status, 0, r.stderr);
-	assert.doesNotMatch(
-		r.stderr,
-		/unhandled url/,
-		'the pin check must short-circuit before any curl call'
-	);
+	assert.ok(existsSync(join(fx.opt, 'jdk-21.0.12+9', 'bin', 'java')));
+	assert.match(r.log, /ln -sfn .*\/opt\/jdk-21\.0\.12\+9\/bin\/java \/usr\/local\/bin\/java/);
+});
+
+test('a half-extracted .incoming dir is never read as an install', () => {
+	const fx = fakeToolchainHome();
+	mkdirSync(join(fx.opt, 'apache-maven-3.9.99.incoming'), { recursive: true });
+	const tarball = makeTarball('apache-maven-3.9.16', { mvn: '#!/bin/sh\n' });
+	const r = fx.run(installScript('maven', '3.9.16'), {
+		TARGET_VERSION: '3.9.16',
+		CURL_TARBALL_FILE: tarball,
+		CURL_MAVEN_SHA512: sha512Of(tarball),
+	});
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.log, /ln -sfn .*apache-maven-3\.9\.16\/bin\/mvn /);
 });
 
 test('maven repair: a sha512 mismatch is refused BEFORE extraction', () => {
@@ -1057,7 +1086,7 @@ test('maven repair: a sha512 mismatch is refused BEFORE extraction', () => {
 	assert.notEqual(r.status, 0);
 	assert.match(r.stderr, /sha512 mismatch/);
 	assert.doesNotMatch(r.log, /ln -sfn/);
-	assert.ok(!existsSync(join(fx.home, '.local', 'opt', 'apache-maven-3.9.16')));
+	assert.ok(!existsSync(join(fx.opt, 'apache-maven-3.9.16')));
 });
 
 test('maven repair: a MATCHING sha512 extracts and links mvn onto the stock PATH', () => {
@@ -1069,7 +1098,7 @@ test('maven repair: a MATCHING sha512 extracts and links mvn onto the stock PATH
 		CURL_MAVEN_SHA512: sha512Of(tarball),
 	});
 	assert.equal(r.status, 0, r.stderr);
-	assert.ok(existsSync(join(fx.home, '.local', 'opt', 'apache-maven-3.9.16', 'bin', 'mvn')));
+	assert.ok(existsSync(join(fx.opt, 'apache-maven-3.9.16', 'bin', 'mvn')));
 	assert.match(r.log, /ln -sfn .*apache-maven-3\.9\.16\/bin\/mvn \/usr\/local\/bin\/mvn/);
 });
 

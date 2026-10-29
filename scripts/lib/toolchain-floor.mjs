@@ -112,6 +112,24 @@ const CLAUDE_LINK = [
 ].join('\n');
 
 /**
+ * WHERE A TARBALL TOOL LIVES (jdk21, maven): `/opt/fleet-tools`, root-owned and
+ * readable by every user. It was the running user's `~/.local/opt`, and repairs
+ * run as admin, so after a node-users cutover the daily cadence reinstalled
+ * CI's JDK into ADMIN's home and pointed /usr/local/bin/java there (claw-4 and
+ * claw-5, 2026-10-29) — the exact link the cutover moves away. A system path
+ * belongs to no role. `FLEET_TOOL_OPT` exists for the tests and nothing else.
+ */
+export const TOOL_OPT = '/opt/fleet-tools';
+const TOOL_OPT_LINE = `opt="\${FLEET_TOOL_OPT:-${TOOL_OPT}}"`;
+const extractAsRoot = (tarball) => [
+	'  sudo -n rm -rf "${dest}.incoming" "$dest"',
+	'  sudo -n mkdir -p "${dest}.incoming"',
+	`  sudo -n tar -xzf "$tmp/${tarball}" -C "\${dest}.incoming" --strip-components=1 --no-same-owner`,
+	'  sudo -n mv "${dest}.incoming" "$dest"',
+	'  rm -rf "$tmp"',
+];
+
+/**
  * NON-APT capabilities, each with a detector and a repair.
  *
  * A package list cannot express these: rustup is a curl-to-shell installer and
@@ -629,8 +647,8 @@ export const REPAIRS = {
 		// x.y.z (see `lookupAdoptiumLatest`'s header for why the tag is not
 		// threaded through), downloads the linux/x64/hotspot tarball Adoptium's
 		// binary-redirect endpoint names, VERIFIES its published sha256 BEFORE
-		// extracting, and lays it at `~/.local/opt/jdk-<release>` — the layout
-		// hokon already uses by hand. Links land in `/usr/local/bin`, the STOCK
+		// extracting, and lays it at `/opt/fleet-tools/jdk-<release>`, root-owned.
+		// Links land in `/usr/local/bin`, the STOCK
 		// PATH, never only `~/.local/bin` — the exact claw-8/claude lesson this
 		// file's header names. NEVER MOVES BACKWARD: a `java` that already
 		// reports the pinned version or newer skips the download but still
@@ -640,7 +658,11 @@ export const REPAIRS = {
 			'set -eu',
 			'want="$TARGET_VERSION"',
 			'[ -n "$want" ] || { echo "jdk21 repair needs \\$TARGET_VERSION" >&2; exit 1; }',
-			'cur="$(java -version 2>&1 | sed -n \'1s/.*"\\([0-9][0-9.]*\\)".*/\\1/p\' 2>/dev/null || true)"',
+			TOOL_OPT_LINE,
+			// What is installed is what is under the opt root, NOT whatever `java`
+			// is on PATH: one in a user's home must not count, or it is never moved.
+			'have="$(ls -d "$opt"/jdk-*[0-9] 2>/dev/null | sort -V | tail -n 1)"',
+			'cur="${have##*/jdk-}"; cur="${cur%%+*}"',
 			'if [ -n "$cur" ] && { [ "$cur" = "$want" ] || ' +
 				'[ "$(printf \'%s\\n%s\\n\' "$cur" "$want" | sort -V | tail -n 1)" = "$cur" ]; }; then',
 			'  : # already current or newer than the pin -- never move backward',
@@ -672,16 +694,12 @@ export const REPAIRS = {
 			'  got="$(sha256sum "$tmp/jdk.tar.gz" | awk \'{print $1}\')"',
 			'  [ -n "$exp" ] && [ "$exp" = "$got" ] || ' +
 				'{ echo "sha256 mismatch for $asset_url -- refusing to extract" >&2; rm -rf "$tmp"; exit 1; }',
-			'  dest="$HOME/.local/opt/${rel}"',
-			'  rm -rf "${dest}.incoming" "$dest"',
-			'  mkdir -p "${dest}.incoming"',
-			'  tar -xzf "$tmp/jdk.tar.gz" -C "${dest}.incoming" --strip-components=1',
-			'  mv "${dest}.incoming" "$dest"',
-			'  rm -rf "$tmp"',
+			'  dest="$opt/${rel}"',
+			...extractAsRoot('jdk.tar.gz'),
 			'fi',
-			'cur_dest="$(ls -d "$HOME"/.local/opt/jdk-"$want"* 2>/dev/null | sort -V | tail -n 1)"',
-			'[ -n "$cur_dest" ] || cur_dest="$(ls -d "$HOME"/.local/opt/jdk-* 2>/dev/null | sort -V | tail -n 1)"',
-			'[ -n "$cur_dest" ] || { echo "no jdk under ~/.local/opt after repair" >&2; exit 1; }',
+			'cur_dest="$(ls -d "$opt"/jdk-"$want"*[0-9] 2>/dev/null | sort -V | tail -n 1)"',
+			'[ -n "$cur_dest" ] || cur_dest="$(ls -d "$opt"/jdk-*[0-9] 2>/dev/null | sort -V | tail -n 1)"',
+			'[ -n "$cur_dest" ] || { echo "no jdk under $opt after repair" >&2; exit 1; }',
 			'for b in java javac; do',
 			'  sudo -n ln -sfn "$cur_dest/bin/$b" "/usr/local/bin/$b"',
 			'done',
@@ -711,7 +729,9 @@ export const REPAIRS = {
 			'set -eu',
 			'want="$TARGET_VERSION"',
 			'[ -n "$want" ] || { echo "maven repair needs \\$TARGET_VERSION" >&2; exit 1; }',
-			'cur="$(mvn -v 2>/dev/null | sed -n \'1s/Apache Maven \\([0-9][0-9.]*\\).*/\\1/p\')"',
+			TOOL_OPT_LINE,
+			'have="$(ls -d "$opt"/apache-maven-*[0-9] 2>/dev/null | sort -V | tail -n 1)"',
+			'cur="${have##*/apache-maven-}"',
 			'if [ -n "$cur" ] && { [ "$cur" = "$want" ] || ' +
 				'[ "$(printf \'%s\\n%s\\n\' "$cur" "$want" | sort -V | tail -n 1)" = "$cur" ]; }; then',
 			'  : # already current or newer than the pin -- never move backward',
@@ -726,15 +746,11 @@ export const REPAIRS = {
 			'  got="$(sha512sum "$tmp/maven.tar.gz" | awk \'{print $1}\')"',
 			'  [ "$exp" = "$got" ] || ' +
 				'{ echo "sha512 mismatch for apache-maven-$want -- refusing to extract" >&2; rm -rf "$tmp"; exit 1; }',
-			'  dest="$HOME/.local/opt/apache-maven-${want}"',
-			'  rm -rf "${dest}.incoming" "$dest"',
-			'  mkdir -p "${dest}.incoming"',
-			'  tar -xzf "$tmp/maven.tar.gz" -C "${dest}.incoming" --strip-components=1',
-			'  mv "${dest}.incoming" "$dest"',
-			'  rm -rf "$tmp"',
+			'  dest="$opt/apache-maven-${want}"',
+			...extractAsRoot('maven.tar.gz'),
 			'fi',
-			'cur_dest="$(ls -d "$HOME"/.local/opt/apache-maven-* 2>/dev/null | sort -V | tail -n 1)"',
-			'[ -n "$cur_dest" ] || { echo "no maven under ~/.local/opt after repair" >&2; exit 1; }',
+			'cur_dest="$(ls -d "$opt"/apache-maven-*[0-9] 2>/dev/null | sort -V | tail -n 1)"',
+			'[ -n "$cur_dest" ] || { echo "no maven under $opt after repair" >&2; exit 1; }',
 			'sudo -n ln -sfn "$cur_dest/bin/mvn" /usr/local/bin/mvn',
 		].join('\n'),
 	},
