@@ -17,7 +17,9 @@
  * SINCE 2026-08-30 THERE ARE NO REQUIRED FLAGS. node-bootstrap.sh infers all
  * three — the key and the profile from the stick it is running off, the
  * hostname from the box the installer just named — so the printed command is
- * `sudo bash /mnt/kit/bootstrap/node-bootstrap.sh` and nothing else. That
+ * `sudo bash /mnt/bootstrap/node-bootstrap.sh` and nothing else (the stick
+ * mounts at `/mnt` itself, never `/mnt/kit` — memory `console-mount-at-mnt`).
+ * That
  * deleted this file's original claim: "every printed invocation supplies every
  * flag node-bootstrap requires" is trivially true of an empty set, and a gate
  * that cannot fail is not a gate. What replaces it is the two halves of the
@@ -43,10 +45,21 @@
 import { strict as assert } from 'node:assert';
 import { after, test } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	copyFileSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { blankComments } from './blank-comments.mjs';
+import { parseCliCommands } from './json-contract.mjs';
 
 const path = (rel) => fileURLToPath(new URL(rel, import.meta.url));
 const read = (rel) => readFileSync(path(rel), 'utf8');
@@ -214,7 +227,7 @@ function stick({ profiles = ['desktop-debian-trixie'], key = VALID_KEY } = {}) {
  * NODE_BOOTSTRAP_SOURCE_ONLY makes it stop after the guard definitions; without
  * that it would run the preflight and then convert this machine. The script is
  * passed as `$0` so its own `HERE="$(dirname "$0")"` resolves to the fixture's
- * bootstrap/ — the same way it will resolve to /mnt/kit/bootstrap on the stick.
+ * bootstrap/ — the same way it will resolve to /mnt/bootstrap on the stick.
  */
 function guard(script, snippet) {
 	const r = spawnSync('bash', ['-c', `set -u; . "$0"; ${snippet}`, script], {
@@ -448,5 +461,110 @@ test('setting the hostname is verified against the kernel, not assumed', () => {
 		after,
 		/\bdie\b/,
 		'a hostname that did not take must STOP the run — every later step names the node'
+	);
+});
+
+// ── docs/runbooks/*.md: a printed `fleet …` command must be a real one ─────
+//
+// Wave 5b §A step 4 (plan §5.2, "the bar: a runbook is backed by a command
+// that reports which step is missing"). A runbook that tells an operator to
+// run `fleet <typo>` fails exactly like the node-bootstrap heredoc above did
+// — at a console, far from a gate — so this reuses the SAME shape this file
+// already proved out there: read the real source, trust nothing a comment
+// says, and check it against the one list that matters.
+//
+// THE DOOR'S OWN TABLE, not a second copy of it. `cli-help.test.mjs` already
+// solved "read COMMANDS without importing cli.ts" (importing it would spawn a
+// subcommand or call `process.exit`): `parseCliCommands` blanks the source's
+// comments first and reads the table as data. Reusing it here means a
+// subcommand rename is still caught — this test and `cli-help.test.mjs` read
+// the identical parse, so they cannot disagree about what the door knows.
+//
+// SCOPED TO CODE, NOT PROSE. A runbook's prose says things like "the fleet
+// has no record of it" or "a fleet node" — neither is an invocation, and a
+// token scan over the whole file would flag `has` and `node` as if they were
+// subcommand names. Only text inside a fenced code block or a single-
+// backtick inline span is a command an operator is being told to TYPE, so
+// only that text is scanned. Fenced blocks are pulled out and stripped from
+// the document FIRST: a fence is three backticks, an odd number per fence, so
+// matching single backticks against the ORIGINAL text (fences still in it)
+// shifts every later inline-span pairing by one and silently swallows the
+// prose between two unrelated spans — caught by hand while writing this
+// test, against exactly the "fleet has" sentence above.
+
+const RUNBOOKS_DIR = path('../../docs/runbooks');
+const CLI_SOURCE = path('../../src/cli.ts');
+
+/** Every `fleet <subcommand>` token written where an operator would TYPE it. */
+export function fleetInvocationsInDoc(markdown) {
+	const fenced = [...markdown.matchAll(/```[\s\S]*?```/g)].map((m) => m[0]);
+	const unfenced = markdown.replace(/```[\s\S]*?```/g, '');
+	const names = new Set();
+	const FLEET_SUB = /\bfleet ([a-z][a-z0-9-]*)/g;
+	for (const block of fenced) {
+		for (const m of block.matchAll(FLEET_SUB)) names.add(m[1]);
+	}
+	for (const span of unfenced.matchAll(/`([^`]+)`/g)) {
+		for (const m of span[1].matchAll(FLEET_SUB)) names.add(m[1]);
+	}
+	return [...names].sort();
+}
+
+function cliCommandNames() {
+	return parseCliCommands(blankComments(readFileSync(CLI_SOURCE, 'utf8')));
+}
+
+function runbookFiles() {
+	return readdirSync(RUNBOOKS_DIR)
+		.filter((f) => f.endsWith('.md'))
+		.sort();
+}
+
+test('every runbook exists and is not empty', () => {
+	const files = runbookFiles();
+	assert.ok(files.length >= 2, `expected R1 and R3 at least, found ${files.length}`);
+});
+
+for (const file of runbookFiles()) {
+	test(`${file}: every "fleet <sub>" it prints is a real door command`, () => {
+		const markdown = readFileSync(join(RUNBOOKS_DIR, file), 'utf8');
+		const commands = cliCommandNames();
+		const unknown = fleetInvocationsInDoc(markdown).filter((name) => !commands.has(name));
+		assert.deepEqual(
+			unknown,
+			[],
+			`${file} tells the operator to run "fleet ${unknown.join('", "fleet ')}", which ` +
+				`src/cli.ts's COMMANDS table does not know. That command refuses with exit 2 at a ` +
+				`console, after everything this runbook asked for up to that point.`
+		);
+	});
+}
+
+test('MUTATION — a runbook naming a nonexistent subcommand fails the check', () => {
+	// Against a FIXTURE doc in a throwaway temp dir, never the real runbooks —
+	// the same discipline the layer-guard mutation tests use for the real tree.
+	const dir = mkdtempSync(join(tmpdir(), 'fleet-runbook-mutation-'));
+	sticks.push(dir);
+	const commands = cliCommandNames();
+	const real = [...commands.keys()][0];
+	assert.ok(real, 'the door table parsed to zero commands — nothing to compare against');
+
+	const clean = join(dir, 'clean.md');
+	writeFileSync(clean, `Run \`fleet ${real}\` to proceed.\n`);
+	assert.deepEqual(
+		fleetInvocationsInDoc(readFileSync(clean, 'utf8')).filter((n) => !commands.has(n)),
+		[],
+		'a real subcommand must not be flagged'
+	);
+
+	const broken = join(dir, 'broken.md');
+	writeFileSync(broken, 'Run `fleet this-subcommand-does-not-exist` to proceed.\n');
+	const unknown = fleetInvocationsInDoc(readFileSync(broken, 'utf8')).filter(
+		(n) => !commands.has(n)
+	);
+	assert.deepEqual(
+		unknown,
+		['this-subcommand-does-not-exist'],
+		'a nonexistent subcommand named in a fixture doc must be caught'
 	);
 });

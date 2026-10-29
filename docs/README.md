@@ -19,6 +19,13 @@
   plugins.
 - [`spare-parts.md`](spare-parts.md) — the hardware shelf and what the fleet
   measurably needs; the shelf half lives in the private repo.
+- [`runbooks/`](runbooks/) — one file per onboarding scenario (plan §5.3):
+  preconditions, numbered steps with where/as-whom/the command, a verify
+  command per step, rollback, and what enforces it.
+  [`new-claw.md`](runbooks/new-claw.md) (R1) and
+  [`retire-node.md`](runbooks/retire-node.md) (R3) are the first two;
+  `scripts/lib/onboarding-docs.test.mjs` fails the build if either names a
+  `fleet` subcommand that does not exist.
 
 ## Arriving in Phase 4
 

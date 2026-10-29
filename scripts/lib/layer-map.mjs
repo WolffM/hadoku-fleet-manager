@@ -124,7 +124,6 @@ export const LAYER_MAP = [
 
 	// ------------------------------------------------------------- composition
 	{ glob: 'src/index.ts', layer: 'composition' },
-	{ glob: 'src/host.ts', layer: 'composition' },
 	{ glob: 'src/standalone.ts', layer: 'composition' },
 	{ glob: 'src/serve.ts', layer: 'composition' },
 
@@ -201,6 +200,8 @@ export const LAYER_MAP = [
 	// the target shape — config is the layer for the package's own
 	// declarative inputs, which this is.
 	{ glob: 'scripts/lib/layer-map.mjs', layer: 'config' },
+	{ glob: 'src/host.ts', layer: 'config' },
+	{ glob: 'src/lib/measured-paths.ts', layer: 'config' },
 
 	// ----------------------------------------------------------- domain: lifecycle
 	{ glob: 'src/runners/prove-job.ts', layer: 'domain', domain: 'lifecycle', part: 'run' },

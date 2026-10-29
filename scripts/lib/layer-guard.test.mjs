@@ -1,5 +1,5 @@
 /**
- * THE IMPORT-DIRECTION GUARD, debt-list mode, cut (i) only (wave 5a §A step 3).
+ * THE IMPORT-DIRECTION GUARD, debt-list mode, cut (iii) (wave 5b §A step 2).
  *
  * `measure-layers.mjs --json` is the MEASURING tool; this is the GATE built
  * on top of it, in the same shape `node-identity-guard.test.mjs` and
@@ -11,12 +11,20 @@
  * worse the failure gets" has a mirror image here — no gate may stay EASY to
  * pass once the thing it is forgiving has been fixed).
  *
- * WHY CUT (i) ONLY. `measure-layers.mjs` counts all four candidate cuts so
- * the operator can see what each one costs (plan §3.3). Nothing has signed
- * off on (ii)/(iii)/(iv) yet — that sign-off is wave 5b's job (plan: "5b |
- * operator signs off the cut … | 5a counts"). Gating the build on a cut
- * nobody has agreed to would make this guard the decision instead of the
- * measurement informing one.
+ * WHY CUT (iii), NOW. Wave 5a gated on cut (i) because nothing had signed off
+ * on (ii)/(iii)/(iv) yet, and gating the build on a cut nobody had agreed to
+ * would have made this guard the decision instead of the measurement
+ * informing one. The operator settled it 2026-10-29 (plan "Settled — do not
+ * re-open": "the cut is (iii) — observation is a LAYER between automation and
+ * the domains; no directory moves; no CLI aliases/renames"). So OBSERVATION
+ * stops being a fourth sibling domain next to lifecycle/ci-scheduling/tenancy
+ * and becomes its own flat stratum between the domain stratum and automation
+ * — which flips the legal direction for exactly the edges that cross that
+ * line: **a domain (lifecycle/ci-scheduling/tenancy) importing observation is
+ * now a downward, legal edge** (observation sits below the domains), and
+ * **observation importing any domain is upward and a violation** — the
+ * reverse of cut (i), where observation was just another domain and the two
+ * were lateral (crossing a domain boundary) rather than vertical.
  *
  * DEBT ENTRIES ARE `{from, to}` FILE PAIRS, never line numbers — the same
  * reason `node-users-guard.test.mjs`'s debt entries are `file:symbol`: a line
@@ -41,7 +49,7 @@ import {
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const DEBT_PATH = join(ROOT, 'scripts/lib/layer-debt.json');
-const CUT_I = CUTS.find((c) => c.id === 'i');
+const CUT_III = CUTS.find((c) => c.id === 'iii');
 
 function pairKey(v) {
 	return `${v.from}\u0000${v.to}`;
@@ -58,7 +66,7 @@ function liveViolations() {
 		'layer-map.mjs must be total before this guard can mean anything'
 	);
 	const { edges } = buildImportEdges(classified);
-	cached = violationsForCut(edges, classified, CUT_I);
+	cached = violationsForCut(edges, classified, CUT_III);
 	return cached;
 }
 
@@ -129,14 +137,14 @@ test('MUTATION — an upward import added in a FIXTURE fails the guard', () => {
 	const clean = violationsForCut(
 		[{ from: 'fixture/ci-scheduling-core.ts', to: 'fixture/config-file.mjs' }], // DOWN: allowed
 		classified,
-		CUT_I
+		CUT_III
 	);
 	assert.deepEqual(clean, [], 'a domain file importing config (downward) must not be flagged');
 
 	const upward = violationsForCut(
 		[{ from: 'fixture/config-file.mjs', to: 'fixture/ci-scheduling-core.ts' }], // UP: a violation
 		classified,
-		CUT_I
+		CUT_III
 	);
 	assert.deepEqual(
 		upward,
@@ -145,13 +153,48 @@ test('MUTATION — an upward import added in a FIXTURE fails the guard', () => {
 	);
 
 	const lateral = violationsForCut(
-		[{ from: 'fixture/ci-scheduling-core.ts', to: 'fixture/tenancy-core.ts' }], // sideways: a violation under cut (i)
+		[{ from: 'fixture/ci-scheduling-core.ts', to: 'fixture/tenancy-core.ts' }], // sideways: a violation under cut (iii) too — tenancy is not folded
 		classified,
-		CUT_I
+		CUT_III
 	);
 	assert.deepEqual(
 		lateral,
 		[{ from: 'fixture/ci-scheduling-core.ts', to: 'fixture/tenancy-core.ts' }],
-		'one domain importing a sibling domain must be flagged under cut (i)'
+		'one domain importing a sibling domain must be flagged under cut (iii)'
+	);
+});
+
+test('MUTATION — cut (iii) makes observation a LAYER: a domain importing it is legal, the reverse is not', () => {
+	// The direction this guard exists to flip for 5b (see the file header): under
+	// cut (i) `observation` was just a fourth domain, lateral to
+	// lifecycle/ci-scheduling/tenancy. Under cut (iii) it is its own flat stratum
+	// BELOW the domain stratum, so the two edges below are not a lateral pair any
+	// more — they are a downward one and an upward one, and only the upward one
+	// is a violation. Fixture-only, per the rule above.
+	const classified = new Map([
+		['fixture/ci-scheduling-core.ts', { layer: 'domain', domain: 'ci-scheduling', part: 'core' }],
+		['fixture/observation-core.ts', { layer: 'domain', domain: 'observation', part: 'core' }],
+	]);
+
+	const domainIntoObservation = violationsForCut(
+		[{ from: 'fixture/ci-scheduling-core.ts', to: 'fixture/observation-core.ts' }], // DOWN under (iii): allowed
+		classified,
+		CUT_III
+	);
+	assert.deepEqual(
+		domainIntoObservation,
+		[],
+		'a domain importing observation (downward under cut iii) must not be flagged'
+	);
+
+	const observationIntoDomain = violationsForCut(
+		[{ from: 'fixture/observation-core.ts', to: 'fixture/ci-scheduling-core.ts' }], // UP under (iii): a violation
+		classified,
+		CUT_III
+	);
+	assert.deepEqual(
+		observationIntoDomain,
+		[{ from: 'fixture/observation-core.ts', to: 'fixture/ci-scheduling-core.ts' }],
+		'observation importing a domain (upward under cut iii) must be flagged'
 	);
 });

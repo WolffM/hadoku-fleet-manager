@@ -1,23 +1,7 @@
 [
   {
-    "from": "scripts/apt-security.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/backstop-switch.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
     "from": "scripts/benchmark-fleet.mjs",
     "to": "scripts/lib/refresh-cycle.mjs"
-  },
-  {
-    "from": "scripts/bootcamp.mjs",
-    "to": "scripts/lib/bootcamp-required.mjs"
-  },
-  {
-    "from": "scripts/bootcamp.mjs",
-    "to": "scripts/lib/expected-down.mjs"
   },
   {
     "from": "scripts/check-capabilities.mjs",
@@ -65,87 +49,19 @@
   },
   {
     "from": "scripts/clean-runner-debris.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/clean-runner-debris.mjs",
     "to": "scripts/lib/placement-rules.mjs"
-  },
-  {
-    "from": "scripts/converge-toolchain.mjs",
-    "to": "scripts/lib/expected-down.mjs"
   },
   {
     "from": "scripts/converge-toolchain.mjs",
     "to": "scripts/lib/service-peers.mjs"
   },
   {
-    "from": "scripts/deploy-ci-throttle.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/deploy-ci-throttle.mjs",
-    "to": "scripts/lib/runner-env-drift.mjs"
-  },
-  {
-    "from": "scripts/deploy-runners-slice.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/deploy-runners-slice.mjs",
-    "to": "scripts/lib/slice-summary.mjs"
-  },
-  {
     "from": "scripts/deploy-runners-slice.mjs",
     "to": "src/runners/ephemeral.ts"
   },
   {
-    "from": "scripts/drain-node.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/drain-node.mjs",
-    "to": "scripts/lib/queue-health.mjs"
-  },
-  {
-    "from": "scripts/drain-node.mjs",
-    "to": "src/runners/census.ts"
-  },
-  {
-    "from": "scripts/fleet-inventory.mjs",
-    "to": "scripts/lib/demand-derive.mjs"
-  },
-  {
     "from": "scripts/fleet-source.mjs",
     "to": "scripts/lib/emit.mjs"
-  },
-  {
-    "from": "scripts/floor-probe.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/floor-probe.mjs",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "scripts/floor-probe.mjs",
-    "to": "src/runner-health.ts"
-  },
-  {
-    "from": "scripts/floor-probe.mjs",
-    "to": "src/runners/census.ts"
-  },
-  {
-    "from": "scripts/hosting-converge.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/hosting-demand.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/hosting.mjs",
-    "to": "scripts/lib/expected-down.mjs"
   },
   {
     "from": "scripts/lib/capability-seeds.mjs",
@@ -158,10 +74,6 @@
   {
     "from": "scripts/lib/capability-seeds.mjs",
     "to": "scripts/lib/queue-health.mjs"
-  },
-  {
-    "from": "scripts/lib/collect-offers.mjs",
-    "to": "scripts/lib/expected-down.mjs"
   },
   {
     "from": "scripts/lib/doctor-run.mjs",
@@ -178,10 +90,6 @@
   {
     "from": "scripts/lib/doctor.mjs",
     "to": "scripts/lib/node-interfaces.mjs"
-  },
-  {
-    "from": "scripts/lib/fleet-inventory.mjs",
-    "to": "scripts/lib/demand-derive.mjs"
   },
   {
     "from": "scripts/lib/fleet-source-fixture.mjs",
@@ -216,10 +124,6 @@
     "to": "scripts/lib/emit.mjs"
   },
   {
-    "from": "scripts/lib/node-users-cutover.mjs",
-    "to": "scripts/lib/preflight.mjs"
-  },
-  {
     "from": "scripts/lib/preflight.mjs",
     "to": "scripts/lib/node-interfaces.mjs"
   },
@@ -228,28 +132,12 @@
     "to": "src/runners/ephemeral.ts"
   },
   {
-    "from": "scripts/lib/refresh-cycle.mjs",
-    "to": "scripts/check-fleet-toolchain.mjs"
-  },
-  {
-    "from": "scripts/lib/refresh-cycle.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/lib/runner-var.mjs",
-    "to": "scripts/lib/queue-health.mjs"
-  },
-  {
     "from": "scripts/lib/site-token.mjs",
     "to": "scripts/lib/yaml-comments.mjs"
   },
   {
     "from": "scripts/lib/slice-inventory-run.mjs",
     "to": "scripts/lib/collect-offers.mjs"
-  },
-  {
-    "from": "scripts/lib/slice-inventory-run.mjs",
-    "to": "scripts/lib/expected-down.mjs"
   },
   {
     "from": "scripts/lib/slice-inventory-run.mjs",
@@ -276,18 +164,6 @@
     "to": "src/lib/node-users.ts"
   },
   {
-    "from": "scripts/node-status.mjs",
-    "to": "scripts/lib/doctor.mjs"
-  },
-  {
-    "from": "scripts/node-status.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/node-users-cutover.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
     "from": "scripts/node-users.mjs",
     "to": "scripts/lib/emit.mjs"
   },
@@ -300,40 +176,8 @@
     "to": "scripts/node-users-cutover.mjs"
   },
   {
-    "from": "scripts/prove-job.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/prove-job.mjs",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "scripts/provision-fleet.mjs",
-    "to": "scripts/lib/doctor.mjs"
-  },
-  {
-    "from": "scripts/reboot-claws.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/reconcile-fleet-runners.mjs",
-    "to": "scripts/lib/demand-derive.mjs"
-  },
-  {
-    "from": "scripts/reconcile-fleet-runners.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/reconcile-fleet-runners.mjs",
-    "to": "scripts/lib/job-metrics.mjs"
-  },
-  {
     "from": "scripts/reconcile-fleet-runners.mjs",
     "to": "scripts/lib/placement-rules.mjs"
-  },
-  {
-    "from": "scripts/reconcile-fleet-runners.mjs",
-    "to": "scripts/lib/queue-health.mjs"
   },
   {
     "from": "scripts/reconcile-fleet-runners.mjs",
@@ -356,52 +200,16 @@
     "to": "scripts/lib/slice-inventory-run.mjs"
   },
   {
-    "from": "scripts/traffic-status.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
     "from": "src/capabilities.ts",
     "to": "src/lib/measured.ts"
   },
   {
-    "from": "src/ci-alerts.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/ci-runner-fallback.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/claw-reboot.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/conditional-cache-store.ts",
-    "to": "src/host.ts"
-  },
-  {
     "from": "src/fleet-loop.ts",
     "to": "src/fleet-report-types.ts"
   },
   {
-    "from": "src/fleet-loop.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/fleet-loop.ts",
-    "to": "src/runners/census.ts"
-  },
-  {
     "from": "src/gh-budget.ts",
     "to": "src/fleet-report-types.ts"
-  },
-  {
-    "from": "src/gh-budget.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/job-history.ts",
-    "to": "src/host.ts"
   },
   {
     "from": "src/job-history.ts",
@@ -421,10 +229,6 @@
   },
   {
     "from": "src/job-rollups.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/job-rollups.ts",
     "to": "src/lib/job-kind.ts"
   },
   {
@@ -434,22 +238,6 @@
   {
     "from": "src/node-reservation.ts",
     "to": "src/host-lease.ts"
-  },
-  {
-    "from": "src/node-reservation.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/node-shell.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/routes/fleet.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/run-listing-gap.ts",
-    "to": "src/host.ts"
   },
   {
     "from": "src/runner-health.ts",
@@ -462,10 +250,6 @@
   {
     "from": "src/runner-health.ts",
     "to": "src/fleet-report-types.ts"
-  },
-  {
-    "from": "src/runner-health.ts",
-    "to": "src/host.ts"
   },
   {
     "from": "src/runner-health.ts",
@@ -496,24 +280,12 @@
     "to": "src/fleet-loop.ts"
   },
   {
-    "from": "src/runner-supervision.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/runners/backstop-force.ts",
-    "to": "src/host.ts"
-  },
-  {
     "from": "src/runners/backstop.ts",
     "to": "src/fleet-report-types.ts"
   },
   {
     "from": "src/runners/claw-state.ts",
     "to": "src/fleet-report-types.ts"
-  },
-  {
-    "from": "src/runners/decision-log.ts",
-    "to": "src/host.ts"
   },
   {
     "from": "src/runners/decision-log.ts",
@@ -528,44 +300,8 @@
     "to": "src/runners/ephemeral.ts"
   },
   {
-    "from": "src/runners/dispatch-daily.ts",
-    "to": "src/host.ts"
-  },
-  {
     "from": "src/runners/dispatch-pass.ts",
     "to": "src/fleet-report-types.ts"
-  },
-  {
-    "from": "src/runners/dispatch-pass.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/runners/dispatch-pass.ts",
-    "to": "src/runners/census.ts"
-  },
-  {
-    "from": "src/runners/dispatch-tick.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/runners/drain.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/runners/ephemeral-exec.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/runners/ephemeral-tick.ts",
-    "to": "src/host.ts"
-  },
-  {
-    "from": "src/runners/ephemeral-tick.ts",
-    "to": "src/runners/disk-watch.ts"
-  },
-  {
-    "from": "src/runners/hosting-record.ts",
-    "to": "src/host.ts"
   },
   {
     "from": "src/runners/node-regression.ts",
@@ -582,10 +318,6 @@
   {
     "from": "src/runners/prove-job.ts",
     "to": "src/runners/ephemeral.ts"
-  },
-  {
-    "from": "src/scheduled-converger.ts",
-    "to": "src/host.ts"
   },
   {
     "from": "src/server.ts",

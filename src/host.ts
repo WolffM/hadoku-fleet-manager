@@ -31,7 +31,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { measuredFacetPaths } from './lib/measured.js';
+import { measuredFacetPaths } from './lib/measured-paths.js';
 
 /** Mirrors mgmt-api's discord-sink result. Structural, so the host's real one fits. */
 export interface PostDiscordResult {
