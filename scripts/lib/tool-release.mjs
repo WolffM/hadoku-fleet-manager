@@ -465,7 +465,7 @@ export async function lookupGithubRelease(source, opts = {}) {
  * lookup goes with which `source.kind` — `createReleaseLookup`'s whole reason
  * to exist is that every real caller shares it.
  */
-function dispatchLookup(source, opts) {
+export function dispatchLookup(source, opts) {
 	if (source?.kind === 'adoptium') return lookupAdoptiumLatest(source, opts);
 	if (source?.kind === 'maven-metadata') return lookupMavenLatest(source, opts);
 	if (source?.kind === 'github-release') return lookupGithubRelease(source, opts);

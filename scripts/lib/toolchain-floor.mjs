@@ -12,7 +12,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { nodeOffer } from '../../dist/capabilities.js';
 import { hostsCiDocker, hostsPm2Services, isGuestNode } from '../../dist/lib/node-role.js';
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
-import { DEFAULT_MIN_AGE_MINUTES, lookupLatest, parseVersion } from './tool-release.mjs';
+import { DEFAULT_MIN_AGE_MINUTES, dispatchLookup, parseVersion } from './tool-release.mjs';
 
 /**
  * The installed-RAM floor jdk21/maven apply through `when` (cardtable#5,
@@ -857,20 +857,20 @@ export function isVersionManaged(tool) {
  *
  * @param {object} tool  a REPAIRS entry
  * @param {object} [opts]
- * @param {typeof lookupLatest} [opts.lookup]  injectable; defaults to a bare
- *        npm lookup, which is right for a presence-only or npm-sourced tool
- *        and wrong for `jdk21`/`maven`'s non-npm sources — every real caller
- *        (bootcamp, the refresh cycle, the doctor) passes
- *        `createReleaseLookup()`'s result instead, which dispatches on the
- *        tool's own `latest.source.kind` (npm, Adoptium or Maven Central) and
- *        is the one this function should always be handed in production.
+ * @param {typeof dispatchLookup} [opts.lookup]  injectable; defaults to
+ *        `dispatchLookup`, which reads the tool's own `latest.source.kind`
+ *        (npm, Adoptium, Maven Central or a GitHub release). The default was a
+ *        bare npm lookup until converge-toolchain, the one caller that passed
+ *        none, failed jdk21/maven with "tool declares no upstream package".
+ *        A caller asking for many nodes still passes `createReleaseLookup()`
+ *        so upstream is asked once per run.
  * @returns {Promise<{status:'presence-only'}
  *          | {status:'known', version:string, publishedAt:string}
  *          | {status:'unknown', reason:string}>}
  */
 export async function resolveInstallTarget(tool, opts = {}) {
 	if (!isVersionManaged(tool)) return { status: 'presence-only' };
-	const { lookup = lookupLatest, ...rest } = opts;
+	const { lookup = dispatchLookup, ...rest } = opts;
 	const latest = await lookup(tool.latest.source, { minAge: minAgeOf(tool), ...rest });
 	if (latest.status !== 'known') return { status: 'unknown', reason: latest.reason };
 	return { status: 'known', version: latest.version, publishedAt: latest.publishedAt };

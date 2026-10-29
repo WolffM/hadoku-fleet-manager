@@ -514,6 +514,28 @@ test('resolveInstallTarget: an unresolved lookup is unknown with the reason, nev
 	assert.equal(r.version, undefined);
 });
 
+/**
+ * With NO lookup injected, a non-npm source still reaches its own upstream.
+ * converge-toolchain passed none, and the npm-only default answered jdk21 and
+ * maven with "tool declares no upstream package" on a live cutover.
+ */
+test('resolveInstallTarget: with no lookup injected, jdk21 and maven ask their own upstream, not npm', async () => {
+	for (const [id, host] of [
+		['jdk21', 'api.adoptium.net'],
+		['maven', 'repo1.maven.org'],
+	]) {
+		const asked = [];
+		const fetch = async (url) => {
+			asked.push(String(url));
+			return { ok: false, status: 503 };
+		};
+		const r = await resolveInstallTarget(REPAIRS[id], { fetch, attempts: 1 });
+		assert.equal(r.status, 'unknown', id);
+		assert.doesNotMatch(r.reason, /no upstream package/, id);
+		assert.ok(asked.length && asked.every((u) => new URL(u).host === host), `${id} asked ${asked}`);
+	}
+});
+
 // ---------------------------------------------------------------------------
 // The claude install/link TEXT, EXECUTED under bash with stub curl/sudo and a
 // fake HOME — the scripts decide whether a binary is moved, so they are run, not

@@ -59,6 +59,7 @@ import {
 	resolveInstallTarget,
 } from './lib/toolchain-floor.mjs';
 import { createLiveDeps, runRefreshCycle } from './lib/refresh-cycle.mjs';
+import { createReleaseLookup } from './lib/tool-release.mjs';
 import { defaultSeedDeps, isSeedFinding, seedNode } from './lib/capability-seeds.mjs';
 import {
 	TOKEN_ENV,
@@ -197,6 +198,9 @@ function observe(node, packages, repairs) {
  * names, and a repair that installs FOR the ci user (docker) is told who that
  * is. The raw repair text has neither and died on `TARGET_VERSION: unbound`.
  */
+// Upstream is asked once per run, however many nodes need the same release.
+const releaseLookup = createReleaseLookup();
+
 async function converge(node, missingPkgs, brokenCaps, manifest) {
 	const steps = [];
 	const failed = [];
@@ -209,7 +213,7 @@ async function converge(node, missingPkgs, brokenCaps, manifest) {
 	for (const id of brokenCaps) {
 		let version;
 		if (isVersionManaged(REPAIRS[id])) {
-			const resolved = await resolveInstallTarget(REPAIRS[id]);
+			const resolved = await resolveInstallTarget(REPAIRS[id], { lookup: releaseLookup });
 			if (resolved.status !== 'known') {
 				failed.push(
 					`${id}: could not determine the debounced release to install: ${resolved.reason}`
