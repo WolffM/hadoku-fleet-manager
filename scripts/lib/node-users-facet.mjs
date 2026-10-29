@@ -23,9 +23,20 @@
  * true, and worth seeing, but not drift from a declaration nobody made yet.
  */
 import { ciIsSeparate, nodeHome, nodeUser } from '../../dist/lib/node-users.js';
+import { TENANT_USER_SUFFIXES } from './tenant-registry.mjs';
 
 /** Groups a ci user may be in besides its own: GPU device access, granted where a GPU label is proven. */
 export const ALLOWED_CI_GROUPS = ['video', 'render'];
+
+/**
+ * Which accounts {@link judgeNodeAccounts} must claim: the human uid range, any
+ * account with a login shell, and any named like a tenant's user (a tenant user
+ * is a SYSTEM account, below 1000, with no shell). root is the system's own.
+ */
+const ACCOUNT_SELECT =
+	`$3!=0 && (($3>=1000 && $3<60000) || $7 !~ /(nologin|false|sync|shutdown|halt)$/` +
+	TENANT_USER_SUFFIXES.map((x) => ` || $1 ~ /${x}$/`).join('') +
+	`)`;
 
 /** `KEY=value` lines between markers, like the hosting observation. */
 export function usersObserveScript(machine) {
@@ -60,6 +71,24 @@ done
 echo "runnerProcs=$n"
 echo "runnersNotCi=$wrong"
 echo "secretArgv=$argv"
+# Every account that must be claimed: name:uid:shell:groups:sudo:slice-tasks.
+# slice-tasks is hosting-<app>.slice's pids.current for a tenant-named account:
+# the kernel's count over the whole subtree, which admin can read even where a
+# tenant delegates sub-cgroups it cannot enter. '-' is no such slice, 'U' a
+# slice whose count could not be read.
+echo "accountsRead=$(getent passwd >/dev/null && echo yes || echo no)"
+getent passwd | awk -F: '${ACCOUNT_SELECT} {print $1":"$3":"$7}' | while IFS=: read -r name uid shell; do
+	groups=$(id -Gn "$name" 2>/dev/null | tr ' ' ',')
+	sudo=$(sudo -n -l -U "$name" 2>/dev/null | grep -c 'may run' || true)
+	tasks=-
+	for suffix in ${TENANT_USER_SUFFIXES.join(' ')}; do
+		case "$name" in *"$suffix")
+			c="/sys/fs/cgroup/hosting.slice/hosting-\${name%"$suffix"}.slice"
+			[ -d "$c" ] && tasks=$(cat "$c/pids.current" 2>/dev/null || echo U) ;;
+		esac
+	done
+	echo "account=$name:$uid:$shell:$groups:$sudo:$tasks"
+done
 echo USERS-END
 `;
 }
@@ -71,9 +100,26 @@ export function parseUsersObservation(stdout) {
 	const b = text.indexOf('USERS-END');
 	if (a === -1 || b === -1 || b < a) return null;
 	const kv = {};
+	const accounts = [];
 	for (const line of text.slice(a, b).split('\n')) {
 		const i = line.indexOf('=');
-		if (i > 0) kv[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+		if (i <= 0) continue;
+		const key = line.slice(0, i).trim();
+		const value = line.slice(i + 1).trim();
+		if (key !== 'account') {
+			kv[key] = value;
+			continue;
+		}
+		const [name, uid, shell, groups, sudo, tasks] = value.split(':');
+		accounts.push({
+			name,
+			uid: Number(uid),
+			shell,
+			groups: groups ? groups.split(',') : [],
+			sudo: /^\d+$/.test(sudo ?? '') ? Number(sudo) : null,
+			/** null when there is no slice; 'unread' when there is one and its count was not readable. */
+			sliceTasks: /^\d+$/.test(tasks ?? '') ? Number(tasks) : tasks === 'U' ? 'unread' : null,
+		});
 	}
 	const num = (k) => (kv[k] === undefined || kv[k] === '' ? null : Number(kv[k]));
 	return {
@@ -92,6 +138,8 @@ export function parseUsersObservation(stdout) {
 		runnerProcs: num('runnerProcs'),
 		runnersNotCi: num('runnersNotCi'),
 		secretArgv: num('secretArgv'),
+		/** null when the account database could not be read: could not look. */
+		accounts: kv.accountsRead === 'yes' ? accounts : null,
 	};
 }
 
@@ -165,4 +213,69 @@ export function judgeNodeUsers(machine, obs) {
 			`${obs.runnersNotCi} of ${obs.runnerProcs} runner process(es) do not run as ${ci}: something still mints as another user`
 		);
 	return { state: findings.length ? 'drift' : 'ok', findings };
+}
+
+const NO_LOGIN = /\/(nologin|false)$/;
+
+/**
+ * Claim every account on a node from the record that creates it
+ * (docs/planning/node-users-2026-10-27.md §2, phase 2). Only `fleet node-users`
+ * asks this; node-status, which tenants read, does not.
+ *
+ *   admin, ci           `machines.<node>.users`, through the registry
+ *   <app>-agent / -svc  a registered tenant's user (the tenant registry). It
+ *                       must not log in, sudo, or share a group with ci:
+ *                       BLOCKING. With nothing running in its slice it is the
+ *                       user `fleet hosting --remove` keeps by design: ADVISORY
+ *   anything else       claimed by no role and no tenant: BLOCKING
+ *
+ * Whether a RUNNING tenant is declared on this node is the hosting record's
+ * question, not this one: node-users reads config, never the tenancy domain's
+ * records (layer-map.mjs).
+ *
+ * @param {object} machine
+ * @param {ReturnType<typeof parseUsersObservation>} obs
+ * @param {{ app: string, user: string }[]} registered every registered tenant's app and user
+ */
+export function judgeNodeAccounts(machine, obs, registered) {
+	const findings = [];
+	if (!obs || obs.accounts === null) {
+		findings.push({
+			class: 'blocking',
+			category: 'accounts-unobserved',
+			why: "could not read the node's account database, so who may log in or run here is unknown",
+		});
+		return findings;
+	}
+	const admin = nodeUser(machine, 'admin');
+	const ci = ciIsSeparate(machine) ? nodeUser(machine, 'ci') : null;
+	const byUser = new Map(registered.map((t) => [t.user, t]));
+	for (const acct of obs.accounts) {
+		if (acct.name === admin || acct.name === ci) continue;
+		const tenant = byUser.get(acct.name);
+		if (!tenant) {
+			findings.push({
+				class: 'blocking',
+				category: 'unclaimed-user',
+				why: `${acct.name} (uid ${acct.uid}, ${acct.shell}) is claimed by no role in machines.<node>.users and no registered tenant`,
+			});
+			continue;
+		}
+		const block = (why) => findings.push({ class: 'blocking', category: 'tenant-user-drift', why });
+		if (!NO_LOGIN.test(acct.shell)) block(`${acct.name} has a login shell, ${acct.shell}`);
+		if (acct.sudo === null) block(`could not read ${acct.name}'s sudo rights`);
+		else if (acct.sudo > 0) block(`${acct.name} may run sudo`);
+		if (ci && acct.groups.includes(ci)) block(`${acct.name} shares the group ${ci} with CI`);
+		if (acct.sliceTasks === 'unread')
+			block(
+				`could not read whether ${tenant.app} runs here: hosting-${tenant.app}.slice has no readable pids.current`
+			);
+		else if (!(acct.sliceTasks > 0))
+			findings.push({
+				class: 'advisory',
+				category: 'tenant-user-kept',
+				why: `${acct.name} is registered tenant ${tenant.app}'s user with nothing running in its slice here; \`fleet hosting --remove\` keeps the user and home by design`,
+			});
+	}
+	return findings;
 }

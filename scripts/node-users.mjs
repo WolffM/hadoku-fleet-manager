@@ -12,9 +12,14 @@
  * (`node-users-cutover.mjs`, docs/planning/node-users-2026-10-27.md P3) is what
  * creates and moves a ci user, and this reads the result.
  *
- * EXIT 0 only when every node answered and none that HAS been cut over has
- * drifted. A node still running CI as admin is reported, with what that means,
+ * EXIT 0 only when every node answered and none carries a BLOCKING finding:
+ * a cut-over node that drifted, a runner secret in argv, or an account nothing
+ * claims. A node still running CI as admin is reported, with what that means,
  * but it is the state the plan is moving away from, not a failure of this run.
+ *
+ * Every account on a node is claimed from the record that creates it (phase 2,
+ * `judgeNodeAccounts`): admin and ci from the manifest, a tenant's user from the
+ * tenant registry.
  */
 import process from 'node:process';
 
@@ -22,15 +27,18 @@ import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, readDrains } from './lib/expected-down.mjs';
 import { loadManifest, machineArg, runOn, selectNodes } from './lib/fleet-exec.mjs';
 import {
+	judgeNodeAccounts,
 	judgeNodeUsers,
 	parseUsersObservation,
 	usersObserveScript,
 } from './lib/node-users-facet.mjs';
+import { stateDir } from './lib/paths.mjs';
+import { readTenantRegistry, registeredTenantUsers } from './lib/tenant-registry.mjs';
 
 const emitter = createEmitter({ argv: process.argv });
 const log = (...a) => emitter.log(...a);
 
-async function checkNode(node, machine, drains) {
+async function checkNode(node, machine, drains, tenants) {
 	const res = await runOn(node, usersObserveScript(machine), {
 		as: 'admin',
 		timeoutMs: 30_000,
@@ -46,7 +54,15 @@ async function checkNode(node, machine, drains) {
 			expectedDown: deferralFor(node, drains).deferred,
 		};
 	}
-	return { machine: node, ok: true, ...judgeNodeUsers(machine, obs), observed: obs };
+	const users = judgeNodeUsers(machine, obs);
+	const accounts = judgeNodeAccounts(machine, obs, tenants);
+	return {
+		machine: node,
+		ok: true,
+		state: users.state,
+		findings: [...users.findings, ...accounts],
+		observed: obs,
+	};
 }
 
 async function main() {
@@ -64,7 +80,19 @@ async function main() {
 		return;
 	}
 	const drains = readDrains();
-	const results = await Promise.all(nodes.map(([n, m]) => checkNode(n, m, drains)));
+	let tenants;
+	try {
+		tenants = registeredTenantUsers(readTenantRegistry(stateDir()));
+	} catch (err) {
+		// A registry that cannot be read leaves every tenant user unclaimable:
+		// could not look, not "no tenants".
+		const error = `could not read the tenant registry: ${err.message}`;
+		log(error);
+		if (emitter.json) emitter.emit({ ok: false, error, results: [], skippedByRole });
+		process.exitCode = 1;
+		return;
+	}
+	const results = await Promise.all(nodes.map(([n, m]) => checkNode(n, m, drains, tenants)));
 	for (const r of results) {
 		if (!r.ok) {
 			log(`── ${r.machine}  [${r.expectedDown ? 'expected down' : 'UNREADABLE'}] ${r.error}`);
@@ -74,7 +102,7 @@ async function main() {
 		for (const f of r.findings) log(`   ${f.class.padEnd(9)} ${f.category}: ${f.why}`);
 	}
 	const unread = results.filter((r) => !r.ok && !r.expectedDown);
-	const drifted = results.filter((r) => r.ok && r.state !== 'ok' && r.state !== 'not-cut-over');
+	const drifted = results.filter((r) => r.ok && r.findings.some((f) => f.class === 'blocking'));
 	const pending = results.filter((r) => r.state === 'not-cut-over').length;
 	const ok = !unread.length && !drifted.length;
 	log(

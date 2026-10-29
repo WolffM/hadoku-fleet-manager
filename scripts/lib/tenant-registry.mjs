@@ -74,6 +74,23 @@ export function readTenantRegistry(dir) {
 	return { tenants: doc.tenants ?? {} };
 }
 
+/**
+ * The suffixes a tenant's user carries (`<app>-agent`, `<app>-svc`), read off
+ * the runtimes that create them, so a new runtime is listed without an edit
+ * anywhere that matches tenant users on a node.
+ */
+export const TENANT_USER_SUFFIXES = Object.values(RUNTIMES).map((r) =>
+	r.names('APP').user.replace(/^APP/, '')
+);
+
+/** Every registered tenant's app and the user it runs as on a node. */
+export function registeredTenantUsers(registry) {
+	return Object.values(registry.tenants).map((e) => {
+		const spec = tenantSpecFrom(e.request);
+		return { app: spec.app, user: spec.user };
+	});
+}
+
 /** The spec for a registered tenant, or null when it is not registered. */
 export function tenantSpec(registry, app) {
 	const entry = registry.tenants[app];
