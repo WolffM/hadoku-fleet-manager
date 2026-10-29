@@ -100,6 +100,20 @@ WantedBy=multi-user.target`,
 	 */
 	pm2: {
 		kind: 'service',
+		/**
+		 * Files the tenant's home must hold, written by the door (only when they
+		 * differ) and read back by the judge. The app layer builds a service as
+		 * its user with `pnpm install`, and @wolffm packages come from GitHub
+		 * Packages: without this mapping that install goes out unauthenticated
+		 * and 401s (watchparty's first deploy on claw-6, 2026-10-29). TOKENLESS,
+		 * like every fleet `~/.npmrc`: pnpm expands NODE_AUTH_TOKEN from the
+		 * deploy's own environment.
+		 */
+		homeFiles: {
+			'.npmrc':
+				'//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n' +
+				'@wolffm:registry=https://npm.pkg.github.com\n',
+		},
 		names: (app) => ({
 			user: `${app}-svc`,
 			service: `pm2-${app}-svc.service`,

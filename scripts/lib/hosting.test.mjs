@@ -20,6 +20,7 @@ import {
 	removeScript,
 } from './hosting.mjs';
 
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { validateHostingRequest } from './hosting-request.mjs';
 import { tenantSpecFrom } from './tenant-registry.mjs';
@@ -448,4 +449,54 @@ test("after a cutover, CI's headroom is set in the ci user's manager, found by u
 		removeScript(CARDTABLE, '192.0.2.10', { ciUser: 'hadoku-ci' }),
 		/^CI_USER='hadoku-ci'$/m
 	);
+});
+
+/** archivebot's spec: a pm2 `service` tenant, the runtime that declares home files. */
+const ARCHIVEBOT = tenantSpecFrom(
+	validateHostingRequest(
+		JSON.parse(readFileSync(new URL('./fixtures/hosting-archivebot.json', import.meta.url), 'utf8'))
+	).request
+);
+const NPMRC_SHA = createHash('sha256')
+	.update(
+		'//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n@wolffm:registry=https://npm.pkg.github.com\n'
+	)
+	.digest('hex');
+
+test("a pm2 tenant's home gets the tokenless .npmrc its deploy's install needs; an agent's does not", () => {
+	const ctl = { lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null };
+	const s = deployScript(ARCHIVEBOT, { memoryMb: 1024, cores: 1 }, ctl, { shared: true });
+	assert.match(s, new RegExp(`!= "${NPMRC_SHA}" \\]; then`));
+	assert.match(
+		s,
+		/install -m 0600 -o "\$AGENT_USER" -g "\$AGENT_USER" \/dev\/stdin '\/var\/lib\/archivebot-svc\/\.npmrc'/
+	);
+	assert.doesNotMatch(s, /NODE_AUTH_TOKEN/, 'the text travels base64, never as shell');
+	assert.doesNotMatch(deployScript(CARDTABLE, { memoryMb: 4096, cores: 4 }, ctl), /\.npmrc/);
+	assert.match(observeScript(ARCHIVEBOT, 'ci'), /homeFiles=\.npmrc:/);
+});
+
+test('a pm2 tenant whose .npmrc is missing or changed is not guaranteed; the one the fleet wrote is', () => {
+	const declared = { tenant: 'archivebot', memoryMb: 1024, cores: 1, port: ARCHIVEBOT.port };
+	const files = (homeFiles) =>
+		judgeHosting(
+			declared,
+			parseObserved(answer({ homeStat: 'archivebot-svc:archivebot-svc:700', homeFiles })),
+			'shared',
+			REACH,
+			ARCHIVEBOT
+		).findings.filter((f) => f.category === 'hosting-files');
+	assert.match(
+		files('.npmrc:')
+			.map((f) => f.why)
+			.join(),
+		/\.npmrc is missing/
+	);
+	assert.match(
+		files('.npmrc:0000')
+			.map((f) => f.why)
+			.join(),
+		/not what the fleet wrote/
+	);
+	assert.deepEqual(files(`.npmrc:${NPMRC_SHA}`), []);
 });

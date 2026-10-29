@@ -51,6 +51,8 @@
  * quota, so a tenant should size its pools explicitly
  * (`-XX:ActiveProcessorCount=N`) rather than trust the JVM's guess.
  */
+import { createHash } from 'node:crypto';
+
 import {
 	AGENT_OOM_SCORE_ADJ,
 	CI_OOM_SCORE_ADJ,
@@ -141,6 +143,29 @@ const assign = (vars) =>
 
 /** Single-quote for bash. Every value here is ours, but a quote costs nothing. */
 export const shellQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/** The home files a tenant's runtime declares (lib/hosting-runtimes.mjs), name → text. */
+const homeFilesOf = (t) => (t && t.app !== NO_TENANT.app ? (runtimeFor(t).homeFiles ?? {}) : {});
+
+const sha256 = (text) => createHash('sha256').update(text).digest('hex');
+
+/**
+ * Write each declared home file, as the tenant, 0600, only when its text
+ * differs: the bytes travel base64 so nothing in them is ever shell.
+ */
+function homeFilesScript(t) {
+	return Object.entries(homeFilesOf(t))
+		.map(([f, text]) => {
+			const path = shellQuote(`${t.home}/${f}`);
+			const b64 = Buffer.from(text).toString('base64');
+			return (
+				`if [ "$($S sha256sum ${path} 2>/dev/null | cut -c1-64)" != "${sha256(text)}" ]; then\n` +
+				`\tprintf '%s' '${b64}' | base64 -d | $S install -m 0600 -o "$AGENT_USER" -g "$AGENT_USER" /dev/stdin ${path}\n` +
+				'fi'
+			);
+		})
+		.join('\n');
+}
 
 const tenantVars = (t) => ({
 	TENANT: t.app,
@@ -310,6 +335,7 @@ if ! id -u "$AGENT_USER" >/dev/null 2>&1; then
 	$S useradd --system --user-group --home-dir "$AGENT_HOME" --no-create-home --shell /usr/sbin/nologin "$AGENT_USER"
 fi
 $S install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$AGENT_HOME"
+${homeFilesScript(t)}
 ${t.exec ? '$S install -d -o root -g root -m 0755 "$(dirname "$EXEC")"' : ''}
 # Write a unit only when its text changed, and remember which did: a re-deploy
 # that changes nothing must not restart the agent (it kills the tenant's JVMs).
@@ -543,6 +569,11 @@ if pw=$(getent passwd "$AGENT_USER"); then
 	echo "agentSudo=$(sudo -n -l -U "$AGENT_USER" 2>/dev/null | grep -c 'may run' || true)"
 fi
 echo "homeStat=$(stat -c '%U:%G:%a' "$AGENT_HOME" 2>/dev/null)"
+echo "homeFiles=${Object.keys(homeFilesOf(t))
+		.map(
+			(f) => `${f}:$(sudo -n sha256sum ${shellQuote(`${t.home}/${f}`)} 2>/dev/null | cut -c1-64)`
+		)
+		.join(',')}"
 echo "execDirStat=$(stat -c '%U:%G:%a' "$(dirname "$EXEC")" 2>/dev/null)"
 echo "execStat=$(stat -c '%U:%G:%a' "$EXEC" 2>/dev/null)"
 echo "agentInstalled=$([ -x "$EXEC" ] && echo yes || echo no)"
@@ -613,6 +644,15 @@ export function parseObserved(stdout) {
 		ciGroups: str('ciGroups')?.split(/\s+/) ?? null,
 		agentSudo: num('agentSudo'),
 		homeStat: str('homeStat'),
+		homeFiles: Object.fromEntries(
+			(str('homeFiles') ?? '')
+				.split(',')
+				.filter(Boolean)
+				.map((pair) => [
+					pair.slice(0, pair.lastIndexOf(':')),
+					pair.slice(pair.lastIndexOf(':') + 1) || null,
+				])
+		),
 		execDirStat: str('execDirStat'),
 		execStat: str('execStat'),
 		agentInstalled: kv.agentInstalled === 'yes',
@@ -800,7 +840,12 @@ export function judgeHosting(declared, obs, mode = 'whole', reach = null, t = nu
 		},
 		agentProcess:
 			obs.listenerPid === null ? null : { uid: obs.listenerUid, oomScoreAdj: obs.listenerOom },
-		files: { home: obs.homeStat, execDir: obs.execDirStat, exec: obs.execStat },
+		files: {
+			home: obs.homeStat,
+			execDir: obs.execDirStat,
+			exec: obs.execStat,
+			homeFiles: obs.homeFiles,
+		},
 		ci: {
 			workers: obs.ciWorkers,
 			listeners: obs.ciListeners,
@@ -864,6 +909,14 @@ export function judgeHosting(declared, obs, mode = 'whole', reach = null, t = nu
 	}
 	if (!home || home.owner !== t.user || home.mode !== '700')
 		block('hosting-files', `${t.home} is ${obs.homeStat ?? 'missing'}, not ${t.user}-owned 0700`);
+	for (const [f, text] of Object.entries(homeFilesOf(t))) {
+		const seen = obs.homeFiles?.[f] ?? null;
+		if (seen !== sha256(text))
+			block(
+				'hosting-files',
+				`${t.home}/${f} is ${seen ? 'not what the fleet wrote' : 'missing'}: the ${t.app} deploy's install needs it`
+			);
+	}
 	for (const [path, s] of t.exec
 		? [
 				[t.exec.replace(/\/[^/]+$/, ''), execDir],
