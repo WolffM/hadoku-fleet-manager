@@ -51,38 +51,35 @@ import {
 	unmeasured,
 	validateResidentRow,
 } from './lib/service-inventory.mjs';
-import { keepStdoutWhole } from './lib/emit.mjs';
+import { createEmitter } from './lib/emit.mjs';
 import { stateDir } from './lib/paths.mjs';
 import { hubRepo } from '../dist/lib/fleet-config.js';
 
-// STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
-// and on a pipe `process.exit` throws away whatever the stream still had
-// queued — measured on this host, 149,133 bytes in and 146,176 out, which
-// `JSON.parse` then rejects mid-string. `keepStdoutWhole` puts fd 1 in
-// blocking mode so there is nothing left to lose. Issue #33; the shared
-// emitter calls the same function for the scripts that use it.
-keepStdoutWhole();
+// Every stdout write goes through the shared emitter: `--slices --write --json`
+// is ci:slice-inventory's contract, and the emitter keeps fd 1 whole so
+// `process.exit` cannot cut the document off on a pipe (issue #33).
+const out = createEmitter({ argv: process.argv });
 
 const ARGV = process.argv.slice(2);
-const JSON_OUT = ARGV.includes('--json');
+const JSON_OUT = out.json;
 const WRITE = ARGV.includes('--write');
 const WINDOW_MS = Number(ARGV[ARGV.indexOf('--window-ms') + 1]) || 10_000;
 
 if (ARGV.includes('--slices')) {
 	const { runSliceInventory } = await import('./lib/slice-inventory-run.mjs');
 	const r = await runSliceInventory({ windowMs: WINDOW_MS, write: WRITE });
-	if (JSON_OUT) console.log(JSON.stringify(r, null, 2));
+	if (JSON_OUT) out.emit(r);
 	else {
 		const gb = (n) => (typeof n === 'number' ? `${(n / 1e9).toFixed(2)} GB` : 'unmeasured');
-		console.log(`hosting slices at ${r.at} (${r.declaredNodes} node(s) declare one):`);
+		out.log(`hosting slices at ${r.at} (${r.declaredNodes} node(s) declare one):`);
 		for (const row of r.rows) {
-			console.log(
-				`  ${`${row.host}/${row.name}`.padEnd(28)} peak=${gb(row.ram).padEnd(10)} now=${gb(row.detail.memoryCurrent).padEnd(10)} ` +
+			out.log(
+				`  ${`${row.host}/${row.name}`.padEnd(28)} ram=${gb(row.ram).padEnd(10)} peak=${gb(row.detail.memoryPeak).padEnd(10)} ` +
 					`cpu=${typeof row.cpu === 'number' ? `${row.cpu}m` : 'unmeasured'}`
 			);
 		}
 		if (r.write) {
-			console.log(
+			out.log(
 				`\nwrote ${r.write.written} slice row(s) -> ${r.write.path} (replaced ${r.write.replaced}` +
 					`${r.write.removedHosts.length ? `, removed ${r.write.removedHosts.join(', ')}` : ''})`
 			);
@@ -948,25 +945,25 @@ const report = {
 };
 
 if (JSON_OUT) {
-	console.log(JSON.stringify(report, null, 2));
+	out.emit(report);
 } else {
 	const gb = (n) => (isMeasured(n) ? `${(n / 1e9).toFixed(2)} GB` : 'unmeasured');
-	console.log(`resident inventory on ${NODE} at ${AT}`);
+	out.log(`resident inventory on ${NODE} at ${AT}`);
 	for (const kind of ['pm2', 'cron', 'checkout', 'mirror']) {
 		const of = rows.filter((r) => r.kind === kind);
-		console.log(`\n${kind} (${of.length}):`);
+		out.log(`\n${kind} (${of.length}):`);
 		for (const r of of) {
-			console.log(
+			out.log(
 				`  ${r.name.padEnd(30)} ram=${gb(r.ram).padEnd(12)} cpu=${String(isMeasured(r.cpu) ? `${r.cpu}m` : 'unmeasured').padEnd(12)} ` +
 					`disk=${gb(r.disk).padEnd(12)} net=${isMeasured(r.net) ? `${r.net} B/s` : 'unmeasured'}`
 			);
 		}
 	}
-	console.log(
+	out.log(
 		`\nslice ${slice.cgroup}: current=${gb(slice.memoryCurrent)} peak=${gb(slice.memoryPeak)} procs=${slice.procs} childCgroups=${slice.childCgroups}`
 	);
 	if (writeResult) {
-		console.log(
+		out.log(
 			`\nwrote ${writeResult.written} resident row(s) -> ${writeResult.path} ` +
 				`(kept ${writeResult.kept} non-resident line(s), replaced ${writeResult.replaced})`
 		);

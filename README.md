@@ -188,29 +188,30 @@ mgmt-api cron jobs run this CLI and parse its **stdout as JSON, before looking
 at the exit code** — these gates exit non-zero ON FINDINGS, so reading the exit
 code first would turn every real finding into "the checker broke".
 
-| command                                     | cron job                |
-| ------------------------------------------- | ----------------------- |
-| `fleet drain-check --json`                  | `ci:drain-enforced`     |
-| `fleet benchmark --due 30 --cadence --json` | `ci:fleet-benchmark`    |
-| `fleet reconcile --json`                    | `ci:fleet-coverage`     |
-| `fleet toolchain --json`                    | `ci:fleet-toolchain`    |
-| `fleet converge-toolchain --refresh --json` | `ci:toolchain-refresh`  |
-| `fleet header-audit --json`                 | `ci:header-fleet`       |
-| `fleet identity-model --fleet --json`       | `ci:identity-model`     |
-| `fleet cleanup --json --confirm`            | `ci:claw-cleanup`       |
-| `fleet check-runner-var --json`             | `ci:runner-var`         |
-| `fleet check-site-token --json`             | `ci:site-token`         |
-| `fleet egress-slices --json`                | `ci:egress-slices`      |
-| `fleet queue-health --json`                 | `ci:queue-health`       |
-| `fleet reap-trend --json`                   | `ci:reap-timeout-trend` |
-| `fleet preflight --json`                    | `ci:fleet-preflight`    |
-| `fleet srv-drift --json`                    | `ci:srv-drift`          |
-| `fleet inventory --check --json`            | `ci:fleet-inventory`    |
-| `fleet doctor --cadence --write --json`     | `ci:health-refresh`     |
-| `fleet health-freshness --json`             | `ci:health-freshness`   |
-| `fleet node-users --json`                   | `ci:node-users`         |
-| `fleet runner-units --json`                 | `ci:runner-units`       |
-| `fleet fleet-kills --days 2 --json`         | `ci:fleet-kills`        |
+| command                                           | cron job                |
+| ------------------------------------------------- | ----------------------- |
+| `fleet drain-check --json`                        | `ci:drain-enforced`     |
+| `fleet benchmark --due 30 --cadence --json`       | `ci:fleet-benchmark`    |
+| `fleet reconcile --json`                          | `ci:fleet-coverage`     |
+| `fleet toolchain --json`                          | `ci:fleet-toolchain`    |
+| `fleet converge-toolchain --refresh --json`       | `ci:toolchain-refresh`  |
+| `fleet header-audit --json`                       | `ci:header-fleet`       |
+| `fleet identity-model --fleet --json`             | `ci:identity-model`     |
+| `fleet cleanup --json --confirm`                  | `ci:claw-cleanup`       |
+| `fleet check-runner-var --json`                   | `ci:runner-var`         |
+| `fleet check-site-token --json`                   | `ci:site-token`         |
+| `fleet egress-slices --json`                      | `ci:egress-slices`      |
+| `fleet queue-health --json`                       | `ci:queue-health`       |
+| `fleet reap-trend --json`                         | `ci:reap-timeout-trend` |
+| `fleet preflight --json`                          | `ci:fleet-preflight`    |
+| `fleet srv-drift --json`                          | `ci:srv-drift`          |
+| `fleet inventory --check --json`                  | `ci:fleet-inventory`    |
+| `fleet doctor --cadence --write --json`           | `ci:health-refresh`     |
+| `fleet service-inventory --slices --write --json` | `ci:slice-inventory`    |
+| `fleet health-freshness --json`                   | `ci:health-freshness`   |
+| `fleet node-users --json`                         | `ci:node-users`         |
+| `fleet runner-units --json`                       | `ci:runner-units`       |
+| `fleet fleet-kills --days 2 --json`               | `ci:fleet-kills`        |
 
 That table listed SIX of these ten until 2026-09-07 — `drain-check`,
 `benchmark`, `egress-slices` and `queue-health` were under contract and

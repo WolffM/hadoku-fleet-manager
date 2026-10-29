@@ -443,8 +443,15 @@ void test('zero cron jobs is a FAILURE, not a clean box', () => {
 // SLICES — `--slices`, a hosting tenant's cgroup measured from the controller
 // ═══════════════════════════════════════════════════════════════════════════
 
-// VERBATIM, 2026-10-28, `sliceProbe(cardtable, 5)` on claw-9.
-const CLAW9_SLICE = `SLICES-BEGIN
+// VERBATIM, 2026-10-29, `sliceProbe(cardtable, 5)` on claw-8: peak 3.68 GB,
+// of which 0.95 GB is file cache; the working set is anon + kernel, 2.51 GB.
+const CLAW8_SLICE = `SLICES-BEGIN
+A cardtable 352669.30 3465613312 3678347264 1232029575 2337972224 172191744 952320000
+B cardtable 352674.32 3465613312 3678347264 1232040744 2337972224 172191744 952320000
+SLICES-END
+`;
+// VERBATIM, 2026-10-28, the probe before it read memory.stat, on claw-9.
+const CLAW9_PRE_STAT = `SLICES-BEGIN
 A cardtable 270171.52 4177555456 4180393984 11132566518
 B cardtable 270176.53 4177555456 4180393984 11132586339
 SLICES-END
@@ -452,30 +459,35 @@ SLICES-END
 const AT = '2026-10-28T20:00:00.000Z';
 const BY = 'fleet service-inventory --slices';
 
-void test('a slice row is the kernel peak and the CPU delta over the window, off the real capture', () => {
+void test('a slice row is the working set and the CPU delta over the window, off the real capture', () => {
 	const row = sliceRow({
 		app: 'cardtable',
-		host: 'claw-9',
-		samples: parseSliceProbe(CLAW9_SLICE).get('cardtable'),
+		host: 'claw-8',
+		samples: parseSliceProbe(CLAW8_SLICE).get('cardtable'),
 		at: AT,
 		by: BY,
 	});
 	validateResidentRow(row);
 	assert.equal(row.kind, 'slice');
-	assert.equal(row.ram, 4180393984);
-	assert.equal(row.detail.sampleWindowMs, 5010);
-	assert.equal(row.cpu, millicores(19821, 5010));
+	assert.equal(row.ram, 2337972224 + 172191744);
+	assert.equal(row.detail.memoryPeak, 3678347264);
+	assert.equal(row.detail.fileBytes, 952320000);
+	assert.equal(row.detail.memoryCurrent, 3465613312);
+	assert.equal(row.detail.sampleWindowMs, 5020);
+	assert.equal(row.cpu, millicores(11169, 5020));
 	assert.equal(row.provenance.scope, 'per-slice');
 	for (const col of ['disk', 'net', 'gpu']) assert.equal(isMeasured(row[col]), false, col);
 });
 
 void test('a missing end marker is no answer, and an absent or unreadable slice is unmeasured, never zero', () => {
-	assert.equal(parseSliceProbe(CLAW9_SLICE.replace('SLICES-END', '')), null);
+	assert.equal(parseSliceProbe(CLAW8_SLICE.replace('SLICES-END', '')), null);
 	const absent = parseSliceProbe('A x absent\nB x absent\nSLICES-END\n').get('x');
 	const row = sliceRow({ app: 'x', host: 'claw-9', samples: absent, at: AT, by: BY });
 	assert.equal(isMeasured(row.ram), false);
 	assert.equal(isMeasured(row.cpu), false);
-	const blind = parseSliceProbe('A x 10.0 U U U\nB x 15.0 U U U\nSLICES-END\n').get('x');
+	const blind = parseSliceProbe('A x 10.0 U U U U U U\nB x 15.0 U U U U U U\nSLICES-END\n').get(
+		'x'
+	);
 	const r2 = sliceRow({ app: 'x', host: 'claw-9', samples: blind, at: AT, by: BY });
 	assert.equal(isMeasured(r2.ram), false);
 	assert.equal(isMeasured(r2.cpu), false);
@@ -483,6 +495,20 @@ void test('a missing end marker is no answer, and an absent or unreadable slice 
 		isMeasured(sliceRow({ app: 'x', host: 'h', samples: undefined, at: AT, by: BY }).ram),
 		false
 	);
+});
+
+void test('a capture without memory.stat is unmeasured RAM, never its peak', () => {
+	const row = sliceRow({
+		app: 'cardtable',
+		host: 'claw-9',
+		samples: parseSliceProbe(CLAW9_PRE_STAT).get('cardtable'),
+		at: AT,
+		by: BY,
+	});
+	assert.equal(isMeasured(row.ram), false);
+	assert.match(row.ram.unmeasured, /memory\.stat anon and kernel/);
+	assert.equal(row.detail.memoryPeak, 4180393984);
+	assert.equal(isMeasured(row.cpu), true);
 });
 
 void test('sliceProbe refuses anything it would have to quote', () => {
@@ -501,7 +527,7 @@ void test("a kinds-scoped merge replaces only those kinds, so hokon's pm2 rows s
 	const fresh = sliceRow({
 		app: 'x',
 		host: 'hokon',
-		samples: parseSliceProbe(CLAW9_SLICE.replaceAll('cardtable', 'x')).get('x'),
+		samples: parseSliceProbe(CLAW8_SLICE.replaceAll('cardtable', 'x')).get('x'),
 		at: AT,
 		by: BY,
 	});

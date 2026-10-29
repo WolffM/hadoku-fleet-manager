@@ -471,7 +471,8 @@ export function flattenCronProfiles(profilesJson) {
 /**
  * One ssh per node: each named slice's cgroup read, a `windowS` sleep, then
  * read again, so CPU is a delta the node measured on its own clock. The
- * figures are the kernel's (`memory.peak`, `cpu.stat`), never the tenant's.
+ * figures are the kernel's (`memory.current`, `memory.peak`, `memory.stat`,
+ * `cpu.stat`), never the tenant's.
  *
  * @param {{ app: string, cgroup: string }[]} slices
  */
@@ -488,7 +489,8 @@ export function sliceProbe(slices, windowS) {
 				(s) =>
 					`c=/sys/fs/cgroup${s.cgroup}; if [ -d "$c" ]; then ` +
 					`echo "${tag} ${s.app} $(cut -d' ' -f1 /proc/uptime) $(cat $c/memory.current 2>/dev/null || echo U) ` +
-					`$(cat $c/memory.peak 2>/dev/null || echo U) $(awk '/^usage_usec /{print $2}' $c/cpu.stat 2>/dev/null || echo U)"; ` +
+					`$(cat $c/memory.peak 2>/dev/null || echo U) $(awk '/^usage_usec /{print $2}' $c/cpu.stat 2>/dev/null || echo U) ` +
+					`$(awk '$1=="anon"{a=$2} $1=="kernel"{k=$2} $1=="file"{f=$2} END{print (a==""?"U":a), (k==""?"U":k), (f==""?"U":f)}' $c/memory.stat 2>/dev/null || echo U U U)"; ` +
 					`else echo "${tag} ${s.app} absent"; fi`
 			)
 			.join('\n');
@@ -504,7 +506,7 @@ export function parseSliceProbe(stdout) {
 	for (const line of text.split('\n')) {
 		const m = /^([AB]) (\S+) (.*)$/.exec(line.trim());
 		if (!m) continue;
-		const [up, current, peak, usage] = m[3].split(/\s+/);
+		const [up, current, peak, usage, anon, kernel, file] = m[3].split(/\s+/);
 		const sample =
 			m[3] === 'absent'
 				? { absent: true }
@@ -513,6 +515,9 @@ export function parseSliceProbe(stdout) {
 						current: n(current),
 						peak: n(peak),
 						usageUsec: n(usage),
+						anon: n(anon),
+						kernel: n(kernel),
+						file: n(file),
 					};
 		out.set(m[2], { ...out.get(m[2]), [m[1].toLowerCase()]: sample });
 	}
@@ -521,17 +526,24 @@ export function parseSliceProbe(stdout) {
 
 /**
  * A `kind: slice` resident row from two samples of one slice. RAM is the
- * cgroup's `memory.peak` (bytes, since the slice was created: what a request
- * must be sized for), CPU the millicores it used across the window. Disk, net
- * and GPU are not per-slice in the kernel and are said so, never zeroed.
+ * slice's working set, `anon + kernel` from `memory.stat`, at the end of the
+ * window; CPU the millicores it used across the window. Disk, net and GPU are
+ * not per-slice in the kernel and are said so, never zeroed.
+ *
+ * Not `memory.peak`: it counts page cache, which the kernel reclaims before
+ * it reclaims anything a tenant holds. On 2026-10-29 claw-8's cardtable slice
+ * peaked at 3.68 GB with a 2.51 GB working set, and a request sized from the
+ * peak would have reserved a gigabyte of cache. The kernel keeps a
+ * high-water mark only for the total, so this is a reading at one moment, not
+ * a peak; `memory.peak` and the file cache are kept in `detail` beside it.
  */
 export function sliceRow({ app, host, samples, at, by }) {
 	const { a, b } = samples ?? {};
 	const why = (what) => `${what} of hosting slice ${app} on ${host}`;
 	const ram =
-		b && !b.absent && b.peak !== null
-			? b.peak
-			: unmeasured(`${why('memory.peak')} was not readable`);
+		b && !b.absent && b.anon != null && b.kernel != null
+			? b.anon + b.kernel
+			: unmeasured(`${why('memory.stat anon and kernel')} were not readable`);
 	const wallMs =
 		a?.uptimeS != null && b?.uptimeS != null ? Math.round((b.uptimeS - a.uptimeS) * 1000) : null;
 	const cpu =
@@ -548,12 +560,17 @@ export function sliceRow({ app, host, samples, at, by }) {
 		disk: unmeasured('a slice has no disk figure in the kernel; its state dir is not sampled yet'),
 		net: unmeasured('a slice has no network counters in the kernel without per-cgroup accounting'),
 		gpu: unmeasured('no GPU is assigned to a hosting slice'),
-		detail: { memoryCurrent: b?.current ?? null, sampleWindowMs: wallMs },
+		detail: {
+			memoryCurrent: b?.current ?? null,
+			memoryPeak: b?.peak ?? null,
+			fileBytes: b?.file ?? null,
+			sampleWindowMs: wallMs,
+		},
 		provenance: {
 			at,
 			by,
 			host,
-			sources: ['memory.peak', 'cpu.stat'],
+			sources: ['memory.stat', 'cpu.stat'],
 			scope: 'per-slice',
 		},
 	};

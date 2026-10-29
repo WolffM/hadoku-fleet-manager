@@ -357,6 +357,21 @@ export const JSON_CONTRACT = [
 			'that matches nothing.',
 	},
 	{
+		sub: 'service-inventory',
+		hostBound: false,
+		argv: ['--slices', '--write', '--json'],
+		job: 'ci:slice-inventory',
+		consumer: 'services/mgmt-api/src/routes/jobs/slice-inventory.ts',
+		why:
+			'The WRITER of the `kind: slice` resident rows in the demand ledger: each declared ' +
+			"hosting slice's working set (`anon + kernel`) and CPU, measured on its own node over " +
+			'ssh. From 2026-10-28 to 2026-10-29 it ran only by hand, so the rows were as old as ' +
+			'the last person who typed it. It reads the hosting doc and the drain doc from the ' +
+			'state dir and the nodes over ssh, never this box, so it is not host-bound. A node ' +
+			'that cannot be read, or a declared slice whose cgroup is missing, lands in ' +
+			'`findings` and exits 1 with the JSON on stdout; the unread node keeps its last rows.',
+	},
+	{
 		sub: 'doctor',
 		hostBound: false,
 		argv: ['--cadence', '--write', '--json'],
