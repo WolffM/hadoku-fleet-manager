@@ -386,8 +386,80 @@ export async function lookupMavenLatest(source, opts = {}) {
 }
 
 /**
+ * A GitHub repository's own release list — for a tool shipped as a release
+ * binary (yt-dlp, deno), which no package registry tracks. `source.repo` is
+ * `owner/name`; `source.tagPrefix` is stripped from each tag (deno tags
+ * `v2.9.8`, yt-dlp `2026.10.26`), and the VERSION returned is the rest of the
+ * tag exactly as written, because the install fetches by that tag. Drafts and
+ * prereleases are never candidates.
+ *
+ * Unauthenticated: 60 calls an hour per address, and a run asks once per
+ * tool. A refusal (403/429) is `unknown` with the reason, like any lookup.
+ */
+export async function lookupGithubRelease(source, opts = {}) {
+	const {
+		attempts = 2,
+		timeoutMs = 15_000,
+		now = Date.now(),
+		minAge = DEFAULT_MIN_AGE_MINUTES,
+	} = opts;
+	const doFetch = opts.fetch ?? globalThis.fetch;
+	if (typeof doFetch !== 'function') return { status: 'unknown', reason: 'no fetch available' };
+	if (!/^[\w.-]+\/[\w.-]+$/.test(source?.repo ?? ''))
+		return { status: 'unknown', reason: 'tool declares no GitHub owner/name repo' };
+	const prefix = source.tagPrefix ?? '';
+	const url = `https://api.github.com/repos/${source.repo}/releases?per_page=20`;
+	let reason = 'no attempt was made';
+	for (let i = 1; i <= Math.max(1, attempts); i++) {
+		try {
+			const res = await doFetch(url, {
+				headers: { accept: 'application/vnd.github+json' },
+				signal: AbortSignal.timeout(timeoutMs),
+			});
+			if (!res.ok) {
+				reason =
+					res.status === 429 || res.status === 403
+						? `rate limited (HTTP ${res.status})`
+						: `GitHub answered HTTP ${res.status}`;
+				continue;
+			}
+			let body;
+			try {
+				body = await res.json();
+			} catch (e) {
+				reason = `GitHub body was not JSON (${e.message})`;
+				continue;
+			}
+			if (!Array.isArray(body)) {
+				reason = 'GitHub response was not a release list';
+				continue;
+			}
+			const time = {};
+			for (const release of body) {
+				if (release?.draft || release?.prerelease) continue;
+				const tag = String(release?.tag_name ?? '');
+				if (!tag.startsWith(prefix)) continue;
+				time[tag.slice(prefix.length)] = release.published_at;
+			}
+			const r = newestCleared(time, { now, minAge });
+			if (r.status !== 'known') return { status: 'unknown', reason: `${source.repo}: ${r.reason}` };
+			return { status: 'known', version: r.version, publishedAt: r.publishedAt, attempts: i };
+		} catch (e) {
+			reason =
+				e?.name === 'TimeoutError'
+					? `timed out after ${timeoutMs} ms`
+					: `fetch failed (${e?.message ?? e})`;
+		}
+	}
+	return {
+		status: 'unknown',
+		reason: `${reason}; gave up after ${Math.max(1, attempts)} attempt(s)`,
+	};
+}
+
+/**
  * Dispatch a `latest.source` to the lookup that can actually read it: npm by
- * default, Adoptium or Maven Central when the source says so.
+ * default, Adoptium, Maven Central or a GitHub release list when the source says so.
  *
  * ONE DISPATCHER, not three call sites that each have to remember which
  * lookup goes with which `source.kind` — `createReleaseLookup`'s whole reason
@@ -396,6 +468,7 @@ export async function lookupMavenLatest(source, opts = {}) {
 function dispatchLookup(source, opts) {
 	if (source?.kind === 'adoptium') return lookupAdoptiumLatest(source, opts);
 	if (source?.kind === 'maven-metadata') return lookupMavenLatest(source, opts);
+	if (source?.kind === 'github-release') return lookupGithubRelease(source, opts);
 	return lookupLatest(source, opts);
 }
 
@@ -423,6 +496,7 @@ export function createReleaseLookup(opts = {}) {
 			source?.package ?? '',
 			source?.feature ?? '',
 			source?.majorMinor ?? '',
+			source?.repo ?? '',
 			minAge,
 		].join('|');
 		if (!cache.has(key)) cache.set(key, dispatchLookup(source, { ...opts, ...perCall, minAge }));

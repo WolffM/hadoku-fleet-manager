@@ -11,6 +11,7 @@ import {
 	newestCleared,
 	lookupLatest,
 	lookupAdoptiumLatest,
+	lookupGithubRelease,
 	lookupMavenLatest,
 	createReleaseLookup,
 	assess,
@@ -240,6 +241,47 @@ test('lookupAdoptiumLatest: a non-2xx answer is unknown with the reason, never a
 		assert.equal(r.status, 'unknown');
 		assert.match(r.reason, /429/);
 	});
+});
+
+test('lookupGithubRelease: the newest release past minAge, tag prefix stripped, drafts and prereleases never', async () => {
+	const now = Date.now();
+	const old = (days) => new Date(now - days * 24 * 60 * 60 * 1000).toISOString();
+	const body = [
+		{ tag_name: 'v2.10.0', published_at: old(9), prerelease: true },
+		{ tag_name: 'v2.9.9', published_at: old(9), draft: true },
+		{ tag_name: 'v2.9.8', published_at: old(8) },
+		{ tag_name: 'v2.9.7', published_at: old(40) },
+	];
+	let asked;
+	const fetchStub = async (url) => ((asked = url), { ok: true, json: async () => body });
+	const r = await lookupGithubRelease(
+		{ repo: 'denoland/deno', tagPrefix: 'v' },
+		{ fetch: fetchStub, now }
+	);
+	assert.deepEqual(r, { status: 'known', version: '2.9.8', publishedAt: old(8), attempts: 1 });
+	assert.match(asked, /repos\/denoland\/deno\/releases/);
+	// A one-day debounce clears a day-and-a-half-old release; the TAG is kept as
+	// written (zero-padded), because the install fetches by it.
+	const yt = [{ tag_name: '2026.10.06', published_at: old(1.5) }];
+	const y = await lookupGithubRelease(
+		{ repo: 'yt-dlp/yt-dlp' },
+		{ fetch: async () => ({ ok: true, json: async () => yt }), now, minAge: 1440 }
+	);
+	assert.equal(y.version, '2026.10.06');
+});
+
+test('lookupGithubRelease: a refusal or a bad repo is unknown with the reason, never a version', async () => {
+	const limited = await lookupGithubRelease(
+		{ repo: 'yt-dlp/yt-dlp' },
+		{ fetch: async () => ({ ok: false, status: 403 }), attempts: 1 }
+	);
+	assert.equal(limited.status, 'unknown');
+	assert.match(limited.reason, /rate limited \(HTTP 403\)/);
+	const bad = await lookupGithubRelease(
+		{ repo: 'not a repo' },
+		{ fetch: async () => assert.fail() }
+	);
+	assert.equal(bad.status, 'unknown');
 });
 
 test('lookupMavenLatest: picks the newest 3.9.x whose POM Last-Modified clears minAge', () => {
