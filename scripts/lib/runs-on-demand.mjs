@@ -241,10 +241,12 @@ export function workflowDemand(body, { fleetValue }) {
  *
  * @param {string} text the raw jsonl
  * @param {{sinceIso: string, isProof: (runner: string) => boolean}} opts
- * @returns {{labels: Map<string, number>, rows: number, malformed: number}}
+ * @returns {{labels: Map<string, number>, last: Map<string, string>, rows: number, malformed: number}}
+ *   `last` is when each label was most recently asked for (the latest `startedAt`).
  */
 export function observedDemand(text, { sinceIso, isProof }) {
 	const labels = new Map();
+	const last = new Map();
 	let rows = 0;
 	let malformed = 0;
 	for (const line of String(text).split('\n')) {
@@ -262,7 +264,10 @@ export function observedDemand(text, { sinceIso, isProof }) {
 		if (!Array.isArray(r.labels) || !r.labels.length) continue;
 		if (typeof r.runner === 'string' && isProof(r.runner)) continue;
 		rows++;
-		for (const l of r.labels) labels.set(l, (labels.get(l) ?? 0) + 1);
+		for (const l of r.labels) {
+			labels.set(l, (labels.get(l) ?? 0) + 1);
+			if (!(last.get(l) >= r.startedAt)) last.set(l, r.startedAt);
+		}
 	}
-	return { labels, rows, malformed };
+	return { labels, last, rows, malformed };
 }

@@ -290,3 +290,56 @@ test('a resident-floor read that never recovers fails the gate after READ_ATTEMP
 		cleanup(fx);
 	}
 });
+
+// ── historical demand: nothing offers the label, and nothing asks any more ─
+
+/** Jobs that ran on `label` `hoursAgo`, as job history records them. */
+function observedJobs(fx, label, hoursAgo, n) {
+	const rows = Array.from({ length: n }, () =>
+		JSON.stringify({
+			repo: REPO,
+			runner: HOLDER_A,
+			labels: ['self-hosted', label],
+			startedAt: new Date(Date.now() - hoursAgo * 3_600_000).toISOString(),
+		})
+	);
+	writeFileSync(
+		join(fx.stateDir, 'job-history.jsonl'),
+		readFileSync(join(fx.stateDir, 'job-history.jsonl'), 'utf8') + rows.join('\n') + '\n'
+	);
+}
+
+test('a label only past jobs asked for, that nothing offers, is historical: reported, not failed (#29)', () => {
+	const fx = fixture();
+	try {
+		observedJobs(fx, 'watchparty-media', 30, 4);
+		const { code, report } = run(fx);
+		assert.equal(code, 0, `historical demand must not fail the gate: ${JSON.stringify(report)}`);
+		assert.deepEqual(report.unoffered, []);
+		assert.equal(report.historical.length, 1);
+		assert.equal(report.historical[0].label, 'watchparty-media');
+		assert.equal(report.historical[0].observed, 4);
+		assert.match(report.historical[0].lastObserved, /^\d{4}-\d\d-\d\dT/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('the same label still fails while a shipped workflow asks for it', () => {
+	const fx = fixture();
+	try {
+		observedJobs(fx, 'watchparty-media', 30, 4);
+		fx.remotes.push(REPO, {
+			'.github/workflows/ci.yml': 'jobs:\n  check:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n',
+			'.github/workflows/ingest.yml':
+				"jobs:\n  ingest:\n    runs-on: ['self-hosted', 'watchparty-media']\n",
+		});
+		const { code, report } = run(fx);
+		assert.equal(code, 1);
+		assert.equal(report.verdict, 'unoffered');
+		assert.deepEqual(report.unoffered, ['watchparty-media']);
+		assert.deepEqual(report.historical, []);
+	} finally {
+		cleanup(fx);
+	}
+});

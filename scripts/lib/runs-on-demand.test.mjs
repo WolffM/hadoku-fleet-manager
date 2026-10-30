@@ -149,3 +149,18 @@ test('observedDemand: the window, proof runs and malformed lines', () => {
 	assert.equal(o.malformed, 1);
 	assert.deepEqual([...o.labels.keys()].sort(), ['jdk21', 'self-hosted']);
 });
+
+test('observedDemand: when each label was last asked for is its latest job, in any order', () => {
+	const now = Date.now();
+	const iso = (h) => new Date(now - h * 3_600_000).toISOString();
+	const rows = [
+		{ runner: 'claw-1', labels: ['jdk21'], startedAt: iso(48) },
+		{ runner: 'claw-2', labels: ['jdk21'], startedAt: iso(2) },
+		{ runner: 'claw-3', labels: ['jdk21'], startedAt: iso(72) },
+	];
+	const o = observedDemand(rows.map((r) => JSON.stringify(r)).join('\n'), {
+		sinceIso: iso(24 * 14),
+		isProof: () => false,
+	});
+	assert.equal(o.last.get('jdk21'), iso(2));
+});

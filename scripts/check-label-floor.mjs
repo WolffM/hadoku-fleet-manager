@@ -631,7 +631,7 @@ const servedByMintOnly = new Set(
  * failure gets: the more capabilities the fleet loses, the fewer dependencies
  * it would have had to floor.
  */
-const unoffered = dependencies.filter((l) => offerersOf(l).length === 0);
+const nothingOffers = dependencies.filter((l) => offerersOf(l).length === 0);
 
 /**
  * THE STATIC HALF OF THE DEMAND, PERSISTED FOR THE RUNTIME FLOOR.
@@ -655,6 +655,30 @@ const staticDemand = Object.entries(demandSources)
 	.sort();
 const staticComplete =
 	coveredRepos.length > 0 && !unread.length && !noWorkflows.length && !unresolvable.length;
+
+/**
+ * HISTORICAL DEMAND: a label nothing offers that only past JOBS asked for.
+ *
+ * The rule above keeps an unoffered label in the dependency set so the gate
+ * never gets easier to pass as capabilities disappear. The reverse case is a
+ * label nothing ASKS for any more: hadoku-watchparty moved ingest off
+ * `watchparty-media` (e87161e6, 2026-10-28) and bootcamp revoked it the same
+ * day, and the jobs that ran on it before stayed in the observed window for
+ * fourteen days, failing this gate on a dependency no workflow has
+ * (fleet-manager#29).
+ *
+ * Only a COMPLETE static read can say "no workflow asks". Every covered
+ * repo's shipped workflows were read and every `runs-on` resolved, so a label
+ * with no static job is not a live dependency of any of them. It is reported
+ * with when it was last asked for, and it ages out of the window on its own.
+ * An incomplete read keeps it failing: then the gate cannot tell. And a job
+ * that asks for an unoffered label never starts, so it never reaches job
+ * history: a live runtime-resolved ask shows up in ci:queue-health, not here.
+ */
+const historical = staticComplete
+	? nothingOffers.filter((l) => demandSources[l].static.length === 0)
+	: [];
+const unoffered = nothingOffers.filter((l) => !historical.includes(l));
 let floorDemandWriteError = null;
 if (staticComplete) {
 	try {
@@ -894,6 +918,11 @@ function emitJson(verdict, extra = {}) {
 		noWorkflows,
 		unresolvable,
 		demandSources,
+		historical: historical.map((l) => ({
+			label: l,
+			observed: demandSources[l].observed,
+			lastObserved: observed?.last.get(l) ?? null,
+		})),
 		observedRows: observed?.rows ?? null,
 		observedMalformed: observed?.malformed ?? null,
 		observedError,
@@ -968,6 +997,17 @@ if (observedError) {
 	);
 	emitJson('observed-unreadable');
 	process.exit(1);
+}
+if (historical.length) {
+	log(
+		`historical demand only (${historical.length}) — nothing offers it and no shipped workflow asks for it:`
+	);
+	for (const l of historical) {
+		log(
+			`  "${l}" — ${demandSources[l].observed} job(s) in ${RETENTION_DAYS}d, last ${observed?.last.get(l) ?? '?'}; ` +
+				`ages out of the window`
+		);
+	}
 }
 if (unoffered.length) {
 	console.error(`\u2717 ${unoffered.length} routing dependency NOTHING in the fleet offers:\n`);
