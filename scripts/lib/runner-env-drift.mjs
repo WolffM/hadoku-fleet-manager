@@ -170,7 +170,7 @@ export function throttleSummaryDrift({ name, m, kv, wantConfSha }) {
 				findings.push(
 					`${name}: the node's ci-throttle.conf is not what the manifest renders for it ` +
 						`(node ${sha}, rendered ${wantConfSha}) though its limits match — another line ` +
-						`moved (MAX_WAIT_S or RESERVE_FILE) and this node was not re-deployed ` +
+						`moved (MAX_WAIT_S, RESERVE_FILE, or the cores/RAM header after an enroll refresh) and this node was not re-deployed ` +
 						`(fix: fleet throttle --confirm)`
 				);
 			}
