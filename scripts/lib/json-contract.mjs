@@ -77,7 +77,37 @@
  * This remains a check on the DECLARATION in the sense docs/VOCABULARY.md gives
  * that word; the cron is still the only observer of what the fleet actually
  * says back.
+ *
+ * SINCE WAVE 5E (plan §6.2 item 4): the list below is DERIVED from
+ * `src/lib/job-registry.ts`'s `JOB_REGISTRY`, not hand-written. That file is
+ * the one place cadence and detection budget live; this one stays the
+ * declaration of WHO READS IT, in the exact shape every consumer below
+ * already depends on (`sub`, `hostBound`, `argv`, `job`, `consumer`, `why`).
+ * `json-contract.test.mjs` pins the derived list against today's 22 entries
+ * BY NAME, so a registry change that silently drops or renames one still
+ * fails the build the same way an edit to a hand list used to.
  */
+import { JOB_REGISTRY } from '../../dist/lib/job-registry.js';
+
+/**
+ * `JOB_REGISTRY` entries with `contract: 'json'`, reshaped into the exact
+ * fields every consumer of `JSON_CONTRACT` already reads. `hostBound`
+ * defaults to `false` rather than being required in the registry's own
+ * shape, because every in-process entry (not under this contract at all)
+ * would otherwise need to carry a field that means nothing for it.
+ */
+function deriveJsonContract(registry) {
+	return registry
+		.filter((e) => e.contract === 'json')
+		.map((e) => ({
+			sub: e.sub,
+			hostBound: e.hostBound ?? false,
+			argv: e.args,
+			job: e.name,
+			consumer: e.mgmtApiFile,
+			why: e.why,
+		}));
+}
 
 /**
  * One entry per mgmt-api cron job that parses this CLI's stdout as JSON.
@@ -102,370 +132,7 @@
  * requires it on every entry, present or future, so a new contracted
  * subcommand cannot land silently unclassified.
  */
-export const JSON_CONTRACT = [
-	{
-		sub: 'drain-check',
-		hostBound: false,
-		argv: ['--json'],
-		job: 'ci:drain-enforced',
-		consumer: 'services/mgmt-api/src/routes/jobs/drain-enforced-check.ts',
-		why:
-			'Is a drained node actually idle. `fleet drain --status` reads the drain ' +
-			'FILE and reports what it says, so when the file is wrong the check is ' +
-			'wrong with it -- claw-5 spent days believed drained, by three documents, ' +
-			'while serving 61 jobs. `--check` reads JOB HISTORY instead: a drained ' +
-			'node that STARTED work after its drain is a drain not being enforced, ' +
-			'whichever of the two enforcement paths failed. On fleet-pulse at */10 ' +
-			'rather than repo-sync because a drain is a safety fact about a physical ' +
-			'machine and it costs two local file reads -- no ssh, no token.',
-	},
-	{
-		sub: 'benchmark',
-		hostBound: false,
-		argv: ['--due', '30', '--cadence', '--json'],
-		job: 'ci:fleet-benchmark',
-		consumer: 'services/mgmt-api/src/routes/jobs/fleet-benchmark-check.ts',
-		why:
-			'Is the hardware still what the manifest says. Every capacity decision ' +
-			'is COMPARATIVE, so the fleet has to keep measuring or the comparison ' +
-			'silently ages out. AUTOMATED since 2026-10-04 (operator: "i would prefer ' +
-			'if that was automated", reversing the 2026-09-15 report-only decision, ' +
-			'#87): `--cadence` measures at most ONE claw per run, never a guest, a busy ' +
-			'node or one someone else drained, drains it around the measurement the ' +
-			'way ci:toolchain-refresh does, writes `<stateDir>/benchmark.json`, and ' +
-			'always undrains. A node due inside the lead window but not measured this ' +
-			'run is an ADVISORY; a finding comes only past a grace, or for a node that ' +
-			'could not be reached. `--report` remains a supported read-only mode for ' +
-			'people; it is no longer what the cron runs (#93).',
-	},
-	{
-		sub: 'reconcile',
-		hostBound: false,
-		argv: ['--json'],
-		job: 'ci:fleet-coverage',
-		consumer: 'services/mgmt-api/src/routes/jobs/fleet-coverage-check.ts',
-		why:
-			'Does every covered repo have a runner. Also invoked a second time as ' +
-			'`--json --confirm` to apply, so both paths must emit the same shape. ' +
-			'Distinct from `--check-coverage` (is the roster itself current), which ' +
-			"ci:audit-gates runs and reads as prose, not JSON — see that job's own note.",
-	},
-	{
-		sub: 'toolchain',
-		hostBound: false,
-		argv: ['--json'],
-		job: 'ci:fleet-toolchain',
-		consumer: 'services/mgmt-api/src/routes/jobs/fleet-toolchain-check.ts',
-		why:
-			'Can each node build what its neighbours can. Detection only — it ' +
-			'never passes --confirm, because converging means apt-get on shared CI ' +
-			'hosts. An unreachable node is a finding, so a non-zero exit here is ' +
-			'the NORMAL case the JSON has to survive.',
-	},
-	{
-		sub: 'converge-toolchain',
-		hostBound: false,
-		argv: ['--refresh', '--json'],
-		job: 'ci:toolchain-refresh',
-		consumer: 'services/mgmt-api/src/routes/jobs/toolchain-refresh.ts',
-		why:
-			'The CADENCE (#69): detect every node, then one node at a time drain -> ' +
-			'wait DRAINED -> update -> re-probe -> undrain. A non-zero exit is a ' +
-			'FINDING, not a crash, and parseable stdout wins: a node that failed its ' +
-			're-probe STAYS DRAINED and arrives as `findings[].kind === "reprobe-failed"`, ' +
-			'and `nodes[].status === "deferred"` (queue under pressure, or a hold that ' +
-			'is not ours) is reported but is not a failure. `tunnels[]` (additive) is each ' +
-			"service host's own Cloudflare tunnel; its findings are `tunnel-*` kinds. `peers[]` (additive) is each hot standby's peer port, closed to all but its pair-mate; its findings are `peer-port-*` kinds. A guest's check-only recheck (fleet-manager#17) is a `nodes[]` row with `guest: true`; a guest it could not reach is `unreachable`, and every label it revoked is its own `guest-revoked` finding. Plain `converge-toolchain " +
-			'--json` (no --refresh) is not under contract.',
-	},
-	{
-		sub: 'header-audit',
-		hostBound: false,
-		argv: ['--json'],
-		job: 'ci:header-fleet',
-		consumer: 'services/mgmt-api/src/routes/jobs/header-fleet-check.ts',
-		why:
-			'The @wolffm consumer contract across every checkout. It reports ' +
-			'`registry.blind` so the job can tell "clean" from "could not read the ' +
-			'registry" — a distinction that exists ONLY in the JSON shape; the human ' +
-			'output collapses both into a tidy summary line.',
-	},
-	{
-		sub: 'identity-model',
-		hostBound: false,
-		argv: ['--fleet', '--json'],
-		job: 'ci:identity-model',
-		consumer: 'services/mgmt-api/src/routes/jobs/identity-model-check.ts',
-		why:
-			'The child half of the identity model. `--fleet` is not optional here: ' +
-			'without it the run covers hadoku_site alone, which lint.yml already ' +
-			'does. The JSON carries `scanned` and `missingCheckouts`, which is how ' +
-			'the job fails a run that looked at nothing.',
-	},
-	{
-		sub: 'cleanup',
-		hostBound: false,
-		argv: ['--json', '--confirm'],
-		job: 'ci:claw-cleanup',
-		consumer: 'services/mgmt-api/src/routes/jobs/claw-cleanup.ts',
-		why:
-			'Reclaims what runner self-update strands. The fifth consumer, and the ' +
-			'one CLAUDE.md\'s "four cron jobs" had never counted. It is the only ' +
-			'contract entry that MUTATES the fleet, so a broken parse here means an ' +
-			'apply whose result nobody reads.',
-	},
-	{
-		sub: 'check-runner-var',
-		hostBound: false,
-		argv: ['--json'],
-		job: 'ci:runner-var',
-		consumer: 'services/mgmt-api/src/routes/jobs/runner-var-check.ts',
-		why:
-			'Does every repo that ASKS for vars.CI_RUNNER actually have it. The fleet ' +
-			'uses the bare `fromJSON(vars.CI_RUNNER)` form, so an unset variable is not ' +
-			'a queue — runs-on resolves to nothing and every workflow in that repo ' +
-			'fails to start. ci-runner-fallback.ts named this guard as covering that ' +
-			'case for a year before it existed. Deliberately WIDER than the coverage ' +
-			'roster: a repo that leaves the roster keeps its workflows and loses its ' +
-			'writer, which is the case it is most for.',
-	},
-	{
-		sub: 'check-site-token',
-		hostBound: false,
-		argv: ['--json'],
-		job: 'ci:site-token',
-		consumer: 'services/mgmt-api/src/routes/jobs/site-token-check.ts',
-		why:
-			'Is HADOKU_SITE_TOKEN, the account-wide repo+workflow PAT, held only by the ' +
-			'hub and the declared siteTokenHolders. Child repos stopped holding it on ' +
-			'2026-10-23 (mgmt-api does their two writes with their own service key), and ' +
-			'a copy that comes back fails nothing on its own. Reads Actions secrets from ' +
-			'the GitHub API and workflows/.devvault.json from each default branch on origin.',
-	},
-	{
-		sub: 'egress-slices',
-		hostBound: true,
-		argv: ['--json'],
-		job: 'ci:egress-slices',
-		consumer: 'services/mgmt-api/src/routes/jobs/egress-slices-check.ts',
-		why:
-			"fleet-manager's half of the cgroup split tunnel agreed with local-hawk on " +
-			'2026-09-05: we declare which cgroups carry fleet work and must egress direct, ' +
-			'local-hawk owns the routing policy that acts on it. The reason it needs a cron ' +
-			'rather than a subcommand is the same property that makes the policy drift-' +
-			'resistant — it is a PREFIX match, so a PM2 app added tomorrow is covered with no ' +
-			'rule edit, and therefore inherits FLEET EGRESS with nobody deciding that it ' +
-			'should. Its JSON separates `findings` from `deferred` and `acceptedLeaks`, and ' +
-			'that separation exists ONLY in the JSON shape: an app restarting during a rolling ' +
-			'deploy must not read as a policy breach, and a leak already on record must not ' +
-			'read as clean. The only entry here that is HOST-LOCAL — it reads this box, not ' +
-			'the fleet, because the claws carry no VPN and have no split tunnel to audit.',
-	},
-	{
-		sub: 'queue-health',
-		hostBound: false,
-		argv: ['--json'],
-		job: 'ci:queue-health',
-		consumer: 'services/mgmt-api/src/routes/jobs/queue-health-check.ts',
-		why:
-			'Is the fleet actually SERVING work. The only entry here that reads an ' +
-			'OUTCOME rather than a declaration or a mechanism, and it exists because on ' +
-			'2026-09-01 every other one was green while 13 jobs sat queued 11-19 minutes ' +
-			'across nine repos. Runs */10 in its own fleet-pulse profile rather than ' +
-			'daily, because a stall resolves or escalates inside the hour. Its JSON ' +
-			'carries `error` separately from `findings` so the job can tell "the roster ' +
-			'could not be read" from "nothing is queued" - a distinction that exists ONLY ' +
-			'in the JSON shape, since both render as a calm fleet otherwise.',
-	},
-	{
-		sub: 'reap-trend',
-		hostBound: true,
-		argv: ['--json'],
-		job: 'ci:reap-timeout-trend',
-		consumer: 'services/mgmt-api/src/routes/jobs/reap-timeout-trend-check.ts',
-		why:
-			"Is the reap's GET-runners timeout rate CLIMBING, not just what it reads today. " +
-			'`api-budget-outage-2026-09-07.md`: timeouts on this path went 460/hr at the peak to ' +
-			'~35/hr after the cadence fix, and nothing would notice if the trend resumed. Reads ' +
-			"mgmt-api's OWN pm2 log for the exact line the outage was diagnosed from — " +
-			'`[runner-health] GET /actions/runners?per_page=100 failed: ...` — so it must run on ' +
-			'the box mgmt-api runs on, which every consumer of this contract already does. Its ' +
-			'JSON separates a trend FINDING from an `error` (log too short to compare two ' +
-			'windows, or unreadable) — a distinction that exists ONLY in the JSON shape, since a ' +
-			'gate that could not read enough log must never report the quiet it produced as a ' +
-			'clean fleet.',
-	},
-	{
-		sub: 'preflight',
-		hostBound: false,
-		argv: ['--json'],
-		job: 'ci:fleet-preflight',
-		consumer: 'services/mgmt-api/src/routes/jobs/fleet-preflight-check.ts',
-		why:
-			'The nightly slow-motion sweep: Tailscale node-key expiry, HADOKU_SITE_TOKEN expiry, ' +
-			'runner-version drift on the standing claw-4/claw-6/hokon registrations and on each ' +
-			"node's JIT payload (every mint is copied from it), pending " +
-			'reboots. Every one of the first three has already caused a silent outage on this ' +
-			'fleet once (claw-1/claw-2 node keys lapsing 2026-08-31, HADOKU_SITE_TOKEN expiring ' +
-			'unregistered 2026-08-13) or is the same shape of risk (runner version, reboots). ' +
-			'Its JSON separates a `could-not-look` finding — one of the four signals could not be ' +
-			'read at all — from an ordinary finding on a signal it DID read, so a partial outage ' +
-			'in the checker itself cannot be reported as "the other three are clean".',
-	},
-	{
-		sub: 'srv-drift',
-		hostBound: true,
-		argv: ['--json'],
-		job: 'ci:srv-drift',
-		consumer: 'services/mgmt-api/src/routes/jobs/srv-drift-check.ts',
-		why:
-			'Is the manifest the fleet is RUNNING the manifest main holds. The DEPLOYED site ' +
-			'checkout under `~/srv` is not a deploy artifact — it is a git checkout, and every ' +
-			'redeploy of mgmt-api runs `git reset ' +
-			'--hard origin/main` on it — so the four `--write` commands that resolve ' +
-			'FLEET_MANIFEST_DIR there succeed, read back true, and are erased at the next publish ' +
-			'anywhere in the ecosystem. That happened on 2026-09-14 and the loss was silent. ' +
-			'`lib/manifest-target.mjs` now refuses that target for those four; this is the half ' +
-			'that sees writes they did not make — a hand edit, an older deployed fleet-manager, ' +
-			'anything run from `~/srv` because that is where the CLI is. Its JSON separates ' +
-			'`unlanded-write` from `undeployed`, and both from `deferred` and `error`: the two ' +
-			'findings have OPPOSITE fixes (recover the numbers, versus fix redeploy-mgmt-api.yml), ' +
-			'an in-flight redeploy must not page, and `facetsCompared: 0` must not read as a ' +
-			'matching deploy — distinctions that exist ONLY in the JSON shape, since all four ' +
-			'render as a calm fleet otherwise.',
-	},
-	{
-		sub: 'inventory',
-		hostBound: false,
-		argv: ['--check', '--json'],
-		job: 'ci:fleet-inventory',
-		consumer: 'services/mgmt-api/src/routes/jobs/fleet-inventory-check.ts',
-		why:
-			'Is the blast-radius doc still the fleet. #38 built `fleet inventory --check` in wave ' +
-			'3j and NOTHING ran it, so when claw-9 joined and claw-7 left, the generated region of ' +
-			"hadoku_site's SELF_HOSTED_RUNNERS.md kept naming a fleet that had stopped existing — " +
-			'measured 2026-09-22, 113 committed rows against 115 real workflows, stale:true, exit ' +
-			'1, and nobody knew. The lane that wired this consumer was named for the rule itself: ' +
-			'a manual subcommand is not a guard until a cron runs it. Detection only, and the ' +
-			'consumer never passes --write — regenerating the region is a hadoku_site COMMIT from ' +
-			'a development checkout, because ~/srv is hard-reset at every publish and a write ' +
-			'there is erased silently. The consumer points HADOKU_SITE_ROOT at the ~/repos ' +
-			'checkout, which repos:main-sync fast-forwards earlier in the same profile, so the ' +
-			"doc under judgment is MAIN's committed copy rather than the deploy tree's lag. Its " +
-			'JSON carries `stale` separately from `problems` and `ok`, and the zero-scan case ' +
-			'emits `ok:false` with `error` — a run that read nothing must not render as a doc ' +
-			'that matches nothing.',
-	},
-	{
-		sub: 'service-inventory',
-		hostBound: false,
-		argv: ['--slices', '--write', '--json'],
-		job: 'ci:slice-inventory',
-		consumer: 'services/mgmt-api/src/routes/jobs/slice-inventory.ts',
-		why:
-			'The WRITER of the `kind: slice` resident rows in the demand ledger: each declared ' +
-			"hosting slice's working set (`anon + kernel`) and CPU, measured on its own node over " +
-			'ssh. From 2026-10-28 to 2026-10-29 it ran only by hand, so the rows were as old as ' +
-			'the last person who typed it. It reads the hosting doc and the drain doc from the ' +
-			'state dir and the nodes over ssh, never this box, so it is not host-bound. A node ' +
-			'that cannot be read, or a declared slice whose cgroup is missing, lands in ' +
-			'`findings` and exits 1 with the JSON on stdout; the unread node keeps its last rows.',
-	},
-	{
-		sub: 'doctor',
-		hostBound: false,
-		argv: ['--cadence', '--write', '--json'],
-		job: 'ci:health-refresh',
-		consumer: 'services/mgmt-api/src/routes/jobs/health-refresh.ts',
-		why:
-			'The WRITER of `$health`, which ci:health-freshness below only judges. Until ' +
-			'2026-10-11 nothing scheduled it: one hand run on 2026-09-26 wrote all nine records ' +
-			'and ci:health-freshness went red 15.3 days later on every node at once. ' +
-			'`--cadence` is the run a cron can own — a node busy with CI is DEFERRED (advisory, ' +
-			'record kept) rather than a BLOCKING no-load-reading that would page on busyness, and ' +
-			'a guest is probed but never loaded. An unreachable node and every real thermal, ' +
-			'SMART or disk finding still exit 1, so a non-zero exit with parseable stdout is the ' +
-			'FINDING path. `deferred` and `unreachable` name the nodes this run did not rewrite.',
-	},
-	{
-		sub: 'health-freshness',
-		hostBound: false,
-		argv: ['--json'],
-		job: 'ci:health-freshness',
-		consumer: 'services/mgmt-api/src/routes/jobs/health-freshness-check.ts',
-		why:
-			'How old is the `$health` record every placement rule reads. The second entry here ' +
-			'whose subject is a FACET RATHER THAN A FLEET, and the one that shows why the rule ' +
-			'needs a cron to mean anything: `fleet doctor` is the only thing that reads `$health` ' +
-			'and it REWRITES it on every run, so the record is fresh whenever anyone looks and ' +
-			'invisible when nobody does. Measured 2026-09-26 — SIX of NINE nodes carried one ' +
-			'15.7-day-old reading, across a window that decommissioned claw-7, admitted claw-8 ' +
-			'and claw-9 and rewrote the `cpu-thermal` rule, while filter 5 of resident placement ' +
-			'read it to decide who may host. Nothing was red. The gate (wave 3o, #64) answered ' +
-			'correctly from the day it landed and NOTHING RAN IT for two waves, which is the ' +
-			'same shape as ci:fleet-inventory above and the reason "a manual subcommand is not a ' +
-			'guard" is a standing rule rather than an observation. Probes nothing, writes ' +
-			"nothing, calls no API and ssh's no box: two local file reads, which is why it sits " +
-			'in repo-sync with the other daily audits and needs no retry. Its JSON separates ' +
-			'`blocking` from `advisory` and carries `facetFileOk` beside `ok` — a GUEST node is ' +
-			'not a placement candidate, so its ageing record must be SAID without failing the ' +
-			'run (the role comes from the manifest, never a name here), and a `$health` file ' +
-			'that could not be parsed at all must not arrive as zero findings. Both distinctions ' +
-			'exist ONLY in the JSON shape: the human output collapses each into one summary line.',
-	},
-	{
-		sub: 'node-users',
-		hostBound: false,
-		argv: ['--json'],
-		job: 'ci:node-users',
-		consumer: 'services/mgmt-api/src/routes/jobs/node-users-check.ts',
-		why:
-			'Who runs CI on each claw, read from the node (node users, 2026-10-27). Built in ' +
-			'0.34.100 and run by nothing until 2026-10-28 — the same shape as ci:fleet-inventory ' +
-			'and ci:health-freshness above. A node still running CI as admin is `state: ' +
-			'"not-cut-over"`: the state the cutover plan is moving AWAY from, reported with an ' +
-			'advisory and never a failure, so the consumer carries the count as data. `ok` is ' +
-			'false only for a node that did not answer (and is not expected down) or a cut-over ' +
-			'node that drifted. The consumer ALSO fails on any `class: "blocking"` finding on an ' +
-			'answered node, which today adds exactly one case `ok` does not cover: ' +
-			'`runner-secret-in-argv` on a node not yet cut over. Those distinctions exist ONLY in ' +
-			'the JSON shape; the human output is one line per node.',
-	},
-	{
-		sub: 'runner-units',
-		hostBound: false,
-		argv: ['--json'],
-		job: 'ci:runner-units',
-		consumer: 'services/mgmt-api/src/routes/jobs/runner-units-check.ts',
-		why:
-			'Does every standing runner install on a node name a live, on-roster, unarchived repo. ' +
-			"Reads the BOX, not GitHub: a runner whose registration died appears in no repo's " +
-			'runner list, which is how claw-1 and claw-2 carried six crash-looping installs ' +
-			'(11,126 and 8,422 restarts) while `reconcile` reported clean on 2026-09-03. Nothing ran ' +
-			'it until 2026-10-28. Its JSON separates `findings` from `unreachable`, ' +
-			'`rosterUnresolved` and `lookupFailed` (each with a reason), and a run that could not ' +
-			'start — no manifest, zero nodes selected — still emits a document with `error`, so ' +
-			'"GitHub could not be asked" never arrives as GONE and "probed nothing" never as clean.',
-	},
-	{
-		sub: 'fleet-kills',
-		hostBound: false,
-		argv: ['--days', '2', '--json'],
-		job: 'ci:fleet-kills',
-		consumer: 'services/mgmt-api/src/routes/jobs/fleet-kills-check.ts',
-		why:
-			'Did the FLEET stop a job at a unit TTL, rather than the job failing (#22). Reads only ' +
-			'job history — completed jobs, after the fact — so it is nightly in repo-sync, not ' +
-			"fleet-pulse: the evidence exists only once a job has already died, and today's TTL " +
-			"(23,400 s) sits above GitHub's own 6 h job ceiling, so a new match means a TTL " +
-			'regression shipped by a release. `--days 2` and not the default 14: history is ' +
-			'immutable, so a 14-day window would hold one kill red for a fortnight; 48 h still ' +
-			'reads every record at least once on a daily cadence (a job is written when it ends, ' +
-			'at most 6.5 h after it started). `kills` and `nearTtl` are separate, and the three ' +
-			'refusals (`bad-days`, `no-history`, `no-records-in-window`) arrive as `ok: false` ' +
-			'with `why` — zero records scanned is not a clean window.',
-	},
-];
+export const JSON_CONTRACT = deriveJsonContract(JOB_REGISTRY);
 
 /**
  * The `COMMANDS` table in `src/cli.ts`, as `subcommand -> script`.
@@ -490,6 +157,31 @@ export function parseCliCommands(blankedSource) {
 	// A table entry: one tab of indent, an optionally-quoted key, then the
 	// `script:` field somewhere inside its braces.
 	const ENTRY = /\n\t(?:'([a-z0-9-]+)'|([a-z0-9-]+)):\s*\{[\s\S]*?script:\s*'([^']+)'/g;
+	for (const m of table.matchAll(ENTRY)) out.set(m[1] ?? m[2], m[3]);
+	return out;
+}
+
+/**
+ * The same `COMMANDS` table, read for its `kind` field instead of `script`
+ * (wave 5e lane A, `job-registry-guard.test.mjs`): does every automated
+ * subcommand (`gate` | `converger` | `recorder`) have a clock in
+ * `src/lib/job-registry.ts`, or an explicit `manual: '<why>'` there?
+ *
+ * Non-greedy to the first `kind:` after each entry's opening brace, same
+ * reasoning as `parseCliCommands`'s stop at the first `script:` — every real
+ * entry carries exactly one `kind` field, so the nearest one is always this
+ * entry's own, never a later entry's. Pass BLANKED source for the same reason
+ * as every other parser here: a commented-out `kind:` must not be read as one.
+ */
+export function parseCliCommandKinds(blankedSource) {
+	const start = blankedSource.indexOf('const COMMANDS');
+	if (start === -1) return new Map();
+	const end = blankedSource.indexOf('\n};', start);
+	if (end === -1) return new Map();
+	const table = blankedSource.slice(start, end);
+
+	const out = new Map();
+	const ENTRY = /\n\t(?:'([a-z0-9-]+)'|([a-z0-9-]+)):\s*\{[\s\S]*?kind:\s*'([a-z-]+)'/g;
 	for (const m of table.matchAll(ENTRY)) out.set(m[1] ?? m[2], m[3]);
 	return out;
 }
@@ -608,24 +300,26 @@ export function emitsJson(blankedSource) {
  *
  * `check-contract-consumers.mjs` verifies both halves against the real
  * hadoku_site checkout, so this is a gate rather than a note.
+ *
+ * SINCE WAVE 5E: derived from `JOB_REGISTRY`'s one `contract: 'prose'` entry
+ * (`ci:audit-gates`), same reasoning as `JSON_CONTRACT` above. `requires` is
+ * hardcoded here rather than carried on the registry entry — it is a fact
+ * about THIS contract's own mechanism (the env var a prose consumer must set
+ * to stop reading the banner as evidence), not a property every job in the
+ * registry needs a field for.
  */
-export const PROSE_CONTRACT = [
-	{
-		job: 'ci:audit-gates',
-		consumer: 'services/mgmt-api/src/routes/jobs/audit-gates.ts',
-		/** The env var the consumer must set. The mechanism, named so it is checkable. */
-		requires: 'FLEET_NO_BANNER',
-		why:
-			"Runs every `script: 'fleet'` gate in its GATES table through this CLI and " +
-			'judges each by a regex over stdout+stderr merged — count the entries, do ' +
-			'not trust a number written here; this sentence carried 13 and went stale ' +
-			'the day `check:warm-canary` was added. Anything the CLI WRAPPER writes — ' +
-			'as opposed to the subcommand — becomes part of every one of those ' +
-			'verdicts and can both satisfy `evidence` and mask `spawnError`. It reads ' +
-			'output as PROSE, so no --json contract covers it and the producer-side ' +
-			'test cannot see it.',
-	},
-];
+function deriveProseContract(registry) {
+	return registry
+		.filter((e) => e.contract === 'prose')
+		.map((e) => ({
+			job: e.name,
+			consumer: e.mgmtApiFile,
+			requires: 'FLEET_NO_BANNER',
+			why: e.why,
+		}));
+}
+
+export const PROSE_CONTRACT = deriveProseContract(JOB_REGISTRY);
 
 /**
  * A TENANT reads these, not a cron job: hadoku-cardtable's coordinator (lane D,

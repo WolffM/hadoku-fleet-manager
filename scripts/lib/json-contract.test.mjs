@@ -41,6 +41,7 @@ import {
 	JSON_CONTRACT,
 	PROSE_CONTRACT,
 	parseCliCommands,
+	parseCliCommandKinds,
 	parseAuditGates,
 	bindsJsonFlag,
 	emitsJson,
@@ -1027,6 +1028,116 @@ void test('a contract subcommand delivers its WHOLE document through a real pipe
  * always undrained, including when the measurement throws) is proved against
  * injected fixtures in `scripts/benchmark-fleet.test.mjs`.
  */
+/**
+ * THE PROOF REQUIRED BEFORE THE HAND LIST COULD BE DELETED (wave 5e lane A,
+ * plan §6.2 item 4 / blast-radius row 1): `JSON_CONTRACT` and
+ * `PROSE_CONTRACT` are now DERIVED from `src/lib/job-registry.ts`'s
+ * `JOB_REGISTRY`, not hand-written. This pins the derived list against
+ * today's truth — the same 22 JSON jobs and 1 prose job that were here
+ * before the derivation landed, by name, subcommand and consumer file — so a
+ * registry edit that silently drops, renames or re-points one of them still
+ * fails the build exactly the way an edit to the old hand list used to.
+ */
+const TODAYS_JSON_CONTRACT = [
+	['drain-check', 'ci:drain-enforced', 'services/mgmt-api/src/routes/jobs/drain-enforced-check.ts'],
+	['benchmark', 'ci:fleet-benchmark', 'services/mgmt-api/src/routes/jobs/fleet-benchmark-check.ts'],
+	['reconcile', 'ci:fleet-coverage', 'services/mgmt-api/src/routes/jobs/fleet-coverage-check.ts'],
+	['toolchain', 'ci:fleet-toolchain', 'services/mgmt-api/src/routes/jobs/fleet-toolchain-check.ts'],
+	[
+		'converge-toolchain',
+		'ci:toolchain-refresh',
+		'services/mgmt-api/src/routes/jobs/toolchain-refresh.ts',
+	],
+	['header-audit', 'ci:header-fleet', 'services/mgmt-api/src/routes/jobs/header-fleet-check.ts'],
+	[
+		'identity-model',
+		'ci:identity-model',
+		'services/mgmt-api/src/routes/jobs/identity-model-check.ts',
+	],
+	['cleanup', 'ci:claw-cleanup', 'services/mgmt-api/src/routes/jobs/claw-cleanup.ts'],
+	['check-runner-var', 'ci:runner-var', 'services/mgmt-api/src/routes/jobs/runner-var-check.ts'],
+	['check-site-token', 'ci:site-token', 'services/mgmt-api/src/routes/jobs/site-token-check.ts'],
+	['egress-slices', 'ci:egress-slices', 'services/mgmt-api/src/routes/jobs/egress-slices-check.ts'],
+	['queue-health', 'ci:queue-health', 'services/mgmt-api/src/routes/jobs/queue-health-check.ts'],
+	[
+		'reap-trend',
+		'ci:reap-timeout-trend',
+		'services/mgmt-api/src/routes/jobs/reap-timeout-trend-check.ts',
+	],
+	['preflight', 'ci:fleet-preflight', 'services/mgmt-api/src/routes/jobs/fleet-preflight-check.ts'],
+	['srv-drift', 'ci:srv-drift', 'services/mgmt-api/src/routes/jobs/srv-drift-check.ts'],
+	['inventory', 'ci:fleet-inventory', 'services/mgmt-api/src/routes/jobs/fleet-inventory-check.ts'],
+	[
+		'service-inventory',
+		'ci:slice-inventory',
+		'services/mgmt-api/src/routes/jobs/slice-inventory.ts',
+	],
+	['doctor', 'ci:health-refresh', 'services/mgmt-api/src/routes/jobs/health-refresh.ts'],
+	[
+		'health-freshness',
+		'ci:health-freshness',
+		'services/mgmt-api/src/routes/jobs/health-freshness-check.ts',
+	],
+	['node-users', 'ci:node-users', 'services/mgmt-api/src/routes/jobs/node-users-check.ts'],
+	['runner-units', 'ci:runner-units', 'services/mgmt-api/src/routes/jobs/runner-units-check.ts'],
+	['fleet-kills', 'ci:fleet-kills', 'services/mgmt-api/src/routes/jobs/fleet-kills-check.ts'],
+].map(([sub, job, consumer]) => `${sub} -> ${job} -> ${consumer}`);
+
+void test("the derived JSON_CONTRACT equals today's 22 entries exactly — name, sub and consumer", () => {
+	const derived = JSON_CONTRACT.map((e) => `${e.sub} -> ${e.job} -> ${e.consumer}`);
+	assert.deepEqual(derived.slice().sort(), TODAYS_JSON_CONTRACT.slice().sort());
+});
+
+void test("the derived PROSE_CONTRACT equals today's one entry exactly", () => {
+	assert.equal(PROSE_CONTRACT.length, 1);
+	assert.equal(PROSE_CONTRACT[0].job, 'ci:audit-gates');
+	assert.equal(PROSE_CONTRACT[0].consumer, 'services/mgmt-api/src/routes/jobs/audit-gates.ts');
+	assert.equal(PROSE_CONTRACT[0].requires, 'FLEET_NO_BANNER');
+});
+
+/**
+ * `parseCliCommandKinds` — the same table, read for `kind` instead of
+ * `script`. `job-registry-guard.test.mjs` is the real consumer; this proves
+ * the parser itself against both a fixture (so a shape it cannot read fails
+ * loudly rather than silently) and the real table (floor, not a count, same
+ * reasoning as `parseCliCommands` above).
+ */
+void test('parseCliCommandKinds reads a fixture table without bleeding across entries', () => {
+	const fixture = [
+		'const COMMANDS: Record<string, Command> = {',
+		'\treconcile: {',
+		"\t\tscript: 'reconcile-fleet-runners.mjs',",
+		"\t\tkind: 'converger',",
+		"\t\tsummary: 'converge runner coverage',",
+		'\t},',
+		"\t'drain-check': {",
+		"\t\tscript: 'check-drain-enforced.mjs',",
+		"\t\tkind: 'gate',",
+		"\t\tsummary: 'is every drain actually being enforced',",
+		'\t},',
+		'};',
+	].join('\n');
+	const kinds = parseCliCommandKinds(blankComments(fixture));
+	assert.equal(kinds.get('reconcile'), 'converger');
+	assert.equal(kinds.get('drain-check'), 'gate');
+	assert.equal(kinds.size, 2);
+});
+
+void test('parseCliCommandKinds: a table it cannot find yields an empty map, not a crash', () => {
+	assert.equal(parseCliCommandKinds('const SOMETHING_ELSE = {};').size, 0);
+});
+
+void test('parseCliCommandKinds against the real src/cli.ts: every JOB_REGISTRY sub resolves to a real kind', () => {
+	const kinds = parseCliCommandKinds(blankComments(readFileSync(CLI, 'utf8')));
+	assert.ok(
+		kinds.size >= MIN_COMMANDS,
+		`parsed ${kinds.size} kind(s), expected at least ${MIN_COMMANDS}`
+	);
+	for (const entry of JSON_CONTRACT) {
+		assert.ok(kinds.has(entry.sub), `src/cli.ts has no COMMANDS['${entry.sub}'].kind`);
+	}
+});
+
 void test('the benchmark entry declares the cadence, and with nothing due it reaches no machine', () => {
 	assert.ok(existsSync(BUILT_CLI), 'dist/cli.js is missing — run `pnpm run build` first');
 	const entry = JSON_CONTRACT.find((e) => e.sub === 'benchmark');

@@ -205,6 +205,7 @@ export const LAYER_MAP = [
 	{ glob: 'src/capabilities.ts', layer: 'config' }, // registry part; see the decision note below
 	{ glob: 'src/lib/fleet-config.ts', layer: 'config' },
 	{ glob: 'src/lib/fleet-paths.ts', layer: 'config' },
+	{ glob: 'src/lib/job-registry.ts', layer: 'config' }, // wave 5e lane A: data + validation, no I/O
 	{ glob: 'src/lib/manifest.ts', layer: 'config' }, // F1 (wave 5c): the typed manifest loader
 	{ glob: 'src/lib/node-role.ts', layer: 'config' },
 	{ glob: 'src/lib/provenance.ts', layer: 'config' },
