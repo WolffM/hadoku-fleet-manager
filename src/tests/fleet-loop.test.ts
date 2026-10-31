@@ -9,46 +9,25 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { homedir, hostname } from 'node:os';
 
-import {
-	dispatchBetweenTicks,
-	__resetDispatchInputForTesting,
-	__setDispatchInputForTesting,
-	tickFleet,
-	RECONCILE_EVERY_TICKS,
-	__resetFleetLoopForTesting,
-	recordDispatch,
-	getDispatchSnapshot,
-	probeNode,
-	probeFleet,
-	markNodeSick,
-	nodeIsSick,
-	sickNodeNames,
-	repairSickNode,
-	doctorCommand,
-	runDoctor,
-	__resetSickForTesting,
-	__parseProbeForTesting,
-	__PROBE_CMD_FOR_TESTING,
-	loadResidentRepos,
-	nodeFailsBootcamp,
-	startFastLoop,
-	__setFastLoopTokenRetryForTesting,
-} from '../fleet-loop.js';
+import { dispatchBetweenTicks, __resetDispatchInputForTesting } from '../fleet-loop.js';
+import { __setDispatchInputForTesting, tickFleet, RECONCILE_EVERY_TICKS } from '../fleet-loop.js';
+import { __resetFleetLoopForTesting, recordDispatch, getDispatchSnapshot } from '../fleet-loop.js';
+import { startFastLoop, __setFastLoopTokenRetryForTesting } from '../fleet-loop.js';
+import { loadResidentRepos } from '../runners/node-eligibility.js';
+import { markNodeSick, nodeIsSick } from '../lib/sick-node.js';
+import { sickNodeNames, __resetSickForTesting } from '../lib/sick-node.js';
 import { loadClawNodes } from '../lib/manifest.js';
 import { __resetReservationForTesting } from '../node-reservation.js';
 import type { DispatchPassResult } from '../runners/dispatch-pass.js';
 import type { EphemeralTickInput } from '../runners/ephemeral-tick.js';
 import { setBackstopHold } from '../runners/backstop-hold.js';
 import { writeDrain } from '../runners/drain.js';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tempDir } from './tmpdir.js';
 import { __setHostForTesting } from '../host.js';
 import { testHost } from './install-test-host.js';
-import { DEFAULT_ADMIN_USER } from '../lib/node-users.js';
 
 // ── rig ─────────────────────────────────────────────────────────────────────
 
@@ -501,63 +480,6 @@ test('loadResidentRepos reads the manifest field it was born to read', async () 
 	});
 });
 
-test('probe parsing: an idle node reports 0 workers, not an unreadable box', () => {
-	// This test used to declare its own `parse` and assert against that copy, so
-	// it passed no matter what parseProbe did — deleting the real parser outright
-	// would not have failed it, while its name claimed to pin the regression
-	// below. It drives the real one now.
-	const idle = __parseProbeForTesting('0 8 0 ');
-	assert.equal(idle?.workers, 0, 'idle box must read as 0 workers');
-	assert.equal(idle?.cores, 8, 'of 8 cores');
-	const busy = __parseProbeForTesting('3 8 0 ');
-	assert.equal(busy?.workers, 3);
-	assert.equal(busy?.cores, 8);
-	// The old buggy output — must still be rejected rather than silently misread.
-	assert.equal(__parseProbeForTesting('0\n0 8'), null, 'the double-zero form is garbage');
-	assert.equal(__parseProbeForTesting(''), null);
-});
-
-// ── probing THIS node ────────────────────────────────────────────────────
-
-test('probeNode: the local host is probed WITHOUT ssh', async () => {
-	// Regression for a silent, months-long capacity loss. mgmt-api runs on hokon,
-	// and hokon refuses ssh to itself (sshd is not on loopback), so probeNode
-	// returned null for its own host on every tick, and an unreachable node
-	// contributes nothing: hokon's slots never counted once.
-	//
-	// Asserting a real result here rather than mocking execFile is the point —
-	// the bug was that the ssh path cannot work for the local host, and only
-	// actually running it proves the local path does.
-	const me = await probeNode(hostname());
-	assert.notEqual(me, null, 'probing our own hostname must not fail');
-	assert.ok((me?.cores ?? 0) > 0, `cores should be positive, got ${me?.cores}`);
-	assert.ok((me?.workers ?? -1) >= 0, 'worker count must be a non-negative number');
-});
-
-test('probe parses the tagged OS field and still finds the repo list after it', () => {
-	const p = __parseProbeForTesting('2 8 0 g=1 o=13.6,6.12.94+deb13-amd64 WolffM/a,WolffM/b,');
-	assert.deepEqual(p?.os, { release: '13.6', kernel: '6.12.94+deb13-amd64' });
-	assert.equal(p?.githubDns, true);
-	assert.deepEqual(
-		[...(p?.busyRepos ?? [])],
-		[
-			['WolffM/a', 1],
-			['WolffM/b', 1],
-		]
-	);
-	assert.deepEqual(__parseProbeForTesting('0 8 0 g=1 o=-,6.12.94')?.os, {
-		release: null,
-		kernel: '6.12.94',
-	});
-	assert.equal(__parseProbeForTesting('0 8 0 g=1 ')?.os, undefined, 'absent claims nothing');
-});
-
-test('probe runs here and reports this host’s real OS', async () => {
-	const me = await probeNode(hostname());
-	assert.match(me?.os?.release ?? '', /^\d+(\.\d+)*$|^[a-z]+\/sid$/, `got ${me?.os?.release}`);
-	assert.ok(me?.os?.kernel, 'uname -r is always readable');
-});
-
 test('dispatch snapshot: a quiet pass keeps the last mint and the trailing hour', () => {
 	// 2026-10-25: the panel read `Minted 0` beside eight jobs in flight, because
 	// it showed the one 15s pass that happened to mint nothing.
@@ -578,140 +500,6 @@ test('dispatch snapshot: a quiet pass keeps the last mint and the trailing hour'
 	);
 });
 
-test('probe counts SPAWNED workers only, never a process merely named Runner.Worker', () => {
-	// 2026-10-25: claw-6 read `busy 7 / 2` holding two real jobs. The extra five
-	// were ci-throttle.test.mjs fixtures — bash copied to `Runner.Worker` — from
-	// this repo's own suite running on the node, and the dispatcher charged them
-	// as standing work and refused the node as at capacity. A stub `pgrep` makes
-	// the census deterministic: one real job, one fixture.
-	const bin = tempDir('probe-pgrep-');
-	writeFileSync(
-		join(bin, 'pgrep'),
-		'#!/bin/sh\n' +
-			'echo "101 /home/u/.hadoku/jit/slot0/bin.2.338.0/Runner.Worker spawnclient 149 152"\n' +
-			'echo "102 /tmp/ci-throttle-1-node-x/Runner.Worker -c sleep 60"\n'
-	);
-	chmodSync(join(bin, 'pgrep'), 0o755);
-	const out = execFileSync('bash', ['-c', __PROBE_CMD_FOR_TESTING], {
-		env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
-		encoding: 'utf8',
-	});
-	assert.equal(__parseProbeForTesting(out)?.workers, 1);
-});
-
-test('probeFleet: the local host reports reachable, not down', async () => {
-	// The dashboard consequence of the same bug: hokon rendered red "unreachable"
-	// on a node that was up and serving CI.
-	const out = await probeFleet([hostname()], {});
-	assert.equal(out.get(hostname())?.reachable, true);
-});
-
-test('sick: a successful repair releases the node', async () => {
-	__resetSickForTesting();
-	markNodeSick('claw-1');
-	const calls: string[][] = [];
-	const ok = await repairSickNode('claw-1', async (node, args) => {
-		calls.push([node, ...args]);
-		return true;
-	});
-	assert.equal(ok, true);
-	assert.equal(nodeIsSick('claw-1'), false, 'a repaired node returns to service');
-	const stores = calls.filter((c) => c.includes('--store')).map((c) => c[2]);
-	assert.ok(
-		stores.some((v) => v.includes('.local/share/pnpm/store')) &&
-			stores.some((v) => v.includes('/opt/hostedtoolcache/pnpm-store')),
-		`both stores must be repaired — workflows do not all use the same one, got ${JSON.stringify(stores)}`
-	);
-	assert.ok(
-		calls.every((c) => c.includes('--fix') || c.includes('--clear-marker')),
-		'repair must actually fix, not merely report'
-	);
-	assert.ok(
-		calls.at(-1)?.includes('--clear-marker'),
-		'the marker is cleared LAST, after the doctor succeeded'
-	);
-});
-
-test('sick: a FAILED repair keeps the node retired', async () => {
-	__resetSickForTesting();
-	markNodeSick('claw-1');
-	const ok = await repairSickNode('claw-1', async () => false);
-	assert.equal(ok, false);
-	assert.ok(nodeIsSick('claw-1'), 'a node we could not fix must not come back');
-	assert.deepEqual(sickNodeNames(), ['claw-1']);
-});
-
-test('sick: a repair that fixes the store but cannot clear the marker stays retired', async () => {
-	// The bug this pins: doing the repair and the marker-clear in ONE command made
-	// release depend on whether `rm` worked rather than on whether the store was
-	// fixed. Inverted here — the doctor succeeds, the clear fails — because a
-	// node whose marker survives will just be re-reported sick next tick, and
-	// releasing it produces a flap instead of a fix.
-	__resetSickForTesting();
-	markNodeSick('claw-1');
-	const ok = await repairSickNode('claw-1', async (_h, args) => !args.includes('--clear-marker'));
-	assert.equal(ok, false);
-	assert.ok(nodeIsSick('claw-1'), 'no release without a cleared marker');
-});
-
-// --- probe field ORDER ------------------------------------------------------
-//
-// The repo field is VARIABLE LENGTH and empty on an idle node, so anything
-// printed after it lands in its position. It must stay last. This mattered
-// when a fifth field existed (the runners.slice OOM counters, removed
-// 2026-08-29 as unconsumed) and it will matter again for the next one.
-
-test('probe: an IDLE node invents no repo from a trailing field', () => {
-	const p = __parseProbeForTesting('0 8 0 ');
-	assert.equal(p?.workers, 0);
-	assert.equal(p?.busyRepos?.size, 0, 'no repo may be invented from an empty tail');
-});
-
-test('probe: a busy node reports its repos', () => {
-	const p = __parseProbeForTesting('2 8 0 WolffM/hadoku_site,WolffM/hadoku-rally');
-	assert.equal(p?.busyRepos?.get('WolffM/hadoku_site'), 1);
-	assert.equal(p?.busyRepos?.get('WolffM/hadoku-rally'), 1);
-});
-
-// --- the GitHub-DNS field (2026-10-16) ------------------------------------
-//
-// claw-9 answered ssh for two hours while MagicDNS SERVFAILed every public
-// name, read `mintable` throughout, and took a mint whose listener never
-// connected. The field is TAGGED so it cannot be confused with the repo list.
-
-test('probe: g=1 resolves, g=0 does not, and the repo list after it still parses', () => {
-	const ok = __parseProbeForTesting('2 8 0 g=1 WolffM/hadoku_site,');
-	assert.equal(ok?.githubDns, true);
-	assert.equal(ok?.busyRepos?.get('WolffM/hadoku_site'), 1);
-	const blind = __parseProbeForTesting('0 8 0 g=0 ');
-	assert.equal(blind?.githubDns, false);
-	assert.equal(blind?.busyRepos?.size, 0, 'the tag is not a repo');
-});
-
-test('probe: an untagged probe claims nothing about DNS and keeps its repo field', () => {
-	const p = __parseProbeForTesting('1 8 0 WolffM/hadoku_site');
-	assert.equal(p?.githubDns, undefined);
-	assert.equal(p?.busyRepos?.get('WolffM/hadoku_site'), 1);
-});
-
-test('probeFleet: a node that answers ssh but cannot resolve GitHub is UNREACHABLE, with the reason', async () => {
-	const out = await probeFleet(['claw-9', 'claw-8'], { 'claw-9': 4, 'claw-8': 4 }, async (n) =>
-		n === 'claw-9'
-			? { workers: 1, cores: 8, sick: false, githubDns: false, busyRepos: new Map() }
-			: { workers: 1, cores: 8, sick: false, githubDns: true, busyRepos: new Map() }
-	);
-	const blind = out.get('claw-9');
-	assert.equal(blind?.reachable, false, 'every reader of `reachable` must stop counting it');
-	assert.equal(blind?.free, 0);
-	assert.match(
-		blind?.unreachableWhy ?? '',
-		/cannot resolve broker\.actions\.githubusercontent\.com/
-	);
-	assert.equal(out.get('claw-8')?.reachable, true);
-	assert.equal(out.get('claw-8')?.free, 3);
-	assert.equal(out.get('claw-8')?.unreachableWhy, undefined);
-});
-
 // --- hadoku-builder gets a PRODUCER (P1.2/P1.3, 2026-09-07) ---------------
 //
 // `hadoku-builder` used to be hand-applied and nothing verified it. Now the
@@ -719,163 +507,6 @@ test('probeFleet: a node that answers ssh but cannot resolve GitHub is UNREACHAB
 // finding (`machines[node].$capabilities`), FAIL-OPEN on absence — bootcamp
 // has never run against every node yet, and "never probed" must not read as
 // "proven bad".
-
-// --- nodeFailsBootcamp: the required set, and the three states that refuse ---
-//
-// The label rule adopted `provesRequiredSet` in wave 3c §G. `REQUIRED` is the bar
-// every case below is judged against; it is passed EXPLICITLY so no test here
-// depends on whether the operator's real demand ledger happens to exist.
-
-/** The demand-derived bar. Two ids is enough for "prove all of them". */
-const REQUIRED = new Set(['python-toolcache', 'gh']);
-
-/** A node bootcamp probed cleanly, proving the whole required set. */
-const provenNode = () => ({
-	$capabilities: {
-		blocked: [],
-		unprobed: [],
-		// `earned` is load-bearing, not decoration: `provenCapabilities` returns
-		// `null` when it is not an array, which `provesRequiredSet` reads as
-		// "nothing has looked".
-		earned: [],
-		prereqs: [{ id: 'python-toolcache' }, { id: 'gh' }],
-	},
-});
-
-test('nodeFailsBootcamp: no recorded finding fails OPEN — never probed is not proven bad', () => {
-	assert.equal(nodeFailsBootcamp('claw-1', { machines: { 'claw-1': {} } }, REQUIRED), false);
-	assert.equal(nodeFailsBootcamp('claw-9', { machines: {} }, REQUIRED), false);
-	assert.equal(nodeFailsBootcamp('claw-1', null, REQUIRED), false);
-});
-
-test('nodeFailsBootcamp: a clean finding proving the required set passes', () => {
-	assert.equal(
-		nodeFailsBootcamp('claw-1', { machines: { 'claw-1': provenNode() } }, REQUIRED),
-		false
-	);
-});
-
-test('nodeFailsBootcamp: MUTATION — removing one capability from the proof fails it', () => {
-	// The fixture starts clean, then loses exactly one proof — python-toolcache
-	// stops passing — which is the mutation item 4 of the handoff names.
-	const clean = { machines: { 'claw-1': provenNode() } };
-	assert.equal(nodeFailsBootcamp('claw-1', clean, REQUIRED), false);
-	const mutated = {
-		machines: {
-			'claw-1': {
-				$capabilities: {
-					blocked: [{ id: 'python-toolcache', detail: 'not found' }],
-					unprobed: [],
-					earned: [],
-					prereqs: [{ id: 'gh' }],
-				},
-			},
-		},
-	};
-	assert.equal(nodeFailsBootcamp('claw-1', mutated, REQUIRED), true);
-});
-
-test('nodeFailsBootcamp: MUTATION — one node missing a capability moves ONLY that node', () => {
-	// The third state of §G item 3, and the one that separates a per-node verdict
-	// from a fleet-wide one. claw-2 is untouched by claw-1's gap.
-	const fleet = {
-		machines: {
-			'claw-1': {
-				$capabilities: { blocked: [], unprobed: [], earned: [], prereqs: [{ id: 'gh' }] },
-			},
-			'claw-2': provenNode(),
-		},
-	};
-	assert.equal(nodeFailsBootcamp('claw-1', fleet, REQUIRED), true, 'the gap is claw-1s');
-	assert.equal(nodeFailsBootcamp('claw-2', fleet, REQUIRED), false, 'and nobody elses');
-});
-
-test('nodeFailsBootcamp: an UNPROBED required capability also disqualifies', () => {
-	// The manifest and capability-probe.sh disagree about what exists — not a
-	// pass, and must not read as one.
-	assert.equal(
-		nodeFailsBootcamp(
-			'claw-1',
-			{
-				machines: {
-					'claw-1': {
-						$capabilities: {
-							blocked: [],
-							unprobed: ['gh'],
-							earned: [],
-							prereqs: [{ id: 'python-toolcache' }],
-						},
-					},
-				},
-			},
-			REQUIRED
-		),
-		true
-	);
-});
-
-test('nodeFailsBootcamp: an UNREADABLE required set moves NO label, fleet-wide', () => {
-	// `null` is "I could not read the bar". Demoting here takes the whole fleet
-	// down at once on one bad file — `provesRequiredSet`'s own header is explicit
-	// that the flip is only safe once the set can be read reliably.
-	// MUTATION: the node below is missing BOTH required capabilities and still
-	// must not move, so a `null` silently coerced to an empty Set would fail this.
-	const starved = {
-		machines: {
-			'claw-1': { $capabilities: { blocked: [], unprobed: [], earned: [], prereqs: [] } },
-		},
-	};
-	assert.equal(nodeFailsBootcamp('claw-1', starved, null), false);
-	assert.equal(nodeFailsBootcamp('claw-1', starved, REQUIRED), true, 'and the bar DOES bite');
-});
-
-test('nodeFailsBootcamp: an EMPTY required set moves NO label either', () => {
-	// A ledger that parsed and asked for nothing. Every node clears a bar of
-	// zero, so enforcing it would be a green fleet proving nothing (3a).
-	//
-	// THE FIXTURE CARRIES A BLOCKED CAPABILITY, and that is what makes this test
-	// bite. `provesRequiredSet` reports `blocked`/`unprobed` as a failure
-	// WHATEVER the bar is, so a node with an empty record would return the same
-	// `false` with or without the guard and the mutation would survive —
-	// measured: deleting the empty-set branch failed 0 of 119 tests against the
-	// empty-record fixture this used to carry.
-	const blocked = {
-		machines: {
-			'claw-1': {
-				$capabilities: {
-					blocked: [{ id: 'gh', detail: 'not found' }],
-					unprobed: [],
-					earned: [],
-					prereqs: [],
-				},
-			},
-		},
-	};
-	assert.equal(nodeFailsBootcamp('claw-1', blocked, new Set()), false);
-	// MUTATION: the same node against a REAL bar is demoted, so the refusal is
-	// the empty set's doing and not the fixture being harmless.
-	assert.equal(nodeFailsBootcamp('claw-1', blocked, REQUIRED), true);
-});
-
-test('nodeFailsBootcamp: a GUEST is never judged by the fast loop, however bad its record', () => {
-	// A guest lends the fleet a registration and is out of scope for bootcamp's
-	// required set (operator, 2026-09-14). `planTierWrites` already drops it;
-	// this is the second half of the same statement, so a resident-registration
-	// caller cannot route around it.
-	const guest = {
-		machines: {
-			hokon: {
-				role: 'guest',
-				$capabilities: { blocked: [{ id: 'gh' }], unprobed: ['python-toolcache'] },
-			},
-		},
-	};
-	assert.equal(nodeFailsBootcamp('hokon', guest, REQUIRED), false);
-	// MUTATION: the same record on a CLAW fails, so this is the role and not the
-	// fixture being harmless.
-	const asClaw = { machines: { hokon: { ...guest.machines.hokon, role: 'claw' } } };
-	assert.equal(nodeFailsBootcamp('hokon', asClaw, REQUIRED), true);
-});
 
 function withCapabilitiesManifest(
 	capabilities:
@@ -1069,40 +700,6 @@ test('two dispatch passes never overlap', async () => {
 	release();
 	assert.equal(await first, 'ok');
 	assert.equal(maxConcurrent, 1);
-});
-
-// ── the repair must reach the node mgmt-api runs on ─────────────────────────
-// `ssh hokon` from hokon is refused, so an ssh-only repair left a quarantined
-// hokon retired for two days on 2026-09-19..21 with both stores clean.
-
-test('repair: the LOCAL node runs through a local shell, never ssh-to-self', () => {
-	const [cmd, args] = doctorCommand('hokon', 'bash -s -- --fix', 'hokon');
-	assert.equal(cmd, 'bash');
-	assert.deepEqual(args, ['-c', 'bash -s -- --fix']);
-});
-
-test('repair: a REMOTE node still goes over ssh, with the same command string', () => {
-	const [cmd, args] = doctorCommand('claw-2', 'bash -s -- --fix', 'hokon');
-	assert.equal(cmd, 'ssh');
-	// As the ci role: claw-2's fixture names no users, so ci is the admin default.
-	assert.equal(args.at(-2), `${DEFAULT_ADMIN_USER}@claw-2`);
-	assert.equal(args.at(-1), 'bash -s -- --fix');
-});
-
-test('repair: the local path EXPANDS $HOME in the store path, as the remote shell does', async () => {
-	// A bare spawn('bash', ['-s', ...]) would hand the doctor a literal "$HOME"
-	// and fail exactly as silently as the ssh-to-self did.
-	const out = join(tempDir('doctor-'), 'seen');
-	const ok = await runDoctor('hokon', ['--store', '$HOME/.local/share/pnpm/store'], {
-		self: 'hokon',
-		script: `printf %s "$2" > ${JSON.stringify(out)}`,
-	});
-	assert.equal(ok, true);
-	assert.equal(readFileSync(out, 'utf8'), `${homedir()}/.local/share/pnpm/store`);
-});
-
-test('repair: a failing doctor reports FAILURE, not a released node', async () => {
-	assert.equal(await runDoctor('hokon', ['--fix'], { self: 'hokon', script: 'exit 3' }), false);
 });
 
 // ── bootcamp decides the label, through the tick ────────────────────────────

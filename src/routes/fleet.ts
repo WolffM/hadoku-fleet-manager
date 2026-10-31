@@ -30,12 +30,9 @@ import {
 	getRunnerHealthSnapshot,
 	type RunnerHealthSnapshot,
 } from '../runner-health.js';
-import {
-	getDispatchSnapshot,
-	getFleetProbeSnapshot,
-	getReservationSnapshot,
-	type NodeProbe,
-} from '../fleet-loop.js';
+import { getDispatchSnapshot, getFleetProbeSnapshot } from '../fleet-loop.js';
+import { getReservationSnapshot } from '../fleet-loop.js';
+import { type NodeProbe } from '../lib/node-probe.js';
 import {
 	backfillFailedSteps,
 	summarise,

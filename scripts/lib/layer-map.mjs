@@ -117,6 +117,7 @@ export const LAYER_MAP = [
 	{ glob: 'src/runners/decision-log.ts', layer: 'state' },
 	{ glob: 'src/capability-revocations.ts', layer: 'state' },
 	{ glob: 'src/lib/measured.ts', layer: 'state' },
+	{ glob: 'src/lib/sick-node.ts', layer: 'state' },
 	{ glob: 'src/job-history.ts', layer: 'state' }, // store part; see the analytics-part note below
 	{ glob: 'src/job-rollup-store.ts', layer: 'state' },
 	{ glob: 'scripts/lib/enrollment-record.mjs', layer: 'state' },
@@ -181,6 +182,7 @@ export const LAYER_MAP = [
 	// -------------------------------------------------------------------- access
 	{ glob: 'src/lib/node-identity.ts', layer: 'access' },
 	{ glob: 'src/lib/node-users.ts', layer: 'access' },
+	{ glob: 'src/lib/node-probe.ts', layer: 'access' },
 	{ glob: 'src/node-shell.ts', layer: 'access' },
 	{ glob: 'src/gh-budget.ts', layer: 'access' },
 	{ glob: 'src/conditional-cache-store.ts', layer: 'access' },

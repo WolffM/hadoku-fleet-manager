@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { buildFleetReport, fetchJobForBackfill } from '../routes/fleet.js';
 import type { RunnerHealthSnapshot } from '../runner-health.js';
 import type { CapacityKind, FleetReport } from '../fleet-report-types.js';
-import { probeFleet, type NodeProbe } from '../fleet-loop.js';
+import { probeFleet, type NodeProbe } from '../lib/node-probe.js';
 import {
 	__resetAdmissionVerdictsForTesting,
 	__setAdmissionVerdictsForTesting,
