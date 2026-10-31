@@ -1,7 +1,7 @@
 {
   "F1": [
-    "scripts/benchmark-fleet.mjs:doc#1",
     "scripts/check-label-floor.mjs:MANIFEST#1",
+    "scripts/lib/benchmark-inventory.mjs:doc#1",
     "scripts/node-users-cutover.mjs:MANIFEST#1",
     "scripts/node-users-cutover.mjs:p#2"
   ],

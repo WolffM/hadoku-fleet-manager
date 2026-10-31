@@ -451,6 +451,24 @@ export const LAYER_MAP = [
 	// map's home for exactly that shape of meta/repo-tooling script.
 	{ glob: 'scripts/split-check.mjs', layer: 'domain', domain: 'observation', part: 'run' },
 	{
+		glob: 'scripts/lib/benchmark-cadence.mjs',
+		layer: 'domain',
+		domain: 'observation',
+		part: 'core',
+	},
+	{
+		glob: 'scripts/lib/benchmark-inventory.mjs',
+		layer: 'domain',
+		domain: 'observation',
+		part: 'core',
+	},
+	{
+		glob: 'scripts/lib/benchmark-measure.mjs',
+		layer: 'domain',
+		domain: 'observation',
+		part: 'run',
+	},
+	{
 		glob: 'scripts/lib/bootcamp-required.mjs',
 		layer: 'domain',
 		domain: 'observation',

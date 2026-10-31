@@ -1055,7 +1055,7 @@ void test('a contract subcommand delivers its WHOLE document through a real pipe
  * nothing due it measures nothing and touches no box. The cadence's behaviour
  * with a node due (at most one, never a guest, busy or someone else's drain,
  * always undrained, including when the measurement throws) is proved against
- * injected fixtures in `scripts/benchmark-fleet.test.mjs`.
+ * injected fixtures in `scripts/lib/benchmark-cadence.test.mjs`.
  */
 /**
  * THE PROOF REQUIRED BEFORE THE HAND LIST COULD BE DELETED (wave 5e lane A,
