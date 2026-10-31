@@ -463,6 +463,23 @@ test("after a cutover, CI's headroom is set in the ci user's manager, found by u
 	);
 });
 
+test("a shared deploy realizes and pins CI's slice before reading its ceiling (claw-8, 2026-10-31)", () => {
+	const ctl = { lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null };
+	const s = deployScript(CARDTABLE, { memoryMb: 4096, cores: 4 }, ctl, {
+		shared: true,
+		ciUser: 'hadoku-ci',
+	});
+	const pin = s.indexOf('ci_systemctl add-wants default.target runners.slice');
+	const start = s.indexOf('ci_systemctl start runners.slice');
+	const read = s.indexOf('ci_max=$(cat "$CI_CG/memory.max"');
+	assert.ok(pin > -1, 'pinned to the ci user default.target, so a reboot keeps it realized');
+	assert.ok(start > -1, 'started now, so the ceiling is readable with no runner in it');
+	assert.ok(pin < read && start < read, 'both happen before memory.max is read');
+	// A whole-node deploy holds CI off: it neither pins nor starts CI's slice.
+	const whole = deployScript(CARDTABLE, { memoryMb: 4096, cores: 4 }, ctl, { ciUser: 'hadoku-ci' });
+	assert.doesNotMatch(whole, /add-wants default\.target runners\.slice/);
+});
+
 /** archivebot's spec: a pm2 `service` tenant, the runtime that declares home files. */
 const ARCHIVEBOT = tenantSpecFrom(
 	validateHostingRequest(

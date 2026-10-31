@@ -103,6 +103,7 @@ const BOOL_FLAGS = [
 	'--remove',
 	'--check',
 	'--restart',
+	'--reassert',
 	'--ci-shaped',
 	'--wait',
 	'--force',
@@ -135,6 +136,8 @@ if (has('--help') || has('-h')) {
 			"        put the tenant's executable in place, root-owned, and restart the agent.",
 			'fleet hosting <node> --restart',
 			'        restart the agent (after it upgraded itself).',
+			'fleet hosting <node> --reassert',
+			'        re-run the node side of the slice it holds, from its record; the record is not touched.',
 			'fleet hosting <node> --end (--in 30m | --at <iso>) [--force]',
 			`        schedule the end; the tenant is owed ${HOSTING_NOTICE_MS / 60_000} min notice.`,
 			'fleet hosting <node> --keep',
@@ -160,15 +163,17 @@ const action = has('--check')
 		? 'install'
 		: has('--restart')
 			? 'restart'
-			: has('--end')
-				? 'end'
-				: has('--keep')
-					? 'keep'
-					: has('--remove')
-						? 'remove'
-						: has('--ci-shaped')
-							? 'ci-shaped'
-							: 'declare';
+			: has('--reassert')
+				? 'reassert'
+				: has('--end')
+					? 'end'
+					: has('--keep')
+						? 'keep'
+						: has('--remove')
+							? 'remove'
+							: has('--ci-shaped')
+								? 'ci-shaped'
+								: 'declare';
 
 /** Human lines go to stderr under --json, so stdout is the one document. */
 const say = (line) => (JSON_OUT ? console.error(line) : console.log(line));
@@ -376,6 +381,44 @@ if (action === 'restart') {
 	if (!m) refuse(`restart on ${node} did not finish: ${r.error ?? r.stderr.trim()}`);
 	say(`✓ ${spec.service} on ${node} restarted (pid ${m[1]}).`);
 	finish(true, { state: 'restarted', pid: Number(m[1]) || null });
+}
+
+// THE NODE SIDE, AGAIN, FROM THE RECORD. A re-declare would do it too, but it
+// rewrites the record — reason, and a scheduled end taken back — so nothing
+// unattended may use it. The node-users cutover calls this: a new ci user has
+// its own user manager, and the slice's CI headroom and OOM ranking lived in
+// the old one (claw-8 and claw-6 read not-guaranteed on 2026-10-31).
+if (action === 'reassert') {
+	if (!current) refuse(`${node} holds no live hosting record, so there is nothing to re-assert.`);
+	const spec = specOf(current.tenant);
+	if (!spec) refuse(`${current.tenant} is not a registered tenant.`);
+	const { mode, until, ...declared } = current;
+	const shared = mode === 'shared';
+	const r = await runOn(
+		node,
+		deployScript(
+			spec,
+			{ memoryMb: current.memoryMb, cores: current.cores },
+			await controllerAddrs(),
+			{ shared, ciUser: nodeUser(machine, 'ci') }
+		),
+		{ as: 'admin', timeoutMs: 120_000 }
+	);
+	if (!r.stdout.includes('HOSTING-DEPLOYED'))
+		refuse(`re-assert on ${node} did not finish: ${r.error ?? r.stderr.trim()}`);
+	const row = await checkOne({ name: node, mode, declared, until: until ?? null });
+	for (const f of row.findings) say(`  ${f.class.padEnd(9)} ${f.category}: ${f.why}`);
+	say(
+		`${row.state === 'guaranteed' ? '✓' : '✗'} ${node}: ${current.tenant}'s slice re-asserted, ${row.state}.`
+	);
+	finish(row.state === 'guaranteed', {
+		state: row.state,
+		mode,
+		findings: row.findings,
+		...(row.state === 'guaranteed'
+			? {}
+			: { reason: `${node} is ${row.state} after the re-assert` }),
+	});
 }
 
 if (action === 'ci-shaped') {

@@ -33,7 +33,8 @@ import process from 'node:process';
 
 import { ciIsSeparate, cutoverCiUser, nodeHome, nodeUser } from '../dist/lib/node-users.js';
 import { isGuestNode } from '../dist/lib/node-role.js';
-import { readDrains } from './lib/expected-down.mjs';
+import { hostingOn, readHostingDoc } from '../dist/runners/hosting-record.js';
+import { readDrainDoc, readDrains } from './lib/expected-down.mjs';
 import { runOn } from './lib/fleet-exec.mjs';
 import {
 	deploySiteRoot,
@@ -228,6 +229,12 @@ async function main() {
 		['bootcamp.mjs', [...machine, '--write']],
 		['node-users.mjs', machine],
 	];
+	// A HOSTING node's slice reaches into CI's user manager: the headroom below
+	// it and CI's OOM ranking. The new manager has neither until the slice's
+	// node side runs again (claw-8 and claw-6, 2026-10-31: not-guaranteed with
+	// no CI running, and cardtable promoted hokon for want of claw-8).
+	if (hostingOn(NODE, readDrainDoc(), readHostingDoc()))
+		chain.splice(1, 0, ['hosting.mjs', [NODE, '--reassert']]);
 	for (const [s, a] of chain) {
 		if (!fleet(s, a)) {
 			die(

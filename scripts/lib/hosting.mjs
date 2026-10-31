@@ -333,9 +333,20 @@ const CI_SYSTEMCTL = `ci_systemctl() {
  * (`ciUnitProperties`), so that reclaim cannot be swap thrash, the reason
  * runners-slice-install.sh sets no MemoryHigh of its own. A persistent
  * set-property, so it survives the slice's unit being rewritten.
+ *
+ * The slice is REALIZED and PINNED to the ci user's default.target first. A
+ * slice nothing runs in has no cgroup, so there is no memory.max to take the
+ * headroom from and node-status reads `hosting-ci-headroom` — blocking. On
+ * 2026-10-31 the node-users cutover gave claw-8 and claw-6 a new ci user whose
+ * runners.slice had never held a runner: both read not-guaranteed with no CI
+ * running at all, and cardtable promoted hokon for want of claw-8. A reboot of
+ * an idle hosting node does the same until its first mint. The pin is the
+ * ci user's own wants link, so it holds across both.
  */
 const CI_HEADROOM = `
 ${CI_SYSTEMCTL}
+ci_systemctl add-wants default.target runners.slice >/dev/null 2>&1
+ci_systemctl start runners.slice >/dev/null 2>&1
 ${CI_SLICE_CG}
 ci_max=$(cat "$CI_CG/memory.max" 2>/dev/null || echo max)
 if [ -n "$CI_CG" ] && [ "$ci_max" != max ]; then
