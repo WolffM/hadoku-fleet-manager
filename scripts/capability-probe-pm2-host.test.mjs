@@ -127,6 +127,6 @@ test('the hub with mgmt-api STOPPED is not answering as the hub', async () => {
 test('a daemon supervising nothing is still no', async () => {
 	assert.equal(
 		await probePm2Host({ online: [], hubPid: '' }),
-		'CAP pm2-host no daemon-up-but-no-app-online'
+		'CAP pm2-host no no-mgmt-api-in-this-users-pm2'
 	);
 });

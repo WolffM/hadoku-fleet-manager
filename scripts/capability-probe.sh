@@ -647,7 +647,12 @@ pm2_host_try() {
 	elif [ "${ph_n:-0}" -gt 0 ]; then
 		printf 'no %s-online-without-mgmt-api' "$ph_n"
 	else
-		printf 'no daemon-up-but-no-app-online'
+		# THIS USER'S daemon, which since the node-users cutover is ci's on a
+		# claw: admin's services (pygmalion on claw-4) live in another daemon
+		# this probe does not read. The verdict is the same either way, because
+		# mgmt-api is not here, so the reason names that rather than implying
+		# the box runs nothing (read that way on claw-4, 2026-10-29).
+		printf 'no no-mgmt-api-in-this-users-pm2'
 	fi
 }
 

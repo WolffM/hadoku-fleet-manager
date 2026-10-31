@@ -64,18 +64,31 @@ prose can neither trip that rule nor satisfy it.
 `src/lib/node-users.ts` — `nodeUser(machine, role)`. A first-party concept since
 2026-10-27 (operator: "must be respected"). A node has users by **role**:
 
-| role       | is                                                                        | never                           |
-| ---------- | ------------------------------------------------------------------------- | ------------------------------- |
-| **admin**  | the management identity: ssh, NOPASSWD sudo, the journal, pm2             | runs a CI job                   |
-| **ci**     | runs every CI job; owns runner slots, toolchains, caches, `runners.slice` | sudo, the docker group, adm     |
-| **tenant** | a hosting agent's system user (`cardtable-agent`), in the tenant registry | logs in, shares a group with ci |
+| role       | is                                                                                                  | never                           |
+| ---------- | --------------------------------------------------------------------------------------------------- | ------------------------------- |
+| **admin**  | the management identity: ssh, NOPASSWD sudo, the journal, pm2                                       | runs a CI job                   |
+| **ci**     | runs every CI job; owns runner slots, home toolchains, caches, `runners.slice`, its rootless docker | sudo, the docker group, adm     |
+| **tenant** | a hosting agent's system user (`cardtable-agent`), in the tenant registry                           | logs in, shares a group with ci |
 
 Code names the ROLE, never a user. `runOn(node, script, { as: 'ci' })`,
 `nodeShell(node, 'ci', cmd)`, `sshDestination(node, 'admin')` and
 `nodeHome(machine, 'ci')` are the doors. The ssh LOGIN carries the role, so
 `$HOME`, `id -u` and `systemctl --user` on the far side are that role's.
 `machines.<node>.users.ci` names a node's ci user; absent means the node has
-not been cut over and its CI still runs as admin.
+not been cut over and its CI still runs as admin. `machines.<node>.containers:
+"docker"` gives that ci user its own rootless docker; the rootful daemon, whose
+group is root-equivalent, stays admin's.
+
+**Shared tarball tools belong to no role.** jdk21 and maven install under the
+root-owned `/opt/fleet-tools` (`TOOL_OPT`), linked into `/usr/local/bin`, so a
+repair run as admin never lands one in a home CI then depends on. Their detect
+fails on a working copy anywhere else, so the next converge moves it, and the
+nightly refresh removes the leftover home copy (`superseded-installs.mjs`).
+
+**A probe reads its own user's pm2.** Capabilities are probed as the role they
+belong to (`role` on a toolchain-floor entry, ci by default). After the cutover
+ci's pm2 is not admin's, so `pm2-host` on a claw reports
+`no-mgmt-api-in-this-users-pm2` even where admin supervises a service.
 `scripts/lib/node-users-guard.test.mjs` fails the build on a user literal, on a
 `runOn` call with no `as:`, or on a hand-rolled ssh that skips `sshDestination`.
 The plan and the cutover order are in `docs/planning/node-users-2026-10-27.md`.

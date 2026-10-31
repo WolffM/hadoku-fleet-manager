@@ -95,6 +95,11 @@ const ONLY = machineArg(process.argv.slice(2), { valueFlags: ['--out', '--budget
  * debounce — drain, wait until DRAINED, update, re-probe, undrain, one node at a
  * time. See `scripts/lib/refresh-cycle.mjs`. `--plan` detects and prints the
  * work without draining anything. `--out <file>` also writes the JSON document.
+ *
+ * The same nightly pass also seeds earned capabilities' caches (`seeds`),
+ * removes JDK/Maven installs left in node users' homes once the opt root holds
+ * the tool (`superseded`, lib/superseded-installs.mjs), and converges each
+ * service host's tunnel and peer port (`tunnels`, `peers`).
  */
 const REFRESH = process.argv.includes('--refresh');
 const PLAN = process.argv.includes('--plan');
