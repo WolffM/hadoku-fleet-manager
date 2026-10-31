@@ -3,19 +3,17 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import {
-	runDispatchTick,
-	resetRecoveryClock,
-	STUCK_ANNOUNCED_FILE,
-	__resetPollStateForTesting,
-	__restartPollCacheForTesting,
-	__restartAnnouncedStuckForTesting,
-	PROBE_BACKOFF_MS,
-	PENDING_INTERVAL_MS,
-	MAX_PENDING_PROBES,
-	getDispatchQueueSnapshot,
-	type DispatchTickInput,
-} from '../runners/dispatch-tick.js';
+import { runDispatchTick } from '../runners/dispatch-tick.js';
+import { resetRecoveryClock } from '../runners/dispatch-tick.js';
+import { __resetPollStateForTesting } from '../runners/dispatch-tick.js';
+import { __restartPollCacheForTesting } from '../runners/dispatch-tick.js';
+import { __restartAnnouncedStuckForTesting } from '../runners/dispatch-tick.js';
+import { PENDING_INTERVAL_MS } from '../runners/dispatch-tick.js';
+import { MAX_PENDING_PROBES } from '../runners/dispatch-tick.js';
+import type { DispatchTickInput } from '../runners/dispatch-tick.js';
+import { getDispatchQueueSnapshot } from '../runners/dispatch-tick.js';
+import { STUCK_ANNOUNCED_FILE } from '../runners/stuck-runs.js';
+import { PROBE_BACKOFF_MS } from '../runners/probe-backoff.js';
 import type { NodeState } from '../runners/placement.js';
 import { jitRunnerName } from '../runners/ephemeral.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';

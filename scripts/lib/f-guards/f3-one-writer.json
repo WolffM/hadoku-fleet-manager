@@ -9,7 +9,7 @@
     "claw-reboot.json": ["scripts/reboot-claws.mjs"],
     "demand-ledger.jsonl": ["scripts/lib/slice-inventory-run.mjs", "scripts/service-inventory.mjs"],
     "dispatch-daily.json": ["src/runners/dispatch-daily.ts"],
-    "dispatch-stuck-announced.json": ["src/runners/dispatch-tick.ts"],
+    "dispatch-stuck-announced.json": ["src/runners/stuck-runs.ts"],
     "fleet-backstop-force.json": ["src/runners/backstop-force.ts"],
     "fleet-drain.json": ["scripts/lib/expected-down.mjs", "src/runners/drain.ts"],
     "fleet-hosting.json": ["src/runners/hosting-record.ts"],

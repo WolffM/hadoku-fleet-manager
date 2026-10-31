@@ -119,6 +119,10 @@ export const LAYER_MAP = [
 	// warm-fill backoff streak, same "one declared writer, read back by
 	// something else" shape as its neighbours above.
 	{ glob: 'src/runners/warm-backoff.ts', layer: 'state' },
+	// Wave 5i lane C split of dispatch-tick.ts (plan §4.3 #16): the
+	// announced-stuck book persisted to dispatch-stuck-announced.json — same
+	// "one declared writer, read back by something else" shape.
+	{ glob: 'src/runners/stuck-runs.ts', layer: 'state' },
 	{ glob: 'src/capability-revocations.ts', layer: 'state' },
 	{ glob: 'src/lib/measured.ts', layer: 'state' },
 	{ glob: 'src/lib/sick-node.ts', layer: 'state' },
@@ -196,6 +200,12 @@ export const LAYER_MAP = [
 	{ glob: 'src/lib/node-identity.ts', layer: 'access' },
 	{ glob: 'src/lib/node-users.ts', layer: 'access' },
 	{ glob: 'src/lib/node-probe.ts', layer: 'access' },
+	// Wave 5i lane C split of dispatch-tick.ts (plan §4.3 #16, "poll cache ->
+	// access"): the ETag/disk-store bookkeeping with no domain-shaped payload
+	// (the cached response BODIES stay in dispatch-tick.ts — they are typed by
+	// QueuedRun/QueuedJob, a ci-scheduling domain type, and an access file
+	// importing a domain type is itself a cut (iii) violation).
+	{ glob: 'src/lib/dispatch-poll-cache.ts', layer: 'access' },
 	{ glob: 'src/node-shell.ts', layer: 'access' },
 	{ glob: 'src/gh-budget.ts', layer: 'access' },
 	{ glob: 'src/conditional-cache-store.ts', layer: 'access' },
@@ -348,6 +358,16 @@ export const LAYER_MAP = [
 	// file's own src/runners/*.ts catch-all (which would otherwise tag it 'run').
 	{
 		glob: 'src/runners/speed-heavy-cache.ts',
+		layer: 'domain',
+		domain: 'ci-scheduling',
+		part: 'core',
+	},
+	// Wave 5i lane C split of dispatch-tick.ts (plan §4.3 #16, "probe backoff ->
+	// own module"): the pure placement fingerprint and the per-run backoff map
+	// it gates, same part as its neighbours above, ahead of this file's own
+	// src/runners/*.ts catch-all (which would otherwise tag it 'run').
+	{
+		glob: 'src/runners/probe-backoff.ts',
 		layer: 'domain',
 		domain: 'ci-scheduling',
 		part: 'core',

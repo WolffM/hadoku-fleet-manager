@@ -22,62 +22,55 @@ import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { logger, stateDir } from '../host.js';
-import { writeFileAtomic } from '../lib/atomic-json.js';
 import { noteTick } from '../lib/liveness.js';
 import { ghTokenFingerprint, withGhCaller } from '../gh-budget.js';
-import { conditionalCacheStore } from '../conditional-cache-store.js';
 import {
 	runDispatchPass,
 	__resetReapClockForTesting,
 	type DispatchPassResult,
 	type RunningJob,
 } from './dispatch-pass.js';
-import type { SkipReason } from './dispatcher.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
-import {
-	DEFAULT_POLL_POLICY,
-	deriveHotRepos,
-	jobQueuedSinceMs,
-	MIN_QUEUED_MS,
-	ZOMBIE_MS,
-	mintableRuns,
-	queuedSinceMs,
-	reposDue,
-	runnableJobs,
-	type QueuedJob,
-	type QueuedRun,
-} from './queue-discovery.js';
-import { satisfiesLabels, type NodeState } from './placement.js';
+import { DEFAULT_POLL_POLICY } from './queue-discovery.js';
+import { deriveHotRepos } from './queue-discovery.js';
+import { jobQueuedSinceMs } from './queue-discovery.js';
+import { MIN_QUEUED_MS } from './queue-discovery.js';
+import { ZOMBIE_MS } from './queue-discovery.js';
+import { mintableRuns } from './queue-discovery.js';
+import { queuedSinceMs } from './queue-discovery.js';
+import { reposDue } from './queue-discovery.js';
+import { runnableJobs } from './queue-discovery.js';
+import type { QueuedJob } from './queue-discovery.js';
+import type { QueuedRun } from './queue-discovery.js';
+import type { NodeState } from './placement.js';
 import { runnerTarballUrl } from './ephemeral-exec.js';
 import type { GhLike, ShellLike } from './ephemeral-exec.js';
+import {
+	etagByRepo,
+	runsDisk,
+	jobsDisk,
+	pendingEtagByRepo,
+	pendingDisk,
+	diskKey,
+	lastPolledMs,
+	pendingKeysByRepo,
+} from '../lib/dispatch-poll-cache.js';
+import { probeBackoff, placementFingerprint, recordProbeBackoff } from './probe-backoff.js';
+import {
+	STUCK_ANNOUNCED_FILE,
+	warnedStuck,
+	stuckStoreComplaints,
+	reasonOf,
+	complainOnce,
+	stuckStorePath,
+	capAnnouncedStuck,
+	persistWarnedStuck,
+	repoOfStuckKey,
+} from './stuck-runs.js';
 
-/** Last poll time per repo. Module state, and safe to lose: `reposDue` treats an
- * unknown repo as due, so a restart polls everything once and re-tiers itself. */
-/**
- * Per-repo ETag and the body it belongs to.
- *
- * PERSISTED since 2026-10-25, with the jobs cache below. This said persisting
- * "would risk serving a body from before a restart that the fleet has already
- * acted on" — true of a body served without asking, and these never are: the
- * cached body is read ONLY on `unchanged`, which is GitHub answering 304 to the
- * ETag stored beside it, i.e. saying that body is the one it would serve now.
- * What persisting changes is the price of the first poll after a restart, not
- * what it returns: on 2026-10-25 the dispatcher's first minutes after each of 12
- * restarts charged 36-63 polls and 23-70 probes, every one a full listing.
- * The bounds and the write rule are in conditional-cache-store.ts.
- */
-const etagByRepo = new Map<string, string>();
-const cachedRunsByRepo = new Map<string, { workflow_runs?: QueuedRun[] }>();
-const POLL_CACHE_MAX_BYTES = 8 * 1024 * 1024;
-const runsDisk = conditionalCacheStore('dispatch-runs', { maxBytes: POLL_CACHE_MAX_BYTES });
-const jobsDisk = conditionalCacheStore('dispatch-jobs', { maxBytes: POLL_CACHE_MAX_BYTES });
-/** The pending listing's ETag and body (fleet-manager#11), kept exactly like the queued one's. */
-const pendingEtagByRepo = new Map<string, string>();
-const cachedPendingByRepo = new Map<string, { workflow_runs?: QueuedRun[] }>();
-const pendingDisk = conditionalCacheStore('dispatch-pending', { maxBytes: POLL_CACHE_MAX_BYTES });
 let pollCacheHydrated = false;
-/** `${token fingerprint}\n${repo or repo#runId}` — an ETag is answered per credential. */
-const diskKey = (token: string, key: string): string => `${ghTokenFingerprint(token)}\n${key}`;
+const cachedRunsByRepo = new Map<string, { workflow_runs?: QueuedRun[] }>();
+const cachedPendingByRepo = new Map<string, { workflow_runs?: QueuedRun[] }>();
 
 /**
  * The previous process's ETags and bodies, once per process, before the first
@@ -117,7 +110,6 @@ function hydratePollCache(token: string): void {
 	});
 }
 
-const lastPolledMs = new Map<string, number>();
 /**
  * Each repo's last successfully READ listing (200 or 304) and when. An errored
  * poll leaves the entry alone, and `at` says how old it is. Separate from
@@ -181,25 +173,6 @@ export function getDispatchQueueSnapshot(
 const jobsCacheByRun = new Map<string, { etag: string | null; body: { jobs?: QueuedJob[] } }>();
 
 /**
- * How long a run that NO node could take goes un-probed (#117).
- *
- * The jobs probe ran for every candidate on every 15s tick, and a run nothing
- * could serve got the same answer every time and paid for it every time: on
- * 2026-10-16 hadoku-cardtable run 38948244350 was probed and skipped 65 times
- * between 18:33 and 18:50Z — 240 calls an hour for one run — because the three
- * jdk21 nodes were full. Its siblings were RUNNING, so their steps changed the
- * body and the ETag above rarely answered 304. 251 such skips in the window
- * that ended in that day's blackout.
- *
- * The backoff is BOUNDED and lifts early on exactly the two things that can
- * change the answer: a node that could take the job changing state (see
- * `placementFingerprint`), and a time-based hold reaching its release
- * (`SkipReason.releaseAtMs`). So a full fleet stops paying per tick, and a
- * freed slot is still seen on the very next one.
- */
-export const PROBE_BACKOFF_MS = 120_000;
-
-/**
  * Liveness expectation for `noteTick('dispatch', …)` — see lib/liveness.ts.
  *
  * MIRRORS `fleet-loop.ts`'s `DISPATCH_SECONDS` (15s), which owns the actual
@@ -215,185 +188,7 @@ export const PROBE_BACKOFF_MS = 120_000;
  */
 const DISPATCH_TICK_EXPECTED_MS = 15_000;
 
-/** `repo#runId` -> do not re-probe before `untilMs` while `fingerprint` holds. */
-const probeBackoff = new Map<
-	string,
-	{ untilMs: number; fingerprint: string; wanted: string[][] }
->();
-
-/**
- * What a job's placement answer depends on, over the nodes that could ever
- * take it — the ones carrying one of its label sets and not excluding its
- * repo. A node that lacks `jdk21` finishing a job elsewhere cannot change
- * whether a jdk21 job places, so it must not lift the backoff; one of the
- * three jdk21 nodes freeing a slot must.
- *
- * NOT `freeMb`: it is re-read every tick and never repeats, so including it
- * would lift every backoff on every tick. A memory refusal is re-asked when a
- * relevant node's unit count moves (a job finishing is what frees memory) and
- * at the latest after PROBE_BACKOFF_MS.
- */
-export function placementFingerprint(
-	nodes: readonly NodeState[],
-	repo: string,
-	wanted: readonly (readonly string[])[]
-): string {
-	return nodes
-		.filter(
-			(n) =>
-				!n.excludedRepos?.has(repo) &&
-				(!wanted.length || wanted.some((w) => satisfiesLabels(n.labels ?? [], w)))
-		)
-		.map((n) =>
-			[
-				n.name,
-				n.healthy,
-				n.eligible,
-				n.schedulable ?? '',
-				n.liveUnits,
-				n.standingBusy,
-				n.maxConcurrent,
-				n.heavyJobs ?? 0,
-				n.runningHeavy ?? false,
-			].join(':')
-		)
-		.sort()
-		.join('|');
-}
-
-/**
- * Stuck runs already warned about.
- *
- * A stuck run stays stuck — that is what makes it stuck — so warning every tick
- * turns a real finding into 6 lines an hour, forever, and the fleet's own logs
- * become the thing nobody reads.
- *
- * THE TWO ZOMBIES CANNOT BE CLEARED AT ALL — not "until someone gets to it".
- * Tested to exhaustion on 2026-09-07, by API and by a human in the web UI.
- *
- * The REST API is CONSISTENT, and an earlier version of this comment got that
- * wrong by listing four "contradictory" answers. Two of those were client
- * renderings — the `gh` CLI says "is completed", the web UI says "is not in
- * progress" — and quoting them as server states overstated the evidence. The
- * server says one thing:
- *
- *   POST /cancel        -> 409 "Cannot cancel a workflow run that has not been queued yet."
- *   POST /force-cancel  -> 409 (identical)
- *   DELETE /runs/<id>   -> 403 "Could not delete the workflow run"
- *
- * The real contradiction is smaller and much sharper, and it is between two
- * endpoints of the same API for the same run:
- *
- *   GET  /runs/<id>     -> "status": "queued"
- *   POST /runs/<id>/cancel -> "has not been queued yet"
- *
- * Both cannot be true. And the two refusals close the loop on each other: it
- * cannot be cancelled because the cancel endpoint says it was never queued, and
- * it cannot be deleted because DELETE wants a COMPLETED run. There is no
- * transition out.
- *
- * The 403 is a STATE refusal rather than a scope one: retried with the
- * owner's own credential, same answer.
- *
- * The cause is visible in the runs themselves — both report `total_count: 0`
- * jobs. A run that never produced a job was never queued in the sense the
- * cancel endpoint means, so no state transition it offers applies, and the
- * record is stranded server-side. That is also why minting for them could never
- * have helped: there is no job to assign.
- *
- * Note this is NOT the same as a genuinely queued run that will not cancel.
- * hadoku-jobplatform#34076512658 refused a plain cancel on 2026-09-07 and
- * force-cancel cleared it in one call — it had real jobs. Reach for
- * force-cancel there; it is not the answer here.
- *
- * So they stay until GitHub Support removes them. `summariseQueue` already
- * contains the cost: they are classified `zombie` and reported rather than
- * failed, so they cannot pin the gate red.
- *
- * ---------------------------------------------------------------------------
- * AND THE SET IS A FILE, BECAUSE THE PROCESS IS NOT DURABLE (issue #25).
- * ---------------------------------------------------------------------------
- *
- * "Said ONCE per run" was true of one PROCESS and of nothing else, and that is
- * not what an operator reading the logs experiences. mgmt-api restarts on every
- * deploy — 28 in one morning is on record — and each restart handed this set
- * back empty, so the same ids were announced again. Counted in
- * `~/.pm2/logs/mgmt-api-out__*.log`, the line about the same two permanent
- * zombies appeared 32 times on 2026-09-08 and 23 on 2026-09-09. The in-process
- * dedup was working perfectly the whole time; it was simply scoped to the wrong
- * lifetime.
- *
- * So the announcement is booked in `STUCK_ANNOUNCED_FILE` under `stateDir()`,
- * which outlives the process. Three properties this has to keep:
- *
- *  1. IT NEVER GETS QUIETER AS THE FAILURE GETS WORSE. Suppression is keyed on
- *     the RUN ID, so a new unclearable run is a new key and is announced even
- *     while a dozen old ones are suppressed; and every line carries the TOTAL
- *     alongside the new ones, so a growing population is visible in the one
- *     line it does emit. (The key is the full `repo#id` STRING — it was a
- *     32-bit hash, which at this file's new lifetime and size is a way for a
- *     genuinely new run to be silenced by a collision nobody could ever
- *     diagnose.)
- *  2. IT NEVER RETRACTS THE FINDING. The runs stay in `stuckRuns` and stay
- *     classified `zombie`; `ci:queue-health` counts them on every run, every
- *     run, regardless of what this file says. What is suppressed is a repeated
- *     LINE, never the count.
- *  3. "I COULD NOT LOOK" DOES NOT PRUNE. An entry is dropped only when its
- *     repo's listing was READ on this tick and the run was absent from it — so
- *     an API failure leaves the book untouched rather than forgetting six
- *     zombies and re-announcing them the moment it recovers.
- */
-export const STUCK_ANNOUNCED_FILE = 'dispatch-stuck-announced.json';
-
-/**
- * Ceiling on the announced set, because a persisted file grows where a process
- * one could not.
- *
- * The prune above handles every run that leaves a queue this dispatcher still
- * polls. It cannot handle a repo that leaves the ROSTER while holding a zombie:
- * nothing polls it again, so its entries are never observed gone. That leaks
- * slowly — six ids in a month of the worst incident on record — and a cap of 500
- * is far past any honest population.
- *
- * DROPS THE OLDEST, and says so. Dropping the newest would silence exactly the
- * findings this mechanism exists to surface; dropping the oldest re-announces a
- * long-known zombie once, which is noise rather than a lost signal.
- */
-export const MAX_ANNOUNCED_STUCK = 500;
-
-/** `repo#id` -> the ISO time it was first announced. Loaded lazily from disk. */
-const warnedStuck = new Map<string, string>();
 let warnedStuckLoaded = false;
-
-/** Store failures are announced once per process, never once per tick. */
-const stuckStoreComplaints = new Set<string>();
-
-const reasonOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-
-function complainOnce(key: string, message: string): void {
-	if (stuckStoreComplaints.has(key)) return;
-	stuckStoreComplaints.add(key);
-	logger.warn(`[dispatch-tick] ${message}`);
-}
-
-const stuckStorePath = (): string => join(stateDir(), STUCK_ANNOUNCED_FILE);
-
-/** Oldest-first, so the cap and the prune both have one ordering to agree on. */
-function capAnnouncedStuck(): void {
-	if (warnedStuck.size <= MAX_ANNOUNCED_STUCK) return;
-	const oldestFirst = [...warnedStuck.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-	const drop = oldestFirst.slice(0, warnedStuck.size - MAX_ANNOUNCED_STUCK);
-	for (const [k] of drop) warnedStuck.delete(k);
-	complainOnce(
-		'cap',
-		`the announced-stuck book passed ${MAX_ANNOUNCED_STUCK} entries — dropped the ` +
-			`${drop.length} oldest, which WILL be announced again: ${drop
-				.slice(0, 5)
-				.map(([k]) => k)
-				.join(', ')}. A book this size means runs are being written off faster than ` +
-			`they leave the queue; that is the finding, not this line.`
-	);
-}
 
 /**
  * The book, from disk. Once per process.
@@ -437,43 +232,6 @@ function loadWarnedStuck(): void {
 		if (typeof v === 'string') warnedStuck.set(k, v);
 	}
 	capAnnouncedStuck();
-}
-
-/**
- * Write the book back. ONLY when it changed — this is on the 15 s dispatch tick,
- * and a steady fleet must not write a file 240 times an hour to say nothing.
- *
- * Temp-and-rename, so a torn write cannot leave a half-object behind; the parse
- * failure that would follow is survivable but costs a duplicated announcement of
- * every zombie on the fleet.
- */
-function persistWarnedStuck(): void {
-	capAnnouncedStuck();
-	const path = stuckStorePath();
-	try {
-		// Write-then-rename (F3, `lib/atomic-json.ts`), fsync SKIPPED — a RECORDED
-		// divergence (plan §4.1 step 2): this is the 15 s dispatch tick, named
-		// explicitly in the wave brief as a site where the two extra fsyncs are
-		// not worth paying. A lost write here costs one re-announced zombie, not
-		// a lost decision.
-		writeFileAtomic(path, `${JSON.stringify(Object.fromEntries(warnedStuck), null, '\t')}\n`, {
-			fsync: false,
-		});
-	} catch (e) {
-		// SAY WHY, and say what it costs. A silent persist failure is invisibly
-		// identical to the bug this file was written to close.
-		complainOnce(
-			'write',
-			`could not persist ${path}: ${reasonOf(e)} — every stuck run will be announced ` +
-				`again on the next restart, which is issue #25 back`
-		);
-	}
-}
-
-/** `WolffM/hadoku_site#34749048183` -> `WolffM/hadoku_site`. */
-function repoOfStuckKey(key: string): string {
-	const i = key.lastIndexOf('#');
-	return i === -1 ? key : key.slice(0, i);
 }
 
 /**
@@ -526,12 +284,6 @@ export const PENDING_INTERVAL_MS = 240_000;
 export const MAX_PENDING_PROBES = 10;
 
 let lastPendingPollMs = 0;
-/**
- * `repo#runId` of the runs each repo's last pending listing returned. Their
- * jobs cache and backoff must outlive the ticks between pending polls, or every
- * probe would be a full read; they are dropped once a listing no longer has them.
- */
-const pendingKeysByRepo = new Map<string, Set<string>>();
 
 // ---------------------------------------------------------------------------
 // The probe's declared intent — the one thing that stops the wasted competitor
@@ -1232,53 +984,6 @@ function entryFor(
 		jobName: j.name,
 		jobCreatedAt: j.created_at,
 	};
-}
-
-/**
- * Back off every run whose EVERY pending job this pass refused as unplaceable.
- * A run with one job minted or in flight is moving, and is probed as usual.
- */
-function recordProbeBackoff(
-	nodes: readonly NodeState[],
-	pending: readonly { id: number; repo: string; labels?: string[] }[],
-	unplaceable: readonly SkipReason[],
-	nowMs: number
-): void {
-	const jobsOf = new Map<string, { labels?: string[] }[]>();
-	for (const p of pending) {
-		const k = `${p.repo}#${p.id}`;
-		jobsOf.set(k, [...(jobsOf.get(k) ?? []), p]);
-	}
-	const skipsOf = new Map<string, SkipReason[]>();
-	for (const s of unplaceable) {
-		const k = `${s.repo}#${s.runId}`;
-		skipsOf.set(k, [...(skipsOf.get(k) ?? []), s]);
-	}
-	const fresh: string[] = [];
-	for (const [k, skips] of skipsOf) {
-		const jobs = jobsOf.get(k) ?? [];
-		if (skips.length !== jobs.length) continue;
-		const release = Math.min(...skips.map((s) => s.releaseAtMs ?? Infinity));
-		const untilMs = Math.min(nowMs + PROBE_BACKOFF_MS, release);
-		if (untilMs <= nowMs) continue;
-		const repo = skips[0].repo;
-		const wanted = jobs.map((j) => j.labels ?? []);
-		probeBackoff.set(k, {
-			untilMs,
-			fingerprint: placementFingerprint(nodes, repo, wanted),
-			wanted,
-		});
-		fresh.push(`${k} ${Math.round((untilMs - nowMs) / 1000)}s`);
-	}
-	if (fresh.length) {
-		// Says why the `skipped run` lines go quiet: the run is still queued and
-		// still unplaceable, it is simply not being re-asked every tick.
-		logger.info(
-			`[dispatch-tick] no node can take ${fresh.length} run(s); not re-probing until a node ` +
-				`that could changes or the hold releases: ${fresh.slice(0, 5).join(', ')}` +
-				(fresh.length > 5 ? ` (+${fresh.length - 5} more)` : '')
-		);
-	}
 }
 
 /** Test seam: the poll cadence is module state and a test must be able to reset it. */

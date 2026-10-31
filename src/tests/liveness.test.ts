@@ -201,7 +201,12 @@ test('two loops are tracked independently — each judged by its OWN cadence, no
 
 test('lastTickAt is an ISO timestamp matching the recorded instant, and ageMs tracks `now`', () => {
 	reset();
-	const before = Date.now();
+	// Frozen for the same reason as the boundary tests above: `noteTick` reads
+	// `Date.now()` again after `before` was read, and under load the two reads
+	// can land a millisecond apart, which made `ageMs >= 5_000` fail once in
+	// the wave 5h run — `ageMs` is `(before + 5_000) - <noteTick's own read>`,
+	// so any gap between the two reads pulls it strictly below 5_000.
+	const before = freezeNow();
 	noteTick('iso-stub', 1_000);
 	const liveness = getFleetLiveness(before + 5_000);
 	const loop = liveness.loops.find((l) => l.name === 'iso-stub');
