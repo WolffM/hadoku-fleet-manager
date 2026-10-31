@@ -206,20 +206,6 @@ const NODE_NAMES = (() => {
 })();
 
 /**
- * The nodes this reconciler manages — DERIVED, never enumerated.
- *
- * This was a hardcoded four-name array, and `loadManifest` THREW on any manifest
- * node not in it. So onboarding a claw meant editing the manifest AND this
- * list, and getting only the first produced a hard failure of `fleet:reconcile`
- * with a message telling you to mark the new node `placement: excluded` —
- * exactly the opposite of what you wanted. With three claws arriving that is
- * three chances to hit it.
- *
- * The manifest already IS the declaration of what is managed, and it already has
- * the opt-out the guard was reaching for: `placement: "excluded"`. So the guard
- * was asking a question the file next to it had already answered.
- */
-/**
  * Which node owns a runner. What matters to a queued job is that SOME
  * labelled runner on that node can take it, not which unix user supervises
  * it, so every instance on a box satisfies coverage for that box.
@@ -352,6 +338,20 @@ function readJobReserves(manifest, repos, previousByRepo = {}) {
 // Desired state
 // ---------------------------------------------------------------------------
 
+/**
+ * The nodes this reconciler manages — DERIVED, never enumerated.
+ *
+ * This was a hardcoded four-name array, and `loadManifest` THREW on any manifest
+ * node not in it. So onboarding a claw meant editing the manifest AND this
+ * list, and getting only the first produced a hard failure of `fleet:reconcile`
+ * with a message telling you to mark the new node `placement: excluded` —
+ * exactly the opposite of what you wanted. With three claws arriving that is
+ * three chances to hit it.
+ *
+ * The manifest already IS the declaration of what is managed, and it already has
+ * the opt-out the guard was reaching for: `placement: "excluded"`. So the guard
+ * was asking a question the file next to it had already answered.
+ */
 function loadManifest() {
 	const raw = readManifest();
 	if (!raw.machines || !Object.keys(raw.machines).length) {

@@ -29,9 +29,10 @@ export const WARM_CACHE_INTERVAL_MS = 60_000;
  *
  * Every fill was failing on every eligible node, every 60s tick, forever: a
  * registration-token GitHub call plus a heavy provisioning ssh, for nothing,
- * ~360 calls/hr fleet-wide. This is state, same shape as `lastWarmCacheMs`
- * above, because the thing it is protecting — a mint attempt — is I/O the
- * pure decision layer in ephemeral.ts cannot gate on its own: `planWarmCache`
+ * ~360 calls/hr fleet-wide. This is state, same shape as
+ * `dispatch-warm-cache.ts`'s `lastWarmCacheMs`, because the thing it is
+ * protecting — a mint attempt — is I/O the pure decision layer in
+ * ephemeral.ts cannot gate on its own: `planWarmCache`
  * correctly says 'fill' every tick there is nothing warm yet, and it should —
  * knowing "try again" is the right call is not the same as knowing "try again
  * this SECOND".

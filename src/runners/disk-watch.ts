@@ -16,21 +16,24 @@
  * HEADROOM LEFT, not a ratio of a disk whose total size varies 16x across the
  * fleet (110 GB on claw-2 to 1,817 GB on claw-8).
  *
- * THE SEAM, NOT THE WIRING. `ephemeral-tick.ts` is lane A's file this wave and
- * cannot be touched here beyond the one hunk the wave brief calls out
- * separately. So the registry below — {@link recordDiskReadings} /
- * {@link diskReadingsForReport} — lives in THIS file rather than beside
- * `admissionVerdictByNode` in `ephemeral-tick.ts`, even though it is the exact
- * same pattern (a module-level snapshot, replaced WHOLESALE once per tick,
- * copied out never mutated — see that file's own doc for why wholesale
- * matters: a node that stops being reachable must stop being reported on the
- * very next pass, not keep a frozen reading forever). The ONE hunk landing
- * after lane A does nothing but call {@link recordDiskReadings} with the two
- * maps `dispatchEphemeral` already builds (`tmpFreeMbByNode`, `workFreeMbByNode`
- * — see that file's `SPACE_PROBE_DF_CMD`/`parseSpaceProbe`). Until that hunk
- * lands, this registry is simply always empty, which is the same honest
- * "could not look yet" `admissionVerdictByNode` reports after every mgmt-api
- * restart — never misread as "every node is fine".
+ * THE SEAM, NOT THE WIRING. `ephemeral-tick.ts` was lane A's file in the wave
+ * this note was written for (4c) and could not be touched here beyond the
+ * one hunk that wave's brief called out separately. So the registry below —
+ * {@link recordDiskReadings} / {@link diskReadingsForReport} — lives in THIS
+ * file rather than beside `admissionVerdictByNode`, which still lives in
+ * `ephemeral-tick.ts`, even though it is the exact same pattern (a
+ * module-level snapshot, replaced WHOLESALE once per tick, copied out never
+ * mutated — see that file's own doc for why wholesale matters: a node that
+ * stops being reachable must stop being reported on the very next pass, not
+ * keep a frozen reading forever). The ONE hunk landing after lane A does
+ * nothing but call {@link recordDiskReadings} with the two maps
+ * `dispatchEphemeral` (still in `ephemeral-tick.ts`) already builds
+ * (`tmpFreeMbByNode`, `workFreeMbByNode` — built from `ephemeral-shared.ts`'s
+ * `SPACE_PROBE_DF_CMD`/`parseSpaceProbe`, split out of `ephemeral-tick.ts` in
+ * split #3). Until that hunk lands, this registry is simply always empty,
+ * which is the same honest "could not look yet" `admissionVerdictByNode`
+ * reports after every mgmt-api restart — never misread as "every node is
+ * fine".
  *
  * HOKON APPEARS HERE SINCE #120 (2026-10-19). Until then it was a guest the
  * dispatcher never minted for, `withoutGuests` stripped it before the space
