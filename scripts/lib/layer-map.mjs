@@ -151,6 +151,10 @@ export const LAYER_MAP = [
 	// ------------------------------------------------------------- automation
 	{ glob: 'src/scheduled-converger.ts', layer: 'automation' },
 	{ glob: 'src/claw-reboot.ts', layer: 'automation' },
+	// The generic job runner (wave 5e lane B): the spawn-classify, pager
+	// ledger, schedule and job-sink primitives `scheduled-converger.ts` and
+	// `claw-reboot.ts` are both now thin configuration over.
+	{ glob: 'src/lib/job-runner.ts', layer: 'automation' },
 	{ glob: 'src/lib/concurrency.ts', layer: 'automation' },
 	// Wave 5e lane C: a generic, domain-blind tick ledger every control loop
 	// (ci-scheduling's dispatch/fast loop, observation's runner-health,

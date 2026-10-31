@@ -25,12 +25,31 @@
  * by the next one. This module keeps when it last ran and what it paged in
  * `claw-reboot-controller.json`. A reboot in flight makes the first pass after
  * a restart due at FIRST_PASS_MIN_MS rather than a whole interval later.
+ *
+ * PORTED ONTO `src/lib/job-runner.ts` (wave 5e lane B): the paging ledger, the
+ * boot-timing clock, the no-overlap guard and the job-sink call are the
+ * runner's shared primitives — this module's own copies of all four are
+ * gone. What stays HERE, unchanged, is this cycle's own report shape
+ * (`RebootDoc`'s `nodes`/`findings`, not `ConvergeDoc`'s rows) and its own
+ * words: a reboot cycle is not a converger with different labels, and
+ * forcing its report into `ConvergeDoc`'s shape would be a behaviour change
+ * this wave does not make.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { logger, postDiscord, stateDir } from './host.js';
 import { writeJsonAtomic } from './lib/atomic-json.js';
+import {
+	classifyMissingDoc,
+	computeFirstDelayMs,
+	createOverlapGuard,
+	createPager,
+	finishTick,
+	hours,
+	scheduleRepeating,
+	type Verdict,
+} from './lib/job-runner.js';
 import { packageScriptPath, spawnScriptJson } from './scheduled-converger.js';
 
 /** Between passes. A pass with nothing to do is one ssh per claw. */
@@ -49,6 +68,8 @@ export const REPAGE_MS = 24 * 60 * 60_000;
  */
 const RUN_TIMEOUT_MS = 100 * 60_000;
 const SELF_KEY = 'reboot-cycle';
+/** The job-sink name (also the Discord alert source, as before). */
+const JOB_NAME = 'reboot';
 
 export interface RebootNode {
 	node: string;
@@ -116,7 +137,6 @@ export const rebootScriptPath = (): string => packageScriptPath('reboot-claws.mj
 export const runRebootScript: RebootRunner = () =>
 	spawnScriptJson<RebootDoc>(rebootScriptPath(), ['--json'], RUN_TIMEOUT_MS);
 
-const hours = (ms: number): string => `${Math.round(ms / 3_600_000)}h`;
 // dkms-missing pages: the claw can never take its kernel until a human builds
 // the module, so it would sit on an unpatched kernel in silence.
 const PAGED_KINDS = new Set(['verify-failed', 'hold-failed', 'undrain-failed', 'dkms-missing']);
@@ -128,27 +148,39 @@ export interface RebootTickSummary {
 	recoveries: number;
 }
 
+/**
+ * The job-sink verdict (job-runner.ts's classify step), read from the SAME
+ * `doc.findings`/`doc.nodes` the paging loop below reads — a second look at
+ * the same report, never a second source of truth. `findings` for anything
+ * that pages or holds a node; `unavailable` for a node this pass could not
+ * read at all; `ok` otherwise (a deferral alone is "busy", not a problem).
+ */
+function classifyRebootDoc(doc: RebootDoc): Verdict {
+	const pagingFindings = doc.findings.filter((f) => f.node && PAGED_KINDS.has(f.kind));
+	const held = doc.nodes.some((n) => n.status === 'held');
+	if (pagingFindings.length > 0 || held) return 'findings';
+	const unreadable =
+		doc.nodes.some((n) => n.status === 'unreadable') ||
+		doc.findings.some((f) => f.kind === 'unreadable');
+	return unreadable ? 'unavailable' : 'ok';
+}
+
 /** One pass: run it, log and page by the rules in the header. Never throws. */
 export async function clawRebootTick(
 	run: RebootRunner = runRebootScript,
 	now: number = Date.now()
 ): Promise<RebootTickSummary> {
+	const startedAt = Date.now();
 	const state = readState();
 	state.lastRunAt = new Date(now).toISOString();
 	const summary: RebootTickSummary = { ran: false, rebooted: 0, pages: 0, recoveries: 0 };
-	const page = async (k: string, content: string) => {
-		const last = state.paged[k] ? Date.parse(state.paged[k]) : null;
-		if (last !== null && now - last < REPAGE_MS) return;
-		state.paged[k] = new Date(now).toISOString();
-		summary.pages++;
-		await postDiscord(content, 'reboot');
-	};
-	const recover = async (k: string, content: string) => {
-		if (!state.paged[k]) return;
-		delete state.paged[k];
-		summary.recoveries++;
-		await postDiscord(content, 'reboot');
-	};
+	const pager = createPager({
+		paged: state.paged,
+		now,
+		repageMs: REPAGE_MS,
+		post: postDiscord,
+		source: 'reboot',
+	});
 
 	const { doc, why } = await run();
 	if (!doc) {
@@ -156,18 +188,28 @@ export async function clawRebootTick(
 		const failingFor = now - Date.parse(state.failingSince);
 		logger.warn(`[reboot] the reboot cycle produced no report: ${why}`);
 		if (failingFor >= FAIL_PAGE_MS) {
-			await page(
+			await pager.page(
 				SELF_KEY,
 				`⚠️ fleet reboot-claws has not produced a report for ${hours(failingFor)} — staged kernels ` +
 					`on the claws are not being rebooted. Last: ${why}`
 			);
 		}
+		summary.pages = pager.counts.pages;
+		summary.recoveries = pager.counts.recoveries;
 		writeState(state);
+		await finishTick({
+			intervalMs: CLAW_REBOOT_MS,
+			jobName: JOB_NAME,
+			now,
+			verdict: classifyMissingDoc(why),
+			durationMs: Date.now() - startedAt,
+			why,
+		});
 		return summary;
 	}
 	summary.ran = true;
 	state.failingSince = null;
-	await recover(SELF_KEY, '✅ fleet reboot-claws is reporting again.');
+	await pager.recover(SELF_KEY, '✅ fleet reboot-claws is reporting again.');
 
 	for (const n of doc.nodes) {
 		if (n.status === 'rebooted') {
@@ -198,7 +240,7 @@ export async function clawRebootTick(
 			continue;
 		}
 		open.add(f.node);
-		await page(
+		await pager.page(
 			f.node,
 			`🔴 ${f.node}: the reboot cycle could not return it to service (${f.kind}): ${f.reason} ` +
 				`Look at it, then \`fleet drain ${f.node} --undo\`.`
@@ -208,62 +250,60 @@ export async function clawRebootTick(
 	for (const n of doc.nodes) {
 		if (open.has(n.node)) continue;
 		if (n.status === 'rebooted' || n.status === 'current') {
-			await recover(n.node, `✅ ${n.node}: back in service after the reboot cycle held it.`);
+			await pager.recover(n.node, `✅ ${n.node}: back in service after the reboot cycle held it.`);
 		}
 	}
 
+	summary.pages = pager.counts.pages;
+	summary.recoveries = pager.counts.recoveries;
 	writeState(state);
+	await finishTick({
+		intervalMs: CLAW_REBOOT_MS,
+		jobName: JOB_NAME,
+		now,
+		verdict: classifyRebootDoc(doc),
+		durationMs: Date.now() - startedAt,
+	});
 	return summary;
 }
 
 let started = false;
-let running = false;
-let timers: ReturnType<typeof setTimeout>[] = [];
+let guard = createOverlapGuard();
+let scheduled: ReturnType<typeof scheduleRepeating> | null = null;
 
 /** Test seam: clear the timers and the `started` guard. */
 export function __stopClawRebootForTesting(): void {
-	for (const t of timers) clearTimeout(t);
-	timers = [];
+	scheduled?.stop();
+	scheduled = null;
 	started = false;
-	running = false;
+	// A fresh guard, not a reset flag — see scheduled-converger.ts's identical note.
+	guard = createOverlapGuard();
 }
 
 /** Start the cycle's timer. Controller-only: `createFleetManager().start()` gates it. */
 export function startClawReboot(run: RebootRunner = runRebootScript): void {
 	if (started) return;
 	started = true;
-	const pass = () => {
-		if (running) return;
-		running = true;
-		clawRebootTick(run)
-			.then((s) => {
-				if (s.rebooted || s.pages || s.recoveries) {
-					logger.info(
-						`[reboot] pass: ${s.rebooted} rebooted, ${s.pages} page(s), ${s.recoveries} recovery(ies)`
-					);
-				}
-			})
-			.catch((err: unknown) => {
-				logger.warn(`[reboot] pass threw: ${err instanceof Error ? err.message : String(err)}`);
-			})
-			.finally(() => {
-				running = false;
-			});
-	};
+	const pass = () =>
+		guard.run(() =>
+			clawRebootTick(run)
+				.then((s) => {
+					if (s.rebooted || s.pages || s.recoveries) {
+						logger.info(
+							`[reboot] pass: ${s.rebooted} rebooted, ${s.pages} page(s), ${s.recoveries} recovery(ies)`
+						);
+					}
+				})
+				.catch((err: unknown) => {
+					logger.warn(`[reboot] pass threw: ${err instanceof Error ? err.message : String(err)}`);
+				})
+		);
 	const last = readState().lastRunAt;
-	const sinceLast = last ? Date.now() - Date.parse(last) : Infinity;
 	const firstIn = inFlight()
 		? FIRST_PASS_MIN_MS
-		: Math.max(FIRST_PASS_MIN_MS, Math.min(CLAW_REBOOT_MS, CLAW_REBOOT_MS - sinceLast));
+		: computeFirstDelayMs({ intervalMs: CLAW_REBOOT_MS, firstPassMinMs: FIRST_PASS_MIN_MS }, last);
 	logger.info(
 		`[reboot] cycle every ${CLAW_REBOOT_MS / 60_000} min, next in ${Math.round(firstIn / 60_000)} min`
 	);
-	const first = setTimeout(() => {
-		pass();
-		const every = setInterval(pass, CLAW_REBOOT_MS);
-		every.unref?.();
-		timers.push(every);
-	}, firstIn);
-	first.unref?.();
-	timers.push(first);
+	scheduled = scheduleRepeating(firstIn, CLAW_REBOOT_MS, pass, JOB_NAME);
 }

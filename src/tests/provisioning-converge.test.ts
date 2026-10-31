@@ -46,6 +46,8 @@ beforeEach(() => {
 			},
 			recordQuietly() {},
 		},
+		// See scheduled-converger.test.ts: every tick now reports to the job sink.
+		jobs: { recordJobResult: async () => {} },
 	});
 });
 afterEach(() => __setHostForTesting(testHost));
@@ -164,4 +166,36 @@ void test('the real runner refuses under node --test, and names the packaged scr
 	assert.match(r.why, /refused under node --test/);
 	assert.match(convergeScriptPath(), /scripts\/converge-provisioning\.mjs$/);
 	assert.ok(existsSync(convergeScriptPath()), 'the path resolves to the shipped script');
+});
+
+void test('job-runner.ts classify: ok/findings report succeeded, unavailable/broke report failed', async () => {
+	const sink: { jobState: string; verdict: unknown }[] = [];
+	__setHostForTesting({
+		...testHost,
+		logger: { info() {}, warn() {}, error() {} },
+		alerts: { post: async () => ({ posted: true, sinkRecorded: true }), recordQuietly() {} },
+		jobs: {
+			async recordJobResult(_jobName, jobState, _durationMs, opts) {
+				sink.push({
+					jobState,
+					verdict: (opts?.data as Record<string, unknown> | undefined)?.verdict,
+				});
+			},
+		},
+	});
+
+	await convergeProvisioningTick(runner(doc()), T0); // nothing outstanding
+	await convergeProvisioningTick(runner(doc({ deferred: [CLAW4_THROTTLE] })), T0); // a finding, not yet paged
+	await convergeProvisioningTick(
+		runner(doc({ unreadable: [{ node: 'claw-4', facet: 'throttle', why: 'ssh timed out' }] })),
+		T0
+	);
+	await convergeProvisioningTick(runner(null, 'exit 1, no report'), T0);
+
+	assert.deepEqual(sink, [
+		{ jobState: 'succeeded', verdict: 'ok' },
+		{ jobState: 'succeeded', verdict: 'findings' },
+		{ jobState: 'failed', verdict: 'unavailable' },
+		{ jobState: 'failed', verdict: 'broke' },
+	]);
 });

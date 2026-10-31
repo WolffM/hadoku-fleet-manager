@@ -12,14 +12,23 @@
  *   - a (node, facet) `deferred` for longer than `deferPageMs` pages;
  *   - the converger itself failing to report for `deferPageMs` pages;
  *   - whatever paged gets a recovery once it is read clean.
- * An UNREADABLE node is logged, not paged, and keeps its open page: "could not
- * look" is never "converged".
+ * An UNREADABLE node is logged, not paged: "could not look" is never
+ * "converged". It also feeds the job sink below.
  *
  * STATE IS ON DISK. mgmt-api restarts many times a day, so the last run, the
  * deferral clocks and the open pages live in `<stateFile>` under stateDir. The
  * first pass after a boot is due one interval after the LAST pass on disk, and
  * never sooner than `firstPassMinMs` (boot is when the fast loop probes every
  * node).
+ *
+ * THIS MODULE IS NOW A THIN CONFIGURATION OVER `src/lib/job-runner.ts` (wave
+ * 5e lane B): the clock, the paging ledger and the job-sink call are the
+ * runner's; `createConverger` supplies only the (node, facet) entity loop —
+ * `ConvergeDoc`'s `deferred`/`unconverged`/`unreadable`/`changed` arrays — and
+ * the words. Its own exported shape (`Converger<R>`, `ConvergeTickSummary`,
+ * `ConvergeDoc`/`ConvergeRow`/`ConvergeRunner`) is UNCHANGED: every existing
+ * importer (`provisioning-converge.ts`, `hosting-converge.ts`, their tests)
+ * needed no edit beyond a hermetic job-sink stub in their test host.
  */
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
@@ -27,28 +36,26 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { ConvergeDoc, ConvergeRow } from './fleet-report-types.js';
 import { logger, manifestDir, postDiscord, stateDir } from './host.js';
 import { writeJsonAtomic } from './lib/atomic-json.js';
+import {
+	classifyMissingDoc,
+	computeFirstDelayMs,
+	createOverlapGuard,
+	createPager,
+	finishTick,
+	hours,
+	scheduleRepeating,
+	type Verdict,
+} from './lib/job-runner.js';
 
-/** One (node, facet) finding, as every converger's `--json` reports it. */
-export interface ConvergeRow {
-	node: string;
-	facet: string;
-	before?: string;
-	changed?: string;
-	why?: string;
-}
-
-/** A converger subcommand's `--json`, as far as this module reads it. */
-export interface ConvergeDoc<R extends ConvergeRow = ConvergeRow> {
-	ok: boolean;
-	planned: R[];
-	converged: R[];
-	deferred: R[];
-	unconverged: R[];
-	unreadable: { node: string; facet: string; why: string }[];
-	changed: { node: string; facet: string; changed: string }[];
-}
+/**
+ * `ConvergeDoc`/`ConvergeRow` moved to `fleet-report-types.ts` beside
+ * `GateDoc`/`RecordDoc` (wave 5e lane B); re-exported here under their
+ * original names and path for every existing importer.
+ */
+export type { ConvergeDoc, ConvergeRow } from './fleet-report-types.js';
 
 export type ConvergeRunner<R extends ConvergeRow = ConvergeRow> = () => Promise<{
 	doc: ConvergeDoc<R> | null;
@@ -64,7 +71,7 @@ export interface ConvergeTickSummary {
 
 /** What one converger is: its name, its file, its clock and its words. */
 export interface ConvergerConfig<R extends ConvergeRow = ConvergeRow> {
-	/** The log tag and alert source, e.g. `provisioning`. */
+	/** The log tag, alert source and job-sink name, e.g. `provisioning`. */
 	name: string;
 	/** Its state file under stateDir. */
 	stateFile: string;
@@ -102,7 +109,6 @@ interface ConvergeState {
 /** The key for "the converger itself did not report", beside the (node, facet) keys. */
 const SELF_KEY = 'converger';
 const key = (r: { node: string; facet: string }): string => `${r.node}|${r.facet}`;
-const hours = (ms: number): string => `${Math.round(ms / 3_600_000)}h`;
 
 /** A subcommand of this package, beside this module's `dist/` in the installed package. */
 export function packageScriptPath(script: string): string {
@@ -226,27 +232,35 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 		writeJsonAtomic(statePath(), s, { space: 2 });
 	}
 
+	/**
+	 * The job-sink verdict (job-runner.ts's classify step): `findings` for
+	 * anything a human or a repair still needs to act on, `unavailable` for
+	 * "read everything else fine, but could not look at this one", `ok`
+	 * otherwise. Orthogonal to the paging decision below, which keeps its own
+	 * timers unchanged.
+	 */
+	function classify(doc: ConvergeDoc<R>): Verdict {
+		if (doc.unconverged.length > 0 || doc.deferred.length > 0) return 'findings';
+		if (doc.unreadable.length > 0) return 'unavailable';
+		return 'ok';
+	}
+
 	/** One pass. Never throws: a broken pass is logged and retried next interval. */
 	async function tick(
 		run: ConvergeRunner<R>,
 		now: number = Date.now()
 	): Promise<ConvergeTickSummary> {
+		const startedAt = Date.now();
 		const state = readState();
 		state.lastRunAt = new Date(now).toISOString();
 		const summary: ConvergeTickSummary = { ran: false, changed: 0, pages: 0, recoveries: 0 };
-		const page = async (k: string, content: string) => {
-			const last = state.paged[k] ? Date.parse(state.paged[k]) : null;
-			if (last !== null && now - last < cfg.repageMs) return;
-			state.paged[k] = new Date(now).toISOString();
-			summary.pages++;
-			await postDiscord(content, cfg.name);
-		};
-		const recover = async (k: string, content: string) => {
-			if (!state.paged[k]) return;
-			delete state.paged[k];
-			summary.recoveries++;
-			await postDiscord(content, cfg.name);
-		};
+		const pager = createPager({
+			paged: state.paged,
+			now,
+			repageMs: cfg.repageMs,
+			post: postDiscord,
+			source: cfg.name,
+		});
 
 		const { doc, why } = await run();
 		if (!doc) {
@@ -254,13 +268,23 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 			const failingFor = now - Date.parse(state.failingSince);
 			logger.warn(`${tag} the converger produced no report: ${why}`);
 			if (failingFor >= cfg.deferPageMs)
-				await page(SELF_KEY, cfg.words.silent(hours(failingFor), why));
+				await pager.page(SELF_KEY, cfg.words.silent(hours(failingFor), why));
+			summary.pages = pager.counts.pages;
+			summary.recoveries = pager.counts.recoveries;
 			writeState(state);
+			await finishTick({
+				intervalMs: cfg.intervalMs,
+				jobName: cfg.name,
+				now,
+				verdict: classifyMissingDoc(why),
+				durationMs: Date.now() - startedAt,
+				why,
+			});
 			return summary;
 		}
 		summary.ran = true;
 		state.failingSince = null;
-		await recover(SELF_KEY, cfg.words.reporting);
+		await pager.recover(SELF_KEY, cfg.words.reporting);
 
 		for (const c of doc.changed) {
 			summary.changed++;
@@ -274,14 +298,15 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 			state.deferredSince[k] ??= state.lastRunAt;
 			const deferredFor = now - Date.parse(state.deferredSince[k]);
 			logger.info(`${tag} ${r.node} ${r.facet} deferred ${hours(deferredFor)}: ${r.why ?? ''}`);
-			if (deferredFor >= cfg.deferPageMs) await page(k, cfg.words.deferred(r, hours(deferredFor)));
+			if (deferredFor >= cfg.deferPageMs)
+				await pager.page(k, cfg.words.deferred(r, hours(deferredFor)));
 		}
 		for (const r of doc.unconverged) {
 			const k = key(r);
 			open.add(k);
 			delete state.deferredSince[k];
 			logger.warn(`${tag} ${r.node} ${r.facet} did NOT converge: ${r.why ?? ''}`);
-			await page(k, cfg.words.unconverged(r));
+			await pager.page(k, cfg.words.unconverged(r));
 		}
 		for (const u of doc.unreadable) {
 			logger.warn(`${tag} ${u.node} ${u.facet} could not be read: ${u.why}`);
@@ -298,62 +323,58 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 		for (const k of closed) {
 			delete state.deferredSince[k];
 			const [node, facet] = k.split('|');
-			await recover(k, cfg.words.recovered(node, facet));
+			await pager.recover(k, cfg.words.recovered(node, facet));
 		}
 
+		summary.pages = pager.counts.pages;
+		summary.recoveries = pager.counts.recoveries;
 		writeState(state);
+		await finishTick({
+			intervalMs: cfg.intervalMs,
+			jobName: cfg.name,
+			now,
+			verdict: classify(doc),
+			durationMs: Date.now() - startedAt,
+		});
 		return summary;
 	}
 
 	let started = false;
-	let inFlight = false;
-	let timers: ReturnType<typeof setTimeout>[] = [];
+	let guard = createOverlapGuard();
+	let scheduled: ReturnType<typeof scheduleRepeating> | null = null;
 
 	function start(run: ConvergeRunner<R>): void {
 		if (started) return;
 		started = true;
-		const pass = () => {
-			if (inFlight) return;
-			inFlight = true;
-			tick(run)
-				.then((s) => {
-					if (s.changed || s.pages || s.recoveries) {
-						logger.info(
-							`${tag} pass: ${s.changed} change(s), ${s.pages} page(s), ${s.recoveries} recovery(ies)`
-						);
-					}
-				})
-				.catch((err: unknown) => {
-					logger.warn(`${tag} pass threw: ${err instanceof Error ? err.message : String(err)}`);
-				})
-				.finally(() => {
-					inFlight = false;
-				});
-		};
-		const last = readState().lastRunAt;
-		const sinceLast = last ? Date.now() - Date.parse(last) : Infinity;
-		const firstIn = Math.max(
-			cfg.firstPassMinMs,
-			Math.min(cfg.intervalMs, cfg.intervalMs - sinceLast)
-		);
+		const pass = () =>
+			guard.run(() =>
+				tick(run)
+					.then((s) => {
+						if (s.changed || s.pages || s.recoveries) {
+							logger.info(
+								`${tag} pass: ${s.changed} change(s), ${s.pages} page(s), ${s.recoveries} recovery(ies)`
+							);
+						}
+					})
+					.catch((err: unknown) => {
+						logger.warn(`${tag} pass threw: ${err instanceof Error ? err.message : String(err)}`);
+					})
+			);
+		const firstIn = computeFirstDelayMs(cfg, readState().lastRunAt);
 		logger.info(
 			`${tag} converger every ${cfg.intervalMs / 60_000} min, next in ${Math.round(firstIn / 60_000)} min`
 		);
-		const first = setTimeout(() => {
-			pass();
-			const every = setInterval(pass, cfg.intervalMs);
-			every.unref?.();
-			timers.push(every);
-		}, firstIn);
-		first.unref?.();
-		timers.push(first);
+		scheduled = scheduleRepeating(firstIn, cfg.intervalMs, pass, cfg.name);
 	}
 
 	function stopForTesting(): void {
-		for (const t of timers) clearTimeout(t);
-		timers = [];
+		scheduled?.stop();
+		scheduled = null;
 		started = false;
-		inFlight = false;
+		// A fresh guard, not a reset flag: the previous one's `inFlight` closure
+		// cannot be reached from outside, so a new object is the only way to
+		// clear it (mirrors the original module-level `inFlight = false`).
+		guard = createOverlapGuard();
 	}
 
 	return { tick, start, stopForTesting };

@@ -27,6 +27,8 @@ beforeEach(() => {
 			},
 			recordQuietly() {},
 		},
+		// See scheduled-converger.test.ts: every tick now reports to the job sink.
+		jobs: { recordJobResult: async () => {} },
 	});
 });
 afterEach(() => __setHostForTesting(testHost));

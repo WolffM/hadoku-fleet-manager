@@ -45,6 +45,11 @@ beforeEach(() => {
 			},
 			recordQuietly() {},
 		},
+		// Every tick now reports to the job sink (job-runner.ts's `finishTick`,
+		// ported in with the rest of the runner). Stubbed for the same reason
+		// scheduled-converger.test.ts stubs it: the real `recordJobResult`
+		// fetches a live URL, and this suite must stay hermetic.
+		jobs: { recordJobResult: async () => {} },
 	});
 });
 afterEach(() => __setHostForTesting(testHost));
@@ -153,4 +158,51 @@ void test('the real runner refuses under node --test, and points at the packaged
 	const r = await runRebootScript();
 	assert.equal(r.doc, null);
 	assert.match(r.why, /refused under node --test/);
+});
+
+void test('job-runner.ts classify: ok/findings report succeeded, unavailable/broke report failed', async () => {
+	const sink: { jobState: string; verdict: unknown }[] = [];
+	__setHostForTesting({
+		...testHost,
+		logger: { info() {}, warn() {}, error() {} },
+		alerts: { post: async () => ({ posted: true, sinkRecorded: true }), recordQuietly() {} },
+		jobs: {
+			async recordJobResult(_jobName, jobState, _durationMs, opts) {
+				sink.push({
+					jobState,
+					verdict: (opts?.data as Record<string, unknown> | undefined)?.verdict,
+				});
+			},
+		},
+	});
+
+	await clawRebootTick(runner(doc({ nodes: [{ node: 'claw-3', status: 'current' }] })), T0); // nothing wrong
+	await clawRebootTick(
+		runner(
+			doc({
+				ok: false,
+				nodes: [{ node: 'claw-5', status: 'held' }],
+				findings: [{ node: 'claw-5', kind: 'verify-failed', reason: 'bad kernel' }],
+			})
+		),
+		T0
+	);
+	await clawRebootTick(
+		runner(
+			doc({
+				ok: false,
+				nodes: [{ node: 'claw-1', status: 'unreadable' }],
+				findings: [{ node: 'claw-1', kind: 'unreadable', reason: 'ssh timed out' }],
+			})
+		),
+		T0
+	);
+	await clawRebootTick(runner(null, 'exit 1, no report'), T0);
+
+	assert.deepEqual(sink, [
+		{ jobState: 'succeeded', verdict: 'ok' },
+		{ jobState: 'succeeded', verdict: 'findings' },
+		{ jobState: 'failed', verdict: 'unavailable' },
+		{ jobState: 'failed', verdict: 'broke' },
+	]);
 });

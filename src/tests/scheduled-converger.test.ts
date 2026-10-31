@@ -43,6 +43,10 @@ beforeEach(() => {
 			},
 			recordQuietly() {},
 		},
+		// Every tick now reports to the job sink (job-runner.ts's `finishTick`).
+		// The real `recordJobResult` fetches a live URL; stubbed here so this
+		// suite stays hermetic, same as fleet-loop.test.ts/drain.test.ts.
+		jobs: { recordJobResult: async () => {} },
 	});
 });
 afterEach(() => __setHostForTesting(testHost));

@@ -316,6 +316,10 @@
     "to": "src/runners/ephemeral.ts"
   },
   {
+    "from": "src/scheduled-converger.ts",
+    "to": "src/fleet-report-types.ts"
+  },
+  {
     "from": "src/server.ts",
     "to": "src/index.ts"
   }
