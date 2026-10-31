@@ -56,6 +56,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { manifest, stateDir, logger, postDiscord } from './host.js';
 import { writeJsonAtomic } from './lib/atomic-json.js';
 import { fleetOwner } from './lib/fleet-config.js';
+import { DAY_MS as REPAGE_INTERVAL_MS, repageDue } from './lib/job-runner.js';
 
 /** One watched workflow. Shape matches `fleet ci-watch --write` output. */
 export interface CiTarget {
@@ -190,8 +191,14 @@ export const STALE_RUN_MS = 6 * 60 * 60 * 1000;
  * 24 h (`REMINDER_INTERVAL_MS`) for the same "failure while already broken"
  * case. The two alerters split GitHub Actions between them along the
  * `coveredJobNames` boundary; one policy across the boundary beats two.
+ *
+ * VALUE AND NAME ARE UNCHANGED (F12, plan §4.1): this is `job-runner.ts`'s
+ * shared `DAY_MS`, imported under this module's own name so every reasoning
+ * above and every existing caller (including the test file, which imports it
+ * by this name) stays exactly as it reads today. What moved is only that this
+ * file no longer DECLARES the value — see the import above.
  */
-export const REPAGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export { REPAGE_INTERVAL_MS };
 
 /**
  * How many completed runs one poll asks for (#32).
@@ -545,13 +552,12 @@ export function decideCiAlert(prev: CiState | null, run: CiRun, now: number): Ci
 			return { action: 'suppressed', next, reason: 'run is older than the freshness gate' };
 		if (alreadyAlerted)
 			return { action: 'suppressed', next, reason: 'already announced for this run' };
-		const lastAlertMs = prev?.lastAlertedAt ? Date.parse(prev.lastAlertedAt) : NaN;
-		// No usable stamp means the page that opened this streak predates the
-		// field or never got sent. Treat it as due rather than swallowing the
-		// streak forever — the same call job-alerts makes on a missing
-		// `last_alert_at`. The freshness gate above still bounds the damage: a
-		// cold resync can only reach runs that ended within the last six hours.
-		if (!Number.isNaN(lastAlertMs) && now - lastAlertMs < REPAGE_INTERVAL_MS) {
+		// `repageDue` (job-runner.ts, F12) treats a missing or unparseable stamp
+		// as due rather than swallowing the streak forever — the same call
+		// job-alerts makes on a missing `last_alert_at`. The freshness gate
+		// above still bounds the damage: a cold resync can only reach runs that
+		// ended within the last six hours.
+		if (!repageDue(prev?.lastAlertedAt, now, REPAGE_INTERVAL_MS)) {
 			return { action: 'suppressed', next, reason: 'still red — re-page window has not elapsed' };
 		}
 		return announce('broken', true);

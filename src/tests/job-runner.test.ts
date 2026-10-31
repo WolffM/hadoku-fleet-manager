@@ -17,8 +17,11 @@ import {
 	computeFirstDelayMs,
 	createOverlapGuard,
 	createPager,
+	DAY_MS,
 	finishTick,
+	HOUR_MS,
 	hours,
+	repageDue,
 	reportJobResult,
 	scheduleRepeating,
 } from '../lib/job-runner.js';
@@ -72,6 +75,44 @@ void test('hours: rounds ms to the nearest hour, as every page/recovery message 
 	assert.equal(hours(3_600_000), '1h');
 	assert.equal(hours(21_600_000), '6h');
 	assert.equal(hours(1_800_000), '1h'); // Math.round(0.5) rounds up
+});
+
+void test('HOUR_MS/DAY_MS: the two duration literals every repage constant migrated onto', () => {
+	assert.equal(HOUR_MS, 3_600_000);
+	assert.equal(DAY_MS, 86_400_000);
+	assert.equal(DAY_MS, 24 * HOUR_MS);
+});
+
+void test('repageDue: no previous page is always due, including an unparseable stamp', () => {
+	assert.equal(repageDue(undefined, 1000, 500), true);
+	assert.equal(repageDue('not a date', 1000, 500), true);
+});
+
+void test('repageDue: due at and past the window, not due a moment before it', () => {
+	assert.equal(repageDue(new Date(0).toISOString(), 499, 500), false);
+	assert.equal(repageDue(new Date(0).toISOString(), 500, 500), true);
+	assert.equal(repageDue(new Date(0).toISOString(), 501, 500), true);
+});
+
+void test("repageDue: createPager's own debounce is this function — breaking the boundary fails here first", async () => {
+	// Pins the one thing `createPager` delegates: its `page()` must refuse
+	// exactly when `repageDue` says no, and nothing else. A `page()` that
+	// re-implemented the comparison by hand could drift from this without
+	// either test alone catching it.
+	const paged: Record<string, string> = { k: new Date(0).toISOString() };
+	let posts = 0;
+	const pager = createPager({
+		paged,
+		now: 499,
+		repageMs: 500,
+		post: async () => {
+			posts++;
+		},
+		source: 'x',
+	});
+	await pager.page('k', 'too soon');
+	assert.equal(posts, 0);
+	assert.equal(repageDue(paged.k, 499, 500), false, 'the two must agree');
 });
 
 void test('createPager: a key pages once, is silent inside repageMs, and pages again past it', async () => {

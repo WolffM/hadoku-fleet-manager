@@ -77,14 +77,38 @@ export function classifyMissingDoc(why: string): 'unavailable' | 'broke' {
 	return ranToCompletion ? 'broke' : 'unavailable';
 }
 
+/** One hour, in ms. A duration literal, not a pager policy — `repageDue`'s callers each pick their own window. */
+export const HOUR_MS = 60 * 60_000;
+/** One day, in ms. */
+export const DAY_MS = 24 * HOUR_MS;
+
 /** `Math.round(ms / 1h)` + `h`, e.g. `6h` — every page/recovery message's duration. */
 export function hours(ms: number): string {
-	return `${Math.round(ms / 3_600_000)}h`;
+	return `${Math.round(ms / HOUR_MS)}h`;
 }
 
 export interface PagerCounts {
 	pages: number;
 	recoveries: number;
+}
+
+/**
+ * Is a repage due? No previous page (`lastPagedIso` absent or unparseable)
+ * is always due — a cold ledger must not read as "inside the window". This
+ * is the one comparison every pager in the fleet makes, and it is pulled out
+ * on its own (not just inlined in {@link createPager}) because `ci-alerts.ts`'s
+ * `decideCiAlert` needs the SAME arithmetic from a pure function that does not
+ * own the post — its announcement happens one layer up, after the decision,
+ * not inside this check (F12, plan §4.1).
+ */
+export function repageDue(
+	lastPagedIso: string | undefined,
+	now: number,
+	repageMs: number
+): boolean {
+	if (!lastPagedIso) return true;
+	const last = Date.parse(lastPagedIso);
+	return Number.isNaN(last) || now - last >= repageMs;
 }
 
 /**
@@ -110,8 +134,7 @@ export function createPager(params: {
 	return {
 		counts,
 		async page(key, content) {
-			const last = params.paged[key] ? Date.parse(params.paged[key]) : null;
-			if (last !== null && params.now - last < params.repageMs) return;
+			if (!repageDue(params.paged[key], params.now, params.repageMs)) return;
 			params.paged[key] = new Date(params.now).toISOString();
 			counts.pages++;
 			await params.post(content, params.source);
