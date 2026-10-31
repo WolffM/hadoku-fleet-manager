@@ -19,7 +19,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { hostingOn, readHostingDoc } from '../dist/runners/hosting-record.js';
+import { hostingsOn, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest } from './lib/fleet-exec.mjs';
@@ -100,7 +100,7 @@ if (valueOf('--slices') !== undefined) {
 
 // What is declared now, from the records the converger and the door both read.
 const { declared, ending } = tenantSlices(app, Object.keys(manifest.machines ?? {}), (node) =>
-	hostingOn(node, drainDoc, hostingDoc, NOW)
+	hostingsOn(node, drainDoc, hostingDoc, NOW)
 );
 
 let lastPass = null;

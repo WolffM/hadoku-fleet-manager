@@ -33,7 +33,7 @@ import process from 'node:process';
 
 import { ciIsSeparate, cutoverCiUser, nodeHome, nodeUser } from '../dist/lib/node-users.js';
 import { isGuestNode } from '../dist/lib/node-role.js';
-import { hostingOn, readHostingDoc } from '../dist/runners/hosting-record.js';
+import { hostingsOn, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { readDrainDoc, readDrains } from './lib/expected-down.mjs';
 import { runOn } from './lib/fleet-exec.mjs';
 import {
@@ -233,8 +233,13 @@ async function main() {
 	// it and CI's OOM ranking. The new manager has neither until the slice's
 	// node side runs again (claw-8 and claw-6, 2026-10-31: not-guaranteed with
 	// no CI running, and cardtable promoted hokon for want of claw-8).
-	if (hostingOn(NODE, readDrainDoc(), readHostingDoc()))
-		chain.splice(1, 0, ['hosting.mjs', [NODE, '--reassert']]);
+	// One re-assert per tenant: a node may hold several (fleet-manager#32).
+	const hosted = hostingsOn(NODE, readDrainDoc(), readHostingDoc());
+	chain.splice(
+		1,
+		0,
+		...hosted.map((h) => ['hosting.mjs', [NODE, '--tenant', h.tenant, '--reassert']])
+	);
 	for (const [s, a] of chain) {
 		if (!fleet(s, a)) {
 			die(

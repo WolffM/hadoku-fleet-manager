@@ -19,10 +19,10 @@
  *   1. RESOURCES. The system slice `hosting.slice/hosting-<tenant>.slice`:
  *      `MemoryMax`, `MemoryMin` and `MemorySwapMax=0`, plus `CPUQuota` at the
  *      declared cores. The parent `hosting.slice` carries `CPUWeight=10000` and
- *      the same `MemoryMin`, because the root cgroup weighs the parent against
- *      `user.slice` (CI) and `system.slice` (pm2), and a parent's protection
- *      bounds its child's. READ BACK FROM THE KERNEL under each cgroup, never
- *      from the unit files written here.
+ *      a `MemoryMin` of EVERY slice on the node summed, because the root cgroup
+ *      weighs the parent against `user.slice` (CI) and `system.slice` (pm2),
+ *      and a parent's protection bounds its children's. READ BACK FROM THE
+ *      KERNEL under each cgroup, never from the unit files written here.
  *   2. THE AGENT, AS ITS OWN USER (§9). A system user with no login shell, no
  *      sudo and no group shared with the CI user, home 0700. A system unit with
  *      `User=` that user, in the slice, `Restart=always`, at
@@ -328,7 +328,8 @@ const CI_SYSTEMCTL = `ci_systemctl() {
  * stalled 66 s in reclaim: protection keeps pages, not latency.
  *
  * So on a shared node CI's slice gets `MemoryHigh` = its observed MemoryMax
- * less the declared slice. Past it CI reclaims its own cache and is
+ * less every slice declared on the node (`NODE_MB`; fleet-manager#32: claw-4
+ * holds two). Past it CI reclaims its own cache and is
  * throttled, before the box is. Minted units run at `MemorySwapMax=0`
  * (`ciUnitProperties`), so that reclaim cannot be swap thrash, the reason
  * runners-slice-install.sh sets no MemoryHigh of its own. A persistent
@@ -350,7 +351,7 @@ ci_systemctl start runners.slice >/dev/null 2>&1
 ${CI_SLICE_CG}
 ci_max=$(cat "$CI_CG/memory.max" 2>/dev/null || echo max)
 if [ -n "$CI_CG" ] && [ "$ci_max" != max ]; then
-	ci_systemctl set-property runners.slice "MemoryHigh=$(( ci_max / 1048576 - MEMORY_MB ))M"
+	ci_systemctl set-property runners.slice "MemoryHigh=$(( ci_max / 1048576 - NODE_MB ))M"
 else
 	echo "HOSTING-NOTE runners.slice has no memory ceiling to take the slice from"
 fi`;
@@ -380,16 +381,20 @@ export const pathUnit = (t) => runtimeFor(t).pathUnit(t);
  * The deploy script. Idempotent: a re-run with the same declaration rewrites
  * the same files, keeps the user and adds no second ufw rule. Run as the CI
  * user over ssh, with every privileged step through `sudo -n`.
+ *
+ * `nodeMb` is every shared slice on the node summed, this one included: the
+ * parent's protection and CI's headroom are the node's, not one tenant's.
  */
 export function deployScript(
 	t,
 	{ memoryMb, cores },
 	controller,
-	{ shared = false, ciUser = '' } = {}
+	{ shared = false, ciUser = '', nodeMb = memoryMb } = {}
 ) {
 	return `${assign({
 		...tenantVars(t),
 		MEMORY_MB: memoryMb,
+		NODE_MB: nodeMb,
 		CPU_PCT: cores * 100,
 		WEIGHT: HOSTING_CPU_WEIGHT,
 		AGENT_OOM: AGENT_OOM_SCORE_ADJ,
@@ -426,7 +431,7 @@ Description=fleet hosting: every tenant slice, weighed against user.slice (CI) a
 CPUAccounting=yes
 CPUWeight=$WEIGHT
 MemoryAccounting=yes
-MemoryMin=\${MEMORY_MB}M
+MemoryMin=\${NODE_MB}M
 EOF
 unit "$SLICE" <<EOF
 [Unit]
@@ -468,16 +473,21 @@ echo HOSTING-DEPLOYED
  * The teardown: every unit, the slice cgroups, the ufw rule and the
  * executable. The agent's user and home stay: they hold what the tenant
  * fetched, and a user id is cheap to keep and costly to reuse by accident.
+ *
+ * `othersMb`: the slices that STAY on the node, summed. While any do, the
+ * parent slice and CI's headroom are theirs, so they are left for the caller
+ * to re-assert at the new size rather than torn down.
  */
-export function removeScript(t, controllerIp, { ciUser = '' } = {}) {
+export function removeScript(t, controllerIp, { ciUser = '', othersMb = 0 } = {}) {
+	const own = othersMb > 0 ? '"$SLICE"' : '"$SLICE" "$PARENT"';
 	return `${assign({ ...tenantVars(t), CONTROLLER_IP: controllerIp, CI_USER: ciUser })}
 set -eu
 S="sudo -n"
 # KillMode=process leaves the tenant's workers running when the agent stops; a teardown takes them too.
 $S systemctl kill --kill-whom=all --signal=SIGKILL "$SERVICE" >/dev/null 2>&1 || true
 $S systemctl disable --now "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" >/dev/null 2>&1 || true
-$S systemctl stop "$SLICE" "$PARENT" >/dev/null 2>&1 || true
-for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" "$SLICE" "$PARENT"; do $S rm -f "/etc/systemd/system/$u"; done
+$S systemctl stop ${own} >/dev/null 2>&1 || true
+for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" ${own}; do $S rm -f "/etc/systemd/system/$u"; done
 $S rm -f "$EXEC" "$EXEC.new"${Object.keys(systemFilesOf(t))
 		.map((f) => ` ${shellQuote(f)}`)
 		.join('')}
@@ -486,7 +496,7 @@ while $S ufw status 2>/dev/null | grep -Eq "^$PORT/tcp +ALLOW +$CONTROLLER_IP( |
 	$S ufw delete allow from "$CONTROLLER_IP" to any port "$PORT" proto tcp >/dev/null
 done
 ${DROP_TAILNET_RULES}
-${CI_HEADROOM_RESET}
+${othersMb > 0 ? '' : CI_HEADROOM_RESET}
 echo HOSTING-REMOVED
 `;
 }
@@ -497,14 +507,15 @@ echo HOSTING-REMOVED
  * purpose (see {@link removeScript}); everything else is listed here if it
  * survived, one `LEFT <what>` line each, then `LEFTOVERS-END`.
  */
-export function leftoversScript(t, { ciUser = '' } = {}) {
+export function leftoversScript(t, { ciUser = '', othersMb = 0 } = {}) {
+	const stays = othersMb > 0;
 	return `${assign({ ...tenantVars(t), SLICE_CG: hostingSliceCgroup(t.app), CI_USER: ciUser })}
 S="sudo -n"
-for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" "$SLICE" "$PARENT"; do
+for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" "$SLICE"${stays ? '' : ' "$PARENT"'}; do
 	[ -e "/etc/systemd/system/$u" ] && echo "LEFT unit file /etc/systemd/system/$u"
 	systemctl is-active -q "$u" 2>/dev/null && echo "LEFT active unit $u"
 done
-[ -d "/sys/fs/cgroup/$PARENT" ] && echo "LEFT cgroup /sys/fs/cgroup/$PARENT"
+${stays ? '[ -d "/sys/fs/cgroup$SLICE_CG" ] && echo "LEFT cgroup /sys/fs/cgroup$SLICE_CG"' : '[ -d "/sys/fs/cgroup/$PARENT" ] && echo "LEFT cgroup /sys/fs/cgroup/$PARENT"'}
 [ -e "$EXEC" ] && echo "LEFT executable $EXEC"
 ${Object.keys(systemFilesOf(t))
 	.map((f) => `[ -e ${shellQuote(f)} ] && echo ${shellQuote(`LEFT file ${f}`)}`)
@@ -515,9 +526,13 @@ $S ufw status 2>/dev/null | grep -E "^$PORT/tcp" | sed "s/^/LEFT ufw rule: /"
 for ipt in iptables ip6tables; do
 	$S /usr/sbin/$ipt -t raw -S PREROUTING 2>/dev/null | grep -- "--dport $PORT " | sed "s/^/LEFT $ipt raw rule: /"
 done
-${CI_SLICE_CG}
+${
+	stays
+		? '# The parent slice and CI headroom stay: the remaining slices hold them.'
+		: `${CI_SLICE_CG}
 h=$(cat "$CI_CG/memory.high" 2>/dev/null)
-[ -n "$CI_CG" ] && [ "$h" != max ] && echo "LEFT runners.slice memory.high $h, not max"
+[ -n "$CI_CG" ] && [ "$h" != max ] && echo "LEFT runners.slice memory.high $h, not max"`
+}
 $S true 2>/dev/null || echo "LEFT-UNKNOWN sudo is not available, so the firewall could not be read"
 echo LEFTOVERS-END
 `;
@@ -843,6 +858,8 @@ const parseStat = (s) => {
 /**
  * Judge one hosting node: what was DECLARED against what was OBSERVED.
  * `mode` is `whole` (CI must be absent) or `shared` (CI must rank below).
+ * `nodeMb` is every shared slice on the node summed: the parent's protection
+ * and CI's headroom are judged against it, not against this slice alone.
  * Returns `{ observed, findings }`, findings classed `blocking` or `advisory`
  * the way `preflight.mjs` classes them.
  *
@@ -850,7 +867,14 @@ const parseStat = (s) => {
  * match may go, and "I could not see the cgroup" must not read as "the cgroup
  * is fine".
  */
-export function judgeHosting(declared, obs, mode = 'whole', reach = null, t = null) {
+export function judgeHosting(
+	declared,
+	obs,
+	mode = 'whole',
+	reach = null,
+	t = null,
+	nodeMb = declared.memoryMb
+) {
 	const findings = [];
 	const block = (category, why) => findings.push({ class: 'blocking', category, why });
 	const advise = (category, why) => findings.push({ class: 'advisory', category, why });
@@ -947,10 +971,10 @@ export function judgeHosting(declared, obs, mode = 'whole', reach = null, t = nu
 		if (cores !== declared.cores)
 			block('hosting-cores', `cpu.max reads "${obs.cpuMax}", not a ${declared.cores}-core quota`);
 		if (obs.swapMax !== '0') block('hosting-swap', `memory.swap.max is "${obs.swapMax}", not 0`);
-		if (!(parentMinMb >= declared.memoryMb))
+		if (!(parentMinMb >= nodeMb))
 			block(
 				'hosting-memory-min',
-				`${HOSTING_PARENT_SLICE} memory.min reads "${obs.parentMemoryMin}", so the slice's protection is capped below ${declared.memoryMb} MiB`
+				`${HOSTING_PARENT_SLICE} memory.min reads "${obs.parentMemoryMin}", so the node's slices' protection is capped below their ${nodeMb} MiB`
 			);
 		if (obs.parentWeight !== HOSTING_CPU_WEIGHT)
 			block(
@@ -1052,10 +1076,10 @@ export function judgeHosting(declared, obs, mode = 'whole', reach = null, t = nu
 				'hosting-ci-headroom',
 				`runners.slice's memory.max reads "${obs.ciSliceMax}", so CI's headroom below the slice cannot be set or checked`
 			);
-		else if (ciHigh === null || ciHigh > ciMax - declared.memoryMb)
+		else if (ciHigh === null || ciHigh > ciMax - nodeMb)
 			block(
 				'hosting-ci-headroom',
-				`runners.slice's memory.high reads "${obs.ciSliceHigh}", not at most ${ciMax - declared.memoryMb} MiB (its max less the slice): CI can push the box into global reclaim`
+				`runners.slice's memory.high reads "${obs.ciSliceHigh}", not at most ${ciMax - nodeMb} MiB (its max less the node's slices): CI can push the box into global reclaim`
 			);
 	}
 

@@ -47,7 +47,7 @@ import { join } from 'node:path';
 
 import { manifest, stateDir } from '../host.js';
 import { writeFileAtomic } from '../lib/atomic-json.js';
-import { effectiveHosting, type HostingDoc } from './hosting-record.js';
+import { effectiveSlices, type HostingDoc } from './hosting-record.js';
 
 /**
  * What a drain is FOR, which decides how it ends.
@@ -261,13 +261,14 @@ export function noticeRefusal(
 ): string | null {
 	const rec = doc.nodes[node];
 	const whole = rec?.kind === 'hosting' && !lapsed(rec, nowMs);
-	const slice =
+	const slices =
 		!whole && shared && (shared.kind === 'reboot' || shared.kind === 'end')
-			? effectiveHosting(shared.hostingDoc, nowMs)[node]
-			: undefined;
-	if (!whole && !slice) return null;
+			? (effectiveSlices(shared.hostingDoc, nowMs)[node] ?? [])
+			: [];
+	if (!whole && !slices.length) return null;
 	if (atMs - nowMs >= HOSTING_NOTICE_MS) return null;
-	const tenant = (whole ? rec.hosting?.tenant : slice?.tenant) ?? 'its tenant';
+	const tenant =
+		(whole ? rec.hosting?.tenant : slices.map((r) => r.tenant).join(' and ')) ?? 'its tenant';
 	return (
 		`${node} is hosting for ${tenant}, which is owed ${HOSTING_NOTICE_MS / 60_000} min notice ` +
 		`before the node is taken away; this would take effect in ${Math.max(0, Math.round((atMs - nowMs) / 60_000))} min.`

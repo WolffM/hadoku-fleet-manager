@@ -18,7 +18,9 @@
  *   --shared  CI keeps the node and ranks below the slice. The record goes in
  *             `fleet-hosting.json` FIRST, so the dispatcher holds back the
  *             slice's memory from its next pass (`admissionFrom`), before the
- *             agent can start.
+ *             agent can start. A node may hold several shared slices, one per
+ *             tenant (fleet-manager#32); every action on such a node names the
+ *             one it means with `--tenant`.
  *
  * ENDING IS TWO STEPS, because the tenant is owed notice. `--end --in 30m`
  * schedules the end (at least HOSTING_NOTICE_MS ahead unless `--force`), and
@@ -36,6 +38,7 @@
  *   fleet hosting claw-9 --end --in 30m
  *   fleet hosting claw-9 --keep
  *   fleet hosting claw-9 --remove
+ *   fleet hosting claw-4 --tenant archivebot --reassert   # a node with several tenants
  *   fleet hosting claw-9 --ci-shaped [--wait] -- <command>
  *   fleet hosting --check
  *   (every action takes --json)
@@ -45,7 +48,13 @@ import { readFileSync, statSync } from 'node:fs';
 import process from 'node:process';
 
 import { HOSTING_NOTICE_MS, noticeRefusal, parseWhen } from '../dist/runners/drain.js';
-import { hostingOn, readHostingDoc, writeHostingDoc } from '../dist/runners/hosting-record.js';
+import {
+	hostingsOn,
+	readHostingDoc,
+	withSlice,
+	withoutSlice,
+	writeHostingDoc,
+} from '../dist/runners/hosting-record.js';
 import { stateDir } from './lib/paths.mjs';
 import { readTenantRegistry, tenantSpec } from './lib/tenant-registry.mjs';
 import { isGuestNode } from '../dist/lib/node-role.js';
@@ -136,7 +145,7 @@ if (has('--help') || has('-h')) {
 			"        put the tenant's executable in place, root-owned, and restart the agent.",
 			'fleet hosting <node> --restart',
 			'        restart the agent (after it upgraded itself).',
-			'fleet hosting <node> --reassert',
+			'fleet hosting <node> [--tenant <name>] --reassert',
 			'        re-run the node side of the slice it holds, from its record; the record is not touched.',
 			'fleet hosting <node> --end (--in 30m | --at <iso>) [--force]',
 			`        schedule the end; the tenant is owed ${HOSTING_NOTICE_MS / 60_000} min notice.`,
@@ -148,6 +157,7 @@ if (has('--help') || has('-h')) {
 			'        run <command> contained exactly as a CI job is, with no GitHub job (tests).',
 			'fleet hosting --check',
 			'        declared vs observed, from the kernel, for every hosting node.',
+			'On a node with several shared tenants, every action names one with --tenant.',
 			'Every action takes --json: one document on stdout, exit 0 only when it was done.',
 			'',
 			'tenants: every request registered with `fleet hosting-request <repo> --register`.',
@@ -250,21 +260,29 @@ async function observe(name, spec) {
 	return { obs: parseObserved(r.stdout), error: r.ok ? null : (r.error ?? r.stderr.trim()) };
 }
 
-/** Every node with a hosting record, either kind, lapsed or not — a lapsed one is still checked. */
+/**
+ * Every shared slice on `name` summed, lapsed ones included: a lapsed slice
+ * keeps its units, and its protection, until `--remove`.
+ */
+const slicesMb = (doc, name) => (doc.nodes[name] ?? []).reduce((s, r) => s + r.memoryMb, 0);
+
+/** Every hosting record, either kind, lapsed or not — a lapsed one is still checked. One row per tenant. */
 function hostingNodes() {
 	const out = [];
 	for (const [name, rec] of Object.entries(drainDoc.nodes)) {
 		if (rec.kind === 'hosting' && rec.hosting)
 			out.push({ name, mode: 'whole', declared: rec.hosting, until: rec.until ?? null });
 	}
-	for (const [name, rec] of Object.entries(hostingDoc.nodes)) {
-		const { tenant, memoryMb, cores, port } = rec;
-		out.push({
-			name,
-			mode: 'shared',
-			declared: { tenant, memoryMb, cores, port },
-			until: rec.until ?? null,
-		});
+	for (const [name, recs] of Object.entries(hostingDoc.nodes)) {
+		for (const rec of recs) {
+			const { tenant, memoryMb, cores, port } = rec;
+			out.push({
+				name,
+				mode: 'shared',
+				declared: { tenant, memoryMb, cores, port },
+				until: rec.until ?? null,
+			});
+		}
 	}
 	return out;
 }
@@ -287,7 +305,8 @@ async function checkOne({ name, mode, declared, until }) {
 					run: runOn,
 				})
 			: null;
-	const judged = judgeHosting(declared, obs, mode, reach, spec);
+	const nodeMb = mode === 'shared' ? slicesMb(hostingDoc, name) : declared.memoryMb;
+	const judged = judgeHosting(declared, obs, mode, reach, spec, nodeMb);
 	if (!obs && error) judged.findings[0].why += ` (${error})`;
 	const blocking = judged.findings.some((f) => f.class === 'blocking');
 	return {
@@ -320,10 +339,31 @@ if (isGuestNode(machine))
 	refuse(
 		`${node} is a guest. A guest lends the fleet a registration and nothing else; it is not lent onward.`
 	);
-const current = hostingOn(node, drainDoc, hostingDoc, NOW);
 const wholeRec = drainDoc.nodes[node]?.kind === 'hosting' ? drainDoc.nodes[node] : null;
-const sharedRec = hostingDoc.nodes[node] ?? null;
+const sharedRecs = hostingDoc.nodes[node] ?? [];
+const tenantArg = valueOf('--tenant');
+/**
+ * The shared record an action on this node means: the one `--tenant` names,
+ * or the only one. Several and no `--tenant` is refused rather than guessed,
+ * because a guess ends or removes the wrong tenant. A declaration is always
+ * about its own `--tenant`.
+ */
+const sharedRec = (() => {
+	if (tenantArg !== null) return sharedRecs.find((r) => r.tenant === tenantArg) ?? null;
+	// --ci-shaped reads only the node's memory, whichever tenant answers.
+	if (sharedRecs.length <= 1 || action === 'ci-shaped') return sharedRecs[0] ?? null;
+	return refuse(
+		`${node} holds ${sharedRecs.length} shared tenants (${sharedRecs.map((r) => r.tenant).join(', ')}); name one with --tenant.`
+	);
+})();
 const recordTenant = wholeRec?.hosting?.tenant ?? sharedRec?.tenant ?? null;
+/** The live hosting the action means, whole or this tenant's shared slice; null past its end. */
+const current =
+	hostingsOn(node, drainDoc, hostingDoc, NOW).find(
+		(h) => h.mode === 'whole' || h.tenant === recordTenant
+	) ?? null;
+/** Every OTHER tenant's slice on this node, summed. */
+const othersMb = slicesMb(hostingDoc, node) - (sharedRec?.memoryMb ?? 0);
 
 if (action === 'install') {
 	const tenant = recordTenant ?? valueOf('--tenant');
@@ -388,32 +428,46 @@ if (action === 'restart') {
 // unattended may use it. The node-users cutover calls this: a new ci user has
 // its own user manager, and the slice's CI headroom and OOM ranking lived in
 // the old one (claw-8 and claw-6 read not-guaranteed on 2026-10-31).
-if (action === 'reassert') {
-	if (!current) refuse(`${node} holds no live hosting record, so there is nothing to re-assert.`);
-	const spec = specOf(current.tenant);
-	if (!spec) refuse(`${current.tenant} is not a registered tenant.`);
-	const { mode, until, ...declared } = current;
+/**
+ * Run `hosting`'s node side again and judge it: `{ row }`, or `{ why }` when
+ * the deploy did not finish. `nodeMb` is the node's shared slices summed.
+ */
+async function reassertOne(hosting, nodeMb) {
+	const spec = specOf(hosting.tenant);
+	if (!spec) return { why: `${hosting.tenant} is not a registered tenant.` };
+	const { mode, until, tenant, memoryMb, cores, port, role } = hosting;
+	const declared = { tenant, memoryMb, cores, port, ...(role ? { role } : {}) };
 	const shared = mode === 'shared';
 	const r = await runOn(
 		node,
 		deployScript(
 			spec,
-			{ memoryMb: current.memoryMb, cores: current.cores },
+			{ memoryMb: hosting.memoryMb, cores: hosting.cores },
 			await controllerAddrs(),
-			{ shared, ciUser: nodeUser(machine, 'ci') }
+			{ shared, ciUser: nodeUser(machine, 'ci'), ...(shared ? { nodeMb } : {}) }
 		),
 		{ as: 'admin', timeoutMs: 120_000 }
 	);
 	if (!r.stdout.includes('HOSTING-DEPLOYED'))
-		refuse(`re-assert on ${node} did not finish: ${r.error ?? r.stderr.trim()}`);
+		return {
+			why: `re-assert of ${hosting.tenant} on ${node} did not finish: ${r.error ?? r.stderr.trim()}`,
+		};
 	const row = await checkOne({ name: node, mode, declared, until: until ?? null });
 	for (const f of row.findings) say(`  ${f.class.padEnd(9)} ${f.category}: ${f.why}`);
 	say(
-		`${row.state === 'guaranteed' ? '✓' : '✗'} ${node}: ${current.tenant}'s slice re-asserted, ${row.state}.`
+		`${row.state === 'guaranteed' ? '✓' : '✗'} ${node}: ${hosting.tenant}'s slice re-asserted, ${row.state}.`
 	);
+	return { row };
+}
+
+if (action === 'reassert') {
+	if (!current) refuse(`${node} holds no live hosting record, so there is nothing to re-assert.`);
+	const { row, why } = await reassertOne(current, slicesMb(hostingDoc, node));
+	if (why) refuse(why);
 	finish(row.state === 'guaranteed', {
 		state: row.state,
-		mode,
+		mode: row.mode,
+		tenant: current.tenant,
 		findings: row.findings,
 		...(row.state === 'guaranteed'
 			? {}
@@ -452,7 +506,11 @@ if (action === 'end') {
 	} catch (err) {
 		refuse(err.message);
 	}
-	const refusal = noticeRefusal(node, endMs, drainDoc, NOW, { hostingDoc, kind: 'end' });
+	// Only the tenant whose slice ends is owed this notice, not its neighbours.
+	const refusal = noticeRefusal(node, endMs, drainDoc, NOW, {
+		hostingDoc: { nodes: current.mode === 'shared' ? { [node]: [sharedRec] } : {} },
+		kind: 'end',
+	});
 	if (refusal && !has('--force'))
 		refuse(`${refusal} Use --in 15m or later, or --force if the box is failing.`);
 	const until = new Date(endMs).toISOString();
@@ -465,13 +523,13 @@ if (action === 'end') {
 			drainDoc
 		);
 	} else {
-		writeHostingDoc(
-			{ nodes: { ...hostingDoc.nodes, [node]: { ...sharedRec, until } } },
-			stateDir()
-		);
+		writeHostingDoc(withSlice(hostingDoc, node, { ...sharedRec, until }), stateDir());
 	}
-	say(`✓ ${node} stops hosting at ${until}. Then: fleet hosting ${node} --remove`);
-	finish(true, { state: 'ending', until, mode: current.mode });
+	const named = sharedRecs.length > 1 ? ` --tenant ${current.tenant}` : '';
+	say(
+		`✓ ${node} stops hosting ${current.tenant} at ${until}. Then: fleet hosting ${node}${named} --remove`
+	);
+	finish(true, { state: 'ending', until, mode: current.mode, tenant: current.tenant });
 }
 
 if (action === 'keep') {
@@ -484,9 +542,9 @@ if (action === 'keep') {
 			{ nodes: { ...drainDoc.nodes, [node]: kept }, planned: drainDoc.planned },
 			drainDoc
 		);
-	else writeHostingDoc({ nodes: { ...hostingDoc.nodes, [node]: kept } }, stateDir());
-	say(`✓ ${node} keeps hosting; the end at ${was} is taken back.`);
-	finish(true, { state: 'kept', was, mode: wholeRec ? 'whole' : 'shared' });
+	else writeHostingDoc(withSlice(hostingDoc, node, kept), stateDir());
+	say(`✓ ${node} keeps hosting ${recordTenant}; the end at ${was} is taken back.`);
+	finish(true, { state: 'kept', was, mode: wholeRec ? 'whole' : 'shared', tenant: recordTenant });
 }
 
 if (action === 'remove') {
@@ -509,7 +567,7 @@ if (action === 'remove') {
 		);
 	const r = await runOn(
 		node,
-		removeScript(spec, controllerIp(), { ciUser: nodeUser(machine, 'ci') }),
+		removeScript(spec, controllerIp(), { ciUser: nodeUser(machine, 'ci'), othersMb }),
 		{
 			as: 'admin',
 			timeoutMs: 60_000,
@@ -523,11 +581,15 @@ if (action === 'remove') {
 	// Read back what survived, from the node (cardtable A11). The record stays
 	// until nothing does: a removed slice whose firewall rule or cgroup lingers
 	// is not removed.
-	const back = await runOn(node, leftoversScript(spec, { ciUser: nodeUser(machine, 'ci') }), {
-		as: 'admin',
-		timeoutMs: 30_000,
-		connectTimeout: 6,
-	});
+	const back = await runOn(
+		node,
+		leftoversScript(spec, { ciUser: nodeUser(machine, 'ci'), othersMb }),
+		{
+			as: 'admin',
+			timeoutMs: 30_000,
+			connectTimeout: 6,
+		}
+	);
 	const leftovers = parseLeftovers(back.stdout);
 	if (!leftovers.complete || leftovers.left.length) {
 		finish(false, {
@@ -544,12 +606,27 @@ if (action === 'remove') {
 		writeDrainDoc({ nodes, planned: drainDoc.planned }, drainDoc);
 	}
 	if (sharedRec) {
-		const nodes = { ...hostingDoc.nodes };
-		delete nodes[node];
-		writeHostingDoc({ nodes }, stateDir());
+		hostingDoc = withoutSlice(hostingDoc, node, sharedRec.tenant);
+		writeHostingDoc(hostingDoc, stateDir());
 	}
-	say(`✓ ${node} is no longer hosting; units, executable and port ${spec.port} removed.`);
-	finish(true, { state: 'removed', left: [] });
+	say(`✓ ${node} no longer hosts ${tenant}; units, executable and port ${spec.port} removed.`);
+	// The tenants that stay held the parent slice and CI's headroom at the old
+	// sum. Their node side runs again at the new one.
+	const stay = hostingsOn(node, drainDoc, hostingDoc, NOW);
+	const failed = [];
+	for (const h of stay) {
+		const { row, why } = await reassertOne(h, othersMb);
+		if (why || row.state !== 'guaranteed')
+			failed.push(why ?? `${h.tenant} is ${row.state} after the re-assert`);
+	}
+	if (failed.length)
+		finish(false, {
+			state: 'removed',
+			tenant,
+			left: [],
+			reason: `removed, but the tenants that stay are not guaranteed: ${failed.join('; ')}`,
+		});
+	finish(true, { state: 'removed', tenant, left: [] });
 }
 
 // ── declare ──────────────────────────────────────────────────────────────────
@@ -572,8 +649,15 @@ try {
 } catch (err) {
 	refuse(err.message);
 }
-if (current && current.mode !== (shared ? 'shared' : 'whole'))
-	refuse(`${node} is already hosting as ${current.mode}. End and remove that first.`);
+// Whole-box hosting is alone on its node; shared slices sit beside each other.
+if (wholeRec && shared)
+	refuse(
+		`${node} is already hosting ${wholeRec.hosting?.tenant} as whole. End and remove that first.`
+	);
+if (!shared && sharedRecs.length)
+	refuse(
+		`${node} already hosts ${sharedRecs.map((r) => r.tenant).join(', ')} as shared. End and remove that first.`
+	);
 // Promoting a standby is the lease's job, not the record's: never flip a role in place.
 if (current && (current.role ?? null) !== role)
 	refuse(
@@ -588,18 +672,29 @@ if (!shared && drained && !['hosting', 'lease'].includes(drained.kind) && !has('
 }
 const controller = await controllerAddrs();
 
-// The node's own measurement, never the manifest's rounded ramGb.
+// The node's own measurement, never the manifest's rounded ramGb, with every
+// other tenant's slice already taken out of it.
 const before = await observe(node, spec);
 if (!before.obs) refuse(`could not observe ${node}: ${before.error ?? 'no answer'}`);
-const misfit = fitProblems(resources, before.obs, machine.minFreeMb ?? 1024);
+const othersCores = sharedRecs
+	.filter((r) => r.tenant !== tenant)
+	.reduce((sum, r) => sum + r.cores, 0);
+const misfit = fitProblems(
+	{ memoryMb: resources.memoryMb + othersMb, cores: resources.cores + othersCores },
+	before.obs,
+	machine.minFreeMb ?? 1024
+);
 if (misfit.length) refuse(`the declaration does not fit ${node}: ${misfit.join('; ')}`);
 
 // THE TENANT'S OWN RULES, at the moment a slice is promised. The same plan
 // `fleet hosting-plan` makes (placement.require, the fit, ciMayRead's policy),
 // so a declare cannot put a tenant where its plan refuses it: archivebot on a
 // Wi-Fi claw whose CI is root went through with nothing in the way until
-// 2026-10-27. A re-declare of the slice this node already holds was judged
-// when it was made, and is not judged again. --force overrides, and says so.
+// 2026-10-27. A re-declare of the slice this TENANT already holds here was
+// judged when it was made, and is not judged again; another tenant's slice on
+// the node is no such thing (pygmalion's declaration skipped this on claw-4
+// on 2026-10-29 because archivebot held the node: fleet-manager#32).
+// --force overrides, and says so.
 let placement = null;
 if (shared && !sharedRec) {
 	const request = registry.tenants[tenant].request;
@@ -642,7 +737,8 @@ const declared = { tenant, ...resources, port: spec.port, ...(role ? { role } : 
 if (current && (current.memoryMb !== declared.memoryMb || current.cores !== declared.cores))
 	base.since = new Date(NOW).toISOString();
 if (shared) {
-	writeHostingDoc({ nodes: { ...hostingDoc.nodes, [node]: { ...base, ...declared } } }, stateDir());
+	hostingDoc = withSlice(hostingDoc, node, { ...base, ...declared });
+	writeHostingDoc(hostingDoc, stateDir());
 	say(
 		`✓ ${node} hosts ${tenant} beside CI; the dispatcher holds the slice back from its next pass.`
 	);
@@ -661,7 +757,11 @@ const admissionFrom = new Date(NOW + 15_000).toISOString();
 
 const r = await runOn(
 	node,
-	deployScript(spec, resources, controller, { shared, ciUser: nodeUser(machine, 'ci') }),
+	deployScript(spec, resources, controller, {
+		shared,
+		ciUser: nodeUser(machine, 'ci'),
+		...(shared ? { nodeMb: slicesMb(hostingDoc, node) } : {}),
+	}),
 	{
 		as: 'admin',
 		timeoutMs: 120_000,

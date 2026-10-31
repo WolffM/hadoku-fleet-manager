@@ -328,7 +328,11 @@ function summarizeRefused(refused) {
 	return refused.map((r) => `${r.node}: ${r.reasons.join(', ')}`).join('; ');
 }
 
-/** The `fleet hosting` arguments for one action. The door re-checks fit and placement on a declare. */
+/**
+ * The `fleet hosting` arguments for one action. The door re-checks fit and
+ * placement on a declare. Every action names its tenant: a node may hold
+ * several, and the door refuses to guess (fleet-manager#32).
+ */
 export function doorArgs(request, a) {
 	const reason = ['--reason', `hosting-converge: ${a.why}`];
 	if (a.op === 'declare') {
@@ -346,9 +350,10 @@ export function doorArgs(request, a) {
 			...reason,
 		];
 	}
-	if (a.op === 'end') return [a.node, '--end', '--in', `${a.inMin}m`, ...reason];
-	if (a.op === 'keep') return [a.node, '--keep'];
-	return [a.node, '--remove'];
+	const tenant = ['--tenant', request.app];
+	if (a.op === 'end') return [a.node, ...tenant, '--end', '--in', `${a.inMin}m`, ...reason];
+	if (a.op === 'keep') return [a.node, ...tenant, '--keep'];
+	return [a.node, ...tenant, '--remove'];
 }
 
 /**
@@ -389,7 +394,7 @@ export async function act(request, decision, { live, door, artifact = null }) {
 			// AN AGENT'S SLICE IS EMPTY UNTIL ITS EXECUTABLE IS THERE: the deploy
 			// made the units, and only an install starts the agent. Install the
 			// tenant's kept artifact through the same door (lib/hosting-artifacts.mjs).
-			const installed = await installAgent(a.node, artifact, door, results);
+			const installed = await installAgent(a.node, request.app, artifact, door, results);
 			if (installed.ok) {
 				const changed = `declared, agent ${installed.sha256.slice(0, 12)} installed`;
 				rows.converged.push({ ...row, changed });
@@ -432,7 +437,7 @@ export async function act(request, decision, { live, door, artifact = null }) {
  * comes. A kept artifact that no longer verifies, or a door that refuses, is
  * hard: it pages now.
  */
-async function installAgent(node, artifact, door, results) {
+async function installAgent(node, app, artifact, door, results) {
 	if (!artifact)
 		return {
 			ok: false,
@@ -443,7 +448,15 @@ async function installAgent(node, artifact, door, results) {
 		};
 	if (!artifact.ok)
 		return { ok: false, hard: true, why: `the kept agent artifact: ${artifact.why}` };
-	const { doc, why } = await door([node, '--install', artifact.path, '--sha256', artifact.sha256]);
+	const { doc, why } = await door([
+		node,
+		'--tenant',
+		app,
+		'--install',
+		artifact.path,
+		'--sha256',
+		artifact.sha256,
+	]);
 	results.push({
 		op: 'install',
 		node,

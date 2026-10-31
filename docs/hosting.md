@@ -47,6 +47,14 @@ Every action takes `--json`: one document on stdout, `{ ok, action, node,
 state, reason, ... }`, and exit 0 only when the action was done. A declaration
 is `ok` only once `--check` reads the whole guarantee back.
 
+A node may hold several shared slices, one per tenant (claw-4 holds
+pygmalion and archivebot). A declaration for a tenant new to the node goes
+through that tenant's placement plan and the node's fit with every other slice
+already counted. On such a node every other action names its tenant
+(`fleet hosting claw-4 --tenant archivebot --reassert`), and the door refuses
+to guess. The parent `hosting.slice`'s protection and CI's headroom are sized
+from all of the node's slices; removing one re-asserts the rest at the new sum.
+
 ### Two modes
 
 **Shared** (`--shared`) is the default for cardtable. CI keeps the box and ranks
@@ -204,6 +212,9 @@ to earn that fence, and how to request it, is
 (live, one ssh per node during the call), `lastSeenAt`, the CI processes on the
 box, the drain in force and `notices` of scheduled starts and ends, the earned
 capabilities, the daily health record with its age, and for a hosting node its
-mode, the declared resources next to the observed ones, and its scheduled end. A node that cannot be reached,
+mode, the declared resources next to the observed ones, and its scheduled end.
+`tenants` lists every slice on the node, oldest first; `hosting` is the oldest
+alone, so a tenant placed beside it later never hides it from a reader of
+that field. A node that cannot be reached,
 whose answer is cut off, or whose health record is more than 36 h old has a
 blocking finding and `ok: false`.

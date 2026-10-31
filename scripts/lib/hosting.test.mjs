@@ -28,14 +28,21 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	rmSync,
 	writeFileSync,
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { validateHostingRequest } from './hosting-request.mjs';
 import { runtimeFor } from './hosting-runtimes.mjs';
+import { spawnCapture } from './spawn-json.mjs';
 import { tenantSpecFrom } from './tenant-registry.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const DOOR = join(HERE, '..', 'hosting.mjs');
+const MANIFESTS = join(HERE, '..', '..', 'manifests');
 
 /** cardtable's spec, derived from its real request: the names the old TENANTS row held. */
 const CARDTABLE = tenantSpecFrom(
@@ -400,13 +407,62 @@ test('only a shared deploy takes the slice out of CI; whole and remove put it ba
 	const res = { memoryMb: 4096, cores: 4 };
 	assert.match(
 		deployScript(CARDTABLE, res, ctl, { shared: true }),
-		/set-property runners\.slice "MemoryHigh=\$\(\( ci_max \/ 1048576 - MEMORY_MB \)\)M"/
+		/set-property runners\.slice "MemoryHigh=\$\(\( ci_max \/ 1048576 - NODE_MB \)\)M"/
 	);
 	assert.match(
 		deployScript(CARDTABLE, res, ctl),
 		/set-property runners\.slice MemoryHigh=infinity/
 	);
 	assert.match(removeScript(CARDTABLE, '192.0.2.10'), /MemoryHigh=infinity/);
+});
+
+// fleet-manager#32: claw-4 holds archivebot (1024) and pygmalion (512).
+test('a node with several slices: the parent and CI headroom are sized and kept for all of them', () => {
+	const ctl = { lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null };
+	const res = { memoryMb: 4096, cores: 4 };
+	const deploy = deployScript(CARDTABLE, res, ctl, { shared: true, nodeMb: 5120 });
+	assert.match(deploy, /^MEMORY_MB='4096'$/m);
+	assert.match(deploy, /^NODE_MB='5120'$/m);
+	// The parent protects the node's slices together; the tenant's own slice stays its size.
+	assert.match(deploy, /fleet hosting: every tenant slice[\s\S]*?MemoryMin=\$\{NODE_MB\}M/);
+	assert.match(deploy, /resources declared for[\s\S]*?MemoryMin=\$\{MEMORY_MB\}M/);
+	// Alone on the node, the node's figure is its own.
+	assert.match(deployScript(CARDTABLE, res, ctl, { shared: true }), /^NODE_MB='4096'$/m);
+
+	// Removing one of several leaves the parent and the headroom to the others.
+	const keep = removeScript(CARDTABLE, '192.0.2.10', { othersMb: 1024 });
+	assert.doesNotMatch(keep, /MemoryHigh=infinity/);
+	assert.doesNotMatch(keep, /"\$PARENT"/);
+	assert.match(keep, /systemctl stop "\$SLICE"/);
+	const last = removeScript(CARDTABLE, '192.0.2.10');
+	assert.match(last, /systemctl stop "\$SLICE" "\$PARENT"/);
+	// And the read-back does not call the others' parent a leftover.
+	const back = leftoversScript(CARDTABLE, { othersMb: 1024 });
+	assert.doesNotMatch(back, /"\$PARENT"|cgroup\/\$PARENT|memory\.high/);
+	assert.match(back, /cgroup\$SLICE_CG/);
+	assert.match(leftoversScript(CARDTABLE), /cgroup\/\$PARENT/);
+});
+
+test("the parent's protection and CI's headroom are judged against every slice on the node", () => {
+	const both = (over) =>
+		judgeHosting(DECLARED, parseObserved(answer(over)), 'shared', REACH, CARDTABLE, 8192 + 1024);
+	// The parent protecting only this slice caps the other's protection.
+	assert.deepEqual(categories(both({ ciSliceHigh: String((27904 - 9216) * MIB) })), [
+		'hosting-memory-min',
+	]);
+	// CI's headroom less only this slice lets CI into the other's memory.
+	assert.deepEqual(categories(both({ parentMemoryMin: String(9216 * MIB) })), [
+		'hosting-ci-headroom',
+	]);
+	assert.deepEqual(
+		categories(
+			both({
+				parentMemoryMin: String(9216 * MIB),
+				ciSliceHigh: String((27904 - 9216) * MIB),
+			})
+		),
+		[]
+	);
 });
 
 test('CI is counted by PROCESS NAME: a probe whose command line says Runner.Worker is not CI', () => {
@@ -653,4 +709,49 @@ test('a CI process that exits mid-read is gone, not an unranked one at oom 0', (
 		}
 	);
 	assert.match(observeScript(CARDTABLE, 'hadoku'), /^PROC=\/proc$/m);
+});
+
+// fleet-manager#32: on a node with several tenants the door refuses to guess
+// which one an action means, before it reaches for the node at all.
+test('the door refuses an action on a node with several tenants unless --tenant names one', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'hosting-door-'));
+	try {
+		const rec = (tenant, memoryMb) => ({
+			tenant,
+			memoryMb,
+			cores: 1,
+			port: 0,
+			since: new Date(Date.now() - 3_600_000).toISOString(),
+			by: 'test',
+			reason: 'test',
+		});
+		const file = join(dir, 'fleet-hosting.json');
+		const text = `${JSON.stringify({
+			nodes: { 'claw-4': [rec('archivebot', 1024), rec('pygmalion', 512)] },
+		})}\n`;
+		writeFileSync(file, text);
+		const door = (...args) =>
+			spawnCapture(process.execPath, [DOOR, ...args, '--json'], {
+				env: {
+					...process.env,
+					HADOKU_STATE_DIR: dir,
+					FLEET_MANIFEST_DIR: MANIFESTS,
+				},
+				label: `fleet hosting ${args.join(' ')}`,
+			});
+		for (const action of ['--remove', '--reassert', '--keep', '--restart']) {
+			const r = door('claw-4', action);
+			const doc = JSON.parse(r.out);
+			assert.equal(r.code, 1, action);
+			assert.equal(doc.state, 'refused', action);
+			assert.match(
+				doc.reason,
+				/holds 2 shared tenants \(archivebot, pygmalion\); name one with --tenant/
+			);
+		}
+		// The record is untouched by every refusal.
+		assert.equal(readFileSync(file, 'utf8'), text);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

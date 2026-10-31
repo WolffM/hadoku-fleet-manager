@@ -32,14 +32,14 @@ export function readDemand(dir) {
  * no end set) and `ending`. Another tenant's slice is never listed, and neither
  * is a hot standby (`role: "standby"`): a tenant reads `declared` as the slices
  * serving it, and the converger counts it against the demand.
- * `hostingOn(node)` is hosting-record's answer for one node.
+ * `hostingsOn(node)` is hosting-record's answer for one node: every tenant on it.
  */
-export function tenantSlices(app, nodes, hostingOn) {
+export function tenantSlices(app, nodes, hostingsOn) {
 	const declared = [];
 	const ending = [];
 	for (const node of nodes) {
-		const h = hostingOn(node);
-		if (h?.tenant !== app || h.role === 'standby') continue;
+		const h = hostingsOn(node).find((x) => x.tenant === app);
+		if (!h || h.role === 'standby') continue;
 		if (h.until) ending.push({ node, until: h.until });
 		else declared.push({ node, mode: h.mode, memoryMb: h.memoryMb, cores: h.cores });
 	}

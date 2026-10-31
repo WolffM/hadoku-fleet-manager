@@ -9,6 +9,13 @@
  * drain reader can mistake it for "CI off". It also cannot be dropped by
  * one of the drain file's writers, which only carry the keys they know.
  *
+ * A NODE MAY HOLD SEVERAL SHARED SLICES, one per tenant (fleet-manager#32).
+ * The file kept one record per node until 2026-10-31, and declaring
+ * pygmalion on claw-4 replaced archivebot's record: archivebot kept running,
+ * unbudgeted by the dispatcher and unchecked by `--check`. Every reader sums
+ * or iterates the list; {@link withSlice} and {@link withoutSlice} are the
+ * only edits, and neither can touch another tenant's record.
+ *
  * THE PRIORITY, operator ruling 2026-10-25: pm2 services and the most
  * critical CI (deploys) come first, then the tenant, then all other CI.
  * pm2 runs in `system.slice`, outside both, and keeps every core the tenant's
@@ -68,13 +75,14 @@ export interface SharedHosting extends HostingResources {
 }
 
 export interface HostingDoc {
-	nodes: Record<string, SharedHosting>;
+	nodes: Record<string, SharedHosting[]>;
 }
 
-/** A node's hosting, whichever kind: `whole` is the drain record, `shared` is this file's. */
+/** One hosting on a node, whichever kind: `whole` is the drain record, `shared` is this file's. */
 export interface HostingOn extends HostingResources {
 	mode: 'whole' | 'shared';
 	until?: string;
+	since?: string;
 }
 
 const FILE = 'fleet-hosting.json';
@@ -89,21 +97,30 @@ const lapsed = (rec: { until?: string }, nowMs: number): boolean => {
 
 /**
  * Parse the file's text. Empty text is no hosting. Malformed text THROWS, and
- * so does a record without a numeric size. A reader that cannot tell how much
- * a tenant was promised must not answer "nothing".
+ * so does a record without a numeric size, and a tenant listed twice on one
+ * node. A reader that cannot tell how much a tenant was promised must not
+ * answer "nothing". A node's value written before 2026-10-31 is one record,
+ * not a list, and reads as a list of one.
  */
 export function parseHostingDoc(raw: string): HostingDoc {
 	if (!raw.trim()) return { nodes: {} };
-	const parsed = JSON.parse(raw) as { nodes?: Record<string, SharedHosting> };
-	const nodes = parsed.nodes ?? {};
-	for (const [node, rec] of Object.entries(nodes)) {
-		if (
-			typeof rec?.tenant !== 'string' ||
-			!Number.isFinite(rec.memoryMb) ||
-			!Number.isFinite(rec.cores)
-		) {
-			throw new Error(`${FILE}: the record for ${node} has no tenant, memoryMb or cores`);
+	const parsed = JSON.parse(raw) as { nodes?: Record<string, SharedHosting | SharedHosting[]> };
+	const nodes: Record<string, SharedHosting[]> = {};
+	for (const [node, value] of Object.entries(parsed.nodes ?? {})) {
+		const recs = Array.isArray(value) ? value : [value];
+		for (const rec of recs) {
+			if (
+				typeof rec?.tenant !== 'string' ||
+				!Number.isFinite(rec.memoryMb) ||
+				!Number.isFinite(rec.cores)
+			) {
+				throw new Error(`${FILE}: a record for ${node} has no tenant, memoryMb or cores`);
+			}
 		}
+		const tenants = recs.map((r) => r.tenant);
+		const twice = tenants.find((t, i) => tenants.indexOf(t) !== i);
+		if (twice) throw new Error(`${FILE}: ${node} lists ${twice} twice`);
+		if (recs.length) nodes[node] = recs;
 	}
 	return { nodes };
 }
@@ -130,45 +147,74 @@ export function writeHostingDoc(doc: HostingDoc, dir: string = stateDir()): void
 	renameSync(tmp, path);
 }
 
-/** Records still in force at `nowMs`. */
-export function effectiveHosting(
+/** Each node's slices still in force at `nowMs`; a node with none is absent. */
+export function effectiveSlices(
 	doc: HostingDoc,
 	nowMs: number = Date.now()
-): Record<string, SharedHosting> {
-	return Object.fromEntries(Object.entries(doc.nodes).filter(([, r]) => !lapsed(r, nowMs)));
+): Record<string, SharedHosting[]> {
+	const out: Record<string, SharedHosting[]> = {};
+	for (const [node, recs] of Object.entries(doc.nodes)) {
+		const live = recs.filter((r) => !lapsed(r, nowMs));
+		if (live.length) out[node] = live;
+	}
+	return out;
+}
+
+/** The memory every shared slice in force on `node` was promised, summed. */
+export function sharedMbOn(doc: HostingDoc, node: string, nowMs: number = Date.now()): number {
+	return (effectiveSlices(doc, nowMs)[node] ?? []).reduce((s, r) => s + r.memoryMb, 0);
 }
 
 /**
- * THE ONE ANSWER TO "IS A TENANT ON THIS NODE", for every reader that must
- * not take the node away without notice: the reboot cycle, `fleet drain`,
- * `node-status`. Whole-box hosting is the drain record; shared is this file.
+ * THE ONE ANSWER TO "WHICH TENANTS ARE ON THIS NODE", for every reader that
+ * must not take the node away without notice: the reboot cycle, `fleet drain`,
+ * `node-status`. Whole-box hosting is the drain record, and is alone on its
+ * node; shared is this file, oldest declaration first. Empty: no tenant.
  */
-export function hostingOn(
+export function hostingsOn(
 	node: string,
 	drainDoc: DrainDoc,
 	hostingDoc: HostingDoc,
 	nowMs: number = Date.now()
-): HostingOn | null {
+): HostingOn[] {
 	const whole = drainDoc.nodes[node];
 	if (whole?.kind === 'hosting' && whole.hosting && !lapsed(whole, nowMs)) {
-		return {
-			mode: 'whole',
-			...whole.hosting,
-			...(whole.until ? { until: whole.until } : {}),
-		};
+		return [
+			{
+				mode: 'whole',
+				...whole.hosting,
+				...(whole.until ? { until: whole.until } : {}),
+				...(whole.since ? { since: whole.since } : {}),
+			},
+		];
 	}
-	const shared = effectiveHosting(hostingDoc, nowMs)[node];
-	if (!shared) return null;
-	const { tenant, memoryMb, cores, port, role, until } = shared;
-	return {
-		mode: 'shared',
-		tenant,
-		memoryMb,
-		cores,
-		port,
-		...(role ? { role } : {}),
-		...(until ? { until } : {}),
-	};
+	return [...(effectiveSlices(hostingDoc, nowMs)[node] ?? [])]
+		.sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
+		.map(({ tenant, memoryMb, cores, port, role, until, since }) => ({
+			mode: 'shared' as const,
+			tenant,
+			memoryMb,
+			cores,
+			port,
+			...(role ? { role } : {}),
+			...(until ? { until } : {}),
+			since,
+		}));
+}
+
+/** `doc` with `rec` as `node`'s slice for `rec.tenant`: that tenant's record replaced, every other kept. */
+export function withSlice(doc: HostingDoc, node: string, rec: SharedHosting): HostingDoc {
+	const others = (doc.nodes[node] ?? []).filter((r) => r.tenant !== rec.tenant);
+	return { nodes: { ...doc.nodes, [node]: [...others, rec] } };
+}
+
+/** `doc` without `tenant`'s slice on `node`; the node's key goes when its last slice does. */
+export function withoutSlice(doc: HostingDoc, node: string, tenant: string): HostingDoc {
+	const nodes = { ...doc.nodes };
+	const left = (nodes[node] ?? []).filter((r) => r.tenant !== tenant);
+	if (left.length) nodes[node] = left;
+	else delete nodes[node];
+	return { nodes };
 }
 
 /**
@@ -178,6 +224,7 @@ export function hostingOn(
  */
 export function hostingNotices(doc: HostingDoc, nowMs: number = Date.now()): DrainNotice[] {
 	return Object.entries(doc.nodes)
+		.flatMap(([node, recs]) => recs.map((r) => [node, r] as const))
 		.filter(([, r]) => Number.isFinite(Date.parse(r.until ?? '')) && Date.parse(r.until!) > nowMs)
 		.map(([node, r]) => ({
 			node,
@@ -235,25 +282,37 @@ export const hostingSliceCgroup = (tenant: string): string =>
 	`/${HOSTING_PARENT_SLICE}/${hostingSliceName(tenant)}`;
 
 /**
- * The shell that prints the slice's `memory.current` on its own line, prefixed
- * so it can ride on another probe's ssh call. `-` when the slice has no cgroup.
+ * The shell that prints each slice's `memory.current` on its own line,
+ * `hosting-slice <tenant> <bytes>`, so it can ride on another probe's ssh
+ * call. `-` when a slice has no cgroup.
  */
-export function sliceUsageProbe(tenant: string): string {
-	return `echo "hosting-slice $(cat /sys/fs/cgroup${hostingSliceCgroup(tenant)}/memory.current 2>/dev/null || echo -)"`;
+export function sliceUsageProbe(tenants: readonly string[]): string {
+	return tenants
+		.map(
+			(t) =>
+				`echo "hosting-slice ${t} $(cat /sys/fs/cgroup${hostingSliceCgroup(t)}/memory.current 2>/dev/null || echo -)"`
+		)
+		.join('; ');
 }
 
-/** Split a {@link sliceUsageProbe} line off probe output: the rest, and the usage in MiB (null if unread). */
+/**
+ * Split {@link sliceUsageProbe}'s lines off probe output: the rest, and each
+ * tenant's usage in MiB (null if unread; a tenant with no line is absent).
+ */
 export function takeSliceUsage(out: string | null): {
 	rest: string;
-	sliceCurrentMb: number | null;
+	sliceCurrentMb: Map<string, number | null>;
 } {
-	const lines = String(out ?? '').split(/\r?\n/);
-	const i = lines.findIndex((l) => l.startsWith('hosting-slice '));
-	if (i === -1) return { rest: String(out ?? ''), sliceCurrentMb: null };
-	const n = Number(lines[i].slice('hosting-slice '.length).trim());
-	lines.splice(i, 1);
-	return {
-		rest: lines.join('\n'),
-		sliceCurrentMb: Number.isFinite(n) ? Math.round(n / 1048576) : null,
-	};
+	const sliceCurrentMb = new Map<string, number | null>();
+	const rest: string[] = [];
+	for (const line of String(out ?? '').split(/\r?\n/)) {
+		const m = /^hosting-slice (\S+) (.*)$/.exec(line);
+		if (!m) {
+			rest.push(line);
+			continue;
+		}
+		const n = /^\d+$/.test(m[2].trim()) ? Number(m[2].trim()) : NaN;
+		sliceCurrentMb.set(m[1], Number.isFinite(n) ? Math.round(n / 1048576) : null);
+	}
+	return { rest: rest.join('\n'), sliceCurrentMb };
 }

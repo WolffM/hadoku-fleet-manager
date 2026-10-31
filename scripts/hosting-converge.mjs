@@ -28,7 +28,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { drainNotices } from '../dist/runners/drain.js';
-import { hostingNotices, hostingOn, readHostingDoc } from '../dist/runners/hosting-record.js';
+import { hostingNotices, hostingsOn, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { collectOffers } from './lib/collect-offers.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
@@ -149,22 +149,21 @@ const door = async (args) => {
 for (const [app, { request }] of tenants) {
 	const facet = `hosting:${app}`;
 	const slices = nodes.flatMap((n) => {
-		const h = hostingOn(n, drainDoc, hostingDoc, NOW);
-		const since = hostingDoc.nodes[n]?.since ?? drainDoc.nodes[n]?.since;
-		return h?.tenant === app
+		const h = hostingsOn(n, drainDoc, hostingDoc, NOW).find((x) => x.tenant === app);
+		return h
 			? [
 					{
 						node: n,
 						...(h.role ? { role: h.role } : {}),
 						...(h.until ? { until: h.until } : {}),
-						...(since ? { since } : {}),
+						...(h.since ? { since: h.since } : {}),
 					},
 				]
 			: [];
 	});
 	// A slice past its end still has units until --remove. Whole-box ends are drains.
 	const pastDue = [
-		...Object.entries(hostingDoc.nodes),
+		...Object.entries(hostingDoc.nodes).flatMap(([n, recs]) => recs.map((r) => [n, r])),
 		...Object.entries(drainDoc.nodes)
 			.filter(([, r]) => r.kind === 'hosting')
 			.map(([n, r]) => [n, { ...r.hosting, until: r.until }]),

@@ -170,11 +170,29 @@ try {
 } catch (err) {
 	hostingUnreadable = hostingUnreadable ?? `tenant registry: ${err.message}`;
 }
-/** The tenant hosted on a node, whole-box or shared, or null. */
-const hostedTenant = (name) =>
-	(doc.nodes[name]?.kind === 'hosting' ? doc.nodes[name].hosting?.tenant : null) ??
-	hostingDoc.nodes[name]?.tenant ??
-	null;
+/**
+ * Every hosting record on a node, lapsed or not (its units stay until
+ * `--remove`): the whole-box one alone, or each shared slice, oldest first.
+ * A node may hold several shared slices (fleet-manager#32).
+ */
+const hostingRecords = (name) => {
+	const whole = doc.nodes[name]?.kind === 'hosting' ? doc.nodes[name] : null;
+	if (whole) return [{ mode: 'whole', rec: whole, declared: whole.hosting ?? {} }];
+	return [...(hostingDoc.nodes[name] ?? [])]
+		.sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
+		.map((r) => ({
+			mode: 'shared',
+			rec: r,
+			declared: {
+				tenant: r.tenant,
+				memoryMb: r.memoryMb,
+				cores: r.cores,
+				port: r.port,
+				// A hot standby (availability.standby); absent = the primary, as before.
+				...(r.role ? { role: r.role } : {}),
+			},
+		}));
+};
 const notices = [...drainNotices(doc, NOW), ...hostingNotices(hostingDoc, NOW)].sort(
 	(a, b) => Date.parse(a.at) - Date.parse(b.at)
 );
@@ -207,12 +225,17 @@ const seen = readSeen();
 const rows = await Promise.all(
 	nodes.map(async ([name, m]) => {
 		const observedAt = iso(Date.now());
-		const spec = hostedTenant(name) ? tenantSpec(registry, hostedTenant(name)) : null;
-		const r = await runOn(name, observeScript(spec ?? NO_TENANT, nodeUser(m, 'ci')), {
-			as: 'admin',
-			timeoutMs: ANSWER_MS,
-			connectTimeout: CONNECT_S,
-		});
+		const records = hostingRecords(name);
+		const specOf = (h) => tenantSpec(registry, h.declared.tenant) ?? null;
+		const observeAs = (spec) =>
+			runOn(name, observeScript(spec ?? NO_TENANT, nodeUser(m, 'ci')), {
+				as: 'admin',
+				timeoutMs: ANSWER_MS,
+				connectTimeout: CONNECT_S,
+			});
+		// The node's own facts ride the first tenant's probe; each further tenant
+		// needs its own, since the probe reads that tenant's slice and listener.
+		const r = await observeAs(records[0] ? specOf(records[0]) : null);
 		const obs = parseObserved(r.stdout);
 		const usersRun = await runOn(name, usersObserveScript(m), {
 			as: 'admin',
@@ -280,9 +303,7 @@ const rows = await Promise.all(
 		}
 
 		const rec = held[name] ?? null;
-		const wholeRec = doc.nodes[name]?.kind === 'hosting' ? doc.nodes[name] : null;
-		const sharedRec = hostingDoc.nodes[name] ?? null;
-		let hosting = null;
+		const tenants = [];
 		if (hostingUnreadable) {
 			findings.push({
 				class: 'blocking',
@@ -290,41 +311,51 @@ const rows = await Promise.all(
 				why: `the shared hosting record is unreadable (${hostingUnreadable}), so whether a tenant is here is unknown`,
 			});
 		}
-		if (wholeRec || sharedRec) {
-			const mode = wholeRec ? 'whole' : 'shared';
-			const r0 = wholeRec ?? sharedRec;
-			const declared = wholeRec
-				? (wholeRec.hosting ?? {})
-				: {
-						tenant: r0.tenant,
-						memoryMb: r0.memoryMb,
-						cores: r0.cores,
-						port: r0.port,
-						// A hot standby (availability.standby); absent = the primary, as before.
-						...(r0.role ? { role: r0.role } : {}),
-					};
+		const nodeMb = records.reduce(
+			(sum, h) => sum + (h.mode === 'shared' ? h.declared.memoryMb : 0),
+			0
+		);
+		for (const [i, h] of records.entries()) {
+			const spec = specOf(h);
+			const tObs = i === 0 || !obs ? obs : parseObserved((await observeAs(spec)).stdout);
+			const { declared, mode } = h;
 			// Reach is a `controller` ingress's question; a loopback tenant is judged from its socket.
 			const reach =
-				obs && spec?.ingress === 'controller'
+				tObs && spec?.ingress === 'controller'
 					? await probeReach({
 							port: declared.port,
 							addrs: {
 								lan: m.lan?.ip ?? null,
-								tailnet4: obs.tailnet4,
-								tailnet6: obs.tailnet6,
+								tailnet4: tObs.tailnet4,
+								tailnet6: tObs.tailnet6,
 							},
 							peers: peerCandidates(manifest, name),
 							run: runOn,
 						})
 					: null;
-			const judged = judgeHosting(declared, obs, mode, reach, spec);
+			const judged = judgeHosting(
+				declared,
+				tObs,
+				mode,
+				reach,
+				spec,
+				mode === 'shared' ? nodeMb : declared.memoryMb
+			);
 			// `state` is hosting --check's word for the same judgement, so a tenant
 			// reads one vocabulary from both (cardtable lane D, TENANT_CONTRACT).
 			const state = judged.findings.some((f) => f.class === 'blocking')
 				? 'not-guaranteed'
 				: 'guaranteed';
-			hosting = { mode, state, declared, until: r0.until ?? null, observed: judged.observed };
-			findings.push(...judged.findings);
+			tenants.push({
+				mode,
+				state,
+				declared,
+				until: h.rec.until ?? null,
+				observed: judged.observed,
+			});
+			// With several tenants, a finding says whose slice it is about.
+			const whose = records.length > 1 ? `${declared.tenant}: ` : '';
+			findings.push(...judged.findings.map((f) => ({ ...f, why: `${whose}${f.why}` })));
 		}
 
 		// Unreachable is already one blocking finding above; the users facet adds its
@@ -347,7 +378,7 @@ const rows = await Promise.all(
 			boots[name] = {
 				bootId: obs.bootId,
 				at: observedAt,
-				hosting: Boolean(wholeRec || sharedRec),
+				hosting: records.length > 0,
 				rebootDrain: rebootDrainOn(name),
 				...(unannounced ? { unannounced } : {}),
 			};
@@ -377,7 +408,11 @@ const rows = await Promise.all(
 					}
 				: null,
 			notices: notices.filter((n) => n.node === name).map(({ node: _, ...n }) => n),
-			hosting,
+			// `hosting` is the node's OLDEST declaration, so a tenant placed beside
+			// it later never hides it from a reader that takes only this field.
+			// `tenants` is every one, oldest first.
+			hosting: tenants[0] ?? null,
+			tenants,
 			ciUser: { name: nodeUser(m, 'ci'), state: users.state },
 			capabilities: m.$capabilities?.earned ?? [],
 			revoked,
@@ -417,7 +452,7 @@ if (out.json) {
 		ok,
 		generatedAt: iso(NOW),
 		freshness: {
-			live: 'reachable, ci and hosting.observed are observed during this call; see each observedAt',
+			live: 'reachable, ci, hosting.observed and tenants[].observed are observed during this call; see each observedAt',
 			healthRecord: `daily (ci:health-refresh, 12:00Z); blocking past ${HEALTH_STALE_HOURS} h`,
 			noticeMinutes: HOSTING_NOTICE_MS / 60_000,
 		},

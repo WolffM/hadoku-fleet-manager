@@ -12,13 +12,16 @@ import {
 	AGENT_UP_MIN_MB,
 	CI_OOM_SCORE_ADJ,
 	HOLD_FULL_MS,
-	effectiveHosting,
+	effectiveSlices,
 	heldBackMb,
-	hostingOn,
+	hostingsOn,
 	parseHostingDoc,
 	readHostingDoc,
+	sharedMbOn,
 	sliceUsageProbe,
 	takeSliceUsage,
+	withSlice,
+	withoutSlice,
 	writeHostingDoc,
 	type HostingDoc,
 	type SharedHosting,
@@ -38,13 +41,52 @@ const slice = (over: Partial<SharedHosting> = {}): SharedHosting => ({
 	reason: 'test slice',
 	...over,
 });
-const shared = (rec: SharedHosting = slice()): HostingDoc => ({ nodes: { 'claw-9': rec } });
+const shared = (rec: SharedHosting = slice()): HostingDoc => ({ nodes: { 'claw-9': [rec] } });
 const noDrains: DrainDoc = { nodes: {}, planned: [] };
 
 test('an unreadable record THROWS: what a tenant was promised is never read as nothing', () => {
 	assert.deepEqual(parseHostingDoc(''), { nodes: {} });
 	assert.throws(() => parseHostingDoc('{ not json'));
 	assert.throws(() => parseHostingDoc('{"nodes":{"claw-9":{"tenant":"cardtable"}}}'), /claw-9/);
+	assert.throws(() => parseHostingDoc('{"nodes":{"claw-9":[{"tenant":"cardtable"}]}}'), /claw-9/);
+});
+
+// fleet-manager#32: the file held one record per node before 2026-10-31.
+test('a node written as one record reads as a list of one; a tenant listed twice THROWS', () => {
+	const rec = slice();
+	assert.deepEqual(parseHostingDoc(JSON.stringify({ nodes: { 'claw-9': rec } })), shared(rec));
+	assert.throws(
+		() => parseHostingDoc(JSON.stringify({ nodes: { 'claw-9': [rec, slice({ memoryMb: 1 })] } })),
+		/claw-9 lists cardtable twice/
+	);
+});
+
+test('withSlice adds or replaces ONE tenant and never another; withoutSlice drops only that one', () => {
+	const archivebot = slice({ tenant: 'archivebot', memoryMb: 1024, cores: 1, port: 0 });
+	const pygmalion = slice({ tenant: 'pygmalion', memoryMb: 512, cores: 1, port: 9002 });
+	// The claw-4 incident: a second tenant declared on the node kept the first.
+	let doc = withSlice({ nodes: {} }, 'claw-4', archivebot);
+	doc = withSlice(doc, 'claw-4', pygmalion);
+	assert.deepEqual(
+		doc.nodes['claw-4'].map((r) => r.tenant),
+		['archivebot', 'pygmalion']
+	);
+	// A re-declare of the same tenant replaces only its own record.
+	doc = withSlice(doc, 'claw-4', { ...pygmalion, memoryMb: 768 });
+	assert.deepEqual(
+		doc.nodes['claw-4'].map((r) => [r.tenant, r.memoryMb]),
+		[
+			['archivebot', 1024],
+			['pygmalion', 768],
+		]
+	);
+	assert.equal(sharedMbOn(doc, 'claw-4', NOW), 1024 + 768);
+	doc = withoutSlice(doc, 'claw-4', 'pygmalion');
+	assert.deepEqual(
+		doc.nodes['claw-4'].map((r) => r.tenant),
+		['archivebot']
+	);
+	assert.deepEqual(withoutSlice(doc, 'claw-4', 'archivebot'), { nodes: {} });
 });
 
 test('the record round-trips through its own state dir, and a missing file is no hosting', () => {
@@ -62,16 +104,26 @@ test('the record round-trips through its own state dir, and a missing file is no
 });
 
 test('a slice past its end is no longer in force; an unparseable end still is', () => {
-	assert.deepEqual(Object.keys(effectiveHosting(shared(slice({ until: ago(1) })), NOW)), []);
-	assert.deepEqual(Object.keys(effectiveHosting(shared(slice({ until: ahead(60_000) })), NOW)), [
+	assert.deepEqual(Object.keys(effectiveSlices(shared(slice({ until: ago(1) })), NOW)), []);
+	assert.deepEqual(Object.keys(effectiveSlices(shared(slice({ until: ahead(60_000) })), NOW)), [
 		'claw-9',
 	]);
-	assert.deepEqual(Object.keys(effectiveHosting(shared(slice({ until: 'soon' })), NOW)), [
-		'claw-9',
-	]);
+	assert.deepEqual(Object.keys(effectiveSlices(shared(slice({ until: 'soon' })), NOW)), ['claw-9']);
+	// One tenant's lapsed slice leaves the other's in force, and out of the sum.
+	const two: HostingDoc = {
+		nodes: {
+			'claw-4': [slice({ until: ago(1) }), slice({ tenant: 'archivebot', memoryMb: 1024 })],
+		},
+	};
+	assert.deepEqual(
+		effectiveSlices(two, NOW)['claw-4'].map((r) => r.tenant),
+		['archivebot']
+	);
+	assert.equal(sharedMbOn(two, 'claw-4', NOW), 1024);
+	assert.equal(sharedMbOn(two, 'claw-9', NOW), 0);
 });
 
-test('hostingOn answers for both kinds, whole from the drain and shared from its own file', () => {
+test('hostingsOn answers for both kinds, whole from the drain and shared from its own file', () => {
 	const whole: DrainDoc = {
 		nodes: {
 			'claw-8': {
@@ -84,23 +136,36 @@ test('hostingOn answers for both kinds, whole from the drain and shared from its
 		},
 		planned: [],
 	};
-	assert.equal(hostingOn('claw-8', whole, { nodes: {} }, NOW)?.mode, 'whole');
-	assert.equal(hostingOn('claw-9', noDrains, shared(), NOW)?.mode, 'shared');
-	assert.equal(hostingOn('claw-4', noDrains, shared(), NOW), null);
+	assert.equal(hostingsOn('claw-8', whole, { nodes: {} }, NOW)[0]?.mode, 'whole');
+	assert.equal(hostingsOn('claw-9', noDrains, shared(), NOW)[0]?.mode, 'shared');
+	assert.deepEqual(hostingsOn('claw-4', noDrains, shared(), NOW), []);
+	// Several shared tenants: every one, oldest declaration first.
+	const two: HostingDoc = {
+		nodes: {
+			'claw-4': [
+				slice({ tenant: 'pygmalion', since: ago(60_000) }),
+				slice({ tenant: 'archivebot', since: ago(3_600_000) }),
+			],
+		},
+	};
+	assert.deepEqual(
+		hostingsOn('claw-4', noDrains, two, NOW).map((h) => h.tenant),
+		['archivebot', 'pygmalion']
+	);
 	// A maintenance drain is not hosting.
 	const maint: DrainDoc = {
 		nodes: { 'claw-4': { since: ago(1), reason: 'x', by: 't', kind: 'maintenance' } },
 		planned: [],
 	};
-	assert.equal(hostingOn('claw-4', maint, { nodes: {} }, NOW), null);
+	assert.deepEqual(hostingsOn('claw-4', maint, { nodes: {} }, NOW), []);
 });
 
-test('hostingOn carries a standby role, and a primary record stays without one', () => {
+test('hostingsOn carries a standby role, and a primary record stays without one', () => {
 	assert.equal(
-		hostingOn('claw-9', noDrains, shared(slice({ role: 'standby' })), NOW)?.role,
+		hostingsOn('claw-9', noDrains, shared(slice({ role: 'standby' })), NOW)[0]?.role,
 		'standby'
 	);
-	assert.ok(!('role' in (hostingOn('claw-9', noDrains, shared(), NOW) ?? {})));
+	assert.ok(!('role' in (hostingsOn('claw-9', noDrains, shared(), NOW)[0] ?? {})));
 	const whole: DrainDoc = {
 		nodes: {
 			'claw-8': {
@@ -113,7 +178,7 @@ test('hostingOn carries a standby role, and a primary record stays without one',
 		},
 		planned: [],
 	};
-	assert.equal(hostingOn('claw-8', whole, { nodes: {} }, NOW)?.role, 'standby');
+	assert.equal(hostingsOn('claw-8', whole, { nodes: {} }, NOW)[0]?.role, 'standby');
 });
 
 test('hold-back: the unused share once the agent is up, everything before it', () => {
@@ -132,18 +197,17 @@ test('hold-back: the unused share once the agent is up, everything before it', (
 	assert.equal(heldBackMb({ ...settled, since: 'garbage', sliceCurrentMb: 3000 }), 4096);
 });
 
-test("the slice's usage rides another probe's ssh and comes off it cleanly", () => {
-	assert.match(
-		sliceUsageProbe('cardtable'),
-		/hosting\.slice\/hosting-cardtable\.slice\/memory\.current/
-	);
-	const raw = `1200 15900\n4000 8000\n90000\nhosting-slice ${1300 * 1048576}\n`;
+test("each slice's usage rides another probe's ssh and comes off it cleanly", () => {
+	const probe = sliceUsageProbe(['cardtable', 'archivebot']);
+	assert.match(probe, /hosting\.slice\/hosting-cardtable\.slice\/memory\.current/);
+	assert.match(probe, /hosting\.slice\/hosting-archivebot\.slice\/memory\.current/);
+	const raw = `1200 15900\n4000 8000\n90000\nhosting-slice cardtable ${1300 * 1048576}\nhosting-slice archivebot -\n`;
 	const { rest, sliceCurrentMb } = takeSliceUsage(raw);
-	assert.equal(sliceCurrentMb, 1300);
+	assert.equal(sliceCurrentMb.get('cardtable'), 1300);
+	assert.equal(sliceCurrentMb.get('archivebot'), null);
 	assert.equal(rest, '1200 15900\n4000 8000\n90000\n');
-	assert.equal(takeSliceUsage('a\nhosting-slice -\n').sliceCurrentMb, null);
-	assert.deepEqual(takeSliceUsage('a\nb\n'), { rest: 'a\nb\n', sliceCurrentMb: null });
-	assert.equal(takeSliceUsage(null).sliceCurrentMb, null);
+	assert.deepEqual(takeSliceUsage('a\nb\n'), { rest: 'a\nb\n', sliceCurrentMb: new Map() });
+	assert.equal(takeSliceUsage(null).sliceCurrentMb.size, 0);
 });
 
 test('notice: a shared slice is owed it for a reboot or its end, not for CI coming off', () => {
@@ -183,16 +247,26 @@ test('every CI unit ranks below the tenant: JIT, warm and the --ci-shaped test u
 	);
 });
 
-/** One dispatcher tick against claw-3 hosting a 4096 MiB slice whose cgroup reads `sliceMb`. */
+/**
+ * One dispatcher tick against claw-3 hosting a 4096 MiB cardtable slice whose
+ * cgroup reads `sliceMb`, plus `beside` (a second tenant's slice, settled,
+ * whose cgroup reads `besideMb`).
+ */
 async function tickFloor(
 	sliceMb: number | null,
-	declaredAgoMs: number
+	declaredAgoMs: number,
+	beside?: { rec: SharedHosting; mb: number | null }
 ): Promise<{ floor: number; cmds: string[] }> {
 	const { dispatchEphemeral } = await import('../runners/ephemeral-tick.js');
 	const { stateDir } = await import('../host.js');
 	const file = join(stateDir(), 'fleet-hosting.json');
 	writeHostingDoc({
-		nodes: { 'claw-3': slice({ since: new Date(Date.now() - declaredAgoMs).toISOString() }) },
+		nodes: {
+			'claw-3': [
+				slice({ since: new Date(Date.now() - declaredAgoMs).toISOString() }),
+				...(beside ? [beside.rec] : []),
+			],
+		},
 	});
 	try {
 		const seen: { minFreeMb: number }[][] = [];
@@ -200,7 +274,12 @@ async function tickFloor(
 		const sh = async (_n: string, cmd: string) => {
 			cmds.push(cmd);
 			if (!cmd.includes('$7, $2')) return '9000';
-			return `9000 16000\n4000 8000\n90000\nhosting-slice ${sliceMb === null ? '-' : sliceMb * 1048576}\n`;
+			const line = (t: string, mb: number | null) =>
+				`hosting-slice ${t} ${mb === null ? '-' : mb * 1048576}\n`;
+			return (
+				`9000 16000\n4000 8000\n90000\n${line('cardtable', sliceMb)}` +
+				(beside ? line(beside.rec.tenant, beside.mb) : '')
+			);
 		};
 		await dispatchEphemeral(
 			{
@@ -244,6 +323,26 @@ test('A4: the dispatcher holds back the unused share, read on the same ssh as fr
 	assert.equal((await tickFloor(3000, 60_000)).floor, 1536 + 4096);
 	// Could not read the slice: everything.
 	assert.equal((await tickFloor(null, settled)).floor, 1536 + 4096);
+});
+
+// fleet-manager#32: claw-4 holds archivebot and pygmalion. The floor holds back
+// what EACH slice is not yet using; one record per node held back only one.
+test('two slices on one node: the dispatcher holds back the unused share of each', async () => {
+	const settled = HOLD_FULL_MS + 60_000;
+	const archivebot = slice({
+		tenant: 'archivebot',
+		memoryMb: 1024,
+		since: new Date(Date.now() - settled).toISOString(),
+	});
+	const { floor, cmds } = await tickFloor(1200, settled, { rec: archivebot, mb: 300 });
+	assert.ok(cmds.some((c) => c.includes('hosting-archivebot.slice/memory.current')));
+	// archivebot at 300 MiB is past AGENT_UP_MIN_MB, so only its unused 724 is held.
+	assert.equal(floor, 1536 + (4096 - 1200) + (1024 - 300));
+	// Its slice unreadable: all of it is held, and cardtable's figure is unchanged.
+	assert.equal(
+		(await tickFloor(1200, settled, { rec: archivebot, mb: null })).floor,
+		1536 + (4096 - 1200) + 1024
+	);
 });
 
 // cardtable's lane D drains its matches off a node from `notices` (asks a and b,

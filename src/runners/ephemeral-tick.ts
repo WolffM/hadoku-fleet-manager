@@ -14,7 +14,7 @@
 
 import { readDrain } from './drain.js';
 import {
-	effectiveHosting,
+	effectiveSlices,
 	heldBackMb,
 	readHostingDoc,
 	sliceUsageProbe,
@@ -406,22 +406,31 @@ export async function dispatchEphemeral(
 	// SHARED HOSTING (src/runners/hosting-record.ts): a hosting node's probe also
 	// reads the tenant slice's usage, on the same ssh, so admission can hold back
 	// exactly the part of the slice the tenant is not using yet.
-	const sharedHosting = effectiveHosting(readHostingDoc());
+	const sharedHosting = effectiveSlices(readHostingDoc());
 	const heldBackMbByNode = new Map<string, number>();
 	await Promise.all(
 		minting.map(async (name) => {
-			const hosted = sharedHosting[name];
+			const hosted = sharedHosting[name] ?? [];
 			const raw = await sh(
 				name,
 				"free -m | awk '/^Mem:/{print $7, $2}'; " +
 					SPACE_PROBE_DF_CMD +
-					(hosted ? `; ${sliceUsageProbe(hosted.tenant)}` : '')
+					(hosted.length ? `; ${sliceUsageProbe(hosted.map((h) => h.tenant))}` : '')
 			);
 			const { rest: out, sliceCurrentMb } = takeSliceUsage(raw);
-			if (hosted) {
+			if (hosted.length) {
 				heldBackMbByNode.set(
 					name,
-					heldBackMb({ declaredMb: hosted.memoryMb, sliceCurrentMb, since: hosted.since })
+					hosted.reduce(
+						(sum, h) =>
+							sum +
+							heldBackMb({
+								declaredMb: h.memoryMb,
+								sliceCurrentMb: sliceCurrentMb.get(h.tenant) ?? null,
+								since: h.since,
+							}),
+						0
+					)
 				);
 			}
 			const { first, tmpFreeMb, tmpSizeMb, workFreeMb } = parseSpaceProbe(out);

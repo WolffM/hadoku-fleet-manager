@@ -36,7 +36,7 @@ import { deferralFor, readDrainDoc, readDrains } from './lib/expected-down.mjs';
 import { loadManifest, machineArg, runOnSync } from './lib/fleet-exec.mjs';
 import { stateDir } from './lib/paths.mjs';
 import { HOSTING_NOTICE_MS } from '../dist/runners/drain.js';
-import { hostingOn, readHostingDoc } from '../dist/runners/hosting-record.js';
+import { hostingsOn, readHostingDoc } from '../dist/runners/hosting-record.js';
 import {
 	REBOOT_PROBE,
 	oursOn,
@@ -99,7 +99,12 @@ const deps = {
 	// `fleet drain` (and node-status) carry it as a notice from now.
 	announce: (node, reason, noticeMin) => drainCli(rebootNoticeArgs(node, reason, noticeMin)),
 	noticeMs: HOSTING_NOTICE_MS,
-	hostingOn: (node) => hostingOn(node, readDrainDoc(), readHostingDoc(stateDir()), Date.now()),
+	// Every tenant on the node, as one answer: the cycle asks whether anyone is
+	// owed notice, in which mode, and names them.
+	hostingOn: (node) => {
+		const hs = hostingsOn(node, readDrainDoc(), readHostingDoc(stateDir()), Date.now());
+		return hs.length ? { mode: hs[0].mode, tenant: hs.map((h) => h.tenant).join(' and ') } : null;
+	},
 	// --force: the node has ALREADY rebooted and failed, so a hosting node's
 	// notice cannot apply to holding it, and a broken box is held regardless.
 	hold: (node, reason) => drainCli([node, '--kind', 'maintenance', '--reason', reason, '--force']),

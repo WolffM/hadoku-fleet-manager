@@ -1,5 +1,5 @@
 import { isDraining, readDrain } from './drain.js';
-import { effectiveHosting, readHostingDoc } from './hosting-record.js';
+import { readHostingDoc, sharedMbOn } from './hosting-record.js';
 import { DEFAULT_RUNNER_SLICE } from './ephemeral.js';
 import { resolveSliceName } from './ephemeral.js';
 import { spaceRefusal } from './ephemeral.js';
@@ -407,7 +407,7 @@ export async function dispatchWarmCache(
 	const drainState = readDrain();
 	// Shared hosting slices, read once with it. Unreadable THROWS, as the drain
 	// does: a tick that cannot tell what a tenant was promised mints nothing.
-	const sharedHosting = effectiveHosting(readHostingDoc());
+	const hostingDoc = readHostingDoc();
 
 	const observed = (
 		await Promise.all(
@@ -439,7 +439,7 @@ export async function dispatchWarmCache(
 					// A SHARED HOSTING SLICE is not CI's to count on: installed memory
 					// includes it, so the whole declaration comes off what a listener
 					// may plan around (src/runners/hosting-record.ts).
-					const hostedMb = sharedHosting[node]?.memoryMb ?? 0;
+					const hostedMb = sharedMbOn(hostingDoc, node);
 					const installedMb = Number(first);
 					if (!Number.isFinite(installedMb) || installedMb <= 0) {
 						logger.warn(

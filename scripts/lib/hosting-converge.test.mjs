@@ -184,7 +184,7 @@ test('demand that comes back keeps its own ending slice rather than declaring a 
 		[['keep', 'claw-9']],
 		'past its end with the units still there is kept, not removed and replaced'
 	);
-	assert.deepEqual(doorArgs(agent, passed.actions[0]), ['claw-9', '--keep']);
+	assert.deepEqual(doorArgs(agent, passed.actions[0]), ['claw-9', '--tenant', agent.app, '--keep']);
 });
 
 test('only as many ending slices are kept as demand is short, latest in the release order first', () => {
@@ -372,16 +372,24 @@ test('live: done is converged, accepted-not-guaranteed is deferred, refused is u
 	);
 });
 
-test('an end goes through the door with the notice, a remove with nothing else', () => {
+test('an end goes through the door with the notice, a remove with only its tenant', () => {
 	assert.deepEqual(doorArgs(agent, { op: 'end', node: 'claw-8', inMin: 15, why: 'w' }), [
 		'claw-8',
+		'--tenant',
+		agent.app,
 		'--end',
 		'--in',
 		'15m',
 		'--reason',
 		'hosting-converge: w',
 	]);
-	assert.deepEqual(doorArgs(agent, { op: 'remove', node: 'claw-8' }), ['claw-8', '--remove']);
+	// The tenant is named every time: a node may hold several (fleet-manager#32).
+	assert.deepEqual(doorArgs(agent, { op: 'remove', node: 'claw-8' }), [
+		'claw-8',
+		'--tenant',
+		agent.app,
+		'--remove',
+	]);
 });
 
 test('a service the app layer already runs is never declared beside itself: its first slice is a move', () => {
@@ -505,7 +513,7 @@ test('an agent slice the fleet declares gets the kept agent through the same doo
 	const calls = [];
 	const door = async (args) => {
 		calls.push(args);
-		return args[1] === '--install'
+		return args.includes('--install')
 			? { doc: { ok: true, state: 'installed' }, why: '' }
 			: { doc: { ok: false, state: 'not-guaranteed', reason: 'agent not running' }, why: '' };
 	};
@@ -515,7 +523,15 @@ test('an agent slice the fleet declares gets the kept agent through the same doo
 		{ actions: [{ op: 'declare', node: 'claw-5', why: 'w' }], blocked: [] },
 		{ live: true, door, artifact: { ok: true, path: '/state/run', sha256: sha } }
 	);
-	assert.deepEqual(calls[1], ['claw-5', '--install', '/state/run', '--sha256', sha]);
+	assert.deepEqual(calls[1], [
+		'claw-5',
+		'--tenant',
+		agent.app,
+		'--install',
+		'/state/run',
+		'--sha256',
+		sha,
+	]);
 	assert.deepEqual(
 		rows.converged.map((r) => [r.node, r.changed]),
 		[['claw-5', 'declared, agent aaaaaaaaaaaa installed']]
@@ -525,7 +541,7 @@ test('an agent slice the fleet declares gets the kept agent through the same doo
 
 test('no kept agent waits (deferred, with the command); an unverifiable or refused one pages', async () => {
 	const declared = async (args) =>
-		args[1] === '--install'
+		args.includes('--install')
 			? { doc: { ok: false, state: 'refused', reason: 'sha mismatch on node' }, why: '' }
 			: { doc: { ok: true, state: 'guaranteed' }, why: '' };
 	const one = { actions: [{ op: 'declare', node: 'claw-5', why: 'w' }], blocked: [] };

@@ -39,8 +39,8 @@ export function tenantsByNode(drainDoc, hostingDoc) {
 	const add = (node, t) => out.set(node, [...(out.get(node) ?? []), t]);
 	for (const [node, rec] of Object.entries(drainDoc.nodes))
 		if (rec.kind === 'hosting' && rec.hosting) add(node, { ...pick(rec.hosting), mode: 'whole' });
-	for (const [node, rec] of Object.entries(hostingDoc.nodes))
-		add(node, { ...pick(rec), mode: 'shared' });
+	for (const [node, recs] of Object.entries(hostingDoc.nodes))
+		for (const rec of recs) add(node, { ...pick(rec), mode: 'shared' });
 	return out;
 }
 const pick = ({ tenant, memoryMb, cores, role }) => ({
