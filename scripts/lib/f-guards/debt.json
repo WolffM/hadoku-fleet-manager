@@ -2,22 +2,12 @@
   "F1": [
     "scripts/benchmark-fleet.mjs:doc#1",
     "scripts/bootcamp.mjs:mp#1",
-    "scripts/check-capability-schema.mjs:MANIFEST#1",
     "scripts/check-label-floor.mjs:MANIFEST#1",
-    "scripts/drain-node.mjs:capacityAfter#2",
-    "scripts/drain-node.mjs:fleetDoc#1",
     "scripts/enroll-node.mjs:INCLUDE_GUESTS#1",
     "scripts/enroll-node.mjs:MANIFEST#2",
-    "scripts/floor-probe.mjs:manifest#1",
     "scripts/lan-reserve.mjs:MANIFEST#1",
     "scripts/node-users-cutover.mjs:MANIFEST#1",
-    "scripts/node-users-cutover.mjs:p#2",
-    "scripts/toolpack.mjs:MANIFEST#1",
-    "scripts/traffic-status.mjs:fleet#1",
-    "src/fleet-loop.ts:FLEET_MANIFEST#1",
-    "src/node-shell.ts:raw#1",
-    "src/routes/fleet.ts:raw#1",
-    "src/runner-health.ts:raw#1"
+    "scripts/node-users-cutover.mjs:p#2"
   ],
   "F3-write-then-rename": [
     "scripts/check-fleet-preflight.mjs:writePendingState#1",

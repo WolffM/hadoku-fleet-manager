@@ -43,13 +43,14 @@
 
 import os from 'node:os';
 
+import { getFleetProbeSnapshot } from './fleet-loop.js';
 import {
-	getFleetProbeSnapshot,
 	loadClawNodes,
 	loadEphemeralNodes,
 	loadFleetManifestMachines,
 	loadFleetNodeNames,
-} from './fleet-loop.js';
+	readManifestState,
+} from './lib/manifest.js';
 import {
 	BACKSTOP_LABEL,
 	BUILDER_LABEL,
@@ -70,7 +71,7 @@ import {
 import { parseJitName, TMP_FREE_FLOOR_MB } from './runners/ephemeral.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { logger, githubToken, manifest, stateDir, TOKEN_RETRY_MS } from './host.js';
+import { logger, githubToken, stateDir, TOKEN_RETRY_MS } from './host.js';
 import {
 	checkSupervision,
 	describeProblem,
@@ -212,14 +213,8 @@ let backstopFleetState: boolean | null = null;
  * ran on before the manifest was consulted at all.
  */
 function readManifestMachines(): Record<string, unknown> | null {
-	try {
-		const raw = JSON.parse(readFileSync(manifest('fleet-runner-manifest.json'), 'utf8')) as {
-			machines?: Record<string, unknown>;
-		};
-		return raw.machines ?? null;
-	} catch {
-		return null;
-	}
+	const result = readManifestState();
+	return result.ok ? (result.doc.machines ?? null) : null;
 }
 let backstopMachinesReader: () => Record<string, unknown> | null = readManifestMachines;
 /** Test seam: the manifest's machines map, as the backstop reads it. */

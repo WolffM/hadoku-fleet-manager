@@ -23,7 +23,6 @@
  */
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
-import { readFileSync } from 'node:fs';
 
 import {
 	QUEUED_WARN_MINUTES,
@@ -62,7 +61,8 @@ import {
 	workloadGatedCapabilities,
 } from '../capabilities.js';
 import { proofFileStatus, readProofsForCapability, type ProofRecord } from '../lib/measured.js';
-import { githubToken, logger, manifest, stateDir } from '../host.js';
+import { githubToken, logger, stateDir } from '../host.js';
+import { readManifestState } from '../lib/manifest.js';
 import { packageVersion } from '../lib/provenance.js';
 import { recordRouteHit } from '../lib/usage-log.js';
 import { getGhBudgetSnapshot, recordGhResponse, withGhCaller } from '../gh-budget.js';
@@ -148,18 +148,26 @@ function loadManifestNodes(): Record<string, ManifestNode> {
 	// `manifest()` throws on a bad path rather than returning empty, which is
 	// the whole point: an unreadable manifest must not render as a fleet with
 	// no capacity.
-	try {
-		const raw = JSON.parse(readFileSync(manifest('fleet-runner-manifest.json'), 'utf8')) as {
-			machines?: Record<string, ManifestNode>;
-		};
-		return raw.machines ?? {};
-	} catch (err) {
+	//
+	// NAMED, NOT FIXED, IN WAVE 5C (lane A, F1): this function still turns
+	// "could not read" into `{}` for the narrower case above — the directory
+	// resolves but the FILE does not read or parse — exactly the collapse
+	// AGENTS.md warns against ("I could not look must never render as nothing
+	// is wrong"), one paragraph up from where this same comment names it.
+	// Fixing it means `loadManifestNodes` returning `null` on that path, which
+	// ripples into every caller in this file (`buildFleetReport`'s default
+	// parameter, `admission`, `buildVocabulary`, `stateOf`) — outside "the F1
+	// read only" this lane owns. The read itself is migrated to the shared
+	// typed loader (`src/lib/manifest.ts`) so this file no longer spells the
+	// manifest's filename itself; the `{}` fallback is left for a wave that can
+	// afford to touch every reader below.
+	const result = readManifestState();
+	if (!result.ok) {
 		// Reported, never swallowed — the silent `{}` is what hid this for a day.
-		logger.error(
-			`[fleet] cannot read the node manifest: ${err instanceof Error ? err.message : String(err)}`
-		);
+		logger.error(`[fleet] cannot read the node manifest: ${result.why}`);
 		return {};
 	}
+	return (result.doc.machines as Record<string, ManifestNode> | undefined) ?? {};
 }
 
 /**

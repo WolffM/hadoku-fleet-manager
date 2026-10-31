@@ -98,7 +98,7 @@ import { readDrains } from './lib/expected-down.mjs';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { stripYamlComments } from './lib/yaml-comments.mjs';
-import { runOn } from './lib/fleet-exec.mjs';
+import { loadManifest, runOn } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { isGuestNode } from '../dist/lib/node-role.js';
@@ -319,7 +319,12 @@ function declareProbeIntent({ repo, job, node, runnerName }) {
 	return release;
 }
 
-const manifest = readJson(manifestFile('fleet-runner-manifest.json'), 'the fleet manifest');
+let manifest;
+try {
+	manifest = loadManifest();
+} catch (err) {
+	fail(`cannot read the fleet manifest: ${err.message}`);
+}
 const machines = manifest.machines ?? {};
 const NODES = Object.keys(machines);
 if (!NODES.length)

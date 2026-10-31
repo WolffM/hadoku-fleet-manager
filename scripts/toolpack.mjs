@@ -36,8 +36,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { manifest, PKG_SCRIPTS } from './lib/paths.mjs';
-import { isLocalNode, sshDestination } from './lib/fleet-exec.mjs';
+import { PKG_SCRIPTS } from './lib/paths.mjs';
+import { isLocalNode, loadManifest, sshDestination } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { isGuestNode } from '../dist/lib/node-role.js';
@@ -73,7 +73,7 @@ const OFF = '\x1b[0m';
 // deployment carry a pack list its own readers disagree with.
 const PACKS = JSON.parse(readFileSync(join(PKG_SCRIPTS, 'toolpacks.json'), 'utf8')).packs;
 const named = parsed.positionals;
-const MANIFEST = JSON.parse(readFileSync(manifest('fleet-runner-manifest.json'), 'utf8'));
+const MANIFEST = loadManifest();
 /**
  * A GUEST IS NOT SWEPT, AND THE SKIP IS PRINTED.
  *

@@ -47,7 +47,8 @@
 import process from 'node:process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { manifest as manifestFile, siteRoot } from './lib/paths.mjs';
+import { siteRoot } from './lib/paths.mjs';
+import { loadManifest, manifestPath } from './lib/fleet-exec.mjs';
 import {
 	validateCapabilities,
 	parseProbeCapabilities,
@@ -76,7 +77,7 @@ keepStdoutWhole();
 
 const JSON_OUT = process.argv.includes('--json');
 const i = process.argv.indexOf('--manifest');
-const MANIFEST = i > -1 ? process.argv[i + 1] : manifestFile('fleet-runner-manifest.json');
+const MANIFEST = i > -1 ? process.argv[i + 1] : manifestPath();
 
 /**
  * "I could not look" must never render as "nothing is wrong."
@@ -100,9 +101,17 @@ function readOrDie(path, what) {
 
 let manifest;
 try {
-	manifest = JSON.parse(readOrDie(MANIFEST, 'the fleet manifest'));
+	manifest = loadManifest(MANIFEST);
 } catch (err) {
-	console.error(`✗ ${MANIFEST} is not valid JSON: ${err.message}`);
+	if (err instanceof SyntaxError) {
+		console.error(`✗ ${MANIFEST} is not valid JSON: ${err.message}`);
+	} else {
+		console.error(`✗ cannot read the fleet manifest: ${MANIFEST}\n  ${err.message}`);
+		console.error(
+			'  This is fatal on purpose: an empty manifest produces zero findings, which\n' +
+				'  is indistinguishable from a healthy fleet.'
+		);
+	}
 	process.exit(1);
 }
 

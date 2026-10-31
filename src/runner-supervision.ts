@@ -54,7 +54,7 @@ import { execFile } from 'node:child_process';
 import { nodeShell } from './node-shell.js';
 
 import { logger } from './host.js';
-import { loadFleetNodeNames, loadGuestNodes } from './fleet-loop.js';
+import { loadFleetNodeNames, loadGuestNodes } from './lib/manifest.js';
 
 const SSH_TIMEOUT_MS = 15000;
 

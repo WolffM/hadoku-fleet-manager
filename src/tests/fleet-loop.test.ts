@@ -31,12 +31,12 @@ import {
 	__resetSickForTesting,
 	__parseProbeForTesting,
 	__PROBE_CMD_FOR_TESTING,
-	loadClawNodes,
 	loadResidentRepos,
 	nodeFailsBootcamp,
 	startFastLoop,
 	__setFastLoopTokenRetryForTesting,
 } from '../fleet-loop.js';
+import { loadClawNodes } from '../lib/manifest.js';
 import { __resetReservationForTesting } from '../node-reservation.js';
 import type { DispatchPassResult } from '../runners/dispatch-pass.js';
 import type { EphemeralTickInput } from '../runners/ephemeral-tick.js';

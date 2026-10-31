@@ -68,8 +68,8 @@ import { idleSecondsFromRecords } from '../dist/job-history.js';
 import { buildSpeedModel } from '../dist/runners/speed-tier.js';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
-import { runOnSync } from './lib/fleet-exec.mjs';
-import { manifest, stateDir } from './lib/paths.mjs';
+import { loadManifest, runOnSync } from './lib/fleet-exec.mjs';
+import { stateDir } from './lib/paths.mjs';
 import { readDrains } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 
@@ -100,20 +100,6 @@ const wantLabels = (parsed.value('--labels') ?? '')
 	.map((s) => s.trim())
 	.filter(Boolean);
 
-function readJson(name, fallback) {
-	const p = manifest(name);
-	if (!existsSync(p)) return fallback;
-	try {
-		return JSON.parse(readFileSync(p, 'utf8'));
-	} catch (err) {
-		// A file we cannot read is NOT an empty file. Reporting "nothing is
-		// drained" or "no nodes" because of a syntax error would describe a fleet
-		// that does not exist.
-		console.error(`traffic: ${name} is unreadable (${err.message}). Refusing to guess.`);
-		process.exit(1);
-	}
-}
-
 /**
  * The drain, from the state dir, falling back to the legacy manifest-dir copy.
  *
@@ -130,7 +116,20 @@ function readDrainState() {
 	}
 }
 
-const fleet = readJson('fleet-runner-manifest.json', { machines: {} });
+// A file we cannot read (missing OR corrupt) is NOT an empty fleet. Reporting
+// "no nodes" because the manifest's directory was there but the file was not
+// would describe a fleet that does not exist — the BUG this reader used to
+// carry: the old `readJson` fell back to `{ machines: {} }` on a MISSING file
+// while still refusing to guess on a corrupt one, two different answers to
+// the same "could not look" question. `loadManifest()` (the one canonical
+// reader, `scripts/lib/fleet-exec.mjs`) throws on either.
+let fleet;
+try {
+	fleet = loadManifest();
+} catch (err) {
+	console.error(`traffic: the fleet manifest is unreadable (${err.message}). Refusing to guess.`);
+	process.exit(1);
+}
 const drain = readDrainState();
 /** Every declared node, in name order — no file's key order may decide anything. */
 const nodeNames = Object.keys(fleet.machines ?? {}).sort();
@@ -317,7 +316,7 @@ const ordered = orderCandidates(
 
 /**
  * MGMT_API_URL — see this file's header comment for the why. LOOPBACK ONLY,
- * read-only, and read through the global `fetch` (Node 22, CI's pin).
+ * read-only, and read through the global `fetch` (Node 24, CI's pin since 2026-10-30).
  */
 const MGMT_API_URL = (process.env.MGMT_API_URL ?? 'http://127.0.0.1:4000').replace(/\/+$/, '');
 const ADMISSION_FETCH_TIMEOUT_MS = 3000;

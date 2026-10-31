@@ -276,10 +276,6 @@
     "to": "src/runners/queue-discovery.ts"
   },
   {
-    "from": "src/runner-supervision.ts",
-    "to": "src/fleet-loop.ts"
-  },
-  {
     "from": "src/runners/backstop.ts",
     "to": "src/fleet-report-types.ts"
   },

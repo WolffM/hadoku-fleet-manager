@@ -59,7 +59,7 @@ import process from 'node:process';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { manifest, stateDir } from './lib/paths.mjs';
-import { isLocalNode, sshDestination } from './lib/fleet-exec.mjs';
+import { isLocalNode, loadManifest, sshDestination } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { guestNodeNames, isGuestNode } from '../dist/lib/node-role.js';
@@ -122,7 +122,7 @@ let fleetDocErrorReason = null;
 function fleetDoc() {
 	if (fleetDocCache !== undefined) return fleetDocCache;
 	try {
-		fleetDocCache = JSON.parse(readFileSync(manifest('fleet-runner-manifest.json'), 'utf8'));
+		fleetDocCache = loadManifest();
 	} catch (err) {
 		fleetDocCache = null;
 		fleetDocErrorReason = err instanceof Error ? err.message : String(err);
@@ -481,7 +481,7 @@ if (parsed.has('--undo')) {
 function capacityAfter(candidate) {
 	let fleetDoc;
 	try {
-		fleetDoc = JSON.parse(readFileSync(manifest('fleet-runner-manifest.json'), 'utf8'));
+		fleetDoc = loadManifest();
 	} catch {
 		// Cannot read the roster: say so rather than assert the fleet is fine.
 		return null;

@@ -7,17 +7,20 @@
  * migrated node's CI as admin, the exact thing roles exist to prevent. Every
  * caller already turns a throw into "could not reach the node".
  */
-import { readFileSync } from 'node:fs';
-
-import { manifest } from './host.js';
+import { readManifestState } from './lib/manifest.js';
 import { nodeCommand, type NodeRole, type UserBearingNode } from './lib/node-users.js';
 
 /** This node's manifest entry, as far as users are concerned. */
 export function manifestUsers(node: string): UserBearingNode | null {
-	const raw = JSON.parse(readFileSync(manifest('fleet-runner-manifest.json'), 'utf8')) as {
-		machines?: Record<string, UserBearingNode>;
-	};
-	return raw.machines?.[node] ?? null;
+	const result = readManifestState();
+	if (!result.ok) {
+		// Preserves the module header's contract: an unreadable manifest THROWS
+		// rather than falling back to the default user. Every caller already
+		// turns a throw into "could not reach the node".
+		throw new Error(`fleet: cannot read the fleet manifest (${result.why})`);
+	}
+	const machines = result.doc.machines as Record<string, UserBearingNode> | undefined;
+	return machines?.[node] ?? null;
 }
 
 /** `[bin, argv]` that runs `command` on `node` as `role`: `bash -c` locally, `ssh user@node` otherwise. */
