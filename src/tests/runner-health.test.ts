@@ -60,6 +60,7 @@ import {
 	__resetGhBlackoutForTesting,
 	ghGet,
 	__logTokenCapabilitiesForTesting,
+	RE_ALERT_MS,
 } from '../runner-health.js';
 import { __setFleetProbeForTesting, __resetSickForTesting, markNodeSick } from '../fleet-loop.js';
 import { writeDrain } from '../runners/drain.js';
@@ -5727,6 +5728,43 @@ test('disk-watch: a node under the page line pages once, not every tick', async 
 
 	await tick('tok');
 	assert.equal(diskPings('page').length, 1, 'not every tick — RE_ALERT_MS dedupes');
+});
+
+/**
+ * Characterization test (F12, plan §4.1 — written against this file BEFORE
+ * `alertOnce` was ported onto `createPager`, and still green after). Every
+ * other `RE_ALERT_MS dedupes` test above only advances time by seconds or
+ * minutes — none crosses the window itself, so none would have caught a
+ * migration that silently changed the actual boundary (e.g. collapsing the
+ * import to the wrong shared duration, `DAY_MS` instead of `HOUR_MS`). This
+ * one does: one millisecond short of RE_ALERT_MS is still silence, and the
+ * window itself is a fresh page.
+ */
+test('disk-watch: RE_ALERT_MS is the actual boundary, not just "some window" — one ms short is silence, the window itself re-pages', async () => {
+	// A hard-coded expectation, not a derived one: this is read from the
+	// export only for the boundary math below, which must still be checked
+	// against the real-world number a migration could silently repoint —
+	// `job-runner.ts`'s DAY_MS instead of its HOUR_MS, say.
+	assert.equal(RE_ALERT_MS, 60 * 60_000, 're-pings a sustained condition at most HOURLY');
+	__setDiskReadingsForTesting(new Map([['claw-6', { tmpFreeMb: 50_000, workFreeMb: 5 * 1024 }]]));
+	installFetch({ runners: LIVE_LISTING });
+	const base = Date.now();
+	const real = Date.now;
+	try {
+		Date.now = () => base;
+		await tick('tok');
+		assert.equal(diskPings('page').length, 1);
+
+		Date.now = () => base + RE_ALERT_MS - 1;
+		await tick('tok');
+		assert.equal(diskPings('page').length, 1, 'one ms short of the window: still suppressed');
+
+		Date.now = () => base + RE_ALERT_MS;
+		await tick('tok');
+		assert.equal(diskPings('page').length, 2, 'the window itself is due');
+	} finally {
+		Date.now = real;
+	}
 });
 
 test('disk-watch: a node back under the lines clears — the next crossing re-fires immediately', async () => {

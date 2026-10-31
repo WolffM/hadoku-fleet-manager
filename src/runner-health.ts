@@ -81,6 +81,7 @@ import {
 } from './runner-supervision.js';
 import { postDiscord as postDiscordSink, recordAlertQuietly } from './host.js';
 import { labelGhToken, withGhCaller } from './gh-budget.js';
+import { createPager, HOUR_MS as RE_ALERT_MS } from './lib/job-runner.js';
 import { recordJobResult } from './host.js';
 import { coveredRepos, syncHostedFallback } from './ci-runner-fallback.js';
 import {
@@ -192,7 +193,13 @@ export { SWEEP_CONCURRENCY } from './lib/concurrency.js';
  */
 export const QUEUED_WARN_MINUTES = 10;
 const INPROGRESS_WARN_MINUTES = 30;
-const RE_ALERT_MS = 60 * 60 * 1000; // re-ping a sustained condition at most hourly
+// re-ping a sustained condition at most hourly: job-runner.ts's shared
+// HOUR_MS, imported under this module's own name (F12, plan §4.1) — see the
+// `import` above and the alert ledger below, now a thin `createPager` wrapper.
+// Exported so a test can assert the actual boundary rather than only "still
+// inside some window" (no test did, before this — the characterization test
+// beside `alertOnce` in runner-health.test.ts).
+export { RE_ALERT_MS };
 const MAX_RERUN_ATTEMPTS = 2; // failover: auto-rerun once — only when run_attempt < this
 const FAILOVER_RECENT_MINUTES = 30; // ignore stale failures (e.g. on monitor restart)
 const JOB_NAME = 'ci:runner-health';
@@ -1014,23 +1021,28 @@ export function __setQuietRecorderForTesting(
 	quietRecorder = fn ?? recordAlertQuietly;
 }
 
-// key → last alert epoch ms. A key absent (or older than RE_ALERT_MS) re-fires.
-const lastAlertAt = new Map<string, number>();
+// key → last alert time, ISO. A key absent (or older than RE_ALERT_MS) re-fires.
+// createPager's own shape (F12, plan §4.1) — see `alertOnce`/`clearAlert` below.
+let pagedAlerts: Record<string, string> = {};
 
 /**
  * Alert suppression SURVIVES A RESTART.
  *
- * `lastAlertAt` was in-memory only, so every mgmt-api restart re-armed every
+ * `pagedAlerts` was in-memory only, so every mgmt-api restart re-armed every
  * condition and the next tick re-paged all of them. A sustained problem is
  * supposed to ping hourly; on 2026-08-29 a deploy-heavy session restarted this
  * process six times and the same two conditions — one failed unit, one queued
  * run — paged 10 minutes apart repeatedly. The alert was correct every time and
  * the channel still became unreadable, which is how an alert gets trained away.
  *
- * Persisted as a plain map of key -> epoch ms next to the other operator state.
- * Entries older than the window are dropped on load, so the file cannot grow
- * without bound and a long-cleared condition still alerts immediately when it
- * returns.
+ * Persisted as a plain map of key -> ISO time next to the other operator
+ * state — `createPager`'s own `paged` shape, so `alertOnce` below is a thin
+ * wrapper rather than a hand-rolled debounce (F12's `page-ledger` debt). A
+ * ledger written by the PRE-F12 code is still read: a bare epoch-ms number is
+ * accepted on load exactly as an ISO string is, so the one file this writes
+ * is read across the deploy that changed its format, not lost by it. Entries
+ * older than the window are dropped on load, so the file cannot grow without
+ * bound and a long-cleared condition still alerts immediately when it returns.
  *
  * Fail-soft in BOTH directions: an unreadable or corrupt ledger means "nothing
  * suppressed" (alert, do not go quiet), and a failed write is logged and
@@ -1046,7 +1058,11 @@ function loadAlertLedger(): void {
 		const raw = JSON.parse(readFileSync(ALERT_LEDGER(), 'utf8')) as Record<string, unknown>;
 		const cutoff = Date.now() - RE_ALERT_MS;
 		for (const [k, v] of Object.entries(raw)) {
-			if (typeof v === 'number' && v > cutoff) lastAlertAt.set(k, v);
+			// Accepts both shapes: a number is the ledger's pre-F12 format (epoch
+			// ms), a string is an ISO stamp written by this code or by claw-reboot/
+			// provisioning-converge's own createPager-backed ledgers.
+			const atMs = typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) : NaN;
+			if (!Number.isNaN(atMs) && atMs > cutoff) pagedAlerts[k] = new Date(atMs).toISOString();
 		}
 	} catch {
 		// No file yet, or unreadable. Suppress nothing — alerting twice is a
@@ -1057,8 +1073,8 @@ function loadAlertLedger(): void {
 function saveAlertLedger(): void {
 	try {
 		const cutoff = Date.now() - RE_ALERT_MS;
-		const out: Record<string, number> = {};
-		for (const [k, v] of lastAlertAt) if (v > cutoff) out[k] = v;
+		const out: Record<string, string> = {};
+		for (const [k, v] of Object.entries(pagedAlerts)) if (Date.parse(v) > cutoff) out[k] = v;
 		mkdirSync(dirname(ALERT_LEDGER()), { recursive: true });
 		writeFileSync(ALERT_LEDGER(), JSON.stringify(out));
 	} catch (err) {
@@ -1779,21 +1795,51 @@ const jobProgress = new Map<number, { done: number; since: number }>();
  */
 const STUCK_MINUTES = 25;
 
-/** Fire at most once per RE_ALERT_MS per condition key. */
+/**
+ * Fire at most once per RE_ALERT_MS per condition key — a thin wrapper over
+ * `createPager` (F12, plan §4.1): the debounce and the post are
+ * `job-runner.ts`'s, this file owns only the ledger's persistence, exactly as
+ * before. A fresh pager per call, matching the old `const now = Date.now()`
+ * read at call time rather than once per tick.
+ *
+ * The save is sequenced in a `finally` rather than before the post (the old
+ * order), so it still runs if `post` rejects — `pager.counts.pages` is 1 by
+ * then regardless, since `createPager` mutates before awaiting its `post` —
+ * but only a process kill mid-`post` (not a rejection) could now lose a write
+ * the old order would have made first; the host's `postDiscord` does not do
+ * that. A SUPPRESSED call (within the window) never saves, same as before.
+ */
 async function alertOnce(key: string, content: string): Promise<void> {
 	loadAlertLedger();
-	const now = Date.now();
-	const prev = lastAlertAt.get(key) ?? 0;
-	if (now - prev < RE_ALERT_MS) return;
-	lastAlertAt.set(key, now);
-	saveAlertLedger();
-	await postDiscordSink(content, 'runner-health');
+	const pager = createPager({
+		paged: pagedAlerts,
+		now: Date.now(),
+		repageMs: RE_ALERT_MS,
+		post: postDiscordSink,
+		source: 'runner-health',
+	});
+	try {
+		await pager.page(key, content);
+	} finally {
+		if (pager.counts.pages > 0) saveAlertLedger();
+	}
 }
 
-/** Condition cleared — re-arm so the next occurrence alerts immediately. */
+/**
+ * Condition cleared — re-arm so the next occurrence alerts immediately.
+ *
+ * Deliberately NOT `pager.recover()`: that always posts, and this ledger has
+ * no recovery announcement today — every call site clears silently, by
+ * design (see the header's `clearAlert` note). Reusing `createPager` here
+ * would add a message that does not exist, so this stays a direct delete on
+ * the same `paged`-shaped map `alertOnce` above uses.
+ */
 function clearAlert(key: string): void {
 	loadAlertLedger();
-	if (lastAlertAt.delete(key)) saveAlertLedger();
+	if (pagedAlerts[key] !== undefined) {
+		delete pagedAlerts[key];
+		saveAlertLedger();
+	}
 }
 
 /** Reset per-condition alert suppression. Test-only seam. */
@@ -1805,7 +1851,7 @@ export function __reloadAlertLedgerForTesting(): void {
 
 export function __resetRunnerHealthAlertsForTesting(): void {
 	ledgerLoaded = true; // never read the operator's ledger from a test
-	lastAlertAt.clear();
+	pagedAlerts = {};
 	// The snapshot is cross-tick memory too, and since it is persisted a stale
 	// in-memory copy would let one test's tick answer the next test's read.
 	lastSnapshot = null;
@@ -3023,7 +3069,7 @@ async function checkLabelFloor(
 			const repeats = offlineRepeats.get(node) ?? 0;
 			const wait =
 				OFFLINE_REPEAT_BACKOFF_MS[Math.min(repeats, OFFLINE_REPEAT_BACKOFF_MS.length - 1)];
-			const last = lastAlertAt.get(key) ?? 0;
+			const last = pagedAlerts[key] ? Date.parse(pagedAlerts[key]) : 0;
 			if (repeats > 0 && Date.now() - last < wait) continue;
 
 			const mins = Math.round((seen * TICK_INTERVAL_MS) / 60000);
@@ -3031,7 +3077,7 @@ async function checkLabelFloor(
 			const instances = e.names.length > 1 ? ` (${e.names.join(', ')})` : '';
 			// Bypasses alertOnce deliberately: that helper is a fixed hourly window,
 			// and this condition needs the escalating ladder instead.
-			lastAlertAt.set(key, Date.now());
+			pagedAlerts[key] = new Date().toISOString();
 			offlineRepeats.set(node, repeats + 1);
 			// LEDGER ONLY. Read the message: capacity is fine and nothing is
 			// queuing, so there is no action that has to happen now — the box needs
