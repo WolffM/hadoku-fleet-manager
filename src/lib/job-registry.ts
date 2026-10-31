@@ -38,7 +38,7 @@
  *
  * `coversSubs` exists for exactly one entry: `ci:audit-gates` runs fourteen
  * `fleet <sub>` invocations under ONE umbrella job and judges each by prose
- * (see `scripts/lib/json-contract.mjs`'s `PROSE_CONTRACT` and
+ * by default (see `scripts/lib/json-contract.mjs`'s `PROSE_CONTRACT` and
  * `parseAuditGates`). Duplicating those fourteen gates' identities into a
  * second hand list here would be exactly the kind of copy `json-contract.mjs`
  * already warns against ("derive, don't copy"); instead the one umbrella row
@@ -47,6 +47,14 @@
  * fourteen (`warm-canary`, `label-floor`) surface as real findings below:
  * they are liveness checks on a daily cron, and `validateRegistry` says so
  * rather than silently passing.
+ *
+ * WAVE 5F LANE B migrates these fourteen off prose one at a time: a covered
+ * sub may carry `contract: 'json'` (see `CoveredSub`'s own doc comment),
+ * which folds it into `JSON_CONTRACT` instead of `PROSE_CONTRACT` while it
+ * stays discharged by the SAME umbrella invocation — there is no second cron
+ * and no second `mgmtApiFile`. `warm-canary`, `history-coverage` and
+ * `contract-consumers` are migrated as of this wave; the rest are not, and
+ * carry no `contract` field at all until their own turn.
  *
  * `kindDrift` exists for the case `src/cli.ts`'s `COMMANDS` table disagrees
  * with the three kinds this registry ever puts a clock on (`gate` |
@@ -88,6 +96,29 @@ export interface CoveredSub {
 	readonly args: string[];
 	readonly detectionBudget: string;
 	readonly why: string;
+	/**
+	 * Wave 5f lane B (plan §6.2: "audit-gates' 14 prose gates migrate to
+	 * GateDoc one at a time"). Absent (the default) means this covered sub is
+	 * still judged the old way — `PROSE_CONTRACT`'s evidence/exit-code rule
+	 * over stdout+stderr. `'json'` means it has migrated: the SAME umbrella
+	 * invocation (`ci:audit-gates`, same `mgmtApiFile` — there is no second
+	 * cron) now passes `--json` and hadoku_site's `audit-gates.ts` reads back
+	 * a `GateDoc` instead, falling back to the old rule when stdout is not
+	 * one (an older fleet-manager) — see `wave5f-2026-10-31.md`'s blast-radius
+	 * row. `scripts/lib/json-contract.mjs`'s `deriveJsonContract` folds a
+	 * migrated covered sub into `JSON_CONTRACT` beside the ten directly
+	 * registered entries; `validateRegistry` requires `args` to actually
+	 * carry `--json` once this is set.
+	 */
+	readonly contract?: 'json';
+	/**
+	 * Required once `contract: 'json'` is set — absent for a sub still judged
+	 * by `PROSE_CONTRACT`, which has no host-bound concept at all (the
+	 * umbrella runs every covered sub from the one place that invokes it; see
+	 * `JobEntry.hostBound`'s own doc comment for what the field means once a
+	 * sub is actually under the JSON contract).
+	 */
+	readonly hostBound?: boolean;
 }
 
 export type JobContract = 'json' | 'prose' | 'in-process';
@@ -498,9 +529,15 @@ export const JOB_REGISTRY: JobEntry[] = [
 			},
 			{
 				sub: 'warm-canary',
-				args: [],
+				args: ['--json'],
+				contract: 'json',
+				// ssh to the CANDIDATE nodes, never this box's own state — the same
+				// class as every other ssh-based fleet gate (node-users,
+				// runner-units), not reap-trend/egress-slices/srv-drift's own log/
+				// cgroup/deploy-clone.
+				hostBound: false,
 				detectionBudget: '1h',
-				why: 'A LIVENESS check — is at least one warm listener actually held on an eligible node — explicitly named in plan §6.1 as a cadence oddity: it runs daily "while queue-health runs every 10 minutes." Budget set to the plan\'s own stated figure ("a liveness check with a one-hour budget") so validateRegistry reports the real gap rather than papering over it with the umbrella\'s daily cadence.',
+				why: 'A LIVENESS check — is at least one warm listener actually held on an eligible node — explicitly named in plan §6.1 as a cadence oddity: it runs daily "while queue-health runs every 10 minutes." Budget set to the plan\'s own stated figure ("a liveness check with a one-hour budget") so validateRegistry reports the real gap rather than papering over it with the umbrella\'s daily cadence. Migrated to GateDoc, wave 5f lane B.',
 			},
 			{
 				sub: 'label-floor',
@@ -528,15 +565,29 @@ export const JOB_REGISTRY: JobEntry[] = [
 			},
 			{
 				sub: 'history-coverage',
-				args: [],
+				args: ['--json'],
+				contract: 'json',
+				// Reads `job-history.jsonl` under HADOKU_STATE_DIR — THIS process's
+				// own recorded ingest, "safe to hand from one controller to the
+				// next but not safe for two to read/write with different beliefs"
+				// (docs/control-plane.md §2) — a different answer on a passive
+				// replica than on the active controller, same class as reap-trend.
+				hostBound: true,
 				detectionBudget: '48h',
-				why: 'Every speed/placement statistic the fleet reports is over job-history.jsonl; this is whether that file is actually recording.',
+				why: 'Every speed/placement statistic the fleet reports is over job-history.jsonl; this is whether that file is actually recording. Migrated to GateDoc, wave 5f lane B.',
 			},
 			{
 				sub: 'contract-consumers',
-				args: [],
+				args: ['--json'],
+				contract: 'json',
+				// Reads a real `hadoku_site` checkout off local disk (`siteRoot()`,
+				// which falls back to `reposDir()`) rather than through
+				// `lib/fleet-source.mjs` — the pre-#7 class of host-bound gate: a
+				// passive replica with no sibling checkout on disk gets a
+				// different (worse) answer than the active controller.
+				hostBound: true,
 				detectionBudget: '48h',
-				why: 'The other half of the --json contract: that every JSON_CONTRACT/PROSE_CONTRACT consumer file actually exists in hadoku_site.',
+				why: 'The other half of the --json contract: that every JSON_CONTRACT/PROSE_CONTRACT consumer file actually exists in hadoku_site. Migrated to GateDoc, wave 5f lane B.',
 			},
 			{
 				sub: 'boundary-contracts',
@@ -772,6 +823,17 @@ export function validateRegistry(
 			checkBudget(label, e.cadence, c.detectionBudget);
 			checkMutatingGate(label, e.kind, c.args);
 			checkKind(c.sub, e.kind, undefined, label);
+			// Wave 5f lane B: a covered sub migrated onto GateDoc is discharged
+			// by the SAME umbrella invocation under `--json` — the declaration
+			// and the actual argv must agree, or `deriveJsonContract` would
+			// derive an entry the real `fleet <sub>` call never satisfies.
+			if (c.contract === 'json' && !c.args.includes('--json')) {
+				issues.push({
+					entry: label,
+					kind: 'malformed',
+					message: 'contract: "json" covered sub must pass --json in its args',
+				});
+			}
 		}
 	}
 

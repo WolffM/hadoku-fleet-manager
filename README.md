@@ -213,6 +213,9 @@ code first would turn every real finding into "the checker broke".
 | `fleet runner-units --json`                       | `ci:runner-units`       |
 | `fleet fleet-kills --days 2 --json`               | `ci:fleet-kills`        |
 | `fleet check-schedule --json`                     | `ci:schedule`           |
+| `fleet warm-canary --json`                        | `ci:audit-gates`        |
+| `fleet history-coverage --json`                   | `ci:audit-gates`        |
+| `fleet contract-consumers --json`                 | `ci:audit-gates`        |
 
 That table listed SIX of these ten until 2026-09-07 — `drain-check`,
 `benchmark`, `egress-slices` and `queue-health` were under contract and
@@ -228,20 +231,23 @@ of these subcommands, or dropping its `--json` handling, fails `pnpm run check`
 here rather than a cron in hadoku_site at 03:00. Renaming one is a cross-repo
 change — the failure message names the mgmt-api file to fix in the same pass.
 
-`ci:audit-gates` runs thirteen more fleet subcommands, but reads their output as
-prose against an `evidence` regex rather than as JSON, so those are deliberately
+`ci:audit-gates` runs eleven more fleet subcommands (wave 5f lane B is moving
+them to the table above one at a time — three already have, hence the three
+`ci:audit-gates` rows above), but reads the remaining eleven's output as prose
+against an `evidence` regex rather than as JSON, so those are deliberately
 not in the table above. It is declared separately, as `PROSE_CONTRACT` in the
 same file, because reading output as prose has its own failure mode: that job
-merges **stdout and stderr** into one value and judges every gate by a regex over
-it, so anything this CLI's WRAPPER writes becomes part of thirteen verdicts.
+merges **stdout and stderr** into one value and judges every prose gate by a
+regex over it, so anything this CLI's WRAPPER writes becomes part of its verdict.
 
-That is not hypothetical — it is what the provenance banner did on 2026-09-07. It
-made `spawnError` ("it never started") unreachable for all thirteen, and its
-operator-controlled paths could satisfy a gate's `evidence` on their own: with the
-site root under `~/repos`, the substring `repos` matched `check:ci-watch`, so a
-gate that exited 0 having printed nothing reported a pass. `audit-gates.ts` now
-runs its gates with `FLEET_NO_BANNER=1` and reports provenance once for the job;
-`fleet contract-consumers` fails if it stops.
+That is not hypothetical — it is what the provenance banner did on 2026-09-07,
+when all fourteen `ci:audit-gates` subcommands were still prose. It made
+`spawnError` ("it never started") unreachable for all of them, and its
+operator-controlled paths could satisfy a gate's `evidence` on their own: with
+the site root under `~/repos`, the substring `repos` matched `check:ci-watch`,
+so a gate that exited 0 having printed nothing reported a pass. `audit-gates.ts`
+now runs its gates with `FLEET_NO_BANNER=1` and reports provenance once for the
+job; `fleet contract-consumers` fails if it stops.
 
 ### The invocation log — which doors anybody opens
 

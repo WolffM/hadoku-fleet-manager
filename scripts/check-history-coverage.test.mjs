@@ -120,6 +120,11 @@ test('a clean fleet passes', () => {
 	const r = run(['alpha', 'beta'], {});
 	assert.equal(r.status, 0, r.stderr);
 	assert.equal(r.doc.ok, true);
+	// GateDoc (wave 5f lane B): a clean run carries no findings, nothing
+	// unreadable, and no `why` at all.
+	assert.deepEqual(r.doc.findings, []);
+	assert.deepEqual(r.doc.unreadable, []);
+	assert.ok(!('why' in r.doc), 'a clean GateDoc must not carry why');
 });
 
 test('one transient blip on one repo is retried, not a red digest (2026-10-25, secretProject)', () => {
@@ -133,6 +138,14 @@ test('a repo that fails EVERY attempt still fails the gate — retrying is not t
 	assert.equal(r.status, 1);
 	assert.equal(r.doc.ok, false);
 	assert.match(r.doc.error, /could not list runs for 1 repo\(s\)/);
+	// GateDoc: a `fail()` refusal is "I could not look", so it is ALWAYS
+	// `unreadable`, never a `findings` entry — the gate never got far enough
+	// to look at any repo's coverage.
+	assert.deepEqual(r.doc.findings, []);
+	assert.equal(r.doc.unreadable.length, 1);
+	assert.equal(r.doc.unreadable[0].node, null);
+	assert.match(r.doc.unreadable[0].why, /could not list runs for 1 repo\(s\)/);
+	assert.equal(r.doc.why, r.doc.error);
 });
 
 test('the finding says WHY, not just which repo', () => {
@@ -165,10 +178,21 @@ test('a lookup that ANSWERS is not a failed lookup, whatever it says', () => {
 	const lost = run(['alpha'], {}, undefined, { missed: 25, jobs: 'ran' });
 	assert.equal(lost.doc.lookupFailed, 0);
 	assert.equal(lost.status, 1, '25 runs that reached a runner and were not recorded are loss');
+	// GateDoc: real loss is a FINDING (the gate looked and did not like what
+	// it saw), never `unreadable` — it got all the way through every repo.
+	assert.deepEqual(lost.doc.unreadable, []);
+	assert.equal(lost.doc.findings.length, 1);
+	assert.equal(lost.doc.findings[0].node, null);
+	assert.equal(lost.doc.findings[0].kind, 'low-coverage');
+	assert.match(lost.doc.findings[0].reason, /^WolffM\/alpha: /);
+	assert.ok(lost.doc.why, 'a failing GateDoc must carry why');
+
 	const never = run(['alpha'], {}, undefined, { missed: 25, jobs: 'never' });
 	assert.equal(never.doc.lookupFailed, 0);
 	assert.equal(never.doc.unrecordable, 25);
 	assert.equal(never.status, 0, JSON.stringify(never.doc));
+	assert.deepEqual(never.doc.findings, []);
+	assert.deepEqual(never.doc.unreadable, []);
 });
 
 test('#9: under the shared GitHub reserve the gate is NOT RUN, fails, and spends nothing', () => {
@@ -184,4 +208,66 @@ test('#9: at the reserve the gate runs as normal', () => {
 	assert.equal(r.status, 0, r.stderr);
 	assert.equal(r.doc.ok, true);
 	assert.deepEqual(r.listed, ['alpha', 'beta']);
+});
+
+test('human output is unaffected by the migration — same prose, same exit code', () => {
+	// Reruns the exact "low coverage" fixture above, once with --json and once
+	// without, over two fresh directories built the same way `run()` builds one.
+	const dir = tempDir('history-coverage-human-');
+	const bin = join(dir, 'bin');
+	mkdirSync(bin);
+	writeFileSync(
+		join(dir, 'fleet-runner-coverage.json'),
+		JSON.stringify({ repos: ['WolffM/alpha'] })
+	);
+	const now = Date.now();
+	const ran = new Date(now - 2 * 3600_000).toISOString();
+	writeFileSync(
+		join(dir, 'job-history.jsonl'),
+		JSON.stringify({ runId: 1000, startedAt: new Date(now - 3 * 3600_000).toISOString() }) + '\n'
+	);
+	writeFileSync(
+		join(dir, 'bodies.json'),
+		JSON.stringify({
+			alpha: JSON.stringify({
+				workflow_runs: [
+					{ id: 1000, status: 'completed', updated_at: ran },
+					...Array.from({ length: 25 }, (_, k) => ({
+						id: 5000 + k,
+						status: 'completed',
+						updated_at: ran,
+					})),
+				],
+			}),
+		})
+	);
+	writeFileSync(join(dir, 'failures.json'), JSON.stringify({}));
+	const gh = join(bin, 'gh');
+	writeFileSync(
+		gh,
+		[
+			'#!/usr/bin/env bash',
+			'if [ "$2" = rate_limit ]; then exit 1; fi',
+			'case "$2" in */jobs)',
+			'  printf "claw-1\\t%s\\t%s\\n" "$JOB_AT" "$JOB_AT"; exit 0 ;;',
+			'esac',
+			'jq -r \'.alpha\' "$DIR/bodies.json" | jq -r "$4"',
+			'',
+		].join('\n')
+	);
+	chmodSync(gh, 0o755);
+	const env = {
+		...process.env,
+		PATH: `${bin}:${process.env.PATH}`,
+		GH_TOKEN: 'fixture',
+		FLEET_MANIFEST_DIR: dir,
+		HADOKU_STATE_DIR: dir,
+		DIR: dir,
+		JOB_AT: ran,
+	};
+	const json = spawnSync(process.execPath, [SCRIPT, '--json'], { encoding: 'utf8', env });
+	const human = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8', env });
+	assert.equal(human.status, json.status, 'exit code must match between the two modes');
+	assert.match(human.stderr, /job-history is losing runs in 1 repo\(s\)/);
+	assert.ok(!human.stdout.trim().startsWith('{'), 'human mode must not print JSON');
 });

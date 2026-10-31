@@ -95,9 +95,16 @@ import { JOB_REGISTRY } from '../../dist/lib/job-registry.js';
  * defaults to `false` rather than being required in the registry's own
  * shape, because every in-process entry (not under this contract at all)
  * would otherwise need to carry a field that means nothing for it.
+ *
+ * SINCE WAVE 5F LANE B: also folds in every `coversSubs` row that carries its
+ * OWN `contract: 'json'` — a gate migrated off the prose umbrella one at a
+ * time (plan §6.2). Its `job`/`consumer` are the UMBRELLA's (`ci:audit-gates`
+ * / `audit-gates.ts`): there is no second cron and no second mgmt-api route,
+ * only the same invocation now passing `--json` for this one sub. See
+ * `CoveredSub`'s own doc comment in `job-registry.ts`.
  */
 function deriveJsonContract(registry) {
-	return registry
+	const direct = registry
 		.filter((e) => e.contract === 'json')
 		.map((e) => ({
 			sub: e.sub,
@@ -107,6 +114,19 @@ function deriveJsonContract(registry) {
 			consumer: e.mgmtApiFile,
 			why: e.why,
 		}));
+	const migrated = registry.flatMap((e) =>
+		(e.coversSubs ?? [])
+			.filter((c) => c.contract === 'json')
+			.map((c) => ({
+				sub: c.sub,
+				hostBound: c.hostBound ?? false,
+				argv: c.args,
+				job: e.name,
+				consumer: e.mgmtApiFile,
+				why: c.why,
+			}))
+	);
+	return [...direct, ...migrated];
 }
 
 /**
@@ -300,6 +320,14 @@ export function emitsJson(blankedSource) {
  *
  * `check-contract-consumers.mjs` verifies both halves against the real
  * hadoku_site checkout, so this is a gate rather than a note.
+ *
+ * THE "THIRTEEN" ABOVE IS THE 2026-09-07 MEASUREMENT, not a live count — wave
+ * 5f lane B starts moving them to `JSON_CONTRACT` instead, one at a time (a
+ * migrated sub's `--json` output is still merged into `out` the same way by
+ * `audit-gates.ts`'s `runGate`, harmlessly, because that file judges a
+ * migrated gate by its parsed `GateDoc` before it ever looks at `evidence`).
+ * `PROSE_CONTRACT.length` stays `1` regardless — see the module header on
+ * `coversSubs`: the row IS the umbrella, not a per-sub count.
  *
  * SINCE WAVE 5E: derived from `JOB_REGISTRY`'s one `contract: 'prose'` entry
  * (`ci:audit-gates`), same reasoning as `JSON_CONTRACT` above. `requires` is

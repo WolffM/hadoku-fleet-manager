@@ -155,8 +155,25 @@ void test('the contract itself is well-formed', () => {
  * and check-site-token read sibling checkouts under REPOS_DIR, and since
  * fleet-manager#7 read each repo's default branch through lib/fleet-source.mjs
  * instead, which any host can do.
+ *
+ * TWO MORE JOINED WAVE 5F LANE B's MIGRATION, deliberately: `history-coverage`
+ * reads `job-history.jsonl` under `HADOKU_STATE_DIR` — THIS process's own
+ * recorded ingest (docs/control-plane.md §2: "safe to hand from one
+ * controller to the next" but a different answer on a passive replica than
+ * the active one), and `contract-consumers` reads a real `hadoku_site`
+ * checkout off local disk (`siteRoot()`/`reposDir()`) rather than through
+ * `lib/fleet-source.mjs` — the pre-#7 class every other migrated entry here
+ * already left behind. `warm-canary`, migrated the same wave, is NOT
+ * host-bound: it ssh's the CANDIDATE nodes, the same class as node-users and
+ * runner-units.
  */
-const HOST_BOUND_SUBS = ['egress-slices', 'reap-trend', 'srv-drift'].sort();
+const HOST_BOUND_SUBS = [
+	'contract-consumers',
+	'egress-slices',
+	'history-coverage',
+	'reap-trend',
+	'srv-drift',
+].sort();
 
 void test('the host-bound declaration matches the evidenced three, exactly', () => {
 	const actual = JSON_CONTRACT.filter((e) => e.hostBound === true)
@@ -834,18 +851,30 @@ void test('suppressesBanner requires the assignment, not the word', () => {
 
 void test('the prose contract is well-formed and names a distinct consumer', () => {
 	assert.ok(PROSE_CONTRACT.length, 'PROSE_CONTRACT is empty — the prose half checks nothing');
-	const jsonConsumers = new Set(JSON_CONTRACT.map((e) => e.consumer));
+	// Wave 5f lane B: a consumer in BOTH lists is no longer automatically a
+	// bug. `ci:audit-gates` migrates its own covered subs off prose ONE AT A
+	// TIME, so its own consumer (`audit-gates.ts`) legitimately shows up in
+	// JSON_CONTRACT (for the migrated subs) AND in PROSE_CONTRACT (the
+	// umbrella row, for the rest) at once — same job, same file, by design.
+	// What the original rule actually guarded against survives: a DIFFERENT
+	// job sharing a prose consumer's file with some JSON entry would still be
+	// one file judged by two contracts with different rules and nothing
+	// holding them apart.
+	const jsonJobByConsumer = new Map(JSON_CONTRACT.map((e) => [e.consumer, e.job]));
 	for (const entry of PROSE_CONTRACT) {
 		assert.ok(
 			entry.job && entry.consumer && entry.requires && entry.why,
 			`${entry.job} is missing a field`
 		);
-		// A consumer in BOTH lists would mean one file is being judged by two
-		// contracts with different rules, which is a declaration nobody can act on.
-		assert.ok(
-			!jsonConsumers.has(entry.consumer),
-			`${entry.consumer} is declared as both a JSON and a prose consumer`
-		);
+		const jsonJob = jsonJobByConsumer.get(entry.consumer);
+		if (jsonJob !== undefined) {
+			assert.equal(
+				jsonJob,
+				entry.job,
+				`${entry.consumer} is a JSON consumer for "${jsonJob}" AND a prose consumer for ` +
+					`"${entry.job}" — two DIFFERENT jobs sharing one consumer file under two contracts`
+			);
+		}
 	}
 });
 
@@ -1083,9 +1112,15 @@ const TODAYS_JSON_CONTRACT = [
 	['fleet-kills', 'ci:fleet-kills', 'services/mgmt-api/src/routes/jobs/fleet-kills-check.ts'],
 	// Added 2026-10-31 (wave 5e lane D): the schedule drift gate.
 	['check-schedule', 'ci:schedule', 'services/mgmt-api/src/routes/jobs/schedule-check.ts'],
+	// Added wave 5f lane B: three `ci:audit-gates` covered subs migrated off
+	// PROSE_CONTRACT onto their own `contract: 'json'` — same umbrella job,
+	// same consumer file, no second cron.
+	['warm-canary', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
+	['history-coverage', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
+	['contract-consumers', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 ].map(([sub, job, consumer]) => `${sub} -> ${job} -> ${consumer}`);
 
-void test("the derived JSON_CONTRACT equals today's 23 entries exactly — name, sub and consumer", () => {
+void test("the derived JSON_CONTRACT equals today's 26 entries exactly — name, sub and consumer", () => {
 	const derived = JSON_CONTRACT.map((e) => `${e.sub} -> ${e.job} -> ${e.consumer}`);
 	assert.deepEqual(derived.slice().sort(), TODAYS_JSON_CONTRACT.slice().sort());
 });

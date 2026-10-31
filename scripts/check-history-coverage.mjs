@@ -75,6 +75,7 @@ import process from 'node:process';
 
 import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
+import { buildGateDoc } from './lib/gate-doc.mjs';
 import { checkGhReserve } from './lib/gh-reserve.mjs';
 import { useAppPool } from './lib/gh-app.mjs';
 import { describeReadFailure, readQueuedWithRetry } from './lib/queue-health.mjs';
@@ -124,7 +125,16 @@ const MIN_SAMPLE = 20;
 const MAX_CLASSIFY = 60;
 
 function fail(msg) {
-	if (JSON_OUT) emitter.emit({ ok: false, error: msg });
+	// `error` is the pre-existing field (the shape `check-history-coverage.test.mjs`
+	// already pins); `buildGateDoc`'s GateDoc half is additive (wave 5f lane B).
+	// Every `fail()` call site is a refusal to even START judging repos — "I
+	// could not look", never a finding — so it is always `unreadable`, never
+	// `findings`.
+	if (JSON_OUT)
+		emitter.emit({
+			error: msg,
+			...buildGateDoc({ unreadable: [{ node: null, why: msg }], ok: false, why: msg }),
+		});
 	else console.error(`✗ ${msg}`);
 	process.exit(1);
 }
@@ -335,8 +345,18 @@ const worst = rows
 const ok = worst.length === 0;
 
 if (JSON_OUT) {
+	// GateDoc (wave 5f lane B). Every unreadable repo already triggered `fail()`
+	// above, before this point is ever reached, so `unreadable` is always empty
+	// here — a low-coverage repo is a FINDING (the gate looked, and did not
+	// like what it saw), never "could not look".
+	const findings = worst.map((r) => ({
+		node: null,
+		kind: 'low-coverage',
+		reason:
+			`${r.repo}: ${r.recorded}/${r.eligible} recorded (${(r.coverage * 100).toFixed(0)}%), ` +
+			`under the ${MIN_COVERAGE * 100}% floor`,
+	}));
 	emitter.emit({
-		ok,
 		overall,
 		eligible,
 		recorded,
@@ -344,6 +364,14 @@ if (JSON_OUT) {
 		lookupFailed,
 		lookupReasons: [...lookupReasons].map(([reason, count]) => ({ reason, count })),
 		repos: rows,
+		...buildGateDoc({
+			findings,
+			unreadable: [],
+			ok,
+			why: ok
+				? undefined
+				: `job-history is losing runs in ${worst.length} repo(s) (fleet-wide ${(overall * 100).toFixed(0)}%)`,
+		}),
 	});
 	process.exit(ok ? 0 : 1);
 }

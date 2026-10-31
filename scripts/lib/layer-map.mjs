@@ -166,6 +166,10 @@ export const LAYER_MAP = [
 	{ glob: 'src/lib/usage-store.ts', layer: 'automation' },
 	{ glob: 'scripts/fleet-usage.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/emit.mjs', layer: 'automation' },
+	// Wave 5f lane B: the GateDoc shape builder — same "generic, domain-blind,
+	// shared report-shape mechanics" as emit.mjs right above it (one of the
+	// three report shapes plan §6.2 names: ConvergeDoc, GateDoc, RecordDoc).
+	{ glob: 'scripts/lib/gate-doc.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/argv.mjs', layer: 'automation' },
 	// F10: the ANSI palette + errText sweep (wave 5d lane B) — same
 	// "generic, domain-blind, cross-cutting" shape as argv.mjs beside it.

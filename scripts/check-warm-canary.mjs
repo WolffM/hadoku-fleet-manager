@@ -37,12 +37,14 @@
  * WIRING (cross-repo, out of scope for this checkout)
  * -----------------------------------------------------
  * `jit-canary` is wired into hadoku_site's own `.github/workflows/` and its
- * `ci:audit-gates` GATES table lives in that repo's `audit-gates.ts`, judged
- * by a regex over stdout+stderr (see scripts/lib/json-contract.mjs's
- * PROSE_CONTRACT). Registering `fleet warm-canary` there is a change to that
- * file, not this one — named here per this lane's brief rather than made
- * silently. `--json` is implemented below anyway, on the same footing as
- * every other check-*.mjs script, so a future JSON consumer costs no rework.
+ * `ci:audit-gates` GATES table lives in that repo's `audit-gates.ts`.
+ * MIGRATED (wave 5f lane B): `ci:audit-gates` now runs this one with `--json`
+ * and judges it by the `GateDoc` below rather than a regex over
+ * stdout+stderr — see `src/lib/job-registry.ts`'s `coversSubs` entry
+ * (`contract: 'json'`) and `scripts/lib/json-contract.mjs`'s derivation of
+ * `JSON_CONTRACT` from it. `audit-gates.ts` falls back to the old
+ * exit-code+evidence rule when stdout is not a `GateDoc` (an older
+ * fleet-manager), so the two repos can land in either order.
  *
  * @guards src/runners/ephemeral.ts
  */
@@ -53,6 +55,7 @@ import { join } from 'node:path';
 import { loadManifest, runOnSync, selectNodes } from './lib/fleet-exec.mjs';
 import { stateDir } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
+import { buildGateDoc } from './lib/gate-doc.mjs';
 import { warmCanaryVerdict, slowTierCandidates } from './lib/warm-canary.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 // The BUILT copy, deliberately — see the header note above and
@@ -206,9 +209,47 @@ function main() {
 	const drained = drainedCandidates.map(([name]) => name);
 
 	if (JSON_OUT) {
+		// GateDoc (wave 5f lane B). `unreachable` is "I could not look" — never
+		// folded into a per-node finding, and it BLOCKS judging the rest: a
+		// candidate that did not answer might have been warm or broken, so the
+		// eligible ones are not scored for "not warm" while any are unreachable
+		// (same reasoning warmCanaryVerdict itself already applies to `ok`).
+		const unreadable = verdict.unreachable.map((node) => ({
+			node,
+			why: 'could not reach this node to measure warm-cache capacity',
+		}));
+		const findings = [];
+		if (!verdict.unreachable.length) {
+			for (const node of verdict.eligible) {
+				if (!verdict.warm.some((w) => w.node === node)) {
+					findings.push({
+						node,
+						kind: 'not-warm',
+						reason: `${node} is eligible for a warm listener but is not holding one`,
+					});
+				}
+			}
+		}
+		// A whole-fleet refusal with no single node to blame (no candidate
+		// exists at all, or none is eligible) still needs ONE finding — a
+		// GateDoc with ok:false and both arrays empty says nothing to a reader.
+		if (!verdict.ok && !findings.length && !unreadable.length) {
+			findings.push({ node: null, kind: 'warm-canary-refused', reason: verdict.reason });
+		}
 		// Alongside the verdict, never inside `eligible`: a node this run chose not
 		// to look at is not a node it measured and found wanting.
-		out.emit({ ...verdict, skippedByRole, drained, slowTier });
+		out.emit({
+			...verdict,
+			skippedByRole,
+			drained,
+			slowTier,
+			...buildGateDoc({
+				findings,
+				unreadable,
+				ok: verdict.ok,
+				why: verdict.ok ? undefined : verdict.reason,
+			}),
+		});
 	} else if (verdict.ok) {
 		for (const s of skippedByRole) out.log(`  · ${s.node} [skipped: guest] — ${s.why}`);
 		for (const [name] of drainedCandidates)

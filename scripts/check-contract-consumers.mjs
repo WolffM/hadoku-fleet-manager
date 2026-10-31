@@ -61,13 +61,20 @@ import {
 	suppressesBanner,
 } from './lib/json-contract.mjs';
 import { createEmitter } from './lib/emit.mjs';
+import { buildGateDoc } from './lib/gate-doc.mjs';
 import { provenance, provenanceLine } from '../dist/lib/provenance.js';
 import { hubRepo } from '../dist/lib/fleet-config.js';
 
 const out = createEmitter();
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-	console.log(
+	// Routed through the shared emitter (wave 5f lane B): this sub is now
+	// under the --json contract for three of its migrated siblings, and
+	// emit.test.mjs requires every stdout write in a contracted script to go
+	// through `log`/`emit`, never a bare `console.log`, with no exception for
+	// a path that always exits before --json's own branch — see that file's
+	// header.
+	out.log(
 		`fleet contract-consumers — every --json contract entry names a real consumer\n\n` +
 			`  --json    machine-readable findings\n\n` +
 			`Reads scripts/lib/json-contract.mjs and checks each entry's \`consumer\`\n` +
@@ -313,14 +320,36 @@ if (!findings.length)
 	out.log('✓ every contract entry names a consumer that exists and knows its job name');
 
 if (out.json) {
+	// GateDoc (wave 5f lane B): `findings`/`ok` above are this script's OWN
+	// shape (string `kind`s, an array of verified consumers named `ok`) and
+	// predate the migration, so they travel under renamed keys rather than
+	// being silently reinterpreted as GateDoc's `ok: boolean` / `findings[]`.
+	// NO-CHECKOUT is "I could not look", never a finding — see the module
+	// header's own rule — so it is the one `findings` kind split into
+	// `unreadable` for the GateDoc half; the human loop above still reads the
+	// original `findings` array unchanged, NO-CHECKOUT included.
+	const gateFindings = findings
+		.filter((f) => f.kind !== 'NO-CHECKOUT')
+		.map((f) => ({
+			node: null,
+			kind: f.kind,
+			reason: f.job ? `${f.job}: ${f.why}` : f.why,
+			...(f.job !== undefined ? { job: f.job } : {}),
+			...(f.sub !== undefined ? { sub: f.sub } : {}),
+			...(f.consumer !== undefined ? { consumer: f.consumer } : {}),
+			...(f.gate !== undefined ? { gate: f.gate } : {}),
+		}));
+	const gateUnreadable = findings
+		.filter((f) => f.kind === 'NO-CHECKOUT')
+		.map((f) => ({ node: null, why: f.why }));
+
 	out.emit({
 		entries: JSON_CONTRACT.length + PROSE_CONTRACT.length,
 		jsonEntries: JSON_CONTRACT.length,
 		proseEntries: PROSE_CONTRACT.length,
-		verified: ok.length,
-		findings,
-		ok,
+		verifiedEntries: ok,
 		lines: out.held(),
+		...buildGateDoc({ findings: gateFindings, unreadable: gateUnreadable }),
 	});
 }
 
