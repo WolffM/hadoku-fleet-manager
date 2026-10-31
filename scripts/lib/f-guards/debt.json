@@ -38,7 +38,7 @@
     "scripts/version-bump.mjs:patched#1",
     "src/lib/alert-ledger.ts:cutoff#1",
     "src/runner-health.ts:persistSnapshot#1",
-    "scripts/floor-probe.mjs:appendLedger#2",
+    "scripts/lib/floor-probe-state.mjs:ledgerPath#1",
     "scripts/lib/fleet-source.mjs:failure#1",
     "src/lib/measured.ts:lines#1"
   ],

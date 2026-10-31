@@ -81,20 +81,11 @@
  * the same footing as every other `check-*.mjs`; the contract DECLARATION waits
  * for its consumer.
  */
-import {
-	existsSync,
-	readFileSync,
-	appendFileSync,
-	mkdirSync,
-	unlinkSync,
-	writeFileSync,
-} from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { existsSync, readFileSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import process from 'node:process';
 
 import { manifest as manifestFile, manifestDir, stateDir, siteRoot } from './lib/paths.mjs';
-import { readDrains } from './lib/expected-down.mjs';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { stripYamlComments } from './lib/yaml-comments.mjs';
@@ -114,23 +105,25 @@ import {
 	dailyCronMinutes,
 	flakyVerdicts,
 	foreignFlags,
-	isCiDemandRow,
 	maxProbesPerRun,
 	nodeZoneTable,
 	parseMode,
-	probeGate,
+	parseUnit,
 	quietWindow,
 	shadowSafety,
 	unitTable,
 	warrantsForcedRerun,
 	ZONE_NAMES,
 } from './lib/floor-probe.mjs';
+import { appendLedger, loadLedger } from './lib/floor-probe-state.mjs';
+import { demandFor, drainedNodes } from './lib/floor-probe-candidates.mjs';
+import { mergeProbeProvenance } from './lib/floor-probe-table.mjs';
+import { githubToken, meteredGh, sleep } from './lib/floor-probe-dispatch.mjs';
 import { installHost } from '../dist/host.js';
 import { nodeOf } from '../dist/runners/census.js';
-import { PROBE_LEDGER_FILE, RETENTION_DAYS } from '../dist/job-history-store.js';
+import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import { PROBE_INTENT_DIR, PROBE_INTENT_MAX_MS } from '../dist/runners/dispatch-tick.js';
-import { ghGet, ghWrite } from '../dist/lib/github-client.js';
-import { ghBlackoutRemainingMs } from '../dist/lib/github-client.js';
+import { ghWrite } from '../dist/lib/github-client.js';
 import { nodeReservation } from '../dist/node-reservation.js';
 import { mintEphemeralRunner, liveJitSlots } from '../dist/runners/ephemeral-exec.js';
 import { jitRunnerName } from '../dist/runners/ephemeral.js';
@@ -222,7 +215,6 @@ function readJson(path, what) {
 }
 
 const historyPath = join(stateDir(), 'job-history.jsonl');
-const ledgerPath = join(stateDir(), PROBE_LEDGER_FILE);
 
 function loadHistory() {
 	if (!existsSync(historyPath)) {
@@ -241,26 +233,6 @@ function loadHistory() {
 	if (!rows.length)
 		fail(`job-history at ${historyPath} holds no records — a window of zero is not a pass`);
 	return { rows, bad };
-}
-
-/** The harness's own ledger. Append-only; job-history reads it and never writes it. */
-function loadLedger() {
-	if (!existsSync(ledgerPath)) return [];
-	const out = [];
-	for (const line of readFileSync(ledgerPath, 'utf8').split('\n')) {
-		if (!line.trim()) continue;
-		try {
-			out.push(JSON.parse(line));
-		} catch {
-			// one bad line, not a bad file
-		}
-	}
-	return out;
-}
-
-function appendLedger(entry) {
-	mkdirSync(dirname(ledgerPath), { recursive: true });
-	appendFileSync(ledgerPath, `${JSON.stringify({ ...entry, at: new Date().toISOString() })}\n`);
 }
 
 /**
@@ -404,14 +376,6 @@ const notAProbeTarget = (node) =>
 			`may never be forced onto it. Name a claw: ${CLAWS.join(', ') || '(none)'}`
 		: `${node} is not an ephemeral node in the manifest`;
 
-/** Drain state, read from where the DISPATCHER reads it — not a git checkout. */
-function drainedNodes() {
-	// A parse failure THROWS in drain.ts and every caller fails closed. Same here:
-	// answering "nothing is drained" would place a probe on a box somebody is
-	// holding a screwdriver over.
-	return Object.keys(readDrains());
-}
-
 /**
  * The capability set a node has actually PROVEN, per `fleet bootcamp`.
  *
@@ -433,40 +397,6 @@ function drainedNodes() {
 function provenCapabilities(node) {
 	const c = machines[node]?.$capabilities ?? {};
 	return new Set([...(c.earned ?? []), ...(c.prereqs ?? []).map((p) => p.id)]);
-}
-
-/**
- * What a `(repo, job)` demands, unioned across every CI demand-ledger record.
- *
- * FILTERED ON `class`, and that filter is load-bearing rather than defensive.
- * The ledger holds resident workloads — PM2 services, cron jobs, deployment
- * checkouts — in the SAME file as CI jobs as of Wave 3-prep, by decision, and a
- * resident row shares the `(repo, job)` shape. Unioned in, a PM2 service's
- * capabilities become a CI job's requirements and every claw that cannot satisfy
- * them is excluded with reason `capability` — a candidate list of zero for a job
- * the fleet serves all day, and this time wearing a certainty. `isCiDemandRow`
- * owns the rule because a predicate inside a script that ssh's to six boxes
- * cannot be exercised.
- */
-function demandFor(repo, job) {
-	const p = join(stateDir(), 'demand-ledger.jsonl');
-	if (!existsSync(p)) return null; // could not look — the caller decides
-	const caps = new Set();
-	let seen = false;
-	for (const line of readFileSync(p, 'utf8').split('\n')) {
-		if (!line.trim()) continue;
-		let r;
-		try {
-			r = JSON.parse(line);
-		} catch {
-			continue;
-		}
-		if (!isCiDemandRow(r, { repo, job })) continue;
-		seen = true;
-		// A capability once demanded does not un-demand itself between ledger runs.
-		for (const c of r.capabilities ?? []) caps.add(c);
-	}
-	return seen ? caps : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -574,56 +504,6 @@ function checkQuietWindow(now = new Date()) {
 // GitHub, metered and blackout-aware
 // ---------------------------------------------------------------------------
 
-function githubToken() {
-	for (const k of ['HADOKU_SITE_TOKEN', 'GITHUB_TOKEN', 'GH_TOKEN']) {
-		const v = process.env[k]?.trim();
-		if (v) return v;
-	}
-	try {
-		// `gh auth token` is the operator's own credential and this command is
-		// operator-invoked. The vault broker is hadoku_site's and cannot be reached
-		// from here without vendoring it.
-		return execFileSync('gh', ['auth', 'token'], {
-			encoding: 'utf8',
-			timeout: 10_000,
-			stdio: ['ignore', 'pipe', 'ignore'],
-		}).trim();
-	} catch {
-		return null;
-	}
-}
-
-/**
- * Every GitHub call this harness makes, metered against §7's 200-call cap and
- * suppressed by the SAME blackout the reap and the label sweep already honour.
- *
- * Suppression returns each function's "could not look" value — `null` for a
- * read, `{ok:false}` for a write. It must NEVER return anything a caller could
- * read as "unchanged": telling the dispatcher its cached queue is current when
- * we simply did not look is the failure CLAUDE.md names by name.
- */
-function meteredGh(budget, token) {
-	const spent = () => budget.spent;
-	const stop = () => probeGate(budget, ghBlackoutRemainingMs());
-	return {
-		spent,
-		async get(path, repo) {
-			const why = stop();
-			if (why) return { ok: false, why, body: null };
-			const body = await ghGet(path, token, repo);
-			return { ok: body !== null, why: body === null ? 'GitHub did not answer' : null, body };
-		},
-		async write(method, path, tok, body, repo) {
-			const why = stop();
-			if (why) return { ok: false, status: 0, why };
-			const res = await ghWrite(method, path, tok, body, repo);
-			return { ...res, why: res.ok ? null : `HTTP ${res.status}` };
-		},
-	};
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 /**
  * Refuse to mint into PROBE_SLOT if something is already listening there.
  *
@@ -681,13 +561,6 @@ const sh = async (node, command) => {
 // Modes
 // ---------------------------------------------------------------------------
 
-function parseUnit(spec) {
-	if (!spec) return null;
-	const i = spec.lastIndexOf('#');
-	if (i < 0) return null;
-	return { repo: spec.slice(0, i), job: spec.slice(i + 1) };
-}
-
 function samplesFor(rows, key) {
 	return rows
 		.filter((r) => r.repo === key.repo && r.name === key.job)
@@ -734,70 +607,6 @@ function pickBusiestUnit(rows) {
 		if (!best || claws > best.claws) best = { k, claws };
 	}
 	return best ? parseUnit(best.k) : null;
-}
-
-/**
- * Merge this harness's settled probes into the unit's samples.
- *
- * TWO SOURCES, MERGED — NOT ONE PREFERRED OVER THE OTHER. job-history is the
- * record every other consumer reads, and `ingestRuns` stamps the `probe` tag
- * from the ledger — but only inside the process that HOLDS the window, which is
- * the DEPLOYED mgmt-api. Until this version is published, a probe run lands in
- * job-history untagged.
- *
- * Dropping the ledger row when history already has the job was the first
- * attempt, and it was wrong in a way that got worse over time: the probes showed
- * in the table for a few minutes and then VANISHED, one by one, as the poller
- * caught up and the untagged copy won. `pinned` on claw-2 went 3 → 0 while the
- * probes sat green in the ledger. A table that loses its own evidence as the
- * fleet observes it is exactly the shape `deployed-not-published-2026-09-05.md`
- * warns about.
- *
- * So: history supplies the MEASUREMENT (it re-read every field from GitHub
- * independently), the ledger supplies the PROVENANCE (`probe`, `intendedNode`),
- * and a job present in both gets one row carrying both. Once this version is
- * published the two agree and the merge is a no-op.
- *
- * This is NOT the harness reading back its own writer's artifact. `node`,
- * `conclusion` and `durationSec` in a settled entry were read from GitHub's job
- * listing, not from the probe's intention — the intention is the separate
- * `intendedNode` field, and `forced` is the comparison between them.
- *
- * A MISSED probe is kept, with the node that ACTUALLY served it. It is a real
- * sample of that node, and dropping it would be discarding a measurement for not
- * being the one we asked for.
- */
-function mergeProbeProvenance(key, fromHistory) {
-	const byJob = new Map();
-	const byRun = new Map();
-	for (const e of loadLedger()) {
-		if (!e.settled || e.repo !== key.repo || e.job !== key.job || !e.node) continue;
-		if (typeof e.jobId === 'number') byJob.set(e.jobId, e);
-		else byRun.set(e.runId, e);
-	}
-	let tagged = 0;
-	const merged = fromHistory.map((r) => {
-		const e = byJob.get(r.jobId) ?? byRun.get(r.runId);
-		if (!e) return r;
-		byJob.delete(r.jobId);
-		byRun.delete(r.runId);
-		tagged++;
-		return { ...r, probe: e.origin, intendedNode: e.intendedNode ?? null };
-	});
-	// Whatever the poller has not ingested yet, as its own sample.
-	const extra = [...byJob.values(), ...byRun.values()].map((e) => ({
-		repo: e.repo,
-		runId: e.runId,
-		jobId: e.jobId ?? null,
-		name: e.job,
-		node: e.node,
-		durationSec: e.durationSec ?? null,
-		conclusion: e.conclusion ?? 'unknown',
-		failedStep: e.failedStep ?? undefined,
-		probe: e.origin,
-		intendedNode: e.intendedNode ?? null,
-	}));
-	return { samples: [...merged, ...extra], tagged, extra: extra.length };
 }
 
 /**

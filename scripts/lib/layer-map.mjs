@@ -142,6 +142,11 @@ export const LAYER_MAP = [
 	{ glob: 'src/job-rollup-store.ts', layer: 'state' },
 	{ glob: 'scripts/lib/enrollment-record.mjs', layer: 'state' },
 	{ glob: 'scripts/lib/job-proof-record.mjs', layer: 'state' },
+	// Wave 5k lane D split of floor-probe.mjs (plan §4.3 #12): the harness's own
+	// probe ledger, read and written in exactly these two functions — the same
+	// "one declared writer, read back by something else" shape as its
+	// neighbours here.
+	{ glob: 'scripts/lib/floor-probe-state.mjs', layer: 'state' },
 	// The transactional writer of fleet-runner-manifest.json (wave 5c F4). The
 	// "one declared writer, read back by something else" state pattern rule 3
 	// describes — the same reason drain.ts/hosting-record.ts above are `state`
@@ -447,6 +452,28 @@ export const LAYER_MAP = [
 		part: 'core',
 	},
 	{ glob: 'scripts/lib/floor-probe.mjs', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
+	// Wave 5k lane D split of floor-probe.mjs (plan §4.3 #12). Each still does
+	// I/O (the exclusion reads, the ledger merge, the metered GitHub calls) so
+	// each is `run`, same as the CLI they were pulled out of — the split moved
+	// the code, not its placement.
+	{
+		glob: 'scripts/lib/floor-probe-candidates.mjs',
+		layer: 'domain',
+		domain: 'ci-scheduling',
+		part: 'run',
+	},
+	{
+		glob: 'scripts/lib/floor-probe-table.mjs',
+		layer: 'domain',
+		domain: 'ci-scheduling',
+		part: 'run',
+	},
+	{
+		glob: 'scripts/lib/floor-probe-dispatch.mjs',
+		layer: 'domain',
+		domain: 'ci-scheduling',
+		part: 'run',
+	},
 	{ glob: 'scripts/floor-probe.mjs', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
 	{
 		glob: 'scripts/lib/placement-rules.mjs',

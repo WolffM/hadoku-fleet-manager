@@ -602,6 +602,13 @@ export const MODE_FLAGS = {
 /** Accepted by every mode, so never foreign. */
 const UNIVERSAL_FLAGS = ['json'];
 
+export function parseUnit(spec) {
+	if (!spec) return null;
+	const i = spec.lastIndexOf('#');
+	if (i < 0) return null;
+	return { repo: spec.slice(0, i), job: spec.slice(i + 1) };
+}
+
 /**
  * Flags in `argv` that `mode` does not accept, each with the modes that do.
  *
