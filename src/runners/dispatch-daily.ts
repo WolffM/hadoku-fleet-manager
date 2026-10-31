@@ -16,7 +16,7 @@ import { join } from 'node:path';
 
 import { logger, stateDir } from '../host.js';
 import { writeJsonAtomic } from '../lib/atomic-json.js';
-import { RETENTION_DAYS } from '../job-history.js';
+import { RETENTION_DAYS } from '../job-history-store.js';
 
 export const DISPATCH_DAILY_FILE = 'dispatch-daily.json';
 

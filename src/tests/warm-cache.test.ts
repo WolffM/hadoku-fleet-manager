@@ -76,7 +76,7 @@ import {
 	__resetJobHistoryForTesting,
 	__setHistoryPathForTesting,
 	historyFile,
-} from '../job-history.js';
+} from '../job-history-store.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
 import {
 	__resetDecisionLogForTesting,

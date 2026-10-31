@@ -122,7 +122,12 @@ export const LAYER_MAP = [
 	{ glob: 'src/capability-revocations.ts', layer: 'state' },
 	{ glob: 'src/lib/measured.ts', layer: 'state' },
 	{ glob: 'src/lib/sick-node.ts', layer: 'state' },
-	{ glob: 'src/job-history.ts', layer: 'state' }, // store part; see the analytics-part note below
+	// Wave 5h lane C split of job-history.ts (plan §4.3 #5): the ledger store —
+	// the in-memory window, the probe ledger and the one writer of
+	// job-history.jsonl. job-history.ts itself is now a thin re-export barrel
+	// (see the domain/observation section below) kept only for
+	// runner-health.ts, not touched this wave.
+	{ glob: 'src/job-history-store.ts', layer: 'state' },
 	{ glob: 'src/job-rollup-store.ts', layer: 'state' },
 	{ glob: 'scripts/lib/enrollment-record.mjs', layer: 'state' },
 	{ glob: 'scripts/lib/job-proof-record.mjs', layer: 'state' },
@@ -399,6 +404,16 @@ export const LAYER_MAP = [
 	{ glob: 'src/ci-alerts.ts', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'src/label-floor.ts', layer: 'domain', domain: 'observation', part: 'core' },
 	{ glob: 'src/job-rollups.ts', layer: 'domain', domain: 'observation', part: 'run' },
+	// Wave 5h lane C split of job-history.ts: GitHub ingest (job-history-ingest.ts,
+	// run) and zone/kill classification + stats (job-history-stats.ts, core).
+	// job-history.ts itself is now a bare re-export barrel, kept only for
+	// runner-health.ts's imports (lane A, not touched this wave) — classified
+	// here rather than under the thing it forwards to, since both its own
+	// imports (domain + state) and runner-health.ts's import of it land legally
+	// only at the domain stratum.
+	{ glob: 'src/job-history.ts', layer: 'domain', domain: 'observation', part: 'run' },
+	{ glob: 'src/job-history-ingest.ts', layer: 'domain', domain: 'observation', part: 'run' },
+	{ glob: 'src/job-history-stats.ts', layer: 'domain', domain: 'observation', part: 'core' },
 	{ glob: 'src/run-listing-gap.ts', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'src/runners/claw-state.ts', layer: 'domain', domain: 'observation', part: 'core' },
 	{ glob: 'src/runners/disk-watch.ts', layer: 'domain', domain: 'observation', part: 'run' },

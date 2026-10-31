@@ -109,7 +109,7 @@
  */
 
 import { nodeOf } from './census.js';
-import type { JobRecord } from '../job-history.js';
+import type { JobRecord } from '../job-history-store.js';
 import { capability, workloadGatedCapabilities } from '../capabilities.js';
 import { markProofStale, readProof, type WriteFacetResult } from '../lib/measured.js';
 import { jobKind } from '../lib/job-kind.js';

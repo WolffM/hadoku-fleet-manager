@@ -19,7 +19,7 @@
     "hosting-converge-last.json": ["scripts/hosting-converge.mjs"],
     "hosting-demand.json": ["scripts/lib/hosting-demand.mjs"],
     "hosting-tenants.json": ["scripts/lib/tenant-registry.mjs"],
-    "job-history.jsonl": ["src/job-history.ts"],
+    "job-history.jsonl": ["src/job-history-store.ts"],
     "job-proofs.json": ["scripts/lib/job-proof-record.mjs"],
     "label-floor-holdings.json": ["scripts/check-label-floor.mjs"],
     "node-status-boots.json": ["scripts/node-status.mjs"],

@@ -212,15 +212,11 @@
     "to": "src/fleet-report-types.ts"
   },
   {
-    "from": "src/job-history.ts",
+    "from": "src/job-history-stats.ts",
     "to": "src/lib/job-kind.ts"
   },
   {
-    "from": "src/job-history.ts",
-    "to": "src/runners/census.ts"
-  },
-  {
-    "from": "src/job-history.ts",
+    "from": "src/job-history-ingest.ts",
     "to": "src/runners/ephemeral.ts"
   },
   {

@@ -42,16 +42,9 @@
 import { join } from 'node:path';
 
 import { logger, stateDir } from './host.js';
-import {
-	FRESH_HORIZON_H,
-	failuresByZone,
-	historyCompleteSinceMs,
-	jobRecords,
-	nodeOf,
-	percentile,
-	type FailuresByZone,
-	type JobRecord,
-} from './job-history.js';
+import { FRESH_HORIZON_H } from './job-history-ingest.js';
+import { historyCompleteSinceMs, jobRecords, type JobRecord } from './job-history-store.js';
+import { failuresByZone, nodeOf, percentile, type FailuresByZone } from './job-history-stats.js';
 import { ROLLUP_FILE, jsonlRollupStore, type RollupStore } from './job-rollup-store.js';
 import { jobKind } from './lib/job-kind.js';
 import { HOSTED_NODE } from './runners/census.js';

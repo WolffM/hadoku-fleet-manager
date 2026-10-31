@@ -64,7 +64,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 import { orderCandidates } from '../dist/runners/traffic.js';
-import { idleSecondsFromRecords } from '../dist/job-history.js';
+import { idleSecondsFromRecords } from '../dist/job-history-stats.js';
 import { buildSpeedModel } from '../dist/runners/speed-tier.js';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';

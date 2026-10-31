@@ -23,13 +23,11 @@ import {
 	__resetAdmissionVerdictsForTesting,
 	__setAdmissionVerdictsForTesting,
 } from '../runners/ephemeral-tick.js';
-import {
-	__resetJobHistoryForTesting,
-	__setHistoryPathForTesting,
-	type JobHistorySummary,
-	type JobRecord,
-	type RecentJobRecord,
-} from '../job-history.js';
+import { __resetJobHistoryForTesting } from '../job-history-store.js';
+import { __setHistoryPathForTesting } from '../job-history-store.js';
+import type { JobRecord } from '../job-history-store.js';
+import type { JobHistorySummary } from '../job-history-stats.js';
+import type { RecentJobRecord } from '../job-history-stats.js';
 import { testStateDir, testHost } from './install-test-host.js';
 import { __setHostForTesting } from '../host.js';
 import { setBackstopHold } from '../runners/backstop-hold.js';

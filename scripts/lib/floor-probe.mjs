@@ -18,7 +18,7 @@
  * argument. The one import below is the BUILT zone classifier and it reads
  * neither — see the note on it.
  */
-import { classifyZone, zoneOf } from '../../dist/job-history.js';
+import { classifyZone, zoneOf } from '../../dist/job-history-stats.js';
 
 // ---------------------------------------------------------------------------
 // §1.3 / master §5.5 — the zone classifier

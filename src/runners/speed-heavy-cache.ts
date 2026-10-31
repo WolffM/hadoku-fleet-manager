@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs';
 
-import { historyFile, jobRecords } from '../job-history.js';
+import { historyFile, jobRecords } from '../job-history-store.js';
 import { logger } from '../host.js';
 import { buildSpeedModel, type SpeedModel } from './speed-tier.js';
 import { buildHeavyModel, type HeavyModel } from './traffic.js';

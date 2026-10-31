@@ -37,12 +37,10 @@ import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
 import { jobReserve, loadRepoReserves, withoutGuests } from '../runners/ephemeral-shared.js';
 import { setBackstopHold } from '../runners/backstop-hold.js';
 import { SATURATED_QUEUED_MS } from '../runners/queue-discovery.js';
-import {
-	__resetJobHistoryForTesting,
-	__setHistoryPathForTesting,
-	ingestRuns,
-	jobRecords,
-} from '../job-history.js';
+import { __resetJobHistoryForTesting } from '../job-history-store.js';
+import { __setHistoryPathForTesting } from '../job-history-store.js';
+import { jobRecords } from '../job-history-store.js';
+import { ingestRuns } from '../job-history-ingest.js';
 
 /** Build a jitconfig the way GitHub does: base64(JSON{'.runner': base64(JSON)}). */
 function jitConfig(runner: Record<string, unknown>): string {

@@ -54,7 +54,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { logger, stateDir } from './host.js';
-import { FRESH_HORIZON_H, jobHistoryHasRun } from './job-history.js';
+import { FRESH_HORIZON_H } from './job-history-ingest.js';
+import { jobHistoryHasRun } from './job-history-store.js';
 import { writeJsonAtomic } from './lib/atomic-json.js';
 
 /** The listing's page size. runner-health asks for exactly this. */

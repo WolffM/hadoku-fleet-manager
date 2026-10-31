@@ -16,7 +16,7 @@ import {
 	TRIVIAL_SEC,
 	WINDOW_DAYS,
 } from '../runners/speed-tier.js';
-import { RETENTION_DAYS, type JobRecord, type ProbeOrigin } from '../job-history.js';
+import { RETENTION_DAYS, type JobRecord, type ProbeOrigin } from '../job-history-store.js';
 
 const NOW = Date.parse('2026-10-03T12:00:00Z');
 const RECENT_ISO = new Date(NOW - 2 * 24 * 60 * 60 * 1000).toISOString();

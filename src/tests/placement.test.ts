@@ -38,7 +38,7 @@ import {
 	__resetJobHistoryForTesting,
 	__setHistoryPathForTesting,
 	type JobRecord,
-} from '../job-history.js';
+} from '../job-history-store.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 
 // --- B8: fork safety --------------------------------------------------------

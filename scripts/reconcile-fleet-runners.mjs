@@ -135,7 +135,7 @@ import { metricsReadScript, metricsSince, perJobCosts, readOutcome } from './lib
 import { BUILDER_LABEL } from '../dist/capabilities.js';
 import { fleetOwner } from '../dist/lib/fleet-config.js';
 import { isGuestNode } from '../dist/lib/node-role.js';
-import { RETENTION_DAYS } from '../dist/job-history.js';
+import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import { FAST_LOOP_SECONDS, RECONCILE_EVERY_TICKS } from '../dist/fleet-loop.js';
 import { createEmitter } from './lib/emit.mjs';
 import { checkGhReserve } from './lib/gh-reserve.mjs';

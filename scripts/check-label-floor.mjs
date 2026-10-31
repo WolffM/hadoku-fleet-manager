@@ -58,7 +58,7 @@ import { hubRepoFull } from '../dist/lib/fleet-config.js';
 import { FLOOR_DEMAND_FILE, floorLabels, isFloorDemandLabel } from '../dist/label-floor.js';
 import { FLEET_VALUE } from '../dist/ci-runner-fallback.js';
 import { BUILDER_LABEL } from '../dist/runners/census.js';
-import { RETENTION_DAYS } from '../dist/job-history.js';
+import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import { isProofRunnerName } from '../dist/runners/prove-job.js';
 import {
 	requiredIdentitySet,

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { JobRecord } from '../job-history.js';
+import type { JobRecord } from '../job-history-store.js';
 import { jobKind } from '../lib/job-kind.js';
 import {
 	buildHeavyModel,

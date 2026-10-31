@@ -65,7 +65,7 @@ import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 // The window is job-history's, BUILT, for the same reason `floor-probe.mjs`
 // reads it from there: a row older than job-history keeps has nothing left to
 // join to, and a second spelling of 14 here would be free to drift from it.
-import { RETENTION_DAYS } from '../dist/job-history.js';
+import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import {
 	joinMetrics,
 	byNode,

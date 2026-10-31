@@ -26,7 +26,7 @@ import {
 	BACKSTOP_REASONS,
 	CLAW_STATES,
 } from '../telemetry-vocabulary.js';
-import type { JobHistorySummary } from '../job-history.js';
+import type { JobHistorySummary } from '../job-history-stats.js';
 import type { TelemetryKind, TelemetryTerm } from '../fleet-report-types.js';
 
 const NO_JOBS: JobHistorySummary = {

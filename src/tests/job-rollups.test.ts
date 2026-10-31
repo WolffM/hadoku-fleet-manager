@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { __setHostForTesting } from '../host.js';
-import type { JobRecord } from '../job-history.js';
+import type { JobRecord } from '../job-history-store.js';
 import { jsonlRollupStore } from '../job-rollup-store.js';
 import {
 	FLEET_NODE,

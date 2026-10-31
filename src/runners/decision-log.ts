@@ -62,7 +62,7 @@ import {
 import { join } from 'node:path';
 
 import { logger, stateDir } from '../host.js';
-import { RETENTION_DAYS } from '../job-history.js';
+import { RETENTION_DAYS } from '../job-history-store.js';
 import type { PlanObservation } from './dispatcher.js';
 import { busyOf, type NodeState, type WalkKey } from './placement.js';
 

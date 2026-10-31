@@ -280,7 +280,7 @@ test('the rotation is a RENAME — nothing in the hook rewrites the file in plac
 });
 
 test("the hook's window is job-history's RETENTION_DAYS — one number, two spellings, pinned", async () => {
-	const { RETENTION_DAYS } = await import('../../dist/job-history.js');
+	const { RETENTION_DAYS } = await import('../../dist/job-history-store.js');
 	const m = /JOB_METRICS_RETENTION_DAYS:-(\d+)/.exec(readFileSync(HOOK, 'utf8'));
 	assert.ok(m, 'the hook declares its default window');
 	assert.equal(

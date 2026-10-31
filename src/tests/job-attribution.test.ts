@@ -26,7 +26,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { RECENT_WINDOW_MS, summarise, type JobRecord, type NodeJobStats } from '../job-history.js';
+import type { JobRecord } from '../job-history-store.js';
+import { RECENT_WINDOW_MS, summarise, type NodeJobStats } from '../job-history-stats.js';
 import { buildFleetReport } from '../routes/fleet.js';
 
 const NODES = ['claw-1', 'claw-2', 'claw-3', 'hokon'];

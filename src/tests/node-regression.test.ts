@@ -20,7 +20,7 @@ import {
 	type Divergence,
 	type GatedKind,
 } from '../runners/node-regression.js';
-import type { JobRecord } from '../job-history.js';
+import type { JobRecord } from '../job-history-store.js';
 import type { ProofRecord, WriteFacetResult } from '../lib/measured.js';
 
 const NODES = ['claw-3', 'claw-4', 'claw-8', 'claw-9', 'hokon'];

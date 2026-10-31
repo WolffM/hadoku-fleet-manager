@@ -5,13 +5,10 @@ import { rmSync } from 'node:fs';
 
 import { __setHostForTesting } from '../host.js';
 import { testHost, testStateDir } from './install-test-host.js';
-import {
-	FetchBudget,
-	ingestRuns,
-	jobRecords,
-	__resetJobHistoryForTesting,
-	__setHistoryPathForTesting,
-} from '../job-history.js';
+import { __setHistoryPathForTesting } from '../job-history-store.js';
+import { __resetJobHistoryForTesting } from '../job-history-store.js';
+import { jobRecords } from '../job-history-store.js';
+import { FetchBudget, ingestRuns } from '../job-history-ingest.js';
 import {
 	closeListingGap,
 	LISTING_GAP_FILE,

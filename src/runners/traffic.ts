@@ -45,7 +45,8 @@
  * otherwise) are `maxConcurrent` in the fleet manifest, which admission enforces.
  */
 
-import { percentile, type JobRecord } from '../job-history.js';
+import type { JobRecord } from '../job-history-store.js';
+import { percentile } from '../job-history-stats.js';
 import { jobKind } from '../lib/job-kind.js';
 
 /** What the ordering needs to know about a candidate. Deliberately minimal. */

@@ -25,7 +25,8 @@
  * module performs.
  */
 
-import { median, nodeOf, percentile, type JobRecord } from '../job-history.js';
+import type { JobRecord } from '../job-history-store.js';
+import { median, nodeOf, percentile } from '../job-history-stats.js';
 import { jobKind } from '../lib/job-kind.js';
 
 export type SpeedTier = 'normal' | 'slow' | 'unknown';

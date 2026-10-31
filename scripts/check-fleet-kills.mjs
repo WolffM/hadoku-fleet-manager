@@ -63,7 +63,7 @@ import process from 'node:process';
 
 import { stateDir } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
-import { KNOWN_TTL_SEC, TTL_MATCH_SEC, isFleetKill } from '../dist/job-history.js';
+import { KNOWN_TTL_SEC, TTL_MATCH_SEC, isFleetKill } from '../dist/job-history-stats.js';
 
 const JSON_OUT = process.argv.includes('--json');
 const out = createEmitter({ argv: process.argv });

@@ -33,12 +33,8 @@ import {
 import { getDispatchSnapshot, getFleetProbeSnapshot } from '../fleet-loop.js';
 import { getReservationSnapshot } from '../fleet-loop.js';
 import { type NodeProbe } from '../lib/node-probe.js';
-import {
-	backfillFailedSteps,
-	summarise,
-	type GhJob,
-	type JobHistorySummary,
-} from '../job-history.js';
+import { backfillFailedSteps, type GhJob } from '../job-history-ingest.js';
+import { summarise, type JobHistorySummary } from '../job-history-stats.js';
 import { ephemeralState } from '../runners/claw-state.js';
 import { isBackstopHeld } from '../runners/backstop-hold.js';
 import { mintsOnDemand } from '../lib/node-role.js';

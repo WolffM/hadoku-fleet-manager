@@ -76,7 +76,7 @@ import { stateDir } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
 // job-history's window, BUILT — the same import `collect-job-metrics` makes, so
 // the two commands read the same rows from every node.
-import { RETENTION_DAYS } from '../dist/job-history.js';
+import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import {
 	metricsSince,
 	metricsReadScript,

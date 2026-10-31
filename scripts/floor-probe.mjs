@@ -127,7 +127,7 @@ import {
 } from './lib/floor-probe.mjs';
 import { installHost } from '../dist/host.js';
 import { nodeOf } from '../dist/runners/census.js';
-import { PROBE_LEDGER_FILE, RETENTION_DAYS } from '../dist/job-history.js';
+import { PROBE_LEDGER_FILE, RETENTION_DAYS } from '../dist/job-history-store.js';
 import { PROBE_INTENT_DIR, PROBE_INTENT_MAX_MS } from '../dist/runners/dispatch-tick.js';
 import { ghGet, ghWrite } from '../dist/lib/github-client.js';
 import { ghBlackoutRemainingMs } from '../dist/lib/github-client.js';
