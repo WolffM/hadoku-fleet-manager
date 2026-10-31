@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { test } from 'node:test';
+import { afterEach, test } from 'node:test';
 
 import {
 	getFleetLiveness,
@@ -10,6 +10,22 @@ import {
 	TOKEN_WAIT_GRACE_MS,
 	__resetLivenessForTesting,
 } from '../lib/liveness.js';
+
+/**
+ * The ledger stamps ticks and registrations with Date.now(). A test that read
+ * its own `atMs` a millisecond earlier made every exact-boundary check off by
+ * one under load (the 400-days-ahead clock rerun failed on 10-31), so each
+ * boundary test FREEZES the clock at its `atMs`; this puts it back.
+ */
+const REAL_NOW = Date.now;
+afterEach(() => {
+	Date.now = REAL_NOW;
+});
+function freezeNow(): number {
+	const at = REAL_NOW();
+	Date.now = () => at;
+	return at;
+}
 
 // Every test resets the module's shared state first: it is a singleton by
 // design (one ledger per process, matching the thing it describes — see the
@@ -49,7 +65,7 @@ test('a REGISTERED loop that has not ticked yet is PENDING, with lastTickAt null
 
 test('a registered-never-ticked loop goes STALE once past its threshold + first-tick grace — with lastTickAt still null', () => {
 	reset();
-	const atMs = Date.now();
+	const atMs = freezeNow();
 	// expectedMs=15_000 (dispatch-shaped) -> threshold = STALE_FLOOR_MS (60s;
 	// the floor binds, 3*15_000=45_000 < 60_000). Grace adds TOKEN_WAIT_GRACE_MS.
 	registerLoop('dispatch-stub', 15_000, { firstTickGraceMs: TOKEN_WAIT_GRACE_MS });
@@ -75,7 +91,7 @@ test('a registered-never-ticked loop goes STALE once past its threshold + first-
 
 test('a restart (fresh registeredAt) is PENDING again, never stale, even if the prior process had been stuck for a long time', () => {
 	reset();
-	const atMs = Date.now();
+	const atMs = freezeNow();
 	registerLoop('runner-health-stub', 600_000, { firstTickGraceMs: TOKEN_WAIT_GRACE_MS });
 	// Simulate a long stuck boot: well past where THIS registration would be stale.
 	const grace = Math.max(600_000 * STALE_MULTIPLIER, STALE_FLOOR_MS) + TOKEN_WAIT_GRACE_MS;
@@ -122,7 +138,7 @@ test('age past STALE_MULTIPLIER x expectedMs (above the floor) is stale; at or u
 	reset();
 	// expectedMs=600_000 (runner-health's real cadence) -> threshold =
 	// max(STALE_MULTIPLIER*600_000, STALE_FLOOR_MS), well above the floor.
-	const atMs = Date.now();
+	const atMs = freezeNow();
 	noteTick('runner-health-stub', 600_000);
 	const threshold = STALE_MULTIPLIER * 600_000;
 	assert.ok(
@@ -148,7 +164,7 @@ test('the floor protects a short-cadence loop from ordinary jitter past its raw 
 	// expectedMs=100ms -> 3x is only 300ms, far under STALE_FLOOR_MS (60s).
 	// Without the floor, a loop ticking every 100ms would read stale after
 	// one slow pass; the floor is what stops that.
-	const atMs = Date.now();
+	const atMs = freezeNow();
 	noteTick('fast-stub', 100);
 	const underFloor = getFleetLiveness(atMs + (STALE_FLOOR_MS - 1));
 	assert.equal(
@@ -166,7 +182,7 @@ test('the floor protects a short-cadence loop from ordinary jitter past its raw 
 
 test('two loops are tracked independently — each judged by its OWN cadence, not a shared one', () => {
 	reset();
-	const atMs = Date.now();
+	const atMs = freezeNow();
 	// Both last ticked at the same instant; only their declared cadence
 	// differs — exactly the real shape (dispatch's 15s vs runner-health's
 	// 10min), so one loop's threshold must not leak into the other's.
