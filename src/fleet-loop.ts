@@ -45,6 +45,7 @@ import { provesRequiredSet, requiredIdentitySet, type DemandRecord } from './cap
 import { isGuestNode, mintsOnDemand } from './lib/node-role.js';
 import { isBackstopHeld } from './runners/backstop-hold.js';
 import { readDrain } from './runners/drain.js';
+import { noteTick, registerLoop, TOKEN_WAIT_GRACE_MS } from './lib/liveness.js';
 // The typed manifest reader and loaders moved to the config layer in wave 5c
 // (F1): this file is ci-scheduling/run, and a raw manifest read sitting
 // sideways of config is exactly the debt `src/lib/manifest.ts`'s header
@@ -1259,6 +1260,9 @@ export async function tickFleet(
 	};
 	await dispatchBetweenTicks(token, gh, dispatch);
 
+	// Recorded last, after everything above that could throw — a tick that
+	// threw must never read as alive. See lib/liveness.ts.
+	noteTick('fleet-loop', FAST_LOOP_SECONDS * 1000);
 	return { actions };
 }
 
@@ -1286,6 +1290,12 @@ export function startFastLoop(
 ): void {
 	if (started) return;
 	started = true;
+	// Registered BEFORE the token wait below, which can legitimately stall on
+	// a sealed vault — see lib/liveness.ts. A loop that hangs right here, never
+	// reaching its first `tick()`, must still be visible as pending-then-stale,
+	// not simply absent.
+	registerLoop('fleet-loop', FAST_LOOP_SECONDS * 1000, { firstTickGraceMs: TOKEN_WAIT_GRACE_MS });
+	registerLoop('dispatch', DISPATCH_SECONDS * 1000, { firstTickGraceMs: TOKEN_WAIT_GRACE_MS });
 	logger.info(
 		`[fleet-loop] fast loop every ${FAST_LOOP_SECONDS}s, dispatcher every ${DISPATCH_SECONDS}s`
 	);

@@ -137,6 +137,7 @@ import {
 } from './runners/disk-watch.js';
 import { checkNodeRegressions, defaultGatedKinds } from './runners/node-regression.js';
 import type { BackstopReason, ClawState } from './fleet-report-types.js';
+import { noteTick, registerLoop, TOKEN_WAIT_GRACE_MS } from './lib/liveness.js';
 // The GitHub Actions API client, moved to its own module 2026-10-29 (plan §4.1 F2).
 import {
 	SELF_REPO,
@@ -4110,6 +4111,9 @@ function runTick(token: string, opts: { alerts?: boolean } = {}): Promise<void> 
 		);
 	}
 	inFlightTick = withGhCaller('runner-health', () => tick(token))
+		// Recorded only on the success path — see lib/liveness.ts. A tick that
+		// throws falls straight to `.catch` below and is never noted as alive.
+		.then(() => noteTick('runner-health', TICK_INTERVAL_MS))
 		.catch((err) =>
 			logger.warn(
 				`[runner-health] tick failed: ${err instanceof Error ? err.message : String(err)}`
@@ -4203,6 +4207,11 @@ export function __setTokenRetryForTesting(ms: number | null): void {
 export function startRunnerHealthMonitor(): void {
 	if (started) return;
 	started = true;
+	// Registered BEFORE the token wait below — see lib/liveness.ts. A vault
+	// that stays sealed (an operator who hasn't re-unlocked it) is exactly the
+	// "hangs from boot" case this ledger exists to surface, as `pending` while
+	// inside the grace and `stale` (with no tick ever recorded) past it.
+	registerLoop('runner-health', TICK_INTERVAL_MS, { firstTickGraceMs: TOKEN_WAIT_GRACE_MS });
 
 	// Injected, not read from the environment: the host owns credential
 	// resolution, and this package is consumed in-process by a service that

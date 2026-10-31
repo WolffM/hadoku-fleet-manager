@@ -152,6 +152,11 @@ export const LAYER_MAP = [
 	{ glob: 'src/scheduled-converger.ts', layer: 'automation' },
 	{ glob: 'src/claw-reboot.ts', layer: 'automation' },
 	{ glob: 'src/lib/concurrency.ts', layer: 'automation' },
+	// Wave 5e lane C: a generic, domain-blind tick ledger every control loop
+	// (ci-scheduling's dispatch/fast loop, observation's runner-health,
+	// lifecycle's claw-reboot) calls into — same "cross-cutting mechanics"
+	// shape as concurrency.ts beside it.
+	{ glob: 'src/lib/liveness.ts', layer: 'automation' },
 	{ glob: 'src/lib/usage-log.ts', layer: 'automation' },
 	{ glob: 'src/lib/usage-store.ts', layer: 'automation' },
 	{ glob: 'scripts/fleet-usage.mjs', layer: 'automation' },

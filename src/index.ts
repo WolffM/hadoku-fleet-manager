@@ -48,6 +48,18 @@ export type { GhPoolReading } from './gh-budget.js';
 export { ghGet, ghWrite } from './lib/github-client.js';
 
 /**
+ * Whether the fleet's own control loops are still ticking — dispatch, the
+ * fast loop, runner-health, and every scheduled converger/claw-reboot. The
+ * host's `/api/status` folds this in so the off-box heartbeat (wave 5e lane
+ * C, `docs/planning/wave5e-2026-10-31.md`) can alarm on a silently stopped
+ * loop, which a process-liveness probe alone cannot see. Additive: an older
+ * consumer that does not call this sees nothing missing, because it was
+ * never calling it before.
+ */
+export { getFleetLiveness } from './lib/liveness.js';
+export type { FleetLiveness, LoopLiveness } from './lib/liveness.js';
+
+/**
  * THE BACKSTOP DECISION, as a pure library. hokon is the emergency backstop
  * for cardtable's Forge matches with the CI backstop's rules (operator,
  * 2026-10-25; hadoku-cardtable FLEET_MANAGER_FORGE_HOSTING.md §6), and

@@ -23,6 +23,7 @@ import { join } from 'node:path';
 
 import { logger, stateDir } from '../host.js';
 import { writeFileAtomic } from '../lib/atomic-json.js';
+import { noteTick } from '../lib/liveness.js';
 import { ghTokenFingerprint, withGhCaller } from '../gh-budget.js';
 import { conditionalCacheStore } from '../conditional-cache-store.js';
 import {
@@ -197,6 +198,22 @@ const jobsCacheByRun = new Map<string, { etag: string | null; body: { jobs?: Que
  * freed slot is still seen on the very next one.
  */
 export const PROBE_BACKOFF_MS = 120_000;
+
+/**
+ * Liveness expectation for `noteTick('dispatch', …)` — see lib/liveness.ts.
+ *
+ * MIRRORS `fleet-loop.ts`'s `DISPATCH_SECONDS` (15s), which owns the actual
+ * timer: `dispatchBetweenTicks` there calls `dispatchEphemeral` ->
+ * `runDispatchTick` (this function) on that cadence, and the fast loop's own
+ * 60s tick also calls it once per pass. A literal rather than an import: that
+ * constant lives in `fleet-loop.ts`, which reaches this module only through
+ * `runners/ephemeral-tick.js` — importing it back here would be a cycle
+ * (fleet-loop -> ephemeral-tick -> dispatch-tick -> fleet-loop). Changing
+ * DISPATCH_SECONDS without updating this constant makes the staleness
+ * threshold wrong, not incorrect behaviour: `noteTick`'s floor
+ * (`STALE_FLOOR_MS`, 60s) absorbs a modest drift either way.
+ */
+const DISPATCH_TICK_EXPECTED_MS = 15_000;
 
 /** `repo#runId` -> do not re-probe before `untilMs` while `fingerprint` holds. */
 const probeBackoff = new Map<
@@ -739,7 +756,12 @@ export async function runDispatchTick(
 	nowMs = Date.now()
 ): Promise<DispatchPassResult> {
 	const empty = { minted: 0, failed: 0, skipped: 0, inFlight: 0, reaped: 0 };
-	if (!input.order.length) return empty;
+	if (!input.order.length) {
+		// Still a completed tick (no node to mint on is a config fact, not a
+		// hang) — see lib/liveness.ts.
+		noteTick('dispatch', DISPATCH_TICK_EXPECTED_MS);
+		return empty;
+	}
 	hydratePollCache(token);
 
 	// deriveHotRepos, not an inlined `>= 20`. The threshold was duplicated here
@@ -1180,6 +1202,8 @@ export async function runDispatchTick(
 				`reaped=${res.reaped ?? 'skipped'}`
 		);
 	}
+	// Recorded last, after everything above that could throw — see lib/liveness.ts.
+	noteTick('dispatch', DISPATCH_TICK_EXPECTED_MS);
 	return res;
 }
 
