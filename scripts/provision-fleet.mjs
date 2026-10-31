@@ -104,15 +104,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import {
-	closeSync,
-	copyFileSync,
-	mkdtempSync,
-	openSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from 'node:fs';
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
 import process from 'node:process';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -125,14 +117,8 @@ import {
 	runOnSync,
 	selectMachines,
 } from './lib/fleet-exec.mjs';
-import {
-	landingLine,
-	landWrite,
-	refusalLine,
-	runGit,
-	writeTarget,
-} from './lib/manifest-target.mjs';
-import { renderJson } from './lib/prettier-json.mjs';
+import { landingLine, runGit } from './lib/manifest-target.mjs';
+import { manifestEdit } from './lib/manifest-edit.mjs';
 import { placementBackfill } from './lib/enrollment-record.mjs';
 import { blockingFindings, bootcampPointer, doctorFindings } from './lib/doctor.mjs';
 import { measuredFacets } from '../dist/lib/measured.js';
@@ -451,63 +437,39 @@ export async function applyPlacementWrite({
 	ephemeral,
 	noPush = false,
 }) {
-	const target = writeTarget(mp);
-	if (!target.ok)
-		return { ok: false, why: refusalLine(target, { writer: 'provision', file: mp }).trim() };
-	let doc;
-	try {
-		doc = JSON.parse(readFileSync(mp, 'utf8'));
-	} catch (err) {
-		return { ok: false, why: `${mp} does not parse: ${err.message}` };
-	}
-	const entry = doc.machines?.[node];
-	if (!entry)
-		return {
-			ok: false,
-			why: `${node} is not in ${mp} — placement writes an EXISTING entry; the declare step creates it`,
-		};
 	const wrote = [];
-	for (const [k, v] of Object.entries(backfill ?? {})) {
-		entry[k] = v;
-		wrote.push(k);
-	}
-	if (ephemeral) {
-		entry.ephemeral = true;
-		wrote.push('ephemeral');
-	}
-	if (!wrote.length)
+	const result = await manifestEdit(
+		(doc) => {
+			const entry = doc.machines?.[node];
+			if (!entry)
+				throw new Error(
+					`${node} is not in ${mp} — placement writes an EXISTING entry; the declare step creates it`
+				);
+			for (const [k, v] of Object.entries(backfill ?? {})) {
+				entry[k] = v;
+				wrote.push(k);
+			}
+			if (ephemeral) {
+				entry.ephemeral = true;
+				wrote.push('ephemeral');
+			}
+			return wrote.length > 0;
+		},
+		{
+			target: mp,
+			writer: 'provision',
+			reason: () => `placement for ${node}${ephemeral ? ' (ephemeral on)' : ''}`,
+			push: !noPush,
+		}
+	);
+	if ('ok' in result && result.ok === false) return { ok: false, why: result.why };
+	if (!result.changed)
 		return { ok: true, note: 'nothing to write — placement already complete', landed: null };
-	const rendered = await renderJson(doc, mp);
-	copyFileSync(mp, `${mp}.bak`);
-	writeFileSync(mp, rendered.text);
-	let verify;
-	try {
-		verify = JSON.parse(readFileSync(mp, 'utf8'));
-	} catch (err) {
-		copyFileSync(`${mp}.bak`, mp);
-		return {
-			ok: false,
-			why: `the manifest did not parse after writing (${err.message}) — restored from .bak`,
-		};
-	}
-	const after = verify.machines?.[node];
-	if (!after) {
-		copyFileSync(`${mp}.bak`, mp);
-		return { ok: false, why: `${node} is not in the manifest after writing — restored from .bak` };
-	}
-	if (ephemeral && after.ephemeral !== true) {
-		copyFileSync(`${mp}.bak`, mp);
-		return { ok: false, why: 'the ephemeral flag did not survive the write — restored from .bak' };
-	}
-	const landed = landWrite(mp, {
-		writer: 'provision',
-		summary: `placement for ${node}${ephemeral ? ' (ephemeral on)' : ''}`,
-		push: !noPush,
-	});
+	const landed = result.landed;
 	return {
 		ok: landed.ok,
 		why: landed.ok ? undefined : landed.why,
-		note: `${landingLine(landed, { writer: 'provision' })}${rendered.formatter ? '' : '\n  ! written UNFORMATTED — no prettier resolved; run the owning repo’s format before pushing'}`,
+		note: `${landingLine(landed, { writer: 'provision' })}${result.formatter ? '' : '\n  ! written UNFORMATTED — no prettier resolved; run the owning repo’s format before pushing'}`,
 		fields: wrote,
 		landed,
 	};

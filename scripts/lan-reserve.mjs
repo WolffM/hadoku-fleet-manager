@@ -26,14 +26,12 @@
  * node on (`proposeLanRecord`). The reservation exists to keep THAT address
  * still; proposing any other would pin a lease nothing uses.
  */
-import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
 
-import { machineArg, runOn } from './lib/fleet-exec.mjs';
-import { manifest } from './lib/paths.mjs';
-import { renderJson } from './lib/prettier-json.mjs';
-import { landWrite, landingLine, refusalLine, writeTarget } from './lib/manifest-target.mjs';
+import { loadManifest, machineArg, manifestPath, runOn } from './lib/fleet-exec.mjs';
+import { landingLine } from './lib/manifest-target.mjs';
+import { manifestEdit } from './lib/manifest-edit.mjs';
 import { INTERFACE_PROBE, parseInterfaces, proposeLanRecord } from './lib/node-interfaces.mjs';
 import { createEmitter } from './lib/emit.mjs';
 
@@ -57,8 +55,8 @@ function die(message, extra = {}) {
 
 if (!NODE) die('usage: fleet lan-reserve --machine <node> [--write] [--no-push] [--json]');
 
-const MANIFEST = manifest('fleet-runner-manifest.json');
-const doc = JSON.parse(readFileSync(MANIFEST, 'utf8'));
+const MANIFEST = manifestPath();
+const doc = loadManifest(MANIFEST);
 if (!doc.machines?.[NODE]) {
 	die(`${NODE} is not in ${MANIFEST}. Enrol it first (\`fleet enroll ${NODE} --write\`).`);
 }
@@ -115,9 +113,6 @@ if (!WRITE) {
 	finish({ ok: false, node: NODE, written: false, proposal, record: current }, 1);
 }
 
-const target = writeTarget(MANIFEST);
-if (!target.ok) die(refusalLine(target, { writer: 'lan-reserve', file: MANIFEST }));
-
 const record = {
 	mac: proposal.mac,
 	ip: proposal.ip,
@@ -126,31 +121,34 @@ const record = {
 	// is UTC and recorded an evening reservation as tomorrow on its first run.
 	reservedOn: new Date().toLocaleDateString('en-CA'),
 };
-copyFileSync(MANIFEST, `${MANIFEST}.bak`);
-doc.machines[NODE].lan = record;
-const rendered = await renderJson(doc, MANIFEST);
-writeFileSync(MANIFEST, rendered.text);
-if (!rendered.formatter) {
+
+const result = await manifestEdit(
+	(d) => {
+		// Defensive re-check against a FRESH read: the early check above used the
+		// copy read at the top of this script, and manifestEdit always reads
+		// again right before mutating. Enrolling the node is a separate command;
+		// a race here is not expected, but a throw here is a refusal, never an
+		// uncaught exception.
+		if (!d.machines?.[NODE]) throw new Error(`${NODE} is not in ${MANIFEST} any more`);
+		d.machines[NODE].lan = record;
+		return true;
+	},
+	{
+		target: MANIFEST,
+		writer: 'lan-reserve',
+		reason: `${NODE} reserved at ${record.ip}`,
+		push: !NO_PUSH,
+	}
+);
+
+if ('ok' in result && result.ok === false) {
+	die(result.why);
+}
+if (result.formatter === null) {
 	log(`! written UNFORMATTED — no prettier resolved from ${MANIFEST}'s tree`);
 }
 
-let verify;
-try {
-	verify = JSON.parse(readFileSync(MANIFEST, 'utf8'));
-} catch (err) {
-	copyFileSync(`${MANIFEST}.bak`, MANIFEST);
-	die(`the manifest did not parse after writing (${err.message}) — restored from .bak`);
-}
-if (verify.machines?.[NODE]?.lan?.mac !== record.mac) {
-	copyFileSync(`${MANIFEST}.bak`, MANIFEST);
-	die(`${NODE}'s lan record is not in the manifest after writing — restored from .bak`);
-}
-
-const landed = landWrite(MANIFEST, {
-	writer: 'lan-reserve',
-	summary: `${NODE} reserved at ${record.ip}`,
-	push: !NO_PUSH,
-});
+const landed = result.landed;
 if (landed.ok) log(landingLine(landed, { writer: 'lan-reserve' }));
 else log(`! the record for ${NODE} is NOT on main — ${landed.why}`);
 finish({ ok: landed.ok, node: NODE, written: true, record, landed }, landed.ok ? 0 : 1);

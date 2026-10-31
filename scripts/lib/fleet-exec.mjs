@@ -66,8 +66,11 @@ import { isGuestNode } from '../../dist/lib/node-role.js';
  * longer pays for a file it never reads. Do not re-freeze this into a `const`;
  * `manifest-path-is-lazy` in the test beside this file fails the build if you do.
  */
+/** The live fleet manifest's filename — the one place a script spells it (F1). */
+export const MANIFEST_FILE = 'fleet-runner-manifest.json';
+
 export function manifestPath() {
-	return manifestFile('fleet-runner-manifest.json');
+	return manifestFile(MANIFEST_FILE);
 }
 
 /** This box's raw `os.hostname()`. Reported, never compared — use {@link isLocalNode}. */

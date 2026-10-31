@@ -1,11 +1,7 @@
 {
   "F1": [
     "scripts/benchmark-fleet.mjs:doc#1",
-    "scripts/bootcamp.mjs:mp#1",
     "scripts/check-label-floor.mjs:MANIFEST#1",
-    "scripts/enroll-node.mjs:INCLUDE_GUESTS#1",
-    "scripts/enroll-node.mjs:MANIFEST#2",
-    "scripts/lan-reserve.mjs:MANIFEST#1",
     "scripts/node-users-cutover.mjs:MANIFEST#1",
     "scripts/node-users-cutover.mjs:p#2"
   ],
@@ -22,17 +18,14 @@
     "src/runners/hosting-record.ts:tmp#1"
   ],
   "F3-non-atomic": [
-    "scripts/bootcamp.mjs:rendered#1",
     "scripts/check-tool-inventory.mjs:merged#1",
     "scripts/check-tool-inventory.mjs:snapshot#2",
     "scripts/ci-watch.mjs:serialised#1",
     "scripts/converge-toolchain.mjs:tunnelRun#1",
     "scripts/enroll-node.mjs:block#1",
-    "scripts/enroll-node.mjs:rendered#2",
     "scripts/fleet-inventory.mjs:shrink#1",
     "scripts/floor-probe.mjs:expiresAtMs#1",
     "scripts/join-workload-benchmark.mjs:report#1",
-    "scripts/lan-reserve.mjs:rendered#1",
     "scripts/lib/refresh-cycle.mjs:log#1",
     "scripts/lib/slice-inventory-run.mjs:m#1",
     "scripts/node-status.mjs:document#3",
@@ -40,7 +33,6 @@
     "scripts/node-status.mjs:prev#2",
     "scripts/node-users-cutover.mjs:rendered#1",
     "scripts/prove-job.mjs:outFile#1",
-    "scripts/provision-fleet.mjs:rendered#1",
     "scripts/reconcile-fleet-runners.mjs:shrink#1",
     "scripts/service-inventory.mjs:merged#1",
     "scripts/version-bump.mjs:patched#1",

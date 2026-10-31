@@ -121,6 +121,15 @@ export const LAYER_MAP = [
 	{ glob: 'src/job-rollup-store.ts', layer: 'state' },
 	{ glob: 'scripts/lib/enrollment-record.mjs', layer: 'state' },
 	{ glob: 'scripts/lib/job-proof-record.mjs', layer: 'state' },
+	// The transactional writer of fleet-runner-manifest.json (wave 5c F4). The
+	// "one declared writer, read back by something else" state pattern rule 3
+	// describes — the same reason drain.ts/hosting-record.ts above are `state`
+	// rather than their directory's domain — not `access` like
+	// `manifest-target.mjs`: THAT file is the generic "commit onto another
+	// system's repo" mechanism (shared with benchmark/doctor/node-users-cutover),
+	// while this one is the domain-specific record of placement/capability
+	// facts every reader in `src/lib/manifest.ts` consumes.
+	{ glob: 'scripts/lib/manifest-edit.mjs', layer: 'state' },
 
 	// ------------------------------------------------------------- composition
 	{ glob: 'src/index.ts', layer: 'composition' },

@@ -134,7 +134,7 @@
 import { canaryPlan, OWN_DRAIN_REASON_PREFIX, underIdleHold } from './lib/proof-drain.mjs';
 import { carryMeasurements, measuredValue, parseLoad } from './lib/idle-measure.mjs';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, copyFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -142,6 +142,7 @@ import process from 'node:process';
 import {
 	loadManifest,
 	machineArg,
+	manifestPath,
 	runOn,
 	selectMachines,
 	separateCiUser,
@@ -157,7 +158,7 @@ import {
 } from '../dist/capabilities.js';
 import { isGuestNode } from '../dist/lib/node-role.js';
 import { readProof } from '../dist/lib/measured.js';
-import { manifest as manifestPath, stateDir } from './lib/paths.mjs';
+import { stateDir } from './lib/paths.mjs';
 import {
 	applyVerdicts,
 	readRevocations,
@@ -166,8 +167,8 @@ import {
 import { describeProof, proofKey, readProofs } from './lib/job-proof-record.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { dataEndpointUrl, probeScript, serviceStateRoot, unprobed } from './lib/probe-script.mjs';
-import { renderJson } from './lib/prettier-json.mjs';
-import { landWrite, landingLine, refusalLine, writeTarget } from './lib/manifest-target.mjs';
+import { landingLine } from './lib/manifest-target.mjs';
+import { manifestEdit } from './lib/manifest-edit.mjs';
 import { sameCapabilityRecord } from './lib/bootcamp-required.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 import {
@@ -1236,84 +1237,100 @@ if (WRITE) {
 	// node, so routing on it says nothing) and which re-introduces exactly the
 	// hand-declared labels the 2026-09-07 "derived, never declared" decision
 	// removes.
-	const mp = manifestPath('fleet-runner-manifest.json');
-	// ASKED BEFORE ANYTHING IS WRITTEN, because the refusal this most needs to
+	const mp = manifestPath();
+	let recorded = 0;
+	// CHANGED, not merely re-probed. See the `sameCapabilityRecord` block below.
+	let changed = 0;
+	const at = new Date().toISOString();
+	// `manifestEdit` (scripts/lib/manifest-edit.mjs, wave 5c F4) owns: asking
+	// `writeTarget` BEFORE anything is written (the refusal this most needs to
 	// make — the deploy tree — is one where the write SUCCEEDS and is erased
-	// later. See `lib/manifest-target.mjs`: a read-back cannot catch that, only
-	// refusing the target can.
-	const target = writeTarget(mp);
-	if (!target.ok) {
-		log(refusalLine(target, { writer: 'bootcamp', file: mp }));
-		findings++;
-		written = { ok: false, reason: `${target.reason}: ${target.why}` };
-	} else {
-		const raw = JSON.parse(readFileSync(mp, 'utf8'));
-		let recorded = 0;
-		// CHANGED, not merely re-probed. See the `sameCapabilityRecord` block below.
-		let changed = 0;
-		const at = new Date().toISOString();
-		for (const [name, r] of Object.entries(report)) {
-			const node = raw.machines?.[name];
-			if (!node) continue;
-			// THE SUPPLY LEDGER'S CAPABILITY FACET — P1.1. `$benchmark` (fleet
-			// benchmark) and `$measured` (fleet enroll) already write a
-			// `{at, by, ...}` block straight onto this same machine entry; nothing
-			// did that for what bootcamp proves, so the earned/blocked/unprobed
-			// verdict lived only in a run's stdout and the manifest kept the
-			// labels a human had asserted, with no record of when — or whether —
-			// they were last checked. This is written for EVERY node this run
-			// could reach, not only the ones with something new to report, because
-			// it is a snapshot of what the probe found, not a diff. A node this
-			// run could not reach keeps whatever `$capabilities` it already had
-			// rather than being overwritten with silence — "I could not look" must
-			// not read as "nothing is here". See
-			// docs/planning/supply-ledger-2026-09-07.md.
-			const prev = node.$capabilities;
-			// THE IDLE MEASUREMENT BEHIND EACH IDLE-ONLY VERDICT (2026-10-10):
-			// `{ value, idle: true, earned, at }`, so a reader can tell an earn
-			// taken on a quiet node from one that predates the rule (no entry). It
-			// moves only when the verdict does — `carryMeasurements` says why
-			// (#59) — and an unjudged run leaves it exactly as it was.
-			const measurements = carryMeasurements(prev, r.measuredIdle, at);
-			const record = {
-				at,
-				by: 'fleet bootcamp',
-				declared: r.declared,
-				earned: r.earned,
-				unclaimed: r.unclaimed,
-				unearned: r.unearned,
-				blocked: r.blocked,
-				prereqs: r.prereqs,
-				unprobed: r.unprobed,
-				...(Object.keys(measurements).length ? { measurements } : {}),
-			};
-			// `at` MEANS "WHEN THIS FINDING LAST CHANGED", NOT "WHEN WE LAST LOOKED".
-			//
-			// Issue #59. The stamp above is fresh on every pass, so a node whose
-			// probe returned exactly what it returned last time still produced a
-			// changed file — and this writer LANDS ITS WRITES AS COMMITS on
-			// hadoku_site (`manifest-target.mjs`, and it has to: a write there that
-			// is not a commit is erased by the next redeploy). hadoku_site's
-			// `redeploy-mgmt-api.yml` filters on this exact path, so every
-			// no-op bootcamp restarted the production API. Observed on claw-9,
-			// 2026-09-23: `538c9d00` and `3faeb8fe`, eleven minutes apart, one
-			// changed line each, and the line was `at`.
-			//
-			// Carrying the PREVIOUS `at` forward when nothing else moved is what
-			// makes the write byte-identical, which is what makes `landWrite`
-			// report `unchanged` and commit nothing. "When did we last look" is
-			// still answered — on stdout, below, where a run's own bookkeeping
-			// belongs.
-			//
-			// AND THE GATE READS OBSERVED STATE, not this writer's intent
-			// (CLAUDE.md): the comparison is against what is ON DISK in the
-			// manifest, not against a record this process wrote earlier.
-			if (sameCapabilityRecord(prev, record)) record.at = prev.at;
-			else changed++;
-			node.$capabilities = record;
-			recorded++;
+	// later, and a read-back cannot catch that, only refusing the target can),
+	// a FRESH read, rendering through `renderJson` (#12), writing ATOMICALLY,
+	// reading back and comparing, and `landWrite`. This closure only decides
+	// WHAT changes and whether anything needs writing at all.
+	const result = await manifestEdit(
+		(raw) => {
+			for (const [name, r] of Object.entries(report)) {
+				const node = raw.machines?.[name];
+				if (!node) continue;
+				// THE SUPPLY LEDGER'S CAPABILITY FACET — P1.1. `$benchmark` (fleet
+				// benchmark) and `$measured` (fleet enroll) already write a
+				// `{at, by, ...}` block straight onto this same machine entry; nothing
+				// did that for what bootcamp proves, so the earned/blocked/unprobed
+				// verdict lived only in a run's stdout and the manifest kept the
+				// labels a human had asserted, with no record of when — or whether —
+				// they were last checked. This is written for EVERY node this run
+				// could reach, not only the ones with something new to report, because
+				// it is a snapshot of what the probe found, not a diff. A node this
+				// run could not reach keeps whatever `$capabilities` it already had
+				// rather than being overwritten with silence — "I could not look" must
+				// not read as "nothing is here". See
+				// docs/planning/supply-ledger-2026-09-07.md.
+				const prev = node.$capabilities;
+				// THE IDLE MEASUREMENT BEHIND EACH IDLE-ONLY VERDICT (2026-10-10):
+				// `{ value, idle: true, earned, at }`, so a reader can tell an earn
+				// taken on a quiet node from one that predates the rule (no entry). It
+				// moves only when the verdict does — `carryMeasurements` says why
+				// (#59) — and an unjudged run leaves it exactly as it was.
+				const measurements = carryMeasurements(prev, r.measuredIdle, at);
+				const record = {
+					at,
+					by: 'fleet bootcamp',
+					declared: r.declared,
+					earned: r.earned,
+					unclaimed: r.unclaimed,
+					unearned: r.unearned,
+					blocked: r.blocked,
+					prereqs: r.prereqs,
+					unprobed: r.unprobed,
+					...(Object.keys(measurements).length ? { measurements } : {}),
+				};
+				// `at` MEANS "WHEN THIS FINDING LAST CHANGED", NOT "WHEN WE LAST LOOKED".
+				//
+				// Issue #59. The stamp above is fresh on every pass, so a node whose
+				// probe returned exactly what it returned last time still produced a
+				// changed file — and this writer LANDS ITS WRITES AS COMMITS on
+				// hadoku_site (`manifest-target.mjs`, and it has to: a write there that
+				// is not a commit is erased by the next redeploy). hadoku_site's
+				// `redeploy-mgmt-api.yml` filters on this exact path, so every
+				// no-op bootcamp restarted the production API. Observed on claw-9,
+				// 2026-09-23: `538c9d00` and `3faeb8fe`, eleven minutes apart, one
+				// changed line each, and the line was `at`.
+				//
+				// Carrying the PREVIOUS `at` forward when nothing else moved is what
+				// makes the write byte-identical, which is what makes `manifestEdit`
+				// report `changed: false` and commit nothing. "When did we last look"
+				// is still answered — on stdout, below, where a run's own bookkeeping
+				// belongs.
+				//
+				// AND THE GATE READS OBSERVED STATE, not this writer's intent
+				// (CLAUDE.md): the comparison is against what is ON DISK in the
+				// manifest, not against a record this process wrote earlier.
+				if (sameCapabilityRecord(prev, record)) record.at = prev.at;
+				else changed++;
+				node.$capabilities = record;
+				recorded++;
+			}
+			return changed > 0;
+		},
+		{
+			target: mp,
+			writer: 'bootcamp',
+			// THE SUBJECT COUNTS WHAT MOVED. `${recorded}` here read "for 1 node(s)"
+			// on a commit whose only changed line was a timestamp (#59). Evaluated
+			// lazily — only once `changed` is known — because `manifestEdit` calls
+			// this after the closure above has run.
+			reason: () => `$capabilities for ${changed} node(s)`,
+			push: !NO_PUSH,
 		}
-		if (recorded && !changed) {
+	);
+	if ('ok' in result && result.ok === false) {
+		log(result.why);
+		findings++;
+		written = { ok: false, reason: `${result.reason}: ${result.why}` };
+	} else if (!result.changed) {
+		if (recorded) {
 			written = { ok: true, reason: 'unchanged' };
 			// RE-PROBED AND IDENTICAL. Not "nothing to write" — every node this run
 			// reached was read, and the record already in the manifest is the record
@@ -1327,63 +1344,35 @@ if (WRITE) {
 					`was last checked;\n` +
 					`  restamping it on every pass is what made an idempotent run redeploy mgmt-api (#59).`
 			);
-		} else if (recorded) {
-			// FORMATTED THE WAY THE OWNING REPO WOULD (#12), which is not optional for
-			// a file that lives in hadoku_site's checkout rather than this one.
-			//
-			// This wrote `JSON.stringify(raw, null, 2)` until 2026-09-14 — the same
-			// bypass #12 removed from `fleet benchmark --write` and `fleet doctor
-			// --write`, left in place here because each writer was individually
-			// correct about the facet it records. hadoku_site's prettier keeps a
-			// short array inline (`printWidth: 100`) and `JSON.stringify` expands
-			// every one of them, so a run that added eight `$capabilities` blocks
-			// rewrote hundreds of lines it had not touched, buried the record an
-			// operator is trying to review, and left that checkout failing its own
-			// `format:check`.
-			//
-			// `renderJson` never throws and never pretends: with no prettier
-			// resolvable from the target's tree it returns `formatter: null` and
-			// plain output, and the caller owes the operator that fact — losing a
-			// probe that cost seven boxes three minutes over a formatting problem
-			// would be the wrong trade, and so would claiming the write was clean.
-			const rendered = await renderJson(raw, mp);
-			copyFileSync(mp, `${mp}.bak`);
-			writeFileSync(mp, rendered.text);
-			// Read it back — a manifest the loader cannot parse takes the fleet
-			// down at the next tick, and checking costs nothing here. Same guard
-			// benchmark-fleet.mjs runs after its own write.
-			JSON.parse(readFileSync(mp, 'utf8'));
-			log(
-				`\n✓ wrote ${changed} changed capability record(s) of ${recorded} re-probed — ` +
-					'`$capabilities` only, never `labels`; backup alongside the manifest'
-			);
-			if (rendered.formatter) log(`  formatted by ${rendered.formatter}`);
-			else
-				log(
-					`  ! UNFORMATTED: no prettier could be resolved from ${mp}'s own tree, so this is plain\n` +
-						`    JSON.stringify output. The records are correct and saved; the owning repo's\n` +
-						`    format:check will very likely reject the file until it is run through prettier there.`
-				);
-			// AND NOW MAKE IT SURVIVE. Everything above — renderJson, the .bak, the
-			// parse-back — was already true of the write that was erased 40 seconds
-			// later on 2026-09-14. The commit is the only part of this that a
-			// redeploy cannot undo.
-			const landed = landWrite(mp, {
-				writer: 'bootcamp',
-				// THE SUBJECT COUNTS WHAT MOVED. `${recorded}` here read "for 1 node(s)"
-				// on a commit whose only changed line was a timestamp (#59).
-				summary: `$capabilities for ${changed} node(s)`,
-				push: !NO_PUSH,
-			});
-			log(landingLine(landed, { writer: 'bootcamp' }));
-			if (!landed.ok) findings++;
-			written = landed.ok
-				? { ok: true, reason: landed.reason ?? 'landed' }
-				: { ok: false, reason: `${landed.reason}: ${landed.why ?? ''}`.trim() };
 		} else {
 			log(`\n  nothing to write — no node reachable`);
 			written = { ok: false, reason: 'no node reachable' };
 		}
+	} else {
+		// FORMATTED THE WAY THE OWNING REPO WOULD (#12), which is not optional for
+		// a file that lives in hadoku_site's checkout rather than this one. See
+		// `manifest-edit.mjs` for why an unresolvable prettier degrades to plain
+		// output rather than throwing or claiming the write was clean.
+		log(
+			`\n✓ wrote ${changed} changed capability record(s) of ${recorded} re-probed — ` +
+				'`$capabilities` only, never `labels`'
+		);
+		if (result.formatter) log(`  formatted by ${result.formatter}`);
+		else
+			log(
+				`  ! UNFORMATTED: no prettier could be resolved from ${mp}'s own tree, so this is plain\n` +
+					`    JSON.stringify output. The records are correct and saved; the owning repo's\n` +
+					`    format:check will very likely reject the file until it is run through prettier there.`
+			);
+		// AND NOW MAKE IT SURVIVE. The commit is the only part of this that a
+		// redeploy cannot undo (the write that was erased 40 seconds later on
+		// 2026-09-14 had already done everything else right).
+		const landed = result.landed;
+		log(landingLine(landed, { writer: 'bootcamp' }));
+		if (!landed.ok) findings++;
+		written = landed.ok
+			? { ok: true, reason: landed.reason ?? 'landed' }
+			: { ok: false, reason: `${landed.reason}: ${landed.why ?? ''}`.trim() };
 	}
 }
 

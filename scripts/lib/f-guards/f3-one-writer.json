@@ -14,12 +14,7 @@
     "fleet-drain.json": ["scripts/lib/expected-down.mjs", "src/runners/drain.ts"],
     "fleet-hosting.json": ["src/runners/hosting-record.ts"],
     "fleet-runner-coverage.json": ["scripts/reconcile-fleet-runners.mjs"],
-    "fleet-runner-manifest.json": [
-      "scripts/bootcamp.mjs",
-      "scripts/enroll-node.mjs",
-      "scripts/lan-reserve.mjs",
-      "scripts/node-users-cutover.mjs"
-    ],
+    "fleet-runner-manifest.json": ["scripts/node-users-cutover.mjs"],
     "gh-budget.json": ["src/gh-budget.ts"],
     "hosting-converge-last.json": ["scripts/hosting-converge.mjs"],
     "hosting-demand.json": ["scripts/lib/hosting-demand.mjs"],
