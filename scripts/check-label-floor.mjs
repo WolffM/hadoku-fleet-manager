@@ -51,7 +51,6 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
-import { readDrains } from './lib/expected-down.mjs';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { writeFileAtomic } from '../dist/lib/atomic-json.js';
 import { hubRepoFull } from '../dist/lib/fleet-config.js';
@@ -61,9 +60,8 @@ import { BUILDER_LABEL } from '../dist/runners/census.js';
 import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import { isProofRunnerName } from '../dist/runners/prove-job.js';
 import { requiredIdentitySet, provesRequiredSet } from '../dist/lib/bootcamp-proof.js';
-import { probeableIds, eligibilityLabels } from '../dist/lib/capability-labels.js';
+import { probeableIds } from '../dist/lib/capability-labels.js';
 import { nodeOffer } from '../dist/lib/capability-offer.js';
-import { capability } from '../dist/lib/capability-registry.js';
 import {
 	ciRecords,
 	emptyRequiredSetReason,
@@ -71,9 +69,28 @@ import {
 	unprovenRequired,
 } from './lib/bootcamp-required.mjs';
 import { createEmitter } from './lib/emit.mjs';
-import { buildGateDoc } from './lib/gate-doc.mjs';
 import { mintsJitRunners } from '../dist/lib/node-role.js';
 import { observedDemand, workflowDemand } from './lib/runs-on-demand.mjs';
+import { offerersOf, causeFor, drainedNodeNames } from './lib/label-floor-check.mjs';
+import {
+	buildJsonDoc,
+	computeDerivationFailures,
+	checkUnread,
+	checkEmptyRoster,
+	checkNoWorkflows,
+	checkUnresolvable,
+	checkObservedError,
+	reportHistorical,
+	checkUnoffered,
+	checkMissing,
+	checkResidentFailures,
+	checkLedgerError,
+	checkLedgerMissing,
+	checkEmptyRequired,
+	checkRequiredGaps,
+	checkDerivationFailures,
+	reportSuccess,
+} from './lib/label-floor-gate.mjs';
 // The resident-floor's one `gh api` read, retried before it is called
 // could-not-look (#80) — moved to the shared module (plan §4.1 F2b), which
 // also carries `reconcile-fleet-runners.mjs`'s own copy of the same retry.
@@ -200,10 +217,6 @@ const holdings = Object.fromEntries(
 	])
 );
 
-function offerersOf(label) {
-	return Object.keys(manifest.machines ?? {}).filter((name) => holdings[name].includes(label));
-}
-
 /**
  * THE DERIVATION AND THE MINT MUST AGREE — issue #19, as a gate.
  *
@@ -239,133 +252,7 @@ function offerersOf(label) {
  *     reported too, EXCEPT for the labels a declaration was never supposed to
  *     carry — see `declarationIsRight` and `derivedByEarning`.
  */
-const ELIGIBILITY = new Set(eligibilityLabels());
-
-/**
- * THE TWO PLACES A DECLARATION IS RIGHT, and nothing else.
- *
- * Capabilities are DERIVED (operator, 2026-09-09) and question 3 above compares
- * the derivation against the declaration. A label the manifest is SUPPOSED to
- * declare therefore has to be exempt from that comparison, or the gate reports
- * the correct state as a disagreement — and it did, on `jit-canary`, the moment
- * `nodeOffer` stopped honouring declarations for anything a probe can settle.
- *
- * The exemption is read from the REGISTRY (`mintOnly`), never listed here: a
- * literal list in a gate is the third copy of a policy this repo has paid for
- * three times. `mintOnly` carries the reasoning.
- *
- * NARROW ON PURPOSE, IN TWO DIRECTIONS. It exempts the DECLARED-BUT-NOT-DERIVED
- * side only. The reverse — a mint-only label the derivation projects that the
- * manifest does NOT declare — is never exempt: the only way one reaches the
- * offer is through `earned`, and a probe cannot earn what minting proves. That
- * case has its own finding below (`mintOnlyEarned`), because a bootcamp record
- * claiming it is the record lying, not the declaration.
- *
- * `check-capability-schema` still refuses `jit-canary` on a node without
- * `ephemeral: true`, which is the failure a mint-only label actually has, and
- * the floor and unoffered checks above still see it.
- */
-function declarationIsRight(label) {
-	return capability(label)?.mintOnly === true;
-}
-
-/**
- * A label the derivation adds because the node EARNED it — the design, not a
- * disagreement.
- *
- * `cargo-bevy` is the case that exists, and the registry entry says why in its
- * own words: it is "routed by `nodeOffer`, so `machines[].labels` stays
- * untouched and the manifest cannot claim a speed the box has not
- * demonstrated". Four claws earned it on 2026-09-14 and this gate reported four
- * disagreements, because the only exemption on the `added` side was
- * ELIGIBILITY. The end state for every probe-settled label is exactly this:
- * present in `earned`, absent from `labels`.
- *
- * KEYED ON THIS NODE'S OWN `earned`, not on the capability alone. A probe-
- * verified label that appears in the offer WITHOUT the node having earned it
- * came from somewhere else and still fails — the exemption is "the probe put it
- * there", not "labels of this kind are never compared".
- *
- * The `lost` direction is deliberately NOT exempt: a manifest that DECLARES a
- * probe-verified label the record does not earn is the dangerous direction
- * (av1-nvenc on a node whose GPU cannot encode it) and must stay red.
- */
-function derivedByEarning(label, earned) {
-	if (!earned.has(label)) return false;
-	const cap = capability(label);
-	return cap?.surface === 'label' && cap.verify === 'probe';
-}
-const derivationFailures = [];
-for (const [name, m] of Object.entries(manifest.machines ?? {})) {
-	const rec = m.$capabilities;
-	if (!rec || !Array.isArray(rec.earned)) {
-		derivationFailures.push(
-			`${name} — cannot derive its label offer: ${
-				rec ? '`$capabilities` carries no `earned` array' : 'no `$capabilities` record at all'
-			}. ` +
-				`\`nodeOffer\` fell back to the manifest's declared labels ` +
-				`(${(m.labels ?? []).join(', ') || '(none)'}), which is the safe direction and not an ` +
-				`answer. Run \`fleet bootcamp --write\` against it.`
-		);
-		continue;
-	}
-	const earned = new Set(rec.earned);
-	const staleProof = (rec.prereqs ?? []).map((p) => p.id ?? p).filter((id) => !earned.has(id));
-	if (staleProof.length) {
-		derivationFailures.push(
-			`${name} — \`$capabilities.earned\` is [${rec.earned.join(', ')}] but the node PROVED ` +
-				`${staleProof.join(', ')}. That record was written by the pre-2026-09-10 producer, which ` +
-				`promoted only \`proven ∩ declared\` among probeable LABEL capabilities — so the field the ` +
-				`claw floor's eligibility input reads is empty on a node that passed every probe. Re-run ` +
-				`\`fleet bootcamp --write\`.`
-		);
-	}
-	// A MINT-ONLY LABEL IN `earned` IS THE RECORD LYING.
-	//
-	// `jit-canary` is proven by MINTING, so bootcamp has no probe that can put it
-	// there — a record that carries it was written by something that is not this
-	// bootcamp, or by one that promoted a declaration it read. Either way the
-	// field the claw floor ranks on now contains a capability nothing executed,
-	// and the fleet's one guarantee that the dispatcher works starts resting on a
-	// declaration again. This is the direction the marker EXISTS to catch; the
-	// declared-but-not-derived side it merely keeps quiet.
-	for (const l of rec.earned) {
-		if (!declarationIsRight(l)) continue;
-		derivationFailures.push(
-			`${name} — \`$capabilities.earned\` carries "${l}", which is MINT-ONLY: no probe can ` +
-				`prove it, so bootcamp cannot have earned it. A record that claims it turns the one ` +
-				`label that proves the dispatcher works back into a declaration. Re-run ` +
-				`\`fleet bootcamp --write\` against it and find out what wrote that record.`
-		);
-	}
-	const declared = m.labels ?? [];
-	const derived = holdings[name];
-	const lost = declared.filter((l) => !derived.includes(l) && !declarationIsRight(l));
-	// A mint-only label (`jit-canary`) is DERIVED from the node's facts by
-	// `nodeOffer` since 2026-10-09 — undeclared is the design, not a reader
-	// still reading `labels`.
-	const added = derived.filter(
-		(l) =>
-			!declared.includes(l) &&
-			!ELIGIBILITY.has(l) &&
-			!derivedByEarning(l, earned) &&
-			!declarationIsRight(l)
-	);
-	for (const l of lost) {
-		derivationFailures.push(
-			`${name} — declares "${l}" and its derived offer does NOT carry it. A mint from the ` +
-				`manifest would project a label the node has not proven; the derivation refuses it. ` +
-				`bootcamp ${rec.at ?? '(undated)'} earned [${rec.earned.join(', ') || 'nothing'}].`
-		);
-	}
-	for (const l of added) {
-		derivationFailures.push(
-			`${name} — its derived offer carries "${l}" and the manifest does not declare it, so a ` +
-				`mint taken from the declared array alone would be missing it. Either the declaration ` +
-				`was removed without this package being deployed, or a reader still reads \`labels\`.`
-		);
-	}
-}
+const derivationFailures = computeDerivationFailures(manifest, holdings);
 
 /**
  * EVERY LABEL TRANSITION SINCE THIS GATE LAST RAN — node, label, gained or
@@ -412,46 +299,6 @@ if (existsSync(HOLDINGS_PATH)) {
 	}
 }
 
-/** The bootcamp finding (or the declaration) that explains a node's label. */
-function causeFor(node, label) {
-	const m = manifest.machines?.[node];
-	if (!m) return { kind: 'node-removed', why: `${node} is no longer in the manifest` };
-	// `earned` FIRST, because it is the answer `nodeOffer` uses for anything a
-	// probe can settle. A label that is both declared and earned got onto the
-	// registration because the probe passed, and reporting the declaration as the
-	// cause would send an operator to the manifest to explain a transition the
-	// manifest did not cause.
-	if ((m.$capabilities?.earned ?? []).includes(label)) {
-		return { kind: 'earned', why: `earned in bootcamp — the probe for \`${label}\` passed` };
-	}
-	if ((m.labels ?? []).includes(label)) {
-		return { kind: 'declared', why: `declared in the manifest's \`labels\` array` };
-	}
-	const rec = m.$capabilities;
-	if (!rec) {
-		return {
-			kind: 'no-finding',
-			why: 'no bootcamp finding on record — run `fleet bootcamp --write`',
-		};
-	}
-	const blocked = (rec.blocked ?? []).map((b) => b.id ?? b);
-	const unprobed = rec.unprobed ?? [];
-	const prereqs = (rec.prereqs ?? []).map((p) => p.id ?? p);
-	return {
-		kind: 'bootcamp',
-		at: rec.at ?? null,
-		by: rec.by ?? null,
-		blocked,
-		unprobed,
-		prereqs,
-		why:
-			blocked.length || unprobed.length
-				? `bootcamp ${rec.at ?? '(undated)'} — blocked ${blocked.join(', ') || '(none)'}, ` +
-					`unprobed ${unprobed.join(', ') || '(none)'}`
-				: `bootcamp ${rec.at ?? '(undated)'} — proves ${prereqs.join(', ') || '(nothing required)'}`,
-	};
-}
-
 const transitions = [];
 if (previousHoldings) {
 	const nodes = [...new Set([...Object.keys(previousHoldings), ...Object.keys(holdings)])].sort();
@@ -459,10 +306,10 @@ if (previousHoldings) {
 		const before = new Set(previousHoldings[node] ?? []);
 		const after = new Set(holdings[node] ?? []);
 		for (const label of [...after].filter((l) => !before.has(l)).sort()) {
-			transitions.push({ node, label, change: 'gained', cause: causeFor(node, label) });
+			transitions.push({ node, label, change: 'gained', cause: causeFor(manifest, node, label) });
 		}
 		for (const label of [...before].filter((l) => !after.has(l)).sort()) {
-			transitions.push({ node, label, change: 'lost', cause: causeFor(node, label) });
+			transitions.push({ node, label, change: 'lost', cause: causeFor(manifest, node, label) });
 		}
 	}
 }
@@ -637,7 +484,7 @@ const dependencies = [...requested].sort();
  */
 const servedByMintOnly = new Set(
 	dependencies.filter((l) => {
-		const offerers = offerersOf(l);
+		const offerers = offerersOf(manifest, holdings, l);
 		return offerers.length > 0 && offerers.every((n) => mintsJitRunners(manifest.machines?.[n]));
 	})
 );
@@ -651,7 +498,7 @@ const servedByMintOnly = new Set(
  * failure gets: the more capabilities the fleet loses, the fewer dependencies
  * it would have had to floor.
  */
-const nothingOffers = dependencies.filter((l) => offerersOf(l).length === 0);
+const nothingOffers = dependencies.filter((l) => offerersOf(manifest, holdings, l).length === 0);
 
 /**
  * THE STATIC HALF OF THE DEMAND, PERSISTED FOR THE RUNTIME FLOOR.
@@ -769,17 +616,6 @@ for (const [name, m] of Object.entries(manifest.machines ?? {})) {
 	}
 }
 
-/**
- * Nodes held out of service, read exactly like `fleet drain` — this is a
- * standalone script with no in-process host to inject the path, so it resolves
- * the same two locations `drain-node.mjs` does. A parse failure THROWS: an
- * unreadable drain file must not read as "nothing is drained" and wave a
- * holder through that somebody has a screwdriver in.
- */
-function drainedNodeNames() {
-	return new Set(Object.keys(readDrains()));
-}
-
 const residentFailures = [];
 if (residentHolders.size) {
 	const drained = drainedNodeNames();
@@ -880,359 +716,85 @@ const contractVerdicts = Object.entries(manifest.machines ?? {})
 	.map(([name, m]) => ({ name, ...provesRequiredSet(m, requiredSet) }))
 	.sort((a, b) => a.name.localeCompare(b.name));
 
-/**
- * THE ONE STDOUT WRITE IN `--json` MODE.
- *
- * Every branch below already prints its diagnosis to STDERR and exits; this
- * adds the machine-readable half beside it without moving a single line of that
- * prose. `verdict` is what the gate concluded, `transitions` and `holdings`
- * ride on EVERY outcome — a demotion is exactly as worth reviewing on a run
- * that failed for some other reason.
- */
-function emitJson(verdict, extra = {}) {
-	// `if (JSON_OUT) { ... }`, not an early-return guard: `json-contract.mjs`'s
-	// `emitsJson` structural check (wave 5i lane B put this sub under
-	// contract) looks for the positive branch, the same idiom every other
-	// migrated gate uses.
-	if (JSON_OUT) {
-		emitter.emit({
-			ok: verdict === 'ok',
-			verdict,
-			dependencies,
-			unoffered,
-			missing,
-			servedByMintOnly: [...servedByMintOnly],
-			runtimeWatched: [...runtimeWatched],
-			floorDemandPath: FLOOR_DEMAND_PATH,
-			floorDemandWriteError,
-			persistedStaticError,
-			unread,
-			noWorkflows,
-			unresolvable,
-			demandSources,
-			historical: historical.map((l) => ({
-				label: l,
-				observed: demandSources[l].observed,
-				lastObserved: observed?.last.get(l) ?? null,
-			})),
-			observedRows: observed?.rows ?? null,
-			observedMalformed: observed?.malformed ?? null,
-			observedError,
-			transitions,
-			holdings,
-			holdingsPath: HOLDINGS_PATH,
-			holdingsError,
-			requiredSet: [...requiredSet].sort(),
-			derivationFailures,
-			contractVerdicts,
-			eligible: eligibleNodes,
-			disqualified: disqualifiedNodes,
-			unverified: unverifiedNodes,
-			held: emitter.held(),
-			...extra,
-			// GateDoc (wave 5i lane B). `ok` is pinned to `verdict` explicitly —
-			// the SAME source of truth every branch below already used for its
-			// exit code — rather than left to `buildGateDoc`'s own array-emptiness
-			// default, so a branch that pushed nothing into either array (there is
-			// none today) could never silently read as a clean pass.
-			...buildGateDoc({ findings: gateFindings, unreadable: gateUnreadable, ok: verdict === 'ok' }),
-		});
-	}
-}
-
-// A repo not on disk is a repo whose labels were NOT READ, and a gate that could
-// not look must never report success — that is how this one passed on its first
-// run having examined a single repository. Reported as a failure, with the
-// resolved path, so the cause is visible rather than inferred.
-if (unread.length) {
-	console.error(`✗ ${unread.length} fleet repo(s) whose shipped workflows could not be read:`);
-	for (const name of unread) console.error(`  ${name}: ${unreadWhy.get(name)}`);
-	console.error(
-		`\n  This gate reads workflow labels from each repo's default branch. Unreadable ones\n` +
-			`  mean their labels were not examined, so a pass here would be meaningless.`
-	);
-	for (const name of unread) gateUnreadable.push({ node: name, why: unreadWhy.get(name) });
-	emitJson('unread');
-	process.exit(1);
-}
-// AN EMPTY ROSTER READ ONLY THE SITE, and passed. The coverage file is
-// generated; one that lists no repo is a failed generation, not a fleet with
-// one repo in it.
-if (!coveredRepos.length) {
-	console.error(
-		`✗ ${COVERAGE} lists no covered repos — this gate would have read only the site checkout\n` +
-			`  and called that the fleet's demand. Regenerate it with \`fleet reconcile --write-coverage\`.`
-	);
-	gateFindings.push({
-		node: null,
-		kind: 'empty-roster',
-		reason: `${COVERAGE} lists no covered repos`,
-	});
-	emitJson('empty-roster');
-	process.exit(1);
-}
-if (noWorkflows.length) {
-	console.error(
-		`✗ ${noWorkflows.length} covered repo(s) ship no .github/workflows on their default branch:\n` +
-			`  ${noWorkflows.join(', ')}\n\n` +
-			`  A covered repo is covered because its workflows run on the fleet, so its demand\n` +
-			`  was not read.`
-	);
-	// Could not look, by this gate's own reasoning above: a missing workflows
-	// directory on a covered repo's default branch is "the same 'could not
-	// look' as an unreadable repo", never a finding.
-	for (const name of noWorkflows)
-		gateUnreadable.push({ node: name, why: 'ships no .github/workflows on its default branch' });
-	emitJson('no-workflows');
-	process.exit(1);
-}
-if (unresolvable.length) {
-	console.error(`✗ ${unresolvable.length} job(s) whose \`runs-on\` resolves to no label:\n`);
-	for (const u of unresolvable) console.error(`  unresolvable runs-on in ${u}`);
-	console.error(
-		`\n  A \`runs-on\` this gate cannot read is demand it did not count. It is a finding, not\n` +
-			`  "this job asks for nothing" — a scope that shrinks on a shape the reader does not\n` +
-			`  know is how the old reader missed \`jdk21\` and \`cargo-bevy\`. Teach\n` +
-			`  scripts/lib/runs-on-demand.mjs the shape, or write the labels as a JSON array literal.`
-	);
-	// A finding, not "could not look" — this file's own comment above.
-	for (const u of unresolvable)
-		gateFindings.push({
-			node: null,
-			kind: 'unresolvable-runs-on',
-			reason: `unresolvable runs-on in ${u}`,
-		});
-	emitJson('unresolvable-runs-on');
-	process.exit(1);
-}
-if (observedError) {
-	console.error(`✗ observed demand: ${observedError}.`);
-	console.error(
-		`\n  The labels jobs actually requested are half of this gate's scope; without them only\n` +
-			`  the static read of the workflows counts, and a \`runs-on\` resolved at run time is\n` +
-			`  invisible. Point HADOKU_STATE_DIR at mgmt-api's state directory.`
-	);
-	gateUnreadable.push({ node: null, why: `observed demand: ${observedError}` });
-	emitJson('observed-unreadable');
-	process.exit(1);
-}
-if (historical.length) {
-	log(
-		`historical demand only (${historical.length}) — nothing offers it and no shipped workflow asks for it:`
-	);
-	for (const l of historical) {
-		log(
-			`  "${l}" — ${demandSources[l].observed} job(s) in ${RETENTION_DAYS}d, last ${observed?.last.get(l) ?? '?'}; ` +
-				`ages out of the window`
-		);
-	}
-}
-if (unoffered.length) {
-	console.error(`\u2717 ${unoffered.length} routing dependency NOTHING in the fleet offers:\n`);
-	for (const l of unoffered) {
-		console.error(
-			`  "${l}" \u2014 a covered repo's workflow asks for it and no machine declares it,\n` +
-				`    earned it in bootcamp, or is eligible for it. A job on this label is not\n` +
-				`    slow, it is UNPLACEABLE \u2014 it queues until somebody cancels it, which is the\n` +
-				`    854 minutes hadoku-games-host sat for 32 seconds of work.`
-		);
-	}
-	console.error(
-		`\n  Fix: give a machine the capability (\`fleet bootcamp --write\` once it can prove it),\n` +
-			`  or stop the workflow asking for it. This gate deliberately does NOT drop the label\n` +
-			`  from its dependency set just because nothing offers it \u2014 that is how a gate gets\n` +
-			`  easier to pass the worse the fleet gets.`
-	);
-	for (const l of unoffered)
-		gateFindings.push({
-			node: null,
-			kind: 'unoffered',
-			reason: `"${l}" — a covered repo's workflow asks for it and nothing in the fleet offers it`,
-		});
-	emitJson('unoffered');
-	process.exit(1);
-}
-if (missing.length) {
-	console.error(`✗ the runtime label floor will not see ${missing.length} routing dependency:\n`);
-	for (const l of missing) {
-		const asked = demandSources[l];
-		console.error(
-			`  "${l}" — requested (${asked.static.length} job(s) in workflows, ${asked.observed} ` +
-				`observed in ${RETENTION_DAYS}d) and offered by ${offerersOf(l).join(', ')}, but runner-health\n` +
-				`    watches observed demand plus ${FLOOR_DEMAND_PATH}, and this label is in neither, so\n` +
-				`    the last runner offering it can go dark with no alert. That is exactly how taskauto\n` +
-				`    queued for 6h45m on 2026-08-26.`
-		);
-	}
-	console.error(
-		`\n  Fix: the persisted static demand is ${
-			floorDemandWriteError
-				? `UNWRITABLE (${floorDemandWriteError})`
-				: persistedStaticError
-					? `unreadable (${persistedStaticError})`
-					: 'out of date'
-		}. Make ${FLOOR_DEMAND_PATH} writable and re-run.`
-	);
-	for (const l of missing)
-		gateFindings.push({
-			node: null,
-			kind: 'missing',
-			reason: `"${l}" is requested and offered but the runtime label floor will not see it`,
-		});
-	emitJson('missing');
-	process.exit(1);
-}
-if (residentFailures.length) {
-	console.error(`✗ resident backstop floor: ${residentFailures.length} problem(s):\n`);
-	for (const f of residentFailures) console.error(`  ${f}`);
-	console.error(
-		`\n  Fix: see "the resident backstop" in @wolffm/fleet-manager's docs/VOCABULARY.md\n` +
-			`  for how to move it — edit the two \`residentRepos\` entries, ` +
-			`\`fleet reconcile --confirm\`,\n  then verify against the GitHub API, not the manifest.`
-	);
-	emitJson('resident-backstop', { residentFailures });
-	process.exit(1);
-}
-if (ledgerError) {
-	console.error(`✗ could not read the demand ledger: ${ledgerError}`);
-	console.error(
-		`\n  \`hadoku-builder\`'s required set is derived from ` +
-			`${join(stateDir(), 'demand-ledger.jsonl')}, and a ledger this gate cannot fully\n` +
-			`  parse must not silently under-count demand and pass. Fix or regenerate it with\n` +
-			`  \`fleet tool-inventory --write\`.`
-	);
-	gateUnreadable.push({ node: null, why: `could not read the demand ledger: ${ledgerError}` });
-	emitJson('ledger-unreadable', { ledgerError });
-	process.exit(1);
-}
-if (!ledgerRecords) {
-	console.error(`✗ no demand ledger at ${join(stateDir(), 'demand-ledger.jsonl')}`);
-	console.error(
-		`\n  \`hadoku-builder\`'s required set (P1.2/P1.3) is derived from it, and this gate\n` +
-			`  cannot check the required-set floor without it. Run \`fleet tool-inventory --write\`\n` +
-			`  first.`
-	);
-	gateUnreadable.push({
-		node: null,
-		why: `no demand ledger at ${join(stateDir(), 'demand-ledger.jsonl')}`,
-	});
-	emitJson('ledger-missing');
-	process.exit(1);
-}
 // A LEDGER THAT PARSED AND ASKED FOR NOTHING IS THE THIRD CASE, and it used to
 // be the silent one: `unprovenRequired` returns `[]` for an empty set, so the
 // gap check below passed having checked nothing. Every node clears a bar of
 // zero. Settled in wave 3a — an empty required set is a failure, not a pass —
 // and it is now the SAME refusal the fast loop makes (`nodeFailsBootcamp`),
-// so the gate and the loop agree about a bar neither can enforce.
+// so the gate and the loop agree about a bar neither can enforce. MOVED UP
+// from between `checkLedgerMissing`/`checkEmptyRequired` — it is just a `ctx` field.
 const emptyRequired = emptyRequiredSetReason(requiredSet, {
 	path: join(stateDir(), 'demand-ledger.jsonl'),
 	records: ledgerRecords,
 });
-if (emptyRequired) {
-	console.error(`✗ ${emptyRequired}`);
-	gateFindings.push({ node: null, kind: 'required-set-empty', reason: emptyRequired });
-	emitJson('required-set-empty', { emptyRequired });
-	process.exit(1);
+
+// ONE CONTEXT OBJECT, handed into each guard EXPLICITLY — never a reverse import (see gate.mjs).
+const ctx = {
+	emitter,
+	JSON_OUT,
+	log,
+	gateFindings,
+	gateUnreadable,
+	COVERAGE,
+	manifest,
+	holdings,
+	eligibleNodes,
+	unverifiedNodes,
+	disqualifiedNodes,
+	HOLDINGS_PATH,
+	holdingsError,
+	transitions,
+	coveredRepos,
+	demandSources,
+	unread,
+	unreadWhy,
+	noWorkflows,
+	unresolvable,
+	observed,
+	observedError,
+	dependencies,
+	servedByMintOnly,
+	FLOOR_DEMAND_PATH,
+	historical,
+	unoffered,
+	floorDemandWriteError,
+	persistedStaticError,
+	runtimeWatched,
+	missing,
+	residentHolders,
+	residentFailures,
+	ledgerRecords,
+	ledgerError,
+	requiredSet,
+	knownProbeableIds,
+	requiredGaps,
+	contractVerdicts,
+	emptyRequired,
+	derivationFailures,
+};
+
+// `--json`'s emit-and-exit: every guard calls `ctx.finish`. The literal
+// `if (JSON_OUT) emitter.emit(...)` HERE, not in `buildJsonDoc` (a pure
+// builder), is what json-contract.test.mjs's `emitsJson` scans THIS file for.
+function finish(verdict, extra) {
+	if (JSON_OUT) emitter.emit(buildJsonDoc(ctx, verdict, extra));
+	if (verdict !== 'ok') process.exit(1);
 }
-if (requiredGaps.length) {
-	console.error(`✗ ${requiredGaps.length} demanded capability no node proves:\n`);
-	for (const id of requiredGaps) {
-		console.error(
-			knownProbeableIds.has(id)
-				? `  "${id}" — the demand ledger says a covered repo's job needs it on the general\n` +
-						`    pool, and no node's \`fleet bootcamp --write\` finding proves it. That is\n` +
-						`    the shape of the 2026-09-02 claw-5/claw-6 outage: registered, carrying\n` +
-						`    hadoku-builder, no Python tool cache at all.`
-				: `  "${id}" — the demand ledger asks for it and NOTHING in src/capabilities.ts\n` +
-						`    registers it, so no probe can ever prove it. Both python-toolcache/\n` +
-						`    playwright/ffmpeg started exactly here before a job died on them.`
-		);
-	}
-	console.error(
-		`\n  Fix: run \`fleet bootcamp --write\` on a node that should carry it, or — if it is\n` +
-			`  genuinely new — register it in src/capabilities.ts and add it to\n` +
-			`  \`toolchain.capabilities\` in fleet-runner-manifest.json.`
-	);
-	for (const id of requiredGaps)
-		gateFindings.push({
-			node: null,
-			kind: 'required-gap',
-			reason: `"${id}" is demanded and no node proves it`,
-		});
-	emitJson('required-gap', { requiredGaps });
-	process.exit(1);
-}
-if (derivationFailures.length) {
-	console.error(
-		`\u2717 the derived label offer and the manifest disagree on ${derivationFailures.length} point(s):\n`
-	);
-	for (const f of derivationFailures) console.error(`  ${f}`);
-	console.error(
-		`\n  WHY THIS FAILS THE GATE (issue #19). The manifest's \`labels\` array is the JIT\n` +
-			`  mint's label WRITER \u2014 fleet-loop -> ephemeral-tick -> dispatch-pass ->\n` +
-			`  mintLabels() \u2014 and it is ALSO read by placement and by floor-probe. Since\n` +
-			`  2026-09-10 src/capabilities.ts's \`nodeOffer\` derives that set from\n` +
-			`  \`$capabilities.earned\` instead. If the two disagree, one of them is wrong about\n` +
-			`  what GitHub will see, and the symptom is jobs queueing silently while this gate\n` +
-			`  reports a healthy fleet \u2014 which is exactly what it did on a stripped manifest\n` +
-			`  before this check existed.\n\n` +
-			`  Fix: run \`fleet bootcamp --write\` against the node(s) named above, then re-run.`
-	);
-	for (const f of derivationFailures)
-		gateFindings.push({ node: null, kind: 'derivation-disagreement', reason: f });
-	emitJson('derivation-disagreement', { derivationFailures });
-	process.exit(1);
-}
-log(
-	`✓ label floor covers every routing dependency: ${dependencies.join(', ') || '(none)'}` +
-		`\n  floor model: each is served by a standing online runner OR an eligible minting node that offers it:` +
-		dependencies
-			.map((l) => {
-				const offerers = offerersOf(l);
-				const minting = offerers.filter((n) => mintsJitRunners(manifest.machines?.[n]));
-				const standing = offerers.filter((n) => !minting.includes(n));
-				return `\n    ${l}: standing ${standing.join(', ') || '(none)'}; minting ${minting.join(', ') || '(none)'}`;
-			})
-			.join('') +
-		(residentHolders.size
-			? `\n  (resident backstop: ${[...residentHolders].map(([r, h]) => `${r} on ${h.join('+')}`).join(', ')})`
-			: '') +
-		(servedByMintOnly.size
-			? `\n  served by minting alone, by decision (#120): ${[...servedByMintOnly].sort().join(', ')}`
-			: '') +
-		`\n  required set (from the demand ledger): ${[...requiredSet].sort().join(', ') || '(none)'}` +
-		(eligibleNodes.length
-			? `\n  ${BUILDER_LABEL} — which nodes hold it and WHY:\n` +
-				eligibleNodes
-					.sort((a, b) => a.name.localeCompare(b.name))
-					.map((n) => `    ${n.name}: proves ${n.prereqs.join(', ') || '(nothing required)'}`)
-					.join('\n')
-			: '') +
-		(disqualifiedNodes.length
-			? `\n  ${BUILDER_LABEL} — disqualified:\n` +
-				disqualifiedNodes
-					.sort((a, b) => a.name.localeCompare(b.name))
-					.map(
-						(n) =>
-							`    ${n.name}: blocked ${n.blocked.join(', ') || '(none)'}, unprobed ${n.unprobed.join(', ') || '(none)'}`
-					)
-					.join('\n')
-			: '') +
-		(unverifiedNodes.length
-			? `\n  ${BUILDER_LABEL} — no recorded finding yet (run \`fleet bootcamp --write\`): ` +
-				unverifiedNodes.sort().join(', ')
-			: '') +
-		// THE CONSUMER CONTRACT, evaluated per node on live data. The rule is
-		// settled and enforced by the fast loop (see `contractVerdicts`); this is
-		// where the verdict is visible on live data before the next tick acts.
-		(contractVerdicts.length
-			? `\n  consumer contract (a node carries ${BUILDER_LABEL} iff it proves the required set):\n` +
-				contractVerdicts.map((v) => `    ${v.name}: ${v.ok ? 'proves it' : v.reason}`).join('\n') +
-				`\n    ENFORCED by the fast loop since wave 3c §G — \`nodeFailsBootcamp\` asks this` +
-				`\n    same predicate, so a node reported here as not proving it is demoted on the` +
-				`\n    next tick. A node with NO recorded finding still fails OPEN, by design, and` +
-				`\n    is listed above under "no recorded finding yet".`
-			: '')
-);
-emitJson('ok');
+ctx.finish = finish;
+
+// Each guard: `if (condition) { diagnose; ctx.finish(...); }`, inline once, now in lib/label-floor-gate.mjs.
+checkUnread(ctx);
+checkEmptyRoster(ctx);
+checkNoWorkflows(ctx);
+checkUnresolvable(ctx);
+checkObservedError(ctx);
+reportHistorical(ctx);
+checkUnoffered(ctx);
+checkMissing(ctx);
+checkResidentFailures(ctx);
+checkLedgerError(ctx);
+checkLedgerMissing(ctx);
+checkEmptyRequired(ctx);
+checkRequiredGaps(ctx);
+checkDerivationFailures(ctx);
+reportSuccess(ctx);

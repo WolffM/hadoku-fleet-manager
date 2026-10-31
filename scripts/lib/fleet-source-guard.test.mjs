@@ -24,7 +24,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** path -> why it may still name the sibling checkouts. */
 const ALLOWED = {
-	'scripts/check-header-fleet.mjs': '--worktree only: an operator auditing working copies',
+	'scripts/lib/header-source.mjs': '--worktree only: an operator auditing working copies',
 	'scripts/check-tier-fleet.mjs': '--worktree only: an operator auditing working copies',
 	'scripts/check-mf-externals.mjs': '--worktree only: an operator auditing working copies',
 	'scripts/check-contract-consumers.mjs':

@@ -48,6 +48,10 @@ import { cleanGitEnv } from './lib/test-git-identity.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'check-header-fleet.mjs');
+// `catalogue()` moved to lib/header-rules.mjs in wave 5m lane D's split #13
+// (pure move) — its own `readChildApps` import and function body now live
+// there, not in SCRIPT.
+const RULES_LIB = join(HERE, 'lib', 'header-rules.mjs');
 
 /** The ambient environment with every GIT_* variable removed — see
  *  lib/hook-safe-tests.test.mjs and lib/test-git-identity.mjs. */
@@ -389,9 +393,9 @@ test('#98: categories.json readable, child-apps.json missing, is still catalogue
 // `JSON.parse(readFile(site, 'scripts/child-apps.json'))` back and this goes
 // red even though the runtime test above still passes (see its own comment).
 test('#98: the catalogue reads child-apps.json through site-docs.mjs, not a bare JSON.parse', () => {
-	const src = readFileSync(SCRIPT, 'utf8');
-	assert.match(src, /import \{ readChildApps \} from '\.\/lib\/site-docs\.mjs';/);
-	const fn = src.slice(src.indexOf('function catalogue()'), src.indexOf('// ---- the catalogue'));
+	const src = readFileSync(RULES_LIB, 'utf8');
+	assert.match(src, /import \{ readChildApps \} from '\.\/site-docs\.mjs';/);
+	const fn = src.slice(src.indexOf('function catalogue()'), src.indexOf('/**\n * The `title`'));
 	assert.match(fn, /readChildApps\(\{\s*read:\s*\(file\)\s*=>\s*readFile\(site,\s*file\)\s*\}\)/);
 	assert.doesNotMatch(fn, /JSON\.parse\(readFile\(site, 'scripts\/child-apps\.json'\)\)/);
 });

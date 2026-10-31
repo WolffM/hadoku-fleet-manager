@@ -709,6 +709,36 @@ export const LAYER_MAP = [
 		domain: 'observation',
 		part: 'core',
 	},
+	// Split #13 (wave 5m lane D, pure move): check-header-fleet.mjs's per-repo
+	// rules, the allowlist loader and the uniform repo-reading layer it reads
+	// through. Same bucket as the CLI they were cut from — "observation:
+	// check-*" — since cut (iii) treats observation as one flat layer and
+	// core/run does not gate it there.
+	{ glob: 'scripts/lib/header-rules.mjs', layer: 'domain', domain: 'observation', part: 'core' },
+	{
+		glob: 'scripts/lib/header-allowlist.mjs',
+		layer: 'domain',
+		domain: 'observation',
+		part: 'core',
+	},
+	{ glob: 'scripts/lib/header-source.mjs', layer: 'domain', domain: 'observation', part: 'core' },
+	// Split #21 (wave 5m lane D, pure move): check-label-floor.mjs's small
+	// standalone offer/cause predicates, and — extended past the first pass to
+	// clear the operator's 800-line file-size ceiling — its derivation check,
+	// JSON emitter and exit-branch guards. Same bucket and same reasoning as
+	// the header-fleet split above.
+	{
+		glob: 'scripts/lib/label-floor-check.mjs',
+		layer: 'domain',
+		domain: 'observation',
+		part: 'core',
+	},
+	{
+		glob: 'scripts/lib/label-floor-gate.mjs',
+		layer: 'domain',
+		domain: 'observation',
+		part: 'core',
+	},
 
 	// Directory-level fallbacks, LAST: everything under src/runners/* or
 	// scripts/check-*.mjs not named explicitly above falls through to these.
