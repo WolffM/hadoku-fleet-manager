@@ -197,6 +197,17 @@ export function validateHostingRequest(raw) {
 		}
 	}
 
+	// `order`: the nodes this tenant wants, best first. A RANKING, not a filter —
+	// every rule still applies to a listed node, and an unlisted node that fits
+	// ranks after the list rather than never.
+	const order = pl.order ?? [];
+	if (
+		!Array.isArray(order) ||
+		!order.every((n) => typeof n === 'string' && /^[a-z][a-z0-9-]{0,30}$/.test(n)) ||
+		new Set(order).size !== order.length
+	)
+		bad('placement.order', 'a list of distinct node names, best first');
+
 	const iso = isObj(raw.isolation) ? raw.isolation : {};
 	if (iso.ciMayRead !== undefined && typeof iso.ciMayRead !== 'boolean')
 		bad('isolation.ciMayRead', 'true or false');
@@ -228,7 +239,12 @@ export function validateHostingRequest(raw) {
 				...(av.fence ? { fence: av.fence } : {}),
 				...(standby > 0 ? { standby } : {}),
 			},
-			placement: { require, prefer, ...(pl.auto === true ? { auto: true } : {}) },
+			placement: {
+				require,
+				prefer,
+				...(order.length ? { order } : {}),
+				...(pl.auto === true ? { auto: true } : {}),
+			},
 			// Defaults to false: a tenant has to SAY CI may read it.
 			isolation: iso.ciMayRead === true ? { ciMayRead: true } : { ciMayRead: false, advisoryUntil },
 			...(raw.contact ? { contact: raw.contact } : {}),

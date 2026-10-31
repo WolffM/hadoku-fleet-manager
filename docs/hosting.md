@@ -9,6 +9,12 @@ the fleet can also pick the nodes for a tenant's slices and meet its demand
 for them: see "Slices on demand" below. A tenant opts into that with
 `placement.auto: true`; without it, the fleet only plans.
 
+A tenant may also rank the nodes it wants with `placement.order`, best first
+(cardtable: `["claw-8", "claw-9", "claw-5"]`, its slowest claw last). The plan
+ranks listed nodes in that order ahead of everything else, and only then by CI
+cost. It is a ranking, not a filter: a listed node that fails a `require` rule
+is still refused, and an unlisted node that fits ranks after the list.
+
 The first tenant is hadoku-cardtable, which hosts Forge matches. Its request is
 `docs/requests/FLEET_MANAGER_FORGE_HOSTING.md` in that repo.
 

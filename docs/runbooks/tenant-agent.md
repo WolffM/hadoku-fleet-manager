@@ -74,7 +74,7 @@ Every `fleet …` command below is checked against `src/cli.ts`'s door table by
 
    `hosting-offers` measures every claw (hostable memory and cores, disk,
    link, CI's own cost, pm2 neighbours); `hosting-plan` ranks them against
-   this request's `placement.require`/`prefer` and its CI-may-read policy.
+   this request's `placement.require`/`order` and its CI-may-read policy.
    Neither command changes anything.
    Verify: at least one node is ranked and not refused. If every node is
    refused, read why before step 4 — a fit problem ("the declaration does not

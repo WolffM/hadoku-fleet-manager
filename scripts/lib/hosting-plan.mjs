@@ -26,8 +26,11 @@
  *
  * Placement rules are lib/hosting-placement.mjs's; this file only applies them.
  *
- * RANK among the claws that fit: cut over first, then the fewest CI jobs
- * lost, then the most memory left.
+ * RANK among the claws that fit: the tenant's own `placement.order` first —
+ * its listed nodes in the listed order, every unlisted one after them — then
+ * cut over first, then the fewest CI jobs lost, then the most memory left. An
+ * order is the tenant's judgement of its own workload (cardtable 2026-10-31:
+ * claw-8, then claw-9, then claw-5, slowest last), which CI cost cannot see.
  *
  * STANDBYS (`availability.standby`, docs/service-state.md) are planned as their
  * own entry. A slice whose record says `role: "standby"` is not one of the
@@ -113,10 +116,13 @@ export function planFor(request, offers) {
 	}
 
 	const lost = (r) => (r.ciJobs.before ?? 0) - (r.ciJobs.after ?? 0);
+	const order = placement.order ?? [];
+	const place = (r) => (order.includes(r.node) ? order.indexOf(r.node) : order.length);
 	const ranked = rows
 		.filter((r) => r.fits)
 		.sort(
 			(a, b) =>
+				place(a) - place(b) ||
 				Number(b.cutOver) - Number(a.cutOver) ||
 				lost(a) - lost(b) ||
 				(b.memoryLeftMb ?? 0) - (a.memoryLeftMb ?? 0)

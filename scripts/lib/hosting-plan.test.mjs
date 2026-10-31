@@ -59,6 +59,51 @@ test("cardtable's next slice: wired, bounded neighbours, one per node, ranked by
 	assert.match(why(plan, 'claw-6'), /drained \(maintenance\)/);
 });
 
+test("the tenant's placement.order outranks CI cost; an unlisted node that fits ranks after the list", () => {
+	const ordered = {
+		...CARDTABLE,
+		placement: { ...CARDTABLE.placement, order: ['claw-8', 'claw-9', 'claw-5'] },
+	};
+	const plan = planFor(ordered, [
+		// claw-5 loses the fewest CI jobs, which would rank it first without an order.
+		offer('claw-5', {
+			hostable: { memoryMb: 20000, cores: 7, diskFreeGb: 100 },
+			measured: { memTotalMb: 32000, nproc: 8 },
+		}),
+		offer('claw-7'),
+		offer('claw-9'),
+		offer('claw-8'),
+	]);
+	assert.deepEqual(nodes(plan), ['claw-8', 'claw-9', 'claw-5', 'claw-7']);
+});
+
+test('an order never lifts a rule: a listed node that fails one is still refused', () => {
+	const ordered = {
+		...CARDTABLE,
+		placement: { ...CARDTABLE.placement, order: ['claw-1', 'claw-8'] },
+	};
+	const plan = planFor(ordered, [offer('claw-1', { link: 'wifi' }), offer('claw-8')]);
+	assert.deepEqual(nodes(plan), ['claw-8']);
+	assert.match(why(plan, 'claw-1'), /fails "wired"/);
+});
+
+test('placement.order must be distinct node names', () => {
+	const raw = JSON.parse(
+		readFileSync(new URL('./fixtures/hosting-cardtable.json', import.meta.url), 'utf8')
+	);
+	for (const order of [['claw-8', 'claw-8'], 'claw-8', [8], ['Claw 8']]) {
+		const r = validateHostingRequest({ ...raw, placement: { ...raw.placement, order } });
+		assert.equal(r.ok, false, JSON.stringify(order));
+		assert.ok(r.problems.some((p) => p.path === 'placement.order'));
+	}
+	const good = validateHostingRequest({
+		...raw,
+		placement: { ...raw.placement, order: ['claw-8', 'claw-9', 'claw-5'] },
+	});
+	assert.deepEqual(good.request.placement.order, ['claw-8', 'claw-9', 'claw-5']);
+	assert.equal('order' in validateHostingRequest(raw).request.placement, false);
+});
+
 test('claw-4 rejoins once its pm2 is bounded (cardtable ruling 4)', () => {
 	const bounded = offer('claw-4', { pm2: { present: true, unbounded: [], unboundedMb: 0 } });
 	assert.deepEqual(nodes(planFor(CARDTABLE, [bounded])), ['claw-4']);
