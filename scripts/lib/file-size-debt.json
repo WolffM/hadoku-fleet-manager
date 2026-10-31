@@ -45,7 +45,6 @@
   "src/lib/capability-registry.ts": 1166,
   "src/lib/job-registry.ts": 973,
   "src/routes/fleet.ts": 988,
-  "src/runner-health.ts": 2930,
   "src/runners/backstop-decision.ts": 1049,
   "src/runners/dispatch-tick.ts": 1065,
   "src/runners/dispatch-warm-cache.ts": 1024,

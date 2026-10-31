@@ -565,7 +565,7 @@ export const LAYER_MAP = [
 
 	// ----------------------------------------------------------- domain: observation
 	{ glob: 'src/runners/census.ts', layer: 'domain', domain: 'observation', part: 'core' }, // §3.5 names this under observation despite the ci-scheduling directory
-	{ glob: 'src/runner-health.ts', layer: 'domain', domain: 'observation', part: 'run' },
+	{ glob: 'src/runner-health*.ts', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'src/runner-supervision.ts', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'src/ci-alerts.ts', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'src/label-floor.ts', layer: 'domain', domain: 'observation', part: 'core' },

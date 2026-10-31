@@ -31,7 +31,7 @@
     "retired-facets.json": ["scripts/retire-node.mjs"],
     "run-listing-marks.json": ["src/run-listing-gap.ts"],
     "runner-health-alerts.json": ["src/lib/alert-ledger.ts"],
-    "runner-health-snapshot.json": ["src/runner-health.ts"],
+    "runner-health-snapshot.json": ["src/runner-health-snapshot.ts"],
     "security-pending.json": ["scripts/check-fleet-preflight.mjs"],
     "snapshot.json": ["scripts/lib/herdr-fleet.mjs"],
     "tool-inventory-capabilities.json": ["scripts/check-tool-inventory.mjs"],
