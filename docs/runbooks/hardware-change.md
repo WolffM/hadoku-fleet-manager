@@ -100,14 +100,14 @@ Every `fleet …` command below is checked against `src/cli.ts`'s door table by
    node name — install, convert, reboot + Tailscale, capture — except at
    step 4, use `fleet enroll <node> --update` in place of `--write` (the
    node is already declared; `--update` is what refreshes an existing entry
-   without the "ALREADY in the manifest" refusal). Then repeat R1's steps 6
-   through 8 (toolpack, the node-users cutover if this node carries one,
-   `provision --confirm`) to re-earn everything a fresh root disk has no
+   without the "ALREADY in the manifest" refusal). Then repeat R1's steps 5
+   and 6 (the node-users cutover if this node carries one, then
+   `provision --confirm`, which also re-runs the toolpack) to re-earn everything a fresh root disk has no
    copy of. Nothing from before the swap — capabilities, caches, home
    toolchains — survives onto the new disk; `provision` re-derives all of
    it exactly as it would for a brand-new box, because to the filesystem,
    it is one.
-   Verify: R1's own step 8 verify (`fleet provision --machine <node>
+   Verify: R1's own step 6 verify (`fleet provision --machine <node>
 --verify-only` reports every step converged).
 
    **A GPU.** Nothing declares a GPU capability by hand — `av1-nvenc` /
@@ -203,7 +203,7 @@ min(4, floor((MemTotal-floor)/4096))`) is a reasonable starting point
   made.
 - After step 6: reversing it is the same hand-edit in the other direction;
   there is no automated undo because there was no automated application.
-- Mid-reimage (root-disk branch, after R1 steps 1–4 but before step 8
+- Mid-reimage (root-disk branch, after R1 steps 1–4 but before step 6
   completes): this is now R1's own rollback — a declared-but-unconverged
   node (still under its OLD name here, since this is a reimage, not a
   replacement) does not receive jobs; continue the chain or leave it drained

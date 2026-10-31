@@ -2,12 +2,13 @@
 
 Scenario #1 of `docs/planning/refactor-plan-2026-10-28.md` §5.3's catalogue.
 Written against `provision`'s CURRENT chain (`scripts/provision-fleet.mjs:19`
-onward: declare → converge → bootcamp → placement → register → throttle →
-slice → realize → benchmark → health). `lan-reserve`, `toolpack` and the
-node-users cutover are **explicit manual steps below** until
-`refactor-plan-2026-10-28.md` §5.4 folds them into `provision` (tracked
-there, not here — this runbook is written against today's behaviour and
-tightens as the code lands).
+onward: declare → lan-reserve → toolpack → node-users (printed reminder) →
+converge → bootcamp → placement → register → throttle → slice → realize →
+benchmark → health). Wave 5m lane B folded `lan-reserve --write` and
+`toolpack --confirm` into that chain (`refactor-plan-2026-10-28.md` §5.4);
+the **node-users cutover is still an explicit manual step below** — it is a
+different workstream's (d3's), and `provision` only ever PRINTS a reminder
+for it, never calls it.
 
 Every `fleet …` command below is checked against `src/cli.ts`'s door table by
 `scripts/lib/onboarding-docs.test.mjs`: a command this file prints that the
@@ -88,42 +89,9 @@ up` invocation it chose (tags come from the node's profile) at the end of
    Verify: `fleet enroll <node>` a second time reports the node already
    declared, not a fresh proposal.
 
-5. **LAN reservation** (manual until §5.4). Where: from the control host.
-   As: `fleet lan-reserve` connects as `admin`.
-   Command:
-
-   ```
-   fleet lan-reserve --machine <node>            # propose, read off the box
-   fleet lan-reserve --machine <node> --write    # record it
-   ```
-
-   hokon reaches every claw by a LAN IP in `~/.ssh/config`; without a gateway
-   reservation on record, that IP is a DHCP lease that can move under the
-   node (memory `lan-reservations`).
-   Verify: `fleet preflight` no longer lists `<node>` under
-   `lan-reservation`.
-
-6. **Toolchain floor** (manual until §5.4). Where: from the control host.
-   As: `fleet toolpack` connects as `admin`, installs as `ci` where the
-   instrument is CI-scoped.
-   Command:
-
-   ```
-   fleet toolpack                 # report gaps against the TOOLS floor
-   fleet toolpack --confirm       # install what is missing
-   ```
-
-   Run this **before** bootcamp (step 7, inside `provision`): bootcamp
-   proves a capability by executing it, and a probe run against a box
-   missing its toolchain floor fails the capability rather than reporting
-   "not yet installed" (memory `converge-toolchain`, the sibling check for
-   the package floor specifically).
-   Verify: `fleet toolpack` reports no gaps.
-
-7. **Node-users cutover** (manual until §5.4; owned by the node-users
-   workstream, d3). Where: from the control host. As: `fleet node-users`
-   connects as `admin`; the cutover itself creates and moves the node's `ci`
-   role user.
+5. **Node-users cutover** (manual; owned by the node-users workstream, d3).
+   Where: from the control host. As: `fleet node-users` connects as `admin`;
+   the cutover itself creates and moves the node's `ci` role user.
    Command:
 
    ```
@@ -133,11 +101,12 @@ up` invocation it chose (tags come from the node's profile) at the end of
 
    Until this runs, the node's CI jobs execute as `admin` — correct for a
    node mid-migration, not a target state (see `docs/VOCABULARY.md` §"Node
-   users").
+   users"). `provision` (next) prints a reminder of this exact step on every
+   run; it never calls it — that area is a different workstream's.
    Verify: `fleet node-users --machine <node>` reports the `ci` role present
    and not drifted.
 
-8. **Provision.** Where: from the control host. As: `fleet provision`
+6. **Provision.** Where: from the control host. As: `fleet provision`
    connects as both roles in turn, per internal step (declare as itself,
    converge/bootcamp as `ci`, placement/register/throttle/slice/realize as
    `admin`).
@@ -154,10 +123,33 @@ up` invocation it chose (tags come from the node's profile) at the end of
    `--write` and seeds remedies (`scripts/provision-fleet.mjs:788-862`).
    Without `--confirm` nothing is written anywhere; with it, the node is
    converged.
-   Verify: `fleet provision --machine <node> --verify-only` reports every
-   step converged.
 
-9. **Admit.** Nothing to run — this is the fast loop's own job
+   Since wave 5m lane B, the chain's own second and third steps absorb what
+   used to be two more hand commands here:
+
+   - **LAN reservation.** The chain records the node's gateway DHCP
+     reservation (`lan-reserve --write`) and re-reads it to verify, rather
+     than trusting its own write. It CANNOT make the reservation itself — no
+     code holds the gateway's admin credential (memory `lan-reservations`) —
+     so a dry run (`fleet provision --machine <node>`, no `--confirm`) prints
+     the exact MAC/IP to reserve if the gateway doesn't have it yet: do that
+     by hand (Advanced → DHCP Reservation → delete any Auto row for that MAC →
+     select the MAC → pick the address → Add) BEFORE re-running with
+     `--confirm`. hokon reaches every claw by this LAN IP in `~/.ssh/config`;
+     without the reservation on record, it is a DHCP lease that can move
+     under the node.
+   - **Toolchain floor.** The chain installs the benchmark instrument floor
+     (`toolpack --confirm`) and re-reads it to verify — fully automatic,
+     unlike the LAN step. It runs before bootcamp inside the chain
+     (memory `converge-toolchain`): bootcamp proves a capability by
+     executing it, and a probe run against a box missing this floor fails
+     the capability rather than reporting "not yet installed".
+
+   Verify: `fleet provision --machine <node> --verify-only` reports every
+   step converged; `fleet preflight` no longer lists `<node>` under
+   `lan-reservation`; `fleet toolpack <node>` reports no gaps.
+
+7. **Admit.** Nothing to run — this is the fast loop's own job
    (`nodeIsSafe`, `docs/VOCABULARY.md`'s ADMIT phase). Once provisioning
    above reports converged, the fast loop starts routing real CI to the node
    on its own next tick.
@@ -168,11 +160,11 @@ up` invocation it chose (tags come from the node's profile) at the end of
 
 - Before step 4 (`enroll --write`): nothing is declared. Wipe the box and
   start over, or walk away — the fleet has no record of it.
-- After step 4, before step 8 (`provision --confirm`): `fleet drain <node>
+- After step 4, before step 6 (`provision --confirm`): `fleet drain <node>
 --undo` is a no-op (nothing has ever scheduled to it); remove the manifest
   entry by hand if the node is being abandoned, or continue the chain later —
   a declared-but-unconverged node does not receive jobs.
-- After step 8: this is now R3's job. Drain it (`fleet drain <node> --reason
+- After step 6: this is now R3's job. Drain it (`fleet drain <node> --reason
 "<why>"`), then follow R3 to take it out cleanly rather than deleting
   manifest state out from under a node that may still have jobs assigned.
 
@@ -181,10 +173,14 @@ up` invocation it chose (tags come from the node's profile) at the end of
 - `scripts/lib/onboarding-docs.test.mjs` — every `fleet …` command printed
   above exists in the door's table (`src/cli.ts`'s `COMMANDS`), and the
   flagless `node-bootstrap.sh` invocation resolves against a fixture stick.
-- `scripts/lib/node-users-guard.test.mjs` — step 7 is read through the role,
+- `scripts/lib/node-users-guard.test.mjs` — step 5 is read through the role,
   never a user literal.
-- `fleet preflight` (nightly) — pages if step 5 (LAN reservation) is skipped
-  and the node is later admitted anyway.
+- `scripts/lib/onboarding-automation.test.mjs` — the chain's own `lan-reserve`
+  and `toolpack` steps (inside step 6) run in the order this runbook
+  documents, write/install only with `--confirm`, verify with an independent
+  re-read, and the `node-users` step is never spawned — only printed.
+- `fleet preflight` (nightly) — pages if the LAN reservation (step 6) is
+  skipped and the node is later admitted anyway.
 - `fleet drain-check` — catches a node this runbook's rollback drained but
   whose drain was never actually enforced.
 
@@ -196,10 +192,12 @@ in agent memory (plan §5.2, "runbooks drain agent memory"):
 - **Node names are immutable** — a replacement claw always increments
   (`claw-N+1`); a name is never reused (Preconditions, and R3).
 - **Seed the payload before flipping a node ephemeral** — `provision`'s
-  internal ordering (step 8 above) does this for you; never flip
+  internal ordering (step 6 above) does this for you; never flip
   `ephemeral` by hand ahead of it.
-- **LAN reservation** — step 5; a node without one is reachable until its
-  DHCP lease moves, silently, under a live fleet.
+- **LAN reservation** — step 6; a node without one is reachable until its
+  DHCP lease moves, silently, under a live fleet. Since wave 5m lane B the
+  chain records it for you; the gateway click itself still cannot be
+  automated — no code holds that credential.
 - **Mount the kit at `/mnt`**, never `/mnt/kit` — step 2's exact command.
 - **`journalctl --list-boots` first** — if step 3's reboot looks like it
   never happened, check boot history before any Linux-side theory; a box
@@ -207,6 +205,7 @@ in agent memory (plan §5.2, "runbooks drain agent memory"):
 - **`--help` can execute** — never run a step above with `--help` to "check"
   it; read this runbook or the script's own header instead. `reboot-claws
 --help` once rebooted a node.
-- **`converge-toolchain`/`toolpack` before bootcamp** — step 6 before step 8;
-  bootcamping a node with a missing instrument fails the capability instead
-  of reporting it as not-yet-installed.
+- **`converge-toolchain`/`toolpack` before bootcamp** — both run inside step
+  6's chain, in that order, ahead of bootcamp; bootcamping a node with a
+  missing instrument fails the capability instead of reporting it as
+  not-yet-installed.

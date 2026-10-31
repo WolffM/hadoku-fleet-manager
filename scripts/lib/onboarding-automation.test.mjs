@@ -34,6 +34,9 @@ test('the chain runs ENROLL FIRST, and only through provision — no sixth door'
 	// order asserted here is the order that runs.
 	const order = [
 		["id: 'declare'"],
+		["id: 'lan-reserve'"],
+		["id: 'toolpack'"],
+		["id: 'node-users'"],
 		["id: 'converge'"],
 		["id: 'bootcamp'"],
 		["id: 'placement'"],
@@ -57,6 +60,115 @@ test('the chain runs ENROLL FIRST, and only through provision — no sixth door'
 		1,
 		'provision-fleet.mjs must stay the single runner behind one subcommand'
 	);
+});
+
+test('lan-reserve and toolpack (R1 steps 5-6) run where the operator ran them by hand — between declare and converge, before provision ever reached bootcamp', () => {
+	// Wave 5m lane B: these were manual steps the operator ran between
+	// `enroll --write` and invoking `provision` at all; provision's own chain
+	// only ever started at `converge`. Folding them in keeps that order.
+	const src = read('scripts/lib/provision-plan.mjs') + read('scripts/lib/provision-phases.mjs');
+	const declareAt = src.indexOf("id: 'declare'");
+	const lanAt = src.indexOf("id: 'lan-reserve'");
+	const toolAt = src.indexOf("id: 'toolpack'");
+	const convergeAt = src.indexOf("id: 'converge'");
+	const bootcampAt = src.indexOf("id: 'bootcamp'");
+	assert.ok(
+		declareAt < lanAt && lanAt < toolAt && toolAt < convergeAt && convergeAt < bootcampAt,
+		'declare → lan-reserve → toolpack → converge → bootcamp, in that order in the chain table'
+	);
+	// Both spawn the real scripts, never a re-derived copy of what they do.
+	assert.ok(src.includes("resolve(HERE, 'lan-reserve.mjs')"), 'the chain must spawn lan-reserve');
+	assert.ok(src.includes("resolve(HERE, 'toolpack.mjs')"), 'the chain must spawn toolpack');
+	// lan-reserve is addressed by --machine (its own usage line); toolpack is
+	// POSITIONAL (`fleet toolpack [node...]`) — passing it `--machine` would be
+	// an unknown flag under its strict argv spec and exit 2 before it ever ran.
+	const phases = read('scripts/lib/provision-phases.mjs');
+	assert.match(phases, /'lan-reserve\.mjs'\), '--machine', node/);
+	assert.ok(
+		!/'toolpack\.mjs'\), '--machine'/.test(phases),
+		'toolpack takes the node POSITIONALLY, never --machine'
+	);
+});
+
+test('lan-reserve and toolpack each write/install only with --confirm, and VERIFY with an independent re-read afterwards', () => {
+	const phases = read('scripts/lib/provision-phases.mjs');
+	const lanPhase = phases.slice(
+		phases.indexOf('function lanReservePhase'),
+		phases.indexOf('function toolpackPhase')
+	);
+	// A dry run (no --confirm) never reaches --write.
+	assert.ok(lanPhase.indexOf('if (!confirm)') < lanPhase.indexOf("'--write'"));
+	// The write is followed by a SECOND, independent read — not the write's
+	// own exit code — exactly the "reader is not the writer" rule this file
+	// holds everywhere else.
+	const writeAt = lanPhase.indexOf("'--write'");
+	const secondReadAt = lanPhase.lastIndexOf("'--machine', node, '--json'");
+	assert.ok(secondReadAt > writeAt, "lan-reserve's verify re-reads after the write");
+
+	const toolPhase = phases.slice(
+		phases.indexOf('function toolpackPhase'),
+		phases.indexOf('function nodeUsersPrintPhase')
+	);
+	assert.ok(toolPhase.indexOf('if (!confirm)') < toolPhase.indexOf("'--confirm'"));
+	const installAt = toolPhase.indexOf("'--confirm'");
+	const verifyReadAt = toolPhase.lastIndexOf("node, '--json'");
+	assert.ok(verifyReadAt > installAt, "toolpack's verify re-reads after --confirm installs");
+});
+
+test('lan-reserve fast-forwards the manifest checkout before writing — it does not do so itself', () => {
+	// lan-reserve.mjs writes fleet-runner-manifest.json through manifestEdit
+	// directly and never fast-forwards its own checkout (unlike declare and
+	// placement inside this chain) — so, run as a chain step right after a
+	// SKIPPED declare (the common re-run case), it would hit the manual
+	// record's step 1 trap ("enroll refused to push: checkout behind origin")
+	// one layer down if this step did not fast-forward for it.
+	const lanSrc = read('scripts/lan-reserve.mjs');
+	assert.ok(
+		!/fastForwardManifest/.test(lanSrc),
+		'lan-reserve.mjs itself must not fast-forward — this chain step must do it instead'
+	);
+	const phases = read('scripts/lib/provision-phases.mjs');
+	const lanPhase = phases.slice(
+		phases.indexOf('function lanReservePhase'),
+		phases.indexOf('function toolpackPhase')
+	);
+	assert.match(lanPhase, /fastForwardManifest\(manifestPath\(\)\)/);
+	// Fast-forward happens AFTER deciding there is something to write, and
+	// BEFORE the write itself — never ahead of the read-only check, which
+	// would fast-forward even a node that has nothing owed.
+	const ffAt = lanPhase.indexOf('fastForwardManifest(');
+	const confirmAt = lanPhase.indexOf('if (!confirm)');
+	const writeAt = lanPhase.indexOf("'--write'");
+	assert.ok(confirmAt < ffAt && ffAt < writeAt);
+	// And the existing fast-forward count grows by one: declare, lan-reserve
+	// and placement all land writes now.
+	const allSrc = read('scripts/provision-fleet.mjs') + phases;
+	const ffCalls = allSrc.match(/fastForwardManifest\(/g) ?? [];
+	assert.ok(ffCalls.length >= 3, 'declare, lan-reserve and placement all fast-forward first');
+});
+
+test('the node-users cutover is a PRINTED reminder, and this chain never calls it', () => {
+	// d3's workstream owns the cutover; the chain must never spawn
+	// node-users.mjs or read any node-users state — only print a reminder.
+	const src = read('scripts/provision-fleet.mjs') + read('scripts/lib/provision-phases.mjs');
+	// The ACTUAL spawn shape every other step uses is `resolve(HERE, '<script>.mjs')`
+	// (register/throttle/slice/lan-reserve/toolpack all match it) — that is
+	// what must never name node-users, not the bare filename, which the
+	// surrounding prose is allowed to mention when explaining the refusal.
+	assert.ok(
+		!/resolve\(HERE, 'node-users/.test(src),
+		'provision must never spawn node-users.mjs — the cutover stays manual'
+	);
+	const phases = read('scripts/lib/provision-phases.mjs');
+	assert.match(phases, /function nodeUsersPrintPhase/);
+	const printPhase = phases.slice(
+		phases.indexOf('function nodeUsersPrintPhase'),
+		phases.indexOf('function convergePhase')
+	);
+	// It never spawns a child process.
+	assert.ok(!/run\(process\.execPath/.test(printPhase), 'node-users must only print, never run');
+	// And it can never be the reason the chain stops.
+	assert.match(printPhase, /return \{ status: 0 \}/);
 });
 
 test('the chain fixes what bootcamp reports and RE-RUNS bootcamp (the 3-6 loop)', () => {

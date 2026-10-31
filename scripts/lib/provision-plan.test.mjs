@@ -26,6 +26,8 @@ const {
 	flipDecision,
 	healthStep,
 	benchmarkStep,
+	lanReserveStep,
+	toolpackStep,
 	BENCHMARK_DUE_DAYS,
 	HEALTH_FRESH_DAYS,
 	VERIFY,
@@ -297,12 +299,108 @@ test('a report that could not be READ fails — it is never a silent skip', () =
 	assert.match(v.why, /no `due` list/);
 });
 
+// ── lanReserveStep — R1 step 5, now a chain step ─────────────────────────────
+
+test('a record that already matches the box is nothing to do', () => {
+	const v = lanReserveStep({ ok: true, node: 'claw-9', written: false, record: { ip: '.9' } });
+	assert.equal(v.action, 'none');
+	assert.match(v.why, /matches/);
+});
+
+test('no record yet (or a mismatch) is WRITE, not a failure', () => {
+	const v = lanReserveStep({
+		ok: false,
+		node: 'claw-9',
+		written: false,
+		proposal: { ip: '.9' },
+		record: null,
+	});
+	assert.equal(v.action, 'write');
+});
+
+test('lan-reserve could not look (no ssh, no ipv4, undeclared) FAILS — never read as "write"', () => {
+	const v = lanReserveStep({ ok: false, node: 'claw-9', error: 'claw-9 is not in the manifest' });
+	assert.equal(v.action, 'fail');
+	assert.match(v.why, /could not look/);
+	assert.match(v.why, /not in the manifest/);
+});
+
+test('a write that did not land FAILS, distinct from a write never attempted', () => {
+	const v = lanReserveStep({
+		ok: false,
+		node: 'claw-9',
+		written: true,
+		record: { ip: '.9' },
+		landed: { ok: false, why: 'checkout is dirty' },
+	});
+	assert.equal(v.action, 'fail');
+	assert.match(v.why, /dirty/);
+});
+
+test('an unparseable lan-reserve report fails, never reads as "already matches"', () => {
+	for (const doc of [null, undefined, '', 'not json', 42]) {
+		assert.equal(lanReserveStep(doc).action, 'fail', `${JSON.stringify(doc)} must fail`);
+	}
+});
+
+// ── toolpackStep — R1 step 6, now a chain step ───────────────────────────────
+
+/** A `toolpack <node> --json` document, shaped like the real one. */
+const toolpackDoc = (report) => ({ at: new Date().toISOString(), report, findings: [], ok: true });
+
+test('a node with no missing binaries is nothing to do', () => {
+	const v = toolpackStep(
+		toolpackDoc([{ node: 'claw-9', packs: ['base'], missing: [], apt: [] }]),
+		'claw-9'
+	);
+	assert.equal(v.action, 'none');
+	assert.match(v.why, /complete/);
+});
+
+test('a node missing a binary is INSTALL, and names the exact apt packages', () => {
+	const v = toolpackStep(
+		toolpackDoc([
+			{
+				node: 'claw-9',
+				packs: ['base', 'wireless'],
+				missing: [{ pack: 'wireless', bin: 'iw' }],
+				apt: ['iw'],
+			},
+		]),
+		'claw-9'
+	);
+	assert.equal(v.action, 'install');
+	assert.match(v.why, /iw/);
+	assert.deepEqual(v.apt, ['iw']);
+});
+
+test('a node toolpack could not look at (unreachable) FAILS, never reads as "complete"', () => {
+	const v = toolpackStep(toolpackDoc([{ node: 'claw-9', error: 'ssh timed out' }]), 'claw-9');
+	assert.equal(v.action, 'fail');
+	assert.match(v.why, /ssh timed out/);
+});
+
+test('a report carrying no row for this node fails rather than passing vacuously', () => {
+	const v = toolpackStep(toolpackDoc([{ node: 'claw-2', missing: [] }]), 'claw-9');
+	assert.equal(v.action, 'fail');
+	assert.match(v.why, /no row/);
+});
+
+test('an unparseable or mis-shaped toolpack report fails, never reads as "nothing missing"', () => {
+	for (const doc of [null, undefined, '', 'not json', 42, { ok: true }]) {
+		assert.equal(toolpackStep(doc, 'claw-9').action, 'fail', `${JSON.stringify(doc)} must fail`);
+	}
+});
+
 // ── the chain table ──────────────────────────────────────────────────────────
 
 test('the onboarding chain is the manual record, in order, ending on health', () => {
 	const ids = ONBOARDING_STEPS.map((s) => s.id);
 	assert.deepEqual(ids, [
 		'declare',
+		'lan-reserve',
+		'toolpack',
+		'node-users',
 		'converge',
 		'bootcamp',
 		'placement',
@@ -313,6 +411,19 @@ test('the onboarding chain is the manual record, in order, ending on health', ()
 		'benchmark',
 		'health',
 	]);
+	// lan-reserve and toolpack (R1 steps 5-6) and the node-users reminder (R1
+	// step 7) sit exactly where the manual record ran them BY HAND: after
+	// declaration, before provision's own chain ever reached `converge`.
+	assert.ok(
+		ids.indexOf('declare') < ids.indexOf('lan-reserve') &&
+			ids.indexOf('lan-reserve') < ids.indexOf('toolpack') &&
+			ids.indexOf('toolpack') < ids.indexOf('node-users') &&
+			ids.indexOf('node-users') < ids.indexOf('converge'),
+		'declare → lan-reserve → toolpack → node-users → converge'
+	);
+	// toolpack's own constraint — its header: "Run this before bootcamp" —
+	// holds with room to spare.
+	assert.ok(ids.indexOf('toolpack') < ids.indexOf('bootcamp'));
 	// The three deployers the old provision ran are still there, still in their
 	// own dependency order, inside the chain.
 	const deploys =
@@ -325,6 +436,9 @@ test('the onboarding chain is the manual record, in order, ending on health', ()
 		ids.indexOf('slice') < ids.indexOf('realize') &&
 			ids.indexOf('realize') < ids.indexOf('benchmark')
 	);
+	// node-users is a PRINTED reminder, never a call — see
+	// onboarding-automation.test.mjs for the guard that it is never spawned.
+	assert.equal(ONBOARDING_STEPS.find((s) => s.id === 'node-users').kind, 'print');
 });
 
 // --- a dry run installs nothing (2026-10-25 audit) ---------------------------

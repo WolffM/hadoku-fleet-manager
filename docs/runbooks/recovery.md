@@ -138,7 +138,7 @@ no `fleet` subcommand is required to get through it.**
    ssh targets in this fleet are always NAMES, never bare addresses — if a
    name that used to resolve now points nowhere, or somewhere wrong, the
    underlying DHCP lease moved, which is a LAN-reservation problem (see R1
-   step 5), not a cabling one.
+   step 6, provision's lan-reserve step), not a cabling one.
    Verify: you can name which single thing is actually missing — no address,
    no route, no DNS, or a changed address — not just "unreachable". Each
    needs a different next step.

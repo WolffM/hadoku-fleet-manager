@@ -246,18 +246,110 @@ export function benchmarkStep(report, node) {
 	};
 }
 
+/**
+ * What `lan-reserve --machine <node> --json` owes, judged from ITS OWN
+ * document — a reader, not a writer: `lan-reserve.mjs` already re-derives the
+ * proposal from the box's live interfaces every time it runs, so this never
+ * trusts a cached belief that the record still matches.
+ *
+ *   none   `ok: true` — the manifest record matches what the box reports.
+ *          The write already happened (this run's or an earlier one's); a
+ *          re-run changes nothing.
+ *   write  not yet recorded, and not because anything is broken — the
+ *          proposal differs from the record (or there is no record), and the
+ *          remedy is `--write` (after the operator has made the gateway
+ *          reservation — `lan-reserve` cannot confirm that part itself, see
+ *          its own header).
+ *   fail   `lan-reserve` COULD NOT LOOK (`doc.error` — no ssh, no IPv4
+ *          interface, the node is not declared), or wrote a record that did
+ *          not land (`doc.written && !doc.ok` — the commit/push failed).
+ *          Neither is a case the chain can retry past by itself.
+ *
+ * @param {unknown} doc parsed `lan-reserve --json` output
+ */
+export function lanReserveStep(doc) {
+	if (!doc || typeof doc !== 'object')
+		return { action: 'fail', why: 'lan-reserve produced no parseable report' };
+	if (doc.error) return { action: 'fail', why: `could not look: ${doc.error}` };
+	if (doc.ok) return { action: 'none', why: 'the manifest record matches the box' };
+	if (doc.written)
+		return {
+			action: 'fail',
+			why: doc.landed?.why ?? 'lan-reserve wrote a record but it did not land',
+		};
+	return { action: 'write', why: 'the manifest record does not match what the box reports' };
+}
+
+/**
+ * What `toolpack <node> --json` owes for THIS node, judged from its report —
+ * a reader, not a writer: `--confirm` already RE-READS after installing
+ * (toolpack.mjs: "RE-READ RATHER THAN ASSUME"), so this never trusts apt's
+ * exit code either, only the shape coming back.
+ *
+ *   none     no pack this node needs is missing a binary — nothing to do.
+ *   install  the node is missing one or more instruments; `row.apt` names
+ *            the packages toolpack itself would install.
+ *   fail     no parseable report, no row for this node, or the row itself
+ *            says `error` (the node could not be reached to shape it) —
+ *            every one of these is "could not look", never "nothing missing".
+ *
+ * @param {unknown} doc parsed `toolpack <node> --json` output
+ * @param {string} node
+ */
+export function toolpackStep(doc, node) {
+	if (!doc || !Array.isArray(doc.report))
+		return { action: 'fail', why: 'toolpack produced no parseable report' };
+	const row = doc.report.find((r) => r?.node === node);
+	if (!row) return { action: 'fail', why: `toolpack's report carries no row for ${node}` };
+	if (row.error) return { action: 'fail', why: `could not look at ${node}: ${row.error}` };
+	if (!row.missing?.length) return { action: 'none', why: 'the instrument floor is complete' };
+	return {
+		action: 'install',
+		why: `missing ${row.missing.map((m) => m.bin).join(', ')}`,
+		apt: row.apt ?? [],
+	};
+}
+
 // ── the chain, as data — one order, printed and tested ───────────────────────
 
 /**
  * The onboarding chain, in dependency order. `fleetWide` steps cannot be
  * scoped to one node and still run for the whole manifest — reconcile
  * validates every entry and the coverage check reads the fleet.
+ *
+ * `lan-reserve`, `toolpack` and the `node-users` reminder sit where R1's
+ * manual record ran them BY HAND — right after declaration and before
+ * `converge` ever touches the box (`docs/runbooks/new-claw.md`, steps 5-7,
+ * pre-wave-5m): the operator ran `lan-reserve --write` and `toolpack
+ * --confirm` between `enroll --write` and invoking `provision` at all, and
+ * provision's own chain only ever started at `converge`. Folding them in
+ * keeps that order rather than inventing a new one. `toolpack` ALSO has its
+ * own hard constraint — its header: "Run this before bootcamp: a probe run
+ * against a box missing its toolchain floor fails the capability rather than
+ * reporting 'not yet installed'" — which this placement satisfies with room
+ * to spare. `node-users` is PRINTED ONLY: the cutover belongs to a different
+ * workstream (d3), and this chain never calls it.
  */
 export const ONBOARDING_STEPS = [
 	{
 		id: 'declare',
 		kind: 'builtin',
 		why: 'measured declaration with DERIVED placement — the four hand edits, automated',
+	},
+	{
+		id: 'lan-reserve',
+		kind: 'builtin',
+		why: "record the node's gateway DHCP reservation, read off the box — R1 step 5",
+	},
+	{
+		id: 'toolpack',
+		kind: 'builtin',
+		why: 'the benchmark instrument floor — must land before bootcamp proves a capability',
+	},
+	{
+		id: 'node-users',
+		kind: 'print',
+		why: 'PRINTED ONLY — the ci-role cutover belongs to a different workstream; this chain never calls it',
 	},
 	{
 		id: 'converge',

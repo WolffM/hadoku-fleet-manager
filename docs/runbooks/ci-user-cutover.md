@@ -7,7 +7,7 @@ documents CURRENT behaviour only**, not that workstream's design intent.
 
 Use this for a claw that is **already declared and provisioned** and still
 runs CI as the `admin` user — the state every claw was in before
-2026-10-27, and the state any claw stays in until this runbook (or R1 step 7,
+2026-10-27, and the state any claw stays in until this runbook (or R1 step 5,
 for a brand-new node) runs against it. `machines.<node>.users.ci` absent in
 the manifest is exactly that state (`docs/VOCABULARY.md`, "Node users").
 

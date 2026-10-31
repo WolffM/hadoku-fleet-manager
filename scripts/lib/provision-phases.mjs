@@ -15,6 +15,8 @@ import {
 	bootcampProbeArgs,
 	benchmarkStep,
 	healthStep,
+	lanReserveStep,
+	toolpackStep,
 	safeJson,
 } from './provision-plan.mjs';
 
@@ -111,6 +113,137 @@ function declarePhase(node, { confirm, noPush, address }) {
 			remedy:
 				'enroll exited 0 but the node is not in the manifest afterwards — read its landing line above.',
 		};
+	return { status: 0 };
+}
+
+/**
+ * THE LAN-RESERVE STEP: read the node's own record, decide, write, then
+ * READ AGAIN rather than trust the write's exit code — the same discipline
+ * every other apply step in this chain holds (VERIFY IS A SEPARATE PASS,
+ * DELIBERATELY, see the file header on the register/throttle/slice trio).
+ *
+ * `lan-reserve --write` is still not proof the GATEWAY row exists —
+ * `lan-reserve.mjs`'s own header says plainly that no code holds that
+ * credential — so this step's "verify" proves only what code CAN prove: the
+ * manifest now matches what the box reports, re-derived from a second,
+ * independent read rather than from the write having returned 0.
+ *
+ * `lan-reserve.mjs` writes the manifest through `manifestEdit` directly and
+ * does not fast-forward its own checkout first — so, like `declare` and
+ * `placement`, this step fast-forwards onto `origin/main` before writing
+ * (manual record's step 1: "enroll refused to push: checkout behind
+ * origin" — the same trap, one layer down, if this step skipped it).
+ */
+function lanReservePhase(node, { confirm }) {
+	const check = run(
+		process.execPath,
+		[resolve(HERE, 'lan-reserve.mjs'), '--machine', node, '--json'],
+		{ captureJson: true }
+	);
+	const verdict = lanReserveStep(safeJson(check.text));
+	if (verdict.action === 'fail') return { status: 1, remedy: verdict.why };
+	if (verdict.action === 'none') {
+		P(`   · ${verdict.why} — nothing to do`);
+		return { status: 0 };
+	}
+	if (!confirm) {
+		P(`   · dry run: would record (${verdict.why}) — --confirm records it`);
+		return { status: 0 };
+	}
+	const ff = fastForwardManifest(manifestPath());
+	if (!ff.ok) return { status: 1, remedy: ff.why };
+	P(`   · ${ff.note}`);
+	P(`   · ${verdict.why} — recording`);
+	const write = run(
+		process.execPath,
+		[resolve(HERE, 'lan-reserve.mjs'), '--machine', node, '--write', '--json'],
+		{ captureJson: true }
+	);
+	const wdoc = safeJson(write.text);
+	if (write.status !== 0 && !wdoc)
+		return {
+			status: 1,
+			remedy: 'lan-reserve --write produced no parseable report — its output above says why.',
+		};
+	// THE READER IS NOT THE WRITER: re-read rather than trust this exit code.
+	const verify = run(
+		process.execPath,
+		[resolve(HERE, 'lan-reserve.mjs'), '--machine', node, '--json'],
+		{ captureJson: true }
+	);
+	const verifyVerdict = lanReserveStep(safeJson(verify.text));
+	if (verifyVerdict.action !== 'none')
+		return {
+			status: 1,
+			remedy:
+				`lan-reserve wrote a record but the re-read still does not match it: ${verifyVerdict.why}. ` +
+				'Make the gateway reservation (Advanced -> DHCP Reservation) if it is not there yet, then re-run.',
+		};
+	return { status: 0 };
+}
+
+/**
+ * THE TOOLPACK STEP: report, decide, install, then a FRESH read-only pass —
+ * `toolpack --confirm` already re-reads internally after apt
+ * ("RE-READ RATHER THAN ASSUME"), but this step re-asks the read-only
+ * question anyway, as its own independent verify, rather than trusting the
+ * install run's own exit code the way the chain's other apply steps do not
+ * trust theirs either.
+ */
+function toolpackPhase(node, { confirm }) {
+	const check = run(process.execPath, [resolve(HERE, 'toolpack.mjs'), node, '--json'], {
+		captureJson: true,
+	});
+	const verdict = toolpackStep(safeJson(check.text), node);
+	if (verdict.action === 'fail') return { status: 1, remedy: verdict.why };
+	if (verdict.action === 'none') {
+		P(`   · ${verdict.why} — nothing to do`);
+		return { status: 0 };
+	}
+	if (!confirm) {
+		P(`   · dry run: would install (${verdict.why})`);
+		return { status: 0 };
+	}
+	P(`   · ${verdict.why} — installing`);
+	const install = run(
+		process.execPath,
+		[resolve(HERE, 'toolpack.mjs'), node, '--confirm', '--json'],
+		{ captureJson: true }
+	);
+	if (!safeJson(install.text))
+		return {
+			status: 1,
+			remedy: 'toolpack --confirm produced no parseable report — its output above says why.',
+		};
+	// A FRESH read-only pass, never the install's own exit code.
+	const verify = run(process.execPath, [resolve(HERE, 'toolpack.mjs'), node, '--json'], {
+		captureJson: true,
+	});
+	const verifyVerdict = toolpackStep(safeJson(verify.text), node);
+	if (verifyVerdict.action !== 'none')
+		return {
+			status: 1,
+			remedy:
+				`toolpack installed and ${node} still has a gap: ${verifyVerdict.why} — its output ` +
+				'above names the cause.',
+		};
+	return { status: 0 };
+}
+
+/**
+ * THE NODE-USERS STEP IS A REMINDER, NOT A CALL. The ci-role cutover is
+ * d3's workstream (`docs/planning/node-users-2026-10-27.md`); this chain
+ * never spawns `node-users.mjs` or reads its state — doing either would make
+ * provision a second place that decides when a node's CI stops running as
+ * `admin`. It always succeeds: a chain step that merely prints can never be
+ * the reason a run stops.
+ */
+function nodeUsersPrintPhase(node) {
+	P(
+		`   · MANUAL, outside this chain: \`fleet node-users --machine ${node}\` to check, ` +
+			`\`fleet node-users --cutover ${node} --confirm\` to create and move the ci role. ` +
+			"Until that runs, this node's CI jobs execute as admin."
+	);
 	return { status: 0 };
 }
 
@@ -401,4 +534,15 @@ export async function applyPlacementWrite({
 	};
 }
 
-export { run, P, declarePhase, convergePhase, bootcampPhase, benchmarkPhase, healthPhase };
+export {
+	run,
+	P,
+	declarePhase,
+	lanReservePhase,
+	toolpackPhase,
+	nodeUsersPrintPhase,
+	convergePhase,
+	bootcampPhase,
+	benchmarkPhase,
+	healthPhase,
+};

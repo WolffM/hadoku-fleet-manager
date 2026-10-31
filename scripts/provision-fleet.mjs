@@ -16,40 +16,53 @@
  *
  *   1. declare      `enroll` — measured, never typed; placement DERIVED
  *                   (labels [], role, maxRegistrations, slice, minFreeGb).
- *   2. converge     `converge-toolchain --write` — the package floor, then a
+ *   2. lan-reserve  `lan-reserve --machine <node> --write` — records the
+ *                   gateway DHCP reservation the box reports, re-reads to
+ *                   verify, never assumes the write landed (wave 5m lane B:
+ *                   this used to be a manual step between `enroll --write`
+ *                   and running `provision` at all; the gateway row itself
+ *                   stays a human act — no code holds that credential).
+ *   3. toolpack     `toolpack <node> --confirm` — the benchmark INSTRUMENT
+ *                   floor (lscpu, smartctl, dmidecode, …), installed and
+ *                   re-read, before bootcamp ever probes a capability: a
+ *                   probe against a box missing this floor fails the
+ *                   capability instead of reporting it not-yet-installed.
+ *   4. node-users   PRINTED ONLY — the ci-role cutover is a different
+ *                   workstream's (d3's); this chain never calls it.
+ *   5. converge     `converge-toolchain --write` — the package floor, then a
  *                   re-probe; bootcamp earns from what the box can DO.
- *   3. bootcamp     PROBE first. What it reports and this chain knows the
+ *   6. bootcamp     PROBE first. What it reports and this chain knows the
  *                   remedy for — python-toolcache, playwright, the JIT
  *                   payload — gets SEEDED and bootcamp re-runs, rather than
  *                   stopping at a failure whose remedy it knows (the manual
  *                   record's steps 3-6). Only a PASSING bootcamp writes
  *                   `$capabilities`.
- *   4. placement    The manifest fields a serving claw needs, all DERIVED:
+ *   7. placement    The manifest fields a serving claw needs, all DERIVED:
  *                   the seed backfill for an older entry, and `ephemeral`
  *                   flipped ONLY once bootcamp has EARNED `jitconfig` AND the
  *                   payload binary exists on the node — payload before
  *                   ephemeral, both halves (claw-8's gate caught the flag
  *                   without the provisioner; its probe can pass without the
  *                   payload).
- *   5. register     `reconcile --confirm` — validates the manifest and creates
+ *   8. register     `reconcile --confirm` — validates the manifest and creates
  *                   whatever standing registrations the node keeps (none for
  *                   an all-JIT claw; its `residentRepos` only).
- *   6. throttle     writes each runner's `.env` and — only once `ephemeral`
+ *   9. throttle     writes each runner's `.env` and — only once `ephemeral`
  *                   is set — the JIT provisioner every mint execs.
- *   7. slice        cgroup containment + supervision, ceiling derived from the
+ *  10. slice        cgroup containment + supervision, ceiling derived from the
  *                   node's own MemTotal.
- *   8. realize      `systemctl --user start runners.slice`. The ONE hand step
+ *  11. realize      `systemctl --user start runners.slice`. The ONE hand step
  *                   the manual record needed after `slice --confirm`: io
  *                   never reached a slice that had never been realized. A
  *                   slice unit file is inert until the manager starts it, and
  *                   `--check`'s io_ctrl reads a cgroup that does not exist
  *                   until then.
- *   9. benchmark    `--due 30 --write` — the same freshness window
+ *  12. benchmark    `--due 30 --write` — the same freshness window
  *                   `ci:fleet-benchmark` enforces nightly, so the first
  *                   night's cron sees a measured node instead of paging
  *                   (claw-8/claw-9 both paged @here on 09-21 for exactly
  *                   this).
- *  10. health       `doctor --write`, gated on the STORED record: a fresh
+ *  13. health       `doctor --write`, gated on the STORED record: a fresh
  *                   record with no blocking findings skips the 60s load. A
  *                   node is not done being enrolled while a nightly checker
  *                   is still waiting to discover what it lacks — the chain
@@ -131,6 +144,9 @@ import {
 	run,
 	P,
 	declarePhase,
+	lanReservePhase,
+	toolpackPhase,
+	nodeUsersPrintPhase,
 	convergePhase,
 	bootcampPhase,
 	benchmarkPhase,
@@ -235,6 +251,15 @@ async function onboardingRun(node, { confirm, verifyOnly, noPush, address }) {
 			switch (step.id) {
 				case 'declare':
 					r = declarePhase(node, { confirm, noPush, address });
+					break;
+				case 'lan-reserve':
+					r = lanReservePhase(node, { confirm });
+					break;
+				case 'toolpack':
+					r = toolpackPhase(node, { confirm });
+					break;
+				case 'node-users':
+					r = nodeUsersPrintPhase(node);
 					break;
 				case 'converge':
 					r = convergePhase(node, { confirm });
