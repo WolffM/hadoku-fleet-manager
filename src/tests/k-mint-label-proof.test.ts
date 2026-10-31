@@ -27,7 +27,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { dispatchEphemeral, type EphemeralTickInput } from '../runners/ephemeral-tick.js';
+import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
+import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
 import { runDispatchPass, __resetReapClockForTesting } from '../runners/dispatch-pass.js';
 import { choosePlacement, satisfiesLabels, type NodeState } from '../runners/placement.js';
 import { nodeOffer } from '../capabilities.js';

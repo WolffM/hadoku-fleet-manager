@@ -17,17 +17,15 @@ import {
 import { buildSpeedModel, type SpeedModel, type SpeedTier } from '../runners/speed-tier.js';
 import type { HeavyModel } from '../runners/traffic.js';
 import { planTick, type PendingRun } from '../runners/dispatcher.js';
-import {
-	__resetSpeedModelForTesting,
-	__resetHeavyModelForTesting,
-	__resetWarmCacheClockForTesting,
-	__resetWarmReposForTesting,
-	__resetWarmBackoffForTesting,
-	dispatchEphemeral,
-	dispatchWarmCache,
-	warmReposForPlacement,
-	type EphemeralTickInput,
-} from '../runners/ephemeral-tick.js';
+import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
+import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
+import { __resetWarmCacheClockForTesting } from '../runners/dispatch-warm-cache.js';
+import { __resetWarmReposForTesting } from '../runners/dispatch-warm-cache.js';
+import { dispatchWarmCache } from '../runners/dispatch-warm-cache.js';
+import { warmReposForPlacement } from '../runners/dispatch-warm-cache.js';
+import { __resetSpeedModelForTesting } from '../runners/speed-heavy-cache.js';
+import { __resetHeavyModelForTesting } from '../runners/speed-heavy-cache.js';
+import { __resetWarmBackoffForTesting } from '../runners/warm-backoff.js';
 import {
 	runDispatchPass,
 	__resetReapClockForTesting,

@@ -33,12 +33,8 @@ import {
 } from '../runners/ephemeral.js';
 import { choosePlacement, type NodeState } from '../runners/placement.js';
 import { nodeOf } from '../runners/census.js';
-import {
-	dispatchEphemeral,
-	jobReserve,
-	loadRepoReserves,
-	withoutGuests,
-} from '../runners/ephemeral-tick.js';
+import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
+import { jobReserve, loadRepoReserves, withoutGuests } from '../runners/ephemeral-shared.js';
 import { setBackstopHold } from '../runners/backstop-hold.js';
 import { SATURATED_QUEUED_MS } from '../runners/queue-discovery.js';
 import {

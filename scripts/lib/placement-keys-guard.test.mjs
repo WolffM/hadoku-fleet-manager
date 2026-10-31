@@ -43,6 +43,12 @@ const PLACEMENT_RULES = 'scripts/lib/placement-rules.mjs';
 const RECONCILER = 'scripts/lib/reconcile-plan.mjs';
 const MINT_TICK = 'src/runners/ephemeral-tick.ts';
 const MINT_PLACEMENT = 'src/runners/placement.ts';
+// Wave 5g lane B split of ephemeral-tick.ts (pure move): `offerFor`'s
+// definition moved to ephemeral-shared.ts (shared by both assignment paths)
+// and `dispatchWarmCache`'s to dispatch-warm-cache.ts. `dispatchEphemeral`
+// stayed in MINT_TICK, so every pattern keyed to it there is unaffected.
+const MINT_SHARED = 'src/runners/ephemeral-shared.ts';
+const MINT_WARM_CACHE = 'src/runners/dispatch-warm-cache.ts';
 
 function read(rel) {
 	return readFileSync(join(ROOT, rel), 'utf8');
@@ -286,7 +292,9 @@ void test('excludeRepos is honoured on BOTH of ephemeral-tick.ts’s own assignm
 		pattern,
 		'excludeRepos is not read anywhere in dispatchEphemeral (the JIT mint path) any more'
 	);
-	const warmBody = functionBody(blanked, 'dispatchWarmCache');
+	// dispatchWarmCache moved to dispatch-warm-cache.ts (wave 5g lane B split) —
+	// read ITS body from there now, not from MINT_TICK's.
+	const warmBody = functionBody(blankComments(read(MINT_WARM_CACHE)), 'dispatchWarmCache');
 	assert.match(
 		warmBody,
 		pattern,
@@ -303,7 +311,7 @@ void test('the canonical functions this guard reads still exist where it expects
 	// against for its own canonical file.
 	assert.match(read(PLACEMENT_RULES), /export function mayRunRepo\(/);
 	assert.match(read(RECONCILER), /function placementFor\(/);
-	assert.match(read(MINT_TICK), /function offerFor\(/);
+	assert.match(read(MINT_SHARED), /function offerFor\(/);
 	assert.match(read(MINT_TICK), /function dispatchEphemeral\(/);
-	assert.match(read(MINT_TICK), /function dispatchWarmCache\(/);
+	assert.match(read(MINT_WARM_CACHE), /function dispatchWarmCache\(/);
 });

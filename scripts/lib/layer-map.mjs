@@ -115,6 +115,10 @@ export const LAYER_MAP = [
 	{ glob: 'src/runners/dispatch-daily.ts', layer: 'state' },
 	{ glob: 'src/runners/schedulable.ts', layer: 'state' },
 	{ glob: 'src/runners/decision-log.ts', layer: 'state' },
+	// Wave 5g lane B split of ephemeral-tick.ts (plan §4.3 #3): the persisted
+	// warm-fill backoff streak, same "one declared writer, read back by
+	// something else" shape as its neighbours above.
+	{ glob: 'src/runners/warm-backoff.ts', layer: 'state' },
 	{ glob: 'src/capability-revocations.ts', layer: 'state' },
 	{ glob: 'src/lib/measured.ts', layer: 'state' },
 	{ glob: 'src/lib/sick-node.ts', layer: 'state' },
@@ -328,6 +332,17 @@ export const LAYER_MAP = [
 	},
 	{ glob: 'src/runners/speed-tier.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
 	{ glob: 'src/runners/traffic.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
+	// Wave 5g lane B split of ephemeral-tick.ts (plan §4.3 #3, "speed/heavy
+	// caches -> scheduling core"): the cached speed/heavy-kind models both
+	// dispatch-warm-cache.ts and ephemeral-tick.ts read, same part as the
+	// speed-tier.ts/traffic.ts models it rebuilds from, just ahead of this
+	// file's own src/runners/*.ts catch-all (which would otherwise tag it 'run').
+	{
+		glob: 'src/runners/speed-heavy-cache.ts',
+		layer: 'domain',
+		domain: 'ci-scheduling',
+		part: 'core',
+	},
 	{ glob: 'src/lib/job-kind.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
 	{ glob: 'scripts/backstop-switch.mjs', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
 	{ glob: 'scripts/fleet-decisions.mjs', layer: 'domain', domain: 'ci-scheduling', part: 'run' },

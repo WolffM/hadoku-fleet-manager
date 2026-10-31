@@ -66,7 +66,7 @@ import {
 	warmEligibleSlots,
 	warmRunnerName,
 } from '../dist/runners/ephemeral.js';
-import { jobReserve } from '../dist/runners/ephemeral-tick.js';
+import { jobReserve } from '../dist/runners/ephemeral-shared.js';
 import { effectiveHosting, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { buildSpeedModel } from '../dist/runners/speed-tier.js';
 

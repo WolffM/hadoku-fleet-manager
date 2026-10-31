@@ -20,7 +20,7 @@ import { sickNodeNames, __resetSickForTesting } from '../lib/sick-node.js';
 import { loadClawNodes } from '../lib/manifest.js';
 import { __resetReservationForTesting } from '../node-reservation.js';
 import type { DispatchPassResult } from '../runners/dispatch-pass.js';
-import type { EphemeralTickInput } from '../runners/ephemeral-tick.js';
+import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
 import { setBackstopHold } from '../runners/backstop-hold.js';
 import { writeDrain } from '../runners/drain.js';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';

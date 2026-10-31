@@ -21,7 +21,8 @@ import {
 	__resetDiskReadingsForTesting,
 	__setDiskReadingsForTesting,
 } from '../runners/disk-watch.js';
-import { dispatchEphemeral, type EphemeralTickInput } from '../runners/ephemeral-tick.js';
+import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
+import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
 
 test('judgeTmpDisk: lines sit above the 2048MB mint floor — hokon at 1718MB on 2026-10-21 pages; 12GB is ok', () => {
 	assert.equal(judgeTmpDisk(1718).level, 'page', 'already under the floor: refusing');

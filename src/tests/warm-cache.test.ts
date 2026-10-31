@@ -50,26 +50,24 @@ import {
 	mintWarmListener,
 	__resetTarballCacheForTesting,
 } from '../runners/ephemeral-exec.js';
-import {
-	admissionVerdictsForReport,
-	__resetAdmissionVerdictsForTesting,
-	__setAdmissionVerdictsForTesting,
-	__resetSpeedModelForTesting,
-	__resetWarmBackoffForTesting,
-	__resetWarmCacheClockForTesting,
-	__resetWarmReposForTesting,
-	__restartWarmBackoffForTesting,
-	__resetWorkloadGateCorruptionLogForTesting,
-	__setWorkloadGateContextForTesting,
-	dispatchEphemeral,
-	dispatchWarmCache,
-	fleetServedJobs,
-	parseSpaceProbe,
-	SPACE_PROBE_DF_CMD,
-	warmReposForPlacement,
-	WARM_CACHE_INTERVAL_MS,
-	type EphemeralTickInput,
-} from '../runners/ephemeral-tick.js';
+import { admissionVerdictsForReport } from '../runners/ephemeral-tick.js';
+import { __resetAdmissionVerdictsForTesting } from '../runners/ephemeral-tick.js';
+import { __setAdmissionVerdictsForTesting } from '../runners/ephemeral-tick.js';
+import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
+import { __resetWorkloadGateCorruptionLogForTesting } from '../runners/ephemeral-shared.js';
+import { __setWorkloadGateContextForTesting } from '../runners/ephemeral-shared.js';
+import { parseSpaceProbe } from '../runners/ephemeral-shared.js';
+import { SPACE_PROBE_DF_CMD } from '../runners/ephemeral-shared.js';
+import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
+import { __resetWarmCacheClockForTesting } from '../runners/dispatch-warm-cache.js';
+import { __resetWarmReposForTesting } from '../runners/dispatch-warm-cache.js';
+import { dispatchWarmCache } from '../runners/dispatch-warm-cache.js';
+import { fleetServedJobs } from '../runners/dispatch-warm-cache.js';
+import { warmReposForPlacement } from '../runners/dispatch-warm-cache.js';
+import { __resetSpeedModelForTesting } from '../runners/speed-heavy-cache.js';
+import { __resetWarmBackoffForTesting } from '../runners/warm-backoff.js';
+import { __restartWarmBackoffForTesting } from '../runners/warm-backoff.js';
+import { WARM_CACHE_INTERVAL_MS } from '../runners/warm-backoff.js';
 import { ephemeralOnlyLabels, workloadGateContext } from '../capabilities.js';
 import type { ProofRecord } from '../lib/measured.js';
 import { nodeOf } from '../runners/census.js';

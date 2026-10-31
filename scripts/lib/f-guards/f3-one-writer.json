@@ -33,7 +33,7 @@
     "security-pending.json": ["scripts/check-fleet-preflight.mjs"],
     "snapshot.json": ["scripts/lib/herdr-fleet.mjs"],
     "tool-inventory-capabilities.json": ["scripts/check-tool-inventory.mjs"],
-    "warm-backoff.json": ["src/runners/ephemeral-tick.ts"]
+    "warm-backoff.json": ["src/runners/warm-backoff.ts"]
   },
   "patterns": {
     "^(\\d{4}-\\d{2}-\\d{2})\\.jsonl$": ["src/runners/decision-log.ts"],

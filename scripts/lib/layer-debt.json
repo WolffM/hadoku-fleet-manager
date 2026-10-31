@@ -37,7 +37,7 @@
   },
   {
     "from": "scripts/check-warm-canary.mjs",
-    "to": "src/runners/ephemeral-tick.ts"
+    "to": "src/runners/ephemeral-shared.ts"
   },
   {
     "from": "scripts/check-warm-canary.mjs",
