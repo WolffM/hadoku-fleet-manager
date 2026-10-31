@@ -526,6 +526,9 @@ export const LAYER_MAP = [
 	{ glob: 'src/ci-alerts.ts', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'src/label-floor.ts', layer: 'domain', domain: 'observation', part: 'core' },
 	{ glob: 'src/job-rollups.ts', layer: 'domain', domain: 'observation', part: 'run' },
+	// T3 (plan §7.3, wave 5n lane A): the per-node-vs-fleet statistic. PURE —
+	// same shape as job-history-stats.ts beside it.
+	{ glob: 'src/failure-rates.ts', layer: 'domain', domain: 'observation', part: 'core' },
 	// Wave 5h lane C split of job-history.ts: GitHub ingest (job-history-ingest.ts,
 	// run) and zone/kill classification + stats (job-history-stats.ts, core).
 	// job-history.ts's own bare re-export barrel (kept in 5h only for
@@ -560,6 +563,8 @@ export const LAYER_MAP = [
 	{ glob: 'scripts/ci-watch.mjs', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'scripts/collect-job-metrics.mjs', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'scripts/job-rollups.mjs', layer: 'domain', domain: 'observation', part: 'run' },
+	// T3 reader (plan §7.3, wave 5n lane A) — same shape as job-rollups.mjs beside it.
+	{ glob: 'scripts/failures.mjs', layer: 'domain', domain: 'observation', part: 'run' },
 	{
 		glob: 'scripts/join-workload-benchmark.mjs',
 		layer: 'domain',

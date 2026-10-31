@@ -454,6 +454,13 @@ const COMMANDS: Record<string, Command> = {
 		help: true,
 		summary: 'daily CI rollups per node/repo/job kind, kept a year (read-only)',
 	},
+	failures: {
+		script: 'failures.mjs',
+		kind: 'operator',
+		help: true,
+		summary:
+			"per-node CI failure rate standardized against the fleet's own rate for the same repo+kind (T3, read-only)",
+	},
 	'boundary-contracts': {
 		script: 'check-boundary-contracts.mjs',
 		kind: 'gate',

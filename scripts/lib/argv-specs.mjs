@@ -148,6 +148,25 @@ export const ARGV_SPECS = {
 		positionals: false,
 	},
 
+	'failures.mjs': {
+		usage: [
+			'fleet failures — per-node CI failure rate against the FLEET rate for the same repo+kind',
+			'',
+			'  --days <n>     closed days to look back, counted from today (default 14)',
+			"  --node <name>  only this node's row (the statistic is still computed over every node)",
+			'  --json         the full per-node statistic, every zone broken out',
+			'',
+			// `{SETTLE_HOURS}` — see the matching note on job-rollups.mjs's own entry.
+			'A day is written {SETTLE_HOURS}h after it ends, so the newest two days are',
+			'never here yet. A node (or cell) below the significance floor is reported',
+			'"insufficient data", never folded into "healthy". Reads the state dir only;',
+			'writes nothing. Replaces docs/planning/failures-by-node-*.md.',
+		].join('\n'),
+		booleans: ['--json'],
+		valued: ['--days', '--node'],
+		positionals: false,
+	},
+
 	'retire-node.mjs': {
 		usage: [
 			'fleet retire <node> [--confirm] [--reason "why"] [--no-push] [--json]',
