@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { reapJitRunners } from '../runners/ephemeral-exec.js';
+import { reapJitRunners } from '../runners/ephemeral-exec-reap.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import { SWEEP_CONCURRENCY } from '../lib/concurrency.js';
 

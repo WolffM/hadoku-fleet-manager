@@ -14,21 +14,24 @@ import assert from 'node:assert/strict';
 import { nodeOffer } from '../lib/capability-offer.js';
 import { capability, type ManifestNode } from '../lib/capability-registry.js';
 import { parseJitName } from '../runners/ephemeral.js';
-import { __resetTarballCacheForTesting, reapJitRunners } from '../runners/ephemeral-exec.js';
+import { __resetTarballCacheForTesting } from '../runners/ephemeral-exec-jit.js';
+import { reapJitRunners } from '../runners/ephemeral-exec-reap.js';
 import {
 	MAX_ATTEMPTS_CEILING,
-	buildProofRecord,
+	type ProofGh,
+	type ProofResult,
+	type ProveSpec,
+} from '../runners/prove-job-types.js';
+import {
 	extractEvidence,
 	isDispatchable,
 	isProofRunnerName,
 	proofRunnerName,
-	proveJob,
 	runsOnForJob,
 	specFromCapability,
-	type ProofGh,
-	type ProofResult,
-	type ProveSpec,
-} from '../runners/prove-job.js';
+} from '../runners/prove-job-parse.js';
+import { buildProofRecord } from '../runners/prove-job-record.js';
+import { proveJob } from '../runners/prove-job.js';
 import type { ProofRecord } from '../lib/measured.js';
 import { GOOD_JITCONFIG } from './helpers/fleet-fakes.js';
 

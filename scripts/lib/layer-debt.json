@@ -296,8 +296,8 @@
     "to": "src/runners/ephemeral-exec.ts"
   },
   {
-    "from": "src/runners/prove-job.ts",
-    "to": "src/runners/ephemeral.ts"
+    "from": "src/runners/prove-job-types.ts",
+    "to": "src/runners/ephemeral-exec.ts"
   },
   {
     "from": "src/scheduled-converger.ts",

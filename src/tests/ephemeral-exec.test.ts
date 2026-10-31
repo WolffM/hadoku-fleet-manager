@@ -7,7 +7,7 @@ import {
 	liveJitUnits,
 	mintEphemeralRunner,
 	runnerTarballUrl,
-} from '../runners/ephemeral-exec.js';
+} from '../runners/ephemeral-exec-jit.js';
 import { jitUnitDescription, labelsFromUnitDescription } from '../runners/ephemeral-mint.js';
 import { GOOD_JITCONFIG, jitConfig } from './helpers/fleet-fakes.js';
 

@@ -372,7 +372,8 @@ test('enroll declares DERIVED placement — the four hand edits have no author l
 });
 
 test('the ssh config writer never rewrites what the operator wrote', () => {
-	const src = read('scripts', 'enroll-node.mjs');
+	// writeSshConfig moved out of the CLI in wave 5o (lane D).
+	const src = read('scripts', 'lib', 'enroll-ssh.mjs');
 	assert.match(src, /state: 'already'/, 'an existing entry must win');
 	assert.match(src, /# >>> fleet enroll: \$\{node\} >>>/, 'the block must be delimited and named');
 	assert.match(src, /copyFileSync\(cfg, `\$\{cfg\}\.bak-fleet-enroll`\)/, 'back it up first');

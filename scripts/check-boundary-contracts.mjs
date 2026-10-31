@@ -341,7 +341,7 @@ for (const [name] of machines) {
 	// output our parser silently reads as a unit name — OR silently drops.
 	//
 	// `--plain` is load-bearing, and must match `liveJitUnits` in
-	// src/runners/ephemeral-exec.ts. Without it systemctl prefixes a FAILED unit
+	// src/runners/ephemeral-exec-jit.ts. Without it systemctl prefixes a FAILED unit
 	// with `●`, the first token becomes the dot, and both this parser and the
 	// dispatcher's filtered the line out — so a failed jit-* unit vanished from
 	// B9's reconstruction and this gate reported the remainder as parsing fine.

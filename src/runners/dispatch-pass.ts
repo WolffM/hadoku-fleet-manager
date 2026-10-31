@@ -19,19 +19,19 @@ import { withGhCaller } from '../gh-budget.js';
 import { subCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
 import { planTick, type PendingRun, type SkipReason } from './dispatcher.js';
 import {
-	mintEphemeralRunner,
-	liveJitUnitRecords,
-	liveJitSlots,
 	evictWarmListener,
-	retireStrandedJit,
-	type LiveJitUnit,
 	warmRegistration,
-	reapJitRunners,
-	REAP_INTERVAL_MS,
-	REAP_IDLE_INTERVAL_MS,
 	type GhLike,
 	type ShellLike,
 } from './ephemeral-exec.js';
+import {
+	mintEphemeralRunner,
+	liveJitUnitRecords,
+	liveJitSlots,
+	retireStrandedJit,
+	type LiveJitUnit,
+} from './ephemeral-exec-jit.js';
+import { reapJitRunners, REAP_INTERVAL_MS, REAP_IDLE_INTERVAL_MS } from './ephemeral-exec-reap.js';
 import { JIT_PREFIX, WARM_PREFIX, parseJitName, warmRunnerName } from './ephemeral.js';
 import { recordCapacityLedger } from './capacity-ledger.js';
 import { nodeOf } from './census.js';

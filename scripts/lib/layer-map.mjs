@@ -361,6 +361,8 @@ export const LAYER_MAP = [
 
 	// ----------------------------------------------------------- domain: lifecycle
 	{ glob: 'src/runners/prove-job.ts', layer: 'domain', domain: 'lifecycle', part: 'run' },
+	// prove-job.ts's split-out types, parsing and record builder (wave 5o).
+	{ glob: 'src/runners/prove-job-*.ts', layer: 'domain', domain: 'lifecycle', part: 'core' },
 	{ glob: 'src/provisioning-converge.ts', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/bootcamp.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/provision-fleet.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
@@ -374,6 +376,11 @@ export const LAYER_MAP = [
 	{ glob: 'scripts/reboot-claws.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/drain-node.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/enroll-node.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
+	// Wave 5o lane D split of enroll-node.mjs (pure move): the pure ssh helpers
+	// (sshCapture, probeSshName, writeSshConfig) moved out; the CLI's own
+	// argv/die/log/warn closures stayed, per d6dcfa5/8fb8009. Same part as
+	// their source file for the same reason as the other wave-5o splits.
+	{ glob: 'scripts/lib/enroll-ssh.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/retire-node.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/lan-reserve.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/prove-job.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
@@ -433,8 +440,6 @@ export const LAYER_MAP = [
 	{ glob: 'src/node-reservation.ts', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
 	{ glob: 'src/runners/backstop.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
 	{ glob: 'src/runners/dispatcher.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
-	{ glob: 'src/runners/dispatch-pass.ts', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
-	{ glob: 'src/runners/dispatch-tick.ts', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
 	{ glob: 'src/runners/ephemeral.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
 	// Wave 5k lane C split of ephemeral.ts (plan §4.3 #11, pure move): the mint
 	// plan builders (buildSpawnPlan/buildWarmSpawnPlan and the sizing/labelling
@@ -444,9 +449,8 @@ export const LAYER_MAP = [
 	// Same part as their source file for the same reason.
 	{ glob: 'src/runners/ephemeral-mint.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
 	{ glob: 'src/runners/ephemeral-warm.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
-	{ glob: 'src/runners/ephemeral-exec.ts', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
-	{ glob: 'src/runners/ephemeral-tick.ts', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
-	{ glob: 'src/runners/node-script.ts', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
+	// ephemeral-exec-jit.ts and -reap.ts (wave 5o) fall to the src/runners/*.ts
+	// catch-all below: ci-scheduling, run, the same as their source file.
 	{ glob: 'src/runners/placement.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
 	{
 		glob: 'src/runners/queue-discovery.ts',

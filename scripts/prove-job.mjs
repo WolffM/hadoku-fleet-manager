@@ -69,7 +69,9 @@ import { installCliHost } from '../dist/host.js';
 import { nodeHome } from '../dist/lib/node-users.js';
 import { capability } from '../dist/lib/capability-registry.js';
 import { workloadGatedCapabilities } from '../dist/lib/workload-gate.js';
-import { buildProofRecord, proveJob, specFromCapability } from '../dist/runners/prove-job.js';
+import { proveJob } from '../dist/runners/prove-job.js';
+import { specFromCapability } from '../dist/runners/prove-job-parse.js';
+import { buildProofRecord } from '../dist/runners/prove-job-record.js';
 import { readProofsForCapability, writeProof } from '../dist/lib/measured.js';
 
 /**

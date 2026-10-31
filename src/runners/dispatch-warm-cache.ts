@@ -19,9 +19,9 @@ import {
 	readWarmMarker,
 	mintWarmListener,
 	refreshWarmMarker,
-	runnerTarballUrl,
 	type GhLike,
 } from './ephemeral-exec.js';
+import { runnerTarballUrl } from './ephemeral-exec-jit.js';
 import { heavyMarkedRecently } from './dispatch-pass.js';
 import { slowReposOn } from './placement.js';
 import { recordWarmListenerDecisions, type WarmListenerDecision } from './decision-log.js';

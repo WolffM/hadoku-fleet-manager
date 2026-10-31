@@ -44,7 +44,7 @@ import { runnableJobs } from './queue-discovery.js';
 import type { QueuedJob } from './queue-discovery.js';
 import type { QueuedRun } from './queue-discovery.js';
 import type { NodeState } from './placement.js';
-import { runnerTarballUrl } from './ephemeral-exec.js';
+import { runnerTarballUrl } from './ephemeral-exec-jit.js';
 import type { GhLike, ShellLike } from './ephemeral-exec.js';
 import {
 	etagByRepo,

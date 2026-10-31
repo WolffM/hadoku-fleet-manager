@@ -64,421 +64,58 @@
  * without a node or a token. `scripts/prove-job.mjs` is the real wiring.
  */
 
-import {
-	capability,
-	type Capability,
-	type JobProof,
-	type ManifestNode,
-} from '../lib/capability-registry.js';
-import { judgeWorkloadProof, proofBudget } from '../lib/workload-gate.js';
+import { capability } from '../lib/capability-registry.js';
 import { nodeOffer } from '../lib/capability-offer.js';
-import type { ProofRecord } from '../lib/measured.js';
 import { mintsJitRunners, mintsOnDemand } from '../lib/node-role.js';
 import {
-	JIT_PREFIX,
 	JIT_UNIT_MAX_SEC,
 	admitMint,
 	backstopUnitMemoryMaxMb,
-	jitRunnerName,
 	slotDir,
 	unitMemoryMaxMb,
-} from './ephemeral.js';
-import {
 	liveJitSlots,
 	liveJitUnits,
 	mintEphemeralRunner,
 	runnerTarballUrl,
-	type GhLike,
-	type ShellLike,
 } from './ephemeral-exec.js';
 import { jobKind } from '../lib/job-kind.js';
+import {
+	MAX_ATTEMPTS_CEILING,
+	DEFAULT_MAX_ATTEMPTS,
+	type ProveSpec,
+	type ProveDeps,
+	type ProofAttempt,
+	type ProofResult,
+	type RunnerTeardown,
+	type Owned,
+	type RunRow,
+	type JobRow,
+	jobDurationSec,
+	Abort,
+	Unreadable,
+	sq,
+	type ListedRunner,
+} from './prove-job-types.js';
+import {
+	proofRunnerName,
+	proofLabel,
+	scratchBranchName,
+	isProofRunnerName,
+	dispatchBody,
+	runsOnForJob,
+	isDispatchable,
+	extractEvidence,
+} from './prove-job-parse.js';
+
+// `runner-health.ts` (out of scope for this split) imports `isProofRunnerName`
+// from this path; everything else moved below is imported from its real new
+// module by every importer that needs it.
+export { isProofRunnerName } from './prove-job-parse.js';
 
 /** GitHub calls here go through the operator's own `gh` auth, never a token we hold. */
 const NO_TOKEN = '';
 
-/** A retry of the WHOLE dispatch is bounded; this is the ceiling, not the default. */
-export const MAX_ATTEMPTS_CEILING = 6;
-export const DEFAULT_MAX_ATTEMPTS = 3;
-
-/** Read-only GitHub, plus the raw-text read a job log needs. Both THROW on failure. */
-export interface ProofGh extends GhLike {
-	get: (path: string, token: string, repo?: string) => Promise<unknown>;
-	text: (path: string, token: string, repo?: string, accept?: string) => Promise<string>;
-}
-
-export interface ProveSpec {
-	node: string;
-	repo: string;
-	workflow: string;
-	job: string;
-	ref: string;
-	/** Case-insensitive regex for the log lines that show the capability ran. */
-	evidence?: string;
-	/** Replaces the labels read from the workflow. Scoped to THIS proof runner only. */
-	labelsOverride?: string[];
-	/** The capability this proves; the node must carry it. Omitted for an ad-hoc job. */
-	capability?: string;
-	/**
-	 * `workflow_dispatch` inputs, sent verbatim in the dispatch body's `inputs`
-	 * — a targeted canary (e.g. jdk21's fixed cardtable Forge specs) instead of
-	 * the workflow's full default. Omitted entirely when empty/undefined, so a
-	 * workflow with no `inputs:` declared at all is never sent one.
-	 */
-	inputs?: Record<string, string>;
-	/**
-	 * The dispatch input that sets the job's `runs-on` (a JSON label array). When
-	 * set, the proof runner also carries a label unique to this proof, and that
-	 * full set is sent as this input: only the proof runner can take the job.
-	 */
-	runsOnInput?: string;
-	/** Dispatch on a throwaway `canary/<node>-<nonce>` branch at `ref`'s head — see `JobProof.scratchBranch`. */
-	scratchBranch?: boolean;
-	maxAttempts?: number;
-	/** Tear down a proof runner a previous (crashed) run left LIVE, instead of refusing. */
-	reapStale?: boolean;
-	/** Whole-run bound. */
-	timeoutMs?: number;
-	/** How long a dispatched job may sit unassigned before it counts as a miss. */
-	assignTimeoutMs?: number;
-	/** How long a job that DID land on the proof runner may run. */
-	jobTimeoutMs?: number;
-}
-
-export interface ProveDeps {
-	gh: ProofGh;
-	sh: ShellLike;
-	/** The node's manifest entry. READ ONLY — frozen in the tests. */
-	node: ManifestNode;
-	/** Is the node held out of service? Read by the caller from the drain file. */
-	drained: boolean;
-	now: () => number;
-	/** Resolves after `ms`, or rejects if `signal` aborts first. */
-	sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
-	signal?: AbortSignal;
-	/** The node's ci user's home (`nodeHome(machine, 'ci')`). Required: a default would be a literal in a library. */
-	homeDir: string;
-	pollMs?: number;
-}
-
-export type ProofVerdict =
-	'pass' | 'fail' | 'lost-race' | 'refused' | 'timeout' | 'error' | 'teardown-failed';
-
-export interface ProofFinding {
-	rule: string;
-	message: string;
-}
-
-export interface ProofAttempt {
-	attempt: number;
-	runId: number | null;
-	jobId: number | null;
-	runnerName: string | null;
-	jobConclusion: string | null;
-	ranOnTarget: boolean;
-	note?: string;
-}
-
-export interface RunnerTeardown {
-	name: string;
-	unitStopped: boolean;
-	configGone: boolean;
-	listenerGone: boolean;
-	deregistered: boolean;
-}
-
-export interface ProofResult {
-	ok: boolean;
-	verdict: ProofVerdict;
-	node: string;
-	repo: string;
-	workflow: string;
-	job: string;
-	ref: string;
-	/** The branch actually dispatched on: `ref`, or the scratch branch made from it. */
-	dispatchRef: string | null;
-	capability: string | null;
-	labels: string[];
-	labelSource: 'runs-on' | 'override' | null;
-	runId: number | null;
-	jobId: number | null;
-	jobConclusion: string | null;
-	runnerName: string | null;
-	/** Wall time the job itself ran, from the jobs API's own `started_at`/`completed_at` — null when either is missing. Never the whole proof's orchestration time (minting, polling, teardown). */
-	durationSec: number | null;
-	ranOnTarget: boolean;
-	attempts: ProofAttempt[];
-	evidence: string[];
-	findings: ProofFinding[];
-	minted: string[];
-	staleCleaned: string[];
-	teardown: {
-		ok: boolean;
-		runners: RunnerTeardown[];
-		cancelledRuns: number[];
-		problems: string[];
-	};
-	startedAt: string;
-	finishedAt: string;
-}
-
-// --- pure helpers -----------------------------------------------------------
-
-/** `owner/repo` -> `repo`, narrowed to what a unit name admits. */
-function repoSlug(repo: string): string {
-	return repo
-		.split('/')
-		.pop()!
-		.toLowerCase()
-		.replace(/[^a-z0-9._-]/g, '-');
-}
-
-/**
- * The proof runner's name. `proof-` inside the slug is what `isProofRunnerName`
- * keys on; `j0-r0` is a run id no real run has (see the header).
- */
-export function proofRunnerName(node: string, repo: string, nowMs: number): string {
-	return jitRunnerName(node, `x/proof-${repoSlug(repo)}`, nowMs, 0, 0);
-}
-
-/** Is this a proof runner minted for `node`? Stricter than a prefix: a real mint never ends `-j0-r0-`. */
-/** A label unique to one proof, so an aimed canary can land nowhere else. */
-export function proofLabel(nowMs: number): string {
-	return `proof-${nowMs.toString(36)}`;
-}
-
-/** The throwaway branch a scratch-branch canary is dispatched on. */
-export function scratchBranchName(node: string, nowMs: number): string {
-	return `canary/${node}-${nowMs.toString(36)}`;
-}
-
-/**
- * The `workflow_dispatch` body. `inputs` only when there is one — a workflow
- * with no `inputs:` declared must see the body it has always seen — and the
- * runs-on input, when the spec names one, carries the proof runner's labels.
- */
-export function dispatchBody(
-	spec: Pick<ProveSpec, 'ref' | 'inputs' | 'runsOnInput'>,
-	labels: readonly string[]
-): { ref: string; inputs?: Record<string, string> } {
-	const inputs: Record<string, string> = { ...(spec.inputs ?? {}) };
-	if (spec.runsOnInput) inputs[spec.runsOnInput] = JSON.stringify(labels);
-	return Object.keys(inputs).length ? { ref: spec.ref, inputs } : { ref: spec.ref };
-}
-
-export function isProofRunnerName(name: string, node: string): boolean {
-	return (
-		name.startsWith(`${JIT_PREFIX}${node}-proof-`) &&
-		/-j0-r0-\d+$/.test(name.replace(/\.service$/, ''))
-	);
-}
-
-/** Drop a trailing `# comment` that is not inside quotes. Workflow `runs-on` lines are simple. */
-function stripComment(line: string): string {
-	let q: string | null = null;
-	for (let i = 0; i < line.length; i++) {
-		const c = line[i];
-		if (q) {
-			if (c === q) q = null;
-		} else if (c === '"' || c === "'") q = c;
-		else if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
-	}
-	return line;
-}
-
-const unquote = (s: string): string => s.trim().replace(/^(['"])(.*)\1$/, '$2');
-
-export type RunsOn = { ok: true; labels: string[]; jobKey: string } | { ok: false; reason: string };
-
-/**
- * The `runs-on` labels of ONE job, read from the workflow text.
- *
- * Deliberately not a YAML parser: this package has no dependencies, and a
- * workflow's `runs-on` is a scalar, a flow list or a block list. Anything else —
- * an expression (`${{ fromJSON(vars.CI_RUNNER) }}`), a `group:` map — is REFUSED
- * with a reason, because guessing the label set would mint a runner the job
- * cannot land on and report it as a lost race. The caller's `--labels-override`
- * is the explicit way out.
- */
-export function runsOnForJob(yaml: string, jobName: string): RunsOn {
-	const lines = yaml.split('\n').map(stripComment);
-	const jobsAt = lines.findIndex((l) => /^jobs\s*:\s*$/.test(l));
-	if (jobsAt === -1) return { ok: false, reason: 'the workflow has no top-level `jobs:`' };
-	const indentOf = (l: string): number => l.length - l.trimStart().length;
-	const blank = (l: string): boolean => l.trim() === '';
-	let keyIndent = -1;
-	const blocks: { key: string; body: string[] }[] = [];
-	for (let i = jobsAt + 1; i < lines.length; i++) {
-		const l = lines[i];
-		if (blank(l)) continue;
-		if (indentOf(l) === 0) break;
-		if (keyIndent === -1) keyIndent = indentOf(l);
-		if (indentOf(l) === keyIndent) {
-			const m = /^\s*([\w.-]+)\s*:/.exec(l);
-			if (m) blocks.push({ key: m[1], body: [] });
-			continue;
-		}
-		blocks[blocks.length - 1]?.body.push(l);
-	}
-	const hit = blocks.find((b) => {
-		const nm = b.body.find((l) => indentOf(l) === keyIndent + 2 && /^\s*name\s*:/.test(l));
-		return (
-			b.key === jobName || (nm !== undefined && unquote(nm.replace(/^\s*name\s*:/, '')) === jobName)
-		);
-	});
-	if (!hit) {
-		return {
-			ok: false,
-			reason: `no job named "${jobName}" in the workflow (jobs: ${blocks.map((b) => b.key).join(', ') || 'none'})`,
-		};
-	}
-	const at = hit.body.findIndex((l) => indentOf(l) === keyIndent + 2 && /^\s*runs-on\s*:/.test(l));
-	if (at === -1) return { ok: false, reason: `job "${jobName}" has no \`runs-on\`` };
-	const inline = hit.body[at].replace(/^\s*runs-on\s*:/, '').trim();
-	let raw: string[];
-	if (inline.startsWith('[')) {
-		const end = inline.indexOf(']');
-		if (end === -1)
-			return { ok: false, reason: '`runs-on` is a flow list this reader cannot parse' };
-		raw = inline.slice(1, end).split(',');
-	} else if (inline) raw = [inline];
-	else {
-		raw = [];
-		for (let i = at + 1; i < hit.body.length; i++) {
-			const l = hit.body[i];
-			if (blank(l)) continue;
-			if (indentOf(l) <= keyIndent + 2) break;
-			const m = /^\s*-\s*(.+)$/.exec(l);
-			if (!m)
-				return {
-					ok: false,
-					reason: '`runs-on` is a map (group/labels) this reader does not resolve',
-				};
-			raw.push(m[1]);
-		}
-	}
-	const labels = raw.map(unquote).filter(Boolean);
-	if (!labels.length) return { ok: false, reason: '`runs-on` is empty' };
-	const dynamic = labels.find((x) => x.includes('${{'));
-	if (dynamic) {
-		return {
-			ok: false,
-			reason: `\`runs-on\` is an expression (${dynamic}) that only GitHub can resolve — pass the labels with --labels-override`,
-		};
-	}
-	return { ok: true, labels: [...new Set(labels)], jobKey: hit.key };
-}
-
-/** Does the workflow accept `workflow_dispatch`? Read from the `on:` section only. */
-export function isDispatchable(yaml: string): boolean {
-	const head = yaml.split('\n').map(stripComment);
-	const jobsAt = head.findIndex((l) => /^jobs\s*:/.test(l));
-	const on = (jobsAt === -1 ? head : head.slice(0, jobsAt)).join('\n');
-	return /(^|[\s[,])workflow_dispatch\s*(:|,|\]|$)/m.test(on);
-}
-
-/**
- * The log lines that show the capability was EXERCISED.
- *
- * Timestamps are stripped so the evidence reads as the job printed it, and lines
- * are de-duplicated and truncated so a chatty job cannot bloat the JSON past the
- * 8 KB pipe cliff (`keepStdoutWhole` copes, but a consumer reading a file should
- * not have to).
- */
-export function extractEvidence(log: string, pattern: string, max = 40): string[] {
-	const re = new RegExp(pattern, 'i');
-	const seen = new Set<string>();
-	for (const raw of log.split(/\r?\n/)) {
-		const line = raw.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s?/, '').trim();
-		if (line && re.test(line)) seen.add(line.length > 300 ? `${line.slice(0, 300)}…` : line);
-		if (seen.size >= max) break;
-	}
-	return [...seen];
-}
-
-/** Resolve the job a capability declares, with an explicit operator override winning per field. */
-export function specFromCapability(
-	capabilityId: string,
-	over: Partial<ProveSpec> & { node: string }
-): { ok: true; spec: ProveSpec } | { ok: false; reason: string } {
-	const cap = capability(capabilityId);
-	if (!cap) return { ok: false, reason: `"${capabilityId}" is not a registered capability` };
-	const p: JobProof | undefined = cap.jobProof;
-	if (!p) {
-		return {
-			ok: false,
-			reason: `capability "${capabilityId}" declares no jobProof — name the job with --repo/--workflow/--job`,
-		};
-	}
-	return {
-		ok: true,
-		spec: {
-			repo: over.repo ?? p.repo,
-			workflow: over.workflow ?? p.workflow,
-			job: over.job ?? p.job,
-			ref: over.ref ?? p.ref ?? 'main',
-			evidence: over.evidence ?? p.evidence,
-			inputs: over.inputs ?? p.inputs,
-			...(p.runsOn ? { labelsOverride: p.runsOn.labels, runsOnInput: p.runsOn.input } : {}),
-			...(p.scratchBranch ? { scratchBranch: true } : {}),
-			...over,
-			capability: capabilityId,
-		},
-	};
-}
-
 // --- orchestration ----------------------------------------------------------
-
-interface Owned {
-	name: string;
-	unit: string;
-	slotIndex: number;
-	slot: string;
-}
-
-interface RunRow {
-	id: number;
-	status?: string;
-	conclusion?: string | null;
-}
-
-interface JobRow {
-	id: number;
-	name: string;
-	status?: string;
-	conclusion?: string | null;
-	runner_name?: string | null;
-	/** When the job was QUEUED. Never read for duration: a busy runner's queue is not the node's time. */
-	created_at?: string | null;
-	/** The jobs API's own wall-clock bounds — read, never computed from poll timing. */
-	started_at?: string | null;
-	completed_at?: string | null;
-}
-
-/**
- * Wall time the job ran, from the API's own timestamps. Null if either is missing
- * or unparseable. `started_at`, never `created_at`: a job that queued for a
- * runner says nothing about the node in that wait.
- */
-function jobDurationSec(job: JobRow | null | undefined): number | null {
-	if (!job?.started_at || !job?.completed_at) return null;
-	const start = Date.parse(job.started_at);
-	const end = Date.parse(job.completed_at);
-	if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
-	return Math.round((end - start) / 1000);
-}
-
-class Abort extends Error {}
-class Unreadable extends Error {}
-
-const sq = (v: string): string => `'${v.replace(/'/g, `'\\''`)}'`;
-
-interface ListedRunner {
-	id: number;
-	name: string;
-	busy?: boolean;
-	status?: string;
-	labels?: { name: string }[];
-}
 
 export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResult> {
 	const started = d.now();
@@ -1152,109 +789,4 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 		res.finishedAt = new Date(d.now()).toISOString();
 		return res;
 	}
-}
-
-/**
- * Did this canary run say anything about the NODE? Only a job that ran on the
- * target does: it passed, failed, or was still running when the bound ran out.
- * Everything else is "could not look" — the job went to another runner
- * (`lost-race`), a read or dispatch failed, the run was aborted, or a green
- * job's log could not be read for evidence — and must never be filed as a
- * verdict on the node.
- *
- * WHY (2026-10-08). The first live `bootcamp --prove` recorded FAIL for claw-4
- * and claw-8, both "the job did not land on the target node": every other
- * `jdk21` listener in the fleet could take the dispatched canary, and did. An
- * explicit FAIL withholds the label even while the gate is dormant, so a
- * dispatch race on the canary pulled `jdk21` off two healthy claws and left
- * cardtable's Forge jobs one node.
- */
-export function proofConclusive(
-	result: ProofResult
-): { conclusive: true; timedOut: boolean } | { conclusive: false; why: string } {
-	const lastAttempt = result.attempts[result.attempts.length - 1];
-	// A timeout AFTER landing is the node's own result (it ran and did not
-	// finish) — the claw-3 shape. `r.ranOnTarget` is only set on completion, so
-	// the landing is read from the attempt that landed.
-	if (result.verdict === 'timeout' && lastAttempt?.ranOnTarget) {
-		return { conclusive: true, timedOut: true };
-	}
-	if (!result.ranOnTarget || result.jobConclusion === null) {
-		const took = result.attempts.map((a) => a.runnerName ?? 'none').join(', ');
-		return {
-			conclusive: false,
-			why:
-				result.verdict === 'lost-race'
-					? `the job never ran on ${result.node} (taken by: ${took || 'none'}) — says nothing about the node`
-					: `the job never completed on ${result.node} (${result.verdict}) — says nothing about the node`,
-		};
-	}
-	if (
-		result.jobConclusion === 'success' &&
-		result.findings.some((f) => f.rule === 'log-unreadable')
-	) {
-		return {
-			conclusive: false,
-			why: `the job went green on ${result.node} but its log could not be read for evidence`,
-		};
-	}
-	return { conclusive: true, timedOut: false };
-}
-
-/**
- * Turn a FRESH `proveJob` result into the `$proof` record `measured.ts#writeProof`
- * files — the one place `proveJob`'s raw facts (conclusion, ranOnTarget,
- * evidence, duration) meet the registry's budget judgement (`proofBudget`,
- * `judgeWorkloadProof`). `scripts/prove-job.mjs` is the only writer, and
- * `scripts/bootcamp.mjs --prove` reaches it through that script.
- *
- * Returns `{ inconclusive }` instead of a record when the run said nothing
- * about the node ({@link proofConclusive}); the caller writes nothing then.
- *
- * Only meaningful for a capability whose `jobProof` declares a `budget` — see
- * `workloadGatedCapabilities()`. Callers check that before calling this; it is
- * not re-checked here (`judgeWorkloadProof` already fails loudly when it is
- * missing, rather than silently).
- *
- * `otherNodesProofs` MUST already exclude `result.node` — this is the budget
- * computed from NODES OTHER THAN the one just proven, so a node cannot bootstrap
- * its own bar from a stale reading of itself.
- */
-export function buildProofRecord(
-	cap: Capability,
-	result: ProofResult,
-	otherNodesProofs: readonly ProofRecord[],
-	opts: { now?: Date } = {}
-): { record: ProofRecord } | { inconclusive: string } {
-	const c = proofConclusive(result);
-	if (!c.conclusive) return { inconclusive: c.why };
-	const now = opts.now ?? new Date();
-	const budget = proofBudget(cap, otherNodesProofs, now);
-	const evidenceMatched = result.evidence.length > 0;
-	const judged = judgeWorkloadProof(
-		cap,
-		{
-			conclusion: result.jobConclusion,
-			ranOnTarget: true,
-			evidenceMatched,
-			durationSec: result.durationSec,
-			timedOut: c.timedOut,
-		},
-		budget
-	);
-	return {
-		record: {
-			node: result.node,
-			capability: cap.id,
-			runId: result.runId,
-			runner: result.runnerName,
-			conclusion: result.jobConclusion,
-			durationSec: result.durationSec,
-			evidenceMatched,
-			budgetSec: budget.budgetSec,
-			verdict: judged.verdict,
-			why: judged.why,
-			at: now.toISOString(),
-		},
-	};
 }

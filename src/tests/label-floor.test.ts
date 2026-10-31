@@ -20,7 +20,7 @@ import {
 } from '../label-floor.js';
 import { workloadGateContext } from '../lib/workload-gate.js';
 import type { ManifestNode } from '../lib/capability-registry.js';
-import { proofLabel } from '../runners/prove-job.js';
+import { proofLabel } from '../runners/prove-job-parse.js';
 import type { ProofRecord } from '../lib/measured.js';
 
 const node = (over: Partial<MintingNode> = {}): MintingNode => ({

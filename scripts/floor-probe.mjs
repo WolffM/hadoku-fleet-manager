@@ -125,7 +125,7 @@ import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import { PROBE_INTENT_DIR, PROBE_INTENT_MAX_MS } from '../dist/runners/dispatch-tick.js';
 import { ghWrite } from '../dist/lib/github-client.js';
 import { nodeReservation } from '../dist/node-reservation.js';
-import { mintEphemeralRunner, liveJitSlots } from '../dist/runners/ephemeral-exec.js';
+import { mintEphemeralRunner, liveJitSlots } from '../dist/runners/ephemeral-exec-jit.js';
 import { jitRunnerName } from '../dist/runners/ephemeral.js';
 import { nodeOffer } from '../dist/lib/capability-offer.js';
 import { workloadGateContext, workloadGatedCapabilities } from '../dist/lib/workload-gate.js';

@@ -52,8 +52,12 @@ const RAW_CALL = /\b[A-Za-z_$][\w$]*\(\s*(['"`])(ssh|rsync)\1|\[\s*(['"`])(ssh|r
 const CONFIG_READ =
 	/^(?:[A-Za-z_$][\w$]*\(\s*(['"`])ssh\1|\[\s*(['"`])ssh\2)\s*,\s*\[\s*(['"`])-G\3/;
 
-/** Pre-enrolment: the box is not in the manifest yet (F5's own noted exception). */
-const EXEMPT_FILES = new Set(['scripts/enroll-node.mjs']);
+/**
+ * Pre-enrolment: the box is not in the manifest yet (F5's own noted
+ * exception). `enroll-ssh.mjs` is enroll-node.mjs's own ssh helpers (wave 5o
+ * lane D split, pure move) — same box, same reason.
+ */
+const EXEMPT_FILES = new Set(['scripts/enroll-node.mjs', 'scripts/lib/enroll-ssh.mjs']);
 
 function find() {
 	const out = [];

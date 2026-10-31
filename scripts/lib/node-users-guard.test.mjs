@@ -52,8 +52,10 @@ const ALLOWED = {
 		"the operator at hokon's own terminal (`SUDO_USER`), not a node role",
 	'literal:scripts/refresh-preseed.sh':
 		"the operator at hokon's own terminal (`SUDO_USER`), not a node role",
-	'ssh:scripts/enroll-node.mjs':
-		'enrollment reaches a box BEFORE the manifest names it, at the address and user it booted with',
+	'ssh:scripts/lib/enroll-ssh.mjs':
+		'enrollment reaches a box BEFORE the manifest names it, at the address and user it booted ' +
+		'with (wave 5o lane D split of enroll-node.mjs, pure move: the ssh helpers that carried ' +
+		'this exemption moved here)',
 };
 
 /** Rule 1: the shapes a user takes in code. */

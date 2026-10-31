@@ -21,7 +21,7 @@ import {
 	REAP_INTERVAL_MS,
 	REAP_IDLE_INTERVAL_MS,
 	JIT_REAP_GRACE_MS,
-} from '../runners/ephemeral-exec.js';
+} from '../runners/ephemeral-exec-reap.js';
 import type { NodeState } from '../runners/placement.js';
 import type { HeavyModel } from '../runners/traffic.js';
 import type { PendingRun } from '../runners/dispatcher.js';

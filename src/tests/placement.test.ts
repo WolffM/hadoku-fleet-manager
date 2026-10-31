@@ -33,7 +33,7 @@ import {
 	__resetHeavyMarksForTesting,
 } from '../runners/dispatch-pass.js';
 import { warmRunnerName, TMP_FREE_FLOOR_MB, WORK_FREE_FLOOR_MB } from '../runners/ephemeral.js';
-import { __resetTarballCacheForTesting } from '../runners/ephemeral-exec.js';
+import { __resetTarballCacheForTesting } from '../runners/ephemeral-exec-jit.js';
 import {
 	__resetJobHistoryForTesting,
 	__setHistoryPathForTesting,
