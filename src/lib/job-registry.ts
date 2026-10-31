@@ -48,17 +48,16 @@
  * they are liveness checks on a daily cron, and `validateRegistry` says so
  * rather than silently passing.
  *
- * `kindDrift` exists because `src/cli.ts`'s `COMMANDS` table carries SEVEN
- * kinds (plan §3.4) and this registry only needs the three that are ever
- * scheduled (`gate` | `converger` | `recorder`). Four real subcommands are
- * scheduled — and therefore belong here — despite `COMMANDS` filing them
- * under `operator` or `mutator`: `benchmark` and `service-inventory` write a
- * declared record on a cron (plan §3.2 rule 6: that is a `recorder`, whatever
- * the door calls it), `node-users` is judged pass/fail by its consumer (a
- * `gate`), and `cleanup --confirm` is the plan's OWN example of a mutating
- * check that "moves to the registry as" a `converger` (§3.2 rule 6, verbatim).
+ * `kindDrift` exists for the case `src/cli.ts`'s `COMMANDS` table disagrees
+ * with the three kinds this registry ever puts a clock on (`gate` |
+ * `converger` | `recorder`) and the disagreement has NOT been fixed yet.
  * `validateRegistry` requires every such disagreement to carry a `kindDrift`
- * explaining it — an undocumented one is a finding, not a silent re-kind.
+ * explaining it — an undocumented one is a finding, not a silent re-kind. Four
+ * entries used to carry one (`ci:claw-cleanup`, `ci:node-users`,
+ * `ci:fleet-benchmark`, `ci:slice-inventory` — `cleanup`, `node-users`,
+ * `benchmark` and `service-inventory` were filed under `mutator`/`operator` in
+ * `COMMANDS` while actually running as a converger/gate/recorder/recorder);
+ * wave 5e lane D corrected `COMMANDS` itself on 2026-10-31, so none remain.
  */
 
 /** What this job IS, for the three kinds that are ever put on a clock. */
@@ -122,9 +121,10 @@ export interface JobEntry {
 }
 
 /**
- * THE 22 `JSON_CONTRACT` JOBS, read from hadoku_site `origin/main`
- * 2026-10-31: `services/cron-worker/profiles.json` for the cadence and
- * `timeout_s`, `scripts/lib/json-contract.mjs`'s existing `JSON_CONTRACT` for
+ * THE 23 `JSON_CONTRACT` JOBS (22 at wave 5e lane A's landing, plus lane D's
+ * own `ci:schedule`), read from hadoku_site `origin/main` 2026-10-31:
+ * `services/cron-worker/profiles.json` for the cadence and `timeout_s`,
+ * `scripts/lib/json-contract.mjs`'s existing `JSON_CONTRACT` for
  * `argv`/`hostBound`/the consumer file. Every `detectionBudget` below is 2x
  * the job's own cadence period UNLESS the entry's `why` says a different
  * number is the actually-justified one (health-freshness, fleet-kills).
@@ -251,8 +251,6 @@ export const JOB_REGISTRY: JobEntry[] = [
 		hostBound: false,
 		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/claw-cleanup.ts',
 		contract: 'json',
-		kindDrift:
-			"src/cli.ts files `cleanup` as kind: 'mutator'. Plan §3.2 rule 6 names this exact case: \"reconcile --confirm, cleanup --confirm and toolchain --refresh change other domains' state, so they are convergers and move to the registry as such.\" cli.ts is not this lane's to edit (wave 5e lane A); recorded here rather than silently re-kinded.",
 		why: 'Reclaims what runner self-update strands. The only JSON_CONTRACT entry that mutates the fleet by default.',
 	},
 	{
@@ -318,8 +316,6 @@ export const JOB_REGISTRY: JobEntry[] = [
 		hostBound: false,
 		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/node-users-check.ts',
 		contract: 'json',
-		kindDrift:
-			"src/cli.ts files `node-users` as kind: 'operator'. Its consumer fails the run on any class:'blocking' finding and treats `ok:false` as a real failure, not advisory reading — that is a gate's contract, not an operator report's. cli.ts is not this lane's to edit; recorded rather than silently re-kinded.",
 		why: 'Who runs CI on each claw (the ci role), read from the node. A node still running CI as admin is advisory (not-cut-over); a drifted cut-over node or an unreachable one fails.',
 	},
 	{
@@ -374,6 +370,33 @@ export const JOB_REGISTRY: JobEntry[] = [
 		contract: 'json',
 		why: "How old the $health record every placement rule reads is allowed to get is this gate's OWN separate threshold (HEALTH_STALE_DAYS = 14d, scripts/check-health-freshness.mjs) — a fact about the RECORD, not about this cron's own run cadence, which is why this entry's detectionBudget is the generic 2x and not 14d.",
 	},
+	{
+		// Wave 5e lane D: the schedule cannot drift from this registry's own
+		// declaration, or stop silently, without a gate noticing. `fleet
+		// check-schedule --json` reads hadoku_site's
+		// `services/cron-worker/profiles.json` through `lib/fleet-source.mjs`
+		// (never a sibling checkout) and fails on: (a) a registered `cron`-clock
+		// job missing from every profile, (b) a profile cron whose own period
+		// cannot meet the job's `detectionBudget` — using `cadencePeriodMs` and
+		// `parseDurationMs` from THIS file, never a second arithmetic, (c) a
+		// `ci:*` job in profiles.json that actually spawns the `fleet` CLI
+		// (imports `fleetCli()` from mgmt-api's `routes/jobs/lib/site-paths.ts`)
+		// but has no row here. LAST in repo-sync: it is a fact about every OTHER
+		// job in this file, so it has to run after the night's schedule is
+		// settled, same reasoning as ci:fleet-preflight/ci:health-freshness
+		// above it.
+		name: 'ci:schedule',
+		sub: 'check-schedule',
+		args: ['--json'],
+		kind: 'gate',
+		detectionBudget: '48h',
+		cadence: { cron: '0 13 * * *' },
+		timeoutS: 120,
+		hostBound: false,
+		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/schedule-check.ts',
+		contract: 'json',
+		why: 'Is the cron schedule this file declares still what the cron worker actually runs, and still able to meet the budget every OTHER entry here promises. A declaration nothing checks is exactly the shape AGENTS.md warns against for the credential probe and the dead-man gate both.',
+	},
 
 	// ---- fleet-benchmark (0 12 * * *, daily; budget 48h = 2x unless noted) ----
 	{
@@ -387,8 +410,6 @@ export const JOB_REGISTRY: JobEntry[] = [
 		hostBound: false,
 		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/fleet-benchmark-check.ts',
 		contract: 'json',
-		kindDrift:
-			"src/cli.ts files `benchmark` as kind: 'operator'. --cadence (automated since 2026-10-04, #87/#93) measures one claw per run and writes <stateDir>/benchmark.json — plan §3.2 rule 6's definition of a recorder (\"writes ONE declared record\"). cli.ts predates that automation; recorded rather than silently re-kinded.",
 		why: "Is the hardware still what the manifest says, one claw measured per run (never a guest, busy node, or someone else's drain). A full rotation across the fleet takes about as many days as there are claws; this entry's budget is about whether THIS cron fired on schedule, not about any one node's rotation slot.",
 	},
 	{
@@ -415,8 +436,6 @@ export const JOB_REGISTRY: JobEntry[] = [
 		hostBound: false,
 		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/slice-inventory.ts',
 		contract: 'json',
-		kindDrift:
-			"src/cli.ts files `service-inventory` as kind: 'operator'. --slices --write is the WRITER of the kind:'slice' resident rows in the demand ledger — a recorder by plan §3.2 rule 6, not a read-only report. cli.ts predates its 2026-10-29 scheduling; recorded rather than silently re-kinded.",
 		why: "The WRITER of each declared hosting slice's measured working set and CPU, over ssh. Ran only by hand from 2026-10-28 to 2026-10-29; scheduled since.",
 	},
 	{

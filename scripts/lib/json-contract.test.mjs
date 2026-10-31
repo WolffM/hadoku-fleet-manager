@@ -1081,9 +1081,11 @@ const TODAYS_JSON_CONTRACT = [
 	['node-users', 'ci:node-users', 'services/mgmt-api/src/routes/jobs/node-users-check.ts'],
 	['runner-units', 'ci:runner-units', 'services/mgmt-api/src/routes/jobs/runner-units-check.ts'],
 	['fleet-kills', 'ci:fleet-kills', 'services/mgmt-api/src/routes/jobs/fleet-kills-check.ts'],
+	// Added 2026-10-31 (wave 5e lane D): the schedule drift gate.
+	['check-schedule', 'ci:schedule', 'services/mgmt-api/src/routes/jobs/schedule-check.ts'],
 ].map(([sub, job, consumer]) => `${sub} -> ${job} -> ${consumer}`);
 
-void test("the derived JSON_CONTRACT equals today's 22 entries exactly — name, sub and consumer", () => {
+void test("the derived JSON_CONTRACT equals today's 23 entries exactly — name, sub and consumer", () => {
 	const derived = JSON_CONTRACT.map((e) => `${e.sub} -> ${e.job} -> ${e.consumer}`);
 	assert.deepEqual(derived.slice().sort(), TODAYS_JSON_CONTRACT.slice().sort());
 });

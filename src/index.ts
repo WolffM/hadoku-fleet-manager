@@ -43,6 +43,9 @@ export { noteCronStart, noteCronEnd, inFlightCronJobs } from './node-reservation
 export { meterGhPool } from './gh-budget.js';
 export type { GhPoolReading } from './gh-budget.js';
 
+/** The job schedule declaration (wave 5e). mgmt-api's in-process staleness watcher feature-detects this — an installed copy from before 2026-10-31 will not have it. */
+export { JOB_REGISTRY, cadencePeriodMs, parseDurationMs } from './lib/job-registry.js';
+
 /** The GitHub client the component already owns. Exported so a host that needs
  *  one does not build a second — it has no non-fleet consumers today. */
 export { ghGet, ghWrite } from './lib/github-client.js';

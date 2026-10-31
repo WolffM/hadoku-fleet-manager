@@ -231,7 +231,13 @@ const COMMANDS: Record<string, Command> = {
 	},
 	benchmark: {
 		script: 'benchmark-fleet.mjs',
-		kind: 'operator',
+		// A recorder, not an operator report: automated since 2026-10-04
+		// (#87/#93) under `--cadence`, which writes ONE declared record
+		// (<stateDir>/benchmark.json) per run — plan §3.2 rule 6's definition.
+		// Corrected 2026-10-31 (wave 5e lane D); job-registry.ts's
+		// `ci:fleet-benchmark` entry used to carry a `kindDrift` recording
+		// this exact disagreement.
+		kind: 'recorder',
 		help: true,
 		summary: 'measure every node and put the numbers side by side',
 	},
@@ -260,7 +266,12 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'service-inventory': {
 		script: 'service-inventory.mjs',
-		kind: 'operator',
+		// A recorder: `--slices --write` is the WRITER of the kind:'slice'
+		// resident rows in the demand ledger, not a read-only report — plan
+		// §3.2 rule 6. Corrected 2026-10-31 (wave 5e lane D); job-registry.ts's
+		// `ci:slice-inventory` entry used to carry a `kindDrift` recording this
+		// exact disagreement.
+		kind: 'recorder',
 		summary:
 			'every RESIDENT workload on this node, measured; --slices: every declared hosting slice (--write merges the demand ledger)',
 	},
@@ -304,7 +315,13 @@ const COMMANDS: Record<string, Command> = {
 	},
 	'node-users': {
 		script: 'node-users.mjs',
-		kind: 'operator',
+		// A gate: its consumer (ci:node-users) fails the run on any blocking
+		// finding and treats `ok:false` as a real failure rather than advisory
+		// reading — that is a gate's contract, not an operator report's.
+		// Corrected 2026-10-31 (wave 5e lane D); job-registry.ts's
+		// `ci:node-users` entry used to carry a `kindDrift` recording this
+		// exact disagreement.
+		kind: 'gate',
 		summary:
 			'per node: who runs CI (the ci role), read from the node — sudo, groups, keys, every runner uid',
 	},
@@ -508,7 +525,13 @@ const COMMANDS: Record<string, Command> = {
 	},
 	cleanup: {
 		script: 'clean-runner-debris.mjs',
-		kind: 'mutator',
+		// A converger, not a mutator (plan §3.2 rule 6, verbatim: "cleanup
+		// --confirm ... moves to the registry as" one): it reclaims toward a
+		// declared shape (no stranded runner self-update debris) rather than
+		// performing a one-off operator action. Corrected 2026-10-31 (wave 5e
+		// lane D) — job-registry.ts's `ci:claw-cleanup` entry used to carry a
+		// `kindDrift` recording this exact disagreement; now there is none.
+		kind: 'converger',
 		summary: 'reclaim what runner self-update strands',
 	},
 	'seed-python': {
@@ -553,6 +576,15 @@ const COMMANDS: Record<string, Command> = {
 		kind: 'gate',
 		help: true,
 		summary: 'how old is the $health record every placement rule reads',
+	},
+	// UNDER THE --json CONTRACT since wave 5e lane D: `ci:schedule` parses this
+	// stdout daily in repo-sync, LAST, after every other registered job in
+	// src/lib/job-registry.ts — it is a fact about all of THEM, so it has to
+	// run once the night's schedule has settled.
+	'check-schedule': {
+		script: 'check-schedule.mjs',
+		kind: 'gate',
+		summary: 'does the live cron schedule still match job-registry.ts, and can it meet its budgets',
 	},
 	// IMAGE and CONVERT, the two onboarding phases before `provision` can pick a
 	// node up. See the table in docs/VOCABULARY.md.

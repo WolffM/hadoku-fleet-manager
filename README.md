@@ -212,6 +212,7 @@ code first would turn every real finding into "the checker broke".
 | `fleet node-users --json`                         | `ci:node-users`         |
 | `fleet runner-units --json`                       | `ci:runner-units`       |
 | `fleet fleet-kills --days 2 --json`               | `ci:fleet-kills`        |
+| `fleet check-schedule --json`                     | `ci:schedule`           |
 
 That table listed SIX of these ten until 2026-09-07 — `drain-check`,
 `benchmark`, `egress-slices` and `queue-health` were under contract and
