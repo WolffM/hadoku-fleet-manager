@@ -270,6 +270,16 @@ for (const days of SHIFTS) {
  */
 const DECLARED = new Map([
 	[
+		'scripts/lib/backstop-tools.test.mjs',
+		'release dates only: `judgeTool` measures a release against the NEWEST release, never ' +
+			'against the clock, so nothing ages these out (fleet-manager#34).',
+	],
+	[
+		'scripts/lib/hosting-verify.test.mjs',
+		'`planVerify` takes `nowMs` as a parameter and the fixture passes its own NOW; a slice ' +
+			'end is compared with that, never with the clock.',
+	],
+	[
 		'scripts/lib/doctor-write.test.mjs',
 		'`$capabilities.at` is carried into the written record and asserted verbatim. ' +
 			'Nothing anywhere ages a capability stamp — there is no staleness window on it.',

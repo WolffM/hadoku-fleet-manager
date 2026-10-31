@@ -305,6 +305,20 @@ const COMMANDS: Record<string, Command> = {
 		summary:
 			'ACTS for placement.auto tenants: declares and ends slices through `fleet hosting` to meet demand; plans for the rest (--dry-run: decide only)',
 	},
+	'hosting-verify': {
+		script: 'hosting-verify.mjs',
+		kind: 'converger',
+		flags: ['--dry-run', '--json'],
+		summary:
+			'REPAIRS by default: every hosted slice checked from its node, and each one not guaranteed re-asserted from its record (--dry-run: report only)',
+	},
+	'backstop-tools': {
+		script: 'backstop-tools.mjs',
+		kind: 'gate',
+		flags: ['--json'],
+		summary:
+			"the backstop's hand-installed yt-dlp and deno against their newest releases: stale is 30 days behind; installs nothing",
+	},
 	'hosting-request': {
 		script: 'hosting-request.mjs',
 		kind: 'gate',

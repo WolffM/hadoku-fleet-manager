@@ -55,6 +55,11 @@ already counted. On such a node every other action names its tenant
 to guess. The parent `hosting.slice`'s protection and CI's headroom are sized
 from all of the node's slices; removing one re-asserts the rest at the new sum.
 
+`fleet hosting-verify` runs `--check` hourly inside mgmt-api and re-asserts any
+slice that is not guaranteed, from its record (fleet-manager#31). A slice the
+re-assert does not fix pages once, then daily; a node that did not answer is
+logged, not paged, because node-status pages it already.
+
 ### Two modes
 
 **Shared** (`--shared`) is the default for cardtable. CI keeps the box and ranks

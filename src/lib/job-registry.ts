@@ -683,6 +683,30 @@ export const JOB_REGISTRY: JobEntry[] = [
 		pager: { repageMs: 24 * 60 * 60_000, deferPageMs: 6 * 60 * 60_000 },
 		why: 'Drain, wait idle, reboot, verify kernel + runners, undrain — one claw per pass. src/claw-reboot.ts owns the clock and spawns scripts/reboot-claws.mjs, the same script `fleet reboot-claws` runs by hand.',
 	},
+	{
+		name: 'fleet:hosting-verify',
+		sub: 'hosting-verify',
+		args: ['--json'],
+		kind: 'converger',
+		detectionBudget: '3h',
+		cadence: { clockMs: 60 * 60_000 },
+		timeoutS: 1200,
+		contract: 'in-process',
+		pager: { repageMs: 24 * 60 * 60_000, deferPageMs: 3 * 60 * 60_000 },
+		why: "Every hosted tenant's home checked from its node, and re-asserted when it drifted (fleet-manager#31): a missing .npmrc surfaced as a deploy's 401 before. src/hosting-verify.ts owns the clock.",
+	},
+	{
+		name: 'fleet:backstop-tools',
+		sub: 'backstop-tools',
+		args: ['--json'],
+		kind: 'gate',
+		detectionBudget: '72h',
+		cadence: { clockMs: 24 * 60 * 60_000 },
+		timeoutS: 120,
+		contract: 'in-process',
+		pager: { repageMs: 30 * 24 * 60 * 60_000, deferPageMs: 3 * 24 * 60 * 60_000 },
+		why: "The backstop's hand-installed yt-dlp and deno, 30 days behind their newest release, posted at most monthly for the operator to update by hand (fleet-manager#34, operator 2026-10-31). Reads only. src/backstop-tools.ts owns the clock.",
+	},
 ];
 
 /**
@@ -753,6 +777,27 @@ export function cadencePeriodMs(cadence: JobCadence): number {
 	throw new Error(
 		`cadencePeriodMs: does not understand cron "${cron}" — extend this function rather than guessing a period`
 	);
+}
+
+/**
+ * An in-process job's clock and paging, read from its row: the one place they
+ * are declared (F12), so its module never states a second copy. THROWS for a
+ * name with no row, no `clockMs` or no `pager`: a loop with no declared clock
+ * must not start on a guessed one.
+ */
+export function inProcessClock(name: string): {
+	intervalMs: number;
+	repageMs: number;
+	deferPageMs: number;
+} {
+	const e = JOB_REGISTRY.find((j) => j.name === name);
+	if (!e || !('clockMs' in e.cadence) || !e.pager)
+		throw new Error(`job-registry: ${name} declares no in-process clock and pager`);
+	return {
+		intervalMs: e.cadence.clockMs,
+		repageMs: e.pager.repageMs,
+		deferPageMs: e.pager.deferPageMs,
+	};
 }
 
 /** Every `sub` this registry discharges, directly or through `coversSubs`. */

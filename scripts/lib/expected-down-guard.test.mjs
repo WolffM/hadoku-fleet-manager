@@ -95,6 +95,11 @@ const DEFER_CALL = /\bdeferralFor\s*\(/;
  */
 const EXEMPT = new Map([
 	[
+		'backstop-tools.mjs',
+		'reads the backstop, the controller where mgmt-api itself runs: the probe is local, ' +
+			'never ssh, and a controller that is down is not running this at all.',
+	],
+	[
 		'node-users-cutover.mjs',
 		'operator-invoked against ONE named node that it REQUIRES to be drained: ' +
 			'the drain is its precondition, not a reason to defer. An unreachable node ' +

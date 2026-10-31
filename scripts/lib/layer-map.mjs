@@ -336,6 +336,9 @@ export const LAYER_MAP = [
 	{ glob: 'scripts/lib/provision-phases.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/converge-provisioning.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/converge-toolchain.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
+	{ glob: 'src/backstop-tools.ts', layer: 'domain', domain: 'lifecycle', part: 'run' },
+	{ glob: 'scripts/backstop-tools.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
+	{ glob: 'scripts/lib/backstop-tools.mjs', layer: 'domain', domain: 'lifecycle', part: 'core' },
 	{ glob: 'scripts/reboot-claws.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/drain-node.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/enroll-node.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
@@ -491,6 +494,9 @@ export const LAYER_MAP = [
 	// -------------------------------------------------------------- domain: tenancy
 	{ glob: 'src/host-lease.ts', layer: 'domain', domain: 'tenancy', part: 'run' }, // §3.5 names it here explicitly, despite the state-record shape
 	{ glob: 'src/hosting-converge.ts', layer: 'domain', domain: 'tenancy', part: 'run' },
+	{ glob: 'src/hosting-verify.ts', layer: 'domain', domain: 'tenancy', part: 'run' },
+	{ glob: 'scripts/hosting-verify.mjs', layer: 'domain', domain: 'tenancy', part: 'run' },
+	{ glob: 'scripts/lib/hosting-verify.mjs', layer: 'domain', domain: 'tenancy', part: 'core' },
 	{ glob: 'scripts/hosting.mjs', layer: 'domain', domain: 'tenancy', part: 'run' },
 	{ glob: 'scripts/hosting-converge.mjs', layer: 'domain', domain: 'tenancy', part: 'run' },
 	{ glob: 'scripts/hosting-demand.mjs', layer: 'domain', domain: 'tenancy', part: 'run' },

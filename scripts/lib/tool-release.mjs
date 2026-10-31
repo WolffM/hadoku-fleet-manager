@@ -397,12 +397,28 @@ export async function lookupMavenLatest(source, opts = {}) {
  * tool. A refusal (403/429) is `unknown` with the reason, like any lookup.
  */
 export async function lookupGithubRelease(source, opts = {}) {
-	const {
-		attempts = 2,
-		timeoutMs = 15_000,
-		now = Date.now(),
-		minAge = DEFAULT_MIN_AGE_MINUTES,
-	} = opts;
+	const { now = Date.now(), minAge = DEFAULT_MIN_AGE_MINUTES } = opts;
+	const list = await fetchGithubReleaseTimes(source, opts);
+	if (list.status !== 'known') return list;
+	const r = newestCleared(list.time, { now, minAge });
+	if (r.status !== 'known') return { status: 'unknown', reason: `${source.repo}: ${r.reason}` };
+	return {
+		status: 'known',
+		version: r.version,
+		publishedAt: r.publishedAt,
+		attempts: list.attempts,
+	};
+}
+
+/**
+ * The release list itself, `{ version: publishedAt }`, prefix stripped,
+ * drafts and prereleases left out: {@link lookupGithubRelease}'s read, and
+ * what `backstop-tools` dates an INSTALLED version by (fleet-manager#34).
+ *
+ * @returns {Promise<{status:'known', time:Record<string,string>, attempts:number} | {status:'unknown', reason:string}>}
+ */
+export async function fetchGithubReleaseTimes(source, opts = {}) {
+	const { attempts = 2, timeoutMs = 15_000 } = opts;
 	const doFetch = opts.fetch ?? globalThis.fetch;
 	if (typeof doFetch !== 'function') return { status: 'unknown', reason: 'no fetch available' };
 	if (!/^[\w.-]+\/[\w.-]+$/.test(source?.repo ?? ''))
@@ -441,9 +457,7 @@ export async function lookupGithubRelease(source, opts = {}) {
 				if (!tag.startsWith(prefix)) continue;
 				time[tag.slice(prefix.length)] = release.published_at;
 			}
-			const r = newestCleared(time, { now, minAge });
-			if (r.status !== 'known') return { status: 'unknown', reason: `${source.repo}: ${r.reason}` };
-			return { status: 'known', version: r.version, publishedAt: r.publishedAt, attempts: i };
+			return { status: 'known', time, attempts: i };
 		} catch (e) {
 			reason =
 				e?.name === 'TimeoutError'
