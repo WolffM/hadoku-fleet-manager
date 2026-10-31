@@ -211,11 +211,12 @@ function validateProfile(id, raw) {
 	requireObject(power.logind, `${what}.power.logind`);
 	const wd = requireObject(power.watchdog, `${what}.power.watchdog`);
 	requireArray(wd, 'modules', `${what}.power.watchdog`);
-	if (typeof wd.maxLoadPerCore !== 'number' || wd.maxLoadPerCore <= 0) {
+	if ('maxLoadPerCore' in wd) {
 		fail(
-			`${what}.power.watchdog.maxLoadPerCore must be a positive number. It is a ` +
-				`PER-CORE multiplier, never an absolute: a fixed ceiling shut claw-1 down three ` +
-				`times in one hour on 2026-08-17 at a healthy load of 40 on 8 cores.`
+			`${what}.power.watchdog.maxLoadPerCore is refused: the watchdog carries no load ` +
+				`trigger. Load is not a wedge signal on a CI node, and the daemon derives its ` +
+				`15-minute ceiling as half of max-load-1, which rebooted a responsive claw-8 at ` +
+				`34 on 8 cores on 2026-10-30. See the profile's power.watchdog.$why.`
 		);
 	}
 

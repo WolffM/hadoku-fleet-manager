@@ -270,13 +270,13 @@ test('pm2-host is admissible in an imaging floor now that a probe settles it', (
 	assert.doesNotThrow(() => loadNodeProfiles({ path }));
 });
 
-test('maxLoadPerCore must be a positive number, not an absolute ceiling', () => {
+test('a watchdog load trigger is refused, at any value', () => {
 	const path = keep(
 		mutated('laptop-debian-trixie', (p) => {
-			p.power.watchdog.maxLoadPerCore = 0;
+			p.power.watchdog.maxLoadPerCore = 8;
 		})
 	);
-	assert.throws(() => loadNodeProfiles({ path }), /maxLoadPerCore must be a positive number/);
+	assert.throws(() => loadNodeProfiles({ path }), /maxLoadPerCore is refused/);
 });
 
 test('an empty required list is refused — it reads as a forgotten one', () => {

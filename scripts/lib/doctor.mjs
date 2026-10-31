@@ -405,8 +405,8 @@ export function doctorProbe({
 		'say watchdog.enabled "$(systemctl is-enabled watchdog 2>/dev/null)"',
 		'say watchdog.keepalive "$(systemctl is-active wd_keepalive 2>/dev/null)"',
 		'if [ -r /etc/watchdog.conf ]; then',
-		'  WDL=$(grep -E "^[[:space:]]*max-load-1" /etc/watchdog.conf | tr -d " " | cut -d= -f2)',
-		'  if [ -n "$WDL" ]; then say watchdog.maxLoad1 "$WDL"; else unk watchdog.maxLoad1 "watchdog.conf names no max-load-1 threshold, so nothing bounds the load it will reboot this box for"; fi',
+		'  WDL=$(grep -E "^[[:space:]]*max-load-(1|5|15)[[:space:]]*=" /etc/watchdog.conf | tr -d " " | paste -sd, -)',
+		'  say watchdog.loadTrigger "${WDL:-none}"',
 		'  WDS=$(grep -E "^[[:space:]]*temperature-sensor" /etc/watchdog.conf | tr -d " " | cut -d= -f2)',
 		'  if [ -n "$WDS" ]; then say watchdog.sensorPath "$WDS"; say watchdog.sensorMilliC "$(cat "$WDS" 2>/dev/null)"; else unk watchdog.sensorPath "watchdog.conf names no temperature-sensor"; fi',
 		'else unk watchdog.conf "/etc/watchdog.conf is not readable"; fi',
@@ -1099,8 +1099,8 @@ export function healthFacet({
 			active: facts['watchdog.active'] ?? null,
 			enabled: facts['watchdog.enabled'] ?? null,
 			keepalive: facts['watchdog.keepalive'] ?? null,
-			maxLoad1:
-				facts['watchdog.maxLoad1'] === undefined ? null : Number(facts['watchdog.maxLoad1']),
+			// `max-load-1=64,max-load-5=48`, `none`, or null when the conf was unreadable.
+			loadTrigger: facts['watchdog.loadTrigger'] ?? null,
 			sensorPath: facts['watchdog.sensorPath'] ?? null,
 			sensorC:
 				facts['watchdog.sensorMilliC'] === undefined
@@ -1444,6 +1444,25 @@ export function doctorFindings(health, { nowMs = Date.now() } = {}) {
 				'not-running',
 				`the watchdog daemon is "${w.active}" (enabled: ${w.enabled}), wd_keepalive is ` +
 					`"${w.keepalive}". Recover with: systemctl stop wd_keepalive && systemctl start watchdog`
+			)
+		);
+	}
+	// A LOAD TRIGGER REBOOTS A BUSY NODE, NOT A WEDGED ONE. The profile writes
+	// none; a line here is a hand edit or a node bootstrapped before 2026-10-30.
+	// Even `max-load-1` alone is a 15-minute ceiling of half its value, because
+	// the daemon derives max-load-5/15 when they are unset: that is how claw-8
+	// was rebooted at 52/48/34 with two heavy jobs beside its hosting slice.
+	if (watchdogInstalled && w.loadTrigger && w.loadTrigger !== 'none') {
+		out.push(
+			f(
+				health,
+				'watchdog',
+				ADVISORY,
+				'load-trigger',
+				`watchdog.conf reboots this node on load (${w.loadTrigger}). Load is not a wedge ` +
+					'signal on a CI node, and an unset max-load-15 is half of max-load-1. Remove ' +
+					'every max-load-* line from /etc/watchdog.conf and restart watchdog.',
+				{ loadTrigger: w.loadTrigger }
 			)
 		);
 	}

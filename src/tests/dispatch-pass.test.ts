@@ -657,6 +657,66 @@ test("#102 REPLAY 2026-10-08 22:08:09Z: a warm listener's running shard counts a
 	// REVERTED (no runningJobs): placed=claw-4@0,claw-4@1,claw-9@... — the incident.
 });
 
+test('#102 REPLAY 2026-10-30 20:40:52Z: a heavy mint no listing shows yet still holds the next heavy job off its node', async () => {
+	// claw-8's unit was minted 12 s earlier for forge-jvm (1), still queued, and
+	// was already running forge-e2e (1) — but no job listing said so yet. The
+	// tick read claw-8 `heavyJobs: 0` and doubled forge-e2e (4) onto it; the
+	// node then sat at load 52 on 8 cores until the watchdog rebooted it.
+	const infos = recordInfos();
+	const CT = 'WolffM/hadoku-cardtable';
+	const UNIT = 'jit-claw-8-hadoku-cardtabl-j124293716878-r41122643757-1793392837';
+	const heavyModel: HeavyModel = {
+		isHeavy: (repo, jobName) => repo === CT && /^forge-(jvm|e2e)/.test(jobName ?? ''),
+		isHeavyRepo: (repo) => repo === CT,
+	};
+	const base0 = fakeShell();
+	const sh = async (n: string, cmd: string) =>
+		cmd.includes('list-units')
+			? n === 'claw-8'
+				? `${UNIT}.service loaded active running x`
+				: ''
+			: base0(n, cmd);
+	const gh = fakeGh();
+	const job = (jobId: number, jobName: string): PendingRun => ({
+		id: 41122643757,
+		jobId,
+		repo: CT,
+		jobName,
+		jobCreatedAt: '2026-10-30T20:24:14Z',
+		repository: { full_name: CT },
+		head_repository: { full_name: CT, fork: false },
+		event: 'push',
+	});
+	const r = await runDispatchPass(
+		base({
+			order: ['claw-8', 'claw-9'],
+			nodes: [
+				node('claw-8', { maxConcurrent: 2, heavyModel }),
+				node('claw-9', { maxConcurrent: 3, heavyModel }),
+			],
+			pending: [job(124293716878, 'forge-jvm (1)'), job(124293716912, 'forge-e2e (4)')],
+			// claw-9 is visibly running a shard of its own, as it was.
+			runningJobs: [
+				{
+					repo: CT,
+					runner: 'jit-claw-9-hadoku-cardtabl-j1-r41122643757-1',
+					jobName: 'forge-jvm (3)',
+				},
+			],
+			nowMs: Date.parse('2026-10-30T20:40:52Z'),
+		}),
+		'tok',
+		gh,
+		sh
+	);
+	assert.equal(r.minted, 0, 'both nodes run a heavy job, and the hold has 3600 s to run');
+	assert.equal(
+		infos.find((i) => i.startsWith('[dispatch] minted=')),
+		undefined
+	);
+	// REVERTED (no unseen-unit count): minted=1 ... placed=claw-8@1 — the incident.
+});
+
 test('#102: a JIT sibling is in liveUnits already, so it raises heavyJobs but not standingBusy', async () => {
 	const infos = recordInfos();
 	const h = harness(['jit-claw-4-hadoku-cardtabl-j7-r9-1791497283']);

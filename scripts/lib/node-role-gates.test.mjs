@@ -61,7 +61,7 @@ const PROFILE = {
 		lid: 'none',
 		maskSleepTargets: ['sleep.target'],
 		logind: { IdleAction: 'ignore' },
-		watchdog: { modules: ['softdog'], maxLoadPerCore: 8 },
+		watchdog: { modules: ['softdog'] },
 	},
 	users: { fleetUser: 'hadoku', sudo: 'nopasswd', groups: ['sudo'] },
 	network: {

@@ -446,6 +446,27 @@ export async function runDispatchPass(
 		if (heavyModel?.isHeavy(j.repo, j.jobName)) c.heavy++;
 		siblings.set(node, c);
 	}
+	// A HEAVY MINT THE LISTINGS HAVE NOT CAUGHT UP WITH. A JIT unit minted for a
+	// heavy job is in no listing until GitHub reports its job `in_progress`, so
+	// for that window the heavy hold saw nothing there. On 2026-10-30 claw-8 took
+	// forge-e2e (1) at 20:40:43; the 20:40:52 tick read it `units: 1,
+	// heavyJobs: 0` and put forge-e2e (4) beside it. Both ran at load 52 on 8
+	// cores until the watchdog rebooted the node, failing both and the Forge
+	// slice it hosted. Such a unit counts as the heavy job it was minted for. A
+	// unit seen busy is already counted above by the job it actually runs.
+	if (heavyModel) {
+		for (const [node, units] of unitRecordsByNode) {
+			for (const { name } of units) {
+				if (busyRunners.has(name)) continue;
+				const jobId = parseJitName(name)?.jobId;
+				const job = jobId == null ? undefined : queuedJobs.get(jobId);
+				if (!job || !heavyModel.isHeavy(job.repo, job.jobName)) continue;
+				const c = siblings.get(node) ?? { standing: 0, warm: 0, heavy: 0 };
+				c.heavy++;
+				siblings.set(node, c);
+			}
+		}
+	}
 	const nodes = input.nodes.map((m) => {
 		const sib = siblings.get(m.name);
 		const units = unitsByNode.get(m.name)?.length ?? 0;

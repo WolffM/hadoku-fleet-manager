@@ -78,7 +78,7 @@ D idle.throttleCount 2022029
 D watchdog.active active
 D watchdog.enabled enabled
 D watchdog.keepalive inactive
-U watchdog.maxLoad1 watchdog.conf names no max-load-1 threshold, so nothing bounds the load it will reboot this box for
+D watchdog.loadTrigger none
 D watchdog.sensorPath /sys/class/thermal/thermal_zone3/temp
 D watchdog.sensorMilliC 62000
 D crashes 8
@@ -633,6 +633,20 @@ void test('a watchdog unit that does not EXIST is a fact, not a finding', () => 
 	const w = find(doctorFindings(stopped, { nowMs: NOW }), 'watchdog');
 	assert.equal(w[0].class, BLOCKING);
 	assert.equal(w[0].status, 'not-running');
+});
+
+void test('any watchdog load trigger is a finding; none is silent', () => {
+	// claw-8, 2026-10-30: only max-load-1 = 64 was written, the daemon derived a
+	// 15-minute ceiling of 32, and a responsive node was rebooted at 52/48/34.
+	assert.equal(facetOf(CLAW1).watchdog.loadTrigger, 'none');
+	const loaded = facetOf(
+		CLAW1.replace('D watchdog.loadTrigger none', 'D watchdog.loadTrigger max-load-1=64')
+	);
+	assert.equal(loaded.watchdog.loadTrigger, 'max-load-1=64');
+	const w = find(doctorFindings(loaded, { nowMs: NOW }), 'watchdog');
+	assert.equal(w.length, 1);
+	assert.equal(w[0].class, ADVISORY);
+	assert.equal(w[0].status, 'load-trigger');
 });
 
 void test('a radio nothing connected is advisory; the two writers DISAGREEING is not', () => {

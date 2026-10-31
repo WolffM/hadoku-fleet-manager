@@ -744,7 +744,7 @@ REQUIRED_PROFILE_KEYS="
 .id .role .os.distro .os.codename
 .power.chassis .power.lid
 .power.watchdog.device .power.watchdog.timeoutSec .power.watchdog.intervalSec
-.power.watchdog.maxLoadPerCore .power.watchdog.minMemoryPages
+.power.watchdog.minMemoryPages
 .power.watchdog.retryTimeoutSec .power.watchdog.maxTempMilliC
 .users.fleetUser .users.shell .users.sudo .users.homeMode
 .network.lanCidr .network.sshPort
@@ -1717,7 +1717,6 @@ else
 fi
 
 CORES="$(nproc)"
-WD_MAX_LOAD=$((CORES * $(preq .power.watchdog.maxLoadPerCore)))
 
 # Find the CPU PACKAGE sensor BY TYPE. thermal_zone0 was hardcoded in the
 # bazooka and is an AMBIENT zone on every node the fleet owns — it read 27C
@@ -1736,10 +1735,10 @@ done
 	echo "watchdog-device = $(preq .power.watchdog.device)"
 	echo "watchdog-timeout = $(preq .power.watchdog.timeoutSec)"
 	echo "interval = $(preq .power.watchdog.intervalSec)"
-	# 8x the MEASURED core count, never a constant. A fixed ceiling shut claw-1
-	# down three times in one hour on 2026-08-17 at a 1-minute load of 40 on 8
-	# cores — a CI runner's whole purpose is saturation.
-	echo "max-load-1 = $WD_MAX_LOAD"
+	# NO max-load-* line: load is not a wedge signal on a CI node. The daemon
+	# derives max-load-5/15 from max-load-1 when they are unset, which is how a
+	# responsive claw-8 was rebooted at a 15-minute load of 34 on 2026-10-30.
+	# The profile's power.watchdog.$why has the history.
 	echo "min-memory = $(preq .power.watchdog.minMemoryPages)"
 	echo "retry-timeout = $(preq .power.watchdog.retryTimeoutSec)"
 	if [ -n "$WD_SENSOR" ]; then
@@ -1752,7 +1751,7 @@ done
 		echo "# no x86_pkg_temp zone found — temperature check deliberately omitted"
 	fi
 } | write_file /etc/watchdog.conf
-log "  max-load-1=$WD_MAX_LOAD (${CORES} cores) sensor=${WD_SENSOR:-none}"
+log "  no load trigger; sensor=${WD_SENSOR:-none}"
 
 {
 	echo '[Manager]'
