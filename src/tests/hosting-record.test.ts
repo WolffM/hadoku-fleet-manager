@@ -11,15 +11,20 @@ import { drainNotices, noticeRefusal, type DrainDoc } from '../runners/drain.js'
 import {
 	AGENT_UP_MIN_MB,
 	CI_OOM_SCORE_ADJ,
+	ENDED_KEEP_MS,
 	HOLD_FULL_MS,
 	effectiveSlices,
 	heldBackMb,
 	hostingsOn,
+	issueEpoch,
 	parseHostingDoc,
 	readHostingDoc,
 	sharedMbOn,
 	sliceUsageProbe,
 	takeSliceUsage,
+	withEnded,
+	withMoveClosed,
+	withMoveOpen,
 	withSlice,
 	withoutSlice,
 	writeHostingDoc,
@@ -381,4 +386,93 @@ test('lane D: a planned drain of ANY kind is a notice the moment it is scheduled
 		planned: [],
 	};
 	assert.equal(drainNotices(held, NOW)[0].event, 'ends');
+});
+
+// fleet-manager#16: the placement record's app half.
+test('the epoch only goes up: past the counter, past every record, and across a removal', () => {
+	const first = issueEpoch({ nodes: {} }, 'watchparty');
+	assert.equal(first.epoch, 1);
+	// A record carrying a higher token than the counter (a hand edit) is never repeated.
+	const past = issueEpoch(first.doc, 'watchparty', [7]);
+	assert.equal(past.epoch, 8);
+	// The slice is removed; the counter is not.
+	const removed = withoutSlice(
+		withSlice(past.doc, 'claw-6', slice({ tenant: 'watchparty', epoch: 8 })),
+		'claw-6',
+		'watchparty'
+	);
+	assert.equal(removed.nodes['claw-6'], undefined);
+	assert.equal(issueEpoch(removed, 'watchparty').epoch, 9);
+	// Another app keeps its own count.
+	assert.equal(issueEpoch(removed, 'archivebot').epoch, 1);
+});
+
+test('the app half survives every slice edit and a write and read back', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'hosting-apps-'));
+	try {
+		let doc = issueEpoch({ nodes: {} }, 'watchparty').doc;
+		doc = withSlice(doc, 'claw-6', slice({ tenant: 'watchparty', epoch: 1 }));
+		doc = withSlice(doc, 'claw-6', slice({ tenant: 'archivebot', port: 3004 }));
+		doc = withoutSlice(doc, 'claw-6', 'archivebot');
+		writeHostingDoc(doc, dir);
+		const back = readHostingDoc(dir);
+		assert.equal(back.apps?.watchparty.epoch, 1);
+		assert.equal(back.nodes['claw-6'][0].epoch, 1);
+		assert.equal(hostingsOn('claw-6', noDrains, back, NOW)[0].epoch, 1);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('a file without an app half reads exactly as before; a broken one THROWS', () => {
+	assert.deepEqual(parseHostingDoc(JSON.stringify({ nodes: {} })), { nodes: {} });
+	assert.throws(
+		() => parseHostingDoc(JSON.stringify({ nodes: {}, apps: { watchparty: {} } })),
+		/watchparty has no whole-number epoch/
+	);
+	assert.throws(
+		() => parseHostingDoc(JSON.stringify({ nodes: {}, apps: { watchparty: { epoch: -1 } } })),
+		/whole-number epoch/
+	);
+	assert.throws(
+		() =>
+			parseHostingDoc(
+				JSON.stringify({ nodes: {}, apps: { watchparty: { epoch: 2, move: { from: 'claw-6' } } } })
+			),
+		/move has no from, to and epoch/
+	);
+});
+
+test('a move opens with its epoch and closes into lastMove; the epoch is never given back', () => {
+	const issued = issueEpoch({ nodes: {}, apps: { watchparty: { epoch: 3 } } }, 'watchparty');
+	const move = {
+		from: 'claw-6',
+		to: 'claw-4',
+		epoch: issued.epoch,
+		openedAt: ago(60_000),
+		by: 't',
+	};
+	const open = withMoveOpen(issued.doc, 'watchparty', move);
+	assert.deepEqual(open.apps?.watchparty, { epoch: 4, move });
+	const aborted = withMoveClosed(open, 'watchparty', 'aborted', ago(0));
+	assert.equal(aborted.apps?.watchparty.move, undefined);
+	assert.deepEqual(aborted.apps?.watchparty.lastMove, {
+		...move,
+		closedAt: ago(0),
+		outcome: 'aborted',
+	});
+	assert.equal(aborted.apps?.watchparty.epoch, 4);
+	// Closing with nothing open changes nothing.
+	assert.equal(withMoveClosed(aborted, 'watchparty', 'committed', ago(0)), aborted);
+});
+
+test('a removed slice is kept for a day, then dropped on the next write', () => {
+	const old = { node: 'claw-5', removedAt: ago(ENDED_KEEP_MS + 1), epoch: 1 };
+	let doc = withEnded({ nodes: {} }, 'cardtable', old, NOW - ENDED_KEEP_MS);
+	assert.deepEqual(doc.apps?.cardtable, { epoch: 0, ended: [old] });
+	doc = withEnded(doc, 'cardtable', { node: 'claw-9', until: ago(1), removedAt: ago(0) }, NOW);
+	assert.deepEqual(
+		doc.apps?.cardtable.ended?.map((e) => e.node),
+		['claw-9']
+	);
 });

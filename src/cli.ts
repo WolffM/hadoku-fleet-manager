@@ -291,6 +291,13 @@ const COMMANDS: Record<string, Command> = {
 		summary:
 			"where could a tenant's next slice go: its hosting.json against every claw's offer, ranked with reasons",
 	},
+	'hosting-placement': {
+		script: 'hosting-placement.mjs',
+		kind: 'operator',
+		flags: ['--max-age', '--json'],
+		summary:
+			"where the fleet placed an app: { state, epoch, nodes, target } and each slice's state, for its deploy to follow",
+	},
 	'hosting-demand': {
 		script: 'hosting-demand.mjs',
 		kind: 'recorder',

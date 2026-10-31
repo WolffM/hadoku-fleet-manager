@@ -50,7 +50,11 @@ import process from 'node:process';
 import { HOSTING_NOTICE_MS, noticeRefusal, parseWhen } from '../dist/runners/drain.js';
 import {
 	hostingsOn,
+	issueEpoch,
 	readHostingDoc,
+	withEnded,
+	withMoveClosed,
+	withMoveOpen,
 	withSlice,
 	withoutSlice,
 	writeHostingDoc,
@@ -63,25 +67,20 @@ import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
 import { collectOffers } from './lib/collect-offers.mjs';
+import { checkSlice, hostingRecords, observeNode, slicesMb } from './lib/hosting-check.mjs';
 import { keepArtifact } from './lib/hosting-artifacts.mjs';
 import { planFor } from './lib/hosting-plan.mjs';
 import {
 	CONTROLLER_NODE,
 	INSTALL_MAX_BYTES,
-	NO_TENANT,
 	ciShapedScript,
 	deployScript,
 	fitProblems,
 	installScript,
-	judgeHosting,
 	leftoversScript,
-	observeScript,
 	parseCores,
 	parseMemoryMb,
 	parseLeftovers,
-	parseObserved,
-	peerCandidates,
-	probeReach,
 	removeScript,
 	restartScript,
 } from './lib/hosting.mjs';
@@ -107,6 +106,7 @@ const VALUE_FLAGS = [
 ];
 const BOOL_FLAGS = [
 	'--shared',
+	'--move',
 	'--end',
 	'--keep',
 	'--remove',
@@ -141,6 +141,9 @@ if (has('--help') || has('-h')) {
 			'fleet hosting <node> --tenant <name> --memory 4G --cores 4 [--shared] [--role standby] [--reason "why"]',
 			'        lend the node. --shared: CI stays and ranks below the slice; without it CI is held off.',
 			"        --role standby: one of the tenant's availability.standby copies (docs/service-state.md).",
+			'fleet hosting <node> --tenant <name> --memory 1536M --cores 2 --shared --move',
+			"        open a singleton's move to <node>: a new epoch, the old slice still serving. Ending or",
+			'        removing the old slice commits it; ending or removing this one aborts it.',
 			'fleet hosting <node> --install <path> --sha256 <hex>',
 			"        put the tenant's executable in place, root-owned, and restart the agent.",
 			'fleet hosting <node> --restart',
@@ -247,81 +250,41 @@ async function controllerAddrs() {
 /** A registered tenant's spec (lib/tenant-registry.mjs), or null. */
 const specOf = (tenant) => (tenant ? tenantSpec(registry, tenant) : null);
 
-async function observe(name, spec) {
-	const r = await runOn(
-		name,
-		observeScript(spec ?? NO_TENANT, nodeUser(manifest.machines?.[name], 'ci')),
-		{
-			as: 'admin',
-			timeoutMs: 30_000,
-			connectTimeout: 6,
-		}
+/** `tenant`'s primary records in force, either mode, on every node: `[{ node, ...HostingOn }]`. */
+const primariesOf = (tenant) =>
+	[...new Set([...Object.keys(drainDoc.nodes), ...Object.keys(hostingDoc.nodes)])].flatMap((n) =>
+		hostingsOn(n, drainDoc, hostingDoc, NOW)
+			.filter((h) => h.tenant === tenant && h.role !== 'standby')
+			.map((h) => ({ node: n, ...h }))
 	);
-	return { obs: parseObserved(r.stdout), error: r.ok ? null : (r.error ?? r.stderr.trim()) };
-}
 
 /**
- * Every shared slice on `name` summed, lapsed ones included: a lapsed slice
- * keeps its units, and its protection, until `--remove`.
+ * `doc` with a singleton's open move closed, when this action's slice is one
+ * end of it: ending or removing the node it leaves COMMITS the move (the
+ * mover has stopped it there and the new node serves), ending or removing
+ * the node it goes to ABORTS it. Any other slice leaves the move alone.
  */
-const slicesMb = (doc, name) => (doc.nodes[name] ?? []).reduce((s, r) => s + r.memoryMb, 0);
-
-/** Every hosting record, either kind, lapsed or not — a lapsed one is still checked. One row per tenant. */
-function hostingNodes() {
-	const out = [];
-	for (const [name, rec] of Object.entries(drainDoc.nodes)) {
-		if (rec.kind === 'hosting' && rec.hosting)
-			out.push({ name, mode: 'whole', declared: rec.hosting, until: rec.until ?? null });
-	}
-	for (const [name, recs] of Object.entries(hostingDoc.nodes)) {
-		for (const rec of recs) {
-			const { tenant, memoryMb, cores, port } = rec;
-			out.push({
-				name,
-				mode: 'shared',
-				declared: { tenant, memoryMb, cores, port },
-				until: rec.until ?? null,
-			});
-		}
-	}
-	return out;
-}
-
-/** What `--check` and a declaration both report: declared vs observed, judged. */
-async function checkOne({ name, mode, declared, until }) {
-	const spec = specOf(declared.tenant);
-	const { obs, error } = await observe(name, spec);
-	// Reach is a `controller` ingress's question; a loopback tenant is judged from its socket.
-	const reach =
-		obs && spec?.ingress === 'controller'
-			? await probeReach({
-					port: declared.port,
-					addrs: {
-						lan: manifest.machines?.[name]?.lan?.ip ?? null,
-						tailnet4: obs.tailnet4,
-						tailnet6: obs.tailnet6,
-					},
-					peers: peerCandidates(manifest, name),
-					run: runOn,
-				})
-			: null;
-	const nodeMb = mode === 'shared' ? slicesMb(hostingDoc, name) : declared.memoryMb;
-	const judged = judgeHosting(declared, obs, mode, reach, spec, nodeMb);
-	if (!obs && error) judged.findings[0].why += ` (${error})`;
-	const blocking = judged.findings.some((f) => f.class === 'blocking');
+function closingMove(doc, tenant) {
+	const move = doc.apps?.[tenant]?.move;
+	if (!move || (move.from !== node && move.to !== node)) return { doc, closed: null };
+	const outcome = move.from === node ? 'committed' : 'aborted';
 	return {
-		node: name,
-		mode,
-		declared,
-		until,
-		state: blocking ? 'not-guaranteed' : 'guaranteed',
-		...judged,
+		doc: withMoveClosed(doc, tenant, outcome, new Date(NOW).toISOString()),
+		closed: { ...move, outcome },
 	};
 }
 
+/** The context every slice check runs in (lib/hosting-check.mjs). */
+const checkCtx = () => ({ manifest, hostingDoc, specOf, run: runOn });
+
+const observe = (name, spec) => observeNode(checkCtx(), name, spec);
+
+/** What `--check` and a declaration both report: declared vs observed, judged. */
+const checkOne = async (h) => (await checkSlice(checkCtx(), h)).row;
+
 if (action === 'check') {
 	const rows = [];
-	for (const h of hostingNodes()) rows.push(await checkOne(h));
+	for (const h of hostingRecords(drainDoc, hostingDoc)) rows.push(await checkOne(h));
 	for (const r of rows) {
 		say(`── ${r.node}  ${r.mode}  ${r.declared?.tenant ?? '?'}  ${r.state}`);
 		for (const f of r.findings) say(`   ${f.class.padEnd(9)} ${f.category}: ${f.why}`);
@@ -477,7 +440,7 @@ if (action === 'reassert') {
 
 if (action === 'ci-shaped') {
 	if (!tail.length) refuse('--ci-shaped needs a command after --.');
-	const { obs, error } = await observe(node, recordTenant ?? 'cardtable');
+	const { obs, error } = await observe(node, specOf(recordTenant));
 	if (!obs?.memTotalMb) refuse(`could not read ${node}'s memory: ${error ?? 'no answer'}`);
 	const memoryMaxMb = obs.memTotalMb - (machine.minFreeMb ?? 1536);
 	const r = await runOn(
@@ -514,6 +477,7 @@ if (action === 'end') {
 	if (refusal && !has('--force'))
 		refuse(`${refusal} Use --in 15m or later, or --force if the box is failing.`);
 	const until = new Date(endMs).toISOString();
+	const { doc: closedDoc, closed } = closingMove(hostingDoc, current.tenant);
 	if (current.mode === 'whole') {
 		writeDrainDoc(
 			{
@@ -522,20 +486,39 @@ if (action === 'end') {
 			},
 			drainDoc
 		);
+		if (closed) writeHostingDoc(closedDoc, stateDir());
 	} else {
-		writeHostingDoc(withSlice(hostingDoc, node, { ...sharedRec, until }), stateDir());
+		writeHostingDoc(withSlice(closedDoc, node, { ...sharedRec, until }), stateDir());
 	}
 	const named = sharedRecs.length > 1 ? ` --tenant ${current.tenant}` : '';
 	say(
 		`✓ ${node} stops hosting ${current.tenant} at ${until}. Then: fleet hosting ${node}${named} --remove`
 	);
-	finish(true, { state: 'ending', until, mode: current.mode, tenant: current.tenant });
+	if (closed)
+		say(`  the move ${closed.from} → ${closed.to} (epoch ${closed.epoch}) is ${closed.outcome}.`);
+	finish(true, {
+		state: 'ending',
+		until,
+		mode: current.mode,
+		tenant: current.tenant,
+		...(closed ? { move: closed } : {}),
+	});
 }
 
 if (action === 'keep') {
 	const rec = wholeRec ?? sharedRec;
 	if (!rec) refuse(`${node} is not hosting.`);
 	if (!rec.until) refuse(`${node} has no end scheduled.`);
+	// A singleton whose move committed serves from its new node; taking the old
+	// slice's end back would make two places that may run it.
+	const keptTenant = wholeRec?.hosting?.tenant ?? sharedRec.tenant;
+	if (registry.tenants[keptTenant]?.request.availability?.singleton) {
+		const other = primariesOf(keptTenant).find((h) => h.node !== node);
+		if (other)
+			refuse(
+				`${keptTenant} is a singleton and ${other.node} holds it; keeping ${node} would be a second writer.`
+			);
+	}
 	const { until: was, ...kept } = rec;
 	if (wholeRec)
 		writeDrainDoc(
@@ -605,11 +588,28 @@ if (action === 'remove') {
 		delete nodes[node];
 		writeDrainDoc({ nodes, planned: drainDoc.planned }, drainDoc);
 	}
-	if (sharedRec) {
-		hostingDoc = withoutSlice(hostingDoc, node, sharedRec.tenant);
-		writeHostingDoc(hostingDoc, stateDir());
-	}
+	// What was here stays readable for a day, so a tenant can tell "ended" from "vanished".
+	const gone = wholeRec ? { ...wholeRec.hosting, until: wholeRec.until } : (sharedRec ?? null);
+	const { doc: closedDoc, closed } = closingMove(hostingDoc, tenant);
+	hostingDoc = closedDoc;
+	if (sharedRec) hostingDoc = withoutSlice(hostingDoc, node, sharedRec.tenant);
+	if (gone)
+		hostingDoc = withEnded(
+			hostingDoc,
+			tenant,
+			{
+				node,
+				...(gone.until ? { until: gone.until } : {}),
+				removedAt: new Date(NOW).toISOString(),
+				...(gone.role ? { role: gone.role } : {}),
+				...(gone.epoch !== undefined ? { epoch: gone.epoch } : {}),
+			},
+			NOW
+		);
+	if (sharedRec || gone || closed) writeHostingDoc(hostingDoc, stateDir());
 	say(`✓ ${node} no longer hosts ${tenant}; units, executable and port ${spec.port} removed.`);
+	if (closed)
+		say(`  the move ${closed.from} → ${closed.to} (epoch ${closed.epoch}) is ${closed.outcome}.`);
 	// The tenants that stay held the parent slice and CI's headroom at the old
 	// sum. Their node side runs again at the new one.
 	const stay = hostingsOn(node, drainDoc, hostingDoc, NOW);
@@ -625,8 +625,9 @@ if (action === 'remove') {
 			tenant,
 			left: [],
 			reason: `removed, but the tenants that stay are not guaranteed: ${failed.join('; ')}`,
+			...(closed ? { move: closed } : {}),
 		});
-	finish(true, { state: 'removed', tenant, left: [] });
+	finish(true, { state: 'removed', tenant, left: [], ...(closed ? { move: closed } : {}) });
 }
 
 // ── declare ──────────────────────────────────────────────────────────────────
@@ -663,6 +664,37 @@ if (current && (current.role ?? null) !== role)
 	refuse(
 		`${node} already hosts ${current.tenant} as ${current.role ?? 'primary'}. End and remove that first.`
 	);
+
+// A SINGLETON IS NEVER DECLARED TWICE BY ACCIDENT (fleet-manager#16). Its
+// second primary is a move, said with --move, and only one is open at a time:
+// the new node gets the next epoch, and the old one keeps serving until the
+// mover has stopped it and the old slice is ended.
+const singleton = registry.tenants[tenant].request.availability?.singleton === true;
+const elsewhere = role === 'standby' ? [] : primariesOf(tenant).filter((h) => h.node !== node);
+const MOVE = has('--move');
+if (MOVE) {
+	if (!shared || role)
+		refuse("--move opens a move of a singleton's primary slice: it takes --shared and no --role.");
+	if (!singleton) refuse(`${tenant} is not a singleton: it takes another slice, not a move.`);
+	const open = hostingDoc.apps?.[tenant]?.move;
+	if (open)
+		refuse(
+			`a move of ${tenant} is already open: ${open.from} → ${open.to} (epoch ${open.epoch}). ` +
+				`End the slice on ${open.from} to commit it, or on ${open.to} to abort it.`
+		);
+	if (current) refuse(`${node} already holds ${tenant}; a move goes to another node.`);
+	if (elsewhere.length !== 1)
+		refuse(
+			elsewhere.length
+				? `${tenant} holds ${elsewhere.map((h) => h.node).join(', ')}; a move leaves exactly one.`
+				: `${tenant} holds no slice to move from; declare it without --move.`
+		);
+} else if (singleton && elsewhere.length)
+	refuse(
+		`${tenant} is a singleton and ${elsewhere.map((h) => h.node).join(', ')} holds it. ` +
+			'A second place is a move: --move.'
+	);
+const moveFrom = MOVE ? elsewhere[0].node : null;
 const drained = drainDoc.nodes[node];
 if (!shared && drained && !['hosting', 'lease'].includes(drained.kind) && !has('--force')) {
 	refuse(
@@ -699,7 +731,11 @@ let placement = null;
 if (shared && !sharedRec) {
 	const request = registry.tenants[tenant].request;
 	const { offers } = await collectOffers(manifest, { tools: request.runtime?.tools ?? [] });
-	const plan = planFor(request, offers);
+	// A move is not a second slice: its plan allows one past max, as the converger's does.
+	const plan = planFor(
+		MOVE ? { ...request, slices: { ...request.slices, max: request.slices.max + 1 } } : request,
+		offers
+	);
 	// A drain is about CI, not about where a tenant may live: a slice is often
 	// declared under the tenant's own lease drain.
 	const found = plan.refused.find((r) => r.node === node);
@@ -732,7 +768,42 @@ const base = {
 	reason: valueOf('--reason') ?? `${tenant} hosting node`,
 	by,
 };
-const declared = { tenant, ...resources, port: spec.port, ...(role ? { role } : {}) };
+// THE FENCING TOKEN. A primary on a node that did not hold this tenant gets
+// the app's next epoch, recorded before any record carries it. A re-declare
+// of the slice already here keeps the one it has: the node did not change.
+// (A record from before epochs carries none, and keeps carrying none.)
+const heldHere = wholeRec?.hosting?.tenant === tenant ? wholeRec.hosting : sharedRec;
+let epoch = null;
+if (role !== 'standby') {
+	if (heldHere) epoch = heldHere.epoch ?? null;
+	else {
+		// Every record of this tenant, lapsed ones included, so no token is issued twice.
+		const seen = [
+			...Object.values(hostingDoc.nodes).flat(),
+			...Object.values(drainDoc.nodes)
+				.filter((r) => r.kind === 'hosting')
+				.map((r) => r.hosting),
+		]
+			.filter((r) => r?.tenant === tenant && Number.isInteger(r.epoch))
+			.map((r) => r.epoch);
+		({ doc: hostingDoc, epoch } = issueEpoch(hostingDoc, tenant, seen));
+		if (MOVE)
+			hostingDoc = withMoveOpen(hostingDoc, tenant, {
+				from: moveFrom,
+				to: node,
+				epoch,
+				openedAt: new Date(NOW).toISOString(),
+				by,
+			});
+	}
+}
+const declared = {
+	tenant,
+	...resources,
+	port: spec.port,
+	...(role ? { role } : {}),
+	...(epoch !== null ? { epoch } : {}),
+};
 // A resize restarts the hold-back's grace: the new size is not in use yet.
 if (current && (current.memoryMb !== declared.memoryMb || current.cores !== declared.cores))
 	base.since = new Date(NOW).toISOString();
@@ -743,6 +814,8 @@ if (shared) {
 		`✓ ${node} hosts ${tenant} beside CI; the dispatcher holds the slice back from its next pass.`
 	);
 } else {
+	// The token first, so a record never carries one the counter has not issued.
+	if (epoch !== null && !heldHere) writeHostingDoc(hostingDoc, stateDir());
 	writeDrainDoc(
 		{
 			nodes: { ...drainDoc.nodes, [node]: { ...base, kind: 'hosting', hosting: declared } },
@@ -808,4 +881,5 @@ finish(row.state === 'guaranteed', {
 	observed: row.observed,
 	findings: row.findings,
 	placement,
+	...(MOVE ? { move: { from: moveFrom, to: node, epoch } } : {}),
 });

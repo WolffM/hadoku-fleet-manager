@@ -599,3 +599,44 @@ test('a dry run says the agent would be installed, and a service is never instal
 	});
 	assert.equal(calls.length, 1, 'a service is deployed by its app layer');
 });
+
+// fleet-manager#16: a singleton's move, opened through `fleet hosting --move`.
+test('an open move is the mover’s: two primaries are expected and nothing is declared, ended or kept', () => {
+	const d = run({
+		request: service,
+		plan: plan('claw-5'),
+		offers: [offer('claw-6'), offer('claw-4')],
+		slices: [{ node: 'claw-6' }, { node: 'claw-4', since: at(-1) }],
+		move: { from: 'claw-6', to: 'claw-4', epoch: 5 },
+	});
+	assert.deepEqual(d.actions, []);
+	assert.equal(d.blocked.length, 1);
+	assert.equal(d.blocked[0].soft, true, 'an open move pages nobody by itself');
+	assert.match(d.blocked[0].why, /move of watchparty is open, claw-6 → claw-4 \(epoch 5\)/);
+});
+
+test('after a committed move the old slice is never kept, even when the new node cannot serve', () => {
+	const d = run({
+		request: service,
+		plan: plan(),
+		movePlan: plan('claw-5'),
+		offers: [offer('claw-6'), offer('claw-4', { reachable: false })],
+		slices: [{ node: 'claw-6', until: at(10) }, { node: 'claw-4' }],
+	});
+	assert.equal(
+		d.actions.filter((a) => a.op === 'keep').length,
+		0,
+		'keeping claw-6 would name two places that may run a singleton'
+	);
+	assert.match(d.blocked[0].why, /claw-4 cannot be reached and watchparty has no fence/);
+	// With no other primary in force, its own ending slice is still kept.
+	const alone = run({
+		request: service,
+		offers: [offer('claw-6')],
+		slices: [{ node: 'claw-6', until: at(10) }],
+	});
+	assert.deepEqual(
+		alone.actions.map((a) => [a.op, a.node]),
+		[['keep', 'claw-6']]
+	);
+});

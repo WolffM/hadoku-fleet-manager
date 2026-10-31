@@ -83,6 +83,14 @@ export interface HostingResources {
 	 * which keeps every record written before the field byte-identical.
 	 */
 	role?: 'standby';
+	/**
+	 * The fencing token this primary slice was declared with (fleet-manager#16).
+	 * Issued by `fleet hosting` from the app's counter in `fleet-hosting.json`
+	 * (`issueEpoch` in hosting-record.ts) each time the app is placed on a node
+	 * that did not hold it. Absent on a record written before
+	 * epochs were kept, which reads as epoch 0. Never on a standby.
+	 */
+	epoch?: number;
 }
 
 /** One node's drain record. Reasons are required; a drain nobody can explain gets undone. */

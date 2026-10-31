@@ -354,6 +354,8 @@ export const PROSE_CONTRACT = deriveProseContract(JOB_REGISTRY);
  * placement and failover, `apps/server/src/play/remote/`), declared by it on
  * 2026-10-27. It drains matches off a node before a hosting end or a reboot
  * from `notices`, and places by `ok`, `hosting.state` and `ciUser.state`.
+ * `hosting-placement` is the one entry whose first reader is the app layer's
+ * deploy, not cardtable (fleet-manager#16), and that reader is not written yet.
  *
  * Each `fields` entry is a dotted path into the document, `[]` marking an
  * array. Renaming or dropping one breaks a live game's failover, so the
@@ -415,6 +417,38 @@ export const TENANT_CONTRACT = [
 			'lastPass.actions[].op',
 			'lastPass.actions[].node',
 			'lastPass.blocked[].why',
+		],
+	},
+	{
+		// THE PLACEMENT RECORD, read (fleet-manager#16). Reviewed by cardtable,
+		// hadoku_site and watchparty in the private planning doc
+		// hosting-placement-reader-2026-10-31.md (§3, §5a, §5b). The consumer is
+		// NOT WRITTEN YET: hadoku_site#491 part 2 builds it on this document. The
+		// paths below are the ones that review fixed, so they are held from the
+		// day the producer ships rather than from the day a consumer appears.
+		sub: 'hosting-placement',
+		argv: ['watchparty', '--json'],
+		consumer:
+			'the app layer: deploy-config and its placement drift gate for a `"placement": "fleet"` row (site#491 part 2, PENDING: not yet written); later cardtable, polling with --max-age 55',
+		fields: [
+			'contract',
+			'ok',
+			'error',
+			'generatedAt',
+			'cached',
+			'app',
+			'placement.state',
+			'placement.epoch',
+			'placement.nodes',
+			'placement.target',
+			'slices[].node',
+			'slices[].role',
+			'slices[].state',
+			'slices[].why',
+			'slices[].until',
+			'slices[].declared.port',
+			'ended[].node',
+			'ended[].until',
 		],
 	},
 	{

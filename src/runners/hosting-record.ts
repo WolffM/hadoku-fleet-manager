@@ -74,9 +74,59 @@ export interface SharedHosting extends HostingResources {
 	until?: string;
 }
 
+/** A slice `--remove` took away, kept for {@link ENDED_KEEP_MS} so a reader can tell "ended" from "vanished". */
+export interface EndedSlice {
+	node: string;
+	/** The end the tenant was given; absent when it was removed with `--force` before one. */
+	until?: string;
+	removedAt: string;
+	role?: 'standby';
+	epoch?: number;
+}
+
+/**
+ * A singleton's move, OPEN: `to` is declared and carries `epoch`, `from` still
+ * serves. Opened by `fleet hosting <to> --move`; closed by the door when
+ * `from`'s slice is ended or removed (committed) or `to`'s is (aborted).
+ */
+export interface OpenMove {
+	from: string;
+	to: string;
+	epoch: number;
+	openedAt: string;
+	by: string;
+}
+
+/** The last move, once closed. */
+export interface ClosedMove extends OpenMove {
+	closedAt: string;
+	outcome: 'committed' | 'aborted';
+}
+
+/**
+ * THE APP HALF OF THE PLACEMENT RECORD (fleet-manager#16). Where an app is
+ * placed is the slices themselves, by node; this holds only what outlives a
+ * slice. `epoch` is the last fencing token issued for the app: it goes up by
+ * one each time `fleet hosting` places a primary on a node that did not hold
+ * one, a move's open included, and it never goes down, not even when the app
+ * holds no slice at all. A per-slice counter could not promise that: the
+ * record that carried it is gone the moment its slice is removed.
+ */
+export interface AppPlacement {
+	epoch: number;
+	move?: OpenMove;
+	lastMove?: ClosedMove;
+	ended?: EndedSlice[];
+}
+
 export interface HostingDoc {
 	nodes: Record<string, SharedHosting[]>;
+	/** Per app. Absent until the first epoch is issued, so older files read unchanged. */
+	apps?: Record<string, AppPlacement>;
 }
+
+/** How long a removed slice stays in its app's `ended` list. */
+export const ENDED_KEEP_MS = 24 * 3_600_000;
 
 /** One hosting on a node, whichever kind: `whole` is the drain record, `shared` is this file's. */
 export interface HostingOn extends HostingResources {
@@ -104,7 +154,10 @@ const lapsed = (rec: { until?: string }, nowMs: number): boolean => {
  */
 export function parseHostingDoc(raw: string): HostingDoc {
 	if (!raw.trim()) return { nodes: {} };
-	const parsed = JSON.parse(raw) as { nodes?: Record<string, SharedHosting | SharedHosting[]> };
+	const parsed = JSON.parse(raw) as {
+		nodes?: Record<string, SharedHosting | SharedHosting[]>;
+		apps?: Record<string, AppPlacement>;
+	};
 	const nodes: Record<string, SharedHosting[]> = {};
 	for (const [node, value] of Object.entries(parsed.nodes ?? {})) {
 		const recs = Array.isArray(value) ? value : [value];
@@ -122,7 +175,21 @@ export function parseHostingDoc(raw: string): HostingDoc {
 		if (twice) throw new Error(`${FILE}: ${node} lists ${twice} twice`);
 		if (recs.length) nodes[node] = recs;
 	}
-	return { nodes };
+	if (parsed.apps === undefined) return { nodes };
+	for (const [app, a] of Object.entries(parsed.apps)) {
+		// A fencing token that cannot be read must not restart from zero.
+		if (!Number.isInteger(a?.epoch) || a.epoch < 0)
+			throw new Error(`${FILE}: apps.${app} has no whole-number epoch`);
+		if (a.ended !== undefined && !Array.isArray(a.ended))
+			throw new Error(`${FILE}: apps.${app}.ended is not a list`);
+		const m = a.move;
+		if (
+			m !== undefined &&
+			(typeof m?.from !== 'string' || typeof m.to !== 'string' || !Number.isInteger(m.epoch))
+		)
+			throw new Error(`${FILE}: apps.${app}.move has no from, to and epoch`);
+	}
+	return { nodes, apps: parsed.apps };
 }
 
 /**
@@ -142,7 +209,7 @@ export function writeHostingDoc(doc: HostingDoc, dir: string = stateDir()): void
 	const tmp = `${path}.${process.pid}.tmp`;
 	writeFileSync(
 		tmp,
-		`${JSON.stringify({ $comment: 'Shared hosting slices: a tenant beside CI. `fleet hosting --shared` writes this; the dispatcher reads it. See src/runners/hosting-record.ts.', ...doc }, null, 2)}\n`
+		`${JSON.stringify({ $comment: 'Shared hosting slices: a tenant beside CI, and per app its placement epoch. `fleet hosting` writes this; the dispatcher and `fleet hosting-placement` read it. See src/runners/hosting-record.ts.', ...doc }, null, 2)}\n`
 	);
 	renameSync(tmp, path);
 }
@@ -190,13 +257,14 @@ export function hostingsOn(
 	}
 	return [...(effectiveSlices(hostingDoc, nowMs)[node] ?? [])]
 		.sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
-		.map(({ tenant, memoryMb, cores, port, role, until, since }) => ({
+		.map(({ tenant, memoryMb, cores, port, role, epoch, until, since }) => ({
 			mode: 'shared' as const,
 			tenant,
 			memoryMb,
 			cores,
 			port,
 			...(role ? { role } : {}),
+			...(epoch !== undefined ? { epoch } : {}),
 			...(until ? { until } : {}),
 			since,
 		}));
@@ -205,7 +273,7 @@ export function hostingsOn(
 /** `doc` with `rec` as `node`'s slice for `rec.tenant`: that tenant's record replaced, every other kept. */
 export function withSlice(doc: HostingDoc, node: string, rec: SharedHosting): HostingDoc {
 	const others = (doc.nodes[node] ?? []).filter((r) => r.tenant !== rec.tenant);
-	return { nodes: { ...doc.nodes, [node]: [...others, rec] } };
+	return { ...doc, nodes: { ...doc.nodes, [node]: [...others, rec] } };
 }
 
 /** `doc` without `tenant`'s slice on `node`; the node's key goes when its last slice does. */
@@ -214,7 +282,75 @@ export function withoutSlice(doc: HostingDoc, node: string, tenant: string): Hos
 	const left = (nodes[node] ?? []).filter((r) => r.tenant !== tenant);
 	if (left.length) nodes[node] = left;
 	else delete nodes[node];
-	return { nodes };
+	return { ...doc, nodes };
+}
+
+/**
+ * The next fencing token for `app`, and `doc` with it recorded. `seen` is
+ * every epoch on the app's records in force, whole-box drains included, so a
+ * token is never issued twice even against a hand-edited file. The caller
+ * writes the doc BEFORE it writes a record carrying the token: a crash in
+ * between skips a number, which is harmless, and never repeats one.
+ */
+export function issueEpoch(
+	doc: HostingDoc,
+	app: string,
+	seen: readonly number[] = []
+): { doc: HostingDoc; epoch: number } {
+	const prev = doc.apps?.[app];
+	const epoch = Math.max(prev?.epoch ?? 0, ...seen) + 1;
+	return {
+		doc: { ...doc, apps: { ...doc.apps, [app]: { ...prev, epoch } } },
+		epoch,
+	};
+}
+
+/** `doc` with `move` open for `app`. The epoch must already be issued: {@link issueEpoch}. */
+export function withMoveOpen(doc: HostingDoc, app: string, move: OpenMove): HostingDoc {
+	const prev = doc.apps?.[app];
+	return {
+		...doc,
+		apps: { ...doc.apps, [app]: { ...prev, epoch: Math.max(prev?.epoch ?? 0, move.epoch), move } },
+	};
+}
+
+/**
+ * `doc` with `app`'s open move closed as `outcome`, kept as `lastMove`, or
+ * `doc` itself when no move is open. The epoch is never given back: an
+ * aborted move's token stays spent, so the node it was issued to cannot
+ * present it again.
+ */
+export function withMoveClosed(
+	doc: HostingDoc,
+	app: string,
+	outcome: ClosedMove['outcome'],
+	closedAt: string
+): HostingDoc {
+	const prev = doc.apps?.[app];
+	if (!prev?.move) return doc;
+	const { move, ...rest } = prev;
+	return {
+		...doc,
+		apps: { ...doc.apps, [app]: { ...rest, lastMove: { ...move, closedAt, outcome } } },
+	};
+}
+
+/**
+ * `doc` with `slice` in `app`'s ended list, and every entry older than
+ * {@link ENDED_KEEP_MS} dropped. The app's epoch is kept, or started at 0 for
+ * an app that never had one, so the list has somewhere to live.
+ */
+export function withEnded(
+	doc: HostingDoc,
+	app: string,
+	slice: EndedSlice,
+	nowMs: number = Date.now()
+): HostingDoc {
+	const prev = doc.apps?.[app];
+	const ended = [...(prev?.ended ?? []), slice].filter(
+		(e) => !(nowMs - Date.parse(e.removedAt) > ENDED_KEEP_MS)
+	);
+	return { ...doc, apps: { ...doc.apps, [app]: { ...prev, epoch: prev?.epoch ?? 0, ended } } };
 }
 
 /**

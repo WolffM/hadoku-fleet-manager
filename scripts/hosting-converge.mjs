@@ -122,6 +122,18 @@ try {
 const notices = [...drainNotices(drainDoc, NOW), ...hostingNotices(hostingDoc, NOW)];
 const nodes = Object.keys(manifest.machines ?? {});
 
+/** A plan's picks and refusals, in the shape `fleet hosting-placement` publishes. */
+const offersOf = (plan) => ({
+	ranked: plan.ranked.map(({ node, ciJobs, memoryLeftMb, cutOver, risk }) => ({
+		node,
+		ciJobs,
+		memoryLeftMb,
+		cutOver,
+		risk: risk ?? null,
+	})),
+	refused: plan.refused.map(({ node, reasons }) => ({ node, reasons })),
+});
+
 /** The door, spawned as the operator would run it. Its stdout is kept whole under --json. */
 const door = async (args) => {
 	try {
@@ -194,6 +206,7 @@ for (const [app, { request }] of tenants) {
 				: siteDocs
 					? { node: appLayerHost(app, siteDocs) }
 					: { unreadable: siteWhy },
+		move: hostingDoc.apps?.[app]?.move ?? null,
 	});
 	const live = request.placement.auto === true && !DRY_RUN;
 	const { rows, results } = await act(request, decision, {
@@ -213,6 +226,9 @@ for (const [app, { request }] of tenants) {
 		demand: demand.tenants[app] ?? null,
 		...decision,
 		results,
+		// Where the next slice would go, kept for `fleet hosting-placement` so it
+		// answers without an ssh to every node. A singleton's is its move plan.
+		offers: offersOf(movePlan ?? plan),
 	};
 }
 

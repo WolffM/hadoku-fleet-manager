@@ -217,6 +217,100 @@ lease's job. What a service must do
 to earn that fence, and how to request it, is
 [service-state.md](service-state.md).
 
+## The placement record, and its reader
+
+```sh
+fleet hosting-placement watchparty --json              # live: one ssh per slice node
+fleet hosting-placement cardtable --json --max-age 55  # the per-app copy, when younger
+fleet hosting-placement --json                         # every registered tenant, under apps[]
+```
+
+Where the fleet has placed an app is the hosting ledger itself. There is no
+second placements file (design: `capability-placement-2026-10-28.md` §3.1).
+The slices say which nodes: `fleet-hosting.json` for shared ones, and drain
+records of `kind: hosting` for whole ones. Each primary slice carries the
+`epoch` it was declared with. What outlives a slice lives in
+`fleet-hosting.json` under `apps.<app>`:
+
+| field      | what it is                                                                                 |
+| ---------- | ------------------------------------------------------------------------------------------ |
+| `epoch`    | the last fencing token issued. It only goes up, even while the app holds no slice          |
+| `move`     | a singleton's open move: `{ from, to, epoch, openedAt, by }`                               |
+| `lastMove` | the last move once closed, with `closedAt` and `outcome: committed \| aborted`             |
+| `ended`    | slices `--remove` took away in the last 24 h, so a reader can tell "ended" from "vanished" |
+
+**The one writer is the `fleet hosting` door.** The converger and hadoku_site's
+mover both act through it:
+
+- A primary declared on a node that did not hold the app gets the next epoch.
+  The epoch is written before any record carries it. A re-declare of the slice
+  already there keeps the epoch it has.
+- A singleton never gets a second primary by accident. Its second place is a
+  move, said with `--move` on the new node:
+  `fleet hosting claw-4 --tenant watchparty --memory 1536M --cores 2 --shared --move`.
+  That issues the new epoch and opens the move, and the old node keeps serving.
+  Only one move is open at a time.
+- Ending or removing the slice on the node it leaves (`--end --in 15m` after
+  the mover has stopped it there and the new node serves) **commits** the
+  move. Ending or removing the new node's slice **aborts** it. An aborted
+  move's epoch is never given back.
+- `--keep` on a singleton is refused while another primary holds it, and
+  the converger never keeps such a slice: after a commit, the old node's copy
+  is stopped and its state is gone. While a move is open the converger leaves
+  the app alone and reports it (soft).
+
+A record from before epochs carries none, and reads as epoch 0. The next
+placement or move issues epoch 1. hadoku_site's first fleet-placed commit is
+the bootstrap.
+
+**What the reader says** (contract 1, reviewed by cardtable, hadoku_site and
+watchparty in the private `hosting-placement-reader-2026-10-31.md`):
+
+```jsonc
+{
+  "contract": 1, "generatedAt": "…", "cached": false, "ok": true, "app": "watchparty",
+  "tenant": { "kind": "service", "auto": true, "singleton": true, "fence": null,
+              "slices": { "min": 1, "max": 1 }, "noticeMin": 15, "port": 8079 },
+  "placement": { "state": "placed", "epoch": 0, "nodes": ["claw-6"], "target": null },
+  "slices": [ { "node": "claw-6", "mode": "shared", "role": "primary", "epoch": null,
+                "since": "…", "until": null, "declared": { "memoryMb": 1536, "cores": 2, "port": 8079 },
+                "observedAt": "…", "reachable": true, "state": "guaranteed", "why": null,
+                "observed": { … }, "findings": [ … ], "notices": [ … ] } ],
+  "ended": [], "lastMove": null, "demand": null,
+  "converger": { "at": "…", "live": true, "desired": 1, "serving": ["claw-6"], "actions": [], "blocked": [], "unplaceable": [] },
+  "offers": { "at": "…", "ranked": [ … ], "refused": [ … ] }
+}
+```
+
+- `placement.state`: `unplaced` when no primary slice is in force. `moving`
+  while a singleton's move is open: `nodes` is still `[from]`, `target` is
+  where it goes, and `epoch` is already the new one, because it goes up when
+  the move OPENS so the mover can hand it to the new node's first start.
+  `placed` otherwise. A singleton's `nodes` is its one serving primary.
+  Another tenant's is every primary in force that is not ending, in its
+  release order and then oldest first.
+- `slices[].state` comes from the same check `fleet hosting --check` runs
+  (lib/hosting-check.mjs), on this app's nodes only: `guaranteed`,
+  `not-guaranteed` (the node answered and something is missing; `why` says
+  what), `unknown` (it did not answer), or `ended` (past its end; not probed).
+  `declared.port` is the record's. When it differs from the registered
+  hosting.json, that is the advisory finding `hosting-port-drift`.
+- `offers` is the converger's last pass, so the reader sshes no other node. A
+  singleton's offers are its move plan.
+- **"I could not look" is `ok: false` with `error`.** That covers an
+  unreadable registry, ledger, drain, demand or converger file, a slice node
+  that did not answer, and a record that cannot be read as one placement (a
+  singleton held twice with no move open, or an open move naming a node that
+  holds nothing). An unreadable ledger gives `placement: null`, never an empty
+  `unplaced`. Exit 0 when ok, 1 when not, 2 for a usage error or an app that
+  is not registered. The document is on stdout in every case.
+- Not in contract 1 yet: `slices[].ci` (cardtable's ranking input) and any
+  speed figure (cardtable keeps its own, §5b).
+
+hadoku_site's deploy of a `"placement": "fleet"` row reads `placement.nodes[0]`
+live (no `--max-age`). It refuses while `moving` or `unplaced`, and gates red
+on drift from its committed `{ node, epoch }` (hadoku_site#491 part 2).
+
 ## Status
 
 `fleet node-status --json` reports, per node: `reachable` and `observedAt`

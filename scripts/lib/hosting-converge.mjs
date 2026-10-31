@@ -67,6 +67,8 @@ export const YOUNG_SLICE_MS = 10 * 60_000;
  * @param {object[]} i.notices drainNotices + hostingNotices
  * @param {{node: string|null}|{unreadable: string}} [i.appLayer] for a service:
  *        where hadoku_site runs it now (appLayerHost), or why that could not be read
+ * @param {{from: string, to: string, epoch: number}|null} [i.move] a singleton's open
+ *        move, from the hosting record (`fleet hosting --move`)
  * @param {number} i.now
  */
 export function decide({
@@ -81,6 +83,7 @@ export function decide({
 	notices,
 	now,
 	appLayer = null,
+	move = null,
 }) {
 	const { app, slices: size, availability, placement } = request;
 	const desired = Math.min(size.max, Math.max(size.min, demand?.slices ?? size.min));
@@ -95,13 +98,19 @@ export function decide({
 		const i = (demand?.releaseOrder ?? []).indexOf(node);
 		return i === -1 ? Infinity : i;
 	};
-	const keeps = [
-		...primaries.filter((s) => s.until).map((s) => s.node),
-		...pastEnd.filter((n) => !primaries.some((s) => s.node === n)),
-	]
-		.filter((n) => !fault(n))
-		.sort((a, b) => rank(b) - rank(a))
-		.slice(0, Math.max(0, desired - live));
+	// A SINGLETON never gets an ended slice back while another primary is in
+	// force: after a committed move the old node's copy is stopped and its
+	// state is gone, so keeping it would name two places that may run it.
+	const otherInForce = availability.singleton && primaries.some((s) => !s.until);
+	const keeps = otherInForce
+		? []
+		: [
+				...primaries.filter((s) => s.until).map((s) => s.node),
+				...pastEnd.filter((n) => !primaries.some((s) => s.node === n)),
+			]
+				.filter((n) => !fault(n))
+				.sort((a, b) => rank(b) - rank(a))
+				.slice(0, Math.max(0, desired - live));
 	const kept = new Set(keeps);
 	const slices = [
 		...primaries.map(({ until, ...s }) =>
@@ -142,7 +151,17 @@ export function decide({
 	const adoptFrom =
 		request.kind === 'service' && slices.length === 0 && appLayer?.node ? appLayer.node : null;
 
-	if (serving.length < desired && (adoptFrom || runningAt)) {
+	if (availability.singleton && move) {
+		// AN OPEN MOVE IS THE MOVER'S: two primaries are expected until it
+		// commits, so nothing is declared, ended or kept around it here.
+		blocked.push({
+			node: move.to,
+			why:
+				`a move of ${app} is open, ${move.from} → ${move.to} (epoch ${move.epoch}); ` +
+				`the mover commits it by ending ${move.from}'s slice`,
+			soft: true,
+		});
+	} else if (serving.length < desired && (adoptFrom || runningAt)) {
 		const target = plan.ranked[0]?.node ?? null;
 		blocked.push({
 			node: adoptFrom ?? '*',
