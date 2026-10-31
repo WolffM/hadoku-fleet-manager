@@ -22,10 +22,25 @@
 - [`runbooks/`](runbooks/) — one file per onboarding scenario (plan §5.3):
   preconditions, numbered steps with where/as-whom/the command, a verify
   command per step, rollback, and what enforces it.
-  [`new-claw.md`](runbooks/new-claw.md) (R1) and
-  [`retire-node.md`](runbooks/retire-node.md) (R3) are the first two;
-  `scripts/lib/onboarding-docs.test.mjs` fails the build if either names a
-  `fleet` subcommand that does not exist.
+  - Nodes: [`new-claw.md`](runbooks/new-claw.md) (R1),
+    [`replace-claw.md`](runbooks/replace-claw.md) (R2),
+    [`retire-node.md`](runbooks/retire-node.md) (R3),
+    [`hardware-change.md`](runbooks/hardware-change.md) (R4),
+    [`inventory.md`](runbooks/inventory.md) (R5),
+    [`ci-user-cutover.md`](runbooks/ci-user-cutover.md) (R12),
+    [`controller-changes.md`](runbooks/controller-changes.md) (R14).
+  - Capabilities, repos and jobs:
+    [`new-capability.md`](runbooks/new-capability.md) (R6),
+    [`new-covered-repo.md`](runbooks/new-covered-repo.md) (R7),
+    [`new-gate.md`](runbooks/new-gate.md) (R13).
+  - Hosting tenants: [`tenant-agent.md`](runbooks/tenant-agent.md) (R9),
+    [`tenant-pm2-service.md`](runbooks/tenant-pm2-service.md) (R10),
+    [`tenant-change-exit.md`](runbooks/tenant-change-exit.md) (R11).
+  - When things are broken: [`recovery.md`](runbooks/recovery.md) (R15),
+    tool-free on purpose.
+
+  `scripts/lib/onboarding-docs.test.mjs` fails the build if any runbook names
+  a `fleet` subcommand that does not exist.
 
 ## Arriving in Phase 4
 
