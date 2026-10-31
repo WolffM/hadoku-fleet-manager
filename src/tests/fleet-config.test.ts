@@ -266,7 +266,12 @@ test('site 2 — a target with no owner is watched under the CONFIGURED owner', 
 // ---- sites 3 and 4: reconcile-fleet-runners ------------------------------
 
 test('sites 3 and 4 — reconcile reads the resolver and spells no owner of its own', () => {
-	const src = readFileSync(join(ROOT, 'scripts', 'reconcile-fleet-runners.mjs'), 'utf8');
+	// Site 3 (`gh repo list`'s owner) is still in the CLI; site 4
+	// (`loadMountedApps`'s `qualifyRepo`) moved to lib/reconcile-apply.mjs in
+	// wave 5g lane C's pure-move split, so both are read together.
+	const src =
+		readFileSync(join(ROOT, 'scripts', 'reconcile-fleet-runners.mjs'), 'utf8') +
+		readFileSync(join(ROOT, 'scripts', 'lib', 'reconcile-apply.mjs'), 'utf8');
 
 	assert.ok(
 		src.includes("from '../dist/lib/fleet-config.js'"),

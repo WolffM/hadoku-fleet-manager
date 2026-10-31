@@ -176,11 +176,11 @@
     "to": "scripts/node-users-cutover.mjs"
   },
   {
-    "from": "scripts/reconcile-fleet-runners.mjs",
+    "from": "scripts/lib/reconcile-plan.mjs",
     "to": "scripts/lib/placement-rules.mjs"
   },
   {
-    "from": "scripts/reconcile-fleet-runners.mjs",
+    "from": "scripts/lib/reconcile-apply.mjs",
     "to": "scripts/lib/runner-var.mjs"
   },
   {

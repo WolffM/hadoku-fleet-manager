@@ -1,7 +1,8 @@
 /**
  * The generated shell scripts must be COMPLETE, not merely strings.
  *
- * `reconcile-fleet-runners.mjs` builds its remote scripts as template literals
+ * `scripts/lib/reconcile-scripts.mjs` (moved out of `reconcile-fleet-runners.mjs`
+ * in wave 5g lane C, pure move) builds the fleet's remote scripts as template literals
  * full of shell. An unescaped backtick inside one silently ends the literal and
  * everything after it is parsed as JavaScript. This has now happened twice, in
  * the same file, in two different functions:
@@ -32,7 +33,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const SRC = readFileSync(
-	fileURLToPath(new URL('../../scripts/reconcile-fleet-runners.mjs', import.meta.url)),
+	fileURLToPath(new URL('../../scripts/lib/reconcile-scripts.mjs', import.meta.url)),
 	'utf8'
 );
 

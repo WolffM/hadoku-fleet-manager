@@ -42,7 +42,7 @@ const ALLOWED = {
 		"the slice unit's Documentation= URL into the operator's checkout, not an identity",
 	'literal:scripts/lib/toolchain-floor.mjs':
 		"pm2-boot reads its own user with `id -un`: pm2 is admin's, and the entry must move to an admin-run check before a cutover (node-users plan P2)",
-	'literal:scripts/reconcile-fleet-runners.mjs':
+	'literal:scripts/lib/reconcile-scripts.mjs':
 		'a log line printing who wrote the toolcache path; it decides nothing',
 	'literal:scripts/add-dvd.sh':
 		"the operator at hokon's own terminal (`SUDO_USER`), not a node role",

@@ -49,7 +49,7 @@
   ],
   "F7-child-apps": [
     "scripts/lib/service-tunnels.mjs:read#1",
-    "scripts/reconcile-fleet-runners.mjs:reg#1"
+    "scripts/lib/reconcile-apply.mjs:reg#1"
   ],
   "F8-has": [
     "scripts/benchmark-fleet.mjs:args#1",

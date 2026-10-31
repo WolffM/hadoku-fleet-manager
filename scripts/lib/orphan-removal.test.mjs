@@ -140,7 +140,8 @@ test('a marker alone never justifies deletion — .runner is the veto', () => {
 
 /** removeScript's output, lifted from the module the way remove-script-guest.test does. */
 function generatedRemoveScript() {
-	const SRC = readFileSync(join(SCRIPTS, 'reconcile-fleet-runners.mjs'), 'utf8');
+	// removeScript moved to lib/reconcile-scripts.mjs (wave 5g lane C, pure move).
+	const SRC = readFileSync(join(SCRIPTS, 'lib', 'reconcile-scripts.mjs'), 'utf8');
 	const start = SRC.indexOf('function removeScript');
 	const end = SRC.indexOf('\n}', SRC.indexOf('return `', start)) + 2;
 	const make = new Function('repoSuffix', `return ${SRC.slice(start, end)}`);

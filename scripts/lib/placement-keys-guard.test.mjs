@@ -37,7 +37,10 @@ import { blankComments } from './blank-comments.mjs';
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
 const PLACEMENT_RULES = 'scripts/lib/placement-rules.mjs';
-const RECONCILER = 'scripts/reconcile-fleet-runners.mjs';
+// placementFor moved to reconcile-plan.mjs (wave 5g lane C, pure move) — this
+// constant still names wherever the fleet reconciler's placement decision
+// lives, not a fixed file.
+const RECONCILER = 'scripts/lib/reconcile-plan.mjs';
 const MINT_TICK = 'src/runners/ephemeral-tick.ts';
 const MINT_PLACEMENT = 'src/runners/placement.ts';
 
@@ -104,7 +107,7 @@ function functionBody(blanked, name) {
 
 /** Every `m.<key>` (or `(m.<key> ?? ...)`) property access in `body`, where
  *  `m` is the manifest MACHINE entry — the variable name both
- *  `placement-rules.mjs` and `reconcile-fleet-runners.mjs` use for it. */
+ *  `placement-rules.mjs` and `reconcile-plan.mjs` use for it. */
 function machineKeysReferenced(body) {
 	const keys = new Set();
 	for (const match of body.matchAll(/\bm\.(\w+)\b/g)) keys.add(match[1]);
