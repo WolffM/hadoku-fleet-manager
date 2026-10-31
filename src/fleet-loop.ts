@@ -38,7 +38,8 @@ import type { FleetDispatch } from './fleet-report-types.js';
 import { mintsOnDemand } from './lib/node-role.js';
 import { isBackstopHeld } from './runners/backstop-hold.js';
 import { readDrain } from './runners/drain.js';
-import { noteTick, registerLoop, TOKEN_WAIT_GRACE_MS } from './lib/liveness.js';
+import { noteTick } from './lib/liveness.js';
+import { every } from './lib/every.js';
 // The typed manifest reader and loaders moved to the config layer in wave 5c
 // (F1): this file is ci-scheduling/run, and a raw manifest read sitting
 // sideways of config is exactly the debt `src/lib/manifest.ts`'s header
@@ -280,17 +281,24 @@ let tickCount = 0;
  */
 let believedLabel = new Map<string, boolean>();
 let started = false;
-/**
- * Has a pass run WITH a token since start? Until one has, a missing token is
- * retried every TOKEN_RETRY_MS rather than at the next interval (#133).
- */
-let tokenSeen = false;
-let tokenWaitHandle: ReturnType<typeof setTimeout> | null = null;
 let tokenRetryMs = TOKEN_RETRY_MS;
 /** Test seam: shorten the wait between token reads before the first pass. */
 export function __setFastLoopTokenRetryForTesting(ms: number | null): void {
 	tokenRetryMs = ms ?? TOKEN_RETRY_MS;
 }
+
+/**
+ * The two `every()` handles `startFastLoop` creates. Module-level so
+ * `__resetFleetLoopForTesting` can stop them — the ORIGINAL `setInterval`s
+ * here were never captured at all, so a test suite that called
+ * `startFastLoop` more than once leaked an extra pair of live, un-stoppable
+ * intervals per call (harmless only because `getToken` in every such test
+ * closes over that test's own `done` flag). Stopping them on reset is a
+ * strict improvement: no test here asserts on anything a leaked, silenced
+ * interval could still affect.
+ */
+let fastLoopHandle: { stop(): void } | null = null;
+let dispatchTimerHandle: { stop(): void } | null = null;
 
 export function __resetFleetLoopForTesting(): void {
 	lastFleetProbe = null;
@@ -312,9 +320,10 @@ export function __resetFleetLoopForTesting(): void {
 	believedLabel = new Map();
 	tickCount = 0;
 	started = false;
-	tokenSeen = false;
-	if (tokenWaitHandle) clearTimeout(tokenWaitHandle);
-	tokenWaitHandle = null;
+	fastLoopHandle?.stop();
+	fastLoopHandle = null;
+	dispatchTimerHandle?.stop();
+	dispatchTimerHandle = null;
 }
 
 export interface FleetTickResult {
@@ -468,79 +477,88 @@ export function startFastLoop(
 ): void {
 	if (started) return;
 	started = true;
-	// Registered BEFORE the token wait below, which can legitimately stall on
-	// a sealed vault — see lib/liveness.ts. A loop that hangs right here, never
-	// reaching its first `tick()`, must still be visible as pending-then-stale,
-	// not simply absent.
-	registerLoop('fleet-loop', FAST_LOOP_SECONDS * 1000, { firstTickGraceMs: TOKEN_WAIT_GRACE_MS });
-	registerLoop('dispatch', DISPATCH_SECONDS * 1000, { firstTickGraceMs: TOKEN_WAIT_GRACE_MS });
 	logger.info(
 		`[fleet-loop] fast loop every ${FAST_LOOP_SECONDS}s, dispatcher every ${DISPATCH_SECONDS}s`
 	);
-	// Tick IMMEDIATELY, then on the interval: a restart must not leave the Fleet
-	// panel showing every node "unprobed" for the first minute.
-	const startedAtMs = Date.now();
-	let waitLogged = false;
+
+	// Tick IMMEDIATELY, then on the interval: a restart must not leave the
+	// Fleet panel showing every node "unprobed" for the first minute.
 	//
 	// A boot with the vault still sealed has no token yet (#133). That pass
 	// used to return silently and the probe waited a whole interval, so an
 	// unseal 5s after boot still left the panel `machines probing…` for a
 	// minute. Until the first pass with a token, look again every
-	// TOKEN_RETRY_MS, and say once that the loop is waiting.
-	const run = () => {
-		const token = getToken();
-		if (!token) {
-			if (!tokenSeen && !tokenWaitHandle) {
-				if (!waitLogged) {
+	// TOKEN_RETRY_MS, and say once that the loop is waiting — `every()`'s own
+	// `tokenWait` owns exactly that bootstrap wait (registering liveness
+	// before it, too — see lib/liveness.ts). Once it is satisfied, a LATER
+	// tick finding no token (the vault resealing) just skips silently below,
+	// the same as before: nothing re-arms a retry, the loop's own cadence
+	// looks again at the next interval.
+	fastLoopHandle = every(
+		'fleet-loop',
+		FAST_LOOP_SECONDS * 1000,
+		() => {
+			const token = getToken();
+			if (!token) return;
+			return withGhCaller('fleet-loop', () => tick(token, gh))
+				.then((r) => {
+					for (const a of r.actions) {
+						logger.info(
+							`[fleet-loop] ${a.direction} ${a.node}: ${a.changed} label(s) changed, ${a.failed} failed`
+						);
+					}
+				})
+				.catch((err) => {
+					// Fail-open: a broken tick must never strand capacity.
+					logger.warn(
+						`[fleet-loop] tick threw: ${err instanceof Error ? err.message : String(err)} — leaving labels as-is`
+					);
+				});
+		},
+		{
+			firstRunMs: 0,
+			tokenWait: {
+				getToken,
+				retryMs: tokenRetryMs,
+				onWaiting: () => {
 					logger.warn(
 						`[fleet-loop] no GitHub token from host yet (vault sealed?) — first probe waits for it, ` +
 							`retrying every ${tokenRetryMs / 1000}s`
 					);
-					waitLogged = true;
-				}
-				tokenWaitHandle = setTimeout(() => {
-					tokenWaitHandle = null;
-					run();
-				}, tokenRetryMs);
-				tokenWaitHandle.unref?.();
-			}
-			return;
-		}
-		if (!tokenSeen && waitLogged) {
-			logger.info(
-				`[fleet-loop] GitHub token arrived after ${Math.round((Date.now() - startedAtMs) / 1000)}s — probing now`
-			);
-		}
-		tokenSeen = true;
-		if (tokenWaitHandle) clearTimeout(tokenWaitHandle);
-		tokenWaitHandle = null;
-		withGhCaller('fleet-loop', () => tick(token, gh))
-			.then((r) => {
-				for (const a of r.actions) {
+				},
+				onReady: (waitedMs) => {
 					logger.info(
-						`[fleet-loop] ${a.direction} ${a.node}: ${a.changed} label(s) changed, ${a.failed} failed`
+						`[fleet-loop] GitHub token arrived after ${Math.round(waitedMs / 1000)}s — probing now`
 					);
-				}
-			})
-			.catch((err) => {
-				// Fail-open: a broken tick must never strand capacity.
+				},
+			},
+			// `tickFleet` notes its own liveness at the end of its own success
+			// path — see `EveryOptions.noteTick`'s header.
+			noteTick: false,
+		}
+	);
+
+	dispatchTimerHandle = every(
+		'dispatch',
+		DISPATCH_SECONDS * 1000,
+		() => {
+			const token = getToken();
+			if (!token) return;
+			// Fire-and-forget, exactly as before `every()`: `dispatchBetweenTicks`
+			// owns ITS OWN overlap guard (`dispatchInFlight`), shared with the
+			// direct call `tickFleet` makes at the end of its own pass, so this
+			// timer must not ALSO await it — doing so would make `every()`'s guard
+			// track a different thing (this timer's own call) than the one that
+			// actually matters (every caller of `dispatchBetweenTicks`).
+			void dispatchBetweenTicks(token, gh).catch((err: unknown) => {
+				// Belt and braces: a timer that can throw would stop dispatching forever.
 				logger.warn(
-					`[fleet-loop] tick threw: ${err instanceof Error ? err.message : String(err)} — leaving labels as-is`
+					`[fleet-loop] dispatch timer threw: ${err instanceof Error ? err.message : String(err)}`
 				);
 			});
-	};
-	run();
-	setInterval(run, FAST_LOOP_SECONDS * 1000).unref?.();
-
-	const dispatchRun = () => {
-		const token = getToken();
-		if (!token) return;
-		void dispatchBetweenTicks(token, gh).catch((err: unknown) => {
-			// Belt and braces: a timer that can throw would stop dispatching forever.
-			logger.warn(
-				`[fleet-loop] dispatch timer threw: ${err instanceof Error ? err.message : String(err)}`
-			);
-		});
-	};
-	setInterval(dispatchRun, DISPATCH_SECONDS * 1000).unref?.();
+		},
+		// `runDispatchTick` (dispatch-tick.ts) notes its own liveness — see
+		// `EveryOptions.noteTick`'s header.
+		{ noteTick: false }
+	);
 }

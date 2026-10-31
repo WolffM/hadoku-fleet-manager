@@ -182,6 +182,11 @@ export const LAYER_MAP = [
 	// lifecycle's claw-reboot) calls into — same "cross-cutting mechanics"
 	// shape as concurrency.ts beside it.
 	{ glob: 'src/lib/liveness.ts', layer: 'automation' },
+	// Wave5j lane D (plan §6.2 tier 1): the one timer primitive the control
+	// loops (ci-scheduling's dispatch/fast loop, observation's runner-health)
+	// now share — domain-blind scheduling mechanics, same shape as
+	// liveness.ts beside it, which it calls into directly.
+	{ glob: 'src/lib/every.ts', layer: 'automation' },
 	{ glob: 'src/lib/usage-log.ts', layer: 'automation' },
 	{ glob: 'src/lib/usage-store.ts', layer: 'automation' },
 	// Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the tick

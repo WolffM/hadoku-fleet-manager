@@ -121,6 +121,7 @@ import {
 import { checkNodeRegressions, defaultGatedKinds } from './runners/node-regression.js';
 import type { BackstopReason, ClawState } from './lib/fleet-vocabulary.js';
 import { noteTick, registerLoop, TOKEN_WAIT_GRACE_MS } from './lib/liveness.js';
+import { every } from './lib/every.js';
 // The GitHub Actions API client, moved to its own module 2026-10-29 (plan §4.1 F2).
 import {
 	SELF_REPO,
@@ -2611,7 +2612,20 @@ async function checkHostSupervision(data: TickReport): Promise<void> {
 
 /** The tick currently running, so a test can wait for one it did not call. */
 let inFlightTick: Promise<void> | null = null;
-let intervalHandle: ReturnType<typeof setInterval> | null = null;
+/**
+ * The ONGOING interval, ported onto `every()` (wave5j-2026-10-31 lane D) —
+ * `every()`'s own overlap guard, a new property the original bare
+ * `setInterval(() => void runTick(token), TICK_INTERVAL_MS)` did not have,
+ * now stops a tick that runs past TICK_INTERVAL_MS from being joined by a
+ * second one before the first finishes. `registerLiveness: false`: this
+ * loop is registered EARLIER, in `startRunnerHealthMonitor`, before the
+ * token wait below — see `EveryOptions.registerLiveness`'s header for why
+ * `every()` must not redo that registration once a token is finally in
+ * hand. `noteTick: false`: `runTick` notes its own liveness, at the end of
+ * its own success path (`.then(() => noteTick(...))` below) — see
+ * `EveryOptions.noteTick`'s header.
+ */
+let runnerHealthHandle: { stop(): void } | null = null;
 /** Pending re-read of the host's token while start() waits for it (#133). */
 let tokenWaitHandle: ReturnType<typeof setTimeout> | null = null;
 
@@ -2758,8 +2772,8 @@ export function __awaitInFlightTickForTesting(): Promise<void> {
 export function __stopRunnerHealthMonitorForTesting(): void {
 	if (tokenWaitHandle) clearTimeout(tokenWaitHandle);
 	tokenWaitHandle = null;
-	if (intervalHandle) clearInterval(intervalHandle);
-	intervalHandle = null;
+	runnerHealthHandle?.stop();
+	runnerHealthHandle = null;
 	if (remeasureHandle) clearTimeout(remeasureHandle);
 	remeasureHandle = null;
 	if (postBlackoutHandle) clearTimeout(postBlackoutHandle);
@@ -2897,10 +2911,19 @@ function startWithToken(token: string): void {
 				'ago (before this restart); the next one runs on the interval tick'
 		);
 	}
-	void runTick(token, { alerts }).finally(() => {
+	const firstTick = runTick(token, { alerts }).finally(() => {
 		if (lastTickEphemeralUnknown === true) scheduleRemeasure(token);
 	});
-	intervalHandle = setInterval(() => void runTick(token), TICK_INTERVAL_MS);
+	runnerHealthHandle = every('runner-health', TICK_INTERVAL_MS, () => runTick(token), {
+		registerLiveness: false,
+		noteTick: false,
+		// This first tick runs OUTSIDE every()'s own schedule (it carries its
+		// own one-shot boot args, `{alerts}`, that no later tick repeats) —
+		// without seeding it, the regular interval's first firing would be
+		// invisible to the overlap guard and could start a SECOND `runTick`
+		// while this one was still running. See `EveryOptions.seedInFlight`.
+		seedInFlight: firstTick,
+	});
 	logger.info(
 		`[runner-health] monitor started (every ${TICK_INTERVAL_MS / 60000}m), supervision probe on`
 	);
