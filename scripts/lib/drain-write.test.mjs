@@ -38,11 +38,11 @@ test('merge: an undo deletes only its own node', () => {
 });
 
 test('merge: planned entries are added and removed by value, others kept', () => {
-	const p = (node) => ({
-		node,
-		from: new Date(Date.now() + 86_400_000).toISOString(),
-		...rec(node),
-	});
+	// ONE timestamp for every entry: "by value" compares `from` too, so two
+	// Date.now() reads a millisecond apart made claw-1 in base and in current
+	// different values, and the merge rightly kept it (flaked under load).
+	const from = new Date(Date.now() + 86_400_000).toISOString();
+	const p = (node) => ({ node, from, ...rec(node) });
 	const base = { nodes: {}, planned: [p('claw-1')] };
 	const current = { nodes: {}, planned: [p('claw-1'), p('claw-2')] };
 	const next = { nodes: {}, planned: [p('claw-3')] };
