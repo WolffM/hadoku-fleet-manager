@@ -28,6 +28,8 @@
  * them would make this package ship React. The contract is what had to be
  * shared, not the presentation.
  */
+import type { ClawState, BackstopReason } from './lib/fleet-vocabulary.js';
+
 /**
  * HOW SEVERE A TELEMETRY TERM IS, on an axis that outlives the mechanism that
  * produced it.
@@ -426,9 +428,7 @@ export interface FleetMachineMeasured {
 	verified: boolean | null;
 }
 
-/** @see FleetMachine.state */
-export type ClawState =
-	'free' | 'busy' | 'demoted' | 'offline' | 'absent' | 'mintable' | 'unreachable' | 'sick';
+export type { ClawState } from './lib/fleet-vocabulary.js';
 
 /**
  * A node's non-success records split by whose half of the fence they fell on —
@@ -926,16 +926,7 @@ export interface BackstopForced {
 	by: string;
 }
 
-/**
- * Why the backstop is up, or `'none'`. A UNION, not `string`.
- *
- * `decideBackstop` has returned exactly these four since it was written, and the
- * report widened them to `string | null` on the way out — so the panel's
- * four-branch switch fell through to "unknown" for any value it had not been
- * told about, and a rename here would have surfaced as a grey pill on the one
- * page opened when something is already wrong.
- */
-export type BackstopReason = 'outage' | 'saturation' | 'holding' | 'none';
+export type { BackstopReason } from './lib/fleet-vocabulary.js';
 
 /**
  * A way capacity becomes available — the ROWS of `FleetCapacity.byKind`.

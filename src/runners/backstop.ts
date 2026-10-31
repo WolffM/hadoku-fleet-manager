@@ -14,7 +14,7 @@
  * recovered, promoted-but-calming — without simulating the ticks that got it
  * there.
  */
-import type { BackstopReason } from '../fleet-report-types.js';
+import type { BackstopReason } from '../lib/fleet-vocabulary.js';
 
 /**
  * How many calm ticks before a saturation promotion is allowed to stand down.

@@ -5,7 +5,7 @@
  * assertable. The panel distinguishes "free", "down", and "not looked at yet",
  * and the third is the one that keeps getting collapsed into the second.
  */
-import type { ClawState } from '../fleet-report-types.js';
+import type { ClawState } from '../lib/fleet-vocabulary.js';
 
 export interface ClawStateRunner {
 	name: string;

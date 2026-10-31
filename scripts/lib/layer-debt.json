@@ -272,14 +272,6 @@
     "to": "src/runners/queue-discovery.ts"
   },
   {
-    "from": "src/runners/backstop.ts",
-    "to": "src/fleet-report-types.ts"
-  },
-  {
-    "from": "src/runners/claw-state.ts",
-    "to": "src/fleet-report-types.ts"
-  },
-  {
     "from": "src/runners/decision-log.ts",
     "to": "src/runners/dispatcher.ts"
   },
