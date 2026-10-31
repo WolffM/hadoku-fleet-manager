@@ -28,21 +28,33 @@
  * never "this job asks for nothing": a gate whose scope silently shrinks on a
  * shape it cannot read is the dead-rule pattern #98 is about.
  *
- * Pure — no fs. `check-label-floor.mjs` does the reading.
+ * Pure — no fs. `check-label-floor.mjs` does the reading. `isHostedLabel`
+ * below is the one exception to "no fs" in spirit, not in fact: it imports
+ * the compiled `dist/label-floor.js`, whose own import chain
+ * (`capabilities.js`, `lib/node-role.js`) does no I/O at module scope, so
+ * importing it does not make this module read anything at import time.
  */
-import { splitJobs, HOSTED_RE } from './demand-derive.mjs';
+import { splitJobs } from './demand-derive.mjs';
 import { stripYamlComments } from './yaml-comments.mjs';
+import { isHostedLabel } from '../../dist/label-floor.js';
 
 /** What a GitHub runner label can look like. Anything else is syntax, not a label. */
 const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
- * A HOSTED image is not a capability any node can earn or lose. `ubuntu-24.04`
- * was counted as one, because the old filter knew `ubuntu-latest` only.
+ * THE CANONICAL PREDICATE now lives in `src/label-floor.ts` (plan §4.1 F13)
+ * — this used to be its own copy (`demand-derive.mjs`'s `HOSTED_RE` plus its
+ * own inline `/^(ubuntu|macos|windows)(-|$)/`), correct but duplicated
+ * against `label-floor.ts`'s identical union and `runner-health.ts`'s
+ * narrower one (which missed a bare `ubuntu` — 5a §8.3, fixed alongside
+ * this). `tsconfig.json` sets no `allowJs` and `include`s only
+ * `src/**\/*.ts`, so this `.mjs` cannot import the TS source — only its
+ * build output, same door every other `scripts/lib/*.mjs` → `dist/*.js`
+ * import uses. Re-exported (this module's own `resolveRunsOn` below also
+ * calls it) rather than left as an internal-only import, since
+ * `runs-on-demand.test.mjs` imports `isHostedLabel` from here directly.
  */
-export function isHostedLabel(label) {
-	return HOSTED_RE.test(label) || /^(ubuntu|macos|windows)(-|$)/.test(label);
-}
+export { isHostedLabel };
 
 function unquote(s) {
 	return s

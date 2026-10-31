@@ -65,10 +65,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { logger, manifestDir } from './host.js';
-import { ghTokenFingerprint, recordGhResponse } from './gh-budget.js';
+import { ghTokenFingerprint } from './gh-budget.js';
 import { conditionalCacheStore } from './conditional-cache-store.js';
 import { mapConcurrent } from './lib/concurrency.js';
 import { hubRepoFull, userAgent } from './lib/fleet-config.js';
+import { ghFetchRaw, FETCH_TIMEOUT_MS } from './lib/github-client.js';
 
 /** Injected — see host.ts. coveredRepos() falls back to the HUB REPO on a read
  *  failure, so a wrong path here silently shrinks the fleet to one repo. */
@@ -122,8 +123,6 @@ export const HOSTED_VALUE = '"ubuntu-latest"';
  */
 export const FLEET_VALUE = '["self-hosted","hadoku-builder"]';
 
-const FETCH_TIMEOUT_MS = 10_000;
-
 /**
  * Repos to steer. Read fresh each call so a reconcile that adds a repo takes
  * effect without an mgmt-api restart.
@@ -156,6 +155,11 @@ export function coveredRepos(): string[] {
 	return [hubRepoFull()];
 }
 
+/**
+ * The raw `fetch` moved to `github-client.ts`'s `ghFetchRaw` (plan §4.1 F2b)
+ * — a pure move, same headers, same timeout, same `recordGhResponse` call;
+ * see that function's own divergence table for this site's row.
+ */
 async function ghVar(
 	method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
 	path: string,
@@ -163,48 +167,39 @@ async function ghVar(
 	body?: unknown,
 	ifNoneMatch?: string
 ): Promise<{ ok: boolean; status: number; body?: unknown; etag?: string | null }> {
-	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-	try {
-		const headers: Record<string, string> = {
-			Authorization: `Bearer ${token}`,
-			Accept: 'application/vnd.github+json',
-			'X-GitHub-Api-Version': '2022-11-28',
-			// Names the PACKAGE, not whichever service embeds it — see
-			// fleet-config#userAgent. It said `hadoku-mgmt-api` until 2026-09-15,
-			// which stops being true the moment anybody else installs this.
-			'User-Agent': userAgent('ci-runner-fallback'),
-		};
-		if (body !== undefined) headers['Content-Type'] = 'application/json';
-		if (ifNoneMatch) headers['If-None-Match'] = ifNoneMatch;
-		const resp = await fetch(`https://api.github.com${path}`, {
-			method,
-			headers,
-			body: body !== undefined ? JSON.stringify(body) : undefined,
-			signal: controller.signal,
-		});
-		clearTimeout(timeoutId);
-		recordGhResponse(token, resp.status, resp.headers);
-		// GET carries the value the caller needs to decide whether a write is a
-		// CHANGE. The other verbs return nothing worth reading.
-		if (method === 'GET' && resp.ok) {
-			const parsed: unknown = await resp.json().catch(() => undefined);
-			// Optional: a test double may carry no headers at all.
-			return {
-				ok: true,
-				status: resp.status,
-				body: parsed,
-				etag: resp.headers?.get('etag') ?? null,
-			};
-		}
-		return { ok: resp.ok, status: resp.status };
-	} catch (err) {
-		clearTimeout(timeoutId);
-		logger.warn(
-			`[ci-runner-fallback] ${method} ${path} failed: ${err instanceof Error ? err.message : String(err)}`
-		);
+	const headers: Record<string, string> = {
+		Authorization: `Bearer ${token}`,
+		Accept: 'application/vnd.github+json',
+		'X-GitHub-Api-Version': '2022-11-28',
+		// Names the PACKAGE, not whichever service embeds it — see
+		// fleet-config#userAgent. It said `hadoku-mgmt-api` until 2026-09-15,
+		// which stops being true the moment anybody else installs this.
+		'User-Agent': userAgent('ci-runner-fallback'),
+	};
+	if (body !== undefined) headers['Content-Type'] = 'application/json';
+	if (ifNoneMatch) headers['If-None-Match'] = ifNoneMatch;
+	const { resp, error } = await ghFetchRaw(method, `https://api.github.com${path}`, token, {
+		headers,
+		body,
+		timeoutMs: FETCH_TIMEOUT_MS,
+	});
+	if (!resp) {
+		logger.warn(`[ci-runner-fallback] ${method} ${path} failed: ${error}`);
 		return { ok: false, status: 0 };
 	}
+	// GET carries the value the caller needs to decide whether a write is a
+	// CHANGE. The other verbs return nothing worth reading.
+	if (method === 'GET' && resp.ok) {
+		const parsed: unknown = await resp.json().catch(() => undefined);
+		// Optional: a test double may carry no headers at all.
+		return {
+			ok: true,
+			status: resp.status,
+			body: parsed,
+			etag: resp.headers?.get('etag') ?? null,
+		};
+	}
+	return { ok: resp.ok, status: resp.status };
 }
 
 /** PATCH first, POST on 404 — the variable usually already exists after the first outage. */

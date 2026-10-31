@@ -59,6 +59,7 @@ import {
 	unreadableTickError,
 	__resetGhBlackoutForTesting,
 	ghGet,
+	__logTokenCapabilitiesForTesting,
 } from '../runner-health.js';
 import { __setFleetProbeForTesting, __resetSickForTesting, markNodeSick } from '../fleet-loop.js';
 import { writeDrain } from '../runners/drain.js';
@@ -4897,6 +4898,38 @@ test('queued: a PINNED hosted image is hosted too', async () => {
 });
 
 /**
+ * A BARE `ubuntu` (no `-` at all) is still a hosted image — plan §4.1 F13,
+ * 5a §8.3. This file's own `isHostedLabel` used to require a dash and
+ * something after it, so a job pinned to the bare image read as a
+ * self-hosted coverage gap and would have paged, exactly the false alarm
+ * `ubuntu-24.04` caused before THAT fix landed.
+ */
+test('queued: a BARE "ubuntu" with no dash is hosted too (F13)', async () => {
+	installFetch({
+		runners: {
+			runners: [{ id: 1, name: 'claw-1', status: 'online', busy: false, labels: clawLabels() }],
+		},
+		runs: {
+			workflow_runs: [
+				{
+					id: 94,
+					name: 'bare-ubuntu-job',
+					display_title: 'build on bare ubuntu',
+					created_at: minutesAgo(20),
+					status: 'queued',
+					html_url: 'https://gh/run/94',
+				},
+			],
+		},
+		jobs: { jobs: [{ id: 1, status: 'queued', started_at: null, labels: ['ubuntu'] }] },
+	});
+	await tick('tok');
+
+	assert.equal(discordPosts.filter((m) => m.includes('QUEUED')).length, 0);
+	assert.match(quietRecords.filter((m) => m.includes('QUEUED'))[0]!, /GitHub-HOSTED/);
+});
+
+/**
  * The alert names the WORKFLOW, not just the commit subject.
  *
  * `display_title` is the commit message, so two different workflows triggered
@@ -6072,4 +6105,71 @@ test('#118 control: without another loop, the same tick lists each child repo ex
 	await tick('tok');
 	for (const repo of children)
 		assert.equal(runnerListings.filter((r) => r === repo).length, 1, `${repo} listed once`);
+});
+
+// ---------------------------------------------------------------------------
+// logTokenCapabilities: moved onto github-client.ts's `ghFetchRaw` (plan
+// §4.1 F2b) — a pure move, but this one-shot startup probe had NO direct
+// test before this wave (every existing coverage of this file ticks the
+// whole monitor, which never asserts on this log line). It reads the raw
+// response HEADERS (`x-oauth-scopes`), which is exactly why it cannot go
+// through `ghGet` (a parsed body, never headers).
+// ---------------------------------------------------------------------------
+
+test('logTokenCapabilities: a classic repo-scoped token logs write-ready YES', async () => {
+	const infos: string[] = [];
+	__setHostForTesting({
+		...testHost,
+		logger: { info: (m: string) => infos.push(m), warn() {}, error() {} },
+	});
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () =>
+		new Response('{}', {
+			status: 200,
+			headers: { 'x-oauth-scopes': 'repo, workflow' },
+		})) as typeof fetch;
+	try {
+		await __logTokenCapabilitiesForTesting('tok');
+		assert.ok(infos.some((m) => m.includes("scopes='repo, workflow'")));
+		assert.ok(infos.some((m) => m.includes('failover-write=YES')));
+	} finally {
+		globalThis.fetch = originalFetch;
+		__setHostForTesting(testHost);
+	}
+});
+
+test('logTokenCapabilities: a fine-grained PAT (no scopes header) logs UNKNOWN, never a throw', async () => {
+	const infos: string[] = [];
+	__setHostForTesting({
+		...testHost,
+		logger: { info: (m: string) => infos.push(m), warn() {}, error() {} },
+	});
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () => new Response('{}', { status: 200 })) as typeof fetch;
+	try {
+		await __logTokenCapabilitiesForTesting('tok');
+		assert.ok(infos.some((m) => m.includes('failover-write=UNKNOWN')));
+	} finally {
+		globalThis.fetch = originalFetch;
+		__setHostForTesting(testHost);
+	}
+});
+
+test('logTokenCapabilities: a network failure logs a warning and never throws', async () => {
+	const warns: string[] = [];
+	__setHostForTesting({
+		...testHost,
+		logger: { info() {}, warn: (m: string) => warns.push(m), error() {} },
+	});
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () => {
+		throw new Error('ECONNRESET');
+	}) as typeof fetch;
+	try {
+		await __logTokenCapabilitiesForTesting('tok');
+		assert.ok(warns.some((m) => m.includes('ECONNRESET')));
+	} finally {
+		globalThis.fetch = originalFetch;
+		__setHostForTesting(testHost);
+	}
 });

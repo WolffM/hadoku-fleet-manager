@@ -126,6 +126,12 @@ test('hosted images are not capabilities — ubuntu-24.04 included', () => {
 		'ubuntu-22.04-arm',
 		'macos-14',
 		'windows-latest',
+		// A bare image with no dash at all (F13, plan §4.1): the canonical
+		// predicate now lives in src/label-floor.ts and is imported here via
+		// dist/label-floor.js, rather than this file's own former inline copy.
+		'ubuntu',
+		'macos',
+		'windows',
 	]) {
 		assert.ok(isHostedLabel(l), l);
 	}

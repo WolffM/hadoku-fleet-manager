@@ -78,6 +78,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { githubToken, hostInstalled, logger, postDiscord, stateDir } from './host.js';
 import { writeJsonAtomic } from './lib/atomic-json.js';
+import { ghFetchRaw } from './lib/github-client.js';
 import type { FleetGithubBudget, GhCaller } from './fleet-report-types.js';
 
 export type { GhCaller } from './fleet-report-types.js';
@@ -630,15 +631,26 @@ const POOL_READ_TIMEOUT_MS = 10_000;
 export async function readGhPool(): Promise<GhPoolReading | null> {
 	const token = githubToken();
 	if (!token) return null;
+	// Moved onto `ghFetchRaw` (plan §4.1 F2b) — `skipBudgetRecord: true` is
+	// load-bearing: GitHub does not charge `/rate_limit`, and a caller that
+	// booked it would both fabricate a spender in the `[gh-budget] window
+	// ended` line and double-count the very reading `meterGhPool` subtracts it
+	// from (see that function's own doc). Same headers, same timeout — a pure
+	// relocation of the raw `fetch`, not a change to this endpoint's contract.
+	const { resp, error } = await ghFetchRaw('GET', 'https://api.github.com/rate_limit', token, {
+		headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+		timeoutMs: POOL_READ_TIMEOUT_MS,
+		skipBudgetRecord: true,
+	});
+	if (!resp) {
+		logger.warn(`[gh-budget] could not read GET /rate_limit: ${error}; this run is booked unread`);
+		return null;
+	}
+	if (!resp.ok) {
+		logger.warn(`[gh-budget] GET /rate_limit answered ${resp.status}; this run is booked unread`);
+		return null;
+	}
 	try {
-		const resp = await fetch('https://api.github.com/rate_limit', {
-			headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
-			signal: AbortSignal.timeout(POOL_READ_TIMEOUT_MS),
-		});
-		if (!resp.ok) {
-			logger.warn(`[gh-budget] GET /rate_limit answered ${resp.status}; this run is booked unread`);
-			return null;
-		}
 		const body = (await resp.json()) as {
 			resources?: { core?: { limit?: number; remaining?: number; used?: number; reset?: number } };
 		};

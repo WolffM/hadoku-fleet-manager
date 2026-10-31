@@ -92,10 +92,5 @@
     "src/runner-health.ts:page-ledger#1",
     "src/scheduled-converger.ts:page-ledger#1"
   ],
-  "F13-hosted-label": [
-    "scripts/lib/runs-on-demand.mjs:isHostedLabel#1",
-    "src/label-floor.ts:HOSTED_PREFIX#2",
-    "src/label-floor.ts:HOSTED_RE#1",
-    "src/runner-health.ts:isHostedLabel#1"
-  ]
+  "F13-hosted-label": ["src/label-floor.ts:HOSTED_PREFIX#2", "src/label-floor.ts:HOSTED_RE#1"]
 }

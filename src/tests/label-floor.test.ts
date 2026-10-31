@@ -10,6 +10,7 @@ import {
 	buildMintView,
 	floorLabels,
 	isFloorDemandLabel,
+	isHostedLabel,
 	judgeJobMint,
 	judgeLabelFloor,
 	observedFloorDemand,
@@ -203,6 +204,29 @@ test('demand excludes implicit labels (any case) and hosted images, and nothing 
 	}
 	for (const l of ['hadoku-builder', 'jdk21', 'cargo-bevy', 'docker']) {
 		assert.equal(isFloorDemandLabel(l), true, l);
+	}
+});
+
+/**
+ * F13 (plan §4.1): the CANONICAL hosted-label predicate, exported so
+ * `runner-health.ts` and (via the compiled `dist/label-floor.js`)
+ * `scripts/lib/runs-on-demand.mjs` can both drop their own copy.
+ *
+ * A bare `ubuntu`/`macos`/`windows` — no `-` at all — is the case
+ * `runner-health.ts`'s OWN former copy missed (5a, §8.3): its regex required
+ * a dash and at least one character after it
+ * (`/^(ubuntu|windows|macos)-[\w.]+$/`), so `isHostedLabel('ubuntu')` read
+ * `false` there while this file's own (unexported) `HOSTED_PREFIX` already
+ * covered it. Pinned here on the canonical export so the gap cannot reopen
+ * in whichever copy survives.
+ */
+test('isHostedLabel: a bare ubuntu/macos/windows with no dash is still hosted', () => {
+	for (const l of ['ubuntu', 'macos', 'windows']) assert.ok(isHostedLabel(l), l);
+	for (const l of ['ubuntu-latest', 'ubuntu-24.04', 'windows-2022', 'macos-14']) {
+		assert.ok(isHostedLabel(l), l);
+	}
+	for (const l of ['hadoku-builder', 'jdk21', 'cargo-bevy', 'ubuntuish']) {
+		assert.ok(!isHostedLabel(l), l);
 	}
 });
 

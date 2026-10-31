@@ -11,10 +11,11 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
-import { buildFleetReport } from '../routes/fleet.js';
+import { buildFleetReport, fetchJobForBackfill } from '../routes/fleet.js';
 import type { RunnerHealthSnapshot } from '../runner-health.js';
 import type { CapacityKind, FleetReport } from '../fleet-report-types.js';
 import { probeFleet, type NodeProbe } from '../fleet-loop.js';
@@ -29,7 +30,8 @@ import {
 	type JobRecord,
 	type RecentJobRecord,
 } from '../job-history.js';
-import { testStateDir } from './install-test-host.js';
+import { testStateDir, testHost } from './install-test-host.js';
+import { __setHostForTesting } from '../host.js';
 import { setBackstopHold } from '../runners/backstop-hold.js';
 
 /**
@@ -333,6 +335,26 @@ void test('buildFleetReport reads the real manifest, not an empty fallback', () 
 	);
 	const withRam = report.machines.filter((m) => m.ramGb !== null);
 	assert.ok(withRam.length > 0, 'every node has a null ramGb — same soft failure');
+});
+
+/**
+ * THE NARROWER CASE THE COMMENT ABOVE NAMED AND LEFT OPEN (wave 5c, fixed
+ * here in wave 5d lane A): the directory resolves but the FILE does not read
+ * or parse. `loadManifestNodes` used to turn that into `{}`, and the route
+ * answered 200 describing a fleet of zero nodes — "I could not look" must
+ * never render as "nothing is wrong" (AGENTS.md). `buildFleetReport()` with
+ * no manifest injected (so its own default parameter, the one that reads the
+ * manifest, actually runs) must now FAIL LOUDLY instead.
+ */
+void test('buildFleetReport throws when the manifest cannot be read — never a silent 0-node report', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'fleet-report-unreadable-manifest-'));
+	__setHostForTesting({ ...testHost, manifestDir: dir });
+	try {
+		assert.throws(() => buildFleetReport(), /cannot read the node manifest/);
+	} finally {
+		__setHostForTesting(testHost);
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 // ── the vocabulary block ────────────────────────────────────────────────────
@@ -1562,4 +1584,83 @@ test('fleet report: jobs.daily carries each day’s dispatch counts, null before
 			{ minted: 4, failed: 1, mintedViaAffinity: 2 },
 		]
 	);
+});
+
+// ---------------------------------------------------------------------------
+// fetchJobForBackfill: moved onto github-client.ts's `ghFetchRaw` (plan §4.1
+// F2b) — extracted to a named export so this behaviour (especially that a
+// network failure never reports `expired: true`) can be pinned directly.
+// This closure had NO test coverage at all before this wave: every existing
+// `backfillFailedSteps` test injects its own fetch-like callback and never
+// exercised the real one inline in the route.
+// ---------------------------------------------------------------------------
+
+test('fetchJobForBackfill: a successful read parses the job, expired: false', async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () =>
+		new Response(JSON.stringify({ id: 1, conclusion: 'failure', steps: [] }), {
+			status: 200,
+		})) as typeof fetch;
+	try {
+		const r = await fetchJobForBackfill('WolffM/x', 1, 'tok');
+		assert.deepEqual(r, { job: { id: 1, conclusion: 'failure', steps: [] }, expired: false });
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test('fetchJobForBackfill: a 404 is EXPIRED — the job aged out of GitHub, stop asking', async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () => new Response('', { status: 404 })) as typeof fetch;
+	try {
+		const r = await fetchJobForBackfill('WolffM/x', 1, 'tok');
+		assert.deepEqual(r, { job: null, expired: true });
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test('fetchJobForBackfill: a non-404 failure is NOT expired — worth another pass', async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () => new Response('', { status: 500 })) as typeof fetch;
+	try {
+		const r = await fetchJobForBackfill('WolffM/x', 1, 'tok');
+		assert.deepEqual(r, { job: null, expired: false });
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test('fetchJobForBackfill: a network failure never throws and is never reported expired', async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () => {
+		throw new Error('ECONNRESET');
+	}) as typeof fetch;
+	try {
+		const r = await fetchJobForBackfill('WolffM/x', 1, 'tok');
+		assert.deepEqual(r, { job: null, expired: false });
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test('fetchJobForBackfill: the User-Agent names THIS package, not the mgmt-api leftover', async () => {
+	const originalFetch = globalThis.fetch;
+	let seenUserAgent: string | undefined;
+	globalThis.fetch = (async (_url: string | URL, init?: RequestInit) => {
+		seenUserAgent = (init?.headers as Record<string, string> | undefined)?.['User-Agent'];
+		return new Response(JSON.stringify({ id: 1 }), { status: 200 });
+	}) as typeof fetch;
+	try {
+		await fetchJobForBackfill('WolffM/x', 1, 'tok');
+		assert.ok(seenUserAgent, 'a User-Agent header must be sent at all');
+		assert.doesNotMatch(
+			seenUserAgent!,
+			/hadoku-mgmt-api/,
+			'the pre-extraction literal must not survive this move'
+		);
+		assert.match(seenUserAgent!, /job-history-backfill/);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });

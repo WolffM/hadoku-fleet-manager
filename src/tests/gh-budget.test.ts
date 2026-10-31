@@ -13,8 +13,14 @@ import {
 	BUDGET_ALERT_MIN_LEFT_MS,
 	GH_BUDGET_SAVE_MS,
 	meterGhPool,
+	readGhPool,
 } from '../gh-budget.js';
-import { ghGet, ghGetConditional, __resetGhBlackoutForTesting } from '../lib/github-client.js';
+import {
+	ghGet,
+	ghGetConditional,
+	__resetGhBlackoutForTesting,
+	ghBlackoutRemainingMs,
+} from '../lib/github-client.js';
 
 /**
  * #119: the budget was invisible until the 403. On 2026-10-16 the first signal
@@ -441,5 +447,166 @@ test('the meter never changes a dispatch outcome: a failing reader, or no host a
 		assert.equal(await meterGhPool('cron:x', async () => 'ran'), 'ran');
 	} finally {
 		__setHostForTesting(testHost);
+	}
+});
+
+// ---------------------------------------------------------------------------
+// readGhPool: moved onto github-client.ts's `ghFetchRaw` (plan §4.1 F2b), a
+// pure relocation of its raw `fetch`. These pin the behaviour the move must
+// not change — this function had NO direct test before this wave; every
+// existing coverage of it ran through `meterGhPool` with an injected `read`,
+// never the real default.
+// ---------------------------------------------------------------------------
+
+function withTokenAndWarnings(warns: string[]): void {
+	__setHostForTesting({
+		...testHost,
+		githubToken: () => 'tok',
+		logger: { info: (m: string) => infos.push(m), warn: (m: string) => warns.push(m), error() {} },
+		alerts: { post: async () => ({ posted: true, sinkRecorded: true }), recordQuietly() {} },
+	});
+}
+
+test('readGhPool: the happy path parses the core reading', async () => {
+	const warns: string[] = [];
+	withTokenAndWarnings(warns);
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () =>
+		new Response(
+			JSON.stringify({
+				resources: { core: { limit: 5000, remaining: 4000, used: 1000, reset: 123 } },
+			}),
+			{ status: 200 }
+		)) as typeof fetch;
+	try {
+		const reading = await readGhPool();
+		assert.deepEqual(reading, { limit: 5000, remaining: 4000, used: 1000, resetAtMs: 123_000 });
+		assert.equal(warns.length, 0);
+	} finally {
+		globalThis.fetch = originalFetch;
+		__setHostForTesting(testHost);
+	}
+});
+
+test('readGhPool: a non-2xx answers null and logs — never throws', async () => {
+	const warns: string[] = [];
+	withTokenAndWarnings(warns);
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () => new Response('', { status: 500 })) as typeof fetch;
+	try {
+		assert.equal(await readGhPool(), null);
+		assert.ok(
+			warns.some((w) => w.includes('500')),
+			'the status must be in the log line'
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+		__setHostForTesting(testHost);
+	}
+});
+
+test('readGhPool: a network failure answers null and logs — never throws', async () => {
+	const warns: string[] = [];
+	withTokenAndWarnings(warns);
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () => {
+		throw new Error('ECONNRESET');
+	}) as typeof fetch;
+	try {
+		assert.equal(await readGhPool(), null);
+		assert.ok(warns.some((w) => w.includes('ECONNRESET')));
+	} finally {
+		globalThis.fetch = originalFetch;
+		__setHostForTesting(testHost);
+	}
+});
+
+test('readGhPool: no token configured never calls fetch at all', async () => {
+	let called = false;
+	__setHostForTesting({ ...testHost, githubToken: () => '' });
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () => {
+		called = true;
+		return new Response('{}', { status: 200 });
+	}) as typeof fetch;
+	try {
+		assert.equal(await readGhPool(), null);
+		assert.equal(called, false);
+	} finally {
+		globalThis.fetch = originalFetch;
+		__setHostForTesting(testHost);
+	}
+});
+
+/**
+ * THE CAREFUL PART of this move (see `ghFetchRaw`'s own doc): GitHub does not
+ * charge `/rate_limit`, so a successful `readGhPool` call must never show up
+ * as a charged call in the budget books — booking it would both fabricate a
+ * spender and double-count the very reading `meterGhPool` subtracts it from.
+ */
+test('readGhPool: a successful read never books a charged call against the budget', async () => {
+	__resetGhBudgetForTesting();
+	const warns: string[] = [];
+	withTokenAndWarnings(warns);
+	const originalFetch = globalThis.fetch;
+	// A REAL `/rate_limit` response carries `x-ratelimit-*` headers on itself
+	// too — present here so a `recordGhResponse` call (if the mutation this
+	// test exists to catch were reintroduced) would have something to book,
+	// rather than silently no-op on a headerless mock.
+	globalThis.fetch = (async () =>
+		new Response(
+			JSON.stringify({
+				resources: { core: { limit: 5000, remaining: 4000, used: 1000, reset: RESET_S } },
+			}),
+			{ status: 200, headers: headers(1000) }
+		)) as typeof fetch;
+	try {
+		await withGhCaller('runner-health', () => readGhPool());
+		assert.deepEqual(getGhBudgetSnapshot(T0), [], 'readGhPool must open no window of its own');
+	} finally {
+		globalThis.fetch = originalFetch;
+		__setHostForTesting(testHost);
+		__resetGhBudgetForTesting();
+	}
+});
+
+/**
+ * THE OTHER CAREFUL PART: `readGhPool` must read straight through an active
+ * PRIMARY blackout, because it is what tells every other caller when the
+ * blackout ends. Gating it on the blackout it measures would mean a spent
+ * budget could hide its own reset time from the thing timing it.
+ */
+test('readGhPool: reads straight through an active PRIMARY blackout', async () => {
+	__resetGhBlackoutForTesting();
+	const warns: string[] = [];
+	withTokenAndWarnings(warns);
+	const originalFetch = globalThis.fetch;
+	// Trip the shared blackout the same way a real 403 would, via ghGet.
+	globalThis.fetch = (async () =>
+		new Response('{"message":"API rate limit exceeded"}', {
+			status: 403,
+			headers: {
+				'x-ratelimit-remaining': '0',
+				'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 60),
+			},
+		})) as typeof fetch;
+	try {
+		await ghGet('/actions/runners?per_page=100', 'tok');
+		assert.ok(ghBlackoutRemainingMs() > 0, 'the blackout must actually be active for this test');
+
+		globalThis.fetch = (async () =>
+			new Response(
+				JSON.stringify({
+					resources: { core: { limit: 5000, remaining: 4000, used: 1000, reset: RESET_S } },
+				}),
+				{ status: 200 }
+			)) as typeof fetch;
+		const reading = await readGhPool();
+		assert.ok(reading, 'readGhPool must still read, blackout or not');
+		assert.equal(reading?.used, 1000);
+	} finally {
+		globalThis.fetch = originalFetch;
+		__setHostForTesting(testHost);
+		__resetGhBlackoutForTesting();
 	}
 });

@@ -62,6 +62,7 @@ import {
 	FLOOR_DEMAND_FILE,
 	buildMintView,
 	floorLabels,
+	isHostedLabel,
 	judgeJobMint,
 	judgeLabelFloor,
 	observedFloorDemand,
@@ -79,7 +80,7 @@ import {
 	type SupervisionReport,
 } from './runner-supervision.js';
 import { postDiscord as postDiscordSink, recordAlertQuietly } from './host.js';
-import { recordGhResponse, labelGhToken, withGhCaller } from './gh-budget.js';
+import { labelGhToken, withGhCaller } from './gh-budget.js';
 import { recordJobResult } from './host.js';
 import { coveredRepos, syncHostedFallback } from './ci-runner-fallback.js';
 import {
@@ -139,10 +140,10 @@ import type { BackstopReason, ClawState } from './fleet-report-types.js';
 // The GitHub Actions API client, moved to its own module 2026-10-29 (plan §4.1 F2).
 import {
 	SELF_REPO,
-	FETCH_TIMEOUT_MS,
 	ghUrl,
 	ghGet,
 	ghWrite,
+	ghFetchRaw,
 	ghBlackoutRemainingMs,
 	readRunnerListingShared,
 	unreadableTickError,
@@ -1468,19 +1469,6 @@ async function confirmFloorZero(token: string): Promise<FloorConfirmation | null
 		names: online.map((r) => r.name).join(', ') || '(none)',
 		registrations: resp.runners.length,
 	};
-}
-
-/**
- * A GitHub-HOSTED image label, e.g. `ubuntu-latest`, `ubuntu-24.04`,
- * `windows-2022`, `macos-14`.
- *
- * Deliberately the same shape `reconcile-repo-policy.mjs` matches, so the gate
- * that POLICES hosted runners and the monitor that EXCUSES them agree on what
- * one is. Hosted jobs are served by GitHub's pool, so they can never be a fleet
- * coverage gap — the fleet has nothing to do with whether they start.
- */
-function isHostedLabel(label: string): boolean {
-	return /^(ubuntu|windows|macos)-[\w.]+$/.test(label);
 }
 
 /** Why a queued run is waiting — the message half of the classification. */
@@ -4159,47 +4147,52 @@ export function __stopRunnerHealthMonitorForTesting(): void {
  * classic-PAT scopes from the `X-OAuth-Scopes` response header (empty for a
  * fine-grained PAT — that case can only be confirmed by an actual write).
  */
+/**
+ * The raw `fetch` moved onto `github-client.ts`'s `ghFetchRaw` (plan §4.1
+ * F2b) — a pure move. This one reads the raw RESPONSE HEADERS
+ * (`x-oauth-scopes`), not a parsed body, which is why it cannot go through
+ * `ghGet` either (that returns a parsed body, never headers).
+ */
 async function logTokenCapabilities(token: string): Promise<void> {
-	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-	try {
-		const resp = await fetch(ghUrl(SELF_REPO, '/actions/runs?per_page=1'), {
+	const { resp, error } = await ghFetchRaw(
+		'GET',
+		ghUrl(SELF_REPO, '/actions/runs?per_page=1'),
+		token,
+		{
 			headers: {
 				Authorization: `Bearer ${token}`,
 				Accept: 'application/vnd.github+json',
 				'X-GitHub-Api-Version': '2022-11-28',
 				'User-Agent': userAgent('runner-health'),
 			},
-			signal: controller.signal,
-		});
-		clearTimeout(timeoutId);
-		recordGhResponse(token, resp.status, resp.headers);
-		const scopes = (resp.headers.get('x-oauth-scopes') ?? '').trim();
-		const scopeList = scopes
-			.split(',')
-			.map((s) => s.trim())
-			.filter(Boolean);
-		let writeReady: string;
-		if (scopeList.includes('repo')) {
-			writeReady = "YES (classic 'repo' scope authorizes rerun-failed-jobs + runner label mgmt)";
-		} else if (scopes === '') {
-			writeReady =
-				'UNKNOWN (fine-grained PAT — scopes not exposed in header; a failover write will 403 if ' +
-				'Actions:write / Administration:write are missing)';
-		} else {
-			writeReady = `LIKELY NO (classic token without 'repo'; failover writes will 403)`;
 		}
-		logger.info(
-			`[runner-health] token capability: read=${resp.ok ? 'ok' : `HTTP ${resp.status}`} ` +
-				`scopes='${scopes || '(fine-grained/none)'}' failover-write=${writeReady}`
-		);
-	} catch (err) {
-		clearTimeout(timeoutId);
-		logger.warn(
-			`[runner-health] token capability probe failed: ${err instanceof Error ? err.message : String(err)}`
-		);
+	);
+	if (!resp) {
+		logger.warn(`[runner-health] token capability probe failed: ${error}`);
+		return;
 	}
+	const scopes = (resp.headers.get('x-oauth-scopes') ?? '').trim();
+	const scopeList = scopes
+		.split(',')
+		.map((s) => s.trim())
+		.filter(Boolean);
+	let writeReady: string;
+	if (scopeList.includes('repo')) {
+		writeReady = "YES (classic 'repo' scope authorizes rerun-failed-jobs + runner label mgmt)";
+	} else if (scopes === '') {
+		writeReady =
+			'UNKNOWN (fine-grained PAT — scopes not exposed in header; a failover write will 403 if ' +
+			'Actions:write / Administration:write are missing)';
+	} else {
+		writeReady = `LIKELY NO (classic token without 'repo'; failover writes will 403)`;
+	}
+	logger.info(
+		`[runner-health] token capability: read=${resp.ok ? 'ok' : `HTTP ${resp.status}`} ` +
+			`scopes='${scopes || '(fine-grained/none)'}' failover-write=${writeReady}`
+	);
 }
+/** Test seam — this had no direct test before plan §4.1 F2b moved its transport. */
+export { logTokenCapabilities as __logTokenCapabilitiesForTesting };
 
 let tokenRetryMs = TOKEN_RETRY_MS;
 /** Test seam: shorten the wait between token reads. */

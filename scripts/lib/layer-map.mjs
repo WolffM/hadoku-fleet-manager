@@ -187,6 +187,9 @@ export const LAYER_MAP = [
 	{ glob: 'scripts/lib/fake-node.mjs', layer: 'access' },
 	{ glob: 'scripts/lib/gh-app.mjs', layer: 'access' },
 	{ glob: 'scripts/lib/gh-reserve.mjs', layer: 'access' },
+	// `gh api .../actions/runners` with retry, shared by reconcile-fleet-runners
+	// and check-label-floor (plan §4.1 F2b, wave 5d lane A).
+	{ glob: 'scripts/lib/gh-runners.mjs', layer: 'access' },
 	{ glob: 'scripts/lib/sibling-repos.mjs', layer: 'access' },
 	{ glob: 'scripts/lib/service-tunnels.mjs', layer: 'access' },
 	{ glob: 'scripts/lib/session-index.mjs', layer: 'access' },

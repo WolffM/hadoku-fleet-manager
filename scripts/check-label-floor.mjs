@@ -48,7 +48,6 @@
  * were not read is a repo whose labels were not read, and "I could not look"
  * must never read as "there was nothing to find".
  */
-import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
@@ -78,11 +77,16 @@ import {
 import { createEmitter } from './lib/emit.mjs';
 import { mintsJitRunners } from '../dist/lib/node-role.js';
 import { observedDemand, workflowDemand } from './lib/runs-on-demand.mjs';
-// The resident-floor's one `gh api` read is retried per READ_ATTEMPTS before
-// it is called could-not-look (#80), imported rather than re-derived — that
-// gate measured the transient rate (0.13% of `gh api` calls, 2026-09-07) and
-// one number is the point. See `listRunners` below.
+// The resident-floor's one `gh api` read, retried before it is called
+// could-not-look (#80) — moved to the shared module (plan §4.1 F2b), which
+// also carries `reconcile-fleet-runners.mjs`'s own copy of the same retry.
+// `READ_ATTEMPTS`/`describeReadFailure` stay imported HERE (domain layer) and
+// are passed INTO the access-layer helper at the call site below, rather
+// than it importing them — see `gh-runners.mjs`'s own doc for why (an access
+// module importing a domain one is an upward layer violation
+// `layer-guard.test.mjs` refuses).
 import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
+import { listRunners } from './lib/gh-runners.mjs';
 
 /**
  * `--json` for a reader that wants the transition log as data (wave2 §D.4).
@@ -760,67 +764,28 @@ function drainedNodeNames() {
 	return new Set(Object.keys(readDrains()));
 }
 
-/** A read that never finishes is a read that never reports (#80). */
-const RESIDENT_READ_TIMEOUT_MS = 20_000;
-/** Long enough for a blip to pass, short enough to be invisible at the measured 0.13% rate. */
-const RESIDENT_RETRY_DELAY_MS = 1_000;
-
-/** Synchronous sleep — the resident-floor check below is a single serial read. */
-function sleepSync(ms) {
-	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * `gh api repos/<repo>/actions/runners`, tolerant of the fleet's page size and
- * retried per `READ_ATTEMPTS` before it is called could-not-look (#80) — the
- * same shape `check-fleet-preflight.mjs` and `reconcile-runner-identity.mjs`
- * already carry for their own `gh` reads. This is a read, never a write, so
- * retrying costs nothing but the blip's own delay; the caller below still
- * reports a total failure exactly as before, now carrying WHY and
- * `attempt N/M` in `err.message`.
- */
-function listRunners(repo) {
-	let reason = 'no attempt was made';
-	for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
-		try {
-			const out = execFileSync('gh', ['api', `repos/${repo}/actions/runners`, '--paginate'], {
-				encoding: 'utf8',
-				maxBuffer: 32 * 1024 * 1024,
-				stdio: ['ignore', 'pipe', 'pipe'],
-				timeout: RESIDENT_READ_TIMEOUT_MS,
-			});
-			return out
-				.split('\n')
-				.filter(Boolean)
-				.flatMap((chunk) => JSON.parse(chunk).runners ?? []);
-		} catch (err) {
-			reason = `${describeReadFailure(err, RESIDENT_READ_TIMEOUT_MS)} (attempt ${attempt}/${READ_ATTEMPTS})`;
-			if (attempt < READ_ATTEMPTS) sleepSync(RESIDENT_RETRY_DELAY_MS);
-		}
-	}
-	throw new Error(reason);
-}
-
 const residentFailures = [];
 if (residentHolders.size) {
 	const drained = drainedNodeNames();
 	for (const [repo, holders] of residentHolders) {
 		const drainedHolders = holders.filter((n) => drained.has(n));
-		let runners;
-		try {
-			runners = listRunners(repo);
-		} catch (err) {
+		const probe = await listRunners(repo, {
+			attempts: READ_ATTEMPTS,
+			describeFailure: describeReadFailure,
+		});
+		if (!probe.ok) {
 			// "I could not look" must never render as "the floor holds" — see
 			// CLAUDE.md. A repo whose registrations could not be read is reported
 			// as a failure naming why, not skipped.
 			residentFailures.push(
 				`"${repo}" — could not read its runner registrations from GitHub ` +
-					`(${String(err.message ?? err)
+					`(${String(probe.error ?? '')
 						.trim()
 						.slice(0, 160)}). Declared holder(s): ${holders.join(', ')}.`
 			);
 			continue;
 		}
+		const runners = probe.runners;
 		const online = holders.filter((node) =>
 			runners.some(
 				(r) =>

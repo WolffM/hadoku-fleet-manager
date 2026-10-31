@@ -65,7 +65,9 @@ import { githubToken, logger, stateDir } from '../host.js';
 import { readManifestState } from '../lib/manifest.js';
 import { packageVersion } from '../lib/provenance.js';
 import { recordRouteHit } from '../lib/usage-log.js';
-import { getGhBudgetSnapshot, recordGhResponse, withGhCaller } from '../gh-budget.js';
+import { getGhBudgetSnapshot, withGhCaller } from '../gh-budget.js';
+import { ghFetchRaw } from '../lib/github-client.js';
+import { userAgent } from '../lib/fleet-config.js';
 import { loadTargets, readStates, stateKey } from '../ci-alerts.js';
 import { mintBudget } from '../runners/ephemeral.js';
 import { activeForces, readForce } from '../runners/backstop-force.js';
@@ -128,46 +130,57 @@ interface ManifestNode {
 	$measured?: unknown;
 }
 
-function loadManifestNodes(): Record<string, ManifestNode> {
-	// INJECTED, like every other manifest read in this package.
-	//
-	// This one was missed when the component moved out of mgmt-api on
-	// 2026-08-30. It kept two `__dirname`-relative candidates that resolved
-	// correctly from `services/mgmt-api/dist/routes` and resolve, from inside
-	// node_modules, to `.../node_modules/scripts/admin/…` and
-	// `.../@wolffm/scripts/admin/…` — neither of which exists.
-	//
-	// It failed exactly the way the extraction was warned about: SOFTLY. The
-	// catch returned `{}`, the route answered 200, and the command station's
-	// Machines table rendered em dashes in five of seven columns while looking
-	// like a working dashboard. Worse, `summarise()` is called with
-	// `Object.keys()` of this map, so an empty one robs `nodeOf` of the
-	// node list and every JIT runner becomes its own node — 36 rows for a
-	// four-node fleet, and a understated backstopShare.
-	//
-	// `manifest()` throws on a bad path rather than returning empty, which is
-	// the whole point: an unreadable manifest must not render as a fleet with
-	// no capacity.
-	//
-	// NAMED, NOT FIXED, IN WAVE 5C (lane A, F1): this function still turns
-	// "could not read" into `{}` for the narrower case above — the directory
-	// resolves but the FILE does not read or parse — exactly the collapse
-	// AGENTS.md warns against ("I could not look must never render as nothing
-	// is wrong"), one paragraph up from where this same comment names it.
-	// Fixing it means `loadManifestNodes` returning `null` on that path, which
-	// ripples into every caller in this file (`buildFleetReport`'s default
-	// parameter, `admission`, `buildVocabulary`, `stateOf`) — outside "the F1
-	// read only" this lane owns. The read itself is migrated to the shared
-	// typed loader (`src/lib/manifest.ts`) so this file no longer spells the
-	// manifest's filename itself; the `{}` fallback is left for a wave that can
-	// afford to touch every reader below.
+/**
+ * `null` is "I could not look" — AGENTS.md: never conflated with an empty
+ * fleet. This one was missed when the component moved out of mgmt-api on
+ * 2026-08-30 (two `__dirname`-relative candidates that resolve, from inside
+ * node_modules, to paths that do not exist) and failed exactly the way the
+ * extraction was warned about: SOFTLY. The catch returned `{}`, the route
+ * answered 200, and the command station's Machines table rendered em dashes
+ * in five of seven columns while looking like a working dashboard. Worse,
+ * `summarise()` is called with `Object.keys()` of this map, so an empty one
+ * robs `nodeOf` of the node list and every JIT runner becomes its own node —
+ * 36 rows for a four-node fleet, and an understated backstopShare.
+ *
+ * NAMED, NOT FIXED, IN WAVE 5C (lane A, F1); FIXED HERE (wave 5d, lane A, F
+ * "routes/fleet loadManifestNodes"). The directory-resolution failure above
+ * is now a genuine `{}` only through this function's own return — the
+ * narrower case (the directory resolves but the FILE does not read or
+ * parse) now returns `null` instead of swallowing it into `{}`.
+ * `requireManifestNodes()` below is `buildFleetReport`'s own door onto this:
+ * it throws the moment the read fails, so every one of `buildFleetReport`'s
+ * LATER default parameters and every read of `manifest` in its body keeps
+ * assuming a real object — `admission`, `buildVocabulary` and `stateOf`
+ * never observe a null manifest at all, because the throw lands before any
+ * of them is called.
+ */
+function loadManifestNodes(): Record<string, ManifestNode> | null {
 	const result = readManifestState();
 	if (!result.ok) {
 		// Reported, never swallowed — the silent `{}` is what hid this for a day.
 		logger.error(`[fleet] cannot read the node manifest: ${result.why}`);
-		return {};
+		return null;
 	}
 	return (result.doc.machines as Record<string, ManifestNode> | undefined) ?? {};
+}
+
+/** Thrown by {@link requireManifestNodes}; the route answers 503 for it, not 500. */
+class ManifestUnreadableError extends Error {}
+
+/**
+ * `loadManifestNodes()`, or a thrown, named error when the manifest could not
+ * be read — see that function's own doc. `buildFleetReport` uses this as
+ * `manifest`'s default so a could-not-look never reaches `Object.keys()`,
+ * `Object.entries()` or an index read as an empty/zero-node fleet.
+ */
+function requireManifestNodes(): Record<string, ManifestNode> {
+	const nodes = loadManifestNodes();
+	if (nodes === null) {
+		throw new ManifestUnreadableError(
+			'cannot read the node manifest — see the preceding [fleet] log line for why'
+		);
+	}
+	return nodes;
 }
 
 /**
@@ -396,7 +409,7 @@ function loadWorkloadGateInputs(): {
 export function buildFleetReport(
 	health: RunnerHealthSnapshot | null = getRunnerHealthSnapshot(),
 	probe: FleetProbeSnapshot | null = getFleetProbeSnapshot(),
-	manifest: Record<string, ManifestNode> = loadManifestNodes(),
+	manifest: Record<string, ManifestNode> = requireManifestNodes(),
 	// `Object.keys(manifest)`, NOT a second `loadManifestNodes()` call. A
 	// default parameter may reference the ones declared before it, and this one
 	// must: `summarise` folds JIT runner names onto nodes with `nodeOf`,
@@ -831,6 +844,14 @@ router.get('/fleet', countHit, (_req: Request, res: Response) => {
 		res.json({ success: true, ...buildFleetReport() });
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : 'Unknown error';
+		// "I could not look" is not "nothing is wrong" — a 503, never the same
+		// 500 an unrelated bug would also raise, so a dashboard or a monitor can
+		// tell "the manifest is unreadable right now" from "this route broke".
+		if (err instanceof ManifestUnreadableError) {
+			logger.error(`[fleet] GET /fleet → 503 ${msg}`);
+			res.status(503).json({ success: false, error: msg });
+			return;
+		}
 		logger.error(`[fleet] GET /fleet → 500 ${msg}`);
 		res.status(500).json({ success: false, error: msg });
 	}
@@ -881,6 +902,52 @@ router.get('/fleet/ci-state', countHit, (_req: Request, res: Response) => {
 });
 
 /**
+ * One job read for {@link backfillFailedSteps} below. Deliberately NOT
+ * runner-health's `ghGet`: that one folds every failure into a single
+ * `null`, and this caller must tell an aged-out job (gone forever, stop
+ * asking) from a timeout (worth another pass) — `expired` carries that.
+ *
+ * Extracted to a named export (plan §4.1 F2b) so its own behaviour —
+ * especially "a network failure never reports `expired: true`" — can be
+ * pinned without standing up the whole Express route.
+ *
+ * The raw `fetch` moved onto `github-client.ts`'s `ghFetchRaw`: a pure move
+ * except for the `User-Agent`, normalized from a hand-written literal
+ * (`hadoku-mgmt-api/job-history-backfill`, a leftover from before the
+ * 2026-08-30 extraction — the exact bug `ci-runner-fallback.ts`'s own
+ * docstring already names and fixes for itself) to `userAgent(...)`, and the
+ * timeout, normalized from NONE AT ALL to this module's 10s default — a read
+ * that never finishes used to never report, on a route meant to run once
+ * over many job ids.
+ */
+export async function fetchJobForBackfill(
+	repo: string,
+	jobId: number,
+	token: string
+): Promise<{ job: GhJob | null; expired: boolean }> {
+	const { resp } = await ghFetchRaw(
+		'GET',
+		`https://api.github.com/repos/${repo}/actions/jobs/${jobId}`,
+		token,
+		{
+			headers: {
+				Authorization: `Bearer ${token}`,
+				Accept: 'application/vnd.github+json',
+				'X-GitHub-Api-Version': '2022-11-28',
+				'User-Agent': userAgent('job-history-backfill'),
+			},
+		}
+	);
+	if (!resp) return { job: null, expired: false };
+	if (!resp.ok) return { job: null, expired: resp.status === 404 };
+	try {
+		return { job: (await resp.json()) as GhJob, expired: false };
+	} catch {
+		return { job: null, expired: false };
+	}
+}
+
+/**
  * Backfill `failedStep` onto pre-0.22.24 records — INSIDE the process that owns
  * the file.
  *
@@ -912,29 +979,10 @@ router.post('/fleet/job-history/backfill', countHit, (req: Request, res: Respons
 		return;
 	}
 	withGhCaller('route', () =>
-		backfillFailedSteps(
-			async (repo, jobId) => {
-				// Deliberately NOT runner-health's `ghGet`: that one folds every failure
-				// into a single `null`, and this caller must tell an aged-out job (gone
-				// forever, stop asking) from a timeout (worth another pass).
-				try {
-					const resp = await fetch(`https://api.github.com/repos/${repo}/actions/jobs/${jobId}`, {
-						headers: {
-							Authorization: `Bearer ${token}`,
-							Accept: 'application/vnd.github+json',
-							'X-GitHub-Api-Version': '2022-11-28',
-							'User-Agent': 'hadoku-mgmt-api/job-history-backfill',
-						},
-					});
-					recordGhResponse(token, resp.status, resp.headers);
-					if (!resp.ok) return { job: null, expired: resp.status === 404 };
-					return { job: (await resp.json()) as GhJob, expired: false };
-				} catch {
-					return { job: null, expired: false };
-				}
-			},
-			{ max, concurrency }
-		)
+		backfillFailedSteps((repo, jobId) => fetchJobForBackfill(repo, jobId, token), {
+			max,
+			concurrency,
+		})
 	)
 		.then((report) => {
 			res.json({ success: true, ...report });

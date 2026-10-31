@@ -680,3 +680,72 @@ export function __resetGhCacheStateForTesting(): void {
 	ghCacheHydrated = true;
 	runnerWriteGen.clear();
 }
+
+/**
+ * The timeout + fetch + catch SKELETON every raw GitHub call in this package
+ * shared, independently, before this existed (plan §4.1 F2b): four call
+ * sites each hand-rolled an `AbortController` + `setTimeout` + try/catch
+ * around `fetch`, with their own header set and verb. `ghGet`/`ghWrite`
+ * above are NOT rebuilt on this — they already had their own tested
+ * transport and a cache/blackout/classification contract this skeleton does
+ * not touch; folding them in would have been a second, riskier move
+ * alongside this one. This is for the sites that need the raw `Response`
+ * (headers, or a status `ghGet`'s single `null` would collapse) or a header
+ * set `ghGet` cannot vary (gh-budget's unauthenticated-by-version probe).
+ *
+ * DIVERGENCE TABLE — the four sites, what each disagreed on, and why each
+ * difference stayed a per-call parameter rather than getting normalized away
+ * (plan §2):
+ *
+ * | site | verb(s) | headers | timeout | on non-2xx | budget recording |
+ * |---|---|---|---|---|---|
+ * | `ci-runner-fallback.ts` `ghVar` | GET/POST/PATCH/DELETE, conditional (`If-None-Match`) | `userAgent('ci-runner-fallback')` | 10s (own local const, now this module's) | returns `{ok:false,status}`, parses GET body on 2xx | normal — `recordGhResponse` every response |
+ * | `routes/fleet.ts` job-history backfill | GET only, one per job id | hand-written literal `'hadoku-mgmt-api/job-history-backfill'` (a leftover from before the 2026-08-30 extraction — normalized here to `userAgent('job-history-backfill')`, same fix `ci-runner-fallback.ts`'s own docstring already describes for itself) | NONE at all (a real gap — normalized to this module's 10s default, the "most demanding copy") | must tell a 404 (job aged out, stop asking) from any other failure — `ghGet` folds every failure into one `null`, which this caller cannot afford | normal |
+ * | `runner-health.ts` `logTokenCapabilities` | GET only, one-shot at startup | `userAgent('runner-health')` | 10s (`FETCH_TIMEOUT_MS`, already this module's) | reads `x-oauth-scopes` off the HEADERS regardless of `ok` — `ghGet` returns a parsed body, never headers | normal |
+ * | `gh-budget.ts` `readGhPool` | GET only, `/rate_limit` | `Accept` + `Authorization` ONLY — no `X-GitHub-Api-Version`, no `User-Agent` (kept exactly as it was; GitHub does not require either on this endpoint and the point of this move is zero behaviour change) | 10s (its own `POOL_READ_TIMEOUT_MS`, kept) | returns `null`, logs "booked unread" | **`skipBudgetRecord: true` — the ONLY caller that sets it.** GitHub does not charge `/rate_limit`; booking it would show a phantom charged call AND double-count the very reading `meterGhPool` subtracts it from (see that function's own doc) |
+ *
+ * NEVER TOUCHES THE PRIMARY BLACKOUT, either direction, for any caller: not
+ * `ghBlackoutRemainingMs()` before the call, not `noteGhRateLimit`/
+ * `noteGhReadBlackout` after. `readGhPool` must read straight through an
+ * active blackout — it is what tells every OTHER caller (`ghGet`/`ghWrite`)
+ * when the blackout ends, so gating it on the blackout it measures would
+ * mean a spent budget could hide its own reset time from the thing timing
+ * it. The other three callers never checked the blackout before this move
+ * either (a genuine gap for `ci-runner-fallback.ts` and the backfill route,
+ * left as-is: adding blackout-awareness to them is a BEHAVIOUR change, and
+ * this move's contract is "no change to call counts or cadence" — plan §2's
+ * "pure move" rule). `caller` attribution to the `[gh-budget] window ended`
+ * books is untouched either way: it comes from `currentGhCaller()`
+ * (`AsyncLocalStorage`, set by each site's own `withGhCaller` wrapper,
+ * already in place before this move), never from which function performs
+ * the fetch.
+ */
+export async function ghFetchRaw(
+	method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+	url: string,
+	token: string,
+	opts: {
+		headers: Record<string, string>;
+		body?: unknown;
+		timeoutMs?: number;
+		/** @see this function's own doc — `readGhPool` only. */
+		skipBudgetRecord?: boolean;
+	}
+): Promise<{ resp: Response | null; error?: string }> {
+	const controller = new AbortController();
+	const timeoutId = setTimeout(() => controller.abort(), opts.timeoutMs ?? FETCH_TIMEOUT_MS);
+	try {
+		const resp = await fetch(url, {
+			method,
+			headers: opts.headers,
+			body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+			signal: controller.signal,
+		});
+		clearTimeout(timeoutId);
+		if (!opts.skipBudgetRecord) recordGhResponse(token, resp.status, resp.headers);
+		return { resp };
+	} catch (err) {
+		clearTimeout(timeoutId);
+		return { resp: null, error: err instanceof Error ? err.message : String(err) };
+	}
+}

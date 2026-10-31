@@ -114,7 +114,7 @@
  *   reconcile-fleet-runners.test.mjs holds the two together.
  */
 
-import { execFile, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -160,6 +160,7 @@ import { runFleetScript } from './lib/run-fleet-script.mjs';
 // number is the point, exactly as `check-fleet-preflight.mjs` and
 // `reconcile-runner-identity.mjs` already use it (#80).
 import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
+import { listRunners as ghListRunners } from './lib/gh-runners.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = manifestPath();
@@ -404,101 +405,43 @@ const READ_TIMEOUT_MS = 20_000;
 /** Long enough for a blip to pass, short enough to be invisible at the measured 0.13% rate. */
 const RETRY_DELAY_MS = 1_000;
 
-/** Synchronous sleep, for the one retry that runs outside the async pool below. */
+/** Synchronous sleep, for the retries below that run outside the async pool. */
 function sleepSync(ms) {
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 /**
- * One `gh api repos/<repo>/actions/runners` read, ASYNC — `execFile`,
- * deliberately, not `execFileSync`. `listRunners` below runs inside
- * `pool(probeList, 8, ...)` (one call per covered repo, up to 28 today), and a
- * synchronous child process blocks the WHOLE event loop for as long as it
- * runs — measured in `check-fleet-preflight.mjs`: three `Promise.all`-wrapped
- * `execFileSync` calls of 1s each still took 3s wall-clock. Retried
- * SEQUENTIALLY at up to `READ_ATTEMPTS` x 20s per repo, 28 repos could reach
- * ~20 minutes against this gate's wrapper budgets (240s for `ci:fleet-coverage`,
- * 300s for `check:fleet-coverage --check-coverage`) — exactly the "a cadence
- * safe for one call is fatal for a fanned-out one" trap. `execFile`'s callback
- * does not block, so the pool's 8-wide concurrency is now real: worst case is
- * ceil(repos/8) batches, not one per repo.
+ * The runner listing's own retry loop moved to `./lib/gh-runners.mjs` (plan
+ * §4.1 F2b): it was a byte-for-byte duplicate of `check-label-floor.mjs`'s own
+ * copy except for the sync/async axis — see that module's own divergence
+ * table. `listRunners` below runs inside `pool(probeList, 8, ...)` (one call
+ * per covered repo, up to 28 today), which is exactly why the async
+ * transport — the shared module's only transport now — was kept: a
+ * synchronous child blocks the WHOLE event loop for as long as it runs,
+ * measured in `check-fleet-preflight.mjs` at three `Promise.all`-wrapped
+ * `execFileSync` calls of 1s each still taking 3s wall-clock.
  */
-function ghRunnersReadOnce(repo, timeoutMs) {
-	return new Promise((resolve) => {
-		execFile(
-			'gh',
-			['api', `repos/${repo}/actions/runners`, '--paginate'],
-			{ encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs },
-			(err, stdout, stderr) => {
-				if (err) {
-					resolve({
-						ok: false,
-						reason: describeReadFailure(
-							{
-								killed: err.killed,
-								signal: err.signal,
-								status: err.code,
-								// BOTH STREAMS, joined — not stderr alone. The sync `listRunners`
-								// this replaced learned this the hard way: "the earlier fix here
-								// recovered stderr ('Command failed' was all that survived), but
-								// for `gh api` the body that names the rejected field is on
-								// STDOUT, so the reason was still half-missing." A 404/422 from
-								// `gh api` prints its JSON body (e.g. `{"message":"Resource not
-								// accessible by integration"}`) to STDOUT; stderr often carries
-								// only a generic "gh: ..." line. Passing stderr alone into
-								// `describeReadFailure` here would silently reopen that exact gap
-								// for this one retried call.
-								stderr: [stderr, stdout]
-									.map((v) => String(v ?? '').trim())
-									.filter(Boolean)
-									.join(' '),
-								message: err.message,
-							},
-							timeoutMs
-						),
-					});
-					return;
-				}
-				resolve({ ok: true, out: stdout });
-			}
-		);
-	});
-}
 
 /**
  * `gh api` exits non-zero on 404. For runner listings a 404 means "no admin on
  * that repo", which is a real finding — distinguish it from an empty list.
  *
- * Retried per `READ_ATTEMPTS` before it is reported `unreadable` (#80) — the
- * same shape `check-fleet-preflight.mjs` and `reconcile-runner-identity.mjs`
- * already carry for their own `gh` reads. Failing every attempt is still
- * unreadable; `ci:fleet-coverage` fails hard on `unreadable.length` either way
- * (`fleet-coverage-check.ts:160`) — what changes is the reason now says WHY
- * and carries `attempt N/M` instead of a bare error string.
+ * Retried per `READ_ATTEMPTS` before it is reported `unreadable` (#80).
+ * `ci:fleet-coverage` fails hard on `unreadable.length` either way
+ * (`fleet-coverage-check.ts:160`) — the reason says WHY and carries
+ * `attempt N/M` instead of a bare error string.
  */
-async function listRunners(repo) {
-	let reason = 'no attempt was made';
-	for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
-		const r = await ghRunnersReadOnce(repo, READ_TIMEOUT_MS);
-		if (r.ok) {
-			try {
-				// --paginate concatenates objects; the fleet is far under one page, but
-				// parse defensively so a future 100+ runner repo does not silently break.
-				const runners = r.out
-					.split('\n')
-					.filter(Boolean)
-					.flatMap((chunk) => JSON.parse(chunk).runners ?? []);
-				return { ok: true, runners };
-			} catch (e) {
-				return { ok: false, error: `gh returned unparseable JSON: ${e.message}`.slice(0, 200) };
-			}
-		}
-		reason = `${r.reason} (attempt ${attempt}/${READ_ATTEMPTS})`;
-		if (attempt < READ_ATTEMPTS) await sleep(RETRY_DELAY_MS);
-	}
-	return { ok: false, error: reason.slice(0, 200) };
+function listRunners(repo) {
+	// `attempts`/`describeFailure` are passed IN rather than imported by the
+	// shared module itself — an access-layer module importing `queue-health.mjs`
+	// (domain/observation) would be an upward layer violation
+	// `layer-guard.test.mjs` refuses; see `gh-runners.mjs`'s own doc.
+	return ghListRunners(repo, {
+		attempts: READ_ATTEMPTS,
+		describeFailure: describeReadFailure,
+		timeoutMs: READ_TIMEOUT_MS,
+		retryDelayMs: RETRY_DELAY_MS,
+	});
 }
 
 /**

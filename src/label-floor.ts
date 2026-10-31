@@ -72,13 +72,36 @@ export const FLOOR_DEMAND_FILE = 'label-floor-demand.json';
 /** Implicit on every self-hosted registration. Compared case-insensitively. */
 const IMPLICIT = new Set(['self-hosted', 'linux', 'x64']);
 
-/**
- * A hosted image label — exactly `runs-on-demand.mjs`'s `isHostedLabel`: the
- * union of `demand-derive.mjs`'s HOSTED_RE and the prefix rule that stopped
- * `ubuntu-24.04` being counted as a capability a node could lose.
- */
 const HOSTED_RE = /ubuntu-latest|ubuntu-\d|windows-|macos-/;
 const HOSTED_PREFIX = /^(ubuntu|macos|windows)(-|$)/;
+
+/**
+ * A GitHub-HOSTED image label, e.g. `ubuntu-latest`, `ubuntu-24.04`,
+ * `windows-2022`, `macos-14` — or a BARE `ubuntu`/`macos`/`windows` with
+ * nothing after it at all, which `HOSTED_RE` alone does not catch and
+ * `HOSTED_PREFIX` exists for.
+ *
+ * THE CANONICAL PREDICATE (plan §4.1 F13). Until this it lived three times:
+ * here as these two unexported regexes folded into `isFloorDemandLabel`'s
+ * own negation, `scripts/lib/runs-on-demand.mjs`'s own `isHostedLabel` (the
+ * same union, correctly, via `demand-derive.mjs`'s `HOSTED_RE` plus its own
+ * inline copy of the prefix rule), and `runner-health.ts`'s own
+ * `isHostedLabel` — which required a `-` and something after it
+ * (`/^(ubuntu|windows|macos)-[\w.]+$/`) and so answered `false` for a bare
+ * `ubuntu`, a real label GitHub serves (5a, §8.3). A queued job landing on a
+ * bare-`ubuntu` hosted runner read as a self-hosted coverage gap instead of
+ * the hosted job it was.
+ *
+ * Exported so `runner-health.ts` (same file, TS — a direct import) and
+ * `scripts/lib/runs-on-demand.mjs` (via the compiled `dist/label-floor.js`:
+ * `tsconfig.json` sets no `allowJs` and `include`s only `src/**\/*.ts`, so a
+ * `.mjs` cannot import this SOURCE file — same restriction `cli.ts`'s own
+ * header names, same `dist/*.js` door every other `scripts/lib/*.mjs` uses)
+ * can both drop their own copy.
+ */
+export function isHostedLabel(label: string): boolean {
+	return HOSTED_RE.test(label) || HOSTED_PREFIX.test(label);
+}
 
 /** Is this a label a node can lose, i.e. one the floor can watch? */
 /**
@@ -96,8 +119,7 @@ export function isFloorDemandLabel(label: string): boolean {
 		typeof label === 'string' &&
 		label.length > 0 &&
 		!IMPLICIT.has(label.toLowerCase()) &&
-		!HOSTED_RE.test(label) &&
-		!HOSTED_PREFIX.test(label) &&
+		!isHostedLabel(label) &&
 		!PROOF_LABEL_RE.test(label)
 	);
 }

@@ -72,7 +72,16 @@ case "$argv" in
 		n=$((n + 1))
 		echo "$n" > "$GH_COUNT_FILE"
 		if [ "$n" -le "\${GH_FAIL_TIMES:-0}" ]; then
-			echo "gh: ETIMEDOUT waiting for api.github.com" >&2
+			# A real \`gh api\` failure (404/422) prints the body naming WHY to
+			# STDOUT, with only a generic line on stderr — the shape that proved
+			# the shared listRunners (plan §4.1 F2b) over this file's own former
+			# copy, which read \`err.stderr\` alone and lost it.
+			if [ -n "\${GH_FAIL_STDOUT_MSG:-}" ]; then
+				echo "gh: command failed" >&2
+				echo "$GH_FAIL_STDOUT_MSG"
+			else
+				echo "gh: ETIMEDOUT waiting for api.github.com" >&2
+			fi
 			exit 1
 		fi
 		cat "$GH_RUNNERS"
@@ -186,7 +195,7 @@ function cleanup(fx) {
 }
 
 /** One gate run, `--json`. Returns the exit code and the parsed report — never throws. */
-function run(fx, { failTimes = 0 } = {}) {
+function run(fx, { failTimes = 0, failStdoutMsg = '' } = {}) {
 	const env = {
 		...process.env,
 		...fx.remotes.env,
@@ -198,6 +207,7 @@ function run(fx, { failTimes = 0 } = {}) {
 		GH_LOG: fx.ghLog,
 		GH_COUNT_FILE: fx.countFile,
 		GH_FAIL_TIMES: String(failTimes),
+		GH_FAIL_STDOUT_MSG: failStdoutMsg,
 		GH_RUNNERS: fx.runners,
 	};
 	try {
@@ -286,6 +296,36 @@ test('a resident-floor read that never recovers fails the gate after READ_ATTEMP
 			'the finding must say the failure survived the retry'
 		);
 		assert.match(stderr, /resident backstop floor/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+// ── (c) a `gh api` failure body on STDOUT ONLY is still carried (plan §4.1 F2b) ─
+
+/**
+ * `gh api` prints a 404/422's explanatory body to STDOUT, with stderr often
+ * carrying only a generic "gh: command failed" line. This file's own former
+ * `listRunners` passed the raw `execFileSync` error straight to
+ * `describeReadFailure`, which reads `err.stderr` alone — so that body was
+ * lost here, exactly the gap `reconcile-fleet-runners.mjs`'s sibling copy had
+ * already fixed for itself by joining both streams. Moving onto the shared
+ * `scripts/lib/gh-runners.mjs` (which does join them) picks up that fix.
+ */
+test('a resident-floor read whose gh-api body is on STDOUT ONLY still carries that body', () => {
+	const fx = fixture();
+	try {
+		const { code, report } = run(fx, {
+			failTimes: 999,
+			failStdoutMsg: '{"message":"Resource not accessible by integration"}',
+		});
+		assert.equal(code, 1);
+		assert.equal(report.residentFailures.length, 1);
+		assert.match(
+			report.residentFailures[0],
+			/Resource not accessible by integration/,
+			'the STDOUT-only body must reach the finding, not just the generic stderr line'
+		);
 	} finally {
 		cleanup(fx);
 	}
