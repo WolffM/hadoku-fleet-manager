@@ -138,7 +138,6 @@
 import { canaryPlan, OWN_DRAIN_REASON_PREFIX, underIdleHold } from './lib/proof-drain.mjs';
 import { carryMeasurements, measuredValue, parseLoad } from './lib/idle-measure.mjs';
 import { spawnJsonToFile } from './lib/spawn-json.mjs';
-import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -179,7 +178,7 @@ import {
 	resolveInstallTarget,
 } from './lib/toolchain-floor.mjs';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
-import { createReleaseLookup } from './lib/tool-release.mjs';
+import { reasonOf, releaseLookup } from './lib/bootcamp-tool-support.mjs';
 import { defaultSeedDeps, isSeedFinding, seedNode } from './lib/capability-seeds.mjs';
 import {
 	busyCount,
@@ -201,27 +200,6 @@ keepStdoutWhole();
 const DATA = dataEndpointUrl();
 const UNPROBED = unprobed(DATA);
 
-/**
- * ONE release lookup for the whole run, shared by every node's `ensureTools`
- * call so a fleet-wide bootcamp asks npm once per tool rather than once per
- * node (the same per-run sharing `createReleaseLookup` gives the refresh
- * cycle).
- *
- * TEST SEAM. In every real invocation this is `createReleaseLookup()` — the
- * npm registry, for real; `FLEET_TEST_RELEASE_LOOKUP` is unset. The fixtures
- * in `bootcamp.test.mjs` run offline and must not depend on reaching the
- * registry to stay deterministic, so they point this at a JSON file holding
- * one canned `resolveInstallTarget`-shaped answer
- * (`{"status":"known","version":"...","publishedAt":"..."}` or
- * `{"status":"unknown","reason":"..."}`), the same shape `lookupLatest`
- * returns.
- */
-function releaseLookup() {
-	const fixture = process.env.FLEET_TEST_RELEASE_LOOKUP;
-	if (!fixture) return createReleaseLookup();
-	const canned = JSON.parse(readFileSync(fixture, 'utf8'));
-	return async () => canned;
-}
 const lookup = releaseLookup();
 
 /**
@@ -361,15 +339,6 @@ const unreachable = [];
 const toolResults = {};
 /** node -> [{id, status, ...}] — see `capability-seeds.mjs`'s `seedNode`. */
 const seedResultsByNode = {};
-
-/** The tail of a failed command's output — the reason, not the whole log. */
-const reasonOf = (r) =>
-	(r.stderr || r.stdout || r.error || 'no output')
-		.trim()
-		.split('\n')
-		.slice(-3)
-		.join(' | ')
-		.slice(-300);
 
 /**
  * Install every capability-scoped tool this node is assigned and does not yet

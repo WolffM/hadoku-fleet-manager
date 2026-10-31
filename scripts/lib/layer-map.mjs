@@ -449,8 +449,7 @@ export const LAYER_MAP = [
 	// Same part as their source file for the same reason.
 	{ glob: 'src/runners/ephemeral-mint.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
 	{ glob: 'src/runners/ephemeral-warm.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
-	// ephemeral-exec-jit.ts and -reap.ts (wave 5o) fall to the src/runners/*.ts
-	// catch-all below: ci-scheduling, run, the same as their source file.
+	// ephemeral-exec-jit.ts and -reap.ts (wave 5o) fall to src/runners/*.ts below.
 	{ glob: 'src/runners/placement.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
 	{
 		glob: 'src/runners/queue-discovery.ts',
@@ -650,6 +649,7 @@ export const LAYER_MAP = [
 		domain: 'observation',
 		part: 'core',
 	},
+	{ glob: 'scripts/lib/bootcamp-*.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{
 		glob: 'scripts/lib/ci-watch-jobnames.mjs',
 		layer: 'domain',

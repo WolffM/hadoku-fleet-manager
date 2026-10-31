@@ -42,6 +42,7 @@ const SKIP_DIRS = new Set([
 const FIXTURE_FILES = new Set([
 	'scripts/lib/fake-node.mjs',
 	'scripts/lib/fleet-source-fixture.mjs',
+	'scripts/lib/bootcamp-fixtures.mjs',
 ]);
 
 function walk(dir, out) {

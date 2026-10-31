@@ -1,6 +1,5 @@
 {
-  "scripts/bootcamp.mjs": 1314,
-  "scripts/bootcamp.test.mjs": 1794,
+  "scripts/bootcamp.mjs": 1283,
   "scripts/capability-probe.sh": 1030,
   "scripts/check-egress-slices.mjs": 1089,
   "scripts/check-fleet-toolchain.mjs": 1175,
