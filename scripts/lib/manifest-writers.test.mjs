@@ -96,6 +96,11 @@ const WRITERS = [
 		file: 'scripts/lib/provision-phases.mjs',
 		facet: 'placement + ephemeral — `fleet provision --machine <node> --confirm`',
 	},
+	{
+		file: 'scripts/retire-node.mjs',
+		facet:
+			'removes `machines.<node>` and adds the retired-name ledger entry — `fleet retire <node> --confirm`',
+	},
 ];
 
 /** The one caller still on the old direct pattern — a different lane's file; see {@link WRITERS}'s header. */

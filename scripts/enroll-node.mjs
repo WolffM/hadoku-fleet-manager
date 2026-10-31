@@ -242,20 +242,38 @@ const hardwareChanges = [];
  * work. An unreadable manifest reads the same way, deliberately: a missing file
  * must not be able to exempt a node from a check, and it cannot make one appear
  * to be a guest either.
+ *
+ * A RETIRED NAME IS REFUSED TOO, and NOT gated behind `--include-guests` — the
+ * two checks ask unrelated questions. `fleet retire` adds a node's name to the
+ * manifest's `retired` array in the SAME `manifestEdit` transaction that
+ * deletes its `machines` entry (closing `docs/runbooks/replace-claw.md`'s Gap:
+ * "nothing checks a proposed name against every claw that has EVER existed").
+ * Node names are immutable (docs/VOCABULARY.md) — the only legitimate way past
+ * this refusal is to pick a different name, never to override it.
  */
 const INCLUDE_GUESTS = has('--include-guests');
-if (NODE && !INCLUDE_GUESTS) {
-	let declared = null;
+if (NODE) {
+	let manifestDoc = null;
 	try {
-		declared = loadManifest()?.machines?.[NODE];
+		manifestDoc = loadManifest();
 	} catch (err) {
-		// Named, not swallowed: the manifest is unreadable, so the role could not be
-		// looked up. The run continues under the strict default (claw) and says so,
-		// because refusing every enrolment on a missing manifest would break the one
-		// case enrolment exists for — a box that is not in it yet.
-		warn(`could not read the manifest to check ${NODE}'s role: ${err.message}`);
+		// Named, not swallowed: the manifest is unreadable, so neither the role
+		// nor the retired-name ledger could be looked up. The run continues under
+		// the strict defaults (claw, not retired) and says so, because refusing
+		// every enrolment on a missing manifest would break the one case
+		// enrolment exists for — a box that is not in it yet.
+		warn(`could not read the manifest to check ${NODE}'s role/ledger: ${err.message}`);
 	}
-	if (isGuestNode(declared)) {
+	if (manifestDoc?.retired?.includes(NODE)) {
+		die(
+			`${NODE} is a RETIRED node name and may never be re-declared.\n` +
+				`  Node names are immutable (docs/VOCABULARY.md) — a replacement, if any, is\n` +
+				`  the next integer, never this name again. See \`fleet retire\`'s ledger\n` +
+				`  (the manifest's \`retired\` array) and docs/runbooks/replace-claw.md.`,
+			{ node: NODE, retired: true }
+		);
+	}
+	if (!INCLUDE_GUESTS && isGuestNode(manifestDoc?.machines?.[NODE])) {
 		die(
 			`${NODE} is a GUEST and the fleet chain does not probe one.\n` +
 				`  A guest lends the fleet a registration and is otherwise none of its\n` +

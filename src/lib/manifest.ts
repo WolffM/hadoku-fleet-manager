@@ -138,6 +138,17 @@ export interface FleetManifest {
 	/** The manifest KEY. Operator config, not an identifier. */
 	machines?: Record<string, ManifestNode>;
 	repos?: Record<string, { needs?: string[]; skip?: boolean; ignore?: boolean }>;
+	/**
+	 * THE RETIRED-NAME LEDGER (wave 5m lane A, `scripts/retire-node.mjs`).
+	 * Every name `fleet retire` has ever removed a `machines` entry for,
+	 * added in the SAME `manifestEdit` transaction as the removal — one
+	 * atomic write rather than a second file that could land without the
+	 * other. Node names are immutable (docs/VOCABULARY.md): `fleet enroll`
+	 * refuses any name on this list before it probes anything, closing
+	 * `docs/runbooks/replace-claw.md`'s Gap ("nothing checks a proposed name
+	 * against every claw that has EVER existed").
+	 */
+	retired?: string[];
 }
 
 /** `{ok:true, doc}` on a successful read+parse, `{ok:false, why}` otherwise. */

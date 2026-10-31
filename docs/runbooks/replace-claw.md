@@ -40,10 +40,11 @@ Every `fleet …` command below is checked against `src/cli.ts`'s door table by
 
 1. **Retire the dead node.** Where/As/Command: run
    `docs/runbooks/retire-node.md` (R3) against the dead node's CURRENT name,
-   start to finish. None of R3's steps need the dead box's own cooperation —
-   drain, deregistration and the manifest edit all act from the control host
-   or against GitHub's API, so a genuinely dead node does not stall any of
-   them.
+   start to finish — `fleet retire <node> --confirm` composes its drain-check,
+   deregister and manifest-edit steps into one command. None of R3's steps
+   need the dead box's own cooperation — drain, deregistration and the
+   manifest edit all act from the control host or against GitHub's API, so a
+   genuinely dead node does not stall any of them.
    Verify: R3's own per-step verifies, and in particular its step 4's —
    `fleet node-status` no longer lists the old name at all. The old name must
    be fully gone before step 2, or the new node's coverage math runs against a
@@ -54,7 +55,7 @@ Every `fleet …` command below is checked against `src/cli.ts`'s door table by
    `claw-N+1` at R1's step 1 (the installer's hostname prompt) — never the
    dead node's old name, even when the hardware is physically sitting in the
    same rack slot moments later.
-   Verify: R1's own step 9 (`fleet traffic` shows the new name as a
+   Verify: R1's own step 7 (`fleet traffic` shows the new name as a
    candidate, or `fleet doctor <new-name>` shows a fresh record) — and that
    `fleet node-status` lists exactly the new name, never the old one and
    never both.
@@ -67,14 +68,14 @@ Every `fleet …` command below is checked against `src/cli.ts`'s door table by
    and `$health` are three independently-provenanced facets on the manifest
    entry, each written by its own command (`bootcamp --write`,
    `benchmark --write`, `doctor --write`), and a FRESH name starts every one
-   of them at nothing. R1 step 8 (`provision --confirm`) EARNS labels by
+   of them at nothing. R1 step 6 (`provision --confirm`) EARNS labels by
    executing each probe on the new hardware; there is no copy path from an
    old entry to a new one, even for a part that moved unchanged — a disk that
    benchmarked at a given throughput on the dead node is re-measured on the
    new one, never assumed.
    Verify: the new node's `$capabilities`/`$benchmark`/`$health` carry
    timestamps from THIS onboarding. A label the dead node held is present
-   only if the new hardware proved it again under R1 step 8 (see
+   only if the new hardware proved it again under R1 step 6 (see
    `docs/runbooks/hardware-change.md`'s capability step for what re-earning
    looks like when just one part moves without a full R1 pass).
 
@@ -122,11 +123,18 @@ Every `fleet …` command below is checked against `src/cli.ts`'s door table by
 - **`journalctl --list-boots` first** — before spending a replacement name on
   a box that was only unresponsive.
 
-## Gap
+## Gap — CLOSED for every name retired through `fleet retire`
 
-Nothing checks a proposed name against every claw that has EVER existed,
-only against what is currently declared: the manifest entry for a retired
-name is gone by the time this runbook reaches step 2, so nothing refuses
-typing it again. This is not in `refactor-plan-2026-10-28.md` §5.4's table,
-so no engineering is scheduled to close it; until something is, this
-runbook's Precondition ("decided now, before step 1") is the only guard.
+Wave 5m lane A closed the gap this section used to describe: `fleet retire
+<node> --confirm` adds the name to the manifest's `retired` array in the SAME
+`manifestEdit` transaction that removes its `machines` entry, and `fleet
+enroll` refuses any name on that list before it probes anything — so a
+replacement accidentally typed under the dead node's own name is now caught
+at step 2 above, not discovered later.
+
+**What is NOT covered**: a node removed from the manifest by hand, outside
+`fleet retire` — an edit made before this command existed, or any future
+manual edit that bypasses it — leaves no ledger entry, so that name is not
+refused. This runbook's Precondition ("decided now, before step 1") is still
+the guard for that case; `fleet retire` is what makes following this runbook
+from here on actually enforce it instead of merely stating it.

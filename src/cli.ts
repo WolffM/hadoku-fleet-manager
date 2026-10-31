@@ -193,6 +193,13 @@ const COMMANDS: Record<string, Command> = {
 		help: true,
 		summary: 'soft-close a node: no new jobs, current work finishes',
 	},
+	retire: {
+		script: 'retire-node.mjs',
+		kind: 'mutator',
+		help: true,
+		summary:
+			'take a node out of the fleet for good: drain, deregister, un-declare, ledger its name',
+	},
 	backstop: {
 		script: 'backstop-switch.mjs',
 		kind: 'mutator',

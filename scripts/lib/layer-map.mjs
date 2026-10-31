@@ -339,6 +339,7 @@ export const LAYER_MAP = [
 	{ glob: 'scripts/reboot-claws.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/drain-node.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/enroll-node.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
+	{ glob: 'scripts/retire-node.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/lan-reserve.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/prove-job.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{
