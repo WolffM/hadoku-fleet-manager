@@ -42,7 +42,8 @@
  * That half spawns a child and READS ITS OUTPUT, so everything about that
  * output has to be pinned rather than inherited. It was not, once: `node --test`
  * defaults to TAP on a pipe under Node 22 and to `spec` under Node 24, this box
- * and the reviewer's both run 24, and ci.yml pins `node-version: '22'`. The
+ * and the reviewer's both run 24, and ci.yml then pinned `node-version: '22'`
+ * (24 since 2026-10-30). The
  * guard went green twice locally and red on main. Whatever is added here, ask
  * the child for it explicitly and check it on BOTH majors — a guard that reads
  * a subprocess is only as portable as the flags it names.
@@ -160,7 +161,7 @@ for (const days of SHIFTS) {
 				// CHANGED between majors: Node 22 emits TAP when stdout is not a TTY,
 				// Node 24 emits `spec` regardless. This guard is always spawned onto a
 				// pipe, so it read `spec` on the two Node 24 workstations it was written
-				// and reviewed on, and TAP in CI, which pins `node-version: '22'`. The
+				// and reviewed on, and TAP in CI, which then pinned `node-version: '22'`. The
 				// `ℹ pass N` line it looks for below does not exist in TAP — that is
 				// `# pass N` — so the non-vacuity assertion fired on a child that had
 				// run the whole suite perfectly, and reddened main for the entire wave.
