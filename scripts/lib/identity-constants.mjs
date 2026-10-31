@@ -38,8 +38,9 @@ export const IDENTITY_BOUNDARY = 'workers/edge-router/src/';
  */
 export const SELF = 'check-identity-model.mjs';
 /**
- * This gate's own REGRESSION TEST, excluded for the same reason as SELF and
- * more so: it is built out of deliberate violations.
+ * This gate's own REGRESSION TESTS and their fixtures (`isSelfFixture`),
+ * excluded for the same reason as SELF and more so: they are built out of
+ * deliberate violations.
  *
  * Eleven fixtures live in it as template literals — `body.userId`,
  * `c.req.valid('json')`, resolvers with and without bindings — because that is
@@ -54,8 +55,21 @@ export const SELF = 'check-identity-model.mjs';
  * blinded a real rule to fix one file.
  *
  * A fixture is not evidence. Fourth occurrence of that in this repo.
+ *
+ * A RULE, not a name. The 2026-10-31 split (4df230c) was a pure move and
+ * still put nine findings on the live fleet scan that night: it moved
+ * fixtures out of `check-identity-model.test.mjs` into
+ * `check-identity-model-blindspots.test.mjs` and `identity-model-fixtures.mjs`,
+ * names the old exact-match guard (`SELF_TEST`) did not know. Any
+ * `check-identity-model*.test.mjs` and the fixtures module are covered, so the
+ * next split cannot reopen it.
  */
-export const SELF_TEST = 'check-identity-model.test.mjs';
+export function isSelfFixture(name) {
+	return (
+		name === 'identity-model-fixtures.mjs' ||
+		/^check-identity-model(?:-[a-z0-9-]+)?\.test\.mjs$/.test(name)
+	);
+}
 
 // ── G6 ───────────────────────────────────────────────────────────────────────
 /**

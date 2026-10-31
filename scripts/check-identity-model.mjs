@@ -11,7 +11,7 @@
  * `scripts/build/sync-identity.mjs` — SITE BRANDING, nothing to do with users.
  * The names are close enough to mislead exactly the way the comment did.
  *
- * Eight checks, all statically decidable:
+ * Nine checks, all statically decidable:
  *
  *   G1 · one type            a registry-record type declared outside
  *                            @wolffm/worker-utils/identity
@@ -26,9 +26,13 @@
  *                            wrangler.toml binds neither registry nor edge
  *   G8 · credentials don't own  a value read from a CREDENTIAL source reaches
  *                            storage as an owner
+ *   G9 · R12, data lives in prefs-api  (a) a store keyed per person outside
+ *                            prefs-api, (b) a name/sprite/avatar stored beside
+ *                            a userId, (c) an id derived from a credential —
+ *                            see lib/identity-r12.mjs (fleet-manager#39)
  *
  * The header said "five" for a day after G6 landed, and "six" for the length of
- * one commit after G7 did. That is the same class of
+ * one commit after G7 did, and "eight" until G9. That is the same class of
  * defect the whole contract is about — a comment asserting something about the
  * code that the code no longer does — so it is worth the pedantry.
  *
@@ -300,8 +304,8 @@ if (!violations.length && !stale.length && !missingCheckouts.length && !rosterEr
 	// "clean across 28 repos" is the exact sentence that was wrong on 2026-09-24.
 	log(
 		staleCheckouts.length
-			? `✓ identity model clean — G1..G8 across ${scope}, BUT ${staleCheckouts.length} checkout(s) were behind origin (see above): this verdict is partly about old code`
-			: `✓ identity model clean — G1..G8 across ${scope}`
+			? `✓ identity model clean — G1..G9 across ${scope}, BUT ${staleCheckouts.length} checkout(s) were behind origin (see above): this verdict is partly about old code`
+			: `✓ identity model clean — G1..G9 across ${scope}`
 	);
 	reportWallClock();
 	process.exit(0);

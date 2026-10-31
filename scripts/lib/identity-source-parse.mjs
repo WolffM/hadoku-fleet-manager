@@ -230,7 +230,7 @@ export function* typeBlocks(src) {
 export const SQL_IDENT = '(?:"([^"]+)"|`([^`]+)`|\\[([^\\]]+)\\]|([A-Za-z_][\\w$]*))';
 
 /** The same, capturing nothing — for a table name, which is only ever printed. */
-const SQL_IDENT_ANY = '(?:"[^"]+"|`[^`]+`|\\[[^\\]]+\\]|[A-Za-z_][\\w$]*)';
+export const SQL_IDENT_ANY = '(?:"[^"]+"|`[^`]+`|\\[[^\\]]+\\]|[A-Za-z_][\\w$]*)';
 export const identName = (m, at) =>
 	(m[at] ?? m[at + 1] ?? m[at + 2] ?? m[at + 3] ?? '').toLowerCase();
 
@@ -241,7 +241,7 @@ const SQL_CONSTRAINT = /^(?:CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK|KEY|INDEX|EX
  * Split `s` on commas at paren depth 0 and outside quotes, keeping each part's
  * offset into `s`.
  */
-function splitTopLevel(s) {
+export function splitTopLevel(s) {
 	const parts = [];
 	let depth = 0;
 	let quote = null;
@@ -265,7 +265,7 @@ function splitTopLevel(s) {
 }
 
 /** Index of the paren closing the one at `open`, or -1 if it never closes. */
-function matchingParen(s, open) {
+export function matchingParen(s, open) {
 	let depth = 0;
 	let quote = null;
 	for (let i = open; i < s.length; i += 1) {

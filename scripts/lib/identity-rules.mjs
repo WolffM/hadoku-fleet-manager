@@ -2,11 +2,12 @@
  * The identity-model gate's ORCHESTRATION (scripts/check-identity-model.mjs,
  * split #8 — pure move; re-split wave 5q lane C to reach the 800-line
  * ceiling). `scanRepo` ties the one walk to every check: G1, G3, G4, G5 and
- * G8 (identity-checks.mjs) run per file; G6 (identity-checks.mjs) and G7
+ * G8 (identity-checks.mjs) and G9 (identity-r12.mjs, R12) run per file; G6
+ * (identity-checks.mjs) and G7
  * (identity-resolver.mjs) reason about the whole repo and run once at the
  * end, because they need the input every per-file pass collected along the
  * way. `trackedFiles`/`walk` (identity-scan.mjs) choose what gets read;
- * `SELF`/`SELF_TEST`/`IDENTITY_BOUNDARY` (identity-constants.mjs) choose
+ * `SELF`/`isSelfFixture`/`IDENTITY_BOUNDARY` (identity-constants.mjs) choose
  * what does not. Kept together here, rather than splitting the walk into
  * its own module, so `scanRepo` does not have to import back from whatever
  * held it — the exact circular edge the original split (#8) avoided by
@@ -19,7 +20,7 @@ import { resolve, relative, sep, basename } from 'node:path';
 
 import { blankComments } from './blank-comments.mjs';
 import { siteRoot } from './paths.mjs';
-import { IDENTITY_BOUNDARY, SELF, SELF_TEST } from './identity-constants.mjs';
+import { IDENTITY_BOUNDARY, SELF, isSelfFixture } from './identity-constants.mjs';
 import {
 	CODE_EXT,
 	SQL_EXT,
@@ -40,6 +41,7 @@ import {
 	collectUserIdReader,
 } from './identity-checks.mjs';
 import { checkG7, collectResolver } from './identity-resolver.mjs';
+import { checkG9Schemas, checkG9Files, checkG9Derived } from './identity-r12.mjs';
 import { isTestFile } from './identity-source-parse.mjs';
 
 export const REPO_ROOT = siteRoot();
@@ -91,7 +93,7 @@ export function scanRepo(root, label, allow, violations, hits, tracked = tracked
 			: walk(root);
 		for (const full of files) {
 			const rel = relative(root, full).split(sep).join('/');
-			if (basename(rel) === SELF || basename(rel) === SELF_TEST) continue;
+			if (basename(rel) === SELF || isSelfFixture(basename(rel))) continue;
 			// `e2e/` is a test tree too: cardtable's `e2e/edge.ts` and bomberman's
 			// `e2e/edge-stub.mjs` stand in for edge-router under playwright, so
 			// stamping identity headers is their whole job (G5 fired on both,
@@ -117,7 +119,10 @@ export function scanRepo(root, label, allow, violations, hits, tracked = tracked
 			// is not a production schema.
 			if (!isTest && SCHEMA_CODE_EXT.some((e) => full.endsWith(e))) {
 				const raw = readFileSync(full, 'utf8');
-				if (DECLARES_TABLE.test(raw)) checkG2Dir([{ rel, sql: raw }], add);
+				if (DECLARES_TABLE.test(raw)) {
+					checkG2Dir([{ rel, sql: raw }], add);
+					checkG9Schemas([{ rel, sql: raw }], label, add);
+				}
 			}
 			if (!CODE_EXT.some((e) => full.endsWith(e))) continue;
 			const src = blankComments(readFileSync(full, 'utf8'));
@@ -131,6 +136,12 @@ export function scanRepo(root, label, allow, violations, hits, tracked = tracked
 			// because storing a credential is edge-router's registry's job but not
 			// every edge-router file's job.
 			if (!isTest) checkG8(rel, src, add);
+			// G9 (R12), like G8, exempts tests: a fixture writing a record with a
+			// name, or hashing a fake key, is not a store.
+			if (!isTest) {
+				checkG9Files(rel, src, label, add);
+				checkG9Derived(rel, src, label, add);
+			}
 			// G5 is about code OUTSIDE the boundary impersonating a user. A test
 			// harness stamping the header is how a worker gets exercised at all,
 			// and inside edge-router stamping it is the point. The boundary is a
@@ -150,5 +161,6 @@ export function scanRepo(root, label, allow, violations, hits, tracked = tracked
 	for (const [, files] of sqlByDir) {
 		files.sort((a, b) => a.rel.localeCompare(b.rel));
 		checkG2Dir(files, add);
+		checkG9Schemas(files, label, add);
 	}
 }

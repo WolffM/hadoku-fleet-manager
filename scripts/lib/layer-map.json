@@ -1644,6 +1644,13 @@
     "why": "Wave 5q lane C, pure move: identity-rules.mjs re-split. G1, G2, G3, G4, G5, G6 and G8, same bucket as the CLI they were cut from."
   },
   {
+    "glob": "scripts/lib/identity-r12.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "fleet-manager#39: G9 (R12, a person's data lives in prefs-api), its own module beside the G1..G8 checks it runs with; same bucket."
+  },
+  {
     "glob": "scripts/lib/identity-model-fixtures.mjs",
     "layer": "domain",
     "domain": "observation",
