@@ -22,7 +22,7 @@
  */
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +37,9 @@ const {
 	runOn,
 	runOnSync,
 	sshDestination,
+	remoteCommand,
+	scriptExecCommand,
+	runRsync,
 	LOCAL,
 	SYNC_MAX_BUFFER,
 } = await import('./fleet-exec.mjs');
@@ -483,4 +486,90 @@ test('the sync transport says so too, and keeps ETIMEDOUT as the branchable code
 	assert.equal(r.ok, false);
 	assert.equal(r.code, 'ETIMEDOUT');
 	assert.match(r.error, /^no answer within 0s/);
+});
+
+// ── F5: remoteCommand, scriptExecCommand, runRsync ───────────────────────────
+//
+// drain-node.mjs's `busyOn`, toolpack.mjs's `on`, seed-node-cache.mjs's
+// writable-check and benchmark-fleet.mjs's capture each hand-rolled a
+// `['ssh', [...]]`/`['bash', [...]]` tuple instead of going through this
+// file. These three replace all four call sites (F5).
+
+test('remoteCommand runs a one-liner locally through bash -c, no ssh involved', () => {
+	const [cmd, argv] = remoteCommand(LOCAL, 'admin', 'echo reached', {
+		manifest: { machines: {} },
+	});
+	assert.equal(cmd, 'bash');
+	assert.deepEqual(argv, ['-c', 'echo reached']);
+});
+
+test('remoteCommand builds the exact ssh argv the four hand-rolled copies built', () => {
+	// Byte-for-byte the shape `drain-node.mjs`/`toolpack.mjs` built directly:
+	// BatchMode, a per-call ConnectTimeout, `-n` (no stdin), the role's
+	// user@node, and the one-liner as the remote COMMAND, not stdin.
+	const [cmd, argv] = remoteCommand('claw-9', 'admin', 'pgrep -c -f x', {
+		connectTimeout: 6,
+		manifest: { machines: { 'claw-9': {} } },
+	});
+	assert.equal(cmd, 'ssh');
+	assert.deepEqual(argv.slice(0, 4), ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=6']);
+	assert.ok(argv.includes('-n'), 'no caller here writes to stdin');
+	assert.match(argv.at(-2), /^[a-z_][a-z0-9_-]*@claw-9$/);
+	assert.equal(argv.at(-1), 'pgrep -c -f x');
+});
+
+test('remoteCommand actually reaches this box and brings back the answer', () => {
+	const [cmd, argv] = remoteCommand(LOCAL, 'admin', 'echo one; echo two', {
+		manifest: { machines: {} },
+	});
+	const out = execFileSync(cmd, argv, { encoding: 'utf8' });
+	assert.equal(out, 'one\ntwo\n');
+});
+
+test('scriptExecCommand feeds the script over stdin, not as an ssh argument', () => {
+	// The hard caller (benchmark-fleet.mjs): sudo + a non-bash interpreter +
+	// positional args after `--`, joined into ONE command string — ssh joins
+	// its own trailing argv with spaces before sending it either way, so this
+	// is byte-identical to what the four hand-built argv elements sent.
+	const [cmd, argv] = scriptExecCommand('claw-9', 'admin', {
+		connectTimeout: 8,
+		interpreter: 'sh',
+		sudo: true,
+		passthru: ['--quick'],
+		manifest: { machines: { 'claw-9': {} } },
+	});
+	assert.equal(cmd, 'ssh');
+	assert.deepEqual(argv.slice(0, 4), ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8']);
+	assert.ok(!argv.includes('-n'), 'stdin carries the script; -n would break that');
+	assert.equal(argv.at(-1), 'sudo sh -s -- --quick');
+});
+
+test('scriptExecCommand without sudo omits it, same interpreter and args', () => {
+	const [, argv] = scriptExecCommand('claw-9', 'admin', {
+		interpreter: 'sh',
+		sudo: false,
+		passthru: ['--quick'],
+		manifest: { machines: { 'claw-9': {} } },
+	});
+	assert.equal(argv.at(-1), 'sh -s -- --quick');
+});
+
+test('scriptExecCommand actually runs the script and sees the passthru args', () => {
+	const [cmd, argv] = scriptExecCommand(LOCAL, 'admin', {
+		interpreter: 'sh',
+		sudo: false,
+		passthru: ['x', 'y'],
+		manifest: { machines: {} },
+	});
+	const out = execFileSync(cmd, argv, { input: 'echo "$1 $2"', encoding: 'utf8' });
+	assert.equal(out, 'x y\n');
+});
+
+test('runRsync spawns rsync with exactly the args given, no transport logic of its own', () => {
+	const out = runRsync(['--version']).toString();
+	assert.match(out, /^rsync\s+version/);
+});
+
+test('runRsync propagates a real failure rather than swallowing it', () => {
+	assert.throws(() => runRsync(['--this-flag-does-not-exist']), /rsync/);
 });

@@ -49,6 +49,7 @@ import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { readDrains } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
+import { BOLD, GREEN, RED, RESET, YELLOW } from './lib/term.mjs';
 
 // `--status --json` prints one document and exits; through a pipe that loses
 // the tail past 8 KB (#33) unless fd 1 is made whole first. Idempotent.
@@ -82,11 +83,13 @@ if (args.length === 0) {
 	process.exit(0);
 }
 const parsed = parseStrict(SPEC, args);
-const R = '\x1b[31m',
-	G = '\x1b[32m',
-	Y = '\x1b[33m',
-	B = '\x1b[1m',
-	N = '\x1b[0m';
+// F10: the raw escapes live once in scripts/lib/term.mjs; this file keeps its
+// own short names (R/G/Y/B/N) rather than renaming every `${R}`/`${N}` below.
+const R = RED,
+	G = GREEN,
+	Y = YELLOW,
+	B = BOLD,
+	N = RESET;
 
 const now = Date.now();
 

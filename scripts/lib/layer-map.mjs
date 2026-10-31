@@ -157,6 +157,9 @@ export const LAYER_MAP = [
 	{ glob: 'scripts/fleet-usage.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/emit.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/argv.mjs', layer: 'automation' },
+	// F10: the ANSI palette + errText sweep (wave 5d lane B) — same
+	// "generic, domain-blind, cross-cutting" shape as argv.mjs beside it.
+	{ glob: 'scripts/lib/term.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/blank-comments.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/yaml-comments.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/stdin.mjs', layer: 'automation' },

@@ -17,6 +17,16 @@
  * may define several (RESET, BOLD, …); this guard counts the FILE once via
  * its first such definition, since the duplication is "this file rolled its
  * own palette," not "this file has N constants."
+ *
+ * `scripts/lib/term.mjs` is the ONE canonical home for both (wave 5d lane
+ * B) and is exempted below, the same way `f5-guard.test.mjs` exempts
+ * `fleet-exec.mjs`/`node-shell.ts`: a name-based regex could dodge its own
+ * pattern by renaming the export (F8's `flagGiven`/`has` trick), but the
+ * ANSI check matches the LITERAL VALUE `'\x1b['`, not a name, so no rename
+ * makes the canonical palette's own definition stop matching. Without this
+ * exemption `debt.json` would have to carry `scripts/lib/term.mjs` forever —
+ * indistinguishable from unmigrated debt in the one file this guard exists
+ * to point everyone AT.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -26,9 +36,13 @@ import { tsAndMjsSources, assertDebt, loadDebt } from './lib.mjs';
 const ERR_TEXT = /\b(?:const|function)\s+errText\s*[=(]/;
 const ANSI_LITERAL = /=\s*['"`]\\x1b\[/;
 
+/** The one file allowed to define these — see the file header. */
+const CANONICAL = new Set(['scripts/lib/term.mjs']);
+
 function findErrText() {
 	const out = [];
 	for (const { rel, code } of tsAndMjsSources()) {
+		if (CANONICAL.has(rel)) continue;
 		if (ERR_TEXT.test(code)) out.push(`${rel}:errText#1`);
 	}
 	return out;
@@ -37,6 +51,7 @@ function findErrText() {
 function findAnsi() {
 	const out = [];
 	for (const { rel, code } of tsAndMjsSources()) {
+		if (CANONICAL.has(rel)) continue;
 		if (ANSI_LITERAL.test(code)) out.push(`${rel}:ansi-palette#1`);
 	}
 	return out;
@@ -66,4 +81,12 @@ void test('F10: the guard sees the shapes it forbids', () => {
 	assert.ok(ERR_TEXT.test('const errText = (e) => (e instanceof Error ? e.message : String(e));'));
 	assert.ok(ANSI_LITERAL.test("const RESET = '\\x1b[0m';"));
 	assert.ok(!ERR_TEXT.test('const reasonOf = (e) => String(e);'));
+});
+
+void test('F10: the canonical home still defines both', () => {
+	const byRel = new Map(tsAndMjsSources().map((s) => [s.rel, s.code]));
+	const term = byRel.get('scripts/lib/term.mjs');
+	assert.ok(term, 'scripts/lib/term.mjs is missing');
+	assert.match(term, ERR_TEXT);
+	assert.match(term, ANSI_LITERAL);
 });

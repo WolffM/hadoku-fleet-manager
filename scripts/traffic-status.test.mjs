@@ -19,7 +19,15 @@ import { strict as assert } from 'node:assert';
 import { after, test } from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -343,4 +351,62 @@ test('mgmt-api being unreachable reads every node unknown, never admitted', () =
 	const claw4 = out.nodes.find((n) => n.name === 'claw-4');
 	assert.equal(claw4.admission.verdict, 'unknown');
 	assert.match(claw4.admission.why, /unreachable/);
+});
+
+// ── strict argv, run DIRECTLY (bypassing the door) — wave 5b left this open ─
+//
+// `traffic-status.mjs` probes real nodes over ssh (`runOnSync`) and reads
+// mgmt-api live. An unknown flag reaching it by some path other than the
+// door must still be refused before any of that runs. Every external tool
+// it could touch is a stand-in on PATH that fails and records the attempt.
+
+const STRICT_ARGV_STUBS = [
+	'ssh',
+	'scp',
+	'rsync',
+	'gh',
+	'sudo',
+	'apt',
+	'apt-get',
+	'systemctl',
+	'npm',
+	'pnpm',
+	'curl',
+];
+
+function strictArgvSandbox() {
+	const dir = mkdtempSync(join(tmpdir(), 'fleet-traffic-strict-argv-'));
+	madeDirs.push(dir);
+	const bin = join(dir, 'bin');
+	mkdirSync(bin);
+	mkdirSync(join(dir, 'home'));
+	mkdirSync(join(dir, 'state'));
+	const log = join(dir, 'touched.log');
+	for (const s of STRICT_ARGV_STUBS) {
+		writeFileSync(join(bin, s), `#!/bin/sh\necho "${s} $*" >> "${log}"\nexit 97\n`);
+		chmodSync(join(bin, s), 0o755);
+	}
+	return { dir, bin, log };
+}
+
+test('fleet-manager#F8: traffic-status.mjs run DIRECTLY with an unknown flag exits 2 and touches nothing', () => {
+	const sb = strictArgvSandbox();
+	const r = spawnSync(process.execPath, [SCRIPT, '--not-a-real-flag'], {
+		encoding: 'utf8',
+		timeout: 15_000,
+		env: {
+			PATH: `${sb.bin}:${process.env.PATH}`,
+			HOME: join(sb.dir, 'home'),
+			HADOKU_STATE_DIR: join(sb.dir, 'state'),
+			FLEET_MANIFEST_DIR: join(sb.dir, 'no-manifests'),
+			HADOKU_SITE_ROOT: join(sb.dir, 'no-site'),
+			REPOS_DIR: join(sb.dir, 'no-repos'),
+			MGMT_API_URL: 'http://127.0.0.1:9',
+			FLEET_NO_BANNER: '1',
+		},
+	});
+	const touched = existsSync(sb.log) ? readFileSync(sb.log, 'utf8').trim() : '';
+	assert.equal(r.status, 2, r.stdout + r.stderr);
+	assert.match(r.stdout + r.stderr, /unknown flag\(s\) --not-a-real-flag/);
+	assert.equal(touched, '', `traffic-status.mjs called external tools:\n${touched}`);
 });

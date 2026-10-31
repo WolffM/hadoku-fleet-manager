@@ -37,7 +37,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { PKG_SCRIPTS } from './lib/paths.mjs';
-import { isLocalNode, loadManifest, sshDestination } from './lib/fleet-exec.mjs';
+import { loadManifest, remoteCommand } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { isGuestNode } from '../dist/lib/node-role.js';
@@ -45,6 +45,7 @@ import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { packsRequired } from './lib/toolpack-rules.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
+import { GREEN, RED, RESET, YELLOW } from './lib/term.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
 // and on a pipe `process.exit` throws away whatever the stream still had
@@ -61,10 +62,12 @@ const args = process.argv.slice(2);
 const parsed = parseStrict(ARGV_SPECS['toolpack.mjs'], args);
 const JSON_OUT = parsed.has('--json');
 const CONFIRM = parsed.has('--confirm');
-const YEL = '\x1b[33m';
-const RED = '\x1b[31m';
-const GRN = '\x1b[32m';
-const OFF = '\x1b[0m';
+// F10: the raw escapes live once in scripts/lib/term.mjs; this file keeps its
+// own short names (YEL/GRN/OFF) rather than renaming every `${YEL}` below.
+// RED already matched the shared name, so it is imported directly above.
+const YEL = YELLOW;
+const GRN = GREEN;
+const OFF = RESET;
 
 // CATEGORY 1: this file SHIPS WITH THE PACKAGE, beside the script it guards.
 // It is not operator config -- the list is fixed by what benchmark-node.sh
@@ -95,23 +98,14 @@ const skippedByRole = named.length
 	: everyNode.filter((n) => isGuestNode(MANIFEST.machines[n]));
 const nodes = everyNode.filter((n) => !skippedByRole.includes(n));
 
-/** Run on the node. The local host cannot be reached by ssh — see node-identity. */
+/**
+ * Run on the node. F5: one node-exec helper — `remoteCommand` carries the
+ * local-vs-ssh branch itself (the local host cannot be reached by ssh — see
+ * node-identity) instead of this file rolling its own `['ssh', [...]]` tuple.
+ */
 function on(node, script) {
-	const argv = isLocalNode(node)
-		? ['bash', ['-c', script]]
-		: [
-				'ssh',
-				[
-					'-n',
-					'-o',
-					'BatchMode=yes',
-					'-o',
-					'ConnectTimeout=8',
-					sshDestination(node, 'admin'),
-					script,
-				],
-			];
-	return execFileSync(argv[0], argv[1], { encoding: 'utf8', timeout: 60_000 });
+	const [cmd, argv] = remoteCommand(node, 'admin', script, { connectTimeout: 8 });
+	return execFileSync(cmd, argv, { encoding: 'utf8', timeout: 60_000 });
 }
 
 /**

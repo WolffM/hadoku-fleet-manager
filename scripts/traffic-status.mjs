@@ -72,6 +72,7 @@ import { loadManifest, runOnSync } from './lib/fleet-exec.mjs';
 import { stateDir } from './lib/paths.mjs';
 import { readDrains } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
+import { BOLD, DIM, GREEN, RED, RESET, YELLOW } from './lib/term.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
 // and on a pipe `process.exit` throws away whatever the stream still had
@@ -86,12 +87,14 @@ const args = process.argv.slice(2);
 // door reads too. `--help`/`-h` and an unknown flag are both handled before
 // anything below reads the manifest or ssh's to a node.
 const parsed = parseStrict(ARGV_SPECS['traffic-status.mjs'], args);
-const B = '\x1b[1m',
-	G = '\x1b[32m',
-	Y = '\x1b[33m',
-	R = '\x1b[31m',
-	D = '\x1b[2m',
-	N = '\x1b[0m';
+// F10: the raw escapes live once in scripts/lib/term.mjs; this file keeps its
+// own short names (B/G/Y/R/D/N) rather than renaming every `${B}`/`${N}` below.
+const B = BOLD,
+	G = GREEN,
+	Y = YELLOW,
+	R = RED,
+	D = DIM,
+	N = RESET;
 
 const JSON_OUT = parsed.has('--json');
 const LIVE = parsed.has('--live');

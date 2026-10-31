@@ -42,15 +42,7 @@
     "scripts/lib/fleet-source.mjs:failure#1",
     "src/lib/measured.ts:lines#1"
   ],
-  "F5": [
-    "scripts/benchmark-fleet.mjs:spawn#1",
-    "scripts/benchmark-fleet.mjs:stdout#2",
-    "scripts/drain-node.mjs:out#1",
-    "scripts/seed-node-cache.mjs:p#1",
-    "scripts/seed-node-cache.mjs:tmp#2",
-    "scripts/seed-node-cache.mjs:tmp#3",
-    "scripts/toolpack.mjs:argv#1"
-  ],
+  "F5": [],
   "F7-pm2-hosts": [
     "scripts/check-capability-schema.mjs:declared#1",
     "scripts/lib/collect-offers.mjs:pm2Peers#1",
@@ -85,19 +77,8 @@
     "scripts/join-workload-benchmark.mjs:out#1",
     "scripts/prove-job.mjs:VALUE_FLAGS#1"
   ],
-  "F10-errText": [
-    "scripts/benchmark-fleet.mjs:errText#1",
-    "scripts/lib/reboot-cycle.mjs:errText#1",
-    "scripts/lib/refresh-cycle.mjs:errText#1"
-  ],
-  "F10-ansi": [
-    "scripts/backstop-switch.mjs:ansi-palette#1",
-    "scripts/benchmark-fleet.mjs:ansi-palette#1",
-    "scripts/drain-node.mjs:ansi-palette#1",
-    "scripts/lib/emit.mjs:ansi-palette#1",
-    "scripts/toolpack.mjs:ansi-palette#1",
-    "scripts/traffic-status.mjs:ansi-palette#1"
-  ],
+  "F10-errText": [],
+  "F10-ansi": [],
   "F12-repage-ms": [
     "src/ci-alerts.ts:repage-constant#1",
     "src/claw-reboot.ts:repage-constant#1",

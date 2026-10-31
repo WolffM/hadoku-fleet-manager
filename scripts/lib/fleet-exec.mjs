@@ -131,6 +131,60 @@ export function sshDestination(node, role, manifest) {
 }
 
 /**
+ * `[bin, argv]` for running a single, already-assembled COMMAND on `node` as
+ * ROLE — `ssh <user>@<node> <command>`, or `bash -c '<command>'` locally
+ * (F5). The general form behind {@link scriptCommand}, which fixes the
+ * command to `bash -s` so a script can be piped over stdin; this is for a
+ * caller with no script to pipe — a one-liner probe, run as an ssh ARGUMENT
+ * rather than fed on its stdin.
+ *
+ * `-n` is always added to the remote options: none of today's callers write
+ * anything to the child's stdin, and ssh's own stdin-from-/dev/null makes that
+ * explicit rather than relying on `execFileSync`'s default of an empty pipe
+ * when no `input` option is given.
+ *
+ * Extracted from `drain-node.mjs`'s `busyOn` and `toolpack.mjs`'s `on` —
+ * both hand-rolled `['ssh', [...]]`/`['bash', [...]]` tuples built the exact
+ * same way, the shape the F5 guard calls out by name.
+ */
+export function remoteCommand(node, role, command, { connectTimeout = 10, manifest } = {}) {
+	const m = manifest ?? cachedManifest();
+	return nodeCommand(node, role, command, m?.machines?.[node] ?? null, {
+		sshOpts: ['-o', 'BatchMode=yes', '-o', `ConnectTimeout=${connectTimeout}`, '-n'],
+	});
+}
+
+/**
+ * `[bin, argv]` for piping a script over stdin to a REMOTE SHELL OTHER THAN
+ * `bash -s` — {@link scriptCommand}'s general form, for a caller that needs a
+ * `sudo` prefix, a different interpreter, or positional arguments after `--`
+ * (F5). `benchmark-fleet.mjs`'s capture is the caller that shaped this: it
+ * needs `sudo sh -s -- <passthru>` on one attempt and `sh -s -- <passthru>`
+ * on the retry, neither of which `runOn`/`runOnSync` has a shape for.
+ *
+ * A single joined string, not separate argv elements, because ssh joins its
+ * own trailing argv with spaces before sending it to the remote shell either
+ * way (`man ssh`) — so `['sudo','sh','-s','--','x']` and `'sudo sh -s -- x'`
+ * put byte-identical text on the wire.
+ *
+ * No `-n`: the caller feeds the script on this child's stdin, same as
+ * {@link scriptCommand}, so stdin must stay open for exactly that.
+ */
+export function scriptExecCommand(
+	node,
+	role,
+	{ connectTimeout = 10, manifest, interpreter = 'bash', sudo = false, passthru = [] } = {}
+) {
+	const command = [sudo ? 'sudo' : null, interpreter, '-s', '--', ...passthru]
+		.filter((x) => x !== null)
+		.join(' ');
+	const m = manifest ?? cachedManifest();
+	return nodeCommand(node, role, command, m?.machines?.[node] ?? null, {
+		sshOpts: ['-o', 'BatchMode=yes', '-o', `ConnectTimeout=${connectTimeout}`],
+	});
+}
+
+/**
  * The ci role's user on a node that has been cut over to one, else undefined.
  * What a repair that installs FOR the ci user (`installScript`'s `ciUser`)
  * needs; before the cutover ci IS admin and there is nobody else to name.
@@ -625,6 +679,22 @@ export function runOnSync(
 			status: typeof err.status === 'number' ? err.status : null,
 		};
 	}
+}
+
+/**
+ * rsync, ARGS AS GIVEN (F5) — a thin pass-through, not a transport with its
+ * own branching. rsync is its own transport: a `<user>@<node>:<path>`
+ * endpoint (built with {@link sshDestination}) makes rsync invoke ssh
+ * underneath on its own, so none of {@link scriptCommand}'s local/remote
+ * logic applies here. Kept in this file anyway so no script spawns `rsync`
+ * directly — every node-reaching transport resolves through one file, which
+ * is the whole point of F5 — rather than because this wraps any real
+ * behaviour of its own.
+ */
+export function runRsync(args, { timeoutMs = 1_800_000, maxBuffer } = {}) {
+	const opts = { stdio: 'pipe', timeout: timeoutMs };
+	if (maxBuffer) opts.maxBuffer = maxBuffer;
+	return execFileSync('rsync', args, opts);
 }
 
 /**

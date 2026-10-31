@@ -59,7 +59,7 @@ import process from 'node:process';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { manifest, stateDir } from './lib/paths.mjs';
-import { isLocalNode, loadManifest, sshDestination } from './lib/fleet-exec.mjs';
+import { loadManifest, remoteCommand } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { guestNodeNames, isGuestNode } from '../dist/lib/node-role.js';
@@ -86,6 +86,7 @@ import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
 // (#80). Imported, not duplicated: a third copy of this retry is a third
 // place for "retrying is not tolerating" to drift.
 import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
+import { BOLD, GREEN, RED, RESET, YELLOW } from './lib/term.mjs';
 
 // The STATE dir, not the manifest dir — see src/runners/drain.ts for why.
 // Short version: manifestDir is inside a git checkout and there are two of
@@ -96,11 +97,13 @@ const args = process.argv.slice(2);
 // door reads too. `--help`/`-h` and an unknown flag are both handled before
 // anything below reads the drain doc or touches a node.
 const parsed = parseStrict(ARGV_SPECS['drain-node.mjs'], args);
-const R = '\x1b[31m',
-	G = '\x1b[32m',
-	Y = '\x1b[33m',
-	B = '\x1b[1m',
-	N = '\x1b[0m';
+// F10: the raw escapes live once in scripts/lib/term.mjs; this file keeps its
+// own short names (R/G/Y/B/N) rather than renaming every `${R}`/`${N}` below.
+const R = RED,
+	G = GREEN,
+	Y = YELLOW,
+	B = BOLD,
+	N = RESET;
 
 // The whole file, through the one reader and writer every script shares. A
 // parse failure THROWS rather than defaulting to {}: reporting "nothing is
@@ -159,24 +162,11 @@ function busyOn(node) {
 	// the one place the question is asked.
 	const PROBE = 'pgrep -c -f "[R]unner\\.Worker" || true';
 	try {
-		const out = isLocalNode(node)
-			? execFileSync('bash', ['-c', PROBE], { encoding: 'utf8', timeout: 20000 })
-			: execFileSync(
-					'ssh',
-					[
-						'-n',
-						'-o',
-						'BatchMode=yes',
-						'-o',
-						'ConnectTimeout=6',
-						sshDestination(node, 'admin'),
-						PROBE,
-					],
-					{
-						encoding: 'utf8',
-						timeout: 20000,
-					}
-				);
+		// F5: one node-exec helper, not a hand-rolled ['ssh', [...]] tuple — see
+		// scripts/lib/fleet-exec.mjs's remoteCommand, which carries the
+		// isLocalNode branch itself.
+		const [cmd, cmdArgv] = remoteCommand(node, 'admin', PROBE, { connectTimeout: 6 });
+		const out = execFileSync(cmd, cmdArgv, { encoding: 'utf8', timeout: 20000 });
 		const n = parseInt(String(out).trim().split('\n')[0], 10);
 		return Number.isFinite(n) ? n : null;
 	} catch {

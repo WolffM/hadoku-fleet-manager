@@ -41,6 +41,8 @@
  * tested against fixtures (reboot-cycle.test.mjs) and never against a claw.
  */
 
+import { errText } from './term.mjs';
+
 /** Every drain this cycle writes starts with this, and it undoes only those. */
 export const REASON_PREFIX = 'automated reboot';
 /** The drain's window (kind `reboot`): if the cycle dies outright, the node comes back by itself. */
@@ -228,7 +230,6 @@ export function verifyAfter(before, after) {
 	return problems;
 }
 
-const errText = (e) => (e instanceof Error ? e.message : String(e));
 async function attempt(fn) {
 	try {
 		return { ok: true, value: await fn() };

@@ -112,7 +112,10 @@ test('seed-cache remains wired to its own safety rules (unchanged by the chain)'
 	assert.match(src, /return Object\.keys\(caps\)\.length \? caps : null/);
 	// The writability check precedes the copy — claw-7's 5.5GB "Permission
 	// denied" taught this, and the chain calling the script does not retire it.
-	assert.ok(src.indexOf('[ -w "$d" ]') < src.indexOf("execFileSync('rsync'"));
+	// F5: the copy itself now goes through fleet-exec.mjs's `runRsync` rather
+	// than a literal `execFileSync('rsync', ...)` call, so the invariant is
+	// pinned on the new call shape instead.
+	assert.ok(src.indexOf('[ -w "$d" ]') < src.indexOf('runRsync('));
 	// The RICHEST source, not the first that passes: claw-8 was seeded with
 	// 631MB of a 5.2GB cache by exactly that shortcut.
 	assert.match(src, /du -sk/);

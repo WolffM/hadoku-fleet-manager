@@ -63,6 +63,7 @@ import {
 	resolveInstallTarget,
 } from './toolchain-floor.mjs';
 import { compareVersions, createReleaseLookup, parseVersion } from './tool-release.mjs';
+import { errText } from './term.mjs';
 
 /** How long to wait for a node to go quiet before giving up and putting it back. */
 export const DRAIN_TIMEOUT_MS = 45 * 60_000;
@@ -237,8 +238,6 @@ function settle(id, res) {
 		reason: res.ok ? null : (res.stderr || res.error || 'install failed').trim().slice(0, 300),
 	};
 }
-
-const errText = (e) => (e instanceof Error ? e.message : String(e));
 
 /**
  * @param {object} p

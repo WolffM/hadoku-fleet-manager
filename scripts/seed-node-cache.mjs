@@ -32,7 +32,15 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
 
-import { loadManifest, machineArg, runOn, selectNodes, sshDestination } from './lib/fleet-exec.mjs';
+import {
+	loadManifest,
+	machineArg,
+	remoteCommand,
+	runOn,
+	runRsync,
+	selectNodes,
+	sshDestination,
+} from './lib/fleet-exec.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
@@ -274,19 +282,19 @@ for (const what of wanted) {
 		// "mkdir: Permission denied" after 5.5GB because ~/.cache was root-owned
 		// (a `sudo -E` bootstrap). Checking the cheap thing before the expensive
 		// one is the whole lesson.
+		//
+		// F5: one node-exec helper (`remoteCommand`) instead of a hand-rolled
+		// `['ssh', [...]]` tuple — it also carries the isLocalNode branch this
+		// call never had, so seeding a guest reached locally (`--machine hokon`)
+		// no longer fails outright over ssh-to-itself.
 		try {
-			execFileSync(
-				'ssh',
-				[
-					'-o',
-					'BatchMode=yes',
-					'-o',
-					'ConnectTimeout=10',
-					sshDestination(node, 'ci'),
-					`set -e; d="$HOME/${spec.path}"; mkdir -p "$d" 2>/dev/null || { sudo -n mkdir -p "$d"; sudo -n chown -R "$USER:$USER" "$d"; }; [ -w "$d" ]`,
-				],
-				{ stdio: 'pipe', timeout: 60_000 }
+			const [cmd, cmdArgv] = remoteCommand(
+				node,
+				'ci',
+				`set -e; d="$HOME/${spec.path}"; mkdir -p "$d" 2>/dev/null || { sudo -n mkdir -p "$d"; sudo -n chown -R "$USER:$USER" "$d"; }; [ -w "$d" ]`,
+				{ connectTimeout: 10 }
 			);
+			execFileSync(cmd, cmdArgv, { stdio: 'pipe', timeout: 60_000 });
 		} catch {
 			console.error(
 				`✗ ${node}: ${spec.path} is not writable and could not be made so — refusing to start a large copy that will fail at the end`
@@ -302,18 +310,10 @@ for (const what of wanted) {
 			// each other and adding some for a cache copy would be a new standing
 			// permission for a one-off need.
 			const tmp = `/tmp/fleet-seed-${what}`;
-			execFileSync(
-				'rsync',
-				['-a', '--delete', `${sshDestination(source, 'ci')}:${spec.path}/`, `${tmp}/`],
-				{
-					stdio: 'pipe',
-					timeout: 1_800_000,
-				}
-			);
-			execFileSync('rsync', ['-a', `${tmp}/`, `${sshDestination(node, 'ci')}:${spec.path}/`], {
-				stdio: 'pipe',
-				timeout: 1_800_000,
-			});
+			// F5: rsync is spawned through the one canonical wrapper
+			// (`runRsync`) rather than directly — see scripts/lib/fleet-exec.mjs.
+			runRsync(['-a', '--delete', `${sshDestination(source, 'ci')}:${spec.path}/`, `${tmp}/`]);
+			runRsync(['-a', `${tmp}/`, `${sshDestination(node, 'ci')}:${spec.path}/`]);
 		} catch (err) {
 			console.error(`✗ ${node}: copy of ${what} failed: ${String(err.message).slice(0, 160)}`);
 			result.seeds.push({ node, what, state: 'copy-failed' });

@@ -90,10 +90,10 @@
  */
 
 import { writeSync } from 'node:fs';
-
-/** ANSI yellow, matching what enroll-node.mjs already printed for warnings. */
-const YELLOW = '\x1b[33m';
-const RESET = '\x1b[0m';
+// F10: the raw escapes live once in scripts/lib/term.mjs — this file's one
+// ANSI use (a warning in yellow, matching what enroll-node.mjs already
+// printed), imported rather than redefined.
+import { YELLOW, RESET } from './term.mjs';
 
 /** `keepStdoutWhole()` is idempotent and every caller calls it blind. */
 let stdoutIsWhole = false;

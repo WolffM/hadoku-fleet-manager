@@ -44,7 +44,7 @@ import { measuredFacets, writeFacet } from '../dist/lib/measured.js';
 // grew their own `if (node === 'hokon')` are why.
 import { guestNodeNames, nodeRole } from '../dist/lib/node-role.js';
 import { manifest } from './lib/paths.mjs';
-import { isLocalNode, sshDestination } from './lib/fleet-exec.mjs';
+import { isLocalNode, scriptExecCommand } from './lib/fleet-exec.mjs';
 import { createEmitter } from './lib/emit.mjs';
 // THE SAME DRAIN `ci:toolchain-refresh` (#69) USES, reused rather than
 // reimplemented: `createLiveDeps()` already wraps drain-node.mjs and the
@@ -60,12 +60,15 @@ import { createEmitter } from './lib/emit.mjs';
 // `CADENCE_WAIT_TIMEOUT_MS` below for the bounded call this file makes
 // instead, with the same `busyCount` and a fresh clock.
 import { busyCount, createLiveDeps, waitUntilDrained } from './lib/refresh-cycle.mjs';
+import { BOLD, YELLOW, RESET, errText } from './lib/term.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'benchmark-node.sh');
-const BOLD = '\x1b[1m';
-const YEL = '\x1b[33m';
-const OFF = '\x1b[0m';
+// F10: the raw escapes and errText live once in scripts/lib/term.mjs; this
+// file keeps its own short names (BOLD/YEL/OFF) rather than renaming every
+// `${YEL}`/`${OFF}` below.
+const YEL = YELLOW;
+const OFF = RESET;
 /** "Twice a year" cadence, unchanged — the `never`/`stale` coverage bands. */
 const STALE_DAYS = 200;
 /**
@@ -131,8 +134,6 @@ export const CADENCE_WORST_CASE_MS =
 	CADENCE_MEASURE_TIMEOUT_MS * 2 + // measure: privileged attempt + one retry, each at the full ceiling
 	DRAIN_CLI_BUDGET_MS + // undrain
 	CADENCE_MARGIN_MS;
-
-const errText = (e) => (e instanceof Error ? e.message : String(e));
 
 /**
  * THE BY-HAND COMMAND — ONE INVOCATION, NEVER A NODE LIST (#87 §2).
@@ -436,20 +437,12 @@ function measureOneNode(
 		// smartctl's health) is emitted as `unk` WITH THE REASON, which is the
 		// difference between a measured gap and a silent one.
 		const local = isLocalNode(node);
-		const argv = local
-			? ['sh', '-s', '--', ...passthru]
-			: [
-					'-o',
-					'BatchMode=yes',
-					'-o',
-					'ConnectTimeout=8',
-					sshDestination(node, 'admin'),
-					'sudo',
-					'sh',
-					'-s',
-					'--',
-					...passthru,
-				];
+		// Only the LOCAL branch below still builds its own argv — it is appended
+		// after 'sudo'/'sudo -n', which scriptExecCommand has no shape for (F5
+		// does not touch the local privilege chain, which never spawned a raw
+		// ssh/rsync and so was never debt). The REMOTE branch builds its ssh
+		// tuple inline below, through scriptExecCommand.
+		const argv = local ? ['sh', '-s', '--', ...passthru] : null;
 		const spawn = (cmd, a) =>
 			execFileSync(cmd, a, {
 				input: readFileSync(SCRIPT),
@@ -495,8 +488,17 @@ function measureOneNode(
 				}
 			}
 		} else {
+			// F5: one node-exec helper, not a hand-rolled ['ssh', [...]] tuple —
+			// see scripts/lib/fleet-exec.mjs's scriptExecCommand, built for this
+			// exact caller (sudo + a non-bash interpreter + passthru args).
 			try {
-				out = spawn('ssh', argv);
+				const [sshCmd, sshArgv] = scriptExecCommand(node, 'admin', {
+					connectTimeout: 8,
+					interpreter: 'sh',
+					sudo: true,
+					passthru,
+				});
+				out = spawn(sshCmd, sshArgv);
 			} catch (err) {
 				// A BOX THAT IS NOT IN THE FLEET YET HAS NO NOPASSWD SUDO. The
 				// claws are provisioned with it; a candidate machine is not, so
@@ -507,17 +509,13 @@ function measureOneNode(
 				const stdout = typeof err.stdout === 'string' ? err.stdout : err.stdout?.toString?.();
 				if (stdout && stdout.includes('BENCH-BEGIN')) throw err;
 				if (!jsonOut) process.stderr.write('(unprivileged) ');
-				out = spawn('ssh', [
-					'-o',
-					'BatchMode=yes',
-					'-o',
-					'ConnectTimeout=8',
-					sshDestination(node, 'admin'),
-					'sh',
-					'-s',
-					'--',
-					...passthru,
-				]);
+				const [sshCmd, sshArgv] = scriptExecCommand(node, 'admin', {
+					connectTimeout: 8,
+					interpreter: 'sh',
+					sudo: false,
+					passthru,
+				});
+				out = spawn(sshCmd, sshArgv);
 			}
 		}
 		const r = parse(out);
