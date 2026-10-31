@@ -44,6 +44,21 @@
  *   fleet mf-externals --warn      # report, exit 0
  *   fleet mf-externals --no-fetch  # read the fleet-source mirrors as they stand (offline)
  *   fleet mf-externals --source-only  # skip the deployed-bundle half, and say so
+ *   fleet mf-externals --json      # a GateDoc instead of prose
+ *
+ * MIGRATED (wave 5j lane B): `ci:audit-gates` now runs this one with `--json`
+ * and judges it by the `GateDoc` below rather than a regex over
+ * stdout+stderr — see `src/lib/job-registry.ts`'s `coversSubs` entry
+ * (`contract: 'json'`) and `scripts/lib/json-contract.mjs`'s derivation of
+ * `JSON_CONTRACT` from it. A repo (or the whole deployed-bundle half) this
+ * gate could not even reach — an unfetchable checkout, a vite config or a
+ * src/ listing the facet names but that is not there, a registry/bundle
+ * fetch that failed — is "I could not look", classified into `unreadable`
+ * by the MESSAGE each failure already writes (`classify` below), the same
+ * reasoning `scripts/lib/throttle-drift-doc.mjs` gives for doing the same
+ * thing rather than threading a flag through both this file and the shared
+ * `lib/mf-built.mjs`. Every other finding is a conclusion reached from data
+ * this run actually read.
  *
  * TWO HALVES (#111). The SOURCE half below reads each repo's vite `external:`
  * list and its imports — fast, and the only half that names the line to fix.
@@ -65,6 +80,14 @@ import { qualifyRepo } from '../dist/lib/fleet-config.js';
 import { blankComments } from './lib/blank-comments.mjs';
 import { crawlBundle, fetchText, judgeBuilt, siteOrigin } from './lib/mf-built.mjs';
 import { readChildApps } from './lib/site-docs.mjs';
+import { createEmitter } from './lib/emit.mjs';
+import { buildGateDoc } from './lib/gate-doc.mjs';
+
+// Imported before `siteRoot()` below can throw (a missing HADOKU_SITE_ROOT),
+// so the module-scope-throw guard it installs is already in place — see
+// lib/emit.mjs's own header on issue #20-#26 and this file's migration note
+// above.
+const out = createEmitter();
 
 const REPO_ROOT = siteRoot();
 
@@ -73,6 +96,7 @@ const USE_WORKTREE = args.has('--worktree');
 const WARN_ONLY = args.has('--warn');
 const NO_FETCH = args.has('--no-fetch');
 const SOURCE_ONLY = args.has('--source-only');
+const JSON_OUT = out.json;
 
 /**
  * Micro-frontends the parent page MOUNTS, with the build paths read off each
@@ -404,7 +428,9 @@ for (const entry of FLEET) {
  * judged; each way of failing to look is its own finding.
  */
 async function builtFindings() {
-	const out = [];
+	// Named `found`, not `out`: the module-scope `out` above is now the shared
+	// emitter, and shadowing it here would be a trap for the next edit.
+	const found = [];
 	const astro = resolve(REPO_ROOT, 'astro.config.mjs');
 	const origin = existsSync(astro) ? siteOrigin(readFileSync(astro, 'utf8')) : null;
 	if (!origin)
@@ -447,7 +473,7 @@ async function builtFindings() {
 			const id = idByRepo.get(entry.repo);
 			const url = id && registry[id]?.url;
 			if (!url) {
-				out.push({
+				found.push({
 					repo: entry.repo,
 					msg: id
 						? `the deployed registry has no "${id}" entry — its built bundle could not be checked`
@@ -457,27 +483,103 @@ async function builtFindings() {
 			}
 			const crawl = await crawlBundle(new URL(url, origin).href, fetch);
 			if (crawl.reason) {
-				out.push({ repo: entry.repo, msg: `deployed bundle not fully read: ${crawl.reason}` });
+				found.push({ repo: entry.repo, msg: `deployed bundle not fully read: ${crawl.reason}` });
 				return;
 			}
 			const verdict = judgeBuilt(crawl.files);
-			if (verdict) out.push({ repo: entry.repo, msg: verdict });
+			if (verdict) found.push({ repo: entry.repo, msg: verdict });
 		})
 	);
-	return out.sort((a, b) => (a.repo < b.repo ? -1 : 1));
+	return found.sort((a, b) => (a.repo < b.repo ? -1 : 1));
 }
 
 if (SOURCE_ONLY) {
-	console.log('· --source-only: the deployed bundles were NOT checked\n');
+	out.log('· --source-only: the deployed bundles were NOT checked\n');
 } else if (FLEET.length > 0) {
 	findings.push(...(await builtFindings()));
 }
 
-for (const n of notes) console.log(`· ${n.repo}: ${n.msg}`);
-if (notes.length > 0) console.log('');
+for (const n of notes) out.log(`· ${n.repo}: ${n.msg}`);
+if (notes.length > 0) out.log('');
+
+/**
+ * GateDoc (wave 5j lane B). Every `findings` message this script (or
+ * `lib/mf-built.mjs`'s `judgeBuilt`) can produce, classified by matching the
+ * MESSAGE ITSELF — same reasoning `scripts/lib/throttle-drift-doc.mjs` gives
+ * for doing the same thing: each string is written at exactly one call site,
+ * so matching the prose is as reliable as a flag threaded through both this
+ * file and the shared `lib/mf-built.mjs`, without touching that file.
+ *
+ * UNREADABLE = this gate could not even LOOK at the thing in question: an
+ * unfetchable repo, a vite config or a src/ listing the facet names but that
+ * is not there (the same "could not look" `check-label-floor.mjs` gives a
+ * covered repo with no workflows directory), the whole deployed-bundle half
+ * (no `site:`, an unreadable child-apps.json or registry), or one app's
+ * bundle the registry does not list or could not be fully crawled. Every
+ * other message is a conclusion reached from data this run actually read: a
+ * mounted app whose config has no lib build or no externals, zero source
+ * files under the declared path, an import not externalised, or a deployed
+ * bundle PROVEN — by reading it — to inline React.
+ */
+const UNREADABLE_MF = [
+	/^shipped branch unreadable:/,
+	/^no checkout at /,
+	/not found — has the layout moved\?$/,
+	/^cannot list /,
+	/^no `site:` in/,
+	/^scripts\/child-apps\.json unreadable/,
+	/^child-apps\.json names no app for this repo/,
+	/^could not read .*\/mf\/registry\.json/,
+	/^the deployed registry has no "/,
+	/^deployed bundle not fully read:/,
+];
+
+/** @returns {{ unreadable: true } | { unreadable: false, kind: string }} */
+function classifyFinding(msg) {
+	if (UNREADABLE_MF.some((re) => re.test(msg))) return { unreadable: true };
+	if (/^the roster names ZERO micro-frontends/.test(msg))
+		return { unreadable: false, kind: 'empty-roster' };
+	if (/has no `lib:` build/.test(msg)) return { unreadable: false, kind: 'no-lib-build' };
+	if (/is a lib build with no rollupOptions\.external/.test(msg))
+		return { unreadable: false, kind: 'no-externals-declared' };
+	if (/^no \.ts\/\.tsx\/\.js\/\.jsx under /.test(msg))
+		return { unreadable: false, kind: 'no-source-files' };
+	if (/^the DEPLOYED bundle inlines/.test(msg))
+		return { unreadable: false, kind: 'built-bundle-inlines-singleton' };
+	if (/^inlines /.test(msg)) return { unreadable: false, kind: 'inlines-singleton' };
+	// Never silently dropped: an unmatched message (a new finding this
+	// classifier has not learned yet) is still a finding, under a kind that
+	// says so, rather than vanishing from the GateDoc.
+	return { unreadable: false, kind: 'mf-externals-violation' };
+}
+
+const gateFindings = [];
+const gateUnreadable = [];
+for (const f of findings) {
+	// `(fleet)` and `(site)` are this script's own sentinels for a whole-fleet
+	// or whole-deploy finding, never a real repo — carried as `repo` only when
+	// it names one.
+	const repo = f.repo === '(fleet)' || f.repo === '(site)' ? null : f.repo;
+	const c = classifyFinding(f.msg);
+	const reason = repo ? `${f.repo}: ${f.msg}` : f.msg;
+	if (c.unreadable) gateUnreadable.push({ node: null, why: reason, ...(repo ? { repo } : {}) });
+	else gateFindings.push({ node: null, kind: c.kind, reason, ...(repo ? { repo } : {}) });
+}
+
+if (JSON_OUT) {
+	out.emit({
+		microFrontends: FLEET.length,
+		sourceOnly: SOURCE_ONLY,
+		// Size-only, not a failure — see the header on SINGLETONS/notes above.
+		// Additive, alongside GateDoc rather than inside it.
+		notes,
+		...buildGateDoc({ findings: gateFindings, unreadable: gateUnreadable }),
+	});
+	process.exit(WARN_ONLY ? 0 : findings.length ? 1 : 0);
+}
 
 if (findings.length === 0) {
-	console.log(
+	out.log(
 		`check-mf-externals: OK — ${FLEET.length} micro-frontends, every parent-provided ` +
 			`singleton is external` +
 			(SOURCE_ONLY
@@ -488,6 +590,6 @@ if (findings.length === 0) {
 	process.exit(0);
 }
 
-for (const f of findings) console.log(`✗ ${f.repo}: ${f.msg}`);
-console.log(`\n${findings.length} finding(s), ${notes.length} size-only note(s).`);
+for (const f of findings) out.log(`✗ ${f.repo}: ${f.msg}`);
+out.log(`\n${findings.length} finding(s), ${notes.length} size-only note(s).`);
 process.exit(WARN_ONLY ? 0 : 1);

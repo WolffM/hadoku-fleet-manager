@@ -460,3 +460,158 @@ test('a warm registration naming no manifest node FAILS — no unit anywhere can
 		cleanup(fx);
 	}
 });
+
+// ── GateDoc (wave 5j lane B) ─────────────────────────────────────────────────
+//
+// "I could not look" (an unreachable node, an unreadable repo listing, an
+// unreadable drain record, a warm registration's second look that never
+// completed) must land in `unreadable`, never folded into `findings` — the
+// same rule every other migrated gate's GateDoc tests pin. A black hole, an
+// unreaped JIT orphan, a warm orphan both looks actually resolved, a
+// registered-no-install, an unconfigured listener and a stolen identity are
+// all conclusions this gate reached from data it actually read, so each is a
+// finding.
+
+/** One gate run, `--json`. Returns the exit code and the parsed GateDoc. */
+function runJson(fx, opts = {}) {
+	const r = run(fx, { ...opts, argv: [...(opts.argv ?? []), '--json'] });
+	return { code: r.code, doc: JSON.parse(r.out.slice(r.out.indexOf('{'))) };
+}
+
+test('GateDoc: a clean fleet is ok, with no findings and nothing unreadable', () => {
+	const fx = fixture();
+	try {
+		const { code, doc } = runJson(fx);
+		assert.equal(code, 0, JSON.stringify(doc));
+		assert.equal(doc.ok, true);
+		assert.deepEqual(doc.findings, []);
+		assert.deepEqual(doc.unreadable, []);
+		assert.ok(!('why' in doc), 'a clean GateDoc must not carry why');
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: an unreachable node is unreadable, carrying its name and why', () => {
+	const fx = fixture();
+	try {
+		const { code, doc } = runJson(fx, { failNode: NODE });
+		assert.equal(code, 1);
+		assert.equal(doc.ok, false);
+		assert.deepEqual(doc.findings, []);
+		assert.equal(doc.unreadable.length, 1);
+		assert.equal(doc.unreadable[0].node, NODE);
+		assert.match(doc.unreadable[0].why, /No route to host/);
+		assert.ok(doc.why, 'a failing GateDoc must carry why');
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: an unreadable repo listing is unreadable, not a finding', () => {
+	const fx = fixture();
+	try {
+		const { code, doc } = runJson(fx, { failPath: runnersPath(BAD_REPO) });
+		assert.equal(code, 1);
+		assert.deepEqual(doc.findings, []);
+		assert.equal(doc.unreadable.length, 1);
+		assert.equal(doc.unreadable[0].node, null);
+		assert.equal(doc.unreadable[0].repo, BAD_REPO);
+		assert.match(doc.unreadable[0].why, /502/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: an unreadable drain record is unreadable, not a finding', () => {
+	const fx = fixture();
+	try {
+		writeFileSync(join(fx.root, 'fleet-drain.json'), '{ this is not json');
+		const { code, doc } = runJson(fx);
+		assert.equal(code, 1);
+		assert.deepEqual(doc.findings, []);
+		assert.equal(doc.unreadable.length, 1);
+		assert.equal(doc.unreadable[0].node, null);
+		assert.match(doc.unreadable[0].why, /drain record unreadable/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: an unreaped ONLINE JIT orphan is a structured finding, node: null', () => {
+	const fx = fixture();
+	try {
+		const { code, doc } = runJson(fx, {
+			runners: { repo: OK_REPO, list: [jitRunner(3600, 'online')] },
+		});
+		assert.equal(code, 1);
+		assert.equal(doc.ok, false);
+		assert.deepEqual(doc.unreadable, []);
+		assert.equal(doc.findings.length, 1, JSON.stringify(doc.findings));
+		assert.equal(doc.findings[0].node, null);
+		assert.equal(doc.findings[0].kind, 'unreaped-black-hole');
+		assert.match(doc.findings[0].reason, new RegExp(OK_REPO));
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: a routine (not-yet-reaped) JIT orphan is NEITHER a finding NOR unreadable', () => {
+	const fx = fixture();
+	try {
+		const { code, doc } = runJson(fx, {
+			runners: { repo: OK_REPO, list: [jitRunner(300, 'online')] },
+		});
+		assert.equal(code, 0, JSON.stringify(doc));
+		assert.equal(doc.ok, true);
+		assert.deepEqual(doc.findings, []);
+		assert.deepEqual(doc.unreadable, []);
+		// Still reported, additively, under the pre-existing field.
+		assert.equal(doc.jitOrphans.length, 1);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: a warm orphan both looks actually resolved is a finding, not unreadable', () => {
+	const fx = fixture();
+	try {
+		const { code, doc } = runJson(fx, { runners: { repo: OK_REPO, list: [WARM] } });
+		assert.equal(code, 1);
+		assert.deepEqual(doc.unreadable, []);
+		assert.equal(doc.findings.length, 1, JSON.stringify(doc.findings));
+		assert.equal(doc.findings[0].kind, 'warm-orphan');
+		assert.match(doc.findings[0].reason, /no active unit on .* on either look/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: a registered-no-install repo is a finding, node: null', () => {
+	const fx = fixture();
+	try {
+		const ghost = { id: 5, name: 'persistent-ghost', status: 'offline', busy: false };
+		const { code, doc } = runJson(fx, { runners: { repo: OK_REPO, list: [ghost] } });
+		assert.equal(code, 1);
+		assert.deepEqual(doc.unreadable, []);
+		const finding = doc.findings.find((f) => f.kind === 'registered-no-install');
+		assert.ok(finding, JSON.stringify(doc.findings));
+		assert.equal(finding.node, null);
+		assert.match(finding.reason, /persistent-ghost/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('human output is unaffected by the migration — same prose, same exit code', () => {
+	const fx = fixture();
+	try {
+		const human = run(fx, { failNode: NODE });
+		const { code } = runJson(fx, { failNode: NODE });
+		assert.equal(human.code, code, 'exit code must match between the two modes');
+		assert.match(human.out, new RegExp(NODE));
+		assert.ok(!human.out.trim().startsWith('{'), 'human mode must not print JSON');
+	} finally {
+		cleanup(fx);
+	}
+});

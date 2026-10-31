@@ -221,6 +221,8 @@ code first would turn every real finding into "the checker broke".
 | `fleet boundary-contracts --json`                 | `ci:audit-gates`        |
 | `fleet label-floor --json`                        | `ci:audit-gates`        |
 | `fleet throttle --check --json`                   | `ci:audit-gates`        |
+| `fleet mf-externals --json`                       | `ci:audit-gates`        |
+| `fleet identity --json`                           | `ci:audit-gates`        |
 
 That table listed SIX of these ten until 2026-09-07 — `drain-check`,
 `benchmark`, `egress-slices` and `queue-health` were under contract and
@@ -236,14 +238,17 @@ of these subcommands, or dropping its `--json` handling, fails `pnpm run check`
 here rather than a cron in hadoku_site at 03:00. Renaming one is a cross-repo
 change — the failure message names the mgmt-api file to fix in the same pass.
 
-`ci:audit-gates` runs six more fleet subcommands (wave 5f, 5h and 5i lane B
-are moving them to the table above one at a time — eight already have, hence
-the eight `ci:audit-gates` rows above), but reads the remaining six's output as
-prose against an `evidence` regex rather than as JSON, so those are deliberately
-not in the table above. It is declared separately, as `PROSE_CONTRACT` in the
-same file, because reading output as prose has its own failure mode: that job
-merges **stdout and stderr** into one value and judges every prose gate by a
-regex over it, so anything this CLI's WRAPPER writes becomes part of its verdict.
+`ci:audit-gates` runs three more fleet subcommands (wave 5f, 5h, 5i and 5j lane
+B moved ten of fourteen to the table above one at a time, hence the ten
+`ci:audit-gates` rows above; wave 5j lane B's `mf-externals` and `identity`
+were the last two NON-d3 prose gates), but reads the remaining three's output
+as prose against an `evidence` regex rather than as JSON, so those are
+deliberately not in the table above. Only `slice`/`tool-inventory` (d3's own
+lane) and `ci-watch` are left. It is declared separately, as `PROSE_CONTRACT`
+in the same file, because reading output as prose has its own failure mode:
+that job merges **stdout and stderr** into one value and judges every prose
+gate by a regex over it, so anything this CLI's WRAPPER writes becomes part of
+its verdict.
 
 That is not hypothetical — it is what the provenance banner did on 2026-09-07,
 when all fourteen `ci:audit-gates` subcommands were still prose. It made

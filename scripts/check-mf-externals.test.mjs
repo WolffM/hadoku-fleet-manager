@@ -145,6 +145,12 @@ function run(fx, argv = []) {
 	}
 }
 
+/** `run()`, `--json`: returns the exit code and the parsed GateDoc. */
+function runJson(fx, argv = []) {
+	const r = run(fx, [...argv, '--json']);
+	return { code: r.code, doc: JSON.parse(r.out) };
+}
+
 function cleanup(fx) {
 	rmSync(fx.root, { recursive: true, force: true });
 }
@@ -322,6 +328,12 @@ function runOne(files, { git = true, argv = [] } = {}) {
 	}
 }
 
+/** `runOne()`, `--json`: returns the exit code and the parsed GateDoc. */
+function runOneJson(files, { git = true, argv = [] } = {}) {
+	const r = runOne(files, { git, argv: [...argv, '--json'] });
+	return { code: r.code, doc: JSON.parse(r.out) };
+}
+
 test('#98: a roster with ZERO micro-frontends fails — it printed "OK — 0 micro-frontends"', () => {
 	const fx = fixture({ mf: false });
 	try {
@@ -485,6 +497,7 @@ async function runBuilt({
 	files = {},
 	childApps = [{ id: 'clean', repoName: 'mf-clean' }],
 	writeChildApps = true,
+	argv = [],
 }) {
 	const fx = fixture();
 	const server = createServer((req, res) => {
@@ -520,7 +533,7 @@ async function runBuilt({
 		return await new Promise((resolveRun) => {
 			execFile(
 				'node',
-				[SCRIPT],
+				[SCRIPT, ...argv],
 				{
 					env: {
 						...NO_GIT_ENV,
@@ -615,4 +628,160 @@ test('#111: builtFindings reads child-apps.json through site-docs.mjs, not a bar
 	const fn = src.slice(src.indexOf('async function builtFindings'), src.indexOf('const regUrl'));
 	assert.match(fn, /readChildApps\(\{\s*root:\s*REPO_ROOT\s*\}\)/);
 	assert.doesNotMatch(fn, /readFileSync\(resolve\(REPO_ROOT, 'scripts\/child-apps\.json'\)/);
+});
+
+// ── GateDoc (wave 5j lane B) ─────────────────────────────────────────────────
+//
+// "I could not look" (an unfetchable repo, a facet-declared file that is not
+// there, a src/ listing that failed, the whole deployed-bundle half, or one
+// app's bundle the registry does not list or could not be fully crawled)
+// must land in `unreadable`, never folded into `findings` — the same rule
+// every other migrated gate's GateDoc tests pin. Everything this gate
+// actually CONCLUDED from data it read — a mounted app with no lib build or
+// no externals, zero source files, an inlined singleton, or a deployed
+// bundle proven to inline React — is a finding.
+
+test('GateDoc: a clean fleet is ok, with no findings and nothing unreadable', () => {
+	const { code, doc } = runOneJson({
+		'vite.config.ts': viteWith(ALL_EXTERNAL),
+		'src/main.ts': "import { useTheme } from '@wolffm/themes';\nexport { useTheme };\n",
+	});
+	assert.equal(code, 0, JSON.stringify(doc));
+	assert.equal(doc.ok, true);
+	assert.deepEqual(doc.findings, []);
+	assert.deepEqual(doc.unreadable, []);
+	assert.ok(!('why' in doc), 'a clean GateDoc must not carry why');
+});
+
+test('GateDoc: an inlined singleton is a structured finding, carrying the repo', () => {
+	const { code, doc } = runOneJson({
+		'vite.config.ts': viteWith("['react']"),
+		'src/main.ts': "import { useTheme } from '@wolffm/themes';\nexport { useTheme };\n",
+	});
+	assert.equal(code, 1);
+	assert.equal(doc.ok, false);
+	assert.deepEqual(doc.unreadable, []);
+	assert.equal(doc.findings.length, 1, JSON.stringify(doc.findings));
+	assert.equal(doc.findings[0].node, null);
+	assert.equal(doc.findings[0].kind, 'inlines-singleton');
+	assert.equal(doc.findings[0].repo, 'mf-x');
+	assert.match(doc.findings[0].reason, /mf-x: inlines @wolffm\/themes/);
+	assert.ok(doc.why, 'a failing GateDoc must carry why');
+});
+
+test('GateDoc: a mounted app with no `lib:` build is a structured finding', () => {
+	const { code, doc } = runOneJson({
+		'vite.config.ts': 'export default { build: { outDir: "dist" } };\n',
+		'src/main.ts': "import { useTheme } from '@wolffm/themes';\n",
+	});
+	assert.equal(code, 1);
+	assert.deepEqual(doc.unreadable, []);
+	const finding = doc.findings.find((f) => f.kind === 'no-lib-build');
+	assert.ok(finding, JSON.stringify(doc.findings));
+	assert.equal(finding.repo, 'mf-x');
+});
+
+test('GateDoc: a lib build with no rollupOptions.external is a structured finding', () => {
+	const { code, doc } = runOneJson({
+		'vite.config.ts': 'export default { build: { lib: { entry: "src/main.ts" } } };\n',
+		'src/main.ts': "import 'react';\n",
+	});
+	assert.equal(code, 1);
+	assert.deepEqual(doc.unreadable, []);
+	const finding = doc.findings.find((f) => f.kind === 'no-externals-declared');
+	assert.ok(finding, JSON.stringify(doc.findings));
+});
+
+test('GateDoc: no source files under src/ is a structured finding', () => {
+	const { code, doc } = runOneJson({
+		'vite.config.ts': viteWith("['react']"),
+		'src/README.md': 'docs\n',
+	});
+	assert.equal(code, 1);
+	assert.deepEqual(doc.unreadable, []);
+	const finding = doc.findings.find((f) => f.kind === 'no-source-files');
+	assert.ok(finding, JSON.stringify(doc.findings));
+	assert.equal(finding.repo, 'mf-x');
+});
+
+test('GateDoc: a roster with ZERO micro-frontends is a structured finding, not unreadable', () => {
+	const fx = fixture({ mf: false });
+	try {
+		writeBaseAstro(fx, LITERAL_IMPORTMAP);
+		const { code, doc } = runJson(fx);
+		assert.equal(code, 1);
+		assert.deepEqual(doc.unreadable, []);
+		const finding = doc.findings.find((f) => f.kind === 'empty-roster');
+		assert.ok(finding, JSON.stringify(doc.findings));
+		assert.equal(finding.node, null);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: #7 a roster repo whose shipped branch cannot be read is unreadable, not a finding', () => {
+	const fx = fixture({ mf: false });
+	try {
+		writeBaseAstro(fx, SINGLETON_IMPORTMAP);
+		const cov = JSON.parse(readFileSync(fx.coverage, 'utf8'));
+		cov.repos.push('WolffM/mf-never-pushed');
+		cov.facets['WolffM/mf-never-pushed'] = {
+			microFrontend: { vite: 'vite.config.ts', src: 'src' },
+		};
+		writeFileSync(fx.coverage, JSON.stringify(cov));
+		const { code, doc } = runJson(fx);
+		assert.equal(code, 1);
+		assert.deepEqual(doc.findings, []);
+		assert.equal(doc.unreadable.length, 1, JSON.stringify(doc.unreadable));
+		assert.equal(doc.unreadable[0].repo, 'mf-never-pushed');
+		assert.match(doc.unreadable[0].why, /shipped branch unreadable: fetch from .* failed/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: a src/ listing that FAILS is unreadable, not a finding', () => {
+	const { code, doc } = runOneJson(
+		{ 'vite.config.ts': viteWith("['react']"), 'src/main.ts': "import 'react';\n" },
+		{ git: false, argv: ['--worktree'] }
+	);
+	assert.equal(code, 1);
+	assert.deepEqual(doc.findings, []);
+	assert.equal(doc.unreadable.length, 1, JSON.stringify(doc.unreadable));
+	assert.match(doc.unreadable[0].why, /cannot list src/);
+});
+
+test('GateDoc #111: a deployed bundle proven to inline React is a structured finding', async () => {
+	const r = await runBuilt({
+		registry: CLEAN_REGISTRY,
+		files: { '/mf/clean/index.js': 'import"./chunk.js";', '/mf/clean/chunk.js': INLINED_CHUNK },
+		argv: ['--json'],
+	});
+	const doc = JSON.parse(r.out);
+	assert.equal(r.code, 1, r.out);
+	assert.deepEqual(doc.unreadable, []);
+	const finding = doc.findings.find((f) => f.kind === 'built-bundle-inlines-singleton');
+	assert.ok(finding, JSON.stringify(doc.findings));
+	assert.equal(finding.repo, 'mf-clean');
+});
+
+test('GateDoc #111: an unreadable registry is unreadable, not a finding', async () => {
+	const r = await runBuilt({ registry: undefined, argv: ['--json'] });
+	const doc = JSON.parse(r.out);
+	assert.equal(r.code, 1, r.out);
+	assert.deepEqual(doc.findings, []);
+	const unreadable = doc.unreadable.find((u) => u.why && u.why.includes('/mf/registry.json'));
+	assert.ok(unreadable, JSON.stringify(doc.unreadable));
+});
+
+test('human output is unaffected by the migration — same prose, same exit code', () => {
+	const files = {
+		'vite.config.ts': viteWith("['react']"),
+		'src/main.ts': "import { useTheme } from '@wolffm/themes';\nexport { useTheme };\n",
+	};
+	const human = runOne(files);
+	const { code } = runOneJson(files);
+	assert.equal(human.code, code, 'exit code must match between the two modes');
+	assert.match(human.out, /inlines @wolffm\/themes/);
+	assert.ok(!human.out.trim().startsWith('{'), 'human mode must not print JSON');
 });

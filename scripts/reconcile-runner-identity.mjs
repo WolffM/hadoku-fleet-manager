@@ -89,6 +89,22 @@
  * `check-fleet-toolchain` treats it. It is still listed. An unreadable REPO has
  * no such exception — nothing about a drain makes GitHub unreadable.
  *
+ * MIGRATED (wave 5j lane B): `ci:audit-gates` now runs this one with `--json`
+ * and judges it by the `GateDoc` below rather than a regex over
+ * stdout+stderr — see `src/lib/job-registry.ts`'s `coversSubs` entry
+ * (`contract: 'json'`) and `scripts/lib/json-contract.mjs`'s derivation of
+ * `JSON_CONTRACT` from it. This sub already had a `--json` mode (wave2 §D.4);
+ * what changes here is the SHAPE (a `GateDoc` alongside the pre-existing
+ * `summary` fields, additive) and the STDOUT DISCIPLINE (the shared emitter,
+ * `lib/emit.mjs`, in place of the hand-rolled `log`/`console.log` pair —
+ * `emit.test.mjs` requires every contracted script's stdout to go through it).
+ * An unreachable node, an unreadable repo listing, an unreadable drain record
+ * or a warm registration's second look that never completed is "I could not
+ * look" — `unreadable`; a black hole, an unreaped JIT orphan, a warm orphan
+ * both looks actually resolved, a registered-no-install, an unconfigured
+ * listener or a stolen identity is a conclusion reached from data this run
+ * actually read — `findings`.
+ *
  * Usage:
  *   fleet identity            # report
  *   fleet identity --confirm  # + reap JIT orphans
@@ -107,7 +123,9 @@ import { manifest as manifestFile } from './lib/paths.mjs';
 // a measured property of `gh api` from this box (0.13% transient, 2026-09-07),
 // not a fact about queues, and a second copy of it is a second thing to tune.
 import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
-import { keepStdoutWhole } from './lib/emit.mjs';
+import { createEmitter } from './lib/emit.mjs';
+import { buildGateDoc } from './lib/gate-doc.mjs';
+import { warmOrphanUnreadable } from './lib/warm-orphan-doc.mjs';
 // The dispatcher's own reap sweep — its grace and its cadence — so an orphan it
 // has not REACHED yet is told apart from one it has FAILED to clear by the
 // numbers that sweep actually runs on, never by a copy of them.
@@ -118,10 +136,15 @@ import { nodeOf } from '../dist/runners/census.js';
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
 // and on a pipe `process.exit` throws away whatever the stream still had
 // queued — measured on this host, 149,133 bytes in and 146,176 out, which
-// `JSON.parse` then rejects mid-string. `keepStdoutWhole` puts fd 1 in
-// blocking mode so there is nothing left to lose. Issue #33; the shared
-// emitter calls the same function for the scripts that use it.
-keepStdoutWhole();
+// `JSON.parse` then rejects mid-string. `createEmitter()` puts fd 1 in
+// blocking mode (`keepStdoutWhole()`, called internally) so there is nothing
+// left to lose. Issue #33. It is also the ONE place this script writes to
+// stdout (wave 5j lane B) — `emit.test.mjs` requires it, and its own exit
+// guard is what turns the early `console.error` + `process.exit(1)` refusals
+// below into a `--json` document with no further change to them: every one
+// of them already runs after `import { createEmitter }` above is evaluated,
+// and ES modules evaluate their imports before this file's own top-level code.
+const emitter = createEmitter();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const COVERAGE = manifestFile('fleet-runner-coverage.json');
@@ -130,7 +153,7 @@ const PROBE_SRC = resolve(__dirname, 'runner-identity-probe.sh');
 const args = process.argv.slice(2);
 const has = (f) => args.includes(f);
 const CONFIRM = has('--confirm');
-const JSON_OUT = has('--json');
+const JSON_OUT = emitter.json;
 // Via `machineArg`, not a private copy. The private copies had the same hole:
 // a bare positional was IGNORED, so `... claw-3` scoped to the whole fleet.
 const ONLY = machineArg(args);
@@ -189,9 +212,7 @@ function mintAgeMs(name, now) {
 	return now - Number(m[1]) * 1000;
 }
 
-const log = (...a) => {
-	if (!JSON_OUT) console.log(...a);
-};
+const log = emitter.log;
 
 /**
  * A read that never finishes is a read that never reports. 20s matches
@@ -350,8 +371,21 @@ if (!nodes.length) {
 const { pool } = await useAppPool('runner-identity');
 const reserve = checkGhReserve('runner-identity', { pool });
 if (!reserve.ok) {
-	if (JSON_OUT) console.log(JSON.stringify({ ok: false, error: reserve.reason }, null, 2));
-	else console.error(`reconcile-runner-identity: ${reserve.reason}`);
+	if (JSON_OUT) {
+		// `error` is the pre-existing field; the GateDoc half is additive — same
+		// rename-nothing approach `check-history-coverage.mjs`'s own `fail()`
+		// took in wave 5f lane B. A reserve refusal is "I could not look": this
+		// sweep never got as far as reading one node or one repo.
+		emitter.emit({
+			ok: false,
+			error: reserve.reason,
+			...buildGateDoc({
+				unreadable: [{ node: null, why: reserve.reason }],
+				ok: false,
+				why: reserve.reason,
+			}),
+		});
+	} else console.error(`reconcile-runner-identity: ${reserve.reason}`);
 	process.exit(1);
 }
 
@@ -659,6 +693,88 @@ const summary = {
 	unreadableRepos,
 };
 
+/**
+ * GateDoc (wave 5j lane B). Built once, here, from the arrays `summary` above
+ * already carries — every one of them is the FULL result of a decision this
+ * sweep already made, so there is no second pass of logic to keep in sync, in
+ * contrast to a gate that exits on the first bad thing it sees (`label-floor`,
+ * `boundary-contracts`) and has no single point where every array is final.
+ *
+ * `unreadable` IS "I could not look": a repo listing or a node probe that
+ * never came back, a drain record this run could not parse, and — within
+ * `warmOrphans` — the one case where the SECOND look itself failed rather
+ * than resolving (`warmOrphanUnreadable`, `lib/warm-orphan-doc.mjs`). `young`,
+ * `jitOrphans` (the ones not yet past `UNREAPED_AFTER_MS`), `warmRechecked`,
+ * `expectedDown` and `expectedDark` are deliberately in NEITHER array — each
+ * is this gate choosing NOT to judge something yet (too young, routine
+ * leakage, resolved on a second look, or drained on purpose), the same shape
+ * warm-canary's own `drained`/`skippedByRole` and label-floor's
+ * `noWorkflows` precedent (that one, unlike this, counts as unreadable — see
+ * that file) stay out of its GateDoc too. Everything else is a conclusion
+ * reached from data this run actually read.
+ */
+const gateFindings = [
+	...ghosts.map((g) => ({
+		node: null,
+		kind: 'black-hole',
+		reason: `${g.repo} ${g.name}${g.busy ? ' — BUSY, a job is stuck on it' : ''}: GitHub says online, no listener anywhere`,
+	})),
+	...unreaped.map((u) => ({
+		node: null,
+		kind: 'unreaped-black-hole',
+		reason:
+			`${u.repo} ${u.name}: ONLINE JIT orphan past the dispatcher's reap grace, age ` +
+			`${u.ageMs === Infinity ? 'unknown (no epoch in name)' : `${Math.round(u.ageMs / 1000)}s`}`,
+	})),
+	...warmOrphans
+		.filter((w) => !warmOrphanUnreadable(w.why))
+		.map((w) => ({
+			node: w.node ?? null,
+			kind: 'warm-orphan',
+			reason: `${w.repo} ${w.name} status=${w.status ?? 'unknown'}: ${w.why}`,
+		})),
+	...noInstall.map((d) => ({
+		node: null,
+		kind: 'registered-no-install',
+		reason:
+			`${d.repo} runner "${d.name}" status=${d.status}` +
+			(d.carriers.length ? ` (that name lives on: ${d.carriers.join(', ')})` : ''),
+	})),
+	...unconfigured.map((u) => ({
+		node: u.machine,
+		kind: 'unconfigured-listener',
+		reason: `${u.machine} ${u.dir}: running with no readable .runner`,
+	})),
+	...clobbered.map((c) => ({
+		node: c.machine,
+		kind: 'stolen-identity',
+		reason: `${c.machine} ${c.dir} now claims "${c.name}" (${c.repo})`,
+	})),
+];
+const gateUnreadable = [
+	...(drainUnreadable ? [{ node: null, why: `drain record unreadable: ${drainUnreadable}` }] : []),
+	...warmOrphans
+		.filter((w) => warmOrphanUnreadable(w.why))
+		.map((w) => ({ node: w.node ?? null, why: `${w.repo} ${w.name}: ${w.why}` })),
+	...unexpectedlyDark.map((u) => ({ node: u.machine, why: u.error })),
+	...unreadableRepos.map((r) => ({ node: null, why: `${r.repo}: ${r.reason}`, repo: r.repo })),
+];
+// The SAME booleans the exit code below already keys on — computed once, so
+// the GateDoc's `ok` and the real exit code can never read differently from
+// each other, which `buildGateDoc`'s own array-emptiness default would not
+// guarantee if a future term were added to one list and not the other.
+const FAILS = Boolean(
+	ghosts.length ||
+	unreaped.length ||
+	warmOrphans.length ||
+	noInstall.length ||
+	unconfigured.length ||
+	clobbered.length ||
+	drainUnreadable ||
+	unexpectedlyDark.length ||
+	unreadableRepos.length
+);
+
 if (!JSON_OUT) {
 	if (ghosts.length) {
 		log(`BLACK HOLES (${ghosts.length}) — GitHub says online, NO listener anywhere:`);
@@ -818,7 +934,12 @@ if (CONFIRM && jitOrphans.length) {
 	}
 }
 
-if (JSON_OUT) console.log(JSON.stringify(summary, null, 2));
+if (JSON_OUT) {
+	emitter.emit({
+		...summary,
+		...buildGateDoc({ findings: gateFindings, unreadable: gateUnreadable, ok: !FAILS }),
+	});
+}
 
 // A black hole or a drifted identity is a live incident: it silently swallows
 // jobs. Exit non-zero so this can gate. A JIT orphan the dispatcher's sweep has
@@ -834,16 +955,6 @@ if (JSON_OUT) console.log(JSON.stringify(summary, null, 2));
 //   - `unreadableRepos`: a listing that failed every attempt reads downstream
 //     exactly like a repo with no registrations.
 // Each one already survived `READ_ATTEMPTS` looks, so none of these is a blip.
-process.exit(
-	ghosts.length ||
-		unreaped.length ||
-		warmOrphans.length ||
-		noInstall.length ||
-		unconfigured.length ||
-		clobbered.length ||
-		drainUnreadable ||
-		unexpectedlyDark.length ||
-		unreadableRepos.length
-		? 1
-		: 0
-);
+// `FAILS` above is the exact same expression — computed once so the GateDoc's
+// `ok` and this exit code can never disagree.
+process.exit(FAILS ? 1 : 0);

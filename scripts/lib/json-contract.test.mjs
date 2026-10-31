@@ -1139,9 +1139,15 @@ const TODAYS_JSON_CONTRACT = [
 	// second cron.
 	['label-floor', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	['throttle', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
+	// Added wave 5j lane B: the last two NON-d3 `ci:audit-gates` covered subs
+	// migrated off PROSE_CONTRACT the same way — same umbrella job, same
+	// consumer file, no second cron. Only `slice`/`tool-inventory` (d3's lane)
+	// and `ci-watch` stay prose.
+	['mf-externals', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
+	['identity', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 ].map(([sub, job, consumer]) => `${sub} -> ${job} -> ${consumer}`);
 
-void test("the derived JSON_CONTRACT equals today's 31 entries exactly — name, sub and consumer", () => {
+void test("the derived JSON_CONTRACT equals today's 33 entries exactly — name, sub and consumer", () => {
 	const derived = JSON_CONTRACT.map((e) => `${e.sub} -> ${e.job} -> ${e.consumer}`);
 	assert.deepEqual(derived.slice().sort(), TODAYS_JSON_CONTRACT.slice().sort());
 });

@@ -571,6 +571,9 @@ export const LAYER_MAP = [
 	},
 	{ glob: 'scripts/lib/tier-detectors.mjs', layer: 'domain', domain: 'observation', part: 'core' },
 	{ glob: 'scripts/lib/warm-canary.mjs', layer: 'domain', domain: 'observation', part: 'core' },
+	// Wave 5j lane B: the warm-orphan GateDoc classifier, pulled out for the
+	// same reason throttle-drift-doc.mjs above was — same layer.
+	{ glob: 'scripts/lib/warm-orphan-doc.mjs', layer: 'domain', domain: 'observation', part: 'core' },
 
 	// Directory-level fallbacks, LAST: everything under src/runners/* or
 	// scripts/check-*.mjs not named explicitly above falls through to these.

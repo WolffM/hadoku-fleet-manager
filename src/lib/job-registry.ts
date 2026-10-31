@@ -48,7 +48,7 @@
  * they are liveness checks on a daily cron, and `validateRegistry` says so
  * rather than silently passing.
  *
- * WAVE 5F LANE B (5h and 5i lane B after it) migrates these fourteen off
+ * WAVE 5F LANE B (5h, 5i and 5j lane B after it) migrates these fourteen off
  * prose one at a time: a covered sub may carry `contract: 'json'` (see
  * `CoveredSub`'s own doc comment), which folds it into `JSON_CONTRACT`
  * instead of `PROSE_CONTRACT` while it stays discharged by the SAME umbrella
@@ -56,8 +56,9 @@
  * `warm-canary`, `history-coverage` and `contract-consumers` migrated in
  * wave 5f lane B; `tier-fleet`, `capabilities` and `boundary-contracts`
  * migrated in wave 5h lane B; `label-floor` and `throttle` migrated in wave
- * 5i lane B. The rest are not, and carry no `contract` field at all until
- * their own turn.
+ * 5i lane B; `mf-externals` and `identity` migrated in wave 5j lane B — the
+ * last two non-d3 prose gates. Only `slice`/`tool-inventory` (d3's lane) and
+ * `ci-watch` carry no `contract` field at all now.
  *
  * `kindDrift` exists for the case `src/cli.ts`'s `COMMANDS` table disagrees
  * with the three kinds this registry ever puts a clock on (`gate` |
@@ -515,9 +516,16 @@ export const JOB_REGISTRY: JobEntry[] = [
 			},
 			{
 				sub: 'mf-externals',
-				args: [],
+				args: ['--json'],
+				contract: 'json',
+				// Default args, never `--worktree` — it reads each repo's shipped
+				// default branch through `lib/fleet-source.mjs`, and the built half
+				// fetches the SAME deployed site regardless of which host asks —
+				// same reasoning as tier-fleet's own entry above (docs/control-plane.md
+				// §4: "any host gives the same answer... hostBound: false").
+				hostBound: false,
 				detectionBudget: '48h',
-				why: 'A micro-frontend that inlines a mapped singleton breaks only in the browser, invisible to typecheck/lint/build/tests.',
+				why: 'A micro-frontend that inlines a mapped singleton breaks only in the browser, invisible to typecheck/lint/build/tests. Migrated to GateDoc, wave 5j lane B.',
 			},
 			{
 				sub: 'throttle',
@@ -540,9 +548,15 @@ export const JOB_REGISTRY: JobEntry[] = [
 			},
 			{
 				sub: 'identity',
-				args: [],
+				args: ['--json'],
+				contract: 'json',
+				// `gh api` reads of the fleet's registrations plus ssh to the
+				// candidate nodes — the fleet's own identity, never this box's own
+				// state. Same class as boundary-contracts/capabilities, not
+				// reap-trend/egress-slices/srv-drift.
+				hostBound: false,
 				detectionBudget: '48h',
-				why: 'A listener that escaped its systemd unit reports ONLINE to GitHub and is never restarted; every other runner check asks GitHub, which cannot see this class.',
+				why: 'A listener that escaped its systemd unit reports ONLINE to GitHub and is never restarted; every other runner check asks GitHub, which cannot see this class. Migrated to GateDoc, wave 5j lane B.',
 			},
 			{
 				sub: 'warm-canary',
