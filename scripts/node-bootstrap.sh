@@ -2198,6 +2198,34 @@ else
 				EOF
 				/usr/sbin/sysctl -q -p /etc/sysctl.d/60-arp-flux.conf || warn "could not apply the ARP settings now; they apply at the next boot"
 				log "  wrote /etc/sysctl.d/60-arp-flux.conf (each interface answers ARP for its own address only)"
+
+				# TAILSCALE DIRECT TRAFFIC STAYS ON THE WIRE. Tailscale advertises both
+				# addresses and a peer keeps whichever answered last: after claw-8 lost
+				# its wired lease on 2026-10-31, hokon stayed on its weak wifi radio. The
+				# drop is in raw because tailscaled's ts-input ACCEPTs udp 41641 ahead of
+				# ufw. If the wire fails, wifi still carries Tailscale through DERP.
+				cat >/etc/systemd/system/tailscale-wired-only.service <<-EOF
+					[Unit]
+					Description=Tailscale direct traffic stays on $WIRED_IF: $WLAN_IF carries it only via DERP
+					After=tailscaled.service network-online.target
+
+					[Service]
+					Type=oneshot
+					RemainAfterExit=yes
+					ExecStartPre=-/usr/sbin/iptables -t raw -D PREROUTING -i $WLAN_IF -p udp --dport 41641 -j DROP
+					ExecStartPre=-/usr/sbin/iptables -t raw -D OUTPUT -o $WLAN_IF -p udp --sport 41641 -j DROP
+					ExecStart=/usr/sbin/iptables -t raw -I PREROUTING 1 -i $WLAN_IF -p udp --dport 41641 -j DROP
+					ExecStart=/usr/sbin/iptables -t raw -I OUTPUT 1 -o $WLAN_IF -p udp --sport 41641 -j DROP
+					ExecStop=-/usr/sbin/iptables -t raw -D PREROUTING -i $WLAN_IF -p udp --dport 41641 -j DROP
+					ExecStop=-/usr/sbin/iptables -t raw -D OUTPUT -o $WLAN_IF -p udp --sport 41641 -j DROP
+
+					[Install]
+					WantedBy=multi-user.target
+				EOF
+				systemctl daemon-reload
+				systemctl enable --now tailscale-wired-only.service >/dev/null 2>&1 ||
+					warn "tailscale-wired-only.service did not start; Tailscale may use $WLAN_IF directly"
+				log "  wrote tailscale-wired-only.service (Tailscale direct traffic on $WIRED_IF, $WLAN_IF via DERP only)"
 			fi
 
 			# `cloned-mac-address=permanent` IS THE RESERVATION'S FOUNDATION and is
