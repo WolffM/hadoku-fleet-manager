@@ -43,10 +43,10 @@
  * second hand list here would be exactly the kind of copy `json-contract.mjs`
  * already warns against ("derive, don't copy"); instead the one umbrella row
  * names which COMMANDS entries it discharges, each with its OWN detection
- * budget against the umbrella's shared cadence — which is how two of the
- * fourteen (`warm-canary`, `label-floor`) surface as real findings below:
- * they are liveness checks on a daily cron, and `validateRegistry` says so
- * rather than silently passing.
+ * budget against the umbrella's shared cadence. Two of them (`warm-canary`,
+ * `label-floor`) carried a 1h budget the daily cron could not meet, which
+ * `validateRegistry` and `fleet check-schedule` reported every day; since
+ * fleet-manager#38 they are rows of their own on a 30-minute cron instead.
  *
  * WAVE 5F LANE B (5h, 5i and 5j lane B after it) migrates these fourteen off
  * prose one at a time: a covered sub may carry `contract: 'json'` (see
@@ -156,8 +156,10 @@ export interface JobEntry {
 }
 
 /**
- * THE 23 `JSON_CONTRACT` JOBS (22 at wave 5e lane A's landing, plus lane D's
- * own `ci:schedule`), read from hadoku_site `origin/main` 2026-10-31:
+ * THE DIRECTLY REGISTERED `JSON_CONTRACT` JOBS (22 at wave 5e lane A's
+ * landing, lane D's own `ci:schedule`, then `ci:warm-canary` and
+ * `ci:label-floor` out of the umbrella — fleet-manager#38), read from
+ * hadoku_site `origin/main` 2026-10-31:
  * `services/cron-worker/profiles.json` for the cadence and `timeout_s`,
  * `scripts/lib/json-contract.mjs`'s existing `JSON_CONTRACT` for
  * `argv`/`hostBound`/the consumer file. Every `detectionBudget` below is 2x
@@ -488,7 +490,49 @@ export const JOB_REGISTRY: JobEntry[] = [
 		why: "Drain -> wait DRAINED -> update -> re-probe -> undrain, one node at a time. Runs inside fleet-benchmark's declared deploy-hold window (profiles.json names it explicitly beside ci:fleet-benchmark and ci:health-refresh) because it can take up to its full 10800s timeout.",
 	},
 
-	// ---- ci:audit-gates (0 13 * * *, daily; prose, 14 inner `fleet` checks) ----
+	// ---- fleet-liveness (*/30 * * * *, 30-minute cadence; budget 1h = 2x) ----
+	// Liveness checks that rode ci:audit-gates' daily cron until fleet-manager#38:
+	// check-schedule judged their 1h budget against that umbrella cron and
+	// reported CRON-CANNOT-MEET-BUDGET every day, and meeting it from hadoku_site
+	// meant running every audit gate hourly. Every 30 minutes, not hourly: the
+	// staleness watcher (hadoku_site schedule-staleness.ts) judges the last run
+	// against `detectionBudget`, so a 1h budget on a 1h cron would flap on every
+	// slow run.
+	{
+		name: 'ci:warm-canary',
+		sub: 'warm-canary',
+		args: ['--json'],
+		kind: 'gate',
+		detectionBudget: '1h',
+		cadence: { cron: '*/30 * * * *' },
+		timeoutS: 180,
+		// ssh to the CANDIDATE nodes, never this box's own state — the same
+		// class as every other ssh-based fleet gate (node-users, runner-units),
+		// not reap-trend/egress-slices/srv-drift's own log/cgroup/deploy-clone.
+		hostBound: false,
+		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/warm-canary-check.ts',
+		contract: 'json',
+		why: 'A LIVENESS check — is every eligible node actually holding a warm listener — named in plan §6.1 as a cadence oddity while it ran daily "while queue-health runs every 10 minutes"; the plan\'s own figure is "a liveness check with a one-hour budget". No GitHub call: ssh plus systemd on each candidate node.',
+	},
+	{
+		name: 'ci:label-floor',
+		sub: 'label-floor',
+		args: ['--json'],
+		kind: 'gate',
+		detectionBudget: '1h',
+		cadence: { cron: '*/30 * * * *' },
+		timeoutS: 120,
+		// Reads job-history.jsonl AND demand-ledger.jsonl under
+		// HADOKU_STATE_DIR — THIS process's own recorded ingest, same class and
+		// same file as history-coverage (docs/control-plane.md §2: a different
+		// answer on a passive replica than on the active controller).
+		hostBound: true,
+		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/label-floor-check.ts',
+		contract: 'json',
+		why: 'A LIVENESS check — zero online runners for a required label queues jobs indefinitely rather than failing (one repo sat 854 minutes) — named beside warm-canary in plan §6.1, same 1h figure. Workflows come through fleet-source (git, not the REST budget); one runner listing per run.',
+	},
+
+	// ---- ci:audit-gates (0 13 * * *, daily; the inner `fleet` checks in coversSubs) ----
 	{
 		name: 'ci:audit-gates',
 		args: [],
@@ -499,7 +543,7 @@ export const JOB_REGISTRY: JobEntry[] = [
 		hostBound: false,
 		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/audit-gates.ts',
 		contract: 'prose',
-		why: "Runs 14 `fleet <sub>` checks (today's count — see scripts/lib/json-contract.mjs's own warning not to trust a number in prose) through hadoku_site's GATES table and judges each by a regex over stdout+stderr, under FLEET_NO_BANNER=1. Two of the 14 are deliberately given a tighter budget below than this umbrella's own daily cadence can meet — see `coversSubs`.",
+		why: "Runs the `fleet <sub>` checks in `coversSubs` (count them there — see scripts/lib/json-contract.mjs's own warning not to trust a number in prose) through hadoku_site's GATES table, each judged by its GateDoc or, for the unmigrated ones, a regex over stdout+stderr, under FLEET_NO_BANNER=1. Every covered sub's budget is one this daily cadence can meet; a liveness check that needs a tighter one gets its own row (ci:warm-canary, ci:label-floor — fleet-manager#38).",
 		coversSubs: [
 			{
 				sub: 'tier-fleet',
@@ -557,32 +601,6 @@ export const JOB_REGISTRY: JobEntry[] = [
 				hostBound: false,
 				detectionBudget: '48h',
 				why: 'A listener that escaped its systemd unit reports ONLINE to GitHub and is never restarted; every other runner check asks GitHub, which cannot see this class. Migrated to GateDoc, wave 5j lane B.',
-			},
-			{
-				sub: 'warm-canary',
-				args: ['--json'],
-				contract: 'json',
-				// ssh to the CANDIDATE nodes, never this box's own state — the same
-				// class as every other ssh-based fleet gate (node-users,
-				// runner-units), not reap-trend/egress-slices/srv-drift's own log/
-				// cgroup/deploy-clone.
-				hostBound: false,
-				detectionBudget: '1h',
-				why: 'A LIVENESS check — is at least one warm listener actually held on an eligible node — explicitly named in plan §6.1 as a cadence oddity: it runs daily "while queue-health runs every 10 minutes." Budget set to the plan\'s own stated figure ("a liveness check with a one-hour budget") so validateRegistry reports the real gap rather than papering over it with the umbrella\'s daily cadence. Migrated to GateDoc, wave 5f lane B.',
-			},
-			{
-				sub: 'label-floor',
-				args: ['--json'],
-				contract: 'json',
-				// Reads job-history.jsonl AND demand-ledger.jsonl under
-				// HADOKU_STATE_DIR — THIS process's own recorded ingest, same
-				// class and same file (job-history.jsonl) as history-coverage
-				// above (docs/control-plane.md §2: "safe to hand from one
-				// controller to the next" but a different answer on a passive
-				// replica than the active one).
-				hostBound: true,
-				detectionBudget: '1h',
-				why: 'A LIVENESS check — zero online runners for a required label queues jobs indefinitely rather than failing — named beside warm-canary in plan §6.1 as the same cadence oddity, same reasoning, same 1h figure. Migrated to GateDoc, wave 5i lane B.',
 			},
 			{
 				sub: 'capabilities',
@@ -834,10 +852,8 @@ export function registeredSubs(entries: readonly JobEntry[] = JOB_REGISTRY): Set
  *      agrees with `COMMANDS[sub].kind` whenever that kind is itself one
  *      this registry tracks, UNLESS the entry carries `kindDrift`.
  *
- * Returns every issue found rather than throwing on the first one — the
- * known, named cadence-budget gap (`warm-canary`/`label-floor`) is an
- * EXPECTED finding, not a bug in this function, and the caller decides what
- * to do with `ok: false`.
+ * Returns every issue found rather than throwing on the first one; the
+ * caller decides what to do with `ok: false`.
  */
 export function validateRegistry(
 	entries: readonly JobEntry[] = JOB_REGISTRY,

@@ -61,9 +61,10 @@ void test('registeredSubs covers every direct sub and every covered sub', () => 
 	const subs = registeredSubs();
 	assert.ok(subs.has('queue-health'));
 	assert.ok(subs.has('drain-check'));
-	// Discharged only through ci:audit-gates's coversSubs, not its own row.
+	// Their own rows since fleet-manager#38.
 	assert.ok(subs.has('warm-canary'));
 	assert.ok(subs.has('label-floor'));
+	// Discharged only through ci:audit-gates's coversSubs, not its own row.
 	assert.ok(subs.has('tier-fleet'));
 	assert.ok(subs.has('boundary-contracts'));
 	// Never registered anywhere, never manual either — must NOT be present.
@@ -89,25 +90,36 @@ void test('MANUAL names exactly the subcommands that are automated but carry no 
 });
 
 /**
- * THE KNOWN, NAMED FINDING — pinned, not fixed. Plan §6.1 calls out
- * warm-canary and label-floor by name as liveness checks sitting on a daily
- * cron; `validateRegistry` is required to say so rather than pass quietly.
- * This is RED on purpose, and pinning the EXACT two entries is what makes
- * this a test of the gate rather than a test that happens to pass today —
- * a THIRD cadence-budget violation appearing here, undetected, would be
- * exactly the silent regression the rest of this file guards against.
+ * NO KNOWN GAP LEFT. warm-canary and label-floor, the two liveness checks plan
+ * §6.1 named as sitting on a daily cron, were pinned here as the registry's
+ * only cadence-budget findings until fleet-manager#38 gave them their own
+ * 30-minute rows. The real registry must now validate clean, so any new
+ * cadence-budget gap is a red test rather than a third pinned exception.
  */
-void test('validateRegistry (no COMMANDS cross-check): exactly the two known cadence/budget gaps, nothing else', () => {
+void test('validateRegistry (no COMMANDS cross-check): the real registry has no issue at all', () => {
 	const result = validateRegistry();
-	const budgetIssues = result.issues.filter((i) => i.kind === 'cadence-budget');
-	assert.deepEqual(budgetIssues.map((i) => i.entry).sort(), [
-		'ci:audit-gates:label-floor',
-		'ci:audit-gates:warm-canary',
-	]);
-	// And nothing else: no duplicate names, no malformed entries, no gate
-	// carrying a mutating flag, anywhere in the real registry.
-	const other = result.issues.filter((i) => i.kind !== 'cadence-budget');
-	assert.deepEqual(other, [], `unexpected validation issues: ${JSON.stringify(other)}`);
+	assert.deepEqual(
+		result.issues,
+		[],
+		`unexpected validation issues: ${JSON.stringify(result.issues)}`
+	);
+	assert.equal(result.ok, true);
+});
+
+void test('fleet-manager#38: warm-canary and label-floor are their own rows, off the audit-gates umbrella', () => {
+	const umbrella = JOB_REGISTRY.find((e) => e.name === 'ci:audit-gates');
+	const covered = (umbrella?.coversSubs ?? []).map((c) => c.sub);
+	for (const [name, sub] of [
+		['ci:warm-canary', 'warm-canary'],
+		['ci:label-floor', 'label-floor'],
+	] as const) {
+		const row = JOB_REGISTRY.find((e) => e.name === name);
+		assert.ok(row, `${name} has a row`);
+		assert.equal(row.sub, sub);
+		assert.equal(row.detectionBudget, '1h');
+		assert.ok('cron' in row.cadence && cadencePeriodMs(row.cadence) <= 30 * 60_000);
+		assert.ok(!covered.includes(sub), `${sub} is still a covered sub of ci:audit-gates`);
+	}
 });
 
 void test('validateRegistry: a duplicate name is caught', () => {

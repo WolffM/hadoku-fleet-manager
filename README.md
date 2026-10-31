@@ -213,13 +213,13 @@ code first would turn every real finding into "the checker broke".
 | `fleet runner-units --json`                       | `ci:runner-units`       |
 | `fleet fleet-kills --days 2 --json`               | `ci:fleet-kills`        |
 | `fleet check-schedule --json`                     | `ci:schedule`           |
-| `fleet warm-canary --json`                        | `ci:audit-gates`        |
+| `fleet warm-canary --json`                        | `ci:warm-canary`        |
 | `fleet history-coverage --json`                   | `ci:audit-gates`        |
 | `fleet contract-consumers --json`                 | `ci:audit-gates`        |
 | `fleet tier-fleet --json`                         | `ci:audit-gates`        |
 | `fleet capabilities --json`                       | `ci:audit-gates`        |
 | `fleet boundary-contracts --json`                 | `ci:audit-gates`        |
-| `fleet label-floor --json`                        | `ci:audit-gates`        |
+| `fleet label-floor --json`                        | `ci:label-floor`        |
 | `fleet throttle --check --json`                   | `ci:audit-gates`        |
 | `fleet mf-externals --json`                       | `ci:audit-gates`        |
 | `fleet identity --json`                           | `ci:audit-gates`        |

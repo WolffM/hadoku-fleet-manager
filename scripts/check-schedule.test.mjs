@@ -6,11 +6,11 @@
  * copy: every `{ cron }`-clock entry gets a profiles.json job at exactly its
  * own declared cron, and every entry carrying an `mgmtApiFile` gets a route
  * file that calls `fleetCli(` and names itself via a `JOB_NAME` constant.
- * That is deliberate — it is how the two KNOWN findings (`ci:audit-gates`'s
- * `warm-canary`/`label-floor` covered subs, 1h budget under a daily umbrella
- * cron) are proven to surface from this gate exactly as job-registry.ts
- * already pins them, with no hand-picked fixture able to hide that this gate
- * reproduces real, already-documented drift rather than inventing new noise.
+ * That is deliberate: a schedule that matches the registry must come back
+ * CLEAN, with no hand-picked fixture able to hide a budget the registry's own
+ * crons cannot meet. Until fleet-manager#38 it came back with two known
+ * findings (`warm-canary`/`label-floor` as 1h-budget covered subs under the
+ * daily audit-gates umbrella); they are rows of their own now.
  */
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
@@ -88,25 +88,33 @@ function run(env) {
 	return { ...r, out: r.stdout.trim().startsWith('{') ? JSON.parse(r.stdout) : null };
 }
 
-const PINNED = ['ci:audit-gates:warm-canary', 'ci:audit-gates:label-floor'];
-
-test('the baseline fixture (built from the real registry) surfaces exactly the two already-pinned findings', () => {
+test('the baseline fixture (built from the real registry) is clean: every registered cron meets its budget', () => {
 	const fx = fleet(baselineFiles());
 	try {
 		const r = run(fx.env);
 		assert.ok(r.out, r.stdout + r.stderr);
-		assert.equal(r.status, 1, JSON.stringify(r.out.findings));
+		assert.deepEqual(r.out.findings, [], JSON.stringify(r.out.findings));
+		assert.equal(r.status, 0);
+		const cronJobs = JOB_REGISTRY.filter((e) => 'cron' in e.cadence).map((e) => e.name);
+		assert.deepEqual(r.out.ok.map((o) => o.job).sort(), cronJobs.sort());
+	} finally {
+		fx.cleanup();
+	}
+});
+
+test('fleet-manager#38: warm-canary and label-floor scheduled only inside audit-gates are MISSING, not on budget', () => {
+	// The state hadoku_site was in before its half of #38 landed: no profile
+	// names the two new rows. That must read as missing, never as covered by
+	// the umbrella that used to run them.
+	const fx = fleet(baselineFiles({ skip: ['ci:warm-canary', 'ci:label-floor'] }));
+	try {
+		const r = run(fx.env);
+		assert.equal(r.status, 1);
 		assert.deepEqual(
-			r.out.findings.map((f) => f.job).sort(),
-			PINNED.slice().sort(),
+			r.out.findings.map((f) => `${f.kind} ${f.job}`).sort(),
+			['MISSING-FROM-SCHEDULE ci:label-floor', 'MISSING-FROM-SCHEDULE ci:warm-canary'],
 			JSON.stringify(r.out.findings)
 		);
-		for (const f of r.out.findings) assert.equal(f.kind, 'CRON-CANNOT-MEET-BUDGET');
-		// Every OTHER registered cron job reports clean — proves this is signal,
-		// not a gate too noisy to read. ci:audit-gates itself is withheld from
-		// `ok` because one of its OWN covered subs is the pinned finding above.
-		assert.ok(!r.out.ok.some((o) => o.job === 'ci:audit-gates'));
-		assert.ok(r.out.ok.length >= 19, JSON.stringify(r.out.ok));
 	} finally {
 		fx.cleanup();
 	}

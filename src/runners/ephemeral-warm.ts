@@ -364,7 +364,21 @@ export function warmUnitValues(
 export interface WarmFleetNode {
 	node: string;
 	current: WarmSlotState | null;
+	/**
+	 * Repos THIS node must not hold a listener for (fleet-manager#36): the
+	 * manifest's `excludeRepos` (#82) and any repo with a kind it runs slowly
+	 * (#8, `slowReposOn`). The allocation never offers this node one of them.
+	 *
+	 * Before this the allocator was never told: it handed claw-1 hadoku_site,
+	 * the caller withheld it (slow Static Analysis), and claw-1 sat cold 62
+	 * times on 2026-10-31 while hadoku-cardtable, which it can hold, went
+	 * unwarmed there. A node left empty that way also read as `not-warm` to
+	 * `fleet warm-canary`, every day.
+	 */
+	excluded?: ReadonlySet<string>;
 }
+
+const excludes = (n: WarmFleetNode, repo: string): boolean => n.excluded?.has(repo) ?? false;
 
 const byNodeName = (a: WarmFleetNode, b: WarmFleetNode) =>
 	a.node < b.node ? -1 : a.node > b.node ? 1 : 0;
@@ -398,7 +412,9 @@ function assignWarmRepos(
 	const free = byName.filter((n) => !out.has(n.node));
 	const holders = new Map<string, WarmFleetNode[]>();
 	for (const n of free) {
-		if (!n.current) continue;
+		// A node holding a repo it excludes is not that repo's incumbent: the
+		// caller evicts it, and keeping it would re-grant the excluded slot.
+		if (!n.current || excludes(n, n.current.repo)) continue;
 		let list = holders.get(n.current.repo);
 		if (!list) holders.set(n.current.repo, (list = []));
 		list.push(n);
@@ -452,13 +468,47 @@ function assignWarmRepos(
 	//    repo first.
 	const cost = (n: WarmFleetNode): number =>
 		n.current ? (values.get(n.current.repo) ?? []).reduce((a, b) => a + b, 0) : -Infinity;
+	//    A newcomer goes only to a node that does not exclude it; one no open
+	//    node may take is dropped, and its listener is re-granted in step 4.
 	const open = free.filter((n) => !out.has(n.node)).sort((a, b) => cost(a) - cost(b));
 	for (const repo of newcomers) {
-		const n = open.shift();
-		if (n) out.set(n.node, repo);
+		const i = open.findIndex((n) => !excludes(n, repo));
+		if (i < 0) {
+			granted.set(repo, (granted.get(repo) ?? 0) - 1);
+			continue;
+		}
+		out.set(open[i].node, repo);
+		open.splice(i, 1);
 	}
-	// Nothing left worth a listener: they keep what they hold.
-	for (const n of open) out.set(n.node, n.current?.repo ?? null);
+
+	// 4. An EMPTY node still open (nothing held, or only a repo it excludes)
+	//    takes the most valuable next listener it is allowed to hold. Without
+	//    this, a newcomer dropped in step 3 leaves the node cold although
+	//    another repo was worth a listener there (fleet-manager#36).
+	for (const n of [...open]) {
+		if (n.current && !excludes(n, n.current.repo)) continue;
+		let best: { repo: string; v: number } | null = null;
+		for (const [repo, units] of values) {
+			if (excludes(n, repo)) continue;
+			const v = units[granted.get(repo) ?? 0] ?? 0;
+			if (v <= 0) continue;
+			if (best && v < best.v - WARM_SCORE_EPSILON) continue;
+			if (best && v <= best.v + WARM_SCORE_EPSILON) {
+				const bl = latestMs.get(best.repo) ?? -Infinity;
+				const l = latestMs.get(repo) ?? -Infinity;
+				if (l < bl || (l === bl && repo > best.repo)) continue;
+			}
+			best = { repo, v };
+		}
+		if (!best) continue;
+		granted.set(best.repo, (granted.get(best.repo) ?? 0) + 1);
+		out.set(n.node, best.repo);
+		open.splice(open.indexOf(n), 1);
+	}
+	// Nothing left worth a listener: they keep what they hold, unless it is a
+	// repo they exclude.
+	for (const n of open)
+		out.set(n.node, n.current && !excludes(n, n.current.repo) ? n.current.repo : null);
 	return out;
 }
 
@@ -478,7 +528,9 @@ function assignWarmRepos(
  * `residentRepos` is a different mechanism.
  *
  * ONLY THE NODES GIVEN. Eligibility (drain, memory, backstop role) is the
- * caller's; this never widens it.
+ * caller's; this never widens it. Per-REPO exclusions are the caller's too,
+ * passed as `WarmFleetNode.excluded`, and honoured here so a node is offered
+ * a repo it may actually hold rather than one the caller must then refuse.
  *
  * BOTH LOCKS STILL SIT BETWEEN THE TARGET AND ANY EVICTION. A busy listener or
  * one inside {@link WARM_ASSIGN_WINDOW_MS} keeps its repo whatever the ranking

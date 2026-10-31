@@ -568,6 +568,14 @@ export async function dispatchWarmCache(
 		const slow = slowRepos.get(node)?.get(repo);
 		return slow !== undefined ? `${slow} (#8)` : undefined;
 	};
+	// The same two sources as a set, for `planWarmFleet` (fleet-manager#36):
+	// told up front, it offers the node a repo it may hold instead of one the
+	// act loop below must withhold, which left the node cold.
+	const excludedRepos = (
+		node: string,
+		m: { excludeRepos?: Record<string, string> }
+	): ReadonlySet<string> =>
+		new Set([...Object.keys(m.excludeRepos ?? {}), ...(slowRepos.get(node)?.keys() ?? [])]);
 	for (const o of observed) {
 		const tier = speedModel.tierOf(o.node);
 		// THE THIRD ENFORCEMENT POINT (#90, drain-node.mjs's header). A warm
@@ -723,7 +731,7 @@ export async function dispatchWarmCache(
 				);
 				if (evicted) {
 					result.evicted++;
-					planNodes.push({ node: o.node, current: null });
+					planNodes.push({ node: o.node, current: null, excluded: excludedRepos(o.node, o.m) });
 					continue;
 				}
 				result.failed++;
@@ -731,7 +739,7 @@ export async function dispatchWarmCache(
 					`[warm-cache] could not evict ${o.node}'s excluded warm slot for ${o.current.repo}`
 				);
 			}
-			planNodes.push({ node: o.node, current: o.current });
+			planNodes.push({ node: o.node, current: o.current, excluded: excludedRepos(o.node, o.m) });
 		} catch (err) {
 			result.failed++;
 			const excludedForTick = tier === 'slow' || drained || runningHeavyNow;
@@ -747,7 +755,8 @@ export async function dispatchWarmCache(
 			// reason the eviction-failed branch above already does it on a clean
 			// `false` rather than a throw: an eviction we could not confirm is not
 			// safe to assume.
-			if (!excludedForTick) planNodes.push({ node: o.node, current: o.current });
+			if (!excludedForTick)
+				planNodes.push({ node: o.node, current: o.current, excluded: excludedRepos(o.node, o.m) });
 		}
 	}
 
@@ -755,8 +764,9 @@ export async function dispatchWarmCache(
 	// at once, over the fleet's history, so the Nth node takes the Nth most
 	// valuable UNCOVERED repo — a per-node argmax put hadoku_site on all four.
 	// `planNodes`, not `observed`, is what is handed over (#82, #83 above):
-	// `planWarmFleet` is pure and knows nothing of exclusions or speed, so the
-	// node list it is given IS the eligibility it can ever honour.
+	// `planWarmFleet` is pure and knows nothing of speed, so the node list it
+	// is given IS the eligibility it can ever honour, and each node's
+	// `excluded` set is the only per-repo rule it sees (fleet-manager#36).
 	const decisions = planWarmFleet({
 		nodes: planNodes,
 		served: fleetServedJobs(),
@@ -795,11 +805,11 @@ export async function dispatchWarmCache(
 			if (neverWarm.has(node)) return;
 			try {
 				const decision = decisions.get(node) ?? { action: 'idle' };
-				// #82, THE OTHER HALF: `planWarmFleet` ranks repos by served history
-				// alone and can still propose FILLING or ROTATING a node onto a repo
-				// that node excludes — it was never told. Caught here, before any
-				// mint, rather than trusted to the pre-pass above, which only knows
-				// about the repo a node ALREADY holds.
+				// #82, THE OTHER HALF: `planWarmFleet` is told each node's exclusions
+				// (fleet-manager#36) and should never propose FILLING or ROTATING a
+				// node onto one. Checked again here, before any mint, so a slip in the
+				// allocator is a withheld fill rather than a listener on a node that
+				// must not hold that repo.
 				//
 				// COUNTED AS `locked`, not a new field on `WarmCacheResult`: both mean
 				// "the allocator wanted to change this slot and something outside its

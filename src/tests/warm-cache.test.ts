@@ -509,6 +509,53 @@ test('planWarmFleet: more nodes than repos worth warming — the spare nodes kee
 	});
 });
 
+// fleet-manager#36: claw-1 was handed hadoku_site, withheld it (slow Static
+// Analysis) and sat cold 62 times on 2026-10-31 while hadoku-cardtable, which it
+// can hold, went unwarmed. The allocator is now told each node's exclusions.
+
+test('planWarmFleet #36: a node excluding the top repo takes the next one, and another node takes the top', () => {
+	const served = [...jobsOf(SITE, 10), ...jobsOf(CARD, 2)];
+	const nodes = [
+		{ node: 'claw-1', current: null, excluded: new Set([SITE]) },
+		{ node: 'claw-3', current: null },
+	];
+	assert.deepEqual(Object.fromEntries(planWarmFleet({ nodes, served, nowMs: FLEET_NOW })), {
+		'claw-1': { action: 'fill', repo: CARD },
+		'claw-3': { action: 'fill', repo: SITE },
+	});
+});
+
+test('planWarmFleet #36: the only node excluding the top repo still fills with one it may hold', () => {
+	const served = [...jobsOf(SITE, 10), ...jobsOf(CARD, 2)];
+	const d = planWarmFleet({
+		nodes: [{ node: 'claw-1', current: null, excluded: new Set([SITE]) }],
+		served,
+		nowMs: FLEET_NOW,
+	});
+	assert.deepEqual(Object.fromEntries(d), { 'claw-1': { action: 'fill', repo: CARD } });
+});
+
+test('planWarmFleet #36: a node holding a repo it excludes rotates off it, never keeps it', () => {
+	const served = [...jobsOf(SITE, 10), ...jobsOf(CARD, 2)];
+	const d = planWarmFleet({
+		nodes: [{ node: 'claw-1', current: idleSlot(SITE), excluded: new Set([SITE]) }],
+		served,
+		nowMs: FLEET_NOW,
+	});
+	assert.deepEqual(Object.fromEntries(d), {
+		'claw-1': { action: 'rotate', from: SITE, to: CARD },
+	});
+});
+
+test('planWarmFleet #36: every repo worth a listener excluded — the node stays idle, never fills one', () => {
+	const d = planWarmFleet({
+		nodes: [{ node: 'claw-1', current: null, excluded: new Set([SITE, CARD]) }],
+		served: [...jobsOf(SITE, 10), ...jobsOf(CARD, 2)],
+		nowMs: FLEET_NOW,
+	});
+	assert.deepEqual(Object.fromEntries(d), { 'claw-1': { action: 'idle' } });
+});
+
 test('planWarmFleet: assigns ONLY the nodes it is given, whatever order they arrive in', () => {
 	const served = [...jobsOf(SITE, 10), ...jobsOf(MEET, 5), ...jobsOf(CARD, 2), ...jobsOf(TEN, 1)];
 	const nodes = [

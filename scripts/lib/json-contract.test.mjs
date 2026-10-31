@@ -1122,7 +1122,6 @@ const TODAYS_JSON_CONTRACT = [
 	// Added wave 5f lane B: three `ci:audit-gates` covered subs migrated off
 	// PROSE_CONTRACT onto their own `contract: 'json'` — same umbrella job,
 	// same consumer file, no second cron.
-	['warm-canary', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	['history-coverage', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	['contract-consumers', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	// Added wave 5h lane B: three more `ci:audit-gates` covered subs migrated
@@ -1134,7 +1133,6 @@ const TODAYS_JSON_CONTRACT = [
 	// Added wave 5i lane B: two more `ci:audit-gates` covered subs migrated off
 	// PROSE_CONTRACT the same way — same umbrella job, same consumer file, no
 	// second cron.
-	['label-floor', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	['throttle', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	// Added wave 5j lane B: the last two NON-d3 `ci:audit-gates` covered subs
 	// migrated off PROSE_CONTRACT the same way — same umbrella job, same
@@ -1142,6 +1140,11 @@ const TODAYS_JSON_CONTRACT = [
 	// and `ci-watch` stay prose.
 	['mf-externals', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	['identity', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
+	// fleet-manager#38: warm-canary and label-floor (migrated in 5f/5i above)
+	// left the umbrella for rows of their own, so a 30-minute cron can meet
+	// their 1h liveness budget without running every audit gate that often.
+	['warm-canary', 'ci:warm-canary', 'services/mgmt-api/src/routes/jobs/warm-canary-check.ts'],
+	['label-floor', 'ci:label-floor', 'services/mgmt-api/src/routes/jobs/label-floor-check.ts'],
 ].map(([sub, job, consumer]) => `${sub} -> ${job} -> ${consumer}`);
 
 void test("the derived JSON_CONTRACT equals today's 33 entries exactly — name, sub and consumer", () => {

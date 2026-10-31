@@ -22,10 +22,9 @@
  *       arithmetic — never re-implemented here) that exceeds the job's
  *       `detectionBudget` (`parseDurationMs`, same source). Checked for the
  *       umbrella itself AND, against the SAME umbrella cron, for every
- *       `coversSubs` entry — which is how `ci:audit-gates`'s own
- *       `warm-canary`/`label-floor` rows (1h budget, daily umbrella cron)
- *       surface here exactly as `job-registry.ts` already pins them, not as
- *       new noise invented by this gate.
+ *       `coversSubs` entry. A covered sub whose budget the umbrella cron
+ *       cannot meet needs a row of its own, as `warm-canary`/`label-floor`
+ *       got in fleet-manager#38, not a faster umbrella.
  *   (c) UNREGISTERED-FLEET-JOB   a job scheduled in profiles.json whose
  *       mgmt-api route actually spawns the `fleet` CLI, with no row in
  *       `JOB_REGISTRY` naming it.

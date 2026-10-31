@@ -1349,7 +1349,7 @@ test('WARM PATH, #82: planWarmFleet filling an excluded repo onto an empty node 
 	assert.equal(
 		res.filled,
 		0,
-		'planWarmFleet wanted to fill this repo here — the exclusion withheld it'
+		'the only repo worth a listener is excluded here, so nothing is filled'
 	);
 	assert.equal(sims['claw-2'].marker, null, 'no mint ever reached the node');
 	assert.equal(
@@ -1783,7 +1783,7 @@ test('WARM PATH, #8: a listener for a repo with a slow kind on this node is evic
 	assert.equal(res.filled, 0, 'and the same repo is not put straight back');
 });
 
-test('WARM PATH, #8: a fill onto a node where the repo has a slow kind is withheld, never minted', async () => {
+test('WARM PATH, #8: a node where the repo has a slow kind is never filled with it', async () => {
 	seedKindHistory(join(wireTmp, 'job-history.jsonl'), SPEED_DEMAND_AT);
 	const sims: Record<string, NodeSim> = { 'claw-1': { marker: null, active: new Set() } };
 	const input: EphemeralTickInput = {
@@ -1796,7 +1796,9 @@ test('WARM PATH, #8: a fill onto a node where the repo has a slow kind is withhe
 	};
 	const res = await dispatchWarmCache(input, 'tok', fakeGh({}), simShell(sims), SPEED_NOW);
 	assert.equal(res.filled, 0);
-	assert.equal(res.locked, 1, 'counted where #82 counts a withheld fill');
+	// fleet-manager#36: the allocator is told the exclusion, so it never
+	// proposes the fill at all; there is nothing for the act loop to withhold.
+	assert.equal(res.locked, 0, 'the allocator never offered the excluded repo');
 	assert.equal(sims['claw-1'].marker, null);
 });
 
