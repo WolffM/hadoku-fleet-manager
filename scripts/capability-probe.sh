@@ -353,6 +353,73 @@ if [ -n "${CAP_DATA_URL:-}" ]; then
 	say data-peer $(data_peer_try)
 fi
 
+# --- service-host: can this node serve a placed pm2 service ------------------
+# What hadoku_site's cutover and remote deploy need of a NODE before any tenant
+# exists (its docs/operations/MULTI_HOST_PM2.md and service-move gatherFacts()).
+# Membership in pm2-hosts.json is hadoku_site's call; this is the node proving
+# it can serve, the way data-peer reads the listener's verdict. Not `pm2-host`,
+# which means the HUB.
+#   1. the tools a tenant's build runs, on the PATH a tenant gets: every remote
+#      command is `sudo -n -u <tenant> env HOME=…`, and sudo hands it
+#      secure_path, so they are looked up there with a clean env, not on ours
+#   2. cloudflared running this node's own tunnel: `/ready` answers 200 on its
+#      metrics port. The tunnel ID is the evidence, read from the config the
+#      unit runs; the NAME lives in Cloudflare's API, so hadoku_site maps it
+#   3. the service state root the controller names (`CAP_STATE_ROOT`) exists
+# Without CAP_STATE_ROOT this prints NOTHING: not judged, never "no".
+# The CAP_CLOUDFLARED_* and CAP_TENANT_PATH overrides exist for the tests.
+service_host_try() {
+	sh_path="${CAP_TENANT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+	sh_home=$(mktemp -d 2>/dev/null) || sh_home=/nonexistent
+	[ -d "$sh_home" ] && SCRATCH+=("$sh_home")
+	sh_missing=""
+	for t in pm2 node git curl rsync pnpm python3; do
+		env -i HOME="$sh_home" PATH="$sh_path" /bin/sh -c "command -v $t" >/dev/null 2>&1 ||
+			sh_missing="$sh_missing,$t"
+	done
+	env -i HOME="$sh_home" PATH="$sh_path" /bin/sh -c "python3 -c 'import ensurepip, venv'" >/dev/null 2>&1 ||
+		sh_missing="$sh_missing,python3-venv"
+	# The config the RUNNING cloudflared was started with, not an assumed path:
+	# the hub runs its tunnel from the admin user's home, a claw from /etc.
+	sh_cfg="${CAP_CLOUDFLARED_CONFIG:-}"
+	sh_running=""
+	if [ -z "$sh_cfg" ]; then
+		sh_cfg=$(ps -eo args= 2>/dev/null | sed -n 's/^[^ ]*cloudflared .*--config[ =]\([^ ]*\).*/\1/p' | head -n 1)
+		[ -n "$sh_cfg" ] && sh_running=1
+		sh_cfg="${sh_cfg:-/etc/cloudflared/config.yml}"
+	fi
+	sh_tunnel=""
+	if [ -r "$sh_cfg" ]; then
+		sh_tunnel=$(sed -n 's/^tunnel:[[:space:]]*\([A-Za-z0-9-]*\).*/\1/p' "$sh_cfg" 2>/dev/null | head -n 1)
+		[ -n "$sh_tunnel" ] || sh_missing="$sh_missing,tunnel-config"
+	elif [ -e "$sh_cfg" ] || [ -n "$sh_running" ]; then
+		# There, or named by a running cloudflared behind a directory we cannot
+		# enter: could not look, and said so. Absent is the branch below.
+		sh_missing="$sh_missing,tunnel-config-unreadable"
+	else
+		sh_missing="$sh_missing,tunnel-config"
+	fi
+	sh_ready=""
+	for a in ${CAP_CLOUDFLARED_METRICS:-127.0.0.1:20241 127.0.0.1:20242 127.0.0.1:20243 127.0.0.1:20244 127.0.0.1:20245}; do
+		if [ "$(curl -s -o /dev/null -w '%{http_code}' -m 3 "http://$a/ready" 2>/dev/null)" = 200 ]; then
+			sh_ready=1
+			break
+		fi
+	done
+	[ -n "$sh_ready" ] || sh_missing="$sh_missing,tunnel-not-ready"
+	[ -d "$CAP_STATE_ROOT" ] || sh_missing="$sh_missing,state-root"
+	rm -rf "$sh_home"
+	if [ -n "$sh_missing" ]; then
+		printf 'no missing:%s' "${sh_missing#,}"
+	else
+		printf 'ok tunnel=%s' "$sh_tunnel"
+	fi
+}
+if [ -n "${CAP_STATE_ROOT:-}" ]; then
+	# shellcheck disable=SC2046
+	say service-host $(service_host_try)
+fi
+
 # --- nvdec: DECODE something, on the GPU -------------------------------------
 # Encode and decode are separate silicon and separate driver paths; a card can
 # lose one and keep the other. Generated on the CPU first so the decode is

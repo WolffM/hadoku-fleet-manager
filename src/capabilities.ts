@@ -788,6 +788,34 @@ export const CAPABILITIES: readonly Capability[] = [
 			'one does. Routed on by any job that reads or writes the data endpoint.',
 	},
 	{
+		/*
+		 * CAN SERVE A PLACED SERVICE — proved on the node, never read from a list.
+		 *
+		 * fleet-manager#16: the fleet places `kind: service` tenants itself, and
+		 * hadoku_site can deploy one only to a node with the tenant toolchain on
+		 * the PATH sudo gives a tenant, its own cloudflared tunnel up, and a
+		 * service state root (hadoku_site docs/operations/MULTI_HOST_PM2.md,
+		 * service-move gatherFacts()). Which nodes hadoku_site deploys to is its
+		 * call (pm2-hosts.json); this reads whether the node CAN, the way
+		 * `data-peer` reads the listener's verdict. Not `pm2-host`, which means
+		 * the HUB and is hokon's alone: gating on it would rule out claw-6.
+		 *
+		 * The evidence is the tunnel ID, for hadoku_site's drift gate. Readiness
+		 * of one tenant on the node (its user, pm2, clone, ingress rule) is
+		 * `hosting --check`'s, since it cannot be known before the tenant exists.
+		 */
+		id: 'service-host',
+		label: 'Can serve a placed pm2 service',
+		kind: 'identity',
+		surface: 'label',
+		verify: 'probe',
+		description:
+			'A tenant’s toolchain (pm2, node, git, curl, rsync, pnpm, python3 with venv) on ' +
+			'the PATH sudo hands a tenant, this node’s own cloudflared tunnel ready, and ' +
+			'the service state root present. Required of a node before the fleet places a ' +
+			'`kind: service` tenant there.',
+	},
+	{
 		id: 'nvenc-hevc',
 		label: 'NVENC HEVC encode',
 		kind: 'identity',

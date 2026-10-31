@@ -942,8 +942,11 @@ test('every label the committed manifest declares is a registry entry', () => {
 	// reasoning: earned from the bootcamp record, never declared.
 	// `docker` joined it 2026-10-27 (node-users): earned by building an image.
 	// `data-peer` joined it 2026-10-27 (fleet-manager#16): earned by connecting.
+	// `service-host` joined it 2026-10-31 (fleet-manager#16): earned by the node
+	// proving it can serve a placed service.
 	const runtimeWritten = new Set([
 		'data-peer',
+		'service-host',
 		'docker',
 		'hokon-backstop',
 		'hadoku-builder',

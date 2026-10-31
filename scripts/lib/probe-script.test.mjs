@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 
-import { dataEndpointUrl, probeScript, unprobed } from './probe-script.mjs';
+import { nodeHome } from '../../dist/lib/node-users.js';
+import { dataEndpointUrl, probeScript, serviceStateRoot, unprobed } from './probe-script.mjs';
 
 function siteWith(doc) {
 	const root = mkdtempSync(join(tmpdir(), 'probe-script-'));
@@ -58,6 +59,24 @@ test('the script carries the phase and the endpoint only when there is one', () 
 	assert.ok(all.startsWith('#!/usr/bin/env bash\n'), 'nothing is exported ahead of the probe');
 	const m = probeScript('measured', { url: 'http://h:1' });
 	assert.ok(m.startsWith("export CAP_PROBE_PHASE=measured\nexport CAP_DATA_URL='http://h:1'\n"));
+});
+
+test('service-host is judged only where the controller names the state root, as the admin home', () => {
+	assert.equal(serviceStateRoot({}), `${nodeHome({}, 'admin')}/srv-data`);
+	const named = probeScript('presence', { url: null, why: 'x' }, { stateRoot: '/home/a/srv-data' });
+	assert.ok(
+		named.startsWith("export CAP_PROBE_PHASE=presence\nexport CAP_STATE_ROOT='/home/a/srv-data'\n")
+	);
+	assert.ok(!probeScript('all', { url: null, why: 'x' }).includes('export CAP_STATE_ROOT'));
+	// It is pasted inside single quotes: anything that could break out is refused.
+	assert.throws(
+		() => probeScript('all', { url: null }, { stateRoot: "/x'; rm -rf /" }),
+		/absolute path/
+	);
+	assert.throws(
+		() => probeScript('all', { url: null }, { stateRoot: 'relative' }),
+		/absolute path/
+	);
 });
 
 /** Run only the probe's data-peer block against `url`. */

@@ -41,7 +41,7 @@ import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.j
 import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { parseLoad } from './lib/idle-measure.mjs';
-import { dataEndpointUrl, probeScript, unprobed } from './lib/probe-script.mjs';
+import { dataEndpointUrl, probeScript, serviceStateRoot, unprobed } from './lib/probe-script.mjs';
 
 const DATA = dataEndpointUrl();
 const UNPROBED = unprobed(DATA);
@@ -82,7 +82,11 @@ const PROBEABLE = probeableIds();
  * end marker is genuinely unreachable.
  */
 async function run(node, phase = 'all') {
-	const r = await runOn(node, probeScript(phase, DATA), { as: 'ci', timeoutMs: 180_000 });
+	const r = await runOn(
+		node,
+		probeScript(phase, DATA, { stateRoot: serviceStateRoot(manifest.machines[node]) }),
+		{ as: 'ci', timeoutMs: 180_000 }
+	);
 	return !r.ok && !r.stdout.includes('PROBE-END') ? null : r.stdout;
 }
 

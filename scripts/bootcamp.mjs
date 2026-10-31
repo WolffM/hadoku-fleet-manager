@@ -165,7 +165,7 @@ import {
 } from '../dist/capability-revocations.js';
 import { describeProof, proofKey, readProofs } from './lib/job-proof-record.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
-import { dataEndpointUrl, probeScript, unprobed } from './lib/probe-script.mjs';
+import { dataEndpointUrl, probeScript, serviceStateRoot, unprobed } from './lib/probe-script.mjs';
 import { renderJson } from './lib/prettier-json.mjs';
 import { landWrite, landingLine, refusalLine, writeTarget } from './lib/manifest-target.mjs';
 import { sameCapabilityRecord } from './lib/bootcamp-required.mjs';
@@ -325,11 +325,15 @@ const NEVER_WRITTEN = new Set(
  * LOAD the probe observed while measuring.
  */
 async function probe(node, phase = 'all') {
-	const r = await runOn(node, probeScript(phase, DATA), {
-		as: 'ci',
-		timeoutMs: 180_000,
-		includeGuests: checkOnly.has(node),
-	});
+	const r = await runOn(
+		node,
+		probeScript(phase, DATA, { stateRoot: serviceStateRoot(manifest.machines[node]) }),
+		{
+			as: 'ci',
+			timeoutMs: 180_000,
+			includeGuests: checkOnly.has(node),
+		}
+	);
 	if (!r.ok && !r.stdout.includes('PROBE-END')) return null;
 	const caps = {};
 	for (const line of r.stdout.split('\n')) {

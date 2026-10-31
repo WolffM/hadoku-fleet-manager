@@ -13,7 +13,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { nodeHome } from '../../dist/lib/node-users.js';
 import { siteRoot } from './paths.mjs';
+import { SERVICE_STATE_DIR } from './toolchain-floor.mjs';
 
 const PROBE = readFileSync(new URL('../capability-probe.sh', import.meta.url), 'utf8');
 
@@ -50,10 +52,28 @@ export function unprobed(data = dataEndpointUrl()) {
 	return data.url ? {} : { 'data-peer': `the data endpoint could not be named (${data.why})` };
 }
 
-/** The script to run on a node for `phase` (`all`, `presence` or `measured`). */
-export function probeScript(phase = 'all', data = dataEndpointUrl()) {
+/**
+ * Where a service host keeps tenant state on `entry`, for `service-host`'s probe:
+ * the admin user's home plus the one `SERVICE_STATE_DIR`. Named here because
+ * the probe runs as the ci user and must not work out who admin is.
+ */
+export function serviceStateRoot(entry) {
+	return `${nodeHome(entry, 'admin')}/${SERVICE_STATE_DIR}`;
+}
+
+/**
+ * The script to run on a node for `phase` (`all`, `presence` or `measured`).
+ * `node.stateRoot` turns on `service-host`; without it that label is not judged.
+ */
+export function probeScript(phase = 'all', data = dataEndpointUrl(), node = {}) {
 	const head = [];
 	if (phase !== 'all') head.push(`export CAP_PROBE_PHASE=${phase}`);
 	if (data.url) head.push(`export CAP_DATA_URL='${data.url}'`);
+	if (node.stateRoot) {
+		// It is pasted into the script inside single quotes.
+		if (!/^\/[^\s'"]+$/.test(node.stateRoot))
+			throw new Error(`stateRoot is not an absolute path: ${node.stateRoot}`);
+		head.push(`export CAP_STATE_ROOT='${node.stateRoot}'`);
+	}
 	return head.length ? `${head.join('\n')}\n${PROBE}` : PROBE;
 }
