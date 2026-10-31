@@ -16,6 +16,7 @@ import { tempDir } from './tmpdir.js';
 
 import {
 	ciAlertsBootPassDue,
+	lastCleanCiAlertsPassMs,
 	CI_ALERTS_BOOT_SKIP_MS,
 	CI_ALERTS_PASS_FILE,
 	decideCiAlert,
@@ -936,16 +937,21 @@ test('a boot right after a clean pass skips its own; after a blind one it does n
 		};
 		await runCiAlerts('tok', ghGet);
 		assert.equal(ciAlertsBootPassDue(), false, 'a clean pass just finished');
-		assert.equal(ciAlertsBootPassDue(Date.now() + CI_ALERTS_BOOT_SKIP_MS), true, 'and it ages out');
+		const clean = lastCleanCiAlertsPassMs();
+		assert.ok(clean !== null, 'the clean pass is on record');
+		assert.equal(ciAlertsBootPassDue(clean + CI_ALERTS_BOOT_SKIP_MS), true, 'and it ages out');
 
-		// A blind pass is not recorded, so it cannot extend the skip.
+		// A blind pass is not recorded, so it cannot extend the skip. Judged from
+		// the RECORD, never from a second Date.now(): on a loaded runner the blind
+		// pass alone took over a second and aged the clean one out (2026-10-31).
 		blind = true;
 		await runCiAlerts('tok', ghGet);
 		assert.equal(
-			ciAlertsBootPassDue(Date.now() + CI_ALERTS_BOOT_SKIP_MS - 1000),
-			false,
+			lastCleanCiAlertsPassMs(),
+			clean,
 			'still anchored on the clean pass, not the blind one'
 		);
+		assert.equal(ciAlertsBootPassDue(clean + CI_ALERTS_BOOT_SKIP_MS - 1000), false);
 	});
 });
 
