@@ -19,10 +19,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { __setHostForTesting, type FleetHost } from '../host.js';
-import {
-	__setBackstopMachinesForTesting,
-	__setHostLoadReaderForTesting,
-} from '../runner-health.js';
+import { __setBackstopMachinesForTesting } from '../runners/backstop-machines.js';
+import { __setHostLoadReaderForTesting } from '../runners/backstop-decision.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 /** dist/tests/ -> dist/ -> <repo root>/manifests */

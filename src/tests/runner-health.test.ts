@@ -22,18 +22,15 @@ import {
 	__setHistoryPathForTesting,
 	__resetJobHistoryForTesting,
 	historyFile,
-	MAX_FETCH_PER_TICK,
-} from '../job-history.js';
+} from '../job-history-store.js';
+import { MAX_FETCH_PER_TICK } from '../job-history-ingest.js';
 import { __resetFallbackConvergenceForTesting } from '../ci-runner-fallback.js';
 import { __setHostForTesting } from '../host.js';
 import { testHost, testStateDir } from './install-test-host.js';
 
 import {
-	__setBackstopMachinesForTesting,
-	__setHostLoadReaderForTesting,
 	tick,
 	startRunnerHealthMonitor,
-	MAX_RERUNS_PER_TICK,
 	TICK_INTERVAL_MS,
 	SNAPSHOT_RESTORE_MAX_AGE_MS,
 	SWEEP_CONCURRENCY,
@@ -44,17 +41,13 @@ import {
 	__setPostBlackoutSlackForTesting,
 	__setTokenRetryForTesting,
 	__resetRunnerHealthAlertsForTesting,
-	__reloadAlertLedgerForTesting,
 	__setFleetReposForTesting,
 	__setSnapshotPathForTesting,
 	__setSupervisionCheckerForTesting,
 	getRunnerHealthSnapshot,
-	__setReservationForTesting,
 	__setQuietRecorderForTesting,
 	__setFloorConfirmDelayForTesting,
 	__setFloorDemandForTesting,
-	QUEUE_ZOMBIE_SECONDS,
-	refusedAtAdmission,
 	classifyGhReadFailure,
 	unreadableTickError,
 	__resetGhBlackoutForTesting,
@@ -62,6 +55,14 @@ import {
 	__logTokenCapabilitiesForTesting,
 	RE_ALERT_MS,
 } from '../runner-health.js';
+import { __setBackstopMachinesForTesting } from '../runners/backstop-machines.js';
+import {
+	__setHostLoadReaderForTesting,
+	__setReservationForTesting,
+	QUEUE_ZOMBIE_SECONDS,
+} from '../runners/backstop-decision.js';
+import { MAX_RERUNS_PER_TICK, refusedAtAdmission } from '../runners/failover.js';
+import { __reloadAlertLedgerForTesting } from '../lib/alert-ledger.js';
 import { __setFleetProbeForTesting } from '../fleet-loop.js';
 import { __resetSickForTesting, markNodeSick } from '../lib/sick-node.js';
 import { writeDrain } from '../runners/drain.js';

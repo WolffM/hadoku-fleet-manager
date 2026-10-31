@@ -111,6 +111,13 @@ export const LAYER_MAP = [
 	{ glob: 'src/runners/hosting-record.ts', layer: 'state' },
 	{ glob: 'src/runners/backstop-force.ts', layer: 'state' },
 	{ glob: 'src/runners/backstop-hold.ts', layer: 'state' },
+	// Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the manifest's
+	// machines, as the backstop reads them, with a test-seam override — read
+	// by `checkDiskWatch` (observation, stays in runner-health.ts) AND by the
+	// moved `runBackstopDecision` (ci-scheduling). Neither side may own the
+	// other's import, so this is the shared leaf both read from, same shape
+	// as its neighbours above.
+	{ glob: 'src/runners/backstop-machines.ts', layer: 'state' },
 	{ glob: 'src/runners/capacity-ledger.ts', layer: 'state' },
 	{ glob: 'src/runners/dispatch-daily.ts', layer: 'state' },
 	{ glob: 'src/runners/schedulable.ts', layer: 'state' },
@@ -177,6 +184,23 @@ export const LAYER_MAP = [
 	{ glob: 'src/lib/liveness.ts', layer: 'automation' },
 	{ glob: 'src/lib/usage-log.ts', layer: 'automation' },
 	{ glob: 'src/lib/usage-store.ts', layer: 'automation' },
+	// Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the tick
+	// cadence and the hostname accessor, generic values both the checks that
+	// stay in runner-health.ts (observation) and the moved backstop-decision
+	// / hosted-fallback checks (ci-scheduling) call — the least-wrong flat
+	// layer for a domain-blind value neither side may own the other's import
+	// of, same reasoning as concurrency.ts/liveness.ts above.
+	{ glob: 'src/lib/runner-health-shared.ts', layer: 'automation' },
+	// Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the persisted
+	// alert-suppression ledger (`runner-health-alerts.json`), a thin wrapper
+	// over `job-runner.ts`'s `createPager` — same layer as its automation
+	// neighbours above, and the reason it cannot be `state`: it imports
+	// `createPager`/`HOUR_MS` from job-runner.ts (automation), and a `state`
+	// file may not import upward from automation. Read by checks that stay
+	// in runner-health.ts (observation) AND by the moved backstop decision
+	// and hosted-fallback checks (ci-scheduling), so it is the shared leaf
+	// both sides import.
+	{ glob: 'src/lib/alert-ledger.ts', layer: 'automation' },
 	{ glob: 'scripts/fleet-usage.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/emit.mjs', layer: 'automation' },
 	// Wave 5f lane B: the GateDoc shape builder — same "generic, domain-blind,
@@ -430,17 +454,26 @@ export const LAYER_MAP = [
 	{ glob: 'src/job-rollups.ts', layer: 'domain', domain: 'observation', part: 'run' },
 	// Wave 5h lane C split of job-history.ts: GitHub ingest (job-history-ingest.ts,
 	// run) and zone/kill classification + stats (job-history-stats.ts, core).
-	// job-history.ts itself is now a bare re-export barrel, kept only for
-	// runner-health.ts's imports (lane A, not touched this wave) — classified
-	// here rather than under the thing it forwards to, since both its own
-	// imports (domain + state) and runner-health.ts's import of it land legally
-	// only at the domain stratum.
-	{ glob: 'src/job-history.ts', layer: 'domain', domain: 'observation', part: 'run' },
+	// job-history.ts's own bare re-export barrel (kept in 5h only for
+	// runner-health.ts) is removed in wave 5i lane A: runner-health.ts and its
+	// test now import job-history-store.ts/job-history-ingest.ts directly.
 	{ glob: 'src/job-history-ingest.ts', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'src/job-history-stats.ts', layer: 'domain', domain: 'observation', part: 'core' },
 	{ glob: 'src/run-listing-gap.ts', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'src/runners/claw-state.ts', layer: 'domain', domain: 'observation', part: 'core' },
 	{ glob: 'src/runners/disk-watch.ts', layer: 'domain', domain: 'observation', part: 'run' },
+	// Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the dropped-job
+	// rerun `checkRunsAndFailover` (observation, stays) calls — a narrow
+	// reaction to something THIS tick observed (an offline runner, a SIGKILL),
+	// not a scheduling policy, so it stays observation rather than falling to
+	// the ci-scheduling catch-all below. Keeping it here, rather than in
+	// ci-scheduling, is also what keeps cut (iii) from growing on this split:
+	// `backstop-decision.ts` (ci-scheduling, per the plan) swaps one existing
+	// debt edge for another (net zero) and removes a second (ZOMBIE_MS no
+	// longer reached from runner-health.ts directly); `hosted-fallback.ts`
+	// (ci-scheduling, below) adds one genuinely new edge. This file staying
+	// observation is what keeps the set from growing by a second edge too.
+	{ glob: 'src/runners/failover.ts', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'src/runners/node-regression.ts', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'scripts/measure-layers.mjs', layer: 'domain', domain: 'observation', part: 'run' },
 	{
