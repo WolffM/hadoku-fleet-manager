@@ -510,6 +510,12 @@ export const LAYER_MAP = [
 	{ glob: 'scripts/lib/runs-on-demand.mjs', layer: 'domain', domain: 'observation', part: 'core' },
 	{ glob: 'scripts/lib/slice-summary.mjs', layer: 'domain', domain: 'observation', part: 'run' },
 	{ glob: 'scripts/lib/srv-drift.mjs', layer: 'domain', domain: 'observation', part: 'core' },
+	{
+		glob: 'scripts/lib/throttle-drift-doc.mjs',
+		layer: 'domain',
+		domain: 'observation',
+		part: 'core',
+	},
 	{ glob: 'scripts/lib/tier-detectors.mjs', layer: 'domain', domain: 'observation', part: 'core' },
 	{ glob: 'scripts/lib/warm-canary.mjs', layer: 'domain', domain: 'observation', part: 'core' },
 

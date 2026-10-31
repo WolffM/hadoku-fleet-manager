@@ -75,6 +75,7 @@ import {
 	unprovenRequired,
 } from './lib/bootcamp-required.mjs';
 import { createEmitter } from './lib/emit.mjs';
+import { buildGateDoc } from './lib/gate-doc.mjs';
 import { mintsJitRunners } from '../dist/lib/node-role.js';
 import { observedDemand, workflowDemand } from './lib/runs-on-demand.mjs';
 // The resident-floor's one `gh api` read, retried before it is called
@@ -91,15 +92,35 @@ import { listRunners } from './lib/gh-runners.mjs';
 /**
  * `--json` for a reader that wants the transition log as data (wave2 §D.4).
  *
- * NOT under `scripts/lib/json-contract.mjs`: `ci:audit-gates` runs this gate
- * and judges it by a regex over stdout+stderr as PROSE, so nothing parses this
- * payload yet and adding it breaks nothing. The diagnostics stay on STDERR in
- * both modes — stderr is not part of any stdout contract, and audit-gates
- * merges the two, so the prose consumer sees exactly what it sees today.
+ * MIGRATED (wave 5i lane B): `ci:audit-gates` now runs this one with `--json`
+ * and judges it by the `GateDoc` below rather than a regex over
+ * stdout+stderr — see `src/lib/job-registry.ts`'s `coversSubs` entry
+ * (`contract: 'json'`) and `scripts/lib/json-contract.mjs`'s derivation of
+ * `JSON_CONTRACT` from it. The diagnostics stay on STDERR in both modes —
+ * stderr is not part of any stdout contract.
  */
 const emitter = createEmitter();
 const JSON_OUT = emitter.json;
 const log = emitter.log;
+
+/**
+ * GateDoc halves (wave 5i lane B), built ALONGSIDE every exit branch's
+ * existing prose/`extra` fields rather than reconstructed from them later.
+ * `unreadable` is "I could not look" — an unread repo's shipped workflows, a
+ * repo with no workflows directory at all (this gate's own doc on
+ * `noWorkflows` below: "the same 'could not look' as an unreadable repo"), an
+ * unreadable demand ledger or observed-demand window, a resident repo's `gh`
+ * read that exhausted `READ_ATTEMPTS` — never folded into `findings`. Every
+ * other branch is a conclusion this gate actually reached from data it DID
+ * read: an empty roster (a failed generation, same shape as tier-fleet's
+ * "nothing scanned"), an unresolvable `runs-on` (this file's own comment:
+ * "It is a finding, not 'this job asks for nothing'"), a label nothing
+ * offers or the floor will not watch, a drained or understaffed resident
+ * holder, an empty required set, a demanded capability no node proves, or a
+ * manifest/derivation disagreement.
+ */
+const gateFindings = [];
+const gateUnreadable = [];
 
 const MANIFEST = manifestFile('fleet-runner-manifest.json');
 const COVERAGE = manifestFile('fleet-runner-coverage.json');
@@ -776,13 +797,18 @@ if (residentHolders.size) {
 		if (!probe.ok) {
 			// "I could not look" must never render as "the floor holds" — see
 			// CLAUDE.md. A repo whose registrations could not be read is reported
-			// as a failure naming why, not skipped.
-			residentFailures.push(
-				`"${repo}" — could not read its runner registrations from GitHub ` +
-					`(${String(probe.error ?? '')
-						.trim()
-						.slice(0, 160)}). Declared holder(s): ${holders.join(', ')}.`
-			);
+			// as a failure naming why, not skipped. GateDoc (wave 5i lane B): a
+			// `gh` read that exhausted READ_ATTEMPTS is "I could not look",
+			// never a finding — same reasoning check-boundary-contracts.mjs's
+			// own `bad(..., { unreadable: true })` applies to its exhausted
+			// reads.
+			const why =
+				`could not read its runner registrations from GitHub ` +
+				`(${String(probe.error ?? '')
+					.trim()
+					.slice(0, 160)}). Declared holder(s): ${holders.join(', ')}.`;
+			residentFailures.push(`"${repo}" — ${why}`);
+			gateUnreadable.push({ node: null, why: `"${repo}" — ${why}` });
 			continue;
 		}
 		const runners = probe.runners;
@@ -795,19 +821,21 @@ if (residentHolders.size) {
 			)
 		);
 		if (drainedHolders.length) {
-			residentFailures.push(
+			const reason =
 				`"${repo}" — resident holder(s) ${drainedHolders.join(', ')} are DRAINED. ` +
-					`The rule is at least two holders and never a drained one: drain a ` +
-					`replacement holder in first, then drain this one.`
-			);
+				`The rule is at least two holders and never a drained one: drain a ` +
+				`replacement holder in first, then drain this one.`;
+			residentFailures.push(reason);
+			gateFindings.push({ node: null, kind: 'resident-drained', reason });
 		}
 		if (online.length < 2) {
-			residentFailures.push(
+			const reason =
 				`"${repo}" — only ${online.length} of its declared resident holder(s) ` +
-					`(${holders.join(', ')}) are online carrying ${BUILDER_LABEL}. Need at ` +
-					`least 2: this is the fleet's ONE backstop repo and a single holder is the ` +
-					`single point of failure the 2026-09-07 move off claw-1 exists to remove.`
-			);
+				`(${holders.join(', ')}) are online carrying ${BUILDER_LABEL}. Need at ` +
+				`least 2: this is the fleet's ONE backstop repo and a single holder is the ` +
+				`single point of failure the 2026-09-07 move off claw-1 exists to remove.`;
+			residentFailures.push(reason);
+			gateFindings.push({ node: null, kind: 'resident-understaffed', reason });
 		}
 	}
 }
@@ -867,43 +895,54 @@ const contractVerdicts = Object.entries(manifest.machines ?? {})
  * that failed for some other reason.
  */
 function emitJson(verdict, extra = {}) {
-	if (!JSON_OUT) return;
-	emitter.emit({
-		ok: verdict === 'ok',
-		verdict,
-		dependencies,
-		unoffered,
-		missing,
-		servedByMintOnly: [...servedByMintOnly],
-		runtimeWatched: [...runtimeWatched],
-		floorDemandPath: FLOOR_DEMAND_PATH,
-		floorDemandWriteError,
-		persistedStaticError,
-		unread,
-		noWorkflows,
-		unresolvable,
-		demandSources,
-		historical: historical.map((l) => ({
-			label: l,
-			observed: demandSources[l].observed,
-			lastObserved: observed?.last.get(l) ?? null,
-		})),
-		observedRows: observed?.rows ?? null,
-		observedMalformed: observed?.malformed ?? null,
-		observedError,
-		transitions,
-		holdings,
-		holdingsPath: HOLDINGS_PATH,
-		holdingsError,
-		requiredSet: [...requiredSet].sort(),
-		derivationFailures,
-		contractVerdicts,
-		eligible: eligibleNodes,
-		disqualified: disqualifiedNodes,
-		unverified: unverifiedNodes,
-		held: emitter.held(),
-		...extra,
-	});
+	// `if (JSON_OUT) { ... }`, not an early-return guard: `json-contract.mjs`'s
+	// `emitsJson` structural check (wave 5i lane B put this sub under
+	// contract) looks for the positive branch, the same idiom every other
+	// migrated gate uses.
+	if (JSON_OUT) {
+		emitter.emit({
+			ok: verdict === 'ok',
+			verdict,
+			dependencies,
+			unoffered,
+			missing,
+			servedByMintOnly: [...servedByMintOnly],
+			runtimeWatched: [...runtimeWatched],
+			floorDemandPath: FLOOR_DEMAND_PATH,
+			floorDemandWriteError,
+			persistedStaticError,
+			unread,
+			noWorkflows,
+			unresolvable,
+			demandSources,
+			historical: historical.map((l) => ({
+				label: l,
+				observed: demandSources[l].observed,
+				lastObserved: observed?.last.get(l) ?? null,
+			})),
+			observedRows: observed?.rows ?? null,
+			observedMalformed: observed?.malformed ?? null,
+			observedError,
+			transitions,
+			holdings,
+			holdingsPath: HOLDINGS_PATH,
+			holdingsError,
+			requiredSet: [...requiredSet].sort(),
+			derivationFailures,
+			contractVerdicts,
+			eligible: eligibleNodes,
+			disqualified: disqualifiedNodes,
+			unverified: unverifiedNodes,
+			held: emitter.held(),
+			...extra,
+			// GateDoc (wave 5i lane B). `ok` is pinned to `verdict` explicitly —
+			// the SAME source of truth every branch below already used for its
+			// exit code — rather than left to `buildGateDoc`'s own array-emptiness
+			// default, so a branch that pushed nothing into either array (there is
+			// none today) could never silently read as a clean pass.
+			...buildGateDoc({ findings: gateFindings, unreadable: gateUnreadable, ok: verdict === 'ok' }),
+		});
+	}
 }
 
 // A repo not on disk is a repo whose labels were NOT READ, and a gate that could
@@ -917,6 +956,7 @@ if (unread.length) {
 		`\n  This gate reads workflow labels from each repo's default branch. Unreadable ones\n` +
 			`  mean their labels were not examined, so a pass here would be meaningless.`
 	);
+	for (const name of unread) gateUnreadable.push({ node: name, why: unreadWhy.get(name) });
 	emitJson('unread');
 	process.exit(1);
 }
@@ -928,6 +968,11 @@ if (!coveredRepos.length) {
 		`✗ ${COVERAGE} lists no covered repos — this gate would have read only the site checkout\n` +
 			`  and called that the fleet's demand. Regenerate it with \`fleet reconcile --write-coverage\`.`
 	);
+	gateFindings.push({
+		node: null,
+		kind: 'empty-roster',
+		reason: `${COVERAGE} lists no covered repos`,
+	});
 	emitJson('empty-roster');
 	process.exit(1);
 }
@@ -938,6 +983,11 @@ if (noWorkflows.length) {
 			`  A covered repo is covered because its workflows run on the fleet, so its demand\n` +
 			`  was not read.`
 	);
+	// Could not look, by this gate's own reasoning above: a missing workflows
+	// directory on a covered repo's default branch is "the same 'could not
+	// look' as an unreadable repo", never a finding.
+	for (const name of noWorkflows)
+		gateUnreadable.push({ node: name, why: 'ships no .github/workflows on its default branch' });
 	emitJson('no-workflows');
 	process.exit(1);
 }
@@ -950,6 +1000,13 @@ if (unresolvable.length) {
 			`  know is how the old reader missed \`jdk21\` and \`cargo-bevy\`. Teach\n` +
 			`  scripts/lib/runs-on-demand.mjs the shape, or write the labels as a JSON array literal.`
 	);
+	// A finding, not "could not look" — this file's own comment above.
+	for (const u of unresolvable)
+		gateFindings.push({
+			node: null,
+			kind: 'unresolvable-runs-on',
+			reason: `unresolvable runs-on in ${u}`,
+		});
 	emitJson('unresolvable-runs-on');
 	process.exit(1);
 }
@@ -960,6 +1017,7 @@ if (observedError) {
 			`  the static read of the workflows counts, and a \`runs-on\` resolved at run time is\n` +
 			`  invisible. Point HADOKU_STATE_DIR at mgmt-api's state directory.`
 	);
+	gateUnreadable.push({ node: null, why: `observed demand: ${observedError}` });
 	emitJson('observed-unreadable');
 	process.exit(1);
 }
@@ -990,6 +1048,12 @@ if (unoffered.length) {
 			`  from its dependency set just because nothing offers it \u2014 that is how a gate gets\n` +
 			`  easier to pass the worse the fleet gets.`
 	);
+	for (const l of unoffered)
+		gateFindings.push({
+			node: null,
+			kind: 'unoffered',
+			reason: `"${l}" — a covered repo's workflow asks for it and nothing in the fleet offers it`,
+		});
 	emitJson('unoffered');
 	process.exit(1);
 }
@@ -1014,6 +1078,12 @@ if (missing.length) {
 					: 'out of date'
 		}. Make ${FLOOR_DEMAND_PATH} writable and re-run.`
 	);
+	for (const l of missing)
+		gateFindings.push({
+			node: null,
+			kind: 'missing',
+			reason: `"${l}" is requested and offered but the runtime label floor will not see it`,
+		});
 	emitJson('missing');
 	process.exit(1);
 }
@@ -1036,6 +1106,7 @@ if (ledgerError) {
 			`  parse must not silently under-count demand and pass. Fix or regenerate it with\n` +
 			`  \`fleet tool-inventory --write\`.`
 	);
+	gateUnreadable.push({ node: null, why: `could not read the demand ledger: ${ledgerError}` });
 	emitJson('ledger-unreadable', { ledgerError });
 	process.exit(1);
 }
@@ -1046,6 +1117,10 @@ if (!ledgerRecords) {
 			`  cannot check the required-set floor without it. Run \`fleet tool-inventory --write\`\n` +
 			`  first.`
 	);
+	gateUnreadable.push({
+		node: null,
+		why: `no demand ledger at ${join(stateDir(), 'demand-ledger.jsonl')}`,
+	});
 	emitJson('ledger-missing');
 	process.exit(1);
 }
@@ -1061,6 +1136,7 @@ const emptyRequired = emptyRequiredSetReason(requiredSet, {
 });
 if (emptyRequired) {
 	console.error(`✗ ${emptyRequired}`);
+	gateFindings.push({ node: null, kind: 'required-set-empty', reason: emptyRequired });
 	emitJson('required-set-empty', { emptyRequired });
 	process.exit(1);
 }
@@ -1083,6 +1159,12 @@ if (requiredGaps.length) {
 			`  genuinely new — register it in src/capabilities.ts and add it to\n` +
 			`  \`toolchain.capabilities\` in fleet-runner-manifest.json.`
 	);
+	for (const id of requiredGaps)
+		gateFindings.push({
+			node: null,
+			kind: 'required-gap',
+			reason: `"${id}" is demanded and no node proves it`,
+		});
 	emitJson('required-gap', { requiredGaps });
 	process.exit(1);
 }
@@ -1102,6 +1184,8 @@ if (derivationFailures.length) {
 			`  before this check existed.\n\n` +
 			`  Fix: run \`fleet bootcamp --write\` against the node(s) named above, then re-run.`
 	);
+	for (const f of derivationFailures)
+		gateFindings.push({ node: null, kind: 'derivation-disagreement', reason: f });
 	emitJson('derivation-disagreement', { derivationFailures });
 	process.exit(1);
 }

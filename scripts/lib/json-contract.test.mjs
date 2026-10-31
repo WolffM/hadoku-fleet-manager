@@ -166,11 +166,21 @@ void test('the contract itself is well-formed', () => {
  * already left behind. `warm-canary`, migrated the same wave, is NOT
  * host-bound: it ssh's the CANDIDATE nodes, the same class as node-users and
  * runner-units.
+ *
+ * ONE MORE JOINED WAVE 5I LANE B's MIGRATION: `label-floor` reads BOTH
+ * `job-history.jsonl` (the observed-demand half) AND `demand-ledger.jsonl`
+ * under `HADOKU_STATE_DIR` — the same file and the same reasoning as
+ * `history-coverage` above. `throttle`, migrated the same wave, is NOT
+ * host-bound: it ssh's the CANDIDATE nodes, the same class as warm-canary
+ * and capabilities (its one locally-resolved value, RESERVE_FILE, is never
+ * read back as a fact about the fleet — see `src/lib/job-registry.ts`'s
+ * entry for the detail).
  */
 const HOST_BOUND_SUBS = [
 	'contract-consumers',
 	'egress-slices',
 	'history-coverage',
+	'label-floor',
 	'reap-trend',
 	'srv-drift',
 ].sort();
@@ -1124,9 +1134,14 @@ const TODAYS_JSON_CONTRACT = [
 	['tier-fleet', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	['capabilities', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	['boundary-contracts', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
+	// Added wave 5i lane B: two more `ci:audit-gates` covered subs migrated off
+	// PROSE_CONTRACT the same way — same umbrella job, same consumer file, no
+	// second cron.
+	['label-floor', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
+	['throttle', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 ].map(([sub, job, consumer]) => `${sub} -> ${job} -> ${consumer}`);
 
-void test("the derived JSON_CONTRACT equals today's 29 entries exactly — name, sub and consumer", () => {
+void test("the derived JSON_CONTRACT equals today's 31 entries exactly — name, sub and consumer", () => {
 	const derived = JSON_CONTRACT.map((e) => `${e.sub} -> ${e.job} -> ${e.consumer}`);
 	assert.deepEqual(derived.slice().sort(), TODAYS_JSON_CONTRACT.slice().sort());
 });

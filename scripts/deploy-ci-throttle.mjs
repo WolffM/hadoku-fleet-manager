@@ -73,8 +73,22 @@
  *   fleet throttle --machine claw-2 --confirm
  *   fleet throttle --no-restart --confirm
  *   fleet throttle --check             # audit, exit 1 on drift (ssh)
+ *   fleet throttle --check --json      # a GateDoc instead of prose
  *   fleet throttle --machine hokon --include-guests --check
  *                                      # the guest override; BOTH flags, always
+ *
+ * MIGRATED (wave 5i lane B), `--check` ONLY: `ci:audit-gates` now runs
+ * `fleet throttle --check` with `--json` and judges it by the `GateDoc`
+ * below rather than a regex over stdout+stderr — see
+ * `src/lib/job-registry.ts`'s `coversSubs` entry (`contract: 'json'`) and
+ * `scripts/lib/json-contract.mjs`'s derivation of `JSON_CONTRACT` from it.
+ * The `--confirm` (deploy) half of this document is UNCHANGED: a mutating
+ * gate is refused by `validateRegistry` (`checkMutatingGate`), and this
+ * contract is only ever reached through `--check`, so the GateDoc fields
+ * below are added only when `CHECK` is true. "I could not look" (a node
+ * `runOn` could not reach, a SUMMARY line a read never reached, a hash a
+ * read could not take) goes in `unreadable`; every mismatch this command
+ * actually observed is a finding.
  */
 
 import { createHash } from 'node:crypto';
@@ -105,7 +119,9 @@ import {
 import { packageVersion } from '../dist/lib/provenance.js';
 import { isGuestNode, mintsJitRunners } from '../dist/lib/node-role.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
-import { keepStdoutWhole } from './lib/emit.mjs';
+import { createEmitter, keepStdoutWhole } from './lib/emit.mjs';
+import { buildGateDoc } from './lib/gate-doc.mjs';
+import { classifyDrift } from './lib/throttle-drift-doc.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
 // and on a pipe `process.exit` throws away whatever the stream still had
@@ -170,9 +186,16 @@ if (CHECK && CONFIRM) {
 	process.exit(2);
 }
 
-const log = (...a) => {
-	if (!JSON_OUT) console.log(...a);
-};
+// THE SHARED EMITTER (wave 5i lane B — stdout under `--json` is now a
+// contract, `scripts/lib/emit.mjs`'s own "ONE STDOUT DISCIPLINE FOR EVERY
+// SUBCOMMAND"). `log` keeps its exact prior behaviour — a human line in
+// non-JSON mode, suppressed from stdout in `--json` mode — through the
+// shared helper rather than a hand-rolled copy of it. `JSON_OUT`, derived
+// above from the real argv, stays the one flag every other conditional in
+// this file already reads; the emitter is constructed with no `argv`
+// override, so its own `json` reads the same real `--json`.
+const emitter = createEmitter();
+const log = emitter.log;
 
 // 27 runners x a sequential `systemctl restart` overran 120s on claw-1, which
 // killed the ssh MID-TRANSACTION: 21 .env files pointed at a hook the run had not
@@ -722,19 +745,32 @@ if (JSON_OUT) {
 	// exists: a guest this run ACTED ON and a guest it skipped are different
 	// facts, and a parser seeing only `results` could not tell an overridden run
 	// from an ordinary deploy that happened to cover one more node.
-	console.log(
-		JSON.stringify(
-			{
-				confirm: CONFIRM,
-				results,
-				skippedGuests: guests,
-				guestOverride: OVERRIDDEN_GUEST,
-				confirmRemaining,
-			},
-			null,
-			2
-		)
-	);
+	const payload = {
+		confirm: CONFIRM,
+		results,
+		skippedGuests: guests,
+		guestOverride: OVERRIDDEN_GUEST,
+		confirmRemaining,
+	};
+	// GateDoc (wave 5i lane B), `--check` ONLY — the `--confirm` (deploy) half
+	// of this document is untouched by this block, exactly as it was before
+	// this migration. Built from `drift` as it stands here (every per-node
+	// push in the loop above already ran) PLUS `unbounded` — reported here
+	// INDEPENDENTLY of `drift`'s own combined-string push for it at the foot
+	// of this file, so that later push (and the human-prose order around it)
+	// is never touched or reordered by this.
+	if (CHECK) {
+		const { findings, unreadable } = classifyDrift(drift);
+		for (const name of unbounded) {
+			findings.push({
+				node: name,
+				kind: 'unbounded-node',
+				reason: `${name} declares no maxConcurrent/minFreeMb, so it was NOT deployed to`,
+			});
+		}
+		Object.assign(payload, buildGateDoc({ findings, unreadable }));
+	}
+	emitter.emit(payload);
 } else {
 	log('');
 	const failed = results.filter((r) => !r.ok);

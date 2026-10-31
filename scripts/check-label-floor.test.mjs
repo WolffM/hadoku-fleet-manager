@@ -194,9 +194,9 @@ function cleanup(fx) {
 	rmSync(fx.root, { recursive: true, force: true });
 }
 
-/** One gate run, `--json`. Returns the exit code and the parsed report — never throws. */
-function run(fx, { failTimes = 0, failStdoutMsg = '' } = {}) {
-	const env = {
+/** The env every gate run shares, `--json` or not. */
+function envFor(fx, { failTimes = 0, failStdoutMsg = '' } = {}) {
+	return {
 		...process.env,
 		...fx.remotes.env,
 		PATH: `${fx.bin}:${process.env.PATH}`,
@@ -210,6 +210,11 @@ function run(fx, { failTimes = 0, failStdoutMsg = '' } = {}) {
 		GH_FAIL_STDOUT_MSG: failStdoutMsg,
 		GH_RUNNERS: fx.runners,
 	};
+}
+
+/** One gate run, `--json`. Returns the exit code and the parsed report — never throws. */
+function run(fx, opts = {}) {
+	const env = envFor(fx, opts);
 	try {
 		const stdout = execFileSync(process.execPath, [GATE, '--json'], {
 			env,
@@ -224,6 +229,27 @@ function run(fx, { failTimes = 0, failStdoutMsg = '' } = {}) {
 			report: out.trim().startsWith('{') ? JSON.parse(out) : null,
 			stderr: err.stderr ?? '',
 		};
+	}
+}
+
+/**
+ * The SAME run, in human (prose) mode — no `--json` at all, not even a
+ * disabled one, matching exactly what `ci:audit-gates` invokes today for an
+ * unmigrated covered sub. GateDoc (wave 5i lane B) must not move a single
+ * line of this output; `--json` only adds a parallel machine-readable
+ * document beside it.
+ */
+function runHuman(fx, opts = {}) {
+	const env = envFor(fx, opts);
+	try {
+		const stdout = execFileSync(process.execPath, [GATE], {
+			env,
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'pipe'],
+		});
+		return { code: 0, stdout, stderr: '' };
+	} catch (err) {
+		return { code: err.status ?? 1, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
 	}
 }
 
@@ -379,6 +405,131 @@ test('the same label still fails while a shipped workflow asks for it', () => {
 		assert.equal(report.verdict, 'unoffered');
 		assert.deepEqual(report.unoffered, ['watchparty-media']);
 		assert.deepEqual(report.historical, []);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+// ── GateDoc (wave 5i lane B) ─────────────────────────────────────────────────
+//
+// "I could not look" (an unread repo, a repo with no workflows directory, an
+// unreadable ledger or observed-demand window, a resident repo's exhausted
+// `gh` read) must land in `unreadable`, never folded into `findings` — the
+// same rule every other migrated gate's GateDoc tests pin. Everything this
+// gate actually CONCLUDED from data it read — an unoffered/unwatched label,
+// an understaffed or drained resident holder, an empty required set, a
+// required-capability gap, a derivation disagreement — is a finding.
+
+test('GateDoc: a clean fleet is ok, with no findings and nothing unreadable', () => {
+	const fx = fixture();
+	try {
+		const { code, report } = run(fx);
+		assert.equal(code, 0, JSON.stringify(report));
+		assert.equal(report.ok, true);
+		assert.deepEqual(report.findings, []);
+		assert.deepEqual(report.unreadable, []);
+		assert.ok(!('why' in report), 'a clean GateDoc must not carry why');
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: an exhausted resident gh read is unreadable, never a finding', () => {
+	const fx = fixture();
+	try {
+		const { code, report } = run(fx, { failTimes: 999 });
+		assert.equal(code, 1);
+		assert.equal(report.ok, false);
+		assert.deepEqual(report.findings, [], JSON.stringify(report.findings));
+		assert.equal(report.unreadable.length, 1, JSON.stringify(report.unreadable));
+		assert.match(report.unreadable[0].why, /ETIMEDOUT/);
+		assert.ok(report.why);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: an understaffed resident backstop is a finding, not unreadable', () => {
+	const fx = fixture();
+	try {
+		// Only ONE online holder, carrying the floor label — the floor is read,
+		// successfully, and found short of two; this is a conclusion the gate
+		// reached, not a read it could not make.
+		writeFileSync(
+			fx.runners,
+			JSON.stringify({
+				runners: [
+					{
+						id: 1,
+						name: HOLDER_A,
+						status: 'online',
+						busy: false,
+						labels: [{ name: 'hadoku-builder' }],
+					},
+				],
+			})
+		);
+		const { code, report } = run(fx);
+		assert.equal(code, 1);
+		assert.equal(report.ok, false);
+		assert.deepEqual(report.unreadable, [], JSON.stringify(report.unreadable));
+		const finding = report.findings.find((f) => f.kind === 'resident-understaffed');
+		assert.ok(finding, JSON.stringify(report.findings));
+		assert.match(finding.reason, /only 1 of its declared resident holder/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: an unoffered label is a finding, not unreadable', () => {
+	const fx = fixture();
+	try {
+		observedJobs(fx, 'watchparty-media', 30, 4);
+		fx.remotes.push(REPO, {
+			'.github/workflows/ci.yml': 'jobs:\n  check:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n',
+			'.github/workflows/ingest.yml':
+				"jobs:\n  ingest:\n    runs-on: ['self-hosted', 'watchparty-media']\n",
+		});
+		const { code, report } = run(fx);
+		assert.equal(code, 1);
+		assert.equal(report.ok, false);
+		assert.deepEqual(report.unreadable, []);
+		const finding = report.findings.find((f) => f.kind === 'unoffered');
+		assert.ok(finding, JSON.stringify(report.findings));
+		assert.match(finding.reason, /watchparty-media/);
+		assert.ok(report.why);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('human output is unaffected by the migration — same prose, same exit code', () => {
+	const fx = fixture();
+	try {
+		const { code: jsonCode } = run(fx);
+		const { code: humanCode, stdout } = runHuman(fx);
+		assert.equal(humanCode, jsonCode, 'exit code must match between the two modes');
+		assert.match(stdout, /label floor covers every routing dependency/);
+		assert.ok(!stdout.trim().startsWith('{'), 'human mode must not print JSON');
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('human output is unaffected by the migration on a failing branch too', () => {
+	const fx = fixture();
+	try {
+		observedJobs(fx, 'watchparty-media', 30, 4);
+		fx.remotes.push(REPO, {
+			'.github/workflows/ci.yml': 'jobs:\n  check:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n',
+			'.github/workflows/ingest.yml':
+				"jobs:\n  ingest:\n    runs-on: ['self-hosted', 'watchparty-media']\n",
+		});
+		const { code: jsonCode } = run(fx);
+		const { code: humanCode, stderr } = runHuman(fx);
+		assert.equal(humanCode, jsonCode);
+		assert.equal(humanCode, 1);
+		assert.match(stderr, /routing dependency NOTHING in the fleet offers/);
 	} finally {
 		cleanup(fx);
 	}

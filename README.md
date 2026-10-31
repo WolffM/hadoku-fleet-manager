@@ -219,6 +219,8 @@ code first would turn every real finding into "the checker broke".
 | `fleet tier-fleet --json`                         | `ci:audit-gates`        |
 | `fleet capabilities --json`                       | `ci:audit-gates`        |
 | `fleet boundary-contracts --json`                 | `ci:audit-gates`        |
+| `fleet label-floor --json`                        | `ci:audit-gates`        |
+| `fleet throttle --check --json`                   | `ci:audit-gates`        |
 
 That table listed SIX of these ten until 2026-09-07 — `drain-check`,
 `benchmark`, `egress-slices` and `queue-health` were under contract and
@@ -234,9 +236,9 @@ of these subcommands, or dropping its `--json` handling, fails `pnpm run check`
 here rather than a cron in hadoku_site at 03:00. Renaming one is a cross-repo
 change — the failure message names the mgmt-api file to fix in the same pass.
 
-`ci:audit-gates` runs eight more fleet subcommands (wave 5f and 5h lane B are
-moving them to the table above one at a time — six already have, hence the
-six `ci:audit-gates` rows above), but reads the remaining eight's output as
+`ci:audit-gates` runs six more fleet subcommands (wave 5f, 5h and 5i lane B
+are moving them to the table above one at a time — eight already have, hence
+the eight `ci:audit-gates` rows above), but reads the remaining six's output as
 prose against an `evidence` regex rather than as JSON, so those are deliberately
 not in the table above. It is declared separately, as `PROSE_CONTRACT` in the
 same file, because reading output as prose has its own failure mode: that job

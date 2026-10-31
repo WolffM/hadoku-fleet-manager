@@ -48,15 +48,16 @@
  * they are liveness checks on a daily cron, and `validateRegistry` says so
  * rather than silently passing.
  *
- * WAVE 5F LANE B (and 5h lane B after it) migrates these fourteen off prose
- * one at a time: a covered sub may carry `contract: 'json'` (see
+ * WAVE 5F LANE B (5h and 5i lane B after it) migrates these fourteen off
+ * prose one at a time: a covered sub may carry `contract: 'json'` (see
  * `CoveredSub`'s own doc comment), which folds it into `JSON_CONTRACT`
  * instead of `PROSE_CONTRACT` while it stays discharged by the SAME umbrella
  * invocation — there is no second cron and no second `mgmtApiFile`.
  * `warm-canary`, `history-coverage` and `contract-consumers` migrated in
  * wave 5f lane B; `tier-fleet`, `capabilities` and `boundary-contracts`
- * migrated in wave 5h lane B. The rest are not, and carry no `contract`
- * field at all until their own turn.
+ * migrated in wave 5h lane B; `label-floor` and `throttle` migrated in wave
+ * 5i lane B. The rest are not, and carry no `contract` field at all until
+ * their own turn.
  *
  * `kindDrift` exists for the case `src/cli.ts`'s `COMMANDS` table disagrees
  * with the three kinds this registry ever puts a clock on (`gate` |
@@ -520,9 +521,16 @@ export const JOB_REGISTRY: JobEntry[] = [
 			},
 			{
 				sub: 'throttle',
-				args: ['--check'],
+				args: ['--check', '--json'],
+				contract: 'json',
+				// ssh to the candidate nodes, never this box's own state — the
+				// same class as warm-canary/capabilities, not reap-trend/
+				// egress-slices/srv-drift. RESERVE_FILE is resolved locally but
+				// only ever written into the LOCAL node's own rendered conf,
+				// never read back as a fact about the fleet.
+				hostBound: false,
 				detectionBudget: '48h',
-				why: "The runner job-started hook, read-only: is the fleet's only real concurrency limit actually wired.",
+				why: "The runner job-started hook, read-only: is the fleet's only real concurrency limit actually wired. Migrated to GateDoc, wave 5i lane B.",
 			},
 			{
 				sub: 'slice',
@@ -550,9 +558,17 @@ export const JOB_REGISTRY: JobEntry[] = [
 			},
 			{
 				sub: 'label-floor',
-				args: [],
+				args: ['--json'],
+				contract: 'json',
+				// Reads job-history.jsonl AND demand-ledger.jsonl under
+				// HADOKU_STATE_DIR — THIS process's own recorded ingest, same
+				// class and same file (job-history.jsonl) as history-coverage
+				// above (docs/control-plane.md §2: "safe to hand from one
+				// controller to the next" but a different answer on a passive
+				// replica than the active one).
+				hostBound: true,
 				detectionBudget: '1h',
-				why: 'A LIVENESS check — zero online runners for a required label queues jobs indefinitely rather than failing — named beside warm-canary in plan §6.1 as the same cadence oddity, same reasoning, same 1h figure.',
+				why: 'A LIVENESS check — zero online runners for a required label queues jobs indefinitely rather than failing — named beside warm-canary in plan §6.1 as the same cadence oddity, same reasoning, same 1h figure. Migrated to GateDoc, wave 5i lane B.',
 			},
 			{
 				sub: 'capabilities',
