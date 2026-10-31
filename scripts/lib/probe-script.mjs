@@ -11,10 +11,9 @@
  * judged", never a revocation on every node at once. `why` says which.
  */
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 import { nodeHome } from '../../dist/lib/node-users.js';
-import { siteRoot } from './paths.mjs';
+import { readPm2Hosts } from './site-docs.mjs';
 import { SERVICE_STATE_DIR } from './toolchain-floor.mjs';
 
 const PROBE = readFileSync(new URL('../capability-probe.sh', import.meta.url), 'utf8');
@@ -31,16 +30,11 @@ export function dataEndpointUrl(env = process.env) {
 			return { url: null, why: `FLEET_DATA_URL is not a URL: ${url}` };
 		return { url };
 	}
-	let p;
-	try {
-		p = join(siteRoot(), 'scripts', 'pm2-hosts.json');
-		const doc = JSON.parse(readFileSync(p, 'utf8'));
-		const ip = doc.hosts?.[doc.hub]?.tailnetIp;
-		if (!ip) return { url: null, why: `${p}: the hub has no tailnetIp` };
-		return { url: `http://${ip}:${DATA_PORT}` };
-	} catch (err) {
-		return { url: null, why: `${p ?? 'the site checkout'}: ${err.message}` };
-	}
+	const read = readPm2Hosts();
+	if (!read.ok) return { url: null, why: read.why };
+	const ip = read.doc.hosts?.[read.doc.hub]?.tailnetIp;
+	if (!ip) return { url: null, why: `${read.path}: the hub has no tailnetIp` };
+	return { url: `http://${ip}:${DATA_PORT}` };
 }
 
 /**

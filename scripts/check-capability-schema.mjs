@@ -45,9 +45,8 @@
  * @guards scripts/capability-probe.sh
  */
 import process from 'node:process';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { siteRoot } from './lib/paths.mjs';
+import { readFileSync } from 'node:fs';
+import { readPm2Hosts } from './lib/site-docs.mjs';
 import { loadManifest, manifestPath } from './lib/fleet-exec.mjs';
 import {
 	validateCapabilities,
@@ -286,35 +285,19 @@ function servicesFindings(m) {
 		}
 		declared.push(name);
 	}
-	let file = null;
-	try {
-		file = join(siteRoot(), 'scripts', 'pm2-hosts.json');
-	} catch (err) {
-		file = { reason: err.message.split('\n')[0] };
-	}
-	if (typeof file !== 'string' || !existsSync(file)) {
+	const read = readPm2Hosts();
+	if (!read.ok) {
 		if (declared.length)
 			finding(
 				'services-unverifiable',
 				null,
 				`${declared.join(', ')} declare services "pm2", and pm2-hosts.json could not be read ` +
-					`(${typeof file === 'string' ? `${file} does not exist` : file.reason}) — not confirmed.`
+					`(${read.why}) — not confirmed.`
 			);
 		return out;
 	}
-	let hosts;
-	let doc;
-	try {
-		doc = JSON.parse(readFileSync(file, 'utf8'));
-		hosts = Object.keys(doc.hosts ?? {}).filter((h) => h !== doc.hub);
-	} catch (err) {
-		finding(
-			'services-unverifiable',
-			null,
-			`${file} is unreadable (${err.message}) — not confirmed.`
-		);
-		return out;
-	}
+	const { doc, path: file } = read;
+	const hosts = Object.keys(doc.hosts ?? {}).filter((h) => h !== doc.hub);
 	for (const name of declared)
 		if (!hosts.includes(name))
 			finding(

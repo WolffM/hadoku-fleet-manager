@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseJsonStdout, spawnCapture, spawnJson } from './spawn-json.mjs';
+import { parseJsonStdout, spawnCapture, spawnJson, spawnJsonToFile } from './spawn-json.mjs';
 
 /**
  * `assert.throws` returns undefined, so the message — the whole point of this
@@ -124,4 +124,64 @@ test('a command that never starts says so, with the errno', () => {
 	);
 	assert.match(e.message, /never started/);
 	assert.match(e.message, /spawn error: ENOENT/);
+});
+
+// ── `spawnJsonToFile` (F6, plan §4.1) — async, never throws ─────────────────
+//
+// MUTATION: swap its `stdio: ['ignore', fd, 'pipe']` for `['ignore', 'pipe',
+// 'pipe']` (a plain pipe) and the large-payload test below goes red — a
+// 1,000,000-byte `process.stdout.write` followed immediately by
+// `process.exit` landed at 146,176 bytes through a pipe when this was
+// measured directly with `spawnSync`, and the same truncation reproduces
+// through async `spawn` for the same reason (`process.stdout` to a pipe is
+// asynchronous; `process.exit` does not wait for the write to land). A
+// file-backed fd makes the write synchronous, so this is the one case that
+// tells the file-vs-pipe fix apart from a helper that merely LOOKS the same.
+
+test('a large document survives whole — the file-vs-pipe fix, not assumed', async () => {
+	const n = 300_000;
+	const src = `process.stdout.write(JSON.stringify({marker:'m',pad:'x'.repeat(${n})})); process.exit(0);`;
+	const r = await spawnJsonToFile(process.execPath, ['-e', src]);
+	assert.equal(r.why, '');
+	assert.equal(r.doc?.marker, 'm');
+	assert.equal(
+		r.doc?.pad.length,
+		n,
+		'every byte of the payload arrived, not just a pipe-sized head'
+	);
+});
+
+test('a non-zero exit with parseable stdout is a finding, not a failure', async () => {
+	const r = await spawnJsonToFile(process.execPath, [
+		'-e',
+		'console.log(JSON.stringify({unreachable:["a"]})); process.exit(1);',
+	]);
+	assert.equal(r.code, 1);
+	assert.equal(r.why, '', 'parseable stdout wins over the exit code');
+	assert.deepEqual(r.doc, { unreachable: ['a'] });
+});
+
+test('unparseable stdout never collapses to a bare null — the exit, the parse error and the stderr tail all survive', async () => {
+	const r = await spawnJsonToFile(process.execPath, [
+		'-e',
+		'process.stderr.write("explains itself\\n"); process.stdout.write("not json"); process.exit(3);',
+	]);
+	assert.equal(r.doc, null);
+	assert.match(r.why, /exit 3/);
+	assert.match(r.why, /unparseable/);
+	assert.match(r.why, /explains itself/);
+});
+
+test('a command that never starts says so', async () => {
+	const r = await spawnJsonToFile('/nonexistent/definitely-not-a-command', []);
+	assert.equal(r.doc, null);
+	assert.match(r.why, /could not start/);
+});
+
+test('empty stdout is "no stdout", not an invented parse error', async () => {
+	const r = await spawnJsonToFile(process.execPath, ['-e', 'process.exit(7)']);
+	assert.equal(r.doc, null);
+	assert.match(r.why, /exit 7/);
+	assert.match(r.why, /no stdout/);
+	assert.doesNotMatch(r.why, /unparseable/);
 });

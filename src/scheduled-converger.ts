@@ -113,6 +113,23 @@ export function packageScriptPath(script: string): string {
  * Run one of this package's subcommand scripts with the HOST's manifest and
  * state directories, and read its `--json`. Its stdout goes to a file, because
  * a pipe loses everything past 8 KB from a child that prints and exits (#33).
+ *
+ * THE F6 "ONE SHAPE" TWIN. `scripts/lib/spawn-json.mjs`'s `spawnJsonToFile`
+ * (plan §4.1) is the same contract — file-backed capture, parseable stdout
+ * winning over the exit code, a parse failure that never collapses to a bare
+ * `null` with the reason dropped — built for `run-fleet-script.mjs` and
+ * `bootcamp.mjs`'s prove-job canary, which had no such guarantee before. This
+ * function is NOT re-implemented on top of it: `tsconfig.json` sets no
+ * `allowJs`, so `src/` cannot statically import a `.mjs` sibling, and a
+ * dynamic `import()` of it would have to run either eagerly at module load —
+ * the exact shape `src/cli.ts`'s `domainFor` comment records as JUST fixed on
+ * 2026-10-30, because one bad import there broke every subcommand, including
+ * crons that never call this path — or lazily inside every tick, trading a
+ * correct implementation for import() overhead and a second failure mode, for
+ * no behavioural gain. This copy was already the most complete of the four F6
+ * found (file-backed before any of the others, already carrying the reason,
+ * with its own `NODE_TEST_CONTEXT` guard) and is kept as a verified-matching
+ * TS twin rather than risked for the sake of one fewer file.
  */
 export function spawnScriptJson<T>(
 	script: string,

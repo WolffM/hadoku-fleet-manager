@@ -644,10 +644,30 @@ function run(argv0, argv, { captureJson = false } = {}) {
 	return { status: r.status ?? 1, text };
 }
 
-function safeJson(text) {
+/**
+ * `JSON.parse`, or `null` with the reason SAID rather than dropped (F6, plan
+ * §4.1 — this `catch {}` used to be empty, exactly the shape AGENTS.md's "no
+ * lazy shortcuts" warns against).
+ *
+ * Still returns a bare `null` on failure, not `{ok:false, why}`: its three
+ * call sites (`bootcampPhase`'s probe and judge reports, `benchmarkPhase`'s
+ * `benchmarkStep(safeJson(rep.text), node)`) are pinned by
+ * `onboarding-automation.test.mjs`'s literal-source guard and by
+ * `benchmarkStep`'s own `!report` check, neither of which this file owns —
+ * changing the return SHAPE here would silently change what both read. The
+ * reason is carried to stderr instead, where every one of this file's
+ * `run()` calls already prints the child's raw stdout right above it
+ * (`captureJson`'s `process.stdout.write(text)`), so an operator reading a
+ * failed chain sees both the document AND why it did not parse, never
+ * neither.
+ */
+export function safeJson(text) {
 	try {
 		return JSON.parse((text ?? '').trim());
-	} catch {
+	} catch (err) {
+		console.error(
+			`safeJson: stdout did not parse as JSON (${err instanceof Error ? err.message : String(err)})`
+		);
 		return null;
 	}
 }

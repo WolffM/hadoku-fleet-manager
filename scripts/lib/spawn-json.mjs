@@ -42,7 +42,10 @@
  * The status is therefore DIAGNOSIS, printed on every failure, not a verdict of
  * its own.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 /** How much of a child's stderr a failure message carries. */
 const STDERR_TAIL = 2000;
@@ -202,4 +205,87 @@ function indent(text) {
 		.split('\n')
 		.map((l) => `    | ${l}`)
 		.join('\n');
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * `spawnJsonToFile` — F6 (plan §4.1): ONE shape for "run a fleet subcommand
+ * and read its `--json`", async, never throwing.
+ * ---------------------------------------------------------------------------
+ * Before this, `scripts/lib/run-fleet-script.mjs`'s `runFleetScript` and
+ * `src/scheduled-converger.ts`'s `spawnScriptJson` were two independent
+ * copies of the same ~60 lines, and `scripts/provision-fleet.mjs`'s
+ * `safeJson` / `scripts/bootcamp.mjs`'s `runCanary` each parsed a captured
+ * child's stdout with their own ad hoc `try { JSON.parse } catch`.
+ *
+ * STDOUT GOES TO A FILE, NEVER A PIPE — measured, not assumed: a child doing
+ * `process.stdout.write(bigPayload); process.exit(0)` through a PIPE loses
+ * everything past a few hundred KB (reproduced here with plain `spawnSync`:
+ * a 1,000,000-byte write landed as 146,176), because `process.stdout` to a
+ * pipe is ASYNCHRONOUS and `process.exit()` does not wait for the write to
+ * land — this is `spawnCapture` above's own #45/#33 lesson, confirmed to
+ * apply here too. A FILE-backed fd makes Node's stdout writes synchronous,
+ * so by the time the child can call `process.exit()` the bytes are already
+ * on disk. `fleet prove-job --json`'s `evidence`/`findings` arrays are long
+ * enough that bootcamp's canary pipe (migrated here) was carrying exactly
+ * this risk uncaught.
+ *
+ * A NON-ZERO EXIT WITH PARSEABLE STDOUT IS NOT A FAILURE: `--json` is a
+ * contract (AGENTS.md), so parseable stdout wins over the exit code — `doc`
+ * is set whenever the file parses, regardless of `code`/`signal`.
+ *
+ * UNPARSEABLE NEVER COLLAPSES TO A BARE `null` WITH THE REASON DROPPED: `why`
+ * always carries the exit/signal/start-error, the parse error when there was
+ * output to fail on, and the stderr tail — the three facts a human needs to
+ * tell "the child crashed", "the child ran and printed garbage" and "the
+ * child was never reached" apart.
+ *
+ * @param {string} command
+ * @param {readonly string[]} args
+ * @param {{env?: NodeJS.ProcessEnv, timeoutMs?: number, stderrTailBytes?: number}} [options]
+ * @returns {Promise<{doc: unknown, code: number|null, signal: string|null, why: string}>}
+ */
+export function spawnJsonToFile(command, args, options = {}) {
+	const { env = process.env, timeoutMs, stderrTailBytes = 2000 } = options;
+	const dir = mkdtempSync(join(tmpdir(), 'fleet-spawn-json-'));
+	const outPath = join(dir, 'stdout.json');
+	const fd = openSync(outPath, 'w');
+	return new Promise((resolvePromise) => {
+		let stderr = '';
+		let settled = false;
+		const finish = (code, signal, startError) => {
+			if (settled) return;
+			settled = true;
+			closeSync(fd);
+			const text = readFileSync(outPath, 'utf8');
+			rmSync(dir, { recursive: true, force: true });
+			let doc = null;
+			let parseErr = '';
+			if (text.trim()) {
+				try {
+					doc = JSON.parse(text);
+				} catch (err) {
+					parseErr = err instanceof Error ? err.message : String(err);
+				}
+			}
+			const tail = stderr.trim().split('\n').slice(-3).join(' | ');
+			const why =
+				doc !== null
+					? ''
+					: `${startError ? `could not start: ${startError}` : `exit ${code ?? 'none'}${signal ? ` signal ${signal}` : ''}`}` +
+						`${parseErr ? `, unparseable (${parseErr})` : text.trim() ? '' : ', no stdout'}` +
+						`${tail ? ` — ${tail}` : ''}`;
+			resolvePromise({ doc, code, signal, why });
+		};
+		const child = spawn(command, args, {
+			env,
+			stdio: ['ignore', fd, 'pipe'],
+			...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
+		});
+		child.stderr?.on('data', (d) => {
+			stderr = (stderr + d.toString()).slice(-stderrTailBytes);
+		});
+		child.on('error', (err) => finish(null, null, err.message));
+		child.on('close', (code, signal) => finish(code, signal, null));
+	});
 }

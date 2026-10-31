@@ -44,15 +44,10 @@
   ],
   "F5": [],
   "F7-pm2-hosts": [
-    "scripts/check-capability-schema.mjs:declared#1",
     "scripts/lib/collect-offers.mjs:pm2Peers#1",
-    "scripts/lib/herdr-pm2.mjs:hostsDoc#1",
-    "scripts/lib/probe-script.mjs:url#1",
     "scripts/lib/service-tunnels.mjs:read#1"
   ],
   "F7-child-apps": [
-    "scripts/check-header-fleet.mjs:kids#1",
-    "scripts/check-mf-externals.mjs:reg#1",
     "scripts/lib/service-tunnels.mjs:read#1",
     "scripts/reconcile-fleet-runners.mjs:reg#1"
   ],

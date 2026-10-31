@@ -64,6 +64,7 @@ import { tryShipped, UnreadableRepo } from './lib/fleet-source.mjs';
 import { qualifyRepo } from '../dist/lib/fleet-config.js';
 import { blankComments } from './lib/blank-comments.mjs';
 import { crawlBundle, fetchText, judgeBuilt, siteOrigin } from './lib/mf-built.mjs';
+import { readChildApps } from './lib/site-docs.mjs';
 
 const REPO_ROOT = siteRoot();
 
@@ -413,15 +414,17 @@ async function builtFindings() {
 				msg: `no \`site:\` in ${REPO_ROOT}/astro.config.mjs — the deployed bundles could not be located, so none was checked`,
 			},
 		];
+	const reg = readChildApps({ root: REPO_ROOT });
 	let idByRepo;
-	try {
-		const reg = JSON.parse(readFileSync(resolve(REPO_ROOT, 'scripts/child-apps.json'), 'utf8'));
-		idByRepo = new Map((reg.apps ?? []).filter((a) => a.repoName).map((a) => [a.repoName, a.id]));
-	} catch (err) {
+	if (reg.ok) {
+		idByRepo = new Map(
+			(reg.doc.apps ?? []).filter((a) => a.repoName).map((a) => [a.repoName, a.id])
+		);
+	} else {
 		return [
 			{
 				repo: '(site)',
-				msg: `scripts/child-apps.json unreadable (${err.message}) — no deployed bundle was checked`,
+				msg: `scripts/child-apps.json unreadable (${reg.why}) — no deployed bundle was checked`,
 			},
 		];
 	}

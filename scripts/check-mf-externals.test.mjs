@@ -484,6 +484,7 @@ async function runBuilt({
 	registry,
 	files = {},
 	childApps = [{ id: 'clean', repoName: 'mf-clean' }],
+	writeChildApps = true,
 }) {
 	const fx = fixture();
 	const server = createServer((req, res) => {
@@ -510,10 +511,12 @@ async function runBuilt({
 			`export default { site: 'http://127.0.0.1:${server.address().port}' };\n`
 		);
 		mkdirSync(join(fx.siteRoot, 'scripts'), { recursive: true });
-		writeFileSync(
-			join(fx.siteRoot, 'scripts', 'child-apps.json'),
-			JSON.stringify({ apps: childApps })
-		);
+		if (writeChildApps) {
+			writeFileSync(
+				join(fx.siteRoot, 'scripts', 'child-apps.json'),
+				JSON.stringify({ apps: childApps })
+			);
+		}
 		return await new Promise((resolveRun) => {
 			execFile(
 				'node',
@@ -588,4 +591,28 @@ test('#111: a roster repo child-apps.json does not name fails rather than being 
 	const r = await runBuilt({ registry: CLEAN_REGISTRY, childApps: [] });
 	assert.equal(r.code, 1, r.out);
 	assert.match(r.out, /mf-clean: child-apps\.json names no app for this repo/);
+});
+
+// F7 (plan §4.1): child-apps.json itself missing — distinct from "present but
+// names nothing" above, and a path no existing fixture here drove before this
+// migration. The old `try { JSON.parse(readFileSync(...)) } catch (err)` ALSO
+// named the ENOENT (it was never a silent `{}` here), so this is a
+// BEHAVIOUR-PRESERVED check; the source-topology test right after it is what
+// actually goes red on a revert to that shape.
+test('#111: child-apps.json itself missing fails naming the reason, not an uncaught throw', async () => {
+	const r = await runBuilt({ registry: CLEAN_REGISTRY, writeChildApps: false });
+	assert.equal(r.code, 1, r.out);
+	assert.match(r.out, /\(site\): scripts\/child-apps\.json unreadable \(.*ENOENT/);
+});
+
+// F7's actual mutation witness: `builtFindings()` reads child-apps.json
+// through `readChildApps({root})`, not a bare `readFileSync`+`JSON.parse`.
+// MUTATION: put that bare read back and this goes red even though the
+// runtime test above still passes (see its own comment).
+test('#111: builtFindings reads child-apps.json through site-docs.mjs, not a bare readFileSync', () => {
+	const src = readFileSync(SCRIPT, 'utf8');
+	assert.match(src, /import \{ readChildApps \} from '\.\/lib\/site-docs\.mjs';/);
+	const fn = src.slice(src.indexOf('async function builtFindings'), src.indexOf('const regUrl'));
+	assert.match(fn, /readChildApps\(\{\s*root:\s*REPO_ROOT\s*\}\)/);
+	assert.doesNotMatch(fn, /readFileSync\(resolve\(REPO_ROOT, 'scripts\/child-apps\.json'\)/);
 });

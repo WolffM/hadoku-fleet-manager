@@ -9,19 +9,15 @@
  * more place for the rule to drift, and the checks would go on reading the
  * drivers' version.
  *
- * STDOUT GOES TO A FILE, NEVER A PIPE. A child that prints and then calls
- * `process.exit` into a pipe loses everything past 8 KB (#33), and a
- * fleet-wide `--json` from either driver is well past that.
- *
- * A NON-ZERO EXIT WITH PARSEABLE STDOUT IS NOT A CRASH. `--json` is a
- * contract here: the document wins over the exit code, and the caller judges
- * the per-machine result. `json` is null only when there was nothing to parse,
- * and `why` then says what the child reported instead.
+ * THE SPAWN+CAPTURE+PARSE ITSELF IS `spawn-json.mjs`'s `spawnJsonToFile` (F6,
+ * plan §4.1): stdout to a FILE, never a pipe (#33/#45), parseable stdout
+ * winning over a non-zero exit, and a parse failure that never collapses to a
+ * bare `null` with the reason dropped. This module is now a thin adapter onto
+ * that one shape, kept for its own external shape (`{code, signal, json,
+ * why}`) and its callers' defaults (a node script, a 15-minute ceiling, a
+ * 4000-byte stderr tail) rather than re-deriving them at every call site.
  */
-import { spawn } from 'node:child_process';
-import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { spawnJsonToFile } from './spawn-json.mjs';
 
 /**
  * @param {string} script absolute path to a `scripts/*.mjs` subcommand
@@ -29,45 +25,15 @@ import { join } from 'node:path';
  * @param {{ timeoutMs?: number, env?: NodeJS.ProcessEnv }} [opts]
  * @returns {Promise<{ code: number | null, signal: string | null, json: any, why: string }>}
  */
-export function runFleetScript(script, argv, { timeoutMs = 15 * 60_000, env = process.env } = {}) {
-	const dir = mkdtempSync(join(tmpdir(), 'fleet-script-'));
-	const outPath = join(dir, 'stdout.json');
-	const fd = openSync(outPath, 'w');
-	return new Promise((resolvePromise) => {
-		let stderr = '';
-		let settled = false;
-		const finish = (code, signal, startError) => {
-			if (settled) return;
-			settled = true;
-			closeSync(fd);
-			const stdout = readFileSync(outPath, 'utf8');
-			rmSync(dir, { recursive: true, force: true });
-			let json = null;
-			let parseError = '';
-			try {
-				json = stdout.trim() ? JSON.parse(stdout) : null;
-			} catch (err) {
-				parseError = err instanceof Error ? err.message : String(err);
-			}
-			const tail = stderr.trim().split('\n').slice(-3).join(' | ');
-			const why = startError
-				? `could not start: ${startError}`
-				: json !== null
-					? ''
-					: `exit ${code ?? 'none'}${signal ? ` signal ${signal}` : ''}, ` +
-						(parseError ? `stdout unparseable (${parseError})` : 'no stdout') +
-						(tail ? ` — ${tail}` : '');
-			resolvePromise({ code, signal, json, why });
-		};
-		const child = spawn(process.execPath, [script, ...argv], {
-			env,
-			stdio: ['ignore', fd, 'pipe'],
-			timeout: timeoutMs,
-		});
-		child.stderr.on('data', (d) => {
-			stderr = (stderr + d.toString()).slice(-4000);
-		});
-		child.on('error', (err) => finish(null, null, err.message));
-		child.on('close', (code, signal) => finish(code, signal, null));
+export async function runFleetScript(
+	script,
+	argv,
+	{ timeoutMs = 15 * 60_000, env = process.env } = {}
+) {
+	const { doc, code, signal, why } = await spawnJsonToFile(process.execPath, [script, ...argv], {
+		env,
+		timeoutMs,
+		stderrTailBytes: 4000,
 	});
+	return { code, signal, json: doc, why };
 }

@@ -39,7 +39,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -354,6 +354,46 @@ test('#98: an unreadable catalogue is reported ONCE, against the hub — it used
 	} finally {
 		cleanup(fx);
 	}
+});
+
+// F7 (plan §4.1): categories.json readable, child-apps.json specifically
+// missing — the one line this migration touched, isolated from the "the
+// whole hub is unreadable" case above. `catalogue()`'s outer try/catch
+// already degraded this to `readable: false` under the OLD
+// `JSON.parse(readFile(...))` shape too (`readFile` returns `null` on a miss,
+// `JSON.parse(null)` is the JS value `null`, and `null.apps` throws) — so this
+// is a BEHAVIOUR-PRESERVED check, not a mutation witness; the test below it
+// (source topology) is what actually goes red on a revert to that shape.
+test('#98: categories.json readable, child-apps.json missing, is still catalogue-unreadable', () => {
+	const fx = appFixture({}, { hub: false });
+	try {
+		makeRepo(fx, 'hadoku_site', {
+			'spec/categories.json': JSON.stringify({
+				categories: [{ apps: [{ id: 'appx', label: 'App X' }] }],
+			}),
+		});
+		makeRepo(fx, APP, CLEAN_APP);
+		const { code, out } = run(fx);
+		const doc = JSON.parse(out);
+		const blind = findingsFor(doc, 'hadoku_site');
+		assert.equal(blind.length, 1, out);
+		assert.equal(blind[0].rule, 'catalogue-unreadable');
+		assert.equal(code, 1);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+// F7's actual mutation witness: `catalogue()` reads child-apps.json through
+// `readChildApps({read})`, not a bare `JSON.parse`. MUTATION: put
+// `JSON.parse(readFile(site, 'scripts/child-apps.json'))` back and this goes
+// red even though the runtime test above still passes (see its own comment).
+test('#98: the catalogue reads child-apps.json through site-docs.mjs, not a bare JSON.parse', () => {
+	const src = readFileSync(SCRIPT, 'utf8');
+	assert.match(src, /import \{ readChildApps \} from '\.\/lib\/site-docs\.mjs';/);
+	const fn = src.slice(src.indexOf('function catalogue()'), src.indexOf('// ---- the catalogue'));
+	assert.match(fn, /readChildApps\(\{\s*read:\s*\(file\)\s*=>\s*readFile\(site,\s*file\)\s*\}\)/);
+	assert.doesNotMatch(fn, /JSON\.parse\(readFile\(site, 'scripts\/child-apps\.json'\)\)/);
 });
 
 // fleet-manager#4: hadoku-cardtable owns cardtable AND cardtable-ppe, and only

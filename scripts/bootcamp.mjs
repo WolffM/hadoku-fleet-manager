@@ -133,7 +133,7 @@
  */
 import { canaryPlan, OWN_DRAIN_REASON_PREFIX, underIdleHold } from './lib/proof-drain.mjs';
 import { carryMeasurements, measuredValue, parseLoad } from './lib/idle-measure.mjs';
-import { execFileSync } from 'node:child_process';
+import { spawnJsonToFile } from './lib/spawn-json.mjs';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -964,28 +964,27 @@ async function runCanary(name, id) {
 				reason: `never went quiet: ${wait.reason ?? 'timed out'}`,
 			};
 		}
-		let doc = null;
-		try {
-			const stdout = execFileSync(
-				process.execPath,
-				[PROVE_JOB_SCRIPT, '--node', name, '--capability', id, '--json', '--under-own-drain'],
-				{ encoding: 'utf8', timeout: 45 * 60_000, stdio: ['ignore', 'pipe', 'pipe'] }
-			);
-			doc = JSON.parse(stdout);
-		} catch (e) {
-			// `prove-job.mjs` exits non-zero for everything but a pass, and ALWAYS
-			// prints its one JSON document first — see its own header. `e.stdout`
-			// still carries it; only a truly unparseable run has none.
-			try {
-				doc = JSON.parse(String(e.stdout ?? ''));
-			} catch {
-				return {
-					node: name,
-					capability: id,
-					status: 'error',
-					reason: `fleet prove-job did not produce JSON: ${e.message}`,
-				};
-			}
+		// STDOUT TO A FILE, NEVER A PIPE (F6, #33): `fleet prove-job`'s `evidence`
+		// and `findings` arrays are long enough that the old `execFileSync` pipe
+		// capture here measurably lost data on a large doc (reproduced: a plain
+		// 1,000,000-byte child write landed as 146,176 through a pipe, intact
+		// through a file). `spawnJsonToFile` also drops the throw/catch dance:
+		// `prove-job.mjs` exits non-zero for everything but a pass and ALWAYS
+		// prints its one JSON document first, and parseable stdout wins over the
+		// exit code regardless of how the child ended.
+		const run = await spawnJsonToFile(
+			process.execPath,
+			[PROVE_JOB_SCRIPT, '--node', name, '--capability', id, '--json', '--under-own-drain'],
+			{ timeoutMs: 45 * 60_000 }
+		);
+		const doc = run.doc;
+		if (doc === null) {
+			return {
+				node: name,
+				capability: id,
+				status: 'error',
+				reason: `fleet prove-job did not produce JSON: ${run.why}`,
+			};
 		}
 		// An inconclusive canary (it never ran on the node) recorded nothing and
 		// is NOT a fail — see `proofConclusive` in src/runners/prove-job.ts.

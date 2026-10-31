@@ -134,6 +134,7 @@ import { READ_ATTEMPTS } from './lib/queue-health.mjs';
 import { blankComments } from './lib/blank-comments.mjs';
 import { stripYamlComments } from './lib/yaml-comments.mjs';
 import { manifest as manifestFile, siteRoot } from './lib/paths.mjs';
+import { readChildApps } from './lib/site-docs.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { fleetOwner, hubRepo, qualifyRepo } from '../dist/lib/fleet-config.js';
 
@@ -700,12 +701,17 @@ function catalogue() {
 	try {
 		const cats = JSON.parse(readFile(site, 'spec/categories.json'));
 		for (const c of cats.categories ?? []) for (const a of c.apps ?? []) labels.set(a.id, a.label);
-		const kids = JSON.parse(readFile(site, 'scripts/child-apps.json'));
+		// F7 (plan §4.1): `read` replaces path resolution entirely — `site` is a
+		// ref-pinned handle (the hub's shipped branch, or the working copy under
+		// --worktree), never a plain siteRoot() directory; see this function's
+		// own header for why that ref has to match the child repos being audited.
+		const kids = readChildApps({ read: (file) => readFile(site, file) });
+		if (!kids.ok) throw new Error(kids.why);
 		// A repo may own SEVERAL ids — a PPE twin, a worker, a tunnel — and only
 		// one of them need have a tile. Last-wins kept whichever row came last:
 		// hadoku-cardtable's cardtable-ppe row (2026-10-23) shadowed cardtable
 		// and reported the repo uncatalogued every night (fleet-manager#4).
-		for (const a of kids.apps ?? []) {
+		for (const a of kids.doc.apps ?? []) {
 			if (!a.repoName) continue;
 			if (!repoToId.has(a.repoName)) repoToId.set(a.repoName, []);
 			repoToId.get(a.repoName).push(a.id);

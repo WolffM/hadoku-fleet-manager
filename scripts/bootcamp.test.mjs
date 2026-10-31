@@ -1295,6 +1295,45 @@ test('--prove --due <n> skips a node with an existing FRESH pass — "not due ye
 	}
 });
 
+// ── the canary's capture is file-based, not a pipe (F6, #33) ───────────────
+//
+// `runCanary` is not exported (bootcamp.mjs is a CLI, not a library) and the
+// comment above this block already explains why a real drain + a real
+// prove-job subprocess is not re-driven from this fixture: it would stand up
+// a second copy of that machinery. The CORRECTNESS of the file-vs-pipe fix is
+// proven directly against the shared helper in `spawn-json.test.mjs`
+// ("a large document survives whole"); this is the TOPOLOGY half — that
+// `runCanary` actually calls through that helper, with the same argv and
+// ceiling the old `execFileSync` call used, so a revert to the pipe-capturing
+// shape is caught here even though no fixture drives a real canary this big.
+test('the canary reads fleet prove-job through spawnJsonToFile, not a pipe', () => {
+	const src = readFileSync(join(SCRIPTS, 'bootcamp.mjs'), 'utf8');
+	assert.match(src, /import \{ spawnJsonToFile \} from '\.\/lib\/spawn-json\.mjs';/);
+	assert.ok(
+		!src.includes("from 'node:child_process'"),
+		'execFileSync is no longer imported at all'
+	);
+	const canary = src.slice(
+		src.indexOf('async function runCanary'),
+		src.indexOf('async function proveWorkloads')
+	);
+	assert.doesNotMatch(
+		canary,
+		/execFileSync\(/,
+		'the prove-job spawn must not go back to a pipe-capturing execFileSync call'
+	);
+	assert.match(
+		canary,
+		/spawnJsonToFile\(\s*process\.execPath,\s*\[PROVE_JOB_SCRIPT, '--node', name, '--capability', id, '--json', '--under-own-drain'\],\s*\{ timeoutMs: 45 \* 60_000 \}\s*\)/,
+		'the same argv and 45-minute ceiling the old execFileSync call used'
+	);
+	assert.match(
+		canary,
+		/doc === null/,
+		'parseable stdout — not the exit code — decides the outcome'
+	);
+});
+
 // ---------------------------------------------------------------------------
 // IDLE-ONLY MEASUREMENTS ARE TAKEN IDLE, OR NOT AT ALL (2026-10-10).
 //

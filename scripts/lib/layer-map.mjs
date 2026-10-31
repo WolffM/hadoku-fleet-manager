@@ -195,6 +195,7 @@ export const LAYER_MAP = [
 	{ glob: 'scripts/lib/session-index.mjs', layer: 'access' },
 	{ glob: 'scripts/lib/spawn-json.mjs', layer: 'access' },
 	{ glob: 'scripts/lib/run-fleet-script.mjs', layer: 'access' },
+	{ glob: 'scripts/lib/site-docs.mjs', layer: 'access' },
 	{ glob: 'scripts/lib/node-users-facet.mjs', layer: 'access' },
 	{ glob: 'scripts/node-users.mjs', layer: 'access' },
 	// Commits a manifest edit onto hadoku_site's main — another system's repo.

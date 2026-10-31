@@ -39,10 +39,41 @@ const {
 	VERIFY,
 	bootcampProbeArgs,
 	verifyStepArgs,
+	safeJson,
 } = await import('./provision-fleet.mjs');
 
 const made = [];
 after(() => made.forEach((d) => rmSync(d, { recursive: true, force: true })));
+
+// ── safeJson (F6, plan §4.1) ─────────────────────────────────────────────────
+//
+// The `catch {}` used to be empty — a parse failure vanished with no trace at
+// all. It still returns a bare `null` on failure (its three call sites are
+// pinned elsewhere, by `onboarding-automation.test.mjs`'s literal-source
+// guard and by `benchmarkStep`'s own `!report` check), but the reason is no
+// longer silently dropped: it goes to stderr. MUTATION: put the empty
+// `catch {}` back and the second test below goes red (nothing on stderr).
+
+test('safeJson parses, same as before', () => {
+	assert.deepEqual(safeJson('{"ok":true}'), { ok: true });
+	assert.equal(safeJson(''), null);
+	assert.equal(safeJson(undefined), null);
+});
+
+test('safeJson on unparseable text still returns null, but says WHY on stderr', () => {
+	const originalError = console.error;
+	const lines = [];
+	console.error = (...args) => lines.push(args.join(' '));
+	try {
+		const v = safeJson('not json at all');
+		assert.equal(v, null, 'the return shape at this call site is unchanged');
+	} finally {
+		console.error = originalError;
+	}
+	assert.equal(lines.length, 1, 'the parse failure is reported exactly once, not swallowed');
+	assert.match(lines[0], /safeJson/);
+	assert.match(lines[0], /did not parse as JSON/);
+});
 
 // ── seedPlan ─────────────────────────────────────────────────────────────────
 

@@ -25,6 +25,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runOn } from './fleet-exec.mjs';
 import { deploySiteRoot } from './manifest-target.mjs';
+import { readPm2Hosts } from './site-docs.mjs';
 
 /**
  * Runs on the pm2 host. The reducer is node because pm2 is: a host with pm2
@@ -82,7 +83,11 @@ export function readPlacement(root = deploySiteRoot()) {
 			throw new Error(`${path}: ${e.code ?? e.message}`, { cause: e });
 		}
 	};
-	const hostsDoc = read('scripts/pm2-hosts.json');
+	// F7 (plan §4.1): the DEPLOYED tree on purpose, named explicitly here — this
+	// is the one site-docs.mjs caller that must never default to siteRoot().
+	const hosts = readPm2Hosts({ root });
+	if (!hosts.ok) throw new Error(hosts.why);
+	const hostsDoc = hosts.doc;
 	const config = read('services/mgmt-api/deploy-config.json');
 	const hub = hostsDoc.hub;
 	if (!hub || !hostsDoc.hosts?.[hub])
