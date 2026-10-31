@@ -51,19 +51,16 @@ import { join } from 'node:path';
 const STDERR_TAIL = 2000;
 
 /**
- * Node's default `maxBuffer` for a synchronous child, and the size a pipe
- * truncates at when a script prints and then calls `process.exit` (#33). Both
- * are worth naming in a message rather than leaving the reader to recognise a
- * number.
- */
-const PIPE_CLIFF = 8192;
-
-/**
  * Spawn a child and capture everything about how it ended.
  *
  * `spawnSync` rather than `execFileSync` on purpose: it reports a kill and a
  * failure-to-start as DATA (`signal`, `error`) instead of as an exception whose
  * fields differ by failure mode, so there is one shape to read.
+ *
+ * STDOUT GOES TO A FILE, as in `spawnJsonToFile` below (fleet-manager#33): a
+ * child that writes 1,000,000 bytes and calls `process.exit` arrived through
+ * this function's pipe as 146,176, because Node's stdout to a pipe is
+ * asynchronous and exit does not wait for it. To a file it is synchronous.
  *
  * @param {string} command
  * @param {readonly string[]} args
@@ -73,17 +70,27 @@ const PIPE_CLIFF = 8192;
 export function spawnCapture(command, args, options = {}) {
 	const { env, timeout, cwd, input, label } = options;
 	const name = label ?? `${command} ${args.join(' ')}`.trim();
+	const dir = mkdtempSync(join(tmpdir(), 'fleet-spawn-capture-'));
+	const outPath = join(dir, 'stdout');
+	const fd = openSync(outPath, 'w');
 	const started = Date.now();
-	const r = spawnSync(command, [...args], {
-		encoding: 'utf8',
-		stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-		...(input === undefined ? {} : { input }),
-		...(env === undefined ? {} : { env }),
-		...(cwd === undefined ? {} : { cwd }),
-		...(timeout === undefined ? {} : { timeout }),
-	});
+	let r;
+	let out;
+	try {
+		r = spawnSync(command, [...args], {
+			encoding: 'utf8',
+			stdio: [input === undefined ? 'ignore' : 'pipe', fd, 'pipe'],
+			...(input === undefined ? {} : { input }),
+			...(env === undefined ? {} : { env }),
+			...(cwd === undefined ? {} : { cwd }),
+			...(timeout === undefined ? {} : { timeout }),
+		});
+	} finally {
+		closeSync(fd);
+		out = readFileSync(outPath, 'utf8');
+		rmSync(dir, { recursive: true, force: true });
+	}
 	const elapsedMs = Date.now() - started;
-	const out = r.stdout ?? '';
 	const err = r.stderr ?? '';
 
 	// A corpse or a no-show. Neither has an exit status, so there is nothing a
@@ -103,8 +110,8 @@ export function spawnCapture(command, args, options = {}) {
 		);
 	}
 	if (r.error) {
-		// It ran and still errored — ENOBUFS is the one that matters, because the
-		// output is then truncated and the parse below would blame the payload.
+		// It ran and still errored — ENOBUFS on stderr is the one that matters,
+		// because a parse below would otherwise blame the payload.
 		throw new Error(
 			describe(name, 'failed while running', {
 				code: r.status,
@@ -183,11 +190,6 @@ function describe(name, what, { code, signal, elapsedMs, timeoutMs, out, err, sp
 		lines.push(`  spawn error: ${spawnError.code ?? ''} ${spawnError.message}`.trimEnd());
 	}
 	lines.push(`  stdout: ${out.length} bytes${out.length === 0 ? ' (empty)' : ''}`);
-	if (out.length === PIPE_CLIFF) {
-		lines.push(
-			`  -> exactly ${PIPE_CLIFF} bytes is the pipe cliff (#33), not a payload that ends there`
-		);
-	}
 	if (out.length > 0) {
 		lines.push(`  stdout (first 200): ${JSON.stringify(out.slice(0, 200))}`);
 	}

@@ -126,6 +126,16 @@ test('a command that never starts says so, with the errno', () => {
 	assert.match(e.message, /spawn error: ENOENT/);
 });
 
+// MUTATION (fleet-manager#33): give `spawnCapture` back a stdout `'pipe'` and
+// this goes red at 146,176 of 1,000,000 bytes, the measurement in the issue.
+test('spawnCapture keeps a large stdout whole when the child exits right after writing', () => {
+	const n = 1_000_000;
+	const src = `process.stdout.write(JSON.stringify({marker:'m',pad:'x'.repeat(${n})})); process.exit(0);`;
+	const doc = spawnJson(process.execPath, ['-e', src], { label: 'a large document' });
+	assert.equal(doc.marker, 'm');
+	assert.equal(doc.pad.length, n, 'every byte arrived, not a pipe-sized head');
+});
+
 // ── `spawnJsonToFile` (F6, plan §4.1) — async, never throws ─────────────────
 //
 // MUTATION: swap its `stdio: ['ignore', fd, 'pipe']` for `['ignore', 'pipe',
