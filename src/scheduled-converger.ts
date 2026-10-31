@@ -49,6 +49,7 @@ import {
 	scheduleRepeating,
 	type Verdict,
 } from './lib/job-runner.js';
+import { assertRegisteredClock } from './lib/job-registry.js';
 
 /**
  * `ConvergeDoc`/`ConvergeRow` moved to `fleet-report-types.ts` beside
@@ -71,8 +72,16 @@ export interface ConvergeTickSummary {
 
 /** What one converger is: its name, its file, its clock and its words. */
 export interface ConvergerConfig<R extends ConvergeRow = ConvergeRow> {
-	/** The log tag, alert source and job-sink name, e.g. `provisioning`. */
+	/** The log tag and alert source, e.g. `provisioning`. */
 	name: string;
+	/**
+	 * Its `JOB_REGISTRY` row, e.g. `fleet:converge-provisioning`: the name the
+	 * job sink, the liveness heartbeat and the run history know it by. Not
+	 * `name`: monitoring-api refuses a job name that is not `worker:job`, and
+	 * every record from these loops was refused for that from 0.34.236 until
+	 * the registry name was used (fleet-manager#35).
+	 */
+	job: string;
 	/** Its state file under stateDir. */
 	stateFile: string;
 	intervalMs: number;
@@ -198,6 +207,7 @@ export function spawnScriptJson<T>(
 export function createConverger<R extends ConvergeRow = ConvergeRow>(
 	cfg: ConvergerConfig<R>
 ): Converger<R> {
+	assertRegisteredClock(cfg.job, cfg.intervalMs);
 	const tag = `[${cfg.name}]`;
 	const statePath = (): string => join(stateDir(), cfg.stateFile);
 
@@ -274,7 +284,7 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 			writeState(state);
 			await finishTick({
 				intervalMs: cfg.intervalMs,
-				jobName: cfg.name,
+				jobName: cfg.job,
 				now,
 				verdict: classifyMissingDoc(why),
 				durationMs: Date.now() - startedAt,
@@ -331,7 +341,7 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 		writeState(state);
 		await finishTick({
 			intervalMs: cfg.intervalMs,
-			jobName: cfg.name,
+			jobName: cfg.job,
 			now,
 			verdict: classify(doc),
 			durationMs: Date.now() - startedAt,
@@ -364,7 +374,7 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 		logger.info(
 			`${tag} converger every ${cfg.intervalMs / 60_000} min, next in ${Math.round(firstIn / 60_000)} min`
 		);
-		scheduled = scheduleRepeating(firstIn, cfg.intervalMs, pass, cfg.name);
+		scheduled = scheduleRepeating(firstIn, cfg.intervalMs, pass, cfg.job);
 	}
 
 	function stopForTesting(): void {

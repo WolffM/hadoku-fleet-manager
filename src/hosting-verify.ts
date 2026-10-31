@@ -22,7 +22,8 @@ import { packageScriptPath, spawnScriptJson, createConverger } from './scheduled
 import type { ConvergeDoc, ConvergeRunner } from './scheduled-converger.js';
 
 /** Hourly, paging daily, silent after 3 h: `fleet:hosting-verify`'s row in the job registry. */
-const CLOCK = inProcessClock('fleet:hosting-verify');
+const JOB = 'fleet:hosting-verify';
+const CLOCK = inProcessClock(JOB);
 /** Not in the boot window, when the fast loop probes every node. */
 const FIRST_PASS_MIN_MS = 10 * 60_000;
 /** A check of every slice, then a re-assert of each that drifted. */
@@ -33,6 +34,7 @@ export const runHostingVerifyScript: ConvergeRunner = () =>
 
 const converger = createConverger({
 	name: 'hosting-verify',
+	job: JOB,
 	stateFile: 'hosting-verify.json',
 	...CLOCK,
 	firstPassMinMs: FIRST_PASS_MIN_MS,

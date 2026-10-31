@@ -39,6 +39,7 @@ export const runHostingConvergeScript: ConvergeRunner = () =>
 
 const converger = createConverger({
 	name: 'hosting',
+	job: 'fleet:hosting-converge',
 	stateFile: 'hosting-converge.json',
 	intervalMs: HOSTING_CONVERGE_MS,
 	deferPageMs: HOSTING_DEFER_PAGE_MS,

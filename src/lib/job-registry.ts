@@ -827,6 +827,20 @@ export function inProcessClock(name: string): {
 	};
 }
 
+/**
+ * THROWS unless `name` is an in-process row whose clock is `intervalMs`. A
+ * loop calls this when it is built, so a job that reports under a name the
+ * registry does not hold, or ticks on a clock the registry does not declare,
+ * fails at load instead of in the job sink (fleet-manager#35).
+ */
+export function assertRegisteredClock(name: string, intervalMs: number): void {
+	const declared = inProcessClock(name).intervalMs;
+	if (declared !== intervalMs)
+		throw new Error(
+			`job-registry: ${name} ticks every ${intervalMs}ms, its row declares ${declared}ms`
+		);
+}
+
 /** Every `sub` this registry discharges, directly or through `coversSubs`. */
 export function registeredSubs(entries: readonly JobEntry[] = JOB_REGISTRY): Set<string> {
 	const out = new Set<string>();

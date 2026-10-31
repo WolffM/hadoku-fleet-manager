@@ -19,7 +19,8 @@ import { packageScriptPath, spawnScriptJson, createConverger } from './scheduled
 import type { ConvergeDoc, ConvergeRunner } from './scheduled-converger.js';
 
 /** Daily, reminding monthly: `fleet:backstop-tools`'s row in the job registry. */
-const CLOCK = inProcessClock('fleet:backstop-tools');
+const JOB = 'fleet:backstop-tools';
+const CLOCK = inProcessClock(JOB);
 const FIRST_PASS_MIN_MS = 15 * 60_000;
 const RUN_TIMEOUT_MS = 2 * 60_000;
 
@@ -28,6 +29,7 @@ export const runBackstopToolsScript: ConvergeRunner = () =>
 
 const converger = createConverger({
 	name: 'backstop-tools',
+	job: JOB,
 	stateFile: 'backstop-tools.json',
 	...CLOCK,
 	firstPassMinMs: FIRST_PASS_MIN_MS,

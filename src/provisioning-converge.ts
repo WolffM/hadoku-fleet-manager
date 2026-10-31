@@ -91,6 +91,7 @@ export const runConvergeScript: ConvergeRunner = () =>
 
 const converger = createConverger<ConvergeRow>({
 	name: 'provisioning',
+	job: 'fleet:converge-provisioning',
 	stateFile: 'provisioning-converge.json',
 	intervalMs: PROVISIONING_CONVERGE_MS,
 	deferPageMs: DEFER_PAGE_MS,

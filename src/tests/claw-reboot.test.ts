@@ -161,14 +161,15 @@ void test('the real runner refuses under node --test, and points at the packaged
 });
 
 void test('job-runner.ts classify: ok/findings report succeeded, unavailable/broke report failed', async () => {
-	const sink: { jobState: string; verdict: unknown }[] = [];
+	const sink: { jobName: string; jobState: string; verdict: unknown }[] = [];
 	__setHostForTesting({
 		...testHost,
 		logger: { info() {}, warn() {}, error() {} },
 		alerts: { post: async () => ({ posted: true, sinkRecorded: true }), recordQuietly() {} },
 		jobs: {
-			async recordJobResult(_jobName, jobState, _durationMs, opts) {
+			async recordJobResult(jobName, jobState, _durationMs, opts) {
 				sink.push({
+					jobName,
 					jobState,
 					verdict: (opts?.data as Record<string, unknown> | undefined)?.verdict,
 				});
@@ -200,9 +201,9 @@ void test('job-runner.ts classify: ok/findings report succeeded, unavailable/bro
 	await clawRebootTick(runner(null, 'exit 1, no report'), T0);
 
 	assert.deepEqual(sink, [
-		{ jobState: 'succeeded', verdict: 'ok' },
-		{ jobState: 'succeeded', verdict: 'findings' },
-		{ jobState: 'failed', verdict: 'unavailable' },
-		{ jobState: 'failed', verdict: 'broke' },
+		{ jobName: 'fleet:reboot-claws', jobState: 'succeeded', verdict: 'ok' },
+		{ jobName: 'fleet:reboot-claws', jobState: 'succeeded', verdict: 'findings' },
+		{ jobName: 'fleet:reboot-claws', jobState: 'failed', verdict: 'unavailable' },
+		{ jobName: 'fleet:reboot-claws', jobState: 'failed', verdict: 'broke' },
 	]);
 });

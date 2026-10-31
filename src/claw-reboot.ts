@@ -50,6 +50,7 @@ import {
 	scheduleRepeating,
 	type Verdict,
 } from './lib/job-runner.js';
+import { assertRegisteredClock } from './lib/job-registry.js';
 import { packageScriptPath, spawnScriptJson } from './scheduled-converger.js';
 
 /** Between passes. A pass with nothing to do is one ssh per claw. */
@@ -68,8 +69,9 @@ export const REPAGE_MS = 24 * 60 * 60_000;
  */
 const RUN_TIMEOUT_MS = 100 * 60_000;
 const SELF_KEY = 'reboot-cycle';
-/** The job-sink name (also the Discord alert source, as before). */
-const JOB_NAME = 'reboot';
+/** Its `JOB_REGISTRY` row: the job-sink, liveness and run-history name (fleet-manager#35). */
+const JOB_NAME = 'fleet:reboot-claws';
+assertRegisteredClock(JOB_NAME, CLAW_REBOOT_MS);
 
 export interface RebootNode {
 	node: string;
