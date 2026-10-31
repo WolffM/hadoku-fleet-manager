@@ -605,6 +605,18 @@ export const LAYER_MAP = [
 	// Wave 5j lane B: the warm-orphan GateDoc classifier, pulled out for the
 	// same reason throttle-drift-doc.mjs above was — same layer.
 	{ glob: 'scripts/lib/warm-orphan-doc.mjs', layer: 'domain', domain: 'observation', part: 'core' },
+	// Split #8 (wave 5k lane A, pure move): check-identity-model.mjs's G1..G8
+	// rules, repo/file discovery and scanRepo orchestration, plus the generic
+	// text-parsing primitives they read through. Same bucket as the CLI they
+	// were cut from — "observation: check-*" — since cut (iii) treats
+	// observation as one flat layer and core/run does not gate it there.
+	{ glob: 'scripts/lib/identity-rules.mjs', layer: 'domain', domain: 'observation', part: 'core' },
+	{
+		glob: 'scripts/lib/identity-source-parse.mjs',
+		layer: 'domain',
+		domain: 'observation',
+		part: 'core',
+	},
 
 	// Directory-level fallbacks, LAST: everything under src/runners/* or
 	// scripts/check-*.mjs not named explicitly above falls through to these.
