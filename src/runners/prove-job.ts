@@ -14,6 +14,12 @@
  * recipe: "the whole point of this system is for fleet-manager to provision my
  * claws". This is that recipe, built on the machinery that already mints.
  *
+ * ANY NODE THE DISPATCHER MINTS ON — an ephemeral claw or the on-demand
+ * backstop (`mintsJitRunners`). The backstop's proof runner takes its unit cap
+ * from `backstopUnitMemoryMaxMb`, exactly as the dispatcher's mints there do.
+ * (The backstop, called `guest` until 2026-10-31, was proved through its
+ * standing registration instead; that mode is gone.)
+ *
  * WHAT IS REUSED, AND THE ONE SEAM
  * --------------------------------
  * The mint is `mintEphemeralRunner` — slot preparation, `generate-jitconfig`,
@@ -39,8 +45,8 @@
  *
  * THE RACE, HONESTLY
  * ------------------
- * Two runners match, GitHub picks. There is no way to direct it (hokon is a
- * guest and is never touched), so: dispatch, read the job's `runner_name` from
+ * Two runners match, GitHub picks. There is no way to direct an unaimed job,
+ * so: dispatch, read the job's `runner_name` from
  * the API, and if it was not ours cancel that run and try again — up to a hard
  * cap. A job that concluded `success` on the WRONG runner is a `lost-race`,
  * never a pass. `ranOnTarget` is read from the job object and from nothing else.
@@ -52,33 +58,6 @@
  * runs on every path including abort, and what it could not verify is a finding
  * of its own: a leaked registration is a runner GitHub will schedule onto with
  * nothing behind it.
- *
- * STANDING MODE — A GUEST'S OWN RUNNER (2026-10-10)
- * -------------------------------------------------
- * "lets have hokon earn it now" (operator, 2026-10-10). hokon is a GUEST: no
- * JIT mint, no ssh, no drain, ever. In production it would run jdk21 work on
- * its STANDING per-repo registration (named after the node, a systemd --user
- * unit under ~/runners, labels synced by runner-health's backstop) — so a JIT
- * proof minted there would test a path production never takes, in a different
- * environment. Standing mode proves the registration production uses instead,
- * through the GitHub API ALONE:
- *
- *   - only with `includeGuests` (CLI `--include-guests`), which is valid only
- *     for a guest node; without it every guest refusal stands unchanged.
- *   - the registration named exactly like the node, online, in the canary repo.
- *     Offline is the only admission refusal: production work is never stopped.
- *   - the proof label is ADDED to it (additive POST — the backstop's own label
- *     writes are additive POST / targeted DELETE too, so neither erases the
- *     other) and the aimed canary is dispatched with `runs_on` =
- *     `["self-hosted", <proof label>]`: only that registration can take it.
- *   - the label is REMOVED on every path and the removal VERIFIED from the API;
- *     a removal that fails is a teardown finding. A leftover label routes
- *     nothing, but an unreported one is how state drifts.
- *   - the runner may be busy with production work, so the job may queue. That
- *     is not charged: `durationSec` is the job's own `started_at`→`completed_at`
- *     and the job timeout starts at assignment.
- *   - `sh` is never called. The transport keeps refusing guests; nothing here
- *     needed it opened.
  *
  * PURE ORCHESTRATION OVER INJECTED PORTS. `gh`, `sh`, the clock and the sleeper
  * are parameters, so the order of operations — where the leaks live — is tested
@@ -94,11 +73,12 @@ import {
 import { judgeWorkloadProof, proofBudget } from '../lib/workload-gate.js';
 import { nodeOffer } from '../lib/capability-offer.js';
 import type { ProofRecord } from '../lib/measured.js';
-import { isGuestNode } from '../lib/node-role.js';
+import { mintsJitRunners, mintsOnDemand } from '../lib/node-role.js';
 import {
 	JIT_PREFIX,
 	JIT_UNIT_MAX_SEC,
 	admitMint,
+	backstopUnitMemoryMaxMb,
 	jitRunnerName,
 	slotDir,
 	unitMemoryMaxMb,
@@ -153,12 +133,6 @@ export interface ProveSpec {
 	runsOnInput?: string;
 	/** Dispatch on a throwaway `canary/<node>-<nonce>` branch at `ref`'s head — see `JobProof.scratchBranch`. */
 	scratchBranch?: boolean;
-	/**
-	 * The operator's explicit opt-in to prove a GUEST, through its standing
-	 * registration (see the header). Valid only for a guest node: on a claw it is
-	 * refused, and without it a guest is refused exactly as before.
-	 */
-	includeGuests?: boolean;
 	maxAttempts?: number;
 	/** Tear down a proof runner a previous (crashed) run left LIVE, instead of refusing. */
 	reapStale?: boolean;
@@ -204,14 +178,6 @@ export interface ProofAttempt {
 	note?: string;
 }
 
-/** Standing mode: the proof label added to a standing registration, and whether it is gone again. */
-export interface LabelTeardown {
-	runner: string;
-	runnerId: number;
-	label: string;
-	removed: boolean;
-}
-
 export interface RunnerTeardown {
 	name: string;
 	unitStopped: boolean;
@@ -228,15 +194,11 @@ export interface ProofResult {
 	workflow: string;
 	job: string;
 	ref: string;
-	/** `jit`: a minted proof runner. `standing`: a guest's own registration, labelled for the proof. */
-	mode: 'jit' | 'standing';
-	/** Standing mode: the registration proven. Null in jit mode. */
-	standingRunner: { id: number; name: string } | null;
 	/** The branch actually dispatched on: `ref`, or the scratch branch made from it. */
 	dispatchRef: string | null;
 	capability: string | null;
 	labels: string[];
-	labelSource: 'runs-on' | 'override' | 'standing' | null;
+	labelSource: 'runs-on' | 'override' | null;
 	runId: number | null;
 	jobId: number | null;
 	jobConclusion: string | null;
@@ -252,7 +214,6 @@ export interface ProofResult {
 	teardown: {
 		ok: boolean;
 		runners: RunnerTeardown[];
-		labels: LabelTeardown[];
 		cancelledRuns: number[];
 		problems: string[];
 	};
@@ -495,8 +456,8 @@ interface JobRow {
 
 /**
  * Wall time the job ran, from the API's own timestamps. Null if either is missing
- * or unparseable. `started_at`, never `created_at`: a standing runner busy with
- * production work queues the canary, and that wait says nothing about the node.
+ * or unparseable. `started_at`, never `created_at`: a job that queued for a
+ * runner says nothing about the node in that wait.
  */
 function jobDurationSec(job: JobRow | null | undefined): number | null {
 	if (!job?.started_at || !job?.completed_at) return null;
@@ -511,9 +472,6 @@ class Unreadable extends Error {}
 
 const sq = (v: string): string => `'${v.replace(/'/g, `'\\''`)}'`;
 
-/** Standing mode: how long the canary may queue behind the guest's own production work. */
-export const STANDING_ASSIGN_TIMEOUT_MS = 20 * 60_000;
-
 interface ListedRunner {
 	id: number;
 	name: string;
@@ -526,18 +484,12 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 	const started = d.now();
 	const home = d.homeDir;
 	const pollMs = d.pollMs ?? 4_000;
-	// Decided once, here, and only for a guest the operator explicitly opted in.
-	const standing = isGuestNode(d.node) && spec.includeGuests === true;
-	// Standing, the proof label is unique to this run and only one registration
-	// carries it: a retry would ask the same registration the same question.
-	const maxAttempts = standing
-		? 1
-		: Math.min(
-				Math.max(1, Math.floor(spec.maxAttempts ?? DEFAULT_MAX_ATTEMPTS)),
-				MAX_ATTEMPTS_CEILING
-			);
+	const maxAttempts = Math.min(
+		Math.max(1, Math.floor(spec.maxAttempts ?? DEFAULT_MAX_ATTEMPTS)),
+		MAX_ATTEMPTS_CEILING
+	);
 	const deadline = started + (spec.timeoutMs ?? 40 * 60_000);
-	const assignMs = spec.assignTimeoutMs ?? (standing ? STANDING_ASSIGN_TIMEOUT_MS : 120_000);
+	const assignMs = spec.assignTimeoutMs ?? 120_000;
 	const jobMs = spec.jobTimeoutMs ?? 25 * 60_000;
 
 	const r: ProofResult = {
@@ -548,8 +500,6 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 		workflow: spec.workflow,
 		job: spec.job,
 		ref: spec.ref,
-		mode: standing ? 'standing' : 'jit',
-		standingRunner: null,
 		dispatchRef: null,
 		capability: spec.capability ?? null,
 		labels: [],
@@ -565,14 +515,12 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 		findings: [],
 		minted: [],
 		staleCleaned: [],
-		teardown: { ok: true, runners: [], labels: [], cancelledRuns: [], problems: [] },
+		teardown: { ok: true, runners: [], cancelledRuns: [], problems: [] },
 		startedAt: new Date(started).toISOString(),
 		finishedAt: '',
 	};
 	const find = (rule: string, message: string): void => void r.findings.push({ rule, message });
 	const owned: Owned[] = [];
-	/** Standing mode: proof labels this run added (or tried to add) to a standing registration. */
-	const ownedLabels: { runnerId: number; runner: string; label: string }[] = [];
 	const dispatched = new Set<number>();
 	let scratch: string | null = null;
 	const why = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -664,43 +612,6 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 				problem(`could not delete the scratch branch ${scratch}: ${why(e)}`);
 			}
 		}
-		// 1c. Standing mode: the proof label comes off the guest's registration,
-		//     and is VERIFIED gone from the API. 404 is "already gone".
-		if (ownedLabels.length) {
-			for (const l of ownedLabels) {
-				const t: LabelTeardown = {
-					runner: l.runner,
-					runnerId: l.runnerId,
-					label: l.label,
-					removed: false,
-				};
-				td.labels.push(t);
-				try {
-					const res = await d.gh.write(
-						'DELETE',
-						`/actions/runners/${l.runnerId}/labels/${encodeURIComponent(l.label)}`,
-						NO_TOKEN,
-						undefined,
-						spec.repo
-					);
-					if (!res.ok && res.status !== 404)
-						problem(`could not remove proof label ${l.label} from ${l.runner}: HTTP ${res.status}`);
-				} catch (e) {
-					problem(`could not remove proof label ${l.label} from ${l.runner}: ${why(e)}`);
-				}
-			}
-			try {
-				const after = await listRunners();
-				for (const t of td.labels) {
-					const reg = after.find((x) => x.id === t.runnerId);
-					t.removed = !(reg?.labels ?? []).some((x) => x.name === t.label);
-					if (!t.removed)
-						problem(`LEFTOVER: ${t.runner} still carries proof label ${t.label} in ${spec.repo}`);
-				}
-			} catch (e) {
-				problem(`could not verify the proof label is gone from the standing runner: ${why(e)}`);
-			}
-		}
 		// 2. The node: stop the unit, remove any staged config, prove both from the node.
 		for (const o of owned) {
 			const t: RunnerTeardown = {
@@ -769,6 +680,7 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 		}
 	};
 
+	const slice = d.node.slice as { unitMaxMb?: number; maxMb?: number } | undefined;
 	const mint = async (): Promise<Owned | null> => {
 		const used = await liveJitSlots(spec.node, d.sh);
 		let slotIndex = 0;
@@ -796,9 +708,9 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 				labels: r.labels,
 				slotIndex,
 				homeDir: home,
-				memoryMaxMb: unitMemoryMaxMb({
-					requestedMb: (d.node.slice as { unitMaxMb?: number } | undefined)?.unitMaxMb,
-				}),
+				memoryMaxMb: mintsOnDemand(d.node)
+					? backstopUnitMemoryMaxMb({ requestedMb: slice?.unitMaxMb, sliceMaxMb: slice?.maxMb })
+					: unitMemoryMaxMb({ requestedMb: slice?.unitMaxMb }),
 				ttlSeconds: JIT_UNIT_MAX_SEC,
 				tarballUrl: tarball,
 			},
@@ -826,30 +738,6 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 			r.verdict = 'refused';
 			return r;
 		};
-		if (isGuestNode(d.node) && !standing) {
-			return finalise(
-				refuse(
-					'guest',
-					`${spec.node} is a GUEST — the fleet chain never mints on, probes or proves a guest (operator, 2026-09-14); an operator may prove its standing runner with --include-guests`
-				)
-			);
-		}
-		if (spec.includeGuests === true && !isGuestNode(d.node)) {
-			return finalise(
-				refuse(
-					'include-guests',
-					`--include-guests proves a GUEST's standing runner; ${spec.node} is not a guest`
-				)
-			);
-		}
-		if (standing && d.node.ephemeral === true) {
-			return finalise(
-				refuse(
-					'guest-ephemeral',
-					`${spec.node} is a guest AND ephemeral; the JIT mint would need ssh to a guest, which the transport refuses`
-				)
-			);
-		}
 		if (spec.capability) {
 			if (!capability(spec.capability)) {
 				return finalise(
@@ -865,11 +753,11 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 				);
 			}
 		}
-		if (!standing && d.node.ephemeral !== true) {
+		if (!mintsJitRunners(d.node)) {
 			return finalise(
 				refuse(
-					'not-ephemeral',
-					`${spec.node} is not \`ephemeral: true\`; the proof runner goes through the JIT mint, which is an ephemeral node's path`
+					'not-minted',
+					`${spec.node} is neither \`ephemeral: true\` nor an on-demand backstop; the proof runner goes through the JIT mint, which only those nodes take`
 				)
 			);
 		}
@@ -905,20 +793,7 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 				)
 			);
 		}
-		if (standing) {
-			// Aimed or nothing: an unaimed job would need the guest's production
-			// registration to carry the job's own labels, and that is not ours to add.
-			if (!spec.runsOnInput) {
-				return finalise(
-					refuse(
-						'standing-not-aimed',
-						`a standing-runner proof needs an aimed canary (a runs-on dispatch input); ${spec.workflow} declares none here`
-					)
-				);
-			}
-			r.labels = ['self-hosted', proofLabel(d.now())];
-			r.labelSource = 'standing';
-		} else if (spec.labelsOverride?.length) {
+		if (spec.labelsOverride?.length) {
 			r.labels = [...new Set(spec.labelsOverride)];
 			r.labelSource = 'override';
 			// Aimed: one label nothing else in the fleet carries, sent as the job's
@@ -931,119 +806,66 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 			r.labelSource = 'runs-on';
 		}
 
-		// --- standing: the guest's own registration, from the API alone ---------
-		if (standing) {
-			const listed = await listRunners();
-			const reg = listed.find((x) => x.name === spec.node);
-			if (!reg) {
+		// --- the node: reachable, not drained, room for one more ---------------------
+		const probe = await d.sh(spec.node, 'echo REACHABLE');
+		if (probe === null || !probe.includes('REACHABLE')) {
+			find('unreachable', `${spec.node} did not answer ssh — "I could not look" is not a pass`);
+			r.verdict = 'error';
+			return finalise(r);
+		}
+		const units = await liveJitUnits(spec.node, d.sh);
+		const admission = admitMint({
+			drained: d.drained,
+			liveUnits: units.length,
+			standingBusy: 0,
+			maxConcurrent: typeof d.node.maxConcurrent === 'number' ? d.node.maxConcurrent : 1,
+			freeMb: Number.POSITIVE_INFINITY,
+			requiredMb: 0,
+			minFreeMb: 0,
+		});
+		if (!admission.ok) return finalise(refuse('admission', `${spec.node}: ${admission.reason}`));
+
+		// --- a proof runner an earlier run left behind ---------------------------
+		const listed = await listRunners();
+		const stale = listed.filter((x) => isProofRunnerName(x.name, spec.node));
+		for (const x of stale) {
+			if (x.busy) {
 				return finalise(
 					refuse(
-						'standing-runner-missing',
-						`${spec.repo} has no standing registration named "${spec.node}" (registered: ${listed.map((x) => x.name).join(', ') || 'none'})`
+						'proof-in-flight',
+						`${x.name} is BUSY — another proof is running a job on ${spec.node}`
 					)
 				);
 			}
-			if (reg.status !== 'online') {
+			if (units.includes(x.name) && !spec.reapStale) {
 				return finalise(
 					refuse(
-						'standing-runner-offline',
-						`${spec.node}'s standing runner in ${spec.repo} is ${reg.status ?? 'of unknown status'} — the only admission refusal for a guest`
+						'stale-proof-live',
+						`${x.name} has a LIVE unit on ${spec.node}: another prove-job is running, or one was killed. Re-run with --reap-stale to tear it down`
 					)
 				);
 			}
-			const stale = (reg.labels ?? []).map((x) => x.name).filter((n) => n.startsWith('proof-'));
-			if (stale.length && !spec.reapStale) {
-				return finalise(
-					refuse(
-						'stale-proof-label',
-						`${spec.node} already carries ${stale.join(', ')}: another prove-job is running, or one was killed. Re-run with --reap-stale to remove it`
-					)
+		}
+		for (const x of stale) {
+			if (units.includes(x.name)) {
+				await d.sh(
+					spec.node,
+					`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop ${sq(x.name)} 2>/dev/null; true`
 				);
 			}
-			for (const label of stale) {
-				const res = await d.gh.write(
-					'DELETE',
-					`/actions/runners/${reg.id}/labels/${encodeURIComponent(label)}`,
-					NO_TOKEN,
-					undefined,
-					spec.repo
-				);
-				if (!res.ok && res.status !== 404) {
-					find(
-						'stale-cleanup',
-						`could not remove stale proof label ${label} from ${spec.node}: HTTP ${res.status}`
-					);
-					r.verdict = 'error';
-					return finalise(r);
-				}
-				r.staleCleaned.push(`${spec.node}:${label}`);
-			}
-			r.standingRunner = { id: reg.id, name: reg.name };
-		} else {
-			// --- the node: reachable, not drained, room for one more -----------------
-			const probe = await d.sh(spec.node, 'echo REACHABLE');
-			if (probe === null || !probe.includes('REACHABLE')) {
-				find('unreachable', `${spec.node} did not answer ssh — "I could not look" is not a pass`);
+			const res = await d.gh.write(
+				'DELETE',
+				`/actions/runners/${x.id}`,
+				NO_TOKEN,
+				undefined,
+				spec.repo
+			);
+			if (!res.ok) {
+				find('stale-cleanup', `could not remove stale proof runner ${x.name}: HTTP ${res.status}`);
 				r.verdict = 'error';
 				return finalise(r);
 			}
-			const units = await liveJitUnits(spec.node, d.sh);
-			const admission = admitMint({
-				drained: d.drained,
-				liveUnits: units.length,
-				standingBusy: 0,
-				maxConcurrent: typeof d.node.maxConcurrent === 'number' ? d.node.maxConcurrent : 1,
-				freeMb: Number.POSITIVE_INFINITY,
-				requiredMb: 0,
-				minFreeMb: 0,
-			});
-			if (!admission.ok) return finalise(refuse('admission', `${spec.node}: ${admission.reason}`));
-
-			// --- a proof runner an earlier run left behind ---------------------------
-			const listed = await listRunners();
-			const stale = listed.filter((x) => isProofRunnerName(x.name, spec.node));
-			for (const x of stale) {
-				if (x.busy) {
-					return finalise(
-						refuse(
-							'proof-in-flight',
-							`${x.name} is BUSY — another proof is running a job on ${spec.node}`
-						)
-					);
-				}
-				if (units.includes(x.name) && !spec.reapStale) {
-					return finalise(
-						refuse(
-							'stale-proof-live',
-							`${x.name} has a LIVE unit on ${spec.node}: another prove-job is running, or one was killed. Re-run with --reap-stale to tear it down`
-						)
-					);
-				}
-			}
-			for (const x of stale) {
-				if (units.includes(x.name)) {
-					await d.sh(
-						spec.node,
-						`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop ${sq(x.name)} 2>/dev/null; true`
-					);
-				}
-				const res = await d.gh.write(
-					'DELETE',
-					`/actions/runners/${x.id}`,
-					NO_TOKEN,
-					undefined,
-					spec.repo
-				);
-				if (!res.ok) {
-					find(
-						'stale-cleanup',
-						`could not remove stale proof runner ${x.name}: HTTP ${res.status}`
-					);
-					r.verdict = 'error';
-					return finalise(r);
-				}
-				r.staleCleaned.push(x.name);
-			}
+			r.staleCleaned.push(x.name);
 		}
 
 		// --- the branch the run is dispatched on -------------------------------------
@@ -1081,33 +903,15 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 		}
 		const on = { ...spec, ref: r.dispatchRef };
 
-		// --- mint once (or label the standing runner), then dispatch -------------
+		// --- mint once, then dispatch ---------------------------------------------
 		checkAbort();
-		if (r.standingRunner) {
-			const sr = r.standingRunner;
-			const label = r.labels[r.labels.length - 1];
-			// Owned BEFORE the write, so a write that half-succeeds is still removed.
-			ownedLabels.push({ runnerId: sr.id, runner: sr.name, label });
-			const added = await d.gh.write(
-				'POST',
-				`/actions/runners/${sr.id}/labels`,
-				NO_TOKEN,
-				{ labels: [label] },
-				spec.repo
-			);
-			if (!added.ok) {
-				find('label-add-failed', `could not add ${label} to ${sr.name}: HTTP ${added.status}`);
-				r.verdict = 'error';
-				return finalise(r);
-			}
-		} else if (!(await mint())) {
+		if (!(await mint())) {
 			r.verdict = 'error';
 			return finalise(r);
 		}
-		/** The registration names the job counts on: the standing runner, or a proof runner minted here. */
+		/** The registration names the job counts on: a proof runner minted here. */
 		const isTarget = (name: string | null | undefined): boolean =>
-			Boolean(name) &&
-			(r.standingRunner ? name === r.standingRunner.name : owned.some((o) => o.name === name));
+			Boolean(name) && owned.some((o) => o.name === name);
 
 		let landed: { run: RunRow; job: JobRow } | null = null;
 		for (let attempt = 1; attempt <= maxAttempts && !landed; attempt++) {
@@ -1121,7 +925,7 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 				return finalise(r);
 			}
 			// A proof runner that took someone else's job is gone (ephemeral): re-mint.
-			if (!standing && attempt > 1 && !(await runnerAlive(owned[owned.length - 1].name))) {
+			if (attempt > 1 && !(await runnerAlive(owned[owned.length - 1].name))) {
 				if (!(await mint())) {
 					r.verdict = 'error';
 					return finalise(r);
@@ -1193,7 +997,6 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 				job = await pick();
 				if (job && (job.runner_name || job.status === 'completed')) break;
 				if (
-					!standing &&
 					spec.runsOnInput &&
 					reminted < MAX_ATTEMPTS_CEILING &&
 					!(await runnerAlive(owned[owned.length - 1].name))
@@ -1233,7 +1036,7 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 			// MISSED. Cancel our run so it frees the concurrency group and stops burning
 			// the other runner, then let the next attempt try again.
 			row.note = job.runner_name
-				? `took ${job.runner_name}, not ${standing ? 'the standing runner' : 'a proof runner'} on ${spec.node}`
+				? `took ${job.runner_name}, not a proof runner on ${spec.node}`
 				: `no runner took the job within ${Math.round(assignMs / 1000)}s`;
 			if (job.status !== 'completed') {
 				const c = await d.gh.write(
@@ -1300,7 +1103,7 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 			r.verdict = 'lost-race';
 			find(
 				'lost-race',
-				`the job finished on ${done.runner_name ?? 'no runner'}, not ${standing ? 'the standing runner' : 'a proof runner'} on ${spec.node}`
+				`the job finished on ${done.runner_name ?? 'no runner'}, not a proof runner on ${spec.node}`
 			);
 			return finalise(r);
 		}
@@ -1343,7 +1146,7 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 
 	/** Teardown, then the verdict. Awaited on every return path above. */
 	async function finalise(res: ProofResult): Promise<ProofResult> {
-		if (owned.length || ownedLabels.length || dispatched.size || scratch) await teardown();
+		if (owned.length || dispatched.size || scratch) await teardown();
 		if (!res.teardown.ok) res.verdict = 'teardown-failed';
 		res.ok = res.verdict === 'pass' && res.ranOnTarget && res.findings.length === 0;
 		res.finishedAt = new Date(d.now()).toISOString();

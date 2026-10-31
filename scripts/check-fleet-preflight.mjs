@@ -48,7 +48,7 @@ import {
 	rebootFindings,
 	blockingFindings,
 	advisoryFindings,
-	guestAdvisory,
+	backstopAdvisory,
 	lanReservationFindings,
 	BLOCKING,
 	SECURITY_PROBE,
@@ -58,7 +58,7 @@ import {
 } from './lib/preflight.mjs';
 import { stateDir } from './lib/paths.mjs';
 import { INTERFACE_PROBE, parseInterfaces, proposeLanRecord } from './lib/node-interfaces.mjs';
-import { guestNodeNames } from '../dist/lib/node-role.js';
+import { backstopNodeNames } from '../dist/lib/node-role.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
 
@@ -413,8 +413,8 @@ async function main() {
 	findings.push(...rebootFindings(probes));
 
 	// --- security updates ------------------------------------------------------
-	// A guest's finding becomes advisory below like every other node-health one:
-	// hokon keeps its own apt config and its updates are the operator's.
+	// The backstop's finding becomes advisory below like every other node-health
+	// one: it is the production host, and when it reboots is the operator's call.
 	const pendingState = readPendingState();
 	if (!pendingState.ok) {
 		errors.push(pendingState.error);
@@ -488,13 +488,13 @@ async function main() {
 	// A consumer that wants to SHOW advisories in the digest reads `advisory`;
 	// that is a change in mgmt-api, not here, and it is additive — nothing
 	// breaks by ignoring the key.
-	// A GUEST'S NODE HEALTH DOES NOT FAIL THIS RUN. `machines[<node>].role` is
-	// the operator's scoping decision (2026-09-14) and `guestAdvisory` is its one
-	// implementation, shared with `fleet doctor` so the two cannot classify the
-	// same box differently. Applied AFTER the deferral split, so a drained guest
+	// THE BACKSTOP'S NODE HEALTH DOES NOT FAIL THIS RUN: it is the production
+	// host. `backstopAdvisory` is the one implementation, shared with
+	// `fleet doctor` so the two cannot classify the same box differently.
+	// Applied AFTER the deferral split, so a drained backstop
 	// is still reported as deferred rather than as advisory. Nothing is dropped:
 	// the finding keeps its `why` and rides in `advisory`.
-	const classified = guestAdvisory(live, guestNodeNames(manifest));
+	const classified = backstopAdvisory(live, backstopNodeNames(manifest));
 	const blocking = blockingFindings(classified);
 	const advisory = advisoryFindings(classified);
 

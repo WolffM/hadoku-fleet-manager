@@ -38,10 +38,11 @@ import {
 	remoteCommand,
 	runOn,
 	runRsync,
-	selectNodes,
+	selectMachines,
 	sshDestination,
 } from './lib/fleet-exec.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
+import { maySudo } from './lib/operator-sudo.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
 // and on a pipe `process.exit` throws away whatever the stream still had
@@ -138,45 +139,17 @@ async function probeOf(node) {
 }
 
 const manifest = loadManifest();
-/**
- * A GUEST IS NEITHER SEEDED NOR READ FROM, AND THE SKIP IS PRINTED.
- *
- * This copies gigabytes into another machine's home. A guest lends the fleet a
- * registration and is otherwise none of the fleet chain's business (operator,
- * 2026-09-14) — "never seeded" is one of the words in that decision — and its
- * caches are not the fleet's to fill or to harvest.
- *
- * BY ROLE, NOT BY LABEL. The exclusion here used to be `pm2-host`, which was
- * exact only while one machine carried that label and stopped being exact the
- * day Wave 3d made `pm2-host` an EARNED capability a claw can probe into: a claw
- * that earned it would have silently stopped being seeded, and stopped being
- * eligible as a source, for a reason that has nothing to do with caches. The
- * thing that filter was standing in for is the role, so the role is what is
- * asked. `--machine <the guest>` still reaches it, which is how an operator
- * seeds one deliberately.
- */
-const { nodes: selectedTargets, skippedByRole } = selectNodes(manifest, {
+// The backstop is seeded and read from like any claw: it mints JIT runners on
+// demand, and its caches are part of the pool.
+const targets = selectMachines(manifest, {
 	only: ONLY,
 	where: (m) => m.placement !== 'excluded',
-});
-const targets = selectedTargets.map(([name]) => name);
-
-// SAID OUT LOUD. A node that stops being seeded without anyone noticing is the
-// failure the skip exists to prevent.
-// Held out of `--json` mode only because the payload below carries the same
-// facts in `skippedByRole`; in human mode it is the only place they appear.
-if (!JSON_OUT) {
-	for (const s of skippedByRole) console.log(`  ${s.node.padEnd(8)} [skipped: guest] — ${s.why}`);
-}
+}).map(([name]) => name);
 
 if (!targets.length) {
 	console.error(
 		`seed-node-cache: no node matches${ONLY ? ` --machine ${ONLY}` : ''}.\n` +
-			'  A run that matched nothing must not report a clean pass over zero nodes.' +
-			(skippedByRole.length
-				? `\n  The only match is a guest (${skippedByRole.map((s) => s.node).join(', ')}), ` +
-					'whose caches the fleet does not fill.'
-				: '')
+			'  A run that matched nothing must not report a clean pass over zero nodes.'
 	);
 	process.exit(1);
 }
@@ -190,12 +163,10 @@ let failures = 0;
 // a cheap question to ask twice.
 //
 // WHO NEEDS IT and WHO CAN GIVE IT are both answered from this one pass.
-// The DONOR pool, filtered the same way and for the same reason: reading a
-// guest's cache to size it, and then tarring it across the network, is the fleet
-// chain on that box just as much as writing to it is.
-const all = selectNodes(manifest, {
+// The DONOR pool, filtered the same way.
+const all = selectMachines(manifest, {
 	where: (m) => m.placement !== 'excluded',
-}).nodes.map(([name]) => name);
+}).map(([name]) => name);
 const probes = {};
 for (const n of all) probes[n] = await probeOf(n);
 
@@ -285,13 +256,19 @@ for (const what of wanted) {
 		//
 		// F5: one node-exec helper (`remoteCommand`) instead of a hand-rolled
 		// `['ssh', [...]]` tuple — it also carries the isLocalNode branch this
-		// call never had, so seeding a guest reached locally (`--machine hokon`)
+		// call never had, so seeding the node this runs on (`--machine hokon`)
 		// no longer fails outright over ssh-to-itself.
+		//
+		// The root fallback only where the fleet has sudo: on the backstop a
+		// root-owned cache dir is the operator's to fix, and it fails here.
+		const rootFix = maySudo(manifest.machines?.[node])
+			? ` || { sudo -n mkdir -p "$d"; sudo -n chown -R "$USER:$USER" "$d"; }`
+			: '';
 		try {
 			const [cmd, cmdArgv] = remoteCommand(
 				node,
 				'ci',
-				`set -e; d="$HOME/${spec.path}"; mkdir -p "$d" 2>/dev/null || { sudo -n mkdir -p "$d"; sudo -n chown -R "$USER:$USER" "$d"; }; [ -w "$d" ]`,
+				`set -e; d="$HOME/${spec.path}"; mkdir -p "$d" 2>/dev/null${rootFix}; [ -w "$d" ]`,
 				{ connectTimeout: 10 }
 			);
 			execFileSync(cmd, cmdArgv, { stdio: 'pipe', timeout: 60_000 });
@@ -348,9 +325,7 @@ for (const what of wanted) {
 	}
 }
 
-// Alongside `seeds` rather than inside it: `seeds` means "nodes this run acted
-// on", and a guest is precisely one it did not.
-if (JSON_OUT) console.log(JSON.stringify({ ...result, skippedByRole }, null, 2));
+if (JSON_OUT) console.log(JSON.stringify(result, null, 2));
 if (!CONFIRM) console.log('\nDry run only. Re-run with --confirm to copy.');
 if (failures) {
 	console.error(`\n✗ ${failures} seeding problem(s)`);

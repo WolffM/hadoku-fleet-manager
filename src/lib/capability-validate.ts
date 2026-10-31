@@ -1,4 +1,4 @@
-import { isGuestNode } from './node-role.js';
+import { isBackstopNode } from './node-role.js';
 
 import {
 	CAPABILITIES,
@@ -93,15 +93,15 @@ export function validateCapabilities(
 	// MAX_CONCURRENT=99 with this rule green. A capability's requirements bind
 	// whoever OFFERS it: declared, earned, or eligible for general CI.
 	//
-	// ELIGIBLE means every non-guest. That is not `nodeFailsBootcamp`'s answer
-	// for this tick and does not try to be: the fast loop can grant the builder
-	// label to any claw at any tick, so any claw must be ready to carry it. A
-	// guest gets it only through the backstop, and its declared and earned labels
-	// are still checked here.
+	// ELIGIBLE means every claw: the backstop is not general CI capacity. That is
+	// not `nodeFailsBootcamp`'s answer for this tick and does not try to be: the
+	// fast loop can grant the builder label to any claw at any tick, so any claw
+	// must be ready to carry it. The backstop gets it only through the backstop
+	// controller, and its declared and earned labels are still checked here.
 	for (const [name, m] of nodes) {
 		const offered = new Set([
 			...(m.labels ?? []).filter((id) => capability(id)?.surface === 'label'),
-			...nodeOffer(m, { eligible: !isGuestNode(m) }),
+			...nodeOffer(m, { eligible: !isBackstopNode(m) }),
 		]);
 		for (const id of offered) {
 			const cap = capability(id);
@@ -199,13 +199,13 @@ export function validateCapabilities(
 	// is no exemption for a standing offerer to break, and hokon earning `jdk21`
 	// and `cargo-bevy` the way a claw does is exactly what it should do.
 	//
-	// HOW A STANDING NODE COMES TO OFFER WHAT IT DID NOT EARN. A guest's labels
-	// read as `role` ({@link verificationFor}), so its DECLARATIONS stand — the
-	// documented exception for a guest nothing has looked at. The gap is a guest
-	// bootcamp HAS looked at: a declared `av1-nvenc` or `pm2-host` its record does
-	// not earn is a declaration the evidence contradicts, still projected onto
-	// every standing registration. And a workload-gated label, when nobody
-	// supplied the gate to judge it by.
+	// HOW A STANDING NODE COMES TO OFFER WHAT IT DID NOT EARN. With no bootcamp
+	// record, `nodeOffer` keeps the declarations, so a declared label nothing has
+	// executed is still projected onto every standing registration. And a
+	// workload-gated label, when nobody supplied the gate to judge it by. (A
+	// declaration the record CONTRADICTS cannot reach the offer: `nodeOffer`
+	// replaces it with the record on every node, the backstop included since
+	// 2026-10-31.)
 	//
 	// The standing offer is `registrationLabels` — what the reconciler projects —
 	// with the same workload gate the reconciler builds. Without `workloadGate`
@@ -231,17 +231,7 @@ export function validateCapabilities(
 			}
 			let unearned: string | null = null;
 			if (!proven) {
-				// A GUEST nothing has looked at keeps its declarations — the documented
-				// exception (`Capability.mintOnly`), not a gap: the fleet does not probe
-				// a guest by policy. Anyone else standing with no record has simply not
-				// been bootcamped.
-				if (!isGuestNode(m)) {
-					unearned = 'it has no bootcamp record, so nothing has executed the probe on it';
-				}
-			} else if (!proven.has(id)) {
-				unearned =
-					'its bootcamp record does not earn it — the offer stands on a declaration the ' +
-					'evidence contradicts';
+				unearned = 'it has no bootcamp record, so nothing has executed the probe on it';
 			} else if (cap.jobProof?.budget && !opts.workloadGate) {
 				unearned =
 					'it is workload-gated and no workload-proof context was supplied, so whether a ' +

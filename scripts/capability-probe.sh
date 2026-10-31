@@ -62,7 +62,7 @@ trap 'scratch_reap; exit 129' HUP
 # `cargo-bevy` idle and 1169 beside CI, claw-6 1529 and 1024 — both now under
 # the bar for a reason that has nothing to do with the box. `fleet bootcamp`
 # therefore re-takes such a measurement on a node it has DRAINED and waited
-# out (`measured`), and skips it on a guest it may not drain (`presence`).
+# out (`measured`), and skips it when it may not drain the node (`presence`).
 # Which capabilities are idle-only is the REGISTRY's answer
 # (`measuredIdleOnly` in src/capabilities.ts); `capabilities.test.ts` holds
 # the section between the two markers below to exactly that set.
@@ -818,9 +818,9 @@ pm2cap_try() {
 	# the one line in the file that could damage a box: `pm2 kill` against the
 	# DEFAULT home would stop mgmt-api, the tunnel and the other production services on whatever
 	# machine ran it. Nothing after the subshell inherits the variable, so the
-	# kills below can never reach a real daemon. (The fleet must not probe a
-	# guest at all — but a probe whose safety depends on never reaching one box
-	# is not safe.)
+	# kills below can never reach a real daemon. (The production host is probed
+	# like any node now, and a probe whose safety depended on never reaching one
+	# box would not be safe anyway.)
 	(
 		export PM2_HOME="$pc_d/home"
 		node "$pc_pm2" start "$(command -v sleep)" --name hadoku-pm2-probe \

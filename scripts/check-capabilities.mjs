@@ -43,7 +43,6 @@ import {
 	workloadGatedCapabilities,
 	workloadGateStatus,
 } from '../dist/lib/workload-gate.js';
-import { isGuestNode } from '../dist/lib/node-role.js';
 import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.js';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
@@ -140,73 +139,22 @@ const manifest = loadManifest();
  */
 const ONLY = machineArg(process.argv.slice(2));
 
-/**
- * A GUEST IS NOT PROBED. Skipped by ROLE, never by name.
- *
- * "I do NOT want hokon being impacted by the fleet chain" (operator,
- * 2026-09-14). A capability probe is the fleet chain reaching onto a box and
- * executing things there: it compiles on every core, launches a browser, runs
- * ffmpeg encodes, and since #6 starts and kills a pm2 daemon. None of that is
- * the fleet's business on a machine that only lends it a registration.
- *
- * IT IS ALSO A CORRECTNESS FIX, not only a courtesy. A guest's labels stay
- * DECLARED — one of the two places a declaration is the right evidence — so the
- * loop below, which reports "declares X but cannot execute it" for anything the
- * registry marks `verify: 'probe'`, is asking the wrong question of a guest
- * entirely. Before #6 it happened not to bite, because every label a guest
- * declared was `role`-verified. `pm2-host` is no longer one, and the gate's
- * verdict on it would otherwise depend on probing the machine the rule exists to
- * leave alone.
- *
- * The guest is REPORTED, not dropped: see `roleDeclared` below. "I did not need
- * to look" is a third answer, distinct from "I looked" and from "I could not".
- */
-const selected = selectMachines(manifest, { only: ONLY });
-const guests = selected.filter(([, m]) => isGuestNode(m));
-const nodes = selected.filter(([, m]) => !isGuestNode(m));
+/** Every selected node, the backstop included: its labels are earned by probe like a claw's. */
+const nodes = selectMachines(manifest, { only: ONLY });
 
 /**
- * `--include-guests` — same spelling `converge-toolchain` and
- * `deploy-ci-throttle` use. It does NOT lift the probe skip above: a guest is
- * still never probed, because the probe is this command's most invasive path
- * (compiles on every core, launches a browser, runs ffmpeg encodes, starts and
- * kills a pm2 daemon) and none of that becomes safe just because an operator
- * typed a flag. What it lifts is the REFUSAL below, for a guest EXPLICITLY
- * named by `--machine` — issue #75: `fleet capabilities --machine hokon`
- * refused outright, even though "declared, not probed" (`roleDeclared`) was a
- * perfectly good, honest answer this file already knew how to give as part of
- * a wider sweep. Requiring BOTH flags (not just naming the guest) keeps a
- * plain `--machine hokon` refusing exactly as the existing test demands —
- * nobody is surprised into a guest-shaped answer by a typo'd name alone.
- */
-const INCLUDE_GUESTS = process.argv.includes('--include-guests');
-
-/**
- * ZERO NODES IS A FAILURE, NOT A CLEAN FLEET — UNLESS THE ONLY MATCH IS A
- * GUEST THE OPERATOR NAMED ON PURPOSE.
+ * ZERO NODES IS A FAILURE, NOT A CLEAN FLEET.
  *
  * With `--machine` honoured, a typo now selects nothing — and nothing probed
  * yields no findings, which is byte-identical to a healthy fleet. The same shape
  * `check-capability-schema` already refuses for a manifest declaring no
- * machines. That refusal stands whenever NOTHING matched (a typo), and whenever
- * something did match but the operator did not ask for the guest answer with
- * `--include-guests`.
- *
- * `--machine hokon --include-guests` falls through instead: `nodes` stays
- * empty (a guest is still never probed — see above), but `guests` is not, and
- * the `roleDeclared` reporting below already knows how to answer that
- * honestly. Exit 0, because nothing is WRONG — the fleet correctly left a
- * guest alone, and said so.
+ * machines.
  */
-if (!nodes.length && !(guests.length && ONLY && INCLUDE_GUESTS)) {
+if (!nodes.length) {
 	console.error(
 		`✗ no probeable node selected${ONLY ? ` for --machine ${ONLY}` : ''}. ` +
 			`A probe of zero machines produces zero findings, which is indistinguishable\n` +
-			`  from a healthy fleet. ` +
-			(guests.length
-				? `The only match is a GUEST (${guests.map(([n]) => n).join(', ')}), whose labels are ` +
-					`declared and never probed. Re-run with --include-guests to get that answer.`
-				: `Check the name against the manifest.`)
+			`  from a healthy fleet. Check the name against the manifest.`
 	);
 	process.exit(1);
 }
@@ -502,16 +450,6 @@ const expectedDown = unreachable.filter((n) => deferralFor(n, _drains).deferred)
 const trulyUnreachable = unreachable.filter((n) => !deferralFor(n, _drains).deferred);
 const ordered = nodes.map(([name]) => [name, results[name]]).filter(([, caps]) => caps);
 
-/**
- * The guests, and the labels they DECLARE — reported rather than dropped.
- *
- * A machine that vanishes from a report is a machine nobody can tell was
- * considered. These were not probed and never will be, so the honest line is not
- * "unreachable" (we did not try) and not silence (reads as "not in the fleet"),
- * but the declaration itself, which is the only evidence a guest's label has.
- */
-const roleDeclared = Object.fromEntries(guests.map(([name, m]) => [name, m.labels ?? []]));
-
 if (JSON_OUT) {
 	out.emit({
 		results: Object.fromEntries(ordered),
@@ -523,7 +461,6 @@ if (JSON_OUT) {
 		legacyFindings: findings,
 		unreachable: trulyUnreachable,
 		expectedDown,
-		roleDeclared,
 		// ADDITIVE (wave 4e follow-up, #102): not in scripts/lib/json-contract.mjs,
 		// so no cron parses this today, but a new key breaks nothing that does
 		// read the ones above it.
@@ -583,23 +520,11 @@ if (JSON_OUT) {
 	for (const u of trulyUnreachable) console.error(`  ! unreachable: ${u}`);
 	for (const u of expectedDown)
 		out.log(`  · ${deferralNote(u, deferralFor(u, _drains))} — not probed`);
-	for (const [name, labels] of Object.entries(roleDeclared)) {
-		out.log(
-			`  · ${name.padEnd(8)} GUEST — not probed; labels are DECLARED: ` +
-				`${labels.join(', ') || '(none)'}`
-		);
-	}
 	if (findings.length) {
 		console.error(`\n✗ capability drift (${findings.length}):`);
 		for (const f of findings) console.error(`  ${f}`);
-	} else if (nodes.length) {
-		out.log('\n✓ every declared capability was executed successfully on the node claiming it');
 	} else {
-		// `--machine <guest> --include-guests` with no other match: nothing was
-		// probed, on purpose. Saying the line above here would be exactly the
-		// "I did not need to look" rendering as "I looked and it passed" shape —
-		// true that nothing is wrong, false that anything was executed.
-		out.log('\n✓ no probeable node matched — the guest above is declared, never probed');
+		out.log('\n✓ every declared capability was executed successfully on the node claiming it');
 	}
 }
 // Unreachable is NOT a pass. A node we could not probe is a node whose

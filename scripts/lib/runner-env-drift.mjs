@@ -192,7 +192,7 @@ export function throttleSummaryDrift({ name, m, kv, wantConfSha }) {
 		unread('harvest', 'whether the memory harvester unit is active');
 	}
 
-	// `mintsJitRunners`, not `ephemeral === true`: an on-demand guest (#120) is
+	// `mintsJitRunners`, not `ephemeral === true`: an on-demand backstop (#120) is
 	// minted for exactly like a claw and fails at step one exactly the same way.
 	if (mintsJitRunners(m)) {
 		// The provisioner travels with each mint (src/runners/node-script.ts), so
@@ -232,9 +232,8 @@ export function throttleSummaryDrift({ name, m, kv, wantConfSha }) {
 				`Runner.Listener reads .env once at start, so these need a unit restart. For a ` +
 				`claw's systemctl --user units the fix IS fleet throttle --confirm itself — it ` +
 				`stops an idle one and lets the warm pass or the unit refill it, leaving a busy ` +
-				`one alone and reported. A guest node has no passwordless sudo and is never ` +
-				`reached by this command at all (role skip, above), so a stale listener there ` +
-				`needs an operator.`
+				`one alone and reported. A node without passwordless sudo needs an operator ` +
+				`to restart a stale listener.`
 		);
 	}
 	// A .env that is byte-for-byte correct is not proof anything is listening.

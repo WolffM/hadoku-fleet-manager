@@ -1,29 +1,9 @@
 /**
  * `fleet bootcamp` — WHO IT REACHES, run for real.
  *
- * The file had no test. What it needed one for is not the earned/unearned
- * arithmetic — `capabilities.test.ts` covers the registry and
- * `bootcamp-required.test.mjs` covers the lib — but the SELECTION, because until
- * 2026-09-15 the guest rule lived here as a comment saying bootcamp "must not be
- * pointed at a guest in the first place" with nothing enforcing it. CLAUDE.md
- * records four separate times a COMMENT has been read as evidence in this
- * codebase. This is the guard behind the fifth.
- *
- * WHY A GUEST MUST NOT BE BOOTCAMPED, in one line each:
- *   - it is the fleet chain at full stretch on a box that is none of its
- *     business (operator, 2026-09-14), and `--write` records a verdict about it;
- *   - and since 2026-09-26 `pm2-capable` proves a supervisor by PROVISIONING
- *     one — an npm install, a started process, a killed and resurrected daemon.
- *     41 MB and five seconds on a claw; on the production host, a second pm2
- *     beside the one supervising mgmt-api, the tunnel and the other production services.
- *
- * The third reason this file used to give has EXPIRED and is recorded rather
- * than quietly dropped: "the verdict would be WRONG — a guest's labels stay
- * DECLARED, so since #6 made `pm2-host` probe-verified the run reports UNEARNED
- * against the one label the six infra workflows route on". Wave 3o narrowed that
- * probe to "is a pm2 daemon alive here supervising something", which the
- * production host passes, so the false finding is gone. The RULE is unaffected:
- * the fleet is not entitled to probe a guest, whatever the answer would be.
+ * Every managed node, the backstop included: it is installed on, probed,
+ * drained for an idle measurement and recorded exactly like a claw (it was
+ * skipped as a `guest` until 2026-10-31).
  *
  * NO REAL NODE IS REACHED. Every fixture machine resolves nowhere (`.invalid`),
  * so `isLocalNode` is false and nothing in this file can contact a box.
@@ -95,7 +75,7 @@ const NO_DATA_ENDPOINT = 'http://127.0.0.1:9';
 
 /** Names that resolve NOWHERE, and are not this box. */
 const CLAW = 'fixture-claw-1.invalid';
-const GUEST = 'fixture-guest.invalid';
+const BACKSTOP = 'fixture-backstop.invalid';
 
 function fixture() {
 	const root = mkdtempSync(join(tmpdir(), 'fleet-bootcamp-'));
@@ -111,9 +91,7 @@ function fixture() {
 				toolchain: { capabilities: [] },
 				machines: {
 					[CLAW]: { role: 'claw', labels: [], maxConcurrent: 2, minFreeMb: 1024 },
-					// Declares pm2-host and does NOT carry it in any record — exactly the
-					// shape that becomes a false UNEARNED finding if the guest is probed.
-					[GUEST]: { role: 'guest', labels: ['pm2-host', 'taskauto'], minFreeMb: 8192 },
+					[BACKSTOP]: { role: 'backstop', labels: ['pm2-host', 'taskauto'], minFreeMb: 8192 },
 				},
 			},
 			null,
@@ -151,94 +129,30 @@ function run(args, env) {
 	}
 }
 
-test('NAMED, the guest-role node is bootcamped CHECK-ONLY: probed, and nothing installed (operator, 2026-10-09)', () => {
-	// "totally fine to bootcamp hokon. but i would say dont do all the regular
-	// automation. i want to hand approve when new capabilities are install on
-	// hokon." The fixture node does not resolve, so the probe's attempt shows up
-	// as unreachable — proof it was TRIED — while no tool install was attempted.
+test('the backstop is bootcamped like a claw, named or fleet-wide', () => {
+	// The fixture nodes do not resolve, so each probe attempt shows up as
+	// unreachable — proof it was TRIED.
 	const f = fixture();
 	try {
-		const r = run(['--machine', GUEST, '--json'], f.env);
-		const report = JSON.parse(r.out);
-		assert.ok(report.unreachable.includes(GUEST), 'it was probed, not refused');
-		assert.deepEqual(report.tools[GUEST], [], 'and nothing was installed — installs are by hand');
-		assert.ok(!(GUEST in report.roleDeclared), 'not reported as "not probed"');
+		const named = JSON.parse(run(['--machine', BACKSTOP, '--json'], f.env).out);
+		assert.deepEqual(named.unreachable, [BACKSTOP]);
+		const all = JSON.parse(run(['--json'], f.env).out);
+		assert.deepEqual(all.unreachable.sort(), [BACKSTOP, CLAW].sort());
+		assert.equal(all.ok, false);
+		assert.equal(all.roleDeclared, undefined);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
 });
 
-test('a fleet-wide run skips the guest, SAYS SO, and never folds it into the pass', () => {
-	const f = fixture();
-	try {
-		const r = run(['--json'], f.env);
-		const report = JSON.parse(r.out);
-
-		assert.ok(!(GUEST in report.report), 'a guest must produce no bootcamp verdict');
-		assert.ok(
-			!report.unreachable.includes(GUEST),
-			'and it can never be "unreachable" — nothing tried to reach it'
-		);
-		// NOT DROPPED. "I was not entitled to look" is a third answer, and a
-		// machine that vanishes from a report is one nobody can tell was
-		// considered — which is how this rule went unenforced for as long as it
-		// did.
-		assert.deepEqual(report.roleDeclared[GUEST], ['pm2-host', 'taskauto']);
-		assert.ok(!(CLAW in report.roleDeclared), 'a claw earns its labels, it does not declare them');
-
-		// The claw WAS attempted, so the run is not vacuously clean, and the
-		// skipped guest did not buy a pass.
-		assert.deepEqual(report.unreachable, [CLAW]);
-		assert.equal(report.ok, false);
-		assert.equal(r.code, 1);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('the guest is not contacted at all, which is what makes UNEARNED unreachable', () => {
-	// THE ASSERTION IS THE CONTACT, and it outlived the finding it was written
-	// for. `pm2-host` has been `verify: 'probe'` since #6, and until wave 3o the
-	// unearned/unclaimed loop WOULD have reported the guest's declared label as
-	// "work routes here and fails" — about the machine that genuinely runs PM2.
-	// That probe is narrower now and the guest would pass it; what has not
-	// changed is that nothing may REACH the box, which is what this asserts and
-	// what `pm2-capable`'s provisioning install makes sharper than ever.
-	//
-	// WHAT THIS CAN AND CANNOT PROVE, because the first draft got it wrong and the
-	// mutation caught it. It cannot produce the UNEARNED finding itself: a fixture
-	// host resolves nowhere, so a guest with the role filter removed comes back
-	// UNREACHABLE rather than probed, and asserting "no UNEARNED" alone passed
-	// with the guard deleted. A test that cannot fail is worse than no test.
-	//
-	// So the assertion is the CONTACT, which is the precondition for the finding
-	// and is observable here: the guest must appear in neither the probe results
-	// nor the "could not probe" line — absent from both means nothing tried. The
-	// no-UNEARNED check stays as the statement of intent, second.
-	const f = fixture();
-	try {
-		const r = run([], f.env);
-		const all = r.out + r.err;
-		assert.ok(
-			!new RegExp(`could not probe:.*${GUEST.replace(/\./g, '\\.')}`).test(all),
-			`nothing may try to reach a guest, got:\n${all}`
-		);
-		assert.ok(!/UNEARNED/.test(all), `no UNEARNED finding expected, got:\n${all}`);
-		assert.match(r.out, /GUEST — not probed, not written/);
-		assert.match(r.out, /pm2-host, taskauto/);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('a run of only guests still FAILS LOUDLY rather than passing on zero nodes', () => {
+test('a manifest of no nodes still FAILS LOUDLY rather than passing on zero nodes', () => {
 	// Zero probed yields zero findings, which is byte-identical to a healthy
 	// fleet — the shape `check-capability-schema` already refuses for a manifest
 	// of no machines.
 	const f = fixture();
 	try {
 		const doc = JSON.parse(readFileSync(f.manifestPath, 'utf8'));
-		delete doc.machines[CLAW];
+		doc.machines = {};
 		writeFileSync(f.manifestPath, JSON.stringify(doc, null, 2));
 		const r = run(['--json'], f.env);
 		assert.equal(r.code, 1);
@@ -259,7 +173,7 @@ test('a run without --write leaves the manifest byte-identical', () => {
 	try {
 		const before = readFileSync(f.manifestPath, 'utf8');
 		run(['--json'], f.env);
-		run(['--machine', GUEST, '--json'], f.env);
+		run(['--machine', BACKSTOP, '--json'], f.env);
 		assert.equal(readFileSync(f.manifestPath, 'utf8'), before, 'byte-identical');
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
@@ -597,7 +511,7 @@ test('two consecutive --write runs on an unchanged node produce ONE commit, not 
 });
 
 test('#17: --json says what --write did to the record, landed or unchanged', () => {
-	// The refresh cycle spends a guest's recheck turn only on `written.ok`, so
+	// The refresh cycle spends a recheck turn only on a run that landed, so
 	// this field is read, not decoration.
 	const f = writableFixture(PROBE_ANSWER('7.1.5-0+deb13u1'));
 	try {
@@ -1245,24 +1159,6 @@ test('a seed script that fails (non-zero exit) is a FAILED finding carrying its 
 	}
 });
 
-test('hokon (a guest) is never seeded even when $seeds is declared — guarded a second time, inside seedNode itself', () => {
-	const f = seedingFixture();
-	try {
-		const doc = JSON.parse(readFileSync(f.manifestPath, 'utf8'));
-		doc.machines[GUEST] = { role: 'guest', labels: ['pm2-host', 'taskauto'], minFreeMb: 8192 };
-		writeFileSync(f.manifestPath, JSON.stringify(doc, null, 2));
-		f.answer(JDK21_ANSWER);
-		const r = run(['--machine', CLAW, '--no-push', '--json'], f.env);
-		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
-		assert.ok(
-			!(GUEST in JSON.parse(r.out).seeds),
-			'a guest selected by nobody gets no seed verdict at all'
-		);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
 // ---------------------------------------------------------------------------
 // `--prove` (wave 4e, #102) — the CPU pre-filter and the `--due` freshness
 // skip, the two gates that fire BEFORE bootcamp would ever drain a node or
@@ -1452,8 +1348,7 @@ test('the canary reads fleet prove-job through spawnJsonToFile, not a pipe', () 
 //
 // claw-4 scored 2281 on cargo-bevy idle and 1169 beside CI; claw-6 1529 and
 // 1024. `--write` re-takes a busy measurement on a node it DRAINS and waits
-// out; a node that never goes quiet keeps its previous verdict; a guest is
-// never drained. Driven for real: the real `drain-node.mjs` writes the
+// out; a node that never goes quiet keeps its previous verdict. Driven for real: the real `drain-node.mjs` writes the
 // fixture state dir's `fleet-drain.json`, and the ssh shim answers the probe
 // by phase and the busy count from a file the test controls.
 // ---------------------------------------------------------------------------
@@ -1467,12 +1362,11 @@ const ALL_ANSWER = (bevy, load) =>
 		'PROBE-END',
 		'',
 	].join('\n');
-const PRESENCE_ANSWER = ['CAP ffmpeg ok 7.1.5', 'PROBE-END', ''].join('\n');
 const MEASURED_ANSWER = (bevy, load) =>
 	[`CAP cargo-bevy ${bevy}`, `LOAD cargo-bevy ${load}`, 'PROBE-END', ''].join('\n');
 
 /**
- * Two claws (so the real `drain-node` capacity guard lets one go) and a guest,
+ * Two claws (so the real `drain-node` capacity guard lets one go) and the backstop,
  * in a throwaway git repo. `prevEarned` seeds each node's `$capabilities` —
  * the record an unjudged measurement must keep.
  */
@@ -1511,7 +1405,7 @@ function idleFixture({
 		...(soleClaw
 			? {}
 			: { [CLAW2]: { role: 'claw', labels: [], maxConcurrent: 2, minFreeMb: 1024 } }),
-		[GUEST]: { role: 'guest', labels: [], minFreeMb: 8192, ...rec(GUEST) },
+		[BACKSTOP]: { role: 'backstop', labels: [], minFreeMb: 8192, ...rec(BACKSTOP) },
 	};
 	const manifestPath = join(manifestDir, 'fleet-runner-manifest.json');
 	writeFileSync(
@@ -1523,14 +1417,12 @@ function idleFixture({
 	}
 	const files = {
 		all: join(root, 'all.txt'),
-		presence: join(root, 'presence.txt'),
 		measured: join(root, 'measured.txt'),
 		busy: join(root, 'busy.txt'),
 		calls: join(root, 'calls.log'),
 		drainAtMeasure: join(root, 'drain-at-measure.json'),
 	};
 	writeFileSync(files.all, all);
-	writeFileSync(files.presence, PRESENCE_ANSWER);
 	writeFileSync(files.measured, measured);
 	writeFileSync(files.busy, `${busy}\n`);
 	const drainFile = join(stateDir, 'fleet-drain.json');
@@ -1551,9 +1443,6 @@ function idleFixture({
 			`    cat ${q(drainFile)} >${q(files.drainAtMeasure)} 2>/dev/null`,
 			// A node that drops off mid-run: no PROBE-END, and ssh's own exit 255.
 			`    cat ${q(files.measured)}; grep -q PROBE-END ${q(files.measured)} || exit 255; exit 0 ;;`,
-			'  *"export CAP_PROBE_PHASE=presence"*)',
-			`    echo PRESENCE >>${q(files.calls)}`,
-			`    exec cat ${q(files.presence)} ;;`,
 			'  *"capability-probe — EXECUTE"*)',
 			`    echo PROBE >>${q(files.calls)}`,
 			`    exec cat ${q(files.all)} ;;`,
@@ -1809,24 +1698,18 @@ test('a node that drops off during the idle re-measure is inconclusive, and stil
 	}
 });
 
-test('a GUEST is never drained: probed WITHOUT the measurement, and its idle-only verdict is kept', () => {
-	// hokon carries cargo-bevy in `earned` today. `drain-node` refuses a guest, and
-	// a drain would not make it idle: its deploys and backstop runners take work
-	// a drain does not stop.
-	const f = idleFixture({ prevEarned: { [GUEST]: ['cargo-bevy', 'ffmpeg'] } });
+test('the backstop is drained for its idle measurement like a claw', () => {
+	const f = idleFixture();
 	try {
-		const r = run(['--machine', GUEST, '--write', '--no-push', '--json'], f.env);
+		const r = run(['--machine', BACKSTOP, '--write', '--no-push', '--json'], f.env);
 		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
-		assert.deepEqual(f.calls(), ['PRESENCE'], 'only the presence half runs on a guest');
-		assert.ok(!existsSync(f.drainFile), 'a guest was drained');
-		const inc = JSON.parse(r.out).report[GUEST].inconclusive;
 		assert.deepEqual(
-			inc.map((i) => [i.id, i.guest, i.kept]),
-			[['cargo-bevy', true, 'earned']]
+			f.calls().filter((c) => c !== 'BUSY'),
+			['PROBE', 'MEASURED']
 		);
-		assert.ok(f.record(GUEST).earned.includes('cargo-bevy'), 'the guest lost its earned verdict');
-		const human = run(['--machine', GUEST], f.env);
-		assert.match(human.out, /kept \(guest\): cargo-bevy — GUEST: not re-measured/);
+		assert.equal(f.drainAtMeasure()?.[BACKSTOP]?.kind, 'training');
+		assert.deepEqual(f.drains(), {}, 'bootcamp left its drain behind');
+		assert.ok(f.record(BACKSTOP).earned.includes('cargo-bevy'));
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

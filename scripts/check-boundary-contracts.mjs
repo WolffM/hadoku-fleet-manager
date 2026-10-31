@@ -61,7 +61,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { loadManifest, runOn, selectNodes } from './lib/fleet-exec.mjs';
+import { loadManifest, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
 import { createEmitter } from './lib/emit.mjs';
@@ -300,18 +300,10 @@ else {
 
 // --- 4. the shell output our parsers consume --------------------------------
 /**
- * A GUEST IS NOT PROBED HERE, and the skip is printed.
- *
- * The shapes below are the FLEET's own boundaries — what `free -m` returns to
- * the admission check, and whether the JIT units the dispatcher mints parse.
- * Neither is a question about a machine that lends the fleet a registration and
- * mints nothing: a guest is never a mint target, so it has no jit-* units to
- * parse, and its free memory feeds no admission decision. Reaching onto it to
- * ask anyway is the fleet chain on a box the operator put out of its reach
- * (2026-09-14). `selectNodes` is the role-aware door and hands back the refusal
- * so it can be said out loud.
+ * Every node that mints, the backstop included: it mints JIT units on demand,
+ * so its `free -m` and its jit-* units are the same boundary as a claw's.
  */
-const { nodes: machines, skippedByRole } = selectNodes(loadManifest(), {
+const machines = selectMachines(loadManifest(), {
 	where: (m) => m.placement !== 'excluded',
 });
 // A node a human powered off is EXPECTED down. It is still PRINTED, and still
@@ -404,12 +396,11 @@ for (const [name] of machines) {
 
 // ZERO NODES PROBED IS NOT A PASS. A manifest that selects nothing printed
 // "0 machine(s)" and exited 0 — the shell half of every contract above went
-// unchecked. Only a stated reason excuses it: every node skipped as a guest or
-// deferred as expected-down, both of which are printed below.
-if (!machines.length && !skippedByRole.length) {
+// unchecked.
+if (!machines.length) {
 	bad(
 		'machines',
-		'the manifest selected ZERO nodes to probe and none was skipped or deferred — the shell contracts went unchecked',
+		'the manifest selected ZERO nodes to probe — the shell contracts went unchecked',
 		{ kind: 'zero-nodes-probed' }
 	);
 }
@@ -421,18 +412,12 @@ if (out.json) {
 	out.emit({
 		checked: checked.length,
 		machines: machines.length,
-		skippedByRole: skippedByRole.map((s) => ({ node: s.node, why: s.why })),
 		expectedDown,
 		...buildGateDoc({ findings: gateFindings, unreadable: gateUnreadable }),
 	});
 	process.exit(failures.length ? 1 : 0);
 }
 
-// SAID OUT LOUD, never folded into the pass. A node that stops being checked
-// without anyone noticing is the failure the skip exists to prevent.
-for (const s of skippedByRole) {
-	out.log(`  · ${s.node} [skipped: guest] — ${s.why}`);
-}
 for (const name of expectedDown) {
 	out.log(`  · ${deferralNote(name, deferralFor(name, DRAINS))} — not probed`);
 }
@@ -450,6 +435,5 @@ if (failures.length) {
 out.log(
 	`✓ ${checked.length} boundary contract(s) hold against the real GitHub API and ` +
 		`${machines.length} machine(s)` +
-		(skippedByRole.length ? ` (${skippedByRole.length} guest(s) skipped by role)` : '') +
 		(expectedDown.length ? ` (${expectedDown.length} expected down)` : '')
 );

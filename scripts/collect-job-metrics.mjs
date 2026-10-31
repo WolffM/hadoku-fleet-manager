@@ -38,13 +38,6 @@
  * every gate here follows. A fleet where every node is unreachable would
  * otherwise report a tidy summary of nothing.
  *
- * A GUEST IS NOT SWEPT, AND IS NOT UNREACHABLE. `role: guest` nodes are skipped
- * by default and the skip is PRINTED; `--machine <guest>` or `--include-guests`
- * asks for one on purpose. `selectMetricTargets` holds the rule and its header
- * holds the reason — including why "it happens to be local when I run it" is
- * not a defence. A deliberate skip that goes unreported is the other half of the
- * same mistake as an unreachable node that does.
- *
  * `unreachable` IS DEFERRABLE; `read-error` IS NOT (#71/#74). `deferralFor`
  * narrows the `unreachable` class only — ssh itself failing is exactly "the
  * node is not there", which is the case a human can take out on purpose with
@@ -72,7 +65,6 @@ import {
 	byUnit,
 	withUnits,
 	perJobCosts,
-	selectMetricTargets,
 	metricsSince,
 	metricsReadScript,
 	readOutcome,
@@ -85,14 +77,8 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 	console.log(
 		`fleet job-metrics — what each job COST, joined to job history\n\n` +
 			`  --json            machine-readable\n` +
-			`  --machine <n>     one node only — reaches a GUEST when named exactly\n` +
-			`  --include-guests  sweep guests too (default: skipped, and reported)\n` +
+			`  --machine <n>     one node only\n` +
 			`  --min-runs <n>    units with at least n runs (default 2)\n\n` +
-			`A node with role: guest is NOT swept by default — nothing here reaches\n` +
-			`across to one as a matter of course. It is skipped by ROLE, never by\n` +
-			`name, and the skip is printed rather than silent. Ask for one and you\n` +
-			`get one: this command is an inventory of what each node measured, not a\n` +
-			`fleet comparison, so a guest's own numbers are a fair question.\n\n` +
 			`Reads ~/.hadoku/job-metrics.jsonl (and its one rotated .1) from every\n` +
 			`node, ONLY the rows inside job-history's ${RETENTION_DAYS}-day window — written by the\n` +
 			`ACTIONS_RUNNER_HOOK_JOB_COMPLETED hook from the kernel's memory.peak,\n` +
@@ -121,14 +107,8 @@ function fmtPair(p50, p95) {
 }
 
 const manifest = loadManifest();
-// `selectMachines` with no filter is still the one door onto the node model; the
-// ROLE question is answered once, in `selectMetricTargets`, so this file cannot
-// grow a second opinion about what a guest is.
 const only = machineArg(process.argv.slice(2), { valueFlags: ['--min-runs'] });
-const { targets: machines, skipped: skippedGuests } = selectMetricTargets(
-	selectMachines(manifest),
-	{ only, includeGuests: process.argv.includes('--include-guests') }
-);
+const machines = selectMachines(manifest, { only });
 
 /** job-history lives beside mgmt-api's state, on the host this runs from. */
 const HISTORY = join(homedir(), '.hadoku-mgmt', 'job-history.jsonl');
@@ -222,11 +202,6 @@ out.log(
 	`Metric rows: ${metrics.length}  joined: ${joined.length}  unjoined: ${unjoined.length}` +
 		(skippedLines ? `  unparseable: ${skippedLines}` : '')
 );
-
-// A DELIBERATE skip is reported, not silent. "I did not need to look" is not
-// "nothing is wrong" either: a node that lost its role, or one newly marked a
-// guest, has to appear here rather than quietly leave the set.
-for (const s of skippedGuests) out.log(`SKIPPED  ${s.node}: ${s.why}`);
 
 if (unreachable.length) {
 	out.warn(`UNREACHABLE (${unreachable.length}) — "I could not look" is not "nothing is wrong":`);
@@ -349,7 +324,6 @@ if (out.json) {
 		unjoined: unjoined.length,
 		unparseable: skippedLines,
 		costBasis: costNotes,
-		skippedGuests,
 		perNode,
 		perUnit: units,
 		unreachable,

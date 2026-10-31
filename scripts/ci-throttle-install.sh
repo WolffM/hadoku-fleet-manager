@@ -514,8 +514,8 @@ while IFS= read -r d; do
 		# STALE means the file on disk is CORRECT and the listener has simply
 		# not restarted to read it. For a claw this is a `systemctl --user`
 		# unit and needs no sudo — --confirm clears it itself below. Only a
-		# node with no passwordless sudo (a guest, never reached here by role)
-		# is a resting state an operator must clear by hand.
+		# node with no passwordless sudo (the backstop) is a resting state an
+		# operator must clear by hand.
 		no_listener_this=0
 		if [ "$env_ok" = 1 ] && [ -n "$lp" ]; then
 			stalecount=$((stalecount + 1))

@@ -89,7 +89,7 @@ import {
 	durationRatios,
 	perJobCosts,
 } from './lib/job-metrics.mjs';
-import { isGuestNode } from '../dist/lib/node-role.js';
+import { isBackstopNode } from '../dist/lib/node-role.js';
 import { measuredFacets } from '../dist/lib/measured.js';
 
 const out = createEmitter();
@@ -153,22 +153,17 @@ function shortRepo(repo) {
 const manifest = loadManifest();
 const machines = selectMachines(manifest);
 
-// THE GUEST IS NOT PROBED AND IS NOT A COMPARATOR.
+// THE BACKSTOP IS NOT PROBED AND IS NOT A COMPARATOR.
 //
-// hokon is `role: guest` (2026-09-14): nothing here ssh's it, and this command
-// would have, on any box that is not hokon itself — `runOnSync` only takes the
-// local branch when the node IS this box, so running the same command from a
-// claw would have reached across. Skipping by ROLE rather than by name is what
-// makes that true wherever it runs.
-//
-// It is also the right answer for the arithmetic, not just the etiquette. Every
-// question below compares nodes that jobs can be PLACED on; hokon is another
-// hardware class (64 GB, 1,223 MB/s sha512 against the claws' 184-708) and
-// folding it into a "fleet median" moves the yardstick toward a box the
-// dispatcher will not choose. Its `$benchmark` still appears in Q3, which reads
-// the local manifest and touches no node.
-const guests = machines.filter(([, m]) => isGuestNode(m)).map(([name]) => name);
-const probeTargets = machines.filter(([, m]) => !isGuestNode(m));
+// Every question below compares nodes that jobs are PLACED on by speed rank,
+// and the backstop is placed after every claw rather than ranked: it is the
+// emergency backstop, not capacity. It is also another hardware class (64 GB,
+// 1,223 MB/s sha512 against the claws' 184-708), so folding it into a "fleet
+// median" would move the yardstick toward a box the dispatcher does not rank.
+// Its `$benchmark` still appears in Q3, which reads the local manifest and
+// touches no node.
+const backstops = machines.filter(([, m]) => isBackstopNode(m)).map(([name]) => name);
+const probeTargets = machines.filter(([, m]) => !isBackstopNode(m));
 
 // ── gather: $benchmark per node ─────────────────────────────────────────────
 
@@ -450,10 +445,10 @@ const ratios = durationRatios(cells, { proxies: benchmark });
 out.log(
 	`Probed ${probeTargets.length - unreachable.length - readErrors.length}/${probeTargets.length} placement nodes for job-metrics.`
 );
-if (guests.length) {
+if (backstops.length) {
 	out.log(
-		`  Guest${guests.length > 1 ? 's' : ''} NOT probed and NOT used as a comparator: ${guests.join(', ')} ` +
-			`(role: guest — see the note in this file). Still listed under Q3, which reads the stored record only.`
+		`  Backstop${backstops.length > 1 ? 's' : ''} NOT probed and NOT used as a comparator: ${backstops.join(', ')} ` +
+			`(role: backstop — see the note in this file). Still listed under Q3, which reads the stored record only.`
 	);
 }
 out.log(
@@ -582,7 +577,7 @@ const report = {
 	generatedAt: new Date().toISOString(),
 	probed: probeTargets.length - unreachable.length - readErrors.length,
 	totalNodes: probeTargets.length,
-	guestsSkipped: guests,
+	backstopsSkipped: backstops,
 	unreachable,
 	readErrors,
 	costBasis: costNotes,

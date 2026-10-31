@@ -653,7 +653,7 @@ test('#8: one other claw is not a baseline — a kind run by two claws reads not
 	assert.equal(model.kindSlowness?.('claw-9', E2E_REPO, 'forge-e2e'), null);
 });
 
-test('#8: the guest is never read per kind, however slow', () => {
+test('#8: the backstop is never read per kind, however slow', () => {
 	const records = [...e2eBaseline(), ...kindSamples(E2E_REPO, 'e2e', 'hokon', 6000, 5)];
 	const model = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
 	assert.equal(model.kindSlowness?.('hokon', E2E_REPO, 'e2e'), null);

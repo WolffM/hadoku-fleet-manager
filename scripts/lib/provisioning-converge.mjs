@@ -116,6 +116,9 @@ function answered(result) {
 /**
  * From one fleet-wide `--check` of each driver: the nodes to repair, and the
  * nodes the check could not read (reported, never repaired, never "clean").
+ * A result marked `advisory` is root work on a node the fleet has no sudo on
+ * (the backstop): the driver already named the operator's hand-run, and the
+ * converger neither repairs nor pages on it.
  *
  * @returns {{ repair: { node: string, facet: 'throttle' | 'slice', before: string }[],
  *             unreadable: { node: string, facet: string, why: string }[] }}
@@ -124,7 +127,7 @@ export function planRepairs(throttleDoc, sliceDoc, aptDoc = null) {
 	const repair = [];
 	const unreadable = [];
 	for (const r of throttleDoc?.results ?? []) {
-		if (r.expectedDown) continue;
+		if (r.expectedDown || r.advisory) continue;
 		if (!answered(r)) {
 			unreadable.push({ node: r.machine, facet: 'throttle', why: r.error ?? 'no SUMMARY' });
 			continue;
@@ -159,7 +162,7 @@ export function planRepairs(throttleDoc, sliceDoc, aptDoc = null) {
 		if (units.length) repair.push({ node: r.machine, facet: 'slice', before: units.join(', ') });
 	}
 	for (const r of aptDoc?.results ?? []) {
-		if (r.expectedDown) continue;
+		if (r.expectedDown || r.advisory) continue;
 		if (!answered(r)) {
 			unreadable.push({ node: r.machine, facet: 'apt-security', why: r.error ?? 'no SUMMARY' });
 			continue;

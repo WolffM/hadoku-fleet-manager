@@ -82,11 +82,11 @@ import {
 	derivedPlacement,
 } from './lib/enrollment-record.mjs';
 import { loadManifest, manifestPath } from './lib/fleet-exec.mjs';
+import { maySudo } from './lib/operator-sudo.mjs';
 import { landingLine } from './lib/manifest-target.mjs';
 import { manifestEdit } from './lib/manifest-edit.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
-import { isGuestNode } from '../dist/lib/node-role.js';
 import { DEFAULT_ADMIN_USER } from '../dist/lib/node-users.js';
 import {
 	INTERFACE_PROBE,
@@ -133,9 +133,6 @@ if (has('--help') || has('-h')) {
 			'  --file      a saved capture. No re-probe is possible, and it says so.',
 			'  --stdin     read the capture from stdin.',
 			'  --json      machine-readable result.',
-			'',
-			'  A GUEST is refused: the fleet chain does not ssh one to re-measure it.',
-			'  --include-guests overrides that for an operator who means it.',
 		].join('\n')
 	);
 	process.exit(0);
@@ -224,45 +221,25 @@ if (HARDWARE_CHANGED.length) {
 const hardwareChanges = [];
 
 /**
- * A GUEST IS NOT RE-MEASURED, AND THE REFUSAL IS LOUD.
- *
- * Enrolment ssh's the named box, reads its bootstrap log and re-measures it —
- * `nproc`, `free`, `lsblk`, the interface probe. That is the fleet chain on a
- * machine the operator took it off (2026-09-14): a guest lends the fleet a
- * registration and is otherwise none of its business. The name is a POSITIONAL
- * here rather than `--machine`, so `guestGate`'s "the operator named it" door
- * cannot see it; `--include-guests` is the door that works, and it is the same
- * spelling every other command in this package honours.
- *
- * REFUSED rather than skipped, following `bootcamp`: pointed at exactly one
- * node, a silent skip would print a clean run over nothing at all.
- *
- * A NODE THAT IS NOT IN THE MANIFEST YET IS THE NORMAL CASE and reads as a claw
- * — that is `nodeRole`'s strict default, and it is what makes a first enrolment
- * work. An unreadable manifest reads the same way, deliberately: a missing file
- * must not be able to exempt a node from a check, and it cannot make one appear
- * to be a guest either.
- *
- * A RETIRED NAME IS REFUSED TOO, and NOT gated behind `--include-guests` — the
- * two checks ask unrelated questions. `fleet retire` adds a node's name to the
+ * A RETIRED NAME IS REFUSED. `fleet retire` adds a node's name to the
  * manifest's `retired` array in the SAME `manifestEdit` transaction that
  * deletes its `machines` entry (closing `docs/runbooks/replace-claw.md`'s Gap:
  * "nothing checks a proposed name against every claw that has EVER existed").
  * Node names are immutable (docs/VOCABULARY.md) — the only legitimate way past
  * this refusal is to pick a different name, never to override it.
+ *
+ * A NODE THAT IS NOT IN THE MANIFEST YET IS THE NORMAL CASE, and an unreadable
+ * manifest reads as "not retired", deliberately: refusing every enrolment on a
+ * missing manifest would break the one case enrolment exists for.
  */
-const INCLUDE_GUESTS = has('--include-guests');
 if (NODE) {
 	let manifestDoc = null;
 	try {
 		manifestDoc = loadManifest();
 	} catch (err) {
-		// Named, not swallowed: the manifest is unreadable, so neither the role
-		// nor the retired-name ledger could be looked up. The run continues under
-		// the strict defaults (claw, not retired) and says so, because refusing
-		// every enrolment on a missing manifest would break the one case
-		// enrolment exists for — a box that is not in it yet.
-		warn(`could not read the manifest to check ${NODE}'s role/ledger: ${err.message}`);
+		// Named, not swallowed: the manifest is unreadable, so the retired-name
+		// ledger could not be looked up, and the run says so.
+		warn(`could not read the manifest to check ${NODE} against the retired ledger: ${err.message}`);
 	}
 	if (manifestDoc?.retired?.includes(NODE)) {
 		die(
@@ -271,16 +248,6 @@ if (NODE) {
 				`  the next integer, never this name again. See \`fleet retire\`'s ledger\n` +
 				`  (the manifest's \`retired\` array) and docs/runbooks/replace-claw.md.`,
 			{ node: NODE, retired: true }
-		);
-	}
-	if (!INCLUDE_GUESTS && isGuestNode(manifestDoc?.machines?.[NODE])) {
-		die(
-			`${NODE} is a GUEST and the fleet chain does not probe one.\n` +
-				`  A guest lends the fleet a registration and is otherwise none of its\n` +
-				`  business (operator, 2026-09-14) — enrolment ssh's the box and re-measures\n` +
-				`  it, which is exactly that.\n` +
-				`  If you really mean to refresh its measured fields, re-run with --include-guests.`,
-			{ node: NODE, role: 'guest' }
 		);
 	}
 }
@@ -1040,8 +1007,13 @@ result.mode = exists ? 'updated measured fields' : 'declared';
  * process exits. Nothing here fails the enrolment: the manifest is already
  * written and verified above, and a node that is not yet on the tailnet is a
  * node the operator can still reach over LAN.
+ *
+ * NOT ON A NODE THE FLEET HAS NO SUDO ON (the backstop). Its tailnet login is
+ * the operator's, and it is deliberately not `tag:claw`.
  */
-if (NODE) {
+if (NODE && !maySudo(doc.machines?.[name])) {
+	result.tailscale = { state: 'operator', why: 'the fleet has no sudo on this node' };
+} else if (NODE) {
 	try {
 		const out = sshCapture(
 			NODE,

@@ -436,7 +436,7 @@ test('the gate’s mint slice is the minter’s mint slice', () => {
  *
  * `buildWarmSpawnPlan` emits one name because the node's name cannot reach it.
  * `buildSpawnPlan` CAN since #120 — a JIT mint's slice travels MintRequest →
- * dispatch-pass → mintEphemeralRunner, which is how an on-demand guest's units
+ * dispatch-pass → mintEphemeralRunner, which is how an on-demand backstop's units
  * land in its own slice — but a warm listener's does not, and any `ephemeral`
  * node may hold one. So every such node must agree with the default. The gate
  * must be the thing that says so, because a comment is not evidence.
@@ -450,10 +450,9 @@ test('a mint-capable node with a different declared slice FAILS the gate', () =>
 		/if \(mintSliceConflicts\.length\)\s*\n?\s*drift\.push\(/,
 		'the conflict must reach the check’s drift list'
 	);
-	// The exit EXPRESSION, not one exact spelling of it: the guest rule added a
-	// third clause to this ternary in Wave 3e, and an assertion pinned to the
-	// old text would have failed for a reason that has nothing to do with mint
-	// slices. What must hold is that a conflict still reaches the exit code.
+	// The exit EXPRESSION, not one exact spelling of it: an assertion pinned to
+	// one text fails for reasons that have nothing to do with mint slices. What
+	// must hold is that a conflict still reaches the exit code.
 	assert.match(
 		src,
 		/process\.exit\(\s*[^;]*mintSliceConflicts\.length[^;]*\?\s*1\s*:\s*0\s*\)/,
@@ -464,110 +463,33 @@ test('a mint-capable node with a different declared slice FAILS the gate', () =>
 	assert.match(src, /Object\.entries\(manifest\.machines \?\? \{\}\)\s*\n?\s*\.filter/);
 });
 
-// ── the guest rule ──────────────────────────────────────────────────────────
+// ── the backstop: its DECLARED slice, never a default ──────────────────────
 
-test('the sweep selects through the role-aware door, not the bare one', () => {
-	// hokon declares a `slice` block and a `minFreeMb`, so this file's own
-	// eligibility filter matched it and the gate walked the production host's 27
-	// runner units like any claw. `selectMachines` cannot know that; `selectNodes`
-	// is the one that does.
+test('the payload writes the DECLARED slice name and ceiling, so the backstop is never migrated', () => {
+	// hokon declares `slice.name: ci-runner.slice`, which already holds its
+	// system units, and `maxMb: 16384`. A default here would move its units out
+	// of that slice — a containment change wearing a cap's clothes.
 	const src = code(mjs());
-	assert.match(src, /selectNodes\(manifest, \{/, 'the node sweep must come from selectNodes');
-	assert.doesNotMatch(
-		src,
-		/selectMachines\(/,
-		'the bare selection door has no role filter — that is how hokon got in'
-	);
-	assert.match(src, /skippedByRole/, 'and the guests it refused must reach the report');
+	assert.match(src, /`SLICE_NAME=\$\{sliceCfg\.name \?\? 'runners\.slice'\}`/);
+	assert.match(src, /sliceCfg\.maxMb \? `MAX_MB=\$\{sliceCfg\.maxMb\}`/);
+	assert.match(src, /MANAGE_UNIT=\$\{sliceCfg\.manageUnit === false \? 0 : 1\}/);
 });
 
-test('the sudo hint can never name a guest', () => {
-	// THE LINE THAT MADE THIS A LANE. `ci:audit-gates` was red on 2026-09-16
-	// printing "On hokon, as the operator: sudo -v && fleet slice --machine hokon
-	// --confirm" — the fleet asking a guest for sudo on the box every other gate
-	// reports through, which the 2026-09-14 decision rules out.
-	//
-	// `needsSudo` is the only source of that sentence, so the guard is that
-	// nothing can be added to it without the role being consulted first.
+test("the backstop's per-unit cap is its declared one, never widened to its slice", () => {
 	const src = code(mjs());
-	const at = src.indexOf('needsSudo.add(');
-	assert.notEqual(at, -1, 'the sudo hint set must still exist — it is what is being constrained');
-	const guard = src.slice(Math.max(0, at - 400), at);
-	assert.match(
-		guard,
-		/!guest\s*&&/,
-		'the guard adding a node to needsSudo must exclude a guest FIRST'
-	);
+	assert.match(src, /sliceCeilingMb: backstop \? null : ceilingMb/);
 });
-
-test('a guest is never converged, even when the operator names it', () => {
-	// Naming it buys a LOOK, never a write. `--machine hokon --confirm` is the
-	// command this gate's own fix hint told operators to type, so it is the one
-	// spelling that has to be refused rather than merely unreachable.
-	const src = code(mjs());
-	assert.match(
-		src,
-		/if \(selectedGuests\.length && CONFIRM && !CHECK\)/,
-		'--confirm on a named guest must be refused outright'
-	);
-	assert.match(
-		src,
-		/const apply = CONFIRM && !CHECK && !guest;/,
-		'and even past the refusal, nothing may be applied to a guest'
-	);
-});
-
-test("a guest's findings are ADVISORY — they never fail the gate", () => {
-	// `drift` is what exits 1. A guest's slice placement is not this gate's
-	// question at all (whether its backstop registration is online is
-	// check-label-floor's), so its findings are printed and not counted.
-	const src = code(mjs());
-	assert.match(
-		src,
-		/if \(r\.advisory\) roleAdvisories\.push\(/,
-		"a guest's problems must go to roleAdvisories"
-	);
-	assert.match(src, /else drift\.push\(`\$\{r\.machine\}/, 'and only a non-guest may reach drift');
-	assert.match(
-		src,
-		/results\.some\(\(r\) => !r\.ok && !r\.advisory\)/,
-		'nor may an unreachable guest fail the exit code'
-	);
-});
-
-test('every node that was skipped by role is still PRINTED', () => {
-	// A silent skip is how a node stops being checked and nobody notices — the
-	// reason converge-toolchain prints its own, and the reason this one must.
-	const src = code(mjs());
-	assert.match(src, /\[skipped: guest\]/, 'the skip must be visible in human output');
-});
-
-test('a run whose every match was a guest is NOT a pass', () => {
-	// Zero nodes looked at is not a pass even when every skip was deliberate:
-	// exit 0 there is "I could not look" wearing "I chose not to look" as a
-	// costume. `converge-toolchain` draws the same line.
-	const src = code(mjs());
-	const at = src.indexOf('if (!nodes.length)');
-	assert.notEqual(at, -1);
-	const block = src.slice(at, at + 700);
-	assert.match(block, /skippedByRole\.length/, 'the refusal must name the role skip');
-	assert.match(block, /process\.exit\(1\)/, 'and it must fail');
-});
-
-// ── the guest rule, RUN FOR REAL ────────────────────────────────────────────
 
 /**
  * The tests above read source. These SPAWN the deployer, because what regresses
- * is the wiring — that the skip actually fires on the path the script takes, not
- * that the words are present. Same argument `node-role-gates.test.mjs` makes for
- * the two gates it drives.
+ * is the wiring — what the script does on the path it takes, not that the words
+ * are present.
  *
  * AGAINST A TEMP MANIFEST, NEVER THE OPERATOR'S, AND NEVER hokon. Node names are
  * `.invalid` (RFC 6761 reserved), so the resolver answers NXDOMAIN without
  * consulting anything and the ssh fails immediately rather than walking the
  * operator's search list — the flake `doctor-write.test.mjs` documents. Nothing
- * here can reach a real box, which is the point: the guest rule must be provable
- * without exercising it on the guest.
+ * here can reach a real box.
  */
 function sliceFixture(machines) {
 	const root = mkdtempSync(join(tmpdir(), 'fleet-slice-role-'));
@@ -616,8 +538,18 @@ const FX_CLAW = {
 	minFreeMb: 1024,
 	slice: { swapMb: 4096, unitMaxMb: 4096 },
 };
-/** Identical but for the role, so only the role can be what decides. */
-const FX_GUEST = { ...FX_CLAW, role: 'guest' };
+/** The backstop's shape: its own declared slice, ceiling and hand-authored unit. */
+const FX_BACKSTOP = {
+	...FX_CLAW,
+	role: 'backstop',
+	slice: {
+		name: 'ci-runner.slice',
+		maxMb: 16384,
+		unitMaxMb: 4096,
+		swapMb: 4096,
+		manageUnit: false,
+	},
+};
 
 test('run for real: a DRAINED unreachable node is deferred, and --check still reports', () => {
 	// The deferred result once carried no notes/problems, and the mint-placement
@@ -645,71 +577,24 @@ test('run for real: a DRAINED unreachable node is deferred, and --check still re
 	}
 });
 
-test('run for real: a guest is skipped and REPORTED, and the claw is still audited', () => {
-	const f = sliceFixture({ 'fx-claw.invalid': FX_CLAW, 'fx-guest.invalid': FX_GUEST });
+test('run for real: the backstop is audited like a claw, in its DECLARED slice', () => {
+	const f = sliceFixture({ 'fx-claw.invalid': FX_CLAW, 'fx-backstop.invalid': FX_BACKSTOP });
 	try {
-		const r = runSlice(['--check', '--json'], f.env);
-		const report = r.json();
-		assert.deepEqual(
-			report.skippedByRole.map((s) => [s.node, s.role]),
-			[['fx-guest.invalid', 'guest']],
-			'the guest must appear in the report — a silent skip is how a node stops being checked'
+		const report = runSlice(['--check', '--json'], f.env).json();
+		assert.deepEqual(report.results.map((x) => x.machine).sort(), [
+			'fx-backstop.invalid',
+			'fx-claw.invalid',
+		]);
+		assert.equal(report.skippedByRole, undefined);
+		// Both unresolvable, so both UNREADABLE — a failure, not a pass.
+		assert.ok(report.results.every((x) => x.ok === false));
+		const human = runSlice(['--check', '--machine', 'fx-backstop.invalid'], f.env);
+		assert.equal(human.code, 1, 'a backstop nobody could look at fails the gate');
+		assert.match(
+			human.out,
+			/── fx-backstop\.invalid {2}slice ci-runner\.slice {2}16384MB \(declared\)/
 		);
-		assert.deepEqual(
-			report.results.map((x) => x.machine),
-			['fx-claw.invalid'],
-			'and it must NOT appear as a node this run acted on'
-		);
-		// THE CONTROL. The claw is unresolvable, so it is UNREADABLE — which is a
-		// failure and not a skip. Without this the test passes on a deployer that
-		// skipped every node.
-		assert.equal(report.results[0].ok, false);
-		assert.equal(r.code, 1, 'a claw nobody could look at fails the gate');
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('run for real: --machine <guest> reaches it, and everything it finds is ADVISORY', () => {
-	const f = sliceFixture({ 'fx-claw.invalid': FX_CLAW, 'fx-guest.invalid': FX_GUEST });
-	try {
-		const r = runSlice(['--machine', 'fx-guest.invalid', '--check', '--json'], f.env);
-		const report = r.json();
-		assert.deepEqual(report.skippedByRole, [], 'naming it outright is the operator asking');
-		assert.deepEqual(
-			report.results.map((x) => [x.machine, x.role, x.advisory]),
-			[['fx-guest.invalid', 'guest', true]]
-		);
-		// ZERO CLAWS LOOKED AT IS NOT A PASS. Auditing one guest fails on nothing,
-		// and exiting 0 there would be "I could not look" in a costume.
-		assert.equal(r.code, 1);
-		assert.match(r.err, /every node this run looked at is a guest/);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('run for real: --machine <guest> --confirm is REFUSED before anything runs', () => {
-	// The exact command this gate's own fix hint printed until 2026-09-16.
-	const f = sliceFixture({ 'fx-guest.invalid': FX_GUEST });
-	try {
-		const r = runSlice(['--machine', 'fx-guest.invalid', '--confirm'], f.env);
-		assert.equal(r.code, 1);
-		assert.match(r.err, /is a GUEST — refusing to converge it/);
-		assert.equal(r.out, '', 'nothing on stdout — the refusal is not a report');
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('run for real: a fleet of nothing but guests is a REFUSAL, not a clean pass', () => {
-	// A manifest whose every match is skipped by role selects zero nodes, and a
-	// deployer that matched nothing must never report a clean pass over nothing.
-	const f = sliceFixture({ 'fx-guest.invalid': FX_GUEST });
-	try {
-		const r = runSlice(['--check'], f.env);
-		assert.equal(r.code, 1);
-		assert.match(r.err, /Every match is a guest/);
+		assert.match(human.out, /per-unit 4096MB \(declared; the backstop is not widened/);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -2216,31 +2101,51 @@ test('#98: a missing or placeholder token is "could not read", never a pass', ()
 	assert.match(judge({ live_max: undefined }).join('\n'), /could not read the slice MemoryMax/);
 });
 
-test('run for real: a non-guest node with no slice block is REPORTED as skipped, and fails --check', () => {
-	const noSlice = { ...FX_CLAW };
-	delete noSlice.slice;
-	const f = sliceFixture({ 'fx-claw.invalid': FX_CLAW, 'fx-noslice.invalid': noSlice });
+test('run for real: --confirm on the backstop CHECKS and names the operator hand-run; on a claw it applies', () => {
+	const f = sliceFixture({ 'fx-claw.invalid': FX_CLAW, 'fx-backstop.invalid': FX_BACKSTOP });
 	try {
-		const r = runSlice(['--check', '--json'], f.env);
-		assert.equal(r.code, 1);
-		assert.match(r.err, /1 declared node\(s\) SKIPPED: fx-noslice\.invalid/);
-		assert.match(r.err, /fx-noslice\.invalid: declares no slice\/minFreeMb, so it was SKIPPED/);
-		// Still printed without --check: a --confirm that skipped it silently is
-		// as misleading as an audit that did. A dry run reaches no node.
-		const dry = runSlice([], f.env);
-		assert.match(dry.err, /SKIPPED: fx-noslice\.invalid/);
+		const b = runSlice(['--machine', 'fx-backstop.invalid', '--confirm'], f.env);
+		assert.match(b.out, /Mode: APPLY/);
+		assert.match(
+			b.out,
+			/advisory: writing its slice needs root on fx-backstop\.invalid.*checked, not written/
+		);
+		assert.match(
+			b.out,
+			/sudo -v && fleet slice --machine fx-backstop\.invalid --confirm --operator-sudo/
+		);
+		const c = runSlice(['--machine', 'fx-claw.invalid', '--confirm'], f.env);
+		assert.doesNotMatch(c.out, /advisory: writing its slice/);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
 });
 
-test('run for real: a GUEST with no slice block is not reported as unbounded', () => {
-	const noSlice = { ...FX_GUEST };
+test('the apply flag is gated on sudo, so the backstop is never written without the operator', () => {
+	const src = code(mjs());
+	assert.match(src, /const apply = CONFIRM && !CHECK && sudo;/);
+	assert.match(src, /const sudo = maySudo\(m\);/);
+});
+
+test('run for real: a node with no slice block is REPORTED as skipped, and fails --check', () => {
+	const noSlice = { ...FX_CLAW };
 	delete noSlice.slice;
-	const f = sliceFixture({ 'fx-claw.invalid': FX_CLAW, 'fx-guest.invalid': noSlice });
+	const noSliceBackstop = { ...FX_BACKSTOP };
+	delete noSliceBackstop.slice;
+	const f = sliceFixture({
+		'fx-claw.invalid': FX_CLAW,
+		'fx-noslice.invalid': noSlice,
+		'fx-backstop.invalid': noSliceBackstop,
+	});
 	try {
 		const r = runSlice(['--check', '--json'], f.env);
-		assert.doesNotMatch(r.err, /SKIPPED: fx-guest/);
+		assert.equal(r.code, 1);
+		assert.match(r.err, /2 declared node\(s\) SKIPPED: fx-noslice\.invalid, fx-backstop\.invalid/);
+		assert.match(r.err, /fx-noslice\.invalid: declares no slice\/minFreeMb, so it was SKIPPED/);
+		// Still printed without --check: a --confirm that skipped it silently is
+		// as misleading as an audit that did. A dry run reaches no node.
+		const dry = runSlice([], f.env);
+		assert.match(dry.err, /SKIPPED: fx-noslice\.invalid/);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

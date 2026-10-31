@@ -137,25 +137,6 @@ const drain = readDrainState();
 /** Every declared node, in name order — no file's key order may decide anything. */
 const nodeNames = Object.keys(fleet.machines ?? {}).sort();
 
-/**
- * A GUEST IS DELIBERATELY IN SCOPE HERE — `includeGuests` below, on purpose.
- *
- * A guest lends the fleet a registration and is otherwise none of the fleet
- * chain's business (operator, 2026-09-14). WHERE THAT REGISTRATION SITS IN THE
- * ROUTING ORDER IS THE ONE THING THIS FILE IS FOR: the guest is the fleet's
- * BACKSTOP, so a routing report that left it out would
- * describe a fleet that does not exist — and the reason the backstop exists at
- * all is the one place a reader most needs to see.
- *
- * NOTHING IS DONE TO IT. This command simulates and never places, labels or
- * writes; `--live` runs one `pgrep -c`, which is the same read `fleet drain`
- * makes and the lightest thing that can be asked of a box. Leaving the guest
- * unmeasured is not neutral either: `orderCandidates` sorts an unmeasured node
- * LAST, which is exactly the bug the note below records — the backstop ranked
- * last in live mode however idle it actually was.
- */
-const INCLUDE_GUESTS = true;
-
 function busyOf(node) {
 	if (!LIVE) return null;
 	// THROUGH runOnSync, never a bare `ssh`. hokon refuses ssh to ITSELF, and this
@@ -173,7 +154,6 @@ function busyOf(node) {
 		as: 'admin',
 		timeoutMs: 15_000,
 		connectTimeout: 6,
-		includeGuests: INCLUDE_GUESTS,
 	});
 	// UNREACHABLE IS NOT IDLE. Returning 0 here would make a dead box look like
 	// the emptiest node in the fleet and win every placement.

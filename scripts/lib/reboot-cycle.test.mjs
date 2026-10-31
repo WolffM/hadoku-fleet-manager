@@ -60,7 +60,7 @@ function world({
 	let clock = 1_800_000_000_000;
 	let state = null;
 	const deps = {
-		isGuest: (entry) => entry?.role === 'guest',
+		isBackstop: (entry) => entry?.role === 'backstop',
 		isLocal: (node) => node === 'hokon',
 		probe: (node) => {
 			calls.push(`probe ${node}`);
@@ -152,7 +152,7 @@ function world({
 }
 
 const MACHINES = [
-	['hokon', { role: 'guest' }],
+	['hokon', { role: 'backstop' }],
 	['claw-1', { role: 'claw' }],
 	['claw-4', { role: 'claw' }],
 	['claw-8', { role: 'claw' }],
@@ -217,7 +217,7 @@ test('a staged kernel: drained as a reboot, idle, rebooted, verified, undrained 
 		w.calls.filter((c) => !c.startsWith('probe') && !c.startsWith('sleep')),
 		['drain claw-4', 'wait claw-4', 'reboot claw-4', 'reprove claw-4', 'undrain claw-4']
 	);
-	assert.equal(w.calls.includes('probe hokon'), false, 'a guest is never probed');
+	assert.equal(w.calls.includes('probe hokon'), false, 'the backstop is never probed');
 	assert.deepEqual(r.nodes.find((n) => n.node === 'claw-4').kernel, { from: OLD, to: NEW });
 	assert.equal(w.state().inFlight, null);
 	assert.ok(w.state().last['claw-4']);
@@ -265,7 +265,7 @@ test('a SERVICE HOST is never cycled: pm2 apps online, or a pm2 it could not rea
 	assert.equal(w.calls.includes('drain claw-4'), false);
 });
 
-test('never this box, never a guest — even when they need a reboot', async () => {
+test('never this box, never the backstop — even when they need a reboot', async () => {
 	const w = world({ nodes: { hokon: box({ flag: true }), 'claw-1': box() } });
 	const r = await runRebootCycle({
 		machines: [

@@ -17,7 +17,7 @@ import {
 	readManifestState,
 	readFleetManifest,
 	loadEphemeralNodes,
-	loadGuestNodes,
+	loadBackstopNodes,
 	loadClawNodes,
 	loadFleetNodeNames,
 	loadFleetManifestMachines,
@@ -119,10 +119,10 @@ void test('loadEphemeralNodes: the ephemeral set on a readable manifest, empty (
 	});
 });
 
-void test('loadGuestNodes: reads role through isGuestNode, never the raw field', () => {
+void test('loadBackstopNodes: reads role through isBackstopNode, never the raw field', () => {
 	withManifestDir((dir) => {
-		writeManifest(dir, { machines: { hokon: { role: 'guest' }, 'claw-1': { role: 'claw' } } });
-		assert.deepEqual(loadGuestNodes(), new Set(['hokon']));
+		writeManifest(dir, { machines: { hokon: { role: 'backstop' }, 'claw-1': { role: 'claw' } } });
+		assert.deepEqual(loadBackstopNodes(), new Set(['hokon']));
 	});
 });
 

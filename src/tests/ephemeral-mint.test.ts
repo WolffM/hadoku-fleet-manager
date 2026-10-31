@@ -6,12 +6,9 @@ import {
 	GITHUB_JOB_CEILING_SEC,
 	JIT_UNIT_MAX_SEC,
 	JOB_RESERVE_DEFAULT_MB,
+	backstopUnitMemoryMaxMb,
 } from '../runners/ephemeral.js';
-import {
-	buildSpawnPlan,
-	buildWarmSpawnPlan,
-	guestUnitMemoryMaxMb,
-} from '../runners/ephemeral-mint.js';
+import { buildSpawnPlan, buildWarmSpawnPlan } from '../runners/ephemeral-mint.js';
 
 // --- spawn plan -------------------------------------------------------------
 
@@ -203,9 +200,12 @@ test('a ttlSeconds ABOVE the floor is honoured — the floor widens, it does not
 	assert.ok(p.argv.includes(`--property=RuntimeMaxSec=${wide}`));
 });
 
-test('guestUnitMemoryMaxMb: the declared cap, clamped to the allowance, never zero', () => {
-	assert.equal(guestUnitMemoryMaxMb({ requestedMb: 8192, sliceMaxMb: 16384 }), 8192);
-	assert.equal(guestUnitMemoryMaxMb({ requestedMb: 32768, sliceMaxMb: 16384 }), 16384);
-	assert.equal(guestUnitMemoryMaxMb({ sliceMaxMb: 16384 }), JOB_RESERVE_DEFAULT_MB);
-	assert.equal(guestUnitMemoryMaxMb({ requestedMb: 0, sliceMaxMb: null }), JOB_RESERVE_DEFAULT_MB);
+test('backstopUnitMemoryMaxMb: the declared cap, clamped to the allowance, never zero', () => {
+	assert.equal(backstopUnitMemoryMaxMb({ requestedMb: 8192, sliceMaxMb: 16384 }), 8192);
+	assert.equal(backstopUnitMemoryMaxMb({ requestedMb: 32768, sliceMaxMb: 16384 }), 16384);
+	assert.equal(backstopUnitMemoryMaxMb({ sliceMaxMb: 16384 }), JOB_RESERVE_DEFAULT_MB);
+	assert.equal(
+		backstopUnitMemoryMaxMb({ requestedMb: 0, sliceMaxMb: null }),
+		JOB_RESERVE_DEFAULT_MB
+	);
 });

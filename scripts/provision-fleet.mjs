@@ -98,9 +98,7 @@
  * over ssh, and named with --machine".
  *
  * Without `--machine` it stays the WHOLE-FLEET converge it always was:
- * reconcile → throttle → slice → seed-python → seed-cache, then verify. A
- * GUEST is refused on the onboarding path — the chain does not converge,
- * bootcamp or measure one (operator, 2026-09-14).
+ * reconcile → throttle → slice → seed-python → seed-cache, then verify.
  *
  * VERIFY IS A SEPARATE PASS, DELIBERATELY. Each deployer's own `--check` reads
  * OBSERVED state — the kernel's memory.max, the process tree, the live `.env`,
@@ -129,7 +127,6 @@ import {
 	selectMachines,
 } from './lib/fleet-exec.mjs';
 import { placementBackfill } from './lib/enrollment-record.mjs';
-import { isGuestNode } from '../dist/lib/node-role.js';
 import {
 	PAYLOAD_PROBE,
 	flipDecision,
@@ -162,7 +159,7 @@ async function placementPhase(node, earned, { confirm, noPush }) {
 	const doc = JSON.parse(readFileSync(MANIFEST, 'utf8'));
 	const entry = doc.machines?.[node] ?? {};
 	const backfill = placementBackfill(entry);
-	const pr = runOnSync(node, PAYLOAD_PROBE, { as: 'ci', argv: ['--machine', node], manifest: doc });
+	const pr = runOnSync(node, PAYLOAD_PROBE, { as: 'ci', manifest: doc });
 	const payloadPresent = /PAYLOAD yes/.test(pr.out ?? '');
 	const decision = flipDecision({ entry, earned, payloadPresent });
 	if (!decision.flip && decision.state !== 'already') return { status: 1, remedy: decision.remedy };
@@ -224,18 +221,6 @@ function realizePhase(node, { confirm }) {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 async function onboardingRun(node, { confirm, verifyOnly, noPush, address }) {
-	const manifest = loadManifest();
-	const entry = manifest.machines?.[node];
-	if (isGuestNode(entry)) {
-		console.error(
-			`provision-fleet: ${node} is a GUEST — the onboarding chain does not run against it.\n` +
-				'  A guest lends the fleet a registration and is otherwise none of its business ' +
-				'(operator, 2026-09-14); this chain converges, seeds, bootcamps and measures.\n' +
-				'  Its registration is check-label-floor’s question, not provision’s.'
-		);
-		return 1;
-	}
-
 	P(
 		`provision-fleet: onboarding chain for ${node} — ${ONBOARDING_STEPS.length} steps\n` +
 			`Mode: ${verifyOnly ? 'VERIFY ONLY' : confirm ? 'APPLY then VERIFY' : 'DRY RUN (every step checks before acting)'}`

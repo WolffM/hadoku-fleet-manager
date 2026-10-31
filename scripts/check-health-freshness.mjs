@@ -74,13 +74,13 @@
  * between "re-run doctor" and "the box is out for a part". Reason carried,
  * verdict unchanged.
  *
- * A GUEST IS REPORTED AND DOES NOT FAIL THE RUN
- * --------------------------------------------
- * Through `guestAdvisory` in `preflight.mjs` — the same one implementation
+ * THE BACKSTOP IS REPORTED AND DOES NOT FAIL THE RUN
+ * --------------------------------------------------
+ * Through `backstopAdvisory` in `preflight.mjs` — the same one implementation
  * `fleet doctor` and `check-fleet-preflight` use, so three commands cannot
- * classify one box three ways. hokon is the fleet's only guest (operator,
- * 2026-09-14) and is not a placement candidate, so its record ageing is worth
- * SAYING and is not worth failing a gate over. The finding keeps its `why` and
+ * classify one box three ways. hokon is the backstop and the production host:
+ * not general capacity, so not a placement candidate, and its record ageing is
+ * worth SAYING and is not worth failing a gate over. The finding keeps its `why` and
  * still rides in `--json`; advisory means "does not fail the run", never "was
  * not observed".
  *
@@ -107,13 +107,13 @@ import {
 	BLOCKING,
 	advisoryFindings,
 	blockingFindings,
-	guestAdvisory,
+	backstopAdvisory,
 } from './lib/preflight.mjs';
 // The BUILT copies, the same way `doctor-run.mjs` reaches both of these: the
 // state-dir merge and the role rule are TypeScript and there is exactly one
 // implementation of each.
 import { measuredFacets } from '../dist/lib/measured.js';
-import { guestNodeNames } from '../dist/lib/node-role.js';
+import { backstopNodeNames } from '../dist/lib/node-role.js';
 
 /**
  * How old a `$health` record may be before this gate calls it stale.
@@ -148,7 +148,7 @@ import { guestNodeNames } from '../dist/lib/node-role.js';
 export const HEALTH_STALE_DAYS = 14;
 
 /**
- * How old the NEWEST non-guest `$health` record may be before the WRITER is
+ * How old the NEWEST non-backstop `$health` record may be before the WRITER is
  * called stopped.
  *
  * {@link HEALTH_STALE_DAYS} judges each node, so it can only speak once a whole
@@ -176,12 +176,12 @@ export const WRITER_CATEGORY = 'health-writer';
  * Has anything written `$health` lately, pure.
  *
  * @param {Array<{node: string, ageDays: number|null, at: string|null}>} verdicts
- * @param {Set<string>} guests  their records are written with no load and do
+ * @param {Set<string>} backstops  their records are written with no load and do
  *   not decide placement, so they cannot vouch for the writer.
  * @returns {object|null}  a BLOCKING finding, or null.
  */
-export function writerVerdict(verdicts, guests, { writerStaleDays = WRITER_STALE_DAYS } = {}) {
-	const dated = verdicts.filter((v) => !guests.has(v.node) && typeof v.ageDays === 'number');
+export function writerVerdict(verdicts, backstops, { writerStaleDays = WRITER_STALE_DAYS } = {}) {
+	const dated = verdicts.filter((v) => !backstops.has(v.node) && typeof v.ageDays === 'number');
 	// No dated record at all: every node is already absent or unreadable, each a
 	// blocking finding of its own. A second one saying the same thing adds noise.
 	if (!dated.length) return null;
@@ -193,7 +193,7 @@ export function writerVerdict(verdicts, guests, { writerStaleDays = WRITER_STALE
 		class: BLOCKING,
 		status: 'writer-stopped',
 		why:
-			`the NEWEST non-guest $health record is ${newest.ageDays.toFixed(1)}d old ` +
+			`the NEWEST non-backstop $health record is ${newest.ageDays.toFixed(1)}d old ` +
 			`(${newest.node}, ${newest.at}) — past ${writerStaleDays}d, so nothing has written ` +
 			'$health for any node lately. That is the writer, not the boxes: check that ' +
 			'ci:health-refresh is in the fleet-benchmark cron profile and what its last run said, ' +
@@ -222,7 +222,7 @@ export const FUTURE_SKEW_MS = 60_000;
  * Stated here rather than left implicit in the branch order below, because the
  * branch order is what a later edit reshuffles and the ordering is what must
  * survive it. `health-freshness.test.mjs` asserts the ordering against this
- * object and asserts that every non-fresh status blocks for a non-guest node —
+ * object and asserts that every non-fresh status blocks for a non-backstop node —
  * which is a property of the whole table, not of the branch a fixture happens
  * to reach.
  */
@@ -404,11 +404,11 @@ function main() {
 		out.log('  --machine <node>   one node instead of the whole roster');
 		out.log('  --json             machine-readable verdict');
 		out.log('');
-		out.log(`Fails when a non-guest node's $health record is older than ${HEALTH_STALE_DAYS}d,`);
+		out.log(`Fails when a non-backstop node's $health record is older than ${HEALTH_STALE_DAYS}d,`);
 		out.log('is absent, is unreadable, or is dated in the future. Probes nothing and writes');
 		out.log('nothing: `fleet doctor --write` is what refreshes the record, and ci:health-refresh');
 		out.log(
-			`runs it daily. Also fails when the NEWEST non-guest record is older than ${WRITER_STALE_DAYS}d:`
+			`runs it daily. Also fails when the NEWEST non-backstop record is older than ${WRITER_STALE_DAYS}d:`
 		);
 		out.log(
 			'that is the writer stopping, which would otherwise surface only at the per-node line.'
@@ -454,12 +454,12 @@ function main() {
 	}
 
 	const verdicts = freshnessVerdicts(facet.nodes, { nowMs, drainWhy });
-	const guests = guestNodeNames(manifest);
+	const backstops = backstopNodeNames(manifest);
 	// The writer verdict judges the WHOLE roster; a `--machine` run sees one
 	// node and could only mistake that node for the writer.
-	const writer = only ? null : writerVerdict(verdicts, guests);
+	const writer = only ? null : writerVerdict(verdicts, backstops);
 	const classified = [
-		...guestAdvisory(freshnessFindings(verdicts), guests),
+		...backstopAdvisory(freshnessFindings(verdicts), backstops),
 		...(writer ? [writer] : []),
 	];
 	const blocking = blockingFindings(classified);
@@ -477,7 +477,7 @@ function main() {
 		for (const f of classified) {
 			out.log(
 				`${f.class === ADVISORY ? 'advisory' : 'BLOCKING'}  ${f.node}  ` +
-					`${f.category}/${f.status}${f.role === 'guest' ? '  (guest)' : ''}`
+					`${f.category}/${f.status}${f.role === 'backstop' ? '  (backstop)' : ''}`
 			);
 			out.log(`          ${f.why}`);
 		}

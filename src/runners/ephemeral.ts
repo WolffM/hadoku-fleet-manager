@@ -19,7 +19,7 @@
  * carrying `ephemeral: true` in fleet-runner-manifest.json, and no node does.
  */
 
-import { isGuestNode } from '../lib/node-role.js';
+import { isBackstopNode } from '../lib/node-role.js';
 import { CI_OOM_SCORE_ADJ } from './hosting-record.js';
 
 /** Every JIT runner name starts with this. The sweep keys its reaping on it. */
@@ -593,7 +593,7 @@ export interface WarmEligibilityInput {
 	 * is the only honest one here.
 	 */
 	jobMb: number;
-	/** `"claw"` | `"guest"`. Read through `isGuestNode`, never directly. */
+	/** `"claw"` | `"backstop"`. Read through `isBackstopNode`, never directly. */
 	role?: unknown;
 }
 
@@ -626,18 +626,18 @@ export interface WarmEligibilityInput {
  * construction: the warm half and the JIT half are the same size, so a node
  * holds a listener only when its JIT half ALSO holds a full mint.
  *
- * A GUEST HOLDS NONE, BY ROLE. hokon's 63402 MB passes any memory test that
+ * A BACKSTOP HOLDS NONE, BY ROLE. hokon's 63402 MB passes any memory test that
  * can be written (it would read 6 here), so memory shape must not be what
- * excludes it: a guest lends the fleet a backstop registration and is
+ * excludes it: the backstop lends the fleet a reserve registration and is
  * otherwise none of the fleet's business (operator, 2026-09-14). The warm tick
- * also drops guests before any ssh (`withoutGuests`); this is the second
+ * also drops backstops before any ssh (`withoutBackstops`); this is the second
  * answer, so a caller that forgets the first still gets zero.
  *
  * TOTAL over its inputs: a non-positive or non-finite figure anywhere reads
  * as zero listeners — "I could not measure it" must never read as room.
  */
 export function warmEligibleSlots(i: WarmEligibilityInput): number {
-	if (isGuestNode(i)) return 0;
+	if (isBackstopNode(i)) return 0;
 	return warmMemorySlots(i.installedMb - i.minFreeMb, i.jobMb);
 }
 
@@ -692,7 +692,7 @@ export interface WarmPlacementInput {
 	/** One job's worth, in the unit a MINT uses — see {@link
 	 * WarmEligibilityInput.jobMb}. */
 	jobMb: number;
-	/** `"claw"` | `"guest"`. Read through `isGuestNode`, never directly. */
+	/** `"claw"` | `"backstop"`. Read through `isBackstopNode`, never directly. */
 	role?: unknown;
 	/** The node's declared concurrency ceiling, or absent. */
 	maxConcurrent?: number | null;
@@ -715,7 +715,7 @@ export interface WarmPlacementInput {
  * JIT slot. Either reading zero is zero.
  */
 export function warmListenerSlots(i: WarmPlacementInput): number {
-	if (isGuestNode(i)) return 0;
+	if (isBackstopNode(i)) return 0;
 	return Math.min(warmMemorySlots(i.usableMb, i.jobMb), warmConcurrencySlots(i));
 }
 
@@ -747,7 +747,7 @@ export function warmListenersHeld(i: WarmPlacementInput): number {
  * {@link warmEligibleSlots}, whose count this reads. DERIVED, not a name
  * check: on today's fleet it reads true for claw-1/3/4/5/8/9 and false for
  * claw-2/6 (their JIT half, ~3160 MB, holds less than one mint) and hokon
- * (guest).
+ * (backstop).
  *
  * The COUNT it is given decides everything, so which count matters: the warm
  * tick and the dispatch tick both pass {@link warmListenerSlots} (memory AND
@@ -835,10 +835,10 @@ export const JIT_UNIT_MAX_SEC = GITHUB_JOB_CEILING_SEC + 30 * 60;
  * exactly one machine overrides it: hokon, to `ci-runner.slice`, a hand-authored
  * slice whose CPU and IO weights are why it exists. Until 2026-10-19 no JIT
  * unit could land there, and this comment said the name would have to be
- * threaded the day one could. #120 made hokon an on-demand guest, so it is:
+ * threaded the day one could. #120 made hokon an on-demand backstop, so it is:
  * the node's declared name travels `dispatch-pass` → `MintRequest.sliceName` →
  * {@link buildSpawnPlan}. The WARM path still uses the default alone, because a
- * guest never holds a warm listener ({@link warmListenerSlots}).
+ * backstop never holds a warm listener ({@link warmListenerSlots}).
  */
 export const DEFAULT_RUNNER_SLICE = 'runners.slice';
 
@@ -960,4 +960,34 @@ export function ciUnitProperties(o: { memoryMaxMb: number; sliceName?: string | 
 		// hosting tenant (src/runners/hosting-record.ts).
 		`--property=OOMScoreAdjust=${CI_OOM_SCORE_ADJ}`,
 	];
+}
+
+/**
+ * The per-unit `MemoryMax` for a runner minted on an ON-DEMAND BACKSTOP (#120).
+ *
+ * NOT {@link unitMemoryMaxMb}, because the operator's rule there is for the
+ * CLAWS and is the opposite of the one the production host carries. A claw has
+ * no hard per-job cap: a unit may grow to the whole slice, because the slice
+ * IS everything CI may have. On the backstop the manifest says otherwise, in its
+ * own `$why`s: `slice.maxMb` is a deliberate allowance far below
+ * MemTotal − minFreeMb (CI must not grow into the space production needs), and
+ * `slice.unitMaxMb` sits BELOW that so one runaway is one dead unit rather than
+ * a slice-wide kill of its siblings. Widening to the ceiling, as the claw rule
+ * does, would hand one job the whole backstop allowance.
+ *
+ * So the declared cap is the cap, clamped to the slice it has to fit inside.
+ * Total like its sibling: an absent cap is {@link JOB_RESERVE_DEFAULT_MB}, never
+ * zero, because this runs after the registration exists.
+ */
+export function backstopUnitMemoryMaxMb(o: {
+	/** The backstop's declared `slice.unitMaxMb`. */
+	requestedMb?: number | null;
+	/** The backstop's declared `slice.maxMb` — the backstop allowance. */
+	sliceMaxMb?: number | null;
+}): number {
+	const positive = (v: number | null | undefined): number | null =>
+		typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : null;
+	const requested = positive(o.requestedMb) ?? JOB_RESERVE_DEFAULT_MB;
+	const slice = positive(o.sliceMaxMb);
+	return slice === null ? requested : Math.min(requested, slice);
 }

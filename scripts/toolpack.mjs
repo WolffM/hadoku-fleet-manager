@@ -40,7 +40,8 @@ import { PKG_SCRIPTS } from './lib/paths.mjs';
 import { loadManifest, remoteCommand } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
-import { isGuestNode } from '../dist/lib/node-role.js';
+import { isBackstopNode } from '../dist/lib/node-role.js';
+import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { packsRequired } from './lib/toolpack-rules.mjs';
@@ -77,26 +78,7 @@ const OFF = RESET;
 const PACKS = JSON.parse(readFileSync(join(PKG_SCRIPTS, 'toolpacks.json'), 'utf8')).packs;
 const named = parsed.positionals;
 const MANIFEST = loadManifest();
-/**
- * A GUEST IS NOT SWEPT, AND THE SKIP IS PRINTED.
- *
- * With `--confirm` this runs `sudo -n apt-get install` on every node it holds. A
- * guest lends the fleet a registration and is otherwise none of the fleet
- * chain's business (operator, 2026-09-14) — installing packages on it is the
- * furthest end of that, and `converge-toolchain` was fixed for the same reason
- * in Wave 3d.
- *
- * NAMING IT REACHES IT. The node list here is POSITIONAL rather than
- * `--machine`, but the principle `guestGate` encodes is the same: an operator
- * who typed the box's name is not going to be surprised by reaching it, and
- * refusing there would leave no way to service a guest's instruments at all.
- * Only the unnamed fleet-wide sweep skips.
- */
-const everyNode = named.length ? named : Object.keys(MANIFEST.machines);
-const skippedByRole = named.length
-	? []
-	: everyNode.filter((n) => isGuestNode(MANIFEST.machines[n]));
-const nodes = everyNode.filter((n) => !skippedByRole.includes(n));
+const nodes = named.length ? named : Object.keys(MANIFEST.machines);
 
 /**
  * Run on the node. F5: one node-exec helper — `remoteCommand` carries the
@@ -152,8 +134,8 @@ for (const node of nodes) {
 	// into: a claw that earned it would have lost the `python-pip` pack — and the
 	// gap that pack exists to close — for a reason that has nothing to do with CI.
 	// What the filter was standing in for is "this box is not general CI capacity",
-	// and that is the role.
-	const ciClaw = !isGuestNode(MANIFEST.machines[node]);
+	// and that is the role: the backstop takes CI only when the claws cannot.
+	const ciClaw = !isBackstopNode(MANIFEST.machines[node]);
 	const packs = packsRequired(PACKS, shape, ciClaw);
 	const missing = [];
 	for (const [name, p] of packs)
@@ -165,9 +147,20 @@ for (const node of nodes) {
 	report.push({ node, packs: packs.map(([n]) => n), missing, apt });
 }
 
+// apt is root, and the fleet has no sudo on the backstop: its gaps are the
+// operator's hand-run, reported as advisories that fail nothing.
+for (const r of report) {
+	if (r.error || !r.apt?.length || maySudo(MANIFEST.machines[r.node])) continue;
+	r.advisory = rootAdvisory(
+		r.node,
+		`installing ${r.apt.join(' ')}`,
+		`fleet toolpack ${r.node} --confirm`
+	);
+}
+
 if (CONFIRM) {
 	for (const r of report) {
-		if (r.error || !r.apt?.length) continue;
+		if (r.error || !r.apt?.length || r.advisory) continue;
 		if (!JSON_OUT) process.stderr.write(`  ${r.node}: installing ${r.apt.join(' ')} ... `);
 		try {
 			on(r.node, `sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y ${r.apt.join(' ')}`);
@@ -191,24 +184,19 @@ const findings = report.flatMap((r) =>
 		? [`${r.node}: could not look — ${r.error}`]
 		: [
 				...(r.installError ? [`${r.node}: install failed — ${r.installError}`] : []),
-				...r.missing.map((m) => `${r.node}: missing ${m.bin} (pack ${m.pack})`),
+				...(r.advisory ? [] : r.missing.map((m) => `${r.node}: missing ${m.bin} (pack ${m.pack})`)),
 			]
 );
 
 if (JSON_OUT) {
-	// Alongside `report` rather than inside it: `report` means "nodes this run
-	// looked at", and a guest is precisely one it did not.
 	console.log(
 		JSON.stringify(
-			{ at: new Date().toISOString(), report, findings, skippedByRole, ok: !findings.length },
+			{ at: new Date().toISOString(), report, findings, ok: !findings.length },
 			null,
 			2
 		)
 	);
 } else {
-	for (const n of skippedByRole) {
-		console.log(`${n.padEnd(9)} ${YEL}skipped: guest — name it explicitly to reach it${OFF}`);
-	}
 	for (const r of report) {
 		if (r.error) {
 			console.log(`${RED}${r.node.padEnd(9)} could not look — ${r.error}${OFF}`);
@@ -218,6 +206,8 @@ if (JSON_OUT) {
 			? `${YEL}missing ${r.missing.map((m) => m.bin).join(', ')}${OFF}`
 			: `${GRN}complete${OFF}`;
 		console.log(`${r.node.padEnd(9)} packs: ${r.packs.join('+').padEnd(12)} ${state}`);
+		if (r.advisory)
+			console.log(`          advisory: ${r.advisory.message}\n            ${r.advisory.fix}`);
 	}
 	if (findings.length && !CONFIRM)
 		console.log(`\n${YEL}${findings.length} gap(s). Install with: fleet toolpack --confirm${OFF}`);

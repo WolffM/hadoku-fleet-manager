@@ -23,7 +23,6 @@ import {
 	varianceAxis,
 	durationRatios,
 	perJobCosts,
-	selectMetricTargets,
 	costFacets,
 	cpuSec,
 	facet,
@@ -346,75 +345,6 @@ test('costFacets always names every facet, so a consumer never infers one is gon
 	]) {
 		assert.ok(keys.includes(k), `costFacets must always carry ${k}`);
 	}
-});
-
-// ── a guest is not swept, and is not unreachable ───────────────────────────
-//
-// Both directions, because each half fails differently. Lose the skip and a
-// sweep ssh's a guest from every box that is not that guest. Lose the opt-in
-// and an operator asking a guest for its own numbers gets a silent empty set,
-// which is the failure that makes people stop believing the tool.
-
-const FLEET = [
-	['claw-1', { role: 'claw' }],
-	['claw-2', { role: 'claw' }],
-	['hokon', { role: 'guest' }],
-];
-
-test('the default sweep does NOT reach a guest, and says that it did not', () => {
-	const { targets, skipped } = selectMetricTargets(FLEET);
-	assert.deepEqual(
-		targets.map(([n]) => n),
-		['claw-1', 'claw-2']
-	);
-	assert.equal(skipped.length, 1, 'a deliberate skip is REPORTED, never silent');
-	assert.equal(skipped[0].node, 'hokon');
-	assert.match(skipped[0].why, /guest/);
-});
-
-test('the skip is by ROLE, never by name — an unroled hokon is swept', () => {
-	// Skipping a hostname is a fact about one garage. Skipping a role is a fact
-	// about the fleet model, and it is the half that survives a rename.
-	const { targets, skipped } = selectMetricTargets([['hokon', { role: 'claw' }]]);
-	assert.deepEqual(
-		targets.map(([n]) => n),
-		['hokon']
-	);
-	assert.equal(skipped.length, 0);
-	// ...and a differently-named guest IS skipped.
-	const other = selectMetricTargets([['spare-1', { role: 'guest' }]]);
-	assert.equal(other.targets.length, 0);
-	assert.equal(other.skipped[0].node, 'spare-1');
-});
-
-test('naming a guest with --machine reaches it — asking is not sweeping', () => {
-	const { targets, skipped } = selectMetricTargets(FLEET, { only: 'hokon' });
-	assert.deepEqual(
-		targets.map(([n]) => n),
-		['hokon']
-	);
-	assert.equal(skipped.length, 0, 'nothing was skipped: the operator asked for exactly this');
-});
-
-test('--include-guests sweeps everything, guest included', () => {
-	const { targets, skipped } = selectMetricTargets(FLEET, { includeGuests: true });
-	assert.deepEqual(
-		targets.map(([n]) => n),
-		['claw-1', 'claw-2', 'hokon']
-	);
-	assert.equal(skipped.length, 0);
-});
-
-test('--machine on a claw still scopes to that claw and reports no guest skip', () => {
-	// `fleet capabilities --machine claw-1` silently ignored --machine and probed
-	// the whole fleet, hokon included, seven times. The scoping half is not a
-	// formality.
-	const { targets, skipped } = selectMetricTargets(FLEET, { only: 'claw-1' });
-	assert.deepEqual(
-		targets.map(([n]) => n),
-		['claw-1']
-	);
-	assert.equal(skipped.length, 0, 'the guest was out of scope, not skipped by role');
 });
 
 // ── a long-lived cgroup's counters are not a job's cost ────────────────────

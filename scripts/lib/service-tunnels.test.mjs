@@ -23,7 +23,7 @@ const sha = (s) => createHash('sha256').update(s).digest('hex');
 
 const manifest = {
 	machines: {
-		hokon: { role: 'guest' },
+		hokon: { role: 'backstop' },
 		'claw-4': { services: 'pm2' },
 		'claw-6': { services: 'pm2' },
 		'claw-5': {},

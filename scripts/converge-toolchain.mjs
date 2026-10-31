@@ -35,13 +35,11 @@
  * the declaration; this reads it. Adding a package here instead of there would
  * make a freshly imaged node depend on someone remembering to run this.
  *
- * AND IT DOES NOT TOUCH A GUEST. `machines[<node>].role` says what the fleet
- * chain may do to a box; `guest` means it lends the fleet a registration and
- * nothing else. hokon is the only one, and it is the production host — an
- * unattended `apt-get install` there is the specific damage this skip prevents.
- * The skip prints and rides in `--json`, because a silent skip is how a node
- * stops being checked and nobody notices. `--include-guests` overrides it for
- * one run.
+ * The backstop is converged like any claw: it runs the fleet's jobs when the
+ * claws cannot, so it needs the same toolchain. The fleet has no sudo there
+ * (`fleetHasSudo`), so a repair that needs root — apt, or a REPAIRS entry with
+ * `sudo` in it — is not attempted on it: it is an ADVISORY naming the
+ * operator's hand-run, and never fails the run (lib/operator-sudo.mjs).
  */
 
 import { writeFileSync } from 'node:fs';
@@ -56,8 +54,10 @@ import {
 	installScript,
 	isVersionManaged,
 	parseObservation,
+	repairNeedsRoot,
 	resolveInstallTarget,
 } from './lib/toolchain-floor.mjs';
+import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { createLiveDeps, runRefreshCycle } from './lib/refresh-cycle.mjs';
 import { createReleaseLookup } from './lib/tool-release.mjs';
 import { parseSuperseded, supersededScript } from './lib/superseded-installs.mjs';
@@ -74,20 +74,9 @@ import { siteRoot } from './lib/paths.mjs';
 // THE PROFILE MANIFEST IS OPERATOR CONFIG, SO IT IS RESOLVED THE WAY EVERY
 // OTHER MANIFEST IS — see `profilesPath()` below.
 import { profileManifestPath } from './lib/node-profiles.mjs';
-import { isGuestNode } from '../dist/lib/node-role.js';
 
 const JSON_OUT = process.argv.includes('--json');
 const WRITE = process.argv.includes('--write');
-/**
- * Converge a GUEST anyway.
- *
- * The default is to skip one, and the skip is the point (see `main`). The flag
- * exists so the operator who decides a guest needs the fleet's toolchain after
- * all has a door that is not "edit the manifest", and it must be typed every
- * time — there is no manifest field that turns it off permanently, because a
- * permanent opt-in is just a guest that is a claw.
- */
-const INCLUDE_GUESTS = process.argv.includes('--include-guests');
 const ONLY = machineArg(process.argv.slice(2), { valueFlags: ['--out', '--budget-min'] });
 /**
  * `--refresh`: the CADENCE (issue #69). Instead of converging the floor, move
@@ -276,6 +265,7 @@ async function refresh() {
 		log,
 		state,
 		deadline: Date.now() + BUDGET_MIN * 60_000,
+		sudo: (_name, entry) => maySudo(entry),
 	});
 
 	// EARNED CAPABILITIES COME WITH THEIR ARTIFACTS (#102, wave 4c lane E), run
@@ -305,11 +295,21 @@ async function refresh() {
 	// SUPERSEDED TOOL INSTALLS (lib/superseded-installs.mjs), on the same
 	// nightly cadence: a JDK or Maven left in admin's home after the
 	// fleet's copy moved under the opt root. `--plan` lists without removing.
-	// A guest is never touched, and a node the sweep could not finish on is a
-	// finding, never "nothing to remove".
+	// A node the sweep could not finish on is a finding, never "nothing to remove".
+	// It reads other users' homes and /proc and removes as root, so on a node the
+	// fleet has no sudo on it is the operator's, and an advisory.
 	report.superseded = [];
 	for (const [name, entry] of machines) {
-		if (isGuestNode(entry)) continue;
+		if (!maySudo(entry)) {
+			report.advisories.push(
+				rootAdvisory(
+					name,
+					'sweeping superseded tool installs',
+					`fleet converge-toolchain --refresh --machine ${name}`
+				)
+			);
+			continue;
+		}
 		const res = onNode(
 			name,
 			supersededScript({ ciUser: separateCiUser(name, manifest), apply: !PLAN }),
@@ -351,6 +351,7 @@ async function refresh() {
 
 	log('');
 	for (const f of report.findings) log(`FINDING ${f.node ?? '-'} [${f.kind}] ${f.reason}`);
+	for (const a of report.advisories) log(`ADVISORY ${a.node} ${a.message}\n  ${a.fix}`);
 	for (const r of report.superseded) {
 		if (r.status !== 'keep')
 			log(`SUPERSEDED ${r.node} ${r.status} ${r.dir}${r.detail ? ` (${r.detail})` : ''}`);
@@ -443,39 +444,13 @@ async function main() {
 	let drifted = 0;
 	let unreadable = 0;
 
-	let skippedGuests = 0;
-
 	for (const node of nodes) {
-		// A GUEST IS NOT CONVERGED, AND THE SKIP IS PRINTED.
-		//
-		// This is the gate that would apt-get on the production host. hokon runs
-		// mgmt-api, the tunnel and the other production services, and the operator's decision of
-		// 2026-09-14 is that CI's toolchain is not the fleet's to install there:
-		// "hokon is a guest fleet member; they are here when they are needed."
-		// `--write` on a guest is the specific damage — an unattended
-		// `apt-get install` against the box every other gate in this fleet
-		// reports through.
-		//
-		// It PRINTS, and it rides in `--json`, because a silent skip is how a
-		// node stops being checked and nobody notices. This is a node deliberately
-		// out of scope, which is a different fact from `ok` and from
-		// `expected-down`, and the report says which.
-		if (isGuestNode(manifest.machines?.[node]) && !INCLUDE_GUESTS) {
-			skippedGuests++;
-			log(`── ${node}  [skipped: guest]`);
-			log(
-				'   A guest lends the fleet a registration and nothing else — convergence, and ' +
-					'any repair needing sudo, are out of scope there (operator, 2026-09-14).'
-			);
-			log('   Override for one run with --include-guests.');
-			results.push({ node, status: 'guest', role: 'guest' });
-			continue;
-		}
-
 		// Read ONCE outside the loop above: a drain landing mid-sweep would judge
 		// two nodes in the same run against different state.
 		const defer = deferralFor(node, drains);
 
+		const entry = manifest.machines?.[node];
+		const sudo = maySudo(entry);
 		const repairs = applicableRepairs(manifest.machines?.[node]);
 		let state = observe(node, common, repairs);
 		if (!state.readable) {
@@ -498,9 +473,16 @@ async function main() {
 		}
 
 		let { missingPkgs, brokenCaps } = state;
+		// What the fleet may repair here: everything on a node with sudo; on the
+		// backstop, only what needs no root.
+		const fixable = (pkgs, caps) => ({
+			pkgs: sudo ? pkgs : [],
+			caps: sudo ? caps : caps.filter((id) => !repairNeedsRoot(id)),
+		});
 		let repair = null;
-		if (WRITE && (missingPkgs.length || brokenCaps.length)) {
-			repair = await converge(node, missingPkgs, brokenCaps, manifest);
+		const todo = fixable(missingPkgs, brokenCaps);
+		if (WRITE && (todo.pkgs.length || todo.caps.length)) {
+			repair = await converge(node, todo.pkgs, todo.caps, manifest);
 			// RE-PROBE. The install's exit code is the writer describing itself.
 			state = observe(node, common, repairs);
 			if (!state.readable) {
@@ -513,9 +495,31 @@ async function main() {
 			({ missingPkgs, brokenCaps } = state);
 		}
 
-		const clean = !missingPkgs.length && !brokenCaps.length;
+		const left = fixable(missingPkgs, brokenCaps);
+		const clean = !left.pkgs.length && !left.caps.length;
+		const advisories = [
+			...(missingPkgs.length > left.pkgs.length
+				? [
+						rootAdvisory(
+							node,
+							`installing ${missingPkgs.join(' ')}`,
+							`fleet converge-toolchain --machine ${node} --write`
+						),
+					]
+				: []),
+			...brokenCaps
+				.filter((id) => !left.caps.includes(id))
+				.map((id) =>
+					rootAdvisory(
+						node,
+						`repairing "${id}"`,
+						`fleet converge-toolchain --machine ${node} --write`
+					)
+				),
+		];
 		if (clean) {
-			log(`── ${node}  [ok]${repair ? '  (converged)' : ''}`);
+			log(`── ${node}  [${advisories.length ? 'advisory' : 'ok'}]${repair ? '  (converged)' : ''}`);
+			for (const a of advisories) log(`   ${a.message}\n     ${a.fix}`);
 		} else {
 			drifted++;
 			log(`── ${node}  [${WRITE ? 'STILL DRIFTED' : 'drift'}]`);
@@ -526,42 +530,26 @@ async function main() {
 		}
 		results.push({
 			node,
-			status: clean ? 'ok' : 'drift',
+			status: clean ? (advisories.length ? 'advisory' : 'ok') : 'drift',
 			missingPackages: missingPkgs,
 			brokenCapabilities: brokenCaps,
 			converged: Boolean(repair?.ok),
+			...(advisories.length ? { advisories } : {}),
 		});
 	}
 
 	log('');
-	// ZERO NODES ACTUALLY LOOKED AT IS NOT A PASS, even when every skip was
-	// deliberate. `--machine hokon` selects one guest, skips it, and would
-	// otherwise exit 0 having converged nothing — "I could not look" wearing
-	// "I chose not to look" as a costume. The unqualified sweep never hits this:
-	// it always carries claws.
-	if (skippedGuests === nodes.length) {
-		log(
-			`Every selected node (${nodes.join(', ')}) is a guest, so nothing was checked. ` +
-				'That is not a pass — re-run against a claw, or pass --include-guests if you ' +
-				'really mean to converge a guest.'
-		);
-		if (JSON_OUT) {
-			emitter.emit({ ok: false, write: WRITE, nodes: results, guestsSkipped: skippedGuests });
-		}
-		process.exit(1);
-	}
 	const bad = drifted + unreadable;
-	const guestNote = skippedGuests ? `, ${skippedGuests} guest(s) skipped` : '';
 	log(
 		bad === 0
-			? `Every CLAW carries the declared toolchain. (${results.filter((r) => r.status === 'expected-down').length} expected down${guestNote})`
-			: `${drifted} node(s) drifted, ${unreadable} unreadable${guestNote}.`
+			? `Every node carries the declared toolchain. (${results.filter((r) => r.status === 'expected-down').length} expected down)`
+			: `${drifted} node(s) drifted, ${unreadable} unreadable.`
 	);
 	// Only in --json mode: `emit` is the single stdout write and its payload is a
 	// machine's document. Emitting it unasked would put a JSON blob under the
 	// human report, which is the same unparseable stream one layer down.
 	if (JSON_OUT) {
-		emitter.emit({ ok: bad === 0, write: WRITE, nodes: results, guestsSkipped: skippedGuests });
+		emitter.emit({ ok: bad === 0, write: WRITE, nodes: results });
 	}
 	process.exit(bad === 0 ? 0 : 1);
 }

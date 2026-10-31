@@ -360,12 +360,13 @@ export const LAYER_MAP = [
 	{ glob: 'scripts/apt-security.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/node-users-cutover.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/lib/apt-security.mjs', layer: 'domain', domain: 'lifecycle', part: 'core' },
+	// What the role declaration says the fleet may do as root — read off config.
+	{ glob: 'scripts/lib/operator-sudo.mjs', layer: 'config' },
 	{ glob: 'scripts/lib/idle-measure.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/lib/node-interfaces.mjs', layer: 'domain', domain: 'lifecycle', part: 'core' },
 	{ glob: 'scripts/lib/node-users-cutover.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/lib/probe-script.mjs', layer: 'domain', domain: 'lifecycle', part: 'core' },
 	{ glob: 'scripts/lib/proof-drain.mjs', layer: 'domain', domain: 'lifecycle', part: 'core' },
-	{ glob: 'scripts/lib/prove-job-guest.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{
 		glob: 'scripts/lib/provisioning-converge.mjs',
 		layer: 'domain',

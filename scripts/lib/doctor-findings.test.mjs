@@ -32,7 +32,7 @@ import {
 	advisoryFindings,
 	blockingFindings,
 	doctorFindings,
-	guestAdvisory,
+	backstopAdvisory,
 } from './doctor-findings.mjs';
 import {
 	CLAW1,
@@ -924,22 +924,22 @@ void test('the recorded fleet: every node’s thermal verdict is unchanged by th
 //
 // Same reasoning as `preflight.test.mjs`'s wiring block: a classifier nothing
 // calls is worse than none, because the gate then looks role-aware and pages on
-// a guest anyway.
+// the backstop anyway.
 
-test('doctor-run.mjs applies the guest role before deciding its exit code', () => {
+test('doctor-run.mjs applies the backstop role before deciding its exit code', () => {
 	const src = readFileSync(
 		resolve(dirname(fileURLToPath(import.meta.url)), 'doctor-run.mjs'),
 		'utf8'
 	);
 	assert.match(
 		src,
-		/const classified = guestAdvisory\(findings, GUESTS\)/,
-		'`fleet doctor` no longer applies the guest role to its findings'
+		/const classified = backstopAdvisory\(findings, BACKSTOPS\)/,
+		'`fleet doctor` no longer applies the backstop role to its findings'
 	);
 	assert.match(
 		src,
-		/const GUESTS = guestNodeNames\(manifest\)/,
-		'and the guest set must come from the manifest role'
+		/const BACKSTOPS = backstopNodeNames\(manifest\)/,
+		'and the backstop set must come from the manifest role'
 	);
 	assert.match(
 		src,
@@ -949,16 +949,16 @@ test('doctor-run.mjs applies the guest role before deciding its exit code', () =
 	assert.match(
 		src,
 		/const advisory = advisoryFindings\(classified\)/,
-		'a guest finding classified out of `blocking` must still land in `advisory`'
+		'a backstop finding classified out of `blocking` must still land in `advisory`'
 	);
 });
 
-test('a guest’s findings come back advisory, except the one it is in scope for', () => {
+test('the backstop’s findings come back advisory, except unreachable', () => {
 	// Driven through `doctorFindings`' real output rather than a hand-made
 	// finding, so this measures the categories the facet actually produces.
-	const fs = guestAdvisory(doctorFindings(facetOf(CLAW1), { nowMs: NOW }), new Set(['claw-1']));
+	const fs = backstopAdvisory(doctorFindings(facetOf(CLAW1), { nowMs: NOW }), new Set(['claw-1']));
 	assert.ok(fs.length > 0, 'the fixture must produce findings, or this asserts nothing');
-	assert.equal(blockingFindings(fs).length, 0, 'nothing about a guest blocks');
+	assert.equal(blockingFindings(fs).length, 0, 'nothing about the backstop blocks');
 	assert.equal(advisoryFindings(fs).length, fs.length, 'and nothing is dropped');
 	// MUTATION: as a claw the same node keeps whatever it had.
 	const asClaw = doctorFindings(facetOf(CLAW1), { nowMs: NOW });
@@ -969,8 +969,8 @@ test('a guest’s findings come back advisory, except the one it is in scope for
 	);
 });
 
-test('an UNREACHABLE guest still blocks — the one question it IS in scope for', () => {
-	const fs = guestAdvisory(
+test('an UNREACHABLE backstop still blocks — it is no use in an emergency', () => {
+	const fs = backstopAdvisory(
 		doctorFindings({ node: 'hokon', reachable: false, why: 'ssh refused' }),
 		['hokon']
 	);

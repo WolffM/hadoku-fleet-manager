@@ -45,7 +45,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadManifest, machineArg, runOn, selectNodes } from './lib/fleet-exec.mjs';
+import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
 
 /**
  * WHERE THE CACHE LIVES IS NOT THIS SCRIPT'S TO DECIDE.
@@ -76,18 +76,9 @@ const TOOLCACHE_RULE = readFileSync(
  * download that cannot succeed on Debian 13. That is the 2026-08-18 failure
  * arriving on day one of a node's life.
  *
- * A GUEST IS NOT SEEDED, AND THE SKIP IS PRINTED. It lends the fleet a
- * registration and is otherwise none of the fleet chain's business (operator,
- * 2026-09-14) — "never seeded" is one of the words in that decision, and this
- * unpacks a 60MB interpreter into another machine's home.
  *
- * BY ROLE, NOT BY LABEL. The exclusion here used to be `pm2-host`, which was
- * exact only while one machine carried that label and stopped being exact the
- * day Wave 3d made `pm2-host` an EARNED capability a claw can probe into: a claw
- * that earned it would have silently stopped being seeded, and `setup-python` on
- * it would then fall through to a download Debian 13 cannot satisfy — the
- * 2026-08-18 failure, reintroduced by a filter that was never about python.
- * `--machine <the guest>` still reaches it, deliberately.
+ * The backstop is seeded like any claw: it mints JIT runners on demand, and a
+ * job that lands there needs the same interpreter.
  */
 // `--machine` IS HONOURED HERE, and until 2026-09-08 it was silently dropped.
 //
@@ -102,22 +93,14 @@ const TOOLCACHE_RULE = readFileSync(
 // isLocalNode is the one answer to "is this me": this question had four
 // implementations across the CLI and they disagreed.
 const ONLY = machineArg(process.argv.slice(2), { valueFlags: ['--version'] });
-const { nodes: selectedClaws, skippedByRole } = selectNodes(loadManifest(), {
+const CLAWS = selectMachines(loadManifest(), {
 	only: ONLY,
 	where: (m) => m.placement !== 'excluded',
-});
-const CLAWS = selectedClaws.map(([name]) => name);
-// SAID OUT LOUD. A node that stops being seeded without anyone noticing is the
-// failure the skip exists to prevent.
-for (const s of skippedByRole) console.log(`  ${s.node.padEnd(8)} [skipped: guest] — ${s.why}`);
+}).map(([name]) => name);
 if (!CLAWS.length) {
 	console.error(
 		`seed-runner-python: no node matches${ONLY ? ` --machine ${ONLY}` : ''}.\n` +
-			'  A run that matched nothing must not report a clean pass over zero nodes.' +
-			(skippedByRole.length
-				? `\n  The only match is a guest (${skippedByRole.map((s) => s.node).join(', ')}), ` +
-					'whose tool cache the fleet does not seed.'
-				: '')
+			'  A run that matched nothing must not report a clean pass over zero nodes.'
 	);
 	process.exit(1);
 }

@@ -1,7 +1,7 @@
 import { readManifestState } from '../lib/manifest.js';
 
 /**
- * The manifest's machines, as the backstop reads them: which nodes are guests,
+ * The manifest's machines, as the backstop reads them: which nodes are backstops,
  * and which of those are minted for on demand rather than relabelled.
  *
  * `null` when unreadable. The backstop then falls back to what GitHub says —

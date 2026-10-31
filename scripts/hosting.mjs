@@ -57,7 +57,7 @@ import {
 } from '../dist/runners/hosting-record.js';
 import { stateDir } from './lib/paths.mjs';
 import { readTenantRegistry, tenantSpec } from './lib/tenant-registry.mjs';
-import { isGuestNode } from '../dist/lib/node-role.js';
+import { isBackstopNode } from '../dist/lib/node-role.js';
 import { nodeUser } from '../dist/lib/node-users.js';
 import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
@@ -335,9 +335,9 @@ if (action === 'check') {
 if (!node) refuse('name a node, or use --check. See --help.');
 const machine = manifest.machines?.[node];
 if (!machine) refuse(`${node} is not a declared node.`);
-if (isGuestNode(machine))
+if (isBackstopNode(machine))
 	refuse(
-		`${node} is a guest. A guest lends the fleet a registration and nothing else; it is not lent onward.`
+		`${node} is the backstop: not capacity, and the production host. It is not lent to a hosting tenant.`
 	);
 const wholeRec = drainDoc.nodes[node]?.kind === 'hosting' ? drainDoc.nodes[node] : null;
 const sharedRecs = hostingDoc.nodes[node] ?? [];

@@ -18,7 +18,7 @@
  *     exact bytes;
  *   - a measured facet is copied into the archive and removed from the live
  *     file, in that order;
- *   - a guest, a hosting node, an undeclared name and an already-retired
+ *   - a hosting node, an undeclared name and an already-retired
  *     name are each refused for their own stated reason.
  */
 import { test, afterEach } from 'node:test';
@@ -202,17 +202,6 @@ test('a name BOTH declared and on the ledger is an inconsistency, refused rather
 	const r = run(fx, ['claw-9', '--confirm', '--json']);
 	assert.equal(r.status, 1, r.stdout + r.stderr);
 	assert.match(JSON.parse(r.stdout).error, /BOTH declared .* AND on the retired-name ledger/);
-});
-
-test('a GUEST is refused unless --include-guests', () => {
-	const machines = { hokon: { role: 'guest', maxConcurrent: 1 } };
-	const fx = fixture({ machines });
-	const r = run(fx, ['hokon', '--confirm', '--json']);
-	assert.equal(r.status, 1, r.stdout + r.stderr);
-	const out = JSON.parse(r.stdout);
-	assert.equal(out.guest, true);
-	assert.match(out.error, /GUEST/);
-	assert.equal(readTouched(fx), '');
 });
 
 test('a HOSTING node is refused with a pointer to `fleet hosting --end`', () => {
@@ -435,19 +424,6 @@ test('fleet enroll refuses a retired name before it probes anything', async () =
 	assert.equal(out.retired, true);
 	assert.match(out.error, /RETIRED node name/);
 	assert.equal(readTouched(fx), '', 'enroll must refuse before it ever sshes the box');
-});
-
-test('fleet enroll still refuses a GUEST exactly as before, independent of the ledger check', () => {
-	const ENROLL = join(dirname(SCRIPT), 'enroll-node.mjs');
-	const fx = fixture({ machines: { hokon: { role: 'guest' } } });
-	const r = spawnSync(process.execPath, [ENROLL, 'hokon', '--stdin', '--json'], {
-		encoding: 'utf8',
-		input: '',
-		env: cleanGitEnv({ PATH: `${fx.bin}:${process.env.PATH}`, FLEET_MANIFEST_DIR: fx.dir }),
-	});
-	assert.equal(r.status, 1, r.stdout + r.stderr);
-	const out = JSON.parse(r.stdout);
-	assert.equal(out.role, 'guest');
 });
 
 test('fleet enroll proceeds normally for a fresh, unretired name', () => {

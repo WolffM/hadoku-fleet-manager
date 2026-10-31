@@ -474,7 +474,7 @@ export function resetRecoveryClock(): void {
 export interface DispatchTickInput {
 	/**
 	 * Nodes the dispatcher may mint on, in placement order (see
-	 * runners/traffic.ts): the ephemeral claws, then any on-demand guest.
+	 * runners/traffic.ts): the ephemeral claws, then any on-demand backstop.
 	 */
 	order: string[];
 	nodes: NodeState[];

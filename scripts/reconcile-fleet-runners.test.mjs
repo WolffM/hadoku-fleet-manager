@@ -1,22 +1,15 @@
 /**
  * WHOSE OFFLINE ROW FAILS THE RUN — #60.
  *
- * On 2026-09-26 a dry `fleet provision` of a claw exited 1 with `MISSING
- * COVERAGE: none`. The sole cause was `offline.length > 0`, and all 7 offline
- * rows were hokon's. hokon is a GUEST and a RESERVE: its stale registrations
- * are real drift, worth reporting, and not this fleet's to reinstall — so
- * failing on them made provisioning a DIFFERENT node impossible until someone
- * else's box was tidied.
+ * Every node's: a claw's and the backstop's alike. (Until 2026-10-31 the
+ * backstop's rows were reported and did not fail the run, while it was a
+ * `guest` the fleet did not repair.)
  *
- * The file header said the opposite of the code ("Offline runners and unmanaged
- * runners never fail the run — they are reported") while the exit predicate
- * counted `offline.length`. That is the fourth time in this repo that a comment
- * has been read as evidence, so the last test here holds the header to the
- * code.
- *
- * NOT A WIDENING, and that is what the claw cases below exist to prove. A
- * CLAW's offline registration is an incident and still exits 1; a guest's row
- * beside it does not hide it either.
+ * The file header once said the opposite of the code ("Offline runners and
+ * unmanaged runners never fail the run — they are reported") while the exit
+ * predicate counted `offline.length`. That is the fourth time in this repo that
+ * a comment has been read as evidence, so the last test here holds the header
+ * to the code.
  *
  * The reconciler is a CLI over `gh` and `ssh`, so it is exercised as one, the
  * same way `reconcile-runner-identity.test.mjs` does it: a throwaway manifest
@@ -52,7 +45,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'reconcile-fleet-runners.mjs');
 
 const CLAW = 'fixture-claw';
-const GUEST = 'fixture-guest';
+const BACKSTOP = 'fixture-backstop';
 const REPO = 'WolffM/fixture-alpha';
 
 /**
@@ -150,9 +143,8 @@ function fixture() {
 		JSON.stringify({
 			machines: {
 				[CLAW]: { labels: ['hadoku-builder'], maxConcurrent: 2 },
-				// The whole point of the fixture: a guest that the manifest declares
-				// exactly as it declares the claw, differing ONLY in `role`.
-				[GUEST]: { role: 'guest', labels: ['hadoku-builder'], maxConcurrent: 2 },
+				// Declared exactly as the claw is, differing ONLY in `role`.
+				[BACKSTOP]: { role: 'backstop', labels: ['hadoku-builder'], maxConcurrent: 2 },
 			},
 		})
 	);
@@ -252,7 +244,7 @@ function cleanup(fx) {
 test('a fully covered, all-online fleet exits 0 — without this every case below is vacuous', () => {
 	const fx = fixture();
 	try {
-		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, GUEST, 'online')]);
+		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, BACKSTOP, 'online')]);
 		assert.equal(r.code, 0, `a clean fleet must pass, got ${r.code}:\n${r.out}`);
 		assert.match(r.out, /MISSING COVERAGE: none/);
 	} finally {
@@ -262,43 +254,23 @@ test('a fully covered, all-online fleet exits 0 — without this every case belo
 
 // ── #60: whose offline row fails ───────────────────────────────────────────
 
-test("a GUEST's offline registration is reported and does NOT fail the run (#60)", () => {
+test("the backstop's offline registration fails the run like a claw's", () => {
 	const fx = fixture();
 	try {
-		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, GUEST, 'offline')]);
-		assert.equal(
-			r.code,
-			0,
-			`a guest's stale row must not fail a run provisioning a claw, got ${r.code}:\n${r.out}`
-		);
-		// Reported, though — "does not fail" is not "is not mentioned". The whole
-		// contract here is that it stays visible while it stops being fatal.
-		assert.match(r.out, /OFFLINE ON A GUEST \(1\)/);
-		assert.match(r.out, new RegExp(GUEST));
+		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, BACKSTOP, 'offline')]);
+		assert.equal(r.code, 1, `an offline row is an incident, got ${r.code}:\n${r.out}`);
+		assert.match(r.out, /OFFLINE \(1\)/);
 	} finally {
 		cleanup(fx);
 	}
 });
 
-test("a CLAW's offline registration still fails the run — this is not a widening", () => {
+test("a CLAW's offline registration fails the run", () => {
 	const fx = fixture();
 	try {
-		const r = run(fx, [runner(1, CLAW, 'offline'), runner(2, GUEST, 'online')]);
+		const r = run(fx, [runner(1, CLAW, 'offline'), runner(2, BACKSTOP, 'online')]);
 		assert.equal(r.code, 1, `a claw's offline row is an incident, got ${r.code}:\n${r.out}`);
 		assert.match(r.out, /OFFLINE \(1\)/);
-		assert.doesNotMatch(r.out, /OFFLINE ON A GUEST/);
-	} finally {
-		cleanup(fx);
-	}
-});
-
-test("a guest's offline row beside a claw's does not hide the claw's", () => {
-	const fx = fixture();
-	try {
-		const r = run(fx, [runner(1, CLAW, 'offline'), runner(2, GUEST, 'offline')]);
-		assert.equal(r.code, 1, `the claw still fails the run, got ${r.code}:\n${r.out}`);
-		assert.match(r.out, /OFFLINE \(1\)/);
-		assert.match(r.out, /OFFLINE ON A GUEST \(1\)/);
 	} finally {
 		cleanup(fx);
 	}
@@ -306,33 +278,21 @@ test("a guest's offline row beside a claw's does not hide the claw's", () => {
 
 // ── the --json contract ────────────────────────────────────────────────────
 
-test('--json still carries EVERY offline row under `offline`, guest ones marked', () => {
+test('--json carries EVERY offline row under `offline`', () => {
 	// `offline` is in JSON_CONTRACT and mgmt-api's fleet-coverage-check.ts reads
-	// it by name. The guest split must not shorten that array — it lives on the
-	// ROW, so the consumer's `{repo, claw, runner}` shape is untouched and the
-	// exit code and the report read the same fact from the same place.
+	// it by name, as `{repo, claw, runner}`.
 	const fx = fixture();
 	try {
-		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, GUEST, 'offline')], ['--json']);
-		assert.equal(r.code, 0);
+		const r = run(fx, [runner(1, CLAW, 'offline'), runner(2, BACKSTOP, 'offline')], ['--json']);
+		assert.equal(r.code, 1);
 		assert.ok(r.bytes > 0, 'the report reached the file');
 		const report = JSON.parse(r.out);
-		assert.equal(report.offline.length, 1, 'the guest row is still in the contract field');
 		assert.deepEqual(
-			{ ...report.offline[0] },
-			{ repo: REPO, runner: GUEST, claw: GUEST, guest: true }
-		);
-
-		const both = run(fx, [runner(1, CLAW, 'offline'), runner(2, GUEST, 'offline')], ['--json']);
-		assert.equal(both.code, 1);
-		const report2 = JSON.parse(both.out);
-		assert.equal(report2.offline.length, 2);
-		assert.deepEqual(
-			report2.offline.map((o) => [o.claw, o.guest]).sort(),
+			report.offline.map((o) => ({ ...o })).sort((a, b) => a.claw.localeCompare(b.claw)),
 			[
-				[CLAW, false],
-				[GUEST, true],
-			].sort()
+				{ repo: REPO, runner: BACKSTOP, claw: BACKSTOP },
+				{ repo: REPO, runner: CLAW, claw: CLAW },
+			]
 		);
 	} finally {
 		cleanup(fx);
@@ -351,10 +311,9 @@ test('the EXIT STATUS header describes the predicate the code actually uses', ()
 	assert.doesNotMatch(
 		header,
 		/Offline runners and unmanaged runners never fail the run/,
-		'the header must not claim offline never fails — a claw offline DOES fail'
+		'the header must not claim offline never fails — an offline row DOES fail'
 	);
-	assert.match(header, /CLAW/, 'it must say which offline rows fail');
-	assert.match(header, /GUEST/, 'and which do not');
+	assert.match(header, /backstop included, fails the run/, 'it must say which offline rows fail');
 });
 
 // ── #80: the last one-shot `gh` reads retry before could-not-look ──────────
@@ -370,7 +329,7 @@ test('the EXIT STATUS header describes the predicate the code actually uses', ()
 test('a runner-listing read times out once and recovers: no finding in `unreadable`', () => {
 	const fx = fixture();
 	try {
-		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, GUEST, 'online')], ['--json'], {
+		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, BACKSTOP, 'online')], ['--json'], {
 			GH_FAIL_WHAT: 'runners-read',
 			GH_FAIL_TIMES: '1',
 		});
@@ -390,7 +349,7 @@ test('a runner-listing read times out once and recovers: no finding in `unreadab
 test('a runner-listing read that never recovers is reported unreadable, carrying the reason and attempt N/M', () => {
 	const fx = fixture();
 	try {
-		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, GUEST, 'online')], ['--json'], {
+		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, BACKSTOP, 'online')], ['--json'], {
 			GH_FAIL_WHAT: 'runners-read',
 			GH_FAIL_TIMES: '999',
 		});
@@ -425,7 +384,7 @@ test('a runner-listing read that never recovers is reported unreadable, carrying
 test('an unreadable runner listing whose API body is on STDOUT ONLY still carries that body, with attempt N/M', () => {
 	const fx = fixture();
 	try {
-		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, GUEST, 'online')], ['--json'], {
+		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, BACKSTOP, 'online')], ['--json'], {
 			GH_FAIL_WHAT: 'runners-read-stdout-body',
 		});
 		assert.equal(
@@ -450,7 +409,7 @@ test('an unreadable runner listing whose API body is on STDOUT ONLY still carrie
 test('the repo roster read (`gh repo list`) times out once and recovers', () => {
 	const fx = fixture();
 	try {
-		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, GUEST, 'online')], ['--json'], {
+		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, BACKSTOP, 'online')], ['--json'], {
 			GH_FAIL_WHAT: 'repo-list',
 			GH_FAIL_TIMES: '1',
 		});
@@ -464,7 +423,7 @@ test('the repo roster read (`gh repo list`) times out once and recovers', () => 
 test('a repo roster read that never recovers crashes loudly, naming why — never a silent empty roster', () => {
 	const fx = fixture();
 	try {
-		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, GUEST, 'online')], ['--json'], {
+		const r = run(fx, [runner(1, CLAW, 'online'), runner(2, BACKSTOP, 'online')], ['--json'], {
 			GH_FAIL_WHAT: 'repo-list',
 			GH_FAIL_TIMES: '999',
 		});
@@ -482,7 +441,7 @@ test('a repo roster read that never recovers crashes loudly, naming why — neve
 test('a --confirm run with a missing pair calls the registration-token POST exactly once, even when it fails every time', () => {
 	const fx = fixture();
 	try {
-		// ONE declared machine, not the shared fixture's CLAW+GUEST pair — two
+		// ONE declared machine, not the shared fixture's CLAW+BACKSTOP pair — two
 		// eligible placements would mint two SEPARATE tokens for two separate
 		// pairs, which is not a retry and would make the count ambiguous. This
 		// fixture asks a narrower question: for ONE missing pair, is the mint

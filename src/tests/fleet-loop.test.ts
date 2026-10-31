@@ -3,7 +3,7 @@
  * the dispatcher its input.
  *
  * The tier ladder this file used to test was retired on 2026-09-21. Under
- * `carousel` every claw tier was forced on, guests were skipped and the
+ * `carousel` every claw tier was forced on, backstops were skipped and the
  * saturation signal was a constant, so it decided nothing; its tests went with
  * it. What is tested here is what the loop still decides.
  */
@@ -146,7 +146,7 @@ function tick(
 		probe?: Parameters<typeof tickFleet>[2];
 		dispatch?: Parameters<typeof tickFleet>[6];
 		ephemeral?: ReadonlySet<string>;
-		guests?: ReadonlySet<string>;
+		backstops?: ReadonlySet<string>;
 	} = {}
 ) {
 	return tickFleet(
@@ -158,7 +158,7 @@ function tick(
 		noRepair,
 		opts.dispatch ?? noDispatch,
 		opts.ephemeral ?? new Set(),
-		opts.guests ?? new Set()
+		opts.backstops ?? new Set()
 	);
 }
 
@@ -183,12 +183,12 @@ test('labels: a SAFE standing node is promoted — there is no throughput input 
 	});
 });
 
-test('labels: a GUEST is never written by the fast loop — the backstop owns its label', async () => {
+test('labels: a BACKSTOP is never written by the fast loop — the backstop owns its label', async () => {
 	// One writer per label. The ladder and the backstop fighting over hokon is
 	// what put general CI on the production host on 2026-09-01.
-	await withFleet({ hokon: { role: 'guest' } }, async () => {
+	await withFleet({ hokon: { role: 'backstop' } }, async () => {
 		const s = ghStub(['hokon'], ['hokon']);
-		await tick(s.gh, { guests: new Set(['hokon']) });
+		await tick(s.gh, { backstops: new Set(['hokon']) });
 		assert.deepEqual(s.writes, [], 'not promoted, and not stripped either');
 		assert.deepEqual(s.reads, [], 'not even listed');
 	});
@@ -351,11 +351,11 @@ test('sick: UNREACHABLE is not SICK — silence must not retire a node', async (
 
 test('sick: no floor — every damaged node is retired', async () => {
 	await withFleet(
-		{ 'claw-1': {}, 'claw-2': {}, 'claw-3': {}, hokon: { role: 'guest' } },
+		{ 'claw-1': {}, 'claw-2': {}, 'claw-3': {}, hokon: { role: 'backstop' } },
 		async () => {
 			await tick(ghStub(['claw-1', 'claw-2', 'claw-3', 'hokon']).gh, {
 				probe: sickProbe(['claw-1', 'claw-2', 'claw-3']),
-				guests: new Set(['hokon']),
+				backstops: new Set(['hokon']),
 			});
 			assert.deepEqual(
 				sickNodeNames(),
@@ -391,38 +391,38 @@ test('dispatch: called once per tick', async () => {
 });
 
 test('dispatch: an all-JIT fleet hands over an EMPTY standing set, which removes the age gate', async () => {
-	await withFleet({ 'claw-1': { ephemeral: true }, hokon: { role: 'guest' } }, async () => {
+	await withFleet({ 'claw-1': { ephemeral: true }, hokon: { role: 'backstop' } }, async () => {
 		const { seen, dispatch } = capturingDispatch();
 		await tick(ghStub(['claw-1', 'hokon']).gh, {
 			dispatch,
 			ephemeral: new Set(['claw-1']),
-			guests: new Set(['hokon']),
+			backstops: new Set(['hokon']),
 		});
 		assert.deepEqual([...(seen[0]!.standingEligible ?? [])], []);
 	});
 });
 
-test('dispatch: a guest counts as standing ONLY while the backstop has promoted it', async () => {
+test('dispatch: a backstop counts as standing ONLY while the backstop has promoted it', async () => {
 	// Derived from the backstop's own record, not from a belief about it — the
 	// retired ladder's `activeTiers` said "tier4 is up" whether or not the
 	// backstop had actually labelled hokon.
-	await withFleet({ hokon: { role: 'guest' } }, async () => {
+	await withFleet({ hokon: { role: 'backstop' } }, async () => {
 		const { seen, dispatch } = capturingDispatch();
 		const gh = ghStub(['hokon']).gh;
-		await tick(gh, { dispatch, guests: new Set(['hokon']) });
+		await tick(gh, { dispatch, backstops: new Set(['hokon']) });
 		assert.deepEqual([...(seen[0]!.standingEligible ?? [])], [], 'not promoted yet');
 		setBackstopHold(['hokon']);
-		await tick(gh, { dispatch, guests: new Set(['hokon']) });
+		await tick(gh, { dispatch, backstops: new Set(['hokon']) });
 		assert.deepEqual([...(seen[1]!.standingEligible ?? [])], ['hokon']);
 	});
 });
 
-test('dispatch: a QUARANTINED guest is not standing, even while backstop-held', async () => {
-	await withFleet({ hokon: { role: 'guest' } }, async () => {
+test('dispatch: a QUARANTINED backstop is not standing, even while backstop-held', async () => {
+	await withFleet({ hokon: { role: 'backstop' } }, async () => {
 		setBackstopHold(['hokon']);
 		markNodeSick('hokon');
 		const { seen, dispatch } = capturingDispatch();
-		await tick(ghStub(['hokon']).gh, { dispatch, guests: new Set(['hokon']) });
+		await tick(ghStub(['hokon']).gh, { dispatch, backstops: new Set(['hokon']) });
 		assert.deepEqual([...(seen[0]!.standingEligible ?? [])], []);
 	});
 });

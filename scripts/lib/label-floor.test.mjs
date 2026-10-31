@@ -235,9 +235,9 @@ test('#120: a routing label served only by minting is REPORTED, and does not fai
 	}
 });
 
-test('#120: an on-demand guest counts as a MINTING offerer, not a standing one', () => {
+test('#120: the on-demand backstop counts as a MINTING offerer, not a standing one', () => {
 	const { root, env } = fixture({
-		hokon: { role: 'guest', mint: 'on-demand', $capabilities: passes() },
+		hokon: { role: 'backstop', mint: 'on-demand', $capabilities: passes() },
 		'claw-1': { ephemeral: true, $capabilities: passes() },
 	});
 	try {
@@ -447,14 +447,12 @@ test('#19: the END STATE is green — declarations stripped, `earned` promoted',
 	// stay because no probe can settle them.
 	const { root, env } = fixture({
 		hokon: {
-			// `role: 'guest'` because the live manifest has carried it since wave 3c
-			// §G, and because since #6 made `pm2-host` probe-verified it is the ROLE,
-			// not the NAME, that keeps a declared non-CI label in the offer. The
-			// comment above already said "no probe can settle them"; this is that
-			// sentence as a manifest key.
-			role: 'guest',
+			// The backstop is held to its record like a claw (2026-10-31): it keeps
+			// pm2-host and av1-nvenc because it EARNED them, and taskauto because no
+			// probe can settle it.
+			role: 'backstop',
 			labels: ['pm2-host', 'taskauto', 'av1-nvenc'],
-			$capabilities: promoted(['ffmpeg', 'av1-nvenc']),
+			$capabilities: promoted(['ffmpeg', 'av1-nvenc', 'pm2-host']),
 		},
 		'claw-1': { ephemeral: true, $capabilities: promoted(['ffmpeg']) },
 		'claw-3': { ephemeral: true, labels: ['jit-canary'], $capabilities: promoted(['ffmpeg']) },

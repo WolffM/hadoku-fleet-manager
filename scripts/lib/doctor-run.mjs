@@ -66,7 +66,8 @@
  *     provisioning refuses a node on exactly that. The node keeps its older,
  *     dated record, so a box that stays busy every night still goes red at
  *     `fleet health-freshness`'s 14 days, with the reason.
- *   - A GUEST IS NEVER LOADED. See `GUEST_CADENCE_NO_LOAD_WHY` in doctor-probe.mjs.
+ *   - A `--cadence` run NEVER LOADS THE BACKSTOP. See `BACKSTOP_CADENCE_NO_LOAD_WHY`
+ *     in doctor-probe.mjs.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -76,16 +77,16 @@ import { loadManifest, machineArg, runOn, selectMachines } from './fleet-exec.mj
 import { deferralFor, deferralNote, readDrains } from './expected-down.mjs';
 import { createEmitter } from './emit.mjs';
 import { parseDoctor } from './doctor-parse.mjs';
-import { LOAD_SECONDS, doctorProbe, GUEST_CADENCE_NO_LOAD_WHY } from './doctor-probe.mjs';
+import { LOAD_SECONDS, doctorProbe, BACKSTOP_CADENCE_NO_LOAD_WHY } from './doctor-probe.mjs';
 import { bootcampPointer, healthFacet, healthRecord } from './doctor-facet.mjs';
 import {
 	ADVISORY,
 	advisoryFindings,
 	blockingFindings,
 	doctorFindings,
-	guestAdvisory,
+	backstopAdvisory,
 } from './doctor-findings.mjs';
-import { guestNodeNames } from '../../dist/lib/node-role.js';
+import { backstopNodeNames } from '../../dist/lib/node-role.js';
 import { nodeUser } from '../../dist/lib/node-users.js';
 import { readHostingDoc } from '../../dist/runners/hosting-record.js';
 import { pm2Peers, tenantsByNode } from './collect-offers.mjs';
@@ -150,10 +151,13 @@ if (!nodes.length) {
 }
 
 const PROBE = doctorProbe({ loadSeconds: NO_LOAD ? 0 : SECONDS, force: FORCE });
-const GUESTS = guestNodeNames(manifest);
+const BACKSTOPS = backstopNodeNames(manifest);
 const PROBE_ATTEMPTS = 2;
-const GUEST_CADENCE_PROBE = doctorProbe({ loadSeconds: 0, noLoadWhy: GUEST_CADENCE_NO_LOAD_WHY });
-const probeFor = (name) => (CADENCE && GUESTS.has(name) ? GUEST_CADENCE_PROBE : PROBE);
+const BACKSTOP_CADENCE_PROBE = doctorProbe({
+	loadSeconds: 0,
+	noLoadWhy: BACKSTOP_CADENCE_NO_LOAD_WHY,
+});
+const probeFor = (name) => (CADENCE && BACKSTOPS.has(name) ? BACKSTOP_CADENCE_PROBE : PROBE);
 const at = new Date().toISOString();
 /** @type {Record<string, object>} */
 const health = {};
@@ -245,7 +249,7 @@ if (FROM_RECORD) {
 }
 
 // ── cadence deferrals ────────────────────────────────────────────────────────
-// A reachable non-guest that was building when probed, so no load was taken.
+// A reachable non-backstop that was building when probed, so no load was taken.
 // See the header: advisory, and its record is kept rather than rewritten.
 const deferred = new Set(
 	CADENCE
@@ -253,7 +257,7 @@ const deferred = new Set(
 				.filter(
 					([name, h]) =>
 						h.reachable !== false &&
-						!GUESTS.has(name) &&
+						!BACKSTOPS.has(name) &&
 						(h.runners?.busy ?? 0) > 0 &&
 						(h.thermal?.loadC ?? null) === null
 				)
@@ -358,13 +362,13 @@ for (const [name, h] of Object.entries(health).sort()) {
 	}
 }
 
-// A GUEST'S NODE HEALTH DOES NOT FAIL THIS RUN — `machines[<node>].role`, the
-// operator's scoping decision of 2026-09-14, through the one implementation
-// `check-fleet-preflight` also uses. Nothing is dropped: the finding keeps its
-// `why`, gains `role: 'guest'`, and rides in `advisory`. `unreachable` stays
-// blocking even here (GUEST_BLOCKING_CATEGORIES): the one question a guest IS
-// in scope for cannot be answered about a box nothing can reach.
-const classified = guestAdvisory(findings, GUESTS);
+// THE BACKSTOP'S NODE HEALTH DOES NOT FAIL THIS RUN: it is the production host,
+// and its reboots and kernel are the operator's. The one implementation is the
+// one `check-fleet-preflight` also uses. Nothing is dropped: the finding keeps
+// its `why`, gains `role: 'backstop'`, and rides in `advisory`. `unreachable`
+// stays blocking even here (BACKSTOP_BLOCKING_CATEGORIES): a backstop nothing
+// can reach is no use in an emergency.
+const classified = backstopAdvisory(findings, BACKSTOPS);
 const blocking = blockingFindings(classified);
 const advisory = advisoryFindings(classified);
 

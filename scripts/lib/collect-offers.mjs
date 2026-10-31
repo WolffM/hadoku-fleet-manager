@@ -16,8 +16,9 @@ import {
 import { readRevocations, revokedSets } from '../../dist/capability-revocations.js';
 import { proofFileStatus, readProofsForCapability } from '../../dist/lib/measured.js';
 import { readHostingDoc } from '../../dist/runners/hosting-record.js';
+import { isBackstopNode } from '../../dist/lib/node-role.js';
 import { deferralFor, readDrainDoc, readDrains } from './expected-down.mjs';
-import { runOn, selectNodes } from './fleet-exec.mjs';
+import { runOn, selectMachines } from './fleet-exec.mjs';
 import { offerFor, offerProbe, parseOfferProbe } from './hosting-offers.mjs';
 import { siteRoot, stateDir } from './paths.mjs';
 
@@ -78,10 +79,19 @@ export function offeredLabels(machines) {
 		});
 }
 
-/** `{ offers, skippedByRole }` for every claw the manifest selects. */
-/** `tools`: the executables the tenants being planned ask for (`runtime.tools`), run on every node. */
+/**
+ * `{ offers, skippedByRole }` for every claw in the manifest. The backstop is
+ * not lent to a hosting tenant: it is not capacity, and it is the production
+ * host. It is listed in `skippedByRole` rather than dropped.
+ * `tools`: the executables the tenants being planned ask for (`runtime.tools`), run on every node.
+ */
 export async function collectOffers(manifest, { tools = [] } = {}) {
-	const { nodes, skippedByRole } = selectNodes(manifest);
+	const nodes = selectMachines(manifest, { where: (m) => !isBackstopNode(m) });
+	const skippedByRole = selectMachines(manifest, { where: isBackstopNode }).map(([node]) => ({
+		node,
+		role: 'backstop',
+		why: 'the emergency backstop and the production host: not lent to a hosting tenant',
+	}));
 	const drainDoc = readDrainDoc();
 	const hostingDoc = readHostingDoc(stateDir());
 	const tenants = tenantsByNode(drainDoc, hostingDoc);

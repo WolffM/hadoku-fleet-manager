@@ -114,7 +114,7 @@ interface ManifestNode {
 	excludeRepos?: Record<string, string>;
 	/** This node mints a runner per job and holds no standing registration. */
 	ephemeral?: boolean;
-	/** `guest` + `mint: 'on-demand'` — read through `mintsOnDemand`, never directly. */
+	/** `backstop` + `mint: 'on-demand'` — read through `mintsOnDemand`, never directly. */
 	role?: unknown;
 	mint?: unknown;
 	/** Bootcamp's record — read through `bootcampFacet`, never directly. */
@@ -444,14 +444,14 @@ export function buildFleetReport(
 	});
 	const live = health?.runner_state ?? [];
 	const vocabulary = buildVocabulary(manifest);
-	// A HELD ON-DEMAND GUEST IS MINTABLE, whatever the census says. The census
-	// reads the runner listing, and a guest's one standing registration is a
+	// A HELD ON-DEMAND BACKSTOP IS MINTABLE, whatever the census says. The census
+	// reads the runner listing, and a backstop's one standing registration is a
 	// deploy runner the backstop never labels `hadoku-builder` (#120) — so it
 	// wrote `demoted` for hokon on every tick since 2026-10-19, promoted or not.
 	// On 2026-10-25 the panel showed hokon demoted beside 13 queued jobs while
 	// the dispatcher was minting onto it. The hold is this process's own record
 	// of the promotion, read here at request time like the probe is; an
-	// unheld guest keeps the census's word, which is correct for it.
+	// unheld backstop keeps the census's word, which is correct for it.
 	const stateOf = (name: string, m: ManifestNode, p: NodeProbe | undefined): ClawState | null => {
 		if (m.ephemeral || (mintsOnDemand(m) && isBackstopHeld(name))) return ephemeralState(p);
 		return health?.claw_state?.[name] ?? null;
@@ -721,7 +721,7 @@ export function buildFleetReport(
 			// Per-node, because a count cannot be diagnosed. `demoted`,
 			// `offline` and `absent` all render as a smaller clawsOnline and have
 			// three different fixes.
-			// The census's map, with every held on-demand guest re-read the way
+			// The census's map, with every held on-demand backstop re-read the way
 			// `machines[].state` is — two answers for one node in one payload is
 			// the bug `stateOf` exists to end.
 			// A null answer OMITS the key, as the census does for "not looked at".

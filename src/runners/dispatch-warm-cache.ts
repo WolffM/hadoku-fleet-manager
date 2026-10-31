@@ -30,7 +30,7 @@ import { workloadGatedCapabilities } from '../lib/workload-gate.js';
 import { jobRecords } from '../job-history-store.js';
 import { logger } from '../host.js';
 import {
-	withoutGuests,
+	withoutBackstops,
 	offerFor,
 	loadWorkloadGateContext,
 	jobReserve,
@@ -116,7 +116,7 @@ const warnedSliceOverride = new Set<string>();
  * `mintWarmListener`. The JIT path no longer has this gap — since #120 its
  * `MintRequest` carries the node's slice. That is sound only while every
  * warm-capable node agrees with the default, which is true (hokon is the sole
- * override, and as a guest it never holds a listener).
+ * override, and as a backstop it never holds a listener).
  *
  * "Sound only while" is exactly the kind of claim that rots silently, so it is
  * ASSERTED at the mint sites rather than asserted in a comment. The hard gate
@@ -363,7 +363,7 @@ export async function dispatchWarmCache(
 		setWarmRepos(new Map());
 		return { ...EMPTY_WARM_RESULT };
 	}
-	const input = withoutGuests(tickInput);
+	const input = withoutBackstops(tickInput);
 	if (!input.ephemeral.size) return { ...EMPTY_WARM_RESULT };
 	if (nowMs - lastWarmCacheMs < WARM_CACHE_INTERVAL_MS) return { ...EMPTY_WARM_RESULT };
 	lastWarmCacheMs = nowMs;

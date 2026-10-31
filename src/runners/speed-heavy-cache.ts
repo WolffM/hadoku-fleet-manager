@@ -101,7 +101,7 @@ export function getSpeedModel(nowMs: number, nodeNames: readonly string[]): Spee
 	// that is 'unknown' everywhere — safe (spill never engages) but inert, and
 	// indistinguishable from a genuinely thin history unless this says so. An
 	// empty list here means the caller passed `Object.keys(input.nodes)` on a
-	// tick with no manifest machines at all, which `withoutGuests`/the reaching
+	// tick with no manifest machines at all, which `withoutBackstops`/the reaching
 	// code above should already have ruled out — this is the "say why, don't
 	// let it render as nothing wrong" assertion for that assumption.
 	if (nodeNames.length === 0) {

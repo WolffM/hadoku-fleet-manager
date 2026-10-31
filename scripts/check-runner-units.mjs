@@ -241,26 +241,6 @@ if (!machines.length) {
 	);
 }
 
-/**
- * A GUEST IS DELIBERATELY IN SCOPE HERE — `includeGuests` below, on purpose.
- *
- * The rule is that a guest lends the fleet a registration and is otherwise none
- * of its business (operator, 2026-09-14). STANDING REGISTRATIONS ARE EXACTLY
- * WHAT IT LENDS, and they are exactly what this file audits: a unit naming a
- * renamed, archived or off-roster repo. Since the claws went all-JIT the guest
- * is the only node in the fleet carrying standing installs across the roster —
- * measured from the manifest, it is the one machine that is neither
- * `ephemeral: true` nor `placement: excluded`, with `maxRegistrations: 32`
- * against 28 covered repos. Skipping it would leave this gate auditing a handful
- * of resident installs and reporting the fleet clean, which is the "a gate that
- * looks at nothing passes" shape, not a courtesy.
- *
- * It stays read-only. The probe lists units and install directories; it removes
- * nothing, installs nothing and asks for no sudo. Reclaiming what it finds is
- * `fleet cleanup`, which DOES skip a guest — see that file.
- */
-const INCLUDE_GUESTS = true;
-
 /** The roster, resolved to IDS. A name here is as unreliable as a name there. */
 const rosterIds = new Set();
 const rosterUnresolved = [];
@@ -290,9 +270,7 @@ let unitCount = 0;
 // returns a promise, and reading one unawaited is how this gate once parsed
 // "[object Promise]" into zero installs and a clean fleet.
 const probes = await Promise.all(
-	machines.map(([node]) =>
-		runOn(node, PROBE, { as: 'ci', timeoutMs: 90_000, includeGuests: INCLUDE_GUESTS })
-	)
+	machines.map(([node]) => runOn(node, PROBE, { as: 'ci', timeoutMs: 90_000 }))
 );
 
 for (const [i, [node]] of machines.entries()) {

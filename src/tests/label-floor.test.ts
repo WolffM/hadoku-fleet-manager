@@ -137,9 +137,12 @@ test('buildMintView: a claw whose jdk21 workload proof is STALE does not offer i
 	assert.equal(judgeLabelFloor('jdk21', 0, v).state, 'unserved', 'claw-8/9 offer it but are down');
 });
 
-test('buildMintView: only ephemeral nodes mint — a standing guest is arm (a), not arm (b)', () => {
+test('buildMintView: only ephemeral nodes mint — a standing backstop is arm (a), not arm (b)', () => {
 	const v = buildMintView({
-		machines: { hokon: { ...earnedJdk, ephemeral: undefined, role: 'guest' }, 'claw-4': earnedJdk },
+		machines: {
+			hokon: { ...earnedJdk, ephemeral: undefined, role: 'backstop' },
+			'claw-4': earnedJdk,
+		},
 		gate: workloadGateContext(['hokon', 'claw-4'], {}),
 		drained: new Set(['claw-4']),
 		isSick: () => false,
@@ -152,11 +155,11 @@ test('buildMintView: only ephemeral nodes mint — a standing guest is arm (a), 
 	assert.equal(v.measured, false, 'no probe is UNMEASURED, not an empty reading');
 });
 
-test('buildMintView, #120: an ON-DEMAND guest mints its own labels always, hadoku-builder only while held', () => {
+test('buildMintView, #120: an ON-DEMAND backstop mints its own labels always, hadoku-builder only while held', () => {
 	const hokon = {
 		...earnedJdk,
 		ephemeral: undefined,
-		role: 'guest',
+		role: 'backstop',
 		mint: 'on-demand',
 		labels: ['taskauto'],
 	};

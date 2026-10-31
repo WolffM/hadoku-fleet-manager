@@ -26,8 +26,8 @@
  * `machines[].slice.maxMb` is normally ABSENT and derived on the node as
  * (measured MemTotal - minFreeMb). The manifest's `ramGb` is rounded — claw-1
  * says 11G and measures 11885 MiB — so a ceiling computed from it reserves the
- * wrong amount. hokon declares `maxMb` explicitly because there CI is a guest on
- * the production host and must not have most of the box.
+ * wrong amount. hokon declares `maxMb` explicitly because it is the backstop on
+ * the production host, and CI must not have most of the box.
  *
  * `machines[].slice.name` defaults to `runners.slice`. hokon overrides it to
  * `ci-runner.slice`, which already contains its system units: defaulting there
@@ -55,7 +55,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { packageVersion } from '../dist/lib/provenance.js';
-import { isGuestNode } from '../dist/lib/node-role.js';
+import { isBackstopNode } from '../dist/lib/node-role.js';
+import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 // ONE RULE FOR THE PER-UNIT CEILING, and this is the same built copy the minter
 // runs. `unitMemoryMaxMb` is `src/runners/ephemeral.ts` — the fleet's answer to
 // "how much memory may ONE runner unit hold" — and until 2026-09-19 this
@@ -78,7 +79,7 @@ import {
 	machineArg,
 	parseSummary,
 	runOn,
-	selectNodes,
+	selectMachines,
 } from './lib/fleet-exec.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { sliceSummaryProblems } from './lib/slice-summary.mjs';
@@ -101,8 +102,8 @@ const INSTALL_SRC = resolve(__dirname, 'runners-slice-install.sh');
  * is correct only while every node that can receive a mint agrees with the
  * default — true today, because hokon is the sole override (`ci-runner.slice`,
  * hand-authored, `MemoryHigh=12G`/`CPUWeight=50`/`IOWeight=50`) and hokon is not
- * `ephemeral`, so neither minter can target it. The day that changes, this fails
- * rather than placing runners somewhere nobody declared.
+ * `ephemeral`, so the warm minter cannot target it. The day that changes, this
+ * fails rather than placing runners somewhere nobody declared.
  */
 const MINT_SLICE = 'runners.slice';
 
@@ -294,7 +295,7 @@ const manifest = loadManifest();
  * declared slice (`MintRequest.sliceName`), which is how hokon's units reach
  * `ci-runner.slice`; a warm listener is still built with the default name
  * alone. Every `ephemeral: true` node can be handed a warm listener, so every
- * one must agree with the default. An on-demand guest is not `ephemeral` and
+ * one must agree with the default. An on-demand backstop is not `ephemeral` and
  * never holds a listener, so its override is honoured rather than a conflict.
  *
  * Read from the WHOLE manifest, never the `--machine`-filtered selection: an
@@ -308,25 +309,19 @@ const mintSliceConflicts = Object.entries(manifest.machines ?? {})
 	.map(([name, m]) => `${name} declares slice.name=${m.slice.name}`);
 
 /**
- * THE ROLE-AWARE DOOR — a guest is not converged and is never asked for sudo.
+ * Every node that declares a slice, the backstop included. Its declared
+ * `slice.name` (`ci-runner.slice`) and `maxMb` are what the payload audits —
+ * see `payload` — never a default.
  *
- * hokon declares a `slice` block and a `minFreeMb`, so the filter above matched
- * it and this gate walked the production host's 27 runner units like any claw.
- * On 2026-09-16 that is what `ci:audit-gates` was red on: `sudo_ok=no`,
- * `changed=1`, `actions-runner-hadoku-cardtable.service effective=app.slice`,
- * and a fix hint reading "On hokon, as the operator: sudo -v && fleet slice
- * --machine hokon --confirm". Asking the operator for sudo on the production
- * host to move a guest's unit is exactly what the 2026-09-14 decision rules out:
- * "hokon is a guest fleet member; they are here when they are needed."
- *
- * Whether hokon's BACKSTOP REGISTRATION is online with its labels is still the
- * fleet's business — it is just a different gate's question, asked of the GitHub
- * API by `check-label-floor`, and answered without touching the box.
+ * THE BACKSTOP IS AUDITED AND NEVER WRITTEN BY THE FLEET. Its slice lives in
+ * the SYSTEM manager and the fleet has no sudo there (`fleetHasSudo`), so
+ * `--confirm` on it runs the check half and names the operator's hand-run,
+ * and every finding on it is an ADVISORY that never fails the run. The
+ * operator's `--operator-sudo` is the one way to apply (lib/operator-sudo.mjs).
  */
-const { nodes, skippedByRole } = selectNodes(manifest, {
+const nodes = selectMachines(manifest, {
 	only: ONLY,
 	where: (m) => m.slice && typeof m.minFreeMb === 'number',
-	argv: args,
 });
 
 /**
@@ -338,34 +333,14 @@ const { nodes, skippedByRole } = selectNodes(manifest, {
  * dropped it SILENTLY, so a claw enrolled without a slice was absent from every
  * `fleet slice --check` while the run reported every node it did look at as
  * contained — and a node nothing contains is the 2026-08-04 shape, one label
- * away from taking work. Computed from the same `--machine` scope, guests
- * excluded (a guest is out of scope by role, which is a different fact), and
+ * away from taking work. Computed from the same `--machine` scope and
  * REPORTED on every run; under --check it is drift. Read straight off the
  * manifest, not through a selection door: this list is printed, never contacted.
  */
 const unsliced = Object.entries(manifest.machines ?? {})
 	.filter(([name]) => !ONLY || name === ONLY)
-	.filter(([, m]) => !isGuestNode(m) && !(m.slice && typeof m.minFreeMb === 'number'))
+	.filter(([, m]) => !(m.slice && typeof m.minFreeMb === 'number'))
 	.map(([name]) => name);
-
-/** Selected guests — only ever reachable because the operator named one. */
-const selectedGuests = nodes
-	.filter(([name]) => isGuestNode(manifest.machines?.[name]))
-	.map(([name]) => name);
-
-// AN EXPLICIT `--machine <guest> --confirm` IS REFUSED, and says why. Someone
-// will type it, because until today this script's own fix hint told them to.
-// `deploy-ci-throttle` refuses the same request the same way.
-if (selectedGuests.length && CONFIRM && !CHECK) {
-	console.error(
-		`deploy-runners-slice: ${selectedGuests.join(', ')} is a GUEST — refusing to converge it.\n\n` +
-			'  A guest lends the fleet a registration and nothing else. Writing drop-ins,\n' +
-			'  reloading its systemd and restarting its runners are all out of scope there,\n' +
-			"  and the SYSTEM half of that needs the operator's sudo on the production host\n" +
-			'  (operator, 2026-09-14). --check audits it; nothing here applies to it.'
-	);
-	process.exit(1);
-}
 
 if (unsliced.length) {
 	// Printed on EVERY run, not only under --check, and BEFORE the zero-node
@@ -381,32 +356,16 @@ if (unsliced.length) {
 }
 
 if (!nodes.length) {
-	// A run that matched nothing must not report a clean pass over zero nodes —
-	// and a run whose every match was skipped BY ROLE is the same shape wearing
-	// "I chose not to look" as a costume. `converge-toolchain` draws the same
-	// line for the same reason.
+	// A run that matched nothing must not report a clean pass over zero nodes.
 	console.error(
 		'deploy-runners-slice: no nodes to deploy to' +
-			(skippedByRole.length
-				? `. Every match is a guest (${skippedByRole.map((s) => s.node).join(', ')}), which is ` +
-					'not a pass — name a claw, or --include-guests if you really mean it.'
-				: ONLY
-					? ` (--machine ${ONLY} not found, or it declares no slice/minFreeMb)`
-					: '')
+			(ONLY ? ` (--machine ${ONLY} not found, or it declares no slice/minFreeMb)` : '')
 	);
 	process.exit(1);
 }
 
 log(`Manifest: ${manifestPath()}`);
 log(`Mode: ${CHECK ? 'CHECK (audit)' : CONFIRM ? 'APPLY' : 'DRY RUN (no side effects)'}\n`);
-
-// PRINTED, and carried in `--json`. A silent skip is how a node stops being
-// checked and nobody notices.
-for (const s of skippedByRole) {
-	log(`── ${s.node}  [skipped: guest]`);
-	log(`   ${s.why}.`);
-}
-if (skippedByRole.length) log('');
 
 const results = [];
 const drift = [];
@@ -419,14 +378,14 @@ const mintFacts = new Map();
  * "could not look" costs.
  *
  * Extracted when the MemTotal probe gave this file a second way to fail a node:
- * two copies of "unreachable => drift, unless it is a guest, unless it is
- * deliberately down" is two chances for one of them to quietly become exit 0.
+ * two copies of "unreachable => drift, unless it is deliberately down" is two
+ * chances for one of them to quietly become exit 0.
  *
  * `deferrable` is false for a node that ANSWERED but answered wrongly. A drain
  * excuses a box being off; it does not excuse a box that is on and cannot say
  * how much memory it has.
  */
-function recordUnreadable(name, guest, why, out, deferrable) {
+function recordUnreadable(name, why, out, deferrable) {
 	const defer = deferrable ? deferralFor(name, DRAINS) : { deferred: false };
 	if (defer.deferred) {
 		log(`   · ${deferralNote(name, defer)} — not audited`);
@@ -448,24 +407,22 @@ function recordUnreadable(name, guest, why, out, deferrable) {
 	results.push({
 		machine: name,
 		ok: false,
-		role: guest ? 'guest' : 'claw',
-		advisory: guest,
 		error: `${why}: ${out.slice(0, 300)}`,
 	});
-	// An unreadable node is never a node whose state is right — unless it is a
-	// guest, whose state was never this gate's to be right about. It is still
-	// PRINTED and still in the report; it just does not fail the fleet.
-	if (!guest) drift.push(`${name}: could not be audited (${why})`);
+	// An unreadable node is never a node whose state is right.
+	drift.push(`${name}: could not be audited (${why})`);
 }
 
 for (const [name, m] of nodes) {
 	const cfg = m.slice;
 	const sliceName = cfg.name ?? 'runners.slice';
-	// A guest is only ever in `nodes` because the operator named it, and naming
-	// it buys a LOOK, never a write: `apply` is forced off and every finding it
-	// produces is advisory below.
-	const guest = selectedGuests.includes(name);
-	const apply = CONFIRM && !CHECK && !guest;
+	const backstop = isBackstopNode(m);
+	const sudo = maySudo(m);
+	const apply = CONFIRM && !CHECK && sudo;
+	if (CONFIRM && !CHECK && !sudo) {
+		const a = rootAdvisory(name, 'writing its slice', `fleet slice --machine ${name} --confirm`);
+		log(`   advisory: ${a.message} — checked, not written\n     ${a.fix}`);
+	}
 	log(
 		`── ${name}  slice ${sliceName}  ` +
 			`${cfg.maxMb ? `${cfg.maxMb}MB (declared)` : `MemTotal-${m.minFreeMb}MB (derived)`}` +
@@ -479,25 +436,20 @@ for (const [name, m] of nodes) {
 	// hence the probe. On a node that DECLARES `maxMb` the manifest already
 	// holds it and no probe is spent.
 	//
-	// A GUEST IS DELIBERATELY NOT WIDENED, and this is the one asymmetry in the
-	// change. On a claw the slice ceiling IS "everything CI may have", so a unit
-	// reaching it takes nothing from anyone (CLAUDE.md's floor is `minFreeMb`,
-	// and the ceiling already carries it). On hokon the slice ceiling is a
-	// deliberate 16 GiB guest allowance next to mgmt-api, the tunnel and
-	// the other production services — the manifest's own `$why` says CI "must not be allowed to
-	// grow into the space production needs" — so there the per-unit cap is the
-	// thing that keeps ONE runaway from spending the whole guest allowance, and
-	// it stays at the declared number. Withholding the ceiling is how that is
-	// said: the rule is still the only rule, it is simply not given a ceiling to
-	// widen to. hokon's 28 standing units keep 4 GiB, by decision, 2026-09-19.
+	// THE BACKSTOP IS NOT WIDENED. On a claw the slice ceiling IS "everything CI
+	// may have", so a unit reaching it takes nothing from anyone (CLAUDE.md's
+	// floor is `minFreeMb`, and the ceiling already carries it). On hokon the
+	// slice ceiling is a deliberate 16 GiB backstop allowance next to mgmt-api,
+	// the tunnel and the other production services, so there the per-unit cap is
+	// the thing that keeps ONE runaway from spending the whole allowance: it
+	// stays at the declared number (decision 2026-09-19). Withholding the
+	// ceiling is how that is said.
 	let ceilingMb = cfg.maxMb ?? null;
 	let probedMemTotalMb = null;
-	if (ceilingMb === null && !guest) {
+	if (ceilingMb === null) {
 		const probe = await runOn(name, MEMTOTAL_PROBE, {
 			as: 'admin',
 			timeoutMs: 60_000,
-			includeGuests: false,
-			argv: args,
 			manifest,
 		});
 		probedMemTotalMb = probe.ok ? parseMemTotalMb(probe.out) : null;
@@ -507,7 +459,6 @@ for (const [name, m] of nodes) {
 			// this change exists to delete.
 			recordUnreadable(
 				name,
-				guest,
 				'could not read MemTotal, so the per-unit ceiling cannot be computed',
 				`${probe.out ?? ''}${probe.stderr ?? ''}`.trim(),
 				!probe.ok
@@ -518,26 +469,19 @@ for (const [name, m] of nodes) {
 	}
 	const unitMb = unitMemoryMaxMb({
 		requestedMb: cfg.unitMaxMb,
-		sliceCeilingMb: guest ? null : ceilingMb,
+		sliceCeilingMb: backstop ? null : ceilingMb,
 	});
 	log(
 		`   per-unit ${unitMb}MB ` +
-			(guest
-				? '(declared; a guest is not widened to its slice ceiling)'
+			(backstop
+				? '(declared; the backstop is not widened to its slice ceiling)'
 				: `(unitMemoryMaxMb: declared ${cfg.unitMaxMb ?? 'none'}, ceiling ${ceilingMb}MB` +
 					`${probedMemTotalMb === null ? '' : ` from measured MemTotal ${probedMemTotalMb}MB`})`)
 	);
 
-	// `includeGuests: false` ARMS THE TRANSPORT GATE as well as the selection one.
-	// The two are not the same guarantee: selection decides who is in the sweep,
-	// this decides that no code path in this file can reach a guest the operator
-	// did not name, including one added later by someone who never read the
-	// selection block.
 	const r = await runOn(name, payload(cfg, m.minFreeMb, apply, unitMb), {
 		as: 'admin',
 		timeoutMs: SSH_TIMEOUT_MS,
-		includeGuests: false,
-		argv: args,
 		manifest,
 	});
 	let out = (r.stdout + r.stderr).trim();
@@ -547,7 +491,7 @@ for (const [name, m] of nodes) {
 		// Deliberately powered off => expected, printed, not counted. Only when
 		// it was UNREACHABLE: a node that answered but gave no SUMMARY is a
 		// different fault and still drifts.
-		recordUnreadable(name, guest, !r.ok ? 'unreachable or failed' : 'no SUMMARY line', out, !r.ok);
+		recordUnreadable(name, !r.ok ? 'unreachable or failed' : 'no SUMMARY line', out, !r.ok);
 		continue;
 	}
 
@@ -558,8 +502,6 @@ for (const [name, m] of nodes) {
 		const rc = await runOn(name, payload(cfg, m.minFreeMb, apply, unitMb), {
 			as: 'ci',
 			timeoutMs: SSH_TIMEOUT_MS,
-			includeGuests: false,
-			argv: args,
 			manifest,
 		});
 		const ciOut = (rc.stdout + rc.stderr).trim();
@@ -567,7 +509,6 @@ for (const [name, m] of nodes) {
 		if (!rc.ok || !ciKv) {
 			recordUnreadable(
 				name,
-				guest,
 				`the ci user's manager ${!rc.ok ? 'did not answer' : 'gave no SUMMARY line'}`,
 				ciOut,
 				!rc.ok
@@ -586,8 +527,6 @@ for (const [name, m] of nodes) {
 		const probe = await runOn(name, MINT_FACT_PROBE, {
 			as: 'ci',
 			timeoutMs: 60_000,
-			includeGuests: false,
-			argv: args,
 			manifest,
 		});
 		const facts = probe.ok ? parseMintFacts(probe.out) : null;
@@ -787,11 +726,10 @@ for (const [name, m] of nodes) {
 		);
 	}
 
-	// NEVER A GUEST. This set is the only thing that prints "On <node>, as the
-	// operator: sudo -v && fleet slice --machine <node> --confirm", and on the
-	// production host that sentence is the fleet asking a guest for sudo — the
-	// one thing the 2026-09-14 decision rules out.
-	if (!guest && kv.sudo_ok === 'no' && (Number(kv.changed) > 0 || capDrift > 0 || supDrift > 0))
+	// This set is the only thing that prints "On <node>, as the operator:
+	// sudo -v && fleet slice --machine <node> --confirm". A node the fleet has
+	// no sudo on carries its own advisory instead.
+	if (sudo && kv.sudo_ok === 'no' && (Number(kv.changed) > 0 || capDrift > 0 || supDrift > 0))
 		needsSudo.add(name);
 
 	log(
@@ -834,11 +772,8 @@ for (const [name, m] of nodes) {
 	results.push({
 		machine: name,
 		ok: true,
-		role: guest ? 'guest' : 'claw',
-		// ADVISORY AT MOST. A guest's units are reported in full — the operator
-		// asked for them by name — and none of it reaches `drift`, so none of it
-		// fails `check:slice`.
-		advisory: guest,
+		// Every finding on a node the fleet has no sudo on is the operator's.
+		advisory: !sudo,
 		summary: kv,
 		notes,
 		problems,
@@ -1010,21 +945,24 @@ function hms(sec) {
 }
 
 const mintAdvisories = CHECK ? judgeMintPlacement() : [];
-/** A guest's findings, reported and never failed on. */
-const roleAdvisories = [];
+/** Findings on a node the fleet has no sudo on: reported with the hand-run, never drift. */
+const sudoAdvisories = [];
 for (const r of results) {
 	if (!CHECK || !r.ok || !r.problems.length) continue;
-	if (r.advisory) roleAdvisories.push(`${r.machine} (guest): ${r.problems.join('; ')}`);
+	if (r.advisory)
+		sudoAdvisories.push(
+			rootAdvisory(
+				r.machine,
+				`fixing its slice (${r.problems.join('; ')})`,
+				`fleet slice --machine ${r.machine} --confirm`
+			)
+		);
 	else drift.push(`${r.machine}: ${r.problems.join('; ')}`);
 }
-if (roleAdvisories.length) {
+if (sudoAdvisories.length) {
 	log('');
-	log(`⚠ ${roleAdvisories.length} guest(s) you named carry slice findings — ADVISORY, not drift:`);
-	for (const a of roleAdvisories) log(`  ${a}`);
-	log(
-		'  A guest is not converged from here and is never asked for sudo. Whether its backstop' +
-			" registration is online with its labels is check-label-floor's question, not this one's."
-	);
+	log(`⚠ ${sudoAdvisories.length} slice finding(s) on a node the fleet has no sudo on — ADVISORY:`);
+	for (const a of sudoAdvisories) log(`  ${a.message}\n    ${a.fix}`);
 }
 if (mintAdvisories.length) {
 	log('');
@@ -1039,11 +977,7 @@ if (JSON_OUT) {
 		mode: CHECK ? 'check' : CONFIRM ? 'apply' : 'dry-run',
 		version: RUNNING_VERSION,
 		mintAdvisories,
-		// The guests this run refused to act on. Alongside `results` rather than
-		// inside it, the way `deploy-ci-throttle` carries its own: `results` means
-		// "the nodes this run acted on", and a guest is exactly a node it did not.
-		skippedByRole,
-		roleAdvisories,
+		sudoAdvisories,
 		results,
 	});
 } else {
@@ -1171,24 +1105,4 @@ if (CHECK) {
 	}
 }
 
-// ZERO CLAWS LOOKED AT IS NOT A PASS, even when every skip was deliberate.
-//
-// `fleet slice --machine hokon --check` audits one guest, fails on nothing, and
-// would otherwise exit 0 — "I could not look" wearing "I chose not to look" as a
-// costume, which is the shape `converge-toolchain` refuses for the same reason.
-// A run that acted on nothing but guests has proven nothing about the fleet.
-const onlyGuests = results.length > 0 && results.every((r) => r.advisory);
-if (onlyGuests) {
-	console.error(
-		`\n✗ every node this run looked at is a guest (${results.map((r) => r.machine).join(', ')}),\n` +
-			'  so nothing about the fleet was checked. That is not a pass. Name a claw, or run\n' +
-			"  fleet-wide. A guest's findings above are advisory and fix nothing here."
-	);
-}
-
-// A GUEST NEVER FAILS THIS GATE on its own findings. `r.advisory` is set only for
-// a node the operator named by hand, and a guest that did not answer is a guest
-// that was never this gate's to audit — reported, printed, and not counted.
-process.exit(
-	results.some((r) => !r.ok && !r.advisory) || mintSliceConflicts.length || onlyGuests ? 1 : 0
-);
+process.exit(results.some((r) => !r.ok) || mintSliceConflicts.length ? 1 : 0);

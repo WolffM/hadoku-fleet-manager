@@ -5,14 +5,14 @@
  *
  * ONE RULE FOR `hadoku-builder`: a standing registration carries it iff its node
  * is SAFE — not quarantined, not drained, not disqualified by bootcamp
- * (`nodeIsSafe`). A guest's label is the backstop's (runner-health), under the
+ * (`nodeIsSafe`). The backstop node's label is the backstop controller's (runner-health), under the
  * same rule. Placement among JIT nodes is `runners/traffic.ts`.
  *
  * THIS WAS A PRIORITY LADDER until 2026-09-21. GitHub has no runner priority,
  * so `runner-tiers.json` ranked nodes into tiers and this loop made lower tiers
  * invisible by stripping their label until the ones above filled. The all-JIT
  * conversion left it deciding nothing: every claw mints instead of carrying a
- * label, `carousel` forced every claw tier on, guests were skipped, and the one
+ * label, `carousel` forced every claw tier on, backstops were skipped, and the one
  * signal it still fed the dispatcher was a constant. It was retired, along with
  * the file; a per-node ceiling (thermal or otherwise) is `maxConcurrent`.
  *
@@ -48,7 +48,7 @@ import { every } from './lib/every.js';
 // imported from there below, not restated here. `readFleetManifest` is still
 // needed directly: the tick reads the manifest once per pass to enumerate
 // `allNodes` and hands that same `fleetManifest` to `nodeIsSafe`.
-import { readFleetManifest, loadEphemeralNodes, loadGuestNodes } from './lib/manifest.js';
+import { readFleetManifest, loadEphemeralNodes, loadBackstopNodes } from './lib/manifest.js';
 import { loadNodeCapacity } from './lib/manifest.js';
 import { probeNode, probeFleet, type ProbeResultLike, type NodeProbe } from './lib/node-probe.js';
 import { markNodeSick, nodeIsSick, sickNodeNames } from './lib/sick-node.js';
@@ -372,8 +372,8 @@ export async function tickFleet(
 	dispatch: typeof dispatchEphemeral = dispatchEphemeral,
 	/** Which nodes mint instead of carrying labels. Read ONCE per tick. */
 	ephemeralOverride?: ReadonlySet<string>,
-	/** Which nodes are GUESTS. Injected for the same reason. */
-	guestOverride?: ReadonlySet<string>
+	/** Which nodes are BACKSTOPS. Injected for the same reason. */
+	backstopOverride?: ReadonlySet<string>
 ): Promise<FleetTickResult> {
 	// Counted BEFORE anything can fail, so a reconcile cannot be starved by
 	// ticks that bail. tickCount starts at 0: the first tick is a full reconcile.
@@ -396,12 +396,12 @@ export async function tickFleet(
 		if (fleetProbe.get(node)?.reachable) await repair(node);
 	}
 
-	// Recorded for the Fleet panel. hokon is a guest, so the reservation acts
+	// Recorded for the Fleet panel. hokon is a backstop, so the reservation acts
 	// through the BACKSTOP (runner-health), not through a write here.
 	lastReservation = reserve(pm2HostBusy);
 
 	const ephemeralNodes = ephemeralOverride ?? loadEphemeralNodes();
-	const guestNodes = guestOverride ?? loadGuestNodes();
+	const backstopNodes = backstopOverride ?? loadBackstopNodes();
 	// Read ONCE per tick, so every node is judged against the same bar.
 	const drainedNodes = new Set(Object.keys(readDrain()));
 	const requiredSet = loadRequiredSet();
@@ -409,7 +409,7 @@ export async function tickFleet(
 
 	const actions: LabelAction[] = [];
 	for (const node of allNodes) {
-		if (guestNodes.has(node)) continue; // the backstop's label, not ours
+		if (backstopNodes.has(node)) continue; // the backstop's label, not ours
 		const resident = ephemeralNodes.has(node) ? loadResidentRepos(node) : undefined;
 		if (resident !== undefined && resident.length === 0) continue; // nothing standing
 		const want = nodeIsSafe(node, drainedNodes, fleetManifest, requiredSet);
@@ -430,10 +430,10 @@ export async function tickFleet(
 		isSick: nodeIsSick,
 		repos: coveredRepos(),
 		// Standing runners that can take a queued job RIGHT NOW: the non-ephemeral
-		// nodes carrying the label. A guest carries it only while the backstop
+		// nodes carrying the label. The backstop node carries it only while the backstop controller
 		// has promoted it — its own record of that, not a belief about it. EMPTY
 		// (the normal all-JIT case) removes the dispatcher's age gate. An
-		// ON-DEMAND guest stands nothing up (#120): promoting it makes it a mint
+		// ON-DEMAND backstop stands nothing up (#120): promoting it makes it a mint
 		// target, which is exactly the case the age gate is removed for.
 		standingEligible: new Set(
 			allNodes.filter(
@@ -441,7 +441,7 @@ export async function tickFleet(
 					!ephemeralNodes.has(n) &&
 					!mintsOnDemand(fleetManifest?.machines?.[n]) &&
 					nodeIsSafe(n, drainedNodes, fleetManifest, requiredSet) &&
-					(guestNodes.has(n) ? isBackstopHeld(n) : true)
+					(backstopNodes.has(n) ? isBackstopHeld(n) : true)
 			)
 		),
 	};

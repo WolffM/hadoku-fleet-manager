@@ -57,8 +57,8 @@ export interface DispatchPassInput {
 	tarballUrl?: string | null;
 	/**
 	 * The unit's `MemoryMax` for a mint of `repo` on `node`. Asked per mint,
-	 * once placement has chosen the node, because a guest's cap is its own
-	 * declared one and a claw's is not (see `guestUnitMemoryMaxMb`).
+	 * once placement has chosen the node, because a backstop's cap is its own
+	 * declared one and a claw's is not (see `backstopUnitMemoryMaxMb`).
 	 */
 	memoryMaxMbFor: (repo: string, node: string) => number;
 	/**

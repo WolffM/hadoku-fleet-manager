@@ -10,10 +10,9 @@
  * exist — only `src/lib/fleet-paths.ts` does). Teaching `dependency-cruiser`
  * that `dist/x.js` really means `src/x.ts` means handing it a custom resolver
  * plugin, at which point most of what it buys over a direct reader is gone.
- * `node-role-guard.test.mjs` already proves the house style for this: read
- * the source text yourself, blank its comments first, and trust the regex.
- * This file is that style, applied to import statements instead of a role
- * comparison.
+ * `node-identity-guard.test.mjs` already proves the house style for this:
+ * read the source text yourself, blank its comments first, and trust the
+ * regex. This file is that style, applied to import statements.
  *
  * SCOPE. `.ts` and `.mjs` files under `src/`, `scripts/`, `scripts/lib/`,
  * excluding tests (`*.test.ts`, `*.test.mjs`, everything under `src/tests/`).
@@ -117,9 +116,8 @@ const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*(['"])((?:\\.|[^\\])*?)\1\s*\)/g;
  * Every import/export-from specifier a file's source text names, with
  * comments blanked first (`blank-comments.mjs`) so a JSDoc `{import('...')}`
  * type reference or a specifier quoted in prose is never read as a real
- * dependency — the same discipline `node-role-guard.test.mjs` and
- * `node-identity-guard.test.mjs` already hold for this repo's other
- * source-reading guards.
+ * dependency — the same discipline `node-identity-guard.test.mjs` already
+ * holds for this repo's other source-reading guards.
  *
  * @param {string} src
  * @returns {string[]}

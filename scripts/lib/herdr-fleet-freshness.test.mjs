@@ -25,7 +25,6 @@ test('herdr-fleet-freshness: the import walk finds every dist/ module the plugin
 		'gh-budget',
 		'runner-health',
 		'lib/node-identity',
-		'lib/node-role',
 		'lib/fleet-config',
 	]) {
 		assert.ok(dist.includes(m), m);

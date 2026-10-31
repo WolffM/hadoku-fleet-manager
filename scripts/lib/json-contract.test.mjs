@@ -415,16 +415,15 @@ void test('FLEET_NO_BANNER=1 silences it, for a caller that compares fd 2 byte f
  *
  *   fx-claw-old    claw,  40d  -> due at --due 30
  *   fx-claw-fresh  claw,   1d  -> due only at --due 0
- *   fx-guest       guest, 99d  -> NEVER due, and never a finding, at any
- *                                 threshold. A guest is a machine the fleet
- *                                 chain may not act on OR page about
- *                                 (operator, 2026-09-14), and a finding telling
- *                                 someone to go and measure it is paging about
- *                                 it. It must still be VISIBLE, in
+ *   fx-backstop    backstop, 99d -> NEVER due, and never a finding, at any
+ *                                 threshold. The backstop is not ranked for
+ *                                 routing, so a finding telling someone to go
+ *                                 and measure it is noise. It must still be
+ *                                 VISIBLE, in
  *                                 `skippedByRole` — "I did not need to look" is
  *                                 not "nothing is wrong".
  *   fx-unclassified  no role, 99d -> due. Absence reads as `claw`, the strict
- *                                 direction, so a guest that lost its role
+ *                                 direction, so a backstop that lost its role
  *                                 turns up loudly instead of vanishing.
  *
  * Names are deliberately fixture-shaped: this file must not teach anyone that
@@ -439,7 +438,7 @@ function benchmarkFixture() {
 			machines: {
 				'fx-claw-old': { role: 'claw' },
 				'fx-claw-fresh': { role: 'claw' },
-				'fx-guest': { role: 'guest' },
+				'fx-backstop': { role: 'backstop' },
 				'fx-unclassified': {},
 			},
 		})
@@ -457,7 +456,7 @@ function benchmarkFixture() {
 		join(state, 'benchmark.json'),
 		JSON.stringify({
 			nodes: {
-				'fx-guest': stamp(99),
+				'fx-backstop': stamp(99),
 				'fx-unclassified': stamp(99),
 				'fx-claw-old': stamp(40),
 				'fx-claw-fresh': stamp(1),
@@ -511,7 +510,7 @@ void test('--report answers from the state file and reaches no machine', () => {
 		const out = JSON.parse(r.stdout);
 		assert.equal(out.mode, 'report');
 		// Oldest first. fx-unclassified (99d, no role -> claw) then fx-claw-old
-		// (40d); fx-claw-fresh is 1d and fx-guest is exempt.
+		// (40d); fx-claw-fresh is 1d and fx-backstop is exempt.
 		assert.deepEqual(
 			out.due.map((d) => d.node),
 			['fx-unclassified', 'fx-claw-old']
@@ -528,12 +527,10 @@ void test('--report answers from the state file and reaches no machine', () => {
 	}
 });
 
-void test('a GUEST is never due and is never a finding — but it is never dropped either', () => {
-	// hokon is a guest (operator, 2026-09-14): the fleet chain may not converge
-	// it, repair it, or PAGE ABOUT IT. Its $benchmark stamp ages exactly like a
-	// claw's — 12.3d on 2026-09-16, the same 2026-09-03 capture as five claws —
-	// so without the role exclusion the nightly report would have crossed
-	// --due 30 around 2026-10-03 and told a human to go and measure a guest.
+void test('the BACKSTOP is never due and is never a finding — but it is never dropped either', () => {
+	// The backstop is not ranked for routing, so its benchmark is never due. Its
+	// $benchmark stamp ages exactly like a claw's, so without the role exclusion
+	// the nightly report would tell a human to go and measure it.
 	const fx = benchmarkFixture();
 	try {
 		const r = runBenchmark(fx, ['--due', '30', '--report', '--json']);
@@ -543,26 +540,26 @@ void test('a GUEST is never due and is never a finding — but it is never dropp
 
 		// 99 days old and NOT due.
 		assert.ok(
-			!out.due.some((d) => d.node === 'fx-guest'),
-			`a guest reached the due list: ${JSON.stringify(out.due)}`
+			!out.due.some((d) => d.node === 'fx-backstop'),
+			`the backstop reached the due list: ${JSON.stringify(out.due)}`
 		);
 		// Nor named anywhere a cron would turn into an alert. `findings` is what
 		// the consumer pages on, so excluding it from `due` and then listing it
 		// here would route the same page down the other pipe.
-		assert.deepEqual(out.findings, [], 'a guest must not reach findings');
+		assert.deepEqual(out.findings, [], 'the backstop must not reach findings');
 		assert.ok(
-			!out.byHand.includes('fx-guest'),
-			`the by-hand command told an operator to measure a guest: ${out.byHand}`
+			!out.byHand.includes('fx-backstop'),
+			`the by-hand command told an operator to measure the backstop: ${out.byHand}`
 		);
 
 		// VISIBLE, though. "I did not need to look" is not "nothing is wrong", and
-		// a CLAW that wrongly gained role: guest would otherwise stop being
+		// a CLAW that wrongly gained role: backstop would otherwise stop being
 		// measured in total silence.
 		assert.deepEqual(
 			out.skippedByRole.map((d) => d.node),
-			['fx-guest']
+			['fx-backstop']
 		);
-		assert.equal(out.skippedByRole[0].role, 'guest');
+		assert.equal(out.skippedByRole[0].role, 'backstop');
 		assert.ok(
 			out.skippedByRole[0].measuredAt,
 			'an exempt node still carries the date its numbers were taken'
@@ -570,7 +567,7 @@ void test('a GUEST is never due and is never a finding — but it is never dropp
 		assert.ok(out.skippedByRole[0].ageDays > 90, `ageDays ${out.skippedByRole[0].ageDays}`);
 
 		// And the strict default holds: a machine with NO role reads as a claw, so
-		// a guest that somehow lost its role turns up loudly rather than vanishing.
+		// a backstop that somehow lost its role turns up loudly rather than vanishing.
 		assert.ok(
 			out.due.some((d) => d.node === 'fx-unclassified'),
 			'an unclassified machine must be treated as a claw, not silently exempted'
@@ -594,7 +591,7 @@ void test('--due 0 --report accounts for every machine across due + skippedByRol
 		]);
 		assert.deepEqual(
 			out.skippedByRole.map((d) => d.node),
-			['fx-guest']
+			['fx-backstop']
 		);
 		// NO MACHINE MAY DISAPPEAR. At --due 0 every machine in the manifest has
 		// aged out, so the two lists together must be the whole roster — an
@@ -688,7 +685,7 @@ for (const [label, state] of [
 ]) {
 	void test(`S §6: NO benchmark record anywhere reads every claw as DUE, never fresh — ${label}`, () => {
 		const fx = stateFixture({
-			machines: { 'fx-a': { role: 'claw' }, 'fx-b': {}, 'fx-guest': { role: 'guest' } },
+			machines: { 'fx-a': { role: 'claw' }, 'fx-b': {}, 'fx-backstop': { role: 'backstop' } },
 			state,
 			ledgerFresh: true,
 		});
@@ -704,15 +701,15 @@ for (const [label, state] of [
 			);
 			for (const d of out.due) assert.equal(d.measuredAt, null, `${d.node} got a date`);
 			assert.equal(out.ok, false, '"I could not look" must never render as ok');
-			// `coverage` is the raw fact and names the guest too; `findings` — what
+			// `coverage` is the raw fact and names the backstop too; `findings` — what
 			// the cron pages on — does not.
-			assert.deepEqual(out.coverage.never.sort(), ['fx-a', 'fx-b', 'fx-guest']);
+			assert.deepEqual(out.coverage.never.sort(), ['fx-a', 'fx-b', 'fx-backstop']);
 			assert.equal(out.findings.length, 2, JSON.stringify(out.findings));
 			for (const f of out.findings) assert.match(f, /NEVER measured — no benchmark record/);
-			// The guest is exempt from the page and still visible.
+			// The backstop is exempt from the page and still visible.
 			assert.deepEqual(
 				out.skippedByRole.map((d) => d.node),
-				['fx-guest']
+				['fx-backstop']
 			);
 			assert.equal(r.status, 1, 'a claw with no record exits 1');
 		} finally {
@@ -1063,7 +1060,7 @@ void test('a contract subcommand delivers its WHOLE document through a real pipe
  * it cannot share `--report`'s "reaches no machine" proof as-is. What the LIST
  * must guarantee is narrower: the argv mgmt-api runs is accepted, and with
  * nothing due it measures nothing and touches no box. The cadence's behaviour
- * with a node due (at most one, never a guest, busy or someone else's drain,
+ * with a node due (at most one, never the backstop, busy or someone else's drain,
  * always undrained, including when the measurement throws) is proved against
  * injected fixtures in `scripts/lib/benchmark-cadence.test.mjs`.
  */
@@ -1220,7 +1217,7 @@ void test('the benchmark entry declares the cadence, and with nothing due it rea
 				nodes: {
 					'fx-claw-old': fresh,
 					'fx-claw-fresh': fresh,
-					'fx-guest': fresh,
+					'fx-backstop': fresh,
 					'fx-unclassified': fresh,
 				},
 			})

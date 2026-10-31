@@ -82,7 +82,7 @@ export function placementFor(repo, manifest) {
 			// DISPATCHER, so leaving them in place while also minting would double the
 			// node's real concurrency rather than bound it.
 			.filter(([, m]) => m.ephemeral !== true || (m.residentRepos ?? []).includes(repo))
-			// An ON-DEMAND GUEST is the same rule for the same reason (#120): it is
+			// An ON-DEMAND BACKSTOP is the same rule for the same reason (#120): it is
 			// minted for per job, so a standing registration there is a listener
 			// squatting on the production host's memory — the thing the operator
 			// retired on 2026-10-19. It keeps only its `standingRepos`, which is

@@ -1,9 +1,4 @@
-import {
-	CAPABILITIES,
-	capability,
-	verificationFor,
-	type ManifestNode,
-} from './capability-registry.js';
+import { CAPABILITIES, capability, type ManifestNode } from './capability-registry.js';
 import { eligibilityLabels, ephemeralOnlyLabels } from './capability-labels.js';
 import { provenCapabilities } from './bootcamp-proof.js';
 import { workloadGateStatus, type ProofRecord } from './workload-gate.js';
@@ -32,12 +27,10 @@ import { workloadGateStatus, type ProofRecord } from './workload-gate.js';
  *                    with it, or this function could never disagree with the
  *                    manifest and `check-label-floor`'s disagreement check
  *                    would be the verifier-reads-its-own-writer trap.
- *   verify: 'role'   nothing to execute, or nothing this fleet may execute.
- *          / 'mint'  `hadoku-builder` is a routing lever, `jit-canary` is proven
- *                    only by a mint, and EVERY label on a GUEST reads as `role`
- *                    ({@link verificationFor}) because the fleet does not touch a
- *                    guest at all. The declaration is the only evidence there is
- *                    and it is passed through.
+ *   verify: 'role'   nothing to execute.
+ *          / 'mint'  `hadoku-builder` is a routing lever and `jit-canary` is
+ *                    proven only by a mint. The declaration is the only evidence
+ *                    there is and it is passed through.
  *   ELIGIBILITY      never derived here at all — see `opts.eligible`.
  *
  * A FOURTH, ADDED WAVE 4E (#102): a capability whose `jobProof` declares a
@@ -69,7 +62,7 @@ import { workloadGateStatus, type ProofRecord } from './workload-gate.js';
  *        disagree with the real one — precisely when the demand ledger is
  *        unreadable, i.e. at 3am. For a mint, the dispatcher's decision to mint
  *        IS the eligibility decision. For a standing registration the fast
- *        loop's safety rule decides (`nodeIsSafe`), or the backstop on a guest,
+ *        loop's safety rule decides (`nodeIsSafe`), or the backstop controller on the backstop,
  *        and never at registration time — see `registrationLabels`. See `provesRequiredSet` for the
  *        consumer-contract predicate, which is this function's input, not its
  *        business.
@@ -105,10 +98,8 @@ export function nodeOffer(
 		if (eligibility.has(id)) continue;
 		const cap = capability(id);
 		// The declaration is a CLAIM about something executable, and the record
-		// is the answer. Skipped only when there IS a record to answer with —
-		// and `verificationFor`, not `cap.verify`, because on a GUEST there is
-		// nothing the fleet is allowed to execute and the declaration stands.
-		if (cap && cap.surface === 'label' && verificationFor(node, cap) === 'probe' && proven) {
+		// is the answer. Skipped only when there IS a record to answer with.
+		if (cap && cap.surface === 'label' && cap.verify === 'probe' && proven) {
 			continue;
 		}
 		out.push(id);
@@ -146,7 +137,7 @@ export function nodeOffer(
 		? out.filter((id) => {
 				if (revoked !== 'all') return !revoked.has(id);
 				const cap = capability(id);
-				return !(cap && cap.surface === 'label' && verificationFor(node, cap) === 'probe');
+				return !(cap && cap.surface === 'label' && cap.verify === 'probe');
 			})
 		: out;
 	// Eligibility is the fast loop's and the backstop's to grant, never a probe's
@@ -160,7 +151,7 @@ export function nodeOffer(
  *
  * NEVER BORN ELIGIBLE. A registration carries the node's capabilities and
  * nothing that grants general CI: eligibility is granted by the fast loop once
- * the node is judged safe (or by the backstop, on a guest), within one tick. A
+ * the node is judged safe (or by the backstop controller, on the backstop), within one tick. A
  * node born eligible starts schedulable before anything has judged it — which
  * is how 24 hokon runners once came up eligible on the PRODUCTION host. (Until
  * 2026-09-21 this took a `demotable` flag from the tier ladder, and a node in

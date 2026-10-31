@@ -477,7 +477,7 @@ function assignWarmRepos(
  * fleet's served history, every tick. No repo is named anywhere;
  * `residentRepos` is a different mechanism.
  *
- * ONLY THE NODES GIVEN. Eligibility (drain, memory, guest role) is the
+ * ONLY THE NODES GIVEN. Eligibility (drain, memory, backstop role) is the
  * caller's; this never widens it.
  *
  * BOTH LOCKS STILL SIT BETWEEN THE TARGET AND ANY EVICTION. A busy listener or

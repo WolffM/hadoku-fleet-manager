@@ -169,15 +169,13 @@ test('nodeOffer is hokon-correct: the array is a FILTERED identity source there'
 	// GitHub shows it as self-hosted,Linux,X64,pm2-host,taskauto,av1-nvenc —
 	// WITHOUT hadoku-builder, despite declaring it — and that must not change.
 	//
-	// `role: 'guest'` is on the fixture because it is on the LIVE manifest (wave
-	// 3c §G) and because it is now load-bearing rather than decorative: since #6
-	// made `pm2-host` probe-verified, the role is the only thing keeping the
-	// declaration in the offer. The mutation below is the proof.
+	// Its bootcamp record earns pm2-host and av1-nvenc (verified 2026-10-31);
+	// taskauto is role-verified, so its declaration is the evidence.
 	const hokon = {
-		role: 'guest',
+		role: 'backstop',
 		labels: ['pm2-host', 'taskauto', 'av1-nvenc', 'hadoku-builder'],
 		minFreeMb: 4096,
-		$capabilities: { earned: ['av1-nvenc'], prereqs: LIVE_PREREQS },
+		$capabilities: { earned: ['av1-nvenc', 'pm2-host'], prereqs: LIVE_PREREQS },
 	} as ManifestNode;
 	assert.deepEqual(nodeOffer(hokon, { eligible: false }).sort(), [
 		'av1-nvenc',
@@ -194,42 +192,31 @@ test('nodeOffer is hokon-correct: the array is a FILTERED identity source there'
 });
 
 // ---------------------------------------------------------------------------
-// the GUEST carve-out — #6's other half
+// no role carve-out: the backstop's record answers its declarations too
 // ---------------------------------------------------------------------------
 
-test('a GUEST keeps a declared pm2-host, which no probe of ours may settle', () => {
-	// THE OUTAGE THIS PREVENTS. `pm2-host` became `verify: "probe"` on 2026-09-15
-	// so a CLAW has a bar to clear. The production host is a GUEST and carries a
-	// `$capabilities` record from before the role existed, so without the role
-	// narrowing, `nodeOffer` would read "probe-verified, and the record does not
-	// earn it" and drop the label the five infra workflows route on.
-	const guest = {
-		role: 'guest',
-		labels: ['pm2-host', 'taskauto', 'av1-nvenc'],
-		$capabilities: { earned: ['av1-nvenc'], prereqs: LIVE_PREREQS },
+test('every node must EARN pm2-host — the backstop and a claw alike', () => {
+	// Until 2026-10-31 the backstop's labels read as `role`, so a declared
+	// pm2-host survived a record that did not earn it. Now the record answers
+	// for every node, and REVERTING the registry entry to `verify: "role"` would
+	// let the declaration survive here and fail this test.
+	for (const role of ['backstop', 'claw', 'gest']) {
+		const node = {
+			role,
+			labels: ['pm2-host', 'taskauto', 'av1-nvenc'],
+			$capabilities: { earned: ['av1-nvenc'], prereqs: LIVE_PREREQS },
+		} as ManifestNode;
+		assert.ok(
+			!nodeOffer(node, { eligible: false }).includes('pm2-host'),
+			`${role}: pm2-host must be earned, never typed`
+		);
+	}
+	const earned = {
+		role: 'backstop',
+		labels: ['taskauto'],
+		$capabilities: { earned: ['av1-nvenc', 'pm2-host'], prereqs: LIVE_PREREQS },
 	} as ManifestNode;
-	assert.ok(nodeOffer(guest, { eligible: false }).includes('pm2-host'));
-	assert.deepEqual(registrationLabels(guest).sort(), ['av1-nvenc', 'pm2-host', 'taskauto']);
-});
-
-test('MUTATION: the same node WITHOUT the guest role loses the declaration', () => {
-	// Same fixture, one field. This is what makes the test above non-vacuous: it
-	// fails if `verificationFor` stops consulting the role, AND it fails if the
-	// registry entry slides back to `verify: "role"` (then the declaration
-	// survives here too and this assertion goes green in the wrong direction).
-	const asClaw = {
-		role: 'claw',
-		labels: ['pm2-host', 'taskauto', 'av1-nvenc'],
-		$capabilities: { earned: ['av1-nvenc'], prereqs: LIVE_PREREQS },
-	} as ManifestNode;
-	assert.ok(
-		!nodeOffer(asClaw, { eligible: false }).includes('pm2-host'),
-		'a claw must EARN pm2-host, never type it'
-	);
-	// And an UNRECOGNISED role reads as claw, so a typo cannot exempt a node —
-	// `nodeRole`'s strict default, asserted here because this is where it bites.
-	const typo = { ...asClaw, role: 'gest' } as ManifestNode;
-	assert.ok(!nodeOffer(typo, { eligible: false }).includes('pm2-host'));
+	assert.deepEqual(registrationLabels(earned).sort(), ['av1-nvenc', 'pm2-host', 'taskauto']);
 });
 
 test('a CLAW that EARNS pm2-host offers it, without declaring anything', () => {

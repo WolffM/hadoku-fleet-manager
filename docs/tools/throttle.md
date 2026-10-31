@@ -41,7 +41,7 @@ own**, and _any_ non-zero exit fails the job with an annotation.
 pnpm run fleet:throttle                                # dry run (hadoku_site side)
 fleet throttle --confirm                                # install fleet-wide
 fleet throttle --machine claw-2 --confirm               # one box
-fleet throttle --machine hokon --include-guests --check
+fleet throttle --machine hokon --check
 ```
 
 ## It is a smoother, and — changed since 2026-08-24 — no longer _only_ a smoother
@@ -135,9 +135,7 @@ unparseable is discarded for the permissive default, loudly.
 anyone reading the old prose expecting a simpler tool: `deploy-ci-throttle.mjs`
 now also guards `--check`/`--confirm` mutual exclusion explicitly ("a verifier
 that reads its own writer's artifact cannot fail" —
-`scripts/deploy-ci-throttle.mjs:144-154`), supports `--include-guests` for
-hokon with an explicit refusal path if a bare `--confirm` would otherwise ssh
-the production host, and renders a `~/.hadoku/standing.env` file alongside the
+`scripts/deploy-ci-throttle.mjs:144-154`), and renders a `~/.hadoku/standing.env` file alongside the
 runner `.env`s so a warm listener minted _between_ deploys can still build its
 own throttle env.
 
@@ -163,10 +161,8 @@ nodes that drifted (throttle env, node-side scripts behind the package,
 standing-unit slice placement and cap), and reads those nodes again. Node-side
 scripts are replaced by rename, never rewritten in place, so a redeploy is
 safe while a job runs the hook. The package mgmt-api runs is the reference: a
-node hand-deployed ahead of it is put back. A guest (hokon) is skipped by
-`fleet throttle`, so the converger checks each guest separately through
-`--machine <guest> --include-guests` and redeploys it, with `--no-restart`,
-only when a node-side script lags. Nothing else about a guest is repaired. The
+node hand-deployed ahead of it is put back. The backstop (hokon) is converged
+like every other node (operator, 2026-10-31). The
 minters are not node-side scripts any more: each mint sends
 `jit-provision.sh` or `warm-provision.sh` with the command, and the deploy
 deletes the old `~/.hadoku/jit-provision.sh`. `jit-provision.sh` rebuilds a

@@ -18,7 +18,7 @@ import { REPAIRS, applicableRepairs, isVersionManaged } from './toolchain-floor.
 
 const CLAW = { labels: [] };
 const TASKAUTO = { labels: ['taskauto'] };
-const GUEST = { role: 'guest', labels: ['taskauto'] };
+const BACKSTOP = { role: 'backstop', labels: ['taskauto'] };
 
 const KNOWN = {
 	status: 'known',
@@ -346,39 +346,54 @@ test('judgePressure: zombies are not pressure, stranded and old waiters are, unr
 	assert.equal(judgePressure(null).unknown, true);
 });
 
-test('A GUEST IS NEVER TOUCHED: not probed, not drained, not updated — and it is reported', async () => {
-	const tripwire = new Proxy(
-		{},
-		{
-			get: (_t, name) => async (node) => {
-				if (name === 'latest') return KNOWN;
-				// The cycle's own bookkeeping file, not the node.
-				if (name === 'lastChecked') return 0;
-				assert.notEqual(node, 'hokon', `${String(name)} was called for the guest`);
-				if (name === 'detect') return { ok: true, seen: seenFor(CLAW) };
-				if (name === 'queuePressure') return { pressured: false };
-				return undefined;
-			},
-		}
+test('the backstop is in the same pool: drained and updated as its own user, root work an ADVISORY', async () => {
+	// rust's repair links into /usr/local/bin with sudo; rust-wasm32's is the
+	// user's own rustup. The fleet has no sudo on the backstop, so the first is
+	// the operator's hand-run and the second is worked like any claw's.
+	const machines = [
+		['hokon', BACKSTOP],
+		['claw-a', TASKAUTO],
+	];
+	const world = {
+		hokon: seenFor(BACKSTOP, { rust: false }),
+		'claw-a': seenFor(TASKAUTO, { rust: false }),
+	};
+	const h = harness(machines, world);
+	const r = await h.run();
+	assert.equal(r.ok, true, JSON.stringify(r.findings));
+	const hokon = r.nodes.find((n) => n.node === 'hokon');
+	assert.equal(hokon.status, 'updated');
+	assert.deepEqual(
+		hokon.work.map((w) => w.id),
+		['rust-wasm32']
 	);
-	const r = await runRefreshCycle({
-		machines: [
-			// Fresh records, so neither gets a RECHECK turn: this test is about a
-			// guest's TOOLS. Its recheck turn has tests of its own below (#17).
-			['hokon', { ...GUEST, $capabilities: { at: new Date().toISOString() } }],
-			['claw-a', { ...CLAW, $capabilities: { at: new Date().toISOString() } }],
-		],
-		deps: tripwire,
-	});
-	assert.equal(r.nodes[0].status, 'guest');
-	assert.equal(r.nodes[1].status, 'current');
+	assert.ok(h.events.includes('drain hokon training'), h.events.join('\n'));
+	assert.ok(!h.drained.has('hokon'), 'put back');
+	assert.deepEqual(
+		r.advisories.map((a) => [a.node, a.kind, a.blocking]),
+		[['hokon', 'needs-root', false]]
+	);
+	assert.match(
+		r.advisories[0].fix,
+		/^on hokon, as the operator: sudo -v && fleet converge-toolchain --refresh --machine hokon --operator-sudo$/
+	);
+	// THE CONTROL: the claw has sudo, so its root repair is worked.
+	const claw = r.nodes.find((n) => n.node === 'claw-a');
+	assert.deepEqual(claw.work.map((w) => w.id).sort(), ['rust', 'rust-wasm32']);
 });
 
-test('ONLY guests selected is not a pass', async () => {
-	const r = await runRefreshCycle({
-		machines: [['hokon', GUEST]],
-		deps: { latest: async () => KNOWN },
-	});
+test('a backstop whose only work needs root is an ADVISORY: nothing drained, nothing failed', async () => {
+	const machines = [['hokon', BACKSTOP]];
+	const h = harness(machines, { hokon: seenFor(BACKSTOP, { claude: '2.1.284' }) });
+	const r = await h.run();
+	assert.equal(r.ok, true);
+	assert.equal(r.nodes[0].status, 'advisory');
+	assert.ok(!h.events.some((e) => e.startsWith('drain')), h.events.join('\n'));
+	assert.match(r.advisories[0].message, /^claude update to 2\.1\.285 needs root on hokon/);
+});
+
+test('zero machines is not a pass', async () => {
+	const r = await runRefreshCycle({ machines: [], deps: { latest: async () => KNOWN } });
 	assert.equal(r.ok, false);
 	assert.equal(r.findings[0].kind, 'nothing-looked-at');
 });
@@ -957,159 +972,25 @@ test('#127: a runner-PATH miss on a tool with NO link is a finding, and nothing 
 	assert.match(findings[0].reason, /not on the PATH runner jobs get/);
 });
 
-// --- a guest's check-only recheck turn (fleet-manager#17) ------------------
-
-/** Deps that fail the test if anything but the recheck is asked of `guest`. */
-function guestDeps(h, guest, answer) {
-	const calls = [];
-	const marked = [];
-	const guarded = Object.fromEntries(
-		Object.entries(h.deps).map(([k, fn]) => [
-			k,
-			async (node, ...rest) => {
-				assert.notEqual(node, guest, `${k} was called for the guest`);
-				return fn(node, ...rest);
-			},
-		])
-	);
-	return {
-		calls,
-		marked,
-		deps: {
-			...guarded,
-			rebootcamp: async (node) => {
-				calls.push(node);
-				return node === guest ? answer : { ok: true };
-			},
-			markChecked: async (node) => marked.push(node),
-		},
-	};
-}
-
-const RECORDED = { ok: true, recorded: true, unreachable: false, revoked: [], cleared: [] };
-
-test('#17: a guest past RECHECK_DAYS gets a check-only recheck: bootcamp only, no drain, no queue gate', async () => {
+test('RECHECK: the backstop takes the normal recheck turn — drained, re-bootcamped, put back', async () => {
 	const machines = [
-		['hokon', { ...GUEST, ...recordAt(RECHECK_DAYS + 3) }],
+		['hokon', { ...BACKSTOP, ...recordAt(RECHECK_DAYS + 3) }],
 		['claw-a', { ...CLAW, ...recordAt(1) }],
 	];
-	// Under pressure: a claw would be deferred, but a guest recheck takes no capacity.
-	const h = harness(
-		machines,
-		{ 'claw-a': seenFor(machines[1][1]) },
-		{ pressure: { pressured: true, reason: 'busy' } }
-	);
-	const g = guestDeps(h, 'hokon', RECORDED);
-	const r = await runRefreshCycle({ machines, deps: g.deps, state: h.state, now: () => NOW });
-	assert.deepEqual(g.calls, ['hokon']);
-	const rec = r.nodes.find((n) => n.node === 'hokon');
-	assert.equal(rec.status, 'rechecked');
-	assert.equal(rec.guest, true);
-	assert.deepEqual(g.marked, ['hokon'], 'the turn is spent, so the next run does not re-pick it');
-	assert.ok(!h.events.some((e) => e.includes('hokon')), 'nothing else touched the guest');
-});
-
-test('#17: a guest recheck does not take the claw recheck turn — both run', async () => {
-	const machines = [
-		['hokon', { ...GUEST, ...recordAt(RECHECK_DAYS + 3) }],
-		['claw-a', { ...CLAW, ...recordAt(RECHECK_DAYS + 1) }],
-	];
-	const h = harness(machines, { 'claw-a': seenFor(machines[1][1]) });
-	const g = guestDeps(h, 'hokon', RECORDED);
-	const r = await runRefreshCycle({ machines, deps: g.deps, state: h.state, now: () => NOW });
-	assert.deepEqual(g.calls.sort(), ['claw-a', 'hokon']);
-	assert.equal(r.nodes.find((n) => n.node === 'claw-a').status, 'rechecked');
-	assert.ok(!h.drained.has('claw-a'), 'the claw is put back');
-});
-
-test('#17: a guest with a fresh record is not rechecked', async () => {
-	const machines = [
-		['hokon', { ...GUEST, ...recordAt(1) }],
-		['claw-a', { ...CLAW, ...recordAt(1) }],
-	];
-	const h = harness(machines, { 'claw-a': seenFor(machines[1][1]) });
-	const g = guestDeps(h, 'hokon', RECORDED);
-	const r = await runRefreshCycle({ machines, deps: g.deps, state: h.state, now: () => NOW });
-	assert.deepEqual(g.calls, []);
-	assert.equal(r.nodes.find((n) => n.node === 'hokon').status, 'guest');
-});
-
-test('#17: a guest the probe could not reach is UNREACHABLE, a finding, and the turn is not spent', async () => {
-	const machines = [
-		['hokon', { ...GUEST, ...recordAt(RECHECK_DAYS + 3) }],
-		['claw-a', { ...CLAW, ...recordAt(1) }],
-	];
-	const h = harness(machines, { 'claw-a': seenFor(machines[1][1]) });
-	const g = guestDeps(h, 'hokon', {
-		ok: false,
-		unreachable: true,
-		recorded: false,
-		reason: 'no PROBE-END',
-	});
-	const r = await runRefreshCycle({ machines, deps: g.deps, state: h.state, now: () => NOW });
-	assert.equal(r.nodes.find((n) => n.node === 'hokon').status, 'unreachable');
-	assert.equal(r.ok, false);
-	assert.ok(r.findings.some((f) => f.node === 'hokon' && f.kind === 'unreachable'));
-	assert.deepEqual(g.marked, []);
-});
-
-test('#17: every label a guest recheck REVOKES is a named finding, even though the record landed', async () => {
-	const machines = [
-		['hokon', { ...GUEST, ...recordAt(RECHECK_DAYS + 3) }],
-		['claw-a', { ...CLAW, ...recordAt(1) }],
-	];
-	const h = harness(machines, { 'claw-a': seenFor(machines[1][1]) });
-	const g = guestDeps(h, 'hokon', {
-		...RECORDED,
-		// bootcamp exits 1 on its own findings; the record still landed.
-		ok: false,
-		reason: 'exit 1',
-		revoked: [{ node: 'hokon', capability: 'watchparty-media', reason: 'media dir absent' }],
-	});
-	const r = await runRefreshCycle({ machines, deps: g.deps, state: h.state, now: () => NOW });
-	const rec = r.nodes.find((n) => n.node === 'hokon');
-	assert.equal(rec.status, 'rechecked');
-	const f = r.findings.find((x) => x.kind === 'guest-revoked');
-	assert.ok(f, 'a revocation on a guest is loud');
-	assert.match(f.reason, /REVOKED watchparty-media/);
-	assert.equal(r.ok, false);
-	assert.deepEqual(g.marked, ['hokon']);
-});
-
-test('#17: a guest recheck whose record did not land is a finding, and the turn is not spent', async () => {
-	const machines = [
-		['hokon', { ...GUEST, ...recordAt(RECHECK_DAYS + 3) }],
-		['claw-a', { ...CLAW, ...recordAt(1) }],
-	];
-	const h = harness(machines, { 'claw-a': seenFor(machines[1][1]) });
-	const g = guestDeps(h, 'hokon', {
-		ok: false,
-		unreachable: false,
-		recorded: false,
-		reason: 'push-failed: non-fast-forward',
-	});
-	const r = await runRefreshCycle({ machines, deps: g.deps, state: h.state, now: () => NOW });
-	assert.equal(r.nodes.find((n) => n.node === 'hokon').status, 'finding');
-	assert.ok(r.findings.some((f) => f.kind === 'rebootcamp-failed' && /push-failed/.test(f.reason)));
-	assert.deepEqual(g.marked, []);
-});
-
-test('#17: --plan lists the guest recheck and runs nothing', async () => {
-	const machines = [
-		['hokon', { ...GUEST, ...recordAt(RECHECK_DAYS + 3) }],
-		['claw-a', { ...CLAW, ...recordAt(1) }],
-	];
-	const h = harness(machines, { 'claw-a': seenFor(machines[1][1]) });
-	const g = guestDeps(h, 'hokon', RECORDED);
+	const world = Object.fromEntries(machines.map(([n, e]) => [n, seenFor(e)]));
+	const h = harness(machines, world);
+	const rb = withRebootcamp(h);
 	const r = await runRefreshCycle({
 		machines,
-		deps: g.deps,
+		deps: { ...h.deps, ...rb },
 		state: h.state,
-		plan: true,
 		now: () => NOW,
 	});
-	assert.deepEqual(g.calls, []);
-	const rec = r.nodes.find((n) => n.node === 'hokon');
-	assert.equal(rec.status, 'planned');
-	assert.equal(rec.guest, true);
+	assert.deepEqual(rb.calls, ['hokon']);
+	assert.equal(r.nodes.find((n) => n.node === 'hokon').status, 'rechecked');
+	assert.ok(
+		h.events.some((e) => e.startsWith('drain hokon')),
+		h.events.join('\n')
+	);
+	assert.ok(!h.drained.has('hokon'), 'put back');
 });

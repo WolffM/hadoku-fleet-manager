@@ -10,20 +10,16 @@
  *      2026-09-15: seven consecutive `--machine claw-N` runs each returned a
  *      `results` object keyed by every node in the fleet, hokon included. An
  *      operator scoping a run to one box got the whole fleet and no warning.
- *   2. A GUEST was probed. hokon lends the fleet a registration and is otherwise
- *      none of its business (operator, 2026-09-14), and this command is the fleet
- *      chain at its most invasive: it compiles on every core, launches a browser,
- *      runs ffmpeg encodes, and since #6 starts and kills a pm2 daemon.
+ *   2. The backstop's selection: it is probed like any claw (it was skipped as
+ *      a `guest` until 2026-10-31).
  *
  * Both are asserted by SPAWNING the script against a temp manifest, the way
- * `node-role-gates.test.mjs` does — the wiring is what regressed, and a unit test
+ * the other fleet-gate tests do — the wiring is what regressed, and a unit test
  * of the predicate would have passed throughout.
  *
  * NO REAL NODE IS REACHED. Every fixture machine is named so it resolves
  * nowhere: `isLocalNode` is false for each, so the transport tries ssh, ssh fails
- * to resolve, and the node lands in `unreachable`. That is what makes the
- * mutation safe to run — revert the guest skip and the fixture guest is "probed"
- * by attempting to ssh a hostname that does not exist.
+ * to resolve, and the node lands in `unreachable`.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -47,7 +43,7 @@ const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 
 /** Names that resolve NOWHERE, and are not this box. */
 const CLAW = 'fixture-claw-1.invalid';
-const GUEST = 'fixture-guest.invalid';
+const BACKSTOP = 'fixture-backstop.invalid';
 
 function fixture() {
 	const root = mkdtempSync(join(tmpdir(), 'fleet-capabilities-'));
@@ -62,7 +58,7 @@ function fixture() {
 				toolchain: { capabilities: ['ffmpeg'] },
 				machines: {
 					[CLAW]: { role: 'claw', labels: [], maxConcurrent: 2, minFreeMb: 1024 },
-					[GUEST]: { role: 'guest', labels: ['pm2-host', 'taskauto'], minFreeMb: 8192 },
+					[BACKSTOP]: { role: 'backstop', labels: ['pm2-host', 'taskauto'], minFreeMb: 8192 },
 				},
 			},
 			null,
@@ -109,30 +105,16 @@ function json(r) {
 	return parseJsonStdout(r);
 }
 
-test('a GUEST is never probed, and is reported as role-declared rather than dropped', () => {
+test('the backstop is probed like a claw', () => {
 	const f = fixture();
 	try {
 		const r = run(['--json'], f.env);
 		const report = json(r);
-
-		// THE ASSERTION THIS FILE EXISTS FOR. Reverting the guest skip in
-		// check-capabilities.mjs puts GUEST into `unreachable` — the gate tried,
-		// which is the thing the role forbids.
-		assert.ok(
-			!report.unreachable.includes(GUEST),
-			'a guest must not be probed, so it can never be "unreachable"'
-		);
-		assert.ok(!(GUEST in report.results), 'and it must produce no probe results');
-
-		// NOT DROPPED EITHER. "I did not need to look" is a third answer, and a
-		// machine that vanishes from the report is one nobody can tell was
-		// considered. The declaration is the only evidence a guest's label has.
-		assert.deepEqual(report.roleDeclared[GUEST], ['pm2-host', 'taskauto']);
-		assert.ok(!(CLAW in report.roleDeclared), 'a claw earns its labels, it does not declare them');
-
-		// The claw WAS attempted, so the run is not vacuously clean.
-		assert.deepEqual(report.unreachable, [CLAW]);
+		assert.deepEqual(report.unreachable.sort(), [BACKSTOP, CLAW].sort());
+		assert.equal(report.roleDeclared, undefined);
 		assert.equal(r.code, 1, 'a node that could not be probed is not a pass');
+		const named = json(run(['--machine', BACKSTOP, '--json'], f.env));
+		assert.deepEqual(named.unreachable, [BACKSTOP]);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -144,89 +126,23 @@ test('--machine scopes the run instead of being silently ignored', () => {
 		const report = json(run(['--machine', CLAW, '--json'], f.env));
 		// Before the fix this listed BOTH machines, whatever was asked for.
 		assert.deepEqual(report.unreachable, [CLAW]);
-		assert.deepEqual(report.roleDeclared, {}, 'a scoped run reports only what it selected');
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
 });
 
-test('--machine naming a GUEST refuses, rather than reporting a fleet of zero', () => {
+test('--machine naming nothing in the manifest refuses, rather than reporting a fleet of zero', () => {
 	// Nothing probed yields no findings, which is byte-identical to a healthy
-	// fleet. The refusal names the guest so the operator learns WHY rather than
-	// re-running it.
+	// fleet.
 	const f = fixture();
 	try {
-		const r = run(['--machine', GUEST, '--json'], f.env);
+		const r = run(['--machine', 'claw-404', '--json'], f.env);
 		assert.equal(r.code, 1);
 		// Since fleet-manager#20-#26 a --json refusal is a document that says
 		// why, never empty stdout — and never a clean report.
 		const refusal = JSON.parse(r.out);
 		assert.equal(refusal.ok, false, 'a refusal must not emit a parseable clean report');
 		assert.match(refusal.error, /before writing its --json document: ./);
-		assert.equal(refusal.nodes, undefined);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-/**
- * ISSUE #75. `fleet capabilities --machine hokon` refused outright, even
- * though "declared, not probed" was an answer this file already knew how to
- * give — the SAME `roleDeclared` shape the first test above asserts for a
- * guest caught inside a wider sweep. `--include-guests`, paired with
- * `--machine <that guest>` (the same two-flags convention
- * `deploy-ci-throttle` uses), turns the refusal into that honest answer
- * instead. The guest is STILL NEVER PROBED — no `results[GUEST]`, no
- * `unreachable` entry — only the REFUSAL lifts.
- *
- * MUTATION: drop `&& ONLY && INCLUDE_GUESTS` from the refusal's guard and this
- * test's sibling above (`--machine naming a GUEST refuses...`) goes red
- * instead — the flag would then also lift the refusal with no flag typed at
- * all.
- */
-test('--machine <GUEST> --include-guests answers with roleDeclared instead of refusing', () => {
-	const f = fixture();
-	try {
-		const r = run(['--machine', GUEST, '--include-guests', '--json'], f.env);
-		assert.equal(r.code, 0, 'nothing is wrong: the guest was correctly left alone');
-		const report = json(r);
-		assert.deepEqual(report.roleDeclared[GUEST], ['pm2-host', 'taskauto']);
-		assert.ok(!(GUEST in report.results), 'still never probed');
-		assert.deepEqual(report.unreachable, [], 'never attempted, so never unreachable either');
-		assert.deepEqual(report.legacyFindings, []);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('--include-guests alone, with no --machine, does not widen anything', () => {
-	// The door needs BOTH flags. `--include-guests` with no target must not turn
-	// into an implicit "probe every guest too" — that is the mutation risk this
-	// file exists to refuse.
-	const f = fixture();
-	try {
-		const r = run(['--include-guests', '--json'], f.env);
-		const report = json(r);
-		assert.deepEqual(
-			report.unreachable,
-			[CLAW],
-			'the claw was still attempted and still unresolved'
-		);
-		assert.ok(!(GUEST in report.results), 'the guest is still never probed');
-		assert.deepEqual(
-			report.roleDeclared[GUEST],
-			['pm2-host', 'taskauto'],
-			'still reported, as always'
-		);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('--machine naming nothing in the manifest refuses too', () => {
-	const f = fixture();
-	try {
-		assert.equal(run(['--machine', 'claw-404', '--json'], f.env).code, 1);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -739,8 +655,8 @@ test('GateDoc: an unreachable node is unreadable, not a finding', () => {
 		const report = json(run(['--json'], f.env));
 		assert.equal(report.ok, false);
 		assert.deepEqual(report.findings, []);
-		assert.equal(report.unreadable.length, 1);
-		assert.equal(report.unreadable[0].node, CLAW);
+		// Both fixture nodes resolve nowhere, the backstop included.
+		assert.deepEqual(report.unreadable.map((u) => u.node).sort(), [BACKSTOP, CLAW].sort());
 		assert.match(report.unreadable[0].why, /could not reach this node/);
 		assert.ok(report.why, 'a failing GateDoc must carry why');
 	} finally {

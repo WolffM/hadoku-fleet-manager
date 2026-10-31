@@ -74,7 +74,7 @@ test('absent and unreadable are at least as loud as stale, and fresh is the quie
 	}
 });
 
-test('every status except fresh blocks on a non-guest node', () => {
+test('every status except fresh blocks on a non-backstop node', () => {
 	// Driven off the table, so a status added later without a class is caught
 	// here rather than by discovering the gate is green on it.
 	const cases = {
@@ -286,7 +286,7 @@ function run({ mdir, state }, args = []) {
 }
 
 const CLAW = { labels: ['self-hosted'], maxConcurrent: 1, role: 'claw' };
-const GUEST = { labels: ['self-hosted'], maxConcurrent: 1, role: 'guest' };
+const BACKSTOP = { labels: ['self-hosted'], maxConcurrent: 1, role: 'backstop' };
 
 test('a fresh fleet exits 0; one stale claw exits 1 and names it', () => {
 	const fresh = scratch(
@@ -325,21 +325,21 @@ test('an absent facet file fails at least as hard as a stale one', () => {
 	}
 });
 
-test("a guest's stale record is reported and does not fail the run", () => {
+test("the backstop's stale record is reported and does not fail the run", () => {
 	const s = scratch(
-		{ 'claw-1': CLAW, hokon: GUEST },
+		{ 'claw-1': CLAW, hokon: BACKSTOP },
 		{
 			'claw-1': { at: new Date().toISOString() },
 			hokon: { at: new Date(Date.now() - 90 * DAY_MS).toISOString() },
 		}
 	);
 	const r = run(s, ['--json']);
-	assert.equal(r.code, 0, 'the fleet chain does not page on a guest');
+	assert.equal(r.code, 0, 'the fleet chain does not page on the backstop');
 	const doc = JSON.parse(r.stdout);
 	assert.equal(doc.advisory, 1);
 	assert.equal(doc.findings.length, 1, 'advisory means "does not fail the run", not "dropped"');
 	assert.equal(doc.findings[0].node, 'hokon');
-	assert.equal(doc.findings[0].role, 'guest');
+	assert.equal(doc.findings[0].role, 'backstop');
 	assert.equal(doc.findings[0].wasBlocking, true);
 });
 
@@ -352,7 +352,7 @@ test('the writer line sits well inside the per-node line', () => {
 	);
 });
 
-test('the writer verdict reads the NEWEST record, never a guest, and stays quiet with no dates', () => {
+test('the writer verdict reads the NEWEST record, never the backstop, and stays quiet with no dates', () => {
 	const v = (node, ageDays) => ({ node, ageDays, at: agoDays(ageDays ?? 0) });
 	const none = new Set();
 	assert.equal(
@@ -370,7 +370,7 @@ test('the writer verdict reads the NEWEST record, never a guest, and stays quiet
 	assert.notEqual(
 		writerVerdict([v('claw-1', WRITER_STALE_DAYS + 1), v('hokon', 0)], new Set(['hokon'])),
 		null,
-		'a fresh guest record does not vouch for the writer'
+		'a fresh backstop record does not vouch for the writer'
 	);
 	assert.equal(
 		writerVerdict([v('claw-1', null)], none),
@@ -382,7 +382,7 @@ test('the writer verdict reads the NEWEST record, never a guest, and stays quiet
 test('nine records from one run four days ago page as a stopped writer, not at day 14', () => {
 	const at = new Date(Date.now() - (WRITER_STALE_DAYS + 1) * DAY_MS).toISOString();
 	const s = scratch(
-		{ 'claw-1': CLAW, 'claw-2': CLAW, hokon: GUEST },
+		{ 'claw-1': CLAW, 'claw-2': CLAW, hokon: BACKSTOP },
 		{ 'claw-1': { at }, 'claw-2': { at }, hokon: { at } }
 	);
 	const r = run(s, ['--json']);

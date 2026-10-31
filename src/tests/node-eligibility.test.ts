@@ -139,22 +139,22 @@ test('nodeFailsBootcamp: an EMPTY required set moves NO label either', () => {
 	assert.equal(nodeFailsBootcamp('claw-1', blocked, REQUIRED), true);
 });
 
-test('nodeFailsBootcamp: a GUEST is never judged by the fast loop, however bad its record', () => {
-	// A guest lends the fleet a registration and is out of scope for bootcamp's
+test('nodeFailsBootcamp: a BACKSTOP is never judged by the fast loop, however bad its record', () => {
+	// A backstop lends the fleet a registration and is out of scope for bootcamp's
 	// required set (operator, 2026-09-14). `planTierWrites` already drops it;
 	// this is the second half of the same statement, so a resident-registration
 	// caller cannot route around it.
-	const guest = {
+	const backstop = {
 		machines: {
 			hokon: {
-				role: 'guest',
+				role: 'backstop',
 				$capabilities: { blocked: [{ id: 'gh' }], unprobed: ['python-toolcache'] },
 			},
 		},
 	};
-	assert.equal(nodeFailsBootcamp('hokon', guest, REQUIRED), false);
+	assert.equal(nodeFailsBootcamp('hokon', backstop, REQUIRED), false);
 	// MUTATION: the same record on a CLAW fails, so this is the role and not the
 	// fixture being harmless.
-	const asClaw = { machines: { hokon: { ...guest.machines.hokon, role: 'claw' } } };
+	const asClaw = { machines: { hokon: { ...backstop.machines.hokon, role: 'claw' } } };
 	assert.equal(nodeFailsBootcamp('hokon', asClaw, REQUIRED), true);
 });

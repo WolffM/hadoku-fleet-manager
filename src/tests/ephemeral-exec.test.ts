@@ -117,7 +117,7 @@ test('the happy path reports the unit it started', async () => {
 	assert.equal(r.unit, REQ.runnerName);
 });
 
-test("#120: the node's declared slice reaches the unit — a guest's jobs land in ITS slice", async () => {
+test("#120: the node's declared slice reaches the unit — a backstop's jobs land in ITS slice", async () => {
 	const spawned: string[] = [];
 	const h = harness();
 	const sh = async (n: string, cmd: string) => {

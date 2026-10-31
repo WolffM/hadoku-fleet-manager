@@ -273,9 +273,9 @@ test('probeReach asks the controller, then other nodes until one finishes', asyn
 	assert.equal(r.controller.lan, 'filtered');
 });
 
-test('the peers are other non-guest nodes, never the node itself or the controller', () => {
+test('the peers are other non-backstop nodes, never the node itself or the controller', () => {
 	const manifest = {
-		machines: { hokon: {}, 'claw-9': {}, 'claw-8': {}, guesty: { role: 'guest' } },
+		machines: { hokon: {}, 'claw-9': {}, 'claw-8': {}, spare: { role: 'backstop' } },
 	};
 	assert.deepEqual(peerCandidates(manifest, 'claw-9'), ['claw-8']);
 });

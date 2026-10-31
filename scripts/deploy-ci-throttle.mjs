@@ -74,8 +74,6 @@
  *   fleet throttle --no-restart --confirm
  *   fleet throttle --check             # audit, exit 1 on drift (ssh)
  *   fleet throttle --check --json      # a GateDoc instead of prose
- *   fleet throttle --machine hokon --include-guests --check
- *                                      # the guest override; BOTH flags, always
  *
  * MIGRATED (wave 5i lane B), `--check` ONLY: `ci:audit-gates` now runs
  * `fleet throttle --check` with `--json` and judges it by the `GateDoc`
@@ -117,7 +115,8 @@ import {
 	throttleSummaryDrift,
 } from './lib/runner-env-drift.mjs';
 import { packageVersion } from '../dist/lib/provenance.js';
-import { isGuestNode, mintsJitRunners } from '../dist/lib/node-role.js';
+import { mintsJitRunners } from '../dist/lib/node-role.js';
+import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { createEmitter, keepStdoutWhole } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
@@ -166,11 +165,6 @@ const CHECK = args.includes('--check');
 const NO_RESTART = args.includes('--no-restart');
 const ONLY = machineArg(args);
 const JSON_OUT = args.includes('--json');
-// THE GUEST OVERRIDE. `--include-guests` is the spelling `converge-toolchain`
-// established and `guestGate` already answers to, NOT a new word for this one
-// command — one question, one spelling. What differs here is how strict it is,
-// and that is argued where it is enforced, below.
-const INCLUDE_GUESTS = args.includes('--include-guests');
 
 // A verifier that reads its own writer's artifact cannot fail. `--confirm`
 // installs all three node-side scripts and then `--check` would hash what this
@@ -399,132 +393,9 @@ const hook = readFileSync(HOOK_SRC, 'utf8');
 // labels it.
 const allNodes = selectMachines(loadManifest(), { only: ONLY });
 
-// A GUEST IS NOT THE FLEET'S TO CONFIGURE, AND NEITHER FILTER HERE COULD SEE IT.
-//
-// `selectMachines` filters on `--machine` and nothing else, and `bounded()`
-// below asks only about maxConcurrent/minFreeMb — which a guest declares
-// (hokon: 4 and 8192). So a guest cleared every filter this script had, and a
-// bare `--confirm` would ssh the operator's production host and write a hook,
-// a conf and three node-side scripts into it. Wave 3d §K asserted "hokon is
-// skipped by role"; until this it was not skipped at all, and the brief's
-// sentence was describing a skip that did not exist.
-//
-// BY ROLE, through the one function that answers it (`src/lib/node-role.ts`) —
-// never by name, and never inferred from the concurrency numbers. A second copy
-// of "which box is hokon" is the exact thing that module exists to prevent, and
-// reading guest-ness off capacity fields would silently re-classify any node
-// whose numbers were removed, which is a different fault entirely.
-const guestNames = allNodes.filter(([, m]) => isGuestNode(m)).map(([name]) => name);
-
-// --- THE ONE WAY PAST THE SKIP, AND THE TWO SHAPES IT REFUSES --------------
-//
-// `--include-guests` NARROWS AN EXPLICITLY NAMED TARGET HERE. It never widens a
-// fleet-wide pass: the flag is inert without `--machine <name>`, so there is no
-// spelling of this command line that sweeps every guest the manifest declares.
-// That is the whole safety property, and it is why the flag is not simply
-// forwarded to `guestGate`.
-//
-// STRICTER THAN THE SHARED GATE, ON PURPOSE. `fleet-exec`'s `guestGate` opens
-// on any of three doors, and two of them are wider than this command can
-// afford: a bare `--include-guests` with no target, and `--machine <the guest>`
-// ALONE. Both are right for a command that READS a node — `converge-toolchain`
-// probes, `fleet slice --check` audits, and refusing there would leave no way
-// to look at a guest at all. This command WRITES: a hook, a conf, three
-// node-side scripts and a runner `.env`, and it restarts listeners. So it keeps
-// its own refusal and demands BOTH doors at once. The transport underneath
-// (`runOn` -> `guestGate`) is already open on `--machine hokon` by itself; the
-// gate that actually stops a guest being written to is this file's, and it
-// stays shut unless someone typed the flag as well as the name.
-//
-// WHY IT EXISTS AT ALL. ci-throttle.sh IS the fleet's own script, running on
-// the registration the guest lends the fleet, and on 2026-09-17/18/19 it was
-// the broken thing there — four jobs arriving together each counted the other
-// three, nobody was admitted, and all four were refused at the ceiling with
-// 26GB free and a real load of one (#36). Fixing that on every box except the
-// one it happens on is not fixing it. The wave brief of 2026-09-19 discloses
-// this as its single exception; it postdates the operator decision of
-// 2026-09-14 that this skip encodes, and it narrows that decision by one
-// script rather than repealing it. Nothing else about a guest becomes in scope.
-//
-// DISCLOSED, NEVER SILENT. The banner below goes to stderr, which `--json` does
-// not suppress, and the JSON document carries `guestOverride` beside
-// `skippedGuests`. A bypass that leaves no trace in the output is worse than no
-// bypass: the next reader has no way to tell an overridden run from an ordinary
-// one, and this repo has already read a COMMENT as evidence three times.
-if (INCLUDE_GUESTS && !ONLY) {
-	console.error(
-		'deploy-ci-throttle: --include-guests requires --machine <name>, and nothing was contacted.\n' +
-			'  Here the flag narrows ONE explicitly named guest past the role skip. It is not a\n' +
-			'  fleet-wide opt-in and there is deliberately no way to spell one: a bare\n' +
-			'  `--confirm --include-guests` would write the hook, the conf and the node-side\n' +
-			'  scripts to every guest in the manifest, which is the accident the skip exists\n' +
-			'  to prevent. Other commands take this flag fleet-wide because they only read.\n' +
-			'  Did you mean: --machine <guest> --include-guests'
-	);
-	process.exit(2);
-}
-if (INCLUDE_GUESTS && !guestNames.includes(ONLY)) {
-	// Typing an override for a guard that would not have fired means the
-	// operator believes something false about this node. Saying so costs one
-	// re-run; accepting it silently teaches them the flag is free, and this is
-	// the one flag in this command that reaches a box the fleet does not own.
-	console.error(
-		`deploy-ci-throttle: --include-guests names ${ONLY}, which is not a guest, and nothing was contacted.\n` +
-			`  machines['${ONLY}'] has no role: 'guest' in ${manifestPath()} — either it is an\n` +
-			'  ordinary fleet node, in which case drop the flag and it deploys normally, or it\n' +
-			'  is not in the manifest at all, in which case check the spelling.'
-	);
-	process.exit(2);
-}
-
-// The one guest this run may touch, or null. Everything below derives from it,
-// so any OTHER guest stays skipped exactly as it was.
-const OVERRIDDEN_GUEST = INCLUDE_GUESTS ? ONLY : null;
-if (OVERRIDDEN_GUEST) {
-	// stderr, not `log()`, which `--json` suppresses. An override visible only
-	// in the mode nobody automates is not disclosed.
-	console.error(
-		`deploy-ci-throttle: GUEST OVERRIDE — ${OVERRIDDEN_GUEST} is a GUEST and this run will contact it anyway.\n` +
-			'  The fleet does not configure a guest: it lends the fleet a registration and\n' +
-			'  nothing else, so the throttle hook, the standing-runner env and the node-side\n' +
-			'  scripts are all out of scope there (operator, 2026-09-14).\n' +
-			'  --machine and --include-guests were BOTH passed, so that skip is being\n' +
-			'  overridden for this one node. This is an override of a deliberate decision,\n' +
-			`  not a default. Nothing else about ${OVERRIDDEN_GUEST} is in scope, and re-running\n` +
-			'  without the flag skips it again.'
-	);
-}
-
-const guests = guestNames.filter((name) => name !== OVERRIDDEN_GUEST);
-const inChain = allNodes.filter(([name, m]) => !isGuestNode(m) || name === OVERRIDDEN_GUEST);
-
-// An explicit `--machine <guest>` REFUSES, and says why. Someone will type it.
-// Falling through to the generic "no nodes to deploy to" below would read as
-// "that name is not in the manifest" and send them hunting a typo that is not
-// there — "I could not look" rendering as "nothing is wrong", one door down.
-//
-// UNCHANGED BY THE OVERRIDE ABOVE, deliberately. `guests` no longer holds the
-// one node the two flags named, so this still fires — same message, same exit
-// 2 — on every path nobody typed `--include-guests` on, which is all of them
-// but one.
-if (ONLY && guests.includes(ONLY)) {
-	console.error(
-		`deploy-ci-throttle: ${ONLY} is a GUEST — the fleet does not configure it, so nothing was contacted.\n` +
-			'  A guest lends the fleet a registration and nothing else. The throttle hook, the\n' +
-			'  standing-runner env and the node-side scripts are all out of scope there\n' +
-			'  (operator, 2026-09-14).\n' +
-			`  This is machines[${ONLY}].role in the manifest, not a hardcoded name — change the\n` +
-			'  role if this node should take general CI.'
-	);
-	process.exit(2);
-}
-
 const bounded = (m) => typeof m.maxConcurrent === 'number' && typeof m.minFreeMb === 'number';
-// Computed over `inChain`, NOT `allNodes`: a guest that declared no numbers is
-// out of scope, not an unbounded node one label away from taking unlimited
-// work. Reporting it as the latter would be a finding nobody can act on.
-const nodes = inChain.filter(([, m]) => bounded(m));
-const unbounded = inChain.filter(([, m]) => !bounded(m)).map(([name]) => name);
+const nodes = allNodes.filter(([, m]) => bounded(m));
+const unbounded = allNodes.filter(([, m]) => !bounded(m)).map(([name]) => name);
 
 // #76's hokon half. Resolved ONCE, on this box — see resolveReserveFile().
 // Per-node use below still gates on isLocalNode(name): this value is only
@@ -534,31 +405,11 @@ const RESERVE_FILE = resolveReserveFile();
 log(`Manifest: ${manifestPath()}`);
 log(`Mode: ${CONFIRM ? 'APPLY' : 'DRY RUN (no side effects)'}\n`);
 
-// STATED ON EVERY RUN, --check and --confirm alike, and BEFORE the zero-node
-// refusal below so it is said even when nothing is left to deploy to. A silent
-// skip is how a node stops being touched and nobody notices — the same failure
-// the unbounded report at the foot of this file was added for. It is a note
-// rather than a finding because a guest is DELIBERATELY out of scope, which is
-// a different fact from an unbounded node, and a gate that reddened on the
-// operator's own decision would just be turned off.
-for (const g of guests) {
-	log(`── ${g}  [skipped: guest]`);
-	log(
-		'   A guest lends the fleet a registration and nothing else — the throttle hook and\n' +
-			'   the node-side scripts are out of scope there (operator, 2026-09-14).'
-	);
-}
-if (guests.length) log('');
-
 if (!nodes.length) {
-	// Zero nodes deployed to is a FAILURE, never a clean pass — including the
-	// case where every declared node turned out to be a guest.
+	// Zero nodes deployed to is a FAILURE, never a clean pass.
 	console.error(
 		`deploy-ci-throttle: no nodes to deploy to` +
-			(ONLY ? ` (--machine ${ONLY} not found, or it declares no maxConcurrent/minFreeMb)` : '') +
-			(guests.length
-				? `\n  ${guests.length} guest(s) skipped by role and not counted: ${guests.join(', ')}`
-				: '')
+			(ONLY ? ` (--machine ${ONLY} not found, or it declares no maxConcurrent/minFreeMb)` : '')
 	);
 	process.exit(1);
 }
@@ -724,33 +575,42 @@ for (const [name, m] of nodes) {
 // or ok:false) was not acted on at all, so it has nothing to say about
 // whether a stale listener survived THIS run — that is `failed`'s and the
 // deferral note's territory, not this one's.
+//
+// The hook and the scripts under ~/.hadoku are the node user's own, so the
+// backstop gets them like any claw. Restarting a SYSTEM unit's listener is
+// root, which the fleet does not have there (`fleetHasSudo`): its
+// NEEDS-OPERATOR line is an ADVISORY naming the hand-run, never this gate's
+// failure (lib/operator-sudo.mjs).
+const sudoAdvisories = [];
 const confirmRemaining = CONFIRM
-	? results.flatMap((r) =>
-			r.ok && !r.expectedDown
-				? staleRemainingFindings({
-						name: r.machine,
-						staleRemaining: r.staleRemaining ?? 0,
-						notes: r.notes ?? [],
-					})
-				: []
-		)
+	? results.flatMap((r) => {
+			if (!r.ok || r.expectedDown) return [];
+			const found = staleRemainingFindings({
+				name: r.machine,
+				staleRemaining: r.staleRemaining ?? 0,
+				notes: r.notes ?? [],
+			});
+			if (maySudo(Object.fromEntries(allNodes)[r.machine])) return found;
+			const root = found.filter((f) => / NEEDS-OPERATOR /.test(f));
+			for (const f of root)
+				sudoAdvisories.push(
+					rootAdvisory(
+						r.machine,
+						`restarting a system unit's stale listener (${f})`,
+						`fleet throttle --machine ${r.machine} --confirm`
+					)
+				);
+			return found.filter((f) => !root.includes(f));
+		})
 	: [];
+for (const a of sudoAdvisories) log(`⚠ advisory: ${a.message}\n    ${a.fix}`);
 
 if (JSON_OUT) {
-	// `skippedGuests` rides alongside `results` rather than inside it: `results`
-	// means "nodes this run acted on", and a guest is precisely a node it did
-	// NOT act on. Folding it in as another `ok: true` row would make a skipped
-	// guest indistinguishable from a deployed node to anything counting them.
-	// `guestOverride` rides beside `skippedGuests` for the same reason that field
-	// exists: a guest this run ACTED ON and a guest it skipped are different
-	// facts, and a parser seeing only `results` could not tell an overridden run
-	// from an ordinary deploy that happened to cover one more node.
 	const payload = {
 		confirm: CONFIRM,
 		results,
-		skippedGuests: guests,
-		guestOverride: OVERRIDDEN_GUEST,
 		confirmRemaining,
+		sudoAdvisories,
 	};
 	// GateDoc (wave 5i lane B), `--check` ONLY — the `--confirm` (deploy) half
 	// of this document is untouched by this block, exactly as it was before
@@ -859,8 +719,8 @@ if (CHECK) {
 				'\n  Fix (written but not loaded): fleet throttle --confirm. For a claw this is a\n' +
 					'  systemctl --user unit and needs no sudo — --confirm stops it if idle (the warm\n' +
 					'  pass or the unit itself then refills it) and leaves a busy one alone, reported.\n' +
-					'  A guest node is not reached by this command at all and has no passwordless\n' +
-					'  sudo, so a stale listener there needs an operator by hand.'
+					'  A node without passwordless sudo needs an operator to restart a stale\n' +
+					'  listener by hand.'
 			);
 		}
 		process.exit(1);

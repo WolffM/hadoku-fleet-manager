@@ -31,15 +31,7 @@
  * the work it gates" presupposes the node is eligible to receive that work at
  * all.
  *
- * HOKON IS A GUEST: NOTHING SEEDS IT
- * -----------------------------------
- * Not because hokon could not use the artifact — because the fleet chain does
- * not touch hokon at all (operator, 2026-09-14), the same rule
- * `converge-toolchain`/`bootcamp` already enforce by role. {@link seedNode}
- * re-checks the role itself rather than trusting the caller to have filtered
- * guests out — "a guard rather than a sentence" (capabilities.ts's own phrase
- * for the same shape). `capability-seeds.test.mjs` proves hokon is refused with
- * ZERO ssh or gh calls, not merely that it ends up unseeded.
+ * The backstop is seeded by the same gates as any claw.
  *
  * NO TOKEN EVER LANDS ON A CLAW
  * ------------------------------
@@ -112,7 +104,6 @@
 import { execFile } from 'node:child_process';
 import { capability } from '../../dist/lib/capability-registry.js';
 import { provenCapabilities } from '../../dist/lib/bootcamp-proof.js';
-import { isGuestNode } from '../../dist/lib/node-role.js';
 import { mayRunRepo } from './placement-rules.mjs';
 import { runOn } from './fleet-exec.mjs';
 import { READ_ATTEMPTS, describeReadFailure } from './queue-health.mjs';
@@ -411,7 +402,7 @@ export async function resolveSeed(spec, gh) {
 /**
  * Decide and, if ready, perform seeding for ONE capability on ONE node.
  *
- * ORDER MATTERS and is cheapest-check-first: a guest or an unearned/ineligible
+ * ORDER MATTERS and is cheapest-check-first: an unearned/ineligible
  * node costs ZERO ssh/gh calls (see the header). Only once a node is eligible
  * does this ask the node anything, and only once the node answers IDLE with
  * room does it ask GitHub for anything.
@@ -486,8 +477,7 @@ async function seedNodeFor(name, node, manifest, id, spec, deps) {
 }
 
 /**
- * Seed every applicable capability on one node. A GUEST is refused outright,
- * for every entry, with no I/O at all — see the header's "HOKON IS A GUEST".
+ * Seed every applicable capability on one node.
  *
  * @param {string} name
  * @param {object} node a manifest machine entry
@@ -496,14 +486,6 @@ async function seedNodeFor(name, node, manifest, id, spec, deps) {
  */
 export async function seedNode(name, node, manifest, deps) {
 	const entries = seedEntries(manifest);
-	if (isGuestNode(node)) {
-		return entries.map(([id]) => ({
-			id,
-			status: 'guest',
-			reason:
-				'a guest lends the fleet a registration and nothing else (operator, 2026-09-14) — never seeded',
-		}));
-	}
 	const results = [];
 	for (const [id, spec] of entries) {
 		results.push(await seedNodeFor(name, node, manifest, id, spec, deps));

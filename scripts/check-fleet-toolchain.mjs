@@ -29,7 +29,7 @@ import {
 	loadManifest,
 	machineArg,
 	runOnSync,
-	selectNodes,
+	selectMachines,
 } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
@@ -39,9 +39,12 @@ import {
 	isVersionManaged,
 	minAgeOf,
 	probeRole,
+	repairNeedsRoot,
+	REPAIRS,
 } from './lib/toolchain-floor.mjs';
+import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { assess, createReleaseLookup, parseInstalledVersion } from './lib/tool-release.mjs';
-import { isGuestNode } from '../dist/lib/node-role.js';
+import { isBackstopNode } from '../dist/lib/node-role.js';
 
 /**
  * WHICH harvester file is judged is read from the RUNNING service, never a
@@ -57,7 +60,7 @@ const HARVESTER_PKG_PATH = new URL('runner-mem-harvest.py', import.meta.url);
 /**
  * The ABSOLUTE local path to this package's own `runner-mem-harvest.py`,
  * resolved from wherever THIS module was loaded from. When this doctor runs
- * in-process inside mgmt-api on hokon (the guest it is reporting on), that is
+ * in-process inside mgmt-api on hokon (the backstop it is reporting on), that is
  * already the production path — no assumption about mgmt-api's install
  * layout is baked in here; `import.meta.url` IS that layout. See
  * "verify in the consumer's environment".
@@ -90,13 +93,13 @@ export const WORK_ADVISORY_FREE_SHARE = 0.1;
  * correction 2026-10-03, re-corrected 2026-10-03: no node name baked in).
  *
  * The drop-in scan is generic (any `*.service.d` with no matching unit), but
- * a guest is not a box this package owns outright — it also carries the
+ * the backstop is not a box this package owns outright — it also carries the
  * operator's own desktop session (an `app-…@.service.d` template unit, say).
  * Those `@`-template units commonly have no persistent unit FILE at all (the
  * session instantiates them), so "no unit" there is normal, not drift, and
  * recommending `rm -r` on someone's desktop config is not this doctor's
  * business. `actions-runner-` is the live runner naming everywhere (every
- * `actions-runner-*.service.d` on a real guest has a matching unit); a guest
+ * `actions-runner-*.service.d` on the backstop has a matching unit); it
  * may ALSO carry a legacy PER-NODE naming from before that scheme —
  * `<node>-runner-b/c/d`, verified on hokon: `hokon-runner-b.service.d` exists
  * with `systemctl --user list-unit-files 'hokon-runner*'` finding nothing.
@@ -391,7 +394,7 @@ export function judgeTool(id, tool, seen, latest) {
 
 /**
  * Judge every tool that applies to a node. `tools` is `applicableRepairs(node)`,
- * which is where `when` and the guest rule are honoured — a tool that does not
+ * which is where `when` is honoured — a tool that does not
  * apply is not in the list, so it is neither probed nor a finding.
  */
 export function judgeNode(tools, seen, latestById) {
@@ -399,12 +402,13 @@ export function judgeNode(tools, seen, latestById) {
 }
 
 /**
- * ADVISORY-ONLY readiness facts for a GUEST — never requested for a claw.
+ * ADVISORY-ONLY readiness facts for the BACKSTOP — never requested for a claw.
  *
  * Every line here READS the kernel or the filesystem; nothing here installs,
  * starts, stops or writes anything, so it carries none of `check-capabilities`'
  * mutation risk. It answers "could the backstop actually take load", not "is
- * the backstop converged" — the fleet still never repairs a guest.
+ * the backstop converged" — its toolchain is judged by the same rules as a
+ * claw's, above.
  *
  *   bk-avail-kb      /proc/meminfo MemAvailable — what ci-throttle's floor
  *                    (the node's declared `minFreeMb`) is actually compared
@@ -563,13 +567,13 @@ function parseProbe(out) {
 }
 
 /**
- * The advisory backstop-readiness report for ONE guest, from facts the probe
+ * The advisory backstop-readiness report for ONE backstop, from facts the probe
  * above already gathered. Pure, so it is testable against a fixture without a
  * node.
  *
  * NEVER FEEDS `drift`. This answers "could the backstop take load right now",
- * which is a fact about the FLEET's exposure, not about whether the guest
- * itself needs repair — the fleet never repairs it. A consumer (the mgmt-api
+ * which is a fact about the FLEET's exposure, not about whether the backstop
+ * itself needs repair. A consumer (the mgmt-api
  * digest) must not page on anything in here; see `advisory: true`.
  *
  * `sliceMaxMb` is the node's OWN declared `slice.maxMb` (hokon: 16384) —
@@ -778,7 +782,6 @@ export function computeDrift({
 export async function runDoctor({
 	manifest,
 	only = null,
-	includeGuests = false,
 	run = onNode,
 	lookup = createReleaseLookup(),
 	drains = readDrains(),
@@ -787,38 +790,15 @@ export async function runDoctor({
 	if (!tc) throw new Error('fleet-runner-manifest.json has no `toolchain` section');
 	const toolCache = tc.toolCache ?? {};
 
-	// A GUEST IS NOT PROBED BY DEFAULT, AND THE SKIP IS REPORTED.
-	//
-	// "Can each node build what its neighbours can" is a question about CI
-	// capacity. A guest builds nothing for the fleet — it lends a registration and
-	// is otherwise none of the fleet chain's business (operator, 2026-09-14) — so
-	// drift in its tool cache is not drift in the fleet's, and the remedy this
-	// command prints (`tar | ssh <node>`) is a write onto a box the fleet may not
-	// write to. `selectNodes` is the role-aware door; naming the node with
-	// --machine still reaches it, which is how an operator audits one deliberately.
-	// `where` goes INSIDE the door, not after it: a node the fleet excludes from
-	// placement was never going to be probed, so reporting it as "skipped by role"
-	// would put a second reason on a node that already had one.
-	//
-	// `includeGuests` OPENS the door for VERIFICATION ONLY (operator, 2026-10-01:
-	// "the guest rule covers mutation, not verification"). It still never repairs
-	// a guest, never installs on it, never pages about it — see `advisory: true`
-	// on {@link buildBackstop} — it only reads what is already there.
-	const { nodes: selected, skippedByRole } = selectNodes(manifest, {
+	// A node the fleet excludes from placement is not probed.
+	const selected = selectMachines(manifest, {
 		only,
-		includeGuests,
 		where: (m) => m.placement !== 'excluded',
 	});
 
 	// THE TOOLS EACH NODE CARRIES come from the ONE declaration (REPAIRS), filtered
-	// by `applicableRepairs`: `when` in both directions. `includeGuests: true` is
-	// passed UNCONDITIONALLY here — it is safe for a claw (a no-op: the guest
-	// check never applied) and correct for a guest, because `selected` already
-	// enforced the explicit-inclusion gate above. A guest that was NOT explicitly
-	// included is never in `selected` at all; it is in `skippedByRole`.
-	const toolsByNode = new Map(
-		selected.map(([name, m]) => [name, applicableRepairs(m, { includeGuests: true })])
-	);
+	// by `applicableRepairs`: `when` in both directions.
+	const toolsByNode = new Map(selected.map(([name, m]) => [name, applicableRepairs(m)]));
 
 	// Upstream ONCE PER TOOL PER RUN, and only for tools some selected node
 	// carries. The question is "what had cleared minAge + tolerance ago" — see
@@ -836,7 +816,7 @@ export async function runDoctor({
 		})
 	);
 
-	// The repo's own copy, read ONCE — compared against whatever a guest's probe
+	// The repo's own copy, read ONCE — compared against whatever the backstop's probe
 	// reports is actually deployed. Absent in a context where the file was not
 	// published beside this script (never true for the real package); guarded so
 	// a test fixture does not need to carry it. `repoHarvestSha` is what the
@@ -856,15 +836,15 @@ export async function runDoctor({
 	const report = [];
 	for (const [node, m] of selected) {
 		const tools = toolsByNode.get(node);
-		// The backstop probe is ADDITIONAL lines on a guest's probe only — a claw
-		// never pays for cgroup/meminfo reads it has no use for.
-		const guest = isGuestNode(m);
+		// The backstop probe is ADDITIONAL lines on the backstop's probe only — a
+		// claw never pays for cgroup/meminfo reads it has no use for.
+		const backstop = isBackstopNode(m);
 		// The main probe reads as ci; a tool another role owns (`byRole`) is read
 		// as that role, and its lines are appended to the same output.
 		const groups = new Map(byRole(tools));
 		const ciTools = groups.get('ci') ?? [];
 		groups.delete('ci');
-		const res = run(node, probeScript(toolCache, ciTools, { backstop: guest }), {
+		const res = run(node, probeScript(toolCache, ciTools, { backstop }), {
 			timeoutMs: 60_000,
 		});
 		if (!res.ok && !res.out.includes('os\t')) {
@@ -915,7 +895,21 @@ export async function runDoctor({
 				? { id: t.id, status: 'unknown', finding: true, reason: unread.get(t.id) }
 				: t
 		);
-		const toolFindings = toolReports.filter((t) => t.finding);
+		// A finding the fleet could only fix with root, on a node it has no sudo on
+		// (the backstop), is the operator's: an ADVISORY with the hand-run, never
+		// drift that pages (lib/operator-sudo.mjs).
+		const sudo = maySudo(m);
+		const rootOnly = (t) => !sudo && REPAIRS[t.id] && repairNeedsRoot(t.id);
+		const toolFindings = toolReports.filter((t) => t.finding && !rootOnly(t));
+		const advisories = toolReports
+			.filter((t) => t.finding && rootOnly(t))
+			.map((t) =>
+				rootAdvisory(
+					node,
+					`repairing "${t.id}" (${t.status}: ${t.reason})`,
+					`fleet converge-toolchain --machine ${node} --write`
+				)
+			);
 		report.push({
 			machine: node,
 			unreachable: false,
@@ -931,10 +925,9 @@ export async function runDoctor({
 			// `drift`) fails the node without being changed.
 			tools: toolReports,
 			toolFindings,
-			// `tools.length` guards the bug this doctor shipped once:
-			// `--machine hokon --include-guests` reported `drift=false` with
-			// `tools: []`, because nothing was evaluated, not because nothing was
-			// wrong. See {@link computeDrift}.
+			// `tools.length` guards the bug this doctor shipped once: a node
+			// reported `drift=false` with `tools: []`, because nothing was
+			// evaluated, not because nothing was wrong. See {@link computeDrift}.
 			drift: computeDrift({
 				missingCache,
 				ensurepip: facts.ensurepip,
@@ -942,9 +935,10 @@ export async function runDoctor({
 				toolFindings,
 				toolsEvaluated: tools.length,
 			}),
-			// ADVISORY, GUEST ONLY. Never folded into `drift` — a consumer parsing
+			...(advisories.length ? { advisories } : {}),
+			// ADVISORY, BACKSTOP ONLY. Never folded into `drift` — a consumer parsing
 			// `drift`/`toolFindings` for a page sees nothing new. See `buildBackstop`.
-			...(guest
+			...(backstop
 				? {
 						backstop: buildBackstop(
 							{
@@ -971,7 +965,7 @@ export async function runDoctor({
 				: {}),
 		});
 	}
-	return { toolCache, report, skippedByRole, latest: latestById };
+	return { toolCache, report, latest: latestById };
 }
 
 async function main() {
@@ -983,13 +977,10 @@ async function main() {
 	const log = emitter.log;
 
 	const manifest = loadManifest();
-	// `--include-guests` — the one spelling `converge-toolchain` established.
-	// VERIFICATION ONLY: see the note on `runDoctor`'s own `includeGuests`.
-	const INCLUDE_GUESTS = process.argv.includes('--include-guests');
 	const ONLY = machineArg();
 	let result;
 	try {
-		result = await runDoctor({ manifest, only: ONLY, includeGuests: INCLUDE_GUESTS });
+		result = await runDoctor({ manifest, only: ONLY });
 	} catch (err) {
 		// The probe itself broke, so nothing was measured. Under `--json` that is
 		// still ONE document with the reason, never an empty stdout: the cron
@@ -1002,28 +993,20 @@ async function main() {
 				error,
 				toolCache: {},
 				machines: [],
-				skippedByRole: [],
 				noneProbed: error,
 			});
 		}
 		process.exit(1);
 	}
-	const { toolCache, report, skippedByRole, latest } = result;
+	const { toolCache, report, latest } = result;
 	// ZERO NODES PROBED IS NOT A CLEAN FLEET (#98). `--machine` with a typo, or a
 	// manifest where every node is excluded, probed nothing and exited 0 with
-	// "Every node matches". There is no explained zero: a guest NAMED with
-	// `--machine` is reached (`guestGate`), so it is probed and never lands here;
-	// a guest that was not named is skipped, and a fleet of nothing else probed
-	// nothing.
+	// "Every node matches".
 	const noneProbed =
 		report.length === 0
 			? ONLY
 				? `--machine ${ONLY} selected no probeable node — check the name against the manifest`
-				: `no node was probed — every machine in the manifest is excluded` +
-					(skippedByRole.length
-						? ` or a guest skipped by role (${skippedByRole.map((s) => s.node).join(', ')}; ` +
-							'name one with --machine to verify it)'
-						: '')
+				: `no node was probed — every machine in the manifest is excluded`
 			: null;
 	if (noneProbed) console.error(`✗ ${noneProbed}. Nothing probed is not "nothing drifted".`);
 
@@ -1036,14 +1019,9 @@ async function main() {
 	);
 
 	if (JSON_OUT) {
-		// `skippedByRole` rides ALONGSIDE `machines` rather than inside it: `machines`
-		// means "the boxes this run probed", and a guest is precisely one it did not.
-		// Folding them together would make a skipped guest indistinguishable from a
-		// node that answered.
 		emitter.emit({
 			toolCache,
 			machines: report,
-			skippedByRole,
 			// ADDITIVE: what upstream said per tool, so an `unknown` is diagnosable.
 			toolLatest: latest,
 			toolToleranceMinutes: TOLERANCE_MINUTES,
@@ -1051,7 +1029,6 @@ async function main() {
 			noneProbed,
 		});
 	} else {
-		for (const s of skippedByRole) log(`── ${s.node}  [skipped: guest]\n   ${s.why}`);
 		for (const r of report) {
 			if (r.unreachable) {
 				log(
@@ -1073,6 +1050,7 @@ async function main() {
 				);
 			}
 			for (const t of r.toolFindings) log(`   ! tool ${t.id} [${t.status}]: ${t.reason}`);
+			for (const a of r.advisories ?? []) log(`   advisory: ${a.message}\n     ${a.fix}`);
 			if (r.pnpmDrift) {
 				// TWO CAUSES REACH THIS SAME MISSING DIRECTORY, AND THEY HAVE
 				// DIFFERENT REMEDIES. Until 2026-09-09 this printed the shadowing
@@ -1136,7 +1114,7 @@ async function main() {
 				log(`     backstop available: ${availLine}`);
 				log(`     harvester: ${harvestLine}`);
 				// #79 hygiene — reported, never repaired: each advisory names its own
-				// one-line fix for the OPERATOR to run by hand on the guest.
+				// one-line fix for the OPERATOR to run by hand on the backstop.
 				for (const adv of b.advisories ?? []) {
 					log(`     advisory [${adv.id}]: ${adv.message}`);
 					log(`       fix: ${adv.fix}`);
@@ -1186,8 +1164,7 @@ async function main() {
 		log(
 			`\n${drifted.length ? `${drifted.length} node(s) DRIFTED` : noneProbed ? 'No node was probed.' : 'Every node matches the declared toolchain.'}` +
 				(unreachable.length ? `  (${unreachable.length} unreachable)` : '') +
-				(expectedDown.length ? `  (${expectedDown.length} expected down)` : '') +
-				(skippedByRole.length ? `  (${skippedByRole.length} guest(s) skipped by role)` : '')
+				(expectedDown.length ? `  (${expectedDown.length} expected down)` : '')
 		);
 	}
 	process.exit(drifted.length || unreachable.length || noneProbed ? 1 : 0);

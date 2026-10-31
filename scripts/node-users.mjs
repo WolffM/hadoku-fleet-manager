@@ -2,7 +2,7 @@
 /**
  * fleet node-users — who runs CI on each node, read from the node.
  *
- *   fleet node-users            # every claw
+ *   fleet node-users            # every node
  *   fleet node-users --machine claw-5
  *   fleet node-users --json
  *   fleet node-users --cutover claw-5 [--confirm]   # see node-users-cutover.mjs
@@ -25,7 +25,7 @@ import process from 'node:process';
 
 import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, readDrains } from './lib/expected-down.mjs';
-import { loadManifest, machineArg, runOn, selectNodes } from './lib/fleet-exec.mjs';
+import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import {
 	judgeNodeAccounts,
 	judgeNodeUsers,
@@ -68,14 +68,13 @@ async function checkNode(node, machine, drains, tenants) {
 async function main() {
 	const ONLY = machineArg(process.argv.slice(2));
 	const manifest = loadManifest();
-	const { nodes, skippedByRole } = selectNodes(manifest, { only: ONLY });
-	for (const s of skippedByRole) log(`── ${s.node}  [skipped: ${s.role}] ${s.why}`);
+	const nodes = selectMachines(manifest, { only: ONLY });
 	if (!nodes.length) {
 		const error = ONLY
-			? `--machine ${ONLY} selected no claw`
-			: 'the manifest selects no claw; zero nodes checked is not a pass';
+			? `--machine ${ONLY} selected no node`
+			: 'the manifest selects no node; zero nodes checked is not a pass';
 		log(error);
-		if (emitter.json) emitter.emit({ ok: false, error, results: [], skippedByRole });
+		if (emitter.json) emitter.emit({ ok: false, error, results: [] });
 		process.exitCode = 1;
 		return;
 	}
@@ -88,7 +87,7 @@ async function main() {
 		// could not look, not "no tenants".
 		const error = `could not read the tenant registry: ${err.message}`;
 		log(error);
-		if (emitter.json) emitter.emit({ ok: false, error, results: [], skippedByRole });
+		if (emitter.json) emitter.emit({ ok: false, error, results: [] });
 		process.exitCode = 1;
 		return;
 	}
@@ -109,7 +108,7 @@ async function main() {
 		`${results.length} node(s): ${results.length - pending - unread.length} cut over, ${pending} still running CI as admin` +
 			(drifted.length ? `, ${drifted.length} DRIFTED` : '')
 	);
-	if (emitter.json) emitter.emit({ ok, results, skippedByRole });
+	if (emitter.json) emitter.emit({ ok, results });
 	process.exitCode = ok ? 0 : 1;
 }
 

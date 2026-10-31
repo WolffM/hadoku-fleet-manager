@@ -151,16 +151,16 @@ test('a NEWLY eligible node that is not holding a listener FAILS — the denomin
 	assert.match(v.reason, /1 of 2 eligible node\(s\) not holding a warm listener: claw-7/);
 });
 
-test('a guest that reaches the canary is never eligible, whatever its memory', () => {
-	// `selectNodes` skips guests before measuring; this is the second answer. A
-	// 62 GB box passes any memory test, so a fleet of ONLY it must fail as
-	// "nothing eligible", never pass on the guest's listener.
+test('a backstop that reaches the canary is never eligible, whatever its memory', () => {
+	// check-warm-canary skips the backstop before measuring; this is the second
+	// answer. A 62 GB box passes any memory test, so a fleet of ONLY it must fail
+	// as "nothing eligible", never pass on the backstop's listener.
 	const hokon = {
 		...eligible('hokon', 'WolffM/hadoku_site'),
 		totalMb: 63_402,
 		minFreeMb: 8192,
 		jobMb: 4096,
-		role: 'guest',
+		role: 'backstop',
 	};
 	const v = warmCanaryVerdict([hokon], fns);
 	assert.equal(v.ok, false);

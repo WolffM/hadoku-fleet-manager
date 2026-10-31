@@ -15,10 +15,10 @@ import {
 } from './benchmark-cadence.mjs';
 
 /**
- * THE CADENCE MAY NEVER MEASURE A GUEST (#87 §1, done-when #6). The cadence
+ * THE CADENCE MAY NEVER MEASURE THE BACKSTOP (#87 §1, done-when #6). The cadence
  * picks its candidate list from `dueNodes(leadDays, null).due`, exactly like
  * `--report` does — one role split, reused rather than re-asked. This proves
- * that split still holds a guest out of `due` even when it is by far the most
+ * that split still holds the backstop out of `due` even when it is by far the most
  * overdue thing in the fleet, feeding `runCadence` candidates directly so the
  * property is checked at the seam the cadence actually depends on.
  *
@@ -26,8 +26,8 @@ import {
  * IN-PROCESS (not through the CLI subprocess) so a plain fixture dir is enough
  * — no node is reached either way.
  */
-test('dueNodes never puts a guest in the candidate list, however overdue it is', (t) => {
-	const dir = mkdtempSync(join(tmpdir(), 'fleet-benchmark-guest-test-'));
+test('dueNodes never puts the backstop in the candidate list, however overdue it is', (t) => {
+	const dir = mkdtempSync(join(tmpdir(), 'fleet-benchmark-backstop-test-'));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const manifests = join(dir, 'manifests');
 	const state = join(dir, 'state');
@@ -38,12 +38,12 @@ test('dueNodes never puts a guest in the candidate list, however overdue it is',
 		JSON.stringify({
 			machines: {
 				'claw-x': { role: 'claw', cores: 4, labels: [], maxRegistrations: 4 },
-				hokon: { role: 'guest', cores: 8, labels: [], maxRegistrations: 1 },
+				hokon: { role: 'backstop', cores: 8, labels: [], maxRegistrations: 1 },
 			},
 		})
 	);
 	// Neither node has ever been measured, so both are maximally overdue —
-	// the shape that would have picked the guest first if the split failed.
+	// the shape that would have picked the backstop first if the split failed.
 	const prevManifestDir = process.env.FLEET_MANIFEST_DIR;
 	const prevStateDir = process.env.HADOKU_STATE_DIR;
 	process.env.FLEET_MANIFEST_DIR = manifests;
@@ -58,7 +58,7 @@ test('dueNodes never puts a guest in the candidate list, however overdue it is',
 			skippedByRole.map((d) => d.node),
 			['hokon']
 		);
-		assert.equal(skippedByRole[0].role, 'guest');
+		assert.equal(skippedByRole[0].role, 'backstop');
 	} finally {
 		if (prevManifestDir === undefined) delete process.env.FLEET_MANIFEST_DIR;
 		else process.env.FLEET_MANIFEST_DIR = prevManifestDir;

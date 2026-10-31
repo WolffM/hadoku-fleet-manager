@@ -38,7 +38,7 @@
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { loadManifest, runOn, selectNodes } from './lib/fleet-exec.mjs';
+import { loadManifest, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { hubRepoFull } from '../dist/lib/fleet-config.js';
@@ -154,17 +154,11 @@ async function probe(node, tools) {
 }
 
 /**
- * A GUEST IS NOT PROBED, AND THE SKIP IS PRINTED.
- *
- * The question is which tools a CI JOB will find when it lands — and a guest is
- * never a landing site for general CI work, so `command -v` on it answers a
- * question nobody asked. It also lends the fleet a registration and nothing else
- * (operator, 2026-09-14), which makes even a read-only `command -v` sweep the
- * fleet chain reaching onto a box it was told to leave alone. `selectNodes` is
- * the role-aware door and returns what it refused, so the refusal is reportable.
+ * Every node a CI job can land on, the backstop included: it takes CI when the
+ * claws cannot, so the tools a job finds there are the same question.
  */
 const manifest = loadManifest();
-const { nodes: selectedNodes, skippedByRole } = selectNodes(manifest);
+const selectedNodes = selectMachines(manifest);
 const nodes = selectedNodes.map(([name]) => name);
 const present = {};
 const unreachable = [];
@@ -183,14 +177,13 @@ const _drains = readDrains();
 const expectedDown = unreachable.filter((n) => deferralFor(n, _drains).deferred);
 const trulyUnreachable = unreachable.filter((n) => !deferralFor(n, _drains).deferred);
 
-// Claws are what a `hadoku-builder` job can land on; anything else is targeted.
+// Every node a `hadoku-builder` job can land on.
 //
 // This was `nodes` minus anything carrying the `pm2-host` LABEL, which was exact
 // only while one machine carried that label and stopped being exact the day
 // Wave 3d made `pm2-host` an EARNED capability a claw can probe into — a claw
 // that earned it would have dropped out of the CI set for a reason that has
-// nothing to do with CI. The exclusion it was standing in for is the ROLE, and
-// `selectNodes` above has already applied it, so this is now the same list.
+// nothing to do with CI.
 const clawSet = nodes;
 
 /**
@@ -202,9 +195,6 @@ const clawSet = nodes;
  * just moved from a cgroup reader to a capability one. `provenCapabilities`
  * reads each node's bootcamp facet from the MANIFEST instead — no probe, no
  * ssh, no job text.
- *
- * `selectedNodes` is already the guest-excluded general pool (`selectNodes`
- * above applied the role gate), so no second guest filter is needed here.
  *
  * A node bootcamp has never reached (`provenCapabilities` returns `null`)
  * proves NOTHING — it is counted in `poolUnprobedCount` and reported as a
@@ -474,14 +464,10 @@ if (findings.length) {
 	console.error(`✗ tool inventory (${findings.length}):`);
 	for (const f of findings) console.error(`  ${f}`);
 }
-for (const s of skippedByRole) {
-	console.log(`  · ${s.node} [skipped: guest] — ${s.why}`);
-}
 if (!findings.length && !trulyUnreachable.length) {
 	console.log(
 		`✓ ${examined} self-hosted workflow(s) (${examinedJobs} job(s)) inspected across ${clawSet.length} node(s): ` +
 			`every tool invoked is present, guarded, or installed by the workflow` +
-			(skippedByRole.length ? ` (${skippedByRole.length} guest(s) skipped by role)` : '') +
 			(expectedDown.length ? ` (${expectedDown.length} expected down)` : '')
 	);
 }

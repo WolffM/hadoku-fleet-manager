@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { nodeOffer, registrationLabels } from '../lib/capability-offer.js';
-import { capability, verificationFor, type ManifestNode } from '../lib/capability-registry.js';
+import { type ManifestNode } from '../lib/capability-registry.js';
 import { BUILDER_LABEL, PM2_HOST_LABEL } from '../runners/census.js';
 import { healthyClaw, jdk21Earner, proof, ROOT } from './capability-fixtures.js';
 
@@ -50,10 +50,13 @@ test('jdk21 is routed from the bootcamp record, never from a declaration — sam
 		'a declaration must not survive a bootcamp record that did not earn it'
 	);
 
-	// A GUEST declaring it (hokon never will, but the rule is general) stays
-	// declared — verificationFor reads every label on a guest as `role`.
-	const guest: ManifestNode = { role: 'guest', labels: ['jdk21'] };
-	assert.equal(verificationFor(guest, capability('jdk21')), 'role');
+	// The backstop is held to the same bar: its record answers the declaration.
+	const backstop: ManifestNode = {
+		role: 'backstop',
+		labels: ['jdk21'],
+		$capabilities: { earned: [], prereqs: [{ id: 'rust' }] },
+	};
+	assert.ok(!nodeOffer(backstop, { eligible: false }).includes('jdk21'));
 });
 
 test('nodeOffer: omitting workloadProofs is BYTE-IDENTICAL to today — the wave 4e rollout constraint', () => {

@@ -211,16 +211,7 @@ const COMMANDS: Record<string, Command> = {
 		kind: 'converger',
 		// `--refresh` drains and updates nodes, and `--plan` is what makes it a
 		// dry run: a typo of the one must never fall through to the other.
-		flags: [
-			'--json',
-			'--write',
-			'--refresh',
-			'--plan',
-			'--include-guests',
-			'--machine=',
-			'--budget-min=',
-			'--out=',
-		],
+		flags: ['--json', '--write', '--refresh', '--plan', '--machine=', '--budget-min=', '--out='],
 		summary: 'check — and with --write, REFRESH — the build toolchain on every node',
 	},
 	toolpack: {
@@ -398,7 +389,8 @@ const COMMANDS: Record<string, Command> = {
 		summary: 'can each node build what its neighbours can',
 	},
 	// Not under the --json contract: no cron parses it (it spends Actions minutes
-	// and races a guest, so it is an operator act). See scripts/prove-job.mjs.
+	// and mints a runner beside production work, so it is an operator act). See
+	// scripts/prove-job.mjs.
 	'prove-job': {
 		script: 'prove-job.mjs',
 		kind: 'operator',

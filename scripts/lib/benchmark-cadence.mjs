@@ -130,14 +130,12 @@ export function byHandFor(dueDays) {
  * job stranding a node out of the fleet, and src/runners/drain.ts is explicit
  * that a drain must never lapse on its own.
  *
- * A GUEST IS NEVER DUE, AND IS NEVER SILENTLY DROPPED EITHER.
- * ----------------------------------------------------------
- * hokon is a guest (operator, 2026-09-14): the fleet chain may not converge it,
- * bootcamp it, repair it, or PAGE ABOUT IT. Its `$benchmark` stamp ages exactly
- * like a claw's — 12.3 d on 2026-09-16, same 2026-09-03 capture as five of the
- * claws — so without this it would have crossed `--due 30` around 2026-10-03
- * and the nightly report would have told a human to go and measure it. A
- * finding naming a guest IS paging about it.
+ * THE BACKSTOP IS NEVER DUE, AND IS NEVER SILENTLY DROPPED EITHER.
+ * ----------------------------------------------------------------
+ * The benchmark feeds the routing speed rank, and the backstop is placed after
+ * every claw rather than ranked: it is the emergency backstop, not capacity.
+ * Its `$benchmark` stamp ages exactly like a claw's, so without this the
+ * nightly report would tell a human to go and measure a box no rank reads.
  *
  * The exclusion is HERE, in the one writer, so the mgmt-api consumer needs no
  * role knowledge and cannot drift from this. Role is read through
@@ -145,9 +143,9 @@ export function byHandFor(dueDays) {
  *
  * But "I did not need to look" is not "nothing is wrong", so an exempted node
  * goes into `skippedByRole` WITH its role and its dates rather than
- * disappearing. Two failures stay visible that way: a guest that somehow lost
+ * disappearing. Two failures stay visible that way: a backstop that somehow lost
  * its role reads as a claw and shows up loudly in `due` (absence defaults to
- * `claw`, the strict direction), and a CLAW that wrongly gained `role: guest`
+ * `claw`, the strict direction), and a CLAW that wrongly gained `role: backstop`
  * would otherwise stop being measured in silence — instead it is named, with
  * the role that exempted it, in every report.
  *
@@ -237,7 +235,7 @@ export function cadenceBands({ due, measuredNode, dueDays, graceDays }) {
  * ONE NODE, DRAINED AROUND THE MEASUREMENT, ALWAYS PUT BACK.
  *
  * `candidates` is the LEAD-window due list, oldest first, already stripped of
- * guests by the caller (`dueNodes` splits by role before this ever sees it) —
+ * the backstop by the caller (`dueNodes` splits by role before this ever sees it) —
  * this function does not ask what a node IS, only whether it is safe to touch
  * right now. Busy and already-drained nodes are SKIPPED, not waited on: this
  * runs off a cron with a real timeout (1500s), and `waitDrained`'s own

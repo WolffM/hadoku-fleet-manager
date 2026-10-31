@@ -2,8 +2,8 @@
  * THE IMPORT-DIRECTION GUARD, debt-list mode, cut (iii) (wave 5b §A step 2).
  *
  * `measure-layers.mjs --json` is the MEASURING tool; this is the GATE built
- * on top of it, in the same shape `node-identity-guard.test.mjs` and
- * `node-role-guard.test.mjs` already use for a source-reading rule: a NEW
+ * on top of it, in the same shape `node-identity-guard.test.mjs` already
+ * uses for a source-reading rule: a NEW
  * violation fails the build, and a debt entry that stopped being a violation
  * must be DELETED from `layer-debt.json` — the list may only shrink, which is
  * what keeps it a ratchet instead of a parking lot (the same failure mode
@@ -110,8 +110,7 @@ test('the debt list only ever SHRINKS — a fixed entry must be deleted from lay
 test('every debt entry still names two files this run actually classifies', () => {
 	// A rename on either side would otherwise leave a debt entry matching
 	// nothing, silently narrowing what the guard enforces — the same "a
-	// rotted exemption list hides what it stopped covering" trap
-	// node-role-guard.test.mjs closes for UNGATED.
+	// rotted exemption list hides what it stopped covering" trap.
 	const { classified } = classifyFiles(listSourceFiles());
 	const debt = readDebt();
 	const dangling = debt.filter((d) => !classified.has(d.from) || !classified.has(d.to));

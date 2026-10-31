@@ -92,7 +92,7 @@ import { stripYamlComments } from './lib/yaml-comments.mjs';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
-import { isGuestNode } from '../dist/lib/node-role.js';
+import { isBackstopNode, nodeRole } from '../dist/lib/node-role.js';
 import {
 	CallBudget,
 	PER_NODE_SAMPLES,
@@ -342,38 +342,35 @@ function mintLabelsFor(node) {
 }
 
 /**
- * The nodes a probe may place on. EPHEMERAL, AND NOT A GUEST.
+ * The nodes a probe may place on. EPHEMERAL, AND NOT THE BACKSTOP.
  *
  * Both halves are enforced, and the second one is not redundant. A probe mints a
  * real runner and pushes a real job onto the node it names, so this list is the
  * blast radius of `--node` and of `--onto` — and `--onto` exists precisely to
- * FORCE a re-run somewhere the job did not choose to go. A guest lends the fleet
- * a standing registration and is otherwise none of the fleet chain's business
- * (operator, 2026-09-14); billing it for a manufactured job is the far end of
- * that.
+ * FORCE a re-run somewhere the job did not choose to go. A probe measures the
+ * routing speed rank, and the backstop is placed after every claw rather than
+ * ranked: it is the emergency backstop, not capacity, and the production host.
  *
- * Until now the guest was excluded only because it declares no `ephemeral` key —
- * true today, and one manifest edit from being false, at which point `--onto
- * <the guest>` would have started minting there with nothing to say about it.
- * The rule is the ROLE; `ephemeral` is a capacity fact that happens to agree.
+ * The backstop declares no `ephemeral` key today, but that is one manifest edit
+ * from being false. The rule is the ROLE; `ephemeral` is a capacity fact that
+ * happens to agree.
  */
-const CLAWS = NODES.filter((n) => machines[n]?.ephemeral === true && !isGuestNode(machines[n]));
+const CLAWS = NODES.filter((n) => machines[n]?.ephemeral === true && !isBackstopNode(machines[n]));
 
 /** Named separately so a refusal can say WHICH rule refused — see `notAProbeTarget`. */
-const GUESTS = NODES.filter((n) => isGuestNode(machines[n]));
+const BACKSTOPS = NODES.filter((n) => isBackstopNode(machines[n]));
 
 /**
  * Why a node cannot be probed, in the words that fit it.
  *
- * "not an ephemeral node in the manifest" is true of a guest and sends the
+ * "not an ephemeral node in the manifest" is true of the backstop and sends the
  * reader to the wrong fix — they would add `ephemeral: true` to it. A refusal
  * that names the wrong cause is unactionable, which is the point of saying WHY.
  */
 const notAProbeTarget = (node) =>
-	GUESTS.includes(node)
-		? `${node} is a GUEST — the fleet does not place work on one. It lends a standing ` +
-			`registration and is otherwise none of the fleet chain's business, so a probe ` +
-			`may never be forced onto it. Name a claw: ${CLAWS.join(', ') || '(none)'}`
+	BACKSTOPS.includes(node)
+		? `${node} is the BACKSTOP — it is not ranked for routing, so a probe may never be ` +
+			`forced onto it. Name a claw: ${CLAWS.join(', ') || '(none)'}`
 		: `${node} is not an ephemeral node in the manifest`;
 
 /**
@@ -624,9 +621,9 @@ function pickBusiestUnit(rows) {
  *
  * READ-ONLY IS A STRUCTURAL PROPERTY HERE, not a promise. The function touches
  * `loadHistory` and the manifest and nothing else — no `meteredGh`, no `sh`, no
- * `appendLedger`, no `declareProbeIntent`, no `mintEphemeralRunner`. hokon is
- * therefore reached in exactly the way a GUEST may be reached: its rows are
- * READ out of history like every other node's, and nothing is run against it.
+ * `appendLedger`, no `declareProbeIntent`, no `mintEphemeralRunner`. hokon's
+ * rows are READ out of history like every other node's, and nothing is run
+ * against any node.
  *
  * ZERO IS A FAILURE. An empty window, a `--repo` that matches nothing, a
  * history that will not parse — each exits 1 and says which, because "I could
@@ -668,12 +665,10 @@ function modeReport(rows) {
 	const samples = scoped.map((r) => ({ ...r, node: nodeOf(r.runner, NODES) }));
 	const t = nodeZoneTable({ samples, roster: NODES });
 	const since = new Date(cutoffMs).toISOString();
-	// The ROLE, from the manifest, never the name. A guest's failures are read
-	// from history like anyone's — it is probing, converging and paging that the
-	// guest rule forbids — but a reader comparing boxes has to know which row is
-	// not a claw: hokon holds STANDING registrations and GitHub assigns to those
-	// directly, so it serves a different population of work than any claw.
-	const roles = Object.fromEntries(NODES.map((n) => [n, machines[n]?.role ?? 'unknown']));
+	// The ROLE, from the manifest, never the name. A reader comparing boxes has
+	// to know which row is not a claw: the backstop is minted for only when it
+	// is the right home, so it serves a different population of work than any claw.
+	const roles = Object.fromEntries(NODES.map((n) => [n, nodeRole(machines[n])]));
 	const payload = {
 		mode: 'report',
 		days,
@@ -693,11 +688,13 @@ function modeReport(rows) {
 				`(${payload.scanned} of ${rows.length} records)`
 		);
 		log('');
-		log('  node      role    jobs  repos  fails   cxl  runner  seam  content  fleet   r+s    r+s%');
+		log(
+			'  node      role      jobs  repos  fails   cxl  runner  seam  content  fleet   r+s    r+s%'
+		);
 		for (const r of t.rows) {
 			const z = r.zones;
 			log(
-				`  ${r.node.padEnd(9)} ${(roles[r.node] ?? '—').padEnd(6)} ` +
+				`  ${r.node.padEnd(9)} ${(roles[r.node] ?? '—').padEnd(8)} ` +
 					`${String(r.jobs).padStart(5)} ${String(r.repos).padStart(6)} ` +
 					`${String(r.failures).padStart(6)} ${String(r.cancelled).padStart(5)} ` +
 					`${String(z.runner).padStart(7)} ${String(z.seam).padStart(5)} ` +

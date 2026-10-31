@@ -33,7 +33,7 @@
  * (`ManifestNode`, `BootcampFacet`, the label constants) — NOT
  * `runners/census.ts` (domain/observation), which only re-exports those same
  * constants from `capability-registry.ts`; `lib/node-role.ts` (config) for
- * `isGuestNode`. A domain-layer import here would be a NEW layer violation,
+ * `isBackstopNode`. A domain-layer import here would be a NEW layer violation,
  * not debt reduction.
  */
 import { readFileSync } from 'node:fs';
@@ -45,13 +45,13 @@ import {
 	type BootcampFacet,
 	type ManifestNode as RegistryNode,
 } from './capability-registry.js';
-import { isGuestNode } from './node-role.js';
+import { isBackstopNode } from './node-role.js';
 
 const MANIFEST_FILE = 'fleet-runner-manifest.json';
 
 /**
  * EXTENDS the registry's node shape rather than restating it. `provesRequiredSet`
- * and `isGuestNode` take `capabilities.ManifestNode`, and an interface without
+ * and `isBackstopNode` take `capabilities.ManifestNode`, and an interface without
  * that type's index signature is not assignable to it — so the choice was to
  * inherit or to cast at every call, and a cast is a second declaration of the
  * same shape that nothing keeps in step. The members below are the ones THIS
@@ -127,11 +127,11 @@ export interface ManifestNode extends RegistryNode {
 	 * module's types while proving nothing to the registry's.
 	 */
 	$capabilities?: BootcampFacet;
-	/** `"claw"` | `"guest"`. Read through `isGuestNode`, never directly. */
+	/** `"claw"` | `"backstop"`. Read through `isBackstopNode`, never directly. */
 	role?: string;
-	/** `"on-demand"` on a guest. Read through `mintsOnDemand`, never directly. */
+	/** `"on-demand"` on a backstop. Read through `mintsOnDemand`, never directly. */
 	mint?: string;
-	/** An on-demand guest's standing exceptions. Read through `standingRepos`. */
+	/** An on-demand backstop's standing exceptions. Read through `standingRepos`. */
 	standingRepos?: string[];
 }
 export interface FleetManifest {
@@ -230,12 +230,12 @@ export function loadEphemeralNodes(): Set<string> {
 	return out;
 }
 
-/** Guest nodes, by name — `machines[<node>].role`, read fresh each tick. */
-export function loadGuestNodes(): Set<string> {
+/** Backstop nodes, by name — `machines[<node>].role`, read fresh each tick. */
+export function loadBackstopNodes(): Set<string> {
 	const raw = readFleetManifest();
 	const out = new Set<string>();
 	for (const [name, m] of Object.entries(raw?.machines ?? {})) {
-		if (isGuestNode(m)) out.add(name);
+		if (isBackstopNode(m)) out.add(name);
 	}
 	return out;
 }

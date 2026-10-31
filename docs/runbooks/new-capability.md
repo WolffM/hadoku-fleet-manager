@@ -32,7 +32,7 @@ Every `fleet …` command below is checked against `src/cli.ts`'s door table by
   default, and the only one that satisfies "a probe that executes the
   capability, never one that reads its own writer's artifact"), `role`
   (nothing here can execute it — it needs a secret that lives only in a
-  GitHub Actions store, or the node is a guest), or `mint` (proven only by
+  GitHub Actions store), or `mint` (proven only by
   minting — `jit-canary` is the one case; you are very unlikely to need a
   second).
 - If this capability is going to differentiate SOME claws from others on a

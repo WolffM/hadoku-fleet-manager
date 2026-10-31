@@ -416,7 +416,7 @@ export function derivedCapacity(memTotalMb) {
  * Until 2026-09-21 `fleet enroll` wrote no `minFreeGb` at all, so every node it
  * declared reddened the site repo's main the next time that test ran (#52) —
  * claw-8 and claw-9 both landed that way and were fixed by hand. 25 GB is what
- * every machine in the live manifest already carries, claw and guest alike.
+ * every machine in the live manifest already carries, claw and backstop alike.
  */
 export const FLEET_MIN_FREE_GB = 25;
 
@@ -449,8 +449,7 @@ export const SLICE_SWAP_MB = 4096;
  * registrations the node does not keep. `reconcile` refuses a node with NO
  * labels array at all, which is the refusal that forced the first claw-9 hand
  * edit — an empty array is the answer that both satisfies it and says the
- * truth. (A GUEST's labels are declared, not derived; nothing in this file
- * enrols a guest.)
+ * truth.
  */
 export function derivedPlacement() {
 	return {

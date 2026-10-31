@@ -41,8 +41,8 @@ export function parseLoad(stdout) {
  * describe a real idle measurement, the one that established the verdict. The
  * latest figure is on the run's stdout.
  *
- * A capability this run did NOT judge (measured under load, a guest, a node
- * that never went quiet) keeps its previous entry, or has none: an unjudged
+ * A capability this run did NOT judge (measured under load, a node that never
+ * went quiet) keeps its previous entry, or has none: an unjudged
  * run writes nothing new about it.
  *
  * @param {{ measurements?: Record<string, { value: number|null, idle: boolean, earned: boolean, at: string }> } | undefined} prev

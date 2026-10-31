@@ -3,7 +3,7 @@
  * promoted, published for the fast loop.
  *
  * The backstop (runner-health) is the ONLY writer of `hadoku-builder` on a
- * guest. The fast loop reads this to know whether a guest is a standing runner
+ * backstop. The fast loop reads this to know whether a backstop is a standing runner
  * that can take a queued job right now (`standingEligible`), which decides the
  * dispatcher's age gate. Reading the backstop's record, rather than inferring
  * it, is the point: the retired tier ladder kept its own belief about the same

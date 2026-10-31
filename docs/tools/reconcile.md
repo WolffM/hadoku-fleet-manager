@@ -75,8 +75,7 @@ both exist before it. On 2026-10-22 they did not: `enable --now` started
 hadoku-fleet-manager's standing runners on claw-4/claw-6 in `app.slice` with
 no hook, and they needed `slice --confirm --restart` two nights later. A unit
 whose provisioning fails stays stopped and the run fails with the fix
-commands. A guest still starts at registration, because both drivers refuse
-it by role. `scripts/registration-provisioning.test.mjs` registers on a fake
+commands. `scripts/registration-provisioning.test.mjs` registers on a fake
 node and runs the real `--check` of both afterwards, with nothing between.
 
 ## It holds 1,500 GitHub calls back (fleet-manager#9)
@@ -171,7 +170,7 @@ reporting it" and collapses to one line (archived `hadoku-trader` is the live
 example). Reach for `ignore` whenever the honest answer is "don't care" — a
 report that is permanently non-empty is a report nobody reads.
 
-## hokon is a guest, not excluded
+## hokon is the backstop, not excluded
 
 hokon became a managed machine on 2026-08-24 — superseding, not ignoring, the
 old "touch hokon, never" rule: a backstop with runners for 2 of 26 repos
@@ -279,7 +278,7 @@ Checked `scripts/reconcile-fleet-runners.mjs` (2,244 lines) and
 **9 claims verified unchanged**: the two-supervision-model guard and its
 2026-08-18 incident, `maxRegistrations` as a gate, `tierCapacity`/
 `runner-tiers.json` retirement, the asymmetric orphan rules, the
-skip/ignore/explicit three-answer model, the hokon-as-guest model and its
+skip/ignore/explicit three-answer model, the hokon-as-backstop model and its
 `minFreeMb`/`maxConcurrent`, the `-b` pool retirement history,
 `hadoku-builder-heavy` retirement, and the facets table + its two traps.
 **1 claim changed**: `clawOfRunner` no longer hand-enumerates `hokon-b|c|d`/

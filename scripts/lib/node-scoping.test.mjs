@@ -76,9 +76,10 @@ test('every script that selects nodes resolves scope through the ONE parser', ()
 		if (!f.endsWith('.mjs') || f.endsWith('.test.mjs')) continue;
 		const src = blankComments(readFileSync(join(dir, f), 'utf8'));
 		if (!src.includes('selectMachines(')) continue;
-		// Does it try to scope at all? Either by naming --machine, or by filtering
-		// the selected list by a name.
-		const scopes = src.includes('--machine') || /only:\s*[A-Z_]/.test(src);
+		// Does it try to scope at all? Either by reading a --machine argument (the
+		// token as a string literal of its own, not inside a fix hint such as
+		// "fleet slice --machine claw-N"), or by filtering the selected list by a name.
+		const scopes = /['"`]--machine['"`=]/.test(src) || /only:\s*[A-Z_]/.test(src);
 		if (scopes && !src.includes('machineArg')) offenders.push(f);
 	}
 	assert.deepEqual(

@@ -445,7 +445,7 @@ export const JOB_REGISTRY: JobEntry[] = [
 		hostBound: false,
 		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/fleet-benchmark-check.ts',
 		contract: 'json',
-		why: "Is the hardware still what the manifest says, one claw measured per run (never a guest, busy node, or someone else's drain). A full rotation across the fleet takes about as many days as there are claws; this entry's budget is about whether THIS cron fired on schedule, not about any one node's rotation slot.",
+		why: "Is the hardware still what the manifest says, one claw measured per run (never the backstop, a busy node, or someone else's drain). A full rotation across the fleet takes about as many days as there are claws; this entry's budget is about whether THIS cron fired on schedule, not about any one node's rotation slot.",
 	},
 	{
 		name: 'ci:health-refresh',

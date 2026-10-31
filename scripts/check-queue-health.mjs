@@ -65,7 +65,7 @@ import {
 	FAIL_SECONDS,
 } from './lib/queue-health.mjs';
 import { MAX_QUEUED_MS } from '../dist/runners/queue-discovery.js';
-import { guestNodeNames } from '../dist/lib/node-role.js';
+import { backstopNodeNames } from '../dist/lib/node-role.js';
 import { nodeOf } from '../dist/runners/census.js';
 import { loadManifest } from './lib/fleet-exec.mjs';
 import { createEmitter } from './lib/emit.mjs';
@@ -210,15 +210,15 @@ function repoRunners(repo) {
 /**
  * Which registrations belong to a BACKSTOP node — see isSaturated for why an
  * idle one does not break saturation. Read from the manifest's roles, the one
- * answer to "is this node a guest". A manifest that cannot be read exempts
+ * answer to "is this node the backstop". A manifest that cannot be read exempts
  * NOTHING: the strict direction, in which an idle hokon still reads as a stall.
  */
 let isBackstop = () => false;
 try {
 	const manifest = loadManifest();
 	const machines = Object.keys(manifest.machines ?? {});
-	const guests = guestNodeNames(manifest);
-	isBackstop = (name) => guests.has(nodeOf(String(name ?? ''), machines));
+	const backstops = backstopNodeNames(manifest);
+	isBackstop = (name) => backstops.has(nodeOf(String(name ?? ''), machines));
 } catch (err) {
 	log(`  could not read the fleet manifest: ${err.message} — no runner is treated as a backstop`);
 }

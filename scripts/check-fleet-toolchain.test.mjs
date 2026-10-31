@@ -40,7 +40,7 @@ const MIN_AGE = 10080;
 
 const CLAW = 'fixture-claw.invalid';
 const TASKAUTO = 'fixture-taskauto.invalid';
-const GUEST = 'fixture-guest.invalid';
+const BACKSTOP = 'fixture-backstop.invalid';
 
 function manifestOf(machines) {
 	return { toolchain: { toolCache: {} }, machines };
@@ -48,7 +48,7 @@ function manifestOf(machines) {
 const FLEET = manifestOf({
 	[CLAW]: { role: 'claw', labels: ['hadoku-builder'] },
 	[TASKAUTO]: { role: 'claw', labels: ['hadoku-builder', 'taskauto'] },
-	[GUEST]: { role: 'guest', labels: ['pm2-host', 'taskauto'] },
+	[BACKSTOP]: { role: 'backstop', labels: ['pm2-host', 'taskauto'] },
 });
 
 /** A fake home: `claude` lives in ~/.local/bin, which ONLY a login shell puts on PATH. */
@@ -284,6 +284,37 @@ test('#127: no readable runner PATH at all is UNKNOWN, a finding — could not l
 	}
 });
 
+test('a finding only root can fix is an ADVISORY on the backstop and drift on a claw', async () => {
+	// The fleet has no sudo on the backstop: claude's repair links into
+	// /usr/local/bin, so there it is the operator's hand-run, never a page.
+	const fh = fakeHome({ onStockPath: true });
+	try {
+		const { report } = await runDoctor({
+			manifest: FLEET,
+			run: localRun(fh, { runnerPath: null }),
+			lookup: stubLookup(known('2.1.285')),
+			drains: {},
+		});
+		const of = (n) => report.find((m) => m.machine === n);
+		assert.ok(
+			of(TASKAUTO).toolFindings.some((t) => t.id === 'claude'),
+			'the claw pages'
+		);
+		assert.ok(!of(BACKSTOP).toolFindings.some((t) => t.id === 'claude'), 'the backstop does not');
+		const advisory = of(BACKSTOP).advisories.find((a) => /"claude"/.test(a.message));
+		assert.equal(advisory?.blocking, false);
+		assert.match(
+			advisory.fix,
+			new RegExp(
+				`sudo -v && fleet converge-toolchain --machine ${BACKSTOP.replace(/\./g, '\\.')} --write --operator-sudo$`
+			)
+		);
+		assert.equal(of(TASKAUTO).advisories, undefined);
+	} finally {
+		rmSync(fh.home, { recursive: true, force: true });
+	}
+});
+
 test('the same tool ON the stock PATH passes (the control for the test above)', async () => {
 	const fh = fakeHome({ onStockPath: true });
 	try {
@@ -302,7 +333,7 @@ test('the same tool ON the stock PATH passes (the control for the test above)', 
 	}
 });
 
-test('`when` scopes in BOTH directions, and a guest carries nothing', async () => {
+test('`when` scopes in BOTH directions, and the backstop is probed like a claw', async () => {
 	// MUTATION: ignore `when` (iterate Object.entries(REPAIRS) for every node) and
 	// the plain claw gets a claude entry — a finding for lacking a tool it was
 	// never meant to carry. Drop the scoping the other way and TASKAUTO loses it.
@@ -313,7 +344,7 @@ test('`when` scopes in BOTH directions, and a guest carries nothing', async () =
 		return localRun(fh)(node, script, o);
 	};
 	try {
-		const { report, skippedByRole } = await runDoctor({
+		const { report } = await runDoctor({
 			manifest: FLEET,
 			run,
 			lookup: stubLookup(known('2.1.285')),
@@ -329,43 +360,32 @@ test('`when` scopes in BOTH directions, and a guest carries nothing', async () =
 				assert.ok(ids.includes(id), `${n} carries unscoped ${id}`);
 			}
 		}
-		// The guest offers taskauto too — and is neither probed nor a finding.
-		assert.ok(!report.some((m) => m.machine === GUEST));
-		assert.ok(skippedByRole.some((s) => s.node === GUEST));
-		assert.ok(!(GUEST in scripts), 'a guest is never executed on');
+		// The backstop offers taskauto too — and is probed and judged for it.
+		assert.ok(BACKSTOP in scripts, 'the backstop is probed');
+		assert.equal(claudeOf(report, BACKSTOP)?.status, 'ok');
 	} finally {
 		rmSync(fh.home, { recursive: true, force: true });
 	}
 });
 
 /**
- * ISSUE #75. `fleet toolchain --machine hokon --include-guests` reported
- * `drift=false` with `tools: []` — `applicableRepairs` excluded a guest
- * unconditionally, so nothing was ever evaluated on it, which rendered as
- * "nothing is wrong" rather than "nothing was checked". `includeGuests: true`
- * is the one door that lifts it, and only for THIS caller: bootcamp,
- * converge-toolchain and the refresh cycle never pass it.
- *
- * MUTATION: drop `includeGuests: true` from the `applicableRepairs` call in
- * `runDoctor` and `claudeOf(report, GUEST)` goes back to `undefined` — the
- * exact regression this test exists to catch.
+ * ISSUE #75. The backstop once reported `drift=false` with `tools: []` —
+ * nothing was evaluated on it, which rendered as "nothing is wrong" rather
+ * than "nothing was checked".
  */
-test('includeGuests evaluates the guest for REAL, instead of reporting tools: []', async () => {
+test('the backstop is evaluated for REAL, never reported as tools: []', async () => {
 	const fh = fakeHome({ onStockPath: true });
 	try {
-		const { report, skippedByRole } = await runDoctor({
+		const { report } = await runDoctor({
 			manifest: FLEET,
-			only: GUEST,
-			includeGuests: true,
+			only: BACKSTOP,
 			run: localRun(fh),
 			lookup: stubLookup(known('2.1.285')),
 			drains: {},
 		});
-		assert.deepEqual(skippedByRole, [], 'explicitly included: not skipped');
-		const m = report.find((r) => r.machine === GUEST);
-		assert.ok(m, 'the guest is in the report');
+		const m = report.find((r) => r.machine === BACKSTOP);
+		assert.ok(m, 'the backstop is in the report');
 		assert.equal(m.unreachable, false);
-		// Never the empty-tools shape the bug shipped.
 		assert.ok(m.tools.length > 0, 'tools: [] must never recur');
 		const ids = m.tools.map((t) => t.id).sort();
 		assert.deepEqual(
@@ -373,12 +393,9 @@ test('includeGuests evaluates the guest for REAL, instead of reporting tools: []
 			['claude', 'docker', 'ffmpeg', 'gh', 'jdk21', 'rust', 'rust-wasm32'],
 			'taskauto is declared'
 		);
-		assert.equal(claudeOf(report, GUEST)?.status, 'ok');
-		// rust/docker are judged for real against this sandbox's stock PATH (not
-		// asserted pass/fail here, same as the CLAW/TASKAUTO tests above — whether
-		// they pass depends on what the box running the test suite has at
-		// /usr/bin:/bin, which is not this test's business). What matters is that
-		// they were EVALUATED at all: `m.tools` already proved that above.
+		assert.equal(claudeOf(report, BACKSTOP)?.status, 'ok');
+		// rust/docker are judged for real against this sandbox's stock PATH; what
+		// matters is that they were EVALUATED at all.
 		assert.ok(m.tools.every((t) => typeof t.finding === 'boolean'));
 	} finally {
 		rmSync(fh.home, { recursive: true, force: true });
@@ -458,8 +475,7 @@ test('computeDrift: zero tools evaluated must NEVER print drift=false', () => {
 
 /**
  * `buildBackstop` — pure, fixtured from the REAL shape `parseProbe` produces
- * (captured 2026-10-02 via `fleet toolchain --machine hokon --include-guests
- * --json` against the deployed tree: `unitMaxMb: [4096]`, `unitCount: 28`,
+ * (captured 2026-10-02 via `fleet toolchain --machine hokon --json` against the deployed tree: `unitMaxMb: [4096]`, `unitCount: 28`,
  * `harvesterBytes: 8823` against this package's `14983`, `sliceMaxMb: 16384`).
  * Never feeds `drift`.
  */
@@ -780,7 +796,7 @@ test('buildBackstop: an app-owned drop-in with no unit is NOT an advisory', () =
  * 2026-10-03): `fleetDropinPattern` used to bake `hokon` directly into the
  * regex, which `scripts/lib/ecosystem-literals.test.mjs` correctly flagged —
  * a hostname baked into a published library. It now takes the probed node's
- * OWN name, so a DIFFERENT guest's legacy `<node>-runner-*` drop-in is caught
+ * OWN name, so a DIFFERENT node's legacy `<node>-runner-*` drop-in is caught
  * too, and `hokon`'s is caught only because `nodeName: 'hokon'` was passed
  * for hokon, not because the string is special-cased anywhere.
  */
@@ -940,7 +956,7 @@ test('buildBackstop: a tight disk alone, with little _work, is NOT an advisory',
 /**
  * THE CLEAN FIXTURE (#79 done-when): nothing drifted, so zero advisories —
  * and, separately, nothing in here is ever `blocking`. A fixture shaped like
- * a real, healthy `fleet toolchain --machine hokon --include-guests --json`
+ * a real, healthy `fleet toolchain --machine hokon --json`
  * capture.
  */
 test('buildBackstop: a clean fixture produces zero advisories, and none would ever block', () => {
@@ -1112,7 +1128,7 @@ test('an unreachable node stays unreachable (shape unchanged)', async () => {
 // manifests). A field may be ADDED; one of these disappearing or changing type
 // breaks the cron. MUTATION: rename or drop any of them in the script.
 // ---------------------------------------------------------------------------
-const TOP_KEYS = { toolCache: 'object', machines: 'object', skippedByRole: 'object' };
+const TOP_KEYS = { toolCache: 'object', machines: 'object' };
 const REACHABLE_KEYS = {
 	machine: 'string',
 	unreachable: 'boolean',
@@ -1180,8 +1196,8 @@ test('--json keeps every pre-existing field, same shape; new ones are additive',
 });
 
 /**
- * `backstop`, spawned for REAL against this box with `--include-guests` — the
- * exact command CLAUDE.md names for issue #75. This box IS a real node
+ * `backstop`, spawned for REAL against this box declared as the backstop —
+ * the command of issue #75. This box IS a real node
  * (`isLocalNode` matches its own hostname), so the probe runs with genuine
  * cgroup and /proc/meminfo reads rather than a stub: the only way to fixture
  * this from REAL `--json` output rather than a hand-written shape, per the
@@ -1190,7 +1206,7 @@ test('--json keeps every pre-existing field, same shape; new ones are additive',
  * discipline the additivity test above already uses for the rest of the
  * report.
  */
-test('backstop: spawned for real with --include-guests, the shape --json actually produces', () => {
+test('backstop: spawned for real, the shape --json actually produces', () => {
 	const root = mkdtempSync(join(tmpdir(), 'fleet-doctor-backstop-'));
 	try {
 		const dir = join(root, 'manifests');
@@ -1201,7 +1217,7 @@ test('backstop: spawned for real with --include-guests, the shape --json actuall
 				toolchain: { toolCache: {} },
 				machines: {
 					[hostname()]: {
-						role: 'guest',
+						role: 'backstop',
 						labels: [],
 						minFreeMb: 8192,
 						slice: { maxMb: 16384 },
@@ -1209,29 +1225,24 @@ test('backstop: spawned for real with --include-guests, the shape --json actuall
 				},
 			})
 		);
-		const r = spawnCapture(
-			process.execPath,
-			[SCRIPT, '--machine', hostname(), '--include-guests', '--json'],
-			{
-				env: {
-					...process.env,
-					FLEET_MANIFEST_DIR: dir,
-					HADOKU_STATE_DIR: join(root, 'state'),
-					HADOKU_SITE_ROOT: root,
-				},
-				timeout: 120_000,
-				label: 'fleet toolchain --machine <self> --include-guests --json',
-			}
-		);
+		const r = spawnCapture(process.execPath, [SCRIPT, '--machine', hostname(), '--json'], {
+			env: {
+				...process.env,
+				FLEET_MANIFEST_DIR: dir,
+				HADOKU_STATE_DIR: join(root, 'state'),
+				HADOKU_SITE_ROOT: root,
+			},
+			timeout: 120_000,
+			label: 'fleet toolchain --machine <self> --json',
+		});
 		const report = parseJsonStdout(r);
-		assert.deepEqual(report.skippedByRole, [], 'explicitly named: reached, not skipped');
 		// isLocalNode, not a raw `=== hostname()` compare — the guard
 		// (node-identity-guard.test.mjs) refuses a sixth reimplementation of the
 		// local rule, this file included.
 		const m = report.machines.find((mm) => isLocalNode(mm.machine));
 		assert.ok(m, 'the local box is in the report');
 		assert.equal(m.unreachable, false);
-		assert.ok(m.backstop, 'a guest carries a backstop block');
+		assert.ok(m.backstop, 'the backstop carries a backstop block');
 		const b = m.backstop;
 		assert.equal(b.advisory, true);
 		assert.ok(Array.isArray(b.unitMaxMb));
@@ -1258,7 +1269,7 @@ test('backstop: spawned for real with --include-guests, the shape --json actuall
 		assert.ok(Array.isArray(b.advisories));
 		for (const adv of b.advisories) {
 			assert.equal(typeof adv.id, 'string');
-			assert.equal(adv.blocking, false, 'a guest advisory is never a page');
+			assert.equal(adv.blocking, false, 'a backstop advisory is never a page');
 			assert.equal(typeof adv.message, 'string');
 			assert.equal(typeof adv.fix, 'string');
 		}
@@ -1311,18 +1322,6 @@ test('#98: a manifest whose every node is excluded exits 1', () => {
 	const r = spawnDoctor({ [CLAW]: { role: 'claw', placement: 'excluded' } }, []);
 	assert.equal(r.code, 1);
 	assert.match(parseJsonStdout(r).noneProbed, /no node was probed/);
-});
-
-test('#98: a fleet of excluded claws and an UNNAMED guest probed nothing — exit 1, naming the guest', () => {
-	// A guest named with --machine is REACHED (guestGate), so it never yields a
-	// zero; one that was not named is skipped, and that skip explains nothing.
-	const r = spawnDoctor(
-		{ [CLAW]: { role: 'claw', placement: 'excluded' }, [GUEST]: { role: 'guest', labels: [] } },
-		[]
-	);
-	const report = parseJsonStdout(r);
-	assert.equal(r.code, 1);
-	assert.match(report.noneProbed, new RegExp(`skipped by role \\(${GUEST.replace(/\./g, '\\.')};`));
 });
 
 test('#98: a declared cache version is matched exactly or at a dot — 3.1 is not 3.11', async () => {

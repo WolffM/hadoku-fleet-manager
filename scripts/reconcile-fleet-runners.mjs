@@ -98,13 +98,9 @@
  *   unless `--allow-shrink` is passed (#84 part 2) — "wrote a degraded file,
  *   then failed" must be unreachable.
  *
- *   An offline registration on a CLAW fails the run. It is an incident and this
- *   tool exists to make it loud — see the `offline` note at the exit call.
- *   An offline registration on a GUEST is reported and does NOT fail the run:
- *   hokon is a guest and a reserve, its stale rows are nobody's to repair from
- *   here (see MEMORY: "hokon is a guest"), and failing on them made every
- *   `fleet provision` of a DIFFERENT node exit 1 on someone else's drift (#60).
- *   UNMANAGED runners never fail the run either — they are reported and left
+ *   An offline registration on any node, the backstop included, fails the run.
+ *   It is an incident and this tool exists to make it loud — see the `offline`
+ *   note at the exit call. UNMANAGED runners never fail the run either — they are reported and left
  *   alone.
  *
  *   Until 2026-09-26 this block claimed that no offline runner ever failed the
@@ -121,7 +117,7 @@ import {
 	manifestPath,
 	runOn,
 	runOnSync,
-	selectNodes,
+	selectMachines,
 } from './lib/fleet-exec.mjs';
 import { manifest as manifestFile } from './lib/paths.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
@@ -132,9 +128,9 @@ import {
 	shrinkRefusal,
 } from './lib/demand-derive.mjs';
 import { metricsReadScript, metricsSince, perJobCosts, readOutcome } from './lib/job-metrics.mjs';
+import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { BUILDER_LABEL } from '../dist/lib/capability-registry.js';
 import { fleetOwner } from '../dist/lib/fleet-config.js';
-import { isGuestNode } from '../dist/lib/node-role.js';
 import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import { FAST_LOOP_SECONDS, RECONCILE_EVERY_TICKS } from '../dist/fleet-loop.js';
 import { createEmitter } from './lib/emit.mjs';
@@ -185,7 +181,7 @@ const COVERAGE = manifestFile('fleet-runner-coverage.json');
 // but the box that had just killed them.
 //
 // What made the old rule safe is preserved explicitly rather than by omission:
-//   - hokon is a guest: the backstop owns its `hadoku-builder`, so it carries none
+//   - the backstop decision owns hokon's `hadoku-builder`, so it carries none
 //     label in steady state and GitHub cannot schedule onto it until the
 //     backstop promotes it.
 //   - Its `minFreeMb: 8192` floor protects mgmt-api, the tunnel and the other production services
@@ -285,10 +281,8 @@ function failEarly(message) {
  * REPO (see `deriveJobReserves`), so the figure lives beside the other per-repo
  * facets and `ephemeral-tick.ts` reads it for the queued run's repo.
  *
- * GUESTS ARE SKIPPED, through `selectNodes`. A guest's rows are its standing
- * backstop's, whose `memory.peak` is a unit high-water mark `perJobCosts` nulls
- * anyway — so reading it would cost an ssh to the production host for zero
- * usable rows. The skip is returned, not hidden.
+ * Every node is read, the backstop included: its jobs run in minted units,
+ * whose rows are per-job costs like a claw's.
  *
  * "I COULD NOT LOOK" FAILS. A claw whose file cannot be read would leave its
  * jobs out of every repo's p95 — a partial fleet written as the whole one — so
@@ -302,7 +296,7 @@ function failEarly(message) {
  * (#88). See `deriveJobReserves` for the carry-forward rule.
  */
 function readJobReserves(manifest, repos, previousByRepo = {}) {
-	const { nodes, skippedByRole } = selectNodes(manifest);
+	const nodes = selectMachines(manifest);
 	const nowMs = Date.now();
 	// The SAME read `fleet job-metrics` makes: the window filtered node-side,
 	// the rotated `.1` included, and a read that did not finish classed as a
@@ -331,7 +325,7 @@ function readJobReserves(manifest, repos, previousByRepo = {}) {
 		windowDays: RETENTION_DAYS,
 		previousByRepo,
 	});
-	return { ...derived, nodesRead: nodes.length - unreadable.length, unreadable, skippedByRole };
+	return { ...derived, nodesRead: nodes.length - unreadable.length, unreadable };
 }
 
 // ---------------------------------------------------------------------------
@@ -533,31 +527,6 @@ async function pool(items, size, fn) {
 // ---------------------------------------------------------------------------
 
 /**
- * A GUEST IS DELIBERATELY IN SCOPE HERE — `includeGuests` below, on purpose.
- *
- * A guest lends the fleet a registration and is otherwise none of the fleet
- * chain's business (operator, 2026-09-14). THIS FILE IS WHERE THAT REGISTRATION
- * COMES FROM, so it is the one command the exemption is written for: the guest
- * is the fleet's BACKSTOP, the only declared machine that is neither
- * `ephemeral: true` nor `placement: excluded`, and since the claws went all-JIT
- * it holds the standing registration for every covered repo.
- *
- * AN ON-DEMAND GUEST (#120) is narrowed by `placementFor` to its
- * `standingRepos`, which is a deliberate retirement, not this hazard: the
- * dispatcher mints for it, and the narrowing reads the same manifest key that
- * turns the minting on.
- *
- * SKIPPING IT WOULD NOT BE CONSERVATIVE, IT WOULD BE DESTRUCTIVE. `placementFor`
- * is the single place placement is decided, and the orphan sweep REMOVES every
- * (repo, node) pair placement drops. Filtering the guest out here would mark all
- * ~28 of its registrations orphaned, and the next `--confirm` — which runs from
- * `ci:fleet-coverage` — would deregister the fleet's entire backstop and report
- * a successful reconcile. That is the exact shape of failure the guest rule
- * exists to prevent, arrived at from the other direction.
- */
-const INCLUDE_GUESTS = true;
-
-/**
  * Run a script on a node. LOCAL when it is this host — `ssh hokon` from hokon
  * is refused (no sshd on 22), and hokon is now a managed node, so a
  * blind ssh would make every hokon registration fail with a connection error
@@ -568,7 +537,6 @@ async function ssh(claw, script) {
 		as: 'admin',
 		timeoutMs: 15 * 60_000,
 		maxBuffer: 8 * 1024 * 1024,
-		includeGuests: INCLUDE_GUESTS,
 	});
 	return { ok: r.ok, stdout: r.stdout, stderr: r.stderr || (r.error ?? '') };
 }
@@ -640,7 +608,6 @@ async function main() {
 		// Read BEFORE the tree calls: an unreadable node refuses the whole write
 		// or check, and there is no point spending a GitHub call per repo first.
 		const reserves = readJobReserves(manifest, repoList, previousReserves);
-		for (const s of reserves.skippedByRole) log(`jobP95Mb: skipped ${s.node} (${s.why})`);
 		if (reserves.unreadable.length) {
 			failEarly(
 				`fleet-runner-coverage.json: cannot derive jobP95Mb — ${reserves.unreadable.length} ` +
@@ -894,8 +861,8 @@ async function main() {
 			// is what knows which those are. It used to be a literal
 			// `.filter(l => l !== BUILDER_LABEL)` — correct, and only ever correct
 			// about the one eligibility label whoever wrote it remembered to name.
-			// `hadoku-builder` is owned by the fast loop (and, on a guest, by the
-			// backstop), which flip it as nodes become safe or unsafe; treating it
+			// `hadoku-builder` is owned by the fast loop (and, on the backstop, by
+			// the backstop decision), which flip it as nodes become safe or unsafe; treating it
 			// as a capability here would make the tools fight over the same label.
 			// WHAT THE NODE OFFERS — declared AND earned, workload-gated — not the
 			// declared array alone. Against `identityLabels` a standing runner never
@@ -911,7 +878,7 @@ async function main() {
 
 			// A REGISTRATION THAT EXISTS IS COVERAGE, whatever its labels. Labels
 			// are eligibility, written by the fast loop as a node becomes safe or
-			// unsafe (and by the backstop on a guest); a runner without one is
+			// unsafe (and by the backstop decision on the backstop); a runner without one is
 			// present and simply not eligible right now. Reading it as MISSING made
 			// --confirm re-register over it with `config.sh --replace`, stealing a
 			// healthy registration. Until 2026-09-21 only surge-tier nodes were
@@ -936,13 +903,8 @@ async function main() {
 			// report the anomaly, never re-register over it.
 			seen.set(claw, true);
 			if (r.status !== 'online') {
-				// `guest` is carried ON THE ROW, not derived at the exit, so the
-				// --json consumer and the exit code read the same fact from the same
-				// place. mgmt-api types this array as `{repo, claw, runner}[]` and
-				// ignores extra fields, so the contract field `offline` keeps both
-				// its name and every row it has always had — a guest's stale
-				// registration is still REPORTED, it just is not a claw's incident.
-				// `expectedDown` is carried the same way `guest` is — ON THE ROW, so
+				// mgmt-api types this array as `{repo, claw, runner}[]` and ignores
+				// extra fields. `expectedDown` is carried ON THE ROW, so
 				// the --json consumer and the exit code read the same fact from the
 				// same place. Only a node drained for maintenance, dated and fresh,
 				// qualifies (`deferralFor`); a registration that is merely offline on
@@ -959,7 +921,6 @@ async function main() {
 					repo,
 					runner: r.name,
 					claw,
-					guest: isGuestNode(manifest.machines?.[claw]),
 					expectedDown: deferralFor(claw, drains).deferred || undefined,
 				});
 			}
@@ -1073,9 +1034,8 @@ async function main() {
 		}
 
 		if (offline.length) {
-			const clawsOffline = offline.filter((o) => !o.guest && !o.expectedDown);
-			const expectedDownOffline = offline.filter((o) => !o.guest && o.expectedDown);
-			const guestsOffline = offline.filter((o) => o.guest);
+			const clawsOffline = offline.filter((o) => !o.expectedDown);
+			const expectedDownOffline = offline.filter((o) => o.expectedDown);
 			if (clawsOffline.length) {
 				log(
 					`OFFLINE (${clawsOffline.length}) — reported, never auto-reinstalled; this is an incident:`
@@ -1092,19 +1052,6 @@ async function main() {
 				log(`OFFLINE, EXPECTED DOWN (${expectedDownOffline.length}):`);
 				for (const [claw] of byClaw) log(`  · ${deferralNote(claw, deferralFor(claw, drains))}`);
 				for (const o of expectedDownOffline) log(`  ${o.repo}  ${o.runner}  (${o.claw})`);
-				log('');
-			}
-			if (guestsOffline.length) {
-				// Said out loud, and said DIFFERENTLY. A guest's stale rows are real
-				// drift and worth seeing, but they are not a claw's incident and they
-				// do not fail this run — printing them under the same heading is what
-				// made #60 read as "the fleet is broken" when it was one borrowed box
-				// holding registrations nobody here may repair.
-				log(
-					`OFFLINE ON A GUEST (${guestsOffline.length}) — reported only; a guest's ` +
-						`registrations are not this fleet's to reinstall, and do not fail the run:`
-				);
-				for (const o of guestsOffline) log(`  ${o.repo}  ${o.runner}  (${o.claw})`);
 				log('');
 			}
 		}
@@ -1158,7 +1105,7 @@ async function main() {
 	}
 
 	// ---- apply -----------------------------------------------------------
-	const results = { registered: [], removed: [], failed: [] };
+	const results = { registered: [], removed: [], failed: [], advisories: [] };
 
 	// A capacity breach REFUSES the apply, it does not merely colour the report.
 	// A gate that reports and then proceeds anyway is the "dead guard" shape:
@@ -1179,10 +1126,6 @@ async function main() {
 
 		await Promise.all(
 			[...byClaw.entries()].map(async ([claw, pairs]) => {
-				// A guest lends the fleet a registration and nothing else: the slice
-				// and throttle drivers refuse it by role (operator, 2026-09-14), so
-				// its unit starts at registration exactly as before. A claw's waits.
-				const guest = isGuestNode(manifest.machines?.[claw]);
 				const unstarted = [];
 				for (const { repo } of pairs) {
 					const token = mintToken(repo, 'register');
@@ -1202,7 +1145,7 @@ async function main() {
 					const labelArg = labels.length ? labels.join(',') : 'self-hosted';
 					const res = await ssh(
 						claw,
-						registerScript({ repo, claw, version, token, labels: labelArg, start: guest })
+						registerScript({ repo, claw, version, token, labels: labelArg })
 					);
 					// A claw's script ends in exactly one of two ways when it exits 0:
 					// UNIT-WRITTEN (enabled, waiting to be provisioned) or SKIP (a
@@ -1210,9 +1153,9 @@ async function main() {
 					// a script that succeeded without saying what it did.
 					const wrote = /^UNIT-WRITTEN /m.test(res.stdout);
 					const skipped = /^SKIP: /m.test(res.stderr);
-					if (res.ok && !guest && wrote) {
+					if (res.ok && wrote) {
 						unstarted.push(repo);
-					} else if (res.ok && (guest || skipped)) {
+					} else if (res.ok && skipped) {
 						results.registered.push({ repo, claw });
 						log(`  ✓ ${claw}  ${repo}`);
 					} else if (res.ok) {
@@ -1297,16 +1240,18 @@ async function main() {
 	 * header exists for.
 	 */
 	const removeRegistration = async ({ repo, claw, id }) => {
-		const guest = isGuestNode(manifest.machines?.[claw]);
 		const runnerId = Number.isInteger(id) ? id : null;
 		const token = mintToken(repo, 'remove');
-		let res = await ssh(claw, removeScript({ repo, token, guest, runnerId }));
+		// No sudo on the backstop: a SYSTEM install there stops at NEEDS_ROOT
+		// without trying, and is the operator's (lib/operator-sudo.mjs).
+		const sudo = maySudo(manifest.machines?.[claw]);
+		let res = await ssh(claw, removeScript({ repo, token, sudo, runnerId }));
 		let byId = false;
 		if (!res.ok && /DEREGISTER_FAILED/.test(res.stderr) && runnerId !== null) {
 			const del = ghWrite('DELETE', `/repos/${repo}/actions/runners/${runnerId}`, {});
 			if (del.ok) {
 				byId = true;
-				res = await ssh(claw, removeScript({ repo, token, guest, runnerId, deregistered: true }));
+				res = await ssh(claw, removeScript({ repo, token, sudo, runnerId, deregistered: true }));
 			} else {
 				log(`  ! ${claw}  ${repo} — config.sh remove failed and so did DELETE by id: ${del.error}`);
 			}
@@ -1334,6 +1279,14 @@ async function main() {
 						: `      (no runner id was known, so only the current name was searched)`)
 			);
 			results.failed.push({ repo, claw, error: 'no install found for this registration' });
+		} else if (/NEEDS_ROOT/.test(res.stderr) && !sudo) {
+			const a = rootAdvisory(
+				claw,
+				`removing the system-service runner for ${repo}`,
+				`fleet reconcile --confirm --remove-orphans`
+			);
+			results.advisories.push(a);
+			log(`  ! ${claw}  ${repo} — ${a.message}. NOTHING was changed:\n      ${a.fix}`);
 		} else if (/NEEDS_ROOT/.test(res.stderr)) {
 			// The runner is a SYSTEM install and this node would not give it up
 			// unattended. Nothing was changed — say so, because the whole reason
@@ -1416,23 +1369,16 @@ async function main() {
 	}
 
 	const stillMissing = CONFIRM ? missing.length - results.registered.length : missing.length;
-	// A CLAW's offline rows, which are the only ones that fail this run. The
-	// guest half is filtered out HERE and nowhere upstream, so `summary.offline`
-	// — the --json field mgmt-api reads by name — still carries every row.
+	// The offline rows that fail this run. `summary.offline` — the --json field
+	// mgmt-api reads by name — still carries every row.
 	//
-	// #60: every one of the 7 offline rows that failed a dry run was hokon's.
-	// hokon is a GUEST and a RESERVE; its stale registrations are not this
-	// fleet's to reinstall, and a `fleet provision` of claw-7 has no business
-	// exiting 1 because a borrowed box is holding rows from last month. This is
-	// NOT a widening: a claw's offline row still fails, and that is the case the
-	// paragraph below is about.
-	// `expectedDown` is excluded the same way `guest` is: a node drained for
+	// `expectedDown` is excluded: a node drained for
 	// maintenance, dated and fresh, cannot also be serving, so its offline rows
 	// are reported above and left out of the count below. The deferral
 	// EXPIRES (DEFER_DAYS) and does not apply to a `training` drain or an
 	// undrained node that simply went dark — both still fail. See
 	// lib/expected-down.mjs.
-	const offlineClaws = offline.filter((o) => !o.guest && !o.expectedDown);
+	const offlineClaws = offline.filter((o) => !o.expectedDown);
 	// `offline` is counted here EXPLICITLY. It used to reach the exit code only by
 	// accident, via being double-counted into `missing` — so removing that
 	// double-count would otherwise have made a genuinely dead runner (box down,

@@ -264,32 +264,32 @@ test('no failed units means nothing reported', () => {
 	assert.deepEqual(classify('claw-1', parseListeners('')), []);
 });
 
-test('a GUEST in the fleet manifest is never probed, and the skip is reported by name', async () => {
-	// hokon is a guest (operator, 2026-09-14): its runner units are the identity
+test('a BACKSTOP in the fleet manifest is never probed, and the skip is reported by name', async () => {
+	// hokon is a backstop (operator, 2026-09-14): its runner units are the identity
 	// gate's question only. It is a declared fleet node, so without the role skip
 	// this probe reads its listeners every tick and pages on them.
 	const probed: string[] = [];
 	const report = await checkSupervision({
 		nodes: () => ['claw-2', 'hokon'],
-		guests: () => new Set(['hokon']),
+		backstops: () => new Set(['hokon']),
 		probe: async (node) => {
 			probed.push(node);
 			return { listeners: 1, rows: [], problems: [] };
 		},
 	});
-	assert.deepEqual(probed, ['claw-2'], 'the guest must not be reached at all');
+	assert.deepEqual(probed, ['claw-2'], 'the backstop must not be reached at all');
 	assert.deepEqual(report?.nodes, ['claw-2']);
 	assert.deepEqual(report?.skippedByRole, ['hokon'], 'a skip nobody can see is a silent one');
 	assert.equal(report?.listenersSeen, 1);
 });
 
-test('no readable guests means every node is probed — the strict direction', async () => {
-	// An unreadable fleet manifest yields an empty guest set; that must never
+test('no readable backstops means every node is probed — the strict direction', async () => {
+	// An unreadable fleet manifest yields an empty backstop set; that must never
 	// exempt anyone, or a missing file would quietly shrink the check.
 	const probed: string[] = [];
 	const report = await checkSupervision({
 		nodes: () => ['claw-2', 'hokon'],
-		guests: () => new Set(),
+		backstops: () => new Set(),
 		probe: async (node) => {
 			probed.push(node);
 			return { listeners: 0, rows: [], problems: [] };

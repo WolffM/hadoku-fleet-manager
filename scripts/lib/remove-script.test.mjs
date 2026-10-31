@@ -1,15 +1,11 @@
 /**
- * `removeScript` never asks a GUEST for sudo — Wave 3g J2, 3f's leftover.
- *
- * `reconcile-fleet-runners.mjs` keeps the guest IN scope (`INCLUDE_GUESTS`):
- * its backstop registrations are what that file maintains, so a retired repo's
- * registration on the guest is a removal target. The system-unit branch used
- * to try `sudo -n` wherever it ran, which on a guest is the fleet asking the
- * production host for root — the thing the 2026-09-14 decision rules out.
+ * `removeScript` — the teardown of one (repo, node) registration, run for real
+ * against a fixture HOME where it matters.
  *
  * Generated the way `src/tests/generated-scripts.test.ts` generates it: the
  * function is lifted out of the module source and run, because importing the
- * CLI would execute it.
+ * CLI would execute it. (This file was `remove-script-guest.test.mjs` until
+ * 2026-10-31, when the backstop stopped being exempt from `sudo -n`.)
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -59,38 +55,29 @@ const commands = (s) =>
 		})
 		.join('\n');
 
-test('on a GUEST the system path invokes no sudo at all, and stops at NEEDS_ROOT', () => {
-	const s = removeScript({ repo: 'WolffM/x', token: 'tok', guest: true });
-	assert.doesNotMatch(commands(s), /\bsudo\b/, 'a guest is never asked for root');
-	assert.match(s, /NEEDS_ROOT: .*GUEST/, 'and the operator is told why nothing happened');
-	assert.match(s, /systemctl --user disable --now/, 'the user-unit path is unchanged');
-	assert.match(s, /config\.sh remove/, 'and a user-unit registration is still deregistered');
-});
-
-test('on a claw the system path still uses non-prompting sudo', () => {
-	// The other half of the mutation: flip the branch and this fails.
-	const s = removeScript({ repo: 'WolffM/x', token: 'tok', guest: false });
+test('on a claw the system path uses non-prompting sudo, and stops at NEEDS_ROOT without it', () => {
+	const s = removeScript({ repo: 'WolffM/x', token: 'tok' });
 	assert.match(commands(s), /sudo -n \.\/svc\.sh stop/);
-	assert.doesNotMatch(s, /on a GUEST/);
+	assert.match(s, /NEEDS_ROOT: .*passwordless sudo is unavailable/);
+	assert.match(s, /systemctl --user disable --now/, 'the user-unit path needs no root');
+	assert.match(s, /config\.sh remove/, 'and a registration is still deregistered');
 });
 
-test('every removal call site decides the guest question by ROLE', () => {
-	// A call site that forgot the argument would fall back to `guest = false`
-	// and take the sudo path on the guest again, silently.
-	//
-	// Since #123 both paths go through removeRegistration, which decides the
-	// role ONCE (`const guest = isGuestNode(...)`) and passes it to both of its
-	// removeScript calls; a call site may carry that `guest` or decide inline.
+test('on the backstop (sudo: false) the system path invokes no sudo at all, and stops at NEEDS_ROOT', () => {
+	const s = removeScript({ repo: 'WolffM/x', token: 'tok', sudo: false });
+	assert.doesNotMatch(commands(s), /\bsudo\b/, 'the fleet has no sudo there');
+	assert.match(s, /NEEDS_ROOT: .*the fleet has no sudo on this node/);
+	assert.match(s, /systemctl --user disable --now/, 'the user-unit path is unchanged');
+	assert.match(s, /config\.sh remove/);
+});
+
+test('every removal call site decides sudo from the node', () => {
 	const calls = [...CLI_SRC.matchAll(/(?<!function )removeScript\(\{([^}]*)\}\)/g)].map(
 		(m) => m[1]
 	);
 	assert.ok(calls.length >= 2, 'the first attempt and the by-id cleanup both remove');
-	const decidedOnce = /const guest = isGuestNode\(manifest\.machines\?\.\[claw\]\)/.test(CLI_SRC);
-	for (const c of calls) {
-		const inline = /guest: isGuestNode\(/.test(c);
-		const shared = decidedOnce && /(^|[\s,])guest([\s,]|$)/.test(c);
-		assert.ok(inline || shared, `call site without a role: ${c}`);
-	}
+	assert.match(CLI_SRC, /const sudo = maySudo\(manifest\.machines\?\.\[claw\]\)/);
+	for (const c of calls) assert.match(c, /(^|[\s,])sudo([\s,]|$)/, `call site without sudo: ${c}`);
 });
 
 /**

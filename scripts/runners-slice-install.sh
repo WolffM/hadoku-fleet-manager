@@ -570,8 +570,8 @@ fi
 # --- the io controller ------------------------------------------------------
 # The header has the measurement and the two-writes argument. Both writes are
 # SYSTEM-side and therefore need root; both are gated on APPLY alone, which is
-# also the guest door — `deploy-runners-slice.mjs` forces `apply` off for a guest
-# whether or not the operator named it, so nothing here can converge one.
+# also the no-sudo door — `deploy-runners-slice.mjs` forces `apply` off on a node
+# the fleet has no sudo on (the backstop), so nothing here can converge one.
 USER_UNIT="user@$(id -u).service"
 # The TEMPLATE's drop-in, for every user manager: on a cut-over node only admin
 # has sudo, and a per-uid drop-in written by admin's run named admin's own

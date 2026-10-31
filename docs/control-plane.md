@@ -233,7 +233,7 @@ around the clock either way — about 2.8 GB of RSS and swap on the production
 host. Operator, 2026-10-19: "the runners get brought online the same way the
 JIT process does. not having standing runners squatting on ram."
 
-So hokon is an **on-demand guest** (`"mint": "on-demand"` in the manifest):
+So hokon is an **on-demand backstop** (`"mint": "on-demand"` in the manifest):
 
 - **Promotion is a mint.** `src/runners/backstop.ts` still decides, purely,
   whether the backstop is wanted (outage, or saturation while hokon is idle).
@@ -246,11 +246,11 @@ So hokon is an **on-demand guest** (`"mint": "on-demand"` in the manifest):
 - **Overflow never takes its last slot (fleet-manager#15).** A job that some
   healthy, undrained claw offers the labels for is overflow on hokon. It may
   hold every slot but one, and must leave one more job reserve
-  (`requiredMb`) above the memory floor (`GUEST_SOLE_CARRIER_SLOTS` in
+  (`requiredMb`) above the memory floor (`BACKSTOP_SOLE_CARRIER_SLOTS` in
   `runners/placement.ts`). On 2026-10-27 three Forge e2e units filled hokon
   for 40 minutes while an `av1-nvenc` job waited 24 of them.
 - **Demotion leaves nothing listening.** A JIT unit serves one job and exits,
-  in `ci-runner.slice`, capped at the guest's own `slice.unitMaxMb`.
+  in `ci-runner.slice`, capped at the backstop's own `slice.unitMaxMb`.
 - **The red light is `fleet drain hokon`.** A drained node is never held
   (outage included) and never placed. The `backstop: "outage-only"` manifest
   mode is gone: hokon's live entry never carried it, so the block it was

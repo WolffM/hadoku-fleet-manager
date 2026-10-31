@@ -252,8 +252,7 @@ const ELIGIBILITY = new Set(eligibilityLabels());
  *
  * The exemption is read from the REGISTRY (`mintOnly`), never listed here: a
  * literal list in a gate is the third copy of a policy this repo has paid for
- * three times. `mintOnly` carries the reasoning; hokon's half of it is the
- * `role: 'guest'` key, not a label property.
+ * three times. `mintOnly` carries the reasoning.
  *
  * NARROW ON PURPOSE, IN TWO DIRECTIONS. It exempts the DECLARED-BUT-NOT-DERIVED
  * side only. The reverse — a mint-only label the derivation projects that the
@@ -610,8 +609,8 @@ if (observed?.malformed) {
 const dependencies = [...requested].sort();
 
 /**
- * Labels offered ONLY by nodes that mint — an ephemeral claw or an on-demand
- * guest.
+ * Labels offered ONLY by nodes that mint — an ephemeral claw or the on-demand
+ * backstop.
  *
  * REPORTED, NOT FAILED, since 2026-10-19 (#120). From 2026-09-01 a routing
  * label here failed the gate ("stranded on ephemeral"), on the argument that a

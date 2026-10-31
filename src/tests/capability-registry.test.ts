@@ -9,7 +9,6 @@ import {
 	judgeMeasurement,
 	measuredIdleOnly,
 	meetsBar,
-	verificationFor,
 	type Capability,
 } from '../lib/capability-registry.js';
 import { eligibilityLabels } from '../lib/capability-labels.js';
@@ -81,7 +80,7 @@ const CARGO_BEVY_MEASURED = [
 
 // ---------------------------------------------------------------------------
 // pm2-host — IS this box the host (proved since #6, NARROWED in wave 3o), and
-// role-honoured on a guest. "Could it be" is `pm2-capable`, further down.
+// role-honoured on a backstop. "Could it be" is `pm2-capable`, further down.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -377,12 +376,9 @@ test('the probe measures EXACTLY the registry’s idle-only set between its mark
 });
 
 test('pm2-host is PROVEN BY EXECUTION, not by somebody typing it', () => {
-	// The DECLARED path is retired for every non-guest: `nodeOffer` REPLACES a
-	// declared probe-verified label with the proof record, so a claw cannot type
-	// its way into the six workflows that route on this. hokon's declaration
-	// survives because it is a GUEST and `verificationFor` reads every label on a
-	// guest as `role` — that exception is held by the ROLE, not by this entry,
-	// and the test below pins it.
+	// The DECLARED path is retired for every node: `nodeOffer` REPLACES a
+	// declared probe-verified label with the proof record, so nothing can type
+	// its way into the six workflows that route on this.
 	//
 	// REVERT `verify` TO 'role' AND THIS FAILS, which is the point: every other
 	// assertion in this file is derived from the registry and would quietly
@@ -404,27 +400,6 @@ test('the probe script really emits pm2-host — a registry claim is not evidenc
 		readFileSync(resolve(ROOT, 'scripts', 'capability-probe.sh'), 'utf8')
 	);
 	assert.ok(emits?.has('pm2-host'));
-});
-
-test('verificationFor: a GUEST label is role-verified whatever the registry says', () => {
-	const cap = capability('pm2-host');
-	assert.equal(verificationFor({ role: 'guest' }, cap), 'role');
-	assert.equal(verificationFor({ role: 'claw' }, cap), 'probe');
-	// ABSENT reads as claw — the strict direction. A node nobody classified is
-	// held to the bar rather than exempted from it.
-	assert.equal(verificationFor({}, cap), 'probe');
-	assert.equal(verificationFor({ role: 'gest' }, cap), 'probe', 'a typo must not exempt');
-});
-
-test('verificationFor narrows nothing that is not a routable label', () => {
-	// A guest declares labels; it does not declare a toolchain or implicit
-	// capability, and neither is routable, so neither may be silently downgraded
-	// to "the declaration is the evidence".
-	assert.equal(verificationFor({ role: 'guest' }, capability('ffmpeg')), 'probe');
-	assert.equal(verificationFor({ role: 'guest' }, capability('jitconfig')), 'probe');
-	// And an id the registry does not know has no verification at all, rather
-	// than a guessed one.
-	assert.equal(verificationFor({ role: 'guest' }, capability('not-a-capability')), undefined);
 });
 
 test('pm2-capable is probed, measured, and NOT a routing label', () => {

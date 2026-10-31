@@ -188,16 +188,16 @@ test('loadDemandLedger: the finding names the RESOLVED path it actually read', (
 	}
 });
 
-// ── the guest skip ──────────────────────────────────────────────────────────
+// ── the backstop skip ───────────────────────────────────────────────────────
 
-test('unprovenRequired: a GUEST proves nothing for the fleet', () => {
-	// hokon is out of scope for bootcamp's required set (operator, 2026-09-14),
-	// and counting it would let the one machine that never takes general CI be
+test('unprovenRequired: the BACKSTOP proves nothing for the fleet', () => {
+	// The required set is what CI demand asks of general capacity, and counting
+	// the backstop would let the one machine that is not general capacity be
 	// the sole proof of a capability every claw is supposed to carry.
 	const machines = {
 		'claw-1': { role: 'claw', $capabilities: { prereqs: [{ id: 'ffmpeg' }] } },
 		hokon: {
-			role: 'guest',
+			role: 'backstop',
 			$capabilities: { prereqs: [{ id: 'ffmpeg' }, { id: 'python-toolcache' }] },
 		},
 	};

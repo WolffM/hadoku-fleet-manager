@@ -34,7 +34,7 @@
  * WHAT IT WILL NOT DO
  * -------------------
  * It never writes `hadoku-builder`. That is the one ELIGIBILITY capability, and
- * the fast loop is its writer (the backstop, on a guest) — it adds and removes
+ * the fast loop is its writer — it adds and removes
  * it as nodes become safe or unsafe, so a label bootcamp wrote would be undone
  * within the tick and the two would fight. What bootcamp CAN say
  * about it is whether the node deserves it, which is the BLOCKED state: a box
@@ -68,8 +68,7 @@
  * NO SECOND LIST. The tools come from `applicableRepairs(node)` (REPAIRS in
  * `lib/toolchain-floor.mjs`), whose `when` is resolved by `nodeOffer` — the one
  * derivation the mint uses. Only tools that DECLARE a `when` are installed here:
- * the fleet-wide set is `converge-toolchain`'s, and a guest is never touched
- * (`applicableRepairs` is empty for one, and the role filter below runs first).
+ * the fleet-wide set is `converge-toolchain`'s.
  *
  * DETECT FIRST, ON THE STOCK PATH (the tool's own `detect`, never `bash -lc`).
  * An install runs only when detect ANSWERS and says the tool is absent; a node
@@ -110,7 +109,7 @@
  * (PASS 2 below, `underIdleHold` in lib/proof-drain.mjs). Anything still not
  * measured idle is INCONCLUSIVE: the record on disk stands for that capability,
  * nothing new is written for it, and the run says so — a finding under
- * `--write`, a note without it. A guest is never drained, and keeps its record.
+ * `--write`, a note without it.
  *
  * USAGE
  *   fleet bootcamp                 # every managed node: probes and reports.
@@ -156,7 +155,6 @@ import { capability, judgeMeasurement, measuredIdleOnly } from '../dist/lib/capa
 import { probeableIds } from '../dist/lib/capability-labels.js';
 import { nodeOffer } from '../dist/lib/capability-offer.js';
 import { workloadGatedCapabilities, WORKLOAD_PROOF_DUE_DAYS } from '../dist/lib/workload-gate.js';
-import { isGuestNode } from '../dist/lib/node-role.js';
 import { readProof } from '../dist/lib/measured.js';
 import { stateDir } from './lib/paths.mjs';
 import {
@@ -177,8 +175,10 @@ import {
 	isVersionManaged,
 	probeRole,
 	qualifiesForCanary,
+	repairNeedsRoot,
 	resolveInstallTarget,
 } from './lib/toolchain-floor.mjs';
+import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { createReleaseLookup } from './lib/tool-release.mjs';
 import { defaultSeedDeps, isSeedFinding, seedNode } from './lib/capability-seeds.mjs';
 import {
@@ -274,11 +274,10 @@ const PROVE = process.argv.includes('--prove');
  * `--check-only`: probe and judge every node, INSTALL AND SEED NOTHING. The
  * default installs missing tools and seeds artifacts, which made `fleet
  * provision`'s "DRY RUN" install packages through its verify step (2026-10-25
- * audit). Capabilities are still EXECUTED here, unlike a guest's presence-only
- * check: verifying by execution is the point of a verify pass.
+ * audit). Capabilities are still EXECUTED here: verifying by execution is the
+ * point of a verify pass.
  */
 const CHECK_ONLY = process.argv.includes('--check-only');
-const installsOn = (name) => !CHECK_ONLY && !checkOnly.has(name);
 const dueFlagAt = process.argv.indexOf('--due');
 const DUE_DAYS =
 	dueFlagAt > -1 && Number.isFinite(Number(process.argv[dueFlagAt + 1]))
@@ -332,7 +331,6 @@ async function probe(node, phase = 'all') {
 		{
 			as: 'ci',
 			timeoutMs: 180_000,
-			includeGuests: checkOnly.has(node),
 		}
 	);
 	if (!r.ok && !r.stdout.includes('PROBE-END')) return null;
@@ -346,80 +344,8 @@ async function probe(node, phase = 'all') {
 
 const manifest = loadManifest();
 
-/**
- * A GUEST IS NEVER BOOTCAMPED. Skipped by ROLE, never by name.
- *
- * "I do NOT want hokon being impacted by the fleet chain" (operator,
- * 2026-09-14). Bootcamp is the fleet chain at full stretch: it runs the same
- * probe `fleet capabilities` runs — compiling on every core, launching a
- * browser, encoding with ffmpeg — and then, under `--write`, records a verdict
- * about the box on the fleet's manifest.
- *
- * AND SINCE 2026-09-26 THE LOAD HALF IS THE SHARP ONE. `pm2-capable` proves the
- * supervisor by PROVISIONING one: it npm-installs pm2 into a throwaway prefix,
- * starts a process, kills the daemon, resurrects it and removes the lot. On a
- * claw that is 41 MB and five seconds. On the PRODUCTION HOST it would install a
- * second pm2 beside the one supervising mgmt-api, the tunnel and the other production services —
- * sandboxed by `PM2_HOME` and still the single act this fleet has least business
- * performing on a guest. The role filter below is what keeps it off that box,
- * and it is a guard rather than a sentence: `bootcamp.test.mjs` fails if it goes.
- *
- * THE "THE VERDICT WOULD BE WRONG" HALF HAS EXPIRED, and saying so is the point
- * — a justification nobody re-reads is how a comment becomes evidence. Between
- * 2026-09-15 and 2026-09-26 this paragraph read: a guest's labels stay DECLARED,
- * the loop below reports a declared LABEL capability the probe did not prove as
- * `UNEARNED`, and #6 had just made `pm2-host` probe-verified — so probing the
- * guest manufactured that finding against the one label the five infra workflows
- * route on, on the machine that genuinely is the pm2 host. Wave 3o narrowed that
- * probe to "is a pm2 daemon alive here, supervising something", which hokon
- * passes (`ok 24-online`, measured 2026-09-26), and `av1-nvenc` its GPU has
- * always passed. Those are the only two declared-and-probeable labels a guest
- * carries, so the false finding is gone. THE RULE IS UNCHANGED ANYWAY: the
- * reason not to probe a guest is that the fleet is not entitled to, not that the
- * answer would come out wrong. A verdict that happens to come out right is not a
- * reason to go and take it.
- *
- * THIS WAS A COMMENT UNTIL 2026-09-15. The paragraph in the `unclaimed` loop
- * below said bootcamp "must not be pointed at a guest in the first place" and
- * nothing enforced it. CLAUDE.md records four separate times a COMMENT has been
- * read as evidence in this codebase; a comment stating a safety rule with no
- * guard behind it is the fifth. `check-capabilities.mjs` carries the same guard
- * for the same reason, in the same commit's lane.
- */
-const selected = selectMachines(manifest, { only: ONLY });
-const guests = selected.filter(([, m]) => isGuestNode(m));
-/**
- * HOKON IS BOOTCAMPED WHEN NAMED, CHECK-ONLY (operator, 2026-10-09): "totally
- * fine to bootcamp hokon. but i would say dont do all the regular automation. i
- * want to hand approve when new capabilities are install on hokon." So a node
- * with the guest role is probed and recorded only when `--machine` names it —
- * never in a fleet-wide run, which is what the automation does — and nothing is
- * INSTALLED there: `ensureTools` and the capability seeds are skipped for it,
- * and the run says so. An install on hokon is the operator's to approve, by hand.
- */
-const checkOnly = new Set(ONLY ? guests.map(([n]) => n) : []);
-const nodes = selected.filter(([n, m]) => !isGuestNode(m) || checkOnly.has(n));
-
-/**
- * POINTED AT A GUEST: REFUSE, rather than skip and report a clean run.
- *
- * Someone will type `fleet bootcamp hokon`, and the two wrong answers are a
- * silent no-op (reads as "the guest passed") and a probe (the thing the role
- * forbids). A refusal that names the role is the only one that teaches anything.
- * Separate from the empty-selection message below because they are different
- * jobs: this is a node that exists and is out of scope, that is a name that
- * matches nothing.
- */
-if (ONLY && guests.length && !nodes.length && !checkOnly.size) {
-	console.error(
-		`[bootcamp] ${guests.map(([n]) => n).join(', ')} is a GUEST and is never bootcamped.\n` +
-			`  A guest lends the fleet a registration and is otherwise none of the fleet's\n` +
-			`  business (operator, 2026-09-14). Its labels are DECLARED — no probe of ours\n` +
-			`  settles them — so a bootcamp verdict here would be a finding about evidence\n` +
-			`  this fleet is not entitled to gather. Nothing was probed and nothing written.`
-	);
-	process.exit(1);
-}
+/** The backstop is bootcamped like any claw: installed, probed, drained to measure. */
+const nodes = selectMachines(manifest, { only: ONLY });
 if (!nodes.length) {
 	console.error(`[bootcamp] no managed node matches ${ONLY ?? '(any)'}`);
 	process.exit(1);
@@ -472,6 +398,12 @@ async function ensureTools(name, m) {
 		if (!before.ok) continue;
 		if (has(before)) {
 			results.push({ id, action: 'present', detail: `detected on the stock PATH` });
+			continue;
+		}
+		// Root work where the fleet has no sudo (the backstop) is the operator's.
+		if (!maySudo(m) && repairNeedsRoot(id)) {
+			const a = rootAdvisory(name, `installing ${id}`, `fleet bootcamp --machine ${name}`);
+			results.push({ id, action: 'advisory', detail: a.message, fix: a.fix });
 			continue;
 		}
 		let version;
@@ -548,25 +480,18 @@ const probed = {};
 /** node -> the idle hold's outcome, for every node `--write` tried to hold. */
 const idleHolds = {};
 
-// PASS 1 — every node at once, exactly as before: install, then probe. A GUEST
-// runs the probe's `presence` half: the idle-only measurement is never taken
-// there (see PASS 2), so it is not run there either — an all-core compile on
-// the production host for a number nobody will use.
+// PASS 1 — every node at once, exactly as before: install, then probe.
 await Promise.all(
 	nodes.map(async ([name, m]) => {
 		// BEFORE THE PROBE, so what the probe executes is what the node now has —
-		// except on a check-only node, where nothing is installed.
-		if (!installsOn(name)) {
+		// except under --check-only, where nothing is installed.
+		if (CHECK_ONLY) {
 			toolResults[name] = [];
-			log(
-				CHECK_ONLY
-					? `── ${name}  --check-only: nothing will be installed or seeded`
-					: `── ${name}  check-only: nothing will be installed here; installs are approved by hand`
-			);
+			log(`── ${name}  --check-only: nothing will be installed or seeded`);
 		} else {
 			toolResults[name] = await ensureTools(name, m);
 		}
-		const got = await probe(name, checkOnly.has(name) ? 'presence' : 'all');
+		const got = await probe(name);
 		if (got === null) {
 			unreachable.push(name);
 			return;
@@ -590,14 +515,6 @@ await Promise.all(
  * that did that would be a surprise to anyone who typed `fleet bootcamp` to
  * look. Without `--write` a busy measurement is reported as unjudged, carried,
  * and not counted — nothing is being recorded on it.
- *
- * A GUEST IS NEVER HELD. `drain-node` refuses a guest without
- * `--include-guests` ("the fleet does not decide its availability for it"),
- * and the hold would not make it idle anyway: a drain gates `hadoku-builder`
- * and placement, but hokon's pm2-host deploys and its ~28 per-repo backstop
- * runners take work the drain does not stop, and a game launch loads every core
- * with no `Runner.Worker` to count. So a guest keeps its previous idle-only
- * verdict, and the run says so.
  */
 const hold = { held: null };
 if (WRITE) {
@@ -612,7 +529,7 @@ if (WRITE) {
 	}
 	for (const [name] of nodes) {
 		const got = probed[name];
-		if (!got || checkOnly.has(name)) continue;
+		if (!got) continue;
 		const busyIds = IDLE_ONLY.filter((id) => got.caps[id] && got.load[id] !== 0);
 		if (!busyIds.length) continue;
 		log(
@@ -706,24 +623,6 @@ await Promise.all(
 			}
 			if (verdict.proven) proven.add(id);
 		}
-		// A GUEST'S idle-only capabilities were never measured (PASS 1 ran the
-		// `presence` half there), so they are not in `caps` at all — and must not
-		// fall out of `earned` for that.
-		if (checkOnly.has(name)) {
-			for (const id of IDLE_ONLY) {
-				if (caps[id]) continue;
-				inconclusive.push({
-					id,
-					guest: true,
-					reason:
-						'GUEST: not re-measured — the fleet does not drain a guest, and a drain would not ' +
-						'make it idle (its pm2-host deploys and backstop runners take work a drain does not stop); ' +
-						'the previous record stands',
-					kept: prevEarned.has(id) ? 'earned' : 'not earned',
-				});
-				if (prevEarned.has(id)) proven.add(id);
-			}
-		}
 		// A capability this controller could not enable was never probed: the
 		// record on disk stands, and it is said.
 		for (const [id, reason] of Object.entries(UNPROBED)) {
@@ -762,11 +661,7 @@ await Promise.all(
 		// second reason — is a decision about what the box is FOR, and no probe
 		// can settle it. `pm2-host` LEFT that set on 2026-09-15 (#6): it is
 		// probed and therefore earnable here, so a claw that proves it appears as
-		// `unclaimed` rather than being invisible. Its guest half is not this
-		// loop's to keep — `probeableIds()` is node-blind, so this loop would
-		// report a guest's declared `pm2-host` as UNEARNED. What keeps that from
-		// happening is the ROLE FILTER at the top of this file, which is a guard
-		// and not a sentence: `bootcamp.test.mjs` fails if it is removed.
+		// `unclaimed` rather than being invisible.
 		for (const id of probeableIds()) {
 			const cap = capability(id);
 			if (!cap || cap.surface !== 'label' || NEVER_WRITTEN.has(id)) continue;
@@ -872,7 +767,7 @@ await Promise.all(
 		// `earned` here is THIS RUN's fresh proof, not the manifest's possibly
 		// stale `$capabilities` facet, so the synthetic node below carries it
 		// directly rather than asking `seedNode` to re-derive it from `m`.
-		seedResultsByNode[name] = !installsOn(name)
+		seedResultsByNode[name] = CHECK_ONLY
 			? []
 			: await seedNode(name, { ...m, $capabilities: { earned, prereqs } }, manifest, seedDeps);
 	})
@@ -1086,7 +981,7 @@ for (const [name, r] of Object.entries(report).sort()) {
 	const seedFindings = (seedResultsByNode[name] ?? []).filter((s) => isSeedFinding(s.status));
 	// Under `--write` an unjudged measurement is a run that was asked to record
 	// and could not look; without it, nothing was going to be recorded anyway.
-	const heldOut = WRITE ? r.inconclusive.filter((i) => !i.guest) : [];
+	const heldOut = WRITE ? r.inconclusive : [];
 	const verdict =
 		r.unearned.length ||
 		r.blocked.length ||
@@ -1102,6 +997,7 @@ for (const [name, r] of Object.entries(report).sort()) {
 			findings++;
 			log(`   TOOL FAILED: ${t.id} — ${t.detail}`);
 		} else if (t.action === 'installed') log(`   installed: ${t.id} — ${t.detail}`);
+		else if (t.action === 'advisory') log(`   advisory: ${t.detail}\n     ${t.fix}`);
 	}
 	for (const s of seedResultsByNode[name] ?? []) {
 		if (s.status === 'seeded') {
@@ -1151,8 +1047,7 @@ for (const [name, r] of Object.entries(report).sort()) {
 	for (const i of r.inconclusive) {
 		// LOUD, and never a verdict: the record on disk stands for this capability.
 		const kept = `previous record kept (${i.kept})`;
-		if (i.guest) log(`   kept (guest): ${i.id} — ${i.reason}; ${kept}`);
-		else if (WRITE) {
+		if (WRITE) {
 			findings++;
 			log(`   INCONCLUSIVE: ${i.id} — ${i.reason}; ${kept}`);
 			log(
@@ -1191,25 +1086,9 @@ for (const [name, r] of Object.entries(report).sort()) {
 // are printed but not counted. Everything else here is unchanged — in
 // particular a deferred node's labels are left ALONE exactly as an unreachable
 // one's are, because "held out of service" is still not "it cannot do it".
-// A SKIPPED GUEST IS SAID OUT LOUD, and is not folded into the pass.
-//
-// Three different answers, and the report must keep them apart: "I looked",
-// "I could not look" (unreachable, below — a finding), and "I was not entitled
-// to look". The last one is not a finding — nothing is wrong — but a machine
-// that vanishes from the report is one nobody can tell was considered, which is
-// how the guest role went unenforced here in the first place.
 if (!proofLedger.ok) {
 	// Uncounted: the node is not at fault. But "no proof line" would read as "nothing to say".
 	log(`\n· job-proof ledger unreadable — proofs not reported: ${proofLedger.reason}`);
-}
-const roleDeclared = Object.fromEntries(
-	guests.filter(([name]) => !checkOnly.has(name)).map(([name, m]) => [name, m.labels ?? []])
-);
-for (const [name, labels] of Object.entries(roleDeclared)) {
-	log(
-		`\n· ${name}: GUEST — not probed, not written. Its labels are DECLARED: ` +
-			`${labels.join(', ') || '(none)'}`
-	);
 }
 
 const _drains = readDrains();
@@ -1232,9 +1111,8 @@ if (_reallyUnreachable.length) {
 }
 
 /**
- * What `--write` did to the record, for a caller that reads the document: the
- * refresh cycle's guest recheck (#17) counts a turn as spent only when this is
- * `ok`. `null` without `--write`.
+ * What `--write` did to the record, for a caller that reads the document.
+ * `null` without `--write`.
  */
 let written = null;
 if (WRITE) {
@@ -1420,7 +1298,6 @@ if (JSON_OUT)
 				ok: findings === 0,
 				report,
 				unreachable,
-				roleDeclared,
 				tools: toolResults,
 				seeds: seedResultsByNode,
 				revocations: revocationChanges,

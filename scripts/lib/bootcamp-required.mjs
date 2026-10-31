@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 
 import { isCiDemandRecord } from '../../dist/lib/bootcamp-proof.js';
-import { isGuestNode } from '../../dist/lib/node-role.js';
+import { isBackstopNode } from '../../dist/lib/node-role.js';
 
 /**
  * The CI-demand rows of a parsed ledger.
@@ -86,16 +86,14 @@ export function parseDemandLedger(text, path = 'demand-ledger.jsonl') {
 export function unprovenRequired(required, machines, capabilityIds) {
 	const proven = new Set();
 	for (const m of Object.values(machines ?? {})) {
-		// A GUEST PROVES NOTHING HERE, and that is not a slight on the box.
-		// `required` is what the fleet's CI demand asks of general CAPACITY, and a
-		// guest is not general capacity — hokon lends a backstop registration and
-		// is out of scope for bootcamp's required set (operator, 2026-09-14).
-		// Counting it would let the production host be the ONLY proof of a
+		// THE BACKSTOP PROVES NOTHING HERE, and that is not a slight on the box.
+		// `required` is what the fleet's CI demand asks of general CAPACITY, and the
+		// backstop is not general capacity. Counting it would let the production host be the ONLY proof of a
 		// capability the claws are supposed to carry: every claw could lose
 		// `python-toolcache` and this would stay green because hokon still had it,
 		// while every job needing it landed on a claw that did not. The fleet would
 		// read as covered by the one machine that never takes the work.
-		if (isGuestNode(m)) continue;
+		if (isBackstopNode(m)) continue;
 		for (const p of m.$capabilities?.prereqs ?? []) proven.add(p.id);
 	}
 	return [...required].filter((id) => !capabilityIds.has(id) || !proven.has(id)).sort();

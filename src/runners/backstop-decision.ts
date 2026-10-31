@@ -24,7 +24,7 @@ import {
 } from './backstop.js';
 import { isLocalNode } from '../lib/node-identity.js';
 import {
-	isGuestNode,
+	isBackstopNode,
 	mintsOnDemand,
 	type MintBearingNode,
 	type RoleBearingNode,
@@ -92,8 +92,8 @@ function readHostLoadFromProc(
  * 09-18T19:29Z, 09-18T21:47Z, 09-19T20:51Z) are restarts, which set the belief
  * to `null` and forced a converge by accident.
  *
- * The ladder is gone and nothing else writes this label on a guest today (the
- * fast loop skips guests — `fleet-loop.ts`, `if (guestNodes.has(node))
+ * The ladder is gone and nothing else writes this label on a backstop today (the
+ * fast loop skips backstops — `fleet-loop.ts`, `if (backstopNodes.has(node))
  * continue`). That makes the sweep below a guard against a writer that does
  * not currently exist, which is exactly what it should be: the reader for this
  * facet now reads the REGISTRATIONS, not its own record of what it wrote, so a
@@ -590,8 +590,8 @@ export async function runBackstopDecision(args: {
 	// host carries several registrations, so it repeats, and `backstopNodes` is
 	// that folded to machines.
 	const poolNodes = backstopPool.map((r) => nodeOf(r.name, fleetNodes));
-	// THE MANIFEST'S GUESTS AS WELL AS THE POOL'S NODES (#120). The pool is
-	// read off registrations, and an on-demand guest's whole point is to keep
+	// THE MANIFEST'S BACKSTOPS AS WELL AS THE POOL'S NODES (#120). The pool is
+	// read off registrations, and an on-demand backstop's whole point is to keep
 	// none — so a node that retired its standing runners would otherwise
 	// vanish from the backstop the moment it stopped squatting on memory.
 	const machines = backstopMachinesReader();
@@ -599,7 +599,7 @@ export async function runBackstopDecision(args: {
 		...new Set([
 			...poolNodes,
 			...Object.entries(machines ?? {})
-				.filter(([, m]) => isGuestNode(m as RoleBearingNode))
+				.filter(([, m]) => isBackstopNode(m as RoleBearingNode))
 				.map(([n]) => n),
 		]),
 	];
@@ -665,8 +665,8 @@ export async function runBackstopDecision(args: {
 	// gives — a fleet with nowhere to run is worth interrupting for.
 	//
 	// A QUARANTINED OR DRAINED NODE IS NEVER PROMOTED, outage included. The
-	// backstop is the ONLY writer of this label on a guest (the ladder skips
-	// guests), so until 2026-09-21 the fleet loop's quarantine of hokon was a
+	// backstop is the ONLY writer of this label on the backstop node (the ladder skipped
+	// backstops), so until 2026-09-21 the fleet loop's quarantine of hokon was a
 	// log line and nothing else: on saturation this would have handed CI to a
 	// node whose store the guard had flagged. hokon is a reserve, brought in
 	// when work needs it — which is exactly when it must be sound. The loop
@@ -929,7 +929,7 @@ export async function runBackstopDecision(args: {
 	// re-assert while up; see syncBackstopAcrossFleet for why this cannot be
 	// derived from this repo's listing.
 	//
-	// The re-assert is only for a node the label PROMOTES. An on-demand guest
+	// The re-assert is only for a node the label PROMOTES. An on-demand backstop
 	// is promoted by the hold above, and its sweep is demote-only — running it
 	// every tick of a promotion would read the whole fleet's listings to change
 	// nothing.

@@ -196,7 +196,7 @@ test('label floor: a mintable fleet does not excuse pm2-host, which no mint can 
 // standing online runner OR by an eligible minting node that offers it —
 // `jdk21` and `cargo-bevy` "function the same as other runners". Driven
 // against the fixture manifest: claw-3/4/5/8/9 are ephemeral and EARNED jdk21,
-// hokon is the standing guest whose listing below does NOT carry it.
+// hokon is the standing backstop whose listing below does NOT carry it.
 // ---------------------------------------------------------------------------
 
 /** Every ephemeral fixture claw whose bootcamp record earned jdk21. */
@@ -1024,7 +1024,7 @@ test('refusedAtAdmission: only a failed `Set up runner` with no workflow step ru
 // to serve, and availability alone cannot see it: from a queued job's point of
 // view, three claws all mid-build are indistinguishable from three dead ones.
 
-// ── on-demand guest (#120): promotion is a MINT, not a label ────────────────
+// ── on-demand backstop (#120): promotion is a MINT, not a label ────────────────
 // Operator, 2026-10-19: "the runners get brought online the same way the JIT
 // process does. not having standing runners squatting on ram." hokon keeps one
 // standing registration — hadoku_site's deploy runner, `pm2-host` — and the
@@ -1032,10 +1032,10 @@ test('refusedAtAdmission: only a failed `Set up runner` with no workflow step ru
 // dispatcher through the HOLD, which offers the label on hokon's mints.
 
 const ON_DEMAND = {
-	hokon: { role: 'guest', mint: 'on-demand', standingRepos: ['WolffM/hadoku_site'] },
+	hokon: { role: 'backstop', mint: 'on-demand', standingRepos: ['WolffM/hadoku_site'] },
 };
 
-test('#120: saturation promotes an on-demand guest through the HOLD and writes no label', async () => {
+test('#120: saturation promotes an on-demand backstop through the HOLD and writes no label', async () => {
 	__setBackstopMachinesForTesting(() => ON_DEMAND);
 	try {
 		installFetch({
@@ -1062,7 +1062,7 @@ test('#120: saturation promotes an on-demand guest through the HOLD and writes n
 	}
 });
 
-test('#120: an on-demand guest is held with NO registration at all — retiring them must not retire the backstop', async () => {
+test('#120: an on-demand backstop is held with NO registration at all — retiring them must not retire the backstop', async () => {
 	__setBackstopMachinesForTesting(() => ON_DEMAND);
 	try {
 		installFetch({
@@ -1084,7 +1084,7 @@ test('#120: an on-demand guest is held with NO registration at all — retiring 
 	}
 });
 
-test("#120: a leftover hadoku-builder on an on-demand guest's registration is STRIPPED, even while promoted", async () => {
+test("#120: a leftover hadoku-builder on an on-demand backstop's registration is STRIPPED, even while promoted", async () => {
 	__setBackstopMachinesForTesting(() => ON_DEMAND);
 	try {
 		installFetch({
@@ -1246,7 +1246,7 @@ const forceUntil = (minutesFromNow: number) => ({
 	by: 'hadoku',
 });
 
-test('green light: a forced on-demand guest is HELD on a quiet, measured tick, pegged or not', async () => {
+test('green light: a forced on-demand backstop is HELD on a quiet, measured tick, pegged or not', async () => {
 	__setBackstopMachinesForTesting(() => ON_DEMAND);
 	// A pegged box — the idle gate would refuse this — and NO saturation.
 	__setHostLoadReaderForTesting(() => ({ load1: 60, cores: 12, memAvailableMb: 32_768 }));
@@ -1317,7 +1317,7 @@ test('green light: an expired force lapses on its own — nobody has to remember
 	}
 });
 
-test('#120: the drain is the red light — a drained on-demand guest is not held, outage included', async () => {
+test('#120: the drain is the red light — a drained on-demand backstop is not held, outage included', async () => {
 	__setBackstopMachinesForTesting(() => ON_DEMAND);
 	writeDrain({ hokon: { since: 's', reason: 'operator', by: 'hadoku' } });
 	try {
@@ -1562,9 +1562,9 @@ test('2026-10-09: the FIRST tick after a restart never demotes an already-promot
 	assert.deepEqual(labelOps, [], 'nothing demoted on evidence nobody gathered');
 });
 
-test('#120: the FIRST tick after a restart neither holds nor strips an on-demand guest', async () => {
+test('#120: the FIRST tick after a restart neither holds nor strips an on-demand backstop', async () => {
 	// The claws read dark here only because nothing has been measured yet — the
-	// 2026-09-02 shape. An on-demand guest is promoted by the HOLD, so "could not
+	// 2026-09-02 shape. An on-demand backstop is promoted by the HOLD, so "could not
 	// look" must leave the hold empty: no builder work minted on the production
 	// host on evidence nobody gathered. Nothing is stripped either — the units it
 	// may already be running are one-job units the hold never touches.
@@ -1823,7 +1823,7 @@ test('#56: a queue measured EMPTY demotes on the FIRST calm tick, not the third'
 // fallback could not rescue them either, because it counts hokon as capacity.
 
 // ── a reserve must be SOUND when it is brought in ───────────────────────────
-// The backstop is the only writer of hadoku-builder on a guest, so the fleet
+// The backstop is the only writer of hadoku-builder on a backstop, so the fleet
 // loop's quarantine meant nothing here until 2026-09-21 — a hokon whose store
 // the guard had flagged would still be promoted the moment the claws saturated.
 
@@ -3902,7 +3902,7 @@ test('disk-watch #132: a small, nearly empty /tmp is not a repeating advisory �
 	assert.equal(capacity().length, 1);
 });
 
-test('disk-watch 2026-10-21: an on-demand guest is watched too, and its page says deploys stop', async () => {
+test('disk-watch 2026-10-21: an on-demand backstop is watched too, and its page says deploys stop', async () => {
 	__setBackstopMachinesForTesting(() => ON_DEMAND);
 	__setDiskReadingsForTesting(new Map([['hokon', { tmpFreeMb: 1718, workFreeMb: 370 * 1024 }]]));
 	installFetch({ runners: LIVE_LISTING });
@@ -4032,7 +4032,7 @@ test('disk-watch: hokon never appears, even if a reading is injected for it', as
 	assert.equal(
 		getRunnerHealthSnapshot()?.diskWatch?.hokon,
 		undefined,
-		'hokon is a guest and is never judged, however the registry reads'
+		'hokon is a backstop and is never judged, however the registry reads'
 	);
 	assert.equal(
 		discordPosts.some((m) => m.includes('hokon') && m.includes('**disk**')),
@@ -4215,7 +4215,7 @@ test('regression: hokon never acts, even with five divergences of its own', asyn
 	});
 	installFetch({ runners: LIVE_LISTING });
 	await tick('tok');
-	assert.equal(calls, 0, 'hokon is a guest — never proven, never canaried, never marked stale');
+	assert.equal(calls, 0, 'hokon is a backstop — never proven, never canaried, never marked stale');
 	assert.equal(regressionPings().length, 0);
 });
 

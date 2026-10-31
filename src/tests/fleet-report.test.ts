@@ -459,9 +459,9 @@ test('a STANDING node still takes its state from the census', async () => {
 	assert.equal(hokon.ephemeral, false);
 });
 
-const GUEST_MANIFEST = {
+const BACKSTOP_MANIFEST = {
 	...EPHEMERAL_MANIFEST,
-	hokon: { ...EPHEMERAL_MANIFEST.hokon, role: 'guest', mint: 'on-demand' },
+	hokon: { ...EPHEMERAL_MANIFEST.hokon, role: 'backstop', mint: 'on-demand' },
 };
 
 test('os comes from the live probe, so a node enrollment never measured still has one', () => {
@@ -483,7 +483,7 @@ test('os comes from the live probe, so a node enrollment never measured still ha
 	assert.equal(r.machines.find((m) => m.name === 'hokon')!.os, null, 'unprobed is null');
 });
 
-test('a HELD on-demand guest reads mintable, not the census demoted', async () => {
+test('a HELD on-demand backstop reads mintable, not the census demoted', async () => {
 	// 2026-10-25: hokon showed `demoted` beside 13 queued jobs while the
 	// dispatcher minted onto it. Its one standing registration is a deploy runner
 	// the backstop never labels, so the census says `demoted` held or not; the
@@ -493,7 +493,7 @@ test('a HELD on-demand guest reads mintable, not the census demoted', async () =
 		const r = buildFleetReport(
 			health({ claw_state: { hokon: 'demoted' } }),
 			{ at: 'now', nodes: { hokon: upProbe() } },
-			GUEST_MANIFEST,
+			BACKSTOP_MANIFEST,
 			NO_JOBS
 		);
 		assert.equal(r.machines.find((m) => m.name === 'hokon')!.state, 'mintable');
@@ -503,25 +503,25 @@ test('a HELD on-demand guest reads mintable, not the census demoted', async () =
 	}
 });
 
-test('an UNHELD on-demand guest keeps the census word', async () => {
+test('an UNHELD on-demand backstop keeps the census word', async () => {
 	setBackstopHold([]);
 	const r = buildFleetReport(
 		health({ claw_state: { hokon: 'demoted' } }),
 		{ at: 'now', nodes: { hokon: upProbe() } },
-		GUEST_MANIFEST,
+		BACKSTOP_MANIFEST,
 		NO_JOBS
 	);
 	assert.equal(r.machines.find((m) => m.name === 'hokon')!.state, 'demoted');
 	assert.equal(r.fleet.clawState?.hokon, 'demoted');
 });
 
-test('a held guest with no probe is UNKNOWN, never the stale census word', async () => {
+test('a held backstop with no probe is UNKNOWN, never the stale census word', async () => {
 	setBackstopHold(['hokon']);
 	try {
 		const r = buildFleetReport(
 			health({ claw_state: { hokon: 'demoted' } }),
 			{ at: 'now', nodes: {} },
-			GUEST_MANIFEST,
+			BACKSTOP_MANIFEST,
 			NO_JOBS
 		);
 		assert.equal(r.machines.find((m) => m.name === 'hokon')!.state, null);

@@ -56,7 +56,7 @@ claw-2/claw-3 rows are from the 2026-09-02 benchmark, not re-read today.
 Unallocated on purpose:
 
 - **R1, R3 (all four DDR5 sticks).** Every claw is DDR3, DDR4 or soldered.
-  hokon is the only DDR5 box and it is a guest. They wait for an AM5 or
+  hokon is the only DDR5 box and it is the production host. They wait for an AM5 or
   LGA1700 node, or get sold.
 - **D2.** An identical cold spare for claw-5's disk. Once claw-5 is on D1, it
   is spare CI scratch at best.

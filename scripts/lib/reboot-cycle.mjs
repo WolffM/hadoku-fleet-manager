@@ -33,9 +33,10 @@
  * under HELD_PREFIX, a human lifts it, and no other node reboots until then
  * (`halted`). The controller pages on the failure itself.
  *
- * NEVER A GUEST, NEVER THIS BOX. hokon is a guest (the operator's rule: no
- * routine automation there) and is also where this runs; both are refused by
- * role AND by `isLocalNode`, before any dependency is called for it.
+ * NEVER THE BACKSTOP, NEVER THIS BOX. hokon is the backstop and the production
+ * host, so when it reboots is the operator's call, and it is also where this
+ * runs; both are refused by role AND by `isLocalNode`, before any dependency
+ * is called for it.
  *
  * Every side effect is an injected dependency, so the safety properties are
  * tested against fixtures (reboot-cycle.test.mjs) and never against a claw.
@@ -301,7 +302,7 @@ export function heldByCycle(rec) {
  *
  * @param {object} p
  * @param {Array<[string, object]>} p.machines  manifest `[name, entry]` pairs
- * @param {object} p.deps  isGuest, isLocal, probe, expectedDown, drainDoc, drain, hold, undrain,
+ * @param {object} p.deps  isBackstop, isLocal, probe, expectedDown, drainDoc, drain, hold, undrain,
  *                         hostingOn, announce, noticeMs,
  *                         waitDrained, queuePressure, reboot, sleep, now,
  *                         readState, writeState
@@ -378,9 +379,10 @@ export async function runRebootCycle({
 	const candidates = [];
 	for (const [name, entry] of machines) {
 		if (only && name !== only) continue;
-		if (deps.isGuest(entry) || deps.isLocal(name)) {
-			log(`── ${name}  [skipped: ${deps.isGuest(entry) ? 'guest' : 'this box'}]`);
-			nodes.push({ node: name, status: 'skipped', why: deps.isGuest(entry) ? 'guest' : 'local' });
+		if (deps.isBackstop(entry) || deps.isLocal(name)) {
+			const backstop = deps.isBackstop(entry);
+			log(`── ${name}  [skipped: ${backstop ? 'backstop' : 'this box'}]`);
+			nodes.push({ node: name, status: 'skipped', why: backstop ? 'backstop' : 'local' });
 			continue;
 		}
 		const p = await attempt(() => deps.probe(name));

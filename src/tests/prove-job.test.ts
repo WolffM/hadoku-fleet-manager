@@ -5,8 +5,8 @@
  *
  * The properties under test are the ones a wrong implementation would pass a
  * happy-path run with: which runner the API says took the job, that the retry
- * loop stops, that nothing is left behind on ANY exit path, that a guest is never
- * reached, and that an unreadable source is a finding rather than a pass.
+ * loop stops, that nothing is left behind on ANY exit path, and that an
+ * unreadable source is a finding rather than a pass.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -65,9 +65,10 @@ const LOG = [
 	'1203 passed, 2 deselected in 41.2s',
 ].join('\n');
 
-/** `standing`: a guest's own registration, which takes the job only while it carries every aimed label. */
-type Who = 'proof' | 'hokon' | 'none' | 'standing';
+type Who = 'proof' | 'hokon' | 'none';
 interface Scenario {
+	/** The node the proof runner is minted on. Default: claw-8. */
+	target?: string;
 	/** Who wins attempt N (1-based). Default: the proof runner. */
 	winner?: (attempt: number) => Who;
 	conclusion?: string;
@@ -89,13 +90,6 @@ interface Scenario {
 		status?: string;
 		labels?: string[];
 	}[];
-	/** The registration name a `standing` winner is. */
-	standing?: string;
-	/** The standing runner is busy with production work for this many job polls after dispatch. */
-	standingBusyPolls?: number;
-	/** POST/DELETE of a runner label answers this status instead of succeeding. */
-	labelAddStatus?: number;
-	labelDeleteStatus?: number;
 	units?: string[];
 	onSleep?: () => void;
 	/** POST /git/refs answers this status instead of creating the branch. */
@@ -111,6 +105,7 @@ interface Scenario {
 
 function world(sc: Scenario = {}) {
 	__resetTarballCacheForTesting();
+	const target = sc.target ?? 'claw-8';
 	let clock = T0;
 	let nextId = 100;
 	const runners = new Map<
@@ -140,7 +135,6 @@ function world(sc: Scenario = {}) {
 		done: boolean;
 		startedAtMs?: number;
 		createdAtMs: number;
-		runsOn: string[];
 	}[] = [];
 	const log = {
 		writes: [] as string[],
@@ -152,7 +146,7 @@ function world(sc: Scenario = {}) {
 		sh: [] as string[],
 	};
 
-	const hasProof = () => [...runners.values()].find((r) => isProofRunnerName(r.name, 'claw-8'));
+	const hasProof = () => [...runners.values()].find((r) => isProofRunnerName(r.name, target));
 	let prereqTaken = 0;
 	const job = (r: (typeof runs)[number]) => {
 		// queued on the first look, taken on the second, finished on the third
@@ -174,25 +168,13 @@ function world(sc: Scenario = {}) {
 			}
 			if (!hasProof()) return { ...base, status: 'queued', conclusion: null, runner_name: null };
 		}
-		if (r.who === 'standing' && r.runner === null) {
-			const reg = [...runners.values()].find((x) => x.name === sc.standing);
-			const carries = reg && r.runsOn.every((l) => l === 'self-hosted' || reg.labels.includes(l));
-			if (!carries || r.polls <= (sc.standingBusyPolls ?? 0))
-				return { ...base, status: 'queued', conclusion: null, runner_name: null };
-		}
 		if (r.who === 'none' || r.polls < 2)
 			return { ...base, status: 'queued', conclusion: null, runner_name: null };
-		if (r.runner === null)
-			r.runner =
-				r.who === 'hokon'
-					? HOKON
-					: r.who === 'standing'
-						? (sc.standing ?? null)
-						: (hasProof()?.name ?? null);
+		if (r.runner === null) r.runner = r.who === 'hokon' ? HOKON : (hasProof()?.name ?? null);
 		// The jobs API's own wall-clock bounds — set once, the instant the job is
 		// first seen running, read from the SAME fixture clock `deps.sleep` advances.
 		r.startedAtMs ??= clock;
-		const ours = r.who === 'proof' || r.who === 'standing';
+		const ours = r.who === 'proof';
 		if (ours && sc.hang)
 			return {
 				...base,
@@ -201,7 +183,7 @@ function world(sc: Scenario = {}) {
 				runner_name: r.runner,
 				started_at: new Date(r.startedAtMs).toISOString(),
 			};
-		if (ours && r.polls < 3 + (r.who === 'standing' ? (sc.standingBusyPolls ?? 0) : 0))
+		if (ours && r.polls < 3)
 			return {
 				...base,
 				status: 'in_progress',
@@ -212,11 +194,8 @@ function world(sc: Scenario = {}) {
 		if (ours && !r.done) {
 			r.done = true;
 			// An ephemeral runner deregisters itself, and its unit exits, after one job.
-			// A standing one stays.
-			if (r.who === 'proof') {
-				for (const [id, x] of runners) if (x.name === r.runner) runners.delete(id);
-				if (r.runner) units.delete(r.runner);
-			}
+			for (const [id, x] of runners) if (x.name === r.runner) runners.delete(id);
+			if (r.runner) units.delete(r.runner);
 		}
 		log.completedJob = {
 			...base,
@@ -291,10 +270,6 @@ function world(sc: Scenario = {}) {
 					attempt,
 					who: sc.winner ? sc.winner(attempt) : 'proof',
 					createdAtMs: clock,
-					runsOn: (() => {
-						const inputs = (body as { inputs?: Record<string, string> }).inputs;
-						return inputs?.runs_on ? (JSON.parse(inputs.runs_on) as string[]) : [];
-					})(),
 					runner: null,
 					polls: 0,
 					cancelled: false,
@@ -316,23 +291,6 @@ function world(sc: Scenario = {}) {
 			if (cancel) {
 				runs.find((x) => x.id === Number(cancel[1]))!.cancelled = true;
 				return { ok: true, status: 202 };
-			}
-			const addLabel = /\/actions\/runners\/(\d+)\/labels$/.exec(path);
-			if (method === 'POST' && addLabel) {
-				if (sc.labelAddStatus) return { ok: false, status: sc.labelAddStatus };
-				const reg = runners.get(Number(addLabel[1]));
-				if (!reg) return { ok: false, status: 404 };
-				reg.labels.push(...(body as { labels: string[] }).labels);
-				return { ok: true, status: 200 };
-			}
-			const delLabel = /\/actions\/runners\/(\d+)\/labels\/(.+)$/.exec(path);
-			if (method === 'DELETE' && delLabel) {
-				if (sc.labelDeleteStatus) return { ok: false, status: sc.labelDeleteStatus };
-				const reg = runners.get(Number(delLabel[1]));
-				const name = decodeURIComponent(delLabel[2]);
-				if (!reg || !reg.labels.includes(name)) return { ok: false, status: 404 };
-				reg.labels = reg.labels.filter((l) => l !== name);
-				return { ok: true, status: 200 };
 			}
 			const del = /\/actions\/runners\/(\d+)$/.exec(path);
 			if (method === 'DELETE' && del) {
@@ -407,10 +365,10 @@ function world(sc: Scenario = {}) {
 		};
 	};
 	const leaked = () => ({
-		units: [...units.keys()].filter((u) => isProofRunnerName(u, 'claw-8')),
+		units: [...units.keys()].filter((u) => isProofRunnerName(u, target)),
 		registered: [...runners.values()]
 			.map((r) => r.name)
-			.filter((n) => isProofRunnerName(n, 'claw-8')),
+			.filter((n) => isProofRunnerName(n, target)),
 		staged: [...staged],
 	});
 	return {
@@ -646,11 +604,33 @@ function assertUntouched(w: ReturnType<typeof world>) {
 	);
 }
 
-test('a GUEST is refused before anything is reached', async () => {
-	const w = world();
-	const r = await proveJob({ ...SPEC, node: 'hokon' }, w.deps(node({ role: 'guest' })));
+test('an on-demand backstop takes the JIT path, its unit capped by the backstop allowance', async () => {
+	const w = world({ target: 'hokon' });
+	const backstop = node({
+		role: 'backstop',
+		mint: 'on-demand',
+		ephemeral: undefined,
+		slice: { unitMaxMb: 4096, maxMb: 16384 },
+	} as Partial<ManifestNode>);
+	const r = await proveJob({ ...SPEC, node: 'hokon' }, w.deps(backstop));
+	assert.equal(r.verdict, 'pass', JSON.stringify(r.findings));
+	assert.equal(r.minted.length, 1);
+	assert.ok(r.runnerName && isProofRunnerName(r.runnerName, 'hokon'));
+	const run = w.log.sh.find((c) => c.startsWith('systemd-run'));
+	assert.ok(run, 'the proof runner is minted on the node');
+	// The backstop's declared per-unit cap, not the claw rule's widening to the slice.
+	assert.match(run, /MemoryMax=4096M/);
+	assert.deepEqual(w.leaked(), { units: [], registered: [], staged: [] });
+});
+
+test('a backstop that does not mint on demand is refused before anything is reached', async () => {
+	const w = world({ target: 'hokon' });
+	const r = await proveJob(
+		{ ...SPEC, node: 'hokon' },
+		w.deps(node({ role: 'backstop', ephemeral: undefined }))
+	);
 	assert.equal(r.verdict, 'refused');
-	assert.ok(r.findings.some((f) => f.rule === 'guest'));
+	assert.ok(r.findings.some((f) => f.rule === 'not-minted'));
 	assert.deepEqual(w.log.sh, [], 'not even a reachability probe');
 	assertUntouched(w);
 });
@@ -669,7 +649,7 @@ test('a node that does not carry the capability is refused with the reason', asy
 
 test('a non-ephemeral node, a drained node and a full node are refused', async () => {
 	for (const [n, drained, rule] of [
-		[node({ ephemeral: false }), false, 'not-ephemeral'],
+		[node({ ephemeral: false }), false, 'not-minted'],
 		[node(), true, 'admission'],
 	] as const) {
 		const w = world();
@@ -1113,8 +1093,6 @@ function proofResult(over: Partial<ProofResult> = {}): ProofResult {
 		workflow: JDK21.jobProof!.workflow,
 		job: JDK21.jobProof!.job,
 		ref: 'main',
-		mode: 'jit',
-		standingRunner: null,
 		dispatchRef: 'main',
 		capability: 'jdk21',
 		labels: ['self-hosted', 'hadoku-builder', 'jdk21'],
@@ -1130,7 +1108,7 @@ function proofResult(over: Partial<ProofResult> = {}): ProofResult {
 		findings: [],
 		minted: [],
 		staleCleaned: [],
-		teardown: { ok: true, runners: [], labels: [], cancelledRuns: [], problems: [] },
+		teardown: { ok: true, runners: [], cancelledRuns: [], problems: [] },
 		startedAt: new Date(0).toISOString(),
 		finishedAt: new Date(1000).toISOString(),
 		...over,
@@ -1288,255 +1266,4 @@ test("buildProofRecord: `at` is NOW, not the proof's own startedAt/finishedAt", 
 	const now = new Date('2026-10-08T12:00:00Z');
 	const rec = recordOf(buildProofRecord(JDK21, proofResult(), [], { now }));
 	assert.equal(rec.at, now.toISOString());
-});
-
-// ---------------------------------------------------------------------------
-// STANDING MODE (2026-10-10, "lets have hokon earn it now"). A guest is proven
-// on its OWN standing registration — the path production uses — through the
-// GitHub API alone: no mint, no ssh, no drain. The opt-in is explicit, the
-// proof label comes off on every path, and queue time behind production work
-// is never charged.
-// ---------------------------------------------------------------------------
-
-const GUEST_NODE = 'hokon';
-const STANDING_ID = 42;
-const STANDING_LOG = 'two friends play one Forge match\n3 passed (1.2m)';
-
-const guest = (over: Partial<ManifestNode> = {}): ManifestNode =>
-	deepFreeze({ role: 'guest', labels: ['pm2-host', 'jdk21'], maxConcurrent: 4, ...over });
-
-const STANDING_SPEC: ProveSpec = {
-	node: GUEST_NODE,
-	repo: 'WolffM/hadoku-cardtable',
-	workflow: 'forge.yml',
-	job: 'forge-e2e',
-	ref: 'main',
-	evidence: 'two friends play one Forge match|\\d+ passed',
-	capability: 'jdk21',
-	labelsOverride: ['self-hosted', 'hadoku-builder', 'jdk21'],
-	runsOnInput: 'runs_on',
-	inputs: { only: 'e2e' },
-	scratchBranch: true,
-	includeGuests: true,
-};
-
-function standingWorld(sc: Scenario = {}) {
-	return world({
-		jobName: 'forge-e2e (1)',
-		log: STANDING_LOG,
-		winner: () => 'standing',
-		standing: GUEST_NODE,
-		registered: [
-			{
-				id: STANDING_ID,
-				name: GUEST_NODE,
-				status: 'online',
-				labels: ['self-hosted', 'Linux', 'X64', 'pm2-host'],
-			},
-			{ id: 43, name: 'jit-claw-4-hadoku-cardtable-j1-r1-1', labels: ['self-hosted', 'jdk21'] },
-		],
-		...sc,
-	});
-}
-
-/** sh that FAILS the run if it is ever reached: standing mode has no business on the node. */
-const noSsh = async (_node: string, cmd: string): Promise<string | null> => {
-	throw new Error(`standing mode reached for ssh: ${cmd}`);
-};
-
-const standingLabels = (w: ReturnType<typeof world>) =>
-	w.runners.get(STANDING_ID)?.labels.filter((l) => l.startsWith('proof-')) ?? [];
-
-test('standing: a guest with the opt-in is proven on its OWN registration, aimed by a proof label, with no ssh', async () => {
-	const w = standingWorld();
-	const r = await proveJob(STANDING_SPEC, { ...w.deps(guest()), sh: noSsh });
-	assert.equal(r.verdict, 'pass', JSON.stringify(r.findings));
-	assert.equal(r.ok, true);
-	assert.equal(r.mode, 'standing');
-	assert.deepEqual(r.standingRunner, { id: STANDING_ID, name: GUEST_NODE });
-	assert.equal(r.runnerName, GUEST_NODE, 'runner_name is the standing registration');
-	assert.equal(r.ranOnTarget, true);
-	assert.equal(w.log.mintBodies.length, 0, 'nothing is minted on a guest');
-	assert.deepEqual(w.log.sh, [], 'no ssh at all');
-	const label = r.labels[1];
-	assert.match(label, /^proof-[0-9a-z]+$/);
-	assert.deepEqual(r.labels, ['self-hosted', label]);
-	const body = w.log.dispatchBodies[0] as { ref: string; inputs: Record<string, string> };
-	assert.deepEqual(JSON.parse(body.inputs.runs_on), ['self-hosted', label]);
-	assert.equal(body.inputs.only, 'e2e', 'the other inputs still go');
-	assert.match(body.ref, /^canary\/hokon-/, 'still a scratch-branch canary');
-	const add = w.log.writes.indexOf(`POST /actions/runners/${STANDING_ID}/labels`);
-	const dispatch = w.log.writes.findIndex((x) => x.endsWith('/dispatches'));
-	const remove = w.log.writes.indexOf(`DELETE /actions/runners/${STANDING_ID}/labels/${label}`);
-	assert.ok(add !== -1 && add < dispatch, 'the label is added BEFORE the dispatch');
-	assert.ok(remove > dispatch, 'and removed after');
-	assert.deepEqual(standingLabels(w), [], 'the proof label is gone');
-	assert.deepEqual(r.teardown.labels, [
-		{ runner: GUEST_NODE, runnerId: STANDING_ID, label, removed: true },
-	]);
-	assert.deepEqual([...w.branches.keys()], ['main']);
-	assert.ok(
-		!w.log.writes.some((x) => x.startsWith('DELETE /actions/runners/') && !x.includes('/labels/')),
-		'the standing registration is never deregistered'
-	);
-});
-
-test('standing: the proof label is removed, and no ssh is made, on fail, timeout, exception and a miss', async () => {
-	const cases: [string, Scenario, Partial<ProveSpec>, string][] = [
-		['job failure', { conclusion: 'failure' }, {}, 'fail'],
-		['job timeout', { hang: true }, { jobTimeoutMs: 10_000 }, 'timeout'],
-		['exception (unreadable jobs API)', { broken: ['/jobs'] }, {}, 'error'],
-		['never assigned', { winner: () => 'none' }, { assignTimeoutMs: 5_000 }, 'lost-race'],
-	];
-	for (const [label, sc, spec, verdict] of cases) {
-		const w = standingWorld(sc);
-		const r = await proveJob({ ...STANDING_SPEC, ...spec }, { ...w.deps(guest()), sh: noSsh });
-		assert.equal(r.verdict, verdict, `${label}: ${JSON.stringify(r.findings)}`);
-		assert.ok(
-			w.log.writes.some((x) =>
-				x.startsWith(`DELETE /actions/runners/${STANDING_ID}/labels/proof-`)
-			),
-			`${label}: the label was removed`
-		);
-		assert.deepEqual(standingLabels(w), [], `${label} left the proof label`);
-		assert.equal(r.teardown.ok, true, label);
-		assert.deepEqual(w.log.sh, [], label);
-		assert.deepEqual([...w.branches.keys()], ['main'], label);
-	}
-});
-
-test('standing: an abort (SIGTERM) mid-job still removes the proof label', async () => {
-	const ac = new AbortController();
-	let polls = 0;
-	const w = standingWorld({ hang: true, onSleep: () => void (++polls === 6 && ac.abort()) });
-	const r = await proveJob(
-		{ ...STANDING_SPEC, jobTimeoutMs: 600_000 },
-		{ ...w.deps(guest(), { signal: ac.signal }), sh: noSsh }
-	);
-	assert.ok(r.findings.some((f) => f.rule === 'aborted'));
-	assert.deepEqual(standingLabels(w), [], 'abort left the proof label');
-	assert.deepEqual(w.log.sh, []);
-});
-
-test('standing: a label write that half-fails is still torn down', async () => {
-	const w = standingWorld({ labelAddStatus: 502 });
-	// No scratch branch and no run: the owned label ALONE must trigger the teardown.
-	const r = await proveJob(
-		{ ...STANDING_SPEC, scratchBranch: false },
-		{ ...w.deps(guest()), sh: noSsh }
-	);
-	assert.equal(r.verdict, 'error');
-	assert.ok(r.findings.some((f) => f.rule === 'label-add-failed'));
-	assert.equal(w.log.dispatches, 0, 'never dispatched without the label');
-	assert.ok(
-		w.log.writes.some((x) => x.startsWith(`DELETE /actions/runners/${STANDING_ID}/labels/proof-`)),
-		'removal is still attempted'
-	);
-});
-
-test('standing: a proof label that cannot be removed is LOUD — teardown-failed, the label named', async () => {
-	const w = standingWorld({ labelDeleteStatus: 500 });
-	const r = await proveJob(STANDING_SPEC, { ...w.deps(guest()), sh: noSsh });
-	assert.equal(r.verdict, 'teardown-failed');
-	assert.equal(r.ok, false);
-	assert.equal(r.teardown.labels[0].removed, false);
-	assert.ok(
-		r.findings.some((f) => /could not remove proof label proof-.* from hokon/.test(f.message))
-	);
-	assert.ok(r.findings.some((f) => /LEFTOVER: hokon still carries proof label/.test(f.message)));
-});
-
-test('standing: runner_name is READ — a job the API reports on another runner is lost-race, not a pass', async () => {
-	const w = standingWorld({ winner: () => 'hokon' });
-	const r = await proveJob(STANDING_SPEC, { ...w.deps(guest()), sh: noSsh });
-	assert.equal(r.verdict, 'lost-race');
-	assert.equal(r.ranOnTarget, false);
-	assert.equal(r.runnerName, HOKON);
-	assert.equal(w.log.dispatches, 1, 'one registration carries the label; a retry asks it again');
-	assert.deepEqual(standingLabels(w), []);
-});
-
-test('standing: queue time behind production work is NOT charged — duration is started_at to completed_at', async () => {
-	// 200 polls x 1 s busy: well past the 120 s a claw's proof waits for assignment.
-	const w = standingWorld({ standingBusyPolls: 200 });
-	const r = await proveJob(STANDING_SPEC, { ...w.deps(guest()), sh: noSsh });
-	assert.equal(r.verdict, 'pass', JSON.stringify(r.findings));
-	const job = w.log.completedJob as {
-		created_at: string;
-		started_at: string;
-		completed_at: string;
-	};
-	const ran = (Date.parse(job.completed_at) - Date.parse(job.started_at)) / 1000;
-	const sinceQueued = (Date.parse(job.completed_at) - Date.parse(job.created_at)) / 1000;
-	assert.ok(sinceQueued >= 200, `the fixture really queued: ${sinceQueued}s`);
-	assert.equal(r.durationSec, Math.round(ran));
-	assert.ok(r.durationSec! < 10, `only the run itself: ${r.durationSec}s`);
-});
-
-test('standing: a drained guest is still proven — production work is never stopped, and nothing drains a guest', async () => {
-	const w = standingWorld();
-	const r = await proveJob(STANDING_SPEC, { ...w.deps(guest(), { drained: true }), sh: noSsh });
-	assert.equal(r.verdict, 'pass', JSON.stringify(r.findings));
-});
-
-test('standing refusals: no opt-in, opt-in on a claw, offline, missing, unaimed, ephemeral guest — nothing touched', async () => {
-	const cases: [string, Scenario, Partial<ProveSpec>, ManifestNode, string][] = [
-		['no opt-in', {}, { includeGuests: undefined }, guest(), 'guest'],
-		['opt-in on a claw', {}, { node: 'claw-8' }, node({ labels: ['jdk21'] }), 'include-guests'],
-		[
-			'offline',
-			{ registered: [{ id: STANDING_ID, name: GUEST_NODE, status: 'offline', labels: [] }] },
-			{},
-			guest(),
-			'standing-runner-offline',
-		],
-		[
-			"missing (only another node's runner is registered)",
-			{ registered: [{ id: 43, name: 'jit-claw-4-hadoku-cardtable-j1-r1-1', labels: ['jdk21'] }] },
-			{},
-			guest(),
-			'standing-runner-missing',
-		],
-		['unaimed', {}, { runsOnInput: undefined }, guest(), 'standing-not-aimed'],
-		['ephemeral guest', {}, {}, guest({ ephemeral: true }), 'guest-ephemeral'],
-	];
-	for (const [label, sc, spec, n, rule] of cases) {
-		const w = standingWorld(sc);
-		const r = await proveJob({ ...STANDING_SPEC, ...spec }, { ...w.deps(n), sh: noSsh });
-		assert.equal(r.verdict, 'refused', `${label}: ${JSON.stringify(r.findings)}`);
-		assert.equal(r.findings[0].rule, rule, label);
-		assert.deepEqual(w.log.writes, [], `${label}: a refusal must not write to GitHub`);
-		assert.deepEqual(w.log.sh, [], label);
-	}
-});
-
-test('standing: a stale proof label refuses; --reap-stale removes it and proceeds', async () => {
-	const registered = [
-		{ id: STANDING_ID, name: GUEST_NODE, status: 'online', labels: ['self-hosted', 'proof-old1'] },
-	];
-	const w = standingWorld({ registered });
-	const r = await proveJob(STANDING_SPEC, { ...w.deps(guest()), sh: noSsh });
-	assert.equal(r.verdict, 'refused');
-	assert.equal(r.findings[0].rule, 'stale-proof-label');
-	assert.deepEqual(w.log.writes, []);
-
-	const w2 = standingWorld({ registered });
-	const r2 = await proveJob(
-		{ ...STANDING_SPEC, reapStale: true },
-		{ ...w2.deps(guest()), sh: noSsh }
-	);
-	assert.equal(r2.verdict, 'pass', JSON.stringify(r2.findings));
-	assert.deepEqual(r2.staleCleaned, ['hokon:proof-old1']);
-	assert.deepEqual(standingLabels(w2), []);
-});
-
-test('standing: the $proof record is built exactly as for a claw, naming the standing runner', async () => {
-	const w = standingWorld();
-	const r = await proveJob(STANDING_SPEC, { ...w.deps(guest()), sh: noSsh });
-	const rec = recordOf(buildProofRecord(JDK21, r, []));
-	assert.equal(rec.node, GUEST_NODE);
-	assert.equal(rec.runner, GUEST_NODE);
-	assert.equal(rec.verdict, 'pass');
-	assert.equal(rec.durationSec, r.durationSec);
-	assert.equal(rec.evidenceMatched, true);
 });

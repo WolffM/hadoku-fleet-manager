@@ -31,6 +31,8 @@ import {
 	qualifiesForCanary,
 	byRole,
 	probeRole,
+	needsRoot,
+	repairNeedsRoot,
 } from './toolchain-floor.mjs';
 import {
 	DEFAULT_MIN_AGE_MINUTES,
@@ -193,23 +195,26 @@ test('a clean node parses as clean, and empty output is not a crash', () => {
 // visible from the library — every one of the unit tests above passed
 // throughout. The observable is which FILE the run reports reading.
 //
-// Nothing is contacted: the fixture's one machine is a GUEST, which
-// converge-toolchain skips by role and then refuses to call a pass. So the
-// exit code is 1 in every case here and cannot tell the outcomes apart — the
-// floor line on stdout and the refusal on stderr are what distinguish them,
-// and that is the whole claim under test.
+// Nothing is contacted: `ssh` is a stub on PATH that fails, so the fixture's
+// one machine is unreachable and the run exits 1 in every case here. The exit
+// code cannot tell the outcomes apart — the floor line on stdout and the
+// refusal on stderr are what distinguish them, and that is the whole claim
+// under test.
 
 function fleetFixture({ profiles = null } = {}) {
 	const root = tmp();
 	const manifestDir = join(root, 'admin');
 	const stateDir = join(root, 'state');
+	const bin = join(root, 'bin');
 	mkdirSync(manifestDir, { recursive: true });
 	mkdirSync(stateDir, { recursive: true });
+	mkdirSync(bin, { recursive: true });
+	writeFileSync(join(bin, 'ssh'), '#!/bin/sh\nexit 255\n', { mode: 0o755 });
 	writeFileSync(
 		join(manifestDir, 'fleet-runner-manifest.json'),
 		JSON.stringify({
 			toolchain: { capabilities: [] },
-			machines: { 'fixture-guest.invalid': { role: 'guest', labels: [] } },
+			machines: { 'fixture-claw.invalid': { role: 'claw', labels: [] } },
 		})
 	);
 	if (profiles) {
@@ -218,19 +223,28 @@ function fleetFixture({ profiles = null } = {}) {
 			JSON.stringify({ version: 1, profiles })
 		);
 	}
-	return { root, manifestDir, stateDir };
+	return { root, manifestDir, stateDir, bin };
 }
 
-function converge(f, extraEnv = {}) {
-	const env = { ...process.env, FLEET_MANIFEST_DIR: f.manifestDir, HADOKU_STATE_DIR: f.stateDir };
+function converge(f, extraEnv = {}, args = []) {
+	const env = {
+		...process.env,
+		PATH: `${f.bin}:${process.env.PATH}`,
+		FLEET_MANIFEST_DIR: f.manifestDir,
+		HADOKU_STATE_DIR: f.stateDir,
+	};
 	delete env.FLEET_NODE_PROFILES;
 	try {
-		const out = execFileSync(process.execPath, [join(ROOT, 'scripts', 'converge-toolchain.mjs')], {
-			encoding: 'utf8',
-			env: { ...env, ...extraEnv },
-			stdio: ['ignore', 'pipe', 'pipe'],
-			timeout: 60_000,
-		});
+		const out = execFileSync(
+			process.execPath,
+			[join(ROOT, 'scripts', 'converge-toolchain.mjs'), ...args],
+			{
+				encoding: 'utf8',
+				env: { ...env, ...extraEnv },
+				stdio: ['ignore', 'pipe', 'pipe'],
+				timeout: 60_000,
+			}
+		);
 		return { code: 0, out, err: '' };
 	} catch (e) {
 		return { code: e.status ?? 1, out: String(e.stdout ?? ''), err: String(e.stderr ?? '') };
@@ -251,6 +265,33 @@ test('the toolchain floor is read through FLEET_MANIFEST_DIR, not from beside th
 		assert.match(r.out, /2 packages common to 1 profile\(s\)/);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('the backstop is converged like a claw: looked at, and failing to look at it is a finding', () => {
+	// Moved from lib/node-role-gates.test.mjs, which pinned the old skip.
+	for (const role of ['backstop', 'claw']) {
+		const f = fleetFixture({
+			profiles: { 'fixture-desktop': { toolchain: { packages: ['git'] } } },
+		});
+		try {
+			writeFileSync(
+				join(f.manifestDir, 'fleet-runner-manifest.json'),
+				JSON.stringify({
+					toolchain: { capabilities: [] },
+					machines: { 'fixture-claw.invalid': { role, labels: [] } },
+				})
+			);
+			const r = converge(f, {}, ['--json']);
+			assert.equal(r.code, 1);
+			assert.deepEqual(
+				JSON.parse(r.out).nodes.map((n) => n.status),
+				['unreadable'],
+				`a ${role} is probed`
+			);
+		} finally {
+			rmSync(f.root, { recursive: true, force: true });
+		}
 	}
 });
 
@@ -320,7 +361,7 @@ test('docker: every node before its cutover; after it, only containers: "docker"
 	assert.equal(toolAppliesTo('docker', claw([])), true, 'CI is admin: the group path');
 	assert.equal(toolAppliesTo('docker', claw([], cutOver)), false, 'no rootless daemon declared');
 	assert.equal(toolAppliesTo('docker', claw([], { ...cutOver, containers: 'docker' })), true);
-	assert.equal(toolAppliesTo('docker', { role: 'guest', containers: 'docker' }), false);
+	assert.equal(toolAppliesTo('docker', { role: 'backstop', containers: 'docker' }), true);
 	assert.equal(String(REPAIRS.docker.when), 'CI as admin, or containers: "docker"');
 });
 
@@ -360,56 +401,33 @@ test('a node that offers taskauto carries claude; one that does not neither gets
 	);
 });
 
-test('an unscoped tool applies to every managed node, and nothing applies to a guest BY DEFAULT', () => {
+test('an unscoped tool applies to every managed node, the backstop included', () => {
 	assert.equal(toolAppliesTo('rust', claw([])), true);
 	assert.equal(toolAppliesTo('rust', { labels: [] }), true, 'absent role reads as claw');
-	const guest = { role: 'guest', labels: ['taskauto'] };
-	for (const id of Object.keys(REPAIRS)) assert.equal(toolAppliesTo(id, guest), false, id);
-	assert.deepEqual(applicableRepairs(guest), []);
-	// The omitted third argument is the same as `{ includeGuests: false }` —
-	// every mutating caller (bootcamp, converge-toolchain, the refresh cycle)
-	// calls it this way and MUST keep seeing an empty guest.
-	for (const id of Object.keys(REPAIRS)) {
-		assert.equal(toolAppliesTo(id, guest, { includeGuests: false }), false, id);
-	}
-	assert.deepEqual(applicableRepairs(guest, { includeGuests: false }), []);
+	const backstop = { role: 'backstop', labels: ['taskauto'] };
+	assert.equal(toolAppliesTo('rust', backstop), true, 'unscoped applies');
+	assert.equal(toolAppliesTo('claude', backstop), true, 'taskauto is declared');
+	assert.equal(
+		toolAppliesTo('claude', { role: 'backstop', labels: [] }),
+		false,
+		'the `when` scoping still applies'
+	);
+	assert.deepEqual(
+		applicableRepairs(backstop)
+			.map(([id]) => id)
+			.sort(),
+		['claude', 'docker', 'ffmpeg', 'gh', 'jdk21', 'rust', 'rust-wasm32']
+	);
 });
 
-/**
- * `includeGuests: true` is the ONE door that lifts the guest exclusion
- * (issue #75: `fleet toolchain --machine hokon --include-guests` reported
- * `drift=false` with `tools: []`, because this exclusion was unconditional).
- * MUTATION: drop the `&& !includeGuests` in `toolAppliesTo` and the "still
- * nothing applies without the flag" half of this test fails — the door would
- * always be open, which is a guest getting REPAIRED, not just read.
- */
-test('includeGuests lifts the guest exclusion for VERIFICATION, and only when asked', () => {
-	const guest = { role: 'guest', labels: ['taskauto'] };
-	assert.equal(toolAppliesTo('rust', guest, { includeGuests: true }), true, 'unscoped applies');
-	assert.equal(toolAppliesTo('docker', guest, { includeGuests: true }), true, 'unscoped applies');
-	assert.equal(
-		toolAppliesTo('claude', guest, { includeGuests: true }),
-		true,
-		'taskauto is declared, so the scoped tool applies too'
-	);
-	const guestNoTaskauto = { role: 'guest', labels: [] };
-	assert.equal(
-		toolAppliesTo('claude', guestNoTaskauto, { includeGuests: true }),
-		false,
-		'the `when` scoping still applies — includeGuests only lifts the ROLE check'
-	);
-	const ids = applicableRepairs(guest, { includeGuests: true }).map(([id]) => id);
-	assert.deepEqual(ids.sort(), [
-		'claude',
-		'docker',
-		'ffmpeg',
-		'gh',
-		'jdk21',
-		'rust',
-		'rust-wasm32',
-	]);
-	// Still nothing without the flag, same guest object.
-	assert.deepEqual(applicableRepairs(guest), []);
+test('needsRoot/repairNeedsRoot read the script text: any sudo is root work', () => {
+	assert.equal(needsRoot('sudo -n apt-get install -y x'), true);
+	assert.equal(needsRoot('rustup target add wasm32-unknown-unknown'), false);
+	assert.equal(needsRoot(null), false);
+	assert.equal(repairNeedsRoot('gh'), true, 'apt is root');
+	assert.equal(repairNeedsRoot('rust-wasm32'), false, "the user's own rustup");
+	assert.equal(repairNeedsRoot('claude', 'link'), true, 'the link lands in /usr/local/bin');
+	assert.throws(() => repairNeedsRoot('nope'), /unknown tool/);
 });
 
 test('an unknown tool id throws rather than answering false', () => {
@@ -655,7 +673,7 @@ test('the install repair ends with the SAME link text, so the two cannot drift',
 const claw15gb = { role: 'claw', labels: [], ramGb: 15, $measured: { memTotalMb: 15936 } };
 const claw7gb = { role: 'claw', labels: [], ramGb: 7, $measured: { memTotalMb: 7849 } };
 const claw11gbDeclaredOnly = { role: 'claw', labels: [], ramGb: 11 }; // no $measured — claw-1/2/3's own shape
-const guest15gb = { role: 'guest', labels: [], ramGb: 61, $measured: { memTotalMb: 62000 } };
+const backstop61gb = { role: 'backstop', labels: [], ramGb: 61, $measured: { memTotalMb: 62000 } };
 
 test('installedMb prefers $measured.memTotalMb, falls back to declared ramGb, and is null for neither', () => {
 	assert.equal(installedMb(claw15gb), 15936);
@@ -709,11 +727,8 @@ test('the JDK goes to every claw; Maven — and with it the jdk21 LABEL — only
 	assert.equal(toolAppliesTo('maven', claw11gbDeclaredOnly), false, '11 GB is below the floor');
 	// A node nothing has ever measured does not qualify by omission.
 	assert.equal(toolAppliesTo('maven', { role: 'claw', labels: [] }), false);
-	// Never hokon, even at 61 GB measured — the guest check runs BEFORE `when`.
-	for (const id of ['jdk21', 'maven']) {
-		assert.equal(toolAppliesTo(id, guest15gb), false);
-		assert.equal(toolAppliesTo(id, guest15gb, { includeGuests: true }), true);
-	}
+	// The backstop is judged by the same floor as any claw.
+	for (const id of ['jdk21', 'maven']) assert.equal(toolAppliesTo(id, backstop61gb), true);
 });
 
 test('Maven is scoped like the existing optional capabilities — present in applicableRepairs only above the floor', () => {
@@ -1341,7 +1356,7 @@ test('qualifiesForCanary never grants the label — it is a pure predicate over 
  * doctor and bootcamp read — and nothing else is. claw-4's pm2 setup was a
  * hand-run script on 2026-10-12 that nothing would rebuild.
  */
-test('#6: pm2, its boot unit and cloudflared apply to a services host only — never a guest, never a plain claw', () => {
+test('#6: pm2, its boot unit and cloudflared apply to a services host only — never a plain claw', () => {
 	const ids = (node) => applicableRepairs(node).map(([id]) => id);
 	const host = ids({ role: 'claw', services: 'pm2' });
 	for (const id of ['pm2', 'pm2-boot', 'cloudflared']) assert.ok(host.includes(id), id);
@@ -1349,9 +1364,10 @@ test('#6: pm2, its boot unit and cloudflared apply to a services host only — n
 		host.indexOf('pm2') < host.indexOf('pm2-boot'),
 		'the boot unit runs pm2, so pm2 comes first'
 	);
-	for (const node of [{ role: 'claw' }, { role: 'guest', services: 'pm2' }])
-		for (const id of ['pm2', 'pm2-boot', 'cloudflared'])
-			assert.ok(!ids(node).includes(id), `${id} on ${JSON.stringify(node)}`);
+	for (const id of ['pm2', 'pm2-boot', 'cloudflared']) {
+		assert.ok(!ids({ role: 'claw' }).includes(id), id);
+		assert.ok(ids({ role: 'backstop', services: 'pm2' }).includes(id), `${id} on the backstop`);
+	}
 });
 
 /** Runs the pm2-boot repair against stub `pm2`, `sudo` and `systemctl`; returns what each was asked. */

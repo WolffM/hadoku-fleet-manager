@@ -29,8 +29,9 @@
  * code is non-zero when any node is not ok — the document is still printed
  * whole, because under `--json` parseable stdout wins over the exit code.
  *
- * A GUEST IS NOT PROBED. It is listed under `skippedByRole` so its absence is
- * visible; a tenant has no business placing on one.
+ * THE BACKSTOP IS NOT PROBED. It is the fleet's emergency backstop, not
+ * capacity, and a tenant has no business placing on it. It is listed under
+ * `skippedByRole` (`role: 'backstop'`) so its absence is visible.
  *
  * USAGE
  *   fleet node-status            human summary
@@ -45,7 +46,7 @@ import { drainNotices, effectiveDrains, HOSTING_NOTICE_MS } from '../dist/runner
 import { doctorFindings } from './lib/doctor-findings.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
-import { loadManifest, runOn, selectNodes } from './lib/fleet-exec.mjs';
+import { loadManifest, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import {
 	NO_TENANT,
 	judgeHosting,
@@ -56,6 +57,7 @@ import {
 } from './lib/hosting.mjs';
 import { readRevocations } from '../dist/capability-revocations.js';
 import { hostingNotices, readHostingDoc } from '../dist/runners/hosting-record.js';
+import { isBackstopNode } from '../dist/lib/node-role.js';
 import { nodeUser } from '../dist/lib/node-users.js';
 import {
 	judgeNodeUsers,
@@ -93,7 +95,12 @@ export const NODE_STATUS_CONTRACT = 1;
 const NOW = Date.now();
 const iso = (ms) => new Date(ms).toISOString();
 const manifest = loadManifest();
-const { nodes, skippedByRole } = selectNodes(manifest, { argv: process.argv });
+const nodes = selectMachines(manifest, { where: (m) => !isBackstopNode(m) });
+const skippedByRole = selectMachines(manifest, { where: isBackstopNode }).map(([node]) => ({
+	node,
+	role: 'backstop',
+	why: 'the emergency backstop and the production host, not capacity: nothing is placed on it',
+}));
 
 /**
  * `--max-age <sec>`: a tenant that polls every cycle may take the last live

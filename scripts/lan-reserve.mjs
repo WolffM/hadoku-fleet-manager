@@ -61,14 +61,11 @@ if (!doc.machines?.[NODE]) {
 	die(`${NODE} is not in ${MANIFEST}. Enrol it first (\`fleet enroll ${NODE} --write\`).`);
 }
 
-// A GUEST IS REACHED, DELIBERATELY. The operator named the node, the probe only
-// reads interface addresses, and recording hokon's reservation is the operator's
-// own request (#65) — it changes nothing on the box.
+// The probe only reads interface addresses; it changes nothing on the box.
 const res = await runOn(NODE, INTERFACE_PROBE, {
 	as: 'admin',
 	timeoutMs: 20_000,
 	connectTimeout: 8,
-	includeGuests: true,
 });
 if (!res.ok) die(`could not read ${NODE}'s interfaces: ${res.error ?? res.stderr.trim()}`);
 const ifaces = parseInterfaces(res.stdout);

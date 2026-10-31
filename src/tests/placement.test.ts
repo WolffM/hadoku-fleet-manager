@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import {
 	choosePlacement,
 	isForkSafe,
-	GUEST_SOLE_CARRIER_SLOTS,
+	BACKSTOP_SOLE_CARRIER_SLOTS,
 	HEAVY_HOLD_SEC,
 	slowKind,
 	slowReposOn,
@@ -1801,13 +1801,13 @@ test('WARM PATH, #8: a fill onto a node where the repo has a slow kind is withhe
 });
 
 // ---------------------------------------------------------------------------
-// #15: overflow may not take a guest's last slot, or its last job of memory
+// #15: overflow may not take a backstop's last slot, or its last job of memory
 // ---------------------------------------------------------------------------
 
 /** hokon as the backstop holds it: offered `hadoku-builder` beside its own labels. */
-const guest = (over: Partial<NodeState> = {}): NodeState =>
+const backstop = (over: Partial<NodeState> = {}): NodeState =>
 	m('hokon', {
-		onDemandGuest: true,
+		onDemandBackstop: true,
 		labels: ['self-hosted', 'hadoku-builder', 'jdk21', 'av1-nvenc', 'pm2-host'],
 		maxConcurrent: 4,
 		freeMb: 40_000,
@@ -1819,9 +1819,9 @@ const guest = (over: Partial<NodeState> = {}): NodeState =>
 const fullClaw = (over: Partial<NodeState> = {}): NodeState =>
 	m('claw-8', { labels: ['self-hosted', 'hadoku-builder', 'jdk21'], liveUnits: 3, ...over });
 
-test('#15: a guest at 3/4 refuses overflow, and still admits the job only it can run', () => {
-	assert.equal(GUEST_SOLE_CARRIER_SLOTS, 1);
-	const nodes = [fullClaw(), guest({ liveUnits: 3 })];
+test('#15: a backstop at 3/4 refuses overflow, and still admits the job only it can run', () => {
+	assert.equal(BACKSTOP_SOLE_CARRIER_SLOTS, 1);
+	const nodes = [fullClaw(), backstop({ liveUnits: 3 })];
 	const order = ['claw-8', 'hokon'];
 
 	const forge = choosePlacement(order, nodes, ['self-hosted', 'hadoku-builder', 'jdk21']);
@@ -1836,18 +1836,18 @@ test('#15: a guest at 3/4 refuses overflow, and still admits the job only it can
 	assert.equal(gpu.node, 'hokon', 'no other node offers av1-nvenc');
 });
 
-test('#15: under 3/4, overflow still lands on the guest — the backstop keeps working', () => {
+test('#15: under 3/4, overflow still lands on the backstop — the backstop keeps working', () => {
 	const p = choosePlacement(
 		['claw-8', 'hokon'],
-		[fullClaw(), guest({ liveUnits: 2 })],
+		[fullClaw(), backstop({ liveUnits: 2 })],
 		['self-hosted', 'hadoku-builder']
 	);
 	assert.equal(p.node, 'hokon');
 });
 
-test('#15: overflow must leave one more job of memory above the guest floor', () => {
+test('#15: overflow must leave one more job of memory above the backstop floor', () => {
 	// The 10-27 shape: 9,120 MB free against an 8,192 MB floor.
-	const tight = guest({ liveUnits: 1, freeMb: 16_000 });
+	const tight = backstop({ liveUnits: 1, freeMb: 16_000 });
 	const p = choosePlacement(['claw-8', 'hokon'], [fullClaw(), tight], ['hadoku-builder']);
 	assert.equal(p.node, undefined);
 	assert.equal(
@@ -1859,17 +1859,17 @@ test('#15: overflow must leave one more job of memory above the guest floor', ()
 	assert.equal(gpu.node, 'hokon', 'the sole-carrier job gets the memory the reserve kept');
 });
 
-test('#15: a claw that is down or drained is no home — the job is the guest’s alone, and admitted', () => {
+test('#15: a claw that is down or drained is no home — the job is the backstop’s alone, and admitted', () => {
 	for (const claw of [fullClaw({ healthy: false }), fullClaw({ drained: true })]) {
-		const p = choosePlacement(['claw-8', 'hokon'], [claw, guest({ liveUnits: 3 })], ['jdk21']);
+		const p = choosePlacement(['claw-8', 'hokon'], [claw, backstop({ liveUnits: 3 })], ['jdk21']);
 		assert.equal(p.node, 'hokon');
 	}
 });
 
-test('#15: a claw is never reserved, and a single-slot guest keeps nothing back', () => {
+test('#15: a claw is never reserved, and a single-slot backstop keeps nothing back', () => {
 	const claw = m('claw-2', { labels: ['hadoku-builder'], liveUnits: 2, maxConcurrent: 3 });
 	const other = fullClaw();
 	assert.equal(choosePlacement(['claw-2'], [claw, other], ['hadoku-builder']).node, 'claw-2');
-	const one = guest({ maxConcurrent: 1 });
+	const one = backstop({ maxConcurrent: 1 });
 	assert.equal(choosePlacement(['hokon'], [other, one], ['hadoku-builder']).node, 'hokon');
 });

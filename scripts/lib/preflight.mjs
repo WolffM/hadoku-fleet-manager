@@ -89,12 +89,13 @@
  *      get easier to pass the worse the failure gets.
  *
  * There is exactly one more way a finding becomes advisory, and it is a
- * DECLARED SCOPE rather than a severity judgement: {@link guestAdvisory}. A
- * machine the manifest marks `role: "guest"` is out of the fleet chain by the
- * operator's decision, so its node health does not fail this run. It does not
+ * DECLARED SCOPE rather than a severity judgement: {@link backstopAdvisory}. A
+ * machine the manifest marks `role: "backstop"` is the production host, whose
+ * reboots and kernel are the operator's, so its node health does not fail
+ * this run. It does not
  * weaken property (3), because it is not a function of how bad the reading is —
  * and it does not weaken property (2) either, because
- * {@link GUEST_BLOCKING_CATEGORIES} keeps "could not look at it" blocking.
+ * {@link BACKSTOP_BLOCKING_CATEGORIES} keeps "could not look at it" blocking.
  */
 
 import { JIT_PREFIX, WARM_PREFIX } from '../../dist/runners/ephemeral.js';
@@ -139,57 +140,57 @@ export function advisoryFindings(findings) {
 }
 
 /**
- * Finding categories that stay BLOCKING even on a guest.
+ * Finding categories that stay BLOCKING even on the backstop.
  *
- * A guest is in scope for exactly ONE question — is its registration online
- * with its labels — and that question cannot be answered about a box nothing
- * can reach. So "could not look at it at all" keeps its teeth; everything else
- * about a guest is advisory. Keeping this narrow is what stops the role from
- * becoming property (2)'s inverse: an unreachable node muted by config.
+ * The backstop has to be reachable to be any use in an emergency, and nothing
+ * about a box nothing can reach is known. So "could not look at it at all"
+ * keeps its teeth; everything else about it is advisory. Keeping this narrow is
+ * what stops the role from becoming property (2)'s inverse: an unreachable node
+ * muted by config.
  *
- * `check-label-floor` is the gate that actually asks the in-scope question, and
- * it asks the GITHUB API, not the box — CLAUDE.md's "the reader for a facet may
- * not read what the writer wrote". Nothing here weakens it.
+ * `check-label-floor` asks whether its registrations are online with their
+ * labels, and it asks the GITHUB API, not the box — CLAUDE.md's "the reader
+ * for a facet may not read what the writer wrote". Nothing here weakens it.
  */
-export const GUEST_BLOCKING_CATEGORIES = new Set(['unreachable']);
+export const BACKSTOP_BLOCKING_CATEGORIES = new Set(['unreachable']);
 
 /**
- * Re-class a GUEST's findings as advisory — the one place the role changes an
- * outcome in this file.
+ * Re-class the BACKSTOP's findings as advisory — the one place the role changes
+ * an outcome in this file.
  *
- * WHY A ROLE AND NOT A PER-GATE EXCEPTION. hokon is the production host and a
- * guest (operator, 2026-09-14): it lends the fleet a backstop registration and
- * is otherwise none of the fleet's business. Its staged kernel paged `@here`
- * every morning from 2026-08-30, and `REBOOT_ESCALATE_DAYS` only postpones that
- * to 2026-09-29 — the escalation is right for a claw the fleet may reboot and
- * wrong for a box the fleet may not touch. Three gates needed the same
- * exemption; one manifest key gives it to all three.
+ * WHY A ROLE AND NOT A PER-GATE EXCEPTION. hokon is the backstop and the
+ * production host (mgmt-api, the tunnel, vaultwarden): when it reboots, and
+ * onto which kernel, is the operator's call, never the fleet's. Its staged
+ * kernel paged `@here` every morning from 2026-08-30, and
+ * `REBOOT_ESCALATE_DAYS` only postpones that — the escalation is right for a
+ * claw the fleet may reboot and wrong for the production host. Several gates
+ * need the same exemption; one manifest key gives it to all of them.
  *
- * THE FINDING IS NOT DROPPED. It keeps its `why`, gains `role: 'guest'` and
+ * THE FINDING IS NOT DROPPED. It keeps its `why`, gains `role: 'backstop'` and
  * `wasBlocking`, and still prints, still rides in `--json`, still reaches the
  * digest. Advisory means "does not fail the run", never "was not observed" —
  * dropping it would make an operator's deliberate scoping look like a clean box.
  *
- * @param findings  every finding from the sweep.
- * @param guests    guest node names (`guestNodeNames` over the manifest).
+ * @param findings   every finding from the sweep.
+ * @param backstops  backstop node names (`backstopNodeNames` over the manifest).
  */
-export function guestAdvisory(findings, guests = new Set()) {
-	const set = guests instanceof Set ? guests : new Set(guests ?? []);
+export function backstopAdvisory(findings, backstops = new Set()) {
+	const set = backstops instanceof Set ? backstops : new Set(backstops ?? []);
 	if (!set.size) return findings ?? [];
 	return (findings ?? []).map((f) => {
 		// A finding with no `node` is not ABOUT a node — token expiry, a runner
 		// version keyed by repo. A role cannot speak for it.
 		if (!f?.node || !set.has(f.node)) return f;
-		if (f.class === ADVISORY || GUEST_BLOCKING_CATEGORIES.has(f.category)) return f;
+		if (f.class === ADVISORY || BACKSTOP_BLOCKING_CATEGORIES.has(f.category)) return f;
 		return {
 			...f,
 			class: ADVISORY,
-			role: 'guest',
+			role: 'backstop',
 			wasBlocking: true,
 			why:
-				`${f.why} [advisory: ${f.node} is a GUEST — it lends the fleet a registration and ` +
-				"nothing else, so its node health is not the fleet chain's to page on. " +
-				'`check-label-floor` still requires its registration online with its labels.]',
+				`${f.why} [advisory: ${f.node} is the BACKSTOP and the production host — its ` +
+				"reboots and kernel are the operator's, so its node health is not the fleet " +
+				"chain's to page on. `check-label-floor` still requires its registrations online with their labels.]",
 		};
 	});
 }

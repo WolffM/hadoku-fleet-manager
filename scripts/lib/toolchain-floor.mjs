@@ -10,7 +10,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 
 import { nodeOffer } from '../../dist/lib/capability-offer.js';
-import { hostsCiDocker, hostsPm2Services, isGuestNode } from '../../dist/lib/node-role.js';
+import { hostsCiDocker, hostsPm2Services } from '../../dist/lib/node-role.js';
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
 import { DEFAULT_MIN_AGE_MINUTES, dispatchLookup, parseVersion } from './tool-release.mjs';
 
@@ -80,7 +80,7 @@ const pm2ServicesHost = (node) => hostsPm2Services(node);
  * stateRoot is anything else.
  */
 export const SERVICE_STATE_DIR = 'srv-data';
-/** Every node `toolAppliesTo` lets through — a guest is already filtered out before `when` runs. */
+/** Every node. */
 const everyClaw = () => true;
 
 /**
@@ -823,6 +823,22 @@ export function linkScript(id) {
 	return r.link ?? null;
 }
 
+/** Does running this script need root? Any `sudo` in it does. */
+export function needsRoot(script) {
+	return /\bsudo\b/.test(String(script ?? ''));
+}
+
+/**
+ * Does this tool's install (`action` anything but `link`) or link need root?
+ * Read off the script text, so a repair that gains a `sudo` is gated with no
+ * second list to keep in step.
+ */
+export function repairNeedsRoot(id, action = 'install') {
+	const r = REPAIRS[id];
+	if (!r) throw new Error(`unknown tool ${JSON.stringify(id)}`);
+	return needsRoot(action === 'link' ? r.link : r.repair);
+}
+
 /** Minutes a release must have been public before this tool is moved to it. */
 export function minAgeOf(tool) {
 	return Number.isFinite(tool?.minAge) && tool.minAge >= 0 ? tool.minAge : DEFAULT_MIN_AGE_MINUTES;
@@ -885,9 +901,7 @@ export async function resolveInstallTarget(tool, opts = {}) {
 /**
  * Does this tool apply to this node?
  *
- *   - A GUEST is never touched by the fleet chain by DEFAULT (hokon) — the
- *     fleet never converges, repairs or bootcamps it.
- *   - No `when` => every managed node (every included guest, too).
+ *   - No `when` => every managed node, the backstop included.
  *   - `when` AS A STRING => the node must OFFER that capability per
  *     `nodeOffer` — the same derivation `ephemeral-tick.ts` mints with.
  *     `taskauto` is ASSIGNED, not probed, so bootcamp's `$capabilities.earned`
@@ -896,28 +910,17 @@ export async function resolveInstallTarget(tool, opts = {}) {
  *   - `when` AS A FUNCTION `(node) => boolean` => a predicate over the node's
  *     own manifest fields, for a scoping rule that is not itself a capability
  *     — `jdk21`/`maven`'s installed-RAM floor (`installedRamAtLeast`) is the
- *     case that exists. It runs AFTER the guest check below, so it never
- *     needs to re-derive "never hokon" itself.
- *
- * `includeGuests` is the ONE door that lifts the guest exclusion, and it exists
- * for exactly one caller: the read-only doctor (`check-fleet-toolchain.mjs`),
- * asking "could this guest take over" rather than "repair this guest" — the
- * guest rule covers MUTATION, not VERIFICATION (operator, 2026-10-01). Every
- * mutating caller (bootcamp, `converge-toolchain`, the refresh cycle) leaves it
- * at the default `false`, so this stays exactly as uninvolved with a guest as
- * it always was for anything that installs or repairs.
+ *     case that exists.
  *
  * INVARIANT 2: a node for which this is false neither gets the tool nor is
  * reported broken for lacking it. Consumers MUST filter through this.
  *
  * @param {string} id     REPAIRS key
  * @param {object} node   a manifest machine entry (`labels`, `role`, `$capabilities`)
- * @param {{includeGuests?: boolean}} [opts]
  */
-export function toolAppliesTo(id, node, { includeGuests = false } = {}) {
+export function toolAppliesTo(id, node) {
 	const tool = REPAIRS[id];
 	if (!tool) throw new Error(`unknown tool ${JSON.stringify(id)}`);
-	if (isGuestNode(node) && !includeGuests) return false;
 	if (!tool.when) return true;
 	if (typeof tool.when === 'function') return tool.when(node ?? {});
 	return nodeOffer(node ?? {}, { eligible: false }).includes(tool.when);
@@ -943,8 +946,8 @@ export function byRole(tools) {
 }
 
 /** `[id, tool]` for every REPAIRS entry that applies to this node. */
-export function applicableRepairs(node, opts = {}) {
-	return Object.entries(REPAIRS).filter(([id]) => toolAppliesTo(id, node, opts));
+export function applicableRepairs(node) {
+	return Object.entries(REPAIRS).filter(([id]) => toolAppliesTo(id, node));
 }
 
 /**

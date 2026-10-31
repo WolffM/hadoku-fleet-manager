@@ -52,7 +52,6 @@
  *   fleet retire claw-9                    # DRY RUN: the plan, nothing done
  *   fleet retire claw-9 --confirm           # do it
  *   fleet retire claw-9 --confirm --reason "psu failure"
- *   fleet retire hokon --confirm --include-guests
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -68,11 +67,11 @@ import { landingLine } from './lib/manifest-target.mjs';
 import { deferralFor, deferralNote, readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
 import { mintToken, listRunners, ghWrite } from './lib/reconcile-apply.mjs';
 import { removeScript } from './lib/reconcile-scripts.mjs';
+import { maySudo } from './lib/operator-sudo.mjs';
 import { stateDir } from './lib/paths.mjs';
 // The BUILT copies, for the same reason every other script in this door reads
 // a decision from `dist/` rather than keeping a second implementation that
 // can drift from it (docs/VOCABULARY.md: "one question, one answer").
-import { isGuestNode } from '../dist/lib/node-role.js';
 import { nodeOf } from '../dist/runners/census.js';
 import { drainStatus, effectiveDrains } from '../dist/runners/drain.js';
 import { writeFileAtomic } from '../dist/lib/atomic-json.js';
@@ -94,7 +93,6 @@ function die(message, extra = {}) {
 const NODE = parsed.positionals[0] ?? null;
 if (!NODE) die('name a node. See --help.');
 const CONFIRM = parsed.has('--confirm');
-const INCLUDE_GUESTS = parsed.has('--include-guests');
 const NO_PUSH = parsed.has('--no-push');
 const DEFAULT_REASON = 'retiring — see docs/runbooks/retire-node.md';
 const REASON = parsed.value('--reason') ?? DEFAULT_REASON;
@@ -126,15 +124,6 @@ if (alreadyRetired) {
 	die(
 		`${NODE} is BOTH declared in ${MANIFEST} AND on the retired-name ledger. ` +
 			`This should be impossible — fix the manifest by hand before retiring it again.`
-	);
-}
-
-if (isGuestNode(machine) && !INCLUDE_GUESTS) {
-	die(
-		`${NODE} is a GUEST and the fleet chain does not decide a guest's availability — ` +
-			`it is here when it is needed, and otherwise none of the fleet's business ` +
-			`(operator, 2026-09-14). Re-run with --include-guests if you really mean to retire it.`,
-		{ node: NODE, guest: true }
 	);
 }
 
@@ -343,18 +332,17 @@ if (verdict !== 'drained') {
 // ── deregister every registration this node holds ──────────────────────────
 
 async function deregisterAll(node, regs) {
-	const guest = isGuestNode(machine);
+	const sudo = maySudo(machine);
 	const removed = [];
 	const failed = [];
 	for (const { repo, id, name } of regs) {
 		const runnerId = Number.isInteger(id) ? id : null;
 		try {
 			const token = mintToken(repo, 'remove');
-			let res = await runOn(node, removeScript({ repo, token, guest, runnerId }), {
+			let res = await runOn(node, removeScript({ repo, token, sudo, runnerId }), {
 				as: 'admin',
 				timeoutMs: 15 * 60_000,
 				maxBuffer: 8 * 1024 * 1024,
-				includeGuests: INCLUDE_GUESTS,
 			});
 			let byId = false;
 			if (!res.ok && /DEREGISTER_FAILED/.test(res.stderr) && runnerId !== null) {
@@ -363,12 +351,11 @@ async function deregisterAll(node, regs) {
 					byId = true;
 					res = await runOn(
 						node,
-						removeScript({ repo, token, guest, runnerId, deregistered: true }),
+						removeScript({ repo, token, sudo, runnerId, deregistered: true }),
 						{
 							as: 'admin',
 							timeoutMs: 15 * 60_000,
 							maxBuffer: 8 * 1024 * 1024,
-							includeGuests: INCLUDE_GUESTS,
 						}
 					);
 				} else {

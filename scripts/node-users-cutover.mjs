@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { ciIsSeparate, cutoverCiUser, nodeHome, nodeUser } from '../dist/lib/node-users.js';
-import { isGuestNode } from '../dist/lib/node-role.js';
+import { isBackstopNode } from '../dist/lib/node-role.js';
 import { hostingsOn, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { readDrainDoc, readDrains } from './lib/expected-down.mjs';
 import { runOn } from './lib/fleet-exec.mjs';
@@ -153,7 +153,11 @@ async function main() {
 	const doc = JSON.parse(readFileSync(MANIFEST, 'utf8'));
 	const m = doc.machines?.[NODE];
 	if (!m) die(`${NODE} is not in ${MANIFEST}`);
-	if (isGuestNode(m)) die(`${NODE} is a guest: the fleet does not provision its users`);
+	if (isBackstopNode(m))
+		die(
+			`${NODE} is the backstop and the production host: its CI-user cutover is done by hand, ` +
+				'not by this command'
+		);
 	if (BACK && !ciIsSeparate(m)) die(`${NODE} is not cut over (no users.ci): nothing to roll back`);
 	const ci = ciIsSeparate(m) ? nodeUser(m, 'ci') : cutoverCiUser(m);
 	const flipped = { ...m, users: { ...(m.users ?? {}), ci } };

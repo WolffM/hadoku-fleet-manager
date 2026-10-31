@@ -66,7 +66,7 @@ function sourceFiles() {
  * The hop is limited to that case DELIBERATELY. Following imports from every
  * subcommand made this test pass while `fleet benchmark --machine` — a real
  * defect, the same one as #49 — was still in the tree, because benchmark
- * imports lib/fleet-exec.mjs and THAT mentions `--machine` for the guest gate.
+ * imports lib/fleet-exec.mjs and THAT mentioned `--machine` for a role gate.
  * A wider search is not a stricter test; here it was the difference between
  * catching the bug and reporting nothing at all.
  */

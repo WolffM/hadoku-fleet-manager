@@ -501,12 +501,11 @@ test('a manifest that selects ZERO nodes fails, rather than reporting "0 machine
 	});
 });
 
-test('zero nodes probed is fine when every node was skipped as a guest — and it is said', () => {
-	withFixture({ machines: { [NODE]: { role: 'guest' } } }, (fx) => {
+test('the backstop is probed like a claw', () => {
+	withFixture({ machines: { [NODE]: { role: 'backstop' } } }, (fx) => {
 		const r = run(fx);
 		assert.equal(r.code, 0, r.out);
-		assert.match(r.out, /fixture-node \[skipped: guest\]/);
-		assert.equal(attempts(fx.sshLog, NODE), 0, 'a guest is never reached');
+		assert.equal(attempts(fx.sshLog, NODE), 2, 'free -m and list-units both reached the node');
 	});
 });
 

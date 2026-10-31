@@ -389,26 +389,6 @@ if (!reserve.ok) {
 	process.exit(1);
 }
 
-/**
- * A GUEST IS DELIBERATELY IN SCOPE HERE — `includeGuests` below, on purpose.
- *
- * A guest lends the fleet a registration and is otherwise none of the fleet
- * chain's business (operator, 2026-09-14). THE REGISTRATION IS THIS FILE'S WHOLE
- * SUBJECT: does every registration GitHub lists have a live install behind it,
- * and does every install have a registration. The guest is the fleet's backstop
- * and holds the standing registration for essentially the whole roster, so its
- * side of that question is most of the question.
- *
- * SKIPPING IT WOULD MANUFACTURE FINDINGS, not avoid work. `FLEET_WIDE` below
- * turns the registration-side rules on only when the probe saw the WHOLE fleet,
- * because "no node holds an install for this repo" is a claim about every node at
- * once. A guest that was reached but not probed would leave its installs out of
- * `installs`, and every one of its registrations would be reported
- * registered-no-install — a mutation test already caught that exact shape under
- * `--machine`. The probe reads unit and directory listings; it installs nothing,
- * removes nothing and asks for no sudo.
- */
-const INCLUDE_GUESTS = true;
 const repos = coverage.repos;
 
 // ---- node truth -------------------------------------------------------
@@ -447,7 +427,7 @@ function activeWarmUnits(out) {
 async function probeNode(machine) {
 	let error = 'no attempt was made';
 	for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
-		const r = await runOn(machine, probe, { as: 'ci', includeGuests: INCLUDE_GUESTS });
+		const r = await runOn(machine, probe, { as: 'ci' });
 		if (r.out.includes('PROBE-END')) return { ok: true, out: r.out };
 		const why =
 			r.out.trim().replace(/\s+/g, ' ').slice(0, 160) ||

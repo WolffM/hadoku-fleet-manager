@@ -280,11 +280,11 @@ function judgeOfferers(
  * `placement`.
  *
  * Every node the dispatcher mints on: the `ephemeral: true` claws, and an
- * on-demand guest (#120). The guest offers `hadoku-builder` here only while the
+ * on-demand backstop (#120). The backstop offers `hadoku-builder` here only while the
  * backstop holds it — `held`, the same answer the dispatcher's `offerFor`
  * reads — and its own labels (`taskauto`, `av1-nvenc`, ...) always: since its
  * standing runners were retired, a mint is the only thing that serves them,
- * so leaving it out would read every such job as a coverage gap. A guest that
+ * so leaving it out would read every such job as a coverage gap. A backstop that
  * keeps standing registrations is not here; arm (a) counts those from GitHub's
  * listing.
  */
@@ -294,7 +294,7 @@ export function buildMintView(input: {
 	drained: ReadonlySet<string>;
 	isSick: (node: string) => boolean;
 	probe: { nodes?: Record<string, { reachable?: boolean; sick?: boolean }> } | null;
-	/** Is this on-demand guest held by the backstop? Absent reads as no. */
+	/** Is this on-demand backstop held by the backstop controller? Absent reads as no. */
 	held?: (node: string) => boolean;
 }): MintView {
 	const nodes: MintingNode[] = [];

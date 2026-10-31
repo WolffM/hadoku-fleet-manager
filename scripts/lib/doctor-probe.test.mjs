@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
 	doctorProbe,
-	GUEST_CADENCE_NO_LOAD_WHY,
+	BACKSTOP_CADENCE_NO_LOAD_WHY,
 	seedCachePathsFromManifest,
 } from './doctor-probe.mjs';
 
@@ -126,9 +126,9 @@ void test('seedCachePathsFromManifest: a malformed cache value is dropped, not g
 	]);
 });
 
-test('a --cadence guest probe never loads the box, and says why in the record', () => {
-	const probe = doctorProbe({ loadSeconds: 0, noLoadWhy: GUEST_CADENCE_NO_LOAD_WHY });
-	assert.ok(!probe.includes('sha512sum'), 'no load generator may reach a guest');
-	assert.ok(probe.includes(GUEST_CADENCE_NO_LOAD_WHY));
+test('a --cadence backstop probe never loads the box, and says why in the record', () => {
+	const probe = doctorProbe({ loadSeconds: 0, noLoadWhy: BACKSTOP_CADENCE_NO_LOAD_WHY });
+	assert.ok(!probe.includes('sha512sum'), 'no load generator may reach the backstop');
+	assert.ok(probe.includes(BACKSTOP_CADENCE_NO_LOAD_WHY));
 	assert.throws(() => doctorProbe({ loadSeconds: 0, noLoadWhy: 'x"; rm -rf ~; "' }), /unsafe/);
 });

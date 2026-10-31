@@ -19,7 +19,7 @@ import { unitMemoryMaxMb } from '../runners/ephemeral.js';
 import { choosePlacement, type NodeState } from '../runners/placement.js';
 import { nodeOf } from '../runners/census.js';
 import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
-import { jobReserve, loadRepoReserves, withoutGuests } from '../runners/ephemeral-shared.js';
+import { jobReserve, loadRepoReserves, withoutBackstops } from '../runners/ephemeral-shared.js';
 import { setBackstopHold } from '../runners/backstop-hold.js';
 import { SATURATED_QUEUED_MS } from '../runners/queue-discovery.js';
 
@@ -969,23 +969,23 @@ test('#76: loadRepoReserves reads lowerBound, and false is explicit rather than 
 	}
 });
 
-// --- a mint never targets a guest (Wave 3g J2) --------------------------------
+// --- a mint never targets a backstop (Wave 3g J2) --------------------------------
 
-test('withoutGuests drops a guest the manifest marked ephemeral, and nothing else', () => {
+test('withoutBackstops drops a backstop the manifest marked ephemeral, and nothing else', () => {
 	const input = {
 		fleetProbe: new Map(),
 		ephemeral: new Set(['claw-3', 'hokon']),
-		nodes: { 'claw-3': { role: 'claw' }, hokon: { role: 'guest' } },
+		nodes: { 'claw-3': { role: 'claw' }, hokon: { role: 'backstop' } },
 		isSick: () => false,
 		repos: [],
 	};
-	assert.deepEqual([...withoutGuests(input).ephemeral], ['claw-3']);
+	assert.deepEqual([...withoutBackstops(input).ephemeral], ['claw-3']);
 	const clean = { ...input, ephemeral: new Set(['claw-3']) };
-	assert.equal(withoutGuests(clean), clean, 'no guest, no copy');
+	assert.equal(withoutBackstops(clean), clean, 'no backstop, no copy');
 });
 
-test('a guest marked ephemeral is never probed or minted on', async () => {
-	// The whole tick, not the helper: a guest in the ephemeral set must not see
+test('a backstop marked ephemeral is never probed or minted on', async () => {
+	// The whole tick, not the helper: a backstop in the ephemeral set must not see
 	// even the `free -m` ssh. hokon is not `ephemeral: true` today — this is the
 	// manifest edit that would otherwise have minted on the production host.
 	const r = nodeRig({ labels: ['hadoku-builder'], maxConcurrent: 3, minFreeMb: 2048 });
@@ -996,7 +996,7 @@ test('a guest marked ephemeral is never probed or minted on', async () => {
 			['hokon', { reachable: true, busyRepos: new Map() }],
 		]),
 		ephemeral: new Set(['claw-3', 'hokon']),
-		nodes: { ...r.input.nodes, hokon: { role: 'guest', labels: ['hadoku-builder'] } },
+		nodes: { ...r.input.nodes, hokon: { role: 'backstop', labels: ['hadoku-builder'] } },
 	};
 	const touched: string[] = [];
 	const sh = async (n: string, cmd: string) => {
@@ -1004,7 +1004,7 @@ test('a guest marked ephemeral is never probed or minted on', async () => {
 		return r.sh(n, cmd);
 	};
 	await dispatchEphemeral(input as never, 'tok', GH, sh as never, r.run as never);
-	assert.equal(touched.includes('hokon'), false, 'no ssh reaches the guest');
+	assert.equal(touched.includes('hokon'), false, 'no ssh reaches the backstop');
 	assert.deepEqual(
 		r.seen[0].nodes?.map((n) => (n as unknown as { name: string }).name),
 		['claw-3'],
@@ -1012,16 +1012,16 @@ test('a guest marked ephemeral is never probed or minted on', async () => {
 	);
 });
 
-// --- an ON-DEMAND guest is minted for, last and gated (#120) -----------------
+// --- an ON-DEMAND backstop is minted for, last and gated (#120) -----------------
 //
 // Operator, 2026-10-19: "the runners get brought online the same way the JIT
-// process does. not having standing runners squatting on ram." The guest is
+// process does. not having standing runners squatting on ram." The backstop is
 // still never general capacity — it stays out of `ephemeral`, out of the warm
 // cache, and out of the census — but it is a mint TARGET: for the work only its
 // labels fit, and for `hadoku-builder` while the backstop holds it.
 
 const HOKON_ON_DEMAND = {
-	role: 'guest',
+	role: 'backstop',
 	mint: 'on-demand',
 	labels: ['pm2-host', 'taskauto'],
 	maxConcurrent: 4,
@@ -1029,7 +1029,7 @@ const HOKON_ON_DEMAND = {
 	slice: { name: 'ci-runner.slice', maxMb: 16384, unitMaxMb: 8192 },
 };
 
-function guestRig() {
+function backstopRig() {
 	const r = nodeRig({ labels: ['hadoku-builder'], maxConcurrent: 3, minFreeMb: 2048 });
 	const input = {
 		...r.input,
@@ -1065,10 +1065,10 @@ function guestRig() {
 	return { input, run, sh, calls, claw: r };
 }
 
-test('#120: an on-demand guest is a mint target, placed AFTER every claw — even a BUSY one', async () => {
-	const g = guestRig();
+test('#120: an on-demand backstop is a mint target, placed AFTER every claw — even a BUSY one', async () => {
+	const g = backstopRig();
 	// claw-3 running two jobs, hokon idle: a load-ranked order puts hokon FIRST,
-	// which is the inverse of a backstop. The guest must still come last.
+	// which is the inverse of a backstop. The backstop must still come last.
 	g.input.fleetProbe = new Map([
 		['claw-3', { reachable: true, busyRepos: new Map([['WolffM/hadoku_site', 2]]), workers: 2 }],
 		['hokon', { reachable: true, busyRepos: new Map() }],
@@ -1082,8 +1082,8 @@ test('#120: an on-demand guest is a mint target, placed AFTER every claw — eve
 	);
 });
 
-test('#120: the guest offers hadoku-builder ONLY while the backstop holds it', async () => {
-	const g = guestRig();
+test('#120: the backstop offers hadoku-builder ONLY while the backstop holds it', async () => {
+	const g = backstopRig();
 	try {
 		setBackstopHold([]);
 		await dispatchEphemeral(g.input as never, 'tok', GH, g.sh as never, g.run as never);
@@ -1100,17 +1100,17 @@ test('#120: the guest offers hadoku-builder ONLY while the backstop holds it', a
 	}
 });
 
-test('#15: placement is told which node is the on-demand guest — the reserve is not inert', async () => {
-	const g = guestRig();
-	let seen: { name: string; onDemandGuest?: boolean }[] = [];
-	const run = async (i: { nodes: { name: string; onDemandGuest?: boolean }[] }) => {
+test('#15: placement is told which node is the on-demand backstop — the reserve is not inert', async () => {
+	const g = backstopRig();
+	let seen: { name: string; onDemandBackstop?: boolean }[] = [];
+	const run = async (i: { nodes: { name: string; onDemandBackstop?: boolean }[] }) => {
 		seen = i.nodes;
 		return { minted: 0, failed: 0, skipped: 0, inFlight: 0, reaped: 0 };
 	};
 	setBackstopHold([]);
 	await dispatchEphemeral(g.input as never, 'tok', GH, g.sh as never, run as never);
 	assert.deepEqual(
-		seen.map((n) => [n.name, n.onDemandGuest]),
+		seen.map((n) => [n.name, n.onDemandBackstop]),
 		[
 			['claw-3', false],
 			['hokon', true],
@@ -1119,7 +1119,7 @@ test('#15: placement is told which node is the on-demand guest — the reserve i
 });
 
 test('a backstop demotion MID-TICK cannot strip a label from a mint placement already chose (2026-10-23)', async () => {
-	const g = guestRig();
+	const g = backstopRig();
 	let placed: string[] = [];
 	let minted: string[] = [];
 	const run = async (i: {
@@ -1142,8 +1142,8 @@ test('a backstop demotion MID-TICK cannot strip a label from a mint placement al
 	}
 });
 
-test('#120: a guest unit is capped at its OWN unitMaxMb inside its allowance, in its OWN slice', async () => {
-	const g = guestRig();
+test('#120: a backstop unit is capped at its OWN unitMaxMb inside its allowance, in its OWN slice', async () => {
+	const g = backstopRig();
 	await dispatchEphemeral(g.input as never, 'tok', GH, g.sh as never, g.run as never);
 	// The claw rule (MemTotal − minFreeMb) would read 61000 − 8192 here and hand
 	// one job ~52 GB of the production host.
@@ -1151,8 +1151,8 @@ test('#120: a guest unit is capped at its OWN unitMaxMb inside its allowance, in
 	assert.equal(g.calls[0]?.slice, 'ci-runner.slice');
 });
 
-test('#120: a guest WITHOUT mint: on-demand is still never minted on', async () => {
-	const g = guestRig();
+test('#120: a backstop WITHOUT mint: on-demand is still never minted on', async () => {
+	const g = backstopRig();
 	g.input.nodes = { ...g.input.nodes, hokon: { ...HOKON_ON_DEMAND, mint: 'always' } };
 	const touched: string[] = [];
 	const sh = async (n: string, cmd: string) => {
@@ -1160,6 +1160,6 @@ test('#120: a guest WITHOUT mint: on-demand is still never minted on', async () 
 		return g.sh(n, cmd);
 	};
 	await dispatchEphemeral(g.input as never, 'tok', GH, sh as never, g.run as never);
-	assert.equal(touched.includes('hokon'), false, 'only the exact value opts a guest in');
+	assert.equal(touched.includes('hokon'), false, 'only the exact value opts a backstop in');
 	assert.deepEqual(g.calls[0]?.order, ['claw-3']);
 });

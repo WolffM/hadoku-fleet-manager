@@ -27,7 +27,7 @@
  * memory could not fail.
  *
  * ELIGIBLE is the dispatcher's own rule, reused rather than re-typed:
- * ephemeral, not drained, not a guest, and MEASURED usable memory whose warm
+ * ephemeral, not drained, not the backstop, and MEASURED usable memory whose warm
  * half holds one busy listener (a job's worth, `jobReserve`'s node answer)
  * beside the 50% mint reserve — `warmEligibleSlots`/`warmCacheEligible`
  * are imported from the BUILT package (`dist/runners/ephemeral.js`), the same
@@ -52,7 +52,8 @@ import process from 'node:process';
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadManifest, runOnSync, selectNodes } from './lib/fleet-exec.mjs';
+import { isBackstopNode } from '../dist/lib/node-role.js';
+import { loadManifest, runOnSync, selectMachines } from './lib/fleet-exec.mjs';
 import { stateDir } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
@@ -154,20 +155,22 @@ function measure(node, m) {
 function main() {
 	const manifest = loadManifest();
 	/**
-	 * A GUEST IS NOT A CANDIDATE, BY ROLE — not by happening to lack a key.
+	 * THE BACKSTOP IS NOT A CANDIDATE, BY ROLE — not by happening to lack a key.
 	 *
-	 * The warm cache holds a listener the DISPATCHER minted, and a guest is never
-	 * a mint target: it lends the fleet a standing registration and is otherwise
-	 * none of the fleet chain's business (operator, 2026-09-14). The filter below
-	 * already excluded it today, but only incidentally — the guest declares no
-	 * `ephemeral` key, so one manifest edit was all that stood between this and a
-	 * sweep that ssh'd the guest and read its systemd. `selectNodes` states the
-	 * rule instead of relying on that, and hands back the skip so it can be said
-	 * out loud rather than vanishing from a report.
+	 * The warm cache is general capacity, and the backstop is not: it is minted
+	 * for per job only when it is the right home, so it never holds a warm
+	 * listener. It declares no `ephemeral` key today, but one manifest edit
+	 * should not be all that stands between this and a sweep that measures it.
+	 * Every backstop is listed in `skippedByRole` so the skip is said out loud.
 	 */
-	const { nodes: selected, skippedByRole } = selectNodes(manifest, {
-		where: (m) => m.ephemeral === true,
+	const selected = selectMachines(manifest, {
+		where: (m) => m.ephemeral === true && !isBackstopNode(m),
 	});
+	const skippedByRole = selectMachines(manifest, { where: isBackstopNode }).map(([node]) => ({
+		node,
+		role: 'backstop',
+		why: 'the emergency backstop is minted for on demand and never holds a warm listener',
+	}));
 
 	/**
 	 * A node drained for maintenance cannot hold a warm listener BY DESIGN — the
@@ -251,7 +254,7 @@ function main() {
 			}),
 		});
 	} else if (verdict.ok) {
-		for (const s of skippedByRole) out.log(`  · ${s.node} [skipped: guest] — ${s.why}`);
+		for (const s of skippedByRole) out.log(`  · ${s.node} [skipped: backstop] — ${s.why}`);
 		for (const [name] of drainedCandidates)
 			out.log(`  · ${deferralNote(name, deferralFor(name, drains))} — not probed`);
 		for (const s of slowTier)
@@ -262,10 +265,10 @@ function main() {
 			`✓ warm cache canary: ${verdict.warm.map((w) => `${w.node} (${w.repo})`).join(', ')} ` +
 				`— ${verdict.eligible.length} eligible node(s) checked` +
 				(verdict.unreachable.length ? `, ${verdict.unreachable.join(', ')} unreachable` : '') +
-				(skippedByRole.length ? `, ${skippedByRole.length} guest(s) skipped by role` : '')
+				(skippedByRole.length ? `, ${skippedByRole.length} backstop(s) skipped by role` : '')
 		);
 	} else {
-		for (const s of skippedByRole) console.error(`  · ${s.node} [skipped: guest] — ${s.why}`);
+		for (const s of skippedByRole) console.error(`  · ${s.node} [skipped: backstop] — ${s.why}`);
 		for (const [name] of drainedCandidates)
 			console.error(`  · ${deferralNote(name, deferralFor(name, drains))} — not probed`);
 		for (const s of slowTier)

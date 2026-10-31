@@ -34,9 +34,10 @@
  *     minting node must (`floor-bypassed`): the label floor counts its runners
  *     as serving the label. The one rule that reads more than the manifest —
  *     the `$proof` state file, for the workload gate.
- *   - a node that declares no `role`, or a typoed one. The role says what the
- *     fleet chain may DO to the box; an unclassified or misspelled one reads as
- *     `claw` at runtime, which for a guest means apt-get on the production host.
+ *   - a node that declares no `role`, or a typoed one. The role says whether the
+ *     box is general capacity; an unclassified or misspelled one reads as `claw`
+ *     at runtime, which for the backstop means counting the production host as
+ *     capacity and rebooting it.
  *
  * `--json` is a contract: cron jobs parse this stdout.
  *
@@ -52,10 +53,11 @@ import { validateCapabilities, parseProbeCapabilities } from '../dist/lib/capabi
 import { workloadGateContext, workloadGatedCapabilities } from '../dist/lib/workload-gate.js';
 import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.js';
 import {
-	GUEST_MINT_MODE,
+	BACKSTOP_MINT_MODE,
+	LEGACY_BACKSTOP_ROLE,
 	NODE_ROLES,
 	PM2_SERVICES,
-	isGuestNode,
+	isBackstopNode,
 	mintsOnDemand,
 } from '../dist/lib/node-role.js';
 import { keepStdoutWhole } from './lib/emit.mjs';
@@ -133,7 +135,7 @@ if (!probeEmits) {
  *
  * WHY HERE AND NOT IN `validateCapabilities`: that function answers "is what
  * this node claims about its CAPABILITIES coherent", and a role is not a
- * capability — it is what the fleet chain may DO to the box. This gate's own
+ * capability — it is what the box is FOR. This gate's own
  * header calls itself the home of the declaration-time rules, and this is one.
  *
  * WHY IT IS REQUIRED RATHER THAN DEFAULTED SILENTLY. `nodeRole` defaults an
@@ -146,8 +148,12 @@ if (!probeEmits) {
  *
  * An UNKNOWN value is a separate rule from a missing one because they are
  * different jobs: a missing role is a node nobody has classified, and
- * `"gest"` is a node somebody classified and typoed — which silently reads as
- * `claw` and would put the production host back in the chain.
+ * `"backstp"` is a node somebody classified and typoed — which silently reads as
+ * `claw` and would count the production host as capacity.
+ *
+ * `"guest"` IS NOT A FINDING. It is the backstop's name until 2026-10-31, the
+ * live manifest still carries it, and `nodeRole` reads it as `backstop`
+ * (`LEGACY_BACKSTOP_ROLE`), so a node declaring it is classified, not typoed.
  */
 function roleFindings(m) {
 	const out = [];
@@ -159,24 +165,24 @@ function roleFindings(m) {
 				machine: name,
 				capability: null,
 				message:
-					`declares no \`role\`. It decides what the fleet chain may DO to this box — ` +
-					`converge-toolchain, bootcamp's required set, node-health blocking findings, ` +
-					`resident placement, and any repair needing sudo. An absent role reads as ` +
+					`declares no \`role\`. It decides whether this box is general capacity — ` +
+					`the census, routing rank, bootcamp's required set, hosting, the reboot cycle ` +
+					`and node-health blocking findings. An absent role reads as ` +
 					`"claw" at runtime (the strict direction), so nothing breaks; it just means ` +
 					`nobody has said so. Add "role": ${NODE_ROLES.map((r) => `"${r}"`).join(' | ')}.`,
 			});
 			continue;
 		}
-		if (!NODE_ROLES.includes(role)) {
+		if (!NODE_ROLES.includes(role) && role !== LEGACY_BACKSTOP_ROLE) {
 			out.push({
 				rule: 'unknown-role',
 				machine: name,
 				capability: null,
 				message:
 					`declares role "${role}", which is not one of ${NODE_ROLES.join(', ')}. An ` +
-					`unrecognised role reads as "claw", so a typo here does not exempt a guest — it ` +
-					`puts it back into the fleet chain, which for the production host means an ` +
-					`unattended apt-get there.`,
+					`unrecognised role reads as "claw", so a typo here does not make a backstop — it ` +
+					`counts the box as capacity, which for the production host means routing CI ` +
+					`onto it and rebooting it.`,
 			});
 		}
 	}
@@ -184,12 +190,12 @@ function roleFindings(m) {
 }
 
 /**
- * `mint` and `standingRepos` — the on-demand guest's two keys (#120).
+ * `mint` and `standingRepos` — the on-demand backstop's two keys (#120).
  *
  * Both are READ ONLY THROUGH `mintsOnDemand` / `standingRepos`, which answer
  * "no" to anything but the exact shape. That is the safe runtime direction —
- * a typoed `mint` leaves the guest un-minted rather than minted for — and the
- * reason a gate must say so: a guest whose `mint: "on-demnd"` reads as
+ * a typoed `mint` leaves the backstop un-minted rather than minted for — and the
+ * reason a gate must say so: a backstop whose `mint: "on-demnd"` reads as
  * standing would sit with no standing runners (the reconciler retired them
  * under the correct spelling) and nothing minting for it either. A job only it
  * can take would queue with every gate green.
@@ -199,16 +205,16 @@ function mintFindings(m) {
 	for (const [name, node] of Object.entries(m.machines ?? {})) {
 		const finding = (rule, message) => out.push({ rule, machine: name, capability: null, message });
 		if (node?.mint !== undefined) {
-			if (node.mint !== GUEST_MINT_MODE) {
+			if (node.mint !== BACKSTOP_MINT_MODE) {
 				finding(
 					'unknown-mint',
-					`declares mint "${node.mint}", and the only value is "${GUEST_MINT_MODE}". Anything ` +
-						`else reads as a standing guest — with its standing runners possibly retired.`
+					`declares mint "${node.mint}", and the only value is "${BACKSTOP_MINT_MODE}". Anything ` +
+						`else reads as a standing backstop — with its standing runners possibly retired.`
 				);
-			} else if (!isGuestNode(node)) {
+			} else if (!isBackstopNode(node)) {
 				finding(
-					'mint-off-guest',
-					`declares mint "${GUEST_MINT_MODE}" but is not role "guest". A claw mints through ` +
+					'mint-off-backstop',
+					`declares mint "${BACKSTOP_MINT_MODE}" but is not role "backstop". A claw mints through ` +
 						`\`ephemeral: true\`; this key would mean nothing here, and is not read.`
 				);
 			}
@@ -216,7 +222,7 @@ function mintFindings(m) {
 				finding(
 					'mint-and-ephemeral',
 					`declares both mint and ephemeral: true. ephemeral is general CI capacity (census, ` +
-						`warm cache, placement by speed); an on-demand guest is the last resort. Pick one.`
+						`warm cache, placement by speed); an on-demand backstop is the last resort. Pick one.`
 				);
 			}
 		}
@@ -225,8 +231,8 @@ function mintFindings(m) {
 			if (!mintsOnDemand(node)) {
 				finding(
 					'standing-repos-off-mint',
-					`declares standingRepos without mint "${GUEST_MINT_MODE}" on a guest. The list only ` +
-						`narrows an on-demand guest's standing registrations, and is not read anywhere else.`
+					`declares standingRepos without mint "${BACKSTOP_MINT_MODE}" on a backstop. The list only ` +
+						`narrows an on-demand backstop's standing registrations, and is not read anywhere else.`
 				);
 			} else if (
 				!Array.isArray(v) ||
@@ -247,8 +253,7 @@ function mintFindings(m) {
  * hadoku_site's `scripts/pm2-hosts.json`, which decides which boxes host
  * services. Two declarations of one fact, so they are held together here:
  *
- *   services-shape          the only value is "pm2", and never on a guest (the
- *                           fleet does not provision one).
+ *   services-shape          the only value is "pm2".
  *   services-not-a-host     declared here, absent from pm2-hosts.json: the box
  *                           would get pm2 and a tunnel daemon and host nothing.
  *   pm2-host-unprovisioned  a non-hub host in pm2-hosts.json without the key:
@@ -270,12 +275,12 @@ function servicesFindings(m) {
 	const declared = [];
 	for (const [name, node] of Object.entries(m.machines ?? {})) {
 		if (node?.services === undefined) continue;
-		if (node.services !== PM2_SERVICES || isGuestNode(node)) {
+		if (node.services !== PM2_SERVICES) {
 			finding(
 				'services-shape',
 				name,
-				`declares services ${JSON.stringify(node.services)}${isGuestNode(node) ? ' on a guest' : ''}; ` +
-					`the only value is "${PM2_SERVICES}", on a claw. Provisioning reads nothing else.`
+				`declares services ${JSON.stringify(node.services)}; ` +
+					`the only value is "${PM2_SERVICES}". Provisioning reads nothing else.`
 			);
 			continue;
 		}
@@ -293,9 +298,11 @@ function servicesFindings(m) {
 		return out;
 	}
 	const { doc, path: file } = read;
+	// The hub hosts services too, so it may declare them; it is left out of the
+	// two rules below only because its deploy root and state root predate them.
 	const hosts = Object.keys(doc.hosts ?? {}).filter((h) => h !== doc.hub);
 	for (const name of declared)
-		if (!hosts.includes(name))
+		if (name !== doc.hub && !hosts.includes(name))
 			finding(
 				'services-not-a-host',
 				name,

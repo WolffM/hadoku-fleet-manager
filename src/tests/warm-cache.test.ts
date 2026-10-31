@@ -138,7 +138,7 @@ const MEASURED = {
 	'claw-8': { installedMb: 15_915, minFreeMb: 2048, jobMb: 4096 },
 	'claw-9': { installedMb: 32_003, minFreeMb: 4096, jobMb: 4096 },
 } as const;
-const HOKON = { installedMb: 63_402, minFreeMb: 8192, jobMb: 4096, role: 'guest' };
+const HOKON = { installedMb: 63_402, minFreeMb: 8192, jobMb: 4096, role: 'backstop' };
 
 test('eligibility over the measured fleet: how many busy listeners fit beside the 50% mint reserve', () => {
 	const got = Object.fromEntries(
@@ -1446,7 +1446,7 @@ test('dispatchWarmCache: an ineligible (1-slot) node is never touched', async ()
 	assert.equal(gh.calls.length, 0);
 });
 
-test('SAFETY dispatchWarmCache: a guest marked ephemeral is never probed, at 62 GB', async () => {
+test('SAFETY dispatchWarmCache: a backstop marked ephemeral is never probed, at 62 GB', async () => {
 	// hokon's measured shape, the manifest edit away from being in the set: a
 	// 63402 MB box passes every memory test, so only its ROLE keeps it out —
 	// and it must be kept out before the `free -m` ssh, not after.
@@ -1469,7 +1469,7 @@ test('SAFETY dispatchWarmCache: a guest marked ephemeral is never probed, at 62 
 			ephemeral: new Set(['claw-1', 'hokon']),
 			nodes: {
 				'claw-1': NODE_ELIGIBLE,
-				hokon: { ...NODE_ELIGIBLE, minFreeMb: 8192, role: 'guest' },
+				hokon: { ...NODE_ELIGIBLE, minFreeMb: 8192, role: 'backstop' },
 			},
 		}),
 		'tok',
@@ -1477,7 +1477,7 @@ test('SAFETY dispatchWarmCache: a guest marked ephemeral is never probed, at 62 
 		sh,
 		T0
 	);
-	assert.equal(touched.includes('hokon'), false, 'no ssh reaches the guest');
+	assert.equal(touched.includes('hokon'), false, 'no ssh reaches the backstop');
 	assert.equal(sims.hokon.marker, null);
 	assert.equal(res.filled, 1, 'and the claw beside it still fills');
 });
@@ -2447,9 +2447,9 @@ test('SAFETY warmListenerSlots: memory and the cap are each necessary on their o
 		}),
 		0
 	);
-	// A guest holds none by role, at any memory and any cap.
+	// A backstop holds none by role, at any memory and any cap.
 	assert.equal(
-		warmListenerSlots({ usableMb: 55_210, jobMb: 4096, role: 'guest', maxConcurrent: 4 }),
+		warmListenerSlots({ usableMb: 55_210, jobMb: 4096, role: 'backstop', maxConcurrent: 4 }),
 		0
 	);
 	// claw-3's memory admits TWO listeners at its 3400 MB job figure and its cap

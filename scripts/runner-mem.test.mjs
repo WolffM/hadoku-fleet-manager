@@ -874,26 +874,6 @@ test('--check FAILS on a node it cannot reach — unreachable is a finding, neve
 	}
 });
 
-test('--check annotates a guest finding as manual-remedy', () => {
-	// hokon is covered by the report but never deployed to; its findings must
-	// say so, or a red gate points at a box the fleet has decided not to touch.
-	const now = Date.now() / 1000;
-	const fx = checkFixture({
-		samples: sampleRow(now - 3 * 86400) + '\n',
-		inflight: JSON.stringify({ host: ME, at: now - 3600, windows: [] }),
-		jobs: jobRow(now - 120) + '\n',
-		machines: { [ME]: { ramGb: 61, maxConcurrent: 4, role: 'guest' } },
-	});
-	try {
-		const r = runCheck(fx);
-		assert.notEqual(r.status, 0);
-		assert.match(r.stdout, /\[guest/);
-	} finally {
-		rmSync(fx.home, { recursive: true, force: true });
-		rmSync(fx.dir, { recursive: true, force: true });
-	}
-});
-
 test('a BUSY node whose inflight snapshot is truncated is not reported unreadable', () => {
 	// Found by running the gate live on 2026-09-23: `inflight.json` grows with
 	// every OPEN window, so the probe's byte budget is exceeded exactly when the

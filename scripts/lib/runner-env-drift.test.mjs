@@ -204,11 +204,10 @@ writeStub(
 	'sudo',
 	`mkdir -p "$HOME/.fake" 2>/dev/null
 printf '%s\\n' "sudo $*" >> "$HOME/.fake/sudo.log" 2>/dev/null
-# Every fixture in this file is sudo-less, same as every real node this path
-# applies to (a claw never reaches here at all — it has a "user@" cgroup and
-# never leaves the systemctl --user branch; a guest is never reached by the
-# driver in the first place). Refusing unconditionally is the faithful
-# fixture for "NEEDS-OPERATOR", which is all this suite exercises.
+# Every fixture in this file is sudo-less. A claw never reaches here at all —
+# it has a "user@" cgroup and never leaves the systemctl --user branch.
+# Refusing unconditionally is the faithful fixture for "NEEDS-OPERATOR",
+# which is all this suite exercises.
 exit 1
 `
 );
@@ -559,10 +558,8 @@ void test('a node with no passwordless sudo (hokon-shaped unit): restart is refu
 	writeFileSync(join(home, '.fake', 'listener-dir'), dir);
 	// A SYSTEM unit, not a user session — no "user@" anywhere in the
 	// cgroup path, which routes restart_dir to the sudo branch rather than
-	// `systemctl --user` (hokon's own units, per this file's comments, are
-	// real system units; the driver never reaches hokon at all because it
-	// is a guest — this is the defense-in-depth behind that skip, proven
-	// directly rather than assumed).
+	// `systemctl --user`. A node without passwordless sudo must stop at
+	// NEEDS-OPERATOR rather than leave the listener stale silently.
 	writeFileSync(
 		join(home, '.fake', `cgroup-${listenerPid}`),
 		'0::/system.slice/actions.runner.x.service\n'

@@ -866,11 +866,6 @@ def run_checks(nodes, as_json=False):
     findings, rows = [], {}
     for m in nodes:
         facts, err = _probe_node(m, local, nodes.get(m, {}))
-        guest = (
-            " [guest — the fleet does not deploy here, so the remedy is manual]"
-            if nodes.get(m, {}).get("role") == "guest"
-            else ""
-        )
         if err:
             findings.append(err)
             rows[m] = {"ok": False, "finding": err}
@@ -884,15 +879,15 @@ def run_checks(nodes, as_json=False):
         if not have_inflight:
             findings.append(
                 f"{m}: no inflight.json — the harvester has never swept here (not installed, "
-                f"or installed and dead). Nothing samples this node{guest}"
+                f"or installed and dead). Nothing samples this node"
             )
         elif facts["inflight_at"] is None:
-            findings.append(f"{m}: inflight.json exists but carries no readable `at` — the heartbeat is unparseable{guest}")
+            findings.append(f"{m}: inflight.json exists but carries no readable `at` — the heartbeat is unparseable")
         elif now and now - facts["inflight_at"] > HEARTBEAT_STALE_S:
             findings.append(
                 f"{m}: heartbeat stale — last sweep {int(now - facts['inflight_at'])}s ago at "
                 f"{_iso(facts['inflight_at'])}. The harvester is not sampling whatever `is-active` "
-                f"says about the unit{guest}"
+                f"says about the unit"
             )
         # 2. THE CROSS-CHECK — a completed job that the harvest never saw.
         #    Bounded by the sampler's start: see SAMPLER_WARMUP_S above. A node
@@ -905,19 +900,19 @@ def run_checks(nodes, as_json=False):
             if not have_samples:
                 findings.append(
                     f"{m}: active but silent — a job completed at {_iso(facts['job_ts'])} but "
-                    f"samples.jsonl does not exist; the harvest is collecting nothing{guest}"
+                    f"samples.jsonl does not exist; the harvest is collecting nothing"
                 )
             elif facts["sample_end"] is None:
                 findings.append(
                     f"{m}: active but silent — a job completed at {_iso(facts['job_ts'])} but the "
-                    f"newest sample record is unparseable{guest}"
+                    f"newest sample record is unparseable"
                 )
             elif facts["sample_end"] + WINDOW_LAG_S < facts["job_ts"]:
                 findings.append(
                     f"{m}: active but silent — the newest completed job ({_iso(facts['job_ts'])}) "
                     f"postdates the newest harvested window ({_iso(facts['sample_end'])}) by "
                     f"{int(facts['job_ts'] - facts['sample_end'])}s; jobs are streaming past "
-                    f"unmeasured{guest}"
+                    f"unmeasured"
                 )
     ok = not findings
     doc = {"ok": ok, "nodes": rows, "findings": findings}

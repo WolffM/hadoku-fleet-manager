@@ -20,8 +20,7 @@ import {
 	sliceUsageProbe,
 	takeSliceUsage,
 } from './hosting-record.js';
-import { admitMint } from './ephemeral.js';
-import { guestUnitMemoryMaxMb } from './ephemeral-mint.js';
+import { admitMint, backstopUnitMemoryMaxMb } from './ephemeral.js';
 import { JIT_UNIT_MAX_SEC } from './ephemeral.js';
 import { JOB_RESERVE_DEFAULT_MB } from './ephemeral.js';
 import { mintBudget } from './ephemeral.js';
@@ -46,7 +45,7 @@ import { type DispatchPassResult } from './dispatch-pass.js';
 import { type NodeState } from './placement.js';
 import { chargedLikeDispatch, getCapacityLedger } from './capacity-ledger.js';
 import {
-	withoutGuests,
+	withoutBackstops,
 	offerFor,
 	loadWorkloadGateContext,
 	jobReserve,
@@ -65,20 +64,20 @@ import { getSpeedModel, getHeavyModel } from './speed-heavy-cache.js';
 export { loadWorkloadGateContext, __setWorkloadGateContextForTesting } from './ephemeral-shared.js';
 
 /**
- * The guests the dispatcher mints for on demand (#120), in manifest order.
+ * The backstops the dispatcher mints for on demand (#120), in manifest order.
  *
  * Operator, 2026-10-19: "the runners get brought online the same way the JIT
  * process does. not having standing runners squatting on ram." Until then the
- * guest kept ~30 standing listeners alive around the clock (~2.8 GB RSS+swap on
+ * backstop kept ~30 standing listeners alive around the clock (~2.8 GB RSS+swap on
  * the production host) and the backstop's promotion was a label flip on them.
  * Now promotion is a mint, and demotion leaves nothing listening.
  *
- * A DRAINED guest is still returned: the drain reaches placement as
+ * A DRAINED backstop is still returned: the drain reaches placement as
  * `NodeState.drained` like every other node's, which is what keeps it from
- * taking anything — the drain is the guest's red light, and it has to read the
+ * taking anything — the drain is the backstop's red light, and it has to read the
  * same way here as it does on a claw.
  */
-export function onDemandGuests(input: EphemeralTickInput): string[] {
+export function onDemandBackstops(input: EphemeralTickInput): string[] {
 	return Object.keys(input.nodes).filter((n) => mintsOnDemand(input.nodes[n]));
 }
 
@@ -334,17 +333,17 @@ export async function dispatchEphemeral(
 	nowMs: number = Date.now()
 ): Promise<DispatchPassResult | null> {
 	// Before ANY I/O: the warm cache, the `free -m` probe and the mint all reach
-	// the nodes this set names. See `withoutGuests`.
-	const input = withoutGuests(tickInput);
-	// THE ON-DEMAND GUESTS (#120), minted for beside the claws but never part of
+	// the nodes this set names. See `withoutBackstops`.
+	const input = withoutBackstops(tickInput);
+	// THE ON-DEMAND BACKSTOPS (#120), minted for beside the claws but never part of
 	// `input.ephemeral`: that set is general CI capacity, and the warm cache just
-	// below must not see a guest at all — on-demand means no listener parked on
+	// below must not see a backstop at all — on-demand means no listener parked on
 	// the production host's memory. They are placed LAST and offered
 	// `hadoku-builder` only while the backstop holds them; see `offerFor`.
-	const guests = onDemandGuests(input);
-	const minting = [...input.ephemeral, ...guests];
+	const backstops = onDemandBackstops(input);
+	const minting = [...input.ephemeral, ...backstops];
 	if (!minting.length) return { minted: 0, failed: 0, skipped: 0, inFlight: 0, reaped: 0 };
-	const isGuest = (name: string): boolean => guests.includes(name);
+	const isBackstop = (name: string): boolean => backstops.includes(name);
 	// The backstop hold is read ONCE per tick. Placement's `NodeState.labels` and
 	// the mint's `labelsFor` both ask this, seconds apart, with probes and GitHub
 	// polls in between — and runner-health flips the hold on its own clock. On
@@ -352,8 +351,8 @@ export async function dispatchEphemeral(
 	// `hadoku-builder` job hokon had been PLACED for registered without
 	// `hadoku-builder`. The job could never land on it, and "already has a
 	// runner in flight" kept every claw from taking it for the unit's full TTL.
-	const heldThisTick = new Set(guests.filter(isBackstopHeld));
-	const eligibleFor = (name: string): boolean => !isGuest(name) || heldThisTick.has(name);
+	const heldThisTick = new Set(backstops.filter(isBackstopHeld));
+	const eligibleFor = (name: string): boolean => !isBackstop(name) || heldThisTick.has(name);
 	// ONE state-dir read for this whole tick — see `offerFor`'s own doc. A
 	// second read from `dispatchWarmCache`'s OWN call below (it is also called
 	// directly, with its own tick) is accepted: both are one read of a small
@@ -442,12 +441,12 @@ export async function dispatchEphemeral(
 			// than its own floor is a manifest error — `runners-slice-install.sh`
 			// answers SLICE-FAIL for it — and it must not become a cap of zero.
 			//
-			// A GUEST'S CEILING IS ITS ALLOWANCE. On the production host CI gets
+			// A BACKSTOP'S CEILING IS ITS ALLOWANCE. On the production host CI gets
 			// `slice.maxMb`, deliberately far below MemTotal − minFreeMb, and
-			// admission must measure a guest job against what the slice will
+			// admission must measure a backstop job against what the slice will
 			// actually let it have, not against memory production is using.
 			const floorCeiling = total - (input.nodes[name]?.minFreeMb ?? 1536);
-			const allowance = isGuest(name) ? input.nodes[name]?.slice?.maxMb : undefined;
+			const allowance = isBackstop(name) ? input.nodes[name]?.slice?.maxMb : undefined;
 			const ceiling =
 				typeof allowance === 'number' && allowance > 0
 					? Math.min(floorCeiling, allowance)
@@ -529,8 +528,8 @@ export async function dispatchEphemeral(
 		}
 		candidates.push(name);
 		const sliceCeilingMb = sliceCeilingMbByNode.get(name);
-		const capMb = isGuest(name)
-			? guestUnitMemoryMaxMb({ requestedMb: m.slice?.unitMaxMb, sliceMaxMb: m.slice?.maxMb })
+		const capMb = isBackstop(name)
+			? backstopUnitMemoryMaxMb({ requestedMb: m.slice?.unitMaxMb, sliceMaxMb: m.slice?.maxMb })
 			: unitMemoryMaxMb({ requestedMb: m.slice?.unitMaxMb, sliceCeilingMb });
 		// PER NODE HERE, per repo once the run is known — hoisted out of the literal
 		// below because the warm reservation is measured in the same unit and must
@@ -627,8 +626,8 @@ export async function dispatchEphemeral(
 			// inside `choosePlacement`: placement.ts is pure on purpose and is
 			// handed a label list, exactly like `drained` above.
 			labels: offerFor(input.nodes, name, workloadGate, eligibleFor(name)),
-			// #15: placement keeps part of a guest back from overflow work.
-			onDemandGuest: isGuest(name),
+			// #15: placement keeps part of a backstop back from overflow work.
+			onDemandBackstop: isBackstop(name),
 			// P5.1 (`warm-listener-cache-2026-09-05.md`): "placement must gain
 			// warm-affinity as a first-order term ahead of least-loaded". The term
 			// shipped in `a6a19a4` and was INERT for five days and ~2,000 jobs
@@ -802,16 +801,16 @@ export async function dispatchEphemeral(
 		// treat that as neutral, not this call site's.
 		speedFactor: speedModel.factorOf?.(m2.name) ?? null,
 	}));
-	// GUESTS LAST, whatever the ordering thinks of them. A guest is idle on most
+	// BACKSTOPS LAST, whatever the ordering thinks of them. A backstop is idle on most
 	// ticks and fast, so a load- or speed-ranked order would put the production
 	// host FIRST — the inverse of a backstop. It takes what no claw can: a job
 	// only its labels fit, or one every claw refused this pass.
 	const placementOrder = [
 		...orderCandidates(
-			candidates.filter((n) => !isGuest(n)),
+			candidates.filter((n) => !isBackstop(n)),
 			trafficNodes
 		),
-		...orderCandidates(candidates.filter(isGuest), trafficNodes),
+		...orderCandidates(candidates.filter(isBackstop), trafficNodes),
 	];
 
 	// THE AGE GATE. `MIN_QUEUED_MS` is a proxy for "a standing runner would have
@@ -844,12 +843,12 @@ export async function dispatchEphemeral(
 			// declaration was read by nothing.
 			memoryMaxMbFor: (repo, node) => {
 				void repo;
-				// A GUEST'S CAP IS ITS OWN, not a share of the claws' — see
-				// `guestUnitMemoryMaxMb` for why the claw rule below would hand one
-				// job the whole guest allowance.
-				if (isGuest(node)) {
+				// A BACKSTOP'S CAP IS ITS OWN, not a share of the claws' — see
+				// `backstopUnitMemoryMaxMb` for why the claw rule below would hand one
+				// job the whole backstop allowance.
+				if (isBackstop(node)) {
 					const g = input.nodes[node]?.slice;
-					return guestUnitMemoryMaxMb({ requestedMb: g?.unitMaxMb, sliceMaxMb: g?.maxMb });
+					return backstopUnitMemoryMaxMb({ requestedMb: g?.unitMaxMb, sliceMaxMb: g?.maxMb });
 				}
 				// THE SLICE CEILING, not a flat number (issue #26). See
 				// `unitMemoryMaxMb`: a cap below the slice's own ceiling is a second,
@@ -858,16 +857,16 @@ export async function dispatchEphemeral(
 				// against 4 GiB while the node had 13.8 GiB of CI budget unspent.
 				//
 				// STILL THE FLEET MIN FOR A CLAW, though the node is now known (#120
-				// passes it, for the guest above). This used to be forced — the node
+				// passes it, for the backstop above). This used to be forced — the node
 				// was chosen after this was asked — and is now only unchanged: a claw
 				// cap read off its own ceiling is a separate decision from #120, and
 				// it would widen the cap on every larger claw at once. Claws only: a
-				// guest's allowance is not a claw's ceiling and must not lower it.
+				// backstop's allowance is not a claw's ceiling and must not lower it.
 				// Every claw in `nodes` has a MEASURED ceiling, because the loop above
 				// refuses to admit a node without one, so this cannot silently fall
 				// back while any claw was admitted.
 				const ceilings = nodes
-					.filter((n) => !isGuest(n.name))
+					.filter((n) => !isBackstop(n.name))
 					.map((n) =>
 						unitMemoryMaxMb({
 							requestedMb: input.nodes[n.name]?.slice?.unitMaxMb,
@@ -878,7 +877,7 @@ export async function dispatchEphemeral(
 				return ceilings.length ? Math.min(...ceilings) : JOB_RESERVE_DEFAULT_MB;
 			},
 			// The node's own slice, now that the mint path carries it (#120). Only
-			// the guest declares one today; every claw resolves to the default.
+			// the backstop declares one today; every claw resolves to the default.
 			sliceNameFor: (node) => input.nodes[node]?.slice?.name,
 			homeDirFor: (node) => nodeHome(input.nodes[node], 'ci'),
 			// NOT an orphan timeout. It was 3600 until 2026-09-14 and read as one,

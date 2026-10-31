@@ -33,13 +33,11 @@
  *   - One node at a time; do not START a node while the queue is under pressure.
  *     Backing off is `deferred`, never `ok`. A queue we could not read is a
  *     finding: "I could not look" is not "quiet".
- *   - A guest's tools are never touched. Its only turn is a CHECK-ONLY recheck
- *     (fleet-manager#17): `bootcamp --machine <guest> --write`, which on a guest
- *     probes the presence half and installs nothing, so it may earn a label
- *     whose tool is already there and may revoke one that fails. No drain, no
- *     queue gate: it takes no capacity out. Same due rule as a claw's. A probe
- *     that could not reach it is `unreachable`, never a pass, and every label
- *     it revokes is a finding, because a guest carries production routing.
+ *   - The backstop is in the same pool as every claw: updated, drained and
+ *     rechecked by the same rules (it was check-only until 2026-10-31). The
+ *     fleet has no sudo there, so a work item whose script needs root is not
+ *     run on it: it is an ADVISORY naming the operator's hand-run, carried in
+ *     `advisories`, never a finding (lib/operator-sudo.mjs).
  *   - Unknown upstream, unreadable node, unreadable queue: findings with the
  *     reason carried, non-zero exit. Never "current".
  */
@@ -50,16 +48,18 @@ import { fileURLToPath } from 'node:url';
 
 import { hubRepo } from '../../dist/lib/fleet-config.js';
 import { reposDir, stateDir } from './paths.mjs';
-import { isGuestNode } from '../../dist/lib/node-role.js';
 import { judgeTool, parseToolProbe, toolProbeScript } from '../check-fleet-toolchain.mjs';
 import { deferralFor, readDrains } from './expected-down.mjs';
 import { runOnSync, separateCiUser } from './fleet-exec.mjs';
+import { fleetHasSudo } from '../../dist/lib/node-role.js';
+import { rootAdvisory } from './operator-sudo.mjs';
 import {
 	applicableRepairs,
 	byRole,
 	installScript,
 	isVersionManaged,
 	linkScript,
+	repairNeedsRoot,
 	resolveInstallTarget,
 } from './toolchain-floor.mjs';
 import { compareVersions, createReleaseLookup, parseVersion } from './tool-release.mjs';
@@ -246,6 +246,8 @@ function settle(id, res) {
  *                         update, reprobe, queuePressure
  * @param {boolean} [p.plan]  detect and report only; drain nothing
  * @param {(line:string)=>void} [p.log]
+ * @param {(name:string, entry:object)=>boolean} [p.sudo]  may this run use sudo
+ *        on the node; `--operator-sudo` widens it for the operator's hand-run
  */
 export async function runRefreshCycle({
 	machines,
@@ -259,15 +261,15 @@ export async function runRefreshCycle({
 	// would otherwise land mid-node.
 	deadline = null,
 	now = () => Date.now(),
+	sudo = (_name, entry) => fleetHasSudo(entry),
 }) {
 	const nodes = [];
 	const findings = [];
+	const advisories = [];
 	const finding = (node, kind, reason) => findings.push({ node, kind, reason });
 
-	// Upstream ONCE PER TOOL PER RUN, for tools some non-guest node carries.
-	const toolsByNode = new Map(
-		machines.map(([name, entry]) => [name, isGuestNode(entry) ? [] : applicableRepairs(entry)])
-	);
+	// Upstream ONCE PER TOOL PER RUN, for tools some node carries.
+	const toolsByNode = new Map(machines.map(([name, entry]) => [name, applicableRepairs(entry)]));
 	const latestById = {};
 	const wanted = new Map();
 	for (const tools of toolsByNode.values()) {
@@ -280,11 +282,6 @@ export async function runRefreshCycle({
 	// PASS 1 — detect everything. No drain, no write.
 	const todo = [];
 	for (const [name, entry] of machines) {
-		if (isGuestNode(entry)) {
-			log(`── ${name}  [skipped: guest]`);
-			nodes.push({ node: name, status: 'guest' });
-			continue;
-		}
 		const tools = toolsByNode.get(name);
 		let probe;
 		try {
@@ -303,15 +300,27 @@ export async function runRefreshCycle({
 			}
 			continue;
 		}
-		const { work, findings: toolFindings } = planNode(tools, probe.seen, latestById);
+		const planned = planNode(tools, probe.seen, latestById);
+		const toolFindings = planned.findings;
 		for (const f of toolFindings) finding(name, f.kind, `${f.tool}: ${f.reason}`);
+		// Root work is withheld where the fleet has no sudo, and said.
+		const mayRoot = sudo(name, entry);
+		const work = planned.work.filter((w) => mayRoot || !repairNeedsRoot(w.id, w.action));
+		const withheld = planned.work
+			.filter((w) => !work.includes(w))
+			.map((w) =>
+				rootAdvisory(
+					name,
+					`${w.id} ${w.action}${w.target ? ` to ${w.target}` : ''}`,
+					`fleet converge-toolchain --refresh --machine ${name}`
+				)
+			);
+		advisories.push(...withheld);
+		for (const a of withheld) log(`── ${name}  [advisory] ${a.message}\n     ${a.fix}`);
 		if (!work.length) {
-			log(`── ${name}  [${toolFindings.length ? 'FINDING' : 'current'}]`);
-			nodes.push({
-				node: name,
-				status: toolFindings.length ? 'finding' : 'current',
-				findings: toolFindings,
-			});
+			const status = toolFindings.length ? 'finding' : withheld.length ? 'advisory' : 'current';
+			log(`── ${name}  [${status === 'finding' ? 'FINDING' : status}]`);
+			nodes.push({ node: name, status, findings: toolFindings });
 			continue;
 		}
 		log(
@@ -326,9 +335,9 @@ export async function runRefreshCycle({
 	if (deps.rebootcamp) {
 		const busy = new Set(todo.map((t) => t.name));
 		const stale = machines
-			.filter(([name, entry]) => {
+			.filter(([name]) => {
 				const rec = nodes.find((n) => n.node === name);
-				return !isGuestNode(entry) && !busy.has(name) && rec?.status === 'current';
+				return !busy.has(name) && (rec?.status === 'current' || rec?.status === 'advisory');
 			})
 			// `$capabilities.at` moves only when the record CHANGES (#59 — an
 			// unchanged re-probe must not redeploy mgmt-api), so it cannot say
@@ -344,21 +353,6 @@ export async function runRefreshCycle({
 			log(`── ${name}  [recheck: bootcamp record older than ${RECHECK_DAYS} days]`);
 			todo.push({ name, tools: toolsByNode.get(name), work: [], toolFindings: [], recheck: true });
 		}
-
-		// ONE GUEST RECHECK, on its own turn: it drains nothing, so it does not
-		// compete with a claw's. Before #17 a guest was never rechecked, and hokon
-		// could not earn `data-peer` until someone bootcamped it by hand.
-		const guest = machines
-			.filter(([, entry]) => isGuestNode(entry))
-			.map(([name, entry]) => ({ name, at: lastRecordedMs(deps, name, entry) }))
-			.filter((n) => isDue(n.at, now()))
-			.sort(byStalest)[0];
-		if (guest) {
-			const i = nodes.findIndex((n) => n.node === guest.name);
-			nodes.splice(i, 1);
-			log(`── ${guest.name}  [guest recheck: check-only, record older than ${RECHECK_DAYS} days]`);
-			todo.push({ name: guest.name, tools: [], work: [], toolFindings: [], guest: true });
-		}
 	}
 
 	if (plan) {
@@ -368,10 +362,9 @@ export async function runRefreshCycle({
 				status: 'planned',
 				work: t.work,
 				findings: t.toolFindings,
-				...(t.guest ? { guest: true } : {}),
 			});
 		}
-		return finish({ nodes, findings, latestById, plan });
+		return finish({ nodes, findings, advisories, latestById, plan });
 	}
 
 	// PASS 2 — ONE node at a time.
@@ -380,18 +373,6 @@ export async function runRefreshCycle({
 		const { name, tools, work, toolFindings } = t;
 		const rec = { node: name, work, findings: toolFindings };
 		nodes.push(rec);
-
-		if (t.guest) {
-			rec.guest = true;
-			if (deadline !== null && now() >= deadline) {
-				rec.status = 'deferred';
-				rec.reason = 'out of time budget; not started (the next run picks it up)';
-				log(`── ${name}  [deferred] ${rec.reason}`);
-				continue;
-			}
-			await recheckGuest(name, rec, deps, finding, log);
-			continue;
-		}
 
 		if (halted) {
 			rec.status = 'deferred';
@@ -542,7 +523,7 @@ export async function runRefreshCycle({
 		if (rec.status === 'updated') log(`── ${name}  [updated]`);
 	}
 
-	return finish({ nodes, findings, latestById, plan });
+	return finish({ nodes, findings, advisories, latestById, plan });
 }
 
 /**
@@ -559,44 +540,6 @@ async function rebootcamp(name, rec, deps, finding, log) {
 		finding(name, 'rebootcamp-failed', `bootcamp did not re-record this node: ${rec.rebootcamp}`);
 		log(`── ${name}  [FINDING] re-bootcamp failed: ${rec.rebootcamp}`);
 	}
-}
-
-/**
- * A guest's check-only recheck (#17). Reached and recorded is `rechecked`, even
- * when bootcamp exits 1 on a finding of its own: the record moved, so the turn is
- * spent. Not reached is `unreachable`. Each label it revoked is a finding of
- * its own, named, because on a guest it withdraws production routing at once.
- */
-async function recheckGuest(name, rec, deps, finding, log) {
-	const b = await attempt(() => deps.rebootcamp(name));
-	const r = b.ok ? (b.value ?? {}) : { ok: false, reason: b.reason };
-	if (r.unreachable) {
-		rec.status = 'unreachable';
-		rec.reason = r.reason ?? 'the probe did not reach the node';
-		finding(name, 'unreachable', `guest recheck: ${rec.reason}`);
-		log(`── ${name}  [UNREACHABLE] guest recheck: ${rec.reason}`);
-		return;
-	}
-	if (!r.recorded) {
-		rec.status = 'finding';
-		rec.rebootcamp = r.reason ?? 'failed';
-		finding(name, 'rebootcamp-failed', `bootcamp did not re-record this guest: ${rec.rebootcamp}`);
-		log(`── ${name}  [FINDING] guest recheck failed: ${rec.rebootcamp}`);
-		return;
-	}
-	await attempt(() => deps.markChecked?.(name));
-	rec.status = 'rechecked';
-	rec.revoked = r.revoked ?? [];
-	rec.cleared = r.cleared ?? [];
-	for (const v of rec.revoked) {
-		finding(
-			name,
-			'guest-revoked',
-			`REVOKED ${v.capability} on a guest — its routing is withdrawn now: ${v.reason ?? 'its probe failed'}`
-		);
-		log(`── ${name}  REVOKED ${v.capability} (guest): ${v.reason ?? 'its probe failed'}`);
-	}
-	log(`── ${name}  [rechecked: guest, check-only]`);
 }
 
 /** When this node was last recorded or rechecked, epoch ms; NaN for never. */
@@ -633,13 +576,12 @@ async function putBack(name, rec, deps, finding, log, state) {
 	}
 }
 
-function finish({ nodes, findings, latestById, plan }) {
-	const looked = nodes.filter((n) => n.status !== 'guest' && !n.guest).length;
-	if (looked === 0) {
+function finish({ nodes, findings, advisories, latestById, plan }) {
+	if (nodes.length === 0) {
 		findings.push({
 			node: null,
 			kind: 'nothing-looked-at',
-			reason: 'no non-guest node was examined; that is not a pass',
+			reason: 'no node was examined; that is not a pass',
 		});
 	}
 	return {
@@ -647,6 +589,7 @@ function finish({ nodes, findings, latestById, plan }) {
 		plan,
 		nodes,
 		findings,
+		advisories,
 		deferred: nodes.filter((n) => n.status === 'deferred').length,
 		toolLatest: latestById,
 	};
@@ -834,9 +777,7 @@ export function createLiveDeps() {
 				}
 			);
 			if (r.error) return { ok: false, reason: errText(r.error) };
-			// The document, for a guest's recheck (#17): whether the node was
-			// reached, whether the record landed, and what was revoked. No
-			// document is a failed run, not proof the node is down.
+			// No document is a failed run, not proof the node is down.
 			let doc = null;
 			try {
 				doc = JSON.parse(r.stdout);
@@ -844,21 +785,14 @@ export function createLiveDeps() {
 				doc = null;
 			}
 			const tail = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim().split('\n').slice(-3).join(' ');
-			const forNode = (list) => (list ?? []).filter((v) => v.node === node);
-			const outcome = {
-				unreachable: (doc?.unreachable ?? []).includes(node),
-				recorded: doc?.written?.ok === true,
-				revoked: forNode(doc?.revocations?.revoked),
-				cleared: forNode(doc?.revocations?.cleared),
-			};
 			if (r.status !== 0) {
 				const reason =
 					doc === null
 						? `exit ${r.status} with no document: ${tail}`
 						: (doc.error ?? doc.written?.reason ?? `exit ${r.status}: ${tail}`);
-				return { ok: false, reason: String(reason).slice(0, 300), ...outcome };
+				return { ok: false, reason: String(reason).slice(0, 300) };
 			}
-			return { ok: true, ...outcome };
+			return { ok: true };
 		},
 	};
 }

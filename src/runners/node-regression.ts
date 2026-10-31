@@ -102,7 +102,7 @@
  * takes `watchedNodes` and refuses to charge any node outside it;
  * `runner-health.ts`'s call site passes `loadEphemeralNodes()`, the same set
  * `checkStarvation`/`checkDiskWatch` already walk for the identical reason —
- * hokon is a guest, never proven and never canaried (CLAUDE.md,
+ * hokon is the backstop, not general capacity, and never canaried (CLAUDE.md,
  * `docs/planning/wave4e-2026-10-08.md` Settled). hokon's own PASSING runs are
  * still valid counter-evidence against a claw's failure; only the charged
  * (failing) side is restricted.
@@ -259,7 +259,7 @@ export function detectDivergences(
  * here needs to change for it.
  *
  * `watchedNodes`, WHEN GIVEN, IS THE ONLY GUARD AGAINST CHARGING HOKON (or
- * any other guest). `detectDivergences` does not know about guests at all —
+ * any other backstop). `detectDivergences` does not know about backstops at all —
  * hokon may appear as a `passedNode` there, correctly, since its PASS is
  * still real evidence the commit is fine. Restricting here, at the fold, is
  * what keeps that evidence usable without ever making hokon the node a

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { JOB_RESERVE_DEFAULT_MB, jitRoot } from './ephemeral.js';
 import { nodeShell } from '../node-shell.js';
 import { logger, manifest, stateDir } from '../host.js';
-import { isGuestNode } from '../lib/node-role.js';
+import { isBackstopNode } from '../lib/node-role.js';
 import { nodeOffer } from '../lib/capability-offer.js';
 import {
 	revokedFor,
@@ -46,7 +46,7 @@ export interface EphemeralTickInput {
 			minFreeMb?: number;
 			slice?: { unitMaxMb?: number; name?: string; maxMb?: number };
 			/**
-			 * `"on-demand"` on a guest: mint for it, gated — see `mintsOnDemand`.
+			 * `"on-demand"` on a backstop: mint for it, gated — see `mintsOnDemand`.
 			 * Read through that function, never directly.
 			 */
 			mint?: string;
@@ -55,7 +55,7 @@ export interface EphemeralTickInput {
 			 * the queued run's repo figure. See {@link jobReserve}.
 			 */
 			jobP95Mb?: number;
-			/** `"claw"` | `"guest"`. Read through `isGuestNode`, never directly. */
+			/** `"claw"` | `"backstop"`. Read through `isBackstopNode`, never directly. */
 			role?: string;
 			/**
 			 * `"excluded"` means the reconciler will not register this node for
@@ -95,30 +95,33 @@ export interface EphemeralTickInput {
 }
 
 /**
- * THE GENERAL-CAPACITY MINT SET: the ephemeral set, with every guest removed.
+ * THE GENERAL-CAPACITY MINT SET: the ephemeral set, with every backstop removed.
  *
  * `input.ephemeral` is general CI capacity, and both entry points
  * (`dispatchEphemeral`, `dispatchWarmCache`) read it that way: the warm cache
  * parks a listener on every member, and every member is ranked by load and
- * speed. Neither is true of a guest — the production host is the last resort,
- * not a peer — so a guest never enters this set, even when the manifest says
+ * speed. Neither is true of a backstop — the production host is the last resort,
+ * not a peer — so a backstop never enters this set, even when the manifest says
  * `ephemeral: true`. That is a manifest contradiction, logged every tick rather
  * than dropped quietly: a node that stops being minted for has to show up
  * somewhere.
  *
- * A guest that mints says so with `mint: "on-demand"` instead, and reaches the
- * dispatcher through {@link onDemandGuests}, placed last and gated — never
+ * A backstop that mints says so with `mint: "on-demand"` instead, and reaches the
+ * dispatcher through {@link onDemandBackstops}, placed last and gated — never
  * through this set.
  */
-export function withoutGuests(input: EphemeralTickInput): EphemeralTickInput {
-	const guests = [...input.ephemeral].filter((n) => isGuestNode(input.nodes[n]));
-	if (!guests.length) return input;
+export function withoutBackstops(input: EphemeralTickInput): EphemeralTickInput {
+	const backstops = [...input.ephemeral].filter((n) => isBackstopNode(input.nodes[n]));
+	if (!backstops.length) return input;
 	logger.warn(
-		`[ephemeral-tick] ${guests.join(', ')} ${guests.length === 1 ? 'is' : 'are'} marked ephemeral ` +
-			'but role: guest — a guest is not general capacity; declare `mint: "on-demand"` instead. ' +
+		`[ephemeral-tick] ${backstops.join(', ')} ${backstops.length === 1 ? 'is' : 'are'} marked ephemeral ` +
+			'but role: backstop — a backstop is not general capacity; declare `mint: "on-demand"` instead. ' +
 			'Not minting there as ephemeral'
 	);
-	return { ...input, ephemeral: new Set([...input.ephemeral].filter((n) => !guests.includes(n))) };
+	return {
+		...input,
+		ephemeral: new Set([...input.ephemeral].filter((n) => !backstops.includes(n))),
+	};
 }
 
 /** A repo's derived reserve, as `reconcile --write-coverage` writes it. */
@@ -265,7 +268,7 @@ export function offerFor(
 	/**
 	 * Does this node offer the general CI label? Always for a claw: the
 	 * dispatcher's decision to mint IS its eligibility decision. For an
-	 * on-demand guest, only while the backstop holds it (#120) — the guest is
+	 * on-demand backstop, only while the backstop holds it (#120) — the backstop is
 	 * still minted for the work only it can do, but `hadoku-builder` is the
 	 * backstop's to grant, exactly as it was on the standing registrations.
 	 */

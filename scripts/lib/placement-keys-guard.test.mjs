@@ -188,17 +188,17 @@ const PLACEMENT_KEYS = {
 	},
 	mint: {
 		mint: MINT_TICK,
-		// `onDemandGuests` (#120): the same key that narrows a guest's standing
+		// `onDemandBackstops` (#120): the same key that narrows the backstop's standing
 		// registrations here is what makes the dispatcher mint for it, read
 		// through the same `mintsOnDemand`.
 		pattern: /mintsOnDemand\(input\.nodes\[n\]\)/,
 	},
 	standingRepos: {
 		reconcilerOnly:
-			'a STANDING-registration list, the on-demand guest’s counterpart of `residentRepos`: ' +
+			'a STANDING-registration list, the on-demand backstop’s counterpart of `residentRepos`: ' +
 			'which repos keep a registration that does not wait for the dispatcher (hadoku_site’s ' +
 			'deploy runner, because the dispatcher lives in what it deploys). The mint path has ' +
-			'nothing to decide with it — the guest is minted for every repo `mayRunRepo` allows.',
+			'nothing to decide with it — the backstop is minted for every repo `mayRunRepo` allows.',
 	},
 	residentRepos: {
 		reconcilerOnly:

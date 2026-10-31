@@ -36,7 +36,7 @@ import { pathToFileURL } from 'node:url';
 // in flight. See src/lib/measured.ts; the BUILT copy, for the reason
 // `lib/paths.mjs` gives.
 import { measuredFacets, writeFacet } from '../dist/lib/measured.js';
-import { guestNodeNames } from '../dist/lib/node-role.js';
+import { backstopNodeNames } from '../dist/lib/node-role.js';
 import { createEmitter } from './lib/emit.mjs';
 import {
 	byHandFor,
@@ -117,10 +117,10 @@ async function runCadenceCli({ dueDays, jsonOut, passthru, force, refuseIf, log,
 		refuse('--cadence needs --due N — the lead and grace windows are measured from it.');
 
 	const machines = fleetMachines();
-	const guests = guestNodeNames({ machines });
+	const backstops = backstopNodeNames({ machines });
 	const leadDays = Math.max(1, dueDays - LEAD_OFFSET_DAYS);
 	const graceDays = dueDays + GRACE_OFFSET_DAYS;
-	// Every CLAW aged past the lead window, oldest first — guests already split
+	// Every CLAW aged past the lead window, oldest first — the backstop already split
 	// into skippedByRole by dueNodes, same split --report relies on.
 	const leadAged = dueNodes(leadDays, null);
 
@@ -222,7 +222,7 @@ async function runCadenceCli({ dueDays, jsonOut, passthru, force, refuseIf, log,
 		.map((s) => `${s.node}: could not look — ${s.reason}`);
 
 	const cov = coverageOf(measuredNode ? { [measuredNode]: true } : {});
-	const covFindings = coverageFindings(cov, guests);
+	const covFindings = coverageFindings(cov, backstops);
 
 	const findings = [
 		...bandFindings,
@@ -319,10 +319,9 @@ async function main() {
 				'              --due; refuses --report/--scan/--from/--max/a named node/--write',
 				'              (it always writes what it measures).',
 				'',
-				'  --due never selects a GUEST: the fleet chain does not act on one, and a',
-				'  finding naming it is paging about it. Exempt machines are reported in',
-				'  `skippedByRole` rather than dropped. Naming one positionally still',
-				'  measures it — a person asking is not the fleet chain acting.',
+				'  --due never selects the BACKSTOP: it is not ranked for routing, so its',
+				'  benchmark is never due. Exempt machines are reported in `skippedByRole`',
+				'  rather than dropped. Naming one positionally still measures it.',
 				'',
 				'It loads each box on purpose — thermals and throttling are only',
 				'observable under load — so it skips nodes running CI unless forced.',
@@ -443,8 +442,8 @@ async function main() {
 	 * So this path answers exactly one question, from the stored records alone
 	 * (`storedBenchmarks`), and then EXITS — above the measurement loop, which is the only code in
 	 * this file that reaches a machine. No ssh, no sudo, no `dd`, no load, and
-	 * nothing written anywhere. hokon is a guest and is read here like every other
-	 * row: a date out of a file is not a probe.
+	 * nothing written anywhere. The backstop is read here like every other row: a
+	 * date out of a file is not a probe.
 	 *
 	 * IT REFUSES `--max` RATHER THAN HONOURING IT. `--max` bounds how many boxes
 	 * one night may LOAD, and a report loads none — applying it here would truncate
@@ -482,18 +481,18 @@ async function main() {
 		const skippedByRole = aged.skippedByRole.filter((d) => inScope(d.node));
 		// Only a FULL-FLEET report can speak to fleet coverage, exactly as above.
 		const c = named.length ? { never: [], stale: [] } : coverageOf({});
-		// A GUEST MAY NOT BE PAGED ABOUT THROUGH COVERAGE EITHER. Excluding it from
+		// THE BACKSTOP IS NOT PAGED ABOUT THROUGH COVERAGE EITHER. Excluding it from
 		// `due` and then naming it in `findings` as never-measured or stale would
 		// route the same page down the other pipe — `findings` is exactly what the
-		// cron turns into an alert. Nothing is lost: any guest a threshold selected
+		// cron turns into an alert. Nothing is lost: a backstop a threshold selected
 		// is in `skippedByRole` above with its dates, `measuredAt: null` included.
-		const guests = guestNodeNames({ machines: fleetMachines() });
-		const f = coverageFindings(c, guests);
+		const backstops = backstopNodeNames({ machines: fleetMachines() });
+		const f = coverageFindings(c, backstops);
 		const byHand = byHandFor(DUE_DAYS);
 		const line = (d) =>
 			`  ${d.node.padEnd(10)}${d.measuredAt ? `${d.measuredAt}  (${d.ageDays}d)` : 'NEVER measured'}`;
 		const exempt = skippedByRole.length
-			? `\n\nnot due — exempt by role (the fleet chain does not act on these):\n` +
+			? `\n\nnot due — exempt by role (not ranked for routing):\n` +
 				skippedByRole.map((d) => `${line(d)}  [${d.role}]`).join('\n')
 			: '';
 		if (JSON_OUT) {
@@ -534,17 +533,14 @@ async function main() {
 		// turns it into its own finding. A node that has NEVER been measured is a
 		// different thing: a hole in the comparison every capacity decision in the
 		// manifest is made from, and it exits non-zero like the measuring path does —
-		// unless it is a guest, which this command has nothing to say about.
-		process.exit(c.never.some((n) => !guests.has(n)) ? 1 : 0);
+		// unless it is the backstop, which no speed rank reads.
+		process.exit(c.never.some((n) => !backstops.has(n)) ? 1 : 0);
 	}
 
-	// THE MEASURING PATH GETS THE SAME ROLE EXCLUSION, and it matters more here
-	// than in the report: this is the branch that sshes a box and loads it. Before
-	// 2026-09-16 `--due 30 --max 2 --write` would have picked hokon up on the first
-	// night its stamp aged out and run benchmark-node.sh on a guest. An OPERATOR
-	// naming it positionally (`fleet benchmark hokon --write`) is unaffected —
-	// `named` bypasses this entirely, which is correct: a person asking is not the
-	// fleet chain acting.
+	// THE MEASURING PATH GETS THE SAME ROLE EXCLUSION: this is the branch that
+	// sshes a box and loads it, and the backstop is the production host as well as
+	// unranked. An OPERATOR naming it positionally (`fleet benchmark hokon --write`)
+	// is unaffected — `named` bypasses this entirely.
 	const aged = DUE_DAYS === null ? null : dueNodes(DUE_DAYS, MAX_NODES);
 	const due = aged ? aged.due : null;
 	const skippedByRole = aged ? aged.skippedByRole : [];

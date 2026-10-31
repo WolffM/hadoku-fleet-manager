@@ -320,15 +320,15 @@ test("seedNode: a node excluded from the seed's repo is repo-ineligible, no I/O 
 	assert.equal(ghCalls.length, 0);
 });
 
-test('seedNode: hokon (a guest) is never seeded, whatever it has earned — zero I/O', async () => {
+test('seedNode: the backstop goes through the same gates as a claw', async () => {
 	const manifest = seedsManifest();
-	const { ssh, calls: sshCalls } = fakeSsh({});
-	const { gh, calls: ghCalls } = fakeGh();
-	const node = earnedNode({ role: 'guest' });
+	const node = earnedNode({ role: 'backstop' });
+	manifest.machines.hokon = node;
+	const { ssh, calls: sshCalls } = fakeSsh({ hokon: [BUSY] });
+	const { gh } = fakeGh();
 	const results = await seedNode('hokon', node, manifest, { ssh, gh });
-	assert.equal(results[0].status, 'guest');
-	assert.equal(sshCalls.length, 0);
-	assert.equal(ghCalls.length, 0);
+	assert.equal(results[0].status, 'busy');
+	assert.equal(sshCalls.length, 1);
 });
 
 test('seedNode: a busy node is skipped and reported, never counted as a finding', async () => {

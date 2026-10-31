@@ -31,8 +31,6 @@ import process from 'node:process';
 const {
 	unconsumedArgs,
 	manifestPath,
-	guestGate,
-	selectNodes,
 	selectMachines,
 	runOn,
 	runOnSync,
@@ -225,168 +223,43 @@ test('every machine-scoped subcommand routes through machineArg', () => {
 	}
 });
 
-// ── the role gate ───────────────────────────────────────────────────────────
+// ── selection: no role gate ────────────────────────────────────────────────
 
-/**
- * A manifest, always PASSED EXPLICITLY.
- *
- * `guestGate` falls back to the operator's real manifest, which CI does not
- * have — the sibling-checkout trap this file already has two tests about. Every
- * case below hands it its own, so the gate is exercised without a hadoku_site
- * on disk and without any test's answer depending on the live fleet's shape.
- */
 const ROLES = {
 	machines: {
 		'claw-1': { role: 'claw' },
-		guestbox: { role: 'guest' },
+		hokon: { role: 'backstop' },
 		unclassified: {},
 	},
 };
 
-test('a guest is skipped by default, and the skip says why', () => {
-	const g = guestGate('guestbox', { argv: ['--check'], manifest: ROLES });
-	assert.equal(g.skip, true);
-	assert.equal(g.role, 'guest');
-	assert.match(g.why, /lends the fleet a registration/);
-	assert.match(g.why, /--machine guestbox or --include-guests/, 'and names both doors');
-});
-
-test('a claw is never skipped, and neither is a node nobody classified', () => {
-	// ABSENCE READS AS `claw`, the strict direction node-role.ts argues for: a
-	// machine nobody classified gets the whole chain rather than a silent pass.
-	for (const node of ['claw-1', 'unclassified']) {
-		assert.equal(guestGate(node, { argv: [], manifest: ROLES }).skip, false, node);
-	}
-});
-
-test('--machine <the guest> reaches it — naming it outright is the operator asking', () => {
-	assert.equal(
-		guestGate('guestbox', { argv: ['--machine', 'guestbox', '--check'], manifest: ROLES }).skip,
-		false
-	);
-	// `--machine=NAME` is the SAME request. machineArg disagreed with itself
-	// about that until 2026-09-08 and scoped a --confirm run to the whole fleet.
-	assert.equal(
-		guestGate('guestbox', { argv: ['--machine=guestbox'], manifest: ROLES }).skip,
-		false
-	);
-});
-
-test('naming a DIFFERENT node does not open the door for the guest', () => {
-	// The sweep `fleet slice --machine claw-1` must not reach guestbox just
-	// because some `--machine` was present.
-	assert.equal(
-		guestGate('guestbox', { argv: ['--machine', 'claw-1'], manifest: ROLES }).skip,
-		true
-	);
-});
-
-test('--include-guests and includeGuests are the other two doors', () => {
-	assert.equal(guestGate('guestbox', { argv: ['--include-guests'], manifest: ROLES }).skip, false);
-	assert.equal(
-		guestGate('guestbox', { includeGuests: true, argv: [], manifest: ROLES }).skip,
-		false
-	);
-});
-
-test('selectNodes hands back the guests it refused, rather than dropping them', () => {
-	const { nodes, skippedByRole } = selectNodes(ROLES, { argv: [], manifest: ROLES });
-	assert.deepEqual(
-		nodes.map(([n]) => n),
-		['claw-1', 'unclassified']
-	);
-	// A SKIP NOBODY PRINTS is how a node stops being checked and nobody notices.
-	// The list is the caller's obligation, so it has to come back.
-	assert.deepEqual(
-		skippedByRole.map((s) => [s.node, s.role]),
-		[['guestbox', 'guest']]
-	);
-});
-
-test('selectNodes still honours `only` and `where` — the role is an EXTRA filter', () => {
-	const { nodes } = selectNodes(ROLES, {
-		where: (m, name) => name !== 'unclassified',
-		argv: [],
-		manifest: ROLES,
-	});
-	assert.deepEqual(
-		nodes.map(([n]) => n),
-		['claw-1']
-	);
-	// And `--machine <guest>` puts it back in `nodes`, where the caller can
-	// decide it is advisory — which is what `fleet slice --check` does.
-	const named = selectNodes(ROLES, {
-		only: 'guestbox',
-		argv: ['--machine', 'guestbox'],
-		manifest: ROLES,
-	});
-	assert.deepEqual(
-		named.nodes.map(([n]) => n),
-		['guestbox']
-	);
-	assert.deepEqual(named.skippedByRole, []);
-});
-
-test('selectMachines is UNCHANGED — it is a published export another repo imports', () => {
+test('selectMachines selects the backstop like any node, honouring `only` and `where`', () => {
 	// hadoku_site's scripts/admin/check-boundary-contracts.mjs imports this by
-	// name. Adding the role filter here instead of in selectNodes would have
-	// changed a consumer in another repo as a side effect.
+	// name. There is no role filter in the transport: a script that must leave
+	// the backstop out says so itself.
 	assert.deepEqual(
 		selectMachines(ROLES).map(([n]) => n),
-		['claw-1', 'guestbox', 'unclassified']
+		['claw-1', 'hokon', 'unclassified']
+	);
+	assert.deepEqual(
+		selectMachines(ROLES, { only: 'hokon' }).map(([n]) => n),
+		['hokon']
+	);
+	assert.deepEqual(
+		selectMachines(ROLES, { where: (m, name) => name !== 'unclassified' }).map(([n]) => n),
+		['claw-1', 'hokon']
 	);
 });
 
-test('runOnSync REFUSES a guest when the gate is armed, and the refusal is not ok', () => {
-	// `ok: false` is the strict direction. A caller that has not been taught
-	// about skippedByRole sees a node it got no answer from, which is TRUE —
-	// "I chose not to look" is not "nothing is wrong" either.
-	const r = runOnSync('guestbox', 'echo reached', {
-		includeGuests: false,
-		argv: [],
-		manifest: ROLES,
-	});
-	assert.equal(r.ok, false);
-	assert.equal(r.skippedByRole, 'guest');
-	assert.equal(r.out, '', 'and it did not run — nothing came back');
-	assert.match(r.error, /^skipped: guest/);
-});
-
-test('runOnSync with the gate armed still RUNS on a claw', () => {
-	// THE CONTROL. Without it the test above passes on a transport that refuses
-	// every node, which is a different bug wearing the same green tick.
-	//
+test('runOnSync runs on the backstop like any node', () => {
 	// THIS BOX, by its own name, so the run is `bash -s` and no packet leaves the
-	// machine. An earlier draft used a reserved `.invalid` name and let the ssh
-	// fail: it proved the same thing and spent ~40s of every `pnpm run check`
-	// waiting for a resolver, on a runner whose network is not this test's
-	// subject.
+	// machine.
 	const r = runOnSync(LOCAL, 'echo reached', {
-		includeGuests: false,
-		argv: [],
-		manifest: { machines: { [LOCAL]: { role: 'claw' } } },
+		manifest: { machines: { [LOCAL]: { role: 'backstop' } } },
 	});
-	assert.equal(r.skippedByRole, undefined, 'a claw is never skipped by role');
-	assert.equal(r.ok, true, `and it genuinely ran: ${r.error}`);
+	assert.equal(r.ok, true, `it genuinely ran: ${r.error}`);
 	assert.match(r.out, /reached/);
-});
-
-test('an UNARMED call is unchanged — the default is documented debt, not a guard', () => {
-	// Seventeen scripts reach a node without consulting a role
-	// (`node-role-guard.test.mjs` names them). Flipping this default would skip
-	// hokon inside all of them at once, and the ones with an end-of-output
-	// sentinel would read the missing answer as "the probe never ran" and turn
-	// red. Pinned so the day the debt list empties, this test is what someone
-	// has to come and change on purpose.
-	//
-	// The node is a GUEST and it still runs, locally, which is exactly the
-	// unguarded behaviour being pinned.
-	const r = runOnSync(LOCAL, 'echo reached', {
-		argv: [],
-		manifest: { machines: { [LOCAL]: { role: 'guest' } } },
-	});
-	assert.equal(r.skippedByRole, undefined, 'no includeGuests means no gate');
-	assert.equal(r.ok, true, 'an unarmed call reaches a guest, as it always has');
+	assert.equal(r.skippedByRole, undefined);
 });
 
 // ── #37: the sync transport's buffer, and a failure that says what kind ──────

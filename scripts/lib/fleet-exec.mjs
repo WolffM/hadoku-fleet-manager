@@ -43,11 +43,6 @@ import { manifest as manifestFile } from './paths.mjs';
 // than quietly taking the wrong branch.
 import { isLocalNode } from '../../dist/lib/node-identity.js';
 import { ciIsSeparate, nodeCommand, nodeUser } from '../../dist/lib/node-users.js';
-// The BUILT copy for the same reason, and from the same `src/lib/` shelf: one
-// question, one answer. `nodeRole` is the operator's decision about what the
-// fleet chain may DO to a box, and it is read here so that the transport layer
-// and the gates cannot disagree about which boxes are guests.
-import { isGuestNode } from '../../dist/lib/node-role.js';
 
 /**
  * The single node model. Every fleet script reads placement/limits from here.
@@ -228,119 +223,6 @@ export function selectMachines(manifest, { only = null, where = null } = {}) {
 }
 
 /**
- * THE VALUE OF `--machine`, READ AND NOT JUDGED.
- *
- * {@link machineArg} is the operator-facing parser and it EXITS THE PROCESS on a
- * stray positional. That is right for a command's own argument handling and
- * catastrophic for a role lookup: asking "did the operator name this node?"
- * must never be able to kill the caller, and `guestGate` asks it on every node
- * of every sweep. So the reading half lives here, pure, and the refusing half
- * stays where an operator can see it.
- *
- * Both spellings, because `--machine=NAME` and `--machine NAME` are the same
- * request and a parser that silently disagreed with itself about that is the
- * 2026-09-08 bug `machineArg` carries a paragraph about.
- */
-function namedMachine(argv) {
-	const eq = argv.find((a) => a.startsWith('--machine='));
-	if (eq !== undefined) return eq.slice('--machine='.length) || null;
-	const i = argv.indexOf('--machine');
-	if (i === -1) return null;
-	const v = argv[i + 1];
-	return v === undefined || v.startsWith('-') ? null : v;
-}
-
-/**
- * Memoized manifest, for role lookups ONLY.
- *
- * Lazy for the same reason {@link manifestPath} is — importing the transport
- * layer must not demand operator config — and memoized because a fleet sweep
- * asks this once per node and the answer cannot change mid-sweep without the
- * sweep judging two nodes against two manifests.
- */
-let roleManifestCache;
-function roleManifest() {
-	if (roleManifestCache === undefined) roleManifestCache = loadManifest();
-	return roleManifestCache;
-}
-
-/**
- * MAY THE FLEET CHAIN REACH THIS BOX? — asked once, here, for every transport.
- *
- * `src/lib/node-role.ts` owns what a role IS; this owns what a role MEANS to a
- * script that is about to run something somewhere. Five scripts rediscovered
- * the same rule in Wave 3d and each wrote its own `isGuestNode(...) && !FLAG`,
- * and `fleet slice --check` was the sixth — red in `ci:audit-gates` while it
- * printed "On hokon, as the operator: sudo -v && fleet slice --machine hokon
- * --confirm", which is precisely the thing the fleet must never ask of a guest.
- *
- * THREE DOORS OPEN IT, and all three are an explicit human act:
- *   - `includeGuests: true` from the caller, for a command whose whole purpose
- *     is the guest.
- *   - `--include-guests` on the command line, the spelling `converge-toolchain`
- *     established.
- *   - `--machine <the guest>`, naming it outright. An operator who typed the
- *     node's name is not going to be surprised by reaching it, and refusing
- *     there would leave no way to audit a guest at all.
- *
- * A guest that none of the three named is SKIPPED, and the skip is a fact the
- * caller must report — never a silent one. `skippedByRole` exists so a report
- * can carry it.
- *
- * @param {string} node
- * @param {{includeGuests?: boolean, argv?: string[], manifest?: object}} [opts]
- * @returns {{skip: boolean, role: 'claw'|'guest', why: string|null}}
- */
-export function guestGate(node, { includeGuests = false, argv, manifest } = {}) {
-	const av = argv ?? process.argv.slice(2);
-	const m = manifest ?? roleManifest();
-	const role = isGuestNode(m?.machines?.[node]) ? 'guest' : 'claw';
-	if (role !== 'guest') return { skip: false, role, why: null };
-	if (includeGuests === true) return { skip: false, role, why: 'the caller passed includeGuests' };
-	if (av.includes('--include-guests')) return { skip: false, role, why: '--include-guests' };
-	if (namedMachine(av) === node) return { skip: false, role, why: `--machine ${node}` };
-	return {
-		skip: true,
-		role,
-		why:
-			'a guest lends the fleet a registration and nothing else (operator, 2026-09-14); ' +
-			`reach it with --machine ${node} or --include-guests`,
-	};
-}
-
-/**
- * The nodes a command may act on, with the guests it refused to act on.
- *
- * THE ROLE-AWARE DOOR, and the one every fleet-reaching script should come
- * through. {@link selectMachines} keeps its exact behaviour — it is a published
- * subpath export and hadoku_site's `check-boundary-contracts.mjs` imports it —
- * so this wraps it rather than changing it under a consumer in another repo.
- *
- * `skippedByRole` is returned SEPARATELY rather than folded into `nodes`,
- * matching what `deploy-ci-throttle` already does with its own list: `nodes`
- * means "the boxes this run acted on", and a guest is exactly a box it did not.
- * Merging them would make a skipped guest indistinguishable from a deployed
- * node to anything counting them.
- *
- * A caller MUST report what comes back in `skippedByRole`. A skip nobody prints
- * is how a node stops being checked and nobody notices — the reason
- * `converge-toolchain` prints its own.
- */
-export function selectNodes(
-	manifest,
-	{ only = null, where = null, includeGuests = false, argv } = {}
-) {
-	const nodes = [];
-	const skippedByRole = [];
-	for (const entry of selectMachines(manifest, { only, where })) {
-		const gate = guestGate(entry[0], { includeGuests, argv, manifest });
-		if (gate.skip) skippedByRole.push({ node: entry[0], role: gate.role, why: gate.why });
-		else nodes.push(entry);
-	}
-	return { nodes, skippedByRole };
-}
-
-/**
  * Tokens in `argv` that nothing consumed.
  *
  * Pure, and exported so the refusal below can be tested without a process.
@@ -451,17 +333,6 @@ export function machineArg(argv = process.argv.slice(2), { valueFlags = [] } = {
 }
 
 /**
- * What a transport returns instead of reaching a guest.
- *
- * `ok: false`, deliberately, and this is the strict direction that
- * `src/lib/node-role.ts` argues for its own default. A caller that has not been
- * taught about `skippedByRole` then sees a node it did not get an answer from,
- * which is TRUE — "I chose not to look" and "I could not look" are different
- * facts but neither of them is "nothing is wrong". An `ok: true` skip with empty
- * output would hand every unconverted caller a healthy fleet of one fewer
- * machine, which is the failure CLAUDE.md names first.
- */
-/**
  * Why a call failed, in words a finding can carry. `execFile` reports a call
  * IT killed at the timeout as a bare "Command failed: <argv>", the same text
  * as any other failure, and the process it killed never got to say why (an
@@ -480,51 +351,11 @@ function roleFailure(local, err) {
 	return { ok: false, stdout: '', stderr: error, out: error, local, error };
 }
 
-function guestSkipResult(node, gate) {
-	return {
-		ok: false,
-		skippedByRole: gate.role,
-		stdout: '',
-		stderr: '',
-		out: '',
-		local: false,
-		error: `skipped: guest — ${gate.why}`,
-	};
-}
-
-/**
- * Should this transport call refuse the node?
- *
- * TRI-STATE, and the middle state is a documented debt rather than a design.
- *
- *   `includeGuests: true`      reach, whatever the role.
- *   `includeGuests: false`     ENFORCE — a guest is skipped unless the operator
- *                              named it (see {@link guestGate}).
- *   omitted                    reach, unenforced.
- *
- * Omitted cannot be made to mean "enforce" in one wave, and pretending
- * otherwise would be worse than saying so. `scripts/lib/node-role-guard.test.mjs`
- * measured it: ELEVEN scripts reach a node without consulting a role, six of
- * them through `selectMachines` + `runOn` with hokon in the selection. Flipping
- * this default would skip hokon inside all of them at once — and the ones
- * written properly, with an end-of-output sentinel, read a missing answer as
- * "the probe never ran" and turn red. That is six gates reddened by a lane that
- * owns none of them. The guard names every one and refuses to let the list
- * grow; the default flips when the list is empty.
- */
-function guestSkip(node, includeGuests, argv, manifest) {
-	if (includeGuests === undefined) return null;
-	const gate = guestGate(node, { includeGuests, argv, manifest });
-	return gate.skip ? gate : null;
-}
-
 /**
  * Run a shell script on a node and collect its output.
  *
  * Never rejects: an unreachable node is a RESULT, not an exception. A fleet
  * sweep that throws on the first dead box reports nothing about the other three.
- *
- * `includeGuests` arms the role gate — see {@link guestSkip}.
  *
  * `as` is the NODE USER ROLE the script runs as (`src/lib/node-users.ts`):
  * `admin` (the default: provisioning, system units, observation) or `ci`
@@ -534,19 +365,9 @@ function guestSkip(node, includeGuests, argv, manifest) {
 export function runOn(
 	node,
 	script,
-	{
-		timeoutMs = 120_000,
-		connectTimeout = 10,
-		maxBuffer,
-		includeGuests,
-		argv: gateArgv,
-		manifest,
-		as = 'admin',
-	} = {}
+	{ timeoutMs = 120_000, connectTimeout = 10, maxBuffer, manifest, as = 'admin' } = {}
 ) {
 	assertScript(node, script);
-	const gate = guestSkip(node, includeGuests, gateArgv, manifest);
-	if (gate) return Promise.resolve(guestSkipResult(node, gate));
 	const local = isLocalNode(node);
 	let cmd;
 	let argv;
@@ -641,14 +462,10 @@ export function runOnSync(
 		timeoutMs = 120_000,
 		connectTimeout = 10,
 		maxBuffer = SYNC_MAX_BUFFER,
-		includeGuests,
-		argv: gateArgv,
 		manifest,
 		as = 'admin',
 	} = {}
 ) {
-	const gate = guestSkip(node, includeGuests, gateArgv, manifest);
-	if (gate) return guestSkipResult(node, gate);
 	const local = isLocalNode(node);
 	let cmd;
 	let argv;

@@ -36,6 +36,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { parseJsonStdout, spawnCapture } from './lib/spawn-json.mjs';
+import { blankComments } from './lib/blank-comments.mjs';
 import { tempDir, cleanupTempDirs } from './lib/test-tmpdir.mjs';
 
 /**
@@ -1068,13 +1069,9 @@ test('#76: the lower-bound shape (jobP95Mb.mb raised off a capped run) is still 
 	assert.match(r.out + r.err, /cannot host this job/, r.out + r.err);
 });
 
-// ── the DEPLOYER: a guest is skipped by role ───────────────────────────────
+// ── the DEPLOYER ─────────────────────────────────────────────────────────────
 //
 // `deploy-ci-throttle.mjs` writes the hook above onto every node it selects.
-// It selected a guest: `selectMachines` filters on `--machine` alone and the
-// `bounded()` filter asks only about maxConcurrent/minFreeMb, both of which
-// hokon declares — so a bare `--confirm` would have ssh'd the operator's
-// production host. Wave 3d §K asserted the skip existed; it did not.
 //
 // EVERY CASE BELOW IS DRIVEN AGAINST A TEMP MANIFEST AND REACHES NO NODE. The
 // fixture nodes are named under `.invalid`, which RFC 2606 reserves so it can
@@ -1248,7 +1245,7 @@ test('#76: the per-node call site gates RESERVE_FILE on isLocalNode, never on CO
 	// box. Behaviourally exercising `isLocalNode(name)` reading TRUE would mean
 	// actually running this script's local-execution path against the real
 	// node it happens to run on in this environment — out of scope for a test
-	// (no writes of any kind to a guest, and no real local execution of the
+	// (no writes of any kind to a node, and no real local execution of the
 	// install payload at all, read-only or not). `isLocalNode` itself is
 	// already guarded elsewhere (`node-identity-guard.test.mjs`); what matters
 	// here is only that THIS call site still asks it, rather than reading
@@ -1272,300 +1269,30 @@ test('#76: the per-node call site gates RESERVE_FILE on isLocalNode, never on CO
 	);
 });
 
-const GUEST_NODE = {
+const BACKSTOP_NODE = {
 	cores: 12,
 	labels: ['pm2-host'],
 	maxConcurrent: 4,
 	minFreeMb: 8192,
-	role: 'guest',
+	role: 'backstop',
 };
 const CLAW_NODE = { cores: 8, labels: [], maxConcurrent: 2, minFreeMb: 1024, role: 'claw' };
 
-test('deployer: an explicit --machine <guest> REFUSES and names the role', () => {
-	// Someone will type it. The refusal has to say "guest", not the generic
-	// "no nodes to deploy to", which reads as "that name is not in the manifest"
-	// and sends them hunting a typo that is not there.
-	const f = manifestFixture({ 'guest-host.invalid': GUEST_NODE, 'claw-a.invalid': CLAW_NODE });
+test('deployer: the backstop is deployed to like a claw, by --machine and fleet-wide', () => {
+	// The throttle hook is the fleet's own admission script and the backstop
+	// runs the fleet's jobs, so it is in scope on every path. Both nodes are
+	// selected; neither resolves (`.invalid`), so each is an unreachable row.
+	const f = manifestFixture({ 'backstop.invalid': BACKSTOP_NODE, 'claw-a.invalid': CLAW_NODE });
 	try {
-		const r = deploy(['--check', '--machine', 'guest-host.invalid'], f.env);
-		assert.equal(r.code, 2, `expected a usage refusal, got ${r.code}: ${r.err}`);
-		assert.match(r.err, /GUEST/);
-		assert.match(r.err, /nothing was contacted/i);
-		// It must point at the manifest key, not read as a hardcoded name.
-		assert.match(r.err, /role/);
-		assert.doesNotMatch(r.out + r.err, /SUMMARY/, 'no node may be contacted on this path');
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('deployer: a guest is reported as skipped-by-role, under --check AND --confirm', () => {
-	// The claw declares no maxConcurrent/minFreeMb, so nothing is left to deploy
-	// to and the script returns before its ssh. That is what lets --confirm be
-	// exercised here at all: the skip must be stated on an APPLY run too, since
-	// a --confirm that quietly skipped a node is exactly as misleading as an
-	// audit that did.
-	for (const mode of ['--check', '--confirm']) {
-		const f = manifestFixture({
-			'guest-host.invalid': GUEST_NODE,
-			'claw-unbounded.invalid': { cores: 4, labels: [], role: 'claw' },
-		});
-		try {
-			const r = deploy([mode], f.env);
-			assert.match(
-				r.out,
-				/guest-host\.invalid\s+\[skipped: guest\]/,
-				`${mode}: the guest must be named as skipped, got: ${r.out}`
-			);
-			assert.match(r.out, /out of scope/i, `${mode}: the skip must say why`);
-			assert.doesNotMatch(r.out + r.err, /SUMMARY/, `${mode}: no node may be contacted`);
-			// Zero nodes deployed to is a FAILURE, never a clean pass.
-			assert.equal(r.code, 1, `${mode}: zero nodes must fail loudly, got ${r.code}`);
-			assert.match(r.err, /no nodes to deploy to/);
-			assert.match(r.err, /guest\(s\) skipped by role/);
-		} finally {
-			rmSync(f.root, { recursive: true, force: true });
-		}
-	}
-});
-
-test('deployer: --json carries skippedGuests, and the guest is NOT in results', () => {
-	// `log()` is suppressed under --json, so the human-readable skip line above
-	// cannot be the only channel: anything parsing this output would otherwise
-	// see a fleet with the guest silently missing and no way to tell it from a
-	// node that was never declared.
-	const f = manifestFixture({ 'guest-host.invalid': GUEST_NODE, 'claw-a.invalid': CLAW_NODE });
-	try {
-		const r = deploy(['--check', '--json'], f.env);
-		const report = json(r);
-		assert.deepEqual(report.skippedGuests, ['guest-host.invalid']);
+		const all = json(deploy(['--check', '--json'], f.env));
+		assert.deepEqual(all.results.map((x) => x.machine).sort(), [
+			'backstop.invalid',
+			'claw-a.invalid',
+		]);
+		const one = json(deploy(['--check', '--json', '--machine', 'backstop.invalid'], f.env));
 		assert.deepEqual(
-			report.results.map((x) => x.machine),
-			['claw-a.invalid'],
-			'a skipped guest must not appear as a node this run acted on'
-		);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-// ── the DEPLOYER: the ONE door past the skip ───────────────────────────────
-//
-// #36 recurred on hokon three days running, and hokon is a guest — so the fix
-// had to reach the one box the deployer refuses to touch. `--include-guests`
-// (the spelling `guestGate` and `converge-toolchain` already use, not a new
-// word) opens that door for ONE EXPLICITLY NAMED node and nothing else.
-//
-// The property these cases exist to hold is not "the flag works". It is that
-// the flag CANNOT MAKE A GUEST REACHABLE BY ACCIDENT: every path where somebody
-// did not type both `--machine <that guest>` and `--include-guests` must still
-// refuse, with the same message and the same exit 2 as before the flag existed.
-// The four cases above are the untouched half of that and stay exactly as they
-// are; these are the other half.
-//
-// All of them run under `--check` against a temp manifest of `.invalid` nodes
-// and reach no box, for the same reasons as the section above.
-
-test('deployer: --include-guests without --machine REFUSES — it narrows, never widens', () => {
-	// The dangerous shape, and the reason this is not just forwarded to
-	// `guestGate`: that gate opens fleet-wide on this flag, which is right for a
-	// command that reads and catastrophic for one that writes a hook, a conf and
-	// three node-side scripts and then restarts listeners.
-	const f = manifestFixture({
-		'guest-one.invalid': GUEST_NODE,
-		'guest-two.invalid': { ...GUEST_NODE },
-		'claw-a.invalid': CLAW_NODE,
-	});
-	try {
-		const r = deploy(['--check', '--include-guests'], f.env);
-		assert.equal(r.code, 2, `a fleet-wide guest sweep must be refused, got ${r.code}: ${r.err}`);
-		assert.match(r.err, /requires --machine/);
-		assert.match(r.err, /nothing was contacted/i);
-		// No guest may appear as a node this run acted on, under any reading.
-		assert.doesNotMatch(r.out + r.err, /SUMMARY/, 'no node may be contacted on this path');
-		assert.doesNotMatch(r.out, /guest-one\.invalid\s+\(/, 'a guest was selected for deploy');
-		assert.doesNotMatch(r.out, /guest-two\.invalid\s+\(/, 'a guest was selected for deploy');
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('deployer: --include-guests on a node that is NOT a guest REFUSES', () => {
-	// An override typed for a guard that would not have fired means the operator
-	// believes something false about this node. It also catches the typo case —
-	// a name that is in no manifest is not a guest either — which would
-	// otherwise fall through to "no nodes to deploy to" and read as a missing
-	// node rather than a misunderstanding.
-	const f = manifestFixture({ 'guest-host.invalid': GUEST_NODE, 'claw-a.invalid': CLAW_NODE });
-	try {
-		const r = deploy(['--check', '--machine', 'claw-a.invalid', '--include-guests'], f.env);
-		assert.equal(r.code, 2, `expected a usage refusal, got ${r.code}: ${r.err}`);
-		assert.match(r.err, /is not a guest/);
-		assert.match(r.err, /nothing was contacted/i);
-		assert.doesNotMatch(r.out + r.err, /SUMMARY/);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('deployer: --machine <guest> --include-guests selects the guest, and says so loudly', () => {
-	// The one path that opens. It is asserted on `--check` only — a --confirm
-	// here would reach a real box, and `.invalid` plus a temp manifest is what
-	// keeps every other case in this file safe.
-	const f = manifestFixture({ 'guest-host.invalid': GUEST_NODE, 'claw-a.invalid': CLAW_NODE });
-	try {
-		const r = deploy(['--check', '--machine', 'guest-host.invalid', '--include-guests'], f.env);
-		// It got past the refusal and tried to contact the node — which cannot
-		// resolve, so the run fails. That failure IS the evidence: the previous
-		// behaviour was exit 2 with nothing contacted.
-		assert.notEqual(r.code, 2, `still refused by the role guard: ${r.err}`);
-		assert.match(r.out, /guest-host\.invalid/, 'the guest must be selected for deploy');
-		assert.doesNotMatch(
-			r.out,
-			/guest-host\.invalid\s+\[skipped: guest\]/,
-			'the named guest must no longer be reported as skipped'
-		);
-
-		// LOUDLY. Every element the operator needs to read an overridden run
-		// later: that it is a guest, the decision being overridden and its date,
-		// and that this was explicit rather than a default.
-		assert.match(r.err, /GUEST OVERRIDE/);
-		assert.match(r.err, /2026-09-14/, 'the decision being overridden must be named');
-		assert.match(r.err, /override of a deliberate decision/i);
-		assert.match(r.err, /--include-guests/);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('deployer: the SAME command line without --include-guests still refuses — the flag is what opens it', () => {
-	// The A/B pair, on one fixture, differing by exactly one token. Everything
-	// else in this section could pass while the flag was decorative and the
-	// `--machine <guest>` above was doing the work — which is the one way this
-	// change could make a guest reachable by accident. Asserted here rather than
-	// left to the older `--machine <guest> REFUSES` case, because that one does
-	// not know the flag exists and would not notice it becoming load-bearing in
-	// the wrong direction.
-	const f = manifestFixture({ 'guest-host.invalid': GUEST_NODE, 'claw-a.invalid': CLAW_NODE });
-	try {
-		const withFlag = deploy(
-			['--check', '--json', '--machine', 'guest-host.invalid', '--include-guests'],
-			f.env
-		);
-		assert.equal(json(withFlag).guestOverride, 'guest-host.invalid');
-
-		const withoutFlag = deploy(['--check', '--json', '--machine', 'guest-host.invalid'], f.env);
-		assert.equal(
-			withoutFlag.code,
-			2,
-			`dropping the flag must restore the refusal: ${withoutFlag.err}`
-		);
-		assert.match(withoutFlag.err, /GUEST/);
-		// Since fleet-manager#20-#26 a --json refusal is a document that says
-		// why, never empty stdout — and never a clean report.
-		const refusal = JSON.parse(withoutFlag.out);
-		assert.equal(refusal.ok, false, 'a refused run emits no report');
-		assert.match(refusal.error, /GUEST/);
-		assert.doesNotMatch(withoutFlag.err, /GUEST OVERRIDE/, 'nothing was overridden');
-		assert.doesNotMatch(withoutFlag.out + withoutFlag.err, /SUMMARY/);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('deployer: the override is in --json too, as guestOverride, not only on stderr', () => {
-	// `log()` is suppressed under --json, so the banner above cannot be the only
-	// channel — the same argument `skippedGuests` was added for. A cron parsing
-	// this must be able to tell an overridden run from an ordinary one.
-	const f = manifestFixture({
-		'guest-host.invalid': GUEST_NODE,
-		'guest-other.invalid': { ...GUEST_NODE },
-		'claw-a.invalid': CLAW_NODE,
-	});
-	try {
-		const r = deploy(
-			['--check', '--json', '--machine', 'guest-host.invalid', '--include-guests'],
-			f.env
-		);
-		const report = json(r);
-		assert.equal(report.guestOverride, 'guest-host.invalid');
-		assert.deepEqual(
-			report.results.map((x) => x.machine),
-			['guest-host.invalid'],
-			'the overridden guest is the only node --machine selected'
-		);
-		// The banner is on stderr precisely so --json cannot suppress it.
-		assert.match(r.err, /GUEST OVERRIDE/);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('deployer: an ordinary run still reports guestOverride: null', () => {
-	// The other half of the field being load-bearing. If it were only ever
-	// emitted on the overriding path, `report.guestOverride` would be undefined
-	// on every normal run and a consumer could not tell "not overridden" from
-	// "this deployer is too old to say".
-	const f = manifestFixture({ 'guest-host.invalid': GUEST_NODE, 'claw-a.invalid': CLAW_NODE });
-	try {
-		const r = deploy(['--check', '--json'], f.env);
-		const report = json(r);
-		assert.equal(report.guestOverride, null);
-		assert.deepEqual(report.skippedGuests, ['guest-host.invalid']);
-		assert.doesNotMatch(r.err, /GUEST OVERRIDE/);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('deployer: the override reaches ONLY the named guest — a second guest stays skipped', () => {
-	// The blast radius, asserted rather than assumed. Two guests declared, one
-	// named: the other must still be skipped by role and still be reported as
-	// skipped, or the flag has quietly become the fleet-wide sweep the first
-	// case in this section refuses.
-	const f = manifestFixture({
-		'guest-named.invalid': GUEST_NODE,
-		'guest-bystander.invalid': { ...GUEST_NODE },
-		'claw-a.invalid': CLAW_NODE,
-	});
-	try {
-		const r = deploy(
-			['--check', '--json', '--machine', 'guest-named.invalid', '--include-guests'],
-			f.env
-		);
-		const report = json(r);
-		assert.equal(report.guestOverride, 'guest-named.invalid');
-		assert.deepEqual(
-			report.results.map((x) => x.machine),
-			['guest-named.invalid'],
-			'no node but the named guest may be acted on'
-		);
-		// The bystander is filtered out by --machine before the role gate ever
-		// sees it, so it is not in `skippedGuests` either — what matters is that
-		// nothing reached it.
-		assert.doesNotMatch(r.out, /guest-bystander/, 'a guest nobody named must not be touched');
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('deployer: the skip reads the ROLE, not the capacity numbers or the name', () => {
-	// Two nodes identical to the guest in every field EXCEPT role — one claw, one
-	// guest. If the skip were ever re-derived from maxConcurrent/minFreeMb, or
-	// from a hardcoded hostname, this pair becomes indistinguishable and the
-	// assertion below fails.
-	const f = manifestFixture({
-		'twin-guest.invalid': { ...GUEST_NODE },
-		'twin-claw.invalid': { ...GUEST_NODE, role: 'claw' },
-	});
-	try {
-		const r = deploy(['--check', '--json'], f.env);
-		const report = json(r);
-		assert.deepEqual(report.skippedGuests, ['twin-guest.invalid']);
-		assert.deepEqual(
-			report.results.map((x) => x.machine),
-			['twin-claw.invalid'],
-			'identical capacity, different role — only the role may decide'
+			one.results.map((x) => x.machine),
+			['backstop.invalid']
 		);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
@@ -2246,5 +1973,21 @@ after(() => {
 		[],
 		`ci-throttle.test.mjs left ${left.length} fixture dir(s) in ${tmpdir()} (removed now, but ` +
 			'a case is missing its cleanup — on the claws /tmp is RAM)'
+	);
+});
+
+test('#120: fleet throttle asks the MINT predicate, never `ephemeral` — or an on-demand backstop gets no slot env', () => {
+	// Shipped 0.34.0 with one call site still reading `m.ephemeral === true`:
+	// the dry run reported "hokon has no jit-provision.sh", --confirm wrote
+	// nothing, and every mint on the backstop would have failed at step one. The
+	// slot env and the payload check are questions about the MINT PATH, which
+	// an on-demand backstop is on and `ephemeral` does not see. (The provisioner
+	// itself has travelled with each mint since 2026-10-27.)
+	const src = blankComments(readFileSync(DEPLOYER, 'utf8'));
+	assert.deepEqual(src.match(/\.ephemeral\s*[!=]==/g) ?? [], []);
+	assert.equal(
+		(src.match(/mintsJitRunners\(m\)/g) ?? []).length,
+		2,
+		'the slot env (MINTS) and the payload check'
 	);
 });

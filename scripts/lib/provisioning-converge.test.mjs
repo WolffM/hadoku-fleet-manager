@@ -77,12 +77,12 @@ test('planRepairs: a node that could not be read is unreadable — never repaire
 	);
 });
 
-test('planRepairs: a drained node, a guest, and minted-unit drift are none of its business', () => {
+test('planRepairs: a drained node, a backstop advisory and minted-unit drift are none of its business', () => {
 	const plan = planRepairs(
 		{ results: [{ machine: 'claw-2', ok: true, expectedDown: true, skipped: 'expected down' }] },
 		{
 			results: [
-				{ ...sl('hokon', {}, [DRIFT_1023]), role: 'guest', advisory: true },
+				{ ...sl('hokon', {}, [DRIFT_1023]), advisory: true },
 				sl('claw-3', {}, [
 					'MINT-PLACEMENT-DRIFT jit-claw-3-x.service effective=app.slice want=under-runners.slice',
 				]),

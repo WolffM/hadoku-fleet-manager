@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 import { isLocalNode } from '../dist/lib/node-identity.js';
-import { isGuestNode } from '../dist/lib/node-role.js';
+import { isBackstopNode } from '../dist/lib/node-role.js';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { createEmitter } from './lib/emit.mjs';
@@ -80,7 +80,7 @@ function writeState(s) {
 const clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
 
 const deps = {
-	isGuest: (entry) => isGuestNode(entry),
+	isBackstop: (entry) => isBackstopNode(entry),
 	isLocal: (node) => isLocalNode(node),
 	probe: (node) => {
 		const res = runOnSync(node, REBOOT_PROBE, {

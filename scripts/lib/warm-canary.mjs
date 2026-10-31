@@ -20,7 +20,7 @@
  * own writer's bookkeeping could not fail.
  *
  * ELIGIBLE is the same rule the dispatcher enforces: ephemeral, not drained,
- * not a guest, and MEASURED usable memory (`installed − minFreeMb`) whose warm
+ * not the backstop, and MEASURED usable memory (`installed − minFreeMb`) whose warm
  * half holds one busy listener — a job's worth — while the other half stays
  * reserved for cold mints — see `warmEligibleSlots`/`warmCacheEligible` in
  * src/runners/ephemeral.ts, imported here rather than re-typed so there is
@@ -44,7 +44,7 @@
  * @property {number} minFreeMb
  * @property {number} jobMb - one job's worth on this node, the unit a mint and
  *   a busy listener both occupy — see `WarmEligibilityInput.jobMb`.
- * @property {string} [role] - the manifest's role; a guest is never eligible.
+ * @property {string} [role] - the manifest's role; the backstop is never eligible.
  * @property {string|null} activeRepo - the repo an ACTIVE warm-* unit is
  *   currently registered for on this node, or null if none.
  */

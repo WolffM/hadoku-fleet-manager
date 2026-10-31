@@ -138,7 +138,7 @@ test('a marker alone never justifies deletion — .runner is the veto', () => {
 	}
 });
 
-/** removeScript's output, lifted from the module the way remove-script-guest.test does. */
+/** removeScript's output, lifted from the module the way remove-script.test does. */
 function generatedRemoveScript() {
 	// removeScript moved to lib/reconcile-scripts.mjs (wave 5g lane C, pure move).
 	const SRC = readFileSync(join(SCRIPTS, 'lib', 'reconcile-scripts.mjs'), 'utf8');

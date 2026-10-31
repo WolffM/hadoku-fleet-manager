@@ -381,7 +381,7 @@ export type BackstopLabelWrite = 'promote' | 'demote' | null;
 /**
  * ONE PREDICATE for the label write, shared by both paths that perform it.
  *
- * `runner-health` writes `hadoku-builder` on the guest pool in two places — by
+ * `runner-health` writes `hadoku-builder` on the backstop pool in two places — by
  * runner id on the hub repo, and by listing on each of the other 26 — and they
  * disagreed on exactly one clause: the fan-out skipped a runner that was not
  * `online`, for the DEMOTE as well as the promote. That is not a symmetric

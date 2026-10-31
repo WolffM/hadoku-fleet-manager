@@ -38,6 +38,7 @@ function runIn(seed, ...args) {
 			machines: {
 				'claw-5': { role: 'claw', maxConcurrent: 2 },
 				'claw-6': { role: 'claw', maxConcurrent: 2 },
+				hokon: { role: 'backstop', maxConcurrent: 4 },
 			},
 		})
 	);
@@ -66,6 +67,12 @@ test('a reboot drain is accepted, and recorded as kind `reboot` with its end', (
 	assert.equal(rec?.kind, 'reboot');
 	assert.equal(rec?.reason, 'automated reboot: x');
 	assert.ok(Date.parse(rec?.until) > Date.now(), `until must be in the future: ${rec?.until}`);
+});
+
+test('the backstop is drained like a claw', () => {
+	const r = run('hokon', '--reason', 'bootcamp: idle measurement');
+	assert.equal(r.status, 0, r.out);
+	assert.equal(r.doc?.nodes?.hokon?.reason, 'bootcamp: idle measurement');
 });
 
 test('a reboot drain with no end is refused — a reboot that never returns must lapse', () => {

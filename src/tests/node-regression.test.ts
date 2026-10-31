@@ -188,7 +188,7 @@ test('groupRegressions: hokon never acts, even with enough divergences, when exc
 	const findings = groupRegressions(divs, [JDK21], {
 		watchedNodes: ['claw-3', 'claw-4', 'claw-8', 'claw-9'],
 	});
-	assert.equal(findings.length, 0, 'hokon is a guest and must never be charged');
+	assert.equal(findings.length, 0, 'hokon is a backstop and must never be charged');
 });
 
 test('groupRegressions: an un-gated (repo, job) is ignored even past the threshold', () => {

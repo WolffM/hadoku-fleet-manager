@@ -51,9 +51,7 @@ export async function runSliceInventory({ windowMs, write }) {
 			let samples = null;
 			let why = null;
 			for (let attempt = 1; attempt <= READ_ATTEMPTS && !samples; attempt++) {
-				// A guest is measured too: this only reads a slice its declaration put there.
 				const r = await runOn(node, sliceProbe(slices, windowS), {
-					includeGuests: true,
 					as: 'admin',
 					timeoutMs: (windowS + 30) * 1000,
 					connectTimeout: 8,

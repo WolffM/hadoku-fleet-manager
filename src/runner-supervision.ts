@@ -54,7 +54,7 @@ import { execFile } from 'node:child_process';
 import { nodeShell } from './node-shell.js';
 
 import { logger } from './host.js';
-import { loadFleetNodeNames, loadGuestNodes } from './lib/manifest.js';
+import { loadFleetNodeNames, loadBackstopNodes } from './lib/manifest.js';
 
 const SSH_TIMEOUT_MS = 15000;
 
@@ -82,7 +82,7 @@ export interface SupervisionReport {
 	listenersSeen: number;
 	problems: SupervisionProblem[];
 	/**
-	 * Guest nodes in the tier manifest that were deliberately NOT probed — named
+	 * Backstop nodes in the tier manifest that were deliberately NOT probed — named
 	 * so the skip is reported, never silent. Optional only because a report can
 	 * come from a test double; `checkSupervision` always sets it.
 	 */
@@ -316,7 +316,7 @@ export async function probeSupervision(
 export interface SupervisionDeps {
 	/** Every node the fleet manifest declares; `null` = could not read it. */
 	nodes: () => string[] | null;
-	guests: () => ReadonlySet<string>;
+	backstops: () => ReadonlySet<string>;
 	probe: typeof probeSupervision;
 }
 
@@ -325,11 +325,11 @@ const LIVE_DEPS: SupervisionDeps = {
 		const names = loadFleetNodeNames();
 		return names.length ? names : null;
 	},
-	guests: loadGuestNodes,
+	backstops: loadBackstopNodes,
 	probe: probeSupervision,
 };
 
-/** Probe every node the fleet manifest declares; guests are skipped by role and named. */
+/** Probe every node the fleet manifest declares; backstops are skipped by role and named. */
 export async function checkSupervision(
 	deps: SupervisionDeps = LIVE_DEPS
 ): Promise<SupervisionReport | null> {
@@ -338,13 +338,13 @@ export async function checkSupervision(
 	const listed = deps.nodes();
 	if (!listed) return null;
 
-	// A guest's runner units are the identity gate's question only (operator,
-	// 2026-09-14) — the fleet chain never probes, pages about or repairs them.
-	// An unreadable fleet manifest yields NO guests, so every node is probed:
+	// This supervises the claws' warm listeners. The backstop keeps none — it is
+	// minted for on demand, not general capacity — so its units are the identity
+	// gate's question, not this one's. An unreadable fleet manifest yields NO backstops, so every node is probed:
 	// the strict direction, same as `nodeRole`'s default.
-	const guests = deps.guests();
-	const nodes = listed.filter((n) => !guests.has(n));
-	const skippedByRole = listed.filter((n) => guests.has(n));
+	const backstops = deps.backstops();
+	const nodes = listed.filter((n) => !backstops.has(n));
+	const skippedByRole = listed.filter((n) => backstops.has(n));
 
 	const problems: SupervisionProblem[] = [];
 	const unreachable: string[] = [];
@@ -416,7 +416,7 @@ function summarise(report: SupervisionReport): string {
 		? `, ${report.unreachable.length} unreachable (${report.unreachable.join(', ')})`
 		: '';
 	const skipped = report.skippedByRole?.length
-		? `; skipped by role (guest): ${report.skippedByRole.join(', ')}`
+		? `; skipped by role (backstop): ${report.skippedByRole.join(', ')}`
 		: '';
 	return parts.length
 		? `${parts.join(', ')} across ${report.nodes.length} node(s)${unreachable}${skipped}`

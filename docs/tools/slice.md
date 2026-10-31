@@ -48,8 +48,8 @@ MemTotal - minFreeMb` (confirmed: `scripts/deploy-runners-slice.mjs:26-29,
 202-227`). The manifest's `ramGb` is rounded — claw-1 says 11G and measures
 11,885 MiB — so a ceiling computed from the declared figure would reserve the
 wrong amount; the probe reads `/proc/meminfo` on the box itself. hokon
-declares `maxMb: 16384` explicitly because CI is a guest on the production
-host there. `slice.name` defaults to `runners.slice`; hokon overrides it to
+declares `maxMb: 16384` explicitly because CI there runs beside the
+production host's own services. `slice.name` defaults to `runners.slice`; hokon overrides it to
 `ci-runner.slice`, which already holds its system units — defaulting there
 would migrate them out of a capped slice, a containment change wearing a cap's
 clothes (confirmed: `scripts/deploy-runners-slice.mjs:32`,

@@ -43,7 +43,7 @@ const rules = (m: FleetManifestShape, probe?: Set<string>): string[] =>
 /** Enough nodes that the floor rules are satisfied by default. */
 const baseManifest = (nodes: Record<string, ManifestNode>): FleetManifestShape => ({
 	machines: {
-		hokon: { role: 'guest', labels: ['pm2-host', 'taskauto', 'av1-nvenc'], minFreeMb: 8192 },
+		hokon: hokonEarned(['pm2-host', 'av1-nvenc']),
 		...nodes,
 	},
 	toolchain: { capabilities: ['ffmpeg', 'python-venv'], toolCache: { Python: ['3.12'] } },
@@ -53,9 +53,9 @@ const baseManifest = (nodes: Record<string, ManifestNode>): FleetManifestShape =
 // Validation — one test per arm, each proving the arm FIRES
 // ---------------------------------------------------------------------------
 
-/** hokon's live shape (2026-10-10): guest, standing, earned what a claw earns. */
+/** hokon's live shape (2026-10-31): backstop, standing, earned what a claw earns. */
 const hokonEarned = (earned: string[]): ManifestNode => ({
-	role: 'guest',
+	role: 'backstop',
 	labels: ['pm2-host', 'taskauto', 'av1-nvenc'],
 	minFreeMb: 8192,
 	$capabilities: {
@@ -182,9 +182,9 @@ test('#98 missing-required-field: a claw that DECLARES nothing still owes the bu
 	);
 });
 
-test('#98 missing-required-field: a GUEST is not eligible, so it does not owe the builder throttle', () => {
+test('#98 missing-required-field: a BACKSTOP is not eligible, so it does not owe the builder throttle', () => {
 	const m = baseManifest({ 'claw-1': healthyClaw() });
-	assert.equal(m.machines?.hokon?.maxConcurrent, undefined, 'the fixture guest declares none');
+	assert.equal(m.machines?.hokon?.maxConcurrent, undefined, 'the fixture backstop declares none');
 	assert.deepEqual(rules(m), []);
 });
 
@@ -202,17 +202,17 @@ test('floor-bypassed: a standing node that EARNED jdk21/cargo-bevy the way a cla
 	);
 });
 
-test('floor-bypassed: a guest whose bootcamp record does NOT earn a declared probe label is reported', () => {
-	// The floor counts hokon's standing runners online as SERVING av1-nvenc;
-	// the record bootcamp wrote says the probe never earned it.
+test('floor-bypassed: a backstop whose record does NOT earn a declared probe label does not offer it', () => {
+	// The record answers the declaration on every node, so the standing offer
+	// never carries the contradicted label and the floor has nothing to bypass.
 	const m = baseManifest({ 'claw-1': healthyClaw() });
 	m.machines!.hokon = hokonEarned(['pm2-host']);
+	assert.ok(!registrationLabels(m.machines!.hokon).includes('av1-nvenc'));
 	const findings = validateCapabilities(m, undefined, { workloadGate: activeJdkGate(null) });
 	assert.deepEqual(
-		findings.filter((f) => f.rule === 'floor-bypassed').map((f) => [f.machine, f.capability]),
-		[['hokon', 'av1-nvenc']]
+		findings.filter((f) => f.rule === 'floor-bypassed'),
+		[]
 	);
-	assert.match(findings.find((f) => f.rule === 'floor-bypassed')!.message, /evidence contradicts/);
 });
 
 test('floor-bypassed: a standing workload-gated label with NO gate context is reported, not passed', () => {
@@ -250,8 +250,21 @@ test('floor-bypassed: a STALE workload proof keeps jdk21 off the standing offer,
 	);
 });
 
-test('floor-bypassed: a guest nothing has bootcamped keeps its declarations (the documented exception)', () => {
-	assert.deepEqual(rules(baseManifest({ 'claw-1': healthyClaw() })), []);
+test('floor-bypassed: a backstop nothing has bootcamped is reported like any standing node', () => {
+	// Until 2026-10-31 the backstop's declarations stood without a record. Now
+	// "nothing has executed the probe" is a finding on every node.
+	const m = baseManifest({ 'claw-1': healthyClaw() });
+	m.machines!.hokon = {
+		role: 'backstop',
+		labels: ['pm2-host', 'taskauto', 'av1-nvenc'],
+		minFreeMb: 8192,
+	};
+	const findings = validateCapabilities(m).filter((f) => f.rule === 'floor-bypassed');
+	assert.deepEqual(findings.map((f) => [f.machine, f.capability]).sort(), [
+		['hokon', 'av1-nvenc'],
+		['hokon', 'pm2-host'],
+	]);
+	assert.match(findings[0].message, /no bootcamp record/);
 });
 
 test('#98 toolchain-unset: a missing or empty toolchain.capabilities fails', () => {
@@ -298,7 +311,7 @@ test("a demanded label no node offers is NOT this static gate's finding any more
 	// (every covered repo's workflows + job history), and that gate fails on
 	// this exact case as `unoffered` (scripts/lib/label-floor.test.mjs).
 	const m: FleetManifestShape = {
-		machines: { hokon: { role: 'guest', labels: ['pm2-host', 'taskauto'], minFreeMb: 8192 } },
+		machines: { hokon: hokonEarned(['pm2-host']) },
 		toolchain: { capabilities: ['ffmpeg', 'python-venv'], toolCache: { Python: ['3.12'] } },
 	};
 	assert.deepEqual(rules(m), []);

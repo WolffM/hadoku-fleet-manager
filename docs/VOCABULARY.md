@@ -107,7 +107,7 @@ one place.
   read observed state too, or a gate and a repair share a blind spot.
 - **identity vs eligibility.** A FACT about the node (it has an NVENC-capable
   GPU; it is the production host) versus a ROUTING LEVER the fast loop (the
-  backstop, on a guest) rewrites as a node becomes safe or unsafe. `hadoku-builder` is the only eligibility label.
+  backstop, on the backstop node) rewrites as a node becomes safe or unsafe. `hadoku-builder` is the only eligibility label.
   Collapsing them made a healthy demoted claw vanish from `clawsOnline`.
 - **port vs probe.** A **port** is injected by the host and is present or the
   process does not start. A **probe** crosses a network and may come back empty.
@@ -231,13 +231,20 @@ Tailscale admin console (an `ssh` rule for `tag:claw` with `action: "accept"`),
 not a code change. Once it lands, `FLEET_SSH_SUFFIX=<tailnet>.ts.net` moves
 every ssh path in this repo at once.
 
-## The on-demand guest
+## The backstop node
 
-A **guest** (`role: "guest"`) is a node the fleet borrows; hokon is the only
-one. An **on-demand guest** also declares `"mint": "on-demand"`: the
-dispatcher mints JIT runners on it like a claw, but it is NOT `ephemeral` —
-never in the census, never given a warm listener, always placed after every
-claw — and it offers `hadoku-builder` only while the backstop holds it. Its
+The **backstop** (`role: "backstop"`) is the fleet's emergency backstop when
+things go wrong; hokon is the only one. It is NOT general capacity and it is
+the production host, and those are the only two ways it differs from a claw:
+the fleet drains it, installs on it, converges it, probes it and bootcamps it
+like any other node (operator, 2026-10-31). It was called a **guest** until
+then, and the manifest value `"guest"` still reads as `backstop`.
+
+It also declares `"mint": "on-demand"`: the dispatcher mints JIT runners on it
+like a claw, but it is NOT `ephemeral` — never in the census, never given a
+warm listener, never ranked for routing or lent to a hosting tenant, never
+rebooted by the fleet, always placed after every claw — and it offers
+`hadoku-builder` only while the backstop holds it. Its
 `standingRepos` are the registrations it keeps standing anyway (hadoku_site's
 deploy runner). Different from a **resident repo** below, which is a claw's
 standing `hadoku-builder` registration. See `docs/control-plane.md` §6.

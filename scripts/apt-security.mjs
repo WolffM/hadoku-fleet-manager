@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * apt-security — will each claw actually install Debian security updates, and
+ * apt-security — will each node actually install Debian security updates, and
  * (with --confirm) make it so.
  *
- *   fleet apt-security                       # check every claw
+ *   fleet apt-security                       # check every node
  *   fleet apt-security --machine claw-4      # one claw
- *   fleet apt-security --confirm             # repair the claws that drifted
+ *   fleet apt-security --confirm             # repair the nodes that drifted
  *   fleet apt-security --json                # one document
  *
  * WHY. Until 2026-10-25 every claw's unattended-upgrades origin pattern matched
@@ -15,16 +15,17 @@
  *
  * WHO RUNS IT. The provisioning converger (`fleet converge-provisioning`, on
  * the controller's own timer) runs `--check`, then `--confirm --machine N` on
- * each claw that drifted, then `--check --machine N` again, and pages only if
+ * each node that drifted, then `--check --machine N` again, and pages only if
  * the re-check still disagrees. The repair writes two apt conf files and
  * enables two timers; it restarts nothing and touches no runner, so unlike the
  * throttle and slice facets it never waits for a node to go idle.
  *
- * A GUEST IS NEVER TOUCHED. hokon keeps its own Debian-default config and does
- * update; its apt is the operator's, and any install there needs a hand
- * approval. It is listed under `skippedByRole`, never silently absent.
+ * THE BACKSTOP IS READ AND NEVER WRITTEN. The fleet has no sudo there, so its
+ * dry run may not even answer, and its repair is the operator's: every finding
+ * on it is an ADVISORY naming the hand-run (`--operator-sudo`, see
+ * lib/operator-sudo.mjs), and none of them fails the run.
  *
- * EXIT 0 only when every claw was read and (in --check) none drifted, or (in
+ * EXIT 0 only when every node was read and (in --check) none drifted, or (in
  * --confirm) every repair ran. `--json` is parseable either way.
  */
 import process from 'node:process';
@@ -39,8 +40,9 @@ import {
 } from './lib/apt-security.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, readDrains } from './lib/expected-down.mjs';
-import { loadManifest, machineArg, runOn, selectNodes } from './lib/fleet-exec.mjs';
+import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { loadNodeProfiles } from './lib/node-profiles.mjs';
+import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 
 const argv = process.argv.slice(2);
 const CONFIRM = argv.includes('--confirm');
@@ -77,14 +79,13 @@ async function checkNode(node, drains) {
 
 async function main() {
 	const manifest = loadManifest();
-	const { nodes, skippedByRole } = selectNodes(manifest, { only: ONLY });
-	for (const s of skippedByRole) log(`── ${s.node}  [skipped: ${s.role}] ${s.why}`);
+	const nodes = selectMachines(manifest, { only: ONLY });
 	if (!nodes.length) {
 		const error = ONLY
-			? `--machine ${ONLY} selected no claw`
-			: 'the manifest selects no claw; zero nodes checked is not a pass';
+			? `--machine ${ONLY} selected no node`
+			: 'the manifest selects no node; zero nodes checked is not a pass';
 		log(error);
-		if (emitter.json) emitter.emit({ ok: false, error, results: [], skippedByRole });
+		if (emitter.json) emitter.emit({ ok: false, error, results: [] });
 		process.exitCode = 1;
 		return;
 	}
@@ -93,10 +94,26 @@ async function main() {
 	const policy = CONFIRM ? aptSecurityPolicy(loadNodeProfiles().profiles) : null;
 	const drains = readDrains();
 	const results = await Promise.all(nodes.map(([node]) => checkNode(node, drains)));
+	// Root work on a node the fleet has no sudo on: read, judged, never written.
+	for (const r of results) {
+		if (maySudo(manifest.machines?.[r.machine]) || r.expectedDown) continue;
+		r.advisory = true;
+		if (!r.ok || r.drift.length) {
+			r.advisories = [
+				rootAdvisory(
+					r.machine,
+					r.ok
+						? `the security-update policy (${r.drift.join('; ')})`
+						: `reading the security-update policy (${r.error})`,
+					`fleet apt-security --machine ${r.machine} --confirm`
+				),
+			];
+		}
+	}
 
 	if (CONFIRM) {
 		for (const r of results) {
-			if (!r.ok || !r.drift.length) continue;
+			if (!r.ok || !r.drift.length || r.advisory) continue;
 			const res = await runOn(r.machine, repairScript(policy), {
 				as: 'admin',
 				timeoutMs: 60_000,
@@ -115,6 +132,10 @@ async function main() {
 	}
 
 	for (const r of results) {
+		if (r.advisories) {
+			for (const a of r.advisories) log(`── ${r.machine}  [advisory] ${a.message}\n   ${a.fix}`);
+			continue;
+		}
 		if (!r.ok) {
 			log(`── ${r.machine}  [${r.expectedDown ? 'expected down' : 'UNREADABLE'}] ${r.error}`);
 			continue;
@@ -125,12 +146,11 @@ async function main() {
 		for (const n of r.notes) log(`   ${n}`);
 	}
 
-	const unread = results.filter((r) => !r.ok && !r.expectedDown);
-	const drifted = results.filter((r) => r.ok && r.drift.length);
+	const unread = results.filter((r) => !r.ok && !r.expectedDown && !r.advisory);
+	const drifted = results.filter((r) => r.ok && r.drift.length && !r.advisory);
 	const ok = unread.length === 0 && (CONFIRM || drifted.length === 0);
-	if (!drifted.length && !unread.length) log('✓ every claw will install Debian security updates.');
-	if (emitter.json)
-		emitter.emit({ ok, mode: CONFIRM ? 'confirm' : 'check', results, skippedByRole });
+	if (!drifted.length && !unread.length) log('✓ every node will install Debian security updates.');
+	if (emitter.json) emitter.emit({ ok, mode: CONFIRM ? 'confirm' : 'check', results });
 	process.exitCode = ok ? 0 : 1;
 }
 

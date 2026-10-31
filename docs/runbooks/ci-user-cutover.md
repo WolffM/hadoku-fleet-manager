@@ -26,9 +26,9 @@ everything it already had; nothing is removed from it by this runbook.
 
 ## Preconditions
 
-- The node is declared and provisioned (R1 already ran), and is not a guest —
-  `fleet node-users --cutover` refuses a guest outright: "the fleet does not
-  provision its users" for one.
+- The node is declared and provisioned (R1 already ran), and is not the
+  backstop — `fleet node-users --cutover` refuses it outright: it is the
+  production host, and its cutover is done by hand.
 - The node must be **drained and idle** before the cutover is allowed to
   write anything — the node script itself refuses to move a user out from
   under a running job.

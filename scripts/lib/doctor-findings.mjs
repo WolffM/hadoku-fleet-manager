@@ -74,17 +74,16 @@ import { independentCpuSensors } from './doctor-parse.mjs';
 export { ADVISORY, BLOCKING };
 export { advisoryFindings, blockingFindings } from './preflight.mjs';
 /**
- * A GUEST's findings are advisory, and the rule lives in `preflight.mjs` so
+ * The BACKSTOP's findings are advisory, and the rule lives in `preflight.mjs` so
  * `check-fleet-preflight` and `fleet doctor` cannot classify the same box two
  * different ways. Re-exported rather than reimplemented for the reason this
  * file already imports `rebootFinding`: one judgement, one implementation.
  *
  * Every finding `doctorFindings` produces is node-keyed, so this reaches all of
- * them — except `unreachable`, which {@link GUEST_BLOCKING_CATEGORIES} keeps
- * blocking: a box nothing can reach cannot answer the one question a guest IS
- * in scope for.
+ * them — except `unreachable`, which {@link BACKSTOP_BLOCKING_CATEGORIES} keeps
+ * blocking: a backstop nothing can reach is no use in an emergency.
  */
-export { guestAdvisory, GUEST_BLOCKING_CATEGORIES } from './preflight.mjs';
+export { backstopAdvisory, BACKSTOP_BLOCKING_CATEGORIES } from './preflight.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // THRESHOLDS — SAFETY CONTROLS, NOT TUNING

@@ -31,17 +31,13 @@ export const repoSuffix = (repo) =>
  * and failed its first job until self-update caught up. GitHub hard-deprecates
  * old runners, so a stale-enough cache eventually cannot connect at all.
  */
-export function registerScript({ repo, claw, version, token, labels, start }) {
+export function registerScript({ repo, claw, version, token, labels }) {
 	const suffix = repoSuffix(repo);
-	// ENABLED, NOT STARTED, on a claw (#1). A unit's first start decides its
+	// ENABLED, NOT STARTED (#1). A unit's first start decides its
 	// cgroup, so starting it here put it in app.slice — no group ceiling — and a
 	// runner started before its .env carries the throttle hook has no
 	// concurrency limit and no shared tool cache. The caller writes both through
-	// the drivers and only then starts it; see provisionBeforeStart. A guest
-	// (start=true) is out of both drivers' scope and starts here, as it always did.
-	const startBlock = start
-		? 'systemctl --user enable --now "$UNIT"\nsleep 3\nsystemctl --user is-active "$UNIT"'
-		: 'systemctl --user enable "$UNIT"';
+	// the drivers and only then starts it; see provisionBeforeStart.
 	return `
 set -euo pipefail
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
@@ -187,7 +183,7 @@ UNIT_EOF
 echo "UNIT-WRITTEN $UNIT"
 
 systemctl --user daemon-reload
-${startBlock}
+systemctl --user enable "$UNIT"
 `;
 }
 
@@ -255,13 +251,7 @@ echo "STARTED $UNIT in ${sliceName}"
  *      with the directory intact the next run simply tries again, and without
  *      it the only remedy left is the REST API and an operator.
  */
-export function removeScript({
-	repo,
-	token,
-	guest = false,
-	runnerId = null,
-	deregistered = false,
-}) {
+export function removeScript({ repo, token, sudo = true, runnerId = null, deregistered = false }) {
 	const suffix = repoSuffix(repo);
 	// THE INSTALL IS FOUND BY THE REGISTRATION IT HOLDS (#123), not only by the
 	// repo's CURRENT name. A rename leaves the install under the OLD name:
@@ -291,15 +281,11 @@ export function removeScript({
 				'  exit 6',
 				'fi',
 			].join('\n');
-	// A GUEST IS NEVER ASKED FOR SUDO (operator, 2026-09-14) — not even the
-	// non-prompting kind. INCLUDE_GUESTS keeps the guest's backstop registrations
-	// in scope, so a retired repo's registration there IS a removal target, and a
-	// system-installed one would have reached for passwordless root on the
-	// production host. On a guest the system path stops at NEEDS_ROOT and hands
-	// the operator the command, which is what it already does on a claw with no
-	// passwordless sudo; the user-unit path needs no root and is unchanged.
-	const rootStep = guest
-		? '  echo "NEEDS_ROOT: $SYS_UNIT is a system service on a GUEST; the fleet never asks a guest for sudo (DIR=$DIR)" >&2\n' +
+	// A node with no passwordless sudo stops at NEEDS_ROOT and hands the operator
+	// the command; the user-unit path needs no root. sudo=false is a node the
+	// fleet has no sudo on (the backstop): it stops there WITHOUT asking.
+	const rootStep = !sudo
+		? '  echo "NEEDS_ROOT: $SYS_UNIT is a system service and the fleet has no sudo on this node (DIR=$DIR)" >&2\n' +
 			'  exit 5'
 		: '  if ! sudo -n true 2>/dev/null; then\n' +
 			'    echo "NEEDS_ROOT: $SYS_UNIT is a system service and passwordless sudo is unavailable (DIR=$DIR)" >&2\n' +
@@ -360,7 +346,7 @@ if [ -n "$SYS_UNIT" ]; then
     exit 5
   fi
   # -n: never prompt. An interactive sudo would hang this ssh forever, and the
-  # reconciler runs unattended on a cron. On a guest there is no sudo at all.
+  # reconciler runs unattended on a cron.
 ${rootStep}
   OWNER="system:$SYS_UNIT"
 elif systemctl --user cat "$USER_UNIT" >/dev/null 2>&1; then

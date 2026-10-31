@@ -75,16 +75,13 @@ void test('registerScript returns a complete script, not a comparison', () => {
 	assert.match(s, /systemctl --user enable "\$UNIT"\n*$/, 'must reach its final line');
 });
 
-// #1: a claw's unit is enabled and NOT started. Its first start decides its
+// #1: a unit is enabled and NOT started. Its first start decides its
 // cgroup, and the slice drop-in and throttle env do not exist yet.
-void test('registerScript never starts a claw unit; only a guest starts at registration', () => {
+void test('registerScript never starts a unit: provisionBeforeStart starts it, on every node', () => {
 	const args = { repo: 'WolffM/x', claw: 'claw-1', version: '2.337.0', token: 't', labels: 'l' };
 	const claw = generate('registerScript', args) as string;
 	assert.doesNotMatch(claw, /--now/, 'a claw unit must not start before it is provisioned');
 	assert.doesNotMatch(claw, /systemctl --user (re)?start/);
-	const guest = generate('registerScript', { ...args, start: true }) as string;
-	assert.match(guest, /systemctl --user enable --now "\$UNIT"/);
-	assert.match(guest, /is-active/, 'a guest still verifies what it started');
 });
 
 void test('startScript starts the unit and refuses one born outside its slice', () => {

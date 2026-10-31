@@ -72,15 +72,14 @@ export const NO_LOAD_WHY =
 	'the load phase was disabled with --no-load, so no under-load temperature was taken';
 
 /**
- * Why a `--cadence` run carries no under-load reading for a guest.
+ * Why a `--cadence` run carries no under-load reading for the backstop.
  *
- * hokon is the production host, and the operator keeps routine automation off
- * it (2026-10-09). Probing it is in scope, but a nightly 60s all-core load on
- * the box serving production is not. Its findings are advisory anyway, so the
+ * hokon is the backstop and the production host. Probing it is in scope, but a
+ * nightly 60s all-core load on the box serving production is not. Its findings are advisory anyway, so the
  * missing reading costs no verdict. A hand-run `fleet doctor` still loads it.
  */
-export const GUEST_CADENCE_NO_LOAD_WHY =
-	'a scheduled (--cadence) run never loads a guest node; run fleet doctor by hand for its under-load temperature';
+export const BACKSTOP_CADENCE_NO_LOAD_WHY =
+	'a scheduled (--cadence) run never loads the backstop, which is the production host; run fleet doctor by hand for its under-load temperature';
 
 /**
  * The shell the node runs. Emits a line protocol and decides nothing.

@@ -1,34 +1,4 @@
-import { ciUnitProperties, JIT_UNIT_MAX_SEC, JOB_RESERVE_DEFAULT_MB } from './ephemeral.js';
-
-/**
- * The per-unit `MemoryMax` for a runner minted on an ON-DEMAND GUEST (#120).
- *
- * NOT {@link unitMemoryMaxMb}, because the operator's rule there is for the
- * CLAWS and is the opposite of the one the production host carries. A claw has
- * no hard per-job cap: a unit may grow to the whole slice, because the slice
- * IS everything CI may have. On the guest the manifest says otherwise, in its
- * own `$why`s: `slice.maxMb` is a deliberate allowance far below
- * MemTotal − minFreeMb (CI must not grow into the space production needs), and
- * `slice.unitMaxMb` sits BELOW that so one runaway is one dead unit rather than
- * a slice-wide kill of its siblings. Widening to the ceiling, as the claw rule
- * does, would hand one job the whole guest allowance.
- *
- * So the declared cap is the cap, clamped to the slice it has to fit inside.
- * Total like its sibling: an absent cap is {@link JOB_RESERVE_DEFAULT_MB}, never
- * zero, because this runs after the registration exists.
- */
-export function guestUnitMemoryMaxMb(o: {
-	/** The guest's declared `slice.unitMaxMb`. */
-	requestedMb?: number | null;
-	/** The guest's declared `slice.maxMb` — the guest allowance. */
-	sliceMaxMb?: number | null;
-}): number {
-	const positive = (v: number | null | undefined): number | null =>
-		typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : null;
-	const requested = positive(o.requestedMb) ?? JOB_RESERVE_DEFAULT_MB;
-	const slice = positive(o.sliceMaxMb);
-	return slice === null ? requested : Math.min(requested, slice);
-}
+import { ciUnitProperties, JIT_UNIT_MAX_SEC } from './ephemeral.js';
 
 const UNIT_LABELS_PREFIX = 'jit labels=';
 /** A label the description can carry and `list-units`' whitespace split gives back intact. */

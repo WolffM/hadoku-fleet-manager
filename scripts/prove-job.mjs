@@ -20,13 +20,7 @@
  * `--repo --workflow --job --ref --evidence` overrides one field of it.
  *
  * FLAGS
- *   --node <name>            required. A guest is refused unless --include-guests.
- *   --include-guests         OPERATOR ONLY, and only with --node <a guest>: prove the
- *                            guest's STANDING registration in the canary repo (named
- *                            like the node, must be online). GitHub API only — no
- *                            mint, no ssh, no drain: a `proof-<nonce>` label is added
- *                            to it for the aimed canary and removed on every path.
- *                            The capability must declare an aimed canary (runs-on input)
+ *   --node <name>            required. Any node, the backstop included.
  *   --capability <id>        take the job from the registry; the node must carry it
  *   --repo --workflow --job  name a job by hand (all three, without --capability)
  *   --ref <ref>              default main
@@ -56,7 +50,7 @@
  * ledger.
  *
  * NOT UNDER THE --json CONTRACT: no cron parses it (it spends Actions minutes and
- * races a guest, so it is an operator act). If one is ever wired, add it to
+ * races real jobs, so it is an operator act). If one is ever wired, add it to
  * `scripts/lib/json-contract.mjs` in the same change.
  *
  * @guards src/runners/prove-job.ts
@@ -71,10 +65,8 @@ import { manifestDir, stateDir } from './lib/paths.mjs';
 import { readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { recordProof } from './lib/job-proof-record.mjs';
-import { guestPostCheck, proofShell } from './lib/prove-job-guest.mjs';
 import { installCliHost } from '../dist/host.js';
 import { nodeHome } from '../dist/lib/node-users.js';
-import { isGuestNode } from '../dist/lib/node-role.js';
 import { capability } from '../dist/lib/capability-registry.js';
 import { workloadGatedCapabilities } from '../dist/lib/workload-gate.js';
 import { buildProofRecord, proveJob, specFromCapability } from '../dist/runners/prove-job.js';
@@ -133,7 +125,6 @@ if (argv.includes('--help') || argv.includes('-h')) {
 	);
 	out.log('');
 	out.log("  Mints ONE ephemeral proof runner on the node carrying the job's runs-on labels,");
-	out.log('  (or, for a guest with --include-guests, labels its standing runner for the canary),');
 	out.log('  dispatches the workflow, reads which runner took the job FROM GITHUB, extracts');
 	out.log('  the evidence lines from its log, and tears the runner down on every path.');
 	out.log('  Exit 0 only for a pass. See the header of scripts/prove-job.mjs for the flags.');
@@ -220,8 +211,6 @@ if (timeoutMin !== undefined) {
 	spec.timeoutMs = Number(timeoutMin) * 60_000;
 }
 spec.reapStale = argv.includes('--reap-stale');
-const includeGuests = argv.includes('--include-guests');
-if (includeGuests) spec.includeGuests = true;
 
 // --- the real ports ----------------------------------------------------------
 
@@ -286,16 +275,6 @@ if (!nodeEntry)
 	usage(
 		`"${nodeName}" is not a declared node (declared: ${Object.keys(manifest.machines ?? {}).join(', ')})`
 	);
-const nodeIsGuest = isGuestNode(nodeEntry);
-if (includeGuests && !nodeIsGuest)
-	usage(`--include-guests proves a GUEST's standing runner; ${nodeName} is not a guest`);
-if (includeGuests) {
-	process.stderr.write(
-		`\n!!! PROVING A GUEST: ${nodeName} — operator opt-in (--include-guests).\n` +
-			`!!! Its STANDING runner in ${spec.repo} gets a temporary proof-<nonce> label for ONE\n` +
-			'!!! aimed canary; GitHub API only (no mint, no ssh, no drain), label removed on every path.\n\n'
-	);
-}
 
 /** This node's drain row, from the same two locations `fleet drain` writes. */
 function drainRow() {
@@ -318,16 +297,14 @@ for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
 	});
 }
 
-// The transport never reaches a guest, opt-in or not: standing mode needs no ssh.
-// See lib/prove-job-guest.mjs for why `--include-guests` would otherwise open it.
 // The call stays spelled out HERE, where the ssh-ing-script guards read for it.
-const shell = proofShell({
-	runOn: (node, cmd, opts) => runOn(node, cmd, { ...opts, as: 'ci' }),
-	isGuest: (n) => isGuestNode(manifest.machines?.[n]),
-});
+const sh = async (node, cmd) => {
+	const r = await runOn(node, cmd, { as: 'ci', timeoutMs: 300_000 });
+	return r.ok ? r.stdout : null;
+};
 const result = await proveJob(spec, {
 	gh: ports,
-	sh: shell.sh,
+	sh,
 	// The node's ci user's home, where its slots live; never this box's own.
 	homeDir: nodeHome(manifest.machines?.[spec.node], 'ci'),
 	node: nodeEntry,
@@ -348,16 +325,6 @@ const result = await proveJob(spec, {
 	signal: controller.signal,
 	pollMs: 5_000,
 });
-const guestBugs = guestPostCheck(result, {
-	isGuest: nodeIsGuest,
-	includeGuests,
-	guestReached: shell.guestReached,
-});
-if (guestBugs.length) {
-	result.findings.push(...guestBugs);
-	result.ok = false;
-}
-
 let recordError = null;
 if (!argv.includes('--no-record')) {
 	const rec = recordProof(stateDir(), nodeName, result);

@@ -8,7 +8,7 @@ import {
 	requiredIdentitySet,
 	type DemandRecord,
 } from '../lib/bootcamp-proof.js';
-import { isGuestNode } from '../lib/node-role.js';
+import { isBackstopNode } from '../lib/node-role.js';
 import { readFleetManifest, type FleetManifest } from '../lib/manifest.js';
 import { nodeIsSick } from '../lib/sick-node.js';
 
@@ -89,9 +89,9 @@ export function loadRequiredSet(): Set<string> | null {
  *
  * THREE STATES REFUSE TO MOVE A LABEL, and each is a different fact:
  *
- *   GUEST            the node is not the ladder's to judge at all. A guest
- *                    lends the fleet a registration and is out of scope for
- *                    bootcamp's required set (operator, 2026-09-14). It never
+ *   BACKSTOP         the node is not the ladder's to judge at all. The backstop
+ *                    is not general capacity and is out of scope for
+ *                    bootcamp's required set. It never
  *                    reaches a write anyway — `planTierWrites` drops it — and
  *                    this is the second half of the same statement, so a
  *                    resident-registration caller cannot route around it.
@@ -127,7 +127,7 @@ export function nodeFailsBootcamp(
 	required: ReadonlySet<string> | null = loadRequiredSet()
 ): boolean {
 	const entry = raw?.machines?.[node];
-	if (isGuestNode(entry)) return false; // not the ladder's to judge
+	if (isBackstopNode(entry)) return false; // not the ladder's to judge
 	const rec = entry?.$capabilities;
 	if (!rec) return false; // never probed — not the same as proven bad
 	if (!required) return false; // could not read the bar — no label moves
@@ -207,9 +207,9 @@ export interface LabelAction {
  * keeps the O(repos x nodes) label traffic off the fleet. A non-ephemeral node
  * is walked across every covered repo.
  *
- * NOT GUESTS. A guest (hokon) lends the fleet a reserve registration, and its
- * builder label is the BACKSTOP's in runner-health, which applies the same
- * safety rule. One writer per label; the caller skips guests.
+ * NOT BACKSTOPS. The backstop (hokon) is not general capacity, and its
+ * builder label is the backstop controller's in runner-health, which applies the same
+ * safety rule. One writer per label; the caller skips backstops.
  */
 export async function setNodeEligibility(
 	node: string,

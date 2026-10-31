@@ -63,7 +63,7 @@ import {
 } from '../../dist/runners/hosting-record.js';
 import { ciUnitProperties } from '../../dist/runners/ephemeral.js';
 import { runtimeFor } from './hosting-runtimes.mjs';
-import { isGuestNode } from '../../dist/lib/node-role.js';
+import { isBackstopNode } from '../../dist/lib/node-role.js';
 
 /**
  * A tenant is a SPEC (`tenantSpecFrom` in lib/tenant-registry.mjs), derived
@@ -798,10 +798,10 @@ export function parsePortProbe(stdout) {
 /** How many other nodes are asked before "nobody could look" is the answer. */
 const PEER_TRIES = 3;
 
-/** Non-guest nodes other than `node` and the controller: who may try the port from outside. */
+/** Non-backstop nodes other than `node` and the controller: who may try the port from outside. */
 export function peerCandidates(manifest, node) {
 	return Object.entries(manifest.machines ?? {})
-		.filter(([n, m]) => n !== node && n !== CONTROLLER_NODE && !isGuestNode(m))
+		.filter(([n, m]) => n !== node && n !== CONTROLLER_NODE && !isBackstopNode(m))
 		.map(([n]) => n);
 }
 

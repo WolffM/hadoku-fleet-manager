@@ -19,10 +19,10 @@ import {
 	rebootFindings,
 	blockingFindings,
 	advisoryFindings,
-	guestAdvisory,
+	backstopAdvisory,
 	lanReservationFinding,
 	lanReservationFindings,
-	GUEST_BLOCKING_CATEGORIES,
+	BACKSTOP_BLOCKING_CATEGORIES,
 	BLOCKING,
 	ADVISORY,
 	REBOOT_ESCALATE_DAYS,
@@ -220,12 +220,12 @@ test('jitPayloadFinding: a payload that will not run, and a node that could not 
 	assert.equal(dark.class, BLOCKING);
 });
 
-test('jitPayloadFindings: a guest payload is advisory through guestAdvisory, like every node finding', () => {
+test('jitPayloadFindings: a backstop payload is advisory through backstopAdvisory, like every node finding', () => {
 	const found = jitPayloadFindings(
 		[{ node: 'hokon', ok: true, present: true, version: '2.300.0' }],
 		'2.338.1'
 	);
-	assert.equal(guestAdvisory(found, ['hokon'])[0].class, ADVISORY);
+	assert.equal(backstopAdvisory(found, ['hokon'])[0].class, ADVISORY);
 });
 
 test('JIT_PAYLOAD_PROBE, run for real: version, absent, and a binary that will not run', () => {
@@ -440,13 +440,13 @@ test('rebootFindings: the per-node options reach every probe', () => {
 
 test('check-fleet-preflight.mjs decides its exit code with blockingFindings()', () => {
 	const src = readFileSync(DRIVER, 'utf8');
-	// `live` goes through `guestAdvisory` first and `blockingFindings` reads the
+	// `live` goes through `backstopAdvisory` first and `blockingFindings` reads the
 	// RESULT. A driver that classified and then exited on `live` would look
-	// role-aware and page on a guest anyway — the wiring is the whole check.
+	// role-aware and page on the backstop anyway — the wiring is the whole check.
 	assert.match(
 		src,
-		/const classified = guestAdvisory\(live, guestNodeNames\(manifest\)\)/,
-		'the driver no longer applies the guest role to its findings'
+		/const classified = backstopAdvisory\(live, backstopNodeNames\(manifest\)\)/,
+		'the driver no longer applies the backstop role to its findings'
 	);
 	assert.match(
 		src,
@@ -456,7 +456,7 @@ test('check-fleet-preflight.mjs decides its exit code with blockingFindings()', 
 	assert.match(
 		src,
 		/const advisory = advisoryFindings\(classified\)/,
-		'a guest finding classified out of `blocking` must still land in `advisory`'
+		'a backstop finding classified out of `blocking` must still land in `advisory`'
 	);
 	assert.match(
 		src,
@@ -479,11 +479,11 @@ test('the could-not-look finding the driver synthesises is explicitly BLOCKING',
 	);
 });
 
-// ── guestAdvisory — the role, and the two places it must NOT reach ───────────
+// ── backstopAdvisory — the role, and the two places it must NOT reach ───────────
 
-const guests = new Set(['hokon']);
+const backstops = new Set(['hokon']);
 
-test("guestAdvisory: a guest's blocking finding becomes advisory and keeps its why", () => {
+test("backstopAdvisory: a backstop's blocking finding becomes advisory and keeps its why", () => {
 	const f = {
 		node: 'hokon',
 		category: 'pending-reboot',
@@ -491,64 +491,63 @@ test("guestAdvisory: a guest's blocking finding becomes advisory and keeps its w
 		status: 'reboot-required',
 		why: 'hokon has `/var/run/reboot-required` set — an update is staged.',
 	};
-	const [out] = guestAdvisory([f], guests);
+	const [out] = backstopAdvisory([f], backstops);
 	assert.equal(out.class, ADVISORY);
-	assert.equal(out.role, 'guest');
+	assert.equal(out.role, 'backstop');
 	assert.equal(out.wasBlocking, true);
 	assert.match(out.why, /an update is staged/, 'the original diagnosis must survive');
-	assert.match(out.why, /GUEST/, 'and it must say why it stopped blocking');
-	assert.equal(blockingFindings(guestAdvisory([f], guests)).length, 0);
-	assert.equal(advisoryFindings(guestAdvisory([f], guests)).length, 1);
+	assert.match(out.why, /BACKSTOP/, 'and it must say why it stopped blocking');
+	assert.equal(blockingFindings(backstopAdvisory([f], backstops)).length, 0);
+	assert.equal(advisoryFindings(backstopAdvisory([f], backstops)).length, 1);
 });
 
-test('guestAdvisory: it is not a drop — the finding still rides in the report', () => {
+test('backstopAdvisory: it is not a drop — the finding still rides in the report', () => {
 	const f = { node: 'hokon', category: 'disk', class: BLOCKING, why: '/ is 4% free.' };
-	assert.equal(guestAdvisory([f], guests).length, 1, 'advisory is not the same as removed');
+	assert.equal(backstopAdvisory([f], backstops).length, 1, 'advisory is not the same as removed');
 });
 
-test('guestAdvisory: a CLAW is untouched — the role exempts one box, not the fleet', () => {
+test('backstopAdvisory: a CLAW is untouched — the role exempts one box, not the fleet', () => {
 	const f = { node: 'claw-3', category: 'pending-reboot', class: BLOCKING, why: 'staged.' };
-	const [out] = guestAdvisory([f], guests);
+	const [out] = backstopAdvisory([f], backstops);
 	assert.equal(out, f, 'a claw finding must be passed through by identity');
 	assert.equal(blockingFindings([out]).length, 1);
 });
 
-test('guestAdvisory: "could not look" stays BLOCKING even on a guest', () => {
-	// The one question a guest IS in scope for — is its registration online with
-	// its labels — cannot be answered about a box nothing can reach. Muting this
-	// would invert preflight property (2) via a config key.
+test('backstopAdvisory: "could not look" stays BLOCKING even on the backstop', () => {
+	// A backstop nothing can reach is no use in an emergency, and nothing about
+	// it is known. Muting this would invert preflight property (2) via a config key.
 	const f = { node: 'hokon', category: 'unreachable', class: BLOCKING, why: 'ssh refused.' };
-	const [out] = guestAdvisory([f], guests);
+	const [out] = backstopAdvisory([f], backstops);
 	assert.equal(out.class, BLOCKING);
 	assert.equal(blockingFindings([out]).length, 1);
-	assert.ok(GUEST_BLOCKING_CATEGORIES.has('unreachable'));
+	assert.ok(BACKSTOP_BLOCKING_CATEGORIES.has('unreachable'));
 });
 
-test('guestAdvisory: a finding with no node is never re-classed — a role cannot speak for it', () => {
+test('backstopAdvisory: a finding with no node is never re-classed — a role cannot speak for it', () => {
 	// token-expiry is about the CREDENTIAL, and runner-version is keyed by repo.
 	const tok = { category: 'token-expiry', class: BLOCKING, why: 'expires in 3d.' };
 	const ver = { category: 'runner-version', class: BLOCKING, repo: 'WolffM/x', why: 'behind.' };
-	assert.deepEqual(guestAdvisory([tok, ver], guests), [tok, ver]);
-	assert.equal(blockingFindings(guestAdvisory([tok, ver], guests)).length, 2);
+	assert.deepEqual(backstopAdvisory([tok, ver], backstops), [tok, ver]);
+	assert.equal(blockingFindings(backstopAdvisory([tok, ver], backstops)).length, 2);
 });
 
-test('guestAdvisory: an EMPTY guest set changes nothing, by identity', () => {
+test('backstopAdvisory: an EMPTY backstop set changes nothing, by identity', () => {
 	const f = { node: 'hokon', category: 'disk', class: BLOCKING, why: '/ is 4% free.' };
-	assert.equal(guestAdvisory([f], new Set())[0], f);
-	assert.equal(guestAdvisory([f])[0], f, 'and the default is "no node is exempt"');
+	assert.equal(backstopAdvisory([f], new Set())[0], f);
+	assert.equal(backstopAdvisory([f])[0], f, 'and the default is "no node is exempt"');
 });
 
-test('guestAdvisory: MUTATION — dropping the node check would mute the whole fleet', () => {
+test('backstopAdvisory: MUTATION — dropping the node check would mute the whole fleet', () => {
 	const fleet = [
 		{ node: 'hokon', category: 'disk', class: BLOCKING, why: 'a.' },
 		{ node: 'claw-1', category: 'disk', class: BLOCKING, why: 'b.' },
 		{ node: 'claw-2', category: 'thermal', class: BLOCKING, why: 'c.' },
 	];
-	const blocking = blockingFindings(guestAdvisory(fleet, guests));
+	const blocking = blockingFindings(backstopAdvisory(fleet, backstops));
 	assert.deepEqual(
 		blocking.map((f) => f.node),
 		['claw-1', 'claw-2'],
-		'exactly the two claws, and never the guest'
+		'exactly the two claws, and never the backstop'
 	);
 });
 
@@ -596,18 +595,18 @@ test('lanReservationFinding: ssh resolving to a NAME skips only the ssh comparis
 	assert.equal(lanReservationFinding(CLAW4_OK, CLAW4_LAN, 'claw-4.example.ts.net'), null);
 });
 
-test('lanReservationFinding: could not look stays BLOCKING, and a guest keeps it', () => {
+test('lanReservationFinding: could not look stays BLOCKING, and the backstop keeps it', () => {
 	const f = lanReservationFinding({ node: 'hokon', ok: false, error: 'timeout' }, undefined, null);
 	assert.equal(f.status, 'unreachable');
 	assert.equal(f.class, BLOCKING);
-	// A guest's lan findings are advisory like the rest of its node health.
+	// The backstop's lan findings are advisory like the rest of its node health.
 	const unrecorded = lanReservationFinding(
 		{ node: 'hokon', ok: true, ifaces: CLAW4_IFACES },
 		undefined,
 		null,
 		SUGGEST
 	);
-	assert.equal(guestAdvisory([unrecorded], new Set(['hokon']))[0].class, ADVISORY);
+	assert.equal(backstopAdvisory([unrecorded], new Set(['hokon']))[0].class, ADVISORY);
 });
 
 test('lanReservationFindings: findings only, keyed by node', () => {

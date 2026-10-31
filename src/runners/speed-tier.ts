@@ -256,13 +256,13 @@ export const MIN_OTHER_NODES = 2;
 /**
  * Which attributed names count as claws for the "others" baseline — IDENTITY
  * filtering over whatever `nodeOf` already returned, not a second parser of
- * runner names. This is also the ENTIRE mechanism by which the guest is kept
- * out of the baseline: nothing in this module spells the guest's name. A
- * node that is not `claw-<digits>` — the guest, `github-hosted`, or anything
+ * runner names. This is also the ENTIRE mechanism by which the backstop is kept
+ * out of the baseline: nothing in this module spells the backstop's name. A
+ * node that is not `claw-<digits>` — the backstop, `github-hosted`, or anything
  * `nodeOf` could not resolve — never enters `clawNodes` and so never enters
  * `othersFor`'s pool and is never tiered as a claw. Structural, the same way
  * `othersFor`'s doc below describes it, and it is what lets this file carry
- * zero occurrences of the guest's name in code (only in comments, which this
+ * zero occurrences of the backstop's name in code (only in comments, which this
  * repo's `ecosystem-literals` gate already blanks before it counts).
  */
 const CLAW_NODE = /^claw-\d+$/;
@@ -371,7 +371,7 @@ export function buildSpeedModel(
 	// never matches `CLAW_NODE` either — so every node named only through a
 	// JIT/warm runner comes out `'unknown'` (describe().kinds === 0), which
 	// places exactly like `'normal'` downstream. A BARE registration (a
-	// standing runner, or the guest's own name) still resolves correctly with
+	// standing runner, or the backstop's own name) still resolves correctly with
 	// no list at all, because `nodeOf` returns an unprefixed name unchanged.
 	// Nothing is ever held back by a missing list; see the test pinning this.
 	for (const r of records) {
@@ -546,7 +546,7 @@ export function buildSpeedModel(
 	}
 
 	function slownessOf(node: string, kk: string): KindSlowness | null {
-		// Claws only, like the tier: the guest is judged by the backstop, not here.
+		// Claws only, like the tier: the backstop node is judged by the backstop controller, not here.
 		if (!CLAW_NODE.test(node)) return null;
 		const nodeMap = byKindNode.get(kk);
 		if (!nodeMap) return null;

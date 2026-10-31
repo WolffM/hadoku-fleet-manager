@@ -54,8 +54,6 @@
  * modules that DO decide can stop carrying their own copy of the list.
  */
 
-import { isGuestNode } from './node-role.js';
-
 /** A fact about the node, or a routing lever the fast loop flips. */
 export type CapabilityKind = 'identity' | 'eligibility';
 
@@ -83,10 +81,8 @@ export type CapabilitySurface = 'label' | 'toolchain' | 'implicit';
  *          use it — so only a real 256x256 encode separates hokon's RTX 4090
  *          from claw-1's GTX 860M.
  *   role   a declarative fact about the node's job in the fleet. There is
- *          nothing to execute, or nothing the fleet is ALLOWED to execute:
- *          `hadoku-builder` is a routing lever nobody can prove, and a GUEST's
- *          labels stay declared because the fleet does not touch a guest at all.
- *          The declaration is the only evidence there is.
+ *          nothing to execute: `hadoku-builder` is a routing lever nobody can
+ *          prove. The declaration is the only evidence there is.
  *   mint   proven only by a JIT mint succeeding. No standing runner carries
  *          `jit-canary`, so there is nothing to probe against; what proves it is
  *          `.github/workflows/jit-canary.yml`, a job no standing runner in the
@@ -99,9 +95,9 @@ export type CapabilityVerification = 'probe' | 'role' | 'mint';
 export interface ManifestNode {
 	labels?: string[];
 	/**
-	 * `"claw"` | `"guest"`. DECLARED here rather than left to the index
-	 * signature, because {@link verificationFor} reads it and a weak-type check
-	 * would otherwise let any object through. Read via `isGuestNode`, never
+	 * `"claw"` | `"backstop"`. DECLARED here rather than left to the index
+	 * signature, so a weak-type check cannot let any object through where a
+	 * role-bearing node is wanted. Read via `isBackstopNode`, never
 	 * compared directly — `src/lib/node-role.ts` is the one answer, and the
 	 * strict default (absent reads as `claw`) lives there.
 	 */
@@ -314,9 +310,8 @@ export interface Capability {
 	 * declaration is the RIGHT source, and absent everywhere else.
 	 *
 	 * Capabilities are DERIVED, not declared (operator, 2026-09-09), and there
-	 * are exactly TWO exceptions to that. hokon's labels stay declared because
-	 * hokon is a guest and nothing here probes it. And a MINT-ONLY label is
-	 * declared because no probe can ever settle it: it is proven by MINTING, so
+	 * is exactly ONE exception to that: a MINT-ONLY label is declared because
+	 * no probe can ever settle it: it is proven by MINTING, so
 	 * bootcamp cannot put it in `earned` and `earned` is where every other label
 	 * comes from. `jit-canary` is the case that exists — its entry below, and
 	 * {@link ephemeralOnlyLabels}, carry the reasoning and the 2026-09-08/09
@@ -543,13 +538,11 @@ export const CAPABILITIES: readonly Capability[] = [
 			'`surface: "implicit"` and therefore routable by nothing. ' +
 			'It read `verify: "role"` before #6, with "the fleet’s own topology is the ' +
 			'evidence" beside it, which was true of exactly one machine — and that machine is a ' +
-			'GUEST. That half still holds and is why the ROLE, not this field, decides for a ' +
-			'guest — see {@link verificationFor}. THE DECLARED PATH IS RETIRED FOR EVERY ' +
-			'NON-GUEST: a claw cannot type its way in, because `nodeOffer` REPLACES a declared ' +
-			'probe-verified label with the proof record. hokon’s declaration is the one ' +
-			'exception and it is held by the role, not by this entry. Measured 2026-09-26: ' +
-			'`ok 24-online` on hokon (read-only, off the fleet chain), `no absent` on all eight ' +
-			'claws.',
+			'backstop. THE DECLARED PATH IS RETIRED FOR EVERY NODE: nothing can type its way ' +
+			'in, because `nodeOffer` REPLACES a declared probe-verified label with the proof ' +
+			'record. (Until 2026-10-31 the backstop kept its declaration by role; its own ' +
+			'bootcamp record now earns `pm2-host`.) Measured 2026-09-26: ' +
+			'`ok 24-online` on hokon, `no absent` on all eight claws.',
 		rung: 1,
 		requires: {
 			fields: [
@@ -635,7 +628,7 @@ export const CAPABILITIES: readonly Capability[] = [
 	},
 	{
 		/*
-		 * THE FIRST WORKLOAD LEAVING THE GUEST, AND IT IS NOT SIZED BY THE ROLE ABOVE.
+		 * THE FIRST WORKLOAD LEAVING THE BACKSTOP, AND IT IS NOT SIZED BY THE ROLE ABOVE.
 		 *
 		 * `pm2-capable`'s bar is 9,784 MiB because a placement establishing a ROLE
 		 * is sized against the role. `taskauto` is one small TENANT of that role,
@@ -672,7 +665,7 @@ export const CAPABILITIES: readonly Capability[] = [
 			'Scheduled task automation — tenhands’ board sweep and its backend suite. ' +
 			'Bottom rung of the priority ladder, yielded to both CI and pm2-host work. ' +
 			'288 jobs / 1.87 h in the 14 days to 2026-09-28, every one of them served by the ' +
-			'guest’s backstop registration; 517 MiB peak per job, measured on claw-8, which is ' +
+			'backstop’s registration; 517 MiB peak per job, measured on claw-8, which is ' +
 			'a NINETEENTH of the pm2-host role figure `pm2-capable` carries above.',
 		rung: 3,
 		// `backend pytest` is the job that EXERCISES the LLM judge (`taskauto.yml`'s
@@ -737,7 +730,7 @@ export const CAPABILITIES: readonly Capability[] = [
 		 * PROMOTED TO A LABEL 2026-10-23 (fleet-manager#3), against probe output that
 		 * already existed: bootcamp had earned it on hokon (10-09), claw-1 (10-10),
 		 * claw-8 and claw-9 (10-06). No `nodeOffer` change came with it — every
-		 * earned identity label is offered, on a guest too, which is how hokon
+		 * earned identity label is offered, on the backstop too, which is how hokon
 		 * already carried `jdk21`.
 		 *
 		 * FOUR NODES DEEP, ON PURPOSE. watchparty's ingest needs only H.264, so
@@ -1170,40 +1163,4 @@ const BY_ID = new Map(CAPABILITIES.map((c) => [c.id, c]));
 /** The capability with this id, or undefined. Never guesses. */
 export function capability(id: string): Capability | undefined {
 	return BY_ID.get(id);
-}
-
-/**
- * How this capability is proven ON THIS NODE — `verify`, narrowed by the ROLE.
- *
- * THE REGISTRY SAYS WHAT THE EVIDENCE IS; THE ROLE SAYS WHETHER THE FLEET IS
- * ALLOWED TO GO AND GET IT. Those are different questions and `verify` alone can
- * only answer the first, which was survivable while every probe-verified label
- * was also one the fleet was free to execute anywhere. `pm2-host` is the first
- * that is not: it is the bar a CLAW must EARN (#6), and simultaneously a fact
- * about hokon that nothing here may test, because hokon is a GUEST (operator,
- * 2026-09-14: "I do NOT want hokon being impacted by the fleet chain").
- *
- * So for a guest a LABEL capability reads as `role` no matter what the registry
- * says — the declaration is the only evidence there is, which is the first of
- * the two exceptions {@link Capability.mintOnly} already names. It is deliberately
- * NOT restricted to `pm2-host`: the exemption belongs to the role, and the next
- * label promoted to `probe` would otherwise silently start demanding proof from
- * a machine nothing is allowed to probe.
- *
- * WHAT IT COSTS IF THIS IS WRONG. `nodeOffer` REPLACES a declared probe-verified
- * label with the proof record. hokon carries a `$capabilities` record, so without
- * this narrowing its declared `pm2-host` is dropped from the offer the moment the
- * registry entry flips — and `pm2-host` is what the five infra workflows route
- * on. `k-node-offer.test.ts` pins both directions.
- *
- * `toolchain` and `implicit` capabilities are untouched: neither is routable, so
- * neither is anything a guest declares.
- */
-export function verificationFor(
-	node: ManifestNode,
-	cap: Capability | undefined
-): CapabilityVerification | undefined {
-	if (!cap) return undefined;
-	if (cap.surface === 'label' && isGuestNode(node)) return 'role';
-	return cap.verify;
 }

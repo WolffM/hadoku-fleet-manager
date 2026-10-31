@@ -2224,8 +2224,8 @@ function lastStartedAtMsByNode(nodes: readonly string[]): Map<string, number> {
  *       by refusing to do it.
  *
  * `admitMint` ITSELF excludes drained nodes and hokon from ever reaching here
- * refused-on-memory in the first place: a guest never appears in
- * `admissionVerdictsForReport` at all (`withoutGuests`, `ephemeral-tick.ts`),
+ * refused-on-memory in the first place: a backstop never appears in
+ * `admissionVerdictsForReport` at all (`withoutBackstops`, `ephemeral-tick.ts`),
  * and a drained node's verdict clause is `'drained'`, not `'memory'`.
  *
  * AN ABSENT VERDICT IS "COULD NOT LOOK", NEVER "ADMITTED". Right after a
@@ -2359,7 +2359,7 @@ async function checkStarvation(data: TickReport): Promise<void> {
  *
  * HOKON NEVER APPEARS HERE — `loadEphemeralNodes()` is the same set
  * `checkStarvation` walks, and hokon is never in it (`ephemeral: true` is
- * never set on a guest; `ephemeral-tick.ts`'s `withoutGuests` enforces it a
+ * never set on a backstop; `ephemeral-tick.ts`'s `withoutBackstops` enforces it a
  * second time on the producing side). `disk-watch.ts`'s own header has the
  * full chain.
  *
@@ -2385,7 +2385,7 @@ async function checkDiskWatch(data: TickReport): Promise<void> {
 	const tmpSmall: Record<string, number> = {};
 
 	// Every node the dispatcher mints on: the ephemeral claws AND the
-	// manifest's on-demand guests (#120). hokon's /tmp refused every mint there
+	// manifest's on-demand backstops (#120). hokon's /tmp refused every mint there
 	// on 2026-10-20/21, deploys included, and nothing here was watching it.
 	const machines = backstopMachinesReader();
 	const onDemand = Object.entries(machines ?? {})
@@ -2402,7 +2402,7 @@ async function checkDiskWatch(data: TickReport): Promise<void> {
 		}
 		// /tmp FIRST (2026-10-21): judged against the mint floor it is about to
 		// hit, its own alert keys, and folded into the node's one snapshot level
-		// as the worse of the two. On a guest the page says what the refusal
+		// as the worse of the two. On a backstop the page says what the refusal
 		// costs, because there it is not CI that stops.
 		//
 		// #132: judged against the tmpfs's own SIZE. An 8 GB claw's ~3.9 GB /tmp

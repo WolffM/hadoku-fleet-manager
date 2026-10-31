@@ -2,7 +2,7 @@
  * `fleet prove-job` THROUGH ITS REAL ENTRY POINT, against a fixture manifest and
  * shims for `gh` and `ssh`. The orchestration is tested in `src/tests/prove-job.test.ts`
  * with the whole world simulated; this proves the parts only a real process has:
- * argument handling, the guest refusal end to end, that an unreadable GitHub is
+ * argument handling, a refusal end to end, that an unreadable GitHub is
  * a non-zero exit with parseable JSON on stdout, and that `--out` gets the same
  * document. No network and no node: both shims fail loudly if reached for a write.
  */
@@ -24,7 +24,8 @@ import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'prove-job.mjs');
 const CLAW = 'fixture-claw-8.invalid';
-const GUEST = 'fixture-guest.invalid';
+const BACKSTOP = 'fixture-backstop.invalid';
+const STANDING = 'fixture-standing.invalid';
 
 function fixture({ ghExit = 1 } = {}) {
 	const root = mkdtempSync(join(tmpdir(), 'fleet-prove-'));
@@ -38,7 +39,8 @@ function fixture({ ghExit = 1 } = {}) {
 			toolchain: { capabilities: [] },
 			machines: {
 				[CLAW]: { role: 'claw', ephemeral: true, labels: ['taskauto'], maxConcurrent: 2 },
-				[GUEST]: { role: 'guest', labels: ['pm2-host', 'taskauto'] },
+				[BACKSTOP]: { role: 'backstop', mint: 'on-demand', labels: ['pm2-host', 'taskauto'] },
+				[STANDING]: { role: 'claw', labels: ['taskauto'], maxConcurrent: 2 },
 			},
 		})
 	);
@@ -70,7 +72,7 @@ function fixture({ ghExit = 1 } = {}) {
 	};
 }
 
-/** stderr is kept on EVERY exit, a pass included: the guest banner is asserted on one. */
+/** stderr is kept on EVERY exit, a pass included. */
 function run(args, env) {
 	const r = spawnSync(process.execPath, [SCRIPT, ...args], {
 		encoding: 'utf8',
@@ -81,16 +83,16 @@ function run(args, env) {
 	return { code: r.status ?? 1, out: String(r.stdout ?? ''), err: String(r.stderr ?? '') };
 }
 
-test('a guest is REFUSED end to end: exit non-zero, JSON on stdout, nothing reached', () => {
+test('a node that takes no JIT mint is REFUSED end to end: exit non-zero, JSON on stdout, nothing reached', () => {
 	const f = fixture();
 	try {
 		const file = join(f.root, 'proof.json');
-		const r = run(['--node', GUEST, '--capability', 'taskauto', '--json', '--out', file], f.env);
+		const r = run(['--node', STANDING, '--capability', 'taskauto', '--json', '--out', file], f.env);
 		assert.equal(r.code, 1, r.err);
 		const doc = JSON.parse(r.out);
 		assert.equal(doc.verdict, 'refused');
 		assert.equal(doc.ok, false);
-		assert.equal(doc.findings[0].rule, 'guest');
+		assert.equal(doc.findings[0].rule, 'not-minted');
 		assert.deepEqual(
 			JSON.parse(readFileSync(file, 'utf8')),
 			doc,
@@ -121,6 +123,18 @@ test('an unreadable GitHub is a finding with its reason and a non-zero exit — 
 			'only reads; no ssh, no write'
 		);
 		assert.ok(!f.calls().some((c) => /-X/.test(c)));
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('the backstop is proven through the JIT mint like a claw, never refused for its role', () => {
+	const f = fixture();
+	try {
+		const r = run(['--node', BACKSTOP, '--capability', 'taskauto', '--json'], f.env);
+		const doc = JSON.parse(r.out);
+		assert.notEqual(doc.verdict, 'refused', JSON.stringify(doc.findings));
+		assert.equal(doc.findings[0].rule, 'workflow-unreadable');
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -571,116 +585,6 @@ test('--under-own-drain under bootcamp’s own drain gets past admission (the mi
 		const doc = JSON.parse(r.out);
 		assert.notEqual(doc.findings?.[0]?.rule, 'admission', 'its own drain must not refuse the mint');
 		assert.notEqual(doc.findings?.[0]?.rule, 'usage');
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-// ---------------------------------------------------------------------------
-// STANDING MODE through the real entry point (2026-10-10): `--include-guests`
-// proves a guest's own registration with GitHub API calls only. The ssh shim
-// here records and fails; a standing run must never reach it.
-// ---------------------------------------------------------------------------
-
-test('--include-guests on a claw is a usage error and touches nothing', () => {
-	const f = fixture();
-	try {
-		const r = run(
-			['--node', CLAW, '--capability', 'taskauto', '--include-guests', '--json'],
-			f.env
-		);
-		assert.equal(r.code, 2, r.out + r.err);
-		assert.match(JSON.parse(r.out).error, /not a guest/);
-		assert.deepEqual(f.calls(), []);
-	} finally {
-		rmSync(f.root, { recursive: true, force: true });
-	}
-});
-
-test('a guest WITH --include-guests is proven on its standing runner: label added and removed, $proof written, no ssh', async () => {
-	const f = fixture();
-	try {
-		const { readProof } = await import('../dist/lib/measured.js');
-		const jobStartedAt = new Date(Date.now() - 200_000).toISOString();
-		const jobCompletedAt = new Date().toISOString();
-		writeFileSync(
-			join(f.root, 'manifests', 'fleet-runner-manifest.json'),
-			JSON.stringify({
-				toolchain: { capabilities: [] },
-				machines: { [GUEST]: { role: 'guest', labels: ['pm2-host', 'jdk21'], maxConcurrent: 4 } },
-			})
-		);
-		writeFileSync(
-			join(f.root, 'workflow.yml'),
-			[
-				'name: Forge',
-				'on:',
-				'  workflow_dispatch:',
-				'jobs:',
-				'  forge-e2e:',
-				'    runs-on: ${{ fromJSON(inputs.runs_on) }}',
-				'    steps:',
-				'      - run: true',
-				'',
-			].join('\n')
-		);
-		const calls = join(f.root, 'calls.log');
-		const labelFile = join(f.root, 'proof-label');
-		const dispatched = join(f.root, 'dispatched');
-		const bin = join(f.root, 'bin');
-		writeFileSync(
-			join(bin, 'gh'),
-			`#!/bin/sh
-echo "gh $*" >>${JSON.stringify(calls)}
-case "$*" in
-  *contents/.github/workflows*) cat ${JSON.stringify(join(f.root, 'workflow.yml'))} ;;
-  *"-X POST"*actions/runners/42/labels*)
-    sed -n 's/.*"\\(proof-[0-9a-z]*\\)".*/\\1/p' >${JSON.stringify(labelFile)}
-    echo '{}' ;;
-  *"-X DELETE"*actions/runners/42/labels/proof-*) rm -f ${JSON.stringify(labelFile)}; echo '{}' ;;
-  *dispatches*) cat >/dev/null; touch ${JSON.stringify(dispatched)}; exit 0 ;;
-  *git/ref/heads/main*) echo '{"object":{"sha":"ddda60a"}}' ;;
-  *"-X DELETE"*git/refs/heads/canary/*) exit 0 ;;
-  *git/refs*) cat >/dev/null; echo '{}' ;;
-  *workflows/forge.yml/runs*)
-    if [ -f ${JSON.stringify(dispatched)} ]; then
-      echo '{"workflow_runs":[{"id":9001,"status":"queued"}]}'
-    else
-      echo '{"workflow_runs":[]}'
-    fi ;;
-  *runs/9001/jobs*)
-    echo '{"jobs":[{"id":7001,"name":"forge-e2e (1)","status":"completed","conclusion":"success","runner_name":"${GUEST}","created_at":"${jobStartedAt}","started_at":"${jobStartedAt}","completed_at":"${jobCompletedAt}"}]}' ;;
-  *runs/9001*) echo '{"id":9001,"status":"completed"}' ;;
-  *jobs/7001/logs*) echo 'two friends play one Forge match' ;;
-  *actions/runners*)
-    extra=""
-    if [ -s ${JSON.stringify(labelFile)} ]; then extra=",{\\"name\\":\\"$(cat ${JSON.stringify(labelFile)})\\"}"; fi
-    echo "{\\"runners\\":[{\\"id\\":42,\\"name\\":\\"${GUEST}\\",\\"status\\":\\"online\\",\\"busy\\":true,\\"labels\\":[{\\"name\\":\\"self-hosted\\"}$extra]}]}" ;;
-  *) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
-esac
-`
-		);
-		chmodSync(join(bin, 'gh'), 0o755);
-		const r = run(['--node', GUEST, '--capability', 'jdk21', '--include-guests', '--json'], f.env);
-		const doc = JSON.parse(r.out);
-		assert.equal(doc.verdict, 'pass', JSON.stringify(doc.findings));
-		assert.equal(r.code, 0, JSON.stringify(doc.findings));
-		assert.equal(doc.mode, 'standing');
-		assert.equal(doc.runnerName, GUEST);
-		assert.match(r.err, /PROVING A GUEST: fixture-guest\.invalid/, 'logged loudly');
-		const log = f.calls();
-		assert.ok(!log.some((c) => c.startsWith('ssh')), `no ssh: ${log.join('\n')}`);
-		assert.ok(log.some((c) => /-X POST \S*actions\/runners\/42\/labels/.test(c)));
-		assert.ok(log.some((c) => /-X DELETE \S*actions\/runners\/42\/labels\/proof-/.test(c)));
-		assert.equal(existsSync(labelFile), false, 'the proof label is gone');
-		assert.ok(!log.some((c) => /generate-jitconfig/.test(c)), 'nothing minted');
-		assert.equal(doc.proofRecord?.verdict, 'pass');
-		const stored = readProof(GUEST, 'jdk21', { dir: f.stateDir });
-		assert.equal(stored?.verdict, 'pass');
-		assert.equal(stored?.runner, GUEST);
-		assert.equal(stored?.durationSec, 200);
-		const ledger = JSON.parse(readFileSync(join(f.stateDir, 'job-proofs.json'), 'utf8'));
-		assert.equal(ledger[`${GUEST}::jdk21`].lastPass.runnerName, GUEST);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

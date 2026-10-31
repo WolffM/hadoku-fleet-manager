@@ -31,7 +31,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadManifest, machineArg, runOn, selectNodes } from './lib/fleet-exec.mjs';
+import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { manifest as manifestFile } from './lib/paths.mjs';
 import { reposOnNode } from './lib/placement-rules.mjs';
 import { reclaimableCaches } from './lib/tool-caches.mjs';
@@ -67,24 +67,7 @@ const GB = (kb) => (kb / 1048576).toFixed(2);
 
 const script = readFileSync(SCRIPT_SRC, 'utf8');
 const FLEET = loadManifest();
-/**
- * A GUEST IS NOT CLEANED, AND THE SKIP IS PRINTED.
- *
- * This is the only `--json` contract entry that MUTATES, and it runs nightly
- * from `ci:claw-cleanup` with `--confirm`. Unattended deletion inside another
- * machine's home is precisely what "a guest lends the fleet a registration and
- * is otherwise none of the fleet chain's business" (operator, 2026-09-14) rules
- * out — "never cleaned" is one of the words in that decision.
- *
- * WHAT THE SKIP COSTS, SAID PLAINLY: the guest carries the fleet's standing
- * registrations, so it is where runner self-update debris actually accumulates.
- * It is now an operator's job, and it stays one command away — `--machine <the
- * guest>` names it outright and `guestGate` treats a named node as reached on
- * purpose. That is deliberate: the difference between a cron deleting files
- * there every night and a person doing it once is the whole point.
- */
-const { nodes: selected, skippedByRole } = selectNodes(FLEET, { only: ONLY });
-const nodes = selected.map(([name]) => name);
+const nodes = selectMachines(FLEET, { only: ONLY }).map(([name]) => name);
 
 /**
  * Covered repos, for the tool-cache reclaim. Read once.
@@ -108,22 +91,9 @@ try {
 const cacheFindings = new Map();
 
 if (!nodes.length) {
-	console.error(
-		`clean-runner-debris: no nodes${ONLY ? ` matching --machine ${ONLY}` : ''}` +
-			(skippedByRole.length
-				? `. The only match is a guest (${skippedByRole.map((s) => s.node).join(', ')}), ` +
-					'which the fleet does not clean unattended.'
-				: '')
-	);
+	console.error(`clean-runner-debris: no nodes${ONLY ? ` matching --machine ${ONLY}` : ''}`);
 	process.exit(1);
 }
-
-// SAID OUT LOUD BEFORE THE SWEEP, not folded into it. A node that stops being
-// cleaned without anyone noticing is the failure the skip exists to prevent.
-for (const s of skippedByRole) {
-	log(`── ${s.node}  [skipped: guest]\n   ${s.why}`);
-}
-if (skippedByRole.length) log('');
 
 log(
 	`Mode: ${CONFIRM ? 'APPLY' : 'DRY RUN (no deletions)'}   keeping _diag < ${DIAG_KEEP_DAYS}d, ` +
@@ -281,9 +251,7 @@ for (const m of nodes) {
 }
 
 if (JSON_OUT) {
-	// `skippedByRole` rides alongside `results` rather than inside it: `results`
-	// means "nodes this run acted on", and a guest is precisely one it did not.
-	emitter.emit({ confirm: CONFIRM, totalReclaimGb: Number(GB(totalKb)), results, skippedByRole });
+	emitter.emit({ confirm: CONFIRM, totalReclaimGb: Number(GB(totalKb)), results });
 } else {
 	log(
 		`\n${CONFIRM ? 'Reclaimed' : 'Reclaimable'}: ${GB(totalKb)} GB across ${results.filter((r) => r.ok).length} node(s)`

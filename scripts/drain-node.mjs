@@ -62,7 +62,7 @@ import { manifest, stateDir } from './lib/paths.mjs';
 import { loadManifest, remoteCommand } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
-import { guestNodeNames, isGuestNode } from '../dist/lib/node-role.js';
+import { backstopNodeNames } from '../dist/lib/node-role.js';
 // `nodeOf` attributes a runner NAME (`warm-claw-5-hadoku_site`,
 // `jit-claw-3-...`) back to the node it belongs to — the same resolver
 // `speed-tier.ts` and `census.ts` itself use, so a drain status check and the
@@ -114,9 +114,8 @@ const write = (next) => writeDrainDoc(next, doc);
 /**
  * The fleet manifest, for ROLES only. Unreadable is `null`, never `{}`.
  *
- * A `{}` default would read as "no node is a guest", which is the lenient
- * direction and the wrong one — it would put the fleet chain back onto a box the
- * operator took it off. Every caller below treats null as "could not look".
+ * A `{}` default would read as "the fleet has no nodes", which is the lenient
+ * direction and the wrong one. Every caller below treats null as "could not look".
  */
 let fleetDocCache;
 /** WHY `fleetDoc()` read null, for a caller that needs to SAY so rather than
@@ -132,24 +131,6 @@ function fleetDoc() {
 	}
 	return fleetDocCache;
 }
-
-/**
- * A GUEST IS NOT DRAINED, AND NOT SILENTLY PROBED EITHER.
- *
- * "I do NOT want hokon being impacted by the fleet chain" (operator,
- * 2026-09-14) — never converged, never cleaned, never probed, never DRAINED. A
- * drain is the fleet deciding a machine's availability, which is exactly the
- * decision a guest keeps for itself: it is here when it is needed, and it stops
- * being here by not being here.
- *
- * `--include-guests` is the one door, the spelling `converge-toolchain`
- * established and `guestGate` honours, for the operator who genuinely means it.
- * A guest whose role cannot be read (manifest unreadable) is treated as a claw,
- * matching `nodeRole`'s own strict default: a typo or a missing file must not be
- * able to exempt a node, and the capacity refusal below still guards the fleet.
- */
-const INCLUDE_GUESTS = parsed.has('--include-guests');
-const isGuest = (node) => isGuestNode(fleetDoc()?.machines?.[node]);
 
 /** Running jobs, OBSERVED on the node, not inferred from anything we wrote. */
 function busyOn(node) {
@@ -345,40 +326,30 @@ if (parsed.has('--status') || (!node && !parsed.has('--undo'))) {
 	// while GitHub still lists a live warm or JIT registration for it — see
 	// `liveWarmOrJitRegistrations`. Swept ONCE, over every candidate at once,
 	// before the per-node loop, not inside it.
-	const candidateNodes = new Set(names.filter((n) => !(isGuest(n) && !INCLUDE_GUESTS)));
+	const candidateNodes = new Set(names);
 	const registrationCheck = liveWarmOrJitRegistrations(candidateNodes);
 	console.log(`\n${B}node        state      kind         since                 reason${N}`);
 	for (const n of names) {
-		// A guest is not probed unless the operator asked for it. The row still
-		// appears — a machine that vanishes from a report is a machine nobody can
-		// tell was considered — and it says WHY it carries no count.
-		const skipGuest = isGuest(n) && !INCLUDE_GUESTS;
-		let st, col;
-		if (skipGuest) {
-			st = 'guest';
-			col = Y;
-		} else {
-			// `null` (could not read GitHub's listing — `registrationCheck.reason`
-			// says why, printed once below rather than per row) and `true`/`false`
-			// (did read it) are passed straight through to `drainStatus` — the pure
-			// function owns the "never drained while live, UNKNOWN if unreadable"
-			// rule (#90), tested on its own in `src/tests/drain.test.ts`.
-			const hasLiveRegistration = registrationCheck.ok ? registrationCheck.map.has(n) : null;
-			// The ssh busy-probe is skipped once the registration answer alone
-			// already settles the verdict — `drainStatus` never reads `busy` when
-			// `hasLiveRegistration` is truthy or null.
-			const busy = hasLiveRegistration === false ? busyOn(n) : null;
-			const verdict = drainStatus(n, busy, state, hasLiveRegistration);
-			st =
-				verdict === 'unknown'
-					? 'UNKNOWN'
-					: verdict === 'draining'
-						? hasLiveRegistration
-							? `draining(${registrationCheck.map.get(n).name})`
-							: `draining(${busy})`
-						: 'drained';
-			col = verdict === 'drained' ? G : Y;
-		}
+		// `null` (could not read GitHub's listing — `registrationCheck.reason`
+		// says why, printed once below rather than per row) and `true`/`false`
+		// (did read it) are passed straight through to `drainStatus` — the pure
+		// function owns the "never drained while live, UNKNOWN if unreadable"
+		// rule (#90), tested on its own in `src/tests/drain.test.ts`.
+		const hasLiveRegistration = registrationCheck.ok ? registrationCheck.map.has(n) : null;
+		// The ssh busy-probe is skipped once the registration answer alone
+		// already settles the verdict — `drainStatus` never reads `busy` when
+		// `hasLiveRegistration` is truthy or null.
+		const busy = hasLiveRegistration === false ? busyOn(n) : null;
+		const verdict = drainStatus(n, busy, state, hasLiveRegistration);
+		const st =
+			verdict === 'unknown'
+				? 'UNKNOWN'
+				: verdict === 'draining'
+					? hasLiveRegistration
+						? `draining(${registrationCheck.map.get(n).name})`
+						: `draining(${busy})`
+					: 'drained';
+		const col = verdict === 'drained' ? G : Y;
 		const ends = state[n].until ? `  (ends ${state[n].until.slice(0, 16)}Z)` : '';
 		console.log(
 			`${n.padEnd(11)} ${col}${st.padEnd(10)}${N} ${(state[n].kind ?? 'maintenance').padEnd(12)}` +
@@ -408,12 +379,6 @@ if (parsed.has('--status') || (!node && !parsed.has('--undo'))) {
 	if (!registrationCheck.ok) {
 		console.log(
 			`${Y}UNKNOWN rows above: could not read GitHub's registration listing — ${registrationCheck.reason}${N}`
-		);
-	}
-	if (names.some((n) => isGuest(n)) && !INCLUDE_GUESTS) {
-		console.log(
-			`${Y}guest${N} = not probed: the fleet chain does not reach a guest. ` +
-				'Count its jobs with --include-guests.'
 		);
 	}
 	process.exit(0);
@@ -478,27 +443,11 @@ function capacityAfter(candidate) {
 	}
 	const all = Object.keys(fleetDoc.machines ?? {});
 	const held = new Set([...Object.keys(state), candidate]);
-	// A GUEST IS A LAST RESORT, NOT STANDING CAPACITY, and it is excluded BY ROLE
-	// rather than by name. The name was hard-coded here, which made this correct
-	// only for as long as the fleet had exactly one guest and that guest kept its
-	// hostname — the same class of mistake as excluding it by its `pm2-host`
-	// label. Counting a guest would let the fleet drain down to "the backstop
-	// only" and call that healthy.
-	const guests = guestNodeNames(fleetDoc);
-	return all.filter((n) => !held.has(n) && !guests.has(n));
-}
-
-// REFUSED BEFORE ANYTHING IS WRITTEN. A silent skip would report a clean drain
-// of a node that is still taking work, which is worse than the refusal.
-if (isGuest(node) && !INCLUDE_GUESTS) {
-	console.error(
-		`${R}drain: ${node} is a GUEST and the fleet chain does not drain one.${N}\n` +
-			`  A guest lends the fleet a registration and is otherwise none of its\n` +
-			`  business (operator, 2026-09-14) — it is here when it is needed, and the\n` +
-			`  fleet does not decide its availability for it.\n` +
-			`  If you really mean to hold it, re-run with --include-guests.`
-	);
-	process.exit(1);
+	// THE BACKSTOP IS A LAST RESORT, NOT STANDING CAPACITY, and it is excluded BY
+	// ROLE rather than by name. Counting it would let the fleet drain down to
+	// "the backstop only" and call that healthy.
+	const backstops = backstopNodeNames(fleetDoc);
+	return all.filter((n) => !held.has(n) && !backstops.has(n));
 }
 
 const reason = parsed.value('--reason');
@@ -608,7 +557,7 @@ console.log(
 console.log(`  reason: ${reason}`);
 console.log(`  Running jobs finish. New assignment stops within one fast-loop tick (~60s).`);
 console.log(`  Watch it go quiet with:  fleet drain --status`);
-const busy = isGuest(node) && !INCLUDE_GUESTS ? null : busyOn(node);
+const busy = busyOn(node);
 if (busy === null) console.log(`  ${Y}note: could not reach ${node} to count running jobs.${N}`);
 else if (busy > 0) console.log(`  ${busy} job(s) still running right now.`);
 else console.log(`  ${G}already idle — safe for maintenance now.${N}`);

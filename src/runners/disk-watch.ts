@@ -35,13 +35,13 @@
  * reports after every mgmt-api restart — never misread as "every node is
  * fine".
  *
- * HOKON APPEARS HERE SINCE #120 (2026-10-19). Until then it was a guest the
- * dispatcher never minted for, `withoutGuests` stripped it before the space
- * probe, and this registry never carried it. An on-demand guest IS minted
+ * HOKON APPEARS HERE SINCE #120 (2026-10-19). Until then it was a backstop the
+ * dispatcher never minted for, `withoutBackstops` stripped it before the space
+ * probe, and this registry never carried it. An on-demand backstop IS minted
  * for — that is what promotion means now — so `ephemeral-tick.ts` probes its
  * space with every other minting node and the dispatcher refuses it under
  * the same floors. `runner-health.ts`'s `checkDiskWatch` walks
- * `loadEphemeralNodes()` plus the manifest's on-demand guests to decide WHO
+ * `loadEphemeralNodes()` plus the manifest's on-demand backstops to decide WHO
  * to judge.
  *
  * /tmp IS JUDGED TOO (2026-10-21). The `_work` lines above were the whole of

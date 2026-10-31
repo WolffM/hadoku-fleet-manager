@@ -81,7 +81,7 @@ export function coverageOf(measured) {
 	return { never, stale, why };
 }
 
-/** The findings a coverage result implies, `skip` excepted (guests). */
+/** The findings a coverage result implies, `skip` excepted (the backstop, which is not ranked). */
 export function coverageFindings(c, skip = new Set()) {
 	return [
 		...c.never.filter((n) => !skip.has(n)).map((n) => c.why?.get(n) ?? `${n}: NEVER measured`),
