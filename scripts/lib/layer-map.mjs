@@ -243,6 +243,8 @@ export const LAYER_MAP = [
 	{ glob: 'src/provisioning-converge.ts', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/bootcamp.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/provision-fleet.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
+	{ glob: 'scripts/lib/provision-plan.mjs', layer: 'domain', domain: 'lifecycle', part: 'core' },
+	{ glob: 'scripts/lib/provision-phases.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/converge-provisioning.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/converge-toolchain.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },
 	{ glob: 'scripts/reboot-claws.mjs', layer: 'domain', domain: 'lifecycle', part: 'run' },

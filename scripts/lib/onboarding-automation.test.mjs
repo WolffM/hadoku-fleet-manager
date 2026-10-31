@@ -25,7 +25,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (...p) => readFileSync(resolve(ROOT, ...p), 'utf8');
 
 test('the chain runs ENROLL FIRST, and only through provision — no sixth door', () => {
-	const src = read('scripts', 'provision-fleet.mjs');
+	const src = read('scripts/lib/provision-plan.mjs') + read('scripts/lib/provision-phases.mjs');
 	// enroll is a step of the chain, not a command the operator still owes.
 	assert.ok(src.includes("resolve(HERE, 'enroll-node.mjs')"), 'provision must spawn enroll');
 	// And the chain's order is the manual record's order, as data:
@@ -65,13 +65,13 @@ test('the chain fixes what bootcamp reports and RE-RUNS bootcamp (the 3-6 loop)'
 	// chain must PROBE first, seed from the earned set, and let a second
 	// bootcamp judge — never seed blindly, never stop at a failure whose
 	// remedy it knows.
-	const src = read('scripts', 'provision-fleet.mjs');
+	const src = read('scripts', 'lib', 'provision-phases.mjs');
 	// The ORDER is asserted INSIDE bootcampPhase's own body — the file's header
 	// and docstrings mention the same words, and topology is a property of the
 	// executing function, not of the prose around it.
 	const phase = src.slice(
 		src.indexOf('function bootcampPhase'),
-		src.indexOf('async function placementPhase')
+		src.indexOf('function benchmarkPhase')
 	);
 	const probeAt = phase.indexOf('bootcampProbeArgs(');
 	// EVERY bootcamp run in the phase goes through bootcampProbeArgs, which adds
@@ -128,7 +128,7 @@ test('payload BEFORE ephemeral — the flip demands BOTH halves', async () => {
 	// fail"); its PROBE can pass without the payload (a standing install
 	// satisfies jitconfig). The chain therefore requires the earned flag AND
 	// the binary, and the payload check runs over the node, not the manifest.
-	const src = read('scripts', 'provision-fleet.mjs');
+	const src = read('scripts/provision-fleet.mjs') + read('scripts/lib/provision-plan.mjs');
 	assert.match(src, /PAYLOAD_PROBE/, 'the chain probes the payload binary itself');
 	assert.match(src, /jit\/payload\/bin\/Runner\.Listener/);
 	assert.match(src, /flipDecision\(\{ entry, earned, payloadPresent \}\)/);
@@ -149,7 +149,7 @@ test('realize-the-slice is a step of the chain, between slice and benchmark', ()
 	// `systemctl --user start runners.slice` BY HAND — "io never reached a
 	// slice that had never been realized". The start is idempotent (an active
 	// slice is a no-op), which is what makes it safe to run on a re-run.
-	const src = read('scripts', 'provision-fleet.mjs');
+	const src = read('scripts/provision-fleet.mjs') + read('scripts/lib/provision-plan.mjs');
 	const sliceAt = src.indexOf("id: 'slice'");
 	const realizeAt = src.indexOf("id: 'realize'");
 	const benchAt = src.indexOf("id: 'benchmark'");
@@ -167,7 +167,7 @@ test('benchmark runs on the ci:fleet-benchmark window, so the first night is not
 	// benchmark record existed. The chain measures with --due so an
 	// idempotent re-run on a measured node changes nothing, and the window is
 	// the cron's own so the two cannot disagree.
-	const src = read('scripts', 'provision-fleet.mjs');
+	const src = read('scripts/lib/provision-plan.mjs') + read('scripts/lib/provision-phases.mjs');
 	assert.match(src, /'--due',\s*\n?\s*String\(BENCHMARK_DUE_DAYS\)/);
 	assert.match(src, /export const BENCHMARK_DUE_DAYS = 30/);
 	// IT ASKS BEFORE IT MEASURES, and asks the cron's own question. Until
@@ -196,7 +196,7 @@ test('the chain ends on doctor, gated on the STORED record', () => {
 	// in a list nobody ran (the manual record's step 15: "nobody ran it").
 	// Now the chain runs it — but only when the record is missing, stale or
 	// silent: a fresh blocking-free record means the re-run changes nothing.
-	const src = read('scripts', 'provision-fleet.mjs');
+	const src = read('scripts', 'lib', 'provision-phases.mjs');
 	assert.match(src, /lib', 'doctor-run\.mjs'[\s\S]{0,80}'--machine'[\s\S]{0,20}'--write'/);
 	assert.match(
 		src,
@@ -210,7 +210,7 @@ test('every manifest write is preceded by a FAST-FORWARD onto origin/main', () =
 	// The manual record's step 1 failed on exactly this: "enroll refused to
 	// push: checkout behind origin". The chain brings the checkout level
 	// FIRST — and fast-forward only, which cannot lose local work.
-	const src = read('scripts', 'provision-fleet.mjs');
+	const src = read('scripts/provision-fleet.mjs') + read('scripts/lib/provision-phases.mjs');
 	assert.match(src, /\['merge', '--ff-only', 'FETCH_HEAD'\]/);
 	// Both in-chain write phases call it before writing.
 	const ffCalls = src.match(/fastForwardManifest\(MANIFEST\)/g) ?? [];
@@ -223,7 +223,7 @@ test('the WHOLE-FLEET path keeps its own shape — the chain did not eat it', ()
 	// stay LAST there (repair after deploys, gigabytes from a healthy peer);
 	// on the ONBOARDING path they run EARLIER because the payload must exist
 	// before `ephemeral` and `ephemeral` before throttle's provisioner.
-	const src = read('scripts', 'provision-fleet.mjs');
+	const src = read('scripts/lib/provision-plan.mjs') + read('scripts/provision-fleet.mjs');
 	const fleet = src.slice(src.indexOf('FLEET_APPLY'), src.indexOf('const VERIFY'));
 	for (const step of [
 		'reconcile-fleet-runners.mjs',
