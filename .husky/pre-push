@@ -9,8 +9,11 @@
 common_dir=$(git rev-parse --git-common-dir)
 case "$common_dir" in /*) ;; *) common_dir="$PWD/$common_dir" ;; esac
 main_checkout=$(dirname "$common_dir")
-if [ ! -e node_modules ] && [ -e "$main_checkout/node_modules" ]; then
-	ln -s "$main_checkout/node_modules" node_modules 2>/dev/null || true
+# Install this worktree's own node_modules rather than linking the main
+# checkout's (see the pre-commit preamble for why a link is wrong).
+if [ ! -e node_modules ] && ! CI=true pnpm install --frozen-lockfile; then
+	echo "❌ pnpm install failed. A private @wolffm package needs NODE_AUTH_TOKEN."
+	exit 1
 fi
 
 # FIRST, because it reads git's ref lines on stdin and the rest of this file
