@@ -76,8 +76,7 @@
   "F10-ansi": [],
   "F12-repage-ms": [
     "src/claw-reboot.ts:repage-constant#1",
-    "src/hosting-converge.ts:repage-constant#1",
-    "src/provisioning-converge.ts:repage-constant#1"
+    "src/hosting-converge.ts:repage-constant#1"
   ],
   "F12-page-ledger": [],
   "F13-hosted-label": ["src/label-floor.ts:HOSTED_PREFIX#2", "src/label-floor.ts:HOSTED_RE#1"]
