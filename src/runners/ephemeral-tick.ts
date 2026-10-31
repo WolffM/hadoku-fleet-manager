@@ -21,7 +21,7 @@ import {
 	takeSliceUsage,
 } from './hosting-record.js';
 import { admitMint } from './ephemeral.js';
-import { guestUnitMemoryMaxMb } from './ephemeral.js';
+import { guestUnitMemoryMaxMb } from './ephemeral-mint.js';
 import { JIT_UNIT_MAX_SEC } from './ephemeral.js';
 import { JOB_RESERVE_DEFAULT_MB } from './ephemeral.js';
 import { mintBudget } from './ephemeral.js';

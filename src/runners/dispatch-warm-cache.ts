@@ -1,19 +1,17 @@
 import { isDraining, readDrain } from './drain.js';
 import { effectiveHosting, readHostingDoc } from './hosting-record.js';
-import {
-	DEFAULT_RUNNER_SLICE,
-	planWarmFleet,
-	resolveSliceName,
-	spaceRefusal,
-	unitMemoryMaxMb,
-	warmCacheEligible,
-	warmListenerSlots,
-	warmRunnerName,
-	warmSlotLocked,
-	type WarmFleetNode,
-	type WarmServedJob,
-	type WarmSlotState,
-} from './ephemeral.js';
+import { DEFAULT_RUNNER_SLICE } from './ephemeral.js';
+import { resolveSliceName } from './ephemeral.js';
+import { spaceRefusal } from './ephemeral.js';
+import { unitMemoryMaxMb } from './ephemeral.js';
+import { warmCacheEligible } from './ephemeral.js';
+import { warmListenerSlots } from './ephemeral.js';
+import { warmRunnerName } from './ephemeral.js';
+import { planWarmFleet } from './ephemeral-warm.js';
+import { warmSlotLocked } from './ephemeral-warm.js';
+import { type WarmFleetNode } from './ephemeral-warm.js';
+import { type WarmServedJob } from './ephemeral-warm.js';
+import { type WarmSlotState } from './ephemeral-warm.js';
 import {
 	evictWarmListener,
 	withholdWarmListener,

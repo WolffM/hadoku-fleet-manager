@@ -8,7 +8,7 @@ import {
 	mintEphemeralRunner,
 	runnerTarballUrl,
 } from '../runners/ephemeral-exec.js';
-import { jitUnitDescription, labelsFromUnitDescription } from '../runners/ephemeral.js';
+import { jitUnitDescription, labelsFromUnitDescription } from '../runners/ephemeral-mint.js';
 import { GOOD_JITCONFIG, jitConfig } from './helpers/fleet-fakes.js';
 
 const REQ = {

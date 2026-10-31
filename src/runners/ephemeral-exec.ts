@@ -10,18 +10,16 @@
 import { IMPLICIT_LABELS, ephemeralOnlyLabels } from '../lib/capability-labels.js';
 import { logger } from '../host.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
-import {
-	JIT_PREFIX,
-	assertSafeJitConfig,
-	buildSpawnPlan,
-	labelsFromUnitDescription,
-	buildWarmSpawnPlan,
-	parseJitName,
-	slotDir,
-	warmRunnerName,
-	warmSlotDir,
-	type AdmissionResult,
-} from './ephemeral.js';
+import { JIT_PREFIX } from './ephemeral.js';
+import { assertSafeJitConfig } from './ephemeral.js';
+import { parseJitName } from './ephemeral.js';
+import { slotDir } from './ephemeral.js';
+import { warmRunnerName } from './ephemeral.js';
+import { warmSlotDir } from './ephemeral.js';
+import { type AdmissionResult } from './ephemeral.js';
+import { buildSpawnPlan } from './ephemeral-mint.js';
+import { labelsFromUnitDescription } from './ephemeral-mint.js';
+import { buildWarmSpawnPlan } from './ephemeral-mint.js';
 import { nodeScriptCommand } from './node-script.js';
 
 export interface GhLike {

@@ -394,6 +394,14 @@ export const LAYER_MAP = [
 	{ glob: 'src/runners/dispatch-pass.ts', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
 	{ glob: 'src/runners/dispatch-tick.ts', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
 	{ glob: 'src/runners/ephemeral.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
+	// Wave 5k lane C split of ephemeral.ts (plan §4.3 #11, pure move): the mint
+	// plan builders (buildSpawnPlan/buildWarmSpawnPlan and the sizing/labelling
+	// they need) and the warm-cache SELECTION decision (planWarmCache/
+	// planWarmFleet and their scoring) moved out; admission, naming and warm
+	// ELIGIBILITY stayed, keyed by which other-domain files reach in by name.
+	// Same part as their source file for the same reason.
+	{ glob: 'src/runners/ephemeral-mint.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
+	{ glob: 'src/runners/ephemeral-warm.ts', layer: 'domain', domain: 'ci-scheduling', part: 'core' },
 	{ glob: 'src/runners/ephemeral-exec.ts', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
 	{ glob: 'src/runners/ephemeral-tick.ts', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
 	{ glob: 'src/runners/node-script.ts', layer: 'domain', domain: 'ci-scheduling', part: 'run' },
