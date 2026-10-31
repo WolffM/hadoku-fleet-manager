@@ -137,7 +137,7 @@ import {
 	type DiskWatchLevel,
 } from './runners/disk-watch.js';
 import { checkNodeRegressions, defaultGatedKinds } from './runners/node-regression.js';
-import type { BackstopReason, ClawState } from './fleet-report-types.js';
+import type { BackstopReason, ClawState } from './lib/fleet-vocabulary.js';
 import { noteTick, registerLoop, TOKEN_WAIT_GRACE_MS } from './lib/liveness.js';
 // The GitHub Actions API client, moved to its own module 2026-10-29 (plan §4.1 F2).
 import {
@@ -2011,6 +2011,676 @@ export async function tick(token: string): Promise<void> {
  * returned facts are the ENTIRE remaining data flow across the seam; everything
  * else in here is local, which is what made the split safe to do mechanically.
  */
+
+async function runBackstopDecision(args: {
+	token: string;
+	fleetRepos: string[];
+	data: TickReport;
+	clawsOnline: number;
+	clawsRegistered: number;
+	clawsFree: number;
+	ephemeralUnknown: boolean;
+	pm2BusyNodes: Set<string>;
+	fleetNodes: string[];
+	backstopPool: GhRunner[];
+	has: (r: GhRunner, label: string) => boolean;
+}): Promise<void> {
+	const {
+		token,
+		fleetRepos,
+		data,
+		clawsOnline,
+		clawsRegistered,
+		clawsFree,
+		ephemeralUnknown,
+		pm2BusyNodes,
+		fleetNodes,
+		backstopPool,
+		has,
+	} = args;
+	// Two independent reasons to want the backstop up, kept distinct because they
+	// warrant different noise: an OUTAGE is an incident the operator should see,
+	// SATURATION is ordinary load and pages nobody.
+	//
+	// WHAT DECIDES WHETHER TO PROBE IS WHAT THE ANSWER CAN CHANGE, AND
+	// `atCapacity` IS NOT THAT.
+	//
+	// This gate read `isAtCapacity(...)` until 2026-09-24, so off-capacity the
+	// queue was handed to `decideBackstop` as the literal 0 and `saturated`
+	// could not be true there — the caller answering the function's question
+	// for it, and silently undoing the fix the function took on 2026-09-01.
+	// That fix removed `atCapacity` as a precondition BECAUSE census.ts folds
+	// mintable slots into `clawsFree`: once enough of the fleet is JIT the
+	// count never reaches zero, so the one state this caller was willing to
+	// pay for never arrives. On 2026-09-01, three of four nodes ephemeral, 13
+	// jobs sat 11-19 minutes across nine repos while `clawsFree` never hit
+	// zero and this line passed 0 (#63).
+	//
+	// Two states still skip the probe, and NEITHER of them is "a claw was
+	// free":
+	//   - an OUTAGE. There is nothing to queue BEHIND a fleet with nowhere to
+	//     run, `decideBackstop` promotes on the outage alone, and waiting to
+	//     observe a queue would add the threshold to every job's latency
+	//     during the incident. Skipping here BUYS latency; it does not save a
+	//     call that mattered.
+	//   - UNMEASURED counts. `decideBackstop` returns on `ephemeralUnknown`
+	//     before it ever reads `queuePressureSec`, holding the previous
+	//     answer, so a probe there is one listing per repo spent on an input
+	//     nothing consumes — and runner-health's first tick after every
+	//     mgmt-api restart lands in that window.
+	//
+	// BUDGET, sized as if every listing were charged: `probeQueuePressure`
+	// goes through `ghGet`, which revalidates with an ETag, so an unchanged
+	// queue is free — but a moving one is not, and the ceiling is what a
+	// cadence answers to. One listing per repo, breaking at the first run
+	// over the threshold, on runner-health's own 10-minute tick —
+	// 26 covered repos x 6 ticks/hr = 156 calls/hr against 5,000/hr, 3.1%,
+	// and that is the WORST case: a fleet actually backed up breaks early and
+	// costs LESS. No timer changed here, so nothing else hanging off this
+	// tick moved with it. Asserted in runner-health.test.ts.
+	//
+	// AND A DAYS-OLD QUEUED RUN IS NOT PRESSURE, which is what made the
+	// unconditional probe a regression rather than a fix. See
+	// `QUEUE_ZOMBIE_SECONDS`: from 2026-09-25 this line returned ~3.5 MILLION
+	// seconds every tick off two runs that have been `queued` and
+	// uncancellable since 2026-08-17/19, so `saturation` was permanently true
+	// and hokon carried `hadoku-builder` continuously. The probe is right to be
+	// unconditional; it was reading the wrong population.
+	const fleetIsUp = clawsAreHealthy(clawsOnline, clawsRegistered);
+	const queue =
+		fleetIsUp && !ephemeralUnknown
+			? await probeQueuePressure(token, fleetRepos, Date.now())
+			: { pressureSec: 0, zombies: 0, oldestZombieSec: 0 };
+	const queuePressureSec = queue.pressureSec;
+
+	// SAY WHAT WAS REFUSED, ONCE PER CHANGE. A zombie stays a zombie — that is
+	// what makes it one — so a line every tick is six an hour forever and the
+	// fleet's own logs become the thing nobody reads (`dispatch-tick.ts` learned
+	// this about the same two runs). But silence here is the failure this whole
+	// file is about: the operator had no way to know the saturation trigger was
+	// reading a 40-day-old run, and the only number printed was the inflated
+	// one. Logged when the count MOVES, and carried on the snapshot every tick.
+	if (queue.zombies !== queueZombiesLogged) {
+		queueZombiesLogged = queue.zombies;
+		if (queue.zombies > 0) {
+			logger.warn(
+				`[runner-health] queue probe ignored ${queue.zombies} run(s) queued longer than ` +
+					`${Math.round(QUEUE_ZOMBIE_SECONDS / 3600)}h (oldest ` +
+					`${Math.round(queue.oldestZombieSec / 86400)}d) — a run that old is STUCK, not ` +
+					'starved, and the backstop cannot serve it. Saturation is decided on the ' +
+					`remainder: ${queuePressureSec}s`
+			);
+		} else {
+			logger.info('[runner-health] queue probe: no zombie runs left to ignore');
+		}
+	}
+
+	// The reservation ladder — pm2-host > builder > taskauto. hokon's nightly
+	// crons are Temporal work GitHub cannot see, so no label or queue signal
+	// reveals them; only this does. It gates the BACKSTOP, which is the only
+	// writer of `hadoku-builder` on the pool.
+	//
+	// PER NODE on the pm2-host rung, fleet-wide on the cron ones. The pool is
+	// held off builder work by `pm2-host` only when EVERY node in it is serving
+	// that rung — one free holder means the backstop still has somewhere to go,
+	// and the busy holder is skipped individually in the loop below. The cron
+	// rungs have no node to key on (one mgmt-api, one profiles.json), so they
+	// reserve the whole pool exactly as before.
+	//
+	// `poolNodes` is every NODE the pool sits on in listing order — the prod
+	// host carries several registrations, so it repeats, and `backstopNodes` is
+	// that folded to machines.
+	const poolNodes = backstopPool.map((r) => nodeOf(r.name, fleetNodes));
+	// THE MANIFEST'S GUESTS AS WELL AS THE POOL'S NODES (#120). The pool is
+	// read off registrations, and an on-demand guest's whole point is to keep
+	// none — so a node that retired its standing runners would otherwise
+	// vanish from the backstop the moment it stopped squatting on memory.
+	const machines = backstopMachinesReader();
+	const backstopNodes = [
+		...new Set([
+			...poolNodes,
+			...Object.entries(machines ?? {})
+				.filter(([, m]) => isGuestNode(m as RoleBearingNode))
+				.map(([n]) => n),
+		]),
+	];
+	// Promoted by the HOLD alone: the dispatcher mints for it, so nothing here
+	// may write `hadoku-builder` onto one of its registrations — the one it
+	// keeps (`standingRepos`) is a deploy runner, and labelling it would put
+	// builder work on a listener outside the mint path and its slice.
+	const onDemand = (node: string): boolean =>
+		mintsOnDemand(machines?.[node] as MintBearingNode | undefined);
+	// "I could not look" writes no label. Without the manifest a deploy runner
+	// and a backstop registration look identical — both carry `pm2-host` — so a
+	// promotion here would label whichever the pool happens to hold.
+	const labelsMayPromote = (node: string): boolean => machines !== null && !onDemand(node);
+	if (machines === null) {
+		logger.warn(
+			'[runner-health] BACKSTOP could not read the manifest — writing no builder label this ' +
+				'tick (a deploy runner is indistinguishable from a backstop registration without it)'
+		);
+	}
+	const poolPm2Busy = backstopNodes.length > 0 && backstopNodes.every((n) => pm2BusyNodes.has(n));
+	const reservation = (reservationOverride ?? ((busy) => nodeReservation(new Date(), busy)))(
+		poolPm2Busy
+	);
+
+	const backstopInput = {
+		clawsOnline,
+		clawsRegistered,
+		clawsFree,
+		queuePressureSec,
+		reserved: reservation.reserved,
+		// Do not act on capacity that was never measured. Null probe =>
+		// every claw count is a floor, not a reading.
+		ephemeralUnknown: ephemeralUnknown,
+	};
+	const decision = decideBackstop(backstopInput, {
+		calmTicks: backstopCalmTicks,
+		lastReason: backstopLastReason,
+		promoted: backstopFleetState,
+	});
+	backstopCalmTicks = decision.next.calmTicks;
+	backstopLastReason = decision.next.lastReason;
+
+	const outage = decision.outage;
+	const backstopWanted = decision.wanted;
+	const backstopReason = decision.reason;
+	data.queue_pressure_sec = queuePressureSec;
+	data.queue_zombies_ignored = queue.zombies;
+	data.at_capacity = decision.atCapacity;
+	data.reserved_reason = reservation.reserved ? reservation.reason : null;
+	data.backstop_reason = backstopReason;
+	data.backstop_calm_ticks = backstopCalmTicks;
+
+	// Tell the fast loop before touching a single label. The two are
+	// phase-locked ~8s apart and the ladder does not know tier4 exists as far
+	// as the backstop is concerned; without this it strips the label this loop
+	// is about to write. Set on BOTH branches — a stale hold would pin hokon
+	// eligible forever once the backstop stood down.
+	//
+	// PER NODE, and the hold and the write must use ONE predicate: a node the
+	// pm2-host rung excludes is one the loop below is about to DEMOTE, and
+	// holding it would tell the fast loop to preserve the label we are
+	// removing. An OUTAGE overrules the rung for the reason `decideBackstop`
+	// gives — a fleet with nowhere to run is worth interrupting for.
+	//
+	// A QUARANTINED OR DRAINED NODE IS NEVER PROMOTED, outage included. The
+	// backstop is the ONLY writer of this label on a guest (the ladder skips
+	// guests), so until 2026-09-21 the fleet loop's quarantine of hokon was a
+	// log line and nothing else: on saturation this would have handed CI to a
+	// node whose store the guard had flagged. hokon is a reserve, brought in
+	// when work needs it — which is exactly when it must be sound. The loop
+	// keeps repairing it, so a sick reserve returns on its own. An outage with
+	// the reserve also sick is the "no self-hosted capacity" case, which
+	// CI_RUNNER's hosted flip already answers.
+	const drain = readDrain();
+	const unsafeNode = (node: string): boolean => nodeIsSick(node) || isDraining(node, drain);
+	// IDLE (2026-10-09): saturation promotes the backstop host only while it
+	// is quiet — see `isHostIdle`. Read locally (the backstop host is the
+	// controller); a node this process cannot read is not idle.
+	//
+	// THE RED LIGHT IS THE DRAIN (operator, 2026-10-19: "a traffic signal that
+	// just makes it so jobs dont go to hokon if we have it blocked"). It was a
+	// manifest mode, `backstop: "outage-only"`, from 2026-10-09 — and hokon's
+	// live entry never carried the key, so the block the operator asked for
+	// was not in force for ten days. `fleet drain hokon` is the one switch:
+	// `unsafeNode` refuses a drained node on an outage too, and the dispatcher
+	// reads the same drain file for every mint.
+	//
+	// THE GREEN LIGHT IS THE FORCE (2026-10-21, `backstop-force.ts`). An
+	// operator holding a node eligible beats the saturation decision and the
+	// idle gate — that is what the switch is for — but NOT the drain or the
+	// quarantine (red beats green) and NOT the pm2-host rung (a deploy on the
+	// box finishes first, as the ladder orders). Read every tick like the
+	// drain, so a force set between ticks takes effect on the next one and an
+	// expired one lapses on its own. An unreadable file is NO force, said
+	// aloud: a corrupt switch must neither route work nor vanish silently.
+	let force: ForceState = {};
+	try {
+		force = readForce();
+	} catch (err) {
+		logger.warn(
+			'[runner-health] BACKSTOP force file unreadable — treating no node as forced: ' +
+				(err instanceof Error ? err.message : String(err))
+		);
+	}
+	const forceNowMs = Date.now();
+	const forcedOn = (node: string): boolean => isForced(node, force, forceNowMs);
+	//
+	// THE BACKLOG ESCALATION (2026-10-21, `hostMayTakeSaturation`): past
+	// BACKLOG_QUEUE_SECONDS the load clause is waived — the same 300 s at
+	// which ci:queue-health declares the fleet not serving work. Memory is
+	// still required. One verdict with its reason, reused by REACHED NOBODY.
+	const saturationHost = (node: string) =>
+		hostMayTakeSaturation(readHostLoad(node), queuePressureSec);
+	const wantedOnNode = (node: string): boolean =>
+		((forcedOn(node) && !pm2BusyNodes.has(node)) ||
+			(backstopWanted && (outage || (!pm2BusyNodes.has(node) && saturationHost(node).ok)))) &&
+		!unsafeNode(node);
+	const refused = backstopWanted ? backstopNodes.filter(unsafeNode) : [];
+	if (refused.length) {
+		logger.warn(
+			`[runner-health] BACKSTOP wanted (${backstopReason}) but ${refused.join(', ')} ` +
+				'is quarantined or drained — not promoting it'
+		);
+	}
+	const heldNodes = backstopNodes.filter(wantedOnNode);
+	// The hold's EDGES, for the nodes promoted by it alone. A relabelled node
+	// announces itself through its label writes below; an on-demand one has
+	// none, so without this its promotion — the 🔻 on an outage included —
+	// would happen silently.
+	const wasHeld = new Set(backstopHold());
+	setBackstopHold(heldNodes);
+
+	// A FORCE SAYS SO EVERY TICK IT IS IN EFFECT, held or refused. Six lines
+	// an hour while an operator has the switch on is the cheapest possible
+	// answer to "is it doing anything", and a refused force names the one
+	// thing that outranks it — the same per-node spelling REACHED NOBODY uses.
+	for (const node of backstopNodes.filter(forcedOn)) {
+		const why = describeForce(node, force[node], forceNowMs);
+		if (heldNodes.includes(node)) {
+			logger.info(`[runner-health] BACKSTOP FORCED — ${why}`);
+		} else {
+			const blocker = nodeIsSick(node)
+				? 'quarantined'
+				: isDraining(node, drain)
+					? 'drained (the red light beats the green one)'
+					: pm2BusyNodes.has(node)
+						? 'serving pm2-host (the deploy finishes first)'
+						: 'unknown';
+			logger.warn(`[runner-health] BACKSTOP FORCED but REFUSED (${blocker}) — ${why}`);
+		}
+	}
+
+	// THE CAPACITY INVARIANT, PAGED (2026-10-21, `capacity-ledger.ts`). The
+	// dispatcher judges what it charged each node against what it could see
+	// every pass; this reads its last ledger and pages once when a node has
+	// stayed broken for CAPACITY_TICKS_BEFORE_ALERT consecutive ticks. One
+	// broken pass is a race between the unit listing and the probe; a quarter
+	// of an hour of it is the 2026-10-07 bug, which ran fourteen days unseen
+	// because every number on every panel was a different number from the
+	// one that was wrong. A ledger older than two ticks is a dispatcher that
+	// is not running, which is a different page (`dispatch.failingSince`),
+	// not this one.
+	const capLedger = getCapacityLedger();
+	const freshLedger =
+		capLedger !== null && Date.now() - Date.parse(capLedger.at) <= 2 * TICK_INTERVAL_MS
+			? capLedger
+			: null;
+	const brokenNow = new Set((freshLedger?.nodes ?? []).filter((e) => !e.ok).map((e) => e.node));
+	for (const node of [...capacityBrokenTicks.keys()]) {
+		if (!brokenNow.has(node)) capacityBrokenTicks.delete(node);
+	}
+	const sustainedBroken: string[] = [];
+	for (const node of brokenNow) {
+		const seen = (capacityBrokenTicks.get(node) ?? 0) + 1;
+		capacityBrokenTicks.set(node, seen);
+		if (seen >= CAPACITY_TICKS_BEFORE_ALERT) sustainedBroken.push(node);
+	}
+	if (!sustainedBroken.length) {
+		clearAlert('capacity-invariant');
+	} else {
+		const detail = (freshLedger?.nodes ?? [])
+			.filter((e) => sustainedBroken.includes(e.node))
+			.map((e) => `${e.node}: ${e.why}`)
+			.join('; ');
+		const mins = Math.round((CAPACITY_TICKS_BEFORE_ALERT * TICK_INTERVAL_MS) / 60000);
+		await alertOnce(
+			'capacity-invariant',
+			`🚨 **dispatcher accounting** has been wrong on ${sustainedBroken.join(', ')} for ` +
+				`${mins}+ min — a node is charged more in-flight jobs than it is running or ` +
+				`starting, so it refuses mints it has room for (this is the 2026-10-07 double ` +
+				`count's shape). ${detail}. Read \`[dispatch] skipped run\` lines and ` +
+				'`GET /fleet` machines[].dispatchLedger.'
+		);
+	}
+
+	// WHY THE PRODUCTION HOST IS REACHABLE, ON THE TICK IT IS REACHABLE.
+	//
+	// Until now the only lines this decision ever printed were its two EDGES,
+	// the promote and the demote. Everything in between — the whole interval
+	// during which hokon actually takes jobs — was silent, and a standing
+	// registration wins GitHub's assignment race outright (hokon builder queue
+	// p50 2s against a claw JIT's 16s), so that interval is where all the
+	// traffic is. Over 2026-09-10 → 09-19 hokon served 204 `hadoku-builder`
+	// jobs, 98 of them with ZERO claw jobs running anywhere, and there is not
+	// one promote line in any retained log to explain a single one: the label
+	// came from elsewhere and this function never knew. An operator asking
+	// "why did hokon take that job" had nothing to read.
+	//
+	// So the eligible state says so every tick, and it says it through
+	// `explainBackstop`, which lives beside the decision — a log line written
+	// here by hand is a second copy of the reasoning and drifts from it. Six
+	// lines an hour, and only while the reserve is actually in play.
+	const why = explainBackstop(backstopInput, decision);
+	if (backstopWanted && heldNodes.length) {
+		logger.info(
+			`[runner-health] BACKSTOP ELIGIBLE — ${heldNodes
+				.map((n) =>
+					outage ? n : `${n} (${describeSaturationHost(saturationHost(n), queuePressureSec)})`
+				)
+				.join(', ')} may take '${BUILDER_LABEL}' work: ${why}`
+		);
+	} else if (backstopWanted) {
+		// WANTED AND REACHED NOBODY. "We rejected them" and "they never asked"
+		// are different facts and the fleet could not tell them apart (wave 3l);
+		// so is "every holder is quarantined" against "every holder is serving
+		// pm2-host", which are two different jobs for the operator. Say which,
+		// per node.
+		//
+		// NOT IDLE IS THE COMMON REASON AND IT READ `unknown`. The host gate
+		// (`hostMayTakeSaturation`, 2026-10-09/21) is the fourth clause of
+		// `wantedOnNode`, and this map named the other three. On 2026-10-21
+		// hokon sat at load 30-46 on 12 cores under the operator's own sessions
+		// while a 20-run fan-out queued for 25 minutes, and every tick printed
+		// `hokon=unknown` — the one word that sends an operator to the wrong
+		// problem. The verdict carries its own measurement against the gate, so
+		// the line says what would have to change.
+		const because = backstopNodes.length
+			? backstopNodes
+					.map((n) => {
+						const host = saturationHost(n);
+						return `${n}=${
+							nodeIsSick(n)
+								? 'quarantined'
+								: isDraining(n, drain)
+									? 'drained'
+									: pm2BusyNodes.has(n)
+										? 'serving pm2-host'
+										: !host.ok
+											? host.why
+											: 'unknown'
+						}`;
+					})
+					.join(', ')
+			: 'the pool is EMPTY — no runner in this repo carries pm2-host or backstop';
+		logger.warn(
+			`[runner-health] BACKSTOP wanted but REACHED NOBODY (${because}): ${why} — ` +
+				'jobs queue until a claw returns or a holder frees up'
+		);
+	} else if (decision.unmeasured) {
+		// "I could not look" must never render as "nothing is wrong", and it
+		// must say WHY. This branch decided nothing at all.
+		logger.info(`[runner-health] BACKSTOP could not look: ${why}`);
+	}
+
+	const promoted: string[] = [];
+	const demoted: string[] = [];
+
+	// COULD NOT LOOK IS NOT AN ORDER. On an unmeasured tick (the first after
+	// every restart) `decision.wanted` is the remembered state, and memory is
+	// empty after a restart — so this loop and the sweep below DEMOTED a
+	// promoted hokon on every deploy, and the next measured tick promoted it
+	// again ten minutes later (2026-10-09 20:36, 20:52). Nothing is written
+	// until a tick has actually measured the fleet.
+	for (const runner of decision.unmeasured ? [] : backstopPool) {
+		// THE RUNG IS THIS NODE'S, NOT THE FLEET'S. A pool node serving pm2-host
+		// work stays off builder duty while the rest of the pool is promoted;
+		// fleet-wide, this was the whole pool or none of it.
+		const runnerNode = nodeOf(runner.name, fleetNodes);
+		const nodeWanted = wantedOnNode(runnerNode) && labelsMayPromote(runnerNode);
+		// ONE PREDICATE, shared with the fan-out — see `backstopLabelWrite`.
+		// Spelled out twice, the two came to disagree about offline runners.
+		const write = backstopLabelWrite(
+			{ hasBuilder: has(runner, BUILDER_LABEL), online: runner.status === 'online' },
+			nodeWanted
+		);
+		const missing = [BUILDER_LABEL];
+		if (write === 'promote') {
+			const res = await ghWrite('POST', `/actions/runners/${runner.id}/labels`, token, {
+				labels: missing,
+			});
+			if (res.ok) {
+				for (const l of missing) (runner.labels ??= []).push({ name: l });
+				promoted.push(runner.name);
+			} else {
+				logger.warn(
+					`[runner-health] promote ${runner.name} → ${missing.join(',')} failed: HTTP ${res.status} ` +
+						'(token may lack runner-admin) — all-claws-down jobs will queue until a claw returns'
+				);
+			}
+		} else if (write === 'demote') {
+			// Strip only what we grant. hokon keeps pm2-host, the backstops keep
+			// their own label, so the pool returns to being invisible to CI.
+			// One label, since hadoku-builder-heavy was retired on 2026-08-19 and no
+			// runner reports it any more (checked across four repos, 2026-08-29).
+			const res = await ghWrite(
+				'DELETE',
+				`/actions/runners/${runner.id}/labels/${BUILDER_LABEL}`,
+				token
+			);
+			if (res.ok) {
+				runner.labels = (runner.labels ?? []).filter((l) => l.name !== BUILDER_LABEL);
+				if (!demoted.includes(runner.name)) demoted.push(runner.name);
+			} else {
+				logger.warn(
+					`[runner-health] demote ${runner.name} (remove ${BUILDER_LABEL}) failed: HTTP ${res.status}`
+				);
+			}
+		}
+	}
+
+	for (const n of heldNodes) if (onDemand(n) && !wasHeld.has(n)) promoted.push(`${n} (mint)`);
+	for (const n of wasHeld) {
+		if (onDemand(n) && !heldNodes.includes(n)) demoted.push(`${n} (mint)`);
+	}
+
+	// Fan the same decision out to the rest of the fleet. Edge-triggered, plus a
+	// re-assert while up; see syncBackstopAcrossFleet for why this cannot be
+	// derived from this repo's listing.
+	//
+	// The re-assert is only for a node the label PROMOTES. An on-demand guest
+	// is promoted by the hold above, and its sweep is demote-only — running it
+	// every tick of a promotion would read the whole fleet's listings to change
+	// nothing.
+	const relabels = backstopNodes.some(labelsMayPromote);
+	// The third condition is the VERIFY sweep — see `backstopConvergedMs`. The
+	// first two ask "did I change my mind?"; only this one asks "is the fleet
+	// actually in the state I believe it is?", which is the question the 165
+	// jobs on 26 unlooked-at repos needed somebody to ask.
+	const convergeDue = Date.now() - backstopConvergedMs >= BACKSTOP_CONVERGE_INTERVAL_MS;
+	if (
+		!decision.unmeasured &&
+		(backstopFleetState !== backstopWanted || (backstopWanted && relabels) || convergeDue)
+	) {
+		try {
+			const fleet = await withGhCaller('backstop', () =>
+				syncBackstopAcrossFleet(backstopWanted, token, fleetRepos, (name) => {
+					const node = nodeOf(name, fleetNodes);
+					return unsafeNode(node) || !labelsMayPromote(node);
+				})
+			);
+			// Only claim the state once nothing failed, so a partial fan-out is
+			// retried next tick instead of being recorded as done. Same rule for
+			// the verify clock: a sweep that could not read every repo has not
+			// verified anything, and must not buy itself another hour of silence.
+			if (!fleet.failed.length) {
+				backstopFleetState = backstopWanted;
+				backstopConvergedMs = Date.now();
+			}
+			if (convergeDue && fleet.changed.length && backstopFleetState === backstopWanted) {
+				// A divergence the belief could not have shown. Warn, not info:
+				// somebody other than this function wrote the one label it owns.
+				logger.warn(
+					`[runner-health] BACKSTOP verify sweep found ${fleet.changed.length} ` +
+						`registration(s) out of step with reason=${backstopReason} — ` +
+						`${fleet.changed.join(', ')}. This label has one writer; something else moved it.`
+				);
+			}
+			if (fleet.changed.length) {
+				logger.info(
+					`[runner-health] BACKSTOP fleet ${backstopWanted ? 'promote' : 'demote'}: ` +
+						`${fleet.changed.length} runner(s) — ${fleet.changed.join(', ')}`
+				);
+			}
+			if (fleet.failed.length) {
+				logger.warn(
+					`[runner-health] BACKSTOP fleet ${backstopWanted ? 'promote' : 'demote'} FAILED on ` +
+						`${fleet.failed.length}: ${fleet.failed.join(', ')} — those repos queue until this succeeds`
+				);
+			}
+		} catch (err) {
+			// Fail-soft like every other write in this tick: a broken fan-out must
+			// not take down the monitor reporting the outage.
+			logger.warn(
+				`[runner-health] BACKSTOP fleet sync failed: ${err instanceof Error ? err.message : String(err)}`
+			);
+		}
+	}
+
+	if (promoted.length) {
+		logger.info(
+			`[runner-health] BACKSTOP promote (${backstopReason}): ` +
+				`${clawsOnline}/${clawsRegistered} claw instances online, ${clawsFree} free ` +
+				`→ ${promoted.join(', ')} now offer '${BUILDER_LABEL}'`
+		);
+		// Saturation is deliberately silent. Every claw being busy is a normal
+		// weekday, and paging for it would train the operator to skim past the
+		// 🔻 that means the garage is actually dark.
+		if (outage) {
+			await postDiscordSink(
+				`🔻 **runners** on \`${selfHostname()}\`: only ${clawsOnline}/${clawsRegistered} claw instances ` +
+					'online — promoted ' +
+					`${promoted.map((n) => `\`${n}\``).join(', ')} so jobs still have somewhere to run. ` +
+					'Degraded backstop on the prod host; reverts automatically when a claw returns.',
+				'runner-health'
+			);
+			backstopAlerted = true;
+		}
+	}
+	if (demoted.length) {
+		logger.info(
+			`[runner-health] BACKSTOP demote: ${clawsOnline} claw(s) online → released ` +
+				`${demoted.join(', ')} — no longer offered '${BUILDER_LABEL}': ${why}`
+		);
+		// Mirror of the promote arm: only announce the recovery the operator was
+		// told about. A demote after mere saturation never had a 🔻 to close.
+		if (backstopAlerted) {
+			await postDiscordSink(
+				`🔺 **runners** on \`${selfHostname()}\`: a claw is back online — released the backstop on ` +
+					`${demoted.map((n) => `\`${n}\``).join(', ')}.`,
+				'runner-health'
+			);
+			backstopAlerted = false;
+		}
+	}
+}
+
+async function runHostedFallback(args: {
+	token: string;
+	ephemeralUnknown: boolean;
+	clawsOnline: number;
+	backstopOnline: number;
+	data: TickReport;
+}): Promise<void> {
+	const { token, ephemeralUnknown, clawsOnline, backstopOnline, data } = args;
+	// --- Hosted-runner fallback (CI_RUNNER across the whole fleet) ---
+	// Now a genuine LAST resort. The hokon backstop above is fleet-wide (see
+	// syncBackstopAcrossFleet), so counting hokon as self-hosted capacity here
+	// finally describes capacity every repo can actually reach — which is what
+	// this sum always assumed and, until 2026-08-23, never had.
+	//
+	// Driven purely by runner availability — never by a job's outcome — so a red
+	// build is never retried or masked.
+	try {
+		// Escalation order is claws → hokon → GitHub-hosted. Hosted is the LAST
+		// resort, not the second: it costs billed minutes on 12 private repos,
+		// and a hosted runner cannot reach the vault (the fetch comes back as a
+		// CF challenge, which is what broke auto-format on 2026-08-17). So the
+		// fallback is driven by TOTAL self-hosted capacity — claws plus the
+		// promoted hokon pool — and only flips when both are gone.
+		// `null`, not the sum, when the probe has not run. Under all-JIT both
+		// terms are derived from it, so on the first tick after a restart this
+		// sum is not a small reading — it is no reading at all. `census` already
+		// draws that line as `ephemeralUnknown`; the backstop consults it and
+		// this call was the last consumer still acting on the zero.
+		const selfHostedOnline = ephemeralUnknown ? null : clawsOnline + backstopOnline;
+		const fb = await withGhCaller('ci-runner-var', () =>
+			syncHostedFallback(selfHostedOnline, token, { alreadyHosted: hostedRepos })
+		);
+		data.ci_runner = fb.desired;
+		// Deliberately NOT its own Discord alert. All-claws-down already pages
+		// through the backstop promote and the label-floor breach, and a second
+		// message for the same root cause is noise the operator learns to skip.
+		// The fleet flip is reported inside the promote note (below) and here in
+		// the log. `ci_runner` reaches the daily digest through the job-sink
+		// payload below — NOT through the snapshot, which has no such field.
+		if (fb.changed.length) {
+			logger.info(
+				`[runner-health] CI_RUNNER → ${fb.desired} on ${fb.changed.length} repo(s): ${fb.changed.join(', ')}`
+			);
+		}
+		data.ci_runner_write_failed = fb.failed.length;
+		// A FAILED WRITE IS A FINDING, NOT A LOG LINE.
+		//
+		// This was `logger.warn` alone, and nothing else read `fb.failed` — no
+		// alert, no cron finding, no digest field — while the enclosing catch
+		// is fail-soft too. So a repo whose variable could not be written
+		// retried every 10 minutes, forever, and said so only into a log nobody
+		// tails.
+		//
+		// What that costs depends on the runs-on form, and BOTH are bad. Fleet
+		// workflows are now bare `fromJSON(vars.CI_RUNNER)`, so a repo that
+		// never got its value has `runs-on` resolve to nothing and EVERY
+		// workflow in it fails to start. And on the hosted flip — the one path
+		// that only runs while every claw is already down — a failed write
+		// leaves that repo pointed at claws that are not there, so it queues
+		// through the outage the fallback exists to route around.
+		//
+		// COUNTED per repo, ANNOUNCED once.
+		//
+		// The debounce has to be per repo — one flaky repo and a fleet-wide token
+		// scope loss are different faults and must not share a counter. The ALERT
+		// must not be, though: these fail together far more often than singly (one
+		// revoked token covers all 26), and a message per repo would be a 26-page
+		// storm for one cause — the same noise this file already refuses to send
+		// for the all-claws-down case.
+		const failedNow = new Set(fb.failed);
+		for (const repo of [...ciRunnerWriteFailTicks.keys()]) {
+			// Not failing this tick — including repos syncHostedFallback SKIPPED
+			// because its cache says they already hold the desired value. Skipped is
+			// not failed, and treating it as such would hold this open on a repo
+			// that is fine.
+			if (failedNow.has(repo)) continue;
+			ciRunnerWriteFailTicks.delete(repo);
+		}
+		const sustained: string[] = [];
+		for (const repo of fb.failed) {
+			const seen = (ciRunnerWriteFailTicks.get(repo) ?? 0) + 1;
+			ciRunnerWriteFailTicks.set(repo, seen);
+			if (seen >= OFFLINE_TICKS_BEFORE_ALERT) sustained.push(repo);
+		}
+		if (!sustained.length) {
+			clearAlert('ci-runner-write');
+		} else {
+			const mins = Math.round((OFFLINE_TICKS_BEFORE_ALERT * TICK_INTERVAL_MS) / 60000);
+			const named = sustained.slice(0, 5).join(', ');
+			const more = sustained.length > 5 ? ` (+${sustained.length - 5} more)` : '';
+			await alertOnce(
+				'ci-runner-write',
+				`🚨 **CI_RUNNER** could not be written on ${sustained.length} repo(s) for ` +
+					`${mins}+ min (wanted \`${fb.desired}\`): ${named}${more}. Fleet workflows use ` +
+					'bare `runs-on: ${{ fromJSON(vars.CI_RUNNER) }}`, so a repo that never got ' +
+					'the value will FAIL TO START rather than queue. Usually the token has lost ' +
+					'`actions:write`. Check: `gh api /repos/<repo>/actions/variables`'
+			);
+		}
+		if (fb.failed.length) {
+			logger.warn(
+				`[runner-health] CI_RUNNER ${fb.desired} FAILED on ${fb.failed.length} repo(s): ${fb.failed.join(', ')} ` +
+					'(token needs actions:write on each repo)'
+			);
+		}
+	} catch (err) {
+		// Fail-soft, like every other write here: a broken fallback must not
+		// take down the monitor that is reporting the outage.
+		logger.warn(
+			`[runner-health] CI_RUNNER sync threw: ${err instanceof Error ? err.message : String(err)}`
+		);
+	}
+}
+
 async function checkLabelFloor(
 	token: string,
 	fleetRepos: string[],
@@ -2177,638 +2847,27 @@ async function checkLabelFloor(
 			labels: (r.labels ?? []).map((l) => l.name),
 		}));
 
-		// Two independent reasons to want the backstop up, kept distinct because they
-		// warrant different noise: an OUTAGE is an incident the operator should see,
-		// SATURATION is ordinary load and pages nobody.
-		//
-		// WHAT DECIDES WHETHER TO PROBE IS WHAT THE ANSWER CAN CHANGE, AND
-		// `atCapacity` IS NOT THAT.
-		//
-		// This gate read `isAtCapacity(...)` until 2026-09-24, so off-capacity the
-		// queue was handed to `decideBackstop` as the literal 0 and `saturated`
-		// could not be true there — the caller answering the function's question
-		// for it, and silently undoing the fix the function took on 2026-09-01.
-		// That fix removed `atCapacity` as a precondition BECAUSE census.ts folds
-		// mintable slots into `clawsFree`: once enough of the fleet is JIT the
-		// count never reaches zero, so the one state this caller was willing to
-		// pay for never arrives. On 2026-09-01, three of four nodes ephemeral, 13
-		// jobs sat 11-19 minutes across nine repos while `clawsFree` never hit
-		// zero and this line passed 0 (#63).
-		//
-		// Two states still skip the probe, and NEITHER of them is "a claw was
-		// free":
-		//   - an OUTAGE. There is nothing to queue BEHIND a fleet with nowhere to
-		//     run, `decideBackstop` promotes on the outage alone, and waiting to
-		//     observe a queue would add the threshold to every job's latency
-		//     during the incident. Skipping here BUYS latency; it does not save a
-		//     call that mattered.
-		//   - UNMEASURED counts. `decideBackstop` returns on `ephemeralUnknown`
-		//     before it ever reads `queuePressureSec`, holding the previous
-		//     answer, so a probe there is one listing per repo spent on an input
-		//     nothing consumes — and runner-health's first tick after every
-		//     mgmt-api restart lands in that window.
-		//
-		// BUDGET, sized as if every listing were charged: `probeQueuePressure`
-		// goes through `ghGet`, which revalidates with an ETag, so an unchanged
-		// queue is free — but a moving one is not, and the ceiling is what a
-		// cadence answers to. One listing per repo, breaking at the first run
-		// over the threshold, on runner-health's own 10-minute tick —
-		// 26 covered repos x 6 ticks/hr = 156 calls/hr against 5,000/hr, 3.1%,
-		// and that is the WORST case: a fleet actually backed up breaks early and
-		// costs LESS. No timer changed here, so nothing else hanging off this
-		// tick moved with it. Asserted in runner-health.test.ts.
-		//
-		// AND A DAYS-OLD QUEUED RUN IS NOT PRESSURE, which is what made the
-		// unconditional probe a regression rather than a fix. See
-		// `QUEUE_ZOMBIE_SECONDS`: from 2026-09-25 this line returned ~3.5 MILLION
-		// seconds every tick off two runs that have been `queued` and
-		// uncancellable since 2026-08-17/19, so `saturation` was permanently true
-		// and hokon carried `hadoku-builder` continuously. The probe is right to be
-		// unconditional; it was reading the wrong population.
-		const fleetIsUp = clawsAreHealthy(clawsOnline, clawsRegistered);
-		const queue =
-			fleetIsUp && !c.ephemeralUnknown
-				? await probeQueuePressure(token, fleetRepos, Date.now())
-				: { pressureSec: 0, zombies: 0, oldestZombieSec: 0 };
-		const queuePressureSec = queue.pressureSec;
-
-		// SAY WHAT WAS REFUSED, ONCE PER CHANGE. A zombie stays a zombie — that is
-		// what makes it one — so a line every tick is six an hour forever and the
-		// fleet's own logs become the thing nobody reads (`dispatch-tick.ts` learned
-		// this about the same two runs). But silence here is the failure this whole
-		// file is about: the operator had no way to know the saturation trigger was
-		// reading a 40-day-old run, and the only number printed was the inflated
-		// one. Logged when the count MOVES, and carried on the snapshot every tick.
-		if (queue.zombies !== queueZombiesLogged) {
-			queueZombiesLogged = queue.zombies;
-			if (queue.zombies > 0) {
-				logger.warn(
-					`[runner-health] queue probe ignored ${queue.zombies} run(s) queued longer than ` +
-						`${Math.round(QUEUE_ZOMBIE_SECONDS / 3600)}h (oldest ` +
-						`${Math.round(queue.oldestZombieSec / 86400)}d) — a run that old is STUCK, not ` +
-						'starved, and the backstop cannot serve it. Saturation is decided on the ' +
-						`remainder: ${queuePressureSec}s`
-				);
-			} else {
-				logger.info('[runner-health] queue probe: no zombie runs left to ignore');
-			}
-		}
-
-		// The reservation ladder — pm2-host > builder > taskauto. hokon's nightly
-		// crons are Temporal work GitHub cannot see, so no label or queue signal
-		// reveals them; only this does. It gates the BACKSTOP, which is the only
-		// writer of `hadoku-builder` on the pool.
-		//
-		// PER NODE on the pm2-host rung, fleet-wide on the cron ones. The pool is
-		// held off builder work by `pm2-host` only when EVERY node in it is serving
-		// that rung — one free holder means the backstop still has somewhere to go,
-		// and the busy holder is skipped individually in the loop below. The cron
-		// rungs have no node to key on (one mgmt-api, one profiles.json), so they
-		// reserve the whole pool exactly as before.
-		//
-		// `poolNodes` is every NODE the pool sits on in listing order — the prod
-		// host carries several registrations, so it repeats, and `backstopNodes` is
-		// that folded to machines.
-		const poolNodes = hokonPool.map((r) => nodeOf(r.name, fleetNodes));
-		// THE MANIFEST'S GUESTS AS WELL AS THE POOL'S NODES (#120). The pool is
-		// read off registrations, and an on-demand guest's whole point is to keep
-		// none — so a node that retired its standing runners would otherwise
-		// vanish from the backstop the moment it stopped squatting on memory.
-		const machines = backstopMachinesReader();
-		const backstopNodes = [
-			...new Set([
-				...poolNodes,
-				...Object.entries(machines ?? {})
-					.filter(([, m]) => isGuestNode(m as RoleBearingNode))
-					.map(([n]) => n),
-			]),
-		];
-		// Promoted by the HOLD alone: the dispatcher mints for it, so nothing here
-		// may write `hadoku-builder` onto one of its registrations — the one it
-		// keeps (`standingRepos`) is a deploy runner, and labelling it would put
-		// builder work on a listener outside the mint path and its slice.
-		const onDemand = (node: string): boolean =>
-			mintsOnDemand(machines?.[node] as MintBearingNode | undefined);
-		// "I could not look" writes no label. Without the manifest a deploy runner
-		// and a backstop registration look identical — both carry `pm2-host` — so a
-		// promotion here would label whichever the pool happens to hold.
-		const labelsMayPromote = (node: string): boolean => machines !== null && !onDemand(node);
-		if (machines === null) {
-			logger.warn(
-				'[runner-health] BACKSTOP could not read the manifest — writing no builder label this ' +
-					'tick (a deploy runner is indistinguishable from a backstop registration without it)'
-			);
-		}
-		const poolPm2Busy = backstopNodes.length > 0 && backstopNodes.every((n) => pm2BusyNodes.has(n));
-		const reservation = (reservationOverride ?? ((busy) => nodeReservation(new Date(), busy)))(
-			poolPm2Busy
-		);
-
-		const backstopInput = {
+		await runBackstopDecision({
+			token,
+			fleetRepos,
+			data,
 			clawsOnline,
 			clawsRegistered,
 			clawsFree,
-			queuePressureSec,
-			reserved: reservation.reserved,
-			// Do not act on capacity that was never measured. Null probe =>
-			// every claw count is a floor, not a reading.
 			ephemeralUnknown: c.ephemeralUnknown,
-		};
-		const decision = decideBackstop(backstopInput, {
-			calmTicks: backstopCalmTicks,
-			lastReason: backstopLastReason,
-			promoted: backstopFleetState,
+			pm2BusyNodes,
+			fleetNodes,
+			backstopPool: hokonPool,
+			has,
 		});
-		backstopCalmTicks = decision.next.calmTicks;
-		backstopLastReason = decision.next.lastReason;
 
-		const outage = decision.outage;
-		const backstopWanted = decision.wanted;
-		const backstopReason = decision.reason;
-		data.queue_pressure_sec = queuePressureSec;
-		data.queue_zombies_ignored = queue.zombies;
-		data.at_capacity = decision.atCapacity;
-		data.reserved_reason = reservation.reserved ? reservation.reason : null;
-		data.backstop_reason = backstopReason;
-		data.backstop_calm_ticks = backstopCalmTicks;
-
-		// Tell the fast loop before touching a single label. The two are
-		// phase-locked ~8s apart and the ladder does not know tier4 exists as far
-		// as the backstop is concerned; without this it strips the label this loop
-		// is about to write. Set on BOTH branches — a stale hold would pin hokon
-		// eligible forever once the backstop stood down.
-		//
-		// PER NODE, and the hold and the write must use ONE predicate: a node the
-		// pm2-host rung excludes is one the loop below is about to DEMOTE, and
-		// holding it would tell the fast loop to preserve the label we are
-		// removing. An OUTAGE overrules the rung for the reason `decideBackstop`
-		// gives — a fleet with nowhere to run is worth interrupting for.
-		//
-		// A QUARANTINED OR DRAINED NODE IS NEVER PROMOTED, outage included. The
-		// backstop is the ONLY writer of this label on a guest (the ladder skips
-		// guests), so until 2026-09-21 the fleet loop's quarantine of hokon was a
-		// log line and nothing else: on saturation this would have handed CI to a
-		// node whose store the guard had flagged. hokon is a reserve, brought in
-		// when work needs it — which is exactly when it must be sound. The loop
-		// keeps repairing it, so a sick reserve returns on its own. An outage with
-		// the reserve also sick is the "no self-hosted capacity" case, which
-		// CI_RUNNER's hosted flip already answers.
-		const drain = readDrain();
-		const unsafeNode = (node: string): boolean => nodeIsSick(node) || isDraining(node, drain);
-		// IDLE (2026-10-09): saturation promotes the backstop host only while it
-		// is quiet — see `isHostIdle`. Read locally (the backstop host is the
-		// controller); a node this process cannot read is not idle.
-		//
-		// THE RED LIGHT IS THE DRAIN (operator, 2026-10-19: "a traffic signal that
-		// just makes it so jobs dont go to hokon if we have it blocked"). It was a
-		// manifest mode, `backstop: "outage-only"`, from 2026-10-09 — and hokon's
-		// live entry never carried the key, so the block the operator asked for
-		// was not in force for ten days. `fleet drain hokon` is the one switch:
-		// `unsafeNode` refuses a drained node on an outage too, and the dispatcher
-		// reads the same drain file for every mint.
-		//
-		// THE GREEN LIGHT IS THE FORCE (2026-10-21, `backstop-force.ts`). An
-		// operator holding a node eligible beats the saturation decision and the
-		// idle gate — that is what the switch is for — but NOT the drain or the
-		// quarantine (red beats green) and NOT the pm2-host rung (a deploy on the
-		// box finishes first, as the ladder orders). Read every tick like the
-		// drain, so a force set between ticks takes effect on the next one and an
-		// expired one lapses on its own. An unreadable file is NO force, said
-		// aloud: a corrupt switch must neither route work nor vanish silently.
-		let force: ForceState = {};
-		try {
-			force = readForce();
-		} catch (err) {
-			logger.warn(
-				'[runner-health] BACKSTOP force file unreadable — treating no node as forced: ' +
-					(err instanceof Error ? err.message : String(err))
-			);
-		}
-		const forceNowMs = Date.now();
-		const forcedOn = (node: string): boolean => isForced(node, force, forceNowMs);
-		//
-		// THE BACKLOG ESCALATION (2026-10-21, `hostMayTakeSaturation`): past
-		// BACKLOG_QUEUE_SECONDS the load clause is waived — the same 300 s at
-		// which ci:queue-health declares the fleet not serving work. Memory is
-		// still required. One verdict with its reason, reused by REACHED NOBODY.
-		const saturationHost = (node: string) =>
-			hostMayTakeSaturation(readHostLoad(node), queuePressureSec);
-		const wantedOnNode = (node: string): boolean =>
-			((forcedOn(node) && !pm2BusyNodes.has(node)) ||
-				(backstopWanted && (outage || (!pm2BusyNodes.has(node) && saturationHost(node).ok)))) &&
-			!unsafeNode(node);
-		const refused = backstopWanted ? backstopNodes.filter(unsafeNode) : [];
-		if (refused.length) {
-			logger.warn(
-				`[runner-health] BACKSTOP wanted (${backstopReason}) but ${refused.join(', ')} ` +
-					'is quarantined or drained — not promoting it'
-			);
-		}
-		const heldNodes = backstopNodes.filter(wantedOnNode);
-		// The hold's EDGES, for the nodes promoted by it alone. A relabelled node
-		// announces itself through its label writes below; an on-demand one has
-		// none, so without this its promotion — the 🔻 on an outage included —
-		// would happen silently.
-		const wasHeld = new Set(backstopHold());
-		setBackstopHold(heldNodes);
-
-		// A FORCE SAYS SO EVERY TICK IT IS IN EFFECT, held or refused. Six lines
-		// an hour while an operator has the switch on is the cheapest possible
-		// answer to "is it doing anything", and a refused force names the one
-		// thing that outranks it — the same per-node spelling REACHED NOBODY uses.
-		for (const node of backstopNodes.filter(forcedOn)) {
-			const why = describeForce(node, force[node], forceNowMs);
-			if (heldNodes.includes(node)) {
-				logger.info(`[runner-health] BACKSTOP FORCED — ${why}`);
-			} else {
-				const blocker = nodeIsSick(node)
-					? 'quarantined'
-					: isDraining(node, drain)
-						? 'drained (the red light beats the green one)'
-						: pm2BusyNodes.has(node)
-							? 'serving pm2-host (the deploy finishes first)'
-							: 'unknown';
-				logger.warn(`[runner-health] BACKSTOP FORCED but REFUSED (${blocker}) — ${why}`);
-			}
-		}
-
-		// THE CAPACITY INVARIANT, PAGED (2026-10-21, `capacity-ledger.ts`). The
-		// dispatcher judges what it charged each node against what it could see
-		// every pass; this reads its last ledger and pages once when a node has
-		// stayed broken for CAPACITY_TICKS_BEFORE_ALERT consecutive ticks. One
-		// broken pass is a race between the unit listing and the probe; a quarter
-		// of an hour of it is the 2026-10-07 bug, which ran fourteen days unseen
-		// because every number on every panel was a different number from the
-		// one that was wrong. A ledger older than two ticks is a dispatcher that
-		// is not running, which is a different page (`dispatch.failingSince`),
-		// not this one.
-		const capLedger = getCapacityLedger();
-		const freshLedger =
-			capLedger !== null && Date.now() - Date.parse(capLedger.at) <= 2 * TICK_INTERVAL_MS
-				? capLedger
-				: null;
-		const brokenNow = new Set((freshLedger?.nodes ?? []).filter((e) => !e.ok).map((e) => e.node));
-		for (const node of [...capacityBrokenTicks.keys()]) {
-			if (!brokenNow.has(node)) capacityBrokenTicks.delete(node);
-		}
-		const sustainedBroken: string[] = [];
-		for (const node of brokenNow) {
-			const seen = (capacityBrokenTicks.get(node) ?? 0) + 1;
-			capacityBrokenTicks.set(node, seen);
-			if (seen >= CAPACITY_TICKS_BEFORE_ALERT) sustainedBroken.push(node);
-		}
-		if (!sustainedBroken.length) {
-			clearAlert('capacity-invariant');
-		} else {
-			const detail = (freshLedger?.nodes ?? [])
-				.filter((e) => sustainedBroken.includes(e.node))
-				.map((e) => `${e.node}: ${e.why}`)
-				.join('; ');
-			const mins = Math.round((CAPACITY_TICKS_BEFORE_ALERT * TICK_INTERVAL_MS) / 60000);
-			await alertOnce(
-				'capacity-invariant',
-				`🚨 **dispatcher accounting** has been wrong on ${sustainedBroken.join(', ')} for ` +
-					`${mins}+ min — a node is charged more in-flight jobs than it is running or ` +
-					`starting, so it refuses mints it has room for (this is the 2026-10-07 double ` +
-					`count's shape). ${detail}. Read \`[dispatch] skipped run\` lines and ` +
-					'`GET /fleet` machines[].dispatchLedger.'
-			);
-		}
-
-		// WHY THE PRODUCTION HOST IS REACHABLE, ON THE TICK IT IS REACHABLE.
-		//
-		// Until now the only lines this decision ever printed were its two EDGES,
-		// the promote and the demote. Everything in between — the whole interval
-		// during which hokon actually takes jobs — was silent, and a standing
-		// registration wins GitHub's assignment race outright (hokon builder queue
-		// p50 2s against a claw JIT's 16s), so that interval is where all the
-		// traffic is. Over 2026-09-10 → 09-19 hokon served 204 `hadoku-builder`
-		// jobs, 98 of them with ZERO claw jobs running anywhere, and there is not
-		// one promote line in any retained log to explain a single one: the label
-		// came from elsewhere and this function never knew. An operator asking
-		// "why did hokon take that job" had nothing to read.
-		//
-		// So the eligible state says so every tick, and it says it through
-		// `explainBackstop`, which lives beside the decision — a log line written
-		// here by hand is a second copy of the reasoning and drifts from it. Six
-		// lines an hour, and only while the reserve is actually in play.
-		const why = explainBackstop(backstopInput, decision);
-		if (backstopWanted && heldNodes.length) {
-			logger.info(
-				`[runner-health] BACKSTOP ELIGIBLE — ${heldNodes
-					.map((n) =>
-						outage ? n : `${n} (${describeSaturationHost(saturationHost(n), queuePressureSec)})`
-					)
-					.join(', ')} may take '${BUILDER_LABEL}' work: ${why}`
-			);
-		} else if (backstopWanted) {
-			// WANTED AND REACHED NOBODY. "We rejected them" and "they never asked"
-			// are different facts and the fleet could not tell them apart (wave 3l);
-			// so is "every holder is quarantined" against "every holder is serving
-			// pm2-host", which are two different jobs for the operator. Say which,
-			// per node.
-			//
-			// NOT IDLE IS THE COMMON REASON AND IT READ `unknown`. The host gate
-			// (`hostMayTakeSaturation`, 2026-10-09/21) is the fourth clause of
-			// `wantedOnNode`, and this map named the other three. On 2026-10-21
-			// hokon sat at load 30-46 on 12 cores under the operator's own sessions
-			// while a 20-run fan-out queued for 25 minutes, and every tick printed
-			// `hokon=unknown` — the one word that sends an operator to the wrong
-			// problem. The verdict carries its own measurement against the gate, so
-			// the line says what would have to change.
-			const because = backstopNodes.length
-				? backstopNodes
-						.map((n) => {
-							const host = saturationHost(n);
-							return `${n}=${
-								nodeIsSick(n)
-									? 'quarantined'
-									: isDraining(n, drain)
-										? 'drained'
-										: pm2BusyNodes.has(n)
-											? 'serving pm2-host'
-											: !host.ok
-												? host.why
-												: 'unknown'
-							}`;
-						})
-						.join(', ')
-				: 'the pool is EMPTY — no runner in this repo carries pm2-host or backstop';
-			logger.warn(
-				`[runner-health] BACKSTOP wanted but REACHED NOBODY (${because}): ${why} — ` +
-					'jobs queue until a claw returns or a holder frees up'
-			);
-		} else if (decision.unmeasured) {
-			// "I could not look" must never render as "nothing is wrong", and it
-			// must say WHY. This branch decided nothing at all.
-			logger.info(`[runner-health] BACKSTOP could not look: ${why}`);
-		}
-
-		const promoted: string[] = [];
-		const demoted: string[] = [];
-
-		// COULD NOT LOOK IS NOT AN ORDER. On an unmeasured tick (the first after
-		// every restart) `decision.wanted` is the remembered state, and memory is
-		// empty after a restart — so this loop and the sweep below DEMOTED a
-		// promoted hokon on every deploy, and the next measured tick promoted it
-		// again ten minutes later (2026-10-09 20:36, 20:52). Nothing is written
-		// until a tick has actually measured the fleet.
-		for (const runner of decision.unmeasured ? [] : hokonPool) {
-			// THE RUNG IS THIS NODE'S, NOT THE FLEET'S. A pool node serving pm2-host
-			// work stays off builder duty while the rest of the pool is promoted;
-			// fleet-wide, this was the whole pool or none of it.
-			const runnerNode = nodeOf(runner.name, fleetNodes);
-			const nodeWanted = wantedOnNode(runnerNode) && labelsMayPromote(runnerNode);
-			// ONE PREDICATE, shared with the fan-out — see `backstopLabelWrite`.
-			// Spelled out twice, the two came to disagree about offline runners.
-			const write = backstopLabelWrite(
-				{ hasBuilder: has(runner, BUILDER_LABEL), online: runner.status === 'online' },
-				nodeWanted
-			);
-			const missing = [BUILDER_LABEL];
-			if (write === 'promote') {
-				const res = await ghWrite('POST', `/actions/runners/${runner.id}/labels`, token, {
-					labels: missing,
-				});
-				if (res.ok) {
-					for (const l of missing) (runner.labels ??= []).push({ name: l });
-					promoted.push(runner.name);
-				} else {
-					logger.warn(
-						`[runner-health] promote ${runner.name} → ${missing.join(',')} failed: HTTP ${res.status} ` +
-							'(token may lack runner-admin) — all-claws-down jobs will queue until a claw returns'
-					);
-				}
-			} else if (write === 'demote') {
-				// Strip only what we grant. hokon keeps pm2-host, the backstops keep
-				// their own label, so the pool returns to being invisible to CI.
-				// One label, since hadoku-builder-heavy was retired on 2026-08-19 and no
-				// runner reports it any more (checked across four repos, 2026-08-29).
-				const res = await ghWrite(
-					'DELETE',
-					`/actions/runners/${runner.id}/labels/${BUILDER_LABEL}`,
-					token
-				);
-				if (res.ok) {
-					runner.labels = (runner.labels ?? []).filter((l) => l.name !== BUILDER_LABEL);
-					if (!demoted.includes(runner.name)) demoted.push(runner.name);
-				} else {
-					logger.warn(
-						`[runner-health] demote ${runner.name} (remove ${BUILDER_LABEL}) failed: HTTP ${res.status}`
-					);
-				}
-			}
-		}
-
-		for (const n of heldNodes) if (onDemand(n) && !wasHeld.has(n)) promoted.push(`${n} (mint)`);
-		for (const n of wasHeld) {
-			if (onDemand(n) && !heldNodes.includes(n)) demoted.push(`${n} (mint)`);
-		}
-
-		// Fan the same decision out to the rest of the fleet. Edge-triggered, plus a
-		// re-assert while up; see syncBackstopAcrossFleet for why this cannot be
-		// derived from this repo's listing.
-		//
-		// The re-assert is only for a node the label PROMOTES. An on-demand guest
-		// is promoted by the hold above, and its sweep is demote-only — running it
-		// every tick of a promotion would read the whole fleet's listings to change
-		// nothing.
-		const relabels = backstopNodes.some(labelsMayPromote);
-		// The third condition is the VERIFY sweep — see `backstopConvergedMs`. The
-		// first two ask "did I change my mind?"; only this one asks "is the fleet
-		// actually in the state I believe it is?", which is the question the 165
-		// jobs on 26 unlooked-at repos needed somebody to ask.
-		const convergeDue = Date.now() - backstopConvergedMs >= BACKSTOP_CONVERGE_INTERVAL_MS;
-		if (
-			!decision.unmeasured &&
-			(backstopFleetState !== backstopWanted || (backstopWanted && relabels) || convergeDue)
-		) {
-			try {
-				const fleet = await withGhCaller('backstop', () =>
-					syncBackstopAcrossFleet(backstopWanted, token, fleetRepos, (name) => {
-						const node = nodeOf(name, fleetNodes);
-						return unsafeNode(node) || !labelsMayPromote(node);
-					})
-				);
-				// Only claim the state once nothing failed, so a partial fan-out is
-				// retried next tick instead of being recorded as done. Same rule for
-				// the verify clock: a sweep that could not read every repo has not
-				// verified anything, and must not buy itself another hour of silence.
-				if (!fleet.failed.length) {
-					backstopFleetState = backstopWanted;
-					backstopConvergedMs = Date.now();
-				}
-				if (convergeDue && fleet.changed.length && backstopFleetState === backstopWanted) {
-					// A divergence the belief could not have shown. Warn, not info:
-					// somebody other than this function wrote the one label it owns.
-					logger.warn(
-						`[runner-health] BACKSTOP verify sweep found ${fleet.changed.length} ` +
-							`registration(s) out of step with reason=${backstopReason} — ` +
-							`${fleet.changed.join(', ')}. This label has one writer; something else moved it.`
-					);
-				}
-				if (fleet.changed.length) {
-					logger.info(
-						`[runner-health] BACKSTOP fleet ${backstopWanted ? 'promote' : 'demote'}: ` +
-							`${fleet.changed.length} runner(s) — ${fleet.changed.join(', ')}`
-					);
-				}
-				if (fleet.failed.length) {
-					logger.warn(
-						`[runner-health] BACKSTOP fleet ${backstopWanted ? 'promote' : 'demote'} FAILED on ` +
-							`${fleet.failed.length}: ${fleet.failed.join(', ')} — those repos queue until this succeeds`
-					);
-				}
-			} catch (err) {
-				// Fail-soft like every other write in this tick: a broken fan-out must
-				// not take down the monitor reporting the outage.
-				logger.warn(
-					`[runner-health] BACKSTOP fleet sync failed: ${err instanceof Error ? err.message : String(err)}`
-				);
-			}
-		}
-
-		if (promoted.length) {
-			logger.info(
-				`[runner-health] BACKSTOP promote (${backstopReason}): ` +
-					`${clawsOnline}/${clawsRegistered} claw instances online, ${clawsFree} free ` +
-					`→ ${promoted.join(', ')} now offer '${BUILDER_LABEL}'`
-			);
-			// Saturation is deliberately silent. Every claw being busy is a normal
-			// weekday, and paging for it would train the operator to skim past the
-			// 🔻 that means the garage is actually dark.
-			if (outage) {
-				await postDiscordSink(
-					`🔻 **runners** on \`${selfHostname()}\`: only ${clawsOnline}/${clawsRegistered} claw instances ` +
-						'online — promoted ' +
-						`${promoted.map((n) => `\`${n}\``).join(', ')} so jobs still have somewhere to run. ` +
-						'Degraded backstop on the prod host; reverts automatically when a claw returns.',
-					'runner-health'
-				);
-				backstopAlerted = true;
-			}
-		}
-		if (demoted.length) {
-			logger.info(
-				`[runner-health] BACKSTOP demote: ${clawsOnline} claw(s) online → released ` +
-					`${demoted.join(', ')} — no longer offered '${BUILDER_LABEL}': ${why}`
-			);
-			// Mirror of the promote arm: only announce the recovery the operator was
-			// told about. A demote after mere saturation never had a 🔻 to close.
-			if (backstopAlerted) {
-				await postDiscordSink(
-					`🔺 **runners** on \`${selfHostname()}\`: a claw is back online — released the backstop on ` +
-						`${demoted.map((n) => `\`${n}\``).join(', ')}.`,
-					'runner-health'
-				);
-				backstopAlerted = false;
-			}
-		}
-
-		// --- Hosted-runner fallback (CI_RUNNER across the whole fleet) ---
-		// Now a genuine LAST resort. The hokon backstop above is fleet-wide (see
-		// syncBackstopAcrossFleet), so counting hokon as self-hosted capacity here
-		// finally describes capacity every repo can actually reach — which is what
-		// this sum always assumed and, until 2026-08-23, never had.
-		//
-		// Driven purely by runner availability — never by a job's outcome — so a red
-		// build is never retried or masked.
-		try {
-			// Escalation order is claws → hokon → GitHub-hosted. Hosted is the LAST
-			// resort, not the second: it costs billed minutes on 12 private repos,
-			// and a hosted runner cannot reach the vault (the fetch comes back as a
-			// CF challenge, which is what broke auto-format on 2026-08-17). So the
-			// fallback is driven by TOTAL self-hosted capacity — claws plus the
-			// promoted hokon pool — and only flips when both are gone.
-			// `null`, not the sum, when the probe has not run. Under all-JIT both
-			// terms are derived from it, so on the first tick after a restart this
-			// sum is not a small reading — it is no reading at all. `census` already
-			// draws that line as `ephemeralUnknown`; the backstop consults it and
-			// this call was the last consumer still acting on the zero.
-			const selfHostedOnline = c.ephemeralUnknown ? null : clawsOnline + backstopOnline;
-			const fb = await withGhCaller('ci-runner-var', () =>
-				syncHostedFallback(selfHostedOnline, token, { alreadyHosted: hostedRepos })
-			);
-			data.ci_runner = fb.desired;
-			// Deliberately NOT its own Discord alert. All-claws-down already pages
-			// through the backstop promote and the label-floor breach, and a second
-			// message for the same root cause is noise the operator learns to skip.
-			// The fleet flip is reported inside the promote note (below) and here in
-			// the log. `ci_runner` reaches the daily digest through the job-sink
-			// payload below — NOT through the snapshot, which has no such field.
-			if (fb.changed.length) {
-				logger.info(
-					`[runner-health] CI_RUNNER → ${fb.desired} on ${fb.changed.length} repo(s): ${fb.changed.join(', ')}`
-				);
-			}
-			data.ci_runner_write_failed = fb.failed.length;
-			// A FAILED WRITE IS A FINDING, NOT A LOG LINE.
-			//
-			// This was `logger.warn` alone, and nothing else read `fb.failed` — no
-			// alert, no cron finding, no digest field — while the enclosing catch
-			// is fail-soft too. So a repo whose variable could not be written
-			// retried every 10 minutes, forever, and said so only into a log nobody
-			// tails.
-			//
-			// What that costs depends on the runs-on form, and BOTH are bad. Fleet
-			// workflows are now bare `fromJSON(vars.CI_RUNNER)`, so a repo that
-			// never got its value has `runs-on` resolve to nothing and EVERY
-			// workflow in it fails to start. And on the hosted flip — the one path
-			// that only runs while every claw is already down — a failed write
-			// leaves that repo pointed at claws that are not there, so it queues
-			// through the outage the fallback exists to route around.
-			//
-			// COUNTED per repo, ANNOUNCED once.
-			//
-			// The debounce has to be per repo — one flaky repo and a fleet-wide token
-			// scope loss are different faults and must not share a counter. The ALERT
-			// must not be, though: these fail together far more often than singly (one
-			// revoked token covers all 26), and a message per repo would be a 26-page
-			// storm for one cause — the same noise this file already refuses to send
-			// for the all-claws-down case.
-			const failedNow = new Set(fb.failed);
-			for (const repo of [...ciRunnerWriteFailTicks.keys()]) {
-				// Not failing this tick — including repos syncHostedFallback SKIPPED
-				// because its cache says they already hold the desired value. Skipped is
-				// not failed, and treating it as such would hold this open on a repo
-				// that is fine.
-				if (failedNow.has(repo)) continue;
-				ciRunnerWriteFailTicks.delete(repo);
-			}
-			const sustained: string[] = [];
-			for (const repo of fb.failed) {
-				const seen = (ciRunnerWriteFailTicks.get(repo) ?? 0) + 1;
-				ciRunnerWriteFailTicks.set(repo, seen);
-				if (seen >= OFFLINE_TICKS_BEFORE_ALERT) sustained.push(repo);
-			}
-			if (!sustained.length) {
-				clearAlert('ci-runner-write');
-			} else {
-				const mins = Math.round((OFFLINE_TICKS_BEFORE_ALERT * TICK_INTERVAL_MS) / 60000);
-				const named = sustained.slice(0, 5).join(', ');
-				const more = sustained.length > 5 ? ` (+${sustained.length - 5} more)` : '';
-				await alertOnce(
-					'ci-runner-write',
-					`🚨 **CI_RUNNER** could not be written on ${sustained.length} repo(s) for ` +
-						`${mins}+ min (wanted \`${fb.desired}\`): ${named}${more}. Fleet workflows use ` +
-						'bare `runs-on: ${{ fromJSON(vars.CI_RUNNER) }}`, so a repo that never got ' +
-						'the value will FAIL TO START rather than queue. Usually the token has lost ' +
-						'`actions:write`. Check: `gh api /repos/<repo>/actions/variables`'
-				);
-			}
-			if (fb.failed.length) {
-				logger.warn(
-					`[runner-health] CI_RUNNER ${fb.desired} FAILED on ${fb.failed.length} repo(s): ${fb.failed.join(', ')} ` +
-						'(token needs actions:write on each repo)'
-				);
-			}
-		} catch (err) {
-			// Fail-soft, like every other write here: a broken fallback must not
-			// take down the monitor that is reporting the outage.
-			logger.warn(
-				`[runner-health] CI_RUNNER sync threw: ${err instanceof Error ? err.message : String(err)}`
-			);
-		}
+		await runHostedFallback({
+			token,
+			ephemeralUnknown: c.ephemeralUnknown,
+			clawsOnline,
+			backstopOnline,
+			data,
+		});
 
 		// MEASURED first, for everyone. The snapshot, the panel and the sitrep read
 		// `label_online`, and they report what is true NOW — the confirmation below
@@ -3108,6 +3167,136 @@ async function checkLabelFloor(
 }
 
 /**
+ * The dropped-job failover for ONE completed, failed run — extracted from
+ * checkRunsAndFailover's per-run sweep (wave 5h §A step 2). Every `continue`
+ * in the original per-run loop body becomes an early `return` here: this was
+ * always the LAST thing done with a run in that loop, so the caller does
+ * nothing with a `false` result.
+ *
+ * `slots` is a MUTABLE object, not a copied number, for the same reason
+ * `jobFetchBudget` (a `FetchBudget` instance) is one: several repos run this
+ * concurrently (`mapConcurrent`), and the cap is only safe because the check
+ * and the claim happen with no `await` between them — see the comment on
+ * `sweepRepo` below. Threading the count through this function's return
+ * value instead would let every repo that passed the check before the first
+ * POST resolved claim its OWN slot on the same stale count, overshooting the
+ * cap exactly the way the comment there warns about (caught by
+ * `failover: the per-tick rerun cap holds across a concurrent sweep`, which
+ * failed 12-for-10 against a value-threaded first draft of this extraction).
+ *
+ * Returns whether this run's failure was an OOM kill and whether a rerun was
+ * actually accepted, so the caller can fold both into its own
+ * `oomReruns`/`failoverReruns` counters (unaffected by the race above: both
+ * are per-run facts, read back only after this call's own awaits are done).
+ */
+async function attemptFailoverRerun(args: {
+	token: string;
+	repo: string;
+	short: string;
+	title: string;
+	run: GhRun;
+	now: number;
+	runnersChecked: boolean;
+	slots: { taken: number };
+	runnerStateFor: (
+		repo: string
+	) => Promise<({ online: Set<string>; known: Set<string> } & RepoRunnerState) | null>;
+}): Promise<{ oomRerun: boolean; reran: boolean }> {
+	const { token, repo, short, title, run, now, runnersChecked, slots, runnerStateFor } = args;
+	const noRerun = (oomRerun = false) => ({ oomRerun, reran: false });
+
+	if (!runnersChecked) return noRerun();
+	if (slots.taken >= MAX_RERUNS_PER_TICK) return noRerun();
+	if (run.status !== 'completed' || run.conclusion !== 'failure') return noRerun();
+	const attempt = run.run_attempt ?? 1;
+	if (attempt >= MAX_RERUN_ATTEMPTS) return noRerun();
+	const updatedMs = Date.parse(run.updated_at ?? run.created_at);
+	if (!isNaN(updatedMs) && (now - updatedMs) / 60000 > FAILOVER_RECENT_MINUTES) return noRerun();
+	const dedupeKey = `${repo}#${run.id}@${attempt}`;
+	if (failoverReran.has(dedupeKey)) return noRerun();
+
+	const state = await runnerStateFor(repo);
+	if (!state) return noRerun();
+
+	const jobsResp = await ghGet<{ jobs?: GhJob[] }>(`/actions/runs/${run.id}/jobs`, token, repo);
+	if (!jobsResp || !Array.isArray(jobsResp.jobs)) return noRerun();
+
+	// Only jobs that failed on a runner WE own are ever rerun. A failure on
+	// a hosted runner, or on someone else's, is not ours to second-guess.
+	const failedOnOurs = jobsResp.jobs.filter(
+		(j): j is GhJob & { runner_name: string } =>
+			j.conclusion === 'failure' && !!j.runner_name && state.known.has(j.runner_name)
+	);
+	if (failedOnOurs.length === 0) return noRerun();
+
+	// Two INFRASTRUCTURE failure modes, both retryable, and they are
+	// distinguished by opposite evidence — so they need separate probes:
+	//
+	//   runner offline   the box went away UNDER the job. GitHub reports it,
+	//                    so the runner listing is the evidence.
+	//   SIGKILL          the box is fine and the JOB was killed (OOM). The
+	//                    runner is still online, so the listing says nothing
+	//                    and only the job's own exit code shows it.
+	//
+	// Checking the listing first keeps the common case at zero extra calls.
+	let reason = failedOnOurs.find((j) => !state.online.has(j.runner_name))
+		? `'${failedOnOurs.find((j) => !state.online.has(j.runner_name))!.runner_name}' went offline`
+		: '';
+
+	if (!reason) {
+		const refused = failedOnOurs.find((j) => refusedAtAdmission(j));
+		if (refused) reason = `refused at admission by ci-throttle on '${refused.runner_name}'`;
+	}
+
+	let oomRerun = false;
+	if (!reason) {
+		for (const j of failedOnOurs) {
+			if (typeof j.id !== 'number') continue;
+			if (await jobWasKilled(repo, j.id, token)) {
+				reason = `SIGKILL (exit 137, OOM) on '${j.runner_name}'`;
+				oomRerun = true;
+				break;
+			}
+		}
+	}
+	if (!reason) return noRerun(oomRerun);
+
+	// Re-checked here, not only at the top: the probes above awaited, and a
+	// sibling repo may have taken the last slot meanwhile.
+	if (slots.taken >= MAX_RERUNS_PER_TICK) return noRerun(oomRerun);
+	slots.taken++;
+	logger.info(
+		`[runner-health] FAILOVER rerun: ${short} run ${run.id} '${title}' — ${reason} ` +
+			`→ POST rerun-failed-jobs ` +
+			`(attempt ${attempt + 1}/${MAX_RERUN_ATTEMPTS}) ${run.html_url}`
+	);
+	const res = await ghWrite(
+		'POST',
+		`/actions/runs/${run.id}/rerun-failed-jobs`,
+		token,
+		undefined,
+		repo
+	);
+	if (res.ok) {
+		failoverReran.add(dedupeKey);
+		// A self-healed claw drop is NOT outage-worthy — GitHub reruns the
+		// failed jobs onto the next ready claw and CI stays green. So this
+		// records but does NOT ping Discord live; the daily ci-digest rolls
+		// up "N auto-reruns today" instead (workers/monitoring-api/ci-digest).
+		logger.info(
+			`[runner-health] FAILOVER rerun: ${short} run ${run.id} accepted (HTTP ${res.status})`
+		);
+		return { oomRerun, reran: true };
+	}
+	slots.taken--;
+	logger.warn(
+		`[runner-health] failover rerun for ${short} run ${run.id} → HTTP ${res.status} ` +
+			'(token may lack actions:write) — job left failed for the operator'
+	);
+	return { oomRerun, reran: false };
+}
+
+/**
  * Checks 2 & 3 — queued/hung runs, and failover for jobs whose runner vanished.
  *
  * Returns whether ANY repo's runs were readable. A partial read still counts:
@@ -3212,8 +3401,10 @@ async function checkRunsAndFailover(
 	// repo that passed the check before the first POST resolved fire its own,
 	// and the cap would hold only in the sequential case. A slot is claimed right
 	// before the POST and handed back if GitHub refuses it, so a refused rerun
-	// still does not count against the cap — the same rule as before.
-	let rerunSlotsTaken = 0;
+	// still does not count against the cap — the same rule as before. A MUTABLE
+	// object, not a plain number: `attemptFailoverRerun` claims and releases it
+	// directly, so every concurrent repo's sweep sees the SAME live count.
+	const rerunSlots = { taken: 0 };
 	// Subset of failoverReruns that were OOM kills rather than a runner going away.
 	// Tracked separately because a rising count here is a CAPACITY signal — the
 	// fleet is being asked to run more concurrent jobs than a box can hold — where
@@ -3227,7 +3418,7 @@ async function checkRunsAndFailover(
 	//   - counters and maxima above: order-independent.
 	//   - `runnerStateCache`: keyed by repo, and each repo is swept once.
 	//   - `failoverReran`, alert keys: carry the repo or the run URL.
-	//   - `jobFetchBudget`, `rerunSlotsTaken`: claimed with no await in between.
+	//   - `jobFetchBudget`, `rerunSlots`: claimed with no await in between.
 	//   - `ingestRuns`: dedupes on run id before its await, appends synchronously.
 	// Within a repo the runs are still visited in listing order, one at a time,
 	// so the per-repo rerun and alert ordering is exactly what it was.
@@ -3475,94 +3666,19 @@ async function checkRunsAndFailover(
 			}
 
 			// --- dropped-job failover (needs Actions:write) ---
-			if (!runnersChecked) continue;
-			if (rerunSlotsTaken >= MAX_RERUNS_PER_TICK) continue;
-			if (run.status !== 'completed' || run.conclusion !== 'failure') continue;
-			const attempt = run.run_attempt ?? 1;
-			if (attempt >= MAX_RERUN_ATTEMPTS) continue;
-			const updatedMs = Date.parse(run.updated_at ?? run.created_at);
-			if (!isNaN(updatedMs) && (now - updatedMs) / 60000 > FAILOVER_RECENT_MINUTES) continue;
-			const dedupeKey = `${repo}#${run.id}@${attempt}`;
-			if (failoverReran.has(dedupeKey)) continue;
-
-			const state = await runnerStateFor(repo);
-			if (!state) continue;
-
-			const jobsResp = await ghGet<{ jobs?: GhJob[] }>(`/actions/runs/${run.id}/jobs`, token, repo);
-			if (!jobsResp || !Array.isArray(jobsResp.jobs)) continue;
-
-			// Only jobs that failed on a runner WE own are ever rerun. A failure on
-			// a hosted runner, or on someone else's, is not ours to second-guess.
-			const failedOnOurs = jobsResp.jobs.filter(
-				(j): j is GhJob & { runner_name: string } =>
-					j.conclusion === 'failure' && !!j.runner_name && state.known.has(j.runner_name)
-			);
-			if (failedOnOurs.length === 0) continue;
-
-			// Two INFRASTRUCTURE failure modes, both retryable, and they are
-			// distinguished by opposite evidence — so they need separate probes:
-			//
-			//   runner offline   the box went away UNDER the job. GitHub reports it,
-			//                    so the runner listing is the evidence.
-			//   SIGKILL          the box is fine and the JOB was killed (OOM). The
-			//                    runner is still online, so the listing says nothing
-			//                    and only the job's own exit code shows it.
-			//
-			// Checking the listing first keeps the common case at zero extra calls.
-			let reason = failedOnOurs.find((j) => !state.online.has(j.runner_name))
-				? `'${failedOnOurs.find((j) => !state.online.has(j.runner_name))!.runner_name}' went offline`
-				: '';
-
-			if (!reason) {
-				const refused = failedOnOurs.find((j) => refusedAtAdmission(j));
-				if (refused) reason = `refused at admission by ci-throttle on '${refused.runner_name}'`;
-			}
-
-			if (!reason) {
-				for (const j of failedOnOurs) {
-					if (typeof j.id !== 'number') continue;
-					if (await jobWasKilled(repo, j.id, token)) {
-						reason = `SIGKILL (exit 137, OOM) on '${j.runner_name}'`;
-						oomReruns++;
-						break;
-					}
-				}
-			}
-			if (!reason) continue;
-
-			// Re-checked here, not only at the top: the probes above awaited, and a
-			// sibling repo may have taken the last slot meanwhile.
-			if (rerunSlotsTaken >= MAX_RERUNS_PER_TICK) continue;
-			rerunSlotsTaken++;
-			logger.info(
-				`[runner-health] FAILOVER rerun: ${short} run ${run.id} '${title}' — ${reason} ` +
-					`→ POST rerun-failed-jobs ` +
-					`(attempt ${attempt + 1}/${MAX_RERUN_ATTEMPTS}) ${run.html_url}`
-			);
-			const res = await ghWrite(
-				'POST',
-				`/actions/runs/${run.id}/rerun-failed-jobs`,
+			const failoverOutcome = await attemptFailoverRerun({
 				token,
-				undefined,
-				repo
-			);
-			if (res.ok) {
-				failoverReran.add(dedupeKey);
-				failoverReruns++;
-				// A self-healed claw drop is NOT outage-worthy — GitHub reruns the
-				// failed jobs onto the next ready claw and CI stays green. So this
-				// records but does NOT ping Discord live; the daily ci-digest rolls
-				// up "N auto-reruns today" instead (workers/monitoring-api/ci-digest).
-				logger.info(
-					`[runner-health] FAILOVER rerun: ${short} run ${run.id} accepted (HTTP ${res.status})`
-				);
-			} else {
-				rerunSlotsTaken--;
-				logger.warn(
-					`[runner-health] failover rerun for ${short} run ${run.id} → HTTP ${res.status} ` +
-						'(token may lack actions:write) — job left failed for the operator'
-				);
-			}
+				repo,
+				short,
+				title,
+				run,
+				now,
+				runnersChecked,
+				slots: rerunSlots,
+				runnerStateFor,
+			});
+			if (failoverOutcome.oomRerun) oomReruns++;
+			if (failoverOutcome.reran) failoverReruns++;
 		}
 	};
 

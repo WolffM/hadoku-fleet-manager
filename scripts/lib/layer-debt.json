@@ -245,10 +245,6 @@
   },
   {
     "from": "src/runner-health.ts",
-    "to": "src/fleet-report-types.ts"
-  },
-  {
-    "from": "src/runner-health.ts",
     "to": "src/node-reservation.ts"
   },
   {
