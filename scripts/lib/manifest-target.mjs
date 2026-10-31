@@ -96,7 +96,11 @@ import process from 'node:process';
 import { hubRepo } from '../../dist/lib/fleet-config.js';
 
 /**
- * The ambient environment with every `GIT_*` variable REMOVED.
+ * The ambient environment with every `GIT_*` variable REMOVED, except the four
+ * that name who a commit is by (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`). Those locate
+ * no repository, and stripping them made every fixture commit through here
+ * depend on the box's global identity: green on the workstation, red on a CI
+ * runner with none (2026-10-31, `fleet retire`'s tests).
  *
  * Verbatim the reasoning in `src/lib/fleet-paths.ts`: `git` reads `GIT_DIR` and
  * `GIT_INDEX_FILE` from the environment and they OVERRIDE `cwd`, so
@@ -107,8 +111,11 @@ import { hubRepo } from '../../dist/lib/fleet-config.js';
  * every answer is about the wrong tree. That is not a failed read; it is a
  * confident wrong one, which is worse.
  */
+const IDENTITY = /^GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL)$/;
 function noGitEnv(env) {
-	return Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('GIT_')));
+	return Object.fromEntries(
+		Object.entries(env).filter(([k]) => !k.startsWith('GIT_') || IDENTITY.test(k))
+	);
 }
 
 /**
