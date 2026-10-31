@@ -228,6 +228,10 @@ export const LAYER_MAP = [
 	// both sides import.
 	{ glob: 'src/lib/alert-ledger.ts', layer: 'automation' },
 	{ glob: 'scripts/fleet-usage.mjs', layer: 'automation' },
+	// Wave 5n lane D: the file-size ceiling guard's regenerator CLI — a
+	// generic, domain-blind maintenance tool over `file-size-guard.mjs`
+	// below, same bucket as `fleet-usage.mjs` right above it.
+	{ glob: 'scripts/file-size-debt.mjs', layer: 'automation' },
 	{ glob: 'scripts/lib/emit.mjs', layer: 'automation' },
 	// Wave 5f lane B: the GateDoc shape builder — same "generic, domain-blind,
 	// shared report-shape mechanics" as emit.mjs right above it (one of the
@@ -245,6 +249,12 @@ export const LAYER_MAP = [
 	// Lane D's shared debt-list mechanics for the F-item guards: the same
 	// "generic, domain-blind, cross-cutting" shape as blank-comments.mjs.
 	{ glob: 'scripts/lib/f-guards/*.mjs', layer: 'automation' },
+	// Wave 5n lane D: the file-size ceiling guard's size/debt-list mechanics
+	// (ceilings, `wc -l` counting, the ratchet rules). It has no opinion
+	// about any domain — it counts lines in files under src/scripts/herdr/
+	// deploy wholesale — so it is the same "generic, domain-blind,
+	// cross-cutting" shape as f-guards/*.mjs right above it.
+	{ glob: 'scripts/lib/file-size-guard.mjs', layer: 'automation' },
 
 	// -------------------------------------------------------------------- access
 	{ glob: 'src/lib/node-identity.ts', layer: 'access' },

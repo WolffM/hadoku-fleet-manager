@@ -249,6 +249,15 @@ different things. Read it before naming anything new.
 - **`pnpm lint` does NOT catch type-aware bugs.** The type-aware set runs only
   under `ESLINT_TYPE_AWARE=1` (`pnpm run lint:types`). A green `pnpm lint` is not
   evidence an async change is safe.
+- **Files have a ceiling: 800 lines for source, 1,000 for tests** (operator,
+  2026-10-31; wave 5n lane D) — pure-move splits kept stopping at 1,200-1,450
+  lines because nothing made SIZE the target. `scripts/lib/file-size-guard.test.mjs`
+  gates every tracked file under `src/`, `scripts/`, `herdr/`, `deploy/` against
+  `scripts/lib/file-size-debt.json`, a ratchet that may only shrink: a listed
+  file that grew, shrank, healed, or was deleted all fail until the entry is
+  fixed. Lower one with `node scripts/file-size-debt.mjs --write`; raising one,
+  or adding a new one, needs `--allow-growth <path>`. The post-waves refactor
+  pass must empty this list.
 
 ## Known gaps — read before assuming these work
 
