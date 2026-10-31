@@ -190,3 +190,184 @@ void test('split-check: a re-export shim line is a free addition, not a mismatch
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+void test('split-check: a pure move that reflows a multi-line import to single-line passes', () => {
+	// The bug this wave fixes: IMPORT_LINE only matched a one-line import or
+	// the closing `} from '…'` of a wrapped one, so the inner name lines of a
+	// prettier-wrapped import counted as added/removed CONTENT. Reshaping the
+	// SAME import (multi-line here, single-line there — prettier reflows on a
+	// shorter name list, exactly what 594fd65 did at several call sites) is
+	// the case the old regex could not see past: the removed side carried 2
+	// miscounted "content" lines (`foo,`/`bar,`) that the added side's
+	// one-liner never did, so the old code read this as a real mismatch.
+	const dir = mkdtempSync(join(tmpdir(), 'split-check-fixture-'));
+	try {
+		git(dir, ['init', '--quiet', '--initial-branch=main']);
+		writeFileSync(
+			join(dir, 'a.mjs'),
+			[
+				'import {',
+				'\tfoo,',
+				'\tbar,',
+				"} from './lib.mjs';",
+				'',
+				'export function helper(x) {',
+				'\treturn x + foo(x) + bar(x);',
+				'}',
+				'',
+			].join('\n')
+		);
+		git(dir, ['add', 'a.mjs']);
+		commit(dir, 'base');
+		const base = git(dir, ['rev-parse', 'HEAD']).trim();
+
+		writeFileSync(join(dir, 'a.mjs'), ["export { helper } from './b.mjs';", ''].join('\n'));
+		writeFileSync(
+			join(dir, 'b.mjs'),
+			[
+				"import { foo, bar } from './lib.mjs';",
+				'',
+				'export function helper(x) {',
+				'\treturn x + foo(x) + bar(x);',
+				'}',
+				'',
+			].join('\n')
+		);
+		git(dir, ['add', '-A']);
+		commit(dir, 'split helper into b.mjs, reflowing its import to one line');
+
+		const result = checkSplit(`${base}..HEAD`, { cwd: dir });
+		assert.equal(
+			result.ok,
+			true,
+			`expected a clean pure move; findings: ${result.findings.join('; ')}`
+		);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+void test('split-check: a multi-line import does not mask a dropped line in the moved function', () => {
+	// Same shape as the pure-move fixture above, but the moved function loses
+	// its return statement. The multi-line import must still be excluded from
+	// the count (so it does not drown out the real signal), and the drop must
+	// still be caught.
+	const dir = mkdtempSync(join(tmpdir(), 'split-check-fixture-'));
+	try {
+		git(dir, ['init', '--quiet', '--initial-branch=main']);
+		writeFileSync(
+			join(dir, 'a.mjs'),
+			[
+				'import {',
+				'\tfoo,',
+				'\tbar,',
+				"} from './lib.mjs';",
+				'',
+				'export function helper(x) {',
+				'\treturn x + foo(x) + bar(x);',
+				'}',
+				'',
+			].join('\n')
+		);
+		git(dir, ['add', 'a.mjs']);
+		commit(dir, 'base');
+		const base = git(dir, ['rev-parse', 'HEAD']).trim();
+
+		writeFileSync(join(dir, 'a.mjs'), ["export { helper } from './b.mjs';", ''].join('\n'));
+		writeFileSync(
+			join(dir, 'b.mjs'),
+			[
+				'import {',
+				'\tfoo,',
+				'\tbar,',
+				"} from './lib.mjs';",
+				'',
+				'export function helper(x) {',
+				'}',
+				'',
+			].join('\n')
+		);
+		git(dir, ['add', '-A']);
+		commit(dir, 'split helper into b.mjs, losing the return statement');
+
+		const result = checkSplit(`${base}..HEAD`, { cwd: dir });
+		assert.equal(result.ok, false);
+		assert.match(result.findings.join('\n'), /line conservation/);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+void test('split-check: a multi-line bare re-export shim is a free addition, not a mismatch', () => {
+	const { dir, base } = makeFixture();
+	try {
+		// Same free-addition guarantee as the single-line shim test, but
+		// prettier-wrapped across three lines — the opening `export {`, the
+		// name on its own line, and the closing `};` must ALL be excluded,
+		// not just the closing line (which the old single-line SHIM_LINE
+		// regex would have caught by accident while missing the other two).
+		writeFileSync(
+			join(dir, 'a.mjs'),
+			[
+				'export function helper(x) {',
+				'\treturn x + 1;',
+				'}',
+				'export {',
+				'\thelper,',
+				'};',
+				'',
+			].join('\n')
+		);
+		git(dir, ['add', '-A']);
+		commit(dir, 'add a multi-line shim block with nothing removed');
+
+		const result = checkSplit(`${base}..HEAD`, { cwd: dir });
+		assert.equal(
+			result.ok,
+			true,
+			`expected the multi-line shim block to be free; findings: ${result.findings.join('; ')}`
+		);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+void test('split-check: net growth (genuinely new code riding with the move) FAILS and names the added lines', () => {
+	// The exact shape of 594fd65: a split that ALSO adds a small accessor the
+	// move needed (an import binding cannot be reassigned from outside its
+	// module). Catching that is half of this check's job (plan §10 — a move
+	// is separate from a behaviour change), so strict equality must fail
+	// here, and the finding must NAME the new accessor specifically — not
+	// just report a count — so a reviewer can tell at a glance what is new.
+	const { dir, base } = makeFixture();
+	try {
+		writeFileSync(
+			join(dir, 'b.mjs'),
+			['export function helper(x) {', '\treturn x + 1;', '}', ''].join('\n')
+		);
+		writeFileSync(
+			join(dir, 'a.mjs'),
+			[
+				"export { helper } from './b.mjs';",
+				'export function helperAccessor(x) {',
+				'\treturn helper(x);',
+				'}',
+				'',
+			].join('\n')
+		);
+		git(dir, ['add', '-A']);
+		commit(dir, 'split helper into b.mjs, plus a new accessor the move needed');
+
+		const result = checkSplit(`${base}..HEAD`, { cwd: dir });
+		assert.equal(result.ok, false, 'net growth alongside a move must fail, not pass silently');
+		const report = result.findings.join('\n');
+		assert.match(report, /line conservation/);
+		// The two genuinely new lines of `helperAccessor` are named...
+		assert.match(report, /\+ a\.mjs: export function helperAccessor\(x\) \{/);
+		assert.match(report, /\+ a\.mjs: return helper\(x\);/);
+		// ...and nothing is reported on the removed side — nothing was lost.
+		assert.doesNotMatch(report, /removed, no added twin/);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

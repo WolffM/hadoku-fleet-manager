@@ -59,10 +59,7 @@
     "src/runner-health.ts:persistSnapshot#2",
     "scripts/floor-probe.mjs:appendLedger#2",
     "scripts/lib/fleet-source.mjs:failure#1",
-    "src/job-history.ts:appendToDisk#1",
-    "src/lib/measured.ts:lines#1",
-    "src/lib/usage-store.ts:file#1",
-    "src/runners/decision-log.ts:text#1"
+    "src/lib/measured.ts:lines#1"
   ],
   "F5": [
     "scripts/benchmark-fleet.mjs:spawn#1",

@@ -30,17 +30,95 @@
  * O(1) append into an O(n) rewrite. They keep `appendFileSync` and are
  * declared writers in the one-writer guard instead
  * (`scripts/lib/f-guards/f3-one-writer.test.mjs`).
+ *
+ * THE TEMP FILE ITSELF CAN OUTLIVE THE PROCESS (wave 5c §D step 4). The crash
+ * this module protects `path` against can just as easily land between
+ * `openSync(tmp, 'w')` and `renameSync(tmp, path)` — there is no fsync that
+ * makes a `renameSync` call happen before a power cut reaches it — and a
+ * forced restart means the pid that created `tmp` is never coming back to
+ * clean it up. `writeFileAtomic` therefore sweeps stale siblings of ITS OWN
+ * target `path` before writing: see `sweepStaleTempFiles` below for exactly
+ * what "stale" means (dead pid AND old enough not to race a write genuinely
+ * in flight right now). It never touches the live state dir except through
+ * this same call path — there is no separate cron or subcommand for it.
  */
 import {
 	closeSync,
 	fsyncSync,
 	mkdirSync,
 	openSync,
+	readdirSync,
 	readFileSync,
 	renameSync,
+	statSync,
+	unlinkSync,
 	writeSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+
+/**
+ * A sibling `${path}.<pid>.tmp` is swept only once it is this stale — long
+ * enough that a write genuinely in progress right now (this process mid-write,
+ * or another one that started moments ago) is never mistaken for an orphan.
+ * The live example this sweep fixes: `~/.hadoku-mgmt/job-history.jsonl.2791194.tmp`,
+ * 0 bytes, sitting since a crash on 2026-10-29 — a forced restart is a power
+ * cut here (`force-restart-is-power-off`), so the pid that made it is gone for
+ * good and nothing else will ever clean it up.
+ */
+const STALE_TMP_MS = 10 * 60 * 1000;
+
+/**
+ * Is `pid` still a live process? `process.kill(pid, 0)` sends no signal — it
+ * only asks the kernel whether that pid could be signaled. `ESRCH` means no
+ * such process, i.e. dead. Anything else — no throw, or `EPERM` for a pid
+ * owned by another user this process cannot query — is treated as ALIVE:
+ * never delete a file whose writer this code cannot positively rule out.
+ */
+function isPidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (err) {
+		return (err as NodeJS.ErrnoException)?.code !== 'ESRCH';
+	}
+}
+
+/**
+ * Before `writeFileAtomic` creates its OWN temp file, sweep any sibling
+ * `${path}.<pid>.tmp` a CRASHED write of this same `path` left behind —
+ * never a live pid's (including this process's own, though it has not
+ * created its temp file yet when this runs), and never another path's: the
+ * pattern is anchored to `path`'s exact basename, so `job-history.jsonl` and
+ * `job-history.jsonl.bak` never match each other's temp files.
+ *
+ * Best-effort only. A failure here (a raced delete against another sweep, a
+ * permissions surprise on an unrelated directory entry) must never block the
+ * real write this function exists to make durable — each candidate is
+ * handled independently and a failure on one is skipped, not propagated.
+ */
+function sweepStaleTempFiles(path: string, dir: string): void {
+	const base = basename(path);
+	const pattern = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(\\d+)\\.tmp$`);
+	let entries: string[];
+	try {
+		entries = readdirSync(dir);
+	} catch {
+		return; // nothing to sweep if the directory cannot even be listed
+	}
+	for (const entry of entries) {
+		const m = pattern.exec(entry);
+		if (!m) continue; // not a temp file of THIS path
+		const pid = Number(m[1]);
+		if (pid === process.pid || isPidAlive(pid)) continue; // never a live pid's
+		const full = join(dir, entry);
+		try {
+			if (Date.now() - statSync(full).mtimeMs < STALE_TMP_MS) continue; // too recent to be a confirmed orphan
+			unlinkSync(full);
+		} catch {
+			// Best-effort cleanup — see the function header.
+		}
+	}
+}
 
 /**
  * `fsync: false` is a RECORDED divergence (plan §4.1 step 2), not a default:
@@ -69,6 +147,7 @@ export function writeFileAtomic(path: string, text: string, opts: AtomicWriteOpt
 	const { fsync = true } = opts;
 	const dir = dirname(path);
 	mkdirSync(dir, { recursive: true });
+	sweepStaleTempFiles(path, dir);
 	const tmp = `${path}.${process.pid}.tmp`;
 	const fd = openSync(tmp, 'w');
 	try {

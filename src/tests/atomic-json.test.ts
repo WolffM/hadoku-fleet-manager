@@ -1,15 +1,46 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import fs, { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import fs, {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { readJsonState, writeFileAtomic, writeJsonAtomic } from '../lib/atomic-json.js';
 
 function tmpDir(): string {
 	return mkdtempSync(join(tmpdir(), 'atomic-json-test-'));
+}
+
+/** This test runs COMPILED, from `dist/tests/`, so reaching the TypeScript source means climbing
+ *  back out of `dist/` to the repo root first. */
+const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+
+/**
+ * A pid that is GUARANTEED dead — never a real process this test signals.
+ * `spawnSync` blocks until the child exits and is reaped, so by the time it
+ * returns, that pid no longer belongs to any process (short of the kernel
+ * reusing it before this test calls `process.kill(pid, 0)`, a race no test
+ * of pid liveness can fully rule out, same as production's own check).
+ */
+function deadPid(): number {
+	const r = spawnSync(process.execPath, ['-e', '0']);
+	if (typeof r.pid !== 'number') throw new Error('spawnSync did not report a pid');
+	return r.pid;
+}
+
+/** 11 minutes ago — just past `STALE_TMP_MS` (10 minutes). */
+function elevenMinutesAgo(): Date {
+	return new Date(Date.now() - 11 * 60 * 1000);
 }
 
 /**
@@ -283,4 +314,117 @@ test('writeFileAtomic: fsync happens BEFORE the rename and AFTER it; fsync:false
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+// --- stale temp sweep (wave 5c §D step 4) -----------------------------------
+//
+// All through the PUBLIC API (`writeJsonAtomic`), never a testing-only export
+// of `sweepStaleTempFiles` — the thing being proven is that a normal write
+// cleans up after a crashed earlier one, not a unit of internal logic in
+// isolation. Fixture directories only; the live state dir is never touched
+// from a test (AGENTS.md, this wave's brief).
+
+test('stale temp sweep: a dead-pid, >10-minute-old sibling tmp for the SAME path is removed by the next write', () => {
+	const dir = tmpDir();
+	try {
+		const path = join(dir, 'state.json');
+		const pid = deadPid();
+		const stale = `${path}.${pid}.tmp`;
+		writeFileSync(stale, '{"half":');
+		const old = elevenMinutesAgo();
+		utimesSync(stale, old, old);
+
+		writeJsonAtomic(path, { fresh: true });
+
+		assert.ok(!existsSync(stale), 'the stale temp file must be swept');
+		assert.deepEqual(readJsonState(path), { ok: true, doc: { fresh: true } });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('stale temp sweep: a dead-pid sibling tmp UNDER 10 minutes old is left alone — too young to be a confirmed orphan', () => {
+	const dir = tmpDir();
+	try {
+		const path = join(dir, 'state.json');
+		const pid = deadPid();
+		const recent = `${path}.${pid}.tmp`;
+		writeFileSync(recent, '{"half":');
+		// Explicit "now", from THIS process's own `Date` — never the OS-default
+		// mtime a bare writeFileSync leaves. `fixture-clock-guard.test.mjs` reruns
+		// this whole suite with `Date` shifted decades forward while the real
+		// filesystem clock does not move; an mtime left at the untouched OS clock
+		// would then read as ancient relative to the shifted `Date.now()` the
+		// production sweep compares against, failing this test for a reason that
+		// has nothing to do with staleness. Setting it from `Date` keeps both
+		// sides of that comparison on the same clock, shifted or not — exactly
+		// `elevenMinutesAgo()`'s own reasoning below, for the opposite case.
+		const now = new Date();
+		utimesSync(recent, now, now);
+
+		writeJsonAtomic(path, { fresh: true });
+
+		assert.ok(existsSync(recent), 'a recent dead-pid temp file must survive — it is not yet stale');
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("stale temp sweep: a LIVE pid's sibling tmp is never removed, no matter how old its mtime is", () => {
+	const dir = tmpDir();
+	// A real child process this test starts and owns, kept alive for the
+	// duration of the check — never the test's OWN pid, which would collide
+	// with writeFileAtomic's own `${path}.${process.pid}.tmp` naming for its
+	// REAL new temp file and make the rename (not the sweep) consume the
+	// fixture. Killing it after is this test terminating its OWN child, not
+	// signalling an unrelated process.
+	const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30_000)']);
+	try {
+		if (typeof child.pid !== 'number') throw new Error('spawn did not report a pid');
+		const path = join(dir, 'state.json');
+		const live = `${path}.${child.pid}.tmp`;
+		writeFileSync(live, '{"half":');
+		const old = elevenMinutesAgo();
+		utimesSync(live, old, old);
+
+		writeJsonAtomic(path, { fresh: true });
+
+		assert.ok(existsSync(live), "a live pid's temp file must never be removed, however old");
+	} finally {
+		child.kill('SIGKILL');
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('stale temp sweep: a stale tmp for a DIFFERENT path in the same directory is never touched', () => {
+	const dir = tmpDir();
+	try {
+		const path = join(dir, 'state.json');
+		const otherPath = join(dir, 'other.json');
+		const pid = deadPid();
+		const staleOther = `${otherPath}.${pid}.tmp`;
+		writeFileSync(staleOther, '{"half":');
+		const old = elevenMinutesAgo();
+		utimesSync(staleOther, old, old);
+
+		writeJsonAtomic(path, { fresh: true }); // writes state.json, not other.json
+
+		assert.ok(existsSync(staleOther), "another path's temp file must never be swept");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('stale temp sweep: never the live state dir — writeFileAtomic only sweeps siblings of the path IT was called with', () => {
+	// Documents the invariant rather than exercising ~/.hadoku-mgmt directly
+	// (never touched from a test): sweepStaleTempFiles's only caller is
+	// writeFileAtomic, scoped to dirname(path) for that one call's own
+	// target — there is no directory-wide glob and no separate cron.
+	const src = readFileSync(join(REPO_ROOT, 'src', 'lib', 'atomic-json.ts'), 'utf8');
+	assert.match(src, /sweepStaleTempFiles\(path, dir\);/);
+	assert.equal(
+		[...src.matchAll(/sweepStaleTempFiles\(/g)].length,
+		2, // the function's own declaration site + its one call site
+		'sweepStaleTempFiles must be called from exactly one place'
+	);
 });

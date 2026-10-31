@@ -95,14 +95,6 @@ interface Command {
 	/** What this subcommand IS — see {@link Kind}. Every entry carries one. */
 	kind: Kind;
 	/**
-	 * The domain this subcommand's script belongs to, per `layer-map.mjs`
-	 * (plan §3.1/§3.2) — NOT authored here. Resolved once at startup by
-	 * {@link resolveDomains} and attached to every entry, so `fleet --help`
-	 * can group by it without a second copy of the layer map's judgment.
-	 * Undefined only until that resolution runs.
-	 */
-	domain?: string;
-	/**
 	 * Arguments this subcommand always passes, before the operator's own.
 	 *
 	 * Exists so two subcommands can share one script when they are genuinely the
@@ -709,10 +701,18 @@ const UNMEASURED_DOMAIN: Record<string, string> = {
  * domain itself (`lifecycle` | `ci-scheduling` | `tenancy` | `observation`)
  * for one inside it — exactly what `layer-map.mjs` records, read rather than
  * re-decided. THROWS on a script neither the map nor {@link UNMEASURED_DOMAIN}
- * names: a silent fallback here would make `fleet --help` render a fleet of
- * commands with nowhere to put a NEW one, failing exactly the way AGENTS.md
- * warns a resolver must not — "I could not look" rendering as "nothing is
- * wrong".
+ * names.
+ *
+ * Resolved LAZILY — called only from `usage()`, when `fleet --help` actually
+ * renders a domain heading, never at startup. Until 2026-10-30 this ran
+ * eagerly over every `COMMANDS` entry at import time and threw there, so one
+ * new or renamed script missing a layer-map entry broke EVERY subcommand —
+ * mgmt-api's crons included, none of which ever render `--help`. That is
+ * exactly the shape AGENTS.md warns against: "I could not look" (here, about
+ * ONE script's domain) rendering as "nothing works" (every script). The
+ * invariant — every command resolves without throwing — still holds; it is
+ * enforced by `cli-help.test.mjs` in CI now, not by every production
+ * invocation paying for a check only `--help` needs.
  */
 function domainFor(script: string): string {
 	const entry = matchLayer(`scripts/${script}`);
@@ -726,7 +726,6 @@ function domainFor(script: string): string {
 }
 
 for (const cmd of Object.values(COMMANDS)) {
-	cmd.domain = domainFor(cmd.script);
 	// ONE DECLARATION PER SCRIPT (F8 step 2): a migrated script's spec IS its
 	// door flags, read from the same `argv-specs.mjs` the script parses its
 	// own argv with — never a hand-kept second copy. A script not yet
@@ -747,18 +746,31 @@ const KIND_ORDER: Kind[] = [
 	'node-side',
 ];
 
+/**
+ * `domainFor` throws on a script no registry names; `--help` must still
+ * render every OTHER command's heading, so a lookup miss groups under
+ * `(unmapped)` here rather than crashing the whole listing. The missing
+ * entry is still a real gap — `cli-help.test.mjs` fails on it in CI — this
+ * is only about what runtime does with it once CI already let it through.
+ */
+function domainOf(c: Command): string {
+	try {
+		return domainFor(c.script);
+	} catch {
+		return '(unmapped)';
+	}
+}
+
 function usage(): void {
 	const width = Math.max(...Object.keys(COMMANDS).map((k) => k.length));
 	console.log('fleet <subcommand> [...args]\n');
 	// Grouped by domain (plan §3.4), then by kind within it — every command
-	// appears under EXACTLY ONE (domain, kind) pair, since both are resolved
-	// once, above, before this ever runs.
-	const domains = [...new Set(Object.values(COMMANDS).map((c) => c.domain ?? '(unmapped)'))].sort();
+	// appears under EXACTLY ONE (domain, kind) pair. Domain is resolved HERE,
+	// lazily, the only place in production that ever calls domainFor.
+	const domains = [...new Set(Object.values(COMMANDS).map(domainOf))].sort();
 	for (const domain of domains) {
 		console.log(domain);
-		const inDomain = Object.entries(COMMANDS).filter(
-			([, c]) => (c.domain ?? '(unmapped)') === domain
-		);
+		const inDomain = Object.entries(COMMANDS).filter(([, c]) => domainOf(c) === domain);
 		for (const kind of KIND_ORDER) {
 			const rows = inDomain
 				.filter(([, c]) => c.kind === kind)
