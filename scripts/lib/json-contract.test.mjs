@@ -1118,9 +1118,15 @@ const TODAYS_JSON_CONTRACT = [
 	['warm-canary', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	['history-coverage', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	['contract-consumers', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
+	// Added wave 5h lane B: three more `ci:audit-gates` covered subs migrated
+	// off PROSE_CONTRACT the same way — same umbrella job, same consumer
+	// file, no second cron.
+	['tier-fleet', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
+	['capabilities', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
+	['boundary-contracts', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 ].map(([sub, job, consumer]) => `${sub} -> ${job} -> ${consumer}`);
 
-void test("the derived JSON_CONTRACT equals today's 26 entries exactly — name, sub and consumer", () => {
+void test("the derived JSON_CONTRACT equals today's 29 entries exactly — name, sub and consumer", () => {
 	const derived = JSON_CONTRACT.map((e) => `${e.sub} -> ${e.job} -> ${e.consumer}`);
 	assert.deepEqual(derived.slice().sort(), TODAYS_JSON_CONTRACT.slice().sort());
 });

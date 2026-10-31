@@ -193,7 +193,7 @@ test('--machine <GUEST> --include-guests answers with roleDeclared instead of re
 		assert.deepEqual(report.roleDeclared[GUEST], ['pm2-host', 'taskauto']);
 		assert.ok(!(GUEST in report.results), 'still never probed');
 		assert.deepEqual(report.unreachable, [], 'never attempted, so never unreachable either');
-		assert.deepEqual(report.findings, []);
+		assert.deepEqual(report.legacyFindings, []);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -365,8 +365,8 @@ test('fleet capabilities: a corrupt $proof file is a FINDING, and every workload
 		writeFileSync(join(f.stateDir, 'proof.json'), '{ not json');
 		const report = json(run(['--machine', CLAW, '--json'], f.env));
 		assert.ok(
-			report.findings.some((m) => /\$proof is malformed/.test(m)),
-			`expected a $proof finding, got: ${JSON.stringify(report.findings)}`
+			report.legacyFindings.some((m) => /\$proof is malformed/.test(m)),
+			`expected a $proof finding, got: ${JSON.stringify(report.legacyFindings)}`
 		);
 		assert.equal(report.workloadGates[CLAW].jdk21.offer, false);
 		assert.match(report.workloadGates[CLAW].jdk21.reason, /no workload proof/);
@@ -405,9 +405,9 @@ test('#98: an EARNED label the probe can no longer execute is a finding', () => 
 		const r = run(['--machine', CLAW, '--json'], f.env);
 		const report = json(r);
 		assert.equal(r.code, 1);
-		assert.deepEqual(report.findings.length, 1, JSON.stringify(report.findings));
+		assert.deepEqual(report.legacyFindings.length, 1, JSON.stringify(report.legacyFindings));
 		assert.match(
-			report.findings[0],
+			report.legacyFindings[0],
 			/offers "jdk21" \(declared or earned\) but cannot execute it \(javac-failed\)/
 		);
 	} finally {
@@ -424,8 +424,8 @@ test('#98: a MEASURED earned label is judged against its bar, not on `ok` alone'
 	});
 	try {
 		const report = json(run(['--machine', CLAW, '--json'], f.env));
-		assert.equal(report.findings.length, 1, JSON.stringify(report.findings));
-		assert.match(report.findings[0], /offers "cargo-bevy".*< 1200/);
+		assert.equal(report.legacyFindings.length, 1, JSON.stringify(report.legacyFindings));
+		assert.match(report.legacyFindings[0], /offers "cargo-bevy".*< 1200/);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -443,7 +443,7 @@ test('#98: an earned label that still executes is clean', () => {
 	});
 	try {
 		const r = run(['--machine', CLAW, '--json'], f.env);
-		assert.deepEqual(json(r).findings, []);
+		assert.deepEqual(json(r).legacyFindings, []);
 		assert.equal(r.code, 0);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
@@ -464,7 +464,7 @@ test('a MEASURED earned label taken beside a live job is "not judged" — exit 0
 	try {
 		const r = run(['--machine', CLAW, '--json'], f.env);
 		const report = json(r);
-		assert.deepEqual(report.findings, []);
+		assert.deepEqual(report.legacyFindings, []);
 		assert.equal(r.code, 0, 'a busy claw is not a capability fault');
 		assert.equal(report.notJudged.length, 1);
 		assert.equal(report.notJudged[0].capability, 'cargo-bevy');
@@ -485,7 +485,7 @@ test('an UNCOUNTED load (no LOAD line, or "unknown") is not judged either — ne
 		});
 		try {
 			const report = json(run(['--machine', CLAW, '--json'], f.env));
-			assert.deepEqual(report.findings, [], JSON.stringify(loadLine));
+			assert.deepEqual(report.legacyFindings, [], JSON.stringify(loadLine));
 			assert.match(report.notJudged[0].reason, /count unknown/);
 		} finally {
 			rmSync(f.root, { recursive: true, force: true });
@@ -502,7 +502,7 @@ test('an IDLE measurement below the bar IS a finding, and nothing is "not judged
 		const r = run(['--machine', CLAW, '--json'], f.env);
 		const report = json(r);
 		assert.equal(r.code, 1);
-		assert.match(report.findings.join('\n'), /offers "cargo-bevy".*1024.*< 1200/);
+		assert.match(report.legacyFindings.join('\n'), /offers "cargo-bevy".*1024.*< 1200/);
 		assert.deepEqual(report.notJudged, []);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
@@ -525,7 +525,7 @@ test('#122: an idle miss that PASSES on re-measure is not drift, and is reported
 	try {
 		const r = run(['--machine', CLAW, '--json'], f.env);
 		const report = json(r);
-		assert.deepEqual(report.findings, []);
+		assert.deepEqual(report.legacyFindings, []);
 		assert.equal(r.code, 0);
 		assert.equal(report.remeasured.length, 1);
 		assert.match(report.remeasured[0].first, /773/);
@@ -543,7 +543,7 @@ test('#122: an idle miss whose re-measure lands beside a job is not judged — n
 	});
 	try {
 		const report = json(run(['--machine', CLAW, '--json'], f.env));
-		assert.deepEqual(report.findings, []);
+		assert.deepEqual(report.legacyFindings, []);
 		assert.equal(report.notJudged.length, 1);
 		assert.match(report.notJudged[0].reason, /773.*re-measured after 0s: measured under load/);
 	} finally {
@@ -559,7 +559,7 @@ test('#122: a re-measure that returns nothing is not judged, not a pass', () => 
 	});
 	try {
 		const report = json(run(['--machine', CLAW, '--json'], f.env));
-		assert.deepEqual(report.findings, []);
+		assert.deepEqual(report.legacyFindings, []);
 		assert.deepEqual(report.remeasured, []);
 		assert.match(report.notJudged[0].reason, /re-measure returned no result/);
 	} finally {
@@ -577,8 +577,8 @@ test('#122: two idle misses are drift, and the finding carries both readings', (
 		const r = run(['--machine', CLAW, '--json'], f.env);
 		const report = json(r);
 		assert.equal(r.code, 1);
-		assert.equal(report.findings.length, 1);
-		assert.match(report.findings[0], /offers "cargo-bevy".*773.*re-measured after 0s:.*790/);
+		assert.equal(report.legacyFindings.length, 1);
+		assert.match(report.legacyFindings[0], /offers "cargo-bevy".*773.*re-measured after 0s:.*790/);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -598,8 +598,8 @@ test('load excuses ONLY the idle-only measurement: a broken binary label on a bu
 		const r = run(['--machine', CLAW, '--json'], f.env);
 		const report = json(r);
 		assert.equal(r.code, 1);
-		assert.equal(report.findings.length, 1, JSON.stringify(report.findings));
-		assert.match(report.findings[0], /offers "jdk21"/);
+		assert.equal(report.legacyFindings.length, 1, JSON.stringify(report.legacyFindings));
+		assert.match(report.legacyFindings[0], /offers "jdk21"/);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -697,8 +697,87 @@ test('a corrupt record is a FINDING and is never overwritten from a partial view
 		writeFileSync(revocationsFile(f), '{ not json');
 		const r = run(['--machine', CLAW, '--json'], f.env);
 		assert.equal(r.code, 1);
-		assert.ok(json(r).findings.some((x) => /revocation record is unreadable/.test(x)));
+		assert.ok(json(r).legacyFindings.some((x) => /revocation record is unreadable/.test(x)));
 		assert.equal(readFileSync(revocationsFile(f), 'utf8'), '{ not json');
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+// ── GateDoc (wave 5h lane B) ─────────────────────────────────────────────────
+//
+// `legacyFindings` (above) is the pre-existing flat-string shape; these prove
+// the structured `{ok, findings[], unreadable[], why?}` half `ci:audit-gates`
+// will judge instead once this sub migrates there. "I could not look" (an
+// unreachable node) must land in `unreadable`, never folded into `findings`
+// — same rule `check-warm-canary.mjs`'s own GateDoc tests pin.
+
+test('GateDoc: a clean run is ok, with no findings and nothing unreadable', () => {
+	const f = reachableFixture({
+		machine: earnedClaw(['jdk21', 'cargo-bevy']),
+		probe: [
+			'CAP ffmpeg ok 7.1.5',
+			'CAP jdk21 ok 21.0.1',
+			'CAP cargo-bevy ok 2400',
+			'LOAD cargo-bevy 0',
+		],
+	});
+	try {
+		const report = json(run(['--machine', CLAW, '--json'], f.env));
+		assert.equal(report.ok, true);
+		assert.deepEqual(report.findings, []);
+		assert.deepEqual(report.unreadable, []);
+		assert.ok(!('why' in report), 'a clean GateDoc must not carry why');
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('GateDoc: an unreachable node is unreadable, not a finding', () => {
+	const f = fixture();
+	try {
+		const report = json(run(['--json'], f.env));
+		assert.equal(report.ok, false);
+		assert.deepEqual(report.findings, []);
+		assert.equal(report.unreadable.length, 1);
+		assert.equal(report.unreadable[0].node, CLAW);
+		assert.match(report.unreadable[0].why, /could not reach this node/);
+		assert.ok(report.why, 'a failing GateDoc must carry why');
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('GateDoc: an EARNED label the probe can no longer execute is a structured finding', () => {
+	const f = reachableFixture({
+		machine: earnedClaw(['jdk21']),
+		probe: ['CAP ffmpeg ok 7.1.5', 'CAP jdk21 no javac-failed'],
+	});
+	try {
+		const report = json(run(['--machine', CLAW, '--json'], f.env));
+		assert.equal(report.ok, false);
+		assert.deepEqual(report.unreadable, []);
+		assert.equal(report.findings.length, 1, JSON.stringify(report.findings));
+		assert.equal(report.findings[0].node, CLAW);
+		assert.equal(report.findings[0].kind, 'capability-drift');
+		assert.match(report.findings[0].reason, /offers "jdk21"/);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('GateDoc: a corrupt revocation record is a fleet-wide finding, node: null', () => {
+	const f = reachableFixture({
+		machine: earnedClaw(['jdk21']),
+		probe: ['CAP ffmpeg ok 7.1.5', 'CAP jdk21 no javac-failed'],
+	});
+	try {
+		writeFileSync(revocationsFile(f), '{ not json');
+		const report = json(run(['--machine', CLAW, '--json'], f.env));
+		const corrupt = report.findings.find((x) => x.kind === 'revocation-corrupt');
+		assert.ok(corrupt, JSON.stringify(report.findings));
+		assert.equal(corrupt.node, null);
+		assert.match(corrupt.reason, /revocation record is unreadable/);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

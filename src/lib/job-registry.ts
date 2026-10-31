@@ -48,13 +48,15 @@
  * they are liveness checks on a daily cron, and `validateRegistry` says so
  * rather than silently passing.
  *
- * WAVE 5F LANE B migrates these fourteen off prose one at a time: a covered
- * sub may carry `contract: 'json'` (see `CoveredSub`'s own doc comment),
- * which folds it into `JSON_CONTRACT` instead of `PROSE_CONTRACT` while it
- * stays discharged by the SAME umbrella invocation — there is no second cron
- * and no second `mgmtApiFile`. `warm-canary`, `history-coverage` and
- * `contract-consumers` are migrated as of this wave; the rest are not, and
- * carry no `contract` field at all until their own turn.
+ * WAVE 5F LANE B (and 5h lane B after it) migrates these fourteen off prose
+ * one at a time: a covered sub may carry `contract: 'json'` (see
+ * `CoveredSub`'s own doc comment), which folds it into `JSON_CONTRACT`
+ * instead of `PROSE_CONTRACT` while it stays discharged by the SAME umbrella
+ * invocation — there is no second cron and no second `mgmtApiFile`.
+ * `warm-canary`, `history-coverage` and `contract-consumers` migrated in
+ * wave 5f lane B; `tier-fleet`, `capabilities` and `boundary-contracts`
+ * migrated in wave 5h lane B. The rest are not, and carry no `contract`
+ * field at all until their own turn.
  *
  * `kindDrift` exists for the case `src/cli.ts`'s `COMMANDS` table disagrees
  * with the three kinds this registry ever puts a clock on (`gate` |
@@ -499,9 +501,16 @@ export const JOB_REGISTRY: JobEntry[] = [
 		coversSubs: [
 			{
 				sub: 'tier-fleet',
-				args: [],
+				args: ['--json'],
+				contract: 'json',
+				// Default args, never `--worktree` — it reads each repo's shipped
+				// default branch through `lib/fleet-source.mjs`, fetched fresh by
+				// the reader itself, so any host gives the same answer (see
+				// docs/control-plane.md §4: "since fleet-manager#7 ... hostBound:
+				// false").
+				hostBound: false,
 				detectionBudget: '48h',
-				why: 'The child-repo half of the tier model; an incomplete vocabulary fails closed and silently.',
+				why: 'The child-repo half of the tier model; an incomplete vocabulary fails closed and silently. Migrated to GateDoc, wave 5h lane B.',
 			},
 			{
 				sub: 'mf-externals',
@@ -547,9 +556,14 @@ export const JOB_REGISTRY: JobEntry[] = [
 			},
 			{
 				sub: 'capabilities',
-				args: [],
+				args: ['--json'],
+				contract: 'json',
+				// ssh to the candidate nodes, never this box's own state — the
+				// same class as warm-canary/boundary-contracts, not reap-trend/
+				// egress-slices/srv-drift.
+				hostBound: false,
 				detectionBudget: '48h',
-				why: 'Capabilities are probed by EXECUTING them, not by trusting a declaration.',
+				why: 'Capabilities are probed by EXECUTING them, not by trusting a declaration. Migrated to GateDoc, wave 5h lane B.',
 			},
 			{
 				sub: 'tool-inventory',
@@ -591,9 +605,13 @@ export const JOB_REGISTRY: JobEntry[] = [
 			},
 			{
 				sub: 'boundary-contracts',
-				args: [],
+				args: ['--json'],
+				contract: 'json',
+				// `gh api` reads plus ssh to the candidate nodes — the fleet's own
+				// boundaries, never this box's own state.
+				hostBound: false,
 				detectionBudget: '48h',
-				why: "The real shape of every boundary this package's own tests mock (network + ssh), checked from fleet-manager's own install so it resolves the real fleet-exec.",
+				why: "The real shape of every boundary this package's own tests mock (network + ssh), checked from fleet-manager's own install so it resolves the real fleet-exec. Migrated to GateDoc, wave 5h lane B.",
 			},
 		],
 	},

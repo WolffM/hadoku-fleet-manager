@@ -49,6 +49,14 @@
  * nothing written out; now each attempt is bounded to 20s and the worst case
  * — all three calls failing every attempt — is ~123s, comfortably inside it.
  *
+ * MIGRATED (wave 5h lane B): `ci:audit-gates` now runs this one with `--json`
+ * and judges it by the `GateDoc` below rather than a regex over
+ * stdout+stderr — see `src/lib/job-registry.ts`'s `coversSubs` entry
+ * (`contract: 'json'`) and `scripts/lib/json-contract.mjs`'s derivation of
+ * `JSON_CONTRACT` from it. A read that exhausted `READ_ATTEMPTS`, and a node
+ * this gate could not reach at all, are "I could not look" — `unreadable`,
+ * never a finding; every shape violation it actually observed is a finding.
+ *
  * @guards scripts/**
  */
 
@@ -56,6 +64,10 @@ import { execFileSync } from 'node:child_process';
 import { loadManifest, runOn, selectNodes } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
+import { createEmitter } from './lib/emit.mjs';
+import { buildGateDoc } from './lib/gate-doc.mjs';
+
+const out = createEmitter();
 
 // The repo whose Actions API is READ to learn the real shapes. Any repo would
 // do for the schema; this one is chosen because it is the busiest in the fleet,
@@ -65,9 +77,31 @@ import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
 const SELF = process.env.BOUNDARY_PROBE_REPO || 'WolffM/hadoku_site';
 const failures = [];
 const checked = [];
+/**
+ * GateDoc halves (wave 5h lane B), built ALONGSIDE `failures` at the same
+ * `bad()` call sites rather than reconstructed from its prose later.
+ * `unreadable` is "I could not look" — a read that never came back, or a
+ * node `runOn` could not reach — never folded into `findings`.
+ */
+const gateFindings = [];
+const gateUnreadable = [];
 
 const ok = (what) => checked.push(what);
-const bad = (what, detail) => failures.push(`${what}: ${detail}`);
+/**
+ * @param {string} what
+ * @param {string} detail
+ * @param {{ kind?: string, node?: string|null, unreadable?: boolean }} [opts]
+ */
+function bad(what, detail, opts = {}) {
+	failures.push(`${what}: ${detail}`);
+	if (opts.unreadable) gateUnreadable.push({ node: opts.node ?? null, why: `${what}: ${detail}` });
+	else
+		gateFindings.push({
+			node: opts.node ?? null,
+			kind: opts.kind ?? 'boundary-violation',
+			reason: `${what}: ${detail}`,
+		});
+}
 
 /** A read that never finishes is a read that never reports (#80). */
 const READ_TIMEOUT_MS = 20_000;
@@ -107,11 +141,12 @@ function gh(path) {
 function field(where, obj, name, type) {
 	const v = obj?.[name];
 	if (v === undefined || v === null)
-		return bad(where, `\`${name}\` is absent — code destructures it`);
+		return bad(where, `\`${name}\` is absent — code destructures it`, { kind: 'shape-violation' });
 	if (type === 'array' ? !Array.isArray(v) : typeof v !== type) {
 		return bad(
 			where,
-			`\`${name}\` is ${Array.isArray(v) ? 'array' : typeof v}, code assumes ${type}`
+			`\`${name}\` is ${Array.isArray(v) ? 'array' : typeof v}, code assumes ${type}`,
+			{ kind: 'shape-violation' }
 		);
 	}
 	ok(`${where}.${name}`);
@@ -130,7 +165,9 @@ function field(where, obj, name, type) {
 function eachElement(where, list, check) {
 	if (!Array.isArray(list)) return; // `field` already reported the wrong type
 	if (!list.length) {
-		bad(where, 'the listing is EMPTY — nothing was there to check, which proves no shape');
+		bad(where, 'the listing is EMPTY — nothing was there to check, which proves no shape', {
+			kind: 'shape-violation',
+		});
 		return;
 	}
 	list.forEach((item, i) => check(`${where}[${i}]`, item));
@@ -144,7 +181,7 @@ function eachElement(where, list, check) {
  */
 const RUNS_PER_PAGE = 10;
 const runs = gh(`/repos/${SELF}/actions/runs?per_page=${RUNS_PER_PAGE}`);
-if (runs.__error) bad('/actions/runs', runs.__error);
+if (runs.__error) bad('/actions/runs', runs.__error, { unreadable: true });
 else {
 	field('/actions/runs', runs, 'workflow_runs', 'array');
 	eachElement('/actions/runs', runs.workflow_runs, (where, r) => {
@@ -167,7 +204,7 @@ else {
 	for (const r of candidates) {
 		const jobs = gh(`/repos/${SELF}/actions/runs/${r.id}/jobs`);
 		if (jobs.__error) {
-			bad('/actions/runs/:id/jobs', jobs.__error);
+			bad('/actions/runs/:id/jobs', jobs.__error, { unreadable: true });
 			jobsSettled = true;
 			break;
 		}
@@ -185,7 +222,9 @@ else {
 			// Placement compares these as STRINGS. An array of objects passes the
 			// array check above and matches no label at all.
 			if (Array.isArray(j?.labels) && j.labels.some((l) => typeof l !== 'string')) {
-				bad(`${where}.labels[]`, 'entries are not strings — every placement match breaks');
+				bad(`${where}.labels[]`, 'entries are not strings — every placement match breaks', {
+					kind: 'shape-violation',
+				});
 			}
 		});
 		jobsSettled = true;
@@ -194,14 +233,15 @@ else {
 	if (!jobsSettled && candidates.length) {
 		bad(
 			'/actions/runs/:id/jobs',
-			`none of the ${candidates.length} run(s) listed had any jobs — the jobs shape went unchecked`
+			`none of the ${candidates.length} run(s) listed had any jobs — the jobs shape went unchecked`,
+			{ unreadable: true }
 		);
 	}
 }
 
 // --- 3. the runners listing the reaper and the label floor read --------------
 const runners = gh(`/repos/${SELF}/actions/runners`);
-if (runners.__error) bad('/actions/runners', runners.__error);
+if (runners.__error) bad('/actions/runners', runners.__error, { unreadable: true });
 else {
 	field('/actions/runners', runners, 'runners', 'array');
 	/** Runners whose name and labels are well-formed, so the label floor can read them. */
@@ -214,7 +254,9 @@ else {
 		field(where, x, 'labels', 'array');
 		if (!Array.isArray(x?.labels)) return;
 		if (x.labels.some((l) => typeof l?.name !== 'string')) {
-			bad(`${where}.labels[]`, 'entries have no string `name` — every label read breaks');
+			bad(`${where}.labels[]`, 'entries have no string `name` — every label read breaks', {
+				kind: 'shape-violation',
+			});
 			return;
 		}
 		ok(`${where}.labels[].name`);
@@ -237,7 +279,8 @@ else {
 	if (Array.isArray(runners.runners) && runners.runners.length && !standing.length) {
 		bad(
 			'standing runner labels',
-			'no readable standing (non-jit) runner is registered — the implicit-label assumption behind mintLabels() went unchecked'
+			'no readable standing (non-jit) runner is registered — the implicit-label assumption behind mintLabels() went unchecked',
+			{ kind: 'label-assumption-violated' }
 		);
 	}
 	const unlabelled = standing.filter(
@@ -246,7 +289,8 @@ else {
 	for (const s of unlabelled) {
 		bad(
 			'standing runner labels',
-			`${s.name} lacks self-hosted — the implicit-label assumption behind mintLabels() no longer holds`
+			`${s.name} lacks self-hosted — the implicit-label assumption behind mintLabels() no longer holds`,
+			{ kind: 'label-assumption-violated' }
 		);
 	}
 	if (standing.length && !unlabelled.length) {
@@ -289,14 +333,15 @@ for (const [name] of machines) {
 			expectedDown.push(name);
 			continue;
 		}
-		bad(`${name} free -m`, 'unreachable');
+		bad(`${name} free -m`, 'unreachable', { node: name, unreadable: true });
 		continue;
 	}
 	const mb = Number(mem.stdout.trim());
 	if (!Number.isFinite(mb) || mb < 256) {
 		bad(
 			`${name} free -m`,
-			`returned ${JSON.stringify(mem.stdout.trim())} — not a plausible MB figure`
+			`returned ${JSON.stringify(mem.stdout.trim())} — not a plausible MB figure`,
+			{ node: name, kind: 'node-contract' }
 		);
 	} else ok(`${name} free -m → ${mb} MB`);
 
@@ -313,7 +358,7 @@ for (const [name] of machines) {
 		"XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user list-units 'jit-*' --no-legend --plain",
 		{ as: 'ci', timeoutMs: 20_000 }
 	);
-	if (!units.ok) bad(`${name} list-units`, 'command failed');
+	if (!units.ok) bad(`${name} list-units`, 'command failed', { node: name, unreadable: true });
 	else {
 		const lines = units.stdout.split('\n').filter((l) => l.trim());
 		const parsed = lines
@@ -325,13 +370,15 @@ for (const [name] of machines) {
 		if (dropped.length) {
 			bad(
 				`${name} list-units`,
-				`line(s) naming a jit unit the parser would drop: ${dropped.map((l) => JSON.stringify(l.trim())).join(', ')}`
+				`line(s) naming a jit unit the parser would drop: ${dropped.map((l) => JSON.stringify(l.trim())).join(', ')}`,
+				{ node: name, kind: 'node-contract' }
 			);
 		}
 		if (lines.length && !parsed.length) {
 			bad(
 				`${name} list-units`,
-				`${lines.length} line(s) of output parsed to ZERO units: ${JSON.stringify(lines[0].trim())}`
+				`${lines.length} line(s) of output parsed to ZERO units: ${JSON.stringify(lines[0].trim())}`,
+				{ node: name, kind: 'node-contract' }
 			);
 		}
 		// The slug charset must match the MINTER's, not a guess at it.
@@ -346,7 +393,11 @@ for (const [name] of machines) {
 		// `check:live`, a list run by nobody, until it moved into the nightly
 		// audit. Observed 2026-09-03 on claw-2, first run after the move.
 		const junk = parsed.filter((u) => !/^jit-[a-z0-9._-]+-r\d+-\d+\.service$/.test(u));
-		if (junk.length) bad(`${name} list-units`, `unparseable unit name(s): ${junk.join(', ')}`);
+		if (junk.length)
+			bad(`${name} list-units`, `unparseable unit name(s): ${junk.join(', ')}`, {
+				node: name,
+				kind: 'node-contract',
+			});
 		else if (!dropped.length) ok(`${name} jit units parse (${parsed.length})`);
 	}
 }
@@ -358,17 +409,32 @@ for (const [name] of machines) {
 if (!machines.length && !skippedByRole.length) {
 	bad(
 		'machines',
-		'the manifest selected ZERO nodes to probe and none was skipped or deferred — the shell contracts went unchecked'
+		'the manifest selected ZERO nodes to probe and none was skipped or deferred — the shell contracts went unchecked',
+		{ kind: 'zero-nodes-probed' }
 	);
+}
+
+// GateDoc (wave 5h lane B). `ok` is left to its default: `gateFindings` and
+// `gateUnreadable` are 1:1 with `failures`, the exact array the exit code
+// below already keys on.
+if (out.json) {
+	out.emit({
+		checked: checked.length,
+		machines: machines.length,
+		skippedByRole: skippedByRole.map((s) => ({ node: s.node, why: s.why })),
+		expectedDown,
+		...buildGateDoc({ findings: gateFindings, unreadable: gateUnreadable }),
+	});
+	process.exit(failures.length ? 1 : 0);
 }
 
 // SAID OUT LOUD, never folded into the pass. A node that stops being checked
 // without anyone noticing is the failure the skip exists to prevent.
 for (const s of skippedByRole) {
-	console.log(`  · ${s.node} [skipped: guest] — ${s.why}`);
+	out.log(`  · ${s.node} [skipped: guest] — ${s.why}`);
 }
 for (const name of expectedDown) {
-	console.log(`  · ${deferralNote(name, deferralFor(name, DRAINS))} — not probed`);
+	out.log(`  · ${deferralNote(name, deferralFor(name, DRAINS))} — not probed`);
 }
 
 if (failures.length) {
@@ -381,7 +447,7 @@ if (failures.length) {
 	);
 	process.exit(1);
 }
-console.log(
+out.log(
 	`✓ ${checked.length} boundary contract(s) hold against the real GitHub API and ` +
 		`${machines.length} machine(s)` +
 		(skippedByRole.length ? ` (${skippedByRole.length} guest(s) skipped by role)` : '') +

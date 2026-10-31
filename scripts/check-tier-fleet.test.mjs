@@ -85,12 +85,41 @@ function run(fx) {
 	}
 }
 
+/**
+ * `--json`: parses `stdout` ONLY, never merged with stderr — same discipline
+ * `check-boundary-contracts.test.mjs`'s own `runJson` holds, for the same
+ * reason: `--json` is a contract, and the cron parses stdout before it
+ * looks at the exit code.
+ */
+function runJson(fx, extraArgv = []) {
+	const argv = [...(fx.mode === 'worktree' ? ['--worktree'] : []), ...extraArgv, '--json'];
+	const env = {
+		...NO_GIT_ENV,
+		...fx.remotes.env,
+		REPOS_DIR: fx.reposDir,
+		HADOKU_SITE_ROOT: fx.root,
+		FLEET_MANIFEST_DIR: fx.manifestDir,
+	};
+	try {
+		const stdout = execFileSync('node', [SCRIPT, ...argv], {
+			env,
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'pipe'],
+		});
+		return { code: 0, report: JSON.parse(stdout) };
+	} catch (e) {
+		return { code: e.status ?? -1, report: JSON.parse(e.stdout ?? '') };
+	}
+}
+
 /** Runs `fn` once per mode, each against a fresh fixture. */
 function withFixture(repos, allowed, fn) {
 	for (const mode of ['shipped', 'worktree']) {
 		const fx = fixture(repos, allowed, mode);
 		try {
-			fn(run(fx), mode);
+			// `fx` is a third, optional argument — every pre-existing callback
+			// takes only `(r, mode)` and ignores it.
+			fn(run(fx), mode, fx);
 		} finally {
 			rmSync(fx.root, { recursive: true, force: true });
 		}
@@ -254,4 +283,78 @@ test('#7: a CRLF, stale, dirty clone under REPOS_DIR does not change the verdict
 	} finally {
 		rmSync(fx.root, { recursive: true, force: true });
 	}
+});
+
+// ── GateDoc (wave 5h lane B) ─────────────────────────────────────────────────
+//
+// "I could not look" (a missing --worktree checkout, an unfetchable shipped
+// repo) must land in `unreadable`, never folded into `findings` — same rule
+// every other migrated gate's GateDoc tests pin.
+
+test('GateDoc: a clean repo is ok, with no findings and nothing unreadable', () => {
+	withFixture({ 'tier-a': { 'src/tiers.ts': CLEAN } }, null, (_r, mode, fx) => {
+		const { code, report } = runJson(fx);
+		assert.equal(code, 0, JSON.stringify(report));
+		assert.equal(report.ok, true, `${mode}: ${JSON.stringify(report)}`);
+		assert.deepEqual(report.findings, []);
+		assert.deepEqual(report.unreadable, []);
+		assert.ok(!('why' in report), 'a clean GateDoc must not carry why');
+	});
+});
+
+test('GateDoc: a drift finding is structured, with its repo/file/line carried', () => {
+	withFixture(
+		{ 'tier-a': { 'src/tiers.ts': CLEAN, 'src/gate.ts': DRIFT } },
+		null,
+		(_r, mode, fx) => {
+			const { code, report } = runJson(fx);
+			assert.equal(code, 1, `${mode}`);
+			assert.equal(report.ok, false);
+			assert.deepEqual(report.unreadable, []);
+			const finding = report.findings.find((f) => f.kind === 'equality against a non-top tier');
+			assert.ok(finding, JSON.stringify(report.findings));
+			assert.equal(finding.repo, 'tier-a');
+			assert.equal(finding.file, 'src/gate.ts');
+			assert.equal(finding.line, 1);
+			assert.ok(report.why);
+		}
+	);
+});
+
+test('GateDoc: an EMPTY roster is a finding, not unreadable', () => {
+	withFixture({}, null, (_r, mode, fx) => {
+		const { code, report } = runJson(fx);
+		assert.equal(code, 1, mode);
+		assert.deepEqual(report.unreadable, []);
+		const finding = report.findings.find((f) => f.kind === 'nothing scanned');
+		assert.ok(finding, JSON.stringify(report.findings));
+		assert.match(finding.reason, /ZERO repos/);
+	});
+});
+
+test("GateDoc: #7 an unreadable repo is unreadable, carrying the reader's reason", () => {
+	const fx = fixture({ 'tier-a': { 'src/tiers.ts': CLEAN } }, null, 'shipped');
+	try {
+		writeFileSync(
+			join(fx.manifestDir, 'fleet-runner-coverage.json'),
+			JSON.stringify({ repos: ['WolffM/tier-a', 'WolffM/never-pushed'], facets: {} })
+		);
+		const { code, report } = runJson(fx);
+		assert.equal(code, 1);
+		assert.equal(report.findings.length, 0, JSON.stringify(report.findings));
+		const unreadable = report.unreadable.find((u) => u.repo === 'never-pushed');
+		assert.ok(unreadable, JSON.stringify(report.unreadable));
+		assert.match(unreadable.why, /fetch from .* failed/);
+	} finally {
+		rmSync(fx.root, { recursive: true, force: true });
+	}
+});
+
+test('human output is unaffected by the migration — same prose, same exit code', () => {
+	withFixture({ 'tier-a': { 'src/tiers.ts': CLEAN } }, null, (human, mode, fx) => {
+		const { code } = runJson(fx);
+		assert.equal(human.code, code, `${mode}: exit code must match between the two modes`);
+		assert.match(human.all, /fleet tier model clean/);
+		assert.ok(!human.all.trim().startsWith('{'), 'human mode must not print JSON');
+	});
 });

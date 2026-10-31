@@ -41,7 +41,16 @@
  *   fleet tier-fleet --worktree  # audit the working copies under REPOS_DIR
  *   fleet tier-fleet --warn      # report, always exit 0
  *   fleet tier-fleet --no-fetch  # read the reader's mirror as it stands (offline)
+ *   fleet tier-fleet --json      # a GateDoc instead of prose
  *   REPOS_DIR=/path fleet tier-fleet --worktree
+ *
+ * MIGRATED (wave 5h lane B): `ci:audit-gates` now runs this one with `--json`
+ * (default args, never `--worktree`, so every read stays `hostBound: false`
+ * — see `src/lib/job-registry.ts`'s `coversSubs` entry) and judges it by the
+ * `GateDoc` below rather than a regex over stdout+stderr. A repo this file
+ * could not fetch or could not find a checkout for (`missing checkout`,
+ * `unreadable`) is "I could not look" — `unreadable`, never a finding; every
+ * other kind here IS a finding, drift the gate actually observed.
  */
 
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
@@ -56,6 +65,10 @@ import { reposDir } from './lib/sibling-repos.mjs';
 import { manifest as manifestFile } from './lib/paths.mjs';
 import { fleetOwner } from '../dist/lib/fleet-config.js';
 import { tryShipped } from './lib/fleet-source.mjs';
+import { createEmitter } from './lib/emit.mjs';
+import { buildGateDoc } from './lib/gate-doc.mjs';
+
+const out = createEmitter();
 
 const ALLOWLIST_JSON = manifestFile('tier-fleet-allowlist.json');
 
@@ -350,7 +363,7 @@ for (const repo of FLEET) {
 
 // A scan that silently finds nothing is indistinguishable from a clean one —
 // the failure mode check-key-sync learned to report loudly.
-console.log(
+out.log(
 	`Scanned ${scannedFiles} ${useWorktree ? 'working-copy' : 'origin/main'} files ` +
 		`across ${scannedRepos}/${FLEET.length} repos ${useWorktree ? `under ${ROOT}` : 'at their default branch'}`
 );
@@ -385,8 +398,38 @@ for (const f of allowlist.keys()) {
 	}
 }
 
+// GateDoc (wave 5h lane B). `missing checkout` (--worktree) and `unreadable`
+// (shipped mode's own fetch failures) are "I could not look" — every other
+// kind here is drift the gate actually observed. `ok` is left to its
+// default: the two arrays below are a straight partition of `findings`, the
+// same array `warnOnly`'s own exit-code branch below keys on.
+const UNREADABLE_KINDS = new Set(['missing checkout', 'unreadable']);
+const gateUnreadable = findings
+	.filter((f) => UNREADABLE_KINDS.has(f.kind))
+	.map((f) => ({ node: null, why: `${f.repo}: ${f.detail}`, repo: f.repo }));
+const gateFindings = findings
+	.filter((f) => !UNREADABLE_KINDS.has(f.kind))
+	.map((f) => ({
+		node: null,
+		kind: f.kind,
+		reason:
+			f.file !== '-' ? `${f.repo} ${f.file}:${f.line} — ${f.detail}` : `${f.repo}: ${f.detail}`,
+		repo: f.repo,
+		...(f.file !== '-' ? { file: f.file, line: f.line } : {}),
+	}));
+
+if (out.json) {
+	out.emit({
+		scannedFiles,
+		scannedRepos,
+		fleetSize: FLEET.length,
+		...buildGateDoc({ findings: gateFindings, unreadable: gateUnreadable }),
+	});
+	process.exit(warnOnly ? 0 : findings.length ? 1 : 0);
+}
+
 if (findings.length === 0) {
-	console.log('✓ fleet tier model clean — every vocabulary complete, every gate ranked');
+	out.log('✓ fleet tier model clean — every vocabulary complete, every gate ranked');
 	process.exit(0);
 }
 

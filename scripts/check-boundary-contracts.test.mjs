@@ -177,8 +177,8 @@ function cleanup(fx) {
 	rmSync(fx.root, { recursive: true, force: true });
 }
 
-/** One gate run. Returns the exit code and stdout+stderr combined — never throws. */
-function run(
+/** The env every run shares, built once so `run` and `runJson` agree on it. */
+function envFor(
 	fx,
 	{
 		failWhat = '',
@@ -191,7 +191,7 @@ function run(
 	} = {}
 ) {
 	if (units !== null) writeFileSync(fx.unitsFile, units);
-	const env = {
+	return {
 		...process.env,
 		PATH: `${fx.bin}:${process.env.PATH}`,
 		FLEET_MANIFEST_DIR: fx.root,
@@ -210,8 +210,13 @@ function run(
 		SSH_LOG: fx.sshLog,
 		SSH_UNITS_FILE: fx.unitsFile,
 	};
+}
+
+/** One gate run. Returns the exit code and stdout+stderr combined — never throws. */
+function run(fx, opts = {}) {
+	const env = envFor(fx, opts);
 	try {
-		const out = execFileSync('node', [GATE], {
+		const out = execFileSync('node', [GATE, ...(opts.argv ?? [])], {
 			env,
 			encoding: 'utf8',
 			stdio: ['ignore', 'pipe', 'pipe'],
@@ -219,6 +224,30 @@ function run(
 		return { code: 0, out };
 	} catch (e) {
 		return { code: e.status ?? -1, out: String(e.stdout ?? '') + String(e.stderr ?? '') };
+	}
+}
+
+/**
+ * `--json`: parses `stdout` ONLY, never merged with stderr — `gh()`'s own
+ * retries write their raw failure straight to this process' stderr (the
+ * `execFileSync` default: a child's stderr mirrors the parent's unless told
+ * otherwise), same as every other read attempt this gate makes, in HUMAN
+ * mode too. `--json` is a contract and the cron parses stdout before it
+ * looks at the exit code, so folding that stderr in would make a test pass
+ * against something production cannot read. Same discipline
+ * `check-capabilities.test.mjs` already holds its own `--json` runs to.
+ */
+function runJson(fx, opts = {}) {
+	const env = envFor(fx, opts);
+	try {
+		const stdout = execFileSync('node', [GATE, ...(opts.argv ?? []), '--json'], {
+			env,
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'pipe'],
+		});
+		return { code: 0, report: JSON.parse(stdout) };
+	} catch (e) {
+		return { code: e.status ?? -1, report: JSON.parse(e.stdout ?? '') };
 	}
 }
 
@@ -478,5 +507,87 @@ test('zero nodes probed is fine when every node was skipped as a guest — and i
 		assert.equal(r.code, 0, r.out);
 		assert.match(r.out, /fixture-node \[skipped: guest\]/);
 		assert.equal(attempts(fx.sshLog, NODE), 0, 'a guest is never reached');
+	});
+});
+
+// ── GateDoc (wave 5h lane B) ─────────────────────────────────────────────────
+//
+// "I could not look" (a read that exhausted READ_ATTEMPTS, or a node `runOn`
+// could not reach) must land in `unreadable`, never folded into `findings`
+// — same rule every other migrated gate's GateDoc tests pin.
+
+test('GateDoc: a clean fixture is ok, with no findings and nothing unreadable', () => {
+	withFixture({}, (fx) => {
+		const { code, report } = runJson(fx);
+		assert.equal(code, 0, JSON.stringify(report));
+		assert.equal(report.ok, true);
+		assert.deepEqual(report.findings, []);
+		assert.deepEqual(report.unreadable, []);
+		assert.ok(!('why' in report), 'a clean GateDoc must not carry why');
+	});
+});
+
+test('GateDoc: a read that never recovers is unreadable, not a finding', () => {
+	withFixture({}, (fx) => {
+		const { code, report } = runJson(fx, { failWhat: 'runs', failTimes: 999 });
+		assert.equal(code, 1);
+		assert.deepEqual(report.findings, []);
+		assert.equal(report.unreadable.length, 1);
+		assert.equal(report.unreadable[0].node, null);
+		assert.match(report.unreadable[0].why, /ETIMEDOUT/);
+		assert.ok(report.why, 'a failing GateDoc must carry why');
+	});
+});
+
+test('GateDoc: an empty listing is a structured finding, not unreadable', () => {
+	withFixture({}, (fx) => {
+		const { code, report } = runJson(fx, { runs: '{"workflow_runs":[]}' });
+		assert.equal(code, 1);
+		assert.deepEqual(report.unreadable, []);
+		assert.ok(report.findings.length >= 1, JSON.stringify(report.findings));
+		const empty = report.findings.find((f) => f.kind === 'shape-violation');
+		assert.ok(empty, JSON.stringify(report.findings));
+		assert.match(empty.reason, /the listing is EMPTY/);
+	});
+});
+
+test('GateDoc: an unreachable node is unreadable, carrying its name', () => {
+	withFixture({}, (fx) => {
+		// The shared SSH_SHIM answers every call; replace it with one that
+		// fails outright, simulating a node `runOn` cannot reach at all.
+		writeFileSync(join(fx.bin, 'ssh'), '#!/bin/sh\ncat >/dev/null\nexit 1\n');
+		chmodSync(join(fx.bin, 'ssh'), 0o755);
+		const { code, report } = runJson(fx);
+		assert.equal(code, 1);
+		assert.equal(report.findings.length, 0, JSON.stringify(report.findings));
+		const unreachable = report.unreadable.filter((u) => u.node === NODE);
+		assert.equal(unreachable.length, 1, JSON.stringify(report.unreadable));
+		assert.match(unreachable[0].why, /unreachable/);
+	});
+});
+
+test('GateDoc: a malformed label is a structured, node-less finding', () => {
+	const runners = JSON.stringify({
+		runners: [runner(), runner({ id: 2, name: 'odd', labels: [{ id: 7 }] })],
+	});
+	withFixture({}, (fx) => {
+		const { code, report } = runJson(fx, { runners });
+		assert.equal(code, 1);
+		const finding = report.findings.find((f) =>
+			/labels\[\]: entries have no string/.test(f.reason)
+		);
+		assert.ok(finding, JSON.stringify(report.findings));
+		assert.equal(finding.kind, 'shape-violation');
+		assert.equal(finding.node, null);
+	});
+});
+
+test('human output is unaffected by the migration — same prose, same exit code', () => {
+	withFixture({}, (fx) => {
+		const human = run(fx);
+		const { code } = runJson(fx);
+		assert.equal(human.code, code, 'exit code must match between the two modes');
+		assert.match(human.out, /boundary contract\(s\) hold/);
+		assert.ok(!human.out.trim().startsWith('{'), 'human mode must not print JSON');
 	});
 });

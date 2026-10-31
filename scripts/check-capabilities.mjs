@@ -18,6 +18,15 @@
  * on 2.336.0 and which the entire ephemeral dispatcher depends on. A runner
  * self-update could remove it, and the fleet should learn that from a probe
  * rather than from a dispatcher that has quietly stopped working.
+ *
+ * MIGRATED (wave 5h lane B): `ci:audit-gates` runs this one with `--json` and
+ * judges it by the `GateDoc` below rather than a regex over stdout+stderr —
+ * see `src/lib/job-registry.ts`'s `coversSubs` entry (`contract: 'json'`) and
+ * `scripts/lib/json-contract.mjs`'s derivation of `JSON_CONTRACT` from it.
+ * The pre-existing `legacyFindings` (a flat string per drift, the shape this
+ * script has always emitted) travels unchanged, under its migration-era
+ * name — `findings` itself now means `GateDoc`'s structured array, same
+ * rename `check-contract-consumers.mjs` made in wave 5f lane B.
  */
 import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { stateDir } from './lib/paths.mjs';
@@ -39,6 +48,7 @@ import {
 import { isGuestNode } from '../dist/lib/node-role.js';
 import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.js';
 import { createEmitter } from './lib/emit.mjs';
+import { buildGateDoc } from './lib/gate-doc.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { parseLoad } from './lib/idle-measure.mjs';
 import { dataEndpointUrl, probeScript, serviceStateRoot, unprobed } from './lib/probe-script.mjs';
@@ -222,6 +232,21 @@ if (!Array.isArray(REQUIRED_CAPS) || !REQUIRED_CAPS.length) {
 }
 const findings = [];
 /**
+ * Wave 5h lane B. One structured `{node, kind, reason}` record per
+ * `findings` string, same call site, same message — `buildGateDoc`'s shape,
+ * carried ALONGSIDE the prose rather than reconstructed from it by regex
+ * later. `node: null` for a fleet-wide record (the `$proof` or revocation
+ * ledger itself, never a single machine).
+ */
+const gateFindings = [];
+/** One call updates both: the prose array the human report and the
+ *  pre-existing `legacyFindings` JSON field already read, and the structured
+ *  one `--json`'s `GateDoc` half reports through `buildGateDoc`. */
+function pushFinding(node, kind, message) {
+	findings.push(message);
+	gateFindings.push({ node, kind, reason: message });
+}
+/**
  * Offered IDLE-ONLY labels whose measurement this run took beside a live job —
  * `{ node, capability, reason }`. NOT findings (2026-10-10): this gate does not
  * drain, so on a working fleet it measures `cargo-bevy` beside CI most of the
@@ -250,7 +275,9 @@ const workloadGateResults = {};
 const WORKLOAD_GATED = workloadGatedCapabilities();
 const proofStatus = proofFileStatus({ dir: stateDir() });
 if (proofStatus.corrupt) {
-	findings.push(
+	pushFinding(
+		null,
+		'proof-corrupt',
 		`$proof is ${proofStatus.reason} (${proofStatus.why}) — every workload-gated reason below ` +
 			`reads as withheld until this is fixed`
 	);
@@ -338,7 +365,9 @@ await Promise.all(
 		// plan. Distro belongs to a node's onboarding profile, not to a checker.
 		for (const cap of REQUIRED_CAPS) {
 			if (!caps[cap]?.ok) {
-				findings.push(
+				pushFinding(
+					name,
+					'required-capability-broken',
 					`${name}: ${cap} is required of every managed node but does not work here ` +
 						`(${caps[cap]?.detail ?? 'no result'})`
 				);
@@ -361,7 +390,11 @@ await Promise.all(
 			// unservable by every standing runner in the fleet.
 			if (cap && cap.verify !== 'probe') continue;
 			if (!PROBEABLE.has(label)) {
-				findings.push(`${name}: declares "${label}" and nothing can verify it`);
+				pushFinding(
+					name,
+					'unverifiable-label',
+					`${name}: declares "${label}" and nothing can verify it`
+				);
 				continue;
 			}
 			// MEASURED capabilities print `ok <number>` meaning "I measured it",
@@ -393,7 +426,7 @@ await Promise.all(
 					idleMisses.push({ label, cap, first: verdict.reason });
 					continue;
 				}
-				findings.push(driftFinding(name, label, verdict.reason));
+				pushFinding(name, 'capability-drift', driftFinding(name, label, verdict.reason));
 			}
 		}
 		if (idleMisses.length) {
@@ -409,7 +442,7 @@ await Promise.all(
 				if (!second.judged) notJudged.push({ node: name, capability: label, reason: both });
 				else if (second.proven)
 					remeasured.push({ node: name, capability: label, first, second: second.reason });
-				else findings.push(driftFinding(name, label, both));
+				else pushFinding(name, 'capability-drift', driftFinding(name, label, both));
 				if (second.judged && routable(cap)) {
 					verdicts.push({ node: name, capability: label, passed: second.proven, reason: both });
 				}
@@ -417,7 +450,9 @@ await Promise.all(
 		}
 		// The dispatcher's own dependency, on every node that could ever mint.
 		if (caps.jitconfig && !caps.jitconfig.ok) {
-			findings.push(
+			pushFinding(
+				name,
+				'jitconfig-unsupported',
 				`${name}: Runner.Listener does not accept --jitconfig (${caps.jitconfig.detail}) — ` +
 					`the ephemeral dispatcher cannot mint here. It is an UNDOCUMENTED flag, so a ` +
 					`runner self-update is the expected way to lose it.`
@@ -438,7 +473,9 @@ await Promise.all(
 const revocationRead = readRevocations(stateDir());
 const revocations = { revoked: [], cleared: [], held: [] };
 if (revocationRead.corrupt) {
-	findings.push(
+	pushFinding(
+		null,
+		'revocation-corrupt',
 		`the capability revocation record is unreadable (${revocationRead.why}) — nothing revoked or ` +
 			'cleared this run, and every probe-verified label stays withheld fleet-wide until it is repaired'
 	);
@@ -453,6 +490,7 @@ if (revocationRead.corrupt) {
 }
 
 findings.sort();
+gateFindings.sort((a, b) => (a.reason < b.reason ? -1 : 1));
 notJudged.sort((a, b) => (a.node + a.capability < b.node + b.capability ? -1 : 1));
 remeasured.sort((a, b) => (a.node + a.capability < b.node + b.capability ? -1 : 1));
 unreachable.sort();
@@ -479,7 +517,12 @@ const roleDeclared = Object.fromEntries(guests.map(([name, m]) => [name, m.label
 if (JSON_OUT) {
 	out.emit({
 		results: Object.fromEntries(ordered),
-		findings,
+		// RENAMED (wave 5h lane B), unchanged in SHAPE: a flat string per
+		// drift, exactly what this key has always carried. `findings` itself
+		// now means `GateDoc`'s structured `{node, kind, reason}[]` below —
+		// same rename `check-contract-consumers.mjs` made in wave 5f lane B,
+		// for the same reason: `buildGateDoc`'s spread owns that key now.
+		legacyFindings: findings,
 		unreachable: trulyUnreachable,
 		expectedDown,
 		roleDeclared,
@@ -494,6 +537,19 @@ if (JSON_OUT) {
 		// ADDITIVE (2026-10-25), same footing: what this run revoked or cleared,
 		// and every revocation still held after it.
 		revocations,
+		// GateDoc (wave 5h lane B). A node that could not be reached is "I
+		// could not look" — never folded into `findings` — same reasoning
+		// `check-warm-canary.mjs` already applies to its own unreachable
+		// candidates. `ok` is left to its default: `gateFindings`/this array
+		// are 1:1 with `findings.length`/`trulyUnreachable.length`, the exact
+		// pair the exit code below already keys on.
+		...buildGateDoc({
+			findings: gateFindings,
+			unreadable: trulyUnreachable.map((node) => ({
+				node,
+				why: 'could not reach this node to probe its capabilities',
+			})),
+		}),
 	});
 } else {
 	for (const [name, caps] of ordered) {
