@@ -338,15 +338,20 @@ test('#98 floor: a policy whose every entry still applies is clean', () => {
 		{
 			$comment: 'prose, not an entry',
 			alsoWatch: { $comment: 'prose', [REPO_A]: ['release.yml'] },
-			neverWatch: { [REPO_A]: ['deploy-preview.yml'] },
+			neverWatch: {
+				[REPO_A]: {
+					'deploy-preview.yml': 'previews are throwaway',
+					'pages.yml': 'a demo site; nothing ships through it',
+				},
+			},
 		},
-		{ extraWorkflows: ['release.yml', 'deploy-preview.yml'] }
+		{ extraWorkflows: ['release.yml', 'deploy-preview.yml', 'pages.yml', 'vibecheck.yml'] }
 	);
 	assert.deepEqual(r.doc.problems, []);
 	assert.equal(r.code, 0, r.out + r.stderr);
 });
 
-for (const [name, policy, pattern] of [
+for (const [name, policy, pattern, extraWorkflows = [], unclassified = []] of [
 	[
 		'an `exempt` entry with no `why`',
 		{ exempt: { [REPO_A]: {} } },
@@ -355,7 +360,7 @@ for (const [name, policy, pattern] of [
 	[
 		'an `exempt` entry for a repo not on the roster',
 		{ exempt: { 'WolffM/gone': { why: 'archived' } } },
-		/exempt\["WolffM\/gone"\] names a repo not on the roster/,
+		/exempt\["WolffM\/gone"\] names a repo that is neither on the roster nor in alsoWatch/,
 	],
 	[
 		'an `alsoWatch` naming a workflow the repo does not have',
@@ -363,15 +368,49 @@ for (const [name, policy, pattern] of [
 		/alsoWatch\["WolffM\/repo-a"\] names release\.yml/,
 	],
 	[
-		'a `neverWatch` naming a workflow the convention never picks',
+		'a `neverWatch` in the old bare-list form, which carries no `why`',
 		{ neverWatch: { [REPO_A]: ['pages.yml'] } },
-		/neverWatch\["WolffM\/repo-a"\] names pages\.yml/,
+		/neverWatch\["WolffM\/repo-a"\] must map each workflow to its `why`/,
+		// The list is refused whole, so pages.yml is ALSO unclassified: two
+		// problems, and the drift is the one this case is about.
+		['pages.yml'],
+		[`${REPO_A}/pages.yml`],
+	],
+	[
+		'a `neverWatch` entry with an empty `why`',
+		{ neverWatch: { [REPO_A]: { 'pages.yml': ' ' } } },
+		/neverWatch\["WolffM\/repo-a"\]\["pages\.yml"\] has no `why`/,
+		['pages.yml'],
+	],
+	[
+		'a `neverWatch` naming a workflow the repo does not have',
+		{ neverWatch: { [REPO_A]: { 'pages.yml': 'gone' } } },
+		/neverWatch\["WolffM\/repo-a"\] names pages\.yml, which WolffM\/repo-a does not have/,
+	],
+	[
+		'a `neverWatch` naming a workflow the bot convention already ignores',
+		{ neverWatch: { [REPO_A]: { 'vibecheck.yml': 'a bot' } } },
+		/vibecheck\.yml, which the bot convention already ignores/,
+		['vibecheck.yml'],
+	],
+	[
+		'a workflow named in both `alsoWatch` and `neverWatch`',
+		{ alsoWatch: { [REPO_A]: ['pages.yml'] }, neverWatch: { [REPO_A]: { 'pages.yml': 'no' } } },
+		/both alsoWatch and neverWatch/,
+		['pages.yml'],
+	],
+	[
+		'an `alsoWatch` naming a workflow the convention already watches',
+		{ alsoWatch: { [REPO_A]: ['ci.yml'] } },
+		/alsoWatch\["WolffM\/repo-a"\] names ci\.yml, which the convention already watches/,
 	],
 ]) {
 	test(`#98: ${name} is drift in \`problems\`, and fails`, () => {
-		const r = policyRun(policy, { extraWorkflows: ['pages.yml'] });
-		assert.equal(r.doc.problems.length, 1, r.out);
-		assert.match(r.doc.problems[0], pattern);
+		const r = policyRun(policy, { extraWorkflows });
+		assert.deepEqual(r.doc.unclassified, unclassified, r.out);
+		const drift = r.doc.problems.filter((p) => !/UNCLASSIFIED/.test(p));
+		assert.equal(drift.length, 1, r.out);
+		assert.match(drift[0], pattern);
 		assert.equal(r.code, 1);
 	});
 }
@@ -429,6 +468,200 @@ test('#7: an unreadable roster repo is a problem carrying the reason', () => {
 			JSON.parse(r.out).problems.join('\n'),
 			/1 roster repo\(s\) could not be read: WolffM\/repo-b \(fetch from .* failed/
 		);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+// ── fleet-manager#37: every shipped workflow is classified, or the gate is red ─
+//
+// The only completeness check used to ask whether a repo had ANY watched
+// workflow, so a workflow the regexes missed in an otherwise-watched repo was
+// silent until it failed. Each case below is a repo that IS watched (ci.yml)
+// and ships one more workflow.
+
+test('#37: a workflow no bucket claims, in a watched repo, is unclassified and fails --check', () => {
+	const fx = fixture([REPO_A]);
+	try {
+		addShipped(fx, REPO_A);
+		addShipped(fx, REPO_A, { workflow: 'self-test.yml' });
+		const w = run(fx, ['--write']);
+		assert.equal(w.code, 0, `--write is not the gate: ${w.out}\n${w.stderr}`);
+		assert.match(w.stderr, /UNCLASSIFIED.*self-test\.yml/, 'and it says so on stderr');
+		assert.match(w.stderr, /NOT watched until classified/);
+		assert.deepEqual(
+			JSON.parse(readFileSync(fx.outManifest, 'utf8')).targets.map((t) => t.workflow),
+			['ci.yml'],
+			'the classified targets are written'
+		);
+		const r = run(fx, ['--check', '--json']);
+		assert.equal(r.code, 1, r.out + r.stderr);
+		const doc = JSON.parse(r.out);
+		assert.deepEqual(doc.unclassified, [`${REPO_A}/self-test.yml`]);
+		assert.deepEqual(doc.unreadable, []);
+		assert.match(
+			doc.problems.join('\n'),
+			/1 shipped workflow\(s\) are UNCLASSIFIED.*self-test\.yml/
+		);
+		assert.equal(doc.targets, 1, 'an unclassified workflow is not silently watched either');
+	} finally {
+		cleanup(fx);
+	}
+});
+
+for (const [bucket, policy, workflow] of [
+	['alsoWatch', { alsoWatch: { [REPO_A]: ['self-test.yml'] } }, 'self-test.yml'],
+	[
+		'neverWatch with a why',
+		{ neverWatch: { [REPO_A]: { 'pages.yml': 'demo only' } } },
+		'pages.yml',
+	],
+	['the bot convention', {}, 'vibecompact.yml'],
+	['the convention (update-wolffm is the dependency ship path)', {}, 'update-wolffm.yml'],
+]) {
+	test(`#37: a workflow classified by ${bucket} is not a finding`, () => {
+		const r = policyRun(policy, { extraWorkflows: [workflow] });
+		assert.deepEqual(r.doc.unclassified, [], r.out);
+		assert.deepEqual(r.doc.problems, [], r.out);
+		assert.equal(r.code, 0);
+	});
+}
+
+test('#37: update-wolffm is watched, and its report-job name is handed over as covered', () => {
+	const fx = fixture([REPO_A]);
+	try {
+		addShipped(fx, REPO_A);
+		fx.remotes.push(REPO_A, {
+			'.github/workflows/update-wolffm.yml':
+				'jobs:\n  update:\n    steps:\n      - uses: WolffM/hadoku-actions/report-job@v1\n' +
+				'        with:\n          job-name: repo-a:update-wolffm\n',
+		});
+		assert.equal(run(fx, ['--write']).code, 0);
+		const written = JSON.parse(readFileSync(fx.outManifest, 'utf8'));
+		assert.deepEqual(
+			written.targets.map((t) => t.workflow),
+			['ci.yml', 'update-wolffm.yml']
+		);
+		assert.deepEqual(written.coveredJobNames, ['repo-a:update-wolffm']);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('#37: an unreadable repo is never "nothing unclassified" — it fails, and says which repo', () => {
+	const fx = fixture([REPO_A, REPO_B]);
+	try {
+		// REPO_A is fully classified; REPO_B could not be read at all.
+		addShipped(fx, REPO_A);
+		const r = run(fx, ['--check', '--json']);
+		assert.equal(r.code, 1, r.out + r.stderr);
+		const doc = JSON.parse(r.out);
+		assert.deepEqual(doc.unclassified, []);
+		assert.equal(doc.unreadable.length, 1);
+		assert.match(doc.unreadable[0], /^WolffM\/repo-b \(/);
+		assert.match(doc.problems.join('\n'), /could not be read: WolffM\/repo-b/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+// ── #37: a repo off the runner roster can still be watched ────────────────
+//
+// hadoku-actions runs nothing on the claws (public; its Self-test runs PR code
+// on hosted runners), so it is not on the roster — and its red Self-test went
+// unseen for ~23h. `alsoWatch` brings such a repo in, and then it is held to
+// the same rule: every workflow classified.
+
+const OFF = 'WolffM/shared-actions';
+
+test('#37: an alsoWatch repo off the roster is watched, and its other workflows must be classified', () => {
+	const fx = fixture([REPO_A]);
+	try {
+		addShipped(fx, REPO_A);
+		addShipped(fx, OFF, { workflow: 'selftest.yml' });
+		addShipped(fx, OFF, { workflow: 'release-notes.yml' });
+		writeFileSync(
+			join(fx.manifestDir, 'ci-watch-policy.json'),
+			JSON.stringify({ alsoWatch: { [OFF]: ['selftest.yml'] } })
+		);
+		const r = run(fx, ['--write', '--json']);
+		const doc = JSON.parse(r.out);
+		assert.deepEqual(doc.unclassified, [`${OFF}/release-notes.yml`]);
+		assert.equal(r.code, 0, 'a --write tolerates unclassified workflows; --check does not');
+		const written = JSON.parse(readFileSync(fx.outManifest, 'utf8'));
+		assert.deepEqual(
+			written.targets.map((t) => `${t.owner}/${t.repo}/${t.workflow}`),
+			[`${REPO_A}/ci.yml`, `${OFF}/selftest.yml`]
+		);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('#37: an alsoWatch repo off the roster that cannot be read fails, and refuses the write', () => {
+	const fx = fixture([REPO_A]);
+	try {
+		addShipped(fx, REPO_A);
+		writeFileSync(
+			join(fx.manifestDir, 'ci-watch-policy.json'),
+			JSON.stringify({ alsoWatch: { [OFF]: ['selftest.yml'] } })
+		);
+		const baseline = priorGenerated(1);
+		seed(fx, baseline);
+		const r = run(fx, ['--write', '--json']);
+		assert.equal(r.code, 1, r.out + r.stderr);
+		const doc = JSON.parse(r.out);
+		assert.match(doc.unreadable.join('\n'), /^WolffM\/shared-actions \(/);
+		assert.equal(readFileSync(fx.outManifest, 'utf8'), baseline);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+// ── #37: --write tolerates ONLY unclassified workflows ────────────────────
+//
+// reconcile-fleet-coverage runs `--write` under `set -e` in the job that admits
+// new repos, so an unclassified workflow must not fail it — but nothing else
+// may ride along on that exemption.
+
+test('#37: --write with an unclassified workflow AND an unreadable repo still refuses and exits 1', () => {
+	const fx = fixture([REPO_A, REPO_B]);
+	try {
+		addShipped(fx, REPO_A);
+		addShipped(fx, REPO_A, { workflow: 'self-test.yml' });
+		const baseline = priorGenerated(1);
+		seed(fx, baseline);
+		const r = run(fx, ['--write']);
+		assert.equal(r.code, 1, r.out + r.stderr);
+		assert.equal(readFileSync(fx.outManifest, 'utf8'), baseline);
+		assert.equal(readFileSync(fx.outSite, 'utf8'), baseline);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('#37: --write with an unclassified workflow AND policy drift still exits 1', () => {
+	const fx = fixture([REPO_A]);
+	try {
+		addShipped(fx, REPO_A);
+		addShipped(fx, REPO_A, { workflow: 'self-test.yml' });
+		writeFileSync(
+			join(fx.manifestDir, 'ci-watch-policy.json'),
+			JSON.stringify({ alsoWatch: { [REPO_A]: ['gone.yml'] } })
+		);
+		assert.equal(run(fx, ['--write']).code, 1);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('#37: --write --check together is the gate, and fails on an unclassified workflow', () => {
+	const fx = fixture([REPO_A]);
+	try {
+		addShipped(fx, REPO_A);
+		addShipped(fx, REPO_A, { workflow: 'self-test.yml' });
+		assert.equal(run(fx, ['--write', '--check']).code, 1);
+		assert.equal(run(fx, []).code, 1, 'a plain run reports the problem too');
 	} finally {
 		cleanup(fx);
 	}

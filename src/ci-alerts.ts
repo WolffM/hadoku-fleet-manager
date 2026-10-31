@@ -23,19 +23,19 @@
  * cost of a new cross-service call). Ten minutes is still a different world
  * from the daily digest that used to be the only notice.
  *
- * COST IS LOWER THAN WHAT IT REPLACES. One query per watched workflow per tick:
- * 67 calls / 10 min, against ci-check's 62 / 5 min. Halved. It deliberately does
- * NOT derive state from the 30-run repo listing runner-health already pays for,
- * tempting as that is — that listing is the newest 30 runs REPO-WIDE, so on a
- * busy repo (hadoku_site has 27 workflows) a watched workflow's failure can be
- * pushed out of the window by newer runs before the next tick and never be seen
- * at all. Per-workflow queries are what make "every run of every watched
- * workflow" true rather than likely.
+ * COST: ONE LISTING PER REPO, NOT PER WORKFLOW (fleet-manager#37). It used to
+ * be one query per watched workflow per tick, and the watch list grew from 67
+ * to 122 targets when every workflow had to be classified: 732 calls/hr at the
+ * ceiling on a shared 5,000/hr pool that ran dry the same day. The targets live
+ * in 34 repos, so the poll now reads each repo's run listing and splits it by
+ * workflow — see `pollRepo` for how it pages far enough that a busy repo's
+ * runs cannot fall off the window (the reason this was per-workflow before),
+ * and `ciAlertsCallCeilingPerHour` for the arithmetic.
  *
  * WHY "THE LATEST RUN" WAS NOT ENOUGH (#32). Until 2026-09-19 the query was
  * `per_page=1`, and the tick reasoned about the single newest run. That reads
  * "is it red NOW", not "did anything break since I last looked", and the two
- * differ every time a push lands on top of a failure — see RUN_PAGE_SIZE and
+ * differ every time a push lands on top of a failure — see REPO_PAGE_SIZE and
  * `runsEndedSince`, and `docs/planning/ci-alerts-silence-2026-09-19.md` for the
  * incident.
  *
@@ -57,6 +57,7 @@ import { manifest, stateDir, logger, postDiscord } from './host.js';
 import { writeJsonAtomic } from './lib/atomic-json.js';
 import { fleetOwner } from './lib/fleet-config.js';
 import { DAY_MS as REPAGE_INTERVAL_MS, repageDue } from './lib/job-runner.js';
+import { TICK_INTERVAL_MS } from './lib/runner-health-shared.js';
 
 /** One watched workflow. Shape matches `fleet ci-watch --write` output. */
 export interface CiTarget {
@@ -78,6 +79,13 @@ export type CiConclusion = string | null;
 
 export interface CiRun {
 	id: number;
+	/** `.github/workflows/<file>` — how a repo-wide listing is split by target. */
+	path?: string;
+	/**
+	 * Where the run's code came from. A fork PR's is the fork, and its outcome
+	 * is the contributor's, not this fleet's — see `isForeignRun`.
+	 */
+	head_repository?: { full_name?: string; fork?: boolean } | null;
 	conclusion: CiConclusion;
 	status: string;
 	html_url: string;
@@ -201,40 +209,74 @@ export const STALE_RUN_MS = 6 * 60 * 60 * 1000;
 export { REPAGE_INTERVAL_MS };
 
 /**
- * How many completed runs one poll asks for (#32).
+ * How a repo's run listing is read (fleet-manager#37).
  *
- * A page size is not an API call: `per_page` does not move the hourly budget, so
- * this is the one dimension of this poller that can be widened for free. The
- * spend stays 67 calls per 10-minute tick. What it does cost is body bytes —
- * measured 2026-09-19 on hadoku_site/test.yml, 12.0 KB at `per_page=1` and
- * 125.8 KB at 10, so ~8.4 MB per tick across the watch list. That is the whole
- * price.
+ * WHY NOT ONE PAGE. Until #37 this was one `per_page=10` query per watched
+ * WORKFLOW, and #32 measured why 10: one in four failing runs was superseded
+ * before the next tick at `per_page=1`. A repo-wide listing re-opens that,
+ * worse — on hadoku_site, measured 2026-10-31 over its newest 1,000 completed
+ * runs (16 h): up to 48 runs conclude inside one 10-minute tick, and a run that
+ * concludes during a tick sits as deep as position 79 in `created_at` order by
+ * the next poll (p99 61). One page of 100 covers that day; a quieter heuristic
+ * would not, and a burst is precisely when a failure matters.
  *
- * WHY 10, from the 90-day history of the real watch list (67 workflows, 4,702
- * completed runs, 248 of them failing; every run replayed through this poller at
- * six tick phases, so 1,164 target-observations). The measurement is "a failing
- * run the poller NEVER evaluates" — not "alerted late", never seen:
+ * SO IT PAGES TO A FLOOR, which is exact rather than tuned. A run that
+ * concludes between two polls was either created after the previous poll, or
+ * was already open at it. The listing is read WITHOUT a status filter, so each
+ * poll sees the runs still open and records the oldest one's `created_at` as
+ * the repo's FLOOR (or the poll time, less `FLOOR_MARGIN_MS` for GitHub's
+ * indexing lag, when nothing is open). The next poll pages until it is below
+ * that floor: everything that can have concluded since is then on the pages it
+ * read.
  *
- *     page size   1     2     3     5    10    20    30
- *     missed    28.7% 11.9%  7.7%  6.6%  5.8%  5.8%  5.2%
+ * TWO BOUNDS, and what each gives up:
  *
- * One is a cliff, not a choice: better than one in four failing runs on this
- * fleet is superseded by a newer run before the next tick. The curve is flat
- * from 5 on, and 10 is the round number past the knee.
- *
- * It does NOT cover the deepest burst on record — hadoku_site/redeploy-service
- * once concluded 11 runs inside one 10-minute tick, one past this page — and
- * that is measured, not overlooked: 20 recovers nothing at all and 30 recovers
- * ONE run in 90 days, for three times the bytes. What falls off a burst that
- * deep is its oldest run, and the first failure in it has already paged.
- *
- * The 5.8% that remains is NOT a page-size problem and a bigger number does not
- * touch it — see `docs/planning/ci-alerts-silence-2026-09-19.md`. It is runs
- * that conclude so long after they were queued that they are off the page in
- * `created_at` order by the time they finish (the 2026-08-18 queue stall: four
- * repos, 8.7-8.9 h from queue to failure).
+ *   - the floor never reaches back past `MAX_LOOKBACK_MS` (the freshness gate,
+ *     six hours). A run stuck open for days — the uncancellable 2026-08-17/19
+ *     zombies — would otherwise drag every poll of its repo back to it. A run
+ *     created more than six hours before it concludes can fall under the clamp;
+ *     the per-workflow poll lost that class too (the 2026-08-18 queue stall,
+ *     #32's residual 5.8%), and queue-health is the gate that owns it.
+ *   - pages past each repo's first come from one pool of
+ *     `EXTRA_PAGES_PER_TICK` for the whole tick, which is what makes the
+ *     ceiling a number (`ciAlertsCallCeilingPerHour`). A repo that needs more
+ *     than the pool can give is NOT evaluated on a partial window — a watermark
+ *     moved past a run it never read would skip that run forever — it counts
+ *     every target as unreadable and keeps its floor, so the next tick tries
+ *     again from the same place and the tick is logged at WARN.
  */
-export const RUN_PAGE_SIZE = 10;
+export const REPO_PAGE_SIZE = 100;
+export const EXTRA_PAGES_PER_TICK = 12;
+export const FLOOR_MARGIN_MS = 5 * 60 * 1000;
+export const MAX_LOOKBACK_MS = STALE_RUN_MS;
+const GITHUB_LISTING_CAP = 1000;
+
+/**
+ * The most charged GitHub calls the listing side of ci-alerts can make in an
+ * hour: one first page per repo per tick, plus the shared pool of extra pages.
+ * Sized as if every call were charged — a 304 on an idle repo's first page is
+ * free, but a busy repo's listing changes every tick, and the budget rule is
+ * never to size a cadence by its typical bill. The per-run `cancelledByTimeout`
+ * lookups are on top, as they were before: two per CANCELLED run, each asked
+ * once, in both designs.
+ */
+export function ciAlertsCallCeilingPerHour(repoCount: number, tickMs = TICK_INTERVAL_MS): number {
+	return Math.ceil(3_600_000 / tickMs) * (repoCount + EXTRA_PAGES_PER_TICK);
+}
+
+/**
+ * A run whose code is not the repo's own: a pull request from a fork. Its red is
+ * the contributor's, and on a public repo (hadoku-actions, hadoku-task) anyone
+ * can produce one, so it must never page. Read from the listing payload — no
+ * extra call. A run with no `head_repository` at all is kept: GitHub sends one
+ * on every run, and dropping a run on a missing field is the quiet direction.
+ */
+export function isForeignRun(run: CiRun, repo: string): boolean {
+	const head = run.head_repository;
+	if (!head) return false;
+	if (head.fork === true) return true;
+	return typeof head.full_name === 'string' && head.full_name.toLowerCase() !== repo.toLowerCase();
+}
 
 /**
  * When a run ENDED. The freshness gate asks "did this just happen", and
@@ -603,8 +645,17 @@ export interface CiTickSummary {
 	targets: number;
 	/** ghGet returned null: a timeout, a non-2xx, or the rate-limit blackout. */
 	unreadable: number;
-	/** Polled fine, but the workflow has no completed run at all. */
+	/**
+	 * Polled fine, but no completed run of the workflow is in the window and
+	 * there is no record of one — a workflow that has never run, as far as this
+	 * alerter knows.
+	 */
 	noRuns: number;
+	/**
+	 * Completed runs of a watched workflow skipped because they came from a fork
+	 * (`isForeignRun`). Counted so a public repo's quiet is legible.
+	 */
+	foreign: number;
 	/** Polled fine, and nothing has concluded since the last tick. */
 	nothingNew: number;
 	/** Runs actually put through the state machine. */
@@ -626,6 +677,7 @@ function emptySummary(targets: number): CiTickSummary {
 		targets,
 		unreadable: 0,
 		noRuns: 0,
+		foreign: 0,
 		nothingNew: 0,
 		evaluated: 0,
 		broken: 0,
@@ -653,7 +705,8 @@ export function formatCiTickSummary(s: CiTickSummary): string {
 		`[ci-alerts] polled ${s.targets} targets, evaluated ${s.evaluated} runs, ` +
 		`announced ${s.broken + s.recovered} (broken ${s.broken}, recovered ${s.recovered}), ` +
 		`suppressed ${s.suppressed}${reasons ? ` (${reasons})` : ''}, ignored ${s.ignored}, ` +
-		`nothing-new ${s.nothingNew}, no-runs ${s.noRuns}, unreadable ${s.unreadable}, ` +
+		`nothing-new ${s.nothingNew}, no-runs ${s.noRuns}, fork-runs ${s.foreign}, ` +
+		`unreadable ${s.unreadable}, ` +
 		`errors ${s.errors}`
 	);
 }
@@ -664,6 +717,105 @@ function logCiTickSummary(s: CiTickSummary): void {
 	const line = formatCiTickSummary(s);
 	if (blind) logger.warn(line);
 	else logger.info(line);
+}
+
+/** Per-repo listing floor — see REPO_PAGE_SIZE. On disk for the same reason as the state. */
+const REPO_STATE_FILE = 'ci-alert-repos.json';
+
+export interface CiRepoState {
+	/** ISO `created_at` the next poll must page below. */
+	floor: string;
+}
+
+export function readRepoStates(): Record<string, CiRepoState> {
+	const p = join(stateDir(), REPO_STATE_FILE);
+	if (!existsSync(p)) return {};
+	try {
+		return JSON.parse(readFileSync(p, 'utf8')) as Record<string, CiRepoState>;
+	} catch (err) {
+		// A lost floor is a cold start for every repo: one page each, and the
+		// floor rebuilt at MAX_LOOKBACK_MS where the page was full.
+		logger.warn(`[ci-alerts] unreadable repo floors (${String(err)}) — cold-starting each repo`);
+		return {};
+	}
+}
+
+function writeRepoStates(states: Record<string, CiRepoState>): void {
+	try {
+		writeJsonAtomic(join(stateDir(), REPO_STATE_FILE), states, { space: '\t' });
+	} catch (err) {
+		logger.warn(`[ci-alerts] could not persist repo floors: ${String(err)}`);
+	}
+}
+
+export type RepoPoll =
+	{ kind: 'unreadable'; why: string } | { kind: 'ok'; runs: CiRun[]; floor: string; pages: number };
+
+/**
+ * Read one repo's runs down to its floor — see REPO_PAGE_SIZE for why that
+ * bound is exact. `pool.extra` is the tick's shared allowance of pages past the
+ * first, decremented here. Pure apart from `ghGet`.
+ */
+export async function pollRepo(
+	repo: string,
+	prev: CiRepoState | undefined,
+	token: string,
+	ghGet: GhGet,
+	pool: { extra: number },
+	nowMs = Date.now()
+): Promise<RepoPoll> {
+	const prevFloor = prev ? Date.parse(prev.floor) : NaN;
+	const stopBelow = Number.isNaN(prevFloor) ? null : Math.max(prevFloor, nowMs - MAX_LOOKBACK_MS);
+	const runs: CiRun[] = [];
+	let pages = 0;
+	let complete = false;
+	for (let page = 1; ; page++) {
+		// GitHub lists at most 1,000 runs however it is paged; a window deeper
+		// than that is not "complete" because the next page came back empty.
+		if ((page - 1) * REPO_PAGE_SIZE >= GITHUB_LISTING_CAP)
+			return {
+				kind: 'unreadable',
+				why: `the window is deeper than GitHub's ${GITHUB_LISTING_CAP}-run listing cap`,
+			};
+		if (page > 1) {
+			if (pool.extra <= 0)
+				return {
+					kind: 'unreadable',
+					why: `needed more than ${pages} page(s) and the tick's ${EXTRA_PAGES_PER_TICK}-page pool is spent`,
+				};
+			pool.extra--;
+		}
+		const resp = await ghGet<{ workflow_runs?: CiRun[] }>(
+			`/actions/runs?per_page=${REPO_PAGE_SIZE}&page=${page}&exclude_pull_requests=true`,
+			token,
+			repo
+		);
+		pages++;
+		if (!resp) return { kind: 'unreadable', why: `page ${page} could not be read` };
+		const got = resp.workflow_runs ?? [];
+		runs.push(...got);
+		if (got.length < REPO_PAGE_SIZE) {
+			complete = true;
+			break;
+		}
+		// Cold start: one page, and the floor below says how far back it is sure.
+		if (stopBelow === null) break;
+		const oldest = Math.min(...got.map((r) => Date.parse(r.created_at)));
+		if (oldest < stopBelow) {
+			complete = true;
+			break;
+		}
+	}
+	const open = runs
+		.filter((r) => r.status !== 'completed' && !isForeignRun(r, repo))
+		.map((r) => Date.parse(r.created_at))
+		.filter((t) => !Number.isNaN(t));
+	let floor = Math.min(nowMs - FLOOR_MARGIN_MS, ...open);
+	// A full first page on a cold start may have open runs below it that it
+	// never saw, so the floor it can vouch for is the lookback, not the page.
+	if (!complete) floor = Math.min(floor, nowMs - MAX_LOOKBACK_MS);
+	floor = Math.max(floor, nowMs - MAX_LOOKBACK_MS);
+	return { kind: 'ok', runs, floor: new Date(floor).toISOString(), pages };
 }
 
 /**
@@ -684,121 +836,147 @@ export async function runCiAlerts(token: string, ghGet: GhGet): Promise<CiTickSu
 	}
 
 	const states = readStates();
+	const repoStates = readRepoStates();
 	let changed = false;
+	let reposChanged = false;
+	const pool = { extra: EXTRA_PAGES_PER_TICK };
 
+	const byRepo = new Map<string, CiTarget[]>();
 	for (const target of targets) {
+		const repo = `${targetOwner(target)}/${target.repo}`;
+		if (!byRepo.has(repo)) byRepo.set(repo, []);
+		byRepo.get(repo)?.push(target);
+	}
+
+	for (const [repo, repoTargets] of byRepo) {
+		let poll: RepoPoll;
 		try {
-			const resp = await ghGet<{ workflow_runs?: CiRun[] }>(
-				`/actions/workflows/${target.workflow}/runs?per_page=${RUN_PAGE_SIZE}&status=completed`,
-				token,
-				`${targetOwner(target)}/${target.repo}`
-			);
-			// `null` is ghGet's "I could not look" — a timeout, a non-2xx, or the
-			// GitHub blackout. It is NOT an empty run list, and must never be read
-			// as health: leave the state untouched and try again next tick.
-			if (!resp) {
-				summary.unreadable++;
-				continue;
-			}
-			const runs = resp.workflow_runs ?? [];
-			if (!runs.length) {
-				summary.noRuns++;
-				continue;
-			}
-
-			const key = stateKey(target);
-			const fresh = runsEndedSince(runs, states[key] ?? null);
-			if (!fresh.length) {
-				summary.nothingNew++;
-				// We DID look, and the recovery gate reads `lastSeen` to decide
-				// whether the last break was witnessed. Not stamping it here would
-				// make an idle target look blind after 35 minutes of good health.
-				const row = states[key];
-				if (row) {
-					states[key] = { ...row, lastSeen: new Date().toISOString() };
-					changed = true;
-				}
-				continue;
-			}
-
-			let row = states[key] ?? null;
-			let watermark = row?.lastEndedAt ? Date.parse(row.lastEndedAt) : 0;
-			for (const fetched of fresh) {
-				let run = fetched;
-				if (run.conclusion === 'cancelled') {
-					const timedOut = await cancelledByTimeout(
-						run,
-						`${targetOwner(target)}/${target.repo}`,
-						token,
-						ghGet
-					);
-					// Could not look: stop HERE, before the watermark passes this run,
-					// so the next tick asks again. Reading it as a supersede would be
-					// the silence #124 is about; reading it as a timeout would page
-					// on a guess.
-					if (timedOut === null) {
-						summary.unreadable++;
-						break;
-					}
-					// `timed_out` is GitHub's own conclusion word for this, and it is
-					// what the page and the stored row then say.
-					if (timedOut) run = { ...run, conclusion: 'timed_out' };
-				}
-				summary.evaluated++;
-				const decision = decideCiAlert(row, run, Date.now());
-				if (decision.action === 'broken') {
-					summary.broken++;
-					// A re-page says so. "CI broken" arriving for the fourth day running
-					// reads as four separate breaks, and the operator's next question is
-					// always "is this new?" — answer it in the message.
-					const headline = decision.repage
-						? `🚨 **CI still broken** — ${target.label}\nA new run failed too; still red since the last alert.`
-						: `🚨 **CI broken** — ${target.label}`;
-					await postDiscord(
-						`${headline}\nConclusion: \`${run.conclusion}\`\nRun: ${run.html_url}`,
-						'ci-alerts'
-					);
-				} else if (decision.action === 'recovered') {
-					summary.recovered++;
-					await postDiscord(
-						`✅ **CI recovered** — ${target.label}\nRun: ${run.html_url}`,
-						'ci-alerts'
-					);
-				} else if (decision.action === 'suppressed') {
-					summary.suppressed++;
-					const reason = decision.reason ?? 'unstated';
-					summary.reasons[reason] = (summary.reasons[reason] ?? 0) + 1;
-					logger.info(`[ci-alerts] ${target.label}: transition not announced — ${reason}`);
-				} else if (decision.action === 'ignored') {
-					summary.ignored++;
-				}
-
-				// `null` is "leave the row alone" — see the cancelled/skipped branch.
-				if (decision.next) row = decision.next;
-				const ended = runEndedAt(run);
-				if (!Number.isNaN(ended) && ended > watermark) watermark = ended;
-			}
-
-			// The watermark advances over every run this tick CONSIDERED, including
-			// the cancelled ones the machine refuses to store anything for —
-			// otherwise an inert run at the top of the page is re-read forever. It
-			// rides on the row, so a target whose only run is cancelled still
-			// persists nothing at all: that first-sighting case is a regression
-			// production found once already.
-			if (row) {
-				states[key] = { ...row, lastEndedAt: new Date(watermark).toISOString() };
-				changed = true;
-			}
+			poll = await pollRepo(repo, repoStates[repo], token, ghGet, pool);
 		} catch (err) {
-			summary.errors++;
+			summary.errors += repoTargets.length;
 			logger.warn(
-				`[ci-alerts] ${target.label} failed: ${err instanceof Error ? err.message : String(err)}`
+				`[ci-alerts] ${repo} failed: ${err instanceof Error ? err.message : String(err)}`
 			);
+			continue;
+		}
+		// "I could not look" — a timeout, a non-2xx, the GitHub blackout, or a
+		// window the page pool could not reach the bottom of. It is NOT an empty
+		// run list and must never be read as health: every target of the repo is
+		// unreadable, and neither the floor nor any watermark moves.
+		if (poll.kind === 'unreadable') {
+			summary.unreadable += repoTargets.length;
+			logger.warn(`[ci-alerts] ${repo}: could not read its runs — ${poll.why}`);
+			continue;
+		}
+		repoStates[repo] = { floor: poll.floor };
+		reposChanged = true;
+
+		for (const target of repoTargets) {
+			try {
+				changed =
+					(await evaluateTarget(target, repo, poll.runs, states, summary, token, ghGet)) || changed;
+			} catch (err) {
+				summary.errors++;
+				logger.warn(
+					`[ci-alerts] ${target.label} failed: ${err instanceof Error ? err.message : String(err)}`
+				);
+			}
 		}
 	}
 
 	if (changed) writeStates(states);
+	if (reposChanged) writeRepoStates(repoStates);
 	recordCleanPass(summary);
 	logCiTickSummary(summary);
 	return summary;
+}
+
+/** One target against its repo's listing. Returns whether `states` changed. */
+async function evaluateTarget(
+	target: CiTarget,
+	repo: string,
+	listing: CiRun[],
+	states: Record<string, CiState>,
+	summary: CiTickSummary,
+	token: string,
+	ghGet: GhGet
+): Promise<boolean> {
+	const path = `.github/workflows/${target.workflow}`;
+	const mine = listing.filter((r) => r.path === path && r.status === 'completed');
+	const runs = mine.filter((r) => !isForeignRun(r, repo));
+	summary.foreign += mine.length - runs.length;
+
+	const key = stateKey(target);
+	const fresh = runs.length ? runsEndedSince(runs, states[key] ?? null) : [];
+	if (!fresh.length) {
+		const row = states[key];
+		if (!row) {
+			summary.noRuns++;
+			return false;
+		}
+		summary.nothingNew++;
+		// We DID look, and the recovery gate reads `lastSeen` to decide whether the
+		// last break was witnessed. Not stamping it here would make an idle target
+		// look blind after 35 minutes of good health.
+		states[key] = { ...row, lastSeen: new Date().toISOString() };
+		return true;
+	}
+
+	let row = states[key] ?? null;
+	let watermark = row?.lastEndedAt ? Date.parse(row.lastEndedAt) : 0;
+	for (const fetched of fresh) {
+		let run = fetched;
+		if (run.conclusion === 'cancelled') {
+			const timedOut = await cancelledByTimeout(run, repo, token, ghGet);
+			// Could not look: stop HERE, before the watermark passes this run, so
+			// the next tick asks again. Reading it as a supersede would be the
+			// silence #124 is about; reading it as a timeout would page on a guess.
+			if (timedOut === null) {
+				summary.unreadable++;
+				break;
+			}
+			// `timed_out` is GitHub's own conclusion word for this, and it is what
+			// the page and the stored row then say.
+			if (timedOut) run = { ...run, conclusion: 'timed_out' };
+		}
+		summary.evaluated++;
+		const decision = decideCiAlert(row, run, Date.now());
+		if (decision.action === 'broken') {
+			summary.broken++;
+			// A re-page says so. "CI broken" arriving for the fourth day running
+			// reads as four separate breaks, and the operator's next question is
+			// always "is this new?" — answer it in the message.
+			const headline = decision.repage
+				? `🚨 **CI still broken** — ${target.label}\nA new run failed too; still red since the last alert.`
+				: `🚨 **CI broken** — ${target.label}`;
+			await postDiscord(
+				`${headline}\nConclusion: \`${run.conclusion}\`\nRun: ${run.html_url}`,
+				'ci-alerts'
+			);
+		} else if (decision.action === 'recovered') {
+			summary.recovered++;
+			await postDiscord(`✅ **CI recovered** — ${target.label}\nRun: ${run.html_url}`, 'ci-alerts');
+		} else if (decision.action === 'suppressed') {
+			summary.suppressed++;
+			const reason = decision.reason ?? 'unstated';
+			summary.reasons[reason] = (summary.reasons[reason] ?? 0) + 1;
+			logger.info(`[ci-alerts] ${target.label}: transition not announced — ${reason}`);
+		} else if (decision.action === 'ignored') {
+			summary.ignored++;
+		}
+
+		// `null` is "leave the row alone" — see the cancelled/skipped branch.
+		if (decision.next) row = decision.next;
+		const ended = runEndedAt(run);
+		if (!Number.isNaN(ended) && ended > watermark) watermark = ended;
+	}
+
+	// The watermark advances over every run this tick CONSIDERED, including the
+	// cancelled ones the machine refuses to store anything for — otherwise an
+	// inert run at the top of the page is re-read forever. It rides on the row,
+	// so a target whose only run is cancelled still persists nothing at all:
+	// that first-sighting case is a regression production found once already.
+	if (!row) return false;
+	states[key] = { ...row, lastEndedAt: new Date(watermark).toISOString() };
+	return true;
 }

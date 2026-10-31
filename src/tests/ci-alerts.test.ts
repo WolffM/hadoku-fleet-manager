@@ -26,7 +26,13 @@ import {
 	runsEndedSince,
 	stateKey,
 	REPAGE_INTERVAL_MS,
-	RUN_PAGE_SIZE,
+	REPO_PAGE_SIZE,
+	EXTRA_PAGES_PER_TICK,
+	MAX_LOOKBACK_MS,
+	ciAlertsCallCeilingPerHour,
+	isForeignRun,
+	pollRepo,
+	readRepoStates,
 	STALE_RUN_MS,
 	STALE_STATE_MS,
 	type CiAction,
@@ -202,11 +208,18 @@ test('a non-success conclusion that is not "failure" still counts as broken', ()
  */
 
 /** A run exactly as the API returns it: queued at `created`, concluded at `ended`. */
-function ghRun(id: number, conclusion: string | null, created: string, ended: string): CiRun {
+function ghRun(
+	id: number,
+	conclusion: string | null,
+	created: string,
+	ended: string,
+	workflow = 'ci.yml'
+): CiRun {
 	return {
 		id,
 		conclusion,
 		status: 'completed',
+		path: `.github/workflows/${workflow}`,
 		html_url: `https://github.com/WolffM/x/actions/runs/${id}`,
 		created_at: created,
 		updated_at: ended,
@@ -474,12 +487,13 @@ function pollTicks(all: CiRun[], tickTimes: number[], start: CiState | null = nu
 	let row = start;
 	const seen: Array<{ at: number; id: number; action: CiAction; reason?: string }> = [];
 	for (const at of tickTimes) {
-		// What GitHub returns: completed runs, newest `created_at` first, capped
-		// at the page size. That ordering is the whole trap.
+		// What the repo listing yields for this workflow: completed runs, newest
+		// `created_at` first — that ordering is the whole trap — down to the
+		// floor, which `pollRepo` guarantees reaches every run that concluded
+		// since the last poll (fleet-manager#37; the floor's own tests are below).
 		const page = all
 			.filter((r) => runEndedAt(r) <= at)
-			.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
-			.slice(0, RUN_PAGE_SIZE);
+			.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
 		if (!page.length) continue;
 		const fresh = runsEndedSince(page, row);
 		if (!fresh.length) continue;
@@ -619,14 +633,6 @@ test('a whole push storm fits on one page and still pages exactly once', () => {
 	assert.equal(actions.filter((a) => a === 'suppressed').length, storm.length - 1);
 });
 
-test('a page size of one is the bug, so the constant may not quietly go back to it', () => {
-	// Measured over 90 days of the real watch list (67 workflows, 4,702 completed
-	// runs, 248 failing, six tick phases each): 28.7% of failing runs are never
-	// evaluated at all at per_page=1, 7.7% at 3, 5.8% at 10. The cliff is
-	// between 1 and 2 and there is nothing to tune above 5.
-	assert.ok(RUN_PAGE_SIZE >= 5, `page size ${RUN_PAGE_SIZE} is back inside the measured cliff`);
-});
-
 test('a state row from before the watermark existed replays no history', () => {
 	// Migration. Every row in the operator's ci-alert-state.json on 2026-09-19
 	// lacks `lastEndedAt`, and the first tick after the deploy must behave
@@ -661,6 +667,7 @@ test('the summary distinguishes every way of looking away, including the zeroes'
 		targets: 67,
 		unreadable: 0,
 		noRuns: 0,
+		foreign: 0,
 		nothingNew: 64,
 		evaluated: 3,
 		broken: 1,
@@ -686,6 +693,7 @@ test('the summary names the reason a transition was held back', () => {
 		targets: 2,
 		unreadable: 1,
 		noRuns: 0,
+		foreign: 0,
 		nothingNew: 0,
 		evaluated: 2,
 		broken: 0,
@@ -846,7 +854,7 @@ async function tickOnCancelled(
 			);
 		const ended = new Date(Date.now() - 60_000).toISOString();
 		const ghGet = async <T>(path: string): Promise<T | null> => {
-			if (path.startsWith('/actions/workflows/'))
+			if (path.startsWith('/actions/runs?'))
 				return await Promise.resolve({
 					workflow_runs: [ghRun(7, 'cancelled', ended, ended)],
 				} as T);
@@ -962,4 +970,316 @@ test('an unreadable pass record runs the boot pass, and says why', async () => {
 		assert.ok(log.warn.some((w) => w.includes('not parseable')));
 		return Promise.resolve();
 	});
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * ONE LISTING PER REPO (fleet-manager#37).
+ *
+ * The watch list went from 77 to 122 targets when every workflow had to be
+ * classified, which took the per-workflow poll's ceiling from 462 to 732
+ * charged calls an hour on a pool that ran dry the same day. The poll now reads
+ * one repo listing and pages it down to a FLOOR — see REPO_PAGE_SIZE.
+ * ---------------------------------------------------------------------------
+ */
+
+const TICK_MS = 10 * 60_000;
+
+/** A run as the repo listing returns it, with its status and source repo. */
+function listed(
+	id: number,
+	opts: {
+		created: number;
+		ended?: number;
+		conclusion?: string | null;
+		status?: string;
+		workflow?: string;
+		head?: { full_name?: string; fork?: boolean } | null;
+	}
+): CiRun {
+	const created = new Date(opts.created).toISOString();
+	return {
+		...ghRun(
+			id,
+			opts.conclusion ?? 'success',
+			created,
+			new Date(opts.ended ?? opts.created).toISOString(),
+			opts.workflow
+		),
+		status: opts.status ?? 'completed',
+		head_repository: opts.head === undefined ? { full_name: 'WolffM/r', fork: false } : opts.head,
+	};
+}
+
+/** A fake GitHub serving `all()` for one repo, newest created first, paged. */
+function listingGh(all: () => CiRun[], calls: string[] = []) {
+	return async <T>(path: string): Promise<T | null> => {
+		calls.push(path);
+		const m = /^\/actions\/runs\?per_page=(\d+)&page=(\d+)/.exec(path);
+		if (!m) throw new Error(`unexpected path ${path}`);
+		const [size, page] = [Number(m[1]), Number(m[2])];
+		const sorted = [...all()].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+		return await Promise.resolve({
+			workflow_runs: sorted.slice((page - 1) * size, page * size),
+		} as T);
+	};
+}
+
+test('#37: a fork PR run is foreign, a same-repo run is not, and a missing head is kept', () => {
+	const at = Date.now();
+	assert.equal(
+		isForeignRun(listed(1, { created: at, head: { full_name: 'x/r', fork: true } }), 'WolffM/r'),
+		true
+	);
+	assert.equal(
+		isForeignRun(listed(1, { created: at, head: { full_name: 'someone/r' } }), 'WolffM/r'),
+		true
+	);
+	assert.equal(
+		isForeignRun(listed(1, { created: at, head: { full_name: 'wolffm/R' } }), 'WolffM/r'),
+		false
+	);
+	assert.equal(isForeignRun(listed(1, { created: at, head: null }), 'WolffM/r'), false);
+});
+
+test('#37: a failing fork PR run does not page; the same failure from the repo itself does', async () => {
+	const target = { owner: 'WolffM', repo: 'r', workflow: 'ci.yml', label: 'r / ci' };
+	const posts: string[] = [];
+	const manifests = tempDir('ci-alerts-manifests-');
+	const state = tempDir('ci-alerts-state-');
+	__setHostForTesting({
+		...testHost,
+		manifestDir: manifests,
+		stateDir: state,
+		alerts: {
+			post: async (content: string) => {
+				posts.push(content);
+				return await Promise.resolve({ posted: true, sinkRecorded: true });
+			},
+			recordQuietly: () => undefined,
+		},
+	});
+	try {
+		writeFileSync(
+			join(manifests, 'ci-watch.generated.json'),
+			JSON.stringify({ targets: [target] })
+		);
+		const now = Date.now();
+		const runs = [listed(1, { created: now - 20 * 60_000, ended: now - 15 * 60_000 })];
+		const gh = listingGh(() => runs);
+		await runCiAlerts('tok', gh); // first sighting: green
+		runs.push(
+			listed(2, {
+				created: now - 8 * 60_000,
+				ended: now - 2 * 60_000,
+				conclusion: 'failure',
+				head: { full_name: 'stranger/r', fork: true },
+			})
+		);
+		const s1 = await runCiAlerts('tok', gh);
+		assert.equal(s1.foreign, 1, 'counted, so a public repo’s quiet is legible');
+		assert.equal(s1.broken, 0);
+		assert.deepEqual(posts, []);
+		assert.match(formatCiTickSummary(s1), /fork-runs 1/);
+
+		runs.push(listed(3, { created: now - 7 * 60_000, ended: now - 60_000, conclusion: 'failure' }));
+		const s2 = await runCiAlerts('tok', gh);
+		assert.equal(s2.broken, 1);
+		assert.equal(posts.length, 1);
+		assert.match(posts[0], /CI broken/);
+	} finally {
+		__setHostForTesting(testHost);
+	}
+});
+
+test('#37: a cold start reads one page and vouches only for the lookback', async () => {
+	const now = Date.now();
+	const runs = Array.from({ length: 250 }, (_, i) => listed(i + 1, { created: now - i * 60_000 }));
+	const calls: string[] = [];
+	const pool = { extra: EXTRA_PAGES_PER_TICK };
+	const r = await pollRepo(
+		'WolffM/r',
+		undefined,
+		'tok',
+		listingGh(() => runs, calls),
+		pool,
+		now
+	);
+	assert.equal(r.kind, 'ok');
+	assert.equal(calls.length, 1);
+	assert.equal(pool.extra, EXTRA_PAGES_PER_TICK);
+	if (r.kind === 'ok') assert.equal(Date.parse(r.floor), now - MAX_LOOKBACK_MS);
+});
+
+test('#37: the next poll pages down to the floor, and an open run holds the floor at its creation', async () => {
+	const now = Date.now();
+	// 150 runs in the last 150 minutes; run 150 was created first and is open.
+	const runs = Array.from({ length: 150 }, (_, i) =>
+		listed(i + 1, {
+			created: now - (i + 1) * 60_000,
+			status: i === 149 ? 'in_progress' : 'completed',
+		})
+	);
+	const calls: string[] = [];
+	const pool = { extra: EXTRA_PAGES_PER_TICK };
+	const prev = { floor: new Date(now - 140 * 60_000).toISOString() };
+	const r = await pollRepo(
+		'WolffM/r',
+		prev,
+		'tok',
+		listingGh(() => runs, calls),
+		pool,
+		now
+	);
+	assert.equal(r.kind, 'ok');
+	assert.equal(calls.length, 2, 'page 1 ends above the floor, so page 2 is read');
+	assert.equal(pool.extra, EXTRA_PAGES_PER_TICK - 1);
+	if (r.kind === 'ok') {
+		assert.equal(r.runs.length, 150);
+		assert.equal(Date.parse(r.floor), now - 150 * 60_000, 'the open run is the floor');
+	}
+});
+
+test('#37: a run stuck open for days cannot drag the floor past the lookback', async () => {
+	const now = Date.now();
+	const runs = [
+		listed(1, { created: now - 60_000 }),
+		listed(2, { created: now - 9 * 86_400_000, status: 'queued' }),
+	];
+	const r = await pollRepo(
+		'WolffM/r',
+		{ floor: new Date(now - TICK_MS).toISOString() },
+		'tok',
+		listingGh(() => runs),
+		{ extra: 0 },
+		now
+	);
+	assert.equal(r.kind, 'ok');
+	if (r.kind === 'ok') assert.equal(Date.parse(r.floor), now - MAX_LOOKBACK_MS);
+});
+
+test('#37: a window the page pool cannot reach the bottom of is unreadable, not a partial read', async () => {
+	const now = Date.now();
+	const runs = Array.from({ length: 300 }, (_, i) => listed(i + 1, { created: now - i * 1000 }));
+	const prev = { floor: new Date(now - 3_600_000).toISOString() };
+	const r = await pollRepo(
+		'WolffM/r',
+		prev,
+		'tok',
+		listingGh(() => runs),
+		{ extra: 1 },
+		now
+	);
+	assert.equal(r.kind, 'unreadable');
+	if (r.kind === 'unreadable') assert.match(r.why, /pool is spent/);
+});
+
+test('#37: a run open at the last poll that fails deep in the listing still pages', async () => {
+	// The reason the poll was per-workflow: on a busy repo, a run that concludes
+	// during a tick can sit far down the created_at order by the next poll
+	// (hadoku_site, 2026-10-31: as deep as 79). Here it sits at 151.
+	const target = { owner: 'WolffM', repo: 'r', workflow: 'deploy.yml', label: 'r / deploy' };
+	const posts: string[] = [];
+	const manifests = tempDir('ci-alerts-manifests-');
+	const state = tempDir('ci-alerts-state-');
+	__setHostForTesting({
+		...testHost,
+		manifestDir: manifests,
+		stateDir: state,
+		alerts: {
+			post: async (content: string) => {
+				posts.push(content);
+				return await Promise.resolve({ posted: true, sinkRecorded: true });
+			},
+			recordQuietly: () => undefined,
+		},
+	});
+	try {
+		writeFileSync(
+			join(manifests, 'ci-watch.generated.json'),
+			JSON.stringify({ targets: [target] })
+		);
+		const now = Date.now();
+		const green = listed(1, {
+			created: now - 40 * 60_000,
+			ended: now - 35 * 60_000,
+			workflow: 'deploy.yml',
+		});
+		const slow = listed(2, {
+			created: now - 30 * 60_000,
+			status: 'in_progress',
+			workflow: 'deploy.yml',
+		});
+		let runs: CiRun[] = [green, slow];
+		const gh = listingGh(() => runs);
+		await runCiAlerts('tok', gh);
+		assert.ok(readRepoStates()['WolffM/r'], 'the floor is on disk');
+		// 150 other runs land on top of it, then it fails.
+		const noise = Array.from({ length: 150 }, (_, i) =>
+			listed(100 + i, { created: now - 20 * 60_000 + i * 1000, ended: now - 60_000 })
+		);
+		runs = [
+			green,
+			{
+				...slow,
+				status: 'completed',
+				conclusion: 'failure',
+				updated_at: new Date(now - 30_000).toISOString(),
+			},
+			...noise,
+		];
+		const s = await runCiAlerts('tok', gh);
+		assert.equal(s.broken, 1, formatCiTickSummary(s));
+		assert.equal(posts.length, 1);
+		assert.ok(REPO_PAGE_SIZE < 152, 'the run really was past the first page');
+	} finally {
+		__setHostForTesting(testHost);
+	}
+});
+
+test('#37: the listing ceiling at fleet size is at or below the per-workflow 462/hr it replaced', async () => {
+	// The fleet on 2026-10-31: 122 targets across 34 repos. Worst case — every
+	// repo's listing changed (no 304) and every repo needs extra pages — counted
+	// by driving the real tick, not by restating the formula.
+	const REPOS = 34;
+	const TARGETS = 122;
+	const targets = Array.from({ length: TARGETS }, (_, i) => ({
+		owner: 'WolffM',
+		repo: `r${i % REPOS}`,
+		workflow: `w${i}.yml`,
+		label: `r${i % REPOS} / w${i}`,
+	}));
+	const calls: string[] = [];
+	await withTempHost(async (manifests) => {
+		writeFileSync(join(manifests, 'ci-watch.generated.json'), JSON.stringify({ targets }));
+		const now = Date.now();
+		// Every repo has a floor an hour back and 1,000 runs since: as deep as
+		// a listing goes.
+		const floors = Object.fromEntries(
+			Array.from({ length: REPOS }, (_, i) => [
+				`WolffM/r${i}`,
+				{ floor: new Date(now - 3_600_000).toISOString() },
+			])
+		);
+		writeFileSync(join(stateDir(), 'ci-alert-repos.json'), JSON.stringify(floors));
+		const runs = Array.from({ length: 1000 }, (_, i) => listed(i + 1, { created: now - i * 1000 }));
+		await runCiAlerts(
+			'tok',
+			listingGh(() => runs, calls)
+		);
+	});
+	const perTick = calls.length;
+	const ticksPerHour = 3_600_000 / TICK_MS;
+	assert.equal(
+		perTick,
+		REPOS + EXTRA_PAGES_PER_TICK,
+		'one first page per repo plus the pool, no more'
+	);
+	assert.equal(perTick * ticksPerHour, ciAlertsCallCeilingPerHour(REPOS));
+	assert.ok(
+		perTick * ticksPerHour <= 77 * ticksPerHour,
+		`${perTick * ticksPerHour}/hr must not exceed the 462/hr the 77-target per-workflow poll cost`
+	);
+	// For the record: per-workflow at today's list would have been 732/hr.
+	assert.equal(TARGETS * ticksPerHour, 732);
 });
