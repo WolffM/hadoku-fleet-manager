@@ -242,7 +242,11 @@ test('a run of only guests still FAILS LOUDLY rather than passing on zero nodes'
 		writeFileSync(f.manifestPath, JSON.stringify(doc, null, 2));
 		const r = run(['--json'], f.env);
 		assert.equal(r.code, 1);
-		assert.equal(r.out.trim(), '', 'no clean report from a run that probed nobody');
+		// Since fleet-manager#20-#26 a --json refusal is a document that says
+		// why, never empty stdout — and never a clean report.
+		const refusal = JSON.parse(r.out);
+		assert.equal(refusal.ok, false, 'no clean report from a run that probed nobody');
+		assert.match(refusal.error, /before writing its --json document: ./);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

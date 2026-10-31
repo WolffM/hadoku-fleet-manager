@@ -1461,7 +1461,11 @@ test('deployer: the SAME command line without --include-guests still refuses —
 			`dropping the flag must restore the refusal: ${withoutFlag.err}`
 		);
 		assert.match(withoutFlag.err, /GUEST/);
-		assert.equal(withoutFlag.out, '', 'a refused run emits no report at all');
+		// Since fleet-manager#20-#26 a --json refusal is a document that says
+		// why, never empty stdout — and never a clean report.
+		const refusal = JSON.parse(withoutFlag.out);
+		assert.equal(refusal.ok, false, 'a refused run emits no report');
+		assert.match(refusal.error, /GUEST/);
 		assert.doesNotMatch(withoutFlag.err, /GUEST OVERRIDE/, 'nothing was overridden');
 		assert.doesNotMatch(withoutFlag.out + withoutFlag.err, /SUMMARY/);
 	} finally {

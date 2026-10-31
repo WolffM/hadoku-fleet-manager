@@ -40,15 +40,13 @@
  * `results[].error` included). What it refuses is silence — an empty
  * document, a crash, or a result with no explanatory field anywhere.
  *
- * WHAT THIS PROVES AND WHAT IT DOES NOT. Sixteen of the entry/case
- * combinations below fail this proof today — real bugs, each filed as a
- * public fleet-manager issue and recorded in {@link KNOWN_BROKEN} — and this
- * file does NOT fix any of them; §B's brief is explicit that fixing them is
- * out of scope. What it buys is the thing `json-contract.test.mjs` could not:
- * `--json` holding under BEHAVIOUR, not merely under grep, and a build that
- * cannot silently regress past ANY of these sixteen already-known gaps
- * without this file noticing, nor silently grow a seventeenth without a human
- * triaging it into `KNOWN_BROKEN` first.
+ * WHAT THIS PROVES AND WHAT IT DOES NOT. Sixteen entry/case combinations
+ * failed this proof when it was written, each filed as a public
+ * fleet-manager issue and catalogued in {@link KNOWN_BROKEN}; all of them are
+ * closed (#27 at the door, #20-#26 by `emit.mjs`'s exit guard). What it buys
+ * is the thing `json-contract.test.mjs` could not: `--json` holding under
+ * BEHAVIOUR, not merely under grep, and a build that cannot grow a new gap
+ * without a human triaging it into `KNOWN_BROKEN` first.
  *
  * STILL HERMETIC. No real node, no GitHub credential, no mutation: `HOME` and
  * `HADOKU_STATE_DIR` are fresh temp directories per run, `HADOKU_SITE_ROOT`
@@ -268,133 +266,18 @@ function satisfiesContract(result) {
 }
 
 /**
- * KNOWN, FILED, NOT FIXED HERE. §B is explicit: this file catalogues gaps, it
- * does not close them. Each row is one (entry, case) that fails
+ * KNOWN, FILED, NOT FIXED HERE. Each row is one (entry, case) that fails
  * {@link satisfiesContract} today; `issue` is the public
- * `WolffM/hadoku-fleet-manager` issue filed for it. A row disappearing because
+ * `WolffM/hadoku-fleet-manager` issue filed for it. EMPTY since 2026-10-30:
+ * the fifteen rows filed as fleet-manager#20-#26 were one pattern, a
+ * contracted script exiting before its own `emit()`, and `emit.mjs`'s exit
+ * guard now writes the failure document for every such exit at once. A row disappearing because
  * the run now PASSES is treated as a test failure below, on purpose — a
  * silent regression-of-the-regression is exactly the thing nobody would
  * notice otherwise, and the fix is to close the issue and delete the row,
  * not to let the gate go quiet about it.
  */
-export const KNOWN_BROKEN = [
-	// header-audit / identity-model / inventory: `siteRoot()` (or an unawaited
-	// `main()`) throws before any emitter exists, identically across all three
-	// cases, because none of the three even consults argv or the manifest
-	// before crashing.
-	{
-		entry: 'header-audit',
-		case: 'a-unknown-flag',
-		issue: 20,
-		observed: 'uncaught: check-header-fleet.mjs:140 `siteRoot()` at module scope',
-	},
-	{
-		entry: 'header-audit',
-		case: 'b-empty-manifest',
-		issue: 20,
-		observed: 'uncaught: check-header-fleet.mjs:140 `siteRoot()` at module scope',
-	},
-	{
-		entry: 'header-audit',
-		case: 'c-unreachable-node',
-		issue: 20,
-		observed: 'uncaught: check-header-fleet.mjs:140 `siteRoot()` at module scope',
-	},
-	{
-		entry: 'identity-model',
-		case: 'a-unknown-flag',
-		issue: 21,
-		observed: 'uncaught: check-identity-model.mjs:130 `siteRoot()` at module scope',
-	},
-	{
-		entry: 'identity-model',
-		case: 'b-empty-manifest',
-		issue: 21,
-		observed: 'uncaught: check-identity-model.mjs:130 `siteRoot()` at module scope',
-	},
-	{
-		entry: 'identity-model',
-		case: 'c-unreachable-node',
-		issue: 21,
-		observed: 'uncaught: check-identity-model.mjs:130 `siteRoot()` at module scope',
-	},
-	{
-		entry: 'inventory',
-		case: 'a-unknown-flag',
-		issue: 22,
-		observed: 'unhandled rejection: fleet-inventory.mjs:342 bare `await main();`, no `.catch()`',
-	},
-	{
-		entry: 'inventory',
-		case: 'b-empty-manifest',
-		issue: 22,
-		observed: 'unhandled rejection: fleet-inventory.mjs:342 bare `await main();`, no `.catch()`',
-	},
-	{
-		entry: 'inventory',
-		case: 'c-unreachable-node',
-		issue: 22,
-		observed: 'unhandled rejection: fleet-inventory.mjs:342 bare `await main();`, no `.catch()`',
-	},
-	// reconcile: manifest VALIDATION throws (e.g. "machines is required") reach
-	// only the generic top-level `main().catch(...)`, which `console.error`s and
-	// exits WITHOUT consulting JSON_OUT — even though the file's own `fail()`
-	// helper does the right thing on every path that reaches it.
-	{
-		entry: 'reconcile',
-		case: 'a-unknown-flag',
-		issue: 23,
-		observed:
-			'reconcile-fleet-runners.mjs:2577 top-level catch: console.error + exit, no JSON_OUT check',
-	},
-	{
-		entry: 'reconcile',
-		case: 'b-empty-manifest',
-		issue: 23,
-		observed:
-			'reconcile-fleet-runners.mjs:2577 top-level catch: console.error + exit, no JSON_OUT check',
-	},
-	{
-		entry: 'reconcile',
-		case: 'c-unreachable-node',
-		issue: 23,
-		observed:
-			'reconcile-fleet-runners.mjs:2577 top-level catch: console.error + exit, no JSON_OUT check',
-	},
-	// cleanup: the "no nodes" early exit prints to stderr and exits before the
-	// emitter is ever consulted.
-	{
-		entry: 'cleanup',
-		case: 'b-empty-manifest',
-		issue: 24,
-		observed: 'clean-runner-debris.mjs:111-118 console.error + exit(1), empty stdout',
-	},
-	// doctor: the "no managed node matches" early exit does the same.
-	{
-		entry: 'doctor',
-		case: 'b-empty-manifest',
-		issue: 25,
-		observed: 'lib/doctor-run.mjs:151-152 console.error + exit(1), empty stdout',
-	},
-	// converge-toolchain: two DIFFERENT bugs, two different issues.
-	//   (b) `refresh()`'s "no machines selected" calls the shared emitter's
-	//       `log()` (which only HOLDS a line under --json) and then
-	//       `process.exit(1)` on the next line, so the held line is never
-	//       emitted — stdout AND stderr are both empty.
-	{
-		entry: 'converge-toolchain',
-		case: 'b-empty-manifest',
-		issue: 26,
-		observed: 'converge-toolchain.mjs:241-243 log()-then-exit never calls emitter.emit(); silent',
-	},
-	// (a) was fleet-manager#27: `converge-toolchain` is the one JSON_CONTRACT
-	// entry whose door table entry (src/cli.ts) declares an allowed-flags
-	// list, so an unrecognised flag used to be refused by the DOOR with
-	// stderr prose and empty stdout, before the script (and its emitter) ever
-	// ran. Fixed wave 5b §D: the door's flags-refusal now checks `--json` in
-	// the child's own argv and emits `{ok:false, error}` on stdout instead —
-	// closed, not catalogued here any more.
-];
+export const KNOWN_BROKEN = [];
 
 const knownBrokenKey = (entry, caseName) => `${entry}\u0000${caseName}`;
 const KNOWN_BROKEN_SET = new Set(KNOWN_BROKEN.map((r) => knownBrokenKey(r.entry, r.case)));

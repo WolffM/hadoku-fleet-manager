@@ -259,6 +259,79 @@ test('a pipe and a file receive the SAME bytes — the cliff is the pipe, not th
 	}
 });
 
+/** A script that imports the emitter, then runs `body`, spawned with `args`. */
+async function guarded(body, args) {
+	const dir = mkdtempSync(join(tmpdir(), 'fleet-emit-guard-'));
+	try {
+		const script = join(dir, 'guarded.mjs');
+		writeFileSync(
+			script,
+			`import { createEmitter } from ${JSON.stringify(join(HERE, 'emit.mjs'))};\n${body}\n`
+		);
+		const { code, bytes } = await new Promise((resolve, reject) => {
+			const chunks = [];
+			const child = spawn(process.execPath, [script, ...args], {
+				stdio: ['ignore', 'pipe', 'ignore'],
+			});
+			child.stdout.on('data', (c) => chunks.push(c));
+			child.on('error', reject);
+			child.on('exit', (c) => resolve({ code: c, bytes: Buffer.concat(chunks) }));
+		});
+		const text = bytes.toString('utf8');
+		return { code, text, doc: text.trim() ? JSON.parse(text) : null };
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+test('fleet-manager#20-#26: a --json process that ends without a document gets one that says why', async () => {
+	// #20/#21: a throw at module scope, after the import but before any emitter.
+	const thrown = await guarded(
+		'void createEmitter;\nthrow new Error("HADOKU_SITE_ROOT does not exist");',
+		['--json']
+	);
+	assert.equal(thrown.code, 1);
+	assert.equal(thrown.doc.ok, false);
+	assert.match(thrown.doc.error, /HADOKU_SITE_ROOT does not exist$/);
+
+	// #26: a held line, then an exit before emit().
+	const held = await guarded(
+		'const out = createEmitter();\nout.log("no machines selected");\nprocess.exit(1);',
+		['--json']
+	);
+	assert.equal(held.code, 1);
+	assert.match(held.doc.error, /no machines selected$/);
+
+	// #24/#25: the reason went to stderr.
+	const said = await guarded(
+		'void createEmitter;\nconsole.error("clean-runner-debris: no nodes");\nprocess.exit(1);',
+		['--json']
+	);
+	assert.match(said.doc.error, /clean-runner-debris: no nodes$/);
+
+	// Exit 0 with nothing written is "I could not look", never a pass.
+	const quiet = await guarded('void createEmitter;\nprocess.exit(0);', ['--json']);
+	assert.equal(quiet.code, 1);
+	assert.equal(quiet.doc.exit, 1);
+});
+
+test('the exit guard leaves a written document, and human mode, exactly as they were', async () => {
+	const emitted = await guarded(
+		'const out = createEmitter();\nout.emit({ ok: true });\nprocess.exit(0);',
+		['--json']
+	);
+	assert.equal(emitted.code, 0);
+	assert.deepEqual(emitted.doc, { ok: true }, 'one document, not a second one after it');
+
+	const human = await guarded('void createEmitter;\nprocess.exit(1);', []);
+	assert.equal(human.code, 1);
+	assert.equal(human.text, '', 'no --json, no guard');
+
+	const help = await guarded('void createEmitter;\nprocess.exit(0);', ['--json', '--help']);
+	assert.equal(help.code, 0, '--help wins over --json, as it does in createEmitter');
+	assert.equal(help.text, '');
+});
+
 test('keepStdoutWhole() vouches for every stdout Node hands a process', () => {
 	// Node builds stdout in exactly two shapes: a libuv stream (pipe, socket or
 	// TTY — `_handle.setBlocking`) and a file (`fs.SyncWriteStream`, already

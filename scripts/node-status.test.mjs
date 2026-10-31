@@ -89,7 +89,13 @@ test('--max-age without a positive number is a usage error, not a document', () 
 	try {
 		const r = run(['--json', '--max-age', 'soon'], f.env);
 		assert.equal(r.code, 2);
-		assert.equal(r.out, '');
+		// Since fleet-manager#20-#26 a --json refusal is a document that says
+		// why, never empty stdout — and never a clean report.
+		// No `contract` field, so a tenant reads it as "could not look".
+		const refusal = JSON.parse(r.out);
+		assert.equal(refusal.ok, false);
+		assert.equal(refusal.contract, undefined);
+		assert.match(refusal.error, /--max-age takes a number of seconds above 0$/);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

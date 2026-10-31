@@ -158,7 +158,12 @@ test('--machine naming a GUEST refuses, rather than reporting a fleet of zero', 
 	try {
 		const r = run(['--machine', GUEST, '--json'], f.env);
 		assert.equal(r.code, 1);
-		assert.equal(r.out.trim(), '', 'a refusal must not emit a parseable clean report');
+		// Since fleet-manager#20-#26 a --json refusal is a document that says
+		// why, never empty stdout — and never a clean report.
+		const refusal = JSON.parse(r.out);
+		assert.equal(refusal.ok, false, 'a refusal must not emit a parseable clean report');
+		assert.match(refusal.error, /before writing its --json document: ./);
+		assert.equal(refusal.nodes, undefined);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -605,7 +610,12 @@ test('#98: an EMPTY toolchain.capabilities refuses — a bar of zero is not a pa
 	try {
 		const r = run(['--machine', CLAW, '--json'], f.env);
 		assert.equal(r.code, 1);
-		assert.equal(r.out.trim(), '', 'a refusal must not emit a parseable clean report');
+		// Since fleet-manager#20-#26 a --json refusal is a document that says
+		// why, never empty stdout — and never a clean report.
+		const refusal = JSON.parse(r.out);
+		assert.equal(refusal.ok, false, 'a refusal must not emit a parseable clean report');
+		assert.match(refusal.error, /before writing its --json document: ./);
+		assert.equal(refusal.nodes, undefined);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

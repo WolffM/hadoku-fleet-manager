@@ -157,6 +157,86 @@ function writeAllSync(text) {
 }
 
 /**
+ * NO `--json` PROCESS ENDS WITHOUT A DOCUMENT (fleet-manager#20-#26).
+ *
+ * Seven contracted scripts exited before their own `emit()`: a `siteRoot()`
+ * throw at module scope, an unawaited `main()`, a top-level `catch` that only
+ * printed, and four early `process.exit(1)`s after a `console.error` or a held
+ * `log()`. Each left stdout empty, which the cron reads as "the checker broke".
+ * Fixing them one exit at a time is how there came to be seven, so the rule
+ * lives here instead: every contracted script imports this module, and ES
+ * modules evaluate their imports first, so this guard is in place before a
+ * module-scope throw in the importer can happen.
+ *
+ * On exit with nothing written to stdout it writes `{ ok: false, error, exit }`
+ * and makes the exit non-zero: "I could not look" is never a pass, and an exit
+ * 0 with no document is exactly that. The `error` says WHY, in this order: the
+ * uncaught throw, the last line a script held under `--json`, the last thing it
+ * said on stderr.
+ *
+ * Keyed on the REAL argv only, never on an emitter's injected one, so a test
+ * that builds `createEmitter({ json: true })` in-process installs nothing.
+ */
+const guard = {
+	/** @type {string[][]} every emitter's held lines, so the guard can quote the last one. */
+	helds: [],
+	wrote: false,
+	/** @type {string | null} */
+	thrown: null,
+	/** @type {string | null} */
+	lastStderr: null,
+};
+
+function installJsonGuard() {
+	const argv = process.argv;
+	if (!argv.includes('--json') || argv.includes('--help') || argv.includes('-h')) return;
+	const stdoutWrite = process.stdout.write.bind(process.stdout);
+	process.stdout.write = (chunk, ...rest) => {
+		if (String(chunk).trim()) guard.wrote = true;
+		return stdoutWrite(chunk, ...rest);
+	};
+	const stderrWrite = process.stderr.write.bind(process.stderr);
+	process.stderr.write = (chunk, ...rest) => {
+		// The whole write, not its last line: a refusal is often several lines,
+		// and the one that names the cause is rarely the last.
+		const said = String(chunk).trim();
+		if (said) guard.lastStderr = said;
+		return stderrWrite(chunk, ...rest);
+	};
+	// An uncaught throw or rejection ends the process here instead of in Node's
+	// default handler, which would skip nothing but would also print no reason
+	// a `--json` reader can see. The stack still goes to stderr, as it did.
+	process.on('uncaughtException', (err) => {
+		guard.thrown = err instanceof Error ? err.message : String(err);
+		stderrWrite(`${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+		process.exit(1);
+	});
+	process.on('exit', (code) => {
+		if (guard.wrote) return;
+		const lastHeld = guard.helds
+			.flat()
+			.filter((l) => l.trim())
+			.pop();
+		const why = guard.thrown ?? lastHeld ?? guard.lastStderr ?? 'no reason was given';
+		const script = argv[1] ? argv[1].split('/').pop() : 'fleet';
+		const exit = code === 0 ? 1 : code;
+		writeAllSync(
+			`${JSON.stringify(
+				{
+					ok: false,
+					error: `${script} exited ${exit} before writing its --json document: ${why}`,
+					exit,
+				},
+				null,
+				2
+			)}\n`
+		);
+		process.exitCode = exit;
+	});
+}
+installJsonGuard();
+
+/**
  * @param {{ json?: boolean, argv?: string[] }} [opts]
  *   `json` wins if given; otherwise `--json` is read from `argv`, which
  *   defaults to the real one. Injectable so the gate can exercise both modes
@@ -178,6 +258,7 @@ export function createEmitter(opts = {}) {
 	const json = opts.json ?? (argv.includes('--json') && !help);
 	/** @type {string[]} */
 	const held = [];
+	if (json) guard.helds.push(held);
 	let emitted = false;
 
 	const record = (prefix, parts) => {
@@ -228,6 +309,7 @@ export function createEmitter(opts = {}) {
 				);
 			}
 			emitted = true;
+			guard.wrote = true;
 			const document = JSON.stringify(payload, null, 2);
 			// `keepStdoutWhole()` already ran at construction; this re-asks because
 			// its ANSWER is what decides how to write, and a false one must route
