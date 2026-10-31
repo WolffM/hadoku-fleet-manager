@@ -60,6 +60,7 @@ import {
 } from './lib/toolchain-floor.mjs';
 import { createLiveDeps, runRefreshCycle } from './lib/refresh-cycle.mjs';
 import { createReleaseLookup } from './lib/tool-release.mjs';
+import { parseSuperseded, supersededScript } from './lib/superseded-installs.mjs';
 import { defaultSeedDeps, isSeedFinding, seedNode } from './lib/capability-seeds.mjs';
 import {
 	TOKEN_ENV,
@@ -296,6 +297,44 @@ async function refresh() {
 		report.ok = report.findings.length === 0;
 	}
 
+	// SUPERSEDED TOOL INSTALLS (lib/superseded-installs.mjs), on the same
+	// nightly cadence: a JDK or Maven left in a node user's home after the
+	// fleet's copy moved under the opt root. `--plan` lists without removing.
+	// A guest is never touched, and a node the sweep could not finish on is a
+	// finding, never "nothing to remove".
+	report.superseded = [];
+	for (const [name, entry] of machines) {
+		if (isGuestNode(entry)) continue;
+		const res = onNode(
+			name,
+			supersededScript({ ciUser: separateCiUser(name, manifest), apply: !PLAN }),
+			{
+				role: 'admin',
+				timeoutMs: 120_000,
+			}
+		);
+		const parsed = parseSuperseded(res.out);
+		if (!res.ok || !parsed.complete) {
+			report.findings.push({
+				node: name,
+				kind: 'superseded-unread',
+				reason: (res.stderr || res.error || 'the sweep did not finish').trim().slice(0, 300),
+			});
+			continue;
+		}
+		for (const e of parsed.entries) {
+			report.superseded.push({ node: name, ...e });
+			if (e.status === 'failed') {
+				report.findings.push({
+					node: name,
+					kind: 'superseded-failed',
+					reason: `could not remove ${e.dir}`,
+				});
+			}
+		}
+	}
+	report.ok = report.findings.length === 0;
+
 	// EACH SERVICE HOST'S OWN TUNNEL (service-hosts plan P1), on the same
 	// nightly cadence. Additive to `report`, like `seeds`. `--plan` checks
 	// without creating or writing anything. See scripts/lib/service-tunnels.mjs.
@@ -307,6 +346,10 @@ async function refresh() {
 
 	log('');
 	for (const f of report.findings) log(`FINDING ${f.node ?? '-'} [${f.kind}] ${f.reason}`);
+	for (const r of report.superseded) {
+		if (r.status !== 'keep')
+			log(`SUPERSEDED ${r.node} ${r.status} ${r.dir}${r.detail ? ` (${r.detail})` : ''}`);
+	}
 	for (const r of report.seeds ?? []) {
 		if (r.status === 'seeded') {
 			log(

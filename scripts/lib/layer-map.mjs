@@ -195,6 +195,7 @@ export const LAYER_MAP = [
 	{ glob: 'scripts/lib/node-profiles.mjs', layer: 'config' },
 	{ glob: 'scripts/lib/tenant-registry.mjs', layer: 'config' },
 	{ glob: 'scripts/lib/toolchain-floor.mjs', layer: 'config' },
+	{ glob: 'scripts/lib/superseded-installs.mjs', layer: 'config' }, // renders the toolchain-floor sweep
 	{ glob: 'scripts/lib/paths.mjs', layer: 'config' },
 	{ glob: 'scripts/lib/fleet-roster.mjs', layer: 'config' },
 	{ glob: 'scripts/lib/capability-seeds.mjs', layer: 'config' },
