@@ -1207,6 +1207,12 @@ if (_reallyUnreachable.length) {
 	log(`  treating a timeout as a failed capability strips labels off a healthy fleet.`);
 }
 
+/**
+ * What `--write` did to the record, for a caller that reads the document: the
+ * refresh cycle's guest recheck (#17) counts a turn as spent only when this is
+ * `ok`. `null` without `--write`.
+ */
+let written = null;
 if (WRITE) {
 	// THIS NO LONGER WRITES `machines[].labels` AT ALL.
 	//
@@ -1235,6 +1241,7 @@ if (WRITE) {
 	if (!target.ok) {
 		log(refusalLine(target, { writer: 'bootcamp', file: mp }));
 		findings++;
+		written = { ok: false, reason: `${target.reason}: ${target.why}` };
 	} else {
 		const raw = JSON.parse(readFileSync(mp, 'utf8'));
 		let recorded = 0;
@@ -1303,6 +1310,7 @@ if (WRITE) {
 			recorded++;
 		}
 		if (recorded && !changed) {
+			written = { ok: true, reason: 'unchanged' };
 			// RE-PROBED AND IDENTICAL. Not "nothing to write" — every node this run
 			// reached was read, and the record already in the manifest is the record
 			// this run would have written. Saying so is the point: a run that goes
@@ -1365,8 +1373,12 @@ if (WRITE) {
 			});
 			log(landingLine(landed, { writer: 'bootcamp' }));
 			if (!landed.ok) findings++;
+			written = landed.ok
+				? { ok: true, reason: landed.reason ?? 'landed' }
+				: { ok: false, reason: `${landed.reason}: ${landed.why ?? ''}`.trim() };
 		} else {
 			log(`\n  nothing to write — no node reachable`);
+			written = { ok: false, reason: 'no node reachable' };
 		}
 	}
 }
@@ -1400,6 +1412,7 @@ if (JSON_OUT)
 				tools: toolResults,
 				seeds: seedResultsByNode,
 				revocations: revocationChanges,
+				written,
 				...(proofLedger.ok ? {} : { jobProofLedgerError: proofLedger.reason }),
 				...(PROVE ? { prove: proveResults } : {}),
 			},

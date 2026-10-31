@@ -483,6 +483,25 @@ test('two consecutive --write runs on an unchanged node produce ONE commit, not 
 	}
 });
 
+test('#17: --json says what --write did to the record, landed or unchanged', () => {
+	// The refresh cycle spends a guest's recheck turn only on `written.ok`, so
+	// this field is read, not decoration.
+	const f = writableFixture(PROBE_ANSWER('7.1.5-0+deb13u1'));
+	try {
+		const first = JSON.parse(run(['--machine', CLAW, '--write', '--no-push', '--json'], f.env).out);
+		assert.equal(first.written.ok, true);
+		assert.notEqual(first.written.reason, 'unchanged');
+		const second = JSON.parse(
+			run(['--machine', CLAW, '--write', '--no-push', '--json'], f.env).out
+		);
+		assert.deepEqual(second.written, { ok: true, reason: 'unchanged' });
+		const dry = JSON.parse(run(['--machine', CLAW, '--json'], f.env).out);
+		assert.equal(dry.written, null, 'no --write, nothing written');
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
 test('`at` still advances, and a commit is still made, when the finding really changes', () => {
 	// The other half, and the one a naive "stop rewriting the record" fix loses.
 	const f = writableFixture(PROBE_ANSWER('7.1.5-0+deb13u1'));

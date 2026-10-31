@@ -33,7 +33,13 @@
  *   - One node at a time; do not START a node while the queue is under pressure.
  *     Backing off is `deferred`, never `ok`. A queue we could not read is a
  *     finding: "I could not look" is not "quiet".
- *   - A guest is never touched — no dependency is called for it.
+ *   - A guest's tools are never touched. Its only turn is a CHECK-ONLY recheck
+ *     (fleet-manager#17): `bootcamp --machine <guest> --write`, which on a guest
+ *     probes the presence half and installs nothing, so it may earn a label
+ *     whose tool is already there and may revoke one that fails. No drain, no
+ *     queue gate: it takes no capacity out. Same due rule as a claw's. A probe
+ *     that could not reach it is `unreachable`, never a pass, and every label
+ *     it revokes is a finding, because a guest carries production routing.
  *   - Unknown upstream, unreadable node, unreadable queue: findings with the
  *     reason carried, non-zero exit. Never "current".
  */
@@ -329,14 +335,9 @@ export async function runRefreshCycle({
 			// unchanged re-probe must not redeploy mgmt-api), so it cannot say
 			// when a node was last CHECKED; the cycle keeps that itself, or the
 			// same unchanged node would be picked every run.
-			.map(([name, entry]) => ({
-				name,
-				at:
-					Math.max(Date.parse(entry?.$capabilities?.at ?? '') || 0, lastCheckedMs(deps, name)) ||
-					NaN,
-			}))
-			.filter((n) => !Number.isFinite(n.at) || now() - n.at > RECHECK_DAYS * 86_400_000)
-			.sort((a, b) => (Number.isFinite(a.at) ? a.at : 0) - (Number.isFinite(b.at) ? b.at : 0));
+			.map(([name, entry]) => ({ name, at: lastRecordedMs(deps, name, entry) }))
+			.filter((n) => isDue(n.at, now()))
+			.sort(byStalest);
 		if (stale.length) {
 			const { name } = stale[0];
 			const i = nodes.findIndex((n) => n.node === name);
@@ -344,11 +345,32 @@ export async function runRefreshCycle({
 			log(`── ${name}  [recheck: bootcamp record older than ${RECHECK_DAYS} days]`);
 			todo.push({ name, tools: toolsByNode.get(name), work: [], toolFindings: [], recheck: true });
 		}
+
+		// ONE GUEST RECHECK, on its own turn: it drains nothing, so it does not
+		// compete with a claw's. Before #17 a guest was never rechecked, and hokon
+		// could not earn `data-peer` until someone bootcamped it by hand.
+		const guest = machines
+			.filter(([, entry]) => isGuestNode(entry))
+			.map(([name, entry]) => ({ name, at: lastRecordedMs(deps, name, entry) }))
+			.filter((n) => isDue(n.at, now()))
+			.sort(byStalest)[0];
+		if (guest) {
+			const i = nodes.findIndex((n) => n.node === guest.name);
+			nodes.splice(i, 1);
+			log(`── ${guest.name}  [guest recheck: check-only, record older than ${RECHECK_DAYS} days]`);
+			todo.push({ name: guest.name, tools: [], work: [], toolFindings: [], guest: true });
+		}
 	}
 
 	if (plan) {
 		for (const t of todo) {
-			nodes.push({ node: t.name, status: 'planned', work: t.work, findings: t.toolFindings });
+			nodes.push({
+				node: t.name,
+				status: 'planned',
+				work: t.work,
+				findings: t.toolFindings,
+				...(t.guest ? { guest: true } : {}),
+			});
 		}
 		return finish({ nodes, findings, latestById, plan });
 	}
@@ -359,6 +381,18 @@ export async function runRefreshCycle({
 		const { name, tools, work, toolFindings } = t;
 		const rec = { node: name, work, findings: toolFindings };
 		nodes.push(rec);
+
+		if (t.guest) {
+			rec.guest = true;
+			if (deadline !== null && now() >= deadline) {
+				rec.status = 'deferred';
+				rec.reason = 'out of time budget; not started (the next run picks it up)';
+				log(`── ${name}  [deferred] ${rec.reason}`);
+				continue;
+			}
+			await recheckGuest(name, rec, deps, finding, log);
+			continue;
+		}
 
 		if (halted) {
 			rec.status = 'deferred';
@@ -528,6 +562,53 @@ async function rebootcamp(name, rec, deps, finding, log) {
 	}
 }
 
+/**
+ * A guest's check-only recheck (#17). Reached and recorded is `rechecked`, even
+ * when bootcamp exits 1 on a finding of its own: the record moved, so the turn is
+ * spent. Not reached is `unreachable`. Each label it revoked is a finding of
+ * its own, named, because on a guest it withdraws production routing at once.
+ */
+async function recheckGuest(name, rec, deps, finding, log) {
+	const b = await attempt(() => deps.rebootcamp(name));
+	const r = b.ok ? (b.value ?? {}) : { ok: false, reason: b.reason };
+	if (r.unreachable) {
+		rec.status = 'unreachable';
+		rec.reason = r.reason ?? 'the probe did not reach the node';
+		finding(name, 'unreachable', `guest recheck: ${rec.reason}`);
+		log(`── ${name}  [UNREACHABLE] guest recheck: ${rec.reason}`);
+		return;
+	}
+	if (!r.recorded) {
+		rec.status = 'finding';
+		rec.rebootcamp = r.reason ?? 'failed';
+		finding(name, 'rebootcamp-failed', `bootcamp did not re-record this guest: ${rec.rebootcamp}`);
+		log(`── ${name}  [FINDING] guest recheck failed: ${rec.rebootcamp}`);
+		return;
+	}
+	await attempt(() => deps.markChecked?.(name));
+	rec.status = 'rechecked';
+	rec.revoked = r.revoked ?? [];
+	rec.cleared = r.cleared ?? [];
+	for (const v of rec.revoked) {
+		finding(
+			name,
+			'guest-revoked',
+			`REVOKED ${v.capability} on a guest — its routing is withdrawn now: ${v.reason ?? 'its probe failed'}`
+		);
+		log(`── ${name}  REVOKED ${v.capability} (guest): ${v.reason ?? 'its probe failed'}`);
+	}
+	log(`── ${name}  [rechecked: guest, check-only]`);
+}
+
+/** When this node was last recorded or rechecked, epoch ms; NaN for never. */
+function lastRecordedMs(deps, name, entry) {
+	return (
+		Math.max(Date.parse(entry?.$capabilities?.at ?? '') || 0, lastCheckedMs(deps, name)) || NaN
+	);
+}
+const isDue = (at, nowMs) => !Number.isFinite(at) || nowMs - at > RECHECK_DAYS * 86_400_000;
+const byStalest = (a, b) => (Number.isFinite(a.at) ? a.at : 0) - (Number.isFinite(b.at) ? b.at : 0);
+
 async function attempt(fn) {
 	try {
 		return { ok: true, value: await fn() };
@@ -554,7 +635,7 @@ async function putBack(name, rec, deps, finding, log, state) {
 }
 
 function finish({ nodes, findings, latestById, plan }) {
-	const looked = nodes.filter((n) => n.status !== 'guest').length;
+	const looked = nodes.filter((n) => n.status !== 'guest' && !n.guest).length;
 	if (looked === 0) {
 		findings.push({
 			node: null,
@@ -754,11 +835,31 @@ export function createLiveDeps() {
 				}
 			);
 			if (r.error) return { ok: false, reason: errText(r.error) };
-			if (r.status !== 0) {
-				const tail = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim().split('\n').slice(-3).join(' ');
-				return { ok: false, reason: `exit ${r.status}: ${tail}`.slice(0, 300) };
+			// The document, for a guest's recheck (#17): whether the node was
+			// reached, whether the record landed, and what was revoked. No
+			// document is a failed run, not proof the node is down.
+			let doc = null;
+			try {
+				doc = JSON.parse(r.stdout);
+			} catch {
+				doc = null;
 			}
-			return { ok: true };
+			const tail = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim().split('\n').slice(-3).join(' ');
+			const forNode = (list) => (list ?? []).filter((v) => v.node === node);
+			const outcome = {
+				unreachable: (doc?.unreachable ?? []).includes(node),
+				recorded: doc?.written?.ok === true,
+				revoked: forNode(doc?.revocations?.revoked),
+				cleared: forNode(doc?.revocations?.cleared),
+			};
+			if (r.status !== 0) {
+				const reason =
+					doc === null
+						? `exit ${r.status} with no document: ${tail}`
+						: (doc.error ?? doc.written?.reason ?? `exit ${r.status}: ${tail}`);
+				return { ok: false, reason: String(reason).slice(0, 300), ...outcome };
+			}
+			return { ok: true, ...outcome };
 		},
 	};
 }
