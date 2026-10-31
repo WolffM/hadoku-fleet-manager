@@ -774,6 +774,7 @@ case " $* " in
 		case " $* " in *"user@"*) echo "/fake/user-manager" ;; *) echo "" ;; esac
 		exit 0 ;;
 	*" -p DefaultIOAccounting "*) echo "\${SHIM_IOACCT:-no}"; exit 0 ;;
+	*" -p ActiveState "*) echo "\${SHIM_SLICE_STATE:-active}"; exit 0 ;;
 	esac
 	echo ""; exit 0 ;;
 esac
@@ -829,6 +830,9 @@ function runIoInstaller({
 	// `false` stands in for a node where the slice is not where we looked — the
 	// reads must answer "I could not look", never "no".
 	cgroup = true,
+	// `false`: a freshly booted node. The manager's cgroup exists, the slice has
+	// none yet, and the user manager reports the slice inactive.
+	sliceRealized = true,
 	// The USER MANAGER's own cgroup.controllers — what its parent hands it. The
 	// re-exec waits on this, so the default is the converged state; the pending
 	// test passes a set without io.
@@ -841,7 +845,7 @@ function runIoInstaller({
 	const bin = join(dir, 'bin');
 	const slice = join(dir, 'cg', 'fake', 'user-manager', 'runners.slice');
 	mkdirSync(bin, { recursive: true });
-	if (cgroup) mkdirSync(slice, { recursive: true });
+	if (cgroup) mkdirSync(sliceRealized ? slice : dirname(slice), { recursive: true });
 	for (const [name, body] of [
 		['sudo', SUDO_SHIM],
 		['systemctl', SYSTEMCTL_SHIM],
@@ -850,7 +854,9 @@ function runIoInstaller({
 		writeFileSync(join(bin, name), body);
 		chmodSync(join(bin, name), 0o755);
 	}
-	if (cgroup) {
+	if (cgroup && !sliceRealized) {
+		writeFileSync(join(dirname(slice), 'cgroup.controllers'), `${mgrControllers}\n`);
+	} else if (cgroup) {
 		writeFileSync(join(dirname(slice), 'cgroup.controllers'), `${mgrControllers}\n`);
 		writeFileSync(join(slice, 'cgroup.controllers'), `${controllers}\n`);
 		writeFileSync(join(slice, 'cgroup.subtree_control'), subtree ? `${subtree}\n` : '');
@@ -882,6 +888,7 @@ function runIoInstaller({
 			...(standingOom === null ? {} : { SHIM_STANDING: STANDING }),
 			SHIM_REC: rec,
 			SHIM_IOACCT: ioAcct,
+			SHIM_SLICE_STATE: sliceRealized ? 'active' : 'inactive',
 			// One second, not ten: the fixture answers immediately or not at all.
 			IO_WAIT_SECS: '1',
 			APPLY: apply,
@@ -1006,6 +1013,28 @@ test('a runner mid-job DEFERS the re-exec instead of taking it', () => {
 	} finally {
 		rmSync(r.dir, { recursive: true, force: true });
 	}
+});
+
+/**
+ * A FRESHLY BOOTED NODE. Nothing has started in the slice, so the user manager
+ * reports it inactive and there is no cgroup directory. That is `unrealized`,
+ * and the auditor accepts it only beside io_acct=yes. Before this, it read as
+ * "-" and held all eight claws out after the 2026-10-31 reboots.
+ */
+test('an inactive slice with no cgroup is `unrealized`, and passes only with io accounting on', () => {
+	const r = runIoInstaller({
+		controllers: 'cpu memory pids io',
+		ioAcct: 'yes',
+		sliceRealized: false,
+	});
+	try {
+		assert.equal(r.summary.io_ctrl, 'unrealized');
+		assert.equal(r.summary.io_subtree, 'empty');
+	} finally {
+		rmSync(r.dir, { recursive: true, force: true });
+	}
+	const src = code(mjs());
+	assert.match(src, /kv\.io_ctrl === 'unrealized' && kv\.io_acct === 'yes'/);
 });
 
 test('the io facts come from the KERNEL and the live manager, and reach the summary', () => {
@@ -1263,7 +1292,7 @@ test('io_deleg separates "the drop-in landed" from "the manager is using it"', (
 	assert.match(src, /kv\.io_deleg !== 'yes'/, 'a missing delegation is its own problem');
 	assert.match(
 		src,
-		/else if \(kv\.io_ctrl !== 'yes'\)/,
+		/else if \(kv\.io_ctrl !== 'yes'(?: && !\(kv\.io_ctrl === 'unrealized' && kv\.io_acct === 'yes'\))?\)/,
 		'and io_ctrl is only reported once the delegation is known to be there'
 	);
 	assert.match(src, /kv\.io_deleg === undefined/, 'a summary without it did not look');

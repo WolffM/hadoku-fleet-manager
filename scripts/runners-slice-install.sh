@@ -734,6 +734,19 @@ fi
 io_deleg=$(has_io "$CGROOT$mgr_cg/cgroup.controllers")
 io_ctrl=$(has_io "$CGROOT$slice_cg/cgroup.controllers")
 io_subtree=$(has_io "$CGROOT$slice_cg/cgroup.subtree_control")
+# A SLICE NOTHING HAS STARTED IN YET HAS NO CGROUP. After a reboot, until the
+# first runner unit starts, systemd has not realized the slice, so there is no
+# directory to read and has_io answers "-". That read as "io has not reached the
+# slice" and held all eight claws out of service after the 2026-10-31 reboots.
+# It is its own value: whether io WILL reach the slice is io_deleg plus io_acct,
+# which do not depend on the slice existing, and the auditor requires both.
+# Only when the user manager itself says the slice is inactive AND its own
+# cgroup is there: a missing manager cgroup is still "I could not look".
+slice_state=$(XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user show "$SLICE_NAME" -p ActiveState --value 2>/dev/null)
+if [ "$slice_state" = inactive ] && [ -n "$mgr_cg" ] && [ -d "$CGROOT$mgr_cg" ] && [ ! -d "$CGROOT$slice_cg" ]; then
+	io_ctrl=unrealized
+	io_subtree=empty
+fi
 # NOTHING TO MEASURE IS NOT A MEASUREMENT OF "no". `cgroup.subtree_control` lists
 # what a cgroup enables for its MEMBERS, so a slice with no members carries an
 # empty one for every controller, not just io — measured on claw-2 2026-09-16,

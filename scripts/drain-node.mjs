@@ -106,7 +106,7 @@ const R = '\x1b[31m',
 // parse failure THROWS rather than defaulting to {}: reporting "nothing is
 // drained" because the file is corrupt would put work back onto a node
 // somebody is holding a screwdriver over.
-const write = writeDrainDoc;
+const write = (next) => writeDrainDoc(next, doc);
 
 /**
  * The fleet manifest, for ROLES only. Unreadable is `null`, never `{}`.

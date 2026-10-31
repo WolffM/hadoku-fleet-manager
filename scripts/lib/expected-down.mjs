@@ -62,10 +62,19 @@
  * They are not consolidated here — that is a separate change — but new callers
  * should use `readDrains()` rather than adding a seventh.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	rmSync,
+	statSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { manifest, stateDir } from './paths.mjs';
+import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
 import { effectiveDrains, parseDrainDoc, pruneDrainDoc } from '../../dist/runners/drain.js';
 
 /**
@@ -100,16 +109,92 @@ export function readDrainDoc() {
  * The one script-side WRITE, shared by `fleet drain` and `fleet hosting`.
  * Lapsed records are pruned on the way out. Always to the state dir; the
  * legacy copy is removed so exactly one file answers afterwards.
+ *
+ * A MERGE, NOT A REPLACE. `base` is the doc the caller read; only what it
+ * changed between `base` and `next` (per node record, per planned entry) is
+ * applied, onto the file as it stands NOW, under a lock. Until 2026-10-31 this
+ * wrote the caller's whole doc, so two writers that overlapped (a driver
+ * draining four nodes while mgmt-api's hosting converger and reboot pass ran
+ * `fleet hosting` / `fleet drain`) lost one update: claw-9's drain vanished
+ * and it kept taking jobs through its own reboot window. The write is
+ * atomic (`writeFileAtomic`), so a reader never sees half a file.
  */
-export function writeDrainDoc(doc) {
+export function writeDrainDoc(next, base) {
+	if (!base)
+		throw new Error(
+			'writeDrainDoc: pass the doc you read as `base`, so only your change is applied'
+		);
 	const p = join(stateDir(), 'fleet-drain.json');
 	mkdirSync(dirname(p), { recursive: true });
-	writeFileSync(
-		p,
-		`${JSON.stringify({ $comment: 'Nodes held out of service. The fast loop and the dispatcher both read this. Lives in the state dir, NOT a git checkout.', ...pruneDrainDoc(doc) }, null, 2)}\n`
-	);
+	withDrainLock(`${p}.lock`, () => {
+		const merged = mergeDrainDoc(readDrainDoc(), base, next);
+		writeFileAtomic(
+			p,
+			`${JSON.stringify({ $comment: 'Nodes held out of service. The fast loop and the dispatcher both read this. Lives in the state dir, NOT a git checkout.', ...pruneDrainDoc(merged) }, null, 2)}\n`
+		);
+	});
 	const legacy = manifest('fleet-drain.json');
 	if (legacy !== p && existsSync(legacy)) rmSync(legacy, { force: true });
+}
+
+/**
+ * Apply the change `base` -> `next` onto `current`. A node record the caller
+ * did not touch keeps whatever `current` holds; one it set or deleted is set
+ * or deleted. Planned entries are matched by value.
+ */
+export function mergeDrainDoc(current, base, next) {
+	const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+	const nodes = { ...(current.nodes ?? {}) };
+	for (const k of new Set([...Object.keys(base.nodes ?? {}), ...Object.keys(next.nodes ?? {})])) {
+		if (same(base.nodes?.[k], next.nodes?.[k])) continue;
+		if (next.nodes?.[k] === undefined) delete nodes[k];
+		else nodes[k] = next.nodes[k];
+	}
+	const has = (list, x) => (list ?? []).some((y) => same(x, y));
+	const removed = (base.planned ?? []).filter((x) => !has(next.planned, x));
+	const added = (next.planned ?? []).filter((x) => !has(base.planned, x));
+	const planned = [...(current.planned ?? []).filter((x) => !has(removed, x)), ...added];
+	return { nodes, planned };
+}
+
+const LOCK_WAIT_MS = 15_000;
+const LOCK_STALE_MS = 60_000;
+
+/**
+ * An exclusive lock on the drain file, taken by creating `lock` with O_EXCL.
+ * A lock older than LOCK_STALE_MS is a writer that died holding it and is
+ * taken over. Waiting past LOCK_WAIT_MS THROWS: a drain that silently did not
+ * land is the failure this lock exists to end.
+ */
+function withDrainLock(lock, fn) {
+	const deadline = Date.now() + LOCK_WAIT_MS;
+	for (;;) {
+		try {
+			closeSync(openSync(lock, 'wx'));
+			break;
+		} catch (err) {
+			if (err.code !== 'EEXIST') throw err;
+		}
+		let age = 0;
+		try {
+			age = Date.now() - statSync(lock).mtimeMs;
+		} catch (err) {
+			if (err.code !== 'ENOENT') throw err;
+			continue; // released between our open and our stat
+		}
+		if (age > LOCK_STALE_MS) {
+			rmSync(lock, { force: true });
+			continue;
+		}
+		if (Date.now() > deadline)
+			throw new Error(`${lock} held by another writer for over ${LOCK_WAIT_MS / 1000} s`);
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+	}
+	try {
+		return fn();
+	} finally {
+		rmSync(lock, { force: true });
+	}
 }
 
 /**

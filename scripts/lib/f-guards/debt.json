@@ -33,7 +33,6 @@
     "scripts/floor-probe.mjs:expiresAtMs#1",
     "scripts/join-workload-benchmark.mjs:report#1",
     "scripts/lan-reserve.mjs:rendered#1",
-    "scripts/lib/expected-down.mjs:p#1",
     "scripts/lib/refresh-cycle.mjs:log#1",
     "scripts/lib/slice-inventory-run.mjs:m#1",
     "scripts/node-status.mjs:document#3",

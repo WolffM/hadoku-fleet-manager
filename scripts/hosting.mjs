@@ -457,10 +457,13 @@ if (action === 'end') {
 		refuse(`${refusal} Use --in 15m or later, or --force if the box is failing.`);
 	const until = new Date(endMs).toISOString();
 	if (current.mode === 'whole') {
-		writeDrainDoc({
-			nodes: { ...drainDoc.nodes, [node]: { ...wholeRec, until } },
-			planned: drainDoc.planned,
-		});
+		writeDrainDoc(
+			{
+				nodes: { ...drainDoc.nodes, [node]: { ...wholeRec, until } },
+				planned: drainDoc.planned,
+			},
+			drainDoc
+		);
 	} else {
 		writeHostingDoc(
 			{ nodes: { ...hostingDoc.nodes, [node]: { ...sharedRec, until } } },
@@ -477,7 +480,10 @@ if (action === 'keep') {
 	if (!rec.until) refuse(`${node} has no end scheduled.`);
 	const { until: was, ...kept } = rec;
 	if (wholeRec)
-		writeDrainDoc({ nodes: { ...drainDoc.nodes, [node]: kept }, planned: drainDoc.planned });
+		writeDrainDoc(
+			{ nodes: { ...drainDoc.nodes, [node]: kept }, planned: drainDoc.planned },
+			drainDoc
+		);
 	else writeHostingDoc({ nodes: { ...hostingDoc.nodes, [node]: kept } }, stateDir());
 	say(`✓ ${node} keeps hosting; the end at ${was} is taken back.`);
 	finish(true, { state: 'kept', was, mode: wholeRec ? 'whole' : 'shared' });
@@ -535,7 +541,7 @@ if (action === 'remove') {
 	if (wholeRec) {
 		const nodes = { ...drainDoc.nodes };
 		delete nodes[node];
-		writeDrainDoc({ nodes, planned: drainDoc.planned });
+		writeDrainDoc({ nodes, planned: drainDoc.planned }, drainDoc);
 	}
 	if (sharedRec) {
 		const nodes = { ...hostingDoc.nodes };
@@ -641,10 +647,13 @@ if (shared) {
 		`✓ ${node} hosts ${tenant} beside CI; the dispatcher holds the slice back from its next pass.`
 	);
 } else {
-	writeDrainDoc({
-		nodes: { ...drainDoc.nodes, [node]: { ...base, kind: 'hosting', hosting: declared } },
-		planned: drainDoc.planned,
-	});
+	writeDrainDoc(
+		{
+			nodes: { ...drainDoc.nodes, [node]: { ...base, kind: 'hosting', hosting: declared } },
+			planned: drainDoc.planned,
+		},
+		drainDoc
+	);
 	say(`✓ ${node} is a ${tenant} hosting node; CI is held off from the next fast-loop tick.`);
 }
 // The dispatcher re-reads the record every pass (15 s).

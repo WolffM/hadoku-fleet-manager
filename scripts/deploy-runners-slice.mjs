@@ -730,7 +730,10 @@ for (const [name, m] of nodes) {
 				`the system manager has not delegated io to the user manager (io_deleg=${kv.io_deleg}) — ` +
 					'the Delegate= drop-in is missing or has not been realized; --confirm writes it'
 			);
-		else if (kv.io_ctrl !== 'yes')
+		// `unrealized`: the slice has no cgroup yet (nothing started in it since
+		// boot). Accepted only beside io_acct=yes, checked just below, so the
+		// first unit that starts carries io.
+		else if (kv.io_ctrl !== 'yes' && !(kv.io_ctrl === 'unrealized' && kv.io_acct === 'yes'))
 			problems.push(
 				`io is delegated to the user manager but has not reached ${sliceName} ` +
 					`(io_deleg=yes, io_ctrl=${kv.io_ctrl}) — the user manager has not re-exec'd into the ` +
