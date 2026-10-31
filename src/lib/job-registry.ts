@@ -707,6 +707,15 @@ export const JOB_REGISTRY: JobEntry[] = [
 		pager: { repageMs: 30 * 24 * 60 * 60_000, deferPageMs: 3 * 24 * 60 * 60_000 },
 		why: "The backstop's hand-installed yt-dlp and deno, 30 days behind their newest release, posted at most monthly for the operator to update by hand (fleet-manager#34, operator 2026-10-31). Reads only. src/backstop-tools.ts owns the clock.",
 	},
+	{
+		name: 'fleet:capacity-samples',
+		args: [],
+		kind: 'recorder',
+		detectionBudget: '10m',
+		cadence: { clockMs: 5 * 60_000 },
+		contract: 'in-process',
+		why: 'T4 (refactor plan §7.3): one admission-state row per node — declared maxConcurrent, the admitting budget, drained, and the refusal reason when one is on record — written to capacity-sample-store.ts every 5 minutes. src/capacity-sample.ts owns the clock; unlike the three converger rows above it spawns nothing — it reads buildFleetReport() and fleet-drain.json, both already in this process, so there is no `sub` and no mgmtApiFile at all.',
+	},
 ];
 
 /**

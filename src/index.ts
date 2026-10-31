@@ -19,6 +19,7 @@ import { startBackstopTools } from './backstop-tools.js';
 import { startHostingConverge } from './hosting-converge.js';
 import { startHostingVerify } from './hosting-verify.js';
 import { startProvisioningConverge } from './provisioning-converge.js';
+import { startCapacitySampling } from './capacity-sample.js';
 
 export type { FleetHost, FleetHostLogger } from './host.js';
 export type { RunnerHealthSnapshot } from './runner-health.js';
@@ -195,6 +196,9 @@ export function createFleetManager(host: FleetHost): FleetManager {
 			startHostingVerify();
 			// The backstop's hand-installed yt-dlp and deno: a reminder, at most monthly (#34).
 			startBackstopTools();
+			// T4 (refactor plan §7.3): one admission-state row per node, every 5
+			// minutes, read entirely from state the loops above already hold.
+			startCapacitySampling();
 		},
 		snapshot: () => getRunnerHealthSnapshot(),
 	};

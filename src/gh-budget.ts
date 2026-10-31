@@ -79,6 +79,11 @@ import { join } from 'node:path';
 import { githubToken, hostInstalled, logger, postDiscord, stateDir } from './host.js';
 import { writeJsonAtomic } from './lib/atomic-json.js';
 import { ghFetchRaw } from './lib/github-client.js';
+import {
+	ghBudgetHistoryStore,
+	GH_BUDGET_HISTORY_FILE,
+	type GhBudgetHistoryRow,
+} from './gh-budget-history-store.js';
 import type { FleetGithubBudget, GhCaller } from './fleet-report-types.js';
 
 export type { GhCaller } from './fleet-report-types.js';
@@ -346,7 +351,7 @@ function closeSuperseded(
 		if (w.fingerprint !== fingerprint || w.resource !== resource) continue;
 		if (w.resetAtMs + RESET_TOLERANCE_MS >= resetAtMs) continue;
 		if (nowMs < w.resetAtMs + RESET_TOLERANCE_MS) continue;
-		closeWindow(w);
+		closeWindow(w, nowMs);
 		windows.delete(k);
 		lastSaveMs = 0;
 	}
@@ -450,8 +455,16 @@ function spenderLine(w: BudgetWindow, top = 5): string {
 /**
  * The window's last word, in the log. This line is the forensics the 10-16
  * investigation did not have: one per token per hour, naming every spender.
+ *
+ * `nowMs` is the caller's own clock (`closeSuperseded`'s/`loadBooks`'s
+ * `nowMs` parameter), NEVER a fresh `Date.now()` read here — every other
+ * time-sensitive decision in this module threads `nowMs` through for
+ * exactly this reason: a fresh read would silently decouple this function's
+ * notion of "now" from the one the rest of a test (or a mocked clock) is
+ * using, which is also what `recordHistoryRow`'s retention math needs to
+ * agree with.
  */
-function closeWindow(w: BudgetWindow): void {
+function closeWindow(w: BudgetWindow, nowMs: number): void {
 	const restarts = w.restarts
 		? `; books carried across ${w.restarts} restart${w.restarts === 1 ? '' : 's'}`
 		: '';
@@ -460,6 +473,39 @@ function closeWindow(w: BudgetWindow): void {
 			`(reset ${new Date(w.resetAtMs).toISOString().slice(11, 16)}Z): ` +
 			`used ${w.used}/${w.limit}, lowest remaining ${w.remaining} — ${spenderLine(w, 12)}${restarts}`
 	);
+	recordHistoryRow(w, nowMs);
+}
+
+/**
+ * T5 (refactor plan §7.3): one history row, exactly what the log line above
+ * just said, structured. Called from the ONE place that line is written, so
+ * a row and a log line are always the same event. NEVER throws into
+ * `closeWindow` — a failure here must cost this hour's history row, never
+ * the budget accounting `closeWindow` is itself part of.
+ */
+function recordHistoryRow(w: BudgetWindow, nowMs: number): void {
+	try {
+		const row: GhBudgetHistoryRow = {
+			windowEnd: new Date(w.resetAtMs).toISOString(),
+			token: nameOf(w.fingerprint),
+			resource: w.resource,
+			limit: w.limit,
+			usedAtEnd: w.used,
+			remainingAtEnd: w.remaining,
+			byCaller: spenders(w).map((s) => ({
+				caller: s.caller,
+				charged: s.charged,
+				notModified: s.notModified,
+			})),
+			restarts: w.restarts,
+		};
+		ghBudgetHistoryStore(join(stateDir(), GH_BUDGET_HISTORY_FILE)).append([row], nowMs);
+	} catch (err) {
+		logger.warn(
+			`[gh-budget] could not record the window-ended history row: ` +
+				`${err instanceof Error ? err.message : String(err)} — budget accounting is unaffected`
+		);
+	}
 }
 
 interface SavedWindow extends Omit<BudgetWindow, 'byCaller' | 'metered' | 'timeline'> {
@@ -518,7 +564,7 @@ function loadBooks(nowMs: number): void {
 			restarts: (Number.isFinite(saved.restarts) ? saved.restarts : 0) + 1,
 		};
 		if (nowMs >= w.resetAtMs + RESET_TOLERANCE_MS) {
-			closeWindow(w);
+			closeWindow(w, nowMs);
 			continue;
 		}
 		const key = `${w.fingerprint}:${w.resource}:${w.resetAtMs}`;

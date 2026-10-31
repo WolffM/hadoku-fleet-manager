@@ -1,7 +1,9 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-import { __setHostForTesting } from '../host.js';
+import { __setHostForTesting, stateDir } from '../host.js';
 import { testHost } from './install-test-host.js';
 import {
 	recordGhResponse,
@@ -15,6 +17,7 @@ import {
 	meterGhPool,
 	readGhPool,
 } from '../gh-budget.js';
+import { GH_BUDGET_HISTORY_FILE, ghBudgetHistoryStore } from '../gh-budget-history-store.js';
 import {
 	ghGet,
 	ghGetConditional,
@@ -32,6 +35,9 @@ const realFetch = globalThis.fetch;
 let posts: string[] = [];
 let infos: string[] = [];
 
+/** T5's own file — `__resetGhBudgetForTesting` only clears `gh-budget.json`. */
+const historyPath = () => join(stateDir(), GH_BUDGET_HISTORY_FILE);
+
 beforeEach(() => {
 	__resetGhBudgetForTesting();
 	__resetGhBlackoutForTesting();
@@ -48,9 +54,11 @@ beforeEach(() => {
 			recordQuietly() {},
 		},
 	});
+	rmSync(historyPath(), { force: true });
 });
 afterEach(() => {
 	globalThis.fetch = realFetch;
+	rmSync(historyPath(), { force: true });
 	__setHostForTesting(testHost);
 });
 
@@ -608,5 +616,85 @@ test('readGhPool: reads straight through an active PRIMARY blackout', async () =
 		globalThis.fetch = originalFetch;
 		__setHostForTesting(testHost);
 		__resetGhBlackoutForTesting();
+	}
+});
+
+// ── T5: the window-ended history row ────────────────────────────────────────
+
+test('a window ending writes exactly one history row — the same figures the log line just printed', async () => {
+	await withGhCaller('reap', async () => recordGhResponse('tok', 200, headers(2000), T0));
+	await withGhCaller('mint', async () => recordGhResponse('tok', 201, headers(1999), T0));
+	// A later reset closes the window, same trigger as the "a new window logs
+	// the old one" test above — `closeWindow` is the ONE place both the log
+	// line and this row are produced.
+	recordGhResponse('tok', 200, headers(4999, RESET_S + 3600), T0 + 46 * 60_000);
+	const read = ghBudgetHistoryStore(historyPath()).read();
+	assert.equal(read.rows.length, 1);
+	const row = read.rows[0];
+	assert.equal(row.windowEnd, new Date(RESET_S * 1000).toISOString());
+	assert.equal(row.resource, 'core');
+	assert.equal(row.limit, 5000);
+	assert.equal(row.usedAtEnd, 3001);
+	assert.equal(row.remainingAtEnd, 1999);
+	assert.equal(row.restarts, 0);
+	assert.deepEqual(row.byCaller.map((c) => [c.caller, c.charged, c.notModified]).sort(), [
+		['mint', 1, 0],
+		['reap', 1, 0],
+	]);
+});
+
+test('a window that produces no charged calls still writes its row', () => {
+	recordGhResponse('tok', 304, headers(5000), T0);
+	recordGhResponse('tok', 200, headers(4999, RESET_S + 3600), T0 + 46 * 60_000);
+	assert.equal(ghBudgetHistoryStore(historyPath()).read().rows.length, 1);
+});
+
+test('two tokens closing windows write two rows, never merged into one', () => {
+	labelGhToken('tok-a', 'TOKEN_A');
+	labelGhToken('tok-b', 'TOKEN_B');
+	recordGhResponse('tok-a', 200, headers(2000), T0);
+	recordGhResponse('tok-b', 200, headers(3000), T0);
+	recordGhResponse('tok-a', 200, headers(4999, RESET_S + 3600), T0 + 46 * 60_000);
+	recordGhResponse('tok-b', 200, headers(4999, RESET_S + 3600), T0 + 46 * 60_000);
+	const rows = ghBudgetHistoryStore(historyPath()).read().rows;
+	assert.equal(rows.length, 2);
+	const tokens = rows.map((r) => r.token).sort();
+	assert.match(tokens[0]!, /^TOKEN_A \(sha256:[0-9a-f]{8}\)$/);
+	assert.match(tokens[1]!, /^TOKEN_B \(sha256:[0-9a-f]{8}\)$/);
+});
+
+test('a restart carries the window and its restart count into the row', () => {
+	recordGhResponse('tok', 200, headers(2000), T0);
+	__restartGhBudgetForTesting();
+	// The restarted process's own loadBooks sees the reset already passed and
+	// closes the carried-over window itself — the same path mgmt-api's real
+	// restart takes, and the one `closeWindow` call this test needs to reach.
+	recordGhResponse('tok', 200, headers(4999, RESET_S + 3600), RESET_S * 1000 + 1000);
+	const rows = ghBudgetHistoryStore(historyPath()).read().rows;
+	assert.equal(rows.length, 1);
+	assert.equal(rows[0].restarts, 1);
+});
+
+test("a history write failure is logged and never reaches recordGhResponse's caller", () => {
+	// A FILE sitting where the history file's own parent directory needs to be
+	// — writeFileAtomic's mkdirSync throws ENOTDIR, a real failure, no mock.
+	const blocker = join(stateDir(), 'blocked-state-dir');
+	writeFileSync(blocker, 'not a directory');
+	const warns: string[] = [];
+	__setHostForTesting({
+		...testHost,
+		logger: { info: (m: string) => infos.push(m), warn: (m: string) => warns.push(m), error() {} },
+		stateDir: blocker,
+	});
+	try {
+		assert.doesNotThrow(() => {
+			recordGhResponse('tok', 200, headers(2000), T0);
+			recordGhResponse('tok', 200, headers(4999, RESET_S + 3600), T0 + 46 * 60_000);
+		});
+		assert.ok(warns.some((w) => w.includes('could not record the window-ended history row')));
+		// And the thing this whole module exists for is unaffected by that failure.
+		assert.equal(getGhBudgetSnapshot(T0 + 46 * 60_000)[0].remaining, 4999);
+	} finally {
+		rmSync(blocker, { force: true });
 	}
 });

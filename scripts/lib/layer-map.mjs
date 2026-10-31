@@ -145,6 +145,10 @@ export const LAYER_MAP = [
 	// own day files), read back by job-runner.ts and emit.mjs through its
 	// exported functions, same "state" shape as its neighbours above.
 	{ glob: 'src/job-run-store.ts', layer: 'state' },
+	// Wave 5n lane B (plan §7.3, T4): one declared writer, read back by
+	// nothing yet but `capacity-sample.ts`'s own tests — same "JSONL store
+	// behind a one-file module" shape as job-rollup-store.ts right above.
+	{ glob: 'src/capacity-sample-store.ts', layer: 'state' },
 	{ glob: 'scripts/lib/enrollment-record.mjs', layer: 'state' },
 	{ glob: 'scripts/lib/job-proof-record.mjs', layer: 'state' },
 	// Wave 5k lane D split of floor-probe.mjs (plan §4.3 #12): the harness's own
@@ -171,6 +175,13 @@ export const LAYER_MAP = [
 	{ glob: 'src/cli.ts', layer: 'surfaces' },
 	{ glob: 'src/server.ts', layer: 'surfaces' },
 	{ glob: 'src/routes/fleet.ts', layer: 'surfaces' },
+	// Wave 5n lane B (plan §7.3, T4): joins `buildFleetReport()` — the SAME
+	// cross-domain assembly GET /fleet reads — into a telemetry row; it is
+	// `surfaces`, not `domain`/`observation`, for the identical reason
+	// routes/fleet.ts itself is: nothing below surfaces may import a
+	// ci-scheduling-domain fact, and this file needs exactly the ones
+	// routes/fleet.ts already assembled rather than re-deriving them.
+	{ glob: 'src/capacity-sample.ts', layer: 'surfaces' },
 	{ glob: 'src/fleet-report-types.ts', layer: 'surfaces' },
 	{ glob: 'src/telemetry-vocabulary.ts', layer: 'surfaces' },
 	// herdr/ plugin support: physically under scripts/lib, but it IS the
@@ -247,6 +258,12 @@ export const LAYER_MAP = [
 	{ glob: 'src/lib/dispatch-poll-cache.ts', layer: 'access' },
 	{ glob: 'src/node-shell.ts', layer: 'access' },
 	{ glob: 'src/gh-budget.ts', layer: 'access' },
+	// Wave 5n lane B (plan §7.3, T5): `gh-budget.ts`'s own history store, same
+	// "access, not state" reasoning as the comment on atomic-json.ts below —
+	// `gh-budget.ts` is itself `access`, not `state`, and access importing
+	// state is the illegal direction, so this stays beside it rather than
+	// beside job-rollup-store.ts above.
+	{ glob: 'src/gh-budget-history-store.ts', layer: 'access' },
 	{ glob: 'src/conditional-cache-store.ts', layer: 'access' },
 	{ glob: 'src/lib/github-client.ts', layer: 'access' },
 	// The filesystem write primitive every state file goes through (F3). Access,
