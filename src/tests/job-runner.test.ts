@@ -9,9 +9,13 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { __setHostForTesting } from '../host.js';
 import { testHost } from './install-test-host.js';
+import { jobRunDir, readJobRuns } from '../job-run-store.js';
+import { tempDir, cleanupTempDirs } from './tmpdir.js';
 import {
 	classifyMissingDoc,
 	computeFirstDelayMs,
@@ -47,7 +51,10 @@ beforeEach(() => {
 		},
 	});
 });
-afterEach(() => __setHostForTesting(testHost));
+afterEach(() => {
+	__setHostForTesting(testHost);
+	cleanupTempDirs();
+});
 
 void test('classifyMissingDoc: a numeric exit with no signal ran to completion and produced nothing — broke', () => {
 	assert.equal(classifyMissingDoc('exit 0, no report'), 'broke');
@@ -297,4 +304,104 @@ void test('liveness: a scheduled job is registered at once, and a finished tick 
 		job.stop();
 		__resetLivenessForTesting();
 	}
+});
+
+// ---------------------------------------------------------------------------
+// T7 (plan §6.2/§7.3): finishTick's own write to the LOCAL job-run-store,
+// independent of the remote `recordJobResult` sink pinned above. Every test
+// here installs its own `stateDir` (a fresh tempDir) so rows from one test
+// can never be read back by another.
+// ---------------------------------------------------------------------------
+
+function withJobRunStateDir(): string {
+	const dir = tempDir('job-runner-sink-');
+	__setHostForTesting({
+		...testHost,
+		logger: { info() {}, warn: (m) => warns.push(m), error() {} },
+		jobs: {
+			async recordJobResult(jobName, jobState, durationMs, opts) {
+				jobResults.push({ jobName, jobState, durationMs, opts });
+			},
+		},
+		stateDir: dir,
+	});
+	return dir;
+}
+
+void test("finishTick: ok/findings/unavailable/broke each write exactly one job-run-store row, mapped to the store's own four verdicts", async () => {
+	const dir = withJobRunStateDir();
+	// Real-ish timestamps, not epoch-1970: `appendJobRun` prunes against the
+	// REAL `Date.now()` on every call, so a 1970 `startedAt` would read as
+	// 90+ days expired the moment the NEXT row is appended, and each call
+	// would delete the day file the previous one just wrote.
+	const base = Date.now();
+	await finishTick({ jobName: 'x', intervalMs: 60_000, now: base, verdict: 'ok', durationMs: 5 });
+	await finishTick({
+		jobName: 'x',
+		intervalMs: 60_000,
+		now: base + 1,
+		verdict: 'findings',
+		durationMs: 5,
+	});
+	await finishTick({
+		jobName: 'x',
+		intervalMs: 60_000,
+		now: base + 2,
+		verdict: 'unavailable',
+		durationMs: 5,
+		why: 'ssh timeout',
+	});
+	await finishTick({
+		jobName: 'x',
+		intervalMs: 60_000,
+		now: base + 3,
+		verdict: 'broke',
+		durationMs: 5,
+		why: 'exit 1, no report',
+	});
+
+	const read = readJobRuns(jobRunDir(dir), { job: 'x' });
+	assert.equal(read.badLines, 0);
+	assert.equal(read.rows.length, 4, 'one row per finishTick call');
+	const byStartedAt = [...read.rows].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+	assert.deepEqual(
+		byStartedAt.map((r) => r.verdict),
+		['ok', 'findings', 'could-not-look', 'error']
+	);
+	assert.equal(byStartedAt[2].why, 'ssh timeout');
+	assert.equal(byStartedAt[3].why, 'exit 1, no report');
+	assert.ok(
+		byStartedAt.every((r) => r.kind === 'converger'),
+		'every call site today is a converger'
+	);
+});
+
+void test('finishTick: an explicit `kind` is honoured, for whatever a future gate/recorder caller passes', async () => {
+	const dir = withJobRunStateDir();
+	await finishTick({
+		jobName: 'x',
+		intervalMs: 60_000,
+		now: 1000,
+		verdict: 'ok',
+		durationMs: 1,
+		kind: 'gate',
+	});
+	const read = readJobRuns(jobRunDir(dir), { job: 'x' });
+	assert.equal(read.rows[0]?.kind, 'gate');
+});
+
+void test('finishTick: a job-run-store write failure is logged and never thrown, and the remote sink still runs', async () => {
+	const dir = withJobRunStateDir();
+	// Block job-run-store's own mkdirSync: a FILE sits where it wants a directory.
+	writeFileSync(join(dir, 'job-runs'), 'not a directory');
+
+	await assert.doesNotReject(() =>
+		finishTick({ jobName: 'x', intervalMs: 60_000, now: 1000, verdict: 'ok', durationMs: 1 })
+	);
+	assert.ok(
+		warns.some((w) => w.includes('job-run-store')),
+		'the failure must be said, not swallowed silently'
+	);
+	assert.equal(jobResults.length, 1, 'the remote sink is a separate call and still ran');
+	assert.equal(jobResults[0].jobState, 'succeeded');
 });

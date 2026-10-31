@@ -38,6 +38,7 @@
   },
   "patterns": {
     "^(\\d{4}-\\d{2}-\\d{2})\\.jsonl$": ["src/runners/decision-log.ts"],
-    "^usage-(\\d{4})-(\\d{2})\\.jsonl$": ["src/lib/usage-store.ts"]
+    "^usage-(\\d{4})-(\\d{2})\\.jsonl$": ["src/lib/usage-store.ts"],
+    "^run-(\\d{4}-\\d{2}-\\d{2})\\.jsonl$": ["src/job-run-store.ts"]
   }
 }

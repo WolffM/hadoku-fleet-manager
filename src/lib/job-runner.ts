@@ -29,11 +29,18 @@
  *   3. PAGER LEDGER. {@link createPager} is the shared debounce+recovery
  *      primitive; each job still decides WHICH keys page and with what
  *      words, because that decision is the job's, not the runner's.
- *   4. JOB SINK. {@link finishTick} calls `recordJobResult` (the host port
- *      already used by `runner-health.ts`'s own tick) once per pass, mapping
- *      `ok`/`findings` to `succeeded` and `unavailable`/`broke` to `failed` —
- *      a gate that found real problems still RAN; a gate that could not look
- *      did not.
+ *   4. JOB SINK(S). {@link finishTick} calls `recordJobResult` (the host port
+ *      already used by `runner-health.ts`'s own tick — a REMOTE sink, posted
+ *      to monitoring-api) once per pass, mapping `ok`/`findings` to
+ *      `succeeded` and `unavailable`/`broke` to `failed` — a gate that found
+ *      real problems still RAN; a gate that could not look did not. It ALSO
+ *      appends one row to `../job-run-store.js` (T7, plan §7.3) — a LOCAL,
+ *      durable ledger of every registry job's runs that answers the
+ *      staleness gate and "did the nightly gates run last month" without a
+ *      network call. Every call site here is itself a `converger` (the only
+ *      kind on a `clockMs` clock today), so {@link FinishTickParams.kind}
+ *      defaults to it; neither sink's outage can fail the tick that is
+ *      finishing.
  *
  * LIVENESS. {@link finishTick} is also the ONE place a completed tick is
  * finalised, and it notes the tick (`noteTick`, `src/lib/liveness.ts`);
@@ -42,7 +49,8 @@
  * one whose first pass never completes.
  */
 import { noteTick, registerLoop, TOKEN_WAIT_GRACE_MS } from './liveness.js';
-import { logger, recordJobResult } from '../host.js';
+import { logger, recordJobResult, stateDir } from '../host.js';
+import { appendJobRun, buildRow, jobRunDir, type JobRunVerdict } from '../job-run-store.js';
 
 /** A job registry entry's kind (plan §6.2): what reading its doc MEANS. */
 export type JobKind = 'converger' | 'gate' | 'recorder';
@@ -263,15 +271,48 @@ export interface FinishTickParams {
 	durationMs: number;
 	why?: string;
 	data?: Record<string, unknown>;
+	/**
+	 * The job-run-store row's `kind` (T7). Optional because every caller that
+	 * exists today — `scheduled-converger.ts`, `claw-reboot.ts` — IS a
+	 * converger (the only `JobKind` ever put on a `clockMs` clock; see
+	 * `job-registry.ts`'s own three `clockMs` entries), and job-runner.ts does
+	 * not import `job-registry.ts` to look it up: that file is lane A's, and
+	 * staying decoupled from it is deliberate, not a shortcut. A future
+	 * `gate`/`recorder` kind on this clock would pass its own.
+	 */
+	kind?: JobKind;
+}
+
+/**
+ * `Verdict` (what `classifyMissingDoc`/a converger's own `classify` decided)
+ * -> the job-run-store's four verdicts. `unavailable` is "could not look"
+ * (never started, or killed before it reported); `broke` is "ran to
+ * completion and still produced nothing readable" — the SCRIPT's own fault,
+ * not an unreadable target — which is why it maps to `error`, not
+ * `could-not-look`, mirroring `classifyEmittedDoc`'s own split in
+ * `../job-run-store.js` for the cron half of this same T7 row shape.
+ */
+function toJobRunVerdict(v: Verdict): JobRunVerdict {
+	switch (v) {
+		case 'ok':
+			return 'ok';
+		case 'findings':
+			return 'findings';
+		case 'unavailable':
+			return 'could-not-look';
+		case 'broke':
+			return 'error';
+	}
 }
 
 /**
  * THE ONE PLACE A COMPLETED TICK IS FINALISED. Every job's tick — converger,
  * claw-reboot, and whatever a `gate`/`recorder` kind adds later — calls this
  * exactly once, at the end, on every path (doc present or not). It notes the
- * tick for the off-box heartbeat (liveness.ts) and reports to the job sink. A
- * pass that could not look still COMPLETED: the loop is alive, and the sink
- * records the run as failed.
+ * tick for the off-box heartbeat (liveness.ts), reports to the remote job
+ * sink, and appends one row to the local job-run-store (T7). A pass that
+ * could not look still COMPLETED: the loop is alive, and both sinks record
+ * the run as failed/could-not-look rather than going silent.
  */
 export async function finishTick(params: FinishTickParams): Promise<void> {
 	noteTick(params.jobName, params.intervalMs);
@@ -279,4 +320,27 @@ export async function finishTick(params: FinishTickParams): Promise<void> {
 		why: params.why,
 		data: params.data,
 	});
+	// Never lets a job-run-store outage reach the loop this tick belongs to —
+	// `appendJobRun` itself never throws, but the directory resolution
+	// (`stateDir()`) is one more call this tick's own success must not depend
+	// on, so the whole thing is wrapped.
+	try {
+		const row = buildRow({
+			job: params.jobName,
+			startedAtMs: params.now,
+			durationMs: params.durationMs,
+			kind: params.kind ?? 'converger',
+			verdict: toJobRunVerdict(params.verdict),
+			why: params.why,
+		});
+		const res = appendJobRun(row, jobRunDir(stateDir()));
+		if (!res.ok) {
+			logger.warn(`[job-runner] ${params.jobName}: job-run-store append failed: ${res.why}`);
+		}
+	} catch (err) {
+		logger.warn(
+			`[job-runner] ${params.jobName}: could not record to job-run-store: ` +
+				(err instanceof Error ? err.message : String(err))
+		);
+	}
 }

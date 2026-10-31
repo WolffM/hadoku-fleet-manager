@@ -94,9 +94,73 @@ import { writeSync } from 'node:fs';
 // ANSI use (a warning in yellow, matching what enroll-node.mjs already
 // printed), imported rather than redefined.
 import { YELLOW, RESET } from './term.mjs';
+// T7 (plan §7.3): the job sink. `../../dist/...`, same as every other script
+// that reaches into compiled TS (`fleet-exec.mjs`, `paths.mjs`, …) — this
+// file is the ONE place every `--json` script's document is produced, so it
+// is also the one place a cron run can be recorded without touching every
+// script that calls `emit()`.
+import { stateDir } from '../../dist/lib/fleet-paths.js';
+import {
+	appendJobRun,
+	buildRow,
+	classifyEmittedDoc,
+	jobRunDir,
+	registryKindFor,
+} from '../../dist/job-run-store.js';
 
 /** `keepStdoutWhole()` is idempotent and every caller calls it blind. */
 let stdoutIsWhole = false;
+
+/** Close enough to this script's own start — `emit.mjs` is imported very
+ *  early by every `--json` script, well before any real work begins. */
+const RUN_STARTED_MS = Date.now();
+
+/**
+ * THE CRON HALF OF THE T7 JOB SINK (plan §6.2/§7.3). mgmt-api's `fleet <sub>
+ * --json` wrappers already set `FLEET_CALLER=<job name>` in the child's env
+ * for the invocation log (`src/lib/usage-log.ts`, landed wave 5a — "100
+ * records name their cron" per the workstream board); this reuses that same
+ * env var rather than asking hadoku_site to pass a second one, because it
+ * already names exactly the registry job that is running.
+ *
+ * Fires from TWO places below: the normal `emit()` path, and the json-exit-
+ * guard's OWN fallback write (`installJsonGuard`'s `process.on('exit', …)`)
+ * for a script that crashed or exited before ever calling `emit()` — T7 asks
+ * for "including a thrown error" on the in-process half (`job-runner.ts`),
+ * and this is that same case for a cron. `guard.wrote` gates the fallback, so
+ * the two call sites can never both fire for one run.
+ *
+ * SILENT ON FAILURE, ON PURPOSE: never a stdout write (would break the `--
+ * json` contract this file exists to protect), never a stderr write either
+ * (two of this package's consumers capture and log stderr, and doubling that
+ * volume as a side effect of telemetry is a decision for someone to make on
+ * purpose, not a default), never a thrown error, never a changed exit code.
+ * `appendJobRun` itself does not throw; the try/catch is for everything
+ * around it (`stateDir()`, `registryKindFor`, `classifyEmittedDoc`).
+ *
+ * @param {unknown} payload
+ */
+function recordRegistryRun(payload) {
+	try {
+		const caller = (process.env.FLEET_CALLER ?? '').trim();
+		if (!caller) return; // a manual/operator run, or a caller that predates FLEET_CALLER
+		const kind = registryKindFor(caller);
+		if (!kind) return; // FLEET_CALLER names something this registry does not track
+		const { verdict, findings, why } = classifyEmittedDoc(payload);
+		const row = buildRow({
+			job: caller,
+			startedAtMs: RUN_STARTED_MS,
+			durationMs: Date.now() - RUN_STARTED_MS,
+			kind,
+			verdict,
+			findings,
+			why,
+		});
+		appendJobRun(row, jobRunDir(stateDir()));
+	} catch {
+		// See the function's own doc comment: recording must never surface.
+	}
+}
 
 /**
  * MAKE fd 1 DELIVER EVERYTHING BEFORE `process.exit` CAN THROW IT AWAY.
@@ -220,18 +284,17 @@ function installJsonGuard() {
 		const why = guard.thrown ?? lastHeld ?? guard.lastStderr ?? 'no reason was given';
 		const script = argv[1] ? argv[1].split('/').pop() : 'fleet';
 		const exit = code === 0 ? 1 : code;
-		writeAllSync(
-			`${JSON.stringify(
-				{
-					ok: false,
-					error: `${script} exited ${exit} before writing its --json document: ${why}`,
-					exit,
-				},
-				null,
-				2
-			)}\n`
-		);
+		const fallbackDoc = {
+			ok: false,
+			error: `${script} exited ${exit} before writing its --json document: ${why}`,
+			exit,
+		};
+		writeAllSync(`${JSON.stringify(fallbackDoc, null, 2)}\n`);
 		process.exitCode = exit;
+		// T7: this IS a registry job's run — it just never reached its own
+		// emit() — so it still gets one row (classifyEmittedDoc reads ok:false
+		// with no findings/unreadable as `error`, the script's own fault).
+		recordRegistryRun(fallbackDoc);
 	});
 }
 installJsonGuard();
@@ -316,6 +379,9 @@ export function createEmitter(opts = {}) {
 			// around the stream rather than be ignored.
 			if (keepStdoutWhole()) console.log(document);
 			else writeAllSync(`${document}\n`);
+			// T7: record AFTER the document is already on the wire — recording
+			// never gates, delays or can retroactively affect what was written.
+			recordRegistryRun(payload);
 		},
 	};
 }

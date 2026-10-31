@@ -140,6 +140,11 @@ export const LAYER_MAP = [
 	// runner-health.ts, not touched this wave.
 	{ glob: 'src/job-history-store.ts', layer: 'state' },
 	{ glob: 'src/job-rollup-store.ts', layer: 'state' },
+	// Wave 5n lane C (plan §6.2/§7.3 T7): the job sink — one declared writer
+	// (job-run-store.ts itself, the only file that calls appendFileSync on its
+	// own day files), read back by job-runner.ts and emit.mjs through its
+	// exported functions, same "state" shape as its neighbours above.
+	{ glob: 'src/job-run-store.ts', layer: 'state' },
 	{ glob: 'scripts/lib/enrollment-record.mjs', layer: 'state' },
 	{ glob: 'scripts/lib/job-proof-record.mjs', layer: 'state' },
 	// Wave 5k lane D split of floor-probe.mjs (plan §4.3 #12): the harness's own
