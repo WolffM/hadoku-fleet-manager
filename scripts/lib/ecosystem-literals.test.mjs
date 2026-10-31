@@ -47,7 +47,11 @@
  * Tests are excluded because a fixture must be free to spell a real hostname —
  * `doctor-write.test.mjs` needs an unreachable node and `paths.test.ts` needs a
  * real-looking state directory. Including them would make the gate fight the
- * tests that prove the path handling works.
+ * tests that prove the path handling works. `_test.py` joins the exclusion
+ * 2026-10-31 (fleet-manager#19): `runner-mem-report.py`'s first Python test
+ * needed `hadoku`/`hokon` fixtures for the exact same reason, and `.py` was
+ * never covered by the `.test.(mjs|ts)` pattern — there was no Python test
+ * file in this repo for that pattern to have excluded until now.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -284,7 +288,7 @@ function corpus() {
 				continue;
 			}
 			if (!e.isFile()) continue;
-			if (/\.test\.(mjs|ts)$/.test(e.name)) continue;
+			if (/\.test\.(mjs|ts)$|_test\.py$/.test(e.name)) continue;
 			if (!CODE.has(extname(e.name))) continue;
 			out.push(relative(ROOT, join(dir, e.name)));
 		}

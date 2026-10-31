@@ -113,11 +113,16 @@
  * `--write`, a note without it. A guest is never drained, and keeps its record.
  *
  * USAGE
- *   fleet bootcamp                 # every managed node, report only
+ *   fleet bootcamp                 # every managed node: probes and reports.
+ *                                  # NOT a dry run for REVOCATIONS — a label this
+ *                                  # run saw FAIL is withheld from routing at once,
+ *                                  # with or without --write (see REVOCATION
+ *                                  # VERDICTS below). --write is what gates the
+ *                                  # `$capabilities` facet alone.
  *   fleet bootcamp --machine claw-5   # one node (a bare positional is refused)
- *   fleet bootcamp --write         # record `$capabilities` on every node reached
- *                                  # (drains, one at a time, any node whose
- *                                  # idle-only measurement ran beside a job)
+ *   fleet bootcamp --write         # ALSO record `$capabilities` on every node
+ *                                  # reached (drains, one at a time, any node
+ *                                  # whose idle-only measurement ran beside a job)
  *   fleet bootcamp --write --idle-wait 20   # give up on quiet after 20 min, not 45
  *   fleet bootcamp --json
  *   fleet bootcamp --prove                # also canary every workload-gated
@@ -883,15 +888,26 @@ await Promise.all(
  * every node answered. An unreadable record is left alone and said: rewriting
  * it from this run's partial view would re-grant whatever it held for nodes
  * this run did not probe.
+ *
+ * THIS WRITE IS NOT GATED BY `--write`, DELIBERATELY (#15). `--write` governs
+ * the `$capabilities` facet alone; a revocation is a SAFETY stop, not a
+ * finding to record later — a label a probe just watched FAIL must stop
+ * routing to it immediately, or the next dispatch sends a job at a node this
+ * very run proved cannot do it. Saying so only in a code comment is how a
+ * dry run came to read as fully read-only: the output below says it in every
+ * run that actually changes a revocation, and the `--json` document carries
+ * it as `writesEvenWithoutWrite` so a caller never has to infer the rule from
+ * prose.
  */
 const revocationChanges = (() => {
 	const read = readRevocations(stateDir());
 	if (read.corrupt) {
 		log(`── revocations: the record is unreadable (${read.why}) — nothing revoked or cleared.`);
-		return { revoked: [], cleared: [], unreadable: read.why };
+		return { revoked: [], cleared: [], unreadable: read.why, writesEvenWithoutWrite: true };
 	}
 	const applied = applyVerdicts(read.nodes, revocationVerdicts, 'bootcamp');
-	if (applied.revoked.length || applied.cleared.length) writeRevocations(stateDir(), applied.nodes);
+	const changedRevocations = applied.revoked.length > 0 || applied.cleared.length > 0;
+	if (changedRevocations) writeRevocations(stateDir(), applied.nodes);
 	for (const v of applied.revoked) {
 		log(
 			`── ${v.node}  REVOKED ${v.capability} — withheld from routing until a probe passes (${v.reason})`
@@ -899,7 +915,16 @@ const revocationChanges = (() => {
 	}
 	for (const v of applied.cleared)
 		log(`── ${v.node}  cleared ${v.capability} — proven again, routable`);
-	return { revoked: applied.revoked, cleared: applied.cleared };
+	// SAID OUT LOUD, NOT ONLY IN A COMMENT (#15). Without this line a `--write`-
+	// less run that just revoked or cleared a label reads as a dry run that
+	// changed nothing on disk — exactly backwards.
+	if (!WRITE && changedRevocations) {
+		log(
+			`  revocations are written in every mode, with or without --write: a label this run\n` +
+				`  saw FAIL must stop routing immediately, so the above was not a dry run.`
+		);
+	}
+	return { revoked: applied.revoked, cleared: applied.cleared, writesEvenWithoutWrite: true };
 })();
 
 /**

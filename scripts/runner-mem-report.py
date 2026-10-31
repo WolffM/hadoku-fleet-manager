@@ -41,6 +41,7 @@ Usage:
 
 import argparse
 import calendar
+import getpass
 import importlib.util
 import json
 import os
@@ -89,6 +90,22 @@ _LIB_CACHE = {}
 _HUB_CACHE = []
 
 
+def _node_error_message(stderr):
+    """The script's own message, stripped of V8's stack frames. An uncaught
+    throw prints its (possibly multi-line) message BEFORE the stack frames;
+    taking the last line would hand the operator a stack frame instead of a
+    reason — the undiagnosable-finding shape this repo retired from
+    check-queue-health. Shared by every `node -e` call this file makes
+    (`ask_library`, `node_role_user`) so the one rule has one copy."""
+    msg = []
+    for ln in (stderr or "").splitlines():
+        if msg and ln.lstrip().startswith("at "):
+            break
+        if ln.strip():
+            msg.append(ln.rstrip())
+    return "\n  ".join(msg) if msg else "no reason printed"
+
+
 def ask_library(machines=()):
     """`{manifestDir, stateDir, local?}` — the manifest directory, the
     operator-state directory (job-history.jsonl lives there), and which (if
@@ -121,19 +138,9 @@ def ask_library(machines=()):
     except subprocess.TimeoutExpired:
         raise SystemExit(f"fleet mem-report: resolving the manifest through {paths_mod} timed out")
     if r.returncode != 0:
-        # An uncaught throw prints its (possibly multi-line) message BEFORE the
-        # stack frames; taking the last line would hand the operator a stack
-        # frame instead of a reason — the undiagnosable-finding shape this repo
-        # retired from check-queue-health.
-        msg = []
-        for ln in (r.stderr or "").splitlines():
-            if msg and ln.lstrip().startswith("at "):
-                break
-            if ln.strip():
-                msg.append(ln.rstrip())
         raise SystemExit(
             "fleet mem-report: the library refused to resolve the manifest:\n  "
-            + ("\n  ".join(msg) if msg else "no reason printed")
+            + _node_error_message(r.stderr)
         )
     try:
         res = json.loads(r.stdout)
@@ -187,6 +194,100 @@ def hub_repo():
     )
     _HUB_CACHE.append(None)
     return None
+
+
+# ── which USER an ssh/rsync acts as, asked of the one place that knows ──────
+#
+# "Every command on a node acts as a ROLE: `admin` or `ci`" (CLAUDE.md), and
+# `src/lib/node-users.ts` is the single place a role becomes a user name — the
+# JS/TS side's `scripts/lib/fleet-exec.mjs` asks it through `nodeUser` and
+# `sshDestination` rather than keeping a second copy. This file cannot import
+# that module any more than it can import `fleet-paths.ts`, so it EXECUTES it
+# the same way `ask_library` and `hub_repo` already do: one `node` run over
+# the package's own built module. The alternative — a Python literal for the
+# admin default, or a `$(id -un)` guess — is exactly the second answer to "who
+# plays this role" that `node-users-guard.test.mjs` exists to refuse on the
+# JS/TS side; this file keeps the same discipline even though that guard
+# cannot see `.py`.
+#
+# BOTH SSH CALLS BELOW ACT AS `ci`, NEVER `admin`. Every path either call
+# reads lives under the ci user's `$HOME`: `REMOTE`/`INFLIGHT_REMOTE` are
+# `runner-mem-harvest.py`'s own output, and `JOB_METRICS_REMOTE` is
+# `job-metrics.sh`'s — both deployed `as: 'ci'` by `deploy-ci-throttle.mjs`
+# (its one `runOn` call installs the hook, the throttle conf AND the
+# harvester together). The PROBE script's `systemctl --user show ...
+# runner-mem-harvest.service` reads that same unit's OWN systemd --user
+# manager, which CLAUDE.md names as ci's ("its own systemd manager with
+# runners.slice") — admin's `systemctl --user` is a different manager
+# entirely and would read ci's unit as absent.
+_ROLE_ASK = """const [usersMod, machine, role] = process.argv.slice(1);
+const { nodeUser } = await import(usersMod);
+process.stdout.write(nodeUser(JSON.parse(machine), role));"""
+
+_ROLE_CACHE = {}
+
+
+def node_role_user(machine, role):
+    """The user that plays `role` on `machine` (a manifest node entry, or
+    `None`) — asked of `src/lib/node-users.ts`'s own `nodeUser`, never
+    restated here. The admin default (`DEFAULT_ADMIN_USER`) and the rule that
+    `ci` falls back to `admin` when a node has not been cut over both live in
+    that module alone; a second copy in Python is exactly the kind of drift
+    `isLocalNode` had five of before one survived an FQDN (2026-08-30)."""
+    key = (json.dumps(machine or {}, sort_keys=True), role)
+    if key in _ROLE_CACHE:
+        return _ROLE_CACHE[key]
+    mod = (HERE.parent / "dist" / "lib" / "node-users.js").resolve()
+    if not mod.is_file():
+        raise SystemExit(
+            f"fleet mem-report: {mod} does not exist — the package is not built.\n"
+            "  Build it before this report can name which user a role plays."
+        )
+    exe = shutil.which("node")
+    if not exe:
+        raise SystemExit("fleet mem-report: cannot find `node` to resolve a node-users role.")
+    try:
+        r = subprocess.run(
+            [exe, "--input-type=module", "-e", _ROLE_ASK, mod.as_uri(), json.dumps(machine or {}), role],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"fleet mem-report: resolving the '{role}' role through {mod} timed out")
+    if r.returncode != 0:
+        raise SystemExit(
+            f"fleet mem-report: could not resolve the '{role}' role: {_node_error_message(r.stderr)}"
+        )
+    _ROLE_CACHE[key] = r.stdout
+    return r.stdout
+
+
+def ssh_destination(node, role, machine):
+    """`<user>@<node>` for ROLE — the Python twin of
+    `scripts/lib/fleet-exec.mjs`'s `sshDestination`: same rule, same source of
+    truth (`nodeUser`), so the two transports can never name a role
+    differently."""
+    return f"{node_role_user(machine, role)}@{node}"
+
+
+def assert_can_act_locally(node, role, machine):
+    """Mirrors `nodeCommand`'s local branch (`src/lib/node-users.ts`): acting
+    as a role that is not admin, on THIS box, needs this process to already
+    be logged in as that role's user — there is no sudo switch inside this
+    script, and guessing otherwise is how a local read of `collect()`/PROBE
+    would silently read the WRONG `$HOME` instead of failing loudly. Never a
+    literal comparison: both names come from `node_role_user`, the same
+    source `ssh_destination` uses, so the two can never disagree about what a
+    role is called."""
+    user = node_role_user(machine, role)
+    admin = node_role_user(machine, "admin")
+    me = getpass.getuser()
+    if user != admin and me != user:
+        raise SystemExit(
+            f"fleet mem-report: {node} is this box, which runs as {me}; "
+            f"acting as {role} needs {user}."
+        )
 
 
 _HARVEST_INTERVAL_CACHE = []
@@ -375,15 +476,28 @@ def clipped_finding(r, repo):
 
 def collect(nodes):
     """Pull every node's JSONL. A node that cannot be read is NAMED, never
-    silently dropped — 'I could not look' must not read as 'there was nothing'."""
+    silently dropped — 'I could not look' must not read as 'there was nothing'.
+
+    `nodes` is the manifest's `machines` MAPPING, not a bare list of names:
+    `REMOTE` is `ci`'s file (the harvester's own output, deployed `as: 'ci'`
+    by `deploy-ci-throttle.mjs`), and naming that role on a remote call needs
+    each node's own `users.ci` override from its manifest entry."""
     rows, unreachable = [], []
     local = local_node(nodes)
-    for m in nodes:
-        cmd = (
-            ["cat", os.path.expanduser(REMOTE)]
-            if m == local
-            else ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", m, f"cat {REMOTE}"]
-        )
+    for m, cfg in nodes.items():
+        if m == local:
+            assert_can_act_locally(m, "ci", cfg)
+            cmd = ["cat", os.path.expanduser(REMOTE)]
+        else:
+            cmd = [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                ssh_destination(m, "ci", cfg),
+                f"cat {REMOTE}",
+            ]
         try:
             out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         except subprocess.TimeoutExpired:
@@ -656,15 +770,34 @@ def _iso(ts):
         return f"epoch {ts}"
 
 
-def _probe_node(name, local):
-    """Run PROBE on one node. Returns `(facts, finding_or_None)`."""
+def _probe_node(name, local, machine):
+    """Run PROBE on one node, as `ci`. Returns `(facts, finding_or_None)`.
+
+    `machine` is this node's manifest entry (for `users.ci`, if it has been
+    cut over). PROBE reads `ci`'s own files top to bottom — the harvester's
+    `samples.jsonl`/`inflight.json`, the per-job hook's `job-metrics.jsonl`
+    (both deployed `as: 'ci'`, `deploy-ci-throttle.mjs`) — and its very last
+    line reads `runner-mem-harvest.service` through `systemctl --user`, which
+    is ci's OWN systemd --user manager (CLAUDE.md: ci "runs every CI job...
+    its own systemd manager with runners.slice"). `admin`'s `systemctl --user`
+    is a different manager and would read that unit as not existing at all.
+    """
     try:
         if name == local:
+            assert_can_act_locally(name, "ci", machine)
             r = subprocess.run(["bash", "-c", PROBE], capture_output=True, text=True, timeout=60)
             why = (r.stderr or "").strip()
         else:
             r = subprocess.run(
-                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", name, "bash -s"],
+                [
+                    "ssh",
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "ConnectTimeout=10",
+                    ssh_destination(name, "ci", machine),
+                    "bash -s",
+                ],
                 input=PROBE,
                 capture_output=True,
                 text=True,
@@ -732,7 +865,7 @@ def run_checks(nodes, as_json=False):
     local = local_node(list(nodes))
     findings, rows = [], {}
     for m in nodes:
-        facts, err = _probe_node(m, local)
+        facts, err = _probe_node(m, local, nodes.get(m, {}))
         guest = (
             " [guest — the fleet does not deploy here, so the remedy is manual]"
             if nodes.get(m, {}).get("role") == "guest"
@@ -948,7 +1081,7 @@ def main():
     print(f"manifest: {mpath} ({len(nodes)} machine(s))", file=sys.stderr)
     if a.check:
         return run_checks(nodes, a.json)
-    rows, unreachable = collect(list(nodes))
+    rows, unreachable = collect(nodes)
     rows = [r for r in rows if r.get("dur_s", 0) >= a.min_dur]
     if not rows:
         print("no job windows harvested yet", file=sys.stderr)
