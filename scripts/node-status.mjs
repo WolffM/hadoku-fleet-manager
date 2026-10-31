@@ -42,7 +42,7 @@ import { dirname, join } from 'node:path';
 import process from 'node:process';
 
 import { drainNotices, effectiveDrains, HOSTING_NOTICE_MS } from '../dist/runners/drain.js';
-import { doctorFindings } from './lib/doctor.mjs';
+import { doctorFindings } from './lib/doctor-findings.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest, runOn, selectNodes } from './lib/fleet-exec.mjs';

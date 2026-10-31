@@ -8,7 +8,8 @@
  * owned that row; it went when `doctor` came under the `--json` contract
  * (ci:health-refresh), whose gates read the script the row names. The split is the one
  * `check-fleet-preflight.mjs` / `preflight.mjs` already use: every judgement and
- * every threshold lives in `doctor.mjs` and is tested against captured node
+ * every threshold lives in `doctor-probe.mjs` / `doctor-parse.mjs` /
+ * `doctor-facet.mjs` / `doctor-findings.mjs` and is tested against captured node
  * output; this file owns ssh, the record read, the record write, and the
  * rendering.
  *
@@ -65,7 +66,7 @@
  *     provisioning refuses a node on exactly that. The node keeps its older,
  *     dated record, so a box that stays busy every night still goes red at
  *     `fleet health-freshness`'s 14 days, with the reason.
- *   - A GUEST IS NEVER LOADED. See `GUEST_CADENCE_NO_LOAD_WHY` in doctor.mjs.
+ *   - A GUEST IS NEVER LOADED. See `GUEST_CADENCE_NO_LOAD_WHY` in doctor-probe.mjs.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -74,20 +75,16 @@ import process from 'node:process';
 import { loadManifest, machineArg, runOn, selectMachines } from './fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './expected-down.mjs';
 import { createEmitter } from './emit.mjs';
+import { parseDoctor } from './doctor-parse.mjs';
+import { LOAD_SECONDS, doctorProbe, GUEST_CADENCE_NO_LOAD_WHY } from './doctor-probe.mjs';
+import { bootcampPointer, healthFacet, healthRecord } from './doctor-facet.mjs';
 import {
 	ADVISORY,
-	LOAD_SECONDS,
 	advisoryFindings,
 	blockingFindings,
-	bootcampPointer,
 	doctorFindings,
-	doctorProbe,
-	GUEST_CADENCE_NO_LOAD_WHY,
 	guestAdvisory,
-	healthFacet,
-	healthRecord,
-	parseDoctor,
-} from './doctor.mjs';
+} from './doctor-findings.mjs';
 import { guestNodeNames } from '../../dist/lib/node-role.js';
 import { nodeUser } from '../../dist/lib/node-users.js';
 import { readHostingDoc } from '../../dist/runners/hosting-record.js';
@@ -197,7 +194,7 @@ if (FROM_RECORD) {
 			node: name,
 			from: r.from,
 			// Re-derived from the CURRENT manifest, never read out of the record —
-			// see `bootcampPointer` in doctor.mjs.
+			// see `bootcampPointer` in doctor-facet.mjs.
 			bootcamp: bootcampPointer(m.$capabilities ?? null),
 		};
 	}

@@ -88,7 +88,7 @@
     "to": "scripts/lib/reboot-cycle.mjs"
   },
   {
-    "from": "scripts/lib/doctor.mjs",
+    "from": "scripts/lib/doctor-probe.mjs",
     "to": "scripts/lib/node-interfaces.mjs"
   },
   {

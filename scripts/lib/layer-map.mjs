@@ -565,7 +565,11 @@ export const LAYER_MAP = [
 		part: 'core',
 	},
 	{ glob: 'scripts/lib/demand-derive.mjs', layer: 'domain', domain: 'observation', part: 'core' },
-	{ glob: 'scripts/lib/doctor.mjs', layer: 'domain', domain: 'observation', part: 'core' },
+	{ glob: 'scripts/lib/doctor-probe.mjs', layer: 'domain', domain: 'observation', part: 'core' },
+	{ glob: 'scripts/lib/doctor-parse.mjs', layer: 'domain', domain: 'observation', part: 'core' },
+	{ glob: 'scripts/lib/doctor-facet.mjs', layer: 'domain', domain: 'observation', part: 'core' },
+	{ glob: 'scripts/lib/doctor-findings.mjs', layer: 'domain', domain: 'observation', part: 'core' },
+	{ glob: 'scripts/lib/doctor-fixtures.mjs', layer: 'domain', domain: 'observation', part: 'core' },
 	{ glob: 'scripts/lib/doctor-run.mjs', layer: 'domain', domain: 'observation', part: 'run' },
 	{
 		glob: 'scripts/lib/drain-enforcement.mjs',

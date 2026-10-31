@@ -275,7 +275,12 @@ const DECLARED = new Map([
 			'Nothing anywhere ages a capability stamp — there is no staleness window on it.',
 	],
 	[
-		'scripts/lib/doctor.test.mjs',
+		'scripts/lib/doctor-facet.test.mjs',
+		'`doctorFindings(health, { nowMs })` takes its clock; the test pins NOW and the ' +
+			'`at` stamps are read against that, never against the real one.',
+	],
+	[
+		'scripts/lib/doctor-findings.test.mjs',
 		'`doctorFindings(health, { nowMs })` takes its clock; the test pins NOW and the ' +
 			'`at` stamps are read against that, never against the real one.',
 	],

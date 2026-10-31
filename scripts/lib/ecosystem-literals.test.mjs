@@ -52,6 +52,9 @@
  * needed `hadoku`/`hokon` fixtures for the exact same reason, and `.py` was
  * never covered by the `.test.(mjs|ts)` pattern — there was no Python test
  * file in this repo for that pattern to have excluded until now.
+ * `-fixtures.mjs` joins it 2026-10-31 (wave 5k): a module that exists only to
+ * hold test fixtures is a test file by role, and the doctor split moved real
+ * node captures (`pm2-hadoku.service`) out of `doctor.test.mjs` into one.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -288,7 +291,7 @@ function corpus() {
 				continue;
 			}
 			if (!e.isFile()) continue;
-			if (/\.test\.(mjs|ts)$|_test\.py$/.test(e.name)) continue;
+			if (/\.test\.(mjs|ts)$|_test\.py$|-fixtures\.mjs$/.test(e.name)) continue;
 			if (!CODE.has(extname(e.name))) continue;
 			out.push(relative(ROOT, join(dir, e.name)));
 		}
