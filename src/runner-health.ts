@@ -107,7 +107,7 @@ import { getCapacityLedger } from './runners/capacity-ledger.js';
 import { ZOMBIE_MS } from './runners/queue-discovery.js';
 import { setUnschedulableNodes } from './runners/schedulable.js';
 import { deriveClawState } from './runners/claw-state.js';
-import { nodeIsSick } from './fleet-loop.js';
+import { nodeIsSick } from './lib/sick-node.js';
 import { isDraining, readDrain } from './runners/drain.js';
 import { setPm2HostBusy, nodeReservation, type Reservation } from './node-reservation.js';
 import {

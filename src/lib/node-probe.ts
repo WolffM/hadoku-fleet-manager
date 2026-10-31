@@ -270,6 +270,16 @@ function noteDnsBlind(node: string, blind: boolean): void {
 }
 
 /**
+ * Test seam: clear the DNS-blind set. Cross-tick memory, like every other
+ * module-level set in this file — a node left blind by one test would
+ * suppress the next test's "resolves again" transition log and swallow a
+ * blind-to-blind repeat that a real second probe would have re-announced.
+ */
+export function __resetDnsBlindForTesting(): void {
+	dnsBlind.clear();
+}
+
+/**
  * Probe every node once and keep the RAW numbers, not just the derived slot
  * count. The fast loop only needs `free`, but it is the sole thing on the host
  * that ssh's the fleet on a schedule, so throwing away `workers`/`cores` meant

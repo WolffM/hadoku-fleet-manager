@@ -42,9 +42,11 @@ import { noteTick, registerLoop, TOKEN_WAIT_GRACE_MS } from './lib/liveness.js';
 // The typed manifest reader and loaders moved to the config layer in wave 5c
 // (F1): this file is ci-scheduling/run, and a raw manifest read sitting
 // sideways of config is exactly the debt `src/lib/manifest.ts`'s header
-// explains. `nodeFailsBootcamp` and `loadResidentRepos` stayed here — see
-// that file's header for why — and still need `FleetManifest` and
-// `readFleetManifest`.
+// explains. `nodeFailsBootcamp` and `loadResidentRepos` moved OUT to
+// `./runners/node-eligibility.ts` in wave 5f (split #2, fleet-loop split) —
+// imported from there below, not restated here. `readFleetManifest` is still
+// needed directly: the tick reads the manifest once per pass to enumerate
+// `allNodes` and hands that same `fleetManifest` to `nodeIsSafe`.
 import { readFleetManifest, loadEphemeralNodes, loadGuestNodes } from './lib/manifest.js';
 import { loadNodeCapacity } from './lib/manifest.js';
 import { probeNode, probeFleet, type ProbeResultLike, type NodeProbe } from './lib/node-probe.js';
@@ -52,7 +54,6 @@ import { markNodeSick, nodeIsSick, sickNodeNames } from './lib/sick-node.js';
 import { repairSickNode } from './runners/node-repair.js';
 import { loadResidentRepos, loadRequiredSet } from './runners/node-eligibility.js';
 import { nodeIsSafe, setNodeEligibility, type LabelAction } from './runners/node-eligibility.js';
-export { nodeIsSick, markNodeSick, __resetSickForTesting } from './lib/sick-node.js';
 
 /**
  * Last probe from the fast loop, for readers that must not ssh themselves.

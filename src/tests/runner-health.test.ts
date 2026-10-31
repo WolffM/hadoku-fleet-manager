@@ -62,7 +62,8 @@ import {
 	__logTokenCapabilitiesForTesting,
 	RE_ALERT_MS,
 } from '../runner-health.js';
-import { __setFleetProbeForTesting, __resetSickForTesting, markNodeSick } from '../fleet-loop.js';
+import { __setFleetProbeForTesting } from '../fleet-loop.js';
+import { __resetSickForTesting, markNodeSick } from '../lib/sick-node.js';
 import { writeDrain } from '../runners/drain.js';
 import { writeForce } from '../runners/backstop-force.js';
 import {

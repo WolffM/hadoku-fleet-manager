@@ -36,7 +36,7 @@ const [cmd, argv] = local
   : ['ssh', sshArgv(node, connectTimeout)];
 ```
 
-and the in-process path carries the identical branch — `src/fleet-loop.ts:963-966`
+and the in-process path carries the identical branch — `src/runners/node-repair.ts`
 (`doctorCommand`), with the comment that is the whole reason it exists: "mgmt-api
 runs on hokon and `ssh hokon` from hokon is REFUSED." `self` defaults to
 `os.hostname()` of the CALLING PROCESS, so this question is answered **once per
@@ -118,7 +118,7 @@ repos (`src/runner-health.ts:254-284`, `syncBackstopAcrossFleet` — the fan-out
 this file's own doc comment says exists because a full claw outage once left
 25 of 26 repos' hokon runners unlabelled). A restarted single controller
 starting with this state blank is fine — "Empty after a restart, so the first
-tick is a full reconcile" (`src/fleet-loop.ts:1127-1129`, on `believedLabel`).
+tick is a full reconcile" (`src/fleet-loop.ts`, on `believedLabel`).
 Two controllers holding two blank-or-diverged copies AT THE SAME TIME is the
 double-dispatch, double-label-write failure mode #79 exists to prevent.
 
