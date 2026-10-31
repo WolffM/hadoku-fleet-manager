@@ -6,7 +6,7 @@
  * (wave 5j lane A) — see `src/tests/helpers/runner-health-rig.ts` for the
  * shared fetch-stub fixture every file that ticks the monitor installs.
  */
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
@@ -16,6 +16,7 @@ import {
 	__setFleetReposForTesting,
 } from '../runner-health.js';
 import { __setBackstopMachinesForTesting } from '../runners/backstop-machines.js';
+import { BACKSTOP_CONVERGE_INTERVAL_MS } from '../runners/backstop-decision.js';
 import {
 	__setHostLoadReaderForTesting,
 	__setReservationForTesting,
@@ -909,4 +910,91 @@ test('backstop: the restart converge reads the fleet concurrently, bounded by SW
 		'every child repo was read by the converge pass — otherwise the peak means nothing'
 	);
 	assert.equal(peak, SWEEP_CONCURRENCY, 'listings in flight at the peak');
+});
+
+// --- convergeDue: the periodic re-verify sweep (wave5m lane C, migrated onto
+// `lib/every.ts`'s `subCadenceDue`/`markSubCadence`) ------------------------
+//
+// No existing test pinned this gate's cadence before this wave. Steady state
+// (FLEET_ALL_UP: two healthy claws, hokon up but unpromoted) keeps
+// `backstopWanted` and `backstopFleetState` both false throughout, so past
+// the first (restart) tick the ONLY thing that can trigger the fan-out is
+// `convergeDue` itself.
+
+test('backstop: the verify sweep re-reads a converged fleet once BACKSTOP_CONVERGE_INTERVAL_MS has passed', async () => {
+	__setFleetReposForTesting(['WolffM/hadoku_site', 'WolffM/hadoku-rally', 'WolffM/hadoku-task']);
+	mock.timers.enable({ apis: ['Date'] });
+	try {
+		installFetch({ runners: FLEET_ALL_UP });
+		await tick('tok'); // restart tick: backstopFleetState was null, always converges
+		assert.ok(
+			runnerListings.includes('WolffM/hadoku-rally') &&
+				runnerListings.includes('WolffM/hadoku-task'),
+			'the first tick always converges — settling the state'
+		);
+
+		runnerListings.length = 0;
+		await tick('tok'); // same instant: settled AND convergeDue is false
+		assert.deepEqual(
+			runnerListings.filter((r) => r !== 'WolffM/hadoku_site'),
+			[],
+			'a settled fleet inside the window is not re-read (hadoku_site is the label floor’s own read, every tick)'
+		);
+
+		mock.timers.tick(BACKSTOP_CONVERGE_INTERVAL_MS);
+		runnerListings.length = 0;
+		await tick('tok'); // convergeDue alone must force the re-verify
+		assert.ok(
+			runnerListings.includes('WolffM/hadoku-rally') &&
+				runnerListings.includes('WolffM/hadoku-task'),
+			'the verify sweep must re-read every child repo once the interval elapses, ' +
+				'with nothing else about the fleet having changed'
+		);
+	} finally {
+		mock.timers.reset();
+	}
+});
+
+test('backstop: a verify sweep that fails a repo is retried on the very next tick, not held off another hour', async () => {
+	__setFleetReposForTesting(['WolffM/hadoku_site', 'WolffM/hadoku-rally', 'WolffM/hadoku-task']);
+	mock.timers.enable({ apis: ['Date'] });
+	try {
+		installFetch({ runners: FLEET_ALL_UP });
+		await tick('tok'); // settle
+		mock.timers.tick(BACKSTOP_CONVERGE_INTERVAL_MS);
+
+		// The verify sweep is due; hadoku-task's read fails.
+		installFetch({
+			runners: FLEET_ALL_UP,
+			runnersGate: async (repo) => {
+				if (repo === 'WolffM/hadoku-task') throw new Error('simulated 502');
+			},
+		});
+		runnerListings.length = 0;
+		await tick('tok');
+		assert.ok(runnerListings.includes('WolffM/hadoku-task'), 'the failing repo was attempted');
+
+		// NO MORE TIME PASSES. A fan-out that could not read every repo must not
+		// claim the hour — the very next tick must retry, not wait.
+		installFetch({ runners: FLEET_ALL_UP }); // healthy again
+		runnerListings.length = 0;
+		await tick('tok');
+		assert.ok(
+			runnerListings.includes('WolffM/hadoku-task'),
+			'a partial fan-out is retried next tick instead of being recorded as done — ' +
+				'plain subCadence would have marked it on the failed attempt and waited an hour'
+		);
+
+		// It succeeded this time, so NOW the mark holds — one more tick with no
+		// time passed must not re-read.
+		runnerListings.length = 0;
+		await tick('tok');
+		assert.deepEqual(
+			runnerListings.filter((r) => r !== 'WolffM/hadoku_site'),
+			[],
+			'the successful retry finally earned the mark — the next tick is quiet again'
+		);
+	} finally {
+		mock.timers.reset();
+	}
 });

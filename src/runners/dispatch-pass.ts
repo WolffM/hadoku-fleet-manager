@@ -16,6 +16,7 @@
  */
 import { logger } from '../host.js';
 import { withGhCaller } from '../gh-budget.js';
+import { subCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
 import { planTick, type PendingRun, type SkipReason } from './dispatcher.js';
 import {
 	mintEphemeralRunner,
@@ -152,7 +153,8 @@ export function __markHeavyForTesting(node: string, atMs: number): void {
 }
 
 /**
- * When the reap last swept, epoch ms. 0 means "not yet this process".
+ * When the reap last swept, epoch ms. "Not yet this process" until the first
+ * sweep marks it.
  *
  * The docblock below says this pass reconstructs its state from the NODES
  * rather than remembering it, because mgmt-api restarts ~5x a day and anything
@@ -161,8 +163,16 @@ export function __markHeavyForTesting(node: string, atMs: number): void {
  * restart makes the next pass sweep immediately, which is the SAFE direction —
  * one extra listing per repo, once, versus a missed orphan — and no decision
  * anywhere reads it.
+ *
+ * `subCadence` (`lib/every.ts`, wave5m lane C) now holds the clock itself —
+ * in-memory, global, mark-when-due regardless of outcome, exactly the plain
+ * module `let` this replaced: `lastReapMs` was stamped BEFORE the sweep's
+ * await (below) so a slow or failed sweep is not retried until the interval
+ * passes either, the same "stamped before, not after" shape `subCadence`
+ * gives for free. `the reap sweeps on the first pass, then not again on the
+ * next tick` (dispatch-pass.test.ts) pins this unmodified.
  */
-let lastReapMs = 0;
+const REAP_CADENCE_NAME = 'dispatch-pass:reap';
 
 /**
  * Per repo: when the sweep last READ its listing, and whether that listing still
@@ -196,7 +206,7 @@ export function reapTargets(repos: readonly string[], nowMs: number): string[] {
 
 /** Test seam. Not part of the supported API. */
 export function __resetReapClockForTesting(): void {
-	lastReapMs = 0;
+	__resetSubCadenceKeyForTesting(REAP_CADENCE_NAME);
 	reapBook.clear();
 	mintedAtMs.clear();
 }
@@ -275,10 +285,9 @@ export async function runDispatchPass(
 	// collapsing the two would let a sweep that stopped running read for as long
 	// as anyone cared to look like a fleet that never leaks.
 	let reaped: number | null = null;
-	if (nowMs - lastReapMs >= REAP_INTERVAL_MS) {
-		// Stamped BEFORE the await, so a slow sweep cannot let the next pass in
-		// behind it and double the cost it was gated to bound.
-		lastReapMs = nowMs;
+	// Marked BEFORE the await (subCadence's own shape), so a slow sweep cannot
+	// let the next pass in behind it and double the cost it was gated to bound.
+	if (subCadence(REAP_CADENCE_NAME, REAP_INTERVAL_MS, nowMs)) {
 		const targets = reapTargets(input.repos ?? [], nowMs);
 		// Nothing due is a sweep that LOOKED — every repo was read within
 		// REAP_IDLE_INTERVAL_MS and held nothing — so it reports 0, not `null`.

@@ -13,7 +13,14 @@ import assert from 'node:assert/strict';
 
 import { __setHostForTesting } from '../host.js';
 import { testHost } from './install-test-host.js';
-import { every, subCadence, __resetSubCadenceForTesting } from '../lib/every.js';
+import {
+	every,
+	subCadence,
+	subCadenceDue,
+	markSubCadence,
+	__resetSubCadenceForTesting,
+	__resetSubCadenceKeyForTesting,
+} from '../lib/every.js';
 import { getFleetLiveness, __resetLivenessForTesting } from '../lib/liveness.js';
 
 /**
@@ -433,4 +440,48 @@ void test('subCadence: independent gates by name do not interfere', () => {
 	assert.equal(subCadence('y', 1000, 0), true, 'a different name starts cold too');
 	assert.equal(subCadence('x', 1000, 1), false);
 	assert.equal(subCadence('y', 1000, 1), false);
+});
+
+// ── subCadenceDue / markSubCadence (the check and the mark, split) ──────────
+
+void test('subCadenceDue: never marks, however many times it is asked', () => {
+	assert.equal(subCadenceDue('gate-d', 1000, 0), true);
+	assert.equal(subCadenceDue('gate-d', 1000, 1), true, 'still due — the check alone never marks');
+	assert.equal(subCadenceDue('gate-d', 1000, 999), true);
+});
+
+void test('markSubCadence: marks without asking whether it was due', () => {
+	markSubCadence('gate-e', 500);
+	assert.equal(subCadenceDue('gate-e', 1000, 500), false, 'marked, so not due a moment later');
+	assert.equal(subCadenceDue('gate-e', 1000, 1499), false);
+	assert.equal(subCadenceDue('gate-e', 1000, 1500), true);
+});
+
+void test('subCadenceDue + markSubCadence composes to subCadence’s own answer', () => {
+	// The split primitives, driven by hand, must retrace subCadence's shape:
+	// due, mark, not due until the window elapses, due again once it has.
+	const name = 'gate-f';
+	assert.equal(subCadenceDue(name, 1000, 0), true);
+	markSubCadence(name, 0);
+	assert.equal(subCadenceDue(name, 1000, 1), false);
+	assert.equal(subCadenceDue(name, 1000, 999), false);
+	assert.equal(subCadenceDue(name, 1000, 1000), true);
+});
+
+void test('subCadenceDue: a gate the caller never marks stays due forever — the failed-sweep case', () => {
+	// backstop-decision.ts's convergeDue: a check that is never followed by a
+	// mark (because the work it gated failed) must answer due again on the
+	// very next ask, not wait out the window.
+	const name = 'gate-g';
+	assert.equal(subCadenceDue(name, 1000, 0), true);
+	assert.equal(subCadenceDue(name, 1000, 1), true, 'nothing marked it — still due');
+	assert.equal(subCadenceDue(name, 1000, 500), true);
+});
+
+void test('__resetSubCadenceKeyForTesting: clears only the named gate', () => {
+	markSubCadence('gate-h1', 0);
+	markSubCadence('gate-h2', 0);
+	__resetSubCadenceKeyForTesting('gate-h1');
+	assert.equal(subCadenceDue('gate-h1', 1000, 1), true, 'cleared');
+	assert.equal(subCadenceDue('gate-h2', 1000, 1), false, 'its sibling must be untouched');
 });

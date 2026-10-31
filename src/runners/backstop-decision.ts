@@ -38,6 +38,7 @@ import { isDraining, readDrain } from './drain.js';
 import { nodeReservation, type Reservation } from '../node-reservation.js';
 import { backstopMachinesReader } from './backstop-machines.js';
 import { alertOnce, clearAlert } from '../lib/alert-ledger.js';
+import { subCadenceDue, markSubCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
 import { TICK_INTERVAL_MS, selfHostname } from '../lib/runner-health-shared.js';
 import type { TickReport } from '../runner-health.js';
 
@@ -105,10 +106,17 @@ function readHostLoadFromProc(
  * converges every tick. It is deliberately much slower than the 10-minute tick
  * for that reason: the fault it catches is rare and its cost is measured in
  * hours of exposure, not seconds of latency.
+ *
+ * NOT `subCadence` (`lib/every.ts`, wave5m lane C): that primitive marks the
+ * moment it answers due, and this gate must not — "only claim the state once
+ * nothing failed, so a partial fan-out is retried next tick instead of being
+ * recorded as done" (below). `subCadenceDue`/`markSubCadence` are the same
+ * clock with the mark pulled out to this file's own success branch, which is
+ * exactly the split this gate needs.
  */
-let backstopConvergedMs = 0;
+const CONVERGE_CADENCE_NAME = 'backstop-decision:converge';
 
-/** @see backstopConvergedMs — how stale the fan-out's reading may get. */
+/** @see CONVERGE_CADENCE_NAME — how stale the fan-out's reading may get. */
 export const BACKSTOP_CONVERGE_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
@@ -926,11 +934,11 @@ export async function runBackstopDecision(args: {
 	// every tick of a promotion would read the whole fleet's listings to change
 	// nothing.
 	const relabels = backstopNodes.some(labelsMayPromote);
-	// The third condition is the VERIFY sweep — see `backstopConvergedMs`. The
-	// first two ask "did I change my mind?"; only this one asks "is the fleet
-	// actually in the state I believe it is?", which is the question the 165
-	// jobs on 26 unlooked-at repos needed somebody to ask.
-	const convergeDue = Date.now() - backstopConvergedMs >= BACKSTOP_CONVERGE_INTERVAL_MS;
+	// The third condition is the VERIFY sweep — see `CONVERGE_CADENCE_NAME`.
+	// The first two ask "did I change my mind?"; only this one asks "is the
+	// fleet actually in the state I believe it is?", which is the question
+	// the 165 jobs on 26 unlooked-at repos needed somebody to ask.
+	const convergeDue = subCadenceDue(CONVERGE_CADENCE_NAME, BACKSTOP_CONVERGE_INTERVAL_MS);
 	if (
 		!decision.unmeasured &&
 		(backstopFleetState !== backstopWanted || (backstopWanted && relabels) || convergeDue)
@@ -948,7 +956,7 @@ export async function runBackstopDecision(args: {
 			// verified anything, and must not buy itself another hour of silence.
 			if (!fleet.failed.length) {
 				backstopFleetState = backstopWanted;
-				backstopConvergedMs = Date.now();
+				markSubCadence(CONVERGE_CADENCE_NAME);
 			}
 			if (convergeDue && fleet.changed.length && backstopFleetState === backstopWanted) {
 				// A divergence the belief could not have shown. Warn, not info:
@@ -1029,7 +1037,7 @@ export function __resetBackstopDecisionForTesting(): void {
 	// Cross-tick memory — see the comment below. A leaked timestamp would make
 	// the verify sweep "not due" for an hour of test time and pass while
 	// measuring nothing.
-	backstopConvergedMs = 0;
+	__resetSubCadenceKeyForTesting(CONVERGE_CADENCE_NAME);
 	// Every piece of cross-tick memory has to be listed here — see the comment
 	// below. Hysteresis is cross-tick by definition.
 	backstopCalmTicks = 0;

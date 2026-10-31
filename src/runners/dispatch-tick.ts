@@ -23,6 +23,7 @@ import { join } from 'node:path';
 
 import { logger, stateDir } from '../host.js';
 import { noteTick } from '../lib/liveness.js';
+import { subCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
 import { ghTokenFingerprint, withGhCaller } from '../gh-budget.js';
 import {
 	runDispatchPass,
@@ -283,7 +284,14 @@ export const PENDING_INTERVAL_MS = 240_000;
  */
 export const MAX_PENDING_PROBES = 10;
 
-let lastPendingPollMs = 0;
+/**
+ * This gate's `subCadence` name (`lib/every.ts`, wave5m lane C). In-memory,
+ * global, mark-when-due regardless of outcome — exactly this gate's own
+ * previous shape (a plain module `let`, stamped before the fan-out's awaits)
+ * — so the swap changes no observable timing; `#11: the pending listing runs
+ * on its OWN clock` (below) pins it unmodified.
+ */
+const PENDING_CADENCE_NAME = 'dispatch-tick:pending';
 
 // ---------------------------------------------------------------------------
 // The probe's declared intent — the one thing that stops the wasted competitor
@@ -449,11 +457,18 @@ export function __resetProbeIntentStateForTesting(): void {
  */
 export const MAX_RECOVERY_PROBES = 5;
 
-let lastRecoveryMs = 0;
+/**
+ * This gate's `subCadence` name (`lib/every.ts`, wave5m lane C). Same shape
+ * as `PENDING_CADENCE_NAME` above: in-memory, global, mark-when-due
+ * regardless of outcome, stamped before the fan-out's awaits — matching the
+ * plain module `let` this replaced exactly. `recovery is gated on its own
+ * clock, not the dispatch tick` (below) pins it unmodified.
+ */
+const RECOVERY_CADENCE_NAME = 'dispatch-tick:recovery';
 
 /** Tests only: the clock is module state, so it must be resettable between them. */
 export function resetRecoveryClock(): void {
-	lastRecoveryMs = 0;
+	__resetSubCadenceKeyForTesting(RECOVERY_CADENCE_NAME);
 }
 
 export interface DispatchTickInput {
@@ -525,8 +540,7 @@ export async function runDispatchTick(
 	// STAMPED BEFORE THE AWAITS, for the reason the reap gate is: a slow pass must
 	// not let the next one in behind it and double the cost this was gated to
 	// bound. Decided once for the whole tick so every repo in the fan-out agrees.
-	const recoveryDue = nowMs - lastRecoveryMs >= RECOVERY_INTERVAL_MS;
-	if (recoveryDue) lastRecoveryMs = nowMs;
+	const recoveryDue = subCadence(RECOVERY_CADENCE_NAME, RECOVERY_INTERVAL_MS, nowMs);
 
 	// READ ONCE PER TICK, like the reap gate, so every repo in the fan-out below
 	// agrees about what is declared. One readdir of a directory that is empty
@@ -684,8 +698,7 @@ export async function runDispatchTick(
 			return age >= (input.minQueuedMs ?? MIN_QUEUED_MS) && age <= ZOMBIE_MS;
 		});
 
-	const pendingDue = nowMs - lastPendingPollMs >= PENDING_INTERVAL_MS;
-	if (pendingDue) lastPendingPollMs = nowMs;
+	const pendingDue = subCadence(PENDING_CADENCE_NAME, PENDING_INTERVAL_MS, nowMs);
 	const dueSet = new Set(due);
 	// BOUNDED, not `Promise.all`. One token serves the dispatcher, the fleet loop
 	// and runner-health, and a wide simultaneous burst trips GitHub's SECONDARY
@@ -1006,7 +1019,7 @@ export function __resetPollStateForTesting(): void {
 	pendingEtagByRepo.clear();
 	cachedPendingByRepo.clear();
 	pendingKeysByRepo.clear();
-	lastPendingPollMs = 0;
+	__resetSubCadenceKeyForTesting(PENDING_CADENCE_NAME);
 	// And its disk half, for the same reason. Marked hydrated so a test reads
 	// disk only through `__restartPollCacheForTesting`, which means to.
 	runsDisk.clear();
@@ -1034,7 +1047,7 @@ export function __restartPollCacheForTesting(): void {
 	pendingEtagByRepo.clear();
 	cachedPendingByRepo.clear();
 	pendingKeysByRepo.clear();
-	lastPendingPollMs = 0;
+	__resetSubCadenceKeyForTesting(PENDING_CADENCE_NAME);
 	pollCacheHydrated = false;
 }
 

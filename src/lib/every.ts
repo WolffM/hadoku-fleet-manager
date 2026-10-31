@@ -285,29 +285,66 @@ export function every(
  * gates"). A tick asks "has `name` run within `ms`?"; a `true` answer also
  * MARKS it as having run now, so the next ask inside `ms` answers `false`.
  *
- * NOT MIGRATED ONTO THIS (see the report): the gates this wave's grep found —
- * `dispatch-tick.ts`'s `recoveryDue`/`pendingDue`, `dispatch-pass.ts`'s
- * `lastReapMs`, `speed-heavy-cache.ts`'s two model-rebuild gates,
- * `backstop-decision.ts`'s `convergeDue`, `ci-alerts.ts`'s
- * `ciAlertsBootPassDue` — because migrating a GATE's call site means editing
- * the file the gate lives in, and none of those files are this lane's to
- * touch (wave5j-2026-10-31.md's ownership table: lane D owns `every.ts`, the
- * three loops' start/scheduling functions, and runner-health's sub-cadence
- * gates ONLY IF they are physically inside its tick — none of the ones found
- * are). `subCadence` is built, tested and ready for the next lane that owns
- * one of those files to swap its hand-rolled `nowMs - lastXMs >= X_MS` for
- * this.
+ * MIGRATED ONTO THIS (wave5m lane C, 2026-10-31), all in-memory, global,
+ * mark-when-due regardless of outcome — exactly this primitive's shape:
+ * `dispatch-tick.ts`'s `recoveryDue`/`pendingDue` and `dispatch-pass.ts`'s
+ * `lastReapMs` (each already stamped BEFORE its awaits, for the same reason —
+ * "a slow pass must not let the next one in behind it"), and
+ * `speed-heavy-cache.ts`'s two model-rebuild gates (the due/mark half only —
+ * the built MODEL stays a local cache `subCadence` has no slot for).
+ *
+ * NOT MIGRATED, with the reason named at each call site:
+ *   - `backstop-decision.ts`'s `convergeDue` marks only AFTER the fan-out
+ *     succeeds ("a partial fan-out is retried next tick instead of being
+ *     recorded as done") — the opposite of this function's unconditional
+ *     mark-on-due. It uses `subCadenceDue`/`markSubCadence` below instead,
+ *     the same cadence with the mark pulled out to the caller's success
+ *     branch.
+ *   - `ci-alerts.ts`'s `ciAlertsBootPassDue` is read from a file (asked by
+ *     the NEXT process after a restart) and marked only on a clean pass by a
+ *     separate writer (`recordCleanPass`) — persisted, not in-memory, so it
+ *     cannot sit on this module-global map at all.
  */
 const lastRunAtMs = new Map<string, number>();
 
-export function subCadence(name: string, ms: number, now: number = Date.now()): boolean {
+/**
+ * Has `name` run within `ms`? Never marks — see `markSubCadence`, its pair.
+ * `subCadence` below is `subCadenceDue` immediately followed by
+ * `markSubCadence` on a `true` answer; this split exists for a gate whose
+ * mark must wait on the outcome of the work the check gated (see
+ * `backstop-decision.ts`'s `convergeDue`).
+ */
+export function subCadenceDue(name: string, ms: number, now: number = Date.now()): boolean {
 	const last = lastRunAtMs.get(name);
-	const due = last === undefined || now - last >= ms;
-	if (due) lastRunAtMs.set(name, now);
+	return last === undefined || now - last >= ms;
+}
+
+/** Mark `name` as having run at `now`. See `subCadenceDue`. */
+export function markSubCadence(name: string, now: number = Date.now()): void {
+	lastRunAtMs.set(name, now);
+}
+
+export function subCadence(name: string, ms: number, now: number = Date.now()): boolean {
+	const due = subCadenceDue(name, ms, now);
+	if (due) markSubCadence(name, now);
 	return due;
 }
 
 /** Test seam: forget every gate's last-run time. Not part of the supported API. */
 export function __resetSubCadenceForTesting(): void {
 	lastRunAtMs.clear();
+}
+
+/**
+ * Test seam: forget ONE gate's last-run time, leaving every other name's
+ * cadence untouched. `__resetSubCadenceForTesting` clears the whole shared
+ * map, which is right for a suite that owns the entire process's cadence
+ * state but wrong once two independently-reset gates share this one map —
+ * `speed-heavy-cache.ts`'s speed and heavy models reset separately today
+ * (`__resetSpeedModelForTesting`/`__resetHeavyModelForTesting`, called from
+ * different test files, not always both), and a shared clear-all would make
+ * resetting one silently reset the other too. Not part of the supported API.
+ */
+export function __resetSubCadenceKeyForTesting(name: string): void {
+	lastRunAtMs.delete(name);
 }

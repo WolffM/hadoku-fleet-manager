@@ -4,6 +4,7 @@ import { historyFile, jobRecords } from '../job-history-store.js';
 import { logger } from '../host.js';
 import { buildSpeedModel, type SpeedModel } from './speed-tier.js';
 import { buildHeavyModel, type HeavyModel } from './traffic.js';
+import { subCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
 
 /**
  * How often the speed model (#83, `speed-tier.ts`) rebuilds from job history.
@@ -19,12 +20,24 @@ import { buildHeavyModel, type HeavyModel } from './traffic.js';
 export const SPEED_MODEL_REBUILD_INTERVAL_MS = 10 * 60 * 1000;
 
 let cachedSpeedModel: SpeedModel | null = null;
-let speedModelBuiltMs = -1;
+
+/**
+ * This cache's `subCadence` name (`lib/every.ts`, wave5m lane C). Replaces a
+ * plain `speedModelBuiltMs` module `let`: the due/mark half of this gate is
+ * in-memory, global and marks unconditionally the moment it is due — the
+ * same shape `subCadence` already has. `cachedSpeedModel` stays a separate
+ * local — `subCadence` answers only "is it due", it holds no slot for the
+ * built VALUE — and the two are kept in lockstep because every call to
+ * `getSpeedModel` checks and (when due) rebuilds both together, and both
+ * resets below clear both. No existing cadence test pinned this gate's
+ * timing before this wave; `speed-heavy-cache.test.ts` (new) does.
+ */
+const SPEED_MODEL_CADENCE_NAME = 'speed-heavy-cache:speed-model';
 
 /** Test seam. Not part of the supported API. */
 export function __resetSpeedModelForTesting(): void {
 	cachedSpeedModel = null;
-	speedModelBuiltMs = -1;
+	__resetSubCadenceKeyForTesting(SPEED_MODEL_CADENCE_NAME);
 }
 
 /**
@@ -52,10 +65,10 @@ export function __resetSpeedModelForTesting(): void {
  * quiet no-op.
  */
 export function getSpeedModel(nowMs: number, nodeNames: readonly string[]): SpeedModel {
-	if (cachedSpeedModel && nowMs - speedModelBuiltMs < SPEED_MODEL_REBUILD_INTERVAL_MS) {
+	const due = subCadence(SPEED_MODEL_CADENCE_NAME, SPEED_MODEL_REBUILD_INTERVAL_MS, nowMs);
+	if (cachedSpeedModel && !due) {
 		return cachedSpeedModel;
 	}
-	speedModelBuiltMs = nowMs;
 	const records = jobRecords();
 	if (records.length === 0) {
 		// `jobRecords()` never throws and never reports WHY it is empty — that is
@@ -128,12 +141,21 @@ export function getSpeedModel(nowMs: number, nodeNames: readonly string[]): Spee
 }
 
 let cachedHeavyModel: HeavyModel | null = null;
-let heavyModelBuiltMs = -1;
+
+/**
+ * This cache's `subCadence` name — see `SPEED_MODEL_CADENCE_NAME` above for
+ * why it is a SEPARATE name (not shared with the speed model): the two
+ * caches already reset independently in existing tests
+ * (`__resetSpeedModelForTesting` without `__resetHeavyModelForTesting` in
+ * `warm-cache.test.ts`), and `subCadence`'s shared map would make one gate's
+ * reset leak into the other's if they used the same key.
+ */
+const HEAVY_MODEL_CADENCE_NAME = 'speed-heavy-cache:heavy-model';
 
 /** Test seam. Not part of the supported API. */
 export function __resetHeavyModelForTesting(): void {
 	cachedHeavyModel = null;
-	heavyModelBuiltMs = -1;
+	__resetSubCadenceKeyForTesting(HEAVY_MODEL_CADENCE_NAME);
 }
 
 /**
@@ -152,10 +174,10 @@ export function __resetHeavyModelForTesting(): void {
  * for everything, which is the safe default documented on `HeavyModel` itself.
  */
 export function getHeavyModel(nowMs: number): HeavyModel {
-	if (cachedHeavyModel && nowMs - heavyModelBuiltMs < SPEED_MODEL_REBUILD_INTERVAL_MS) {
+	const due = subCadence(HEAVY_MODEL_CADENCE_NAME, SPEED_MODEL_REBUILD_INTERVAL_MS, nowMs);
+	if (cachedHeavyModel && !due) {
 		return cachedHeavyModel;
 	}
-	heavyModelBuiltMs = nowMs;
 	const records = jobRecords();
 	const model = buildHeavyModel(records);
 	cachedHeavyModel = model;
