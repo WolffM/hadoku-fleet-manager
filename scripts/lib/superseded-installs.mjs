@@ -8,17 +8,21 @@
  * install was left behind in admin's AND ci's homes on claw-4 and claw-5, and
  * nothing pointed at it. Nothing else would ever remove it.
  *
- * WHAT IS REMOVED: `<home>/.local/opt/{jdk-*,apache-maven-*}` in the admin and
- * ci homes, and only when ALL of these hold:
+ * WHAT IS REMOVED: `$HOME/.local/opt/{jdk-*,apache-maven-*}` in ADMIN's home,
+ * and only when ALL of these hold:
  *   - the opt root holds an install of the same tool (never delete the only one);
  *   - no symlink in the link dir resolves into it;
  *   - no runner env file (`.env`, `runner.env`) names it, as a JAVA_HOME would;
  *   - no live process runs an executable from inside it.
  * Anything else prints KEEP or BUSY with the reason and is left alone.
  *
- * Run as ADMIN (sudo reads other users' /proc entries and removes ci's files).
- * The ci home is resolved on the node from the user NAME the manifest gives,
- * never spelled here.
+ * NEVER ci's home. A job's own scripts install toolchains there and reuse them
+ * (cardtable's Forge spike extracts a JDK and Maven into `~/.local/opt`), and
+ * a fleet leftover is indistinguishable from that working cache by name. No CI
+ * runs as admin since the node-users cutover, so admin's `.local/opt` holds
+ * only what the fleet's own repairs put there before /opt/fleet-tools.
+ *
+ * Run as ADMIN; sudo reads other users' /proc entries.
  */
 
 import { TOOL_OPT } from './toolchain-floor.mjs';
@@ -33,7 +37,8 @@ const TOOLS = [
  * Output, one line per candidate:
  *   REMOVED <dir> <MB> | WOULD <dir> <MB> | KEEP <dir> <why> | BUSY <dir> | FAILED <dir>
  *
- * @param {{ ciUser?: string, apply: boolean }} opts
+ * @param {{ ciUser?: string, apply: boolean }} opts  `ciUser`: whose runner envs
+ *        are also read for a reference (a ci job's JAVA_HOME pointing here keeps it)
  */
 export function supersededScript({ ciUser, apply }) {
 	const sweeps = TOOLS.map(
@@ -48,10 +53,10 @@ opt="\${FLEET_TOOL_OPT:-${TOOL_OPT}}"
 links="\${FLEET_LINK_DIR:-/usr/local/bin}"
 apply=${apply ? 1 : 0}
 ci_user=${JSON.stringify(ciUser ?? '')}
-homes="$HOME"
+env_homes="$HOME"
 if [ -n "$ci_user" ]; then
 	ci_home="$(getent passwd "$ci_user" | cut -d: -f6)"
-	[ -n "$ci_home" ] && homes="$homes $ci_home"
+	[ -n "$ci_home" ] && env_homes="$env_homes $ci_home"
 fi
 sweep_one() {
 	d="$1"; pat="$2"
@@ -59,10 +64,10 @@ sweep_one() {
 	[ -d "$1" ] || { echo "KEEP $d no install of this tool under $opt"; return; }
 	for l in "$links"/*; do
 		[ -L "$l" ] || continue
-		case "$(readlink -f "$l")" in "$d"/*) echo "KEEP $d $l points into it"; return ;; esac
+		case "$(sudo -n readlink -f "$l")" in "$d"/*) echo "KEEP $d $l points into it"; return ;; esac
 	done
-	for h2 in $homes; do
-		if sudo -n grep -rqsF --include=.env --include=runner.env -- "$d" "$h2/.hadoku" "$h2/runners" 2>/dev/null; then
+	for eh in $env_homes; do
+		if sudo -n grep -rqsF --include=.env --include=runner.env -- "$d" "$eh/.hadoku" "$eh/runners" 2>/dev/null; then
 			echo "KEEP $d a runner env names it"; return
 		fi
 	done
@@ -76,8 +81,7 @@ sweep_one() {
 		echo "WOULD $d \${mb:-?}"
 	fi
 }
-for h in $homes; do${sweeps}
-done
+h="$HOME"${sweeps}
 echo SWEPT
 `;
 }

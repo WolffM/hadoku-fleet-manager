@@ -97,7 +97,7 @@ const ONLY = machineArg(process.argv.slice(2), { valueFlags: ['--out', '--budget
  * work without draining anything. `--out <file>` also writes the JSON document.
  *
  * The same nightly pass also seeds earned capabilities' caches (`seeds`),
- * removes JDK/Maven installs left in node users' homes once the opt root holds
+ * removes JDK/Maven installs left in admin's home once the opt root holds
  * the tool (`superseded`, lib/superseded-installs.mjs), and converges each
  * service host's tunnel and peer port (`tunnels`, `peers`).
  */
@@ -303,7 +303,7 @@ async function refresh() {
 	}
 
 	// SUPERSEDED TOOL INSTALLS (lib/superseded-installs.mjs), on the same
-	// nightly cadence: a JDK or Maven left in a node user's home after the
+	// nightly cadence: a JDK or Maven left in admin's home after the
 	// fleet's copy moved under the opt root. `--plan` lists without removing.
 	// A guest is never touched, and a node the sweep could not finish on is a
 	// finding, never "nothing to remove".

@@ -113,3 +113,20 @@ test('superseded: output without the SWEPT trailer is incomplete, never "nothing
 	assert.equal(parseSuperseded('KEEP /x why\n').complete, false);
 	assert.equal(parseSuperseded('').complete, false);
 });
+
+/**
+ * NEVER ci's HOME. A job's own scripts install a JDK into `~/.local/opt` and
+ * reuse it (cardtable's Forge spike), which is indistinguishable by name from a
+ * fleet leftover. Candidates come from admin's $HOME alone, whoever ci is.
+ */
+test("superseded: candidates come from admin's home only, even when a ci user is named", () => {
+	const s = supersededScript({ ciUser: 'ci-user-fixture', apply: true });
+	const sources = s.match(/for d in "[^"]+"\/\.local\/opt/g) ?? [];
+	assert.ok(sources.length > 0);
+	assert.ok(
+		sources.every((x) => x.startsWith('for d in "$h"')),
+		sources.join(' | ')
+	);
+	assert.match(s, /^h="\$HOME"/m);
+	assert.doesNotMatch(s, /^h="\$ci_home"|for h in/m);
+});
