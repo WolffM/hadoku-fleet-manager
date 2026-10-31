@@ -23,15 +23,15 @@
 /**
  * The three labels this module counts by.
  *
- * RE-EXPORTED, not declared. They are registry entries now — `capabilities.ts`
- * carries the identity/eligibility distinction this file's docstring calls
- * load-bearing, plus the description, the verification route and the floor
- * policy for each. The names stay exported from here because five modules import
- * them from `./census.js` and the point of a registry is to stop the vocabulary
- * being copied, not to make every consumer re-import it.
+ * RE-EXPORTED, not declared. They are registry entries now — `lib/capability-
+ * registry.ts` carries the identity/eligibility distinction this file's
+ * docstring calls load-bearing, plus the description, the verification route
+ * and the floor policy for each. The names stay exported from here because five
+ * modules import them from `./census.js` and the point of a registry is to
+ * stop the vocabulary being copied, not to make every consumer re-import it.
  */
-export { BUILDER_LABEL, PM2_HOST_LABEL, BACKSTOP_LABEL } from '../capabilities.js';
-import { BUILDER_LABEL, PM2_HOST_LABEL, BACKSTOP_LABEL } from '../capabilities.js';
+export { BUILDER_LABEL, PM2_HOST_LABEL, BACKSTOP_LABEL } from '../lib/capability-registry.js';
+import { BUILDER_LABEL, PM2_HOST_LABEL, BACKSTOP_LABEL } from '../lib/capability-registry.js';
 
 export interface CensusRunner {
 	name: string;

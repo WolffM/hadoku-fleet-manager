@@ -40,7 +40,7 @@ import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { requiredIdentitySet } from '../dist/capabilities.js';
+import { requiredIdentitySet } from '../dist/lib/bootcamp-proof.js';
 import { fixtureRemotes, poisonedClone } from './lib/fleet-source-fixture.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));

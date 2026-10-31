@@ -75,7 +75,8 @@ import { guestPostCheck, proofShell } from './lib/prove-job-guest.mjs';
 import { installCliHost } from '../dist/host.js';
 import { nodeHome } from '../dist/lib/node-users.js';
 import { isGuestNode } from '../dist/lib/node-role.js';
-import { capability, workloadGatedCapabilities } from '../dist/capabilities.js';
+import { capability } from '../dist/lib/capability-registry.js';
+import { workloadGatedCapabilities } from '../dist/lib/workload-gate.js';
 import { buildProofRecord, proveJob, specFromCapability } from '../dist/runners/prove-job.js';
 import { readProofsForCapability, writeProof } from '../dist/lib/measured.js';
 

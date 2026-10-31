@@ -14,7 +14,7 @@
  * not revoked). A capability the fleet already proves needs no rule of its own.
  * Not to be confused with lib/placement-rules.mjs, which places CI jobs.
  */
-import { labelCapabilities } from '../../dist/capabilities.js';
+import { labelCapabilities } from '../../dist/lib/capability-labels.js';
 
 /** Rules with no argument. */
 const FIXED = {

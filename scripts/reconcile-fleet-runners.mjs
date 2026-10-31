@@ -132,7 +132,7 @@ import {
 	shrinkRefusal,
 } from './lib/demand-derive.mjs';
 import { metricsReadScript, metricsSince, perJobCosts, readOutcome } from './lib/job-metrics.mjs';
-import { BUILDER_LABEL } from '../dist/capabilities.js';
+import { BUILDER_LABEL } from '../dist/lib/capability-registry.js';
 import { fleetOwner } from '../dist/lib/fleet-config.js';
 import { isGuestNode } from '../dist/lib/node-role.js';
 import { RETENTION_DAYS } from '../dist/job-history-store.js';

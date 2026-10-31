@@ -5,13 +5,13 @@ import { JOB_RESERVE_DEFAULT_MB, jitRoot } from './ephemeral.js';
 import { nodeShell } from '../node-shell.js';
 import { logger, manifest, stateDir } from '../host.js';
 import { isGuestNode } from '../lib/node-role.js';
+import { nodeOffer } from '../lib/capability-offer.js';
 import {
-	nodeOffer,
 	revokedFor,
 	workloadGateContext,
 	workloadGatedCapabilities,
 	type WorkloadGateContext,
-} from '../capabilities.js';
+} from '../lib/workload-gate.js';
 import { readRevocations, REVOCATIONS_FILE, revokedSets } from '../capability-revocations.js';
 import { proofFileStatus, readProofsForCapability, type ProofRecord } from '../lib/measured.js';
 import type { UserBearingNode } from '../lib/node-users.js';

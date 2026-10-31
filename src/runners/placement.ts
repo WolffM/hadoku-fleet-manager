@@ -5,7 +5,7 @@
  * ephemeral.ts: these are decisions, and decisions can be asserted without
  * touching a node.
  */
-import { IMPLICIT_LABELS as REGISTRY_IMPLICIT_LABELS } from '../capabilities.js';
+import { IMPLICIT_LABELS as REGISTRY_IMPLICIT_LABELS } from '../lib/capability-labels.js';
 import { admitMint, type AdmissionInput, type AdmissionResult } from './ephemeral.js';
 import { SLOW_P25, type KindSlowness, type SpeedModel } from './speed-tier.js';
 import type { HeavyModel } from './traffic.js';

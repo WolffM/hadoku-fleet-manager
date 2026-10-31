@@ -9,7 +9,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 
-import { nodeOffer } from '../../dist/capabilities.js';
+import { nodeOffer } from '../../dist/lib/capability-offer.js';
 import { hostsCiDocker, hostsPm2Services, isGuestNode } from '../../dist/lib/node-role.js';
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
 import { DEFAULT_MIN_AGE_MINUTES, dispatchLookup, parseVersion } from './tool-release.mjs';

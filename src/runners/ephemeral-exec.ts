@@ -7,7 +7,7 @@
  * way `setTierEligibility` takes `gh`, so the ORDER of operations — which is
  * where the leaks and the clobbers live — is testable without a node.
  */
-import { IMPLICIT_LABELS, ephemeralOnlyLabels } from '../capabilities.js';
+import { IMPLICIT_LABELS, ephemeralOnlyLabels } from '../lib/capability-labels.js';
 import { logger } from '../host.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
 import {

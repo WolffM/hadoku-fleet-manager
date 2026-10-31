@@ -60,14 +60,10 @@ import { FLEET_VALUE } from '../dist/ci-runner-fallback.js';
 import { BUILDER_LABEL } from '../dist/runners/census.js';
 import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import { isProofRunnerName } from '../dist/runners/prove-job.js';
-import {
-	requiredIdentitySet,
-	probeableIds,
-	nodeOffer,
-	eligibilityLabels,
-	provesRequiredSet,
-	capability,
-} from '../dist/capabilities.js';
+import { requiredIdentitySet, provesRequiredSet } from '../dist/lib/bootcamp-proof.js';
+import { probeableIds, eligibilityLabels } from '../dist/lib/capability-labels.js';
+import { nodeOffer } from '../dist/lib/capability-offer.js';
+import { capability } from '../dist/lib/capability-registry.js';
 import {
 	ciRecords,
 	emptyRequiredSetReason,

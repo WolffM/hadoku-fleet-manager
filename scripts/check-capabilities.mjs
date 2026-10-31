@@ -35,16 +35,14 @@ import {
 	readRevocations,
 	writeRevocations,
 } from '../dist/capability-revocations.js';
+import { capability, judgeMeasurement, measuredIdleOnly } from '../dist/lib/capability-registry.js';
+import { probeableIds } from '../dist/lib/capability-labels.js';
+import { nodeOffer } from '../dist/lib/capability-offer.js';
 import {
-	capability,
-	judgeMeasurement,
-	measuredIdleOnly,
-	nodeOffer,
-	probeableIds,
 	workloadGateContext,
 	workloadGatedCapabilities,
 	workloadGateStatus,
-} from '../dist/capabilities.js';
+} from '../dist/lib/workload-gate.js';
 import { isGuestNode } from '../dist/lib/node-role.js';
 import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.js';
 import { createEmitter } from './lib/emit.mjs';

@@ -68,7 +68,7 @@
  */
 
 import { ADVISORY, BLOCKING, rebootFinding } from './preflight.mjs';
-import { BOOTCAMP_STALE_DAYS } from '../../dist/capabilities.js';
+import { BOOTCAMP_STALE_DAYS } from '../../dist/lib/workload-gate.js';
 import { WIFI_MANAGER_PROBE, parseWifiManager } from './node-interfaces.mjs';
 
 export { ADVISORY, BLOCKING };

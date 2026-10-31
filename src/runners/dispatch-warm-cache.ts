@@ -28,7 +28,7 @@ import { heavyMarkedRecently } from './dispatch-pass.js';
 import { slowReposOn } from './placement.js';
 import { recordWarmListenerDecisions, type WarmListenerDecision } from './decision-log.js';
 import { nodeHome } from '../lib/node-users.js';
-import { workloadGatedCapabilities } from '../capabilities.js';
+import { workloadGatedCapabilities } from '../lib/workload-gate.js';
 import { jobRecords } from '../job-history-store.js';
 import { logger } from '../host.js';
 import {

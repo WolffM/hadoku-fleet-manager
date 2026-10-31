@@ -48,12 +48,8 @@ import process from 'node:process';
 import { readFileSync } from 'node:fs';
 import { readPm2Hosts } from './lib/site-docs.mjs';
 import { loadManifest, manifestPath } from './lib/fleet-exec.mjs';
-import {
-	validateCapabilities,
-	parseProbeCapabilities,
-	workloadGateContext,
-	workloadGatedCapabilities,
-} from '../dist/capabilities.js';
+import { validateCapabilities, parseProbeCapabilities } from '../dist/lib/capability-validate.js';
+import { workloadGateContext, workloadGatedCapabilities } from '../dist/lib/workload-gate.js';
 import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.js';
 import {
 	GUEST_MINT_MODE,

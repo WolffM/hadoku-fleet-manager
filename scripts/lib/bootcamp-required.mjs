@@ -5,12 +5,12 @@
  * same reason `demand-derive.mjs` split from `check-tool-inventory.mjs`.
  *
  * `requiredIdentitySet` itself (which ledger records count) lives in
- * `src/capabilities.ts` — it is pure derivation over the registry's own
+ * `src/lib/bootcamp-proof.ts` — it is pure derivation over the registry's own
  * vocabulary, and this file is I/O plus the registry-vs-proof join around it.
  */
 import { readFileSync } from 'node:fs';
 
-import { isCiDemandRecord } from '../../dist/capabilities.js';
+import { isCiDemandRecord } from '../../dist/lib/bootcamp-proof.js';
 import { isGuestNode } from '../../dist/lib/node-role.js';
 
 /**

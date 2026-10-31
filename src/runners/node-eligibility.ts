@@ -3,7 +3,11 @@ import { resolve } from 'node:path';
 import { logger, stateDir } from '../host.js';
 import { coveredRepos } from '../ci-runner-fallback.js';
 import { BUILDER_LABEL } from './census.js';
-import { provesRequiredSet, requiredIdentitySet, type DemandRecord } from '../capabilities.js';
+import {
+	provesRequiredSet,
+	requiredIdentitySet,
+	type DemandRecord,
+} from '../lib/bootcamp-proof.js';
 import { isGuestNode } from '../lib/node-role.js';
 import { readFleetManifest, type FleetManifest } from '../lib/manifest.js';
 import { nodeIsSick } from '../lib/sick-node.js';

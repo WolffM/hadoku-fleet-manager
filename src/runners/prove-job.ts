@@ -87,13 +87,12 @@
 
 import {
 	capability,
-	judgeWorkloadProof,
-	nodeOffer,
-	proofBudget,
 	type Capability,
 	type JobProof,
 	type ManifestNode,
-} from '../capabilities.js';
+} from '../lib/capability-registry.js';
+import { judgeWorkloadProof, proofBudget } from '../lib/workload-gate.js';
+import { nodeOffer } from '../lib/capability-offer.js';
 import type { ProofRecord } from '../lib/measured.js';
 import { isGuestNode } from '../lib/node-role.js';
 import {

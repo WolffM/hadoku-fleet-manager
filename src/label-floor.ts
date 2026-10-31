@@ -57,13 +57,10 @@
  * Pure. No fs, no network: runner-health and the gate do the reading.
  */
 
-import {
-	IMPLICIT_LABELS,
-	nodeOffer,
-	revokedFor,
-	type ManifestNode,
-	type WorkloadGateContext,
-} from './capabilities.js';
+import { IMPLICIT_LABELS } from './lib/capability-labels.js';
+import { nodeOffer } from './lib/capability-offer.js';
+import { revokedFor, type WorkloadGateContext } from './lib/workload-gate.js';
+import type { ManifestNode } from './lib/capability-registry.js';
 import { mintsJitRunners } from './lib/node-role.js';
 
 /** State-dir file `fleet label-floor` writes and runner-health reads: the static half of demand. */

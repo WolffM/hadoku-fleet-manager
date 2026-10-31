@@ -152,15 +152,10 @@ import {
 	selectMachines,
 	separateCiUser,
 } from './lib/fleet-exec.mjs';
-import {
-	capability,
-	judgeMeasurement,
-	measuredIdleOnly,
-	nodeOffer,
-	probeableIds,
-	workloadGatedCapabilities,
-	WORKLOAD_PROOF_DUE_DAYS,
-} from '../dist/capabilities.js';
+import { capability, judgeMeasurement, measuredIdleOnly } from '../dist/lib/capability-registry.js';
+import { probeableIds } from '../dist/lib/capability-labels.js';
+import { nodeOffer } from '../dist/lib/capability-offer.js';
+import { workloadGatedCapabilities, WORKLOAD_PROOF_DUE_DAYS } from '../dist/lib/workload-gate.js';
 import { isGuestNode } from '../dist/lib/node-role.js';
 import { readProof } from '../dist/lib/measured.js';
 import { stateDir } from './lib/paths.mjs';

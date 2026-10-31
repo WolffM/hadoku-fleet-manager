@@ -134,7 +134,8 @@ import { ghBlackoutRemainingMs } from '../dist/lib/github-client.js';
 import { nodeReservation } from '../dist/node-reservation.js';
 import { mintEphemeralRunner, liveJitSlots } from '../dist/runners/ephemeral-exec.js';
 import { jitRunnerName } from '../dist/runners/ephemeral.js';
-import { nodeOffer, workloadGateContext, workloadGatedCapabilities } from '../dist/capabilities.js';
+import { nodeOffer } from '../dist/lib/capability-offer.js';
+import { workloadGateContext, workloadGatedCapabilities } from '../dist/lib/workload-gate.js';
 import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.js';
 import { nodeHome } from '../dist/lib/node-users.js';
 

@@ -200,7 +200,7 @@
     "to": "scripts/lib/slice-inventory-run.mjs"
   },
   {
-    "from": "src/capabilities.ts",
+    "from": "src/lib/workload-gate.ts",
     "to": "src/lib/measured.ts"
   },
   {

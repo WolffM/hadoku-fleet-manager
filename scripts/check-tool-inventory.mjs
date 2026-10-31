@@ -52,7 +52,7 @@ import {
 	mergeDemandLedger,
 	capabilityRetirements,
 } from './lib/demand-derive.mjs';
-import { CI_DEMAND_CLASS, provenCapabilities } from '../dist/capabilities.js';
+import { CI_DEMAND_CLASS, provenCapabilities } from '../dist/lib/bootcamp-proof.js';
 
 const COVERAGE = manifestFile('fleet-runner-coverage.json');
 

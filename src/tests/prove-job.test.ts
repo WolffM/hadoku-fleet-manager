@@ -11,7 +11,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { nodeOffer, capability, type ManifestNode } from '../capabilities.js';
+import { nodeOffer } from '../lib/capability-offer.js';
+import { capability, type ManifestNode } from '../lib/capability-registry.js';
 import { parseJitName } from '../runners/ephemeral.js';
 import { __resetTarballCacheForTesting, reapJitRunners } from '../runners/ephemeral-exec.js';
 import {

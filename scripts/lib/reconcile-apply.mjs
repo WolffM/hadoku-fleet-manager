@@ -7,12 +7,12 @@ import { runnerVarForm } from './runner-var.mjs';
 import { runFleetScript } from './run-fleet-script.mjs';
 import { siteRoot, stateDir } from './paths.mjs';
 import { readRevocations, revokedSets } from '../../dist/capability-revocations.js';
+import { registrationLabels } from '../../dist/lib/capability-offer.js';
 import {
-	registrationLabels,
 	revokedFor,
 	workloadGateContext,
 	workloadGatedCapabilities,
-} from '../../dist/capabilities.js';
+} from '../../dist/lib/workload-gate.js';
 import { proofFileStatus, readProofsForCapability } from '../../dist/lib/measured.js';
 import { qualifyRepo } from '../../dist/lib/fleet-config.js';
 // The queue-health precedent, imported rather than re-derived — that gate

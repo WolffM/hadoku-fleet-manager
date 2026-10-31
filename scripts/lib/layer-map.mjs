@@ -265,7 +265,33 @@ export const LAYER_MAP = [
 	{ glob: 'scripts/lib/manifest-target.mjs', layer: 'access' },
 
 	// -------------------------------------------------------------------- config
-	{ glob: 'src/capabilities.ts', layer: 'config' }, // registry part; see the decision note below
+	// Wave 5j lane C split of capabilities.ts (plan §4.3 #4): the registry DATA
+	// and label queries (capability-registry.ts, capability-labels.ts) land in
+	// config exactly as the plan says. bootcamp-proof.ts, workload-gate.ts,
+	// capability-offer.ts and capability-validate.ts DEPART from the plan's
+	// "lifecycle core" / "ci-scheduling" / "lifecycle" assignments and stay
+	// config too — a DELIBERATE decision, not an oversight:
+	//
+	// Every one of those four is imported directly by files in ALL FOUR
+	// domains (measured from the real import graph before the split): e.g.
+	// `src/label-floor.ts` (observation) and `src/runners/ephemeral-shared.ts`
+	// (ci-scheduling) both import `nodeOffer`; `src/runners/prove-job.ts`
+	// (lifecycle) imports `judgeWorkloadProof`/`proofBudget`;
+	// `scripts/lib/collect-offers.mjs` (tenancy) imports `workloadGateContext`.
+	// Placing any one of them in a single domain would turn those existing
+	// edges into NEW domain-to-domain violations (rule 5, §3.2) — cut (iii)
+	// would grow by one violation per cross-domain importer, not stay flat.
+	// `config` is the one layer every domain already imports legally, which is
+	// exactly why the whole file sat there as one piece before this split.
+	// Re-cutting these four into their target domains is real work for a LATER
+	// wave, once the callers themselves go through a domain-owned record
+	// instead of calling the registry straight across a domain boundary.
+	{ glob: 'src/lib/capability-registry.ts', layer: 'config' },
+	{ glob: 'src/lib/capability-labels.ts', layer: 'config' },
+	{ glob: 'src/lib/bootcamp-proof.ts', layer: 'config' },
+	{ glob: 'src/lib/workload-gate.ts', layer: 'config' },
+	{ glob: 'src/lib/capability-offer.ts', layer: 'config' },
+	{ glob: 'src/lib/capability-validate.ts', layer: 'config' },
 	{ glob: 'src/lib/fleet-config.ts', layer: 'config' },
 	{ glob: 'src/lib/fleet-paths.ts', layer: 'config' },
 	{ glob: 'src/lib/job-registry.ts', layer: 'config' }, // wave 5e lane A: data + validation, no I/O

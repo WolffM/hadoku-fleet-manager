@@ -72,7 +72,7 @@ import {
 	__setWorkloadGateContextForTesting,
 	type AdmissionVerdict,
 } from '../runners/ephemeral-tick.js';
-import { workloadGateContext } from '../capabilities.js';
+import { workloadGateContext } from '../lib/workload-gate.js';
 import {
 	__resetDiskReadingsForTesting,
 	__setDiskReadingsForTesting,

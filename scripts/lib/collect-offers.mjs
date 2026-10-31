@@ -7,12 +7,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { nodeOffer } from '../../dist/lib/capability-offer.js';
 import {
-	nodeOffer,
 	revokedFor,
 	workloadGateContext,
 	workloadGatedCapabilities,
-} from '../../dist/capabilities.js';
+} from '../../dist/lib/workload-gate.js';
 import { readRevocations, revokedSets } from '../../dist/capability-revocations.js';
 import { proofFileStatus, readProofsForCapability } from '../../dist/lib/measured.js';
 import { readHostingDoc } from '../../dist/runners/hosting-record.js';

@@ -14,16 +14,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { nodeOffer, registrationLabels } from '../lib/capability-offer.js';
 import {
-	nodeOffer,
 	provenCapabilities,
 	provesRequiredSet,
-	registrationLabels,
 	isCiDemandRecord,
 	requiredIdentitySet,
-	workloadGateStatus,
-	type ManifestNode,
-} from '../capabilities.js';
+} from '../lib/bootcamp-proof.js';
+import { workloadGateStatus } from '../lib/workload-gate.js';
+import type { ManifestNode } from '../lib/capability-registry.js';
 import type { ProofRecord } from '../lib/measured.js';
 
 /** The five capabilities every claw on the live manifest proves today. */

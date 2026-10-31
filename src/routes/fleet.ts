@@ -41,18 +41,18 @@ import { mintsOnDemand } from '../lib/node-role.js';
 import { mintableCapacity } from '../runners/census.js';
 import {
 	BACKSTOP_LABEL,
-	BOOTCAMP_STALE_DAYS,
 	BUILDER_LABEL,
 	CAPABILITIES,
-	IMPLICIT_LABELS,
 	PM2_HOST_LABEL,
-	labelCapabilities,
-	bootcampFacet,
-	ladder,
+} from '../lib/capability-registry.js';
+import { IMPLICIT_LABELS, labelCapabilities, ladder } from '../lib/capability-labels.js';
+import { bootcampFacet } from '../lib/bootcamp-proof.js';
+import {
+	BOOTCAMP_STALE_DAYS,
 	workloadGateContext,
 	workloadGateReasons,
 	workloadGatedCapabilities,
-} from '../capabilities.js';
+} from '../lib/workload-gate.js';
 import { proofFileStatus, readProofsForCapability, type ProofRecord } from '../lib/measured.js';
 import { githubToken, logger, stateDir } from '../host.js';
 import { readManifestState } from '../lib/manifest.js';

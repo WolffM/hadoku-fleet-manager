@@ -5,7 +5,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { nodeOffer, registrationLabels, type ManifestNode } from '../capabilities.js';
+import { nodeOffer, registrationLabels } from '../lib/capability-offer.js';
+import type { ManifestNode } from '../lib/capability-registry.js';
 import {
 	REVOCATIONS_FILE,
 	applyVerdicts,

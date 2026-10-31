@@ -110,7 +110,8 @@
  */
 
 import { execFile } from 'node:child_process';
-import { capability, provenCapabilities } from '../../dist/capabilities.js';
+import { capability } from '../../dist/lib/capability-registry.js';
+import { provenCapabilities } from '../../dist/lib/bootcamp-proof.js';
 import { isGuestNode } from '../../dist/lib/node-role.js';
 import { mayRunRepo } from './placement-rules.mjs';
 import { runOn } from './fleet-exec.mjs';

@@ -28,7 +28,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { labelCapabilities } from '../../dist/capabilities.js';
+import { labelCapabilities } from '../../dist/lib/capability-labels.js';
 import { fixtureRemotes, poisonedClone } from './fleet-source-fixture.mjs';
 
 const GATE = join(dirname(dirname(fileURLToPath(import.meta.url))), 'check-label-floor.mjs');

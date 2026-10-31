@@ -20,7 +20,7 @@ import {
 	getPm2HostBusy,
 	__resetReservationForTesting,
 } from '../node-reservation.js';
-import { PM2_HOST_LABEL } from '../capabilities.js';
+import { PM2_HOST_LABEL } from '../lib/capability-registry.js';
 
 beforeEach(() => __resetReservationForTesting());
 

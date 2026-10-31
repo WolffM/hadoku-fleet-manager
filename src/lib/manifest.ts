@@ -28,10 +28,11 @@
  * into every caller in that file, which is outside "the F1 read only").
  *
  * IMPORTS NOTHING ABOVE CONFIG. `host.ts` (config) for the injected
- * `manifestDir()`/`logger`; `capabilities.ts` (config) for the manifest
- * vocabulary (`ManifestNode`, `BootcampFacet`, the label constants) — NOT
+ * `manifestDir()`/`logger`; `lib/capability-registry.ts` (config, split out of
+ * `capabilities.ts` in wave 5j lane C) for the manifest vocabulary
+ * (`ManifestNode`, `BootcampFacet`, the label constants) — NOT
  * `runners/census.ts` (domain/observation), which only re-exports those same
- * constants from `capabilities.ts`; `lib/node-role.ts` (config) for
+ * constants from `capability-registry.ts`; `lib/node-role.ts` (config) for
  * `isGuestNode`. A domain-layer import here would be a NEW layer violation,
  * not debt reduction.
  */
@@ -43,7 +44,7 @@ import {
 	PM2_HOST_LABEL,
 	type BootcampFacet,
 	type ManifestNode as RegistryNode,
-} from '../capabilities.js';
+} from './capability-registry.js';
 import { isGuestNode } from './node-role.js';
 
 const MANIFEST_FILE = 'fleet-runner-manifest.json';

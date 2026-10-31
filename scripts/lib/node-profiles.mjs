@@ -32,7 +32,7 @@
 import process from 'node:process';
 import { readFileSync } from 'node:fs';
 import { manifest as manifestFile } from './paths.mjs';
-import { capability } from '../../dist/capabilities.js';
+import { capability } from '../../dist/lib/capability-registry.js';
 import { keepStdoutWhole } from './emit.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,

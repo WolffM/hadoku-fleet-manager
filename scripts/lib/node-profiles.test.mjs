@@ -28,7 +28,7 @@ const { loadNodeProfiles, nodeProfile, profileIds, profileManifestPath } =
 	await import('./node-profiles.mjs');
 // The BUILT registry, the same copy the loader itself validates against — so a
 // fixture that names a capability cannot drift from what `verify` really says.
-const { capability } = await import('../../dist/capabilities.js');
+const { capability } = await import('../../dist/lib/capability-registry.js');
 
 const SHIPPED = fileURLToPath(new URL('../../manifests/node-profiles.json', import.meta.url));
 
