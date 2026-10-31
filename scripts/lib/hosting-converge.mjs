@@ -324,8 +324,18 @@ function faultOf(node, offer, require, notices, now, horizonMs) {
 	return soon ? `has a ${soon.kind} drain starting ${soon.at}` : null;
 }
 
+/**
+ * The refused nodes, worded for an alert. A node on Wi-Fi is left out by name:
+ * it never hosts anything that requires `wired`, so listing claw-1..3 under
+ * every shortfall read as though they were candidates (operator, 2026-10-31).
+ * They are still counted, so a shortfall never hides how many nodes were seen.
+ */
 function summarizeRefused(refused) {
-	return refused.map((r) => `${r.node}: ${r.reasons.join(', ')}`).join('; ');
+	const wifi = refused.filter((r) => r.reasons.includes('fails "wired"'));
+	const rest = refused.filter((r) => !wifi.includes(r));
+	const lines = rest.map((r) => `${r.node}: ${r.reasons.join(', ')}`);
+	if (wifi.length) lines.push(`${wifi.length} Wi-Fi node(s) never host it`);
+	return lines.join('; ');
 }
 
 /**

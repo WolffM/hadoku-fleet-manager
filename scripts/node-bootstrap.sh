@@ -2185,6 +2185,19 @@ else
 					route-metric=$WIRED_METRIC
 				EOF
 				log "  wrote fleet-wired ($WIRED_IF, route metric $WIRED_METRIC)"
+
+				# WIRED AND WIFI SHARE ONE SUBNET, so by default the wifi card answers
+				# ARP for the wired address. NetworkManager's conflict detection then
+				# sees "another host" (its own wifi MAC) holding the wired address and
+				# stops renewing that lease: on 2026-10-31 claw-8 lost its wired address
+				# for two hours while up and on wifi, and cardtable lost its Forge host.
+				mkdir -p /etc/sysctl.d
+				cat >/etc/sysctl.d/60-arp-flux.conf <<-EOF
+					net.ipv4.conf.all.arp_ignore = 1
+					net.ipv4.conf.all.arp_announce = 2
+				EOF
+				/usr/sbin/sysctl -q -p /etc/sysctl.d/60-arp-flux.conf || warn "could not apply the ARP settings now; they apply at the next boot"
+				log "  wrote /etc/sysctl.d/60-arp-flux.conf (each interface answers ARP for its own address only)"
 			fi
 
 			# `cloned-mac-address=permanent` IS THE RESERVATION'S FOUNDATION and is

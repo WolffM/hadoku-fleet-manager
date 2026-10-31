@@ -504,6 +504,26 @@ test('a shortfall of standby nodes is a hard block with the plan’s reasons', (
 	assert.match(b.why, /claw-6: yt-dlp does not run/);
 });
 
+test('a shortfall names the nodes that could host, and only counts the Wi-Fi ones', () => {
+	const d = run({
+		demand: { slices: 3 },
+		plan: {
+			ranked: [],
+			refused: [
+				{ node: 'claw-1', reasons: ['fails "wired"'] },
+				{ node: 'claw-2', reasons: ['offers 2936 MiB, the unit needs 4096', 'fails "wired"'] },
+				{ node: 'claw-6', reasons: ['offers 1 cores, the unit needs 4'] },
+			],
+		},
+		offers: [offer('claw-5'), offer('claw-9')],
+		slices: [{ node: 'claw-5' }, { node: 'claw-9' }],
+	});
+	const b = d.blocked.find((x) => /more node\(s\) fit/.test(x.why));
+	assert.ok(b, JSON.stringify(d.blocked));
+	assert.match(b.why, /claw-6: offers 1 cores, the unit needs 4; 2 Wi-Fi node\(s\) never host it$/);
+	assert.doesNotMatch(b.why, /claw-1|claw-2/);
+});
+
 test('a request without a standby decides byte-for-byte as before', () => {
 	const d = run({ request: service, offers: [offer('claw-4')], slices: [{ node: 'claw-4' }] });
 	assert.ok(!('standby' in d));
