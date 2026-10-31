@@ -54,9 +54,6 @@
   "src/tests/dispatch-pass.test.ts": 1255,
   "src/tests/dispatch-tick.test.ts": 1168,
   "src/tests/ephemeral.test.ts": 1165,
-  "src/tests/fleet-report.test.ts": 1664,
-  "src/tests/job-history.test.ts": 1631,
-  "src/tests/placement.test.ts": 1877,
   "src/tests/prove-job.test.ts": 1272,
   "src/tests/runner-health.test.ts": 4417,
   "src/tests/warm-cache.test.ts": 3252
