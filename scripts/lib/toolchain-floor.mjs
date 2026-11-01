@@ -13,6 +13,7 @@ import { nodeOffer } from '../../dist/lib/capability-offer.js';
 import { hostsCiDocker, hostsPm2Services } from '../../dist/lib/node-role.js';
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
 import { DEFAULT_MIN_AGE_MINUTES, dispatchLookup, parseVersion } from './tool-release.mjs';
+import { RELEASE_TOOLS } from './toolchain-release-tools.mjs';
 
 /**
  * The installed-RAM floor jdk21/maven apply through `when` (cardtable#5,
@@ -513,77 +514,7 @@ export const REPAIRS = {
 			'sudo -n apt-get install -y nodejs',
 		].join('\n'),
 	},
-	'yt-dlp': {
-		when: pm2ServicesHost,
-		why:
-			'a hosted service downloads with yt-dlp (watchparty submissions and search). The ' +
-			'upstream release binary, into /usr/local/bin.',
-		detect: 'yt-dlp --version >/dev/null 2>&1 && echo OK',
-		version: 'yt-dlp --version 2>/dev/null',
-		latest: { source: { kind: 'github-release', repo: 'yt-dlp/yt-dlp' } },
-		// ONE DAY, not seven. YouTube breaks the release before last within weeks,
-		// and a fix is useless held back a week: watchparty's search and
-		// submissions fail behind a green /healthz meanwhile (watchparty,
-		// 2026-10-28). The checksum and the extraction below are what the day buys.
-		minAge: 1440,
-		// CHECKED BEFORE IT REPLACES ANYTHING: the release's own SHA2-256SUMS, then
-		// ONE REAL EXTRACTION by the new binary. A release that cannot extract
-		// leaves the working copy in place and fails with the reason, so the
-		// refresh reports it rather than installing a broken one. The swap is a
-		// rename, so a service spawning yt-dlp mid-update runs one copy or the other.
-		repair: [
-			'set -e',
-			'v="${TARGET_VERSION:?a pinned version}"',
-			'tmp="$(mktemp -d)"',
-			'trap \'rm -rf "$tmp"\' EXIT',
-			'base="https://github.com/yt-dlp/yt-dlp/releases/download/$v"',
-			'curl -fsSL --max-time 300 -o "$tmp/yt-dlp" "$base/yt-dlp"',
-			'curl -fsSL --max-time 60 -o "$tmp/SUMS" "$base/SHA2-256SUMS"',
-			'want="$(awk \'$2 == "yt-dlp" { print $1 }\' "$tmp/SUMS")"',
-			'[ -n "$want" ] && [ "$(sha256sum "$tmp/yt-dlp" | cut -d" " -f1)" = "$want" ] ||',
-			'  { echo "yt-dlp $v: the download does not match its SHA2-256SUMS" >&2; exit 1; }',
-			'chmod 0755 "$tmp/yt-dlp"',
-			'got="$(cd "$tmp" && timeout 120 "$tmp/yt-dlp" --ignore-config --no-cache-dir --simulate --print id "ytsearch1:test" 2>"$tmp/err" || true)"',
-			'[ -n "$got" ] || { echo "yt-dlp $v failed one real YouTube extraction, so the installed copy was kept (a stale deno is the usual cause): $(tail -n 3 "$tmp/err")" >&2; exit 1; }',
-			'sudo -n install -m 0755 "$tmp/yt-dlp" /usr/local/bin/.yt-dlp.new',
-			'sudo -n mv -f /usr/local/bin/.yt-dlp.new /usr/local/bin/yt-dlp',
-		].join('\n'),
-	},
-	deno: {
-		when: pm2ServicesHost,
-		why:
-			'yt-dlp runs YouTube’s player JavaScript through deno; without it, extraction fails. ' +
-			'The upstream release binary, into /usr/local/bin.',
-		detect: 'deno --version >/dev/null 2>&1 && echo OK',
-		version: 'deno --version 2>/dev/null | head -n 1',
-		latest: { source: { kind: 'github-release', repo: 'denoland/deno', tagPrefix: 'v' } },
-		// Checked as yt-dlp is: the release's checksum, then, where yt-dlp is
-		// installed, one extraction with the NEW deno first on PATH — deno exists
-		// on these hosts for that, so that is what it must still do.
-		repair: [
-			'set -e',
-			'v="${TARGET_VERSION:?a pinned version}"',
-			'tmp="$(mktemp -d)"',
-			'trap \'rm -rf "$tmp"\' EXIT',
-			'f=deno-x86_64-unknown-linux-gnu.zip',
-			'base="https://github.com/denoland/deno/releases/download/v$v"',
-			'curl -fsSL --max-time 300 -o "$tmp/$f" "$base/$f"',
-			'curl -fsSL --max-time 60 -o "$tmp/sum" "$base/$f.sha256sum"',
-			'want="$(awk \'{ print $1; exit }\' "$tmp/sum")"',
-			'[ -n "$want" ] && [ "$(sha256sum "$tmp/$f" | cut -d" " -f1)" = "$want" ] ||',
-			'  { echo "deno $v: the download does not match its sha256sum" >&2; exit 1; }',
-			'mkdir "$tmp/x"',
-			'python3 -m zipfile -e "$tmp/$f" "$tmp/x"',
-			'chmod 0755 "$tmp/x/deno"',
-			'"$tmp/x/deno" --version >/dev/null',
-			'if command -v yt-dlp >/dev/null 2>&1; then',
-			'  got="$(cd "$tmp" && PATH="$tmp/x:$PATH" timeout 120 yt-dlp --ignore-config --no-cache-dir --simulate --print id "ytsearch1:test" 2>"$tmp/err" || true)"',
-			'  [ -n "$got" ] || { echo "yt-dlp failed one real YouTube extraction with deno $v, so the installed deno was kept: $(tail -n 3 "$tmp/err")" >&2; exit 1; }',
-			'fi',
-			'sudo -n install -m 0755 "$tmp/x/deno" /usr/local/bin/.deno.new',
-			'sudo -n mv -f /usr/local/bin/.deno.new /usr/local/bin/deno',
-		].join('\n'),
-	},
+	...RELEASE_TOOLS,
 	/*
 	 * JDK21 + MAVEN (cardtable#5, added 2026-10-05): forge-e2e/forge-jvm move
 	 * off the production host onto whichever claws can hold their footprint. TWO entries, not

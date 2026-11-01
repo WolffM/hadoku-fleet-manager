@@ -18,6 +18,7 @@ import { SEED_DISK_FLOOR_MB } from './lib/capability-seeds.mjs';
 import {
 	CLAW,
 	DOCKER_PRESENT_CASE,
+	BACKSTOP_TOOLS_PRESENT_CASE,
 	JDK_PRESENT_CASE,
 	NO_DATA_ENDPOINT,
 	run,
@@ -115,6 +116,7 @@ function seedingFixture({
 			'case "$script" in',
 			JDK_PRESENT_CASE,
 			DOCKER_PRESENT_CASE,
+			BACKSTOP_TOOLS_PRESENT_CASE,
 			'  *claude.ai/install.sh*)',
 			`    echo INSTALL >>${JSON.stringify(calls)}; exit 0 ;;`,
 			'  *"claude --version"*)',

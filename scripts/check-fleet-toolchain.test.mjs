@@ -31,7 +31,7 @@ import {
 } from './check-fleet-toolchain.mjs';
 import { isLocalNode } from './lib/fleet-exec.mjs';
 import { createReleaseLookup } from './lib/tool-release.mjs';
-import { REPAIRS } from './lib/toolchain-floor.mjs';
+import { REPAIRS, toolAppliesTo } from './lib/toolchain-floor.mjs';
 import { parseJsonStdout, spawnCapture } from './lib/spawn-json.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'check-fleet-toolchain.mjs');
@@ -141,7 +141,8 @@ const stubLookup = (result) => {
  * Adoptium, so a run now asks upstream twice — once per TOOL, still never
  * once per node. These tests are about claude's lookup.
  */
-const claudeCalls = (lookup) => lookup.calls.filter((c) => c.source?.kind !== 'adoptium');
+const claudeCalls = (lookup) =>
+	lookup.calls.filter((c) => c.source?.package === '@anthropic-ai/claude-code');
 
 const claudeOf = (report, node) =>
 	report.find((m) => m.machine === node)?.tools?.find((t) => t.id === 'claude');
@@ -390,8 +391,18 @@ test('the backstop is evaluated for REAL, never reported as tools: []', async ()
 		const ids = m.tools.map((t) => t.id).sort();
 		assert.deepEqual(
 			ids,
-			['claude', 'docker', 'ffmpeg', 'gh', 'jdk21', 'rust', 'rust-wasm32'],
-			'taskauto is declared'
+			[
+				'claude',
+				'deno-user',
+				'docker',
+				'ffmpeg',
+				'gh',
+				'jdk21',
+				'rust',
+				'rust-wasm32',
+				'yt-dlp-user',
+			],
+			'taskauto is declared, and its own yt-dlp and deno are kept (#34)'
 		);
 		assert.equal(claudeOf(report, BACKSTOP)?.status, 'ok');
 		// rust/docker are judged for real against this sandbox's stock PATH; what
@@ -1028,7 +1039,11 @@ test('a registry that fails EVERY attempt is unknown through the real lookup', a
 		assert.equal(claude.status, 'unknown');
 		assert.match(claude.reason, /ECONNRESET/);
 		assert.match(claude.reason, /gave up after 2/);
-		assert.equal(fetches, 4, 'retried once, and asked once per tool: claude and the JDK');
+		assert.equal(
+			fetches,
+			8,
+			'retried once, and asked once per tool: claude, the JDK, and the backstop’s yt-dlp and deno (#34)'
+		);
 	} finally {
 		rmSync(fh.home, { recursive: true, force: true });
 	}
@@ -1400,7 +1415,10 @@ test('--json: a probe that THROWS still emits one document carrying the reason',
  */
 test('an admin-role tool is read as admin, in its own run, with no runner PATH', async () => {
 	const HOST = 'fixture-services.invalid';
-	const admin = Object.keys(REPAIRS).filter((id) => REPAIRS[id].role === 'admin');
+	const host = { role: 'claw', labels: ['hadoku-builder'], services: 'pm2' };
+	const admin = Object.keys(REPAIRS).filter(
+		(id) => REPAIRS[id].role === 'admin' && toolAppliesTo(id, host)
+	);
 	assert.ok(admin.length, 'some tool belongs to admin');
 	const calls = [];
 	const run = (node, script, o = {}) => {
@@ -1412,7 +1430,7 @@ test('an admin-role tool is read as admin, in its own run, with no runner PATH',
 		};
 	};
 	const { report } = await runDoctor({
-		manifest: manifestOf({ [HOST]: { role: 'claw', labels: ['hadoku-builder'], services: 'pm2' } }),
+		manifest: manifestOf({ [HOST]: host }),
 		run,
 		lookup: stubLookup(known('2.1.285')),
 		drains: {},

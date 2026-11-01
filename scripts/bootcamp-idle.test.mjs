@@ -20,6 +20,7 @@ import {
 	BACKSTOP,
 	CLAW,
 	DOCKER_PRESENT_CASE,
+	BACKSTOP_TOOLS_PRESENT_CASE,
 	JDK_PRESENT_CASE,
 	NO_DATA_ENDPOINT,
 	run,
@@ -120,6 +121,7 @@ function idleFixture({
 			'case "$script" in',
 			JDK_PRESENT_CASE,
 			DOCKER_PRESENT_CASE,
+			BACKSTOP_TOOLS_PRESENT_CASE,
 			'  *"export CAP_PROBE_PHASE=measured"*)',
 			`    echo MEASURED >>${q(files.calls)}`,
 			// What the drain file said AT THE MOMENT of the measurement.

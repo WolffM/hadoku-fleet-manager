@@ -60,6 +60,13 @@ export const JDK_PRESENT_CASE = `  *'javac -d "$d"'*) echo OK; exit 0 ;;`;
  */
 export const DOCKER_PRESENT_CASE = `  *'docker info >/dev/null 2>&1 && echo OK'*) echo OK; exit 0 ;;`;
 
+/**
+ * The same for the backstop's own yt-dlp and deno (toolchain-floor.mjs
+ * `yt-dlp-user`/`deno-user`, fleet-manager#34). Matched on their detect, which
+ * names the admin's ~/.local/bin file, text no other probe contains.
+ */
+export const BACKSTOP_TOOLS_PRESENT_CASE = `  *'"$HOME/.local/bin/yt-dlp" --version >/dev/null 2>&1 && echo OK'*|*'"$HOME/.local/bin/deno" --version >/dev/null 2>&1 && echo OK'*) echo OK; exit 0 ;;`;
+
 export const SCRIPTS = join(dirname(fileURLToPath(import.meta.url)), '..');
 /**
  * The discard port on loopback: `data-peer`'s probe runs and is refused there,
@@ -214,6 +221,7 @@ export function writableFixture(
 			`case "$script" in`,
 			JDK_PRESENT_CASE,
 			DOCKER_PRESENT_CASE,
+			BACKSTOP_TOOLS_PRESENT_CASE,
 			`  *claude.ai/install.sh*)`,
 			`    echo INSTALL >>${JSON.stringify(calls)}`,
 			`    printf '%s' "$script" >${JSON.stringify(installScriptLog)}`,

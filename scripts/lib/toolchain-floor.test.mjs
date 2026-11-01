@@ -106,9 +106,22 @@ test('$comment keys are not profiles', () => {
  * into ~/.cargo/bin asks a question no CI step ever asks, and would go green on
  * exactly the state that was broken.
  */
+/**
+ * Tools that install into and judge ONE FILE in the admin's ~/.local/bin on the
+ * backstop (fleet-manager#34). Naming that file is the point, not a PATH
+ * widening: no CI job runs them, and reading PATH would let a system copy stand
+ * in for a stale one.
+ */
+const OWN_FILE = new Set(['yt-dlp-user', 'deno-user']);
+
 test('no detector widens PATH — that is the bug this table exists to prevent', () => {
 	for (const [id, r] of Object.entries(REPAIRS)) {
 		assert.ok(r.detect, `${id} has no detector`);
+		if (OWN_FILE.has(id)) {
+			assert.equal(r.role, 'admin', `${id} judges the admin's own file`);
+			assert.doesNotMatch(r.detect, /PATH=|bash -l|bash --login|-lc\b|\.profile/, id);
+			continue;
+		}
 		assert.doesNotMatch(
 			r.detect,
 			WIDENING,
@@ -416,7 +429,7 @@ test('an unscoped tool applies to every managed node, the backstop included', ()
 		applicableRepairs(backstop)
 			.map(([id]) => id)
 			.sort(),
-		['claude', 'docker', 'ffmpeg', 'gh', 'jdk21', 'rust', 'rust-wasm32']
+		['claude', 'deno-user', 'docker', 'ffmpeg', 'gh', 'jdk21', 'rust', 'rust-wasm32', 'yt-dlp-user']
 	);
 });
 

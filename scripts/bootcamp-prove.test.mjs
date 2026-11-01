@@ -18,6 +18,7 @@ import { writeProof } from '../dist/lib/measured.js';
 import {
 	CLAW,
 	DOCKER_PRESENT_CASE,
+	BACKSTOP_TOOLS_PRESENT_CASE,
 	JDK_PRESENT_CASE,
 	NO_DATA_ENDPOINT,
 	run,
@@ -77,6 +78,7 @@ function proveFixture({ cores = 8 } = {}) {
 			'case "$script" in',
 			JDK_PRESENT_CASE,
 			DOCKER_PRESENT_CASE,
+			BACKSTOP_TOOLS_PRESENT_CASE,
 			'  *)',
 			`    echo PROBE >>${JSON.stringify(calls)}`,
 			"    printf 'CAP jdk21 ok 21.0.1\\nPROBE-END\\n' ;;",
