@@ -22,8 +22,6 @@
   "scripts/node-bootstrap.sh": 2700,
   "scripts/node-usb-prep.sh": 1124,
   "scripts/onboarding.sh": 814,
-  "scripts/runner-mem-report.py": 1300,
-  "scripts/runner-mem.test.mjs": 1270,
   "scripts/runners-slice-install.sh": 986,
   "scripts/service-inventory.mjs": 977,
   "src/ci-alerts.ts": 982,

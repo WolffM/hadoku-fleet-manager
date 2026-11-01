@@ -37,297 +37,136 @@ Usage:
                                    # with a stale output file is broken, and
                                    # is-active is exactly the reader that
                                    # cannot see it (#47).
+
+SPLIT (wave 5q lane D) into `mem_report_env.py` (node identity / ssh roles)
+and `mem_report_check.py` (the `--check` gate), loaded LAZILY by `_sibling()`
+below — never at module scope. That matters for two things this package does
+NOT control:
+
+  - `scripts/lib/slice-placement-guard.test.mjs` copies, and separately
+    MUTATES, only THIS file into a scratch directory with no siblings beside
+    it, then runs `main()` against it with `collect` replaced and no
+    `--check` — a path that reaches `repo_of`/`split_windows`/`main` but
+    never node-identity or the --check gate. Eager imports at module scope
+    would fail loading that copy at all, for code it never calls; the lazy
+    form only pays for a sibling the call it is actually for needs — same
+    shape `hub_repo()` below already uses for a BUILT-package dependency it
+    cannot assume either.
+  - `runner_mem_report_test.py` monkeypatches `local_node`/`subprocess`/
+    `getpass` as ATTRIBUTES of this already-loaded module and then calls
+    `collect()`'s real body — which only works if `collect()` keeps
+    resolving those names through ITS OWN globals, i.e. this module's dict.
+    That is why `collect()`, `local_node`, `assert_can_act_locally` and
+    `ssh_destination` stay defined (or re-exported) here rather than being
+    plain `from mem_report_env import ...` re-bindings done once at import
+    time: a patch applied to `runner-mem-report`'s own attribute must be
+    what every later bare-name call inside this file actually sees.
 """
 
 import argparse
-import calendar
-import getpass
-import importlib.util
+import getpass  # noqa: F401 — kept importable as `mem_report.getpass` for
+# `runner_mem_report_test.py`'s `mock.patch.object(mem_report.getpass, ...)`,
+# which patches the shared stdlib module every caller (including
+# mem_report_env.py's own `import getpass`) sees — not this file's own code.
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-REMOTE = "~/.local/state/hadoku/runner-mem/samples.jsonl"
-# The other two files the gate reads, spelled ONCE each and derived from the
-# one above where they share its directory. They were written out longhand in
-# the probe below — eight more copies of one garage's paths in a published
-# library, and eight places to miss when one moves. Same consolidation
-# `ci-throttle-install.sh` made for `NODE_DIR`.
-INFLIGHT_REMOTE = REMOTE.rsplit("/", 1)[0] + "/inflight.json"
-JOB_METRICS_REMOTE = "~/.hadoku/job-metrics.jsonl"
 
 
-# ── ask the package's own library, never a Python second opinion ────────────
-#
-# `src/lib/fleet-paths.ts` is the settled answer to "where are the manifests"
-# and `src/lib/node-identity.ts` to "is this node the box I am on" — and this
-# file must not grow a Python copy of either. isLocalNode had five
-# implementations before one survived an FQDN; a sixth written in another
-# language is not an improvement. A Python script cannot import them, so it
-# EXECUTES them: one `node` run over the package's built modules, the same
-# modules `fleet` itself used to print the banner this report runs under. If
-# that resolution THROWS — no site checkout and no FLEET_MANIFEST_DIR — the
-# reason is carried out verbatim: this report refuses exactly where the CLI's
-# banner would have refused, instead of quietly answering about another tree.
+def _sibling(name):
+    """Load `scripts/<name>.py` by its own absolute path — the mechanism
+    `harvest_interval()` already used (now in `mem_report_env.py`) for
+    `runner-mem-harvest.py` before this file was split. Never a plain
+    `import`: this file is loaded three different ways (`python3
+    runner-mem-report.py`, where CPython puts THIS file's directory on
+    `sys.path[0]`; spawned by the CLI the same way; and
+    `importlib.util.spec_from_file_location`, used by every test in this
+    tree, which puts nothing on `sys.path` at all), and only an absolute,
+    `__file__`-relative path behaves the same under all three.
 
-_LIB_ASK = """const [pathsMod, identMod, machinesRaw] = process.argv.slice(1);
-const { manifestDir, stateDir } = await import(pathsMod);
-const { isLocalNode } = await import(identMod);
-const out = { manifestDir: manifestDir(), stateDir: stateDir() };
-for (const m of JSON.parse(machinesRaw)) if (isLocalNode(m)) out.local = m;
-process.stdout.write(JSON.stringify(out));"""
+    CACHED IN `sys.modules`, NOT A LOCAL DICT — `mem_report_check.py` loads
+    `mem_report_env.py` too (its own `_env()`, same reasoning), and a role or
+    manifest resolution WARMED through one loader must be visible to the
+    other: `runner_mem_report_test.py` warms `node_role_user`'s cache via
+    this file's wrapper, then calls `_probe_node` (which asks the same
+    question through `mem_report_check.py`), and expects the second ask to
+    be the cached answer rather than a fresh `node` subprocess call. Two
+    independent `importlib` loads of the same file produce two independent
+    module objects with two independent caches; `sys.modules`, keyed by the
+    same name every loader here agrees on, makes the first load everyone's
+    load — the ordinary meaning of "already imported".
 
-_HUB_ASK = """const { hubRepo } = await import(process.argv[1]);
-process.stdout.write(hubRepo());"""
+    LAZY ON PURPOSE — called from inside the functions below, never at
+    module scope. See the module docstring for why a copy of only this one
+    file, with no siblings beside it, must still load successfully for the
+    code paths that never call into one.
+    """
+    if name in sys.modules:
+        return sys.modules[name]
+    import importlib.util
 
-_LIB_CACHE = {}
-_HUB_CACHE = []
+    path = (HERE / f"{name}.py").resolve()
+    if not path.is_file():
+        raise SystemExit(
+            f"fleet mem-report: {path} does not exist — this copy of "
+            f"runner-mem-report.py is missing its sibling module {name}.py"
+        )
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
-def _node_error_message(stderr):
-    """The script's own message, stripped of V8's stack frames. An uncaught
-    throw prints its (possibly multi-line) message BEFORE the stack frames;
-    taking the last line would hand the operator a stack frame instead of a
-    reason — the undiagnosable-finding shape this repo retired from
-    check-queue-health. Shared by every `node -e` call this file makes
-    (`ask_library`, `node_role_user`) so the one rule has one copy."""
-    msg = []
-    for ln in (stderr or "").splitlines():
-        if msg and ln.lstrip().startswith("at "):
-            break
-        if ln.strip():
-            msg.append(ln.rstrip())
-    return "\n  ".join(msg) if msg else "no reason printed"
+# ── thin re-exports of mem_report_env.py — see the module docstring for why
+# these stay defined HERE (bare-name calls inside `collect()`, and the
+# attributes `runner_mem_report_test.py` calls/patches directly) rather than
+# being bound once at import time.
 
 
 def ask_library(machines=()):
-    """`{manifestDir, stateDir, local?}` — the manifest directory, the
-    operator-state directory (job-history.jsonl lives there), and which (if
-    any) of `machines` is this box, all from the package's own resolvers."""
-    key = tuple(sorted(machines))
-    if key in _LIB_CACHE:
-        return _LIB_CACHE[key]
-    paths_mod = (HERE.parent / "dist" / "lib" / "fleet-paths.js").resolve()
-    ident_mod = (HERE.parent / "dist" / "lib" / "node-identity.js").resolve()
-    for p in (paths_mod, ident_mod):
-        if not p.is_file():
-            raise SystemExit(
-                f"fleet mem-report: {p} does not exist — the package is not built.\n"
-                "  Build it, or pass FLEET_MANIFEST_DIR to name the manifests directly."
-            )
-    exe = shutil.which("node")
-    if not exe:
-        raise SystemExit(
-            "fleet mem-report: cannot find `node` to resolve the fleet's paths.\n"
-            "  This report resolves its manifest through the package's own library\n"
-            "  (dist/lib/fleet-paths.js); pass FLEET_MANIFEST_DIR to bypass it."
-        )
-    try:
-        r = subprocess.run(
-            [exe, "--input-type=module", "-e", _LIB_ASK, paths_mod.as_uri(), ident_mod.as_uri(), json.dumps(list(machines))],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    except subprocess.TimeoutExpired:
-        raise SystemExit(f"fleet mem-report: resolving the manifest through {paths_mod} timed out")
-    if r.returncode != 0:
-        raise SystemExit(
-            "fleet mem-report: the library refused to resolve the manifest:\n  "
-            + _node_error_message(r.stderr)
-        )
-    try:
-        res = json.loads(r.stdout)
-    except ValueError:
-        raise SystemExit(f"fleet mem-report: unparseable answer from {paths_mod}: {r.stdout[:200]!r}")
-    _LIB_CACHE[key] = res
-    return res
-
-
-def hub_repo():
-    """The hub repo's name, from `src/lib/fleet-config.ts` — never spelled here.
-
-    That module is the one answer to "who does this fleet belong to", and the
-    names below are the only place this report needed it. Kept in a separate
-    call from the manifest ask on purpose: `repo_of` must keep working where no
-    manifest resolves (CI has no sibling checkout), and folding the two would
-    make a unit-name lookup depend on operator config it does not read.
-    """
-    if _HUB_CACHE:
-        return _HUB_CACHE[0]
-    mod = (HERE.parent / "dist" / "lib" / "fleet-config.js").resolve()
-    exe = shutil.which("node")
-    why = None
-    if not exe:
-        why = "`node` is not on PATH"
-    elif not mod.is_file():
-        why = f"{mod} does not exist — this copy of the script is not inside a built package"
-    else:
-        r = subprocess.run(
-            [exe, "--input-type=module", "-e", _HUB_ASK, mod.as_uri()],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            _HUB_CACHE.append(r.stdout.strip())
-            return _HUB_CACHE[0]
-        why = f"{mod} did not name it: {r.stderr.strip()[:160]}"
-    # NOT FATAL, AND NOT SILENT. This name is needed only to fold two legacy
-    # unit names onto the hub repo; every other unit is read from its own name.
-    # Killing the whole report over it would make a memory distribution
-    # unobtainable from any copy of this script that is not inside a built
-    # package — but saying nothing would let those two units quietly aggregate
-    # as a repo of their own, which is the split the mapping exists to prevent.
-    # So: the mapping is dropped, the reason is printed, and the caller sees it.
-    print(
-        f"fleet mem-report: could not read the hub repo's name ({why}).\n"
-        "  The two legacy unit names that fold onto it will aggregate under "
-        "their own names in this run.",
-        file=sys.stderr,
-    )
-    _HUB_CACHE.append(None)
-    return None
-
-
-# ── which USER an ssh/rsync acts as, asked of the one place that knows ──────
-#
-# "Every command on a node acts as a ROLE: `admin` or `ci`" (CLAUDE.md), and
-# `src/lib/node-users.ts` is the single place a role becomes a user name — the
-# JS/TS side's `scripts/lib/fleet-exec.mjs` asks it through `nodeUser` and
-# `sshDestination` rather than keeping a second copy. This file cannot import
-# that module any more than it can import `fleet-paths.ts`, so it EXECUTES it
-# the same way `ask_library` and `hub_repo` already do: one `node` run over
-# the package's own built module. The alternative — a Python literal for the
-# admin default, or a `$(id -un)` guess — is exactly the second answer to "who
-# plays this role" that `node-users-guard.test.mjs` exists to refuse on the
-# JS/TS side; this file keeps the same discipline even though that guard
-# cannot see `.py`.
-#
-# BOTH SSH CALLS BELOW ACT AS `ci`, NEVER `admin`. Every path either call
-# reads lives under the ci user's `$HOME`: `REMOTE`/`INFLIGHT_REMOTE` are
-# `runner-mem-harvest.py`'s own output, and `JOB_METRICS_REMOTE` is
-# `job-metrics.sh`'s — both deployed `as: 'ci'` by `deploy-ci-throttle.mjs`
-# (its one `runOn` call installs the hook, the throttle conf AND the
-# harvester together). The PROBE script's `systemctl --user show ...
-# runner-mem-harvest.service` reads that same unit's OWN systemd --user
-# manager, which CLAUDE.md names as ci's ("its own systemd manager with
-# runners.slice") — admin's `systemctl --user` is a different manager
-# entirely and would read ci's unit as absent.
-_ROLE_ASK = """const [usersMod, machine, role] = process.argv.slice(1);
-const { nodeUser } = await import(usersMod);
-process.stdout.write(nodeUser(JSON.parse(machine), role));"""
-
-_ROLE_CACHE = {}
+    """`{manifestDir, stateDir, local?}` — see `mem_report_env.ask_library`."""
+    return _sibling("mem_report_env").ask_library(machines)
 
 
 def node_role_user(machine, role):
-    """The user that plays `role` on `machine` (a manifest node entry, or
-    `None`) — asked of `src/lib/node-users.ts`'s own `nodeUser`, never
-    restated here. The admin default (`DEFAULT_ADMIN_USER`) and the rule that
-    `ci` falls back to `admin` when a node has not been cut over both live in
-    that module alone; a second copy in Python is exactly the kind of drift
-    `isLocalNode` had five of before one survived an FQDN (2026-08-30)."""
-    key = (json.dumps(machine or {}, sort_keys=True), role)
-    if key in _ROLE_CACHE:
-        return _ROLE_CACHE[key]
-    mod = (HERE.parent / "dist" / "lib" / "node-users.js").resolve()
-    if not mod.is_file():
-        raise SystemExit(
-            f"fleet mem-report: {mod} does not exist — the package is not built.\n"
-            "  Build it before this report can name which user a role plays."
-        )
-    exe = shutil.which("node")
-    if not exe:
-        raise SystemExit("fleet mem-report: cannot find `node` to resolve a node-users role.")
-    try:
-        r = subprocess.run(
-            [exe, "--input-type=module", "-e", _ROLE_ASK, mod.as_uri(), json.dumps(machine or {}), role],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        raise SystemExit(f"fleet mem-report: resolving the '{role}' role through {mod} timed out")
-    if r.returncode != 0:
-        raise SystemExit(
-            f"fleet mem-report: could not resolve the '{role}' role: {_node_error_message(r.stderr)}"
-        )
-    _ROLE_CACHE[key] = r.stdout
-    return r.stdout
+    """The user that plays `role` on `machine` — see
+    `mem_report_env.node_role_user`."""
+    return _sibling("mem_report_env").node_role_user(machine, role)
 
 
 def ssh_destination(node, role, machine):
-    """`<user>@<node>` for ROLE — the Python twin of
-    `scripts/lib/fleet-exec.mjs`'s `sshDestination`: same rule, same source of
-    truth (`nodeUser`), so the two transports can never name a role
-    differently."""
-    return f"{node_role_user(machine, role)}@{node}"
+    """`<user>@<node>` for ROLE — see `mem_report_env.ssh_destination`."""
+    return _sibling("mem_report_env").ssh_destination(node, role, machine)
 
 
 def assert_can_act_locally(node, role, machine):
-    """Mirrors `nodeCommand`'s local branch (`src/lib/node-users.ts`): acting
-    as a role that is not admin, on THIS box, needs this process to already
-    be logged in as that role's user — there is no sudo switch inside this
-    script, and guessing otherwise is how a local read of `collect()`/PROBE
-    would silently read the WRONG `$HOME` instead of failing loudly. Never a
-    literal comparison: both names come from `node_role_user`, the same
-    source `ssh_destination` uses, so the two can never disagree about what a
-    role is called."""
-    user = node_role_user(machine, role)
-    admin = node_role_user(machine, "admin")
-    me = getpass.getuser()
-    if user != admin and me != user:
-        raise SystemExit(
-            f"fleet mem-report: {node} is this box, which runs as {me}; "
-            f"acting as {role} needs {user}."
-        )
+    """See `mem_report_env.assert_can_act_locally`."""
+    return _sibling("mem_report_env").assert_can_act_locally(node, role, machine)
 
 
-_HARVEST_INTERVAL_CACHE = []
-
-
-def harvest_interval():
-    """`HARVEST_INTERVAL`, read from the harvester's own module — never a
-    second literal here (#94). Imported locally, from this report's own
-    `scripts/` directory, exactly like `ask_library` imports the TS library
-    instead of re-deriving its answer: a hand-copied `3` beside the real
-    constant is the shape that drifts the day only one of the two copies is
-    updated. This runs on the box invoking the CHECK, not over ssh to the
-    node being checked — correct because `HARVEST_INTERVAL` has no per-node
-    override anywhere this fleet is deployed (checked: nothing sets it outside
-    this file and its own test), so the value this process resolves is the
-    value every node's harvester resolves too.
-    """
-    if _HARVEST_INTERVAL_CACHE:
-        return _HARVEST_INTERVAL_CACHE[0]
-    path = (HERE / "runner-mem-harvest.py").resolve()
-    if not path.is_file():
-        raise SystemExit(
-            f"fleet mem-report: {path} does not exist — cannot read HARVEST_INTERVAL "
-            "from the harvester's own constant"
-        )
-    spec = importlib.util.spec_from_file_location("runner_mem_harvest", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    _HARVEST_INTERVAL_CACHE.append(mod.INTERVAL)
-    return _HARVEST_INTERVAL_CACHE[0]
-
-
-# The production host refuses ssh to ITSELF, so the local branch below is
-# load-bearing rather than an optimisation — a loop that ssh'd unconditionally
-# reads that node as permanently unreachable. The comparison is the library's
-# normalising one; a raw `uname().nodename ==` compare is the FQDN bug
-# `isLocalNode` exists to prevent.
 def local_node(nodes):
-    """Which of `nodes` is this box, or None."""
-    return ask_library(list(nodes)).get("local")
+    """Which of `nodes` is this box, or None — see `mem_report_env.local_node`.
+    Deliberately a bare top-level name here, not inlined into `collect()`:
+    `runner_mem_report_test.py` monkeypatches `mem_report.local_node` and
+    relies on `collect()`'s own bare-name lookup resolving through THIS
+    module's globals."""
+    return _sibling("mem_report_env").local_node(nodes)
+
+
+def run_checks(nodes, as_json=False):
+    """The `--check` gate — see `mem_report_check.run_checks`."""
+    return _sibling("mem_report_check").run_checks(nodes, as_json)
+
+
+def _probe_node(name, local, machine):
+    """Run PROBE on one node — see `mem_report_check._probe_node`."""
+    return _sibling("mem_report_check")._probe_node(name, local, machine)
 
 
 def manifest_path():
@@ -479,15 +318,16 @@ def collect(nodes):
     silently dropped — 'I could not look' must not read as 'there was nothing'.
 
     `nodes` is the manifest's `machines` MAPPING, not a bare list of names:
-    `REMOTE` is `ci`'s file (the harvester's own output, deployed `as: 'ci'`
-    by `deploy-ci-throttle.mjs`), and naming that role on a remote call needs
+    the harvester's output is `ci`'s own file (deployed `as: 'ci'` by
+    `deploy-ci-throttle.mjs`), and naming that role on a remote call needs
     each node's own `users.ci` override from its manifest entry."""
+    remote = _sibling("mem_report_env").REMOTE
     rows, unreachable = [], []
     local = local_node(nodes)
     for m, cfg in nodes.items():
         if m == local:
             assert_can_act_locally(m, "ci", cfg)
-            cmd = ["cat", os.path.expanduser(REMOTE)]
+            cmd = ["cat", os.path.expanduser(remote)]
         else:
             cmd = [
                 "ssh",
@@ -496,7 +336,7 @@ def collect(nodes):
                 "-o",
                 "ConnectTimeout=10",
                 ssh_destination(m, "ci", cfg),
-                f"cat {REMOTE}",
+                f"cat {remote}",
             ]
         try:
             out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -514,438 +354,6 @@ def collect(nodes):
     return rows, unreachable
 
 
-# ── the gate: "active" is not "collecting" (#47) ─────────────────────────────
-#
-# Measured 2026-09-22: the harvesters on claw-1/2/3 were `systemctl is-active`
-# green with clean journals while their output had not moved in weeks — the
-# processes swept happily, matched zero runner cgroups under all-JIT naming,
-# and wrote an empty inflight snapshot every 3 s. `is-active` is exactly the
-# reader that cannot see that. So this gate reads three OUTPUTS and never asks
-# the unit manager anything:
-#
-#   inflight.json  rewritten by the harvester EVERY sweep, jobs or not — the
-#                  heartbeat. Stale means nobody is sampling, whatever the
-#                  unit table says.
-#   samples.jsonl  one record per completed job window. Its newest record is
-#                  what the harvest CLAIMS to have seen.
-#   job-metrics.jsonl  the per-job hook, which demonstrably writes on every
-#                  node on every job today. Its newest row is what actually
-#                  HAPPENED on the node.
-#
-# The cross of the last two is the finding `is-active` can never raise: a node
-# whose newest completed job POSTDATES its newest window is silent while jobs
-# stream past. Both timestamps come from the node's own files and clock (the
-# probe reads `date +%s` remotely), so no cross-node clock assumption is made.
-#
-# HEARTBEAT_STALE_S is ~300 missed sweeps at INTERVAL=3 — generous enough that
-# a busy box is never false-red, tight enough that a dead sampler is caught
-# within the hour. JOB_FRESH_S bounds the cross-check: on an idle fleet an old
-# samples file is not a finding (nothing to harvest), which is why liveness is
-# the heartbeat's job and completeness is only judged where a job says so.
-HEARTBEAT_STALE_S = 900
-JOB_FRESH_S = 6 * 3600
-WINDOW_LAG_S = 900
-# A JOB THAT ENDED BEFORE THE SAMPLER STARTED WAS NEVER THE SAMPLER'S TO CATCH.
-#
-# The harvest appends only when a window CLOSES, so a freshly installed node
-# legitimately has no samples until its next job ends. Measured 2026-09-23:
-# claw-8's last job ended 83 SECONDS before its harvester started, and claw-6's
-# an hour and a half before — both brand new and working, both indistinguishable
-# from a broken node if the cross-check looks only at the two output files.
-# Bounding the question by the sampler's start separates "stale because broken"
-# from "stale because nothing has run yet", and the two want opposite responses.
-#
-# READING A START TIMESTAMP IS NOT THE `is-active` TRAP. What made `is-active`
-# useless here is that it reports a VERDICT — up, therefore fine — about a
-# process that was matching nothing. This reads a moment in time and uses it
-# only to bound a window of responsibility; the health question is still
-# answered entirely from the output files. A node whose sampler cannot be dated
-# is judged WITHOUT the bound, which is the stricter direction.
-SAMPLER_WARMUP_S = 60
-
-# #94: the single newest completed job is not enough to judge "silent" by — a
-# job whose Runner.Worker ran for less than `2 * HARVEST_INTERVAL` cannot be
-# sampled (the harvester only has a window open while `has_worker()` is true,
-# `runner-mem-harvest.py` ~L131), and reading that as "jobs streaming past
-# unmeasured" pages for nothing. Probing the last few candidates, oldest to
-# newest, lets the cross-check skip a too-short one and fall back to the
-# newest job that WAS long enough to judge — which is also what keeps a MIXED
-# history (a long unmeasured job followed by a short one) still flagged: the
-# short one is evidence of nothing and must neither raise nor clear a finding.
-# 5 is comfortably more than one quiet pair of jobs; JOB_FRESH_S below still
-# bounds how far back a qualifying job can reach to raise one.
-#
-# #94's OWN claw-5 case turned out NOT to be a too-short job: its real
-# duration (job-history `durationSec`) was 7s, still at or above the 6s floor
-# here, so this rule still flags it. The actual fault is that
-# `runner-mem-harvest.py` closes a window only when a sweep VISITS a unit that
-# is still PRESENT with no worker (~L230-294) — a unit whose cgroup is gone
-# entirely by the next sweep is never visited again at all, so its window
-# never closes. Measured live: claw-5's `inflight.json` held
-# `jit-claw-5-hadoku-pygmalio-j111777744078-…` open at `elapsed_s` past
-# 37,000 with `samples: 2` — sampled twice right after mint, then never
-# revisited, never closed. That is a harvester bug, not a sampling-interval
-# one, and is out of this lane's scope (CHECK only, not the harvester).
-LASTJOB_PROBE_N = 5
-
-# One round trip per node. Lines are prefixed records so partial output (an
-# ssh cut mid-probe) is detectable per fact rather than one blob.
-PROBE = r"""
-now=$(date +%%s 2>/dev/null) || now=0
-echo "NOW $now"
-for f in %(samples)s %(inflight)s %(jobs)s; do
-	if [ -e "$f" ]; then
-		echo "EXISTS $f $(stat -c %%Y "$f" 2>/dev/null || echo 0)"
-	else
-		echo "ABSENT $f"
-	fi
-done
-echo "LASTSAMPLE $(tail -n 1 %(samples)s 2>/dev/null | head -c 4000)"
-echo "INFLIGHT $(head -c 4000 %(inflight)s 2>/dev/null | tr -d "\n")"
-tail -n %(jobn)s %(jobs)s 2>/dev/null | while IFS= read -r jl || [ -n "$jl" ]; do
-	echo "LASTJOB $(printf '%%s' "$jl" | head -c 2000)"
-done
-# An EMPTY timestamp must stay empty: `date -d ""` is today's midnight, which
-# turned an undateable sampler into one that started at 00:00 UTC and excused
-# every job before it (red in the first minutes after midnight, lenient after).
-sampler_ts=$(systemctl --user show -p ActiveEnterTimestamp --value runner-mem-harvest.service 2>/dev/null)
-if [ -n "$sampler_ts" ]; then
-	echo "SAMPLERSTART $(date -u -d "$sampler_ts" +%%s 2>/dev/null)"
-else
-	echo "SAMPLERSTART "
-fi
-""" % {
-    "samples": REMOTE,
-    "inflight": INFLIGHT_REMOTE,
-    "jobs": JOB_METRICS_REMOTE,
-    "jobn": LASTJOB_PROBE_N,
-}
-
-
-def _lead_number(text, key):
-    """`"<key>": <number>` from a possibly TRUNCATED JSON object.
-
-    The byte budgets in PROBE bound one ssh round trip; they are not a promise
-    that the record fits. `inflight.json` grows with every OPEN window, so the
-    read is longest exactly when the sampler is busiest — measured live on
-    2026-09-23, claw-1 and claw-5 were mid-window, their snapshot passed 400
-    bytes, `json.loads` failed, and the gate reported the heartbeat unreadable
-    on the two nodes that were demonstrably sampling. A gate that reddens
-    BECAUSE the thing it checks is working is worse than no gate.
-
-    Both numbers this file needs — the snapshot's `at` and a window's `end` —
-    are written before the long fields (`windows`, the peak set), so they
-    survive the cut even when the closing brace does not.
-    """
-    m = re.search(r'"%s"\s*:\s*(-?\d+(?:\.\d+)?)' % re.escape(key), text)
-    return float(m.group(1)) if m else None
-
-
-def _number_from(text, key):
-    """The key's value, from a whole record when it parses and from the leading
-    bytes when it does not. Parsing WINS: a regex over valid JSON could match a
-    same-named key nested somewhere later, and the parser cannot."""
-    try:
-        v = json.loads(text).get(key)
-        return float(v) if isinstance(v, (int, float)) else None
-    except ValueError:
-        return _lead_number(text, key)
-
-
-def _lead_string(text, key):
-    """`"<key>": "<value>"` from a possibly TRUNCATED JSON object — the string
-    counterpart of `_lead_number`, same reasoning: the budgets in PROBE bound
-    one ssh round trip, not the record."""
-    m = re.search(r'"%s"\s*:\s*"([^"]*)"' % re.escape(key), text)
-    return m.group(1) if m else None
-
-
-def _string_from(text, key):
-    """The key's STRING value, parsed whole when it parses, from the leading
-    bytes when it does not — same precedence as `_number_from` and for the
-    same reason."""
-    try:
-        v = json.loads(text).get(key)
-        return v if isinstance(v, str) else None
-    except ValueError:
-        return _lead_string(text, key)
-
-
-# NOT the JIT unit's own name. A runner's NAME says who it was MINTED for, not
-# necessarily who it ended up serving — measured live, one runner (minted
-# 13:11Z) actually served a job that started 16:20:49Z: names and jobIds are
-# visibly shuffled across the fleet's own job-history. And even where the name
-# and the job line up, mint-to-completion is the wrong span regardless — it
-# includes the wait for GitHub to ASSIGN the job to this runner, which the
-# harvester's sampler was never going to see either way (`has_worker`,
-# `runner-mem-harvest.py` ~L131, only opens a window once a `Runner.Worker`
-# process exists in the cgroup). The CONTROLLER already has the honest number:
-# `durationSec` in the operator-state job-history, keyed on the same `jobId`
-# this hook writes — see `job_history_durations()` below.
-
-
-def _job_history_path():
-    """Where the controller's job-history lives — ASKED from the package's
-    own library (`stateDir()`, the same `ask_library()` call `manifest_path()`
-    already makes for `manifestDir()`), never a second spelling of the state
-    directory in this file. Read LOCALLY, on the box the CHECK runs from —
-    never over ssh to the node being checked, because job-history is
-    controller state, not per-node state; a node has no copy of it to read.
-    """
-    return Path(ask_library()["stateDir"]) / "job-history.jsonl"
-
-
-_JOB_HISTORY_CACHE = {}  # path (str) -> {jobId: durationSec}
-
-
-def job_history_durations():
-    """`{jobId: durationSec}` from the controller's job-history. A missing
-    file, an unparseable line, or a line missing either key simply leaves
-    that jobId out of the map — never a crash, never a guessed duration. A
-    job-metrics row whose `jobId` is not in this map (including every
-    standing/`warm-*` row, whose `jobId` is always `null`) has an UNKNOWN
-    duration, and the call site must judge unknown the strict way: never
-    treated as too short to matter.
-
-    The SAME rule applies one level up: `ask_library()` itself can fail (the
-    package is not built, `node` is not on PATH, its resolver throws) and
-    raises `SystemExit` when it does. That failure is real, but it is not
-    THIS gate's failure to report — `manifest_path()` lets it propagate
-    because a report with no manifest cannot run at all, whereas a report
-    with no reachable job-history can still check the heartbeat and the
-    stale-window cross-check; it just loses the one caveat on top. So it is
-    caught here, narrowly, and turned into the same "nothing to look up"
-    empty map every other unreadable-history case already produces.
-    """
-    try:
-        path = _job_history_path()
-    except SystemExit:
-        return {}
-    key = str(path)
-    if key in _JOB_HISTORY_CACHE:
-        return _JOB_HISTORY_CACHE[key]
-    out = {}
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                jid = rec.get("jobId")
-                dur = rec.get("durationSec")
-                if isinstance(jid, int) and isinstance(dur, (int, float)):
-                    out[jid] = dur
-    except OSError:
-        pass  # no job-history here — every candidate's duration reads UNKNOWN
-    _JOB_HISTORY_CACHE[key] = out
-    return out
-
-
-def _parse_job_record(text, history):
-    """`(ts_epoch, dur_s)` for one job-metrics.jsonl row. `dur_s` is the
-    CONTROLLER's own `durationSec` for this row's `jobId` (from `history`,
-    see `job_history_durations()`) — `None` when `jobId` is null/absent or
-    has no matching job-history record."""
-    ts_s = _string_from(text, "ts")
-    if ts_s is None:
-        return None, None
-    try:
-        ts_epoch = calendar.timegm(time.strptime(ts_s, "%Y-%m-%dT%H:%M:%SZ"))
-    except ValueError:
-        return None, None
-    job_id_f = _number_from(text, "jobId")
-    job_id = int(job_id_f) if job_id_f is not None else None
-    dur = history.get(job_id) if job_id is not None else None
-    return ts_epoch, dur
-
-
-def _iso(ts):
-    try:
-        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
-    except (ValueError, OverflowError):
-        return f"epoch {ts}"
-
-
-def _probe_node(name, local, machine):
-    """Run PROBE on one node, as `ci`. Returns `(facts, finding_or_None)`.
-
-    `machine` is this node's manifest entry (for `users.ci`, if it has been
-    cut over). PROBE reads `ci`'s own files top to bottom — the harvester's
-    `samples.jsonl`/`inflight.json`, the per-job hook's `job-metrics.jsonl`
-    (both deployed `as: 'ci'`, `deploy-ci-throttle.mjs`) — and its very last
-    line reads `runner-mem-harvest.service` through `systemctl --user`, which
-    is ci's OWN systemd --user manager (CLAUDE.md: ci "runs every CI job...
-    its own systemd manager with runners.slice"). `admin`'s `systemctl --user`
-    is a different manager and would read that unit as not existing at all.
-    """
-    try:
-        if name == local:
-            assert_can_act_locally(name, "ci", machine)
-            r = subprocess.run(["bash", "-c", PROBE], capture_output=True, text=True, timeout=60)
-            why = (r.stderr or "").strip()
-        else:
-            r = subprocess.run(
-                [
-                    "ssh",
-                    "-o",
-                    "BatchMode=yes",
-                    "-o",
-                    "ConnectTimeout=10",
-                    ssh_destination(name, "ci", machine),
-                    "bash -s",
-                ],
-                input=PROBE,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            why = (r.stderr or "").strip() or "no output"
-        if r.returncode != 0:
-            return None, f"{name}: unreachable, so nothing on it was checked — {why[:120]}"
-    except subprocess.TimeoutExpired:
-        return None, f"{name}: unreachable — the probe timed out after 60s"
-    facts = {
-        "exists": {},
-        "absent": [],
-        "now": None,
-        "sample_end": None,
-        "inflight_at": None,
-        "job_ts": None,
-        "job_dur_s": None,
-        "job_short_skipped": 0,
-        "sampler_start": None,
-    }
-    job_candidates = []  # raw LASTJOB text, oldest to newest — resolved below
-    for ln in r.stdout.splitlines():
-        kind, _, rest = ln.partition(" ")
-        if kind == "NOW":
-            facts["now"] = int(rest) if rest.isdigit() else None
-        elif kind in ("EXISTS", "ABSENT"):
-            path = rest.split(" ")[0]
-            if kind == "ABSENT":
-                facts["absent"].append(path)
-            else:
-                mtime = rest.split(" ")[1] if " " in rest else "0"
-                facts["exists"][path] = int(mtime) if mtime.isdigit() else 0
-        elif kind == "LASTSAMPLE":
-            facts["sample_end"] = _number_from(rest, "end")
-        elif kind == "INFLIGHT":
-            facts["inflight_at"] = _number_from(rest, "at")
-        elif kind == "SAMPLERSTART":
-            facts["sampler_start"] = int(rest) if rest.strip().isdigit() else None
-        elif kind == "LASTJOB":
-            job_candidates.append(rest)
-    # #94: walk the candidates NEWEST FIRST and stop at the first one that is
-    # not PROVABLY too short to have been sampled. A too-short job is evidence
-    # of nothing, so it is skipped rather than used to clear or raise a
-    # finding — which is also why a job whose duration is UNKNOWN (no
-    # job-history record for its jobId) is never treated as too short: "could
-    # not tell" is judged the strict way, same as an undateable sampler above.
-    min_sampleable_s = 2 * harvest_interval()
-    history = job_history_durations()
-    for rest in reversed(job_candidates):
-        ts_epoch, dur = _parse_job_record(rest, history)
-        if ts_epoch is None:
-            continue  # unparseable row — not usable as a candidate at all
-        if dur is not None and dur < min_sampleable_s:
-            facts["job_short_skipped"] += 1
-            continue
-        facts["job_ts"] = ts_epoch
-        facts["job_dur_s"] = dur
-        break
-    return facts, None
-
-
-def run_checks(nodes, as_json=False):
-    """The --check gate. Returns process exit code."""
-    local = local_node(list(nodes))
-    findings, rows = [], {}
-    for m in nodes:
-        facts, err = _probe_node(m, local, nodes.get(m, {}))
-        if err:
-            findings.append(err)
-            rows[m] = {"ok": False, "finding": err}
-            continue
-        rows[m] = {"ok": True, **facts}
-        now = facts["now"] or 0
-        have_inflight = any("inflight.json" in p for p in facts["exists"])
-        have_samples = any("samples.jsonl" in p for p in facts["exists"])
-        have_jobs = any("job-metrics.jsonl" in p for p in facts["exists"])
-        # 1. THE HEARTBEAT — liveness, independent of job traffic.
-        if not have_inflight:
-            findings.append(
-                f"{m}: no inflight.json — the harvester has never swept here (not installed, "
-                f"or installed and dead). Nothing samples this node"
-            )
-        elif facts["inflight_at"] is None:
-            findings.append(f"{m}: inflight.json exists but carries no readable `at` — the heartbeat is unparseable")
-        elif now and now - facts["inflight_at"] > HEARTBEAT_STALE_S:
-            findings.append(
-                f"{m}: heartbeat stale — last sweep {int(now - facts['inflight_at'])}s ago at "
-                f"{_iso(facts['inflight_at'])}. The harvester is not sampling whatever `is-active` "
-                f"says about the unit"
-            )
-        # 2. THE CROSS-CHECK — a completed job that the harvest never saw.
-        #    Bounded by the sampler's start: see SAMPLER_WARMUP_S above. A node
-        #    whose sampler cannot be dated is judged without the bound.
-        started = facts["sampler_start"]
-        answerable = started is None or (
-            facts["job_ts"] is not None and facts["job_ts"] > started + SAMPLER_WARMUP_S
-        )
-        if answerable and have_jobs and facts["job_ts"] and now and now - facts["job_ts"] <= JOB_FRESH_S:
-            if not have_samples:
-                findings.append(
-                    f"{m}: active but silent — a job completed at {_iso(facts['job_ts'])} but "
-                    f"samples.jsonl does not exist; the harvest is collecting nothing"
-                )
-            elif facts["sample_end"] is None:
-                findings.append(
-                    f"{m}: active but silent — a job completed at {_iso(facts['job_ts'])} but the "
-                    f"newest sample record is unparseable"
-                )
-            elif facts["sample_end"] + WINDOW_LAG_S < facts["job_ts"]:
-                findings.append(
-                    f"{m}: active but silent — the newest completed job ({_iso(facts['job_ts'])}) "
-                    f"postdates the newest harvested window ({_iso(facts['sample_end'])}) by "
-                    f"{int(facts['job_ts'] - facts['sample_end'])}s; jobs are streaming past "
-                    f"unmeasured"
-                )
-    ok = not findings
-    doc = {"ok": ok, "nodes": rows, "findings": findings}
-    # `--json` is a contract like every other subcommand's: parseable stdout,
-    # findings named, and a non-zero exit that a consumer reads as a FINDING
-    # rather than a crash. The human lines go to stdout only when it is off.
-    # THE EXIT CODE IS DERIVED FROM `ok`, NEVER FROM REACHING THE END. Written
-    # as a trailing `raise SystemExit(1)` it fired under `--json` even with
-    # zero findings, which is a gate that is red forever: the cron reads a
-    # non-zero exit as a FINDING, so a healthy fleet would have paged
-    # indefinitely and the one thing the gate exists to say would be lost in
-    # the noise. Caught by the busy-node test on 2026-09-23.
-    if as_json:
-        print(json.dumps(doc, indent=2))
-    elif ok:
-        print(
-            f"✓ the harvest is alive on all {len(nodes)} node(s) and no completed job "
-            f"postdates its newest window (checked output files, never `is-active`)."
-        )
-    else:
-        for f in findings:
-            print(f"! {f}")
-        print(
-            f"\n✗ {len(findings)} finding(s) across {len(nodes)} node(s). 'active' is not 'collecting':",
-            file=sys.stderr,
-        )
-        print(
-            "  the unit can be green while the sampler matches nothing; only its output can say.",
-            file=sys.stderr,
-        )
-    return 0 if ok else 1
-
-
 # hokon's two original units predate the `actions-runner-<repo>` convention and
 # their names say nothing about which repo they serve. Left unmapped they
 # aggregate as their OWN repos, which splits hadoku_site's distribution in two
@@ -959,6 +367,69 @@ def run_checks(nodes, as_json=False):
 #                             install lives INSIDE the working checkout.
 #   github-runner-tenhands -> .runner says WolffM/tenhands, which is a stale name.
 #                             The API redirects it to WolffM/hadoku-tenhands.
+#
+# `hub_repo()` and `legacy_units()`/`repo_of()` stay defined IN THIS FILE
+# (not moved to a sibling) because `slice-placement-guard.test.mjs`'s fixture
+# and mutation tests load (or mutate) only a standalone copy of this one file
+# and still call `repo_of()` through it — so it, and everything it needs,
+# must work with nothing else beside it on disk. `hub_repo()` already
+# tolerates that: see "NOT FATAL, AND NOT SILENT" below, the same shape
+# `_sibling()` above uses for a missing PYTHON sibling rather than a missing
+# BUILT one.
+_HUB_ASK = """const { hubRepo } = await import(process.argv[1]);
+process.stdout.write(hubRepo());"""
+
+_HUB_CACHE = []
+
+
+def hub_repo():
+    """The hub repo's name, from `src/lib/fleet-config.ts` — never spelled here.
+
+    That module is the one answer to "who does this fleet belong to" and the
+    names below are the only place this report needed it. Kept independent of
+    `ask_library()`'s resolution on purpose: `repo_of` must keep working where
+    no manifest resolves (CI has no sibling checkout), and folding the two
+    would make a unit-name lookup depend on operator config it does not read.
+    """
+    if _HUB_CACHE:
+        return _HUB_CACHE[0]
+    mod = (HERE.parent / "dist" / "lib" / "fleet-config.js").resolve()
+    import shutil
+
+    exe = shutil.which("node")
+    why = None
+    if not exe:
+        why = "`node` is not on PATH"
+    elif not mod.is_file():
+        why = f"{mod} does not exist — this copy of the script is not inside a built package"
+    else:
+        r = subprocess.run(
+            [exe, "--input-type=module", "-e", _HUB_ASK, mod.as_uri()],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            _HUB_CACHE.append(r.stdout.strip())
+            return _HUB_CACHE[0]
+        why = f"{mod} did not name it: {r.stderr.strip()[:160]}"
+    # NOT FATAL, AND NOT SILENT. This name is needed only to fold two legacy
+    # unit names onto the hub repo; every other unit is read from its own name.
+    # Killing the whole report over it would make a memory distribution
+    # unobtainable from any copy of this script that is not inside a built
+    # package — but saying nothing would let those two units quietly aggregate
+    # as a repo of their own, which is the split the mapping exists to prevent.
+    # So: the mapping is dropped, the reason is printed, and the caller sees it.
+    print(
+        f"fleet mem-report: could not read the hub repo's name ({why}).\n"
+        "  The two legacy unit names that fold onto it will aggregate under "
+        "their own names in this run.",
+        file=sys.stderr,
+    )
+    _HUB_CACHE.append(None)
+    return None
+
+
 def legacy_units():
     """Unit name -> repo, for the units whose names say nothing about what they
     serve. The hub repo's name is read from `fleet-config`, never spelled here.

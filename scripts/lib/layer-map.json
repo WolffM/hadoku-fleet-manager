@@ -1553,6 +1553,13 @@
     "part": "run"
   },
   {
+    "glob": "scripts/lib/runner-mem-fixtures.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave 5q lane D: shared fixture helpers for runner-mem-harvest.test.mjs and runner-mem-report.test.mjs, split out of the former single runner-mem.test.mjs (same \"-fixtures.mjs\" shape as ci-throttle-fixtures.mjs/doctor-fixtures.mjs above) — the memory pipeline's own domain is observation, same as the two .py scripts it drives (cli.ts's UNMEASURED_DOMAIN)."
+  },
+  {
     "glob": "scripts/lib/runs-on-demand.mjs",
     "layer": "domain",
     "domain": "observation",
