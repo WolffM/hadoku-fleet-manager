@@ -19,9 +19,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
 	GATE,
@@ -605,4 +606,27 @@ export async function handler(c) {
 }
 `;
 	withSite(SRC, KV_BINDING, ({ code, out }) => assert.equal(code, 0, out));
+});
+
+// fleet-manager#40: G9 shipped with no FIXES entry, so every G9 failure printed
+// "Fix — undefined" — on hadoku_site's lint, the first time anyone saw one.
+// Read statically: every check id a rule module can emit must have fix text.
+test('every check id the rules can emit has a FIXES entry', () => {
+	const lib = join(dirname(fileURLToPath(import.meta.url)), 'lib');
+	const emitted = new Set();
+	for (const f of readdirSync(lib).filter((n) => /^identity-.*\.mjs$/.test(n))) {
+		for (const m of readFileSync(join(lib, f), 'utf8').matchAll(/\badd\(\s*'(G\d+[a-z]?)'/g)) {
+			emitted.add(m[1]);
+		}
+	}
+	const gate = readFileSync(GATE, 'utf8');
+	const fixesBody = gate.slice(
+		gate.indexOf('const FIXES = {'),
+		gate.indexOf('\n};', gate.indexOf('const FIXES = {'))
+	);
+	const fixed = new Set([...fixesBody.matchAll(/^\t(G\d+[a-z]?):/gm)].map((m) => m[1]));
+	// Not vacuous: G1..G8 plus G9a/b/c are all emitted today.
+	assert.ok(emitted.size >= 11, `found only ${[...emitted]} — the emit pattern no longer matches`);
+	const missing = [...emitted].filter((c) => !fixed.has(c)).sort();
+	assert.deepEqual(missing, [], `checks with no FIXES entry: ${missing.join(', ')}`);
 });

@@ -349,6 +349,21 @@ const FIXES = {
 	G5: `Only edge-router establishes identity (R1). A script acting for someone
      authenticates with ITS OWN credential and names the target as a parameter
      the app authorizes by tier (R11) — it never asserts the target's headers.`,
+	G9a: `A record that belongs to ONE person is a prefs-api row, not a table or
+     file on the app's disk (R12): an account delete erases prefs-api and cannot
+     see a per-app copy. Write it as a prefs row — the browser's own PUT
+     /prefs/api/v1/:appId, or the server's writeFor() from
+     @wolffm/prefs-client/service — read across people with read()/all(), then
+     add a migration that drops or re-keys the table. Shared state (a room, a
+     queue, a share between two people) stays and names people by userId only.`,
+	G9b: `Store the userId only and look the name, sprite or avatar up when shown
+     (R4, R12): a stored copy outlives the person who chose it, and an account
+     delete cannot reach it. Drop the column in a migration (or the field from
+     the persisted record).`,
+	G9c: `Never derive an identity from a credential (R7, R12): a hashed or
+     truncated key still changes when the key rotates, and the person becomes a
+     stranger. Pass the registry userId — the edge-stamped X-User-Id after
+     sanitizeHeaders, or one resolved through whoami — as the account material.`,
 };
 
 if (violations.length) {
