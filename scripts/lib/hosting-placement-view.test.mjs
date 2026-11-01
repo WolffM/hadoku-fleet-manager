@@ -391,3 +391,45 @@ test("notices, demand, the converger's last pass and its offers ride along", () 
 	assert.equal(doc({ records: [] }).converger, null);
 	assert.equal(doc({ records: [] }).offers, null);
 });
+
+test('ci rides on each slice and each ranked offer, null where the node is unmeasured or the slice ended', () => {
+	const records = recordsOf('watchparty', {
+		'claw-6': [shared('watchparty', { epoch: 1 })],
+		'claw-4': [shared('watchparty', { epoch: 0, until: iso(-60_000) })],
+	});
+	const pressure = { jobs: 1, heavyJobs: 1, max: 2, load1: null, cores: 8, at: iso(-30_000) };
+	const last = {
+		at: iso(-120_000),
+		tenants: {
+			watchparty: {
+				live: true,
+				offers: {
+					ranked: [
+						{ node: 'claw-9', ciJobs: { before: 1, after: 1 } },
+						{ node: 'claw-3', ciJobs: { before: 0, after: 0 } },
+					],
+					refused: [],
+				},
+			},
+		},
+	};
+	const d = doc({
+		records,
+		appRec: { epoch: 1 },
+		probes: new Map([['claw-6', answered()]]),
+		ci: new Map([
+			['claw-6', pressure],
+			['claw-4', pressure],
+			['claw-9', pressure],
+		]),
+		last,
+	});
+	const row = (n) => d.slices.find((s) => s.node === n);
+	assert.deepEqual(row('claw-6').ci, pressure);
+	assert.equal(row('claw-4').state, 'ended');
+	assert.equal(row('claw-4').ci, null, 'an ended slice is not looked at');
+	assert.deepEqual(d.offers.ranked[0].ci, pressure);
+	assert.equal(d.offers.ranked[1].ci, null, 'unmeasured, never idle');
+	// No ci map at all: every slice reads null.
+	assert.equal(doc({ records, probes: new Map([['claw-6', answered()]]) }).slices[0].ci, null);
+});

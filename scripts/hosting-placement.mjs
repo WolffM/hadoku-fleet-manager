@@ -14,10 +14,14 @@
  * writer is the `fleet hosting` door. The one file it writes is its own
  * per-app copy for `--max-age`.
  *
- * EXIT: 0 when the document is ok, 1 when it says `ok: false` (something could
- * not be looked at; `error` says what), 2 on a usage error or an app that is
- * not a registered tenant. Under --json the document is on stdout in every
- * case, and wins over the exit code.
+ * EXIT (reader draft §2): 0 whenever the document was written, `ok: false`
+ * included: what could not be looked at is said by `ok` and `error`, never by
+ * the exit code. 2 on a usage error or an app that is not a registered tenant.
+ * Under --json the document is on stdout in every case, and wins.
+ *
+ * CI PRESSURE (`slices[].ci`, `offers.ranked[].ci`) is the dispatcher's last
+ * capacity row per node, read from its decision log with no ssh
+ * (lib/hosting-ci-pressure.mjs); null when no row is younger than 5 minutes.
  *
  * USAGE
  *   fleet hosting-placement <app> --json [--max-age <sec>]
@@ -28,12 +32,14 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { writeJsonAtomic } from '../dist/lib/atomic-json.js';
+import { decisionLogDir } from '../dist/runners/decision-log.js';
 import { drainNotices } from '../dist/runners/drain.js';
 import { hostingNotices, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
 import { checkSlice } from './lib/hosting-check.mjs';
+import { readCiPressure } from './lib/hosting-ci-pressure.mjs';
 import { readDemand } from './lib/hosting-demand.mjs';
 import {
 	HOSTING_PLACEMENT_CONTRACT,
@@ -90,7 +96,7 @@ let registry;
 try {
 	registry = readTenantRegistry(stateDir());
 } catch (err) {
-	refuse(1, `the tenant registry is unreadable: ${err.message}`);
+	refuse(0, `the tenant registry is unreadable: ${err.message}`);
 }
 if (APP && !registry.tenants[APP])
 	refuse(
@@ -98,7 +104,7 @@ if (APP && !registry.tenants[APP])
 		`${APP} is not a registered tenant (registered: ${Object.keys(registry.tenants).join(', ') || 'none'})`
 	);
 const apps = APP ? [APP] : Object.keys(registry.tenants).sort();
-if (!apps.length) refuse(1, 'no tenant is registered, so there is no placement to read');
+if (!apps.length) refuse(0, 'no tenant is registered, so there is no placement to read');
 
 // A per-app copy, served while younger than --max-age. Its own generatedAt stays.
 const cachePath = APP ? join(stateDir(), CACHE_DIR, `${APP}.json`) : null;
@@ -114,7 +120,7 @@ if (MAX_AGE_S !== null && existsSync(cachePath)) {
 		NOW - Date.parse(last.generatedAt) <= MAX_AGE_S * 1000
 	) {
 		out.emit({ ...last, cached: true });
-		process.exit(last.ok ? 0 : 1);
+		process.exit(0);
 	}
 }
 
@@ -153,9 +159,29 @@ const notices =
 		? [...drainNotices(drainDoc, NOW), ...hostingNotices(hostingDoc, NOW)]
 		: [];
 
+const recordsOf = new Map(
+	apps.map((app) => [
+		app,
+		drainDoc && hostingDoc ? appRecords(app, drainDoc, hostingDoc, NOW) : null,
+	])
+);
+// One read of the decision log for every node any app's document names.
+const ciNodes = new Set();
+for (const app of apps) {
+	for (const r of recordsOf.get(app) ?? []) ciNodes.add(r.node);
+	for (const o of last?.tenants?.[app]?.offers?.ranked ?? []) ciNodes.add(o.node);
+}
+const ci = readCiPressure({
+	dir: decisionLogDir(stateDir()),
+	nodes: [...ciNodes],
+	manifest,
+	nowMs: NOW,
+});
+if (ci.why) out.warn(`${ci.why}; ci reads null (unmeasured) on every slice.`);
+
 const docs = [];
 for (const app of apps) {
-	const records = drainDoc && hostingDoc ? appRecords(app, drainDoc, hostingDoc, NOW) : null;
+	const records = recordsOf.get(app);
 	const probes = new Map();
 	const appProblems = [...problems];
 	if (records && manifest) {
@@ -193,6 +219,7 @@ for (const app of apps) {
 			appRec: hostingDoc?.apps?.[app],
 			probes,
 			notices,
+			ci: ci.byNode,
 			demand: demand?.tenants?.[app] ?? null,
 			last,
 			problems: appProblems,
@@ -221,7 +248,7 @@ if (APP) {
 		out.warn(`could not keep the document for --max-age: ${err.message}`);
 	}
 	out.emit(doc);
-	process.exit(doc.ok ? 0 : 1);
+	process.exit(0);
 }
 const ok = docs.every((d) => d.ok);
 out.emit({
@@ -231,4 +258,4 @@ out.emit({
 	ok,
 	apps: docs,
 });
-process.exit(ok ? 0 : 1);
+process.exit(0);

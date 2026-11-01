@@ -1223,6 +1223,12 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/hosting-ci-pressure.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
     "glob": "scripts/lib/hosting-placement-view.mjs",
     "layer": "domain",
     "domain": "tenancy",

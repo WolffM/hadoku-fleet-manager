@@ -36,7 +36,11 @@ const PRODUCERS = {
 	],
 	hosting: ['scripts/hosting.mjs', 'scripts/lib/hosting.mjs'],
 	'hosting-plan': ['scripts/hosting-plan.mjs', 'scripts/lib/hosting-plan.mjs'],
-	'hosting-placement': ['scripts/hosting-placement.mjs', 'scripts/lib/hosting-placement-view.mjs'],
+	'hosting-placement': [
+		'scripts/hosting-placement.mjs',
+		'scripts/lib/hosting-placement-view.mjs',
+		'scripts/lib/hosting-ci-pressure.mjs',
+	],
 	'hosting-demand': [
 		'scripts/hosting-demand.mjs',
 		'scripts/hosting-converge.mjs',

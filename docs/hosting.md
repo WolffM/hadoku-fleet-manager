@@ -275,7 +275,8 @@ watchparty in the private `hosting-placement-reader-2026-10-31.md`):
   "slices": [ { "node": "claw-6", "mode": "shared", "role": "primary", "epoch": null,
                 "since": "…", "until": null, "declared": { "memoryMb": 1536, "cores": 2, "port": 8079 },
                 "observedAt": "…", "reachable": true, "state": "guaranteed", "why": null,
-                "observed": { … }, "findings": [ … ], "notices": [ … ] } ],
+                "observed": { … }, "findings": [ … ], "notices": [ … ],
+                "ci": { "jobs": 1, "heavyJobs": 0, "max": 1, "load1": null, "cores": 4, "at": "…" } } ],
   "ended": [], "lastMove": null, "demand": null,
   "converger": { "at": "…", "live": true, "desired": 1, "serving": ["claw-6"], "actions": [], "blocked": [], "unplaceable": [] },
   "offers": { "at": "…", "ranked": [ … ], "refused": [ … ] }
@@ -302,14 +303,31 @@ watchparty in the private `hosting-placement-reader-2026-10-31.md`):
   that did not answer, and a record that cannot be read as one placement (a
   singleton held twice with no move open, or an open move naming a node that
   holds nothing). An unreadable ledger gives `placement: null`, never an empty
-  `unplaced`. Exit 0 when ok, 1 when not, 2 for a usage error or an app that
-  is not registered. The document is on stdout in every case.
-- Not in contract 1 yet: `slices[].ci` (cardtable's ranking input) and any
-  speed figure (cardtable keeps its own, §5b).
+  `unplaced`. Exit 0 whenever the document was written, `ok: false`
+  included (reader draft §2: the document says it, not the exit code); 2 for
+  a usage error or an app that is not registered. The document is on stdout
+  in every case.
+- `slices[].ci` and `offers.ranked[].ci` are the node's CI pressure, a
+  RANKING input for the tenant, never a bar (§5b):
+  `{ jobs, heavyJobs, max, load1, cores, at }`, from the newest dispatcher
+  decision-log row (`~/.hadoku-mgmt/dispatch-decisions/`) whose `capacity[]`
+  names the node. `jobs` is the walk's `busy`, `cores` comes from the
+  manifest, and `load1` is always null because nothing persisted carries
+  load. **`null` means unmeasured, not idle:** no row in the last 5 minutes.
+  The dispatcher writes a row only when it decides something, so a quiet
+  fleet reads null. No ssh, and the day file is read from its end.
+- No speed figure in contract 1 (cardtable keeps its own, §5b).
+- `--max-age N` serves the last whole document for that app, kept per app in
+  `~/.hadoku-mgmt/hosting-placement-last/<app>.json`, with `cached: true`
+  while it is younger than N seconds. Without it the read is live. That copy
+  is the only file this command writes.
 
 hadoku_site's deploy of a `"placement": "fleet"` row reads `placement.nodes[0]`
 live (no `--max-age`). It refuses while `moving` or `unplaced`, and gates red
 on drift from its committed `{ node, epoch }` (hadoku_site#491 part 2).
+cardtable polls it every 60 s with `--max-age 55`, ranks by `ci` ahead of its
+own core speed, and ignores `epoch`. Until it has dual-read for a few weeks it
+keeps reading `node-status`, whose contract number is separate.
 
 ## Status
 

@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -71,12 +71,12 @@ test('an app that is not a registered tenant is refused with exit 2 and a reason
 	}
 });
 
-test('an unreadable hosting record is could-not-look: ok false, no placement, exit 1', () => {
+test('an unreadable hosting record is could-not-look: ok false, no placement, still exit 0', () => {
 	const f = fixture();
 	try {
 		writeFileSync(join(f.root, 'fleet-hosting.json'), '{ not json');
 		const r = run(['cardtable'], f.env);
-		assert.equal(r.code, 1);
+		assert.equal(r.code, 0, 'the document was written: ok says it, not the exit code (§2)');
 		assert.equal(r.doc.ok, false);
 		assert.equal(r.doc.placement, null, 'never an empty "unplaced"');
 		assert.match(r.doc.error, /fleet-hosting\.json\) is unreadable/);
@@ -91,12 +91,14 @@ test('an unreadable registry, demand record or converger pass each fail the docu
 		writeFileSync(join(f.root, 'hosting-demand.json'), '[');
 		writeFileSync(join(f.root, 'hosting-converge-last.json'), '{');
 		const r = run(['cardtable'], f.env);
-		assert.equal(r.code, 1);
+		assert.equal(r.code, 0);
+		assert.equal(r.doc.ok, false);
 		assert.match(r.doc.error, /hosting-demand\.json\) is unreadable/);
 		assert.match(r.doc.error, /hosting-converge-last\.json\) is unreadable/);
 		writeFileSync(join(f.root, 'hosting-tenants.json'), '{');
 		const reg = run(['cardtable'], f.env);
-		assert.equal(reg.code, 1);
+		assert.equal(reg.code, 0);
+		assert.equal(reg.doc.ok, false);
 		assert.match(reg.doc.error, /tenant registry is unreadable/);
 	} finally {
 		f.done();
@@ -107,7 +109,8 @@ test('no tenant registered is no evidence, and fails', () => {
 	const f = fixture({ register: false });
 	try {
 		const r = run([], f.env);
-		assert.equal(r.code, 1);
+		assert.equal(r.code, 0);
+		assert.equal(r.doc.ok, false);
 		assert.match(r.doc.error, /no tenant is registered/);
 	} finally {
 		f.done();
@@ -159,6 +162,46 @@ test('a usage error is a document too, exit 2', () => {
 			assert.equal(r.code, 2, args.join(' '));
 			assert.equal(r.doc.ok, false);
 		}
+	} finally {
+		f.done();
+	}
+});
+
+test("an offer's ci is the dispatcher's fresh capacity row for that node, and null once it is stale", () => {
+	const f = fixture();
+	try {
+		const now = Date.now();
+		writeFileSync(
+			join(f.root, 'hosting-converge-last.json'),
+			JSON.stringify({
+				at: new Date(now).toISOString(),
+				tenants: {
+					cardtable: {
+						live: true,
+						offers: { ranked: [{ node: 'claw-9', ciJobs: { before: 1, after: 1 } }], refused: [] },
+					},
+				},
+			})
+		);
+		const dir = join(f.root, 'dispatch-decisions');
+		mkdirSync(dir);
+		const write = (atMs) =>
+			writeFileSync(
+				join(dir, `${new Date(now).toISOString().slice(0, 10)}.jsonl`),
+				JSON.stringify({
+					v: 1,
+					at: new Date(atMs).toISOString(),
+					capacity: [{ node: 'claw-9', busy: 2, heavyJobs: 1, max: 3 }],
+				}) + '\n'
+			);
+		write(now - 30_000);
+		const fresh = run(['cardtable'], f.env).doc.offers.ranked[0].ci;
+		assert.equal(fresh.jobs, 2);
+		assert.equal(fresh.heavyJobs, 1);
+		assert.equal(fresh.max, 3);
+		assert.equal(fresh.load1, null);
+		write(now - 3_600_000);
+		assert.equal(run(['cardtable'], f.env).doc.offers.ranked[0].ci, null, 'unmeasured, not idle');
 	} finally {
 		f.done();
 	}

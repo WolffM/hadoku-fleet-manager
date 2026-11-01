@@ -449,6 +449,12 @@ export const TENANT_CONTRACT = [
 			'slices[].declared.port',
 			'ended[].node',
 			'ended[].until',
+			// cardtable's ranking input (§5b.3): null is unmeasured, never idle.
+			'slices[].ci',
+			'slices[].ci.jobs',
+			'slices[].ci.heavyJobs',
+			'slices[].ci.at',
+			'offers.ranked[].ci',
 		],
 	},
 	{

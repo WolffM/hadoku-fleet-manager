@@ -127,9 +127,10 @@ export function placementOf({ singleton, records, appRec, releaseOrder = [] }) {
 /**
  * One slice row. `probe` is `{ answered, row, observedAt }` from
  * lib/hosting-check.mjs, or undefined for a slice past its end, which is not
- * probed and reads `ended` until `--remove` drops its record.
+ * probed and reads `ended` until `--remove` drops its record. `ci` is the
+ * node's pressure from lib/hosting-ci-pressure.mjs, null when unmeasured.
  */
-export function sliceRow(rec, probe, { notices = [], registeredPort = null } = {}) {
+export function sliceRow(rec, probe, { notices = [], registeredPort = null, ci = null } = {}) {
 	const base = {
 		node: rec.node,
 		mode: rec.mode,
@@ -139,6 +140,7 @@ export function sliceRow(rec, probe, { notices = [], registeredPort = null } = {
 		until: rec.until,
 		declared: rec.declared,
 		notices,
+		ci: rec.lapsed ? null : ci,
 	};
 	if (rec.lapsed)
 		return {
@@ -223,6 +225,7 @@ export function tenantView(request) {
  * @param {object|undefined} i.appRec  fleet-hosting.json apps[app]
  * @param {Map<string, object>} i.probes  node → { answered, row, observedAt }
  * @param {object[]} i.notices   drainNotices + hostingNotices, every node
+ * @param {Map<string, object|null>} [i.ci]  node → CI pressure (lib/hosting-ci-pressure.mjs)
  * @param {object|null} i.demand this app's demand record
  * @param {object|null} i.last   hosting-converge-last.json, or null when absent or unreadable
  * @param {string[]} i.problems
@@ -235,6 +238,7 @@ export function placementDocument({
 	appRec,
 	probes,
 	notices,
+	ci = new Map(),
 	demand,
 	last,
 	problems,
@@ -257,6 +261,7 @@ export function placementDocument({
 			sliceRow(rec, probes.get(rec.node), {
 				notices: notices.filter((n) => n.node === rec.node).map(({ node: _node, ...n }) => n),
 				registeredPort,
+				ci: ci.get(rec.node) ?? null,
 			})
 		);
 		for (const s of slices)
@@ -285,6 +290,12 @@ export function placementDocument({
 		lastMove: appRec?.lastMove ?? null,
 		demand: demand ?? null,
 		converger: convergerView(last, app),
-		offers: t?.offers ? { at: last.at, ...t.offers } : null,
+		offers: t?.offers
+			? {
+					at: last.at,
+					...t.offers,
+					ranked: (t.offers.ranked ?? []).map((o) => ({ ...o, ci: ci.get(o.node) ?? null })),
+				}
+			: null,
 	};
 }
