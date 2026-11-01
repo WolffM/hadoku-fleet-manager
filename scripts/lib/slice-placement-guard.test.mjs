@@ -416,9 +416,9 @@ test('an INACTIVE slice is not read as a missing one', () => {
  */
 test('the gate’s mint slice is the minter’s mint slice', () => {
 	const REPO = dirname(SCRIPTS);
-	const ts = readFileSync(join(REPO, 'src', 'runners', 'ephemeral.ts'), 'utf8');
+	const ts = readFileSync(join(REPO, 'src', 'runners', 'ephemeral-slice.ts'), 'utf8');
 	const minter = ts.match(/export const DEFAULT_RUNNER_SLICE = '([^']+)'/);
-	assert.ok(minter, 'DEFAULT_RUNNER_SLICE must still be a literal in src/runners/ephemeral.ts');
+	assert.ok(minter, 'DEFAULT_RUNNER_SLICE must still be a literal in ephemeral-slice.ts');
 	const gate = code(mjs()).match(/const MINT_SLICE = '([^']+)'/);
 	assert.ok(gate, 'MINT_SLICE must still be a literal in deploy-runners-slice.mjs');
 	assert.equal(

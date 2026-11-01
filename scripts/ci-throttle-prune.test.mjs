@@ -70,8 +70,12 @@ function stubDf(scratchDir, { totalMb, usedMb, availMb, fail = false, headerOnly
 // threshold arithmetic deterministically.
 const PRUNE_SCRATCH = mkdtempSync(join(tmpdir(), `${FIXTURE_PREFIX}prune-scratch-`));
 after(() => rmSync(PRUNE_SCRATCH, { recursive: true, force: true }));
+// Wave 5r lane D split of ephemeral.ts (800-line ceiling, pure move):
+// TMP_FREE_FLOOR_MB's declaration moved to ephemeral-admission.ts, re-exported
+// from ephemeral.ts for every runtime importer — but THIS literal is read
+// straight from source, so it must be read from where it now lives.
 const EPHEMERAL_TS_SRC = readFileSync(
-	join(SCRIPTS, '..', 'src', 'runners', 'ephemeral.ts'),
+	join(SCRIPTS, '..', 'src', 'runners', 'ephemeral-admission.ts'),
 	'utf8'
 );
 const TMP_FREE_FLOOR_MB_MATCH = EPHEMERAL_TS_SRC.match(/TMP_FREE_FLOOR_MB\s*=\s*(\d+)/);

@@ -382,6 +382,26 @@
     "section": "Wave 5j lane C split of capabilities.ts (plan §4.3 #4): the registry DATA and label queries (capability-registry.ts, capability-labels.ts) land in config exactly as the plan says. bootcamp-proof.ts, workload-gate.ts, capability-offer.ts and capability-validate.ts DEPART from the plan's \"lifecycle core\" / \"ci-scheduling\" / \"lifecycle\" assignments and stay config too — a DELIBERATE decision, not an oversight: Every one of those four is imported directly by files in ALL FOUR domains (measured from the real import graph before the split): e.g. `src/label-floor.ts` (observation) and `src/runners/ephemeral-shared.ts` (ci-scheduling) both import `nodeOffer`; `src/runners/prove-job.ts` (lifecycle) imports `judgeWorkloadProof`/`proofBudget`; `scripts/lib/collect-offers.mjs` (tenancy) imports `workloadGateContext`. Placing any one of them in a single domain would turn those existing edges into NEW domain-to-domain violations (rule 5, §3.2) — cut (iii) would grow by one violation per cross-domain importer, not stay flat. `config` is the one layer every domain already imports legally, which is exactly why the whole file sat there as one piece before this split. Re-cutting these four into their target domains is real work for a LATER wave, once the callers themselves go through a domain-owned record instead of calling the registry straight across a domain boundary."
   },
   {
+    "glob": "src/lib/capability-registry-ids.ts",
+    "layer": "config",
+    "why": "Wave 5r lane D split of capability-registry.ts (800-line ceiling): the shared label ids and entry-building helpers capability-registry-label.ts needs as VALUES, pulled into their own leaf module so that import and capability-registry.ts's own import of the assembled label array do not close a cycle. Same layer as its neighbours — it is still registry data, just the part that must load before the entries that reference it."
+  },
+  {
+    "glob": "src/lib/capability-registry-label.ts",
+    "layer": "config",
+    "why": "Wave 5r lane D split of capability-registry.ts: the surface:'label' entries, a pure move of data. Same layer as capability-registry.ts, which assembles CAPABILITIES from this module's export."
+  },
+  {
+    "glob": "src/lib/capability-registry-implicit.ts",
+    "layer": "config",
+    "why": "Wave 5r lane D split of capability-registry.ts: the surface:'implicit' entries, a pure move of data. Same layer as its neighbours above."
+  },
+  {
+    "glob": "src/lib/capability-registry-toolchain.ts",
+    "layer": "config",
+    "why": "Wave 5r lane D split of capability-registry.ts: the surface:'toolchain' entries, a pure move of data. Same layer as its neighbours above."
+  },
+  {
     "glob": "src/lib/capability-labels.ts",
     "layer": "config"
   },
@@ -863,6 +883,20 @@
     "domain": "ci-scheduling",
     "part": "core",
     "section": "Wave 5k lane C split of ephemeral.ts (plan §4.3 #11, pure move): the mint plan builders (buildSpawnPlan/buildWarmSpawnPlan and the sizing/labelling they need) and the warm-cache SELECTION decision (planWarmCache/planWarmFleet and their scoring) moved out; admission, naming and warm ELIGIBILITY stayed, keyed by which other-domain files reach in by name. Same part as their source file for the same reason."
+  },
+  {
+    "glob": "src/runners/ephemeral-admission.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5r lane D split of ephemeral.ts (800-line ceiling): admitMint/spaceRefusal/assertSafeJitConfig, a pure move. Same part as ephemeral.ts, which re-exports every name here."
+  },
+  {
+    "glob": "src/runners/ephemeral-slice.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5r lane D split of ephemeral.ts (800-line ceiling): the cgroup slice and per-unit MemoryMax sizing, a pure move. Same part as ephemeral.ts, which re-exports every name here."
   },
   {
     "glob": "src/runners/ephemeral-warm.ts",

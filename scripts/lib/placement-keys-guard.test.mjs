@@ -49,6 +49,11 @@ const MINT_PLACEMENT = 'src/runners/placement.ts';
 // stayed in MINT_TICK, so every pattern keyed to it there is unaffected.
 const MINT_SHARED = 'src/runners/ephemeral-shared.ts';
 const MINT_WARM_CACHE = 'src/runners/dispatch-warm-cache.ts';
+// Wave 5r lane D split of ephemeral-tick.ts (800-line ceiling, pure move):
+// `onDemandBackstops` (and the `mintsOnDemand` call the 'mint' key's pattern
+// below looks for) moved to ephemeral-tick-verdict.ts. `dispatchEphemeral`
+// itself stayed in MINT_TICK, so every OTHER pattern keyed to it is unaffected.
+const MINT_TICK_VERDICT = 'src/runners/ephemeral-tick-verdict.ts';
 
 function read(rel) {
 	return readFileSync(join(ROOT, rel), 'utf8');
@@ -187,7 +192,7 @@ const PLACEMENT_KEYS = {
 			'claw-3 holds no standing registration for anything and mints constantly anyway).',
 	},
 	mint: {
-		mint: MINT_TICK,
+		mint: MINT_TICK_VERDICT,
 		// `onDemandBackstops` (#120): the same key that narrows the backstop's standing
 		// registrations here is what makes the dispatcher mint for it, read
 		// through the same `mintsOnDemand`.
@@ -243,6 +248,7 @@ void test('every placement key is honoured by the JIT mint path, or explicitly r
 	const sources = {
 		[MINT_TICK]: blankComments(read(MINT_TICK)),
 		[MINT_PLACEMENT]: blankComments(read(MINT_PLACEMENT)),
+		[MINT_TICK_VERDICT]: blankComments(read(MINT_TICK_VERDICT)),
 	};
 	const offenders = [];
 	for (const [key, rule] of Object.entries(PLACEMENT_KEYS)) {
@@ -314,4 +320,5 @@ void test('the canonical functions this guard reads still exist where it expects
 	assert.match(read(MINT_SHARED), /function offerFor\(/);
 	assert.match(read(MINT_TICK), /function dispatchEphemeral\(/);
 	assert.match(read(MINT_WARM_CACHE), /function dispatchWarmCache\(/);
+	assert.match(read(MINT_TICK_VERDICT), /function onDemandBackstops\(/);
 });

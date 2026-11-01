@@ -25,11 +25,7 @@
   "scripts/runners-slice-install.sh": 986,
   "scripts/service-inventory.mjs": 977,
   "src/cli.ts": 974,
-  "src/lib/capability-registry.ts": 1166,
   "src/lib/job-registry.ts": 986,
-  "src/runners/ephemeral-tick.ts": 896,
-  "src/runners/ephemeral.ts": 993,
   "src/runners/placement.ts": 890,
-  "src/tests/ephemeral.test.ts": 1165,
   "src/tests/prove-job.test.ts": 1272
 }
