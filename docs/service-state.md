@@ -112,7 +112,8 @@ running service before the fence goes live.
 
 ## Who is on it
 
-| service                        | level                                | notes                                                                                                                                     |
-| ------------------------------ | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| hopper, ArchiveBot, watchparty | data in the store, no fence declared | media and records in their namespaces. None declares `fence` yet, so each is moved only off a reachable node.                             |
-| pygmalion                      | off-node, built, not cut over        | `pygmalion/state/central.py`, rehearsed 2026-10-27. Item 8 is still open: extraction runs the `claude` CLI on a login stored on the node. |
+| service            | level                                | notes                                                                                                                                               |
+| ------------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| watchparty         | off-node, fence accepted 2026-11-01  | lease over `state/` in namespace `watchparty` (TTL 30 s), no standby: recovery is a cold start on another `data-peer` node. Review: watchparty#159. |
+| hopper, ArchiveBot | data in the store, no fence declared | media and records in their namespaces. Neither declares `fence` yet, so each is moved only off a reachable node.                                    |
+| pygmalion          | off-node, built, not cut over        | `pygmalion/state/central.py`, rehearsed 2026-10-27. Item 8 is still open: extraction runs the `claude` CLI on a login stored on the node.           |
