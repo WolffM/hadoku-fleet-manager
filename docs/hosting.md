@@ -66,6 +66,17 @@ slice that is not guaranteed, from its record (fleet-manager#31). A slice the
 re-assert does not fix pages once, then daily; a node that did not answer is
 logged, not paged, because node-status pages it already.
 
+The same pass sweeps **every** node's pm2 daemons, not only the nodes a tenant
+holds, for a pm2 tenant's app under another user: running, or saved in a dump
+that a reboot brings back (`lib/hosting-pm2-strays.mjs`, fleet-manager#43). A
+tenant's pm2 names are its app plus whatever its own dump holds (archivebot runs
+as `archive-bot`). On 2026-11-01 the admin user's pm2 on claw-4 and claw-6 still
+carried pygmalion from before its 10-29 move into `pygmalion-svc`, resurrected by
+a reboot, and a secret rotation reached only the tenant's copy. A stray pages
+like an unconverged slice and is never removed by the verifier: run
+`pm2 delete <name> && pm2 save --force` as its owner. Without `sudo -n` (hokon)
+only admin's own pm2 is read, and any other user's daemon is reported unread.
+
 ### Two modes
 
 **Shared** (`--shared`) is the default for cardtable. CI keeps the box and ranks

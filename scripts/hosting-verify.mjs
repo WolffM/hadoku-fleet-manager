@@ -18,14 +18,28 @@
  *   fleet hosting-verify [--dry-run] [--json]
  *   --dry-run   check and plan only; re-asserts nothing
  *
- * EXIT 0 only when every slice is guaranteed or was made so.
+ * It also sweeps EVERY node's pm2 daemons for a pm2 tenant's app under another
+ * user (lib/hosting-pm2-strays.mjs, fleet-manager#43). A stray is unconverged
+ * and never removed here: deleting a pm2 app is the operator's act.
+ *
+ * EXIT 0 only when every slice is guaranteed or was made so, and no node holds
+ * a stray.
  */
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createEmitter } from './lib/emit.mjs';
+import { deferralFor, readDrains } from './lib/expected-down.mjs';
+import { loadManifest, runOn, selectMachines } from './lib/fleet-exec.mjs';
+import {
+	judgeStrays,
+	parseStrayObservation,
+	STRAY_OBSERVE_SCRIPT,
+} from './lib/hosting-pm2-strays.mjs';
 import { planVerify } from './lib/hosting-verify.mjs';
+import { stateDir } from './lib/paths.mjs';
 import { runFleetScript } from './lib/run-fleet-script.mjs';
+import { readTenantRegistry, tenantSpecFrom } from './lib/tenant-registry.mjs';
 
 const HOSTING = resolve(dirname(fileURLToPath(import.meta.url)), 'hosting.mjs');
 /** A re-assert deploys and then checks one slice: two ssh round trips and a port probe. */
@@ -46,6 +60,28 @@ if (args.includes('--help') || args.includes('-h')) {
 	log('fleet hosting-verify [--dry-run] [--json]');
 	log('  check every hosted slice from its node; re-assert the ones not guaranteed.');
 	process.exit(0);
+}
+
+/**
+ * Every node's pm2 daemons, read at once. A node that did not answer and is
+ * not expected down is `null`: "I could not look", never "no strays".
+ */
+async function sweepStrays() {
+	const specs = Object.values(readTenantRegistry(stateDir()).tenants)
+		.map((e) => tenantSpecFrom(e.request))
+		.filter((t) => t.runtime === 'pm2');
+	const drains = readDrains();
+	const machines = selectMachines(loadManifest(), { where: (m) => m.placement !== 'excluded' });
+	const observations = {};
+	await Promise.all(
+		machines.map(async ([name]) => {
+			const r = await runOn(name, STRAY_OBSERVE_SCRIPT, { as: 'admin', timeoutMs: 30_000 });
+			const parsed = r.ok ? parseStrayObservation(r.stdout) : null;
+			if (!parsed && deferralFor(name, drains).deferred) return;
+			observations[name] = parsed;
+		})
+	);
+	return judgeStrays(specs, observations);
 }
 
 async function main() {
@@ -92,6 +128,29 @@ async function main() {
 			log(`unconverged ${item.node} ${item.facet}: ${why}`);
 		}
 	}
+	let strays = null;
+	try {
+		const sweep = await sweepStrays();
+		strays = sweep.strays;
+		for (const u of sweep.unreadable)
+			unreadable.push({ node: u.node, facet: 'hosting-pm2', why: u.why });
+		for (const st of sweep.strays) {
+			unconverged.push({
+				node: st.node,
+				tenant: st.tenant,
+				facet: `hosting:${st.tenant}`,
+				why: st.why,
+			});
+			log(`stray       ${st.node} hosting:${st.tenant}: ${st.why}`);
+		}
+	} catch (err) {
+		unreadable.push({
+			node: '*',
+			facet: 'hosting-pm2',
+			why: `the pm2 stray sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+		});
+	}
+
 	for (const u of unreadable) log(`unreadable  ${u.node} ${u.facet}: ${u.why}`);
 	if (rows && !plan.repair.length && !unconverged.length && !unreadable.length)
 		log(`✓ every hosted slice (${rows.length}) is guaranteed.`);
@@ -108,6 +167,7 @@ async function main() {
 			unconverged,
 			unreadable,
 			changed,
+			strays,
 		});
 	process.exitCode = ok ? 0 : 1;
 }

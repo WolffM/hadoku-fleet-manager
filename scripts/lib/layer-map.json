@@ -1193,6 +1193,12 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/hosting-pm2-strays.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
     "glob": "scripts/lib/hosting-converge.mjs",
     "layer": "domain",
     "domain": "tenancy",
