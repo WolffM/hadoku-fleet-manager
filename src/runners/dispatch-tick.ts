@@ -34,7 +34,7 @@ import {
 import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
 import { DEFAULT_POLL_POLICY } from './queue-discovery.js';
 import { deriveHotRepos } from './queue-discovery.js';
-import { jobQueuedSinceMs } from './queue-discovery.js';
+import { observedQueuedSinceMs } from './queue-discovery.js';
 import { MIN_QUEUED_MS } from './queue-discovery.js';
 import { ZOMBIE_MS } from './queue-discovery.js';
 import { mintableRuns } from './queue-discovery.js';
@@ -408,7 +408,7 @@ export async function runDispatchTick(
 	const waitingJobs = (r: QueuedRun, jobs: readonly QueuedJob[], isPending: boolean) =>
 		runnableJobs(jobs).filter((j) => {
 			if (!isPending) return true;
-			const since = jobQueuedSinceMs(r, j.created_at);
+			const since = observedQueuedSinceMs(r, nowMs, j.created_at);
 			if (since === undefined) return false;
 			const age = nowMs - since;
 			return age >= (input.minQueuedMs ?? MIN_QUEUED_MS) && age <= ZOMBIE_MS;

@@ -4,7 +4,10 @@ import assert from 'node:assert/strict';
 import {
 	DEFAULT_POLL_POLICY,
 	deriveHotRepos,
+	MIN_QUEUED_MS,
+	__resetFirstSeenForTesting,
 	mintableRuns,
+	observedQueuedSinceMs,
 	pollCallsPerHour,
 	queuedSinceMs,
 	reposDue,
@@ -369,4 +372,47 @@ test('queuedSinceMs: this is the SAME answer mintableRuns uses internally', () =
 		{ nowMs: now, minQueuedMs: 90_000 }
 	);
 	assert.equal(out.mintable.length, 1, 'both answer "95s queued", which clears a 90s gate');
+});
+
+// 2026-11-01: GitHub stamped watchparty's runs `created_at` 09:52:05Z at 09:19Z.
+// Aged as now - created_at they were negative, under the gate on every tick,
+// and invisible until real time caught up: 34 minutes of a queued deploy.
+test('a run stamped in the future ages from when it was first seen, and is minted once the gate passes', () => {
+	__resetFirstSeenForTesting();
+	const t0 = 1_000_000_000;
+	const run = {
+		id: 41290637995,
+		status: 'queued',
+		created_at: new Date(t0 + 33 * 60_000).toISOString(),
+	};
+	assert.equal(
+		mintableRuns([run], { nowMs: t0 }).mintable.length,
+		0,
+		'first sight: age 0, under the gate'
+	);
+	assert.equal(
+		observedQueuedSinceMs(run, t0 + 10_000),
+		t0,
+		'the first sighting is kept, not re-taken'
+	);
+	const later = t0 + MIN_QUEUED_MS + 1_000;
+	assert.equal(
+		mintableRuns([run], { nowMs: later }).mintable.length,
+		1,
+		'past the gate from first sight'
+	);
+	// The stamp passing real time ends the correction: the run's own clock applies again.
+	const after = t0 + 34 * 60_000;
+	assert.equal(observedQueuedSinceMs(run, after), Date.parse(run.created_at));
+	__resetFirstSeenForTesting();
+});
+
+test('a stamp within the tolerance, or in the past, is the stamp: nothing is remembered', () => {
+	__resetFirstSeenForTesting();
+	const now = 1_000_000_000;
+	const near = { id: 1, status: 'queued', created_at: new Date(now + 2_000).toISOString() };
+	const past = { id: 2, status: 'queued', created_at: new Date(now - 120_000).toISOString() };
+	assert.equal(observedQueuedSinceMs(near, now), now + 2_000);
+	assert.equal(observedQueuedSinceMs(past, now), now - 120_000);
+	assert.equal(mintableRuns([past], { nowMs: now }).mintable.length, 1);
 });

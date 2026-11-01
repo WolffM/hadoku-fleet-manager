@@ -17,7 +17,7 @@ import {
 	type RunIdentity,
 } from './placement.js';
 import { jitRunnerName } from './ephemeral.js';
-import { jobQueuedSinceMs } from './queue-discovery.js';
+import { observedQueuedSinceMs } from './queue-discovery.js';
 
 export interface PendingRun extends RunIdentity {
 	id: number;
@@ -345,7 +345,7 @@ export function planTick(
 		// and `queuedSec` stays `undefined` for it rather than becoming `0` or
 		// some other number that could read as "just started" — `placement.ts`
 		// treats an `undefined` queue age as NEVER having waited long enough.
-		const queuedAt = run.queuedSinceMs ?? jobQueuedSinceMs(run, run.jobCreatedAt);
+		const queuedAt = run.queuedSinceMs ?? observedQueuedSinceMs(run, nowMs, run.jobCreatedAt);
 		const spill = {
 			queuedSec: queuedAt !== undefined ? Math.max(0, (nowMs - queuedAt) / 1000) : undefined,
 			jobName: run.jobName,

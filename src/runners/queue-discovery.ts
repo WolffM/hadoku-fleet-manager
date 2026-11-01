@@ -262,6 +262,46 @@ export function jobQueuedSinceMs(
 	return runQueued === undefined ? jobCreated : Math.max(jobCreated, runQueued);
 }
 
+/** How far ahead of this host's clock GitHub may stamp a run before the stamp is not believed. */
+export const FUTURE_STAMP_TOLERANCE_MS = 5_000;
+
+/** First sight of each run whose stamp was in the future, by run id and job, with that stamp. */
+const firstSeenFuture = new Map<string, { seen: number; stamped: number }>();
+
+/**
+ * {@link jobQueuedSinceMs}, held to what has actually happened by `nowMs`.
+ *
+ * GITHUB STAMPS SOME RUNS IN THE FUTURE. On 2026-11-01 watchparty's three
+ * c751a33f runs carried `created_at` 09:52:05Z at 09:19Z by a clock that agreed
+ * with GitHub's own `Date` header (cardtable's queued Forge runs were 5 and 10
+ * min ahead). Aged as `now - created_at` such a run is negative, under
+ * MIN_QUEUED_MS on every tick, and invisible to the dispatcher and queue-health
+ * until real time catches up — 34 minutes of a queued deploy nothing served.
+ *
+ * A stamp more than {@link FUTURE_STAMP_TOLERANCE_MS} ahead is replaced by the
+ * first time this process saw the run, so it ages from then like any other.
+ * Kept in memory: a restart forgets it, which costs one MIN_QUEUED_MS wait,
+ * never a mint before the gate. Entries leave once their stamp has passed.
+ */
+export function observedQueuedSinceMs(
+	run: Pick<QueuedRun, 'id' | 'created_at' | 'run_started_at'>,
+	nowMs: number,
+	jobCreatedAt?: string
+): number | undefined {
+	const stamped = jobQueuedSinceMs(run, jobCreatedAt);
+	for (const [k, e] of firstSeenFuture) if (e.stamped <= nowMs) firstSeenFuture.delete(k);
+	if (stamped === undefined || stamped <= nowMs + FUTURE_STAMP_TOLERANCE_MS) return stamped;
+	const key = `${run.id}:${jobCreatedAt ?? ''}`;
+	const seen = firstSeenFuture.get(key)?.seen ?? nowMs;
+	firstSeenFuture.set(key, { seen, stamped });
+	return seen;
+}
+
+/** Test seam: forget every first sighting. */
+export function __resetFirstSeenForTesting(): void {
+	firstSeenFuture.clear();
+}
+
 /**
  * How long a run must sit queued before JIT will mint for it.
  *
@@ -409,7 +449,7 @@ export function mintableRuns(
 		// says a new attempt began. Pulled out as `queuedSinceMs` (above) so
 		// `PendingRun`'s own queue age (wave 3w, #83) is the SAME answer rather
 		// than a second copy of this arithmetic.
-		const queuedAt = queuedSinceMs(r);
+		const queuedAt = observedQueuedSinceMs(r, nowMs);
 		if (queuedAt === undefined) continue;
 		const age = nowMs - queuedAt;
 		if (age < minQueuedMs) continue;
