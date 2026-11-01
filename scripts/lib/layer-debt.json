@@ -28,10 +28,6 @@
     "to": "src/runners/ephemeral.ts"
   },
   {
-    "from": "scripts/fleet-source.mjs",
-    "to": "scripts/lib/emit.mjs"
-  },
-  {
     "from": "scripts/lib/capability-seeds.mjs",
     "to": "scripts/lib/fleet-exec.mjs"
   },
@@ -58,10 +54,6 @@
   {
     "from": "scripts/lib/hosting.mjs",
     "to": "src/runners/ephemeral.ts"
-  },
-  {
-    "from": "scripts/lib/node-profiles.mjs",
-    "to": "scripts/lib/emit.mjs"
   },
   {
     "from": "scripts/lib/slice-inventory-run.mjs",

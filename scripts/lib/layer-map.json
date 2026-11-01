@@ -334,7 +334,13 @@
   },
   {
     "glob": "scripts/fleet-source.mjs",
-    "layer": "access"
+    "layer": "surfaces",
+    "why": "Wave clean-2 lane D: this is the CLI door onto lib/fleet-source.mjs for callers that cannot import it (hadoku_site#483), not another access-layer reader of git — a thin argv/emit shell with no shipped-code logic of its own. Plan §3.1 names the layer directly: \"surfaces: CLI door · HTTP routes · herdr plugins · mgmt-api adapter\". Legalises its existing `./lib/emit.mjs` import (automation) with no new edge; it already imported `./lib/fleet-source.mjs` (access), also downward from surfaces."
+  },
+  {
+    "glob": "scripts/node-profiles.mjs",
+    "layer": "surfaces",
+    "why": "Wave clean-2 lane D: a new CLI door, split out of scripts/lib/node-profiles.mjs's `./emit.mjs` import so the validation library below stays config-layer and importable by every lifecycle-domain script that already reads it as a library (apt-security.mjs, converge-toolchain.mjs). Same shape as scripts/fleet-source.mjs right above: a thin argv/emit shell, no validation logic of its own. Plan §3.1: \"surfaces: CLI door · HTTP routes · herdr plugins · mgmt-api adapter\"."
   },
   {
     "glob": "scripts/lib/fleet-source.mjs",

@@ -44,7 +44,7 @@ EOF
 NODE_BIN="${FLEET_NODE_BIN:-$(command -v node || command -v nodejs || true)}"
 profiles() {
 	[ -n "$NODE_BIN" ] || die "node is not on PATH (sudo resets it). Re-run with 'sudo -E', or set FLEET_NODE_BIN=/path/to/node."
-	"$NODE_BIN" "$HERE/lib/node-profiles.mjs" "$@"
+	"$NODE_BIN" "$HERE/node-profiles.mjs" "$@"
 }
 # Parse-check with the interpreter the shebang actually names. The original
 # script ran `sh -n` because claw-admin-fix.sh is POSIX sh; node-bootstrap.sh is

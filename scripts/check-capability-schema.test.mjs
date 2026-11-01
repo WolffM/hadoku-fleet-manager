@@ -357,7 +357,7 @@ test('the fixture profile is honest to the STRICT loader, not just the lenient r
 	// here instead of in whatever first reaches for the strict door.
 	const f = fixture({ hokon: BACKSTOP });
 	try {
-		const r = run('lib/node-profiles.mjs', ['list', '--file', f.profilesPath], f.env);
+		const r = run('node-profiles.mjs', ['list', '--file', f.profilesPath], f.env);
 		assert.equal(r.code, 0, `the strict loader rejected the fixture profile: ${r.out}`);
 		assert.match(r.out, /^fixture-desktop\trunner\tdebian\/trixie\tdesktop$/m);
 	} finally {

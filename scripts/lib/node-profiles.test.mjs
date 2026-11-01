@@ -354,7 +354,10 @@ test('a FLEET_MANIFEST_DIR that does not exist throws naming it', () => {
  * installed and the payload written, leaving a half-built stick and "do NOT use
  * this stick".
  */
-const CLI = fileURLToPath(new URL('./node-profiles.mjs', import.meta.url));
+// The door moved to scripts/node-profiles.mjs (wave clean-2 lane D: the CLI's
+// `./emit.mjs` import put the config-layer library one layer above where it
+// belongs); the library import two lines up stays at `./node-profiles.mjs`.
+const CLI = fileURLToPath(new URL('../node-profiles.mjs', import.meta.url));
 const cli = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8' });
 
 test('what `show` writes to the stick passes `check-resolved`', () => {

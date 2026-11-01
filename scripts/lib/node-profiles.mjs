@@ -6,13 +6,23 @@
  * `fleet-runner-manifest.json`. `fleet usb-prep` resolves one here and copies it
  * onto the stick; `scripts/node-bootstrap.sh` reads that copy on the new box.
  *
+ * THE VALIDATION LIBRARY ONLY. The CLI (`node scripts/node-profiles.mjs
+ * list|show|check-resolved`) is `scripts/node-profiles.mjs`, a thin door split
+ * out in wave clean-2 lane D: this file importing `./emit.mjs` (CLI stdout
+ * discipline, the automation layer) for the sake of a mode it only sometimes
+ * runs in was a layer violation — every lifecycle-domain script that reads
+ * this file as a plain config-layer library (`apt-security.mjs`,
+ * `converge-toolchain.mjs`) was reaching one layer higher than it needed to.
+ * This file keeps the path and every export every library importer already
+ * names; only the CLI half moved.
+ *
  * WHY THIS IS A LOADER AND NOT A `jq` CALL IN A SHELL SCRIPT
  * ---------------------------------------------------------
  * Two callers need the same answer: usb-prep, on the control host, choosing what
  * to write; and later `fleet enroll`, reading a record back and comparing it to
  * what was promised. Two implementations of "which profile is that, and is it
  * coherent" would drift, and the one that drifts is the one nobody tests. So the
- * shell script SHELLS OUT to this — `node scripts/lib/node-profiles.mjs show
+ * shell script SHELLS OUT to the door — `node scripts/node-profiles.mjs show
  * <id>` — rather than parsing JSON itself.
  *
  * WHY EVERY FAILURE HERE IS A THROW
@@ -29,19 +39,9 @@
  * @guards scripts/node-bootstrap.sh
  * @guards scripts/node-usb-prep.sh
  */
-import process from 'node:process';
 import { readFileSync } from 'node:fs';
 import { manifest as manifestFile } from './paths.mjs';
 import { capability } from '../../dist/lib/capability-registry.js';
-import { keepStdoutWhole } from './emit.mjs';
-
-// STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
-// and on a pipe `process.exit` throws away whatever the stream still had
-// queued — measured on this host, 149,133 bytes in and 146,176 out, which
-// `JSON.parse` then rejects mid-string. `keepStdoutWhole` puts fd 1 in
-// blocking mode so there is nothing left to lose. Issue #33; the shared
-// emitter calls the same function for the scripts that use it.
-keepStdoutWhole();
 
 /** The file name, in one place, because three callers name it. */
 export const PROFILE_MANIFEST = 'node-profiles.json';
@@ -65,7 +65,7 @@ const CHASSIS = ['desktop', 'laptop'];
 /** Documentation keys. Every `$`-prefixed key is prose and is never validated. */
 const isProse = (k) => k.startsWith('$');
 
-class ProfileError extends Error {}
+export class ProfileError extends Error {}
 
 function fail(message) {
 	throw new ProfileError(`node-profiles: ${message}`);
@@ -76,7 +76,8 @@ export function profileManifestPath() {
 	return manifestFile(PROFILE_MANIFEST);
 }
 
-function readManifest(path) {
+/** Exported for the CLI door's `check-resolved` verb, which reads a single resolved profile file directly. */
+export function readManifest(path) {
 	let text;
 	try {
 		text = readFileSync(path, 'utf8');
@@ -100,8 +101,10 @@ function readManifest(path) {
  * Narrowed, not asserted. `JSON.parse` yields `any`, and a cast only moves the
  * unsafety somewhere nothing looks — check-exports.mjs reached the same
  * conclusion about package.json for the same reason.
+ *
+ * Exported for the CLI door's `check-resolved` verb.
  */
-function requireObject(value, what) {
+export function requireObject(value, what) {
 	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
 		fail(`${what} must be an object`);
 	}
@@ -177,7 +180,8 @@ function validateCapabilityFloor(ids, what) {
 	return ids;
 }
 
-function validateProfile(id, raw) {
+/** Exported for the CLI door's `check-resolved` verb, which validates one resolved profile directly. */
+export function validateProfile(id, raw) {
 	const what = `profiles["${id}"]`;
 	const p = requireObject(raw, what);
 
@@ -355,55 +359,4 @@ export function nodeProfile(id, opts = {}) {
 		);
 	}
 	return found;
-}
-
-// ── CLI ─────────────────────────────────────────────────────────────────────
-// `fleet usb-prep` calls this rather than parsing JSON in bash, so profile
-// resolution has ONE implementation and ONE test suite.
-//
-//   node scripts/lib/node-profiles.mjs list
-//   node scripts/lib/node-profiles.mjs show <id> [--file PATH]
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-	const [verb, ...rest] = process.argv.slice(2);
-	const fi = rest.indexOf('--file');
-	const opts = fi > -1 ? { path: rest[fi + 1] } : {};
-	try {
-		if (verb === 'list') {
-			for (const p of loadNodeProfiles(opts).profiles.values()) {
-				console.log(`${p.id}\t${p.role}\t${p.os.distro}/${p.os.codename}\t${p.power.chassis}`);
-			}
-		} else if (verb === 'show') {
-			const id = rest.find((a) => !a.startsWith('--') && a !== opts.path);
-			if (!id) throw new ProfileError('node-profiles: show needs a profile id');
-			console.log(JSON.stringify(nodeProfile(id, opts), null, 2));
-		} else if (verb === 'check-resolved') {
-			// A stick carries ONE profile, already resolved, at
-			// profiles/<id>.json — not a manifest. `node-bootstrap.sh` reads it
-			// with plain jq (`.power.chassis`), because on a freshly imaged node
-			// there is no fleet tooling, only jq.
-			//
-			// usb-prep's verifier used to call `show --file` on it, which runs the
-			// MANIFEST loader and demands a top-level `.profiles`. The writer and
-			// the real reader agreed; the verifier was checking the wrong shape,
-			// and it failed after Ventoy had already been installed and the
-			// payload written — the worst possible moment to discover it.
-			const file = opts.path;
-			if (!file) throw new ProfileError('node-profiles: check-resolved needs --file <path>');
-			const doc = requireObject(readManifest(file), file);
-			if (doc.profiles) {
-				throw new ProfileError(
-					`${file} looks like a profile MANIFEST, not a resolved profile. ` +
-						`The stick carries one already-resolved profile so the node can read it ` +
-						`with jq alone.`
-				);
-			}
-			validateProfile(doc.id ?? '(resolved)', doc);
-			console.log(doc.id ?? '(resolved)');
-		} else {
-			throw new ProfileError(`node-profiles: unknown verb ${JSON.stringify(verb ?? '')}`);
-		}
-	} catch (err) {
-		console.error(err instanceof ProfileError ? err.message : `node-profiles: ${err.message}`);
-		process.exit(1);
-	}
 }

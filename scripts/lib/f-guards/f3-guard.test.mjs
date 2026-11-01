@@ -51,7 +51,17 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { tsAndMjsSources, lineOf, enclosingSymbol, assertDebt, loadDebt, ROOT } from './lib.mjs';
+import {
+	tsAndMjsSources,
+	lineOf,
+	enclosingSymbol,
+	assertDebt,
+	loadDebt,
+	loadExemptions,
+	assertExemptions,
+	withoutExempt,
+	ROOT,
+} from './lib.mjs';
 
 const WRITE = /\bwriteFileSync\(/g;
 const APPEND = /\bappendFileSync\(/g;
@@ -64,6 +74,17 @@ const APPEND_VALUE_LOOKBEHIND = 300;
 
 function loadOneWriterData() {
 	return JSON.parse(readFileSync(join(ROOT, 'scripts/lib/f-guards/f3-one-writer.json'), 'utf8'));
+}
+
+/**
+ * F3's REASONED exemption list (plan §4.1 / wave clean-1 §D's 5 non-defects):
+ * a directory-atomic build, two operator-chosen `--out` paths, an
+ * append-only ledger the one-writer detector cannot trace, and the
+ * pre-commit hook that must run without `dist/`. See `lib.mjs`'s
+ * `assertExemptions` for what makes an entry here valid.
+ */
+function loadF3Exemptions() {
+	return loadExemptions('scripts/lib/f-guards/f3-exemptions.json');
 }
 
 /**
@@ -144,26 +165,36 @@ function findNonAtomic(oneWriterData = loadOneWriterData(), sources = tsAndMjsSo
 }
 
 void test('F3: write-then-rename is hand-rolled only where debt.json says so', () => {
+	const exemptions = loadF3Exemptions();
 	assertDebt(
 		assert,
 		loadDebt(),
 		'F3-write-then-rename',
-		findWriteThenRename(),
+		withoutExempt(findWriteThenRename(), exemptions),
 		'Call the shared `writeJsonAtomic` (F3) instead of writing a temp path and renaming it ' +
 			'by hand — fsync-before-rename and fsync-the-directory-after belong in one place.'
 	);
 });
 
 void test('F3: a file with no renameSync at all is only non-atomic where debt.json says so', () => {
+	const exemptions = loadF3Exemptions();
 	assertDebt(
 		assert,
 		loadDebt(),
 		'F3-non-atomic',
-		findNonAtomic(),
+		withoutExempt(findNonAtomic(), exemptions),
 		'This writeFileSync has no rename anywhere in its file, so a restart mid-write can leave ' +
 			'a truncated or empty file where this code reads it back whole. Route it through the ' +
 			'shared `writeJsonAtomic` (F3) rather than adding a bespoke temp-and-rename.'
 	);
+});
+
+void test('F3: every exemption has a reason and still matches a real finding', () => {
+	// `matchedKeys` is the UNION of both shapes F3 finds — an exemption keyed
+	// to a write-then-rename call must not read as stale while this checks
+	// against the non-atomic shape, and vice versa.
+	const matchedKeys = [...findWriteThenRename(), ...findNonAtomic()];
+	assertExemptions(assert, loadF3Exemptions(), matchedKeys, 'F3');
 });
 
 void test('F3: the guard sees the shapes it forbids', () => {
@@ -291,4 +322,44 @@ void test('declared append MUTATION: removing the exemption check un-exempts a r
 	assert.deepEqual(reverted, ['src/owner.ts:text#1'], 'REVERTED: must report the append again');
 	const restored = findNonAtomic(SOLE_WRITER, [{ rel: 'src/owner.ts', code: WHOLE_LINE_APPEND }]);
 	assert.deepEqual(restored, [], 'RESTORED: must be exempt again');
+});
+
+// --- the exemption mechanism itself (lib.mjs's assertExemptions) -----------
+//
+// Against a SYNTHETIC `exemptions` map and a synthetic `matchedKeys` list,
+// never the real F3 exemptions file or tree — so a future edit to the real
+// `f3-exemptions.json` cannot make these pass or fail by accident, and each
+// test isolates exactly one of the two ways an exemption is invalid.
+
+void test('exemption MUTATION: an exempt key that stops matching a finding fails as STALE', () => {
+	// The key matches nothing in `matchedKeys` — the shape it was reasoned
+	// about no longer exists (renamed, fixed, or never real).
+	assert.throws(
+		() =>
+			assertExemptions(
+				assert,
+				{ 'scripts/owner.mjs:gone#1': 'a real reason' },
+				['scripts/owner.mjs:other#1'],
+				'F3'
+			),
+		/STALE/,
+		'an exemption whose key matches no real finding must fail the guard'
+	);
+});
+
+void test('exemption MUTATION: an exemption with an empty (or blank) reason fails', () => {
+	const matchedKeys = ['scripts/owner.mjs:thing#1'];
+	assert.throws(
+		() => assertExemptions(assert, { 'scripts/owner.mjs:thing#1': '' }, matchedKeys, 'F3'),
+		/exemption with no reason/,
+		'an empty reason must fail even though the key matches a real finding'
+	);
+	assert.throws(
+		() => assertExemptions(assert, { 'scripts/owner.mjs:thing#1': '   ' }, matchedKeys, 'F3'),
+		/exemption with no reason/,
+		'a whitespace-only reason is the same as an empty one'
+	);
+	// A real reason against the same matched key passes — proves the failure
+	// above is about the blank reason, not about the key or matchedKeys shape.
+	assertExemptions(assert, { 'scripts/owner.mjs:thing#1': 'a real reason' }, matchedKeys, 'F3');
 });

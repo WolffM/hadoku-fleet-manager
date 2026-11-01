@@ -158,3 +158,66 @@ export function assertDebt(assert, debt, debtKey, found, helperHint) {
 export function loadDebt() {
 	return JSON.parse(readFileSync(join(ROOT, 'scripts/lib/f-guards/debt.json'), 'utf8'));
 }
+
+/**
+ * A REASONED exemption list for findings this guard's pattern would
+ * otherwise have to carry as debt.json entries forever, even though each one
+ * is a one-line structural reason, not a copy anyone intends to migrate
+ * (wave clean-2 lane D / clean-1 §D's 5 F3 non-defects: a directory-atomic
+ * build, two operator-chosen `--out` paths, an append-only ledger the
+ * one-writer detector cannot trace, and the pre-commit hook that must run
+ * without `dist/`). Shaped `{ "<file>:<symbol>#<n>": "<reason>" }`, loaded
+ * from `relPath` (relative to the repo root) so a second F-guard can keep its
+ * own list beside its own debt key rather than sharing this one.
+ */
+export function loadExemptions(relPath) {
+	return JSON.parse(readFileSync(join(ROOT, relPath), 'utf8'));
+}
+
+/**
+ * Two things fail here, mirroring {@link assertDebt}'s two directions:
+ *
+ *   - an exemption with no reason (or a blank one) — an exemption without a
+ *     reason is indistinguishable from debt nobody looked at;
+ *   - an exemption whose key no longer appears in `matchedKeys` (STALE) — the
+ *     code it reasoned about changed shape, moved, or the key was never real,
+ *     and an exemption must not outlive the thing it was written against.
+ *
+ * `matchedKeys` must be the UNION of every shape this debt item's guard
+ * finds, not just the one `found` list the caller is about to filter with
+ * {@link withoutExempt} — F3 has two mutually exclusive shapes
+ * (write-then-rename vs non-atomic) and an exemption keyed to one must not
+ * read as stale while this checks the other.
+ */
+export function assertExemptions(assert, exemptions, matchedKeys, label) {
+	const matched = new Set(matchedKeys);
+
+	const noReason = Object.entries(exemptions)
+		.filter(([, reason]) => typeof reason !== 'string' || reason.trim() === '')
+		.map(([key]) => key)
+		.sort();
+	assert.deepEqual(
+		noReason,
+		[],
+		`${label}: exemption with no reason:\n  ${noReason.join('\n  ')}\n\n` +
+			`Every exemption needs a one-line, specific reason — an empty one is never valid; ` +
+			`either write the reason or remove the exemption and let the finding count as debt.`
+	);
+
+	const stale = Object.keys(exemptions)
+		.filter((key) => !matched.has(key))
+		.sort();
+	assert.deepEqual(
+		stale,
+		[],
+		`${label}: exemption no longer matches a finding (STALE):\n  ${stale.join('\n  ')}\n\n` +
+			`Remove it — an exemption must not outlive the thing it was reasoned about. If this ` +
+			`was a rename rather than a fix, the new key belongs here instead, with its own reason.`
+	);
+}
+
+/** Keys in `exemptions` are removed from `found` before it is compared against debt.json — an exempt key is never counted as debt, and never needs a debt.json entry of its own. */
+export function withoutExempt(found, exemptions) {
+	const exempt = new Set(Object.keys(exemptions));
+	return found.filter((key) => !exempt.has(key));
+}

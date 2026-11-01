@@ -2,7 +2,6 @@
   "F1": ["scripts/node-users-cutover.mjs:MANIFEST#1", "scripts/node-users-cutover.mjs:p#2"],
   "F3-write-then-rename": [
     "scripts/hosting-converge.mjs:p#1",
-    "scripts/lib/fleet-source.mjs:abs#1",
     "scripts/lib/hosting-artifacts.mjs:tmp#1",
     "scripts/lib/hosting-artifacts.mjs:tmp#2",
     "scripts/lib/hosting-demand.mjs:p#1",
@@ -13,16 +12,12 @@
     "scripts/check-tool-inventory.mjs:merged#1",
     "scripts/check-tool-inventory.mjs:snapshot#2",
     "scripts/converge-toolchain.mjs:tunnelRun#1",
-    "scripts/join-workload-benchmark.mjs:report#1",
     "scripts/lib/slice-inventory-run.mjs:m#1",
     "scripts/node-status.mjs:document#3",
     "scripts/node-status.mjs:prev#1",
     "scripts/node-status.mjs:prev#2",
     "scripts/node-users-cutover.mjs:rendered#1",
-    "scripts/prove-job.mjs:outFile#1",
-    "scripts/service-inventory.mjs:merged#1",
-    "scripts/version-bump.mjs:patched#1",
-    "scripts/lib/floor-probe-state.mjs:ledgerPath#1"
+    "scripts/service-inventory.mjs:merged#1"
   ],
   "F5": [],
   "F7-pm2-hosts": [

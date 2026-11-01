@@ -1,0 +1,7 @@
+{
+  "scripts/lib/fleet-source.mjs:abs#1": "materialize() writes each shipped file into a TEMP directory and renames the whole DIRECTORY over the live one in one call (renameSync(tmp, root)); the per-file writeFileSync this key names is atomic at the directory level, one rename up, not at the individual file.",
+  "scripts/prove-job.mjs:outFile#1": "outFile is an operator-chosen --out path for a canary run's result, written once and read by whoever passed the flag; the risk this guard is for is a caller reading the file back through this package's own state contract, which --out is not.",
+  "scripts/join-workload-benchmark.mjs:report#1": "report is an operator-chosen --out path for the benchmark's report, same shape as prove-job's outFile above: a one-shot write to wherever the caller pointed, not a state file this package reads back.",
+  "scripts/lib/floor-probe-state.mjs:ledgerPath#1": "the probe ledger is an append-only JSONL log (appendFileSync, never rewritten in place), but its filename is built from an imported constant one hop away from this call site, which the one-writer detector (f3-one-writer.json) cannot trace back to this file — so the declared-append exemption above can't see it either.",
+  "scripts/version-bump.mjs:patched#1": "version-bump.mjs is the pre-commit hook: it must run before `pnpm run build` produces dist/, so it cannot call a helper that only exists as compiled output. It stays hand-rolled until writeFileAtomic (or an equivalent) ships as source the hook can import directly."
+}
