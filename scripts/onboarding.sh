@@ -46,6 +46,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/make-preseed.sh
 . "$HERE/lib/make-preseed.sh"
+. "$HERE/lib/onboarding-prompts.sh"
+. "$HERE/lib/onboarding-preflight.sh"
 # THE INVOKING USER'S HOME, not root's. This re-execs under sudo, after which
 # $HOME is /root: caching 755MB there means the operator cannot find it, cannot
 # clear it, and pays to fetch it again the first time anything runs
@@ -64,65 +66,6 @@ MNT_KIT=/mnt/fleet-onboard-clawkit
 B=$'\033[1m'; DIM=$'\033[2m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; N=$'\033[0m'
 
 say()  { printf '%s\n' "$*"; }
-# Bytes -> "755MB". Integer arithmetic only: this runs on a fresh Debian
-# netinstall where bc and python are not guaranteed to exist.
-fmt_mb() { [ "${1:-0}" -gt 0 ] 2>/dev/null && printf '%sMB' "$(( $1 / 1000000 ))" || printf '~755MB'; }
-
-# asksecret <prompt> - read without echoing. `ask` echoes, which is wrong for a
-# wifi PSK typed at a desk with someone else in the room, and wrong for anything
-# that ends up in a scrollback the operator later pastes into a chat window.
-asksecret() {
-	local prompt="$1" reply
-	[ -t 0 ] || die "onboarding is interactive and stdin is not a terminal."
-	read -r -s -p "   $prompt: " reply </dev/tty || die "cancelled"
-	printf '\n' >&2
-	printf '%s' "$reply"
-}
-
-# pick <keys> - read one of them, or enter for the first.
-#
-# It owns the WHOLE prompt, which `ask` does not: `ask` appends its own
-# "[default]", so a menu built on it rendered "Which profile? [ab] [a]:" — the
-# option list and the default, both in brackets, meaning two different things.
-# One function, one bracket convention, nothing to reconcile.
-pick() {
-	local keys="$1" prompt="$2" def="${3:-}" reply i k out=""
-	[ -n "$def" ] || def="$(printf '%s' "$keys" | cut -c1)"
-	i=1
-	while [ "$i" -le "${#keys}" ]; do
-		k="$(printf '%s' "$keys" | cut -c"$i")"
-		# THE DEFAULT IS UPPERCASE, not a second bracketed value.
-		#
-		# `ask` appends its own "[default]", so a yes/no built on it rendered
-		# "Preload wifi credentials? [no]:" — which the operator read as "no is
-		# the only option", and reasonably so. The option list and the default
-		# cannot both be brackets. Uppercase is how every other CLI says it.
-		# All lowercase. Case-marking the default was a third attempt at encoding
-		# two things in one bracket list, after "[ab] [a]" and "(a or b) [a]".
-		# It produced "[A] [b]", which reads as a typo rather than as meaning.
-		# The options are the options; enter takes the first.
-		out="$out[$k] "
-		i=$((i + 1))
-	done
-	[ -t 0 ] || die "onboarding is interactive and stdin is not a terminal. Run it from a shell."
-	while :; do
-		read -r -p "   $prompt ${out%% }: " reply </dev/tty || die "cancelled"
-		reply="$(printf '%s' "$reply" | tr 'A-Z' 'a-z')"
-		# People type the whole word. Rejecting "yes" at a prompt that shows
-		# [Y] [n] is technically consistent and practically obnoxious.
-		case "$reply" in
-		yes) reply=y ;;
-		no) reply=n ;;
-		esac
-		# Enter takes the first option. Never a destructive one — the erase is
-		# confirmed separately by retyping the device path.
-		[ -z "$reply" ] && { printf '%s' "$def"; return 0; }
-		case "$keys" in *"$reply"*)
-			[ "${#reply}" = 1 ] && { printf '%s' "$reply"; return 0; } ;;
-		esac
-		printf '   %s!%s pick one of: %s\n' "$Y" "$N" "$keys" >&2
-	done
-}
 step() { printf '\n%s━━ %s %s\n' "$B" "$*" "$N"; }
 note() { printf '   %s%s%s\n' "$DIM" "$*" "$N"; }
 ok()   { printf '   %s✓%s %s\n' "$G" "$N" "$*"; }
@@ -188,23 +131,6 @@ BANNER
 # absence sends someone installing packages they already have.
 step "1/9  Preflight — tools, Ventoy"
 
-have() {
-	command -v "$1" >/dev/null 2>&1 && return 0
-	for d in /usr/local/sbin /usr/sbin /sbin; do [ -x "$d/$1" ] && return 0; done
-	return 1
-}
-
-# tool -> the Debian package that provides it
-tool_pkg() {
-	case "$1" in
-	curl) echo curl ;;
-	sha256sum) echo coreutils ;;
-	lsblk | blkid | sfdisk) echo util-linux ;;
-	mkfs.ext4) echo e2fsprogs ;;
-	partprobe) echo parted ;;
-	*) echo "" ;;
-	esac
-}
 
 MISSING=""
 PKGS=""

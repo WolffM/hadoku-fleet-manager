@@ -46,8 +46,10 @@ const ALLOWED = {
 		'a log line printing who wrote the toolcache path; it decides nothing',
 	'literal:scripts/add-dvd.sh':
 		"the operator at hokon's own terminal (`SUDO_USER`), not a node role",
-	'literal:scripts/node-usb-prep.sh':
-		"the operator at hokon's own terminal (`SUDO_USER`), not a node role",
+	'literal:scripts/lib/usb-prep-site.sh':
+		"the operator at hokon's own terminal (`SUDO_USER`), not a node role (wave 5t lane A " +
+		'pure-move split of node-usb-prep.sh: the SUDO_USER/id -un line that carried this ' +
+		'exemption moved here)',
 	'literal:scripts/onboarding.sh':
 		"the operator at hokon's own terminal (`SUDO_USER`), not a node role",
 	'literal:scripts/refresh-preseed.sh':

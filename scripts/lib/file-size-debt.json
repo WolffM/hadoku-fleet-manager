@@ -12,8 +12,6 @@
   "scripts/lib/toolchain-floor.mjs": 981,
   "scripts/lib/toolchain-floor.test.mjs": 1482,
   "scripts/node-bootstrap.sh": 2700,
-  "scripts/node-usb-prep.sh": 1124,
-  "scripts/onboarding.sh": 814,
   "scripts/runners-slice-install.sh": 986,
   "scripts/service-inventory.mjs": 977
 }

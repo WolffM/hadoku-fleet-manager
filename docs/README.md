@@ -17,6 +17,8 @@
   over.
 - [`herdr.md`](herdr.md) — the `hadoku.fleet` and `hadoku.sessions` herdr
   plugins.
+- [`usb-stick.md`](usb-stick.md) — the onboarding USB stick's layout and why it is
+  Ventoy, ext4 and two-stage; `scripts/node-usb-prep.sh` builds it.
 - [`spare-parts.md`](spare-parts.md) — the hardware shelf and what the fleet
   measurably needs; the shelf half lives in the private repo.
 - [`runbooks/`](runbooks/) — one file per onboarding scenario (plan §5.3):

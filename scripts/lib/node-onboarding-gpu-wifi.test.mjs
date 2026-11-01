@@ -65,6 +65,24 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BOOTSTRAP = resolve(ROOT, 'scripts', 'node-bootstrap.sh');
 const PROFILES = resolve(ROOT, 'manifests', 'node-profiles.json');
 
+/**
+ * node-usb-prep.sh split into scripts/lib/usb-prep-*.sh siblings (wave 5t
+ * lane A, pure move): die/say/resolve_site_facts/netaddr/write_site_env/etc.
+ * now live in those files, sourced by node-usb-prep.sh at the same point its
+ * pre-existing sources (usb-device-guard.sh, stick-stamp.sh, make-preseed.sh)
+ * already were. Every assertion below is textual/ordering, over "the script
+ * as it actually runs" — so each `. "$HERE/lib/X.sh"` line is inlined at its
+ * own position rather than reading node-usb-prep.sh alone, which would now
+ * see only the functions that stayed behind.
+ */
+function inlineSources(mainPath) {
+	const dir = dirname(mainPath);
+	const src = readFileSync(mainPath, 'utf8');
+	return src.replace(/^\. "\$HERE\/lib\/([a-z0-9-]+\.sh)"\n/gm, (_, name) =>
+		readFileSync(resolve(dir, 'lib', name), 'utf8')
+	);
+}
+
 const code = blankShellComments(readFileSync(BOOTSTRAP, 'utf8'));
 const profiles = JSON.parse(readFileSync(PROFILES, 'utf8')).profiles;
 
@@ -294,9 +312,7 @@ test('a declared wireless fallback that did not converge makes the node UNREADY'
  * These assert the contract between the two halves, because they live in
  * different scripts and nothing else connects them.
  */
-const usbPrep = blankShellComments(
-	readFileSync(resolve(ROOT, 'scripts', 'node-usb-prep.sh'), 'utf8')
-);
+const usbPrep = blankShellComments(inlineSources(resolve(ROOT, 'scripts', 'node-usb-prep.sh')));
 const convert = blankShellComments(readFileSync(resolve(ROOT, 'scripts', 'convert.sh'), 'utf8'));
 
 test('usb-prep writes site.env, and convert.sh reads it', () => {
