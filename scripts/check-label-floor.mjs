@@ -51,6 +51,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
+import { loadManifest } from './lib/fleet-exec.mjs';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { writeFileAtomic } from '../dist/lib/atomic-json.js';
 import { hubRepoFull } from '../dist/lib/fleet-config.js';
@@ -135,7 +136,6 @@ const log = emitter.log;
 const gateFindings = [];
 const gateUnreadable = [];
 
-const MANIFEST = manifestFile('fleet-runner-manifest.json');
 const COVERAGE = manifestFile('fleet-runner-coverage.json');
 
 /**
@@ -145,7 +145,7 @@ const COVERAGE = manifestFile('fleet-runner-coverage.json');
  */
 const isDemandLabel = isFloorDemandLabel;
 
-const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8'));
+const manifest = loadManifest();
 
 /**
  * Which nodes hold `hadoku-builder` and WHY (which capabilities proved) —

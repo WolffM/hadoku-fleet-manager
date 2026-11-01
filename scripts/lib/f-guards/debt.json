@@ -1,10 +1,5 @@
 {
-  "F1": [
-    "scripts/check-label-floor.mjs:MANIFEST#1",
-    "scripts/lib/benchmark-inventory.mjs:doc#1",
-    "scripts/node-users-cutover.mjs:MANIFEST#1",
-    "scripts/node-users-cutover.mjs:p#2"
-  ],
+  "F1": ["scripts/node-users-cutover.mjs:MANIFEST#1", "scripts/node-users-cutover.mjs:p#2"],
   "F3-write-then-rename": [
     "scripts/hosting-converge.mjs:p#1",
     "scripts/lib/fleet-source.mjs:abs#1",
@@ -34,37 +29,13 @@
     "scripts/lib/collect-offers.mjs:pm2Peers#1",
     "scripts/lib/service-tunnels.mjs:read#1"
   ],
-  "F7-child-apps": [
-    "scripts/lib/service-tunnels.mjs:read#1",
-    "scripts/lib/reconcile-apply.mjs:reg#1"
-  ],
-  "F8-has": [
-    "scripts/benchmark-fleet.mjs:args#1",
-    "scripts/enroll-node.mjs:args#1",
-    "scripts/hosting.mjs:tail#1",
-    "scripts/reconcile-fleet-runners.mjs:args#1",
-    "scripts/reconcile-runner-identity.mjs:args#1"
-  ],
-  "F8-valueOf": [
-    "scripts/benchmark-fleet.mjs:log#1",
-    "scripts/enroll-node.mjs:has#1",
-    "scripts/hosting-demand.mjs:app#1",
-    "scripts/hosting.mjs:has#1",
-    "scripts/reconcile-fleet-runners.mjs:has#1"
-  ],
-  "F8-flag": [
-    "scripts/backfill-failed-steps.mjs:line38#1",
-    "scripts/collect-job-metrics.mjs:out#1",
-    "scripts/floor-probe.mjs:log#1",
-    "scripts/join-workload-benchmark.mjs:out#1",
-    "scripts/prove-job.mjs:VALUE_FLAGS#1"
-  ],
+  "F7-child-apps": ["scripts/lib/service-tunnels.mjs:read#1"],
+  "F8-has": ["scripts/hosting.mjs:tail#1"],
+  "F8-valueOf": ["scripts/hosting-demand.mjs:app#1", "scripts/hosting.mjs:has#1"],
+  "F8-flag": [],
   "F10-errText": [],
   "F10-ansi": [],
-  "F12-repage-ms": [
-    "src/claw-reboot.ts:repage-constant#1",
-    "src/hosting-converge.ts:repage-constant#1"
-  ],
+  "F12-repage-ms": ["src/hosting-converge.ts:repage-constant#1"],
   "F12-page-ledger": [],
-  "F13-hosted-label": ["src/label-floor.ts:HOSTED_PREFIX#2", "src/label-floor.ts:HOSTED_RE#1"]
+  "F13-hosted-label": []
 }

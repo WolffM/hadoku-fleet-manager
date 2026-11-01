@@ -74,6 +74,8 @@ import process from 'node:process';
 import { loadManifest, runOnSync, selectMachines } from './lib/fleet-exec.mjs';
 import { stateDir } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 // job-history's window, BUILT — the same import `collect-job-metrics` makes, so
 // the two commands read the same rows from every node.
 import { RETENTION_DAYS } from '../dist/job-history-store.js';
@@ -92,51 +94,27 @@ import {
 import { isBackstopNode } from '../dist/lib/node-role.js';
 import { measuredFacets } from '../dist/lib/measured.js';
 
+// F8 (plan §4.1): strict, from the one spec argv-specs.mjs declares. The
+// SUBCOMMAND, not the script — `src/cli.ts` spells this `benchmark-join`; the
+// usage text used to carry the filename, which is an implementation detail
+// of the package layout nobody could type.
+const parsed = parseStrict(ARGV_SPECS['join-workload-benchmark.mjs'], process.argv.slice(2));
 const out = createEmitter();
 
-if (process.argv.includes('--help') || process.argv.includes('-h')) {
-	console.log(
-		// THE SUBCOMMAND, NOT THE SCRIPT. `src/cli.ts` spells this `benchmark-join`;
-		// the file is `join-workload-benchmark.mjs` and the usage line carried the
-		// filename, so the one command `--help` exists to teach was one nobody could
-		// type. The script name is an implementation detail of the package layout.
-		`fleet benchmark-join — P2.4: benchmark x job-metrics x job-history\n\n` +
-			`  --json                    machine-readable\n` +
-			`  --min-nodes <n>           a unit must have this many QUALIFYING nodes to be\n` +
-			`                            compared across nodes (default 2)\n` +
-			`  --min-runs-per-node <n>   a node needs this many runs of a unit before its\n` +
-			`                            median counts toward Q1 (default 3) -- 1-2 runs is\n` +
-			`                            a single sample wearing a node's name, not a trend\n` +
-			`  --min-runs <n>            a (node, repo) cell needs this many rows before it\n` +
-			`                            enters the node x repo table (default 5)\n` +
-			`  --min-groups <n>          a repo needs this many nodes (and a node this many\n` +
-			`                            repos) before it can answer the variance question\n` +
-			`                            (default 3)\n` +
-			`  --write <path>            also save the JSON report to <path>\n\n` +
-			`Read-only. See the file header for what each of the three questions means\n` +
-			`and the CAVEAT on question 2 before quoting a number out of this report.\n`
-	);
-	process.exit(0);
-}
-
-function flag(name, fallback = null) {
-	const i = process.argv.indexOf(name);
-	return i >= 0 ? process.argv[i + 1] : fallback;
-}
-const MIN_NODES = Number(flag('--min-nodes', '2')) || 2;
+const MIN_NODES = Number(parsed.value('--min-nodes') ?? '2') || 2;
 // A node with 1-2 runs on a unit can only report a single sample as its
 // "median" — noise, not a node effect. A single off-trend run (e.g. a
 // dispatch-redeploy that actually had something to redeploy, against fourteen
 // that no-opped) then reads as "this node uses 10x the memory", which is a
 // workload fact wearing a node's name. Requiring several runs per node before
 // it counts toward Q1 is what tells the two apart.
-const MIN_RUNS_PER_NODE = Number(flag('--min-runs-per-node', '3')) || 3;
+const MIN_RUNS_PER_NODE = Number(parsed.value('--min-runs-per-node') ?? '3') || 3;
 // The (node, repo) cell floor. Higher than MIN_RUNS_PER_NODE on purpose: a cell
 // aggregates every job in a repo, so five rows is a low bar for it and three
 // would be a low bar only for a single unit.
-const MIN_RUNS = Number(flag('--min-runs', '5')) || 5;
-const MIN_GROUPS = Number(flag('--min-groups', '3')) || 3;
-const WRITE = flag('--write');
+const MIN_RUNS = Number(parsed.value('--min-runs') ?? '5') || 5;
+const MIN_GROUPS = Number(parsed.value('--min-groups') ?? '3') || 3;
+const WRITE = parsed.value('--write');
 
 /**
  * `owner/name` -> `name`, for the table only — the report keeps the full name.

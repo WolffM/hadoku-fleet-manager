@@ -126,6 +126,8 @@ import { BUILDER_LABEL } from '../dist/lib/capability-registry.js';
 import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import { FAST_LOOP_SECONDS, RECONCILE_EVERY_TICKS } from '../dist/fleet-loop.js';
 import { createEmitter } from './lib/emit.mjs';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 import { checkGhReserve } from './lib/gh-reserve.mjs';
 import { useAppPool } from './lib/gh-app.mjs';
 import { offeredLabels, listRunners } from './lib/reconcile-apply.mjs';
@@ -211,28 +213,26 @@ const clawOfRunner = (name) => {
 };
 
 const args = process.argv.slice(2);
-const has = (f) => args.includes(f);
-const valueOf = (f) => {
-	const i = args.indexOf(f);
-	return i === -1 ? null : args[i + 1];
-};
+// F8 (plan §4.1): strict, from the one spec argv-specs.mjs declares.
+const cli = parseStrict(ARGV_SPECS['reconcile-fleet-runners.mjs'], args);
+const hasFlag = cli.has;
 
-const CONFIRM = has('--confirm');
-const REMOVE_ORPHANS = has('--remove-orphans');
+const CONFIRM = hasFlag('--confirm');
+const REMOVE_ORPHANS = hasFlag('--remove-orphans');
 // Distinct from --remove-orphans on purpose. An ORPHAN is a whole repo that
 // retired, so every one of its runners should go. An EXCLUDED pair is a repo
 // that is still live and still wanted elsewhere — only this one node should
 // stop carrying it. Folding them together would make `excludeRepos` able to
 // take a repo's CI away entirely, which is the opposite of what it means.
-const REMOVE_EXCLUDED = has('--remove-excluded');
-const JSON_OUT = has('--json');
-const ONLY_REPO = valueOf('--repo');
-const WRITE_COVERAGE = has('--write-coverage');
-const CHECK_COVERAGE = has('--check-coverage');
+const REMOVE_EXCLUDED = hasFlag('--remove-excluded');
+const JSON_OUT = hasFlag('--json');
+const ONLY_REPO = cli.value('--repo');
+const WRITE_COVERAGE = hasFlag('--write-coverage');
+const CHECK_COVERAGE = hasFlag('--check-coverage');
 // #84 part 2: a deliberate shrink (a repo archived or dropped from the
 // manifest) is real; refusing it forever would make the generator unable to
 // ever record a genuine retirement.
-const ALLOW_SHRINK = has('--allow-shrink');
+const ALLOW_SHRINK = hasFlag('--allow-shrink');
 
 // One stdout discipline, shared — see lib/emit.mjs. `emit` is the ONLY write
 // to stdout below, which is what makes "print before the JSON" unreachable

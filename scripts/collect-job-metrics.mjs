@@ -55,6 +55,8 @@ import process from 'node:process';
 import { loadManifest, runOnSync, selectMachines, machineArg } from './lib/fleet-exec.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 // The window is job-history's, BUILT, for the same reason `floor-probe.mjs`
 // reads it from there: a row older than job-history keeps has nothing left to
 // join to, and a second spelling of 14 here would be free to drift from it.
@@ -71,34 +73,21 @@ import {
 	perNodeWithReads,
 } from './lib/job-metrics.mjs';
 
+// F8 (plan §4.1): strict, from the one spec argv-specs.mjs declares. The
+// spec's usage carries a `{RETENTION_DAYS}` placeholder — see job-rollups.mjs's
+// matching `{SETTLE_HOURS}` note on why a pure data module does not import a
+// build artifact just to interpolate one constant into its own help text.
+const SPEC = {
+	...ARGV_SPECS['collect-job-metrics.mjs'],
+	usage: ARGV_SPECS['collect-job-metrics.mjs'].usage.replace(
+		'{RETENTION_DAYS}',
+		String(RETENTION_DAYS)
+	),
+};
+const parsed = parseStrict(SPEC, process.argv.slice(2));
 const out = createEmitter();
 
-if (process.argv.includes('--help') || process.argv.includes('-h')) {
-	console.log(
-		`fleet job-metrics — what each job COST, joined to job history\n\n` +
-			`  --json            machine-readable\n` +
-			`  --machine <n>     one node only\n` +
-			`  --min-runs <n>    units with at least n runs (default 2)\n\n` +
-			`Reads ~/.hadoku/job-metrics.jsonl (and its one rotated .1) from every\n` +
-			`node, ONLY the rows inside job-history's ${RETENTION_DAYS}-day window — written by the\n` +
-			`ACTIONS_RUNNER_HOOK_JOB_COMPLETED hook from the kernel's memory.peak,\n` +
-			`cpu.stat, io.stat and memory.stat — and joins it to\n` +
-			`~/.hadoku-mgmt/job-history.jsonl for wall-clock.\n\n` +
-			`Every facet prints its SAMPLE COUNT beside its percentiles: io.stat is\n` +
-			`absent on some cgroup layouts and the tmpfs counters only exist on rows\n` +
-			`written by a newer hook, so a p95 over 4 of 500 rows must not read as the\n` +
-			`node's p95. A null percentile beside n=0 is "nobody measured it".\n\n` +
-			`If every node reports 0 rows, the hook is not installed: run\n` +
-			`  fleet throttle --confirm --machine <node>\n`
-	);
-	process.exit(0);
-}
-
-function flag(name, fallback = null) {
-	const i = process.argv.indexOf(name);
-	return i >= 0 ? process.argv[i + 1] : fallback;
-}
-const minRuns = Number(flag('--min-runs', '2')) || 2;
+const minRuns = Number(parsed.value('--min-runs') ?? '2') || 2;
 
 /** "p50/p95", or "-" when the facet had no samples at all. Never a fabricated 0. */
 function fmtPair(p50, p95) {

@@ -91,6 +91,8 @@ import {
 import { loadManifest, manifestPath } from './lib/fleet-exec.mjs';
 import { writeSshConfig } from './lib/enroll-ssh.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 import { obtainRecordText, probeNode } from './lib/enroll-record-source.mjs';
 import { compareHardware } from './lib/enroll-hardware-compare.mjs';
 import { printAddressing, probeAddressing } from './lib/enroll-addressing.mjs';
@@ -106,41 +108,18 @@ import { bringUpTailscale } from './lib/enroll-tailscale.mjs';
 keepStdoutWhole();
 
 const args = process.argv.slice(2);
-const has = (f) => args.includes(f);
-const valueOf = (f) => {
-	const i = args.indexOf(f);
-	return i === -1 ? null : (args[i + 1] ?? null);
-};
+// F8 (plan §4.1): strict, from the one spec argv-specs.mjs declares. Named
+// `cli`, not `parsed` — `parsed` below is this file's own ENROLLMENT RECORD
+// (`parseEnrollmentRecord`'s result), an unrelated and pre-existing name.
+const cli = parseStrict(ARGV_SPECS['enroll-node.mjs'], args);
+const hasFlag = cli.has;
+const flagValue = cli.value;
 
-if (has('--help') || has('-h')) {
-	console.log(
-		[
-			'fleet enroll <node> [--write|--update] [--json]',
-			'fleet enroll --file <capture> [--json]',
-			'fleet enroll --stdin [--json]',
-			'',
-			'  <node>      ssh target. Reads the record from its newest bootstrap log and',
-			'              RE-MEASURES the box over the same connection.',
-			'  --write     commit a NEW node to the manifest. Without it, nothing is written',
-			'              and the exit status is 1 — declaration is a human act.',
-			'  --update    refresh only the MEASURED fields of a node already declared.',
-			'              Never touches labels, capacity, excludeRepos or any $why.',
-			'  --hardware-changed memTotalKb|cores --reason "<why>"',
-			'              with --update: accept a KNOWN hardware change in that field',
-			'              (a RAM upgrade) instead of refusing it; recorded in $measured.',
-			'  --file      a saved capture. No re-probe is possible, and it says so.',
-			'  --stdin     read the capture from stdin.',
-			'  --json      machine-readable result.',
-		].join('\n')
-	);
-	process.exit(0);
-}
-
-const JSON_OUT = has('--json');
-const WRITE = has('--write');
+const JSON_OUT = hasFlag('--json');
+const WRITE = hasFlag('--write');
 // STOP AT THE COMMIT — see `lib/manifest-target.mjs`. A test of a writer that
 // pushes is a test that mutates a real repository.
-const NO_PUSH = has('--no-push');
+const NO_PUSH = hasFlag('--no-push');
 // `--address` EXISTS BECAUSE THE SSH WRITER CANNOT BOOTSTRAP ITSELF.
 //
 // Enrolment reads the node's record over ssh BY NAME, so `ssh claw-8` has to
@@ -155,7 +134,7 @@ const NO_PUSH = has('--no-push');
 const ADDRESS = process.argv.includes('--address')
 	? process.argv[process.argv.indexOf('--address') + 1]
 	: null;
-const UPDATE = has('--update');
+const UPDATE = hasFlag('--update');
 /**
  * A KNOWN HARDWARE CHANGE, acknowledged by name. MemTotal is fixed hardware
  * between bootstrap and enroll, and a mismatch is fatal because the failure it
@@ -167,14 +146,14 @@ const UPDATE = has('--update');
  * `$measured.hardwareChanges`. hostname never qualifies: a new name is a new
  * node (node names are immutable). Not a --force: it names what changed.
  */
-const HARDWARE_CHANGED = (valueOf('--hardware-changed') ?? '')
+const HARDWARE_CHANGED = (flagValue('--hardware-changed') ?? '')
 	.split(',')
 	.map((x) => x.trim())
 	.filter(Boolean);
-const HARDWARE_REASON = valueOf('--reason');
+const HARDWARE_REASON = flagValue('--reason');
 const HARDWARE_FIELDS = ['memTotalKb', 'cores'];
-const FILE = valueOf('--file');
-const STDIN = has('--stdin');
+const FILE = flagValue('--file');
+const STDIN = hasFlag('--stdin');
 // THE NODE NAME IS A POSITIONAL HERE, and that is enrolment's one deliberate
 // exception: the node is not in the manifest yet, so `--machine` — which every
 // other subcommand uses and which machineArg validates against the manifest —
@@ -184,13 +163,17 @@ const STDIN = has('--stdin');
 // takes one: `fleet enroll --address 1.2.3.4 claw-8` would enrol a node called
 // "1.2.3.4". The values of known value-flags are skipped, which is what
 // `unconsumedArgs` does for every other command.
-const VALUE_FLAGS = new Set(['--address', '--file', '--hardware-changed', '--reason']);
+// `--machine <node>` is accepted as the same name, since every other
+// subcommand spells it that way.
+const VALUE_FLAGS = new Set(['--address', '--file', '--hardware-changed', '--reason', '--machine']);
 const NODE =
+	flagValue('--machine') ??
 	args.find((a, i) => {
 		if (a.startsWith('--') || a === FILE) return false;
 		const prev = args[i - 1];
 		return !(prev && VALUE_FLAGS.has(prev));
-	}) ?? null;
+	}) ??
+	null;
 
 const out = [];
 const log = (m) => (JSON_OUT ? out.push(m) : console.log(m));

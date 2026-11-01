@@ -101,6 +101,8 @@ import process from 'node:process';
 import { manifestDir, stateDir, siteRoot } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { isBackstopNode } from '../dist/lib/node-role.js';
@@ -157,14 +159,27 @@ installHost({
 });
 
 const argv = process.argv.slice(2);
+// F8 (plan §4.1): strict, from the one spec argv-specs.mjs declares — this is
+// the UNION of every mode's flags (`MODE_FLAGS` in lib/floor-probe.mjs is the
+// per-mode authority; `foreignFlags` below still refuses a flag given to the
+// wrong mode, by name). This layer only catches a flag no mode knows at all.
+const parsed = parseStrict(ARGV_SPECS['floor-probe.mjs'], argv);
 const JSON_OUT = argv.includes('--json');
 const CONFIRM = argv.includes('--confirm');
 const emitter = createEmitter({ json: JSON_OUT });
 const log = emitter.log;
 
-const flag = (name, fallback = null) => {
-	const i = argv.indexOf(`--${name}`);
-	return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : fallback;
+/**
+ * `ctx.flag` (unchanged name/signature — every `lib/floor-probe-mode-*.mjs`
+ * reads it off `ctx` by this name): `name` without its leading `--`, reading
+ * through the shared parser's `value()` rather than re-walking `argv` here.
+ * The guard against swallowing the NEXT FLAG as a value — `report --days
+ * --repo x` must read `--days` as ABSENT, not as the literal string
+ * `--repo` — has no equivalent in `parsed.value`, so it stays local.
+ */
+const readFlag = (name, fallback = null) => {
+	const v = parsed.value(`--${name}`);
+	return v !== null && !v.startsWith('--') ? v : fallback;
 };
 
 /**
@@ -303,7 +318,7 @@ const mintLabelsForNode = (node) => mintLabelsFor(node, machines, workloadGate);
 // reverse import (see the header's SPLIT ACROSS FILES note, and the
 // bootcamp.mjs/check-label-floor.mjs precedent this follows).
 const ctx = {
-	flag,
+	flag: readFlag,
 	argv,
 	fail,
 	CONFIRM,

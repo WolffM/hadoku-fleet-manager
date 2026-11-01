@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stripYamlComments } from './yaml-comments.mjs';
 import { runnerVarForm } from './runner-var.mjs';
 import { runFleetScript } from './run-fleet-script.mjs';
-import { siteRoot, stateDir } from './paths.mjs';
+import { stateDir } from './paths.mjs';
+import { readChildApps } from './site-docs.mjs';
 import { readRevocations, revokedSets } from '../../dist/capability-revocations.js';
 import { registrationLabels } from '../../dist/lib/capability-offer.js';
 import {
@@ -358,7 +358,11 @@ export const MAX_PKG_READS = 64;
  */
 export function loadMountedApps() {
 	try {
-		const reg = JSON.parse(readFileSync(join(siteRoot(), 'scripts', 'child-apps.json'), 'utf8'));
+		// F7 (plan §4.1): `readChildApps` replaces the hand-rolled
+		// `join(siteRoot(), 'scripts', 'child-apps.json')` + `readFileSync` pair.
+		const kids = readChildApps();
+		if (!kids.ok) throw new Error(kids.why);
+		const reg = kids.doc;
 		return {
 			// MOUNTED means "in the MF registry", and `includeInRegistry: false`
 			// is the line hadoku_site's generate-registry.mjs draws — the same

@@ -45,6 +45,7 @@ import {
 	computeFirstDelayMs,
 	createOverlapGuard,
 	createPager,
+	DAY_MS as REPAGE_MS,
 	finishTick,
 	hours,
 	scheduleRepeating,
@@ -59,8 +60,13 @@ export const CLAW_REBOOT_MS = 60 * 60_000;
 export const FIRST_PASS_MIN_MS = 5 * 60_000;
 /** The cycle not reporting pages after this long. */
 export const FAIL_PAGE_MS = 6 * 60 * 60_000;
-/** A held node that stays held pages again after this long. */
-export const REPAGE_MS = 24 * 60 * 60_000;
+/**
+ * A held node that stays held pages again after this long —
+ * job-runner.ts's shared `DAY_MS`, imported under this module's own name
+ * (F12, plan §4.1). Re-exported, kept for `claw-reboot.test.ts`, which
+ * imports it by this name.
+ */
+export { REPAGE_MS };
 /**
  * Longest pass: a hosting node's 15-minute notice, a 45-minute idle wait, a
  * 12-minute boot window, a 6-minute services window and the re-prove, with

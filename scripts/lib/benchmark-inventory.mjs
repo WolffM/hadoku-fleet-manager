@@ -1,13 +1,11 @@
-import { readFileSync } from 'node:fs';
-import { manifest } from './paths.mjs';
+import { loadManifest } from './fleet-exec.mjs';
 import { measuredFacets } from '../../dist/lib/measured.js';
 
 /** "Twice a year" cadence, unchanged — the `never`/`stale` coverage bands. */
 const STALE_DAYS = 200;
 
 export function fleetMachines() {
-	const doc = JSON.parse(readFileSync(manifest('fleet-runner-manifest.json'), 'utf8'));
-	return doc.machines ?? {};
+	return loadManifest().machines ?? {};
 }
 
 export function fleetNodes() {

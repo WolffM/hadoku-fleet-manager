@@ -61,6 +61,8 @@ import { writeFileSync } from 'node:fs';
 import process from 'node:process';
 
 import { loadManifest, runOn, unconsumedArgs } from './lib/fleet-exec.mjs';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 import { manifestDir, stateDir } from './lib/paths.mjs';
 import { readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
@@ -99,12 +101,20 @@ const VALUE_FLAGS = [
 	'--timeout-min',
 	'--out',
 ];
-const flag = (name) => {
+/**
+ * F8 (plan §4.1): the `=value` form read verbatim (so the swallow-guard below
+ * — a value may never be the NEXT FLAG, `--ref --evidence x` must read `--ref`
+ * as absent rather than as the literal string `--evidence` — applies only to
+ * the plain `--x value` form, exactly as before); the plain form reads
+ * through the shared parser's `value()` instead of a second `indexOf` walk.
+ * `allFlags` below is untouched: parseStrict's API answers only the first
+ * occurrence of a flag, and `--input` is repeatable.
+ */
+const readFlag = (name) => {
 	const eq = argv.find((a) => a.startsWith(`${name}=`));
 	if (eq !== undefined) return eq.slice(name.length + 1);
-	const i = argv.indexOf(name);
-	const v = argv[i + 1];
-	return i === -1 || v === undefined || v.startsWith('--') ? undefined : v;
+	const v = parsed.value(name);
+	return v !== null && !v.startsWith('--') ? v : undefined;
 };
 
 /** Every occurrence of `--flag <value>` / `--flag=value`, in order — `flag()` only ever returns the first. */
@@ -132,6 +142,12 @@ if (argv.includes('--help') || argv.includes('-h')) {
 	out.log('  Exit 0 only for a pass. See the header of scripts/prove-job.mjs for the flags.');
 	process.exit(0);
 }
+
+// F8 (plan §4.1): strict — an unknown flag now exits 2 instead of being
+// silently swallowed by `unconsumedArgs` below, which only ever caught a
+// stray POSITIONAL, never a flag-shaped typo. Never reaches its OWN --help
+// branch: the manual block above already exited on one.
+const parsed = parseStrict(ARGV_SPECS['prove-job.mjs'], argv);
 
 // AFTER --help, not before: installing the host resolves the manifest dir, which
 // THROWS when it is missing, so usage text was unreachable without a fleet.
@@ -161,18 +177,18 @@ function usage(message) {
 const stray = unconsumedArgs(argv, { valueFlags: VALUE_FLAGS });
 if (stray.length)
 	usage(`unrecognised argument(s): ${stray.join(' ')} (nodes are spelled --node <name>)`);
-const nodeName = flag('--node');
+const nodeName = readFlag('--node');
 if (!nodeName) usage('--node is required');
 
 const over = {
-	repo: flag('--repo'),
-	workflow: flag('--workflow'),
-	job: flag('--job'),
-	ref: flag('--ref'),
-	evidence: flag('--evidence'),
+	repo: readFlag('--repo'),
+	workflow: readFlag('--workflow'),
+	job: readFlag('--job'),
+	ref: readFlag('--ref'),
+	evidence: readFlag('--evidence'),
 };
 for (const k of Object.keys(over)) if (over[k] === undefined) delete over[k];
-const capabilityId = flag('--capability');
+const capabilityId = readFlag('--capability');
 let spec;
 if (capabilityId) {
 	const s = specFromCapability(capabilityId, { node: nodeName, ...over });
@@ -194,19 +210,19 @@ if (inputPairs.length) {
 	}
 	spec.inputs = inputs;
 }
-const override = flag('--labels-override');
+const override = readFlag('--labels-override');
 if (override)
 	spec.labelsOverride = override
 		.split(',')
 		.map((s) => s.trim())
 		.filter(Boolean);
-const attempts = flag('--attempts');
+const attempts = readFlag('--attempts');
 if (attempts !== undefined) {
 	if (!/^\d+$/.test(attempts) || Number(attempts) < 1)
 		usage(`--attempts must be a positive integer, got "${attempts}"`);
 	spec.maxAttempts = Number(attempts);
 }
-const timeoutMin = flag('--timeout-min');
+const timeoutMin = readFlag('--timeout-min');
 if (timeoutMin !== undefined) {
 	if (!/^\d+$/.test(timeoutMin) || Number(timeoutMin) < 1)
 		usage(`--timeout-min must be a positive integer, got "${timeoutMin}"`);
@@ -375,7 +391,7 @@ if (proofRecordError)
 const okFinal = result.ok && !recordError && !proofRecordError && !overBudget;
 result.ok = okFinal;
 
-const outFile = flag('--out');
+const outFile = readFlag('--out');
 if (outFile) {
 	try {
 		writeFileSync(outFile, `${JSON.stringify(result, null, 2)}\n`);

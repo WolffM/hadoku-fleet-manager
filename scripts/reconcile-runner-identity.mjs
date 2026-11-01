@@ -127,6 +127,8 @@ import { manifest as manifestFile } from './lib/paths.mjs';
 // copy for the reads/report they carry.
 import { READ_ATTEMPTS } from './lib/queue-health.mjs';
 import { createEmitter } from './lib/emit.mjs';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
 import { warmOrphanUnreadable } from './lib/warm-orphan-doc.mjs';
 import {
@@ -163,8 +165,9 @@ const COVERAGE = manifestFile('fleet-runner-coverage.json');
 const PROBE_SRC = resolve(__dirname, 'runner-identity-probe.sh');
 
 const args = process.argv.slice(2);
-const has = (f) => args.includes(f);
-const CONFIRM = has('--confirm');
+// F8 (plan §4.1): strict, from the one spec argv-specs.mjs declares.
+const parsed = parseStrict(ARGV_SPECS['reconcile-runner-identity.mjs'], args);
+const CONFIRM = parsed.has('--confirm');
 const JSON_OUT = emitter.json;
 // Via `machineArg`, not a private copy. The private copies had the same hole:
 // a bare positional was IGNORED, so `... claw-3` scoped to the whole fleet.

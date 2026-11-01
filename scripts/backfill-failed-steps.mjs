@@ -34,29 +34,15 @@
  * mgmt-api binds loopback only, so this must run ON the mgmt-api host.
  */
 import process from 'node:process';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 
-function flag(name, fallback = null) {
-	const i = process.argv.indexOf(name);
-	return i >= 0 ? process.argv[i + 1] : fallback;
-}
+// F8 (plan §4.1): strict, from the one spec argv-specs.mjs declares.
+const parsed = parseStrict(ARGV_SPECS['backfill-failed-steps.mjs'], process.argv.slice(2));
 
-if (process.argv.includes('--help') || process.argv.includes('-h')) {
-	console.log(
-		`fleet backfill-failed-steps — fill failedStep/failedPhase on existing failed\n` +
-			`job-history records, as far as GitHub still serves them.\n\n` +
-			`Runs INSIDE mgmt-api (POST /api/fleet/job-history/backfill) because that\n` +
-			`process is the only writer of job-history.jsonl and never re-reads it —\n` +
-			`a patch applied to the file is silently overwritten by its next compaction.\n\n` +
-			`  --max <n>          cap the gh calls this pass makes (default 2000)\n` +
-			`  --concurrency <n>  parallel job fetches, capped at 10 (default 5)\n` +
-			`  --base <url>       mgmt-api base (default http://127.0.0.1:4000)\n`
-	);
-	process.exit(0);
-}
-
-const MAX = Number(flag('--max', '2000')) || 2000;
-const CONCURRENCY = Number(flag('--concurrency', '5')) || 5;
-const BASE = (flag('--base', 'http://127.0.0.1:4000') ?? '').replace(/\/+$/, '');
+const MAX = Number(parsed.value('--max') ?? '2000') || 2000;
+const CONCURRENCY = Number(parsed.value('--concurrency') ?? '5') || 5;
+const BASE = (parsed.value('--base') ?? 'http://127.0.0.1:4000').replace(/\/+$/, '');
 
 const url = `${BASE}/api/fleet/job-history/backfill?max=${MAX}&concurrency=${CONCURRENCY}`;
 

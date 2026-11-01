@@ -62,15 +62,16 @@ import { nodeOffer } from './lib/capability-offer.js';
 import { revokedFor, type WorkloadGateContext } from './lib/workload-gate.js';
 import type { ManifestNode } from './lib/capability-registry.js';
 import { mintsJitRunners } from './lib/node-role.js';
+// F13: the hosted-OS regex halves live in `scripts/lib/demand-derive.mjs`
+// (`demand-derive.d.mts` types this `.mjs` import for `tsc`) rather than as a
+// second copy here — see that file's `HOSTED_RE` and `HOSTED_PREFIX_RE`.
+import { HOSTED_RE, HOSTED_PREFIX_RE as HOSTED_PREFIX } from '../scripts/lib/demand-derive.mjs';
 
 /** State-dir file `fleet label-floor` writes and runner-health reads: the static half of demand. */
 export const FLOOR_DEMAND_FILE = 'label-floor-demand.json';
 
 /** Implicit on every self-hosted registration. Compared case-insensitively. */
 const IMPLICIT = new Set(['self-hosted', 'linux', 'x64']);
-
-const HOSTED_RE = /ubuntu-latest|ubuntu-\d|windows-|macos-/;
-const HOSTED_PREFIX = /^(ubuntu|macos|windows)(-|$)/;
 
 /**
  * A GitHub-HOSTED image label, e.g. `ubuntu-latest`, `ubuntu-24.04`,

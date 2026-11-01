@@ -38,6 +38,8 @@ import { pathToFileURL } from 'node:url';
 import { measuredFacets, writeFacet } from '../dist/lib/measured.js';
 import { backstopNodeNames } from '../dist/lib/node-role.js';
 import { createEmitter } from './lib/emit.mjs';
+import { ARGV_SPECS } from './lib/argv-specs.mjs';
+import { parseStrict } from './lib/argv.mjs';
 import {
 	byHandFor,
 	cadenceBands,
@@ -284,66 +286,25 @@ async function runCadenceCli({ dueDays, jsonOut, passthru, force, refuseIf, log,
  */
 async function main() {
 	const args = process.argv.slice(2);
-	const has = (f) => args.includes(f);
-	// One stdout discipline, shared — see lib/emit.mjs. Created BEFORE the help
-	// block, which is itself a stdout write; the emitter reads process.argv and
-	// lets --help win over --json for exactly that reason.
+	// F8 (plan §4.1): strict, from the one spec argv-specs.mjs declares. The
+	// spec's usage carries a `{BY_HAND_FOR_30}` placeholder — see job-rollups.mjs's
+	// matching `{SETTLE_HOURS}` note on why a pure data module does not import a
+	// build artifact just to interpolate one line into its own help text.
+	const SPEC = {
+		...ARGV_SPECS['benchmark-fleet.mjs'],
+		usage: ARGV_SPECS['benchmark-fleet.mjs'].usage.replace('{BY_HAND_FOR_30}', byHandFor(30)),
+	};
+	const parsed = parseStrict(SPEC, args);
+	const hasFlag = parsed.has;
+	// One stdout discipline, shared — see lib/emit.mjs.
 	const emitter = createEmitter();
 	const log = emitter.log;
 
-	if (has('--help') || has('-h')) {
-		log(
-			[
-				'fleet benchmark [node...] [--quick] [--force] [--write] [--json]',
-				'fleet benchmark --due N --report [--json]   who is due; touches nothing',
-				'fleet benchmark --due N --cadence [--json]  measure the ONE most-overdue idle',
-				'                                             claw; drains, measures, writes, undrains',
-				'fleet scan <host...> [--quick] [--json]   any box, fleet member or not',
-				'',
-				'  no nodes    every machine in the fleet manifest',
-				'  --quick     skip the disk and network timings (inventory only)',
-				'  --force     benchmark even a node that is currently building',
-				'  --write     record each node in <stateDir>/benchmark.json and append a line',
-				'              to <stateDir>/benchmark.log. No commit: the state dir is no checkout.',
-				'  --from F    ingest a capture instead of running: sudo sh benchmark-node.sh > F',
-				'  --json      machine-readable output',
-				'  --due N     only nodes whose benchmark record is older than N days. A node',
-				'              with NO record — no state file, nothing in the manifest — is due.',
-				'  --max N     measure at most N nodes this run (bounds the load)',
-				'  --report    LIST the nodes due against --due and stop. No ssh, no load,',
-				'              no write. Needs --due; refuses --max and --write.',
-				'  --cadence   measure exactly ONE node this run: the most-overdue claw that is',
-				'              idle and not already held by someone else. Drains it the way',
-				'              `ci:toolchain-refresh` does, waits for it to go quiet, measures,',
-				'              writes, undrains — always, even if the measurement fails. Needs',
-				'              --due; refuses --report/--scan/--from/--max/a named node/--write',
-				'              (it always writes what it measures).',
-				'',
-				'  --due never selects the BACKSTOP: it is not ranked for routing, so its',
-				'  benchmark is never due. Exempt machines are reported in `skippedByRole`',
-				'  rather than dropped. Naming one positionally still measures it.',
-				'',
-				'It loads each box on purpose — thermals and throttling are only',
-				'observable under load — so it skips nodes running CI unless forced.',
-				'',
-				'The cadence runs nightly in the quiet hour (operator, 2026-10-04, reversing',
-				'the 2026-09-15 "no cron measures"): one node a night, so a batch measured',
-				'together never ages out together. A node still inside the lead window but',
-				'not picked this run is an ADVISORY; past the grace it is a FINDING. Catch up',
-				'on everything else by hand, on the mgmt-api host:',
-				`  ${byHandFor(30)}`,
-			].join('\n')
-		);
-		process.exit(0);
-	}
-
-	const valueOf = (f) => {
-		const i = args.indexOf(f);
-		return i === -1 ? null : (args[i + 1] ?? null);
-	};
-	const JSON_OUT = has('--json');
-	const WRITE = has('--write') && !has('--scan');
-	const passthru = [has('--quick') && '--quick', has('--force') && '--force'].filter(Boolean);
+	const JSON_OUT = hasFlag('--json');
+	const WRITE = hasFlag('--write') && !hasFlag('--scan');
+	const passthru = [hasFlag('--quick') && '--quick', hasFlag('--force') && '--force'].filter(
+		Boolean
+	);
 	// INGEST A CAPTURE THE OPERATOR TOOK BY HAND.
 	//
 	// hokon has no passwordless sudo (the claws do, deliberately) and its disk test
@@ -354,20 +315,16 @@ async function main() {
 	//
 	// Reuses parse() and inventoryEntry() rather than reimplementing the record
 	// shape, so an ingested node is indistinguishable from a measured one.
-	const fromIdx = args.indexOf('--from');
-	const FROM = fromIdx !== -1 ? args[fromIdx + 1] : null;
-	if (fromIdx !== -1 && !FROM) {
+	const FROM = parsed.value('--from');
+	if (hasFlag('--from') && !FROM) {
 		console.error('benchmark: --from needs a file path');
 		process.exit(2);
 	}
 	// EVERY FLAG THAT TAKES A VALUE HIDES A NODE-SHAPED ARGUMENT BEHIND IT, and the
 	// positional args ARE the node list, so each value must be excluded by index or
 	// it is read as a machine name. `--due 30` tried to ssh to a host called 30.
-	//
-	// A set rather than per-flag tests, because the per-flag form was already wrong
-	// once: `i !== fromIdx + 1` with no --from present is `i !== 0`, which silently
-	// dropped the FIRST node and turned a one-box run into a whole-fleet one. A new
-	// value-taking flag now only has to be named here.
+	// `parsed.positionals` (F8) is this exact exclusion, built once from the
+	// spec's own `valued` list rather than a second, hand-kept copy of it.
 	// SCAN IS THE SAME MEASUREMENT AIMED SOMEWHERE ELSE.
 	//
 	// `fleet scan <host>` answers "what is this machine" for a box that is not in
@@ -380,40 +337,34 @@ async function main() {
 	// never from the roster, and it refuses to write, because a machine that is not
 	// in the manifest has no row to update and one that IS should be measured by
 	// `benchmark` with its coverage and staleness rules applied.
-	const SCAN = has('--scan');
-	const VALUE_FLAGS = ['--from', '--due', '--max'];
-	const flagValueIdx = new Set();
-	for (const f of VALUE_FLAGS) {
-		const i = args.indexOf(f);
-		if (i !== -1) flagValueIdx.add(i + 1);
-	}
-	const named = args.filter((a, i) => !a.startsWith('--') && !flagValueIdx.has(i));
+	const SCAN = hasFlag('--scan');
+	const named = parsed.positionals;
 
 	if (SCAN && !named.length) {
 		console.error('scan: needs at least one host — fleet scan <host> [host...]');
 		process.exit(2);
 	}
-	const DUE_DAYS = valueOf('--due') === null ? null : Number(valueOf('--due'));
-	const MAX_NODES = valueOf('--max') === null ? null : Number(valueOf('--max'));
+	const DUE_DAYS = parsed.value('--due') === null ? null : Number(parsed.value('--due'));
+	const MAX_NODES = parsed.value('--max') === null ? null : Number(parsed.value('--max'));
 	if (DUE_DAYS !== null && !Number.isFinite(DUE_DAYS)) {
 		console.error('benchmark: --due needs a number of days');
 		process.exit(2);
 	}
 
-	const CADENCE = has('--cadence');
+	const CADENCE = hasFlag('--cadence');
 	if (CADENCE) {
 		await runCadenceCli({
 			dueDays: DUE_DAYS,
 			jsonOut: JSON_OUT,
 			passthru,
-			force: has('--force'),
+			force: hasFlag('--force'),
 			refuseIf: {
-				report: has('--report'),
+				report: hasFlag('--report'),
 				scan: SCAN,
 				from: FROM,
 				named,
 				max: MAX_NODES,
-				write: has('--write'),
+				write: hasFlag('--write'),
 			},
 			log,
 			emitter,
@@ -453,13 +404,13 @@ async function main() {
 	 * IT REQUIRES `--due`. "Due" is meaningless without a threshold, and defaulting
 	 * one would make the answer depend on a number nobody typed.
 	 */
-	const REPORT = has('--report');
+	const REPORT = hasFlag('--report');
 	if (REPORT) {
 		const refuse = (msg) => {
 			console.error(`benchmark: ${msg}`);
 			process.exit(2);
 		};
-		if (has('--write'))
+		if (hasFlag('--write'))
 			refuse(
 				'--report and --write are mutually exclusive. --report reads the stored ' +
 					'benchmark records and writes nothing; --write measures and records.'
@@ -677,7 +628,7 @@ async function main() {
 		const raw = {};
 		for (const [node, r] of Object.entries(results)) {
 			if (!machines[node]) continue;
-			const decided = decideRecord(node, r, { stored, force: has('--force') });
+			const decided = decideRecord(node, r, { stored, force: hasFlag('--force') });
 			if (!decided.ok) {
 				degraded.push({ node, lost: decided.lost, rooted: decided.rooted });
 				log(

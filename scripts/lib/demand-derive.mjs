@@ -19,6 +19,14 @@ import { normalizeEol } from './yaml-comments.mjs';
 export const HOSTED_RE = /ubuntu-latest|ubuntu-\d|windows-|macos-/;
 
 /**
+ * A bare `ubuntu`/`macos`/`windows` with no dash — `HOSTED_RE` alone misses
+ * this. `src/label-floor.ts`'s `isHostedLabel` (F13, the canonical hosted-
+ * label predicate) is the only importer; see `demand-derive.d.mts` for the
+ * types `src/label-floor.ts` reads this `.mjs` through.
+ */
+export const HOSTED_PREFIX_RE = /^(ubuntu|macos|windows)(-|$)/;
+
+/**
  * Split a workflow's (comment-stripped) body into its jobs.
  *
  * THE UNIT IS THE JOB (P2.2), not the whole file — `check-tool-inventory.mjs`'s
