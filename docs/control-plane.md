@@ -190,7 +190,7 @@ host is "the controller" at all — every `hostBound: true` job must keep
 running from wherever its own inputs physically live, independent of which
 box is currently driving the fleet's loops.
 
-`scripts/lib/json-contract.test.mjs` requires every entry to declare
+`scripts/lib/json-contract-declaration.test.mjs` requires every entry to declare
 `hostBound` as a literal boolean (present on a hypothetical new entry too,
 not just the current ones) and separately pins the three above by name, so
 flipping any one of them — or quietly dropping the field from a new entry —

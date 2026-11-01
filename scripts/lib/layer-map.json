@@ -1640,6 +1640,12 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/doctor-findings-thresholds.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
     "glob": "scripts/lib/doctor-fixtures.mjs",
     "layer": "domain",
     "domain": "observation",

@@ -228,7 +228,7 @@ code first would turn every real finding into "the checker broke".
 That table listed SIX of these ten until 2026-09-07 — `drain-check`,
 `benchmark`, `egress-slices` and `queue-health` were under contract and
 undocumented here — which is the third time a hand-kept copy of this list has
-been wrong. It is now GATED: `json-contract.test.mjs` parses this table out of
+been wrong. It is now GATED: `json-contract-declaration.test.mjs` parses this table out of
 this file and fails the build if it does not match `JSON_CONTRACT` exactly, in
 both directions. Do not edit it by hand without editing the declaration; the
 declaration is the source and this table is a rendering of it.

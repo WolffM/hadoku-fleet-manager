@@ -84,7 +84,8 @@ job-registry.ts`'s `JOB_REGISTRY` array. As: code author.
 3. **Confirm the derived contract picked it up.** Nothing to edit —
    `JSON_CONTRACT`/`PROSE_CONTRACT` in `scripts/lib/json-contract.mjs` are a
    pure function of `JOB_REGISTRY`.
-   Verify: `node --test scripts/lib/json-contract.test.mjs`.
+   Verify: `node --test scripts/lib/json-contract-declaration.test.mjs scripts/lib/json-contract-provenance.test.mjs scripts/lib/json-contract-benchmark.test.mjs`
+   (split off the `-declaration`/`-provenance`/`-benchmark` prefix, wave 5s lane B).
 
 4. **The mgmt-api wrapper (`hadoku_site`, not this repo).** Where: that
    checkout, `services/mgmt-api/src/routes/jobs/<name>.ts` — the exact path
@@ -166,8 +167,9 @@ job-registry.ts`'s `JOB_REGISTRY` array. As: code author.
 - `scripts/lib/job-registry-guard.test.mjs` — no gate/converger/recorder
   `COMMANDS` entry may exist without a `JOB_REGISTRY` row or a `MANUAL`
   reason; a `gate` may never carry a mutating flag.
-- `scripts/lib/json-contract.test.mjs` — the derived `JSON_CONTRACT`/
-  `PROSE_CONTRACT` lists track `JOB_REGISTRY`, not a frozen snapshot.
+- `scripts/lib/json-contract-declaration.test.mjs` (plus `-provenance.test.mjs`
+  and `-benchmark.test.mjs`) — the derived `JSON_CONTRACT`/`PROSE_CONTRACT`
+  lists track `JOB_REGISTRY`, not a frozen snapshot.
 - `fleet check-schedule` (this repo, reads `hadoku_site`'s
   `profiles.json`) — the cron actually declared matches what this registry
   says it needs.

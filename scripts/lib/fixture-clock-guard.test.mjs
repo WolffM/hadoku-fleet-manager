@@ -290,9 +290,11 @@ const DECLARED = new Map([
 			'`at` stamps are read against that, never against the real one.',
 	],
 	[
-		'scripts/lib/doctor-findings.test.mjs',
+		'scripts/lib/doctor-findings-classification.test.mjs',
 		'`doctorFindings(health, { nowMs })` takes its clock; the test pins NOW and the ' +
-			'`at` stamps are read against that, never against the real one.',
+			'`at` stamps are read against that, never against the real one. (Split off ' +
+			'`doctor-findings.test.mjs`, wave 5s lane B — this file carries the one test ' +
+			'with an absolute date.)',
 	],
 	[
 		'scripts/lib/drain-enforcement.test.mjs',
