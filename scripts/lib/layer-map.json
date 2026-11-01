@@ -1,0 +1,1495 @@
+[
+  {
+    "glob": "src/runners/drain.ts",
+    "layer": "state",
+    "section": "\"One declared writer, read back by something else\" — rule 3 of §3.2 — regardless of which domain the record is about. Listed first because several of these sit under src/runners/, which a later glob also claims for ci-scheduling."
+  },
+  {
+    "glob": "src/runners/hosting-record.ts",
+    "layer": "state"
+  },
+  {
+    "glob": "src/runners/backstop-force.ts",
+    "layer": "state"
+  },
+  {
+    "glob": "src/runners/backstop-hold.ts",
+    "layer": "state"
+  },
+  {
+    "glob": "src/runners/backstop-machines.ts",
+    "layer": "state",
+    "why": "Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the manifest's machines, as the backstop reads them, with a test-seam override — read by `checkDiskWatch` (observation, stays in runner-health.ts) AND by the moved `runBackstopDecision` (ci-scheduling). Neither side may own the other's import, so this is the shared leaf both read from, same shape as its neighbours above."
+  },
+  {
+    "glob": "src/runners/capacity-ledger.ts",
+    "layer": "state"
+  },
+  {
+    "glob": "src/runners/dispatch-daily.ts",
+    "layer": "state"
+  },
+  {
+    "glob": "src/runners/schedulable.ts",
+    "layer": "state"
+  },
+  {
+    "glob": "src/runners/decision-log.ts",
+    "layer": "state"
+  },
+  {
+    "glob": "src/runners/warm-backoff.ts",
+    "layer": "state",
+    "why": "Wave 5g lane B split of ephemeral-tick.ts (plan §4.3 #3): the persisted warm-fill backoff streak, same \"one declared writer, read back by something else\" shape as its neighbours above."
+  },
+  {
+    "glob": "src/runners/stuck-runs.ts",
+    "layer": "state",
+    "why": "Wave 5i lane C split of dispatch-tick.ts (plan §4.3 #16): the announced-stuck book persisted to dispatch-stuck-announced.json — same \"one declared writer, read back by something else\" shape."
+  },
+  {
+    "glob": "src/capability-revocations.ts",
+    "layer": "state"
+  },
+  {
+    "glob": "src/lib/measured.ts",
+    "layer": "state"
+  },
+  {
+    "glob": "src/lib/sick-node.ts",
+    "layer": "state"
+  },
+  {
+    "glob": "src/job-history-store.ts",
+    "layer": "state",
+    "why": "Wave 5h lane C split of job-history.ts (plan §4.3 #5): the ledger store — the in-memory window, the probe ledger and the one writer of job-history.jsonl. job-history.ts itself is now a thin re-export barrel (see the domain/observation section below) kept only for runner-health.ts, not touched this wave."
+  },
+  {
+    "glob": "src/job-rollup-store.ts",
+    "layer": "state"
+  },
+  {
+    "glob": "src/job-run-store.ts",
+    "layer": "state",
+    "why": "Wave 5n lane C (plan §6.2/§7.3 T7): the job sink — one declared writer (job-run-store.ts itself, the only file that calls appendFileSync on its own day files), read back by job-runner.ts and emit.mjs through its exported functions, same \"state\" shape as its neighbours above."
+  },
+  {
+    "glob": "src/capacity-sample-store.ts",
+    "layer": "state",
+    "why": "Wave 5n lane B (plan §7.3, T4): one declared writer, read back by nothing yet but `capacity-sample.ts`'s own tests — same \"JSONL store behind a one-file module\" shape as job-rollup-store.ts right above."
+  },
+  {
+    "glob": "scripts/lib/enrollment-record.mjs",
+    "layer": "state"
+  },
+  {
+    "glob": "scripts/lib/job-proof-record.mjs",
+    "layer": "state"
+  },
+  {
+    "glob": "scripts/lib/floor-probe-state.mjs",
+    "layer": "state",
+    "why": "Wave 5k lane D split of floor-probe.mjs (plan §4.3 #12): the harness's own probe ledger, read and written in exactly these two functions — the same \"one declared writer, read back by something else\" shape as its neighbours here."
+  },
+  {
+    "glob": "scripts/lib/manifest-edit.mjs",
+    "layer": "state",
+    "why": "The transactional writer of fleet-runner-manifest.json (wave 5c F4). The \"one declared writer, read back by something else\" state pattern rule 3 describes — the same reason drain.ts/hosting-record.ts above are `state` rather than their directory's domain — not `access` like `manifest-target.mjs`: THAT file is the generic \"commit onto another system's repo\" mechanism (shared with benchmark/doctor/node-users-cutover), while this one is the domain-specific record of placement/capability facts every reader in `src/lib/manifest.ts` consumes."
+  },
+  {
+    "glob": "src/index.ts",
+    "layer": "composition"
+  },
+  {
+    "glob": "src/standalone.ts",
+    "layer": "composition"
+  },
+  {
+    "glob": "src/serve.ts",
+    "layer": "composition"
+  },
+  {
+    "glob": "src/cli.ts",
+    "layer": "surfaces"
+  },
+  {
+    "glob": "src/server.ts",
+    "layer": "surfaces"
+  },
+  {
+    "glob": "src/routes/fleet.ts",
+    "layer": "surfaces"
+  },
+  {
+    "glob": "src/capacity-sample.ts",
+    "layer": "surfaces",
+    "why": "Wave 5n lane B (plan §7.3, T4): joins `buildFleetReport()` — the SAME cross-domain assembly GET /fleet reads — into a telemetry row; it is `surfaces`, not `domain`/`observation`, for the identical reason routes/fleet.ts itself is: nothing below surfaces may import a ci-scheduling-domain fact, and this file needs exactly the ones routes/fleet.ts already assembled rather than re-deriving them."
+  },
+  {
+    "glob": "src/fleet-report-types.ts",
+    "layer": "surfaces"
+  },
+  {
+    "glob": "src/telemetry-vocabulary.ts",
+    "layer": "surfaces"
+  },
+  {
+    "glob": "scripts/lib/herdr-fleet.mjs",
+    "layer": "surfaces",
+    "section": "herdr/ plugin support: physically under scripts/lib, but it IS the surfaces-layer herdr door (plan §3.5: \"surfaces: … herdr/\")."
+  },
+  {
+    "glob": "scripts/lib/herdr-fleet-freshness.mjs",
+    "layer": "surfaces"
+  },
+  {
+    "glob": "scripts/lib/herdr-pm2.mjs",
+    "layer": "surfaces"
+  },
+  {
+    "glob": "src/scheduled-converger.ts",
+    "layer": "automation"
+  },
+  {
+    "glob": "src/claw-reboot.ts",
+    "layer": "automation"
+  },
+  {
+    "glob": "src/lib/job-runner.ts",
+    "layer": "automation",
+    "why": "The generic job runner (wave 5e lane B): the spawn-classify, pager ledger, schedule and job-sink primitives `scheduled-converger.ts` and `claw-reboot.ts` are both now thin configuration over."
+  },
+  {
+    "glob": "src/lib/concurrency.ts",
+    "layer": "automation"
+  },
+  {
+    "glob": "src/lib/liveness.ts",
+    "layer": "automation",
+    "why": "Wave 5e lane C: a generic, domain-blind tick ledger every control loop (ci-scheduling's dispatch/fast loop, observation's runner-health, lifecycle's claw-reboot) calls into — same \"cross-cutting mechanics\" shape as concurrency.ts beside it."
+  },
+  {
+    "glob": "src/lib/every.ts",
+    "layer": "automation",
+    "why": "Wave5j lane D (plan §6.2 tier 1): the one timer primitive the control loops (ci-scheduling's dispatch/fast loop, observation's runner-health) now share — domain-blind scheduling mechanics, same shape as liveness.ts beside it, which it calls into directly."
+  },
+  {
+    "glob": "src/lib/usage-log.ts",
+    "layer": "automation"
+  },
+  {
+    "glob": "src/lib/usage-store.ts",
+    "layer": "automation"
+  },
+  {
+    "glob": "src/lib/runner-health-shared.ts",
+    "layer": "automation",
+    "why": "Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the tick cadence and the hostname accessor, generic values both the checks that stay in runner-health.ts (observation) and the moved backstop-decision / hosted-fallback checks (ci-scheduling) call — the least-wrong flat layer for a domain-blind value neither side may own the other's import of, same reasoning as concurrency.ts/liveness.ts above."
+  },
+  {
+    "glob": "src/lib/alert-ledger.ts",
+    "layer": "automation",
+    "why": "Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the persisted alert-suppression ledger (`runner-health-alerts.json`), a thin wrapper over `job-runner.ts`'s `createPager` — same layer as its automation neighbours above, and the reason it cannot be `state`: it imports `createPager`/`HOUR_MS` from job-runner.ts (automation), and a `state` file may not import upward from automation. Read by checks that stay in runner-health.ts (observation) AND by the moved backstop decision and hosted-fallback checks (ci-scheduling), so it is the shared leaf both sides import."
+  },
+  {
+    "glob": "scripts/fleet-usage.mjs",
+    "layer": "automation"
+  },
+  {
+    "glob": "scripts/file-size-debt.mjs",
+    "layer": "automation",
+    "why": "Wave 5n lane D: the file-size ceiling guard's regenerator CLI — a generic, domain-blind maintenance tool over `file-size-guard.mjs` below, same bucket as `fleet-usage.mjs` right above it."
+  },
+  {
+    "glob": "scripts/lib/emit.mjs",
+    "layer": "automation"
+  },
+  {
+    "glob": "scripts/lib/gate-doc.mjs",
+    "layer": "automation",
+    "why": "Wave 5f lane B: the GateDoc shape builder — same \"generic, domain-blind, shared report-shape mechanics\" as emit.mjs right above it (one of the three report shapes plan §6.2 names: ConvergeDoc, GateDoc, RecordDoc)."
+  },
+  {
+    "glob": "scripts/lib/argv.mjs",
+    "layer": "automation"
+  },
+  {
+    "glob": "scripts/lib/term.mjs",
+    "layer": "automation",
+    "why": "F10: the ANSI palette + errText sweep (wave 5d lane B) — same \"generic, domain-blind, cross-cutting\" shape as argv.mjs beside it."
+  },
+  {
+    "glob": "scripts/lib/blank-comments.mjs",
+    "layer": "automation"
+  },
+  {
+    "glob": "scripts/lib/yaml-comments.mjs",
+    "layer": "automation"
+  },
+  {
+    "glob": "scripts/lib/stdin.mjs",
+    "layer": "automation"
+  },
+  {
+    "glob": "scripts/lib/test-git-identity.mjs",
+    "layer": "automation"
+  },
+  {
+    "glob": "scripts/lib/test-tmpdir.mjs",
+    "layer": "automation"
+  },
+  {
+    "glob": "scripts/lib/f-guards/*.mjs",
+    "layer": "automation",
+    "why": "Lane D's shared debt-list mechanics for the F-item guards: the same \"generic, domain-blind, cross-cutting\" shape as blank-comments.mjs."
+  },
+  {
+    "glob": "scripts/lib/file-size-guard.mjs",
+    "layer": "automation",
+    "why": "Wave 5n lane D: the file-size ceiling guard's size/debt-list mechanics (ceilings, `wc -l` counting, the ratchet rules). It has no opinion about any domain — it counts lines in files under src/scripts/herdr/deploy wholesale — so it is the same \"generic, domain-blind, cross-cutting\" shape as f-guards/*.mjs right above it."
+  },
+  {
+    "glob": "src/lib/node-identity.ts",
+    "layer": "access"
+  },
+  {
+    "glob": "src/lib/node-users.ts",
+    "layer": "access"
+  },
+  {
+    "glob": "src/lib/node-probe.ts",
+    "layer": "access"
+  },
+  {
+    "glob": "src/lib/dispatch-poll-cache.ts",
+    "layer": "access",
+    "why": "Wave 5i lane C split of dispatch-tick.ts (plan §4.3 #16, \"poll cache -> access\"): the ETag/disk-store bookkeeping with no domain-shaped payload (the cached response BODIES stay in dispatch-tick.ts — they are typed by QueuedRun/QueuedJob, a ci-scheduling domain type, and an access file importing a domain type is itself a cut (iii) violation)."
+  },
+  {
+    "glob": "src/node-shell.ts",
+    "layer": "access"
+  },
+  {
+    "glob": "src/gh-budget.ts",
+    "layer": "access"
+  },
+  {
+    "glob": "src/gh-budget-history-store.ts",
+    "layer": "access",
+    "why": "Wave 5n lane B (plan §7.3, T5): `gh-budget.ts`'s own history store, same \"access, not state\" reasoning as the comment on atomic-json.ts below — `gh-budget.ts` is itself `access`, not `state`, and access importing state is the illegal direction, so this stays beside it rather than beside job-rollup-store.ts above."
+  },
+  {
+    "glob": "src/conditional-cache-store.ts",
+    "layer": "access"
+  },
+  {
+    "glob": "src/lib/github-client.ts",
+    "layer": "access"
+  },
+  {
+    "glob": "src/lib/atomic-json.ts",
+    "layer": "access",
+    "why": "The filesystem write primitive every state file goes through (F3). Access, not state: access-layer stores (gh-budget, conditional-cache-store) persist through it, and state importing access is the legal direction."
+  },
+  {
+    "glob": "scripts/lib/fleet-exec.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/fleet-source.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/fleet-source.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/fleet-source-fixture.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/fake-node.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/gh-app.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/gh-reserve.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/gh-runners.mjs",
+    "layer": "access",
+    "why": "`gh api .../actions/runners` with retry, shared by reconcile-fleet-runners and check-label-floor (plan §4.1 F2b, wave 5d lane A)."
+  },
+  {
+    "glob": "scripts/lib/sibling-repos.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/service-tunnels.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/session-index.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/spawn-json.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/run-fleet-script.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/site-docs.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/node-users-facet.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/node-users.mjs",
+    "layer": "access"
+  },
+  {
+    "glob": "scripts/lib/manifest-target.mjs",
+    "layer": "access",
+    "why": "Commits a manifest edit onto hadoku_site's main — another system's repo."
+  },
+  {
+    "glob": "src/lib/capability-registry.ts",
+    "layer": "config",
+    "section": "Wave 5j lane C split of capabilities.ts (plan §4.3 #4): the registry DATA and label queries (capability-registry.ts, capability-labels.ts) land in config exactly as the plan says. bootcamp-proof.ts, workload-gate.ts, capability-offer.ts and capability-validate.ts DEPART from the plan's \"lifecycle core\" / \"ci-scheduling\" / \"lifecycle\" assignments and stay config too — a DELIBERATE decision, not an oversight: Every one of those four is imported directly by files in ALL FOUR domains (measured from the real import graph before the split): e.g. `src/label-floor.ts` (observation) and `src/runners/ephemeral-shared.ts` (ci-scheduling) both import `nodeOffer`; `src/runners/prove-job.ts` (lifecycle) imports `judgeWorkloadProof`/`proofBudget`; `scripts/lib/collect-offers.mjs` (tenancy) imports `workloadGateContext`. Placing any one of them in a single domain would turn those existing edges into NEW domain-to-domain violations (rule 5, §3.2) — cut (iii) would grow by one violation per cross-domain importer, not stay flat. `config` is the one layer every domain already imports legally, which is exactly why the whole file sat there as one piece before this split. Re-cutting these four into their target domains is real work for a LATER wave, once the callers themselves go through a domain-owned record instead of calling the registry straight across a domain boundary."
+  },
+  {
+    "glob": "src/lib/capability-labels.ts",
+    "layer": "config"
+  },
+  {
+    "glob": "src/lib/bootcamp-proof.ts",
+    "layer": "config"
+  },
+  {
+    "glob": "src/lib/workload-gate.ts",
+    "layer": "config"
+  },
+  {
+    "glob": "src/lib/capability-offer.ts",
+    "layer": "config"
+  },
+  {
+    "glob": "src/lib/capability-validate.ts",
+    "layer": "config"
+  },
+  {
+    "glob": "src/lib/fleet-config.ts",
+    "layer": "config"
+  },
+  {
+    "glob": "src/lib/fleet-paths.ts",
+    "layer": "config"
+  },
+  {
+    "glob": "src/lib/job-registry.ts",
+    "layer": "config",
+    "why": "wave 5e lane A: data + validation, no I/O"
+  },
+  {
+    "glob": "src/lib/manifest.ts",
+    "layer": "config",
+    "why": "F1 (wave 5c): the typed manifest loader"
+  },
+  {
+    "glob": "src/lib/fleet-vocabulary.ts",
+    "layer": "config",
+    "why": "Wave 5h lane A step 1: ClawState + BackstopReason, moved out of fleet-report-types.ts (surfaces) because observation and ci-scheduling both read them and neither domain can host the other's import legally."
+  },
+  {
+    "glob": "src/lib/node-role.ts",
+    "layer": "config"
+  },
+  {
+    "glob": "src/lib/provenance.ts",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/json-contract.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/node-profiles.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/tenant-registry.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/toolchain-floor.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/superseded-installs.mjs",
+    "layer": "config",
+    "why": "renders the toolchain-floor sweep"
+  },
+  {
+    "glob": "scripts/lib/paths.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/fleet-roster.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/capability-seeds.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/prettier-json.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/script-provenance.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/site-token.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/version-bump.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/layer-map.mjs",
+    "layer": "config",
+    "why": "This file and measure-layers.mjs are themselves DATA/measurement about the target shape — config is the layer for the package's own declarative inputs, which this is."
+  },
+  {
+    "glob": "scripts/lib/argv-specs.mjs",
+    "layer": "config"
+  },
+  {
+    "glob": "src/host.ts",
+    "layer": "config"
+  },
+  {
+    "glob": "src/lib/measured-paths.ts",
+    "layer": "config"
+  },
+  {
+    "glob": "src/runners/prove-job.ts",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "`prove-job.ts` is `lifecycle` per §3.5's own misplacement note (\"sits in runners/ but is an operator library\")."
+  },
+  {
+    "glob": "src/runners/prove-job-*.ts",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core",
+    "why": "prove-job.ts's split-out types, parsing and record builder (wave 5o)."
+  },
+  {
+    "glob": "src/provisioning-converge.ts",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/bootcamp.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/provision-fleet.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/provision-plan.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/provision-phases.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/converge-provisioning.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/converge-toolchain.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "src/backstop-tools.ts",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/backstop-tools.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/backstop-tools.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/reboot-claws.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/drain-node.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/enroll-node.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/enroll-ssh.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave 5o lane D split of enroll-node.mjs (pure move): the pure ssh helpers (sshCapture, probeSshName, writeSshConfig) moved out; the CLI's own argv/die/log/warn closures stayed, per d6dcfa5/8fb8009. Same part as their source file for the same reason as the other wave-5o splits."
+  },
+  {
+    "glob": "scripts/retire-node.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lan-reserve.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/prove-job.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/reconcile-fleet-runners.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/reconcile-plan.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/reconcile-scripts.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/reconcile-apply.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/seed-node-cache.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/seed-runner-python.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/toolpack.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/clean-runner-debris.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/deploy-ci-throttle.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/deploy-runners-slice.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/apt-security.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/node-users-cutover.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/apt-security.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/operator-sudo.mjs",
+    "layer": "config",
+    "why": "What the role declaration says the fleet may do as root — read off config."
+  },
+  {
+    "glob": "scripts/lib/idle-measure.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/node-interfaces.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/node-users-cutover.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/probe-script.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/proof-drain.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/provisioning-converge.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/reboot-cycle.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/refresh-cycle.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/roster-eligibility.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/slice-inventory-run.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/slice-split.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/tool-caches.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/toolpack-rules.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/tool-release.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core"
+  },
+  {
+    "glob": "src/fleet-loop.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run"
+  },
+  {
+    "glob": "src/ci-runner-fallback.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run"
+  },
+  {
+    "glob": "src/node-reservation.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run"
+  },
+  {
+    "glob": "src/runners/backstop.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "src/runners/dispatcher.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "src/runners/ephemeral.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "src/runners/ephemeral-mint.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "section": "Wave 5k lane C split of ephemeral.ts (plan §4.3 #11, pure move): the mint plan builders (buildSpawnPlan/buildWarmSpawnPlan and the sizing/labelling they need) and the warm-cache SELECTION decision (planWarmCache/planWarmFleet and their scoring) moved out; admission, naming and warm ELIGIBILITY stayed, keyed by which other-domain files reach in by name. Same part as their source file for the same reason."
+  },
+  {
+    "glob": "src/runners/ephemeral-warm.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "src/runners/placement.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "section": "ephemeral-exec-jit.ts and -reap.ts (wave 5o) fall to the src/runners/*.ts catch-all below."
+  },
+  {
+    "glob": "src/runners/queue-discovery.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "src/runners/speed-tier.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "src/runners/traffic.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "src/runners/speed-heavy-cache.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5g lane B split of ephemeral-tick.ts (plan §4.3 #3, \"speed/heavy caches -> scheduling core\"): the cached speed/heavy-kind models both dispatch-warm-cache.ts and ephemeral-tick.ts read, same part as the speed-tier.ts/traffic.ts models it rebuilds from, just ahead of this file's own src/runners/*.ts catch-all (which would otherwise tag it 'run')."
+  },
+  {
+    "glob": "src/runners/probe-backoff.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5i lane C split of dispatch-tick.ts (plan §4.3 #16, \"probe backoff -> own module\"): the pure placement fingerprint and the per-run backoff map it gates, same part as its neighbours above, ahead of this file's own src/runners/*.ts catch-all (which would otherwise tag it 'run')."
+  },
+  {
+    "glob": "src/lib/job-kind.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/backstop-switch.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/fleet-decisions.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/fleet-inventory.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/traffic-status.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/fleet-inventory.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/floor-probe.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/floor-probe-candidates.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "section": "Wave 5k lane D split of floor-probe.mjs (plan §4.3 #12). Each still does I/O (the exclusion reads, the ledger merge, the metered GitHub calls) so each is `run`, same as the CLI they were pulled out of — the split moved the code, not its placement."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-table.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/floor-probe-dispatch.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/floor-probe.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/placement-rules.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/runner-var.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core"
+  },
+  {
+    "glob": "src/host-lease.ts",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run",
+    "why": "§3.5 names it here explicitly, despite the state-record shape"
+  },
+  {
+    "glob": "src/hosting-converge.ts",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "src/hosting-verify.ts",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/hosting-verify.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/hosting-verify.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/hosting.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/hosting-converge.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/hosting-demand.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/hosting-offers.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/hosting-plan.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/hosting-placement.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/hosting-request.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/node-status.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/service-inventory.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/hosting.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-converge.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-demand.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-offers.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-plan.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-check.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-placement-view.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-request.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-artifacts.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-claims.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-placement.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-runtimes.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/collect-offers.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/service-inventory.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/service-peers.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "src/runners/census.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "§3.5 names this under observation despite the ci-scheduling directory"
+  },
+  {
+    "glob": "src/runner-health*.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "src/runner-supervision.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "src/ci-alerts.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "src/label-floor.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "src/job-rollups.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "src/failure-rates.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "T3 (plan §7.3, wave 5n lane A): the per-node-vs-fleet statistic. PURE — same shape as job-history-stats.ts beside it."
+  },
+  {
+    "glob": "src/job-history-ingest.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "section": "Wave 5h lane C split of job-history.ts: GitHub ingest (job-history-ingest.ts, run) and zone/kill classification + stats (job-history-stats.ts, core). job-history.ts's own bare re-export barrel (kept in 5h only for runner-health.ts) is removed in wave 5i lane A: runner-health.ts and its test now import job-history-store.ts/job-history-ingest.ts directly."
+  },
+  {
+    "glob": "src/job-history-stats.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "src/run-listing-gap.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "src/runners/claw-state.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "src/runners/disk-watch.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "src/runners/failover.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the dropped-job rerun `checkRunsAndFailover` (observation, stays) calls — a narrow reaction to something THIS tick observed (an offline runner, a SIGKILL), not a scheduling policy, so it stays observation rather than falling to the ci-scheduling catch-all below. Keeping it here, rather than in ci-scheduling, is also what keeps cut (iii) from growing on this split: `backstop-decision.ts` (ci-scheduling, per the plan) swaps one existing debt edge for another (net zero) and removes a second (ZOMBIE_MS no longer reached from runner-health.ts directly); `hosted-fallback.ts` (ci-scheduling, below) adds one genuinely new edge. This file staying observation is what keeps the set from growing by a second edge too."
+  },
+  {
+    "glob": "src/runners/node-regression.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/measure-layers.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/backfill-failed-steps.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/benchmark-fleet.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/ci-watch.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/collect-job-metrics.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/job-rollups.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/failures.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "T3 reader (plan §7.3, wave 5n lane A) — same shape as job-rollups.mjs beside it."
+  },
+  {
+    "glob": "scripts/join-workload-benchmark.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/reconcile-runner-identity.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/split-check.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Lane D's split-check (plan §4.1 step 1, §10): a repo-hygiene review tool in the same bucket as check-exports.mjs/check-version-ahead.mjs below — it audits a DIFF, not fleet state, but \"observation: check-*\" is this map's home for exactly that shape of meta/repo-tooling script."
+  },
+  {
+    "glob": "scripts/lib/benchmark-cadence.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/benchmark-inventory.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/benchmark-measure.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/bootcamp-required.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/bootcamp-*.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/ci-watch-jobnames.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/demand-derive.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/doctor-probe.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/doctor-parse.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/doctor-facet.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/doctor-findings.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/doctor-fixtures.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/doctor-run.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/drain-enforcement.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/expected-down.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/job-metrics.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/mf-built.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/preflight.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/queue-health.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/reap-trend.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/runner-env-drift.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/runner-unit-audit.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/runs-on-demand.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/slice-summary.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  },
+  {
+    "glob": "scripts/lib/srv-drift.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/throttle-drift-doc.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/tier-detectors.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/warm-canary.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/warm-orphan-doc.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave 5j lane B: the warm-orphan GateDoc classifier, pulled out for the same reason throttle-drift-doc.mjs above was — same layer."
+  },
+  {
+    "glob": "scripts/lib/identity-rules.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "section": "Split #8 (wave 5k lane A, pure move): check-identity-model.mjs's G1..G8 rules, repo/file discovery and scanRepo orchestration, plus the generic text-parsing primitives they read through. Same bucket as the CLI they were cut from — \"observation: check-*\" — since cut (iii) treats observation as one flat layer and core/run does not gate it there."
+  },
+  {
+    "glob": "scripts/lib/identity-source-parse.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/header-rules.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "section": "Split #13 (wave 5m lane D, pure move): check-header-fleet.mjs's per-repo rules, the allowlist loader and the uniform repo-reading layer it reads through. Same bucket as the CLI they were cut from — \"observation: check-*\" — since cut (iii) treats observation as one flat layer and core/run does not gate it there."
+  },
+  {
+    "glob": "scripts/lib/header-allowlist.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/header-source.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/label-floor-check.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "section": "Split #21 (wave 5m lane D, pure move): check-label-floor.mjs's small standalone offer/cause predicates, and — extended past the first pass to clear the operator's 800-line file-size ceiling — its derivation check, JSON emitter and exit-branch guards. Same bucket and same reasoning as the header-fleet split above."
+  },
+  {
+    "glob": "scripts/lib/label-floor-gate.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
+    "glob": "src/runners/*.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "section": "§3.5's own blanket line: everything else left under src/runners/* that is not named individually above (and not already carved to `state` or `observation` elsewhere in this file) is ci-scheduling's run half. Directory-level fallbacks, LAST: everything under src/runners/* or scripts/check-*.mjs not named explicitly above falls through to these. Because matching is a single ordered pass (first match in this array wins), every specific override for a runners/* or check-*.mjs file above MUST stay ahead of its catch-all here."
+  },
+  {
+    "glob": "scripts/check-*.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run"
+  }
+]
