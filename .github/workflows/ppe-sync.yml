@@ -1,0 +1,53 @@
+name: ppe sync
+
+# A push to main that is not a promotion (a bot's, or an operator hotfix) is
+# merged into ppe with the PPE_PROMOTE_KEY deploy key, so the next promotion is
+# still a fast-forward and CI tests the merge like any ppe push. A promotion's
+# push is already in ppe and the job exits at once. A conflict is an issue and
+# a red job, never forced. Logic: scripts/ppe/sync.mjs.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}
+    timeout-minutes: 10
+    # NOT the promoter's group: GitHub cancels a group's PENDING run when
+    # another queues, so sharing one would let a CI completion silently drop a
+    # bot's sync. A merge and a revert racing on ppe is safe without it: both
+    # push without force, and the loser is refused and decides again.
+    concurrency:
+      group: ppe-sync
+      cancel-in-progress: false
+    steps:
+      - name: Mark the start, so the reported duration is real
+        run: echo "JOB_STARTED_AT=$(date -u +%s)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/ppe
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Merge main into ppe
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PPE_DEPLOY_KEY: ${{ secrets.PPE_PROMOTE_KEY }}
+        run: node scripts/ppe/sync.mjs
+
+      - name: Report the outcome so a silent failure can't hide
+        if: always()
+        uses: WolffM/hadoku-actions/report-job@v1
+        with:
+          job-name: fleet-manager:ppe-sync
+          service-key: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
+          started-at: ${{ env.JOB_STARTED_AT }}
+          timeout-minutes: 10

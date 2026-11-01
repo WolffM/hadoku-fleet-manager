@@ -34,6 +34,7 @@ import {
 	setBackstopDecisionReset,
 	setHostedFallbackReset,
 } from './runner-health-ports.js';
+import { startPpeSweep } from './ppe-sweep.js';
 
 export type { FleetHost, FleetHostLogger } from './host.js';
 export type { RunnerHealthSnapshot } from './runner-health.js';
@@ -207,6 +208,9 @@ export function createFleetManager(host: FleetHost): FleetManager {
 			// T4 (refactor plan §7.3): one admission-state row per node, every 5
 			// minutes, read entirely from state the loops above already hold.
 			startCapacitySampling();
+			// ppe promotion's one timer: wakes a repo's promoter once its ppe has
+			// gone quiet inside the 30-minute window, which no GitHub event signals.
+			startPpeSweep();
 		},
 		snapshot: () => getRunnerHealthSnapshot(),
 	};

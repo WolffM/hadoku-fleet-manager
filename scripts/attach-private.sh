@@ -13,7 +13,7 @@
 #      gitignored, and publish-safety-guard fails if it is ever tracked.
 #   2. The squashed root is grafted onto the private repo's `public-cut` tag, so
 #      `git log` and `git blame` run through the old history. A graft is a
-#      refs/replace/ ref: local, never pushed by `git push origin HEAD:main`.
+#      refs/replace/ ref: local, never sent by any `git push`.
 #
 # Re-running is safe. Run it once per clone and once per new worktree (the
 # symlink is per working tree; the graft is shared).

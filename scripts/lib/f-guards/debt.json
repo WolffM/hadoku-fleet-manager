@@ -17,7 +17,11 @@
     "scripts/node-status.mjs:prev#1",
     "scripts/node-status.mjs:prev#2",
     "scripts/node-users-cutover.mjs:rendered#1",
-    "scripts/service-inventory.mjs:merged#1"
+    "scripts/service-inventory.mjs:merged#1",
+    "scripts/ppe/lib.mjs:hosts#1",
+    "scripts/ppe/lib.mjs:hosts#2",
+    "scripts/ppe/lib.mjs:setOutput#4",
+    "scripts/ppe/lib.mjs:summary#3"
   ],
   "F5": [],
   "F7-pm2-hosts": [

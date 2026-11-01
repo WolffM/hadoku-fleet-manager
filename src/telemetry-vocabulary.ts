@@ -291,6 +291,12 @@ export const GH_CALLERS: Record<GhCaller, LabelledTerm> = {
 		label: 'CI_RUNNER sync',
 		description: 'the per-repo CI_RUNNER variable read and write',
 	},
+	'ppe-sweep': {
+		kind: 'ok',
+		label: 'ppe sweep',
+		description:
+			"the 5-minute read of every repo's ppe against main, and the promoter dispatches it sends",
+	},
 	route: {
 		kind: 'ok',
 		label: 'HTTP route',

@@ -137,9 +137,9 @@ export function inScope(path) {
  * @returns {string[]}
  */
 export function listTrackedCodeFiles(repoRoot) {
-	// Every GIT_* stripped: a hook (`.husky/pre-push` runs the full check)
-	// exports GIT_DIR and GIT_INDEX_FILE, which beat `-C` and would list the
-	// hook's repository instead of `repoRoot` (src/lib/fleet-paths.ts).
+	// Every GIT_* stripped: a git hook that runs the check exports GIT_DIR and
+	// GIT_INDEX_FILE, which beat `-C` and would list the hook's repository
+	// instead of `repoRoot` (src/lib/fleet-paths.ts).
 	const env = Object.fromEntries(
 		Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))
 	);

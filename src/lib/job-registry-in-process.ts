@@ -71,4 +71,13 @@ export const jobRegistryInProcess: JobEntry[] = [
 		contract: 'in-process',
 		why: 'T4 (refactor plan §7.3): one admission-state row per node — declared maxConcurrent, the admitting budget, drained, and the refusal reason when one is on record — written to capacity-sample-store.ts every 5 minutes. src/capacity-sample.ts owns the clock; unlike the three converger rows above it spawns nothing — it reads buildFleetReport() and fleet-drain.json, both already in this process, so there is no `sub` and no mgmtApiFile at all.',
 	},
+	{
+		name: 'fleet:ppe-sweep',
+		args: [],
+		kind: 'converger',
+		detectionBudget: '15m',
+		cadence: { clockMs: 5 * 60_000 },
+		contract: 'in-process',
+		why: "The one ppe promotion wake-up no GitHub event provides (ppe-promotion-2026-11-01; ppe is this repo's only): a ppe that went quiet inside the 30-minute window. One GraphQL query reads ppe against main for the covered repos, skipping any without a ppe branch; a settled, quiet, green tip gets a workflow_dispatch of ppe-promote.yml, at most once per tip per 30 min. src/ppe-sweep.ts owns the clock; it spawns nothing, so there is no `sub`.",
+	},
 ];

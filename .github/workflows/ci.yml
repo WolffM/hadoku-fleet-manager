@@ -6,17 +6,23 @@ name: CI
 # nothing verified and others waiting forever. Scoping belongs inside the job,
 # never on the trigger.
 #
-# ALSO ON PUSH TO MAIN, because pushing straight to main is sanctioned here.
-# A pull_request-only CI would check nothing on the path work actually takes.
+# ON PUSH TO PPE, NOT MAIN (2026-11-01). Work is pushed to `ppe`; the promoter
+# (ppe-promote.yml) fast-forwards `main` to a `ppe` SHA only once `check` went
+# green on it here, so `main`'s required check is already satisfied by the run
+# on the same SHA and running it again on `main` would test nothing new.
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [ppe]
   workflow_dispatch:
 
+# EVERY `ppe` PUSH GETS ITS OWN RUN. The promoter attributes a red to the push
+# that made it by reading each pushed tip's own `check`; a shared group would
+# cancel the in-flight run (or, without cancel-in-progress, the pending one)
+# and blur two pushes into one. Everything else still supersedes by ref.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref == 'refs/heads/ppe' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/ppe' }}
 
 permissions:
   contents: read

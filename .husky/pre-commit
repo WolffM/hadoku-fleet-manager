@@ -64,8 +64,7 @@ pnpm run format
 
 echo "✅ Linting and formatting complete!"
 
-# Re-stage files that lint/format may have touched, before the TS gate and the
-# version bump — both read the staged tree.
+# Re-stage files that lint/format may have touched.
 if [ -n "${STAGED_FILES}" ]; then
   echo "${STAGED_FILES}" | xargs -r git add
 fi
@@ -74,17 +73,6 @@ fi
 echo "🔎 Running typecheck..."
 if ! pnpm run typecheck; then
   echo "❌ TypeScript errors — fix before committing (or --no-verify to bypass)."
-  exit 1
-fi
-
-# Version bump LAST, once every gate above has passed — a commit that's about
-# to be rejected must not leave a bumped package.json behind. classify() in
-# scripts/version-bump.mjs mirrors publish.yml's "Did the published surface
-# change?" step (package.json, src, scripts, deploy) exactly, so the two
-# cannot drift the way a hand-kept second copy of the rule would.
-echo "📦 Checking if a version bump is needed..."
-if ! node scripts/version-bump.mjs; then
-  echo "❌ Version bump failed."
   exit 1
 fi
 

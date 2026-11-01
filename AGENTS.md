@@ -44,6 +44,23 @@ main` replays only the branch's own commits and is safe. A commit of the
 branch's that touches `docs/planning` will then fail the build; move that
 change to the private checkout.
 
+**In THIS repo, push to `ppe`, never to `main`**
+(`docs/planning/ppe-promotion-2026-11-01.md`). ppe is this repo's alone; every
+other hadoku repo keeps its own push rules. `git push origin HEAD:ppe`; a
+refused push means `ppe` moved, so `git fetch`, `git rebase origin/ppe`, push
+again. CI (`check`) runs on every `ppe` push, and `ppe-promote.yml`
+fast-forwards `main` to the newest green `ppe` commit at most every 30 minutes,
+or once `ppe` has been quiet for 10 (`workflow_dispatch` with `force` promotes
+now). A red push is reverted on `ppe` and an issue names its `Session:`
+trailer, so end every commit message with `Session: <your session>`. `main`'s
+ruleset refuses your push; a hotfix straight to `main` is the operator's, never
+an agent's. The promoter and the main-to-ppe sync are `scripts/ppe/`. The pre-push hook runs only the two leak guards
+(`check-public-history`, `publish-safety-guard`); the suite runs in CI, so run
+`pnpm check` yourself before pushing anything you are not sure of. The version
+is set by `publish.yml` at publish time (registry newest + 1 patch) and is
+never committed; a committed version moves only for a deliberate minor or
+major bump.
+
 **Live since 2026-08-30.** mgmt-api consumes it in production and the CLI runs
 every fleet gate. Migration record:
 `docs/planning/fleet-manager-extraction-2026-08-29.md` — read §3 (the client

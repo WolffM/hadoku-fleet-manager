@@ -1,6 +1,11 @@
 name: Publish @wolffm/fleet-manager
 
-# Publishes when package.json's version changes on main.
+# Publishes every push to main that changed what ships. Under ppe promotion
+# (2026-11-01) a push to main is a promotion — a batch of ppe commits that
+# already went green — or a bot's. The version is not in any commit: the
+# Version step below (hadoku-actions' next-version) sets it to one patch above
+# the registry's newest, in this workspace only. "The number is irrelevant,
+# newest wins."
 #
 # NO `paths:` FILTER, deliberately. It used to allow only `package.json` and
 # `src/**`, but `files` ships `dist`, `scripts` AND `deploy`, and three of the
@@ -44,7 +49,7 @@ jobs:
 
       # Did this push touch anything that SHIPS? `files` is dist + scripts +
       # deploy, and three exports point into scripts/lib. A docs-only push
-      # should not demand a version bump; a change to a shipped module must.
+      # publishes nothing; a change to a shipped module must publish.
       - name: Did the published surface change?
         id: gate
         run: |
@@ -56,9 +61,9 @@ jobs:
           set -o pipefail
           BASE="${{ github.event.before }}"
           # An UNRESOLVABLE base is treated as "assume yes", never as "nothing
-          # changed". Assuming yes costs one `check` run and, if the version did
-          # not move, a LOUD failure from the publish step below. Assuming no
-          # silently skips shipping — which is the bug this replaces.
+          # changed". Assuming yes costs one `check` run and one publish of an
+          # unchanged package. Assuming no silently skips shipping — which is
+          # the bug this replaces.
           if [ -z "$BASE" ] \
             || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
@@ -134,48 +139,30 @@ jobs:
           PUBLISH_DENYLIST: ${{ secrets.PUBLISH_DENYLIST }}
         run: pnpm run check
 
-      # GITHUB_TOKEN, not the PAT. The PAT is read-only for packages by design.
-      - name: Publish
+      # One patch above the newest on the registry, written to package.json
+      # in this workspace only and never committed. It reads with the vault's
+      # read token; a registry it cannot read FAILS here rather than guess.
+      - name: Version
+        id: version
         if: steps.gate.outputs.ships == 'true'
+        uses: WolffM/hadoku-actions/next-version@v1
+        env:
+          NODE_AUTH_TOKEN: ${{ env.HADOKU_NPM_READ_TOKEN }}
+
+      # GITHUB_TOKEN, not the PAT. The PAT is read-only for packages by design.
+      #
+      # A RE-RUN OF THE COMMIT THAT PUBLISHED is not a new release. When only
+      # the dispatch below failed, re-running this workflow is the way to retry
+      # it. On 2026-10-25 0.34.64 published at 05:54, its dispatch got a 502
+      # inside a mgmt-api restart, and the 06:00 re-run died as "already
+      # published" before reaching the dispatch. next-version reports
+      # `published` from the registry's own gitHead for its newest version, so
+      # this is decided exactly, never guessed from run_attempt.
+      - name: Publish
+        if: steps.gate.outputs.ships == 'true' && steps.version.outputs.published != 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          # A RE-RUN OF THE COMMIT THAT PUBLISHED IT is not a missed bump. When
-          # only the dispatch below failed, re-running this workflow is the way
-          # to retry it, and on 2026-10-25 that re-run died HERE instead:
-          # 0.34.64 published at 05:54, its dispatch got a 502 inside a mgmt-api
-          # restart, and the 06:00 re-run was refused as "already published",
-          # so the dispatch never ran. npm records the publishing commit as
-          # `gitHead`, so this is decided exactly, never guessed from
-          # run_attempt. An unreadable gitHead falls through to the refusal.
-          published_by=$(npm view "@wolffm/fleet-manager@$VERSION" gitHead 2>/dev/null || true)
-          if [ -n "$published_by" ] && [ "$published_by" = "$GITHUB_SHA" ]; then
-            echo "@wolffm/fleet-manager@$VERSION was published by this commit ($GITHUB_SHA) — a re-run; skipping to the dispatch"
-            exit 0
-          fi
-          if npm view "@wolffm/fleet-manager@$VERSION" version >/dev/null 2>&1; then
-            # This used to `exit 0` with a notice. That is the wrong shape: a
-            # shipped change whose version did not move is a change that never
-            # reaches mgmt-api, and a green no-op is exactly how nobody finds
-            # out.
-            #
-            # There IS a version-bump hook now — .husky/pre-commit runs
-            # scripts/version-bump.mjs, whose classify() mirrors this step's file
-            # list. This comment said there wasn't one long after it landed, which
-            # matters because it is the text someone reads at the moment they hit
-            # this error: it told them to fix by hand a thing that is automatic.
-            #
-            # So reaching here means the hook did not RUN, not that it is missing
-            # — `git commit --no-verify`, or a commit made by something that does
-            # not fire hooks. Bumping the version by hand is the correct fix; the
-            # hook leaves an already-moved version alone.
-            echo "::error::@wolffm/fleet-manager@$VERSION is already published, but this push"
-            echo "::error::changed shipped files. Bump the version in package.json — otherwise"
-            echo "::error::the change goes green here and never reaches any consumer."
-            exit 1
-          fi
-          npm publish --no-git-checks
+        run: npm publish --no-git-checks
 
       # Tell the consumer. mgmt-api picks a new version up through hadoku_site's
       # Update Packages workflow, which runs on a `packages_updated` dispatch —

@@ -1,0 +1,83 @@
+name: ppe promote
+
+# Fast-forwards main to the newest ppe commit whose required checks are green,
+# on the cadence (main untouched 30+ min, or ppe quiet 10+ min, or `force`),
+# and reverts the first red ppe push since the last green. The decision is
+# scripts/ppe/decide.mjs (pure, unit-tested); scripts/ppe/promote.mjs gathers
+# the facts and acts. docs/planning/ppe-promotion-2026-11-01.md.
+#
+# EVENT-DRIVEN, never a cron: every run mints a claw. CI finishing on a ppe
+# push is the only moment the answer can change. The one case no event covers,
+# ppe going quiet inside the 30-minute window, is woken by this package's own
+# in-process sweep (src/ppe-sweep.ts), which dispatches this workflow.
+#
+# Every read is this job's own GITHUB_TOKEN (a per-repo budget, never the
+# fleet's shared token). Pushes use the PPE_PROMOTE_KEY deploy key over ssh,
+# because a push made with GITHUB_TOKEN triggers no workflow: a promotion must
+# fire publish.yml, and a revert must fire CI.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [ppe]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Promote the newest green now, ignoring the cadence
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  checks: read
+  statuses: read
+  issues: write
+
+jobs:
+  promote:
+    # A public repo: a fork's pull request from a branch named `ppe` also
+    # completes CI, and workflow_run hands this job secrets. Only a push to
+    # this repo's own ppe is a candidate.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}
+    timeout-minutes: 10
+    # One at a time. GitHub keeps one running and one pending per group, so a
+    # burst of CI completions collapses into one more decision on the newest
+    # state, which is what a later run would decide anyway.
+    concurrency:
+      group: ppe-promote
+      cancel-in-progress: false
+    steps:
+      - name: Mark the start, so the reported duration is real
+        run: echo "JOB_STARTED_AT=$(date -u +%s)" >> "$GITHUB_ENV"
+
+      # The promoter's own code, from main (the default branch, which is what
+      # both workflow_run and the sweep's dispatch check out): never ppe's,
+      # which is the code under judgement.
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/ppe
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Promote
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PPE_DEPLOY_KEY: ${{ secrets.PPE_PROMOTE_KEY }}
+          PPE_FORCE: ${{ inputs.force == true }}
+        run: node scripts/ppe/promote.mjs
+
+      - name: Report the outcome so a silent failure can't hide
+        if: always()
+        uses: WolffM/hadoku-actions/report-job@v1
+        with:
+          job-name: fleet-manager:ppe-promote
+          service-key: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
+          started-at: ${{ env.JOB_STARTED_AT }}
+          timeout-minutes: 10

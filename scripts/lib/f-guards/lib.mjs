@@ -49,6 +49,7 @@ const FIXTURE_FILES = new Set([
 	'scripts/lib/identity-model-fixtures.mjs',
 	'scripts/lib/runner-mem-fixtures.mjs',
 	'scripts/lib/make-preseed-fixtures.mjs',
+	'scripts/ppe/ppe-fixtures.mjs',
 ]);
 
 function walk(dir, out) {

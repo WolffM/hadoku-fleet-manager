@@ -282,9 +282,9 @@ async function runCadenceCli({ dueDays, jsonOut, passthru, force, refuseIf, log,
  * the file), so that `runCadence`, `cadenceBands` and the other pure functions
  * above can be imported by a test without that import ALSO parsing argv,
  * ssh-ing to a node, or writing a state file — the same reason
- * `check-version-ahead.mjs` and `check-health-freshness.mjs` are shaped this
- * way. `benchmark-fleet.test.mjs` still drives the real CLI as a subprocess
- * for everything that is cheapest to prove end-to-end (the table, `--from`,
+ * `check-health-freshness.mjs` is shaped this way. `benchmark-fleet.test.mjs`
+ * still drives the real CLI as a subprocess for everything that is cheapest
+ * to prove end-to-end (the table, `--from`,
  * `--write`); the cadence's drain/undrain/busy dependencies are the part no
  * subprocess can safely fake without a real ssh target, so THOSE are proven by
  * importing `runCadence` directly and injecting fixtures, the same way
@@ -704,11 +704,10 @@ async function main() {
 	);
 }
 
-// RUN ONLY AS THE CLI ENTRY POINT — the same guard `check-version-ahead.mjs`
-// and `check-health-freshness.mjs` use, and the reason `runCadence`,
-// `cadenceBands` and the other pure functions above can be imported by a test
-// without that import also parsing argv, ssh-ing to a node, or writing a
-// state file.
+// RUN ONLY AS THE CLI ENTRY POINT — the same guard `check-health-freshness.mjs`
+// uses, and the reason `runCadence`, `cadenceBands` and the other pure
+// functions above can be imported by a test without that import also parsing
+// argv, ssh-ing to a node, or writing a state file.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
 	main().catch((err) => {
 		console.error(err);

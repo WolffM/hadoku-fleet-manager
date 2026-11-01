@@ -591,10 +591,6 @@
     "layer": "config"
   },
   {
-    "glob": "scripts/version-bump.mjs",
-    "layer": "config"
-  },
-  {
     "glob": "scripts/lib/layer-map.mjs",
     "layer": "config",
     "why": "This file and measure-layers.mjs are themselves DATA/measurement about the target shape — config is the layer for the package's own declarative inputs, which this is."
@@ -960,6 +956,27 @@
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "run"
+  },
+  {
+    "glob": "src/ppe-sweep.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "ppe promotion's wake-up (ppe-promotion-2026-11-01): which repos' CI is promoted, read over the covered-repo roster ci-runner-fallback.ts owns, and acted on with a workflow dispatch, so the I/O half of ci-scheduling beside that file."
+  },
+  {
+    "glob": "scripts/ppe/decide.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "ppe promotion's decision (ppe-promotion-2026-11-01), pure: which green commit main fast-forwards to and which red push is reverted. promote.mjs is its I/O."
+  },
+  {
+    "glob": "scripts/ppe/*.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "ppe promotion's I/O, run by this repo's own ppe-promote.yml and ppe-sync.yml: git over the deploy key and the job's GITHUB_TOKEN. Moved in from hadoku-actions when ppe was scoped to this repo alone (operator, 2026-11-01)."
   },
   {
     "glob": "src/node-reservation.ts",
@@ -1670,7 +1687,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run",
-    "why": "Lane D's split-check (plan §4.1 step 1, §10): a repo-hygiene review tool in the same bucket as check-exports.mjs/check-version-ahead.mjs below — it audits a DIFF, not fleet state, but \"observation: check-*\" is this map's home for exactly that shape of meta/repo-tooling script."
+    "why": "Lane D's split-check (plan §4.1 step 1, §10): a repo-hygiene review tool in the same bucket as check-exports.mjs below — it audits a DIFF, not fleet state, but \"observation: check-*\" is this map's home for exactly that shape of meta/repo-tooling script."
   },
   {
     "glob": "scripts/lib/benchmark-cadence.mjs",

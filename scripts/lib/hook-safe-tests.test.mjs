@@ -8,7 +8,9 @@
  *      those OVERRIDE the process working directory. `cwd` does not win.
  *   2. A hook's children inherit them — that is how a hook finds the repo it
  *      was invoked for.
- *   3. `.husky/pre-push` (added in d7e15a1) runs the full `pnpm run check`.
+ *   3. `.husky/pre-push` ran the full `pnpm run check` (from d7e15a1 until
+ *      the ppe cutover on 2026-11-01, which moved it to CI; any hook that
+ *      runs the suite again inherits the same environment).
  *   4. `scripts/version-bump.test.mjs` built its fixture with
  *      `execFileSync('git', ['init'], { cwd: tmpdir })` and no `env`.
  *
@@ -88,8 +90,8 @@ function testSources(root = ROOT) {
  * IT SCANS THE WHOLE TREE, AND UNTIL 2026-09-24 IT DID NOT. It read
  * `scripts/` and `scripts/lib/` with two non-recursive `readdirSync` calls,
  * which left out `scripts/fixes/` (three suites) and ALL of `src/tests/`
- * (40 suites) — and `src/tests` runs in the same `pnpm run check`, under the
- * same `.husky/pre-push`, in the same GIT_DIR-poisoned environment this whole
+ * (40 suites) — and `src/tests` runs in the same `pnpm run check`, under
+ * whatever hook runs it, in the same GIT_DIR-poisoned environment this whole
  * file is about. No src suite spawns git today, so the hole cost nothing and
  * showed nothing: the guard was green over half the suite and silent about
  * the other half. A guard whose blind spot is invisible is one nobody will
@@ -205,7 +207,7 @@ test('discovery reaches src/tests and nested script directories, not just script
 			found,
 			expected,
 			'discovery does not see every place a hook-run test can live. A git spawn added to ' +
-				'src/tests/ runs under .husky/pre-push exactly like a scripts/ one does, and a ' +
+				'src/tests/ runs under a git hook exactly like a scripts/ one does, and a ' +
 				'guard that cannot see it reports green over the half where nothing can trip it.'
 		);
 	} finally {

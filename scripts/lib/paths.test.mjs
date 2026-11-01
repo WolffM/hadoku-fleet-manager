@@ -18,9 +18,10 @@ import { cleanGitEnv } from './test-git-identity.mjs';
  * The ambient environment with every `GIT_*` variable REMOVED.
  *
  * `git` reads GIT_DIR and GIT_INDEX_FILE from the environment and they OVERRIDE
- * `cwd`. A git hook exports them to its children, and `.husky/pre-push` runs the
- * full `pnpm run check` — so without this, the `git init` below reinitialises
- * THE REAL REPOSITORY instead of the throwaway directory it names.
+ * `cwd`. A git hook exports them to its children, so under any hook that runs
+ * `pnpm run check` (`.husky/pre-push` did until 2026-11-01) without this, the
+ * `git init` below reinitialises THE REAL REPOSITORY instead of the throwaway
+ * directory it names.
  *
  * That is not theoretical: on 2026-09-08 the same omission in
  * version-bump.test.mjs put two commits authored `t <t@t>` onto a live branch,

@@ -103,6 +103,7 @@ export type GhCaller =
 	| 'backstop'
 	| 'ci-alerts'
 	| 'ci-runner-var'
+	| 'ppe-sweep'
 	| 'route'
 	| 'unattributed';
 
