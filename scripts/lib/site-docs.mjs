@@ -75,3 +75,17 @@ export function readPm2Hosts(opts = {}) {
 export function readChildApps(opts = {}) {
 	return readSiteDoc(CHILD_APPS_FILE, opts);
 }
+
+/**
+ * The node a child-apps row RUNS on. A `"placement": "fleet"` row carries it as
+ * `node`, its committed copy of where the fleet placed it (hadoku_site#491 part
+ * 2), and has no `host`; every other row names `host`. Read through here, never
+ * `row.host` directly: on 2026-11-01 the tunnel writer read `host`, found no
+ * app placed on claw-4 or claw-6 once three rows moved to `node`, and wrote
+ * catch-all-only ingress — watchparty, pygmalion and archivebot were off the
+ * internet for five hours behind healthy origins.
+ */
+export function placedHostOf(row) {
+	if (!row || typeof row !== 'object') return null;
+	return row.placement === 'fleet' ? (row.node ?? null) : (row.host ?? null);
+}

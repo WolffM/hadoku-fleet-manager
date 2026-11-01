@@ -13,6 +13,7 @@ import {
 	placementsFor,
 	renderConfig,
 	repairScript,
+	routedHostnames,
 	tunnelHosts,
 } from './service-tunnels.mjs';
 
@@ -417,4 +418,67 @@ test("a pair's public /health answered by its standby is routed; any other 5xx i
 		hostsDoc: { ...hostsDoc, hosts: { 'claw-4': { tunnel: 'claw-4' } } },
 	});
 	assert.equal(solo.findings[0].kind, 'tunnel-route');
+});
+
+/**
+ * 2026-11-01: hadoku_site moved watchparty, pygmalion and archive-bot to
+ * `"placement": "fleet"` rows, which carry `node` and no `host`. Read as
+ * `host`, no app was placed on claw-4 or claw-6, and the converger wrote
+ * catch-all-only ingress over three live services for five hours.
+ */
+test('a fleet-placed row routes on its committed node, exactly as a host row does', () => {
+	const fleet = {
+		apps: [
+			{ id: 'pygmalion', placement: 'fleet', node: 'claw-4', epoch: 0, tunnel: { port: '9002' } },
+			{
+				id: 'archive-bot',
+				placement: 'fleet',
+				node: 'claw-4',
+				epoch: 0,
+				handWired: { port: '3004', hostname: 'archivebot.hadoku.me' },
+			},
+		],
+	};
+	assert.deepEqual(
+		placementsFor('claw-4', fleet).map((p) => `${p.hostname}:${p.port}`),
+		['archivebot.hadoku.me:3004', 'pygmalion.hadoku.me:9002']
+	);
+	assert.equal(appLayerHost('pygmalion', { hostsDoc, childApps: fleet }), 'claw-4', 'not the hub');
+});
+
+test('a rewrite that would drop a hostname the tunnel routes now is a finding, and the config is left alone', async () => {
+	const live = claw4Live(); // routes pygmalion.hadoku.me
+	const w = world({
+		tunnels: { 'claw-4': ID },
+		hosts: { 'claw-4': live },
+		cname: { 'pygmalion.hadoku.me': `${ID}.cfargotunnel.com` },
+	});
+	// The placements read empty: the 2026-11-01 shape.
+	const { findings } = await run(w, {
+		hostsDoc: { ...hostsDoc, hosts: { 'claw-4': { tunnel: 'claw-4' } } },
+		childApps: { apps: [] },
+	});
+	const drop = findings.find(
+		(f) =>
+			f.category === 'tunnel-would-drop' ||
+			f.kind === 'tunnel-would-drop' ||
+			/tunnel-would-drop/.test(JSON.stringify(f))
+	);
+	assert.ok(drop, JSON.stringify(findings));
+	assert.match(JSON.stringify(drop), /pygmalion\.hadoku\.me/);
+	assert.equal(w.hosts['claw-4'].config, live.config, 'the live config is untouched');
+	assert.ok(
+		!w.calls.some(
+			(c) => c === 'repair claw-4' && /config\.yml/.test(w.hosts['claw-4'].script ?? '')
+		),
+		'no config written'
+	);
+});
+
+test('routedHostnames reads the hostnames a config routes, never the catch-all', () => {
+	assert.deepEqual(routedHostnames(renderConfig(ID, placementsFor('claw-4', childApps))), [
+		'pygmalion.hadoku.me',
+	]);
+	assert.deepEqual(routedHostnames(renderConfig(ID, [])), []);
+	assert.deepEqual(routedHostnames(null), []);
 });

@@ -38,6 +38,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { hostsPm2Services } from '../../dist/lib/node-role.js';
+import { placedHostOf } from './site-docs.mjs';
 
 export const TOKEN_ENV = 'CLOUDFLARE_TUNNEL_API_TOKEN';
 export const ZONE = 'hadoku.me';
@@ -76,13 +77,15 @@ export function tunnelHosts(manifest, hostsDoc) {
 }
 
 /**
- * What a host's ingress must route: apps whose `host` or `standby` is this node,
+ * What a host's ingress must route: apps placed on this node (`placedHostOf`) or
+ * standing by on it,
  * with the port and hostname hadoku_site's own tools use (`service-move.mjs`).
  */
 export function placementsFor(node, childApps) {
 	const out = [];
 	for (const app of childApps.apps ?? []) {
-		const role = app.host === node ? 'primary' : app.standby === node ? 'standby' : null;
+		const host = placedHostOf(app);
+		const role = host === node ? 'primary' : app.standby === node ? 'standby' : null;
 		if (!role) continue;
 		const port = app.tunnel?.port ?? app.handWired?.port;
 		if (!port) continue;
@@ -108,7 +111,12 @@ export function placementsFor(node, childApps) {
 export function appLayerHost(app, { hostsDoc, childApps }) {
 	const row = (childApps.apps ?? []).find((a) => a.tenant === app || a.id === app);
 	if (!row || !(row.tunnel?.port ?? row.handWired?.port)) return null;
-	return row.host ?? hostsDoc.hub ?? null;
+	return placedHostOf(row) ?? hostsDoc.hub ?? null;
+}
+
+/** The hostnames a cloudflared config routes, in order. */
+export function routedHostnames(config) {
+	return [...String(config ?? '').matchAll(/^\s*-\s*hostname:\s*(\S+)\s*$/gm)].map((m) => m[1]);
 }
 
 export function renderConfig(tunnelId, placements) {
@@ -336,6 +344,24 @@ export async function convergeTunnels({ manifest, hostsDoc, childApps, token, wr
 			down: seen.enabled !== 'enabled' || seen.active !== 'active',
 		};
 		rec.drift = Object.keys(drift).filter((k) => drift[k]);
+
+		// A REWRITE NEVER DROPS A ROUTED HOSTNAME ON ITS OWN. On 2026-11-01 the
+		// placements read empty (three rows had moved from `host` to `node`) and
+		// the converger wrote catch-all-only ingress over three live services.
+		// Taking a name off a tunnel is a move or a teardown, said by a human;
+		// here it is a finding, and the config is left as it is.
+		const dropped = routedHostnames(seen.config).filter(
+			(h) => !placements.some((p) => p.hostname === h)
+		);
+		if (drift.config && dropped.length) {
+			find(
+				node,
+				'tunnel-would-drop',
+				`the rendered ingress drops ${dropped.join(', ')}, which this tunnel routes now; config left unchanged (move or end the placement first)`
+			);
+			drift.config = false;
+			rec.drift = Object.keys(drift).filter((k) => drift[k]);
+		}
 
 		if (rec.drift.length && write) {
 			let creds = null;

@@ -25,6 +25,8 @@
  * tailscaled) is still an open port.
  */
 
+import { placedHostOf } from './site-docs.mjs';
+
 export const UNIT_DIR = '/etc/systemd/system';
 export const unitName = (app) => `fleet-peer-${app}.service`;
 
@@ -41,7 +43,8 @@ export function peerPorts(childApps, hostsDoc) {
 	const problems = [];
 	const add = (node, p) => out.set(node, [...(out.get(node) ?? []), p]);
 	for (const app of childApps.apps ?? []) {
-		if (!app.host || !app.standby) continue;
+		const host = placedHostOf(app);
+		if (!host || !app.standby) continue;
 		const raw = app.tunnel?.env?.[`${upperSnake(app.id)}_PEER_PORT`];
 		if (raw === undefined) continue;
 		const port = Number(raw);
@@ -50,8 +53,8 @@ export function peerPorts(childApps, hostsDoc) {
 			continue;
 		}
 		const pair = [
-			[app.host, app.standby],
-			[app.standby, app.host],
+			[host, app.standby],
+			[app.standby, host],
 		];
 		for (const [node, mate] of pair) {
 			const mateIp = hostsDoc.hosts?.[mate]?.tailnetIp ?? null;

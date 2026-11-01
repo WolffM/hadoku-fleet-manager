@@ -8,7 +8,13 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { CHILD_APPS_FILE, PM2_HOSTS_FILE, readChildApps, readPm2Hosts } from './site-docs.mjs';
+import {
+	placedHostOf,
+	CHILD_APPS_FILE,
+	PM2_HOSTS_FILE,
+	readChildApps,
+	readPm2Hosts,
+} from './site-docs.mjs';
 import { tempDir } from './test-tmpdir.mjs';
 
 /** A fake hadoku_site checkout with `scripts/<file>.json`, or neither. */
@@ -99,4 +105,16 @@ test('siteRoot() itself throwing (misconfigured HADOKU_SITE_ROOT) is {ok:false},
 		if (before === undefined) delete process.env.HADOKU_SITE_ROOT;
 		else process.env.HADOKU_SITE_ROOT = before;
 	}
+});
+
+test('placedHostOf: a fleet row is on its node, any other row on its host, and a fleet row never falls back to host', () => {
+	assert.equal(placedHostOf({ placement: 'fleet', node: 'claw-6', epoch: 0 }), 'claw-6');
+	assert.equal(placedHostOf({ host: 'claw-4' }), 'claw-4');
+	assert.equal(
+		placedHostOf({ placement: 'fleet', host: 'claw-4' }),
+		null,
+		'a half-converted row is not guessed'
+	);
+	assert.equal(placedHostOf({}), null);
+	assert.equal(placedHostOf(null), null);
 });
