@@ -111,22 +111,13 @@ export function resolveSliceName(name?: string | null): string {
 }
 
 /**
- * What a job is RESERVED at when nothing has measured it.
- *
- * Deliberately NOT the per-unit cap any more. The two were one number until
- * 2026-09-14 — `Math.min(jobP95Mb ?? unitMaxMb, unitMaxMb)` — and that was fine
- * only while the cap happened to sit in the middle of the measured band. The
- * cap is now the slice's own ceiling ({@link unitMemoryMaxMb}), and a node
- * reserving ~13.8 GB for an unmeasured job would admit exactly one mint and
- * queue everything else: the 2026-09-01 shape, where 13 jobs sat queued while
- * dispatch logged "no node can take this job right now".
- *
- * 4096 is the same number, from the same harvest, for the same reason it was
- * ever chosen: 674 job windows, p95 2,663 MB, max 2,954 MB, so a 4 GB
- * reservation is ~1.4x the worst job ever observed and clears every one of them.
- * It is an ESTIMATE of appetite, which is all a reservation ever was.
+ * What a job is RESERVED at when nothing has measured it. Moved to
+ * `src/lib/job-reserve.ts` (wave clean-1 lane C/D, cut (iii)): `jobReserve`
+ * is pure and `scripts/check-warm-canary.mjs` (observation) needs the same
+ * answer. Re-exported here under its original path.
  */
-export const JOB_RESERVE_DEFAULT_MB = 4096;
+import { JOB_RESERVE_DEFAULT_MB } from '../lib/job-reserve.js';
+export { JOB_RESERVE_DEFAULT_MB };
 
 /**
  * The per-unit `MemoryMax` for a minted runner: the slice's own ceiling, never

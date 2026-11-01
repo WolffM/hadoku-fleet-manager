@@ -350,17 +350,12 @@ export const SATURATED_QUEUED_MS = 30_000;
 
 /**
  * Past this, a run is STUCK rather than starved and minting cannot help it.
- *
- * The pilot's first two mints went to runs queued since 2026-08-17 and
- * 2026-08-19 — ten and twelve days. Nothing will ever pick those up (a deleted
- * branch, a label no runner carries, a cancelled dependency), so a floor-only
- * gate mints for them every time the previous attempt TTLs out: a treadmill that
- * burns a slot an hour, forever, on work that does not exist.
- *
- * One hour is ~22x the fleet's measured queue p95 of 161 s. A run that has
- * genuinely waited that long in a 12-slot fleet is not waiting for capacity.
+ * Moved to `src/lib/queue-thresholds.ts` (wave clean-1 lane C/D, cut (iii)):
+ * `scripts/check-queue-health.mjs` (observation) needs the same boundary.
+ * Re-exported here under its original path.
  */
-export const MAX_QUEUED_MS = 3_600_000;
+import { MAX_QUEUED_MS } from '../lib/queue-thresholds.js';
+export { MAX_QUEUED_MS };
 
 /**
  * Past THIS, a stuck run is a ZOMBIE rather than merely stranded.

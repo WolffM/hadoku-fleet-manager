@@ -83,9 +83,28 @@ import {
 	GH_BUDGET_HISTORY_FILE,
 	type GhBudgetHistoryRow,
 } from './gh-budget-history-store.js';
-import type { FleetGithubBudget, GhCaller } from './fleet-report-types.js';
-
-export type { GhCaller } from './fleet-report-types.js';
+/**
+ * Who made a GitHub call. One word per loop, so a page can name the spender
+ * (#119).
+ *
+ * Defined here, not in `fleet-report-types-budget.ts` (wave clean-1 lane C,
+ * cut (iii)): `withGhCaller`'s `AsyncLocalStorage` scope below is what sets
+ * one of these, so this module is the real owner. `fleet-report-types-budget.ts`
+ * imports and re-exports it from here under its original path.
+ */
+export type GhCaller =
+	| 'reap'
+	| 'dispatch-poll'
+	| 'dispatch-probe'
+	| 'mint'
+	| 'warm-cache'
+	| 'fleet-loop'
+	| 'runner-health'
+	| 'backstop'
+	| 'ci-alerts'
+	| 'ci-runner-var'
+	| 'route'
+	| 'unattributed';
 
 const callerScope = new AsyncLocalStorage<GhCaller>();
 
@@ -649,6 +668,57 @@ function maybeAlert(w: BudgetWindow, nowMs: number): void {
 			`[gh-budget] could not post the low-budget alert: ${err instanceof Error ? err.message : String(err)}`
 		)
 	);
+}
+
+/**
+ * One token's hourly GitHub budget, as GitHub last reported it, with who in
+ * this process spent it (#119).
+ *
+ * `used`/`remaining` are the TOKEN's — HADOKU_SITE_TOKEN is shared with the
+ * workflows that use it — while `byCaller` is only this process's calls since
+ * `countedSince` (a restart resets it). `otherSinceFirst` is the difference:
+ * what the token was charged in that time that no caller here accounts for.
+ *
+ * Defined here, not in `fleet-report-types-budget.ts` (wave clean-1 lane C,
+ * cut (iii)): `getGhBudgetSnapshot` below is what builds one, from this
+ * module's own `windows` state, so this module is the real owner.
+ * `fleet-report-types-budget.ts` imports and re-exports it from here under
+ * its original path.
+ */
+export interface FleetGithubBudget {
+	/** A label and a hash prefix, never the token. */
+	token: string;
+	resource: string;
+	limit: number;
+	remaining: number;
+	used: number;
+	/** remaining / limit, 0..1. */
+	fractionLeft: number;
+	resetAt: string;
+	observedAt: string;
+	/** True once the clock has passed `resetAt` — a past window's reading. */
+	expired: boolean;
+	countedSince: string;
+	/** Charged calls (non-304) and free 304s per caller, most charged first. */
+	byCaller: { caller: GhCaller; charged: number; notModified: number }[];
+	otherSinceFirst: number;
+	/**
+	 * What each metered caller (`meterGhPool`; mgmt-api's crons) moved the pool
+	 * by while it ran, net of this process, most first. Upper bounds that
+	 * overlap: a cron is charged with whatever else ran beside it. Optional only
+	 * for readers built against an older report.
+	 */
+	metered?: { caller: string; runs: number; spent: number; unread: number }[];
+	/** Spend that was not this process's, per five minutes, oldest first. */
+	outsideTimeline?: { at: string; outside: number }[];
+	/** The low-budget alert has fired for this window. */
+	alerted: boolean;
+	/**
+	 * How many processes have carried these books over from a predecessor —
+	 * mgmt-api restarts on every deploy, and the books are persisted. Optional
+	 * only for readers built against an older report.
+	 */
+	restarts?: number;
 }
 
 export function getGhBudgetSnapshot(nowMs = Date.now()): FleetGithubBudget[] {

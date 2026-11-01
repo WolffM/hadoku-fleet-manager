@@ -32,12 +32,20 @@ const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src')
  * reads it — wave 5r lane A split that barrel into `fleet-report-types-*.ts`
  * section files it re-exports, so a source-text scan for a union or a field
  * now has to read every section, not the one file that used to hold them all.
+ *
+ * `gh-budget.ts` joined this set in wave clean-1 lane C (cut (iii)):
+ * `GhCaller`/`FleetGithubBudget` moved there from
+ * `fleet-report-types-budget.ts`, which now only re-exports the names —
+ * `fractionLeft`/`remaining`/`limit`/`expired` live in `gh-budget.ts`'s own
+ * source text, not in any `fleet-report-types-*.ts` file, so a scan limited
+ * to that glob no longer finds them.
  */
 function fleetReportTypesSource() {
 	const files = readdirSync(SRC_DIR).filter(
 		(f) => f === 'fleet-report-types.ts' || f.startsWith('fleet-report-types-')
 	);
-	return files.map((f) => readFileSync(join(SRC_DIR, f), 'utf8')).join('\n');
+	const relocated = ['gh-budget.ts'];
+	return [...files, ...relocated].map((f) => readFileSync(join(SRC_DIR, f), 'utf8')).join('\n');
 }
 
 // The real clock, not a pinned date: every fixture below is relative to NOW and

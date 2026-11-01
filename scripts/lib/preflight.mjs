@@ -97,7 +97,7 @@
  * and it does not weaken property (2) either, because
  * {@link BACKSTOP_BLOCKING_CATEGORIES} keeps "could not look at it" blocking.
  */
-import { JIT_PREFIX, WARM_PREFIX } from '../../dist/runners/ephemeral.js';
+import { JIT_PREFIX, WARM_PREFIX } from '../../dist/lib/jit-naming.js';
 
 /** Fails the gate. The default for anything not deliberately marked otherwise. */
 export const BLOCKING = 'blocking';

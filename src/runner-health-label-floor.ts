@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { logger, stateDir, recordAlertQuietly } from './host.js';
-import { getFleetProbeSnapshot } from './fleet-loop.js';
+import { getFleetProbeSnapshot } from './fleet-probe-store.js';
 // Re-exported so runner-health-runs.ts's own queuedMintView() does not open a
-// second direct edge to fleet-loop.ts for the same probe this file already reads.
+// second direct edge to fleet-probe-store.ts for the same probe this file
+// already reads.
 export { getFleetProbeSnapshot };
 import { loadClawNodes, loadEphemeralNodes, loadFleetNodeNames } from './lib/manifest.js';
 import {
@@ -20,11 +21,11 @@ import {
 	observedFloorDemand,
 	type LabelFloorVerdict,
 } from './label-floor.js';
-import { isProofRunnerName } from './runners/prove-job.js';
+import { isProofRunnerName } from './lib/jit-naming.js';
 import { RETENTION_DAYS, jobRecords } from './job-history-store.js';
 import { setUnschedulableNodes } from './runners/schedulable.js';
 import { deriveClawState } from './runners/claw-state.js';
-import { setPm2HostBusy } from './node-reservation.js';
+import { setPm2HostBusy } from './pm2-host-busy-store.js';
 import {
 	runBackstopDecision,
 	__resetBackstopDecisionForTesting,

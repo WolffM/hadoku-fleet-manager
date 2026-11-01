@@ -5,7 +5,8 @@
  * node — see `prove-job.ts` for the orchestration this feeds.
  */
 import { capability, type JobProof } from '../lib/capability-registry.js';
-import { JIT_PREFIX, jitRunnerName, type ProveSpec } from './prove-job-types.js';
+export { isProofRunnerName } from '../lib/jit-naming.js';
+import { jitRunnerName, type ProveSpec } from './prove-job-types.js';
 
 /** `owner/repo` -> `repo`, narrowed to what a unit name admits. */
 function repoSlug(repo: string): string {
@@ -47,13 +48,6 @@ export function dispatchBody(
 	const inputs: Record<string, string> = { ...(spec.inputs ?? {}) };
 	if (spec.runsOnInput) inputs[spec.runsOnInput] = JSON.stringify(labels);
 	return Object.keys(inputs).length ? { ref: spec.ref, inputs } : { ref: spec.ref };
-}
-
-export function isProofRunnerName(name: string, node: string): boolean {
-	return (
-		name.startsWith(`${JIT_PREFIX}${node}-proof-`) &&
-		/-j0-r0-\d+$/.test(name.replace(/\.service$/, ''))
-	);
 }
 
 /** Drop a trailing `# comment` that is not inside quotes. Workflow `runs-on` lines are simple. */

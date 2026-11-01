@@ -7,13 +7,11 @@
  * genuine test seam, but no CONSUMER should ever have to hand this package its
  * own GitHub client.
  */
-import type { Router } from 'express';
 import { installHost, type FleetHost } from './host.js';
 import { ghGetConditional, ghGet, ghWrite } from './lib/github-client.js';
 import { startRunnerHealthMonitor, getRunnerHealthSnapshot } from './runner-health.js';
 import { startFastLoop } from './fleet-loop.js';
 import { router as fleetRouter } from './routes/fleet.js';
-import type { RunnerHealthSnapshot } from './runner-health.js';
 import { startClawReboot } from './claw-reboot.js';
 import { startBackstopTools } from './backstop-tools.js';
 import { startHostingConverge } from './hosting-converge.js';
@@ -108,29 +106,14 @@ export type { ForceRecord, ForceState } from './runners/backstop-force.js';
 /** The /tmp floor the idle gate's caller applies beside `isHostIdle`. */
 export { TMP_FREE_FLOOR_MB } from './runners/ephemeral.js';
 
-export interface FleetManager {
-	/** Mount at `/api`. Serves `GET /fleet`. Works whether or not `start()` was
-	 *  ever called — a passive host (`host.controller === false`) still serves
-	 *  `GET /fleet` from whatever `snapshot()` returns. */
-	readonly router: Router;
-	/**
-	 * Starts both loops — runner-health (10 min) and the fast loop — UNLESS
-	 * `host.controller === false`, in which case it starts neither and logs one
-	 * line saying so. See `FleetHost.controller` in host.ts.
-	 */
-	start(): void;
-	/**
-	 * The last runner-health tick, or `null` if none has ever completed.
-	 *
-	 * On a passive host (`controller: false`) this is ALWAYS `null`: `start()`
-	 * never calls `startRunnerHealthMonitor()`, so no tick ever runs and no
-	 * snapshot is ever recorded — never "the last known state", because there
-	 * is no state to know. The router still returns it, so `GET /fleet` on a
-	 * passive host is a well-formed response reporting nothing rather than a
-	 * missing route.
-	 */
-	snapshot(): RunnerHealthSnapshot | null;
-}
+/**
+ * Moved to `server.ts` (wave clean-1 lane C, cut (iii)): that is the one
+ * other file that needs it typed, and composition importing surfaces is the
+ * legal direction (not the reverse). Re-exported here under its original
+ * path for every existing importer.
+ */
+import type { FleetManager } from './server.js';
+export type { FleetManager } from './server.js';
 
 let constructed = false;
 

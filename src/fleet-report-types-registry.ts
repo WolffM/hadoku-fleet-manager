@@ -8,37 +8,20 @@
 
 /**
  * THE THREE JOB-REGISTRY REPORT SHAPES (refactor plan §6.2: "report shapes:
- * ConvergeDoc (exists), GateDoc, RecordDoc"), placed together because
+ * ConvergeDoc (exists), GateDoc, RecordDoc"), presented together because
  * `src/lib/job-runner.ts` classifies a job's tick by reading one of these,
  * never the other way around — a reader must not read its own writer's
  * artifact, but all three artifacts are read by the ONE runner, so their
- * shapes belong next to each other rather than beside each job's own file.
+ * shapes belong next to each other for every importer of this barrel.
  *
- * `ConvergeDoc` moved here from `src/scheduled-converger.ts` (still
- * re-exported there, and from `src/provisioning-converge.ts`, for every
- * existing importer) when `GateDoc`/`RecordDoc` were added, so the three
- * shapes have one home instead of drifting apart as each gained its own.
+ * `ConvergeDoc`/`ConvergeRow` moved back to `src/scheduled-converger.ts`
+ * (wave clean-1 lane C, cut (iii)): that automation-layer module is their
+ * real owner (`createConverger` is what produces one), and this file
+ * (surfaces) importing them from there, rather than the other way round, is
+ * the legal direction. Re-exported here under their original path for every
+ * existing importer of `fleet-report-types(-registry).ts`.
  */
-
-/** One (node, facet) finding, as every converger's `--json` reports it. */
-export interface ConvergeRow {
-	node: string;
-	facet: string;
-	before?: string;
-	changed?: string;
-	why?: string;
-}
-
-/** A converger subcommand's `--json`, as far as the job runner reads it. */
-export interface ConvergeDoc<R extends ConvergeRow = ConvergeRow> {
-	ok: boolean;
-	planned: R[];
-	converged: R[];
-	deferred: R[];
-	unconverged: R[];
-	unreadable: { node: string; facet: string; why: string }[];
-	changed: { node: string; facet: string; changed: string }[];
-}
+export type { ConvergeDoc, ConvergeRow } from './scheduled-converger.js';
 
 /**
  * A gate's `--json`: it never mutates, and reports what it found rather than

@@ -45,10 +45,15 @@ import { logger, stateDir } from './host.js';
 import { FRESH_HORIZON_H } from './job-history-ingest.js';
 import { historyCompleteSinceMs, jobRecords, type JobRecord } from './job-history-store.js';
 import { failuresByZone, nodeOf, percentile, type FailuresByZone } from './job-history-stats.js';
-import { ROLLUP_FILE, jsonlRollupStore, type RollupStore } from './job-rollup-store.js';
+import {
+	ROLLUP_FILE,
+	jsonlRollupStore,
+	type RollupStore as RollupStoreOf,
+	type RollupDay,
+} from './job-rollup-store.js';
 import { jobKind } from './lib/job-kind.js';
 import { HOSTED_NODE } from './runners/census.js';
-import { JIT_PREFIX, WARM_PREFIX } from './runners/ephemeral.js';
+import { JIT_PREFIX, WARM_PREFIX } from './lib/jit-naming.js';
 
 /** Bumped when a row's meaning changes, so a reader can refuse a mix. */
 export const ROLLUP_SCHEMA = 1;
@@ -99,18 +104,16 @@ export interface RollupRow {
 	byClass: Partial<Record<RunnerClass, ClassStats>>;
 }
 
-export interface DayRollup {
-	schema: number;
-	/** `YYYY-MM-DD`, UTC, by `startedAt`. */
-	day: string;
-	writtenAt: string;
-	/** The evidence boundary this day was judged whole against. */
-	completeSince: string;
-	/** Organic records folded into `rows`. 0 is a day the ledger saw and found empty. */
-	records: number;
-	probesExcluded: number;
-	rows: RollupRow[];
-}
+/**
+ * One whole day's rollup. `RollupDay<Row>` (job-rollup-store.ts, state) is
+ * the generic envelope — schema/day/writtenAt/completeSince/records/
+ * probesExcluded — that module's own storage format; `RollupRow` below is
+ * what this domain puts in it.
+ */
+export type DayRollup = RollupDay<RollupRow>;
+
+/** This module's own `RollupStore`/`jsonlRollupStore`, fixed to `RollupRow`. */
+type RollupStore = RollupStoreOf<RollupRow>;
 
 export function utcDay(ms: number): string {
 	return new Date(ms).toISOString().slice(0, 10);
@@ -232,7 +235,7 @@ let defaultStorePath: string | null = null;
 function storeAtStateDir(): RollupStore {
 	const path = rollupFile();
 	if (!defaultStore || defaultStorePath !== path) {
-		defaultStore = jsonlRollupStore(path);
+		defaultStore = jsonlRollupStore<RollupRow>(path);
 		defaultStorePath = path;
 	}
 	return defaultStore;

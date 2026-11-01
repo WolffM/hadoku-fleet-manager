@@ -5,12 +5,31 @@ import {
 	type ManifestNode,
 } from './capability-registry.js';
 import { provenCapabilities } from './bootcamp-proof.js';
-import type { ProofRecord } from './measured.js';
-// Re-exported too: `capability-offer.ts` needs the type as well, and importing
-// it from here instead of from `./measured.js` directly keeps this the ONLY
-// file in the capabilities.ts split with an edge into the state layer (cut
-// (iii) — see the layer-map decision note beside this split).
-export type { ProofRecord } from './measured.js';
+
+/**
+ * One (node, capability) workload-proof result.
+ *
+ * Lives here, not in `measured.ts`, even though `measured.ts` is what reads
+ * and writes it: this is config's own edge into the state layer (wave
+ * clean-1 lane C, cut (iii)), fixed by moving the plain data shape down to
+ * the layer that needs it rather than importing it up. `measured.ts`
+ * re-exports it (`export type { ProofRecord } from './workload-gate.js'`)
+ * for every caller already importing it from there.
+ */
+export interface ProofRecord {
+	node: string;
+	capability: string;
+	runId: number | null;
+	runner: string | null;
+	conclusion: string | null;
+	durationSec: number | null;
+	evidenceMatched: boolean;
+	budgetSec: number | null;
+	verdict: 'pass' | 'fail' | 'stale';
+	why: string;
+	at: string;
+}
+// Re-exported too: `capability-offer.ts` needs the type as well.
 
 // ---------------------------------------------------------------------------
 // Workload proofs — wave 4e (#102): bootcamp earns the workload, not just the

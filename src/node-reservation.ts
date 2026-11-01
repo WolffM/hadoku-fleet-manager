@@ -59,6 +59,8 @@
 import { readFileSync } from 'node:fs';
 import { cronProfilesPath } from './host.js';
 import { activeLeases } from './host-lease.js';
+import { __resetPm2HostBusyForTesting } from './pm2-host-busy-store.js';
+export { setPm2HostBusy, getPm2HostBusy } from './pm2-host-busy-store.js';
 
 /**
  * How long after a profile's cron fires we keep the declared reservation open.
@@ -69,50 +71,6 @@ import { activeLeases } from './host-lease.js';
 export const DECLARED_WINDOW_MINUTES = 90;
 
 let inFlight = 0;
-
-/**
- * Which NODES are serving pm2-host work, published by runner-health.
- *
- * A SET, not a flag. `pm2-host` has been PROBED rather than declared since
- * 2026-09-15 (#6), so a claw can EARN it and migration one's box will; one
- * boolean for two holders answers about the fleet when every caller is asking
- * about a box.
- *
- * A push rather than a probe: runner-health already holds the runner listing and
- * the in-progress runs, so it can answer this for free, while the fast loop runs
- * every 60s and must not spend an API call per tick re-asking. Stale by at most
- * one runner-health tick, which is fine — deploys are minutes long and the cron
- * signal, which is the one that matters at night, is exact.
- */
-let pm2HostBusyNodes: ReadonlySet<string> = new Set<string>();
-
-/**
- * Publish the whole set, never one node at a time.
- *
- * The writer holds ONE listing, and a node that has dropped off it is no longer
- * busy — an incremental setter would need a matching clear that nobody would
- * remember to call, and a node stuck `true` is a node silently withheld from CI
- * forever.
- */
-export function setPm2HostBusy(nodes: Iterable<string>): void {
-	pm2HostBusyNodes = new Set(nodes);
-}
-
-/**
- * Is `node` serving pm2-host work right now?
- *
- * WITH NO ARGUMENT it answers "is ANY node", which is the fleet-wide collapse
- * this set exists to end. It is kept for the one caller that has no node in
- * hand — `tickFleet`'s `pm2HostBusy` default parameter in `fleet-loop.ts`,
- * which reserves tiers by `RESERVABLE_NODES` membership rather than by asking
- * per machine. That call site is the last fleet-blind reader of this rung: it
- * over-reserves (a busy holder anywhere forces hokon's tier off), which costs
- * capacity rather than correctness, and converting it means restructuring the
- * fast loop's reservation to run per tier machine.
- */
-export function getPm2HostBusy(node?: string): boolean {
-	return node === undefined ? pm2HostBusyNodes.size > 0 : pm2HostBusyNodes.has(node);
-}
 
 /** Wrap a cron dispatch so the node is reserved for exactly its duration. */
 export function noteCronStart(): void {
@@ -126,7 +84,7 @@ export function inFlightCronJobs(): number {
 }
 export function __resetReservationForTesting(): void {
 	inFlight = 0;
-	pm2HostBusyNodes = new Set<string>();
+	__resetPm2HostBusyForTesting();
 }
 
 interface Profile {

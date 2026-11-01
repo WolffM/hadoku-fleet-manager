@@ -13,7 +13,7 @@ import {
 	trimToBudget,
 	type JobRecord,
 } from './job-history-store.js';
-import { WARM_PREFIX, parseJitName } from './runners/ephemeral.js';
+import { WARM_PREFIX, parseJitName } from './lib/jit-naming.js';
 
 /**
  * Runs whose jobs we may fetch per tick, SHARED across every repo in the sweep.

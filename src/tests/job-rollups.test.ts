@@ -25,6 +25,7 @@ import {
 	utcDay,
 	writeClosedDays,
 	type DayRollup,
+	type RollupRow,
 } from '../job-rollups.js';
 import { testHost } from './install-test-host.js';
 
@@ -249,7 +250,7 @@ test('a day later in the week is added without rewriting the days already held',
 	const file = join(tmp, 'job-rollups.jsonl');
 	const records = eightDays();
 	const since = Date.parse(records[0].startedAt);
-	const store = jsonlRollupStore(file);
+	const store = jsonlRollupStore<RollupRow>(file);
 	writeClosedDays({ nodes: NODES, nowMs: NOW - DAY, records, completeSinceMs: since, store });
 	const before = store.read().days;
 	const r = writeClosedDays({ nodes: NODES, nowMs: NOW, records, completeSinceMs: since, store });

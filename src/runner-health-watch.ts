@@ -25,9 +25,9 @@ import {
 } from './runners/disk-watch.js';
 import { backstopMachinesReader } from './runners/backstop-machines.js';
 import { mintsOnDemand, type MintBearingNode } from './lib/node-role.js';
-import { TMP_FREE_FLOOR_MB, parseJitName } from './runners/ephemeral.js';
+import { TMP_FREE_FLOOR_MB, parseJitName } from './lib/jit-naming.js';
 // Re-exported so runner-health-queue-classify.ts's mismatchedMints/deafMints
-// do not open a second direct edge to runners/ephemeral.ts for this parser.
+// do not open a second direct edge to lib/jit-naming.ts for this parser.
 export { parseJitName };
 import { checkNodeRegressions, defaultGatedKinds } from './runners/node-regression.js';
 import { lastSnapshot, getRunnerHealthSnapshot } from './runner-health-snapshot.js';

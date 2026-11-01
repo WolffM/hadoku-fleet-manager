@@ -124,7 +124,7 @@ import { deriveJobReserves } from './lib/demand-derive.mjs';
 import { metricsReadScript, metricsSince, perJobCosts, readOutcome } from './lib/job-metrics.mjs';
 import { BUILDER_LABEL } from '../dist/lib/capability-registry.js';
 import { RETENTION_DAYS } from '../dist/job-history-store.js';
-import { FAST_LOOP_SECONDS, RECONCILE_EVERY_TICKS } from '../dist/fleet-loop.js';
+import { FAST_LOOP_SECONDS, RECONCILE_EVERY_TICKS } from '../dist/lib/fast-loop-cadence.js';
 import { createEmitter } from './lib/emit.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';

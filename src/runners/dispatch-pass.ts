@@ -38,7 +38,6 @@ import { nodeOf } from './census.js';
 import { recordDispatchDay } from './dispatch-daily.js';
 import { JitDecisionBook, decisionLogEnabled, recordWarmAssignments } from './decision-log.js';
 import { satisfiesLabels, type NodeState } from './placement.js';
-import type { FleetDispatchAffinity } from '../fleet-report-types.js';
 
 export interface DispatchPassInput {
 	/** Nodes allowed to mint, in placement order (see runners/traffic.ts). */
@@ -212,14 +211,39 @@ export function __resetReapClockForTesting(): void {
 }
 
 /**
- * How many successful mints warm affinity landed on a warm node, and how many
- * it MOVED there — `warm-affinity-measured-2-2026-09-15.md` §5e.
+ * Did warm affinity DECIDE where the dispatcher's mints went, or were they warm
+ * by chance? (`warm-affinity-measured-2-2026-09-15.md` §5e.)
  *
- * Module state, and that does not break the reconstruct-from-the-nodes rule
- * above for the same reason `lastReapMs` does not: no decision reads it. It
- * resets on restart, which is why the per-pass `[dispatch]` log line carries
- * the per-pass counts and the re-cut sums THOSE, never these totals.
+ * Three counts per mint that SUCCEEDED, each a subset of the one before:
+ *   minted              every successful JIT mint
+ *   mintedViaAffinity   ...landing on a node warm for that repo (the
+ *                       concentration metric: 74 % with the term OFF)
+ *   mintedAffinityMoved ...that plain ordering would have sent ELSEWHERE —
+ *                       the term's own effect
+ *
+ * `lastPass` is the last pass that minted anything (`null` = none since
+ * restart); `totals` are since process start. Neither is persisted: mgmt-api
+ * restarts several times a day, so the RECORD is the per-pass `[dispatch]` log
+ * line, summed across restarts. These are for a glance, not a re-cut.
+ *
+ * Defined here, not in `fleet-report-types-dispatch.ts` (wave clean-1 lane C,
+ * cut (iii)): this is this module's own in-memory state — `affinity` below is
+ * the one mutable copy, `getDispatchAffinitySnapshot` its one reader — so
+ * `dispatch-pass.ts` is the real owner. `fleet-report-types-dispatch.ts`
+ * imports and re-exports it from here under its original path.
  */
+export interface FleetDispatchAffinity {
+	lastPass: {
+		at: string;
+		minted: number;
+		mintedViaAffinity: number;
+		mintedAffinityMoved: number;
+	} | null;
+	totals: { minted: number; mintedViaAffinity: number; mintedAffinityMoved: number };
+}
+
+/** Module state for {@link FleetDispatchAffinity}; resets on restart and is
+ *  never read for a decision (see that type's own doc). */
 let affinity: FleetDispatchAffinity = {
 	lastPass: null,
 	totals: { minted: 0, mintedViaAffinity: 0, mintedAffinityMoved: 0 },

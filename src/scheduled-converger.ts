@@ -36,7 +36,6 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { ConvergeDoc, ConvergeRow } from './fleet-report-types.js';
 import { logger, manifestDir, postDiscord, stateDir } from './host.js';
 import { writeJsonAtomic } from './lib/atomic-json.js';
 import {
@@ -52,11 +51,33 @@ import {
 import { assertRegisteredClock } from './lib/job-registry.js';
 
 /**
- * `ConvergeDoc`/`ConvergeRow` moved to `fleet-report-types.ts` beside
- * `GateDoc`/`RecordDoc` (wave 5e lane B); re-exported here under their
- * original names and path for every existing importer.
+ * `ConvergeDoc`/`ConvergeRow` moved back here from `fleet-report-types.ts`
+ * (wave clean-1 lane C, cut (iii)): this automation-layer module is their
+ * real owner — `createConverger` below is what produces a `ConvergeDoc`'s
+ * `deferred`/`unconverged`/`unreadable`/`changed` arrays, nothing in the
+ * `GET /fleet` wire contract ever carries one — and `fleet-report-types.ts`
+ * importing them from here (rather than this file importing them from
+ * there) is the downward direction. `fleet-report-types-registry.ts`
+ * re-exports them under their original path, beside `GateDoc`/`RecordDoc`,
+ * so no existing importer of either path changes.
  */
-export type { ConvergeDoc, ConvergeRow } from './fleet-report-types.js';
+export interface ConvergeRow {
+	node: string;
+	facet: string;
+	before?: string;
+	changed?: string;
+	why?: string;
+}
+
+export interface ConvergeDoc<R extends ConvergeRow = ConvergeRow> {
+	ok: boolean;
+	planned: R[];
+	converged: R[];
+	deferred: R[];
+	unconverged: R[];
+	unreadable: { node: string; facet: string; why: string }[];
+	changed: { node: string; facet: string; changed: string }[];
+}
 
 export type ConvergeRunner<R extends ConvergeRow = ConvergeRow> = () => Promise<{
 	doc: ConvergeDoc<R> | null;

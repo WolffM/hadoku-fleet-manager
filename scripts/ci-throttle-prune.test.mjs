@@ -15,6 +15,7 @@
  * deterministically.
  */
 import { after, test } from 'node:test';
+import { TMP_FREE_FLOOR_MB } from '../dist/runners/ephemeral.js';
 import assert from 'node:assert/strict';
 import {
 	existsSync,
@@ -70,15 +71,6 @@ function stubDf(scratchDir, { totalMb, usedMb, availMb, fail = false, headerOnly
 // threshold arithmetic deterministically.
 const PRUNE_SCRATCH = mkdtempSync(join(tmpdir(), `${FIXTURE_PREFIX}prune-scratch-`));
 after(() => rmSync(PRUNE_SCRATCH, { recursive: true, force: true }));
-// Wave 5r lane D split of ephemeral.ts (800-line ceiling, pure move):
-// TMP_FREE_FLOOR_MB's declaration moved to ephemeral-admission.ts, re-exported
-// from ephemeral.ts for every runtime importer — but THIS literal is read
-// straight from source, so it must be read from where it now lives.
-const EPHEMERAL_TS_SRC = readFileSync(
-	join(SCRIPTS, '..', 'src', 'runners', 'ephemeral-admission.ts'),
-	'utf8'
-);
-const TMP_FREE_FLOOR_MB_MATCH = EPHEMERAL_TS_SRC.match(/TMP_FREE_FLOOR_MB\s*=\s*(\d+)/);
 
 /** Make every file inside `dir` (recursively, dir included) look `minutesAgo` old. */
 function ageAll(dir, minutesAgo) {
@@ -390,12 +382,12 @@ test('a failing rm never fails the job', () => {
 	assert.equal(r.code, 0, 'a failing rm must never fail the job');
 });
 
-test('PRUNE_FREE_MB default is strictly greater than TMP_FREE_FLOOR_MB', (t) => {
-	if (!TMP_FREE_FLOOR_MB_MATCH) {
-		t.skip('TMP_FREE_FLOOR_MB not found in src/runners/ephemeral.ts — lands in a sibling lane');
-		return;
-	}
-	const floor = Number(TMP_FREE_FLOOR_MB_MATCH[1]);
+// The admission floor itself, from the built module that exports it: reading
+// the literal out of a source file went silently to `skip` each time the
+// constant moved, which is a test that stops testing without failing.
+test('PRUNE_FREE_MB default is strictly greater than TMP_FREE_FLOOR_MB', () => {
+	const floor = TMP_FREE_FLOOR_MB;
+	assert.ok(Number.isInteger(floor) && floor > 0, `TMP_FREE_FLOOR_MB is ${floor}`);
 	const src = readFileSync(HOOK, 'utf8');
 	const m = src.match(/PRUNE_FREE_MB="\$\{PRUNE_FREE_MB:-(\d+)\}"/);
 	assert.ok(m, 'PRUNE_FREE_MB default not found in ci-throttle.sh');

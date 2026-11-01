@@ -106,7 +106,7 @@ export interface DiskReading {
  * fires with room to actually fix it, never at the instant admission itself
  * would already be refusing.
  */
-import { TMP_FREE_FLOOR_MB } from './ephemeral.js';
+import { TMP_FREE_FLOOR_MB } from '../lib/jit-naming.js';
 
 export const DISK_WATCH_ADVISORY_FREE_GB = 25;
 

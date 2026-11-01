@@ -143,8 +143,8 @@ import { printIdentityReport } from './lib/runner-identity-report.mjs';
 // The dispatcher's own reap sweep — its grace and its cadence — so an orphan it
 // has not REACHED yet is told apart from one it has FAILED to clear by the
 // numbers that sweep actually runs on, never by a copy of them.
-import { JIT_REAP_GRACE_MS, REAP_INTERVAL_MS } from '../dist/runners/ephemeral-exec.js';
-import { WARM_PREFIX } from '../dist/runners/ephemeral.js';
+import { JIT_REAP_GRACE_MS, REAP_INTERVAL_MS } from '../dist/lib/jit-reap-cadence.js';
+import { WARM_PREFIX } from '../dist/lib/jit-naming.js';
 import { nodeOf } from '../dist/runners/census.js';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,

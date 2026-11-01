@@ -8,6 +8,8 @@
  * here is re-exported from `ephemeral.ts` so its existing importers compile
  * unchanged.
  */
+import { TMP_FREE_FLOOR_MB } from '../lib/jit-naming.js';
+export { TMP_FREE_FLOOR_MB } from '../lib/jit-naming.js';
 
 export interface AdmissionInput {
 	/**
@@ -113,20 +115,6 @@ export interface AdmissionResult {
  * that cannot be measured past its own ceiling at all.
  */
 export const LOWER_BOUND_HEADROOM = 0.1;
-
-/**
- * Free-MB floor on `/tmp` below which a node is refused a mint (#101).
- *
- * #101: claw-4's tmpfs filled 03:22-04:14Z and failed 4 jobs while memory
- * admission still passed — a dataplatform pytest run plus a site build wrote
- * GBs onto a 7.8 GB tmpfs. Chosen to refuse a node observed at 300 MB free
- * and admit one observed at 3 GB free (the two reference points the wave that
- * added this clause measured against), and to refuse NO claw on the fleet as
- * measured 2026-10-06 (claw-4 itself sat at ~4.7 GB free that day). 2,048 MB:
- * comfortably under the 3 GB admit case, comfortably over the 300 MB refuse
- * case, round enough to reason about.
- */
-export const TMP_FREE_FLOOR_MB = 2048;
 
 /**
  * Free-MB floor on the filesystem holding `~/.hadoku/jit` below which a node

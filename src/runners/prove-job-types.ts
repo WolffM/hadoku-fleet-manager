@@ -7,9 +7,13 @@
  */
 import type { ManifestNode } from '../lib/capability-registry.js';
 import type { GhLike, ShellLike } from './ephemeral-exec.js';
-// prove-job-parse's two scheduling names, through this module's one edge into
-// ci-scheduling, so the split adds no layer-debt edge of its own.
-export { JIT_PREFIX, jitRunnerName } from './ephemeral-exec.js';
+// prove-job-parse's two naming names. JIT_PREFIX/jitRunnerName are config
+// (wave clean-1 lane C, cut (iii) — src/lib/jit-naming.ts), so this is no
+// longer routed through ephemeral-exec.ts; the edge into ci-scheduling below
+// is GhLike/ShellLike alone (the mint ports prove-job.ts's own orchestration
+// of ephemeral-exec's minting needs — see prove-job.ts's header; a real fix
+// there is a redesign, not a move).
+export { JIT_PREFIX, jitRunnerName } from '../lib/jit-naming.js';
 
 /** A retry of the WHOLE dispatch is bounded; this is the ceiling, not the default. */
 export const MAX_ATTEMPTS_CEILING = 6;

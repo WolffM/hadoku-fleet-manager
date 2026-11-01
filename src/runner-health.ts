@@ -44,7 +44,7 @@
 import { logger, githubToken, TOKEN_RETRY_MS, recordJobResult } from './host.js';
 import { labelGhToken, withGhCaller } from './gh-budget.js';
 import { HOUR_MS as RE_ALERT_MS } from './lib/job-runner.js';
-import { coveredRepos } from './ci-runner-fallback.js';
+import { coveredRepos } from './lib/covered-repos.js';
 import { setBackstopHold } from './runners/backstop-hold.js';
 import { __resetAlertLedgerForTesting } from './lib/alert-ledger.js';
 import { writeClosedDays } from './job-rollups.js';

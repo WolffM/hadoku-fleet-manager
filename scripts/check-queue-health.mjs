@@ -64,7 +64,7 @@ import {
 	isSaturated,
 	FAIL_SECONDS,
 } from './lib/queue-health.mjs';
-import { MAX_QUEUED_MS } from '../dist/runners/queue-discovery.js';
+import { MAX_QUEUED_MS } from '../dist/lib/queue-thresholds.js';
 import { backstopNodeNames } from '../dist/lib/node-role.js';
 import { nodeOf } from '../dist/runners/census.js';
 import { loadManifest } from './lib/fleet-exec.mjs';

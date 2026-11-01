@@ -8,24 +8,8 @@
     "to": "scripts/lib/tool-release.mjs"
   },
   {
-    "from": "scripts/check-label-floor.mjs",
-    "to": "src/ci-runner-fallback.ts"
-  },
-  {
-    "from": "scripts/check-label-floor.mjs",
-    "to": "src/runners/prove-job.ts"
-  },
-  {
-    "from": "scripts/check-queue-health.mjs",
-    "to": "src/runners/queue-discovery.ts"
-  },
-  {
     "from": "scripts/check-runner-var.mjs",
     "to": "scripts/lib/runner-var.mjs"
-  },
-  {
-    "from": "scripts/check-warm-canary.mjs",
-    "to": "src/runners/ephemeral-shared.ts"
   },
   {
     "from": "scripts/check-warm-canary.mjs",
@@ -80,10 +64,6 @@
     "to": "scripts/lib/emit.mjs"
   },
   {
-    "from": "scripts/lib/preflight.mjs",
-    "to": "src/runners/ephemeral.ts"
-  },
-  {
     "from": "scripts/lib/slice-inventory-run.mjs",
     "to": "scripts/lib/collect-offers.mjs"
   },
@@ -128,80 +108,16 @@
     "to": "scripts/lib/runner-var.mjs"
   },
   {
-    "from": "scripts/reconcile-fleet-runners.mjs",
-    "to": "src/fleet-loop.ts"
-  },
-  {
-    "from": "scripts/reconcile-runner-identity.mjs",
-    "to": "src/runners/ephemeral-exec.ts"
-  },
-  {
-    "from": "scripts/reconcile-runner-identity.mjs",
-    "to": "src/runners/ephemeral.ts"
-  },
-  {
     "from": "scripts/service-inventory.mjs",
     "to": "scripts/lib/slice-inventory-run.mjs"
-  },
-  {
-    "from": "src/lib/workload-gate.ts",
-    "to": "src/lib/measured.ts"
-  },
-  {
-    "from": "src/fleet-loop.ts",
-    "to": "src/fleet-report-types.ts"
-  },
-  {
-    "from": "src/gh-budget.ts",
-    "to": "src/fleet-report-types.ts"
-  },
-  {
-    "from": "src/job-history-stats.ts",
-    "to": "src/lib/job-kind.ts"
-  },
-  {
-    "from": "src/job-history-ingest.ts",
-    "to": "src/runners/ephemeral.ts"
-  },
-  {
-    "from": "src/job-rollup-store.ts",
-    "to": "src/job-rollups.ts"
-  },
-  {
-    "from": "src/job-rollups.ts",
-    "to": "src/lib/job-kind.ts"
-  },
-  {
-    "from": "src/job-rollups.ts",
-    "to": "src/runners/ephemeral.ts"
   },
   {
     "from": "src/node-reservation.ts",
     "to": "src/host-lease.ts"
   },
   {
-    "from": "src/runner-health.ts",
-    "to": "src/ci-runner-fallback.ts"
-  },
-  {
-    "from": "src/runner-health-label-floor.ts",
-    "to": "src/fleet-loop.ts"
-  },
-  {
-    "from": "src/runner-health-label-floor.ts",
-    "to": "src/node-reservation.ts"
-  },
-  {
     "from": "src/runner-health-mint.ts",
     "to": "src/runners/ephemeral-tick.ts"
-  },
-  {
-    "from": "src/runner-health-watch.ts",
-    "to": "src/runners/ephemeral.ts"
-  },
-  {
-    "from": "src/runner-health-label-floor.ts",
-    "to": "src/runners/prove-job.ts"
   },
   {
     "from": "src/runner-health-label-floor.ts",
@@ -220,35 +136,11 @@
     "to": "src/runners/placement.ts"
   },
   {
-    "from": "src/runners/disk-watch.ts",
-    "to": "src/runners/ephemeral.ts"
-  },
-  {
-    "from": "src/runners/dispatch-pass.ts",
-    "to": "src/fleet-report-types.ts"
-  },
-  {
-    "from": "src/runners/node-regression.ts",
-    "to": "src/lib/job-kind.ts"
-  },
-  {
-    "from": "src/runners/prove-job.ts",
-    "to": "src/lib/job-kind.ts"
-  },
-  {
     "from": "src/runners/prove-job.ts",
     "to": "src/runners/ephemeral-exec.ts"
   },
   {
     "from": "src/runners/prove-job-types.ts",
     "to": "src/runners/ephemeral-exec.ts"
-  },
-  {
-    "from": "src/scheduled-converger.ts",
-    "to": "src/fleet-report-types.ts"
-  },
-  {
-    "from": "src/server.ts",
-    "to": "src/index.ts"
   }
 ]

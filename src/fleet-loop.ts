@@ -34,7 +34,6 @@ import { logger, TOKEN_RETRY_MS } from './host.js';
 import { withGhCaller } from './gh-budget.js';
 import { coveredRepos } from './ci-runner-fallback.js';
 import { dispatchEphemeral } from './runners/ephemeral-tick.js';
-import type { FleetDispatch } from './fleet-report-types.js';
 import { mintsOnDemand } from './lib/node-role.js';
 import { isBackstopHeld } from './runners/backstop-hold.js';
 import { readDrain } from './runners/drain.js';
@@ -50,18 +49,13 @@ import { every } from './lib/every.js';
 // `allNodes` and hands that same `fleetManifest` to `nodeIsSafe`.
 import { readFleetManifest, loadEphemeralNodes, loadBackstopNodes } from './lib/manifest.js';
 import { loadNodeCapacity } from './lib/manifest.js';
-import { probeNode, probeFleet, type ProbeResultLike, type NodeProbe } from './lib/node-probe.js';
+import { probeNode, probeFleet, type ProbeResultLike } from './lib/node-probe.js';
 import { markNodeSick, nodeIsSick, sickNodeNames } from './lib/sick-node.js';
 import { repairSickNode } from './runners/node-repair.js';
 import { loadResidentRepos, loadRequiredSet } from './runners/node-eligibility.js';
 import { nodeIsSafe, setNodeEligibility, type LabelAction } from './runners/node-eligibility.js';
-
-/**
- * Last probe from the fast loop, for readers that must not ssh themselves.
- * In-memory and null until the first tick, exactly like the runner-health
- * snapshot — a restart clears it rather than serving a stale fleet.
- */
-let lastFleetProbe: { at: string; nodes: Record<string, NodeProbe> } | null = null;
+import { __setFleetProbeForTesting } from './fleet-probe-store.js';
+export { getFleetProbeSnapshot, __setFleetProbeForTesting } from './fleet-probe-store.js';
 
 /**
  * The last dispatch input a fast-loop tick built, so the dispatcher can run WITHOUT one.
@@ -91,13 +85,58 @@ let lastDispatchInput: Parameters<typeof dispatchEphemeral>[0] | null = null;
 let dispatchInFlight = false;
 
 /**
- * What the JIT dispatcher did last. Same lifetime rules as `lastFleetProbe`:
- * in-memory, cleared by a restart rather than serving a stale answer.
+ * What the JIT dispatcher did on its last pass.
  *
- * `failingSince` is the only field that needs history, and it needs it because
- * the question worth alerting on is not "did a mint fail" — mints fail for
- * ordinary reasons — but "has this node stopped being able to mint at all".
+ * Exists because mint failures reached NOTHING (handoff §5 item 1): they were a
+ * `logger.warn` in dispatch-pass.ts with no report field, no panel and no alert,
+ * so a node dead for JIT looked identical to a node with nothing to mint. The
+ * 409 name collision ran at ~7% of mints for the pilot's entire life and was
+ * found by grepping a pm2 buffer that rolls, not by anything the fleet said.
+ *
+ * EVERY COUNT IS NULLABLE ON PURPOSE. The fast loop wraps the dispatcher in a
+ * `.catch` so a JIT bug cannot stop label toggling — which means a pass that
+ * THREW previously rendered the same as a pass that minted nothing. `null` with
+ * `error` set is "I could not look"; `0` is "I looked, there was nothing".
+ *
+ * Defined here, not in `fleet-report-types-dispatch.ts` (wave clean-1 lane C,
+ * cut (iii)): this is the fast loop's own in-memory state — `lastDispatch`
+ * below is the one mutable copy, `getDispatchSnapshot` its one reader — so
+ * the fast loop is the real owner. `fleet-report-types-dispatch.ts` imports
+ * and re-exports it from here under its original path.
  */
+export interface FleetDispatch {
+	/** When the last pass finished. `null` = it has not run since restart. */
+	at: string | null;
+	/** `null` when the pass threw — see `error`. Never conflate with 0. */
+	minted: number | null;
+	failed: number | null;
+	skipped: number | null;
+	inFlight: number | null;
+	reaped: number | null;
+	/** The throw from the last pass, if it threw. */
+	error: string | null;
+	/**
+	 * Start of the current unbroken run of passes that failed every mint they
+	 * attempted. `null` = not currently failing. This is the field that answers
+	 * "is this machine dead for JIT", which a single-pass count cannot.
+	 */
+	failingSince: string | null;
+	/** Since process start, so a panel can show a RATE rather than one tick. */
+	totals: { minted: number; failed: number };
+	/**
+	 * The last pass that minted anything. A pass runs every 15s and most mint
+	 * nothing even while the fleet is busy, so `minted` read `0` beside eight
+	 * jobs in flight (2026-10-25). `null` = nothing minted since restart.
+	 */
+	lastMintAt: string | null;
+	/**
+	 * Mints and failures over the trailing hour, cut at `recent.since` — which is
+	 * the process start when that is later, so a fresh restart never reads as a
+	 * quiet hour.
+	 */
+	recent: { since: string; minted: number; failed: number };
+}
+
 let lastDispatch: FleetDispatch = {
 	at: null,
 	minted: null,
@@ -241,35 +280,14 @@ export function __resetDispatchInputForTesting(): void {
 	dispatchInFlight = false;
 }
 
-export function getFleetProbeSnapshot(): {
-	at: string;
-	nodes: Record<string, NodeProbe>;
-} | null {
-	return lastFleetProbe;
-}
-
-/**
- * Test seam. Not part of the supported API.
- *
- * The label floor now asks the census whether any ephemeral node can MINT before
- * it pages, and that answer comes from this probe. Without a seam the only way to
- * reach the suppressing branch from a test is to run a whole fast-loop tick, so the
- * branch that decides whether the fleet pages would go untested — which is the
- * one direction that must not regress silently.
- */
-export function __setFleetProbeForTesting(
-	probe: { at: string; nodes: Record<string, NodeProbe> } | null
-): void {
-	lastFleetProbe = probe;
-}
-
 /**
  * How often to re-assert every node's labels against GitHub even when nothing
- * this loop can see has changed. At 60s polling this is roughly every 10
- * minutes — frequent enough that external drift is a blip, cheap enough that
- * the common case (already in the desired state) writes nothing at all.
+ * this loop can see has changed. Moved to `src/lib/fast-loop-cadence.ts`
+ * (wave clean-1 lane C/D, cut (iii)): `scripts/reconcile-fleet-runners.mjs`
+ * needs the same figure. Re-exported here under its original path.
  */
-export const RECONCILE_EVERY_TICKS = 10;
+import { RECONCILE_EVERY_TICKS } from './lib/fast-loop-cadence.js';
+export { RECONCILE_EVERY_TICKS };
 
 /** Ticks since process start. Drives the periodic full reconcile above. */
 let tickCount = 0;
@@ -301,7 +319,7 @@ let fastLoopHandle: { stop(): void } | null = null;
 let dispatchTimerHandle: { stop(): void } | null = null;
 
 export function __resetFleetLoopForTesting(): void {
-	lastFleetProbe = null;
+	__setFleetProbeForTesting(null);
 	lastDispatch = {
 		at: null,
 		minted: null,
@@ -382,7 +400,10 @@ export async function tickFleet(
 	const fleetManifest = readFleetManifest();
 	const allNodes = Object.keys(fleetManifest?.machines ?? {});
 	const fleetProbe = await probeFleet(allNodes, loadNodeCapacity(), probe);
-	lastFleetProbe = { at: new Date().toISOString(), nodes: Object.fromEntries(fleetProbe) };
+	__setFleetProbeForTesting({
+		at: new Date().toISOString(),
+		nodes: Object.fromEntries(fleetProbe),
+	});
 
 	// SICK-NODE RETIREMENT, before anything else reads eligibility. The probe
 	// carries the guard's own verdict. Quarantine first so nothing below can
@@ -453,8 +474,14 @@ export async function tickFleet(
 	return { actions };
 }
 
-/** Seconds between fast-loop passes: probe, repair, labels. */
-export const FAST_LOOP_SECONDS = 60;
+/**
+ * Seconds between fast-loop passes: probe, repair, labels. Moved to
+ * `src/lib/fast-loop-cadence.ts` (wave clean-1 lane C/D, cut (iii)):
+ * `scripts/reconcile-fleet-runners.mjs` needs the same figure. Re-exported
+ * here under its original path.
+ */
+import { FAST_LOOP_SECONDS } from './lib/fast-loop-cadence.js';
+export { FAST_LOOP_SECONDS };
 /**
  * Seconds between dispatcher passes. Faster than the loop because discovery
  * latency IS queue latency under all-JIT: nothing starts until a poll finds it

@@ -449,20 +449,13 @@ export function writeFacet(
 // manifest-merging `measuredFacets`/`mergeFacet` above — see `MEASURED_FACETS`'s
 // own doc comment for why `proof` does not fit that shape.
 
-/** One (node, capability) workload-proof result. */
-export interface ProofRecord {
-	node: string;
-	capability: string;
-	runId: number | null;
-	runner: string | null;
-	conclusion: string | null;
-	durationSec: number | null;
-	evidenceMatched: boolean;
-	budgetSec: number | null;
-	verdict: 'pass' | 'fail' | 'stale';
-	why: string;
-	at: string;
-}
+// `ProofRecord` itself lives in `workload-gate.ts` (config, cut (iii)):
+// moving the plain data shape there, rather than importing it from here, is
+// what lets `workload-gate.ts` stay config without an edge up into this
+// state-layer file. Re-exported so every existing `from './measured.js'`
+// import keeps working unchanged.
+import type { ProofRecord } from './workload-gate.js';
+export type { ProofRecord };
 
 /** The composite key a `(node, capability)` proof is filed under in `proof.json`. */
 function proofRecordKey(node: string, capability: string): string {

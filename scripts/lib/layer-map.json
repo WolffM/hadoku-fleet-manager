@@ -79,6 +79,16 @@
     "why": "Wave 5n lane B (plan §7.3, T4): one declared writer, read back by nothing yet but `capacity-sample.ts`'s own tests — same \"JSONL store behind a one-file module\" shape as job-rollup-store.ts right above."
   },
   {
+    "glob": "src/fleet-probe-store.ts",
+    "layer": "state",
+    "why": "Wave clean-1 lane C (cut (iii)): the fast loop's per-node probe snapshot, moved out of fleet-loop.ts (ci-scheduling). One declared writer (fleet-loop.ts's tick), read back by runner-health-label-floor.ts (observation) and routes/fleet-report.ts (surfaces) — rule 5's \"a domain reads another domain's fact through a state record\", in-memory rather than on disk but otherwise the same shape as its neighbours above."
+  },
+  {
+    "glob": "src/pm2-host-busy-store.ts",
+    "layer": "state",
+    "why": "Wave clean-1 lane C (cut (iii)): which nodes are serving pm2-host work, moved out of node-reservation.ts (ci-scheduling). node-reservation.ts's own header already said it — \"runner-health is still the only writer\" — so the writer (runner-health-label-floor.ts, observation) and the record were already in different domains; rule 3 (one declared writer, regardless of domain) is the fix."
+  },
+  {
     "glob": "scripts/lib/enrollment-record.mjs",
     "layer": "state"
   },
@@ -465,6 +475,41 @@
     "glob": "src/lib/fleet-vocabulary.ts",
     "layer": "config",
     "why": "Wave 5h lane A step 1: ClawState + BackstopReason, moved out of fleet-report-types.ts (surfaces) because observation and ci-scheduling both read them and neither domain can host the other's import legally."
+  },
+  {
+    "glob": "src/lib/ci-runner-values.ts",
+    "layer": "config",
+    "why": "Wave clean-1 lane C/D (cut (iii)): FLEET_VALUE, moved out of ci-runner-fallback.ts (ci-scheduling) because scripts/check-label-floor.mjs (observation) reads the same literal and neither domain can host the other's import legally — same shape as fleet-vocabulary.ts above."
+  },
+  {
+    "glob": "src/lib/queue-thresholds.ts",
+    "layer": "config",
+    "why": "Wave clean-1 lane C/D (cut (iii)): MAX_QUEUED_MS, moved out of src/runners/queue-discovery.ts (ci-scheduling) because scripts/check-queue-health.mjs (observation) reads the same one-hour boundary and neither domain can host the other's import legally — same shape as fleet-vocabulary.ts above."
+  },
+  {
+    "glob": "src/lib/job-reserve.ts",
+    "layer": "config",
+    "why": "Wave clean-1 lane C/D (cut (iii)): JOB_RESERVE_DEFAULT_MB/RepoReserve/ReserveSource/jobReserve, moved out of src/runners/ephemeral-slice.ts and ephemeral-shared.ts (ci-scheduling) because jobReserve is pure and scripts/check-warm-canary.mjs (observation) needs the same answer admitMint does — same shape as fleet-vocabulary.ts above."
+  },
+  {
+    "glob": "src/lib/fast-loop-cadence.ts",
+    "layer": "config",
+    "why": "Wave clean-1 lane C/D (cut (iii)): FAST_LOOP_SECONDS/RECONCILE_EVERY_TICKS, moved out of fleet-loop.ts (ci-scheduling) because scripts/reconcile-fleet-runners.mjs (lifecycle) derives a minutes-between-reconciles figure from both — same shape as fleet-vocabulary.ts above."
+  },
+  {
+    "glob": "src/lib/jit-reap-cadence.ts",
+    "layer": "config",
+    "why": "Wave clean-1 lane C/D (cut (iii)): REAP_INTERVAL_MS/JIT_REAP_GRACE_MS, moved out of src/runners/ephemeral-exec-reap.ts (ci-scheduling) because scripts/reconcile-runner-identity.mjs (observation, fleet identity) tells an orphan the sweep has not reached from one it failed to clear using these same two numbers — same shape as fleet-vocabulary.ts above."
+  },
+  {
+    "glob": "src/lib/covered-repos.ts",
+    "layer": "config",
+    "why": "Wave clean-1 lane C (cut (iii)): coveredRepos, moved out of ci-runner-fallback.ts (ci-scheduling). A declarative-input read (manifest rule 1: fleet-runner-coverage.json) built entirely from config (host.ts, fleet-config.ts) with no ci-scheduling decision in it; runner-health.ts (observation) needs the same roster ci-runner-fallback.ts steers."
+  },
+  {
+    "glob": "src/lib/jit-naming.ts",
+    "layer": "config",
+    "why": "Wave clean-1 lane C (cut (iii)): JIT_PREFIX/WARM_PREFIX/parseJitName and the TMP_FREE_FLOOR_MB mint floor, moved out of src/runners/ephemeral.ts and ephemeral-admission.ts (both ci-scheduling) because observation's disk-watch.ts and runner-health-watch.ts read the same naming convention and the same floor to explain their own alerts, and neither domain can host the other's import legally — same shape as fleet-vocabulary.ts above."
   },
   {
     "glob": "src/lib/node-role.ts",
@@ -1008,9 +1053,8 @@
   },
   {
     "glob": "src/lib/job-kind.ts",
-    "layer": "domain",
-    "domain": "ci-scheduling",
-    "part": "core"
+    "layer": "automation",
+    "why": "Reclassified wave clean-1 lane C (cut (iii)): `jobKind` is domain-blind (one pure regex strip, no imports at all) and is already imported identically by ci-scheduling (speed-tier.ts, traffic.ts — same domain, legal), observation (job-history-stats.ts, job-rollups.ts, node-regression.ts) and lifecycle (prove-job.ts). Filing it under ci-scheduling made every one of those other-domain imports a violation that is not really about scheduling at all. `layer-map.mjs`'s own header already names this shape — a generic, domain-blind utility with no placement rule of its own — and assigns it to automation as the least-wrong flat layer (blank-comments.mjs, emit.mjs, yaml-comments.mjs); jobKind fits the same description, so it moves to the same layer rather than staying a one-off exception."
   },
   {
     "glob": "scripts/backstop-switch.mjs",
