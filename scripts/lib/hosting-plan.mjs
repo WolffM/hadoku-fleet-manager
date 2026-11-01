@@ -13,7 +13,8 @@
  *   - one slice of a tenant per node;
  *   - the node answered, and is not drained or leased;
  *   - the unit fits the offer: memory, cores, and disk for `stateGb`;
- *   - every `placement.require` rule holds;
+ *   - every rule `requiredRules` names holds: `placement.require`, plus
+ *     `label:service-host` for a `service` tenant;
  *   - the node runs what `runtime` names: node in its range and every tool,
  *     executed on the service's PATH (lib/hosting-offers.mjs).
  *
@@ -40,7 +41,7 @@
  * primary holds or is about to be given.
  */
 import { ciJobsAfter } from './hosting-offers.mjs';
-import { ruleHolds } from './hosting-placement.mjs';
+import { requiredRules, ruleHolds } from './hosting-placement.mjs';
 import { ADVISORY_UNTIL_DEFAULT } from './hosting-request.mjs';
 import { satisfies } from './tool-release.mjs';
 
@@ -101,7 +102,7 @@ export function planFor(request, offers) {
 		else if (h.diskFreeGb < disk.stateGb)
 			no.push(`${h.diskFreeGb} GB free, state needs ${disk.stateGb}`);
 		no.push(...runtimeReasons(request, o).all);
-		for (const rule of placement.require) {
+		for (const rule of requiredRules(request)) {
 			const holds = ruleHolds(rule, o);
 			if (holds === false) no.push(`fails "${rule}"`);
 			else if (holds === null) no.push(`cannot tell whether "${rule}" holds`);

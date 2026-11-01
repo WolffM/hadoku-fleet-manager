@@ -91,3 +91,17 @@ export function ruleHolds(rule, offer) {
 	const p = i > 0 ? PARAM[rule.slice(0, i)] : undefined;
 	return p ? p.holds(offer, rule.slice(i + 1)) : null;
 }
+
+/**
+ * Every rule a request is placed by: its own `placement.require`, plus what its
+ * KIND implies. A `service` tenant needs a node that has PROVEN it can serve a
+ * placed service, `label:service-host` (src/capabilities.ts; fleet-manager#16):
+ * deploy tools on a tenant's PATH, the node's own tunnel up, and its state root.
+ * Implied rather than written into each hosting.json, so no service tenant can
+ * forget it and none is placed on a node that would fail its first deploy.
+ */
+export function requiredRules(request) {
+	const own = request.placement?.require ?? [];
+	const implied = request.kind === 'service' ? ['label:service-host'] : [];
+	return [...own, ...implied.filter((r) => !own.includes(r))];
+}

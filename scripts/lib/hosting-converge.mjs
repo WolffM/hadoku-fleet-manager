@@ -46,7 +46,7 @@
  * past the count is ended with the tenant's notice; it holds no authority, so
  * no release order is needed. An unplaceable standby is replaced, not ended.
  */
-import { ruleHolds } from './hosting-placement.mjs';
+import { requiredRules, ruleHolds } from './hosting-placement.mjs';
 
 /** A drain of another kind starting this long past the tenant's notice counts as now. */
 export const HORIZON_MARGIN_MS = 15 * 60_000;
@@ -85,12 +85,12 @@ export function decide({
 	appLayer = null,
 	move = null,
 }) {
-	const { app, slices: size, availability, placement } = request;
+	const { app, slices: size, availability } = request;
 	const desired = Math.min(size.max, Math.max(size.min, demand?.slices ?? size.min));
 	const horizonMs = availability.noticeMin * 60_000 + HORIZON_MARGIN_MS;
 	const offerOf = new Map(offers.map((o) => [o.node, o]));
 	const fault = (node) =>
-		faultOf(node, offerOf.get(node), placement.require, notices, now, horizonMs);
+		faultOf(node, offerOf.get(node), requiredRules(request), notices, now, horizonMs);
 
 	const primaries = allSlices.filter((s) => s.role !== 'standby');
 	const live = primaries.filter((s) => !s.until && !fault(s.node)).length;

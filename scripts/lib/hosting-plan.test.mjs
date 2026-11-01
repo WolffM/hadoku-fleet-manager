@@ -25,7 +25,9 @@ const offer = (node, over = {}) => ({
 	pm2: { present: false, unbounded: [], unboundedMb: 0 },
 	pm2Peer: false,
 	drain: null,
-	labels: [],
+	// Every fixture node has earned service-host (#16), so a service tenant's
+	// refusals below are about the rule each test names.
+	labels: ['service-host'],
 	gpu: [],
 	runtime: { node: '22.23.2', tools: {} },
 	unknown: [],
@@ -260,4 +262,13 @@ test('a standby passes the same rules as the primary, runtime included, and a sh
 test('a request without a standby plans byte-for-byte as before', () => {
 	const plan = planFor(ARCHIVEBOT, [peer('claw-4')]);
 	assert.ok(!('standby' in plan));
+});
+
+test('#16: a service tenant needs a node that EARNED service-host; an agent tenant does not', () => {
+	const bare = (node) => offer(node, { labels: [], pm2Peer: true });
+	const svc = planFor(ARCHIVEBOT, [bare('claw-4'), offer('claw-6', { pm2Peer: true })]);
+	assert.deepEqual(nodes(svc), ['claw-6']);
+	assert.match(why(svc, 'claw-4'), /fails "label:service-host"/);
+	const agent = planFor(CARDTABLE, [bare('claw-8')]);
+	assert.deepEqual(nodes(agent), ['claw-8'], 'cardtable is an agent: the label is not asked of it');
 });

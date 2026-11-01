@@ -12,7 +12,7 @@ const offer = (node, over = {}) => ({
 	link: 'wired',
 	pm2: { unbounded: [] },
 	pm2Peer: true,
-	labels: [],
+	labels: ['service-host'],
 	...over,
 });
 const agent = {
