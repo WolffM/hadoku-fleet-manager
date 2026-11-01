@@ -36,7 +36,21 @@ import {
 	__setFloorConfirmDelayForTesting,
 	__setFloorDemandForTesting,
 } from '../../runner-health.js';
-import { __setReservationForTesting } from '../../runners/backstop-decision.js';
+import {
+	__setReservationForTesting,
+	runBackstopDecision,
+	__resetBackstopDecisionForTesting,
+} from '../../runners/backstop-decision.js';
+import {
+	runHostedFallback,
+	__resetHostedFallbackForTesting,
+} from '../../runners/hosted-fallback.js';
+import {
+	setBackstopDecisionRunner,
+	setHostedFallbackRunner,
+	setBackstopDecisionReset,
+	setHostedFallbackReset,
+} from '../../runner-health-ports.js';
 import { __setFleetProbeForTesting } from '../../fleet-loop.js';
 import { __resetSickForTesting } from '../../lib/sick-node.js';
 import { writeDrain } from '../../runners/drain.js';
@@ -46,6 +60,18 @@ import {
 } from '../../runners/ephemeral-tick.js';
 import { __resetDiskReadingsForTesting } from '../../runners/disk-watch.js';
 import { __resetNodeRegressionForTesting } from '../../runners/node-regression.js';
+
+// `tick()` calls `checkLabelFloor` straight from `runner-health.js` in these
+// tests — there is no `createFleetManager()` in a test process, so nothing
+// else wires the backstop decision / hosted fallback into their ports (see
+// `runner-health-ports.ts`'s header: production wires them in `index.ts`).
+// Wired once here, at module load, exactly like `index.ts` wires the real
+// ones — this rig uses the SAME real functions, not a fake, so a test
+// observes the genuine decision logic.
+setBackstopDecisionRunner(runBackstopDecision);
+setHostedFallbackRunner(runHostedFallback);
+setBackstopDecisionReset(__resetBackstopDecisionForTesting);
+setHostedFallbackReset(__resetHostedFallbackForTesting);
 
 export const FAKE_WEBHOOK = 'https://discord.test/webhook';
 

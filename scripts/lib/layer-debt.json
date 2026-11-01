@@ -108,18 +108,6 @@
     "to": "src/host-lease.ts"
   },
   {
-    "from": "src/runner-health-mint.ts",
-    "to": "src/runners/ephemeral-tick.ts"
-  },
-  {
-    "from": "src/runner-health-label-floor.ts",
-    "to": "src/runners/backstop-decision.ts"
-  },
-  {
-    "from": "src/runner-health-label-floor.ts",
-    "to": "src/runners/hosted-fallback.ts"
-  },
-  {
     "from": "src/runners/decision-log.ts",
     "to": "src/runners/dispatcher.ts"
   },

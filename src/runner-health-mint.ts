@@ -1,9 +1,16 @@
 import { loadFleetManifestMachines } from './lib/manifest.js';
 import { readDrain } from './runners/drain.js';
 import { buildMintView, type MintView } from './label-floor.js';
-import { loadWorkloadGateContext, admissionVerdictsForReport } from './runners/ephemeral-tick.js';
+// Both read from a STATE RECORD, never from `runners/ephemeral-tick.ts`
+// itself (wave clean-2 lane A, cut (iii)): that file is ci-scheduling, this
+// one is observation, and a domain reads another domain's facts through a
+// state record, never the writer's own module (rule 5, §3.2).
+// `ephemeral-tick.ts`/`ephemeral-shared.ts` still re-export both names under
+// their original path for every other existing importer.
+import { loadWorkloadGateContext } from './workload-gate-store.js';
+import { admissionVerdictsForReport } from './admission-verdict-store.js';
 // Re-exported so runner-health-watch.ts's checkStarvation does not open a
-// second direct edge to runners/ephemeral-tick.ts for this reader.
+// second direct edge to admission-verdict-store.ts for this reader.
 export { admissionVerdictsForReport };
 import { nodeIsSick } from './lib/sick-node.js';
 import { isBackstopHeld } from './runners/backstop-hold.js';

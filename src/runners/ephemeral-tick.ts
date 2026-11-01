@@ -77,21 +77,22 @@ export {
 };
 
 /**
- * THE VERDICT SNAPSHOT — same shape as `warmRepoByNode` above: module-level,
- * replaced WHOLESALE once per `dispatchEphemeral` pass, never mutated in
- * place, and only ever handed out as a copy (`admissionVerdictsForReport`).
- *
- * WHOLESALE for the same reason `setWarmRepos` is: a node that stops being
- * reachable, or drops out of `input.ephemeral`, must stop being reported on
- * the very next pass rather than carrying a frozen verdict forever.
- *
- * EMPTY AFTER A RESTART, and that is the honest answer, not a bug — mgmt-api
- * restarts ~5x/day and this is in-memory. An ABSENT entry must NEVER be read
- * as "admitted": it means "this pass could not look", and `runner-health.ts`'s
- * starvation check treats it that way — carrying its last known finding
- * forward rather than clearing an alert on a tick that learned nothing.
+ * THE VERDICT SNAPSHOT — moved to `../admission-verdict-store.ts` (wave
+ * clean-2 lane A, cut (iii)): `runner-health-mint.ts` (observation) read it
+ * directly from this file, which is ci-scheduling, and neither domain can
+ * host the other's import legally (rule 5, §3.2). `dispatchEphemeral` below
+ * is still the one writer — `setAdmissionVerdicts` replaces the old bare
+ * assignment — and `admissionVerdictsForReport`/`__setAdmissionVerdictsForTesting`
+ * are re-exported here under their original path, so no existing importer
+ * changes.
  */
-let admissionVerdictByNode: ReadonlyMap<string, AdmissionVerdict> = new Map();
+import {
+	admissionVerdictsForReport,
+	setAdmissionVerdicts,
+	__setAdmissionVerdictsForTesting,
+	__resetAdmissionVerdictsForTesting as __resetAdmissionVerdictStoreForTesting,
+} from '../admission-verdict-store.js';
+export { admissionVerdictsForReport, __setAdmissionVerdictsForTesting };
 
 /** #101: which nodes have already had their `/tmp`/`_work` free space logged
  * once this process's lifetime — see the probe in `dispatchEphemeral`'s node
@@ -100,37 +101,16 @@ let admissionVerdictByNode: ReadonlyMap<string, AdmissionVerdict> = new Map();
  * everything else in-memory here. */
 const loggedSpaceProbeOnce = new Set<string>();
 
-/** Test seam. Not part of the supported API. */
+/**
+ * Test seam. Not part of the supported API. Delegates the verdict snapshot's
+ * own reset to `admission-verdict-store.ts` (its one writer) and clears this
+ * file's OWN `loggedSpaceProbeOnce`, which that store knows nothing about —
+ * a delegating reset, same shape every moved `__reset*ForTesting` seam keeps
+ * (wave5r lane rules).
+ */
 export function __resetAdmissionVerdictsForTesting(): void {
-	admissionVerdictByNode = new Map();
+	__resetAdmissionVerdictStoreForTesting();
 	loggedSpaceProbeOnce.clear();
-}
-
-/**
- * Test seam: inject the verdict snapshot directly, bypassing a real
- * `dispatchEphemeral` pass. Not part of the supported API.
- *
- * `runner-health.ts`'s starvation check is this file's READER, not its
- * producer — a test of the reader should not have to drive the dispatcher's
- * whole I/O-heavy pass (GitHub `gh`, `sh`, the warm cache, the speed model)
- * just to get one node refused on memory. `dispatchEphemeral` itself is
- * exercised end to end in `warm-cache.test.ts`.
- */
-export function __setAdmissionVerdictsForTesting(
-	verdicts: ReadonlyMap<string, AdmissionVerdict>
-): void {
-	admissionVerdictByNode = new Map(verdicts);
-}
-
-/**
- * What the last `dispatchEphemeral` pass's generic admission check found, for
- * `runner-health.ts`'s starvation finding and `routes/fleet.ts`'s panel field.
- *
- * Copied, same rule as `warmReposForPlacement` — a caller must not be able to
- * mutate the fleet's belief about its own admission state.
- */
-export function admissionVerdictsForReport(): ReadonlyMap<string, AdmissionVerdict> {
-	return new Map(admissionVerdictByNode);
 }
 
 /**
@@ -324,7 +304,7 @@ export async function dispatchEphemeral(
 	// built for admission's own space clause to the early-warning registry in
 	// disk-watch.ts/runner-health.ts. No second probe, no second ssh — see
 	// disk-watch.ts's own header for why this registry lives there instead of
-	// beside admissionVerdictByNode here, and why WHOLESALE replace is the rule.
+	// beside the admission verdict snapshot here, and why WHOLESALE replace is the rule.
 	recordDiskReadings(tmpFreeMbByNode, workFreeMbByNode, tmpSizeMbByNode);
 
 	const nodes: NodeState[] = [];
@@ -347,9 +327,15 @@ export async function dispatchEphemeral(
 	const heavyModel = getHeavyModel(nowMs);
 	const candidates: string[] = [];
 	// THE GENERIC ADMISSION VERDICT (wave 4a §A.1, #100), built fresh this pass
-	// and published wholesale after the loop — see `admissionVerdictByNode`'s
+	// and published wholesale after the loop — see `admission-verdict-store.ts`'s
 	// own note on why wholesale, not merged.
 	const nextVerdicts = new Map<string, AdmissionVerdict>();
+	// LAST pass's published snapshot, read ONCE before this pass starts writing
+	// `nextVerdicts` — the store's one value does not change again until
+	// `setAdmissionVerdicts` below, so one copy here reads exactly what every
+	// per-node `.get(name)` in the loop used to read off the live module
+	// variable directly.
+	const prevVerdicts = admissionVerdictsForReport();
 	for (const name of minting) {
 		const p = input.fleetProbe.get(name);
 		const m = input.nodes[name];
@@ -609,7 +595,7 @@ export async function dispatchEphemeral(
 		// floor in either direction afterwards. grep: "space verdict".
 		{
 			const wasSpace = (() => {
-				const prev = admissionVerdictByNode.get(name);
+				const prev = prevVerdicts.get(name);
 				return !!prev && !prev.ok && prev.clause === 'space';
 			})();
 			const isSpace = !verdict.ok && verdict.clause === 'space';
@@ -622,11 +608,11 @@ export async function dispatchEphemeral(
 			}
 		}
 	}
-	// PUBLISHED EVEN WHEN EMPTY — see `admissionVerdictByNode`'s own note. Every
-	// node this pass could not reach, or could not read memory for, is simply
-	// absent from `nextVerdicts`, which is exactly "could not look" for THAT
-	// node and must be published as such rather than left stale.
-	admissionVerdictByNode = nextVerdicts;
+	// PUBLISHED EVEN WHEN EMPTY — see `admission-verdict-store.ts`'s own note.
+	// Every node this pass could not reach, or could not read memory for, is
+	// simply absent from `nextVerdicts`, which is exactly "could not look" for
+	// THAT node and must be published as such rather than left stale.
+	setAdmissionVerdicts(nextVerdicts);
 	// COULD NOT LOOK, not "nothing to do". Every declared node was unreachable
 	// or refused to report its free memory (both logged above), so this pass
 	// cannot vouch for anything — including that no work was waiting.

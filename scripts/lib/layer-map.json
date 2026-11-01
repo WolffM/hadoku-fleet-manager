@@ -89,6 +89,16 @@
     "why": "Wave clean-1 lane C (cut (iii)): which nodes are serving pm2-host work, moved out of node-reservation.ts (ci-scheduling). node-reservation.ts's own header already said it — \"runner-health is still the only writer\" — so the writer (runner-health-label-floor.ts, observation) and the record were already in different domains; rule 3 (one declared writer, regardless of domain) is the fix."
   },
   {
+    "glob": "src/admission-verdict-store.ts",
+    "layer": "state",
+    "why": "Wave clean-2 lane A (cut (iii)): the dispatcher's generic admission-verdict snapshot, moved out of runners/ephemeral-tick.ts (ci-scheduling). One declared writer (ephemeral-tick.ts's dispatchEphemeral, through setAdmissionVerdicts), read back by runner-health-mint.ts (observation) and routes/fleet-report.ts (surfaces) — same shape as fleet-probe-store.ts above."
+  },
+  {
+    "glob": "src/workload-gate-store.ts",
+    "layer": "state",
+    "why": "Wave clean-2 lane A (cut (iii)): this tick's WorkloadGateContext ($proof + revocations), moved out of runners/ephemeral-shared.ts (ci-scheduling). runner-health-mint.ts (observation) asks the SAME state-dir question dispatchEphemeral does, and neither domain can host the other's import legally — same shape as fleet-probe-store.ts above."
+  },
+  {
     "glob": "scripts/lib/enrollment-record.mjs",
     "layer": "state"
   },

@@ -18,6 +18,22 @@ import { startHostingConverge } from './hosting-converge.js';
 import { startHostingVerify } from './hosting-verify.js';
 import { startProvisioningConverge } from './provisioning-converge.js';
 import { startCapacitySampling } from './capacity-sample.js';
+// runner-health (observation) calls the backstop decision and the hosted
+// fallback (both ci-scheduling) through a port it does not own the import
+// side of (rule 5, §3.2; see `runner-health-ports.ts`'s header). THIS file
+// is composition — it may import either domain — so it is the one place
+// that wires the real functions in, once, before any tick can run.
+import {
+	runBackstopDecision,
+	__resetBackstopDecisionForTesting,
+} from './runners/backstop-decision.js';
+import { runHostedFallback, __resetHostedFallbackForTesting } from './runners/hosted-fallback.js';
+import {
+	setBackstopDecisionRunner,
+	setHostedFallbackRunner,
+	setBackstopDecisionReset,
+	setHostedFallbackReset,
+} from './runner-health-ports.js';
 
 export type { FleetHost, FleetHostLogger } from './host.js';
 export type { RunnerHealthSnapshot } from './runner-health.js';
@@ -138,6 +154,15 @@ export function createFleetManager(host: FleetHost): FleetManager {
 	}
 	installHost(host);
 	constructed = true;
+
+	// Wire runner-health's ci-scheduling ports (see `runner-health-ports.ts`'s
+	// header) — once, before `start()` can ever begin a tick. `createFleetManager`
+	// is itself guarded as a singleton (see this function's own doc), so this
+	// runs exactly once per process, same as `installHost` just above.
+	setBackstopDecisionRunner(runBackstopDecision);
+	setHostedFallbackRunner(runHostedFallback);
+	setBackstopDecisionReset(__resetBackstopDecisionForTesting);
+	setHostedFallbackReset(__resetHostedFallbackForTesting);
 
 	// `getConditional` carries the ETag path. It is a THIRD member rather than a
 	// change to `get`, because most callers want a body or null and should not

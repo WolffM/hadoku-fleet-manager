@@ -26,14 +26,13 @@ import { RETENTION_DAYS, jobRecords } from './job-history-store.js';
 import { setUnschedulableNodes } from './runners/schedulable.js';
 import { deriveClawState } from './runners/claw-state.js';
 import { setPm2HostBusy } from './pm2-host-busy-store.js';
-import {
-	runBackstopDecision,
-	__resetBackstopDecisionForTesting,
-} from './runners/backstop-decision.js';
-import { runHostedFallback, __resetHostedFallbackForTesting } from './runners/hosted-fallback.js';
-// Re-exported so runner-health.ts's own reset does not open a second direct
-// edge to either module for a function this file already imports.
-export { __resetBackstopDecisionForTesting, __resetHostedFallbackForTesting };
+// The backstop decision and the hosted fallback are ci-scheduling — observation
+// must not import either module directly (rule 5, §3.2). `runner-health-ports.ts`
+// is the port the composition root (`index.ts`) and the test rig wire the real
+// functions into; see its own header. `runner-health.ts`'s own umbrella reset
+// calls the matching `reset*Port` functions straight from that same file — not
+// re-exported here, which would just re-open the edge this split closes.
+import { runBackstopDecisionPort, runHostedFallbackPort } from './runner-health-ports.js';
 import { alertOnce, clearAlert, pagedAlerts } from './lib/alert-ledger.js';
 import { TICK_INTERVAL_MS, OFFLINE_TICKS_BEFORE_ALERT } from './lib/runner-health-shared.js';
 import { selfHostname } from './lib/runner-health-shared.js';
@@ -460,7 +459,7 @@ export async function checkLabelFloor(
 			labels: (r.labels ?? []).map((l) => l.name),
 		}));
 
-		await runBackstopDecision({
+		await runBackstopDecisionPort({
 			token,
 			fleetRepos,
 			data,
@@ -474,7 +473,7 @@ export async function checkLabelFloor(
 			has,
 		});
 
-		await runHostedFallback({
+		await runHostedFallbackPort({
 			token,
 			ephemeralUnknown: c.ephemeralUnknown,
 			clawsOnline,

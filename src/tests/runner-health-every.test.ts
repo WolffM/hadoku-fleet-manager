@@ -41,6 +41,19 @@ import {
 import { getFleetLiveness, __resetLivenessForTesting } from '../lib/liveness.js';
 import { __setHostForTesting } from '../host.js';
 import { testHost } from './install-test-host.js';
+import { runBackstopDecision } from '../runners/backstop-decision.js';
+import { runHostedFallback } from '../runners/hosted-fallback.js';
+import { setBackstopDecisionRunner, setHostedFallbackRunner } from '../runner-health-ports.js';
+
+// This file calls `startRunnerHealthMonitor()` directly, with no
+// `createFleetManager()` (that is where production wires these — see
+// `runner-health-ports.ts`'s header) and no `installRunnerHealthRig()`
+// (this file predates it and intentionally does not import its private
+// `installFetch`). A real tick still reaches `checkLabelFloor`'s call into
+// both ports even against an empty runner listing, so they are wired here,
+// once, with the same real functions production uses.
+setBackstopDecisionRunner(runBackstopDecision);
+setHostedFallbackRunner(runHostedFallback);
 
 function okJson(obj: unknown): Response {
 	return {

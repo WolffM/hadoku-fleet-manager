@@ -62,9 +62,13 @@ import {
 	__setQuietRecorderForTesting,
 	lastTickEphemeralUnknown,
 	__clearLastTickEphemeralUnknownForTesting,
-	__resetHostedFallbackForTesting,
-	__resetBackstopDecisionForTesting,
 } from './runner-health-label-floor.js';
+// The umbrella reset below resets the backstop decision's and the hosted
+// fallback's own cross-tick memory through these PORTS, not by importing
+// `runners/backstop-decision.ts`/`runners/hosted-fallback.ts` directly —
+// this file is observation, those are ci-scheduling (rule 5, §3.2). See
+// `runner-health-ports.ts`'s header.
+import { resetBackstopDecisionPort, resetHostedFallbackPort } from './runner-health-ports.js';
 import {
 	checkRunsAndFailover,
 	__resetRunsForTesting,
@@ -165,8 +169,8 @@ export function __resetRunnerHealthAlertsForTesting(): void {
 	// in-memory copy would let one test's tick answer the next test's read.
 	__resetSnapshotForTesting();
 	__resetLabelFloorForTesting();
-	__resetHostedFallbackForTesting();
-	__resetBackstopDecisionForTesting();
+	resetHostedFallbackPort();
+	resetBackstopDecisionPort();
 	__resetFailoverForTesting();
 	// Cross-tick memory — see the comment below; every piece of it belongs here.
 	__resetRunsForTesting();
