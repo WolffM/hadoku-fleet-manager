@@ -167,6 +167,25 @@ export const ARGV_SPECS = {
 		positionals: false,
 	},
 
+	'stats.mjs': {
+		usage: [
+			'fleet stats — the operator surface over the fleet telemetry stores (T2/T4/T5/T7)',
+			'',
+			'  --days <n>  the window for every section, counted back from today (default 14)',
+			'  --json      every section, in full',
+			'',
+			'Five independent sections — daily jobs/queue/conclusions and per-repo totals',
+			'(T2 rollups), automation health (T7 job-run sink), capacity/admission share',
+			'(T4 samples) and GitHub budget peaks/top-callers (T5 history). A section with',
+			'no store, or nothing in the window, reports COULD NOT LOOK on its own — never',
+			'a silent zero — and the other sections still answer. Reads the state dir only;',
+			'calls no GitHub endpoint, reaches no node.',
+		].join('\n'),
+		booleans: ['--json'],
+		valued: ['--days'],
+		positionals: false,
+	},
+
 	'retire-node.mjs': {
 		usage: [
 			'fleet retire <node> [--confirm] [--reason "why"] [--no-push] [--json]',

@@ -86,6 +86,13 @@ export const commandsGates: Record<string, Command> = {
 		summary:
 			"per-node CI failure rate standardized against the fleet's own rate for the same repo+kind (T3, read-only)",
 	},
+	stats: {
+		script: 'stats.mjs',
+		kind: 'operator',
+		help: true,
+		summary:
+			'daily jobs/queue/conclusions, per-repo totals, automation health, capacity share and GitHub budget (T6, read-only)',
+	},
 	'boundary-contracts': {
 		script: 'check-boundary-contracts.mjs',
 		kind: 'gate',

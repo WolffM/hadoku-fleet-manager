@@ -28,6 +28,27 @@
  * `<stateDir>/<facet>.log`, because git history went when the data left the
  * repo and "when did this change, and to what" must still have an answer.
  *
+ * THE LOG IS BOUNDED BY TIME (T6, refactor plan §7.3: "bound the facet
+ * logs" — `health.log` measured 501KB and climbing on 2026-11-01, with no
+ * reader anywhere in `src/` or `scripts/` other than this file's own writer).
+ * {@link FACET_LOG_RETENTION_DAYS} = 30: at least 2x `$health`'s own
+ * staleness gate (`HEALTH_STALE_DAYS` = 14d, `check-health-freshness.mjs`)
+ * and more than two full fleet rotations (`ci:fleet-benchmark` measures one
+ * node per run, "about as many days as there are claws"), so a question
+ * about "what changed, and to what" over any window anyone has actually
+ * asked about is still answerable. Trimmed on every write that has new lines
+ * to add — the same "trimmed on append" shape `capacity-sample-store.ts` and
+ * `gh-budget-history-store.ts` already use — via a full rewrite through the
+ * shared `writeFileAtomic` (F3), never a bare `appendFileSync`: nothing reads
+ * this file today, so a rewrite tears no live reader's mid-read the way it
+ * would for `job-history.jsonl`, and the atomic rename still makes a crash
+ * mid-write leave either the whole old log or the whole new one. A line this
+ * cannot determine the age of (corrupt JSON, a missing/unparseable
+ * `loggedAt`) is NEVER dropped — see `logLineAgeMs`. If a reader is ever
+ * built that needs the FULL history, it says so explicitly and widens or
+ * removes this window on purpose, rather than inheriting whatever an
+ * unbounded log happened to still hold.
+ *
  * THE RULE THIS FILE EXISTS TO HOLD: A MISSING FILE IS NEVER "HEALTHY"
  * -------------------------------------------------------------------
  * `stateDir()` has no existence guard (`fleet-paths.ts`), unlike `manifestDir()`.
@@ -58,23 +79,21 @@
  * (`no-state-dir` / `no-file`) falls back.
  */
 import { createHash } from 'node:crypto';
-import {
-	appendFileSync,
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	renameSync,
-	statSync,
-	writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
+import { writeFileAtomic } from './atomic-json.js';
 import { stateDir } from './fleet-paths.js';
 import { assertFacet, facetPath, MEASURED_FACETS, measuredFacetPaths } from './measured-paths.js';
 import type { MeasuredFacetName } from './measured-paths.js';
 
 export { MEASURED_FACETS, facetPath, measuredFacetPaths, type MeasuredFacetName };
+
+/** Kept this long in `<facet>.log`; see the module header for why 30. */
+export const FACET_LOG_RETENTION_DAYS = 30;
+
+const DAY_MS = 86_400_000;
 
 /**
  * The key each one had inside `machines[node]` of the manifest. `proof` never
@@ -284,6 +303,51 @@ export function measuredFacet(
 	return mergeFacet(node, facet, machine, readFacetFile(facet, { dir }));
 }
 
+/**
+ * One log line's age in ms since epoch, read from its own `loggedAt`, or
+ * `null` when that cannot be determined — not JSON, no `loggedAt` string, or
+ * one `Date.parse` cannot read. `null` NEVER counts as old: see
+ * {@link appendFacetLog}.
+ */
+function logLineAgeMs(line: string): number | null {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(line);
+	} catch {
+		return null;
+	}
+	if (typeof parsed !== 'object' || parsed === null) return null;
+	const loggedAt = (parsed as Record<string, unknown>).loggedAt;
+	if (typeof loggedAt !== 'string') return null;
+	const ms = Date.parse(loggedAt);
+	return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Appends `newLines` to `<facet>.log`, trimming every row older than
+ * {@link FACET_LOG_RETENTION_DAYS} in the SAME write — see the module header
+ * for why a rewrite (rather than a bare `appendFileSync`) is safe here and
+ * why 30 days. A row whose age {@link logLineAgeMs} could not determine is
+ * kept regardless: "could not look" must never render as "old enough to
+ * discard" (AGENTS.md).
+ */
+function appendFacetLog(logPath: string, newLines: readonly string[]): void {
+	const cutoffMs = Date.now() - FACET_LOG_RETENTION_DAYS * DAY_MS;
+	let existing: string[] = [];
+	try {
+		existing = readFileSync(logPath, 'utf8')
+			.split('\n')
+			.filter((l) => l.trim().length > 0);
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
+	}
+	const kept = existing.filter((l) => {
+		const ageMs = logLineAgeMs(l);
+		return ageMs === null || ageMs >= cutoffMs;
+	});
+	writeFileAtomic(logPath, `${[...kept, ...newLines].join('\n')}\n`);
+}
+
 /** A stable serialisation — keys sorted, recursively — for the log's digest. */
 function stable(value: unknown): string {
 	if (value === null || typeof value !== 'object') return JSON.stringify(value ?? null);
@@ -369,7 +433,7 @@ export function writeFacet(
 			...(extra[node] ?? {}),
 		})
 	);
-	if (lines.length) appendFileSync(logPath, `${lines.join('\n')}\n`);
+	if (lines.length) appendFacetLog(logPath, lines);
 	return { ok: true, path, logPath, written: Object.keys(records) };
 }
 

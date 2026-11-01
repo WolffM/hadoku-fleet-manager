@@ -1468,6 +1468,13 @@
     "why": "T3 (plan §7.3, wave 5n lane A): the per-node-vs-fleet statistic. PURE — same shape as job-history-stats.ts beside it."
   },
   {
+    "glob": "src/fleet-stats.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "T6 (plan §7.3): the `fleet stats` computation over the T2/T4/T5/T7 stores. PURE — same shape as failure-rates.ts beside it."
+  },
+  {
     "glob": "src/job-history-ingest.ts",
     "layer": "domain",
     "domain": "observation",
@@ -1546,6 +1553,13 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run"
+  },
+  {
+    "glob": "scripts/stats.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "T6 (plan §7.3): the `fleet stats` CLI — reads job-rollup-store.ts, job-run-store.ts, capacity-sample-store.ts and gh-budget-history-store.ts and wires them into fleet-stats.ts. Same shape as job-rollups.mjs/failures.mjs beside it."
   },
   {
     "glob": "scripts/failures.mjs",

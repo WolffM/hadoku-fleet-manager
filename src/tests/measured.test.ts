@@ -18,6 +18,7 @@ import { join } from 'node:path';
 
 import { missingMeasuredFiles } from '../host.js';
 import {
+	FACET_LOG_RETENTION_DAYS,
 	MANIFEST_KEY,
 	MEASURED_FACETS,
 	facetLogPath,
@@ -298,6 +299,64 @@ test('every write appends one dated, digested line per node to <facet>.log — n
 	}
 	assert.equal(lines[0].raw, 'x');
 	assert.equal(lines[1].raw, undefined);
+});
+
+// ── T6: the log is bounded by time (refactor plan §7.3, "bound the facet logs") ─
+
+test('a write trims log rows older than FACET_LOG_RETENTION_DAYS, keeping newer ones', () => {
+	const dir = stateFixture();
+	const logPath = join(dir, 'health.log');
+	const old = JSON.stringify({ loggedAt: ago(FACET_LOG_RETENTION_DAYS + 1), node: 'ancient' });
+	const recent = JSON.stringify({ loggedAt: ago(FACET_LOG_RETENTION_DAYS - 1), node: 'recent' });
+	writeFileSync(logPath, `${old}\n${recent}\n`);
+
+	writeFacet('health', { n: rec(ago(0)) }, { dir });
+
+	const lines = readFileSync(logPath, 'utf8')
+		.trim()
+		.split('\n')
+		.map((l) => JSON.parse(l) as Record<string, unknown>);
+	assert.deepEqual(
+		lines.map((l) => l.node),
+		['recent', 'n'],
+		'the row older than the retention window is dropped; the newer one and the new write survive'
+	);
+});
+
+test('a log row whose age cannot be determined is NEVER dropped, however long the log sits', () => {
+	const dir = stateFixture();
+	const logPath = join(dir, 'health.log');
+	// Not JSON at all, and JSON with no parseable `loggedAt` — two different
+	// ways a row's age is unknowable, both kept (AGENTS.md: "could not look"
+	// must never render as "old enough to discard").
+	const notJson = '{ not json at all';
+	const noLoggedAt = JSON.stringify({ node: 'mystery' });
+	writeFileSync(logPath, `${notJson}\n${noLoggedAt}\n`);
+
+	writeFacet('health', { n: rec(ago(0)) }, { dir });
+
+	const lines = readFileSync(logPath, 'utf8').trim().split('\n');
+	assert.equal(
+		lines.length,
+		3,
+		'both undated rows plus the new write — nothing unknowable was dropped'
+	);
+	assert.equal(lines[0], notJson);
+	assert.equal(lines[1], noLoggedAt);
+});
+
+test('the log is a REWRITE, not an append, once trimming has something to drop — still atomic', () => {
+	const dir = stateFixture();
+	const logPath = join(dir, 'health.log');
+	writeFileSync(
+		logPath,
+		`${JSON.stringify({ loggedAt: ago(FACET_LOG_RETENTION_DAYS + 5), node: 'too-old' })}\n`
+	);
+	const w = writeFacet('health', { n: rec(ago(0)) }, { dir });
+	assert.equal(w.ok, true);
+	const lines = readFileSync(logPath, 'utf8').trim().split('\n');
+	assert.equal(lines.length, 1, 'the stale row is gone — this was a rewrite, not a bare append');
+	assert.equal((JSON.parse(lines[0]) as Record<string, unknown>).node, 'n');
 });
 
 // ── the host's boot check (S §2.3 rule 2, declared optional until §4 step 7) ─
