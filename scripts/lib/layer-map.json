@@ -289,6 +289,11 @@
     "why": "Wave 5n lane B (plan §7.3, T5): `gh-budget.ts`'s own history store, same \"access, not state\" reasoning as the comment on atomic-json.ts below — `gh-budget.ts` is itself `access`, not `state`, and access importing state is the illegal direction, so this stays beside it rather than beside job-rollup-store.ts above."
   },
   {
+    "glob": "src/gh-budget-pool.ts",
+    "layer": "access",
+    "why": "Wave 5r lane C: the shared-pool metering (`readGhPool`/`meterGhPool`) split out of `gh-budget.ts` to bring that file under the 800-line ceiling (pure move). Same layer as the file it split from — it reads and writes the exact same window bookkeeping, through accessors `gh-budget.ts` exports for it."
+  },
+  {
     "glob": "src/conditional-cache-store.ts",
     "layer": "access"
   },
@@ -1324,6 +1329,27 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run"
+  },
+  {
+    "glob": "src/ci-alerts-decide.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave 5r lane C: ci-alerts.ts's run/state shapes and pure decision machine, split out to bring that file under the 800-line ceiling (pure move). Same layer as the file it split from."
+  },
+  {
+    "glob": "src/ci-alerts-summary.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave 5r lane C: ci-alerts.ts's per-tick tally, split out to bring that file under the 800-line ceiling (pure move). Same layer as the file it split from."
+  },
+  {
+    "glob": "src/ci-alerts-state.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave 5r lane C: ci-alerts.ts's three persisted files, split out to bring that file under the 800-line ceiling (pure move). Same layer as the file it split from."
   },
   {
     "glob": "src/label-floor.ts",

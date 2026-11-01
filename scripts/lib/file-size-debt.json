@@ -24,16 +24,12 @@
   "scripts/onboarding.sh": 814,
   "scripts/runners-slice-install.sh": 986,
   "scripts/service-inventory.mjs": 977,
-  "src/ci-alerts.ts": 982,
   "src/cli.ts": 974,
-  "src/gh-budget.ts": 843,
   "src/lib/capability-registry.ts": 1166,
   "src/lib/job-registry.ts": 986,
-  "src/runners/backstop-decision.ts": 1049,
   "src/runners/ephemeral-tick.ts": 896,
   "src/runners/ephemeral.ts": 993,
   "src/runners/placement.ts": 890,
-  "src/tests/ci-alerts.test.ts": 1285,
   "src/tests/ephemeral.test.ts": 1165,
   "src/tests/prove-job.test.ts": 1272
 }

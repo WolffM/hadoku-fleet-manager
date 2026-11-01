@@ -76,9 +76,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { githubToken, hostInstalled, logger, postDiscord, stateDir } from './host.js';
+import { logger, postDiscord, stateDir } from './host.js';
 import { writeJsonAtomic } from './lib/atomic-json.js';
-import { ghFetchRaw } from './lib/github-client.js';
 import {
 	ghBudgetHistoryStore,
 	GH_BUDGET_HISTORY_FILE,
@@ -113,14 +112,14 @@ export const BUDGET_ALERT_FRACTION = 0.2;
  */
 export const BUDGET_ALERT_MIN_LEFT_MS = 10 * 60_000;
 
-interface CallerCount {
+export interface CallerCount {
 	calls: number;
 	/** 304s — answered, and free against the primary limit. */
 	notModified: number;
 }
 
 /** What one metered caller (a cron) moved the pool by, net of this process. */
-interface MeteredSpend {
+export interface MeteredSpend {
 	runs: number;
 	spent: number;
 	/** Runs whose before or after reading could not be taken — counted, never guessed. */
@@ -128,7 +127,7 @@ interface MeteredSpend {
 }
 
 /** One {@link TIMELINE_BUCKET_MS} slice: the highest `used` seen in it, and our own charges. */
-interface TimelineBucket {
+export interface TimelineBucket {
 	used: number;
 	own: number;
 }
@@ -138,7 +137,8 @@ export const TIMELINE_BUCKET_MS = 5 * 60_000;
 /** A slice of outside spend under this is not worth a word in the `window ended` line. */
 const BUSIEST_MIN = 50;
 
-interface BudgetWindow {
+/** Exported for `gh-budget-pool.ts`'s `bookMetered` — see {@link lastWindowByToken}. */
+export interface BudgetWindow {
 	fingerprint: string;
 	resource: string;
 	limit: number;
@@ -164,11 +164,17 @@ interface BudgetWindow {
 /** Keyed `${fingerprint}:${resource}:${resetAtMs}` — see "more than one window" above. */
 const windows = new Map<string, BudgetWindow>();
 const tokenLabels = new Map<string, string>();
-/** The window each token was last charged in, for a response with no rate-limit headers. */
-const lastWindowByToken = new Map<string, string>();
+/**
+ * The window each token was last charged in, for a response with no rate-limit
+ * headers. Exported for `gh-budget-pool.ts`'s `bookMetered`, which books a
+ * {@link meterGhPool} reading into the same window bookkeeping this file owns
+ * — one map, read and written from both files, never duplicated.
+ */
+export const lastWindowByToken = new Map<string, string>();
 
 /** A window's reset is fixed; this much drift is the same window. */
-const RESET_TOLERANCE_MS = 1000;
+/** Exported for `gh-budget-pool.ts`'s `bookMetered` — see {@link lastWindowByToken}. */
+export const RESET_TOLERANCE_MS = 1000;
 
 /** Under `stateDir()`. */
 export const GH_BUDGET_FILE = 'gh-budget.json';
@@ -261,7 +267,8 @@ export function recordGhResponse(
 	saveBooks(nowMs);
 }
 
-function openWindow(
+/** Exported for `gh-budget-pool.ts`'s `bookMetered` — see {@link lastWindowByToken}. */
+export function openWindow(
 	fingerprint: string,
 	resource: string,
 	limit: number,
@@ -296,7 +303,8 @@ function openWindow(
  * Fold one reading into an open window. `own` is how many of this process's
  * charged calls the reading includes (the call that carried it, or none).
  */
-function absorbReading(
+/** Exported for `gh-budget-pool.ts`'s `bookMetered` — see {@link lastWindowByToken}. */
+export function absorbReading(
 	w: BudgetWindow,
 	limit: number,
 	remaining: number,
@@ -317,7 +325,8 @@ function absorbReading(
 	w.timeline.set(at, b);
 }
 
-function windowFor(fingerprint: string, resource: string, resetAtMs: number) {
+/** Exported for `gh-budget-pool.ts`'s `bookMetered` — see {@link lastWindowByToken}. */
+export function windowFor(fingerprint: string, resource: string, resetAtMs: number) {
 	for (const w of windows.values()) {
 		if (
 			w.fingerprint === fingerprint &&
@@ -341,7 +350,8 @@ function lastWindowOf(fingerprint: string): BudgetWindow | undefined {
  * still counting; and a passed reset alone may be our clock running ahead of
  * GitHub's, with the next response still from that window.
  */
-function closeSuperseded(
+/** Exported for `gh-budget-pool.ts`'s `bookMetered` — see {@link lastWindowByToken}. */
+export function closeSuperseded(
 	fingerprint: string,
 	resource: string,
 	resetAtMs: number,
@@ -370,6 +380,11 @@ function isLate(fingerprint: string, resource: string, resetAtMs: number, nowMs:
 
 /** This process's charged calls, ever. {@link meterGhPool} subtracts its own share with it. */
 let chargedByThisProcess = 0;
+
+/** Read access to {@link chargedByThisProcess} for `gh-budget-pool.ts`'s `meterGhPool`. */
+export function chargedCallsSoFar(): number {
+	return chargedByThisProcess;
+}
 
 /** Count one call; true when it was charged. */
 function count(w: BudgetWindow, caller: GhCaller, status: number, afterFirst: boolean): boolean {
@@ -523,7 +538,8 @@ const booksPath = (): string => join(stateDir(), GH_BUDGET_FILE);
  * the books are kept at all. Unreadable books start fresh and SAY so; the cost
  * is the per-caller split for the rest of the hour, never a reading.
  */
-function loadBooks(nowMs: number): void {
+/** Exported for `gh-budget-pool.ts`'s `bookMetered` — see {@link lastWindowByToken}. */
+export function loadBooks(nowMs: number): void {
 	if (loaded) return;
 	loaded = true;
 	let parsed: { labels?: Record<string, string>; windows?: SavedWindow[] };
@@ -574,8 +590,11 @@ function loadBooks(nowMs: number): void {
 	lastSaveMs = 0;
 }
 
-/** Throttled to one write per GH_BUDGET_SAVE_MS, except that an open or close resets the clock. */
-function saveBooks(nowMs: number): void {
+/**
+ * Throttled to one write per GH_BUDGET_SAVE_MS, except that an open or close resets the clock.
+ * Exported for `gh-budget-pool.ts`'s `bookMetered` — see {@link lastWindowByToken}.
+ */
+export function saveBooks(nowMs: number): void {
 	if (lastSaveMs && nowMs - lastSaveMs < GH_BUDGET_SAVE_MS) return;
 	lastSaveMs = nowMs;
 	const path = booksPath();
@@ -657,155 +676,13 @@ export function getGhBudgetSnapshot(nowMs = Date.now()): FleetGithubBudget[] {
 	}));
 }
 
-/** The shared pool as `GET /rate_limit` reports it. */
-export interface GhPoolReading {
-	limit: number;
-	remaining: number;
-	used: number;
-	resetAtMs: number;
-}
-
-const POOL_READ_TIMEOUT_MS = 10_000;
-
 /**
- * `GET /rate_limit` with the host's token. GitHub does not charge it, and it
- * does not pass through {@link recordGhResponse}, which would book it as a
- * charged call. It reports the GENERAL bucket (checked 2026-10-27: its reset
- * matched the :02 window, not the runner listings' :27 one), which is the
- * bucket the outside spend lands in. Null when it cannot be read.
+ * The shared-pool metering (`readGhPool`/`meterGhPool`), moved to
+ * `gh-budget-pool.ts` (wave 5r lane C, pure move) to bring this file under
+ * the 800-line ceiling. Re-exported so every existing importer — `index.ts`
+ * among them — compiles unchanged.
  */
-export async function readGhPool(): Promise<GhPoolReading | null> {
-	const token = githubToken();
-	if (!token) return null;
-	// Moved onto `ghFetchRaw` (plan §4.1 F2b) — `skipBudgetRecord: true` is
-	// load-bearing: GitHub does not charge `/rate_limit`, and a caller that
-	// booked it would both fabricate a spender in the `[gh-budget] window
-	// ended` line and double-count the very reading `meterGhPool` subtracts it
-	// from (see that function's own doc). Same headers, same timeout — a pure
-	// relocation of the raw `fetch`, not a change to this endpoint's contract.
-	const { resp, error } = await ghFetchRaw('GET', 'https://api.github.com/rate_limit', token, {
-		headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
-		timeoutMs: POOL_READ_TIMEOUT_MS,
-		skipBudgetRecord: true,
-	});
-	if (!resp) {
-		logger.warn(`[gh-budget] could not read GET /rate_limit: ${error}; this run is booked unread`);
-		return null;
-	}
-	if (!resp.ok) {
-		logger.warn(`[gh-budget] GET /rate_limit answered ${resp.status}; this run is booked unread`);
-		return null;
-	}
-	try {
-		const body = (await resp.json()) as {
-			resources?: { core?: { limit?: number; remaining?: number; used?: number; reset?: number } };
-		};
-		const c = body.resources?.core;
-		const nums = [c?.limit, c?.remaining, c?.used, c?.reset];
-		if (!c || !nums.every((n) => typeof n === 'number' && Number.isFinite(n))) {
-			logger.warn('[gh-budget] GET /rate_limit carried no core reading; this run is booked unread');
-			return null;
-		}
-		return { limit: c.limit!, remaining: c.remaining!, used: c.used!, resetAtMs: c.reset! * 1000 };
-	} catch (e) {
-		logger.warn(
-			`[gh-budget] could not read GET /rate_limit: ${e instanceof Error ? e.message : String(e)}; ` +
-				'this run is booked unread'
-		);
-		return null;
-	}
-}
-
-/**
- * Run `fn` and book what the shared pool rose by while it ran, net of this
- * process's own charged calls in that time, against `caller` (fleet-manager#9).
- *
- * For a caller whose spend happens OUTSIDE this process: mgmt-api wraps each
- * cron dispatch, because a cron's `fleet` CLI, Python script or worker spends
- * the same user pool and was until now one undifferentiated `not this process`.
- * Anything else running at the same time is charged to the cron too, so a
- * figure is an upper bound for that cron, and two overlapping crons share it.
- *
- * Never changes `fn`'s outcome: its value or its throw passes through, and a
- * reading that cannot be taken books the run as `unread`. In a process with no
- * fleet host installed there are no books, so `fn` simply runs unmetered; and
- * a fault in the metering itself is logged, never thrown, because a throw from
- * the `finally` below would REPLACE the dispatch's own result.
- *
- * A run that straddles a reset books only what it saw of the new window: the
- * `used` it read after, which GitHub counts from that reset.
- */
-export async function meterGhPool<T>(
-	caller: string,
-	fn: () => Promise<T>,
-	opts: { read?: () => Promise<GhPoolReading | null>; now?: () => number } = {}
-): Promise<T> {
-	if (!hostInstalled()) return fn();
-	const read = opts.read ?? readGhPool;
-	const meterFault = (e: unknown) =>
-		logger.warn(
-			`[gh-budget] metering ${caller} failed: ${e instanceof Error ? e.message : String(e)}`
-		);
-	const before = await read().catch((e: unknown) => {
-		meterFault(e);
-		return null;
-	});
-	const ownBefore = chargedByThisProcess;
-	try {
-		return await fn();
-	} finally {
-		try {
-			const after = await read();
-			bookMetered(
-				caller,
-				before,
-				after,
-				chargedByThisProcess - ownBefore,
-				(opts.now ?? Date.now)()
-			);
-		} catch (e) {
-			meterFault(e);
-		}
-	}
-}
-
-function bookMetered(
-	caller: string,
-	before: GhPoolReading | null,
-	after: GhPoolReading | null,
-	own: number,
-	nowMs: number
-): void {
-	const token = githubToken();
-	// Without an after reading there is no window to book into; readGhPool has
-	// already said why.
-	if (!token || !after) return;
-	loadBooks(nowMs);
-	const fingerprint = ghTokenFingerprint(token);
-	closeSuperseded(fingerprint, 'core', after.resetAtMs, nowMs);
-	const w =
-		windowFor(fingerprint, 'core', after.resetAtMs) ??
-		openWindow(
-			fingerprint,
-			'core',
-			after.limit,
-			after.remaining,
-			after.used,
-			after.resetAtMs,
-			nowMs
-		);
-	absorbReading(w, after.limit, after.remaining, after.used, nowMs, 0);
-	const m = w.metered.get(caller) ?? { runs: 0, spent: 0, unread: 0 };
-	m.runs++;
-	if (!before) m.unread++;
-	else {
-		const sameWindow = Math.abs(before.resetAtMs - after.resetAtMs) <= RESET_TOLERANCE_MS;
-		m.spent += Math.max(0, (sameWindow ? after.used - before.used : after.used) - own);
-	}
-	w.metered.set(caller, m);
-	lastWindowByToken.set(fingerprint, `${w.fingerprint}:${w.resource}:${w.resetAtMs}`);
-	saveBooks(nowMs);
-}
+export { readGhPool, meterGhPool, type GhPoolReading } from './gh-budget-pool.js';
 
 /** The top spenders across every open window, for a line that has no room for more. */
 export function ghBudgetSummary(): string {

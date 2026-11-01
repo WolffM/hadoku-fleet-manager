@@ -1,20 +1,9 @@
-import os from 'node:os';
-import { readFileSync } from 'node:fs';
-
 import { logger } from '../host.js';
 import { postDiscord as postDiscordSink } from '../host.js';
-import {
-	ghGet,
-	ghWrite,
-	readRunnerListingShared,
-	SELF_REPO,
-	type GhRunner,
-} from '../lib/github-client.js';
+import { ghWrite, type GhRunner } from '../lib/github-client.js';
 import { withGhCaller } from '../gh-budget.js';
-import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
-import { BACKSTOP_LABEL, BUILDER_LABEL, PM2_HOST_LABEL, nodeOf } from './census.js';
+import { BUILDER_LABEL, nodeOf } from './census.js';
 import {
-	SATURATION_QUEUE_SECONDS,
 	backstopLabelWrite,
 	clawsAreHealthy,
 	decideBackstop,
@@ -22,7 +11,6 @@ import {
 	hostMayTakeSaturation,
 	describeSaturationHost,
 } from './backstop.js';
-import { isLocalNode } from '../lib/node-identity.js';
 import {
 	isBackstopNode,
 	mintsOnDemand,
@@ -32,7 +20,6 @@ import {
 import { backstopHold, setBackstopHold } from './backstop-hold.js';
 import { describeForce, isForced, readForce, type ForceState } from './backstop-force.js';
 import { getCapacityLedger } from './capacity-ledger.js';
-import { ZOMBIE_MS } from './queue-discovery.js';
 import { nodeIsSick } from '../lib/sick-node.js';
 import { isDraining, readDrain } from './drain.js';
 import { nodeReservation, type Reservation } from '../node-reservation.js';
@@ -42,6 +29,18 @@ import { subCadenceDue, markSubCadence, __resetSubCadenceKeyForTesting } from '.
 import { TICK_INTERVAL_MS, selfHostname } from '../lib/runner-health-shared.js';
 import type { TickReport } from '../runner-health.js';
 
+import { readHostLoad } from './backstop-host-load.js';
+export { __setHostLoadReaderForTesting, type HostLoad } from './backstop-host-load.js';
+
+import { syncBackstopAcrossFleet } from './backstop-fanout.js';
+
+import { probeQueuePressure, QUEUE_ZOMBIE_SECONDS } from './backstop-queue-probe.js';
+export {
+	probeQueuePressure,
+	QUEUE_ZOMBIE_SECONDS,
+	type QueuePressure,
+} from './backstop-queue-probe.js';
+
 /**
  * Last backstop state we pushed to the NON-self repos. `null` = unknown, which
  * is the state after every mgmt-api restart, and it deliberately forces one
@@ -50,30 +49,6 @@ import type { TickReport } from '../runner-health.js';
  * them.
  */
 let backstopFleetState: boolean | null = null;
-
-type HostLoad = { load1: number; cores: number; memAvailableMb: number };
-let hostLoadReader: (node: string) => HostLoad | null = readHostLoadFromProc;
-const readHostLoad = (node: string): HostLoad | null => hostLoadReader(node);
-/** Test seam: the backstop's idle check reads this instead of /proc. */
-export function __setHostLoadReaderForTesting(
-	fn: ((node: string) => HostLoad | null) | null
-): void {
-	hostLoadReader = fn ?? readHostLoadFromProc;
-}
-
-/** The backstop host's load and memory for `isHostIdle`, read from /proc when it is THIS box. */
-function readHostLoadFromProc(
-	node: string
-): { load1: number; cores: number; memAvailableMb: number } | null {
-	if (!isLocalNode(node)) return null;
-	try {
-		const load1 = Number(readFileSync('/proc/loadavg', 'utf8').split(' ')[0]);
-		const mem = /MemAvailable:\s+(\d+) kB/.exec(readFileSync('/proc/meminfo', 'utf8'));
-		return { load1, cores: os.cpus().length, memAvailableMb: mem ? Number(mem[1]) / 1024 : 0 };
-	} catch {
-		return null;
-	}
-}
 
 /**
  * When the fan-out last READ the fleet's registrations, rather than trusting
@@ -174,118 +149,6 @@ let backstopLastReason: 'outage' | 'saturation' | null = null;
 let queueZombiesLogged: number | null = null;
 
 /**
- * Apply the backstop label to hokon's runner on EVERY fleet repo, not just this
- * one.
- *
- * SELF_REPO's runner listing is a valid fleet-wide view for the CLAWS — they
- * register to every covered repo under the same names with the same labels — and
- * that is what the comment on SELF_REPO means. It was never true of hokon, and
- * on 2026-08-23 it stopped being harmless: hokon gained a runner on all 26 repos,
- * each carrying only `pm2-host,taskauto`. The promote below writes labels by
- * runner ID, and a runner ID is repo-scoped, so a full claw outage promoted
- * hokon for hadoku_site and left the other 25 repos' hokon runners unlabelled.
- *
- * That combination strands them. `runs-on: [self-hosted, hadoku-builder]` matches
- * nothing once the claws are down, and the hosted fallback cannot rescue them
- * either — it flips on `clawsOnline + backstopOnline`, and backstopOnline counts
- * hokon as capacity even though that capacity was only ever reachable from one
- * repo. So the escalation claws → hokon → hosted silently skipped BOTH remaining
- * rungs for 25 of 26 repos, and their jobs would queue until a claw came back.
- *
- * Costs nothing on the happy path: the fan-out only runs on a state CHANGE, and
- * re-asserts every tick only while the backstop is up — the state where a write
- * that silently failed last tick is worth the calls.
- *
- * One state change it ALWAYS sees is a restart: `backstopFleetState` is null in
- * a new process, so the first tick reads every child repo's runner listing to
- * converge. Read one after another that was ~12s of the first tick — measured
- * 2026-09-01 on 0.21.2, the first tick took 19.5s with the runs sweep already
- * fanned out. The repos are independent here (each is read and written on its
- * own id), so they go `SWEEP_CONCURRENCY` at a time. The two result lists are
- * sorted, so the log line does not depend on which listing answered first.
- */
-async function syncBackstopAcrossFleet(
-	on: boolean,
-	token: string,
-	repos: string[],
-	/**
-	 * Runners that must NOT carry the label whatever `on` says — the pool
-	 * members on a quarantined or drained node. Same predicate as the local
-	 * loop, so the fan-out cannot re-label on twenty repos a node this tick
-	 * refused on this one.
-	 */
-	unsafe: (runnerName: string) => boolean = () => false
-): Promise<{ changed: string[]; failed: string[] }> {
-	const changed: string[] = [];
-	const failed: string[] = [];
-	const converge = async (repo: string): Promise<void> => {
-		if (repo === SELF_REPO) return; // handled by the ID-based loop above
-		// Shared (#118): the reap and the warm cache list these repos on a minute
-		// clock, and a label sweep on a 10-minute one can use their answer. Its
-		// own writes drop the entry, so a re-assert never reads back its past.
-		const resp = await readRunnerListingShared(repo, token);
-		if (!resp || !Array.isArray(resp.runners)) {
-			failed.push(repo);
-			return;
-		}
-		for (const r of resp.runners) {
-			const labels = r.labels ?? [];
-			const inPool = labels.some((l) => l.name === PM2_HOST_LABEL || l.name === BACKSTOP_LABEL);
-			// Only the hokon pool is ever relabelled here. A claw carries neither
-			// label, so it can never be demoted by this path even by accident.
-			if (!inPool) continue;
-			// ONE PREDICATE, shared with the id-based loop in `tick` — see
-			// `backstopLabelWrite`. This arm used to skip an offline runner for the
-			// DEMOTE as well as the promote, which is how hadoku-cardtable kept
-			// `hadoku-builder` through the 2026-09-18T19:29Z sweep and served seven
-			// more builder jobs on it.
-			const write = backstopLabelWrite(
-				{
-					hasBuilder: labels.some((l) => l.name === BUILDER_LABEL),
-					online: r.status === 'online',
-				},
-				on && !unsafe(r.name)
-			);
-			if (write === null) continue;
-			const want = write === 'promote';
-			const res = want
-				? await ghWrite(
-						'POST',
-						`/actions/runners/${r.id}/labels`,
-						token,
-						{
-							labels: [BUILDER_LABEL],
-						},
-						repo
-					)
-				: await ghWrite(
-						'DELETE',
-						`/actions/runners/${r.id}/labels/${BUILDER_LABEL}`,
-						token,
-						undefined,
-						repo
-					);
-			// A demote that 404s found the label already gone — which is the state
-			// being converged to, so it is neither a change nor a failure. The other
-			// writer of this label (the tier ladder, see runners/backstop-hold.ts)
-			// demotes hokon on its own first pass after a restart, and since the
-			// first tick here fires at t=0 the two can strip the same label within
-			// the same second. Counting that as failed left `backstopFleetState`
-			// unset, which forced a second full converge next tick, and logged
-			// "those repos queue until this succeeds" about repos that were fine.
-			if (res.ok) changed.push(`${repo.split('/')[1]}:${r.name}`);
-			else if (!(want === false && res.status === 404)) {
-				failed.push(`${repo.split('/')[1]}:${r.name}`);
-			}
-		}
-	};
-	await mapConcurrent(repos, SWEEP_CONCURRENCY, converge);
-	changed.sort();
-	failed.sort();
-	return { changed, failed };
-}
-
-/**
  * Reservation override for tests.
  *
  * REQUIRED, not a convenience: the real `nodeReservation` consults the
@@ -297,147 +160,6 @@ async function syncBackstopAcrossFleet(
 let reservationOverride: ((pm2Busy: boolean) => Reservation) | null = null;
 export function __setReservationForTesting(fn: ((pm2Busy: boolean) => Reservation) | null): void {
 	reservationOverride = fn;
-}
-
-/**
- * Past this, a queued run is a ZOMBIE and is NOT queue pressure.
- *
- * ONE BOUNDARY, ONE NAME — imported from the dispatcher rather than restated,
- * for the reason `queue-discovery.ts` gives beside it: two copies of this number
- * means a run the dispatcher will never mint for is one this probe still reads
- * as work waiting for capacity. `zombie-boundary-guard.test.mjs` already pins
- * `ZOMBIE_MS` against `queue-health.mjs`'s `ZOMBIE_SECONDS`; importing puts this
- * third reader inside that guard instead of beside it.
- *
- * WHY THE BACKSTOP NEEDED IT AND DID NOT HAVE IT. The two runs the dispatcher's
- * band was written for — hadoku-tenhands 32072350405 (2026-08-17T21:40:51Z) and
- * hadoku_site 32218726912 (2026-08-19T05:15:08Z) — are permanently `queued` and
- * cannot be cancelled, force-cancelled or deleted; `dispatch-tick.ts` records
- * the three refusals and why. They were harmless here while the probe was gated
- * on `isAtCapacity(...)`, which under all-JIT is never true, so this function
- * effectively never ran. `2383b18` (#63) made it run every tick — and on the
- * first tick after that deploy it returned **3.5 million seconds**, 35,000x the
- * 100s threshold, and `reason=saturation` has been true on essentially every
- * tick since. Measured in the deployed tree: ZERO `BACKSTOP` lines in
- * `mgmt-api-out` for 2026-09-22..24, then 37 on 09-25, 111 on 09-26, 149 on
- * 09-27 and 116 by 21:00Z on 09-28, every one of them `reason=saturation
- * queue=~3,510,000s` against a fleet reporting `claws=12/12 online free=27`.
- * That is the #56 regression: hokon was not catching overflow, it was carrying
- * `hadoku-builder` permanently and winning GitHub's assignment race with a
- * standing registration (builder queue p50 2s against the claws' 4s).
- *
- * THE FAILURE THIS EXCLUSION DOES *NOT* MANUFACTURE. CLAUDE.md's rule is that no
- * gate may get easier to pass the worse the failure gets, and that if you
- * exclude a category you must check what happens when a real failure MAKES that
- * category. `queue-health`'s p95 broke exactly that way: every casualty of a
- * long stall eventually crossed the one-hour ceiling and LEFT the percentile, so
- * a two-hour outage read greener than a twenty-minute one. A MAXIMUM over a
- * sliding age band does not have that shape. A saturation lasting longer than
- * the band means runs are still arriving and still not being served, so the band
- * is full of recent ones and the maximum inside it stays far over 100s; the only
- * way the band empties is that nothing has queued for a whole day, which is a
- * genuinely idle fleet. The passage of time cannot move a run out of the band
- * without newer runs moving in behind it — unless the queue really did drain.
- *
- * AND THEY ARE COUNTED, NOT DISCARDED. "I deliberately did not act on this" is
- * not "there was nothing there": the count and the oldest age ride out on
- * `QueuePressure` and reach both the snapshot and the log.
- */
-export const QUEUE_ZOMBIE_SECONDS = ZOMBIE_MS / 1000;
-
-/** What the queue probe saw, split into what it acted on and what it refused. */
-export interface QueuePressure {
-	/**
-	 * Age of the oldest queued run INSIDE the band, seconds. This is the only
-	 * field the backstop decision reads.
-	 */
-	pressureSec: number;
-	/**
-	 * Queued runs excluded by age — SEEN, and deliberately not acted on.
-	 *
-	 * Understated when `pressureSec` already crossed the threshold, because the
-	 * loop stops looking at that point. It is a diagnostic, never an input to a
-	 * decision, so a partial count costs nothing; the alternative is paying the
-	 * full 26-repo sweep on a fleet already known to be backed up.
-	 */
-	zombies: number;
-	/** The oldest of them, seconds, so the log can name what it refused. */
-	oldestZombieSec: number;
-}
-
-/**
- * Age of the oldest run that cannot start at all, in seconds.
- *
- * RUN level here, deliberately. The justification this comment used to give —
- * "only ever called when `clawsFree === 0`, and with no free runner anywhere a
- * newly-arrived run cannot start ANY of its jobs" — stopped being true on
- * 2026-09-24, when the caller began probing whenever the fleet is UP (#63). It
- * is recorded rather than deleted because the conclusion survives the premise:
- * only the MAXIMUM is returned and only `>= SATURATION_QUEUE_SECONDS` moves the
- * decision, so a run sitting queued for the seconds GitHub takes to place it is
- * under the bar with or without a free claw, and a run still queued past the
- * fleet's measured p90 is STUCK either way — that is precisely the 2026-09-01
- * shape, where `clawsFree` never hit zero and 13 jobs waited 11-19 minutes.
- * (Job-level queue time is the right measure for the DISTRIBUTION, which is why
- * `JobRecord.queueSec` records it; it is not needed to answer "is anything
- * stuck right now".)
- *
- * IT IS NO LONGER FREE ON A HEALTHY FLEET in the worst case. `ghGet` revalidates
- * with an ETag, so an unchanged queue answers 304 for nothing, but a repo whose
- * queue moved between ticks is charged, and the ceiling is sized as if every
- * listing were; the per-hour arithmetic is stated at the call site and asserted by
- * `the queue probe stays inside the hourly API budget at fleet size`. It exits
- * at the first run over the threshold, so "yes, there is pressure" is one API
- * call and the quiet answer is one per repo — and the quiet answer is now the
- * common one, which is the direction that costs.
- *
- * THE ZOMBIE WAS ALSO HIDING THE SPEND. With a permanently-over-threshold run in
- * the first repo swept, this broke after ONE listing on every tick from
- * 2026-09-25 to 09-28 — so the measured cost was ~6 calls/hr and the arithmetic
- * at the call site described a path nothing took. Excluding it restores the
- * worst case the budget test has always asserted: 26 listings x 6 ticks/hr =
- * 156/hr, 3.1% of a 5,000/hr budget. The spend goes UP by design, and it is the
- * number that was already under test.
- */
-export async function probeQueuePressure(
-	token: string,
-	repos: string[],
-	nowMs: number,
-	zombieSec: number = QUEUE_ZOMBIE_SECONDS
-): Promise<QueuePressure> {
-	let pressureSec = 0;
-	let zombies = 0;
-	let oldestZombieSec = 0;
-	for (const repo of repos) {
-		const resp = await ghGet<{
-			workflow_runs?: { created_at?: string; run_started_at?: string }[];
-		}>('/actions/runs?status=queued&per_page=20', token, repo);
-		for (const run of resp?.workflow_runs ?? []) {
-			// THIS ATTEMPT'S CLOCK, like every other age in this file.
-			//
-			// `created_at` pins to the ORIGINAL run and GitHub never moves it, so on
-			// a re-run the two diverge by the whole gap between attempts. That is
-			// the bug `GhRun.run_started_at` was added for on 2026-09-10, when a
-			// re-run of a 2h-old hadoku-tenhands run alerted as "QUEUED 122m" while
-			// its jobs started four seconds later — and this function was still
-			// reading the field that mistake was about. A re-run of anything old
-			// therefore read as hours of queue pressure the instant it was
-			// requeued, which is enough on its own to promote the production host.
-			// Both fields are absent on runs old enough to predate `run_started_at`,
-			// hence the fallback.
-			const started = Date.parse(run.run_started_at ?? run.created_at ?? '');
-			if (!Number.isFinite(started)) continue;
-			const age = Math.max(0, Math.round((nowMs - started) / 1000));
-			if (age > zombieSec) {
-				zombies++;
-				if (age > oldestZombieSec) oldestZombieSec = age;
-				continue;
-			}
-			if (age > pressureSec) pressureSec = age;
-		}
-		if (pressureSec >= SATURATION_QUEUE_SECONDS) break;
-	}
-	return { pressureSec, zombies, oldestZombieSec };
 }
 
 /**
