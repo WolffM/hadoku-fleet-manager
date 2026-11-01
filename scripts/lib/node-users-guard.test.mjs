@@ -56,6 +56,11 @@ const ALLOWED = {
 		'enrollment reaches a box BEFORE the manifest names it, at the address and user it booted ' +
 		'with (wave 5o lane D split of enroll-node.mjs, pure move: the ssh helpers that carried ' +
 		'this exemption moved here)',
+	'literal:scripts/lib/make-preseed-fixtures.mjs':
+		'`target/home/hadoku/.ssh` is a SANDBOX directory `runWifiBranch` builds under a throwaway ' +
+		'tempDir to simulate the preseed late_command writing into /target — never a real node or a ' +
+		'path this suite reads/writes outside the sandbox (wave 5s lane D test-file split of ' +
+		'make-preseed.test.mjs, which this walk never scanned — a test file by name — pure move)',
 };
 
 /** Rule 1: the shapes a user takes in code. */

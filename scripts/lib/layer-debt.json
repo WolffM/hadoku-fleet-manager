@@ -124,7 +124,7 @@
     "to": "scripts/lib/emit.mjs"
   },
   {
-    "from": "scripts/lib/preflight.mjs",
+    "from": "scripts/lib/preflight-lan.mjs",
     "to": "scripts/lib/node-interfaces.mjs"
   },
   {

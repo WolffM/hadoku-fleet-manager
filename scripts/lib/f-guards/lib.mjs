@@ -17,9 +17,10 @@
  * has that are not named `*.test.*` but exist only for tests to import
  * (`scripts/lib/fake-node.mjs`, `scripts/lib/fleet-source-fixture.mjs`,
  * `scripts/lib/bootcamp-fixtures.mjs`, `scripts/lib/ci-throttle-fixtures.mjs`,
- * `scripts/lib/runner-mem-fixtures.mjs`). Each is confirmed by grep to have
- * zero non-test importers; a new one that earns the same treatment should be
- * added here with the same kind of check, not guessed at.
+ * `scripts/lib/runner-mem-fixtures.mjs`, `scripts/lib/make-preseed-fixtures.mjs`).
+ * Each is confirmed by grep to have zero non-test importers; a new one that
+ * earns the same treatment should be added here with the same kind of check,
+ * not guessed at.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -47,6 +48,7 @@ const FIXTURE_FILES = new Set([
 	'scripts/lib/ci-throttle-fixtures.mjs',
 	'scripts/lib/identity-model-fixtures.mjs',
 	'scripts/lib/runner-mem-fixtures.mjs',
+	'scripts/lib/make-preseed-fixtures.mjs',
 ]);
 
 function walk(dir, out) {

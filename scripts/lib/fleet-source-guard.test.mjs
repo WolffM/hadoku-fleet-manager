@@ -29,8 +29,9 @@ const ALLOWED = {
 	'scripts/check-mf-externals.mjs': '--worktree only: an operator auditing working copies',
 	'scripts/check-contract-consumers.mjs':
 		'builds a banner SAMPLE string from the path; reads nothing there',
-	'scripts/lib/refresh-cycle.mjs':
-		'a WRITER: commits manifests through a worktree of the hub clone, which needs a clone',
+	'scripts/lib/refresh-cycle-live.mjs':
+		'a WRITER: commits manifests through a worktree of the hub clone, which needs a clone ' +
+		'(wave 5s lane D split of refresh-cycle.mjs: writerManifestDir moved here)',
 	'src/lib/fleet-paths.ts': 'defines reposDir, and siteRoot() falls back to it',
 	'src/cli.ts': '--help text naming the variable',
 	'scripts/lib/identity-model-fixtures.mjs':

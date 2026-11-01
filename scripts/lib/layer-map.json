@@ -643,6 +643,13 @@
     "why": "enroll-node.mjs's libs: the ssh helpers (wave 5o, pure move) and the record source, hardware comparison, addressing, manifest write and Tailscale bring-up (wave 5p, given the CLI's state as one context). Same domain and part as the CLI."
   },
   {
+    "glob": "scripts/lib/make-preseed-fixtures.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave 5s lane D test-file split of make-preseed.test.mjs (1,000-line test ceiling): the shared rig (render_preseed's output, the sandboxed wifi-branch execution, sfdisk's PATH) for the eight make-preseed-*.test.mjs files, same 'shared rig, domain-blind-except-for-what-it-drives' bucket as runner-health-rig.ts — make-preseed.sh and node-usb-prep.sh are node provisioning, the same domain as enroll-node.mjs just above."
+  },
+  {
     "glob": "scripts/retire-node.mjs",
     "layer": "domain",
     "domain": "lifecycle",
@@ -825,6 +832,13 @@
     "layer": "domain",
     "domain": "lifecycle",
     "part": "core"
+  },
+  {
+    "glob": "scripts/lib/refresh-cycle-live.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave 5s lane D split of refresh-cycle.mjs (800-line ceiling): every live dependency that touches a real node, ssh, or this package's own CLIs (busyCount, drainCli, judgePressure, liveQueuePressure, createLiveDeps), a pure move. `part: run` rather than refresh-cycle.mjs's `core`, since this half is exactly the I/O the plan's core/run split is for; refresh-cycle.mjs re-exports every name here."
   },
   {
     "glob": "scripts/lib/roster-eligibility.mjs",
@@ -1686,6 +1700,20 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run"
+  },
+  {
+    "glob": "scripts/lib/preflight-lan.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave 5s lane D split of preflight.mjs (800-line ceiling): the LAN-reservation finding, a pure move. Same part as preflight.mjs, which re-exports every name here."
+  },
+  {
+    "glob": "scripts/lib/preflight-security.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave 5s lane D split of preflight.mjs (800-line ceiling): the security-updates finding, a pure move. Same part as preflight.mjs, which re-exports every name here."
   },
   {
     "glob": "scripts/lib/queue-health.mjs",
