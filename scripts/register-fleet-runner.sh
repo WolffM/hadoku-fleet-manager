@@ -148,12 +148,12 @@ sudo ./svc.sh install hadoku
 # needed" — restarting into that is an endless conflict loop, so it is the one
 # status we must honour rather than fight.
 #
-# KillMode=mixed is the other half of that same failure. The stock `process`
+# KillMode=mixed is the other half of that same failure. The stock "process"
 # signals only run.sh and never reaps its children, so a stop that outruns
 # TimeoutStopSec leaves a Runner.Listener alive holding the single GitHub
 # session — which is what MAKES the exit-5 conflict above. GitHub reports such a
 # runner ONLINE the whole time, because it answers about the listener.
-# `scripts/admin/fix-runner-supervision.sh` reconciles this across the fleet.
+# scripts/admin/fix-runner-supervision.sh reconciles this across the fleet.
 sudo mkdir -p "/etc/systemd/system/\$SERVICE_NAME.d"
 printf '%s\n' \\
   '# Managed by fleet register — do not hand-edit.' \\

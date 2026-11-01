@@ -18,7 +18,13 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const FILES = ['../node-usb-prep.sh', '../onboarding.sh', './make-preseed.sh', '../net-survey.sh'];
+const FILES = [
+	'../node-usb-prep.sh',
+	'../onboarding.sh',
+	'./make-preseed.sh',
+	'../net-survey.sh',
+	'../register-fleet-runner.sh',
+];
 
 /** Body of every `<<DELIM` heredoc whose delimiter is NOT quoted. */
 function unquotedHeredocs(src) {
