@@ -51,6 +51,5 @@
   "src/tests/dispatch-pass.test.ts": 1255,
   "src/tests/dispatch-tick.test.ts": 1168,
   "src/tests/ephemeral.test.ts": 1165,
-  "src/tests/prove-job.test.ts": 1272,
-  "src/tests/runner-health.test.ts": 4417
+  "src/tests/prove-job.test.ts": 1272
 }

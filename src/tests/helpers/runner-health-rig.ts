@@ -80,6 +80,122 @@ export const hokonPromotedLabels = () => [
 	...clawLabels().filter((l) => l.name !== 'self-hosted'),
 ];
 
+/**
+ * A fleet where every claw is ONLINE — so nothing here is a runner drop.
+ *
+ * It says nothing about OOM kills (2026-08-24): the offline-runner failover
+ * cannot see those either, because the kernel OOM killer reaps the JOB, not
+ * the listener, so the runner is still online at the next tick and every gate
+ * the drop-failover uses reports a perfectly healthy fleet — the run just
+ * stays red and pages @here as if the build were broken. Real event: the
+ * 13:00 UTC @wolffm fan-out dispatched 14 repos inside 4 seconds, 11 landed on
+ * claw-2 (7.8GB, smallest box in the fleet, tier1 so never demoted), and the
+ * kernel killed hadoku-craft and hadoku-resume-bot 82 seconds apart.
+ */
+export const FLEET_ALL_UP = {
+	runners: [
+		{ id: 1, name: 'hokon', status: 'online', busy: false, labels: hokonLabels() },
+		{ id: 2, name: 'claw-1', status: 'online', busy: false, labels: clawLabels() },
+		{ id: 3, name: 'claw-2', status: 'online', busy: false, labels: clawLabels() },
+	],
+};
+
+/**
+ * THE LIVE hadoku_site RUNNER LISTING, `gh api repos/WolffM/hadoku_site/actions/runners`
+ * on 2026-09-14 — ids, names, statuses and labels exactly as GitHub returned
+ * them, including the `X64`/`Linux` labels GitHub stamps and the `jit-canary`
+ * one the dispatcher writes. It is the listing issue #24 quotes.
+ *
+ * Fresh objects per call: the monitor mutates `runner.labels` in place.
+ */
+export const LIVE_LISTING = () => ({
+	total_count: 7,
+	runners: [
+		{
+			id: 2491,
+			name: 'claw-8',
+			status: 'offline',
+			busy: false,
+			labels: [{ name: 'self-hosted' }, { name: 'X64' }, { name: 'Linux' }],
+		},
+		{
+			id: 69,
+			name: 'hokon',
+			status: 'online',
+			busy: false,
+			labels: [
+				{ name: 'self-hosted' },
+				{ name: 'X64' },
+				{ name: 'Linux' },
+				{ name: 'pm2-host' },
+				{ name: 'taskauto' },
+				{ name: 'av1-nvenc' },
+			],
+		},
+		{
+			id: 2998,
+			name: 'warm-claw-5-hadoku_site',
+			status: 'online',
+			busy: false,
+			labels: [
+				{ name: 'self-hosted' },
+				{ name: 'X64' },
+				{ name: 'Linux' },
+				{ name: 'hadoku-builder' },
+			],
+		},
+		{
+			id: 3057,
+			name: 'warm-claw-3-hadoku_site',
+			status: 'online',
+			busy: false,
+			labels: [
+				{ name: 'self-hosted' },
+				{ name: 'X64' },
+				{ name: 'Linux' },
+				{ name: 'hadoku-builder' },
+			],
+		},
+		{
+			id: 3143,
+			name: 'jit-claw-3-hadoku_site-j104143747556-r34894126603-1789418307',
+			status: 'online',
+			busy: false,
+			labels: [
+				{ name: 'self-hosted' },
+				{ name: 'X64' },
+				{ name: 'Linux' },
+				{ name: 'hadoku-builder' },
+				{ name: 'jit-canary' },
+			],
+		},
+		{
+			id: 3145,
+			name: 'jit-claw-5-hadoku_site-j104143747283-r34894126507-1789418307',
+			status: 'online',
+			busy: false,
+			labels: [
+				{ name: 'self-hosted' },
+				{ name: 'X64' },
+				{ name: 'Linux' },
+				{ name: 'hadoku-builder' },
+			],
+		},
+		{
+			id: 2884,
+			name: 'warm-claw-7-hadoku_site',
+			status: 'online',
+			busy: false,
+			labels: [
+				{ name: 'self-hosted' },
+				{ name: 'X64' },
+				{ name: 'Linux' },
+				{ name: 'hadoku-builder' },
+			],
+		},
+	],
+});
+
 export let originalFetch: typeof globalThis.fetch;
 export let discordPosts: string[];
 export let rerunPosts: string[];
