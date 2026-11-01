@@ -244,13 +244,21 @@ test('a job name with a space round-trips through the intent key', async () => {
 	assert.equal(near.res.minted, 1, 'and the prefix is a DIFFERENT job');
 });
 
-test('dispatch-tick.ts carries no literal NUL — it must be an escape', () => {
+test('dispatch-tick-probe-intents.ts carries no literal NUL — it must be an escape', () => {
 	// This test exists because the line it guards was written with a literal NUL on
 	// the first attempt. It WORKED — the Set joined and compared consistently — and
 	// it made git classify the file as binary, so no diff, no grep, no review.
 	// §2.5 is the same failure in `scripts/lib/floor-probe.mjs`, seven bytes of it.
+	//
+	// Wave 5r lane B moved INTENT_KEY_SEP (and this literal) out of dispatch-tick.ts
+	// into dispatch-tick-probe-intents.ts (800-line ceiling, pure move) — re-exported
+	// from dispatch-tick.ts unchanged, so every OTHER test in this file still reads
+	// it from there; only the source text this one inspects by path moved with it.
 	const HERE = fileURLToPath(new URL('.', import.meta.url));
-	const src = readFileSync(resolve(HERE, '..', '..', 'src', 'runners', 'dispatch-tick.ts'), 'utf8');
+	const src = readFileSync(
+		resolve(HERE, '..', '..', 'src', 'runners', 'dispatch-tick-probe-intents.ts'),
+		'utf8'
+	);
 	assert.ok(src.includes(String.raw`'\u0000'`), 'the separator must be spelled as an escape');
 	assert.equal(src.indexOf('\u0000'), -1, 'a literal NUL byte makes this file invisible to git');
 });

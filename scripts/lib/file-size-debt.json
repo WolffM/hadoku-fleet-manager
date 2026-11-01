@@ -30,14 +30,10 @@
   "src/lib/capability-registry.ts": 1166,
   "src/lib/job-registry.ts": 973,
   "src/runners/backstop-decision.ts": 1049,
-  "src/runners/dispatch-tick.ts": 1065,
-  "src/runners/dispatch-warm-cache.ts": 1024,
   "src/runners/ephemeral-tick.ts": 896,
   "src/runners/ephemeral.ts": 993,
   "src/runners/placement.ts": 890,
   "src/tests/ci-alerts.test.ts": 1285,
-  "src/tests/dispatch-pass.test.ts": 1255,
-  "src/tests/dispatch-tick.test.ts": 1168,
   "src/tests/ephemeral.test.ts": 1165,
   "src/tests/prove-job.test.ts": 1272
 }
