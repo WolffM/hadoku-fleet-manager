@@ -39,7 +39,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -48,10 +48,6 @@ import { cleanGitEnv } from './lib/test-git-identity.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'check-header-fleet.mjs');
-// `catalogue()` moved to lib/header-rules.mjs in wave 5m lane D's split #13
-// (pure move) — its own `readChildApps` import and function body now live
-// there, not in SCRIPT.
-const RULES_LIB = join(HERE, 'lib', 'header-rules.mjs');
 
 /** The ambient environment with every GIT_* variable removed — see
  *  lib/hook-safe-tests.test.mjs and lib/test-git-identity.mjs. */
@@ -388,17 +384,19 @@ test('#98: categories.json readable, child-apps.json missing, is still catalogue
 	}
 });
 
-// F7's actual mutation witness: `catalogue()` reads child-apps.json through
-// `readChildApps({read})`, not a bare `JSON.parse`. MUTATION: put
-// `JSON.parse(readFile(site, 'scripts/child-apps.json'))` back and this goes
-// red even though the runtime test above still passes (see its own comment).
-test('#98: the catalogue reads child-apps.json through site-docs.mjs, not a bare JSON.parse', () => {
-	const src = readFileSync(RULES_LIB, 'utf8');
-	assert.match(src, /import \{ readChildApps \} from '\.\/site-docs\.mjs';/);
-	const fn = src.slice(src.indexOf('function catalogue()'), src.indexOf('/**\n * The `title`'));
-	assert.match(fn, /readChildApps\(\{\s*read:\s*\(file\)\s*=>\s*readFile\(site,\s*file\)\s*\}\)/);
-	assert.doesNotMatch(fn, /JSON\.parse\(readFile\(site, 'scripts\/child-apps\.json'\)\)/);
-});
+// The source-text test that used to sit here ('#98: the catalogue reads
+// child-apps.json through site-docs.mjs, not a bare JSON.parse') asserted on
+// `catalogue()`'s own source text rather than its behaviour. Its own comment
+// said why it existed: reverting to a bare `JSON.parse(readFile(site, ...))`
+// leaves the runtime test above (child-apps.json missing) still green — but
+// tracing that mutation shows why: `readFile` already returns `null` for a
+// missing file (never throws), so `JSON.parse(null)` yields `null`, `null.ok`
+// throws, and the SAME outer catch sets `readable = false` either way. Every
+// fixture in this file converges on the one externally visible shape
+// (`catalogue-unreadable` or a successful parse) regardless of which of the
+// two equivalent reads produced it — a source-text duplicate of behaviour
+// nothing here actually distinguishes. Deleted by the 2026-11-01 test audit
+// (row 9).
 
 // fleet-manager#4: hadoku-cardtable owns cardtable AND cardtable-ppe, and only
 // cardtable has a tile. The PPE row comes second, so a last-wins map lost the

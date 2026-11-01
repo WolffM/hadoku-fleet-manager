@@ -1,29 +1,17 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import fs, {
-	existsSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	utimesSync,
-	writeFileSync,
-} from 'node:fs';
+import fs, { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 import { readJsonState, writeFileAtomic, writeJsonAtomic } from '../lib/atomic-json.js';
 
 function tmpDir(): string {
 	return mkdtempSync(join(tmpdir(), 'atomic-json-test-'));
 }
-
-/** This test runs COMPILED, from `dist/tests/`, so reaching the TypeScript source means climbing
- *  back out of `dist/` to the repo root first. */
-const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
 /**
  * A pid that is GUARANTEED dead — never a real process this test signals.
@@ -415,16 +403,9 @@ test('stale temp sweep: a stale tmp for a DIFFERENT path in the same directory i
 	}
 });
 
-test('stale temp sweep: never the live state dir — writeFileAtomic only sweeps siblings of the path IT was called with', () => {
-	// Documents the invariant rather than exercising ~/.hadoku-mgmt directly
-	// (never touched from a test): sweepStaleTempFiles's only caller is
-	// writeFileAtomic, scoped to dirname(path) for that one call's own
-	// target — there is no directory-wide glob and no separate cron.
-	const src = readFileSync(join(REPO_ROOT, 'src', 'lib', 'atomic-json.ts'), 'utf8');
-	assert.match(src, /sweepStaleTempFiles\(path, dir\);/);
-	assert.equal(
-		[...src.matchAll(/sweepStaleTempFiles\(/g)].length,
-		2, // the function's own declaration site + its one call site
-		'sweepStaleTempFiles must be called from exactly one place'
-	);
-});
+// The source-text test that used to sit here ('stale temp sweep: never the
+// live state dir...') only counted `sweepStaleTempFiles(` occurrences in
+// atomic-json.ts — a source-text duplicate of the behavioural test directly
+// above, which already proves the scoping by writing a real sibling temp
+// file and watching it survive. Deleted by the 2026-11-01 test audit (row 9);
+// the behavioural test above is the one that actually covers this.

@@ -12,7 +12,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
@@ -23,7 +23,6 @@ import {
 	installCiThrottleRig,
 	installLeakGate,
 } from './lib/ci-throttle-fixtures.mjs';
-import { blankComments } from './lib/blank-comments.mjs';
 import { parseJsonStdout, spawnCapture } from './lib/spawn-json.mjs';
 import { tempDir } from './lib/test-tmpdir.mjs';
 
@@ -90,6 +89,58 @@ function deploy(args, env) {
  */
 function json(r) {
 	return parseJsonStdout(r);
+}
+
+/**
+ * A fake `ssh` on PATH that captures exactly what the deployer would have
+ * piped to a real node, then exits 0 without touching a network — the same
+ * `script="$(cat)"` technique `bootcamp-prove.test.mjs`'s `sshShim` already
+ * uses to read what was actually SENT rather than trust what the source says
+ * it sends. Still reaches no real node: `.invalid` fixture names resolve to
+ * nothing, but here that no longer matters, because this `ssh` never
+ * resolves anything either.
+ *
+ * The destination (`<user>@<node>`) is whichever argv token contains an `@`
+ * — `scriptCommand`'s own shape (`ssh <user>@<node> bash -s`) — so the
+ * capture file is named after it without this fixture having to predict the
+ * manifest's default admin user.
+ */
+function sshCaptureFixture() {
+	const bin = tempDir(`${FIXTURE_PREFIX}ssh-bin-`);
+	const captureDir = tempDir(`${FIXTURE_PREFIX}ssh-capture-`);
+	writeFileSync(
+		join(bin, 'ssh'),
+		[
+			'#!/bin/sh',
+			'dest=""',
+			'for a in "$@"; do',
+			'  case "$a" in *@*) dest="$a" ;; esac',
+			'done',
+			`cat >"${captureDir}/$dest.payload"`,
+			'exit 0',
+		].join('\n')
+	);
+	chmodSync(join(bin, 'ssh'), 0o755);
+	return {
+		bin,
+		/** The one captured payload for a destination containing `node` — fails loudly if there is not exactly one. */
+		payloadFor(node) {
+			const files = readdirSync(captureDir).filter((f) => f.includes(node));
+			assert.equal(
+				files.length,
+				1,
+				`expected exactly one captured ssh payload for ${node}, found ${files.length}: ${files.join(', ')}`
+			);
+			return readFileSync(join(captureDir, files[0]), 'utf8');
+		},
+	};
+}
+
+/** `KEY_B64=...` from a captured payload, base64-decoded — `remotePayload()`'s own shape. */
+function b64Field(payload, key) {
+	const m = new RegExp(`^${key}_B64=(\\S+)$`, 'm').exec(payload);
+	assert.ok(m, `captured payload has no ${key}_B64= line:\n${payload}`);
+	return Buffer.from(m[1], 'base64').toString('utf8');
 }
 
 // ── #76: `resolveReserveFile()` / `renderConf()`, run as the REAL code ─────
@@ -208,27 +259,37 @@ test('#76: the per-node call site gates RESERVE_FILE on isLocalNode, never on CO
 	// actually running this script's local-execution path against the real
 	// node it happens to run on in this environment — out of scope for a test
 	// (no writes of any kind to a node, and no real local execution of the
-	// install payload at all, read-only or not). `isLocalNode` itself is
-	// already guarded elsewhere (`node-identity-guard.test.mjs`); what matters
-	// here is only that THIS call site still asks it, rather than reading
-	// `RESERVE_FILE` unconditionally or gating on something else — a structural
-	// check, the same kind `node-identity-guard.test.mjs` already uses for the
-	// same reason: a behavioural test cannot catch a line being deleted or
-	// loosened, only a reader of the source can.
-	const source = readFileSync(DEPLOYER, 'utf8');
-	assert.match(
-		source,
-		/const reserveFile = isLocalNode\(name\) \? RESERVE_FILE : null;/,
-		'the per-node RESERVE_FILE gate must read exactly isLocalNode(name) ? RESERVE_FILE : null — ' +
-			'found something else, so a remote node may now be getting a path resolved on this box'
-	);
-	// And it must be the value renderConf is actually called with, not a
-	// sibling variable nobody passes on.
-	assert.match(
-		source,
-		/renderConf\(name, m, reserveFile\)/,
-		'renderConf must be called with the gated reserveFile, not m/name alone or RESERVE_FILE directly'
-	);
+	// install payload at all, read-only or not).
+	//
+	// What IS in scope, and is what this now drives instead of a source-text
+	// regex: `isLocalNode(name)` reading FALSE for a manifest node that is
+	// certainly not this box (any `.invalid` name), through the REAL per-node
+	// loop, over the REAL ssh payload — captured by `sshCaptureFixture()`
+	// rather than trusted from source text, which cannot tell a textually
+	// different but behaviourally equivalent rewrite (a false failure) from an
+	// inversion that reads the WRONG boolean while still matching no fixed
+	// pattern at all (a false pass). Reading the actual `CONF_B64` this run
+	// would have shipped settles both: either the line was asking the right
+	// question or RESERVE_FILE leaked into a remote node's conf.
+	const capture = sshCaptureFixture();
+	const f = manifestFixture({
+		'claw-a.invalid': { cores: 8, maxConcurrent: 2, minFreeMb: 1024, role: 'claw' },
+	});
+	try {
+		// RESERVE_FILE resolves to a real, truthy path only when a coverage file
+		// sits exactly where resolveReserveFile() looks — without this the gate
+		// being tested can never leak anything, because there is nothing to leak.
+		writeFileSync(join(f.env.FLEET_MANIFEST_DIR, 'fleet-runner-coverage.json'), '{"facets":{}}');
+		deploy(['--check'], { ...f.env, PATH: `${capture.bin}:${f.env.PATH}` });
+		const conf = b64Field(capture.payloadFor('claw-a.invalid'), 'CONF');
+		assert.doesNotMatch(
+			conf,
+			/RESERVE_FILE/,
+			`a path resolved on the deploying box leaked into a remote node's conf:\n${conf}`
+		);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
 });
 
 const BACKSTOP_NODE = {
@@ -268,13 +329,39 @@ test('#120: fleet throttle asks the MINT predicate, never `ephemeral` — or an 
 	// slot env and the payload check are questions about the MINT PATH, which
 	// an on-demand backstop is on and `ephemeral` does not see. (The provisioner
 	// itself has travelled with each mint since 2026-10-27.)
-	const src = blankComments(readFileSync(DEPLOYER, 'utf8'));
-	assert.deepEqual(src.match(/\.ephemeral\s*[!=]==/g) ?? [], []);
-	assert.equal(
-		(src.match(/mintsJitRunners\(m\)/g) ?? []).length,
-		2,
-		'the slot env (MINTS) and the payload check'
-	);
+	//
+	// A source-text regex for `.ephemeral\s*[!=]==` and a count of
+	// `mintsJitRunners(m)` both still pass an INVERTED predicate —
+	// `ephemeral: !mintsJitRunners(m)` mentions no `.ephemeral` comparison at
+	// all and still calls `mintsJitRunners(m)` exactly twice, so every
+	// assertion here would read green while MINTS was backwards for every node
+	// in the fleet. Driven over the real captured ssh payload instead: an
+	// on-demand backstop (role backstop, `mint: 'on-demand'`, no `ephemeral`
+	// field at all — the exact #120 shape) must get `MINTS=1`, and an ordinary
+	// claw that mints nothing must get `MINTS=0`.
+	const capture = sshCaptureFixture();
+	const onDemandBackstop = { ...BACKSTOP_NODE, mint: 'on-demand' };
+	const f = manifestFixture({
+		'backstop.invalid': onDemandBackstop,
+		'claw-a.invalid': CLAW_NODE,
+	});
+	try {
+		deploy(['--check'], { ...f.env, PATH: `${capture.bin}:${f.env.PATH}` });
+		const backstopPayload = capture.payloadFor('backstop.invalid');
+		assert.match(
+			backstopPayload,
+			/^MINTS=1$/m,
+			`an on-demand backstop must get the slot env:\n${backstopPayload}`
+		);
+		const clawPayload = capture.payloadFor('claw-a.invalid');
+		assert.match(
+			clawPayload,
+			/^MINTS=0$/m,
+			`a claw that mints nothing must not get the slot env:\n${clawPayload}`
+		);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
 });
 
 installLeakGate();

@@ -95,3 +95,97 @@ test('fleet-manager#F8: --help still answers, even in the same sandbox', () => {
 	assert.equal(r.status, 0, r.stdout + r.stderr);
 	assert.equal(touched, '', `backstop-switch.mjs --help called external tools:\n${touched}`);
 });
+
+/**
+ * `--force`/`--off`/`--status` all call `readDrain()`, which validates that
+ * `FLEET_MANIFEST_DIR` EXISTS even when no drain file sits inside it
+ * (`fleet-paths.ts`'s `must()`) — unlike the pure-argv tests above, which
+ * deliberately leave the sandbox's manifest dir absent to prove nothing here
+ * touches it. These round-trip tests need it to actually exist.
+ */
+function realManifestDir(sb) {
+	mkdirSync(join(sb.dir, 'no-manifests'), { recursive: true });
+}
+
+// ── the round trip: --force, --status, --off, against a temp state dir ────
+//
+// Everything above only proved argv handling; nothing here exercised the
+// switch file at all. `sandbox()`/`run()` already point HADOKU_STATE_DIR at
+// a throwaway temp dir (never `~/.hadoku-mgmt`, the live path
+// `src/lib/fleet-paths.ts`'s `stateDir()` falls back to with no override),
+// so the real CLI is safe to drive end to end here.
+
+test('#2026-11-01: --force writes a time-boxed record --status reads back, and --off clears it', () => {
+	const sb = sandbox();
+	realManifestDir(sb);
+
+	const forced = run(['--force', 'claw-3', '--for', '30m', '--reason', 'queue backed up'], sb);
+	assert.equal(forced.status, 0, forced.stdout + forced.stderr);
+	assert.match(forced.stdout, /claw-3/);
+
+	const statusAfterForce = json(run(['--status', '--json'], sb));
+	assert.equal(statusAfterForce.ok, true, JSON.stringify(statusAfterForce));
+	assert.equal(statusAfterForce.switch.length, 1, JSON.stringify(statusAfterForce.switch));
+	const rec = statusAfterForce.switch[0];
+	assert.equal(rec.node, 'claw-3');
+	assert.equal(rec.reason, 'queue backed up');
+	// 30 minutes, give or take the second this run itself takes.
+	assert.ok(
+		rec.remainingMin >= 28 && rec.remainingMin <= 30,
+		`expected ~30 remaining minutes, got ${rec.remainingMin}`
+	);
+
+	const off = run(['--off', 'claw-3'], sb);
+	assert.equal(off.status, 0, off.stdout + off.stderr);
+	assert.match(off.stdout, /force cleared/);
+
+	const statusAfterOff = json(run(['--status', '--json'], sb));
+	assert.equal(statusAfterOff.ok, true, JSON.stringify(statusAfterOff));
+	assert.deepEqual(statusAfterOff.switch, []);
+});
+
+test('#2026-11-01: --off on a node that was never forced says so and still exits 0', () => {
+	const sb = sandbox();
+	const r = run(['--off', 'claw-9'], sb);
+	assert.equal(r.status, 0, r.stdout + r.stderr);
+	assert.match(r.stdout, /was not forced/);
+});
+
+test('#2026-11-01: --force on a node already DRAINED is refused — the red light beats the green one', () => {
+	const sb = sandbox();
+	realManifestDir(sb);
+	writeFileSync(
+		join(sb.dir, 'state', 'fleet-drain.json'),
+		JSON.stringify({
+			nodes: { 'claw-5': { since: new Date().toISOString(), kind: 'maintenance', reason: 'x' } },
+			planned: [],
+		})
+	);
+	const r = run(['--force', 'claw-5', '--for', '30m'], sb);
+	assert.equal(r.status, 1, r.stdout + r.stderr);
+	assert.match(r.stdout + r.stderr, /DRAINED/);
+
+	const status = json(run(['--status', '--json'], sb));
+	assert.deepEqual(status.switch, [], 'the refused force must not have been written at all');
+});
+
+test('#2026-11-01: --force rejects a duration past the ceiling, and writes nothing', () => {
+	const sb = sandbox();
+	realManifestDir(sb);
+	const r = run(['--force', 'claw-3', '--for', '700h'], sb);
+	assert.notEqual(r.status, 0, r.stdout + r.stderr);
+	assert.match(r.stdout + r.stderr, /ceiling/);
+
+	const status = json(run(['--status', '--json'], sb));
+	assert.deepEqual(status.switch, []);
+});
+
+/** The script's `--status --json` document, parsed. */
+function json(r) {
+	assert.ok(r.stdout.trim(), `no stdout to parse:\n${r.stdout}\n${r.stderr}`);
+	try {
+		return JSON.parse(r.stdout);
+	} catch (err) {
+		throw new Error(`stdout is not JSON (${err.message}):\n${r.stdout}`);
+	}
+}

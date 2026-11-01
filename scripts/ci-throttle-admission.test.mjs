@@ -96,13 +96,19 @@ test('the wait actually elapses before refusing — it is a cap, not an instant 
 	assert.ok(r.elapsedMs >= 800, `refused too early to have waited at all: ${r.elapsedMs}ms`);
 });
 
-test('a slot that frees mid-wait still admits — the cap is not a permanent ban', () => {
-	// Simulated by a wait long enough that MAX_WAIT_S alone would not refuse:
-	// under the limit from the first check, so it must return immediately
-	// rather than waiting out any part of MAX_WAIT_S.
-	const r = run({ conf: { MAX_CONCURRENT: 5, MIN_FREE_MB: 0, MAX_WAIT_S: 10 }, others: 1 });
-	assert.equal(r.code, 0);
-});
+// The test that used to sit here ('a slot that frees mid-wait still admits —
+// the cap is not a permanent ban') used CI_THROTTLE_TEST_OTHERS, which PINS
+// the count for the whole run (file header) — so its own fixture (others: 1
+// against MAX_CONCURRENT: 5) was under the limit from the very first check
+// and returned immediately, never waiting out any part of MAX_WAIT_S or
+// observing a slot free at all. It was a weaker duplicate of "under the
+// limit: admits immediately, exit 0" above, with a title that claimed the
+// opposite of what it ran. The real version — real spawned jobs holding real
+// markers, one of them exiting and freeing a slot a genuine waiter is then
+// admitted into — is `ci-throttle-liveness.test.mjs`'s "four jobs arriving
+// together are all admitted in turn" (#36), which asserts on the actual
+// `slot free after \d+s` line this hook emits only on that real path.
+// Deleted by the 2026-11-01 test audit (row 11).
 
 test('the memory floor refuses too, independent of concurrency', () => {
 	// Still a refusal, and that half is unchanged by #67 — what changed is the

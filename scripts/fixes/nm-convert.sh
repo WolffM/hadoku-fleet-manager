@@ -317,7 +317,7 @@ arm_watchdog() {
 	mkdir -p "$(dirname "$WATCHDOG_BIN")" "$(dirname "$WATCHDOG_UNIT")"
 	cat >"$WATCHDOG_BIN" <<EOF
 #!/bin/sh
-# Written by nm-convert.sh. Removed by \`nm-convert.sh --commit\`, and by this
+# Written by nm-convert.sh. Removed by 'nm-convert.sh --commit', and by this
 # script itself on the first boot that comes up healthy.
 #
 # IT IS SELF-LIMITING ON PURPOSE. Left armed forever it would revert a

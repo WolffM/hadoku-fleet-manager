@@ -365,9 +365,14 @@ test('the fixture profile is honest to the STRICT loader, not just the lenient r
 	}
 });
 
-test('the built dist the gates import is present', () => {
+test('the built dist the gates import is present', async () => {
 	// The gate imports `../dist/lib/node-role.js`. A source checkout that has
 	// not been built fails LOUDLY on that import rather than skipping the rule,
 	// and this names the cause when it does.
-	assert.doesNotReject(() => import(join(ROOT, 'dist', 'lib', 'node-role.js')));
+	//
+	// MUST be `async` + `awaited`: `assert.doesNotReject` returns a promise, and
+	// a sync test callback that never awaits it reports PASS before the import
+	// even settles — the rejection becomes an unhandled rejection attributed to
+	// nothing, not a failure of this test (2026-11-01 test audit).
+	await assert.doesNotReject(() => import(join(ROOT, 'dist', 'lib', 'node-role.js')));
 });

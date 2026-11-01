@@ -97,6 +97,8 @@ import { readFileSync as _read } from 'node:fs';
 import { dirname as _dir, resolve as _res } from 'node:path';
 import { fileURLToPath as _f2u } from 'node:url';
 
+import { blankComments } from './blank-comments.mjs';
+
 const SCRIPTS = _res(_dir(_f2u(import.meta.url)), '..');
 
 for (const f of [
@@ -109,7 +111,12 @@ for (const f of [
 	'reconcile-runner-identity.mjs',
 ]) {
 	test(`${f} consults the drain record before failing on an unreachable node`, () => {
-		const src = _read(_res(SCRIPTS, f), 'utf8');
+		// Blanked first: this repo has been bitten three times by a grep that
+		// read a COMMENT as evidence (CLAUDE.md), and an unblanked `src.match`
+		// reads a commented-out import or a dead call the SAME as a live one —
+		// a refactor that unhooks `deferralFor` but leaves the old `import` line
+		// or call commented out in place would still read as wired here.
+		const src = blankComments(_read(_res(SCRIPTS, f), 'utf8'));
 		assert.match(
 			src,
 			/from '\.\/lib\/expected-down\.mjs'/,

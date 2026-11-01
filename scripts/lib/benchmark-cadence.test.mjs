@@ -419,16 +419,23 @@ test('cadenceSignalHandler: an undrain that itself fails is reported, not swallo
  * sync by hand with `fleet-benchmark-check.ts`'s `TIMEOUT_MS` comment and
  * `services/cron-worker/profiles.json`'s `timeout_s: 1500` in hadoku_site.
  */
-test("the cadence budget fits under mgmt-api's timeout, which fits under the cron's", () => {
+test("the cadence budget fits under mgmt-api's timeout AND under the cron's", () => {
 	const MGMT_API_TIMEOUT_MS = 20 * 60_000; // fleet-benchmark-check.ts's TIMEOUT_MS
 	const CRON_TIMEOUT_MS = 1500 * 1000; // services/cron-worker/profiles.json, hadoku_site
 	assert.ok(
 		CADENCE_WORST_CASE_MS < MGMT_API_TIMEOUT_MS,
 		`worst case ${CADENCE_WORST_CASE_MS}ms must leave margin under mgmt-api's ${MGMT_API_TIMEOUT_MS}ms`
 	);
+	// Before this fix this compared the two STATED literals above against each
+	// other (`MGMT_API_TIMEOUT_MS < CRON_TIMEOUT_MS`) — both written two lines
+	// up in this same test, so the comparison could never fail regardless of
+	// what `benchmark-cadence.mjs` actually computes (2026-11-01 test audit).
+	// `CADENCE_WORST_CASE_MS` is the real, imported figure this whole test
+	// exists to bound, so it is what belongs on the other side of the cron's
+	// ceiling too, the same way it already is for mgmt-api's above.
 	assert.ok(
-		MGMT_API_TIMEOUT_MS < CRON_TIMEOUT_MS,
-		`mgmt-api's ${MGMT_API_TIMEOUT_MS}ms must itself fire before the cron's ${CRON_TIMEOUT_MS}ms`
+		CADENCE_WORST_CASE_MS < CRON_TIMEOUT_MS,
+		`worst case ${CADENCE_WORST_CASE_MS}ms must leave margin under the cron's ${CRON_TIMEOUT_MS}ms too`
 	);
 	// Sanity on the two constants this sum is built from, so a future edit to
 	// either cannot silently drift from the figures named in the comment above

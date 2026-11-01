@@ -6,10 +6,10 @@ import { resolve } from 'node:path';
 import {
 	identityLabels,
 	ephemeralOnlyLabels,
-	IMPLICIT_LABELS,
 	labelCapabilities,
 } from '../lib/capability-labels.js';
 import { capability, type FleetManifestShape } from '../lib/capability-registry.js';
+import { warmLabels } from '../runners/ephemeral-exec.js';
 import { ROOT } from './capability-fixtures.js';
 
 // ---------------------------------------------------------------------------
@@ -98,9 +98,14 @@ test('a warm listener never carries a mint-only label', () => {
 	//
 	// capabilities.ts states the rule the warm path broke: "A standing runner
 	// carrying this label would answer the canary without minting anything."
+	//
+	// Calls the REAL `warmLabels` from `ephemeral-exec.ts` (exported for this
+	// test) rather than reimplementing its filter inline: the inline version
+	// passed even the one time the real function's filter was deleted, because
+	// it was never exercising the real code (capability-labels.test.ts:93 in
+	// the 2026-11-01 test audit).
 	const declared = ['hadoku-builder', 'jit-canary'];
-	const forbidden = new Set(ephemeralOnlyLabels());
-	const warm = [...new Set([...IMPLICIT_LABELS, ...declared])].filter((l) => !forbidden.has(l));
+	const warm = warmLabels(declared);
 	assert.ok(
 		!warm.includes('jit-canary'),
 		'a standing listener must not be able to answer the canary'

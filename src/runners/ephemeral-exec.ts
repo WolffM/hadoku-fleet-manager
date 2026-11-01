@@ -84,7 +84,7 @@ export interface MintOutcome {
  * quiet pass. But the warm cache should never have been able to answer it, and
  * the registry already knew which labels are mint-only.
  */
-function warmLabels(declared: readonly string[]): string[] {
+export function warmLabels(declared: readonly string[]): string[] {
 	const forbidden = new Set(ephemeralOnlyLabels());
 	return mintLabels(declared).filter((l) => !forbidden.has(l));
 }

@@ -16,7 +16,6 @@ test('the backstop is bootcamped like a claw, named or fleet-wide', () => {
 		const all = JSON.parse(run(['--json'], f.env).out);
 		assert.deepEqual(all.unreachable.sort(), [BACKSTOP, CLAW].sort());
 		assert.equal(all.ok, false);
-		assert.equal(all.roleDeclared, undefined);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

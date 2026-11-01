@@ -14,6 +14,14 @@
  *     `10.5.0.0/16`). Fixtures use the RFC 5737 documentation ranges instead —
  *     192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24 — which no network routes,
  *     so a fixture can never be somebody's real address.
+ *   - a PRIVATE IPv6 HOST address — the ULA block `fd00::/8` and link-local
+ *     `fe80::/10`. Same /16-or-wider carve-out as IPv4, by the same reasoning:
+ *     `fd00::/8` and `fe80::/10` written out as RANGES stay allowed. A public
+ *     IPv6 address is NOT refused by this rule — Tailscale's own IPv6 range
+ *     and a box's real public address are both outside fd00::/8 and
+ *     fe80::/10, so they would need a denylist entry like any other real
+ *     value this file can't describe by pattern. Fixtures use the RFC 3849
+ *     documentation range, `2001:db8::/32`, which no network routes either.
  *   - a tailnet name, `tail<hex>.ts.net`. Write `example.ts.net`.
  *   - a MAC address, unless it is a placeholder: `02:00:00:…` (a locally
  *     administered address no vendor ships) or `00:00:5e:00:53:…` (the RFC 7042
@@ -62,6 +70,17 @@ const PRIVATE_TREES = ['docs/planning'];
 const DENYLIST_FILE = '.publish-denylist';
 
 const IPV4 = /(?<![\w.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?(?!\w|\.\d)/g;
+// ULA (`fd00::/8`: first hextet is exactly `fd` + 2 more hex digits) or
+// link-local (`fe80::/10`: first hextet's top 10 bits fix it to `fe80`-`febf`,
+// i.e. `fe` + one of `8`/`9`/`a`/`b` + one more hex digit). Anchored so it
+// cannot start mid-token (a longer hex run ending in a matching hextet is not
+// this), and stops before more hex or a colon so a link-local address with an
+// empty host part (nothing after its double colon) still matches. A PUBLIC
+// IPv6 address — `2001:db8::1`, a real Tailscale IPv6, a box's real public
+// address — never starts `fd` or `fe8`/`9`/`a`/`b`, so it is not matched here
+// at all; see the file header for why that is deliberate.
+const IPV6 =
+	/(?<![0-9a-f:])(fd[0-9a-f]{2}|fe[89ab][0-9a-f])((?::[0-9a-f]{0,4}){1,7})(?:\/(\d{1,3}))?(?![0-9a-f:])/gi;
 const TAILNET = /\btail[0-9a-f]{4,}\.ts\.net\b/gi;
 const MAC = /(?<![0-9a-f:-])[0-9a-f]{2}([:-])(?:[0-9a-f]{2}\1){4}[0-9a-f]{2}(?![0-9a-f:-])/gi;
 const MAC_PLACEHOLDER = /^(?:02[:-]00[:-]00|00[:-]00[:-]5e[:-]00[:-]53)[:-]/i;
@@ -122,6 +141,12 @@ export function findLeaks(raw, denylist = []) {
 		if (!isPrivate(a, b)) continue;
 		if (prefix !== undefined && prefix <= 16) continue;
 		leaks.push({ rule: 'private IPv4 host', match: m[0], line: lineOf(m.index) });
+	}
+	for (const m of text.matchAll(IPV6)) {
+		const prefix = m[3] === undefined ? undefined : Number(m[3]);
+		if (prefix !== undefined && prefix <= 16) continue; // a RANGE, not a place
+		const kind = /^fd/i.test(m[1]) ? 'ULA' : 'link-local';
+		leaks.push({ rule: `private IPv6 ${kind}`, match: m[0], line: lineOf(m.index) });
 	}
 	for (const m of text.matchAll(TAILNET)) {
 		leaks.push({ rule: 'tailnet name', match: m[0], line: lineOf(m.index) });
@@ -199,6 +224,29 @@ void test('findLeaks: a private host address fails, a documentation address and 
 	assert.deepEqual(findLeaks('ssh 192.0.2.7, 198.51.100.4, 203.0.113.9'), []);
 	assert.deepEqual(findLeaks('ranges 100.64.0.0/10 and 10.5.0.0/16 and 172.16.0.0/12'), []);
 	assert.deepEqual(findLeaks('version 1.2.3 and v10.1.2.3'), []);
+});
+
+void test('findLeaks: a private IPv6 host fails (ULA and link-local), a public one and a wide range pass', () => {
+	// Assembled at runtime, like the IPv4 host samples above: a bare ULA or
+	// link-local HOST address is exactly what this rule exists to catch, so the
+	// literal must not sit in this file's own source for its self-scan to pass.
+	const ula = ['fd12', '3456', '789a', '1', '', '42'].join(':');
+	assert.equal(findLeaks(ula).length, 1, 'ULA (fd00::/8) host');
+	const linkLocal = ['fe80', '', '1a2b', '3c4d', '5e6f', '7a8b'].join(':');
+	assert.equal(findLeaks(`inet6 ${linkLocal}%eth0`).length, 1, 'link-local (fe80::/10) host');
+	const ulaWithPrefix = `${['fd00', '', '1'].join(':')}/128`;
+	assert.equal(findLeaks(ulaWithPrefix).length, 1, 'a ULA host with a /128 is still one address');
+	// A public IPv6 address is not this rule's job (file header): neither a
+	// real Tailscale IPv6 nor a box's real public address starts fd/fe8x, so
+	// this rule has nothing to say about either, by design. Safe as a literal:
+	// it never matches IPV6 regardless of where it appears.
+	assert.deepEqual(findLeaks('2001:db8::1'), [], 'RFC 3849 documentation range stays allowed');
+	assert.deepEqual(findLeaks('fe01::1'), [], 'fe00::/8 is neither ULA nor fe80::/10 link-local');
+	// Same /16-or-wider carve-out as IPv4: writing the RANGE, not a host in it.
+	// Safe as a literal too — the exemption applies to this file's own text
+	// exactly as it would to anyone else's.
+	assert.deepEqual(findLeaks('the ULA block is fd00::/8'), []);
+	assert.deepEqual(findLeaks('link-local is fe80::/10'), []);
 });
 
 void test('findLeaks: a tailnet name fails, an example one passes', () => {

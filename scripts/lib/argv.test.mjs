@@ -77,15 +77,25 @@ void test("parseStrict: a positional that is a valued flag's own value is exclud
 	assert.deepEqual(r.positionals, ['claw-5']);
 });
 
-void test('parseStrict: json is false unless the SPEC declares --json, even if argv has it', () => {
+void test('parseStrict: json is false unless the SPEC declares --json, even when argv contains the literal token', () => {
+	// Before this fix the argv here was `['--on']` — it never contained
+	// `--json` at all, so the test could not exhibit its own title (2026-11-01
+	// test audit). `--json` genuinely sits in this argv; it is after a literal
+	// `--`, so `unknownFlags` treats it as positional data rather than a flag
+	// (never triggering the `exit(2)` an UNDECLARED, unescaped `--json` would —
+	// the in-process path this file's own header says cannot be exercised
+	// in-process), yet `argv.includes('--json')` below is still true.
 	const noJsonSpec = { usage: 'x', booleans: ['--on'], valued: [], positionals: false };
-	const r = parseStrict(noJsonSpec, ['--on']);
-	assert.equal(r.json, false);
+	const r = parseStrict(noJsonSpec, ['--on', '--', '--json']);
+	assert.equal(r.has('--on'), true);
+	assert.equal(r.json, false, 'spec.booleans gates --json, not merely argv containing it');
 });
 
 void test('parseStrict: positionals are empty when the spec forbids them, even if argv has bare tokens', () => {
+	// Before this fix the argv here was `[]` — it had no bare tokens at all,
+	// so the test could not exhibit its own title (2026-11-01 test audit).
 	const noPositionals = { usage: 'x', booleans: [], valued: [], positionals: false };
-	const r = parseStrict(noPositionals, []);
+	const r = parseStrict(noPositionals, ['claw-3', 'claw-5']);
 	assert.deepEqual(r.positionals, []);
 });
 

@@ -133,12 +133,19 @@ function fixtureStore(sb) {
 		records: 200,
 		probesExcluded: 0,
 		rows: [
-			// fleet rate 5% (10/200)
+			// fleet rate 5% (10/200) — well above minCellFleetJobs (20), so the
+			// cell itself is never excluded for any node below.
 			row('*', 'WolffM/hadoku-cardtable', 'build', 200, { runner: 10 }),
 			// double the fleet's rate, enough volume to be significant
 			row('claw-1', 'WolffM/hadoku-cardtable', 'build', 100, { runner: 10 }),
 			// exactly the fleet's rate
 			row('claw-2', 'WolffM/hadoku-cardtable', 'build', 100, { runner: 5 }),
+			// below minNodeJobs (30, default): the ONLY node in this fixture that
+			// reaches the insufficientData branch. Without this row nothing here
+			// ever exercised it — the 2026-11-01 test audit's finding against
+			// this file (`failures.test.mjs:181-188`): a test titled "... and
+			// marks insufficient data" whose fixture could not reach that branch.
+			row('claw-3', 'WolffM/hadoku-cardtable', 'build', 10, { runner: 2 }),
 		],
 	};
 	writeFileSync(join(sb.dir, 'state', 'job-rollups.jsonl'), `${JSON.stringify(rollup)}\n`);
@@ -162,7 +169,23 @@ test('a real fixture store: ranks the excess node first, the fleet-normal node n
 	assert.equal(byNode['claw-2'].excess, 0);
 	assert.equal(byNode['claw-2'].z, 0);
 
+	// claw-3 has only 10 pooled jobs, below the default minNodeJobs (30) — the
+	// branch `human mode ... marks insufficient data` below claims to exercise
+	// but, before this fixture carried an under-threshold row, never did.
+	assert.equal(byNode['claw-3'].insufficientData, true);
+	assert.match(
+		byNode['claw-3'].insufficientReason,
+		/only 10 job\(s\) in judgeable cells \(need 30\)/
+	);
+	assert.equal(byNode['claw-3'].z, null, 'insufficient data gets no z-score, not a fabricated one');
+	assert.equal(byNode['claw-3'].pValue, null);
+
 	assert.equal(doc.nodes[0].node, 'claw-1', 'the node with real excess ranks first');
+	assert.equal(
+		doc.nodes[doc.nodes.length - 1].node,
+		'claw-3',
+		'an insufficientData node sorts after every measured one'
+	);
 });
 
 test('--node filters the shown rows without changing the baseline computation', () => {
@@ -185,4 +208,8 @@ test('human mode renders a table and marks insufficient data', () => {
 	assert.equal(r.status, 0, r.stdout + r.stderr);
 	assert.match(r.stdout, /claw-1/);
 	assert.match(r.stdout, /claw-2/);
+	// claw-3 is the fixture's only under-threshold node (10 jobs, below
+	// minNodeJobs=30): this is the one line in the table that must render
+	// `insufficient` rather than a fabricated `z=.. p=..`.
+	assert.match(r.stdout, /claw-3\s+10\s.*insufficient/);
 });

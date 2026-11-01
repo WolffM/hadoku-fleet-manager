@@ -2676,7 +2676,7 @@ printf '\n'
 
 cat <<EOF
 The block above is the ENROLLMENT RECORD. Keep it — it is the only measurement
-of this node that anything has, and \`fleet enroll\` reads exactly that shape
+of this node that anything has, and 'fleet enroll' reads exactly that shape
 (scripts/lib/enrollment-record.mjs). Capture it with:
 
     ... 2>&1 | tee $KIT_ROOT/enrollment-$HOSTNAME_NEW.txt
@@ -2685,7 +2685,7 @@ Still to do, by hand, and deliberately not automated here:
   1. reboot (a vendor kernel and the GRUB change need one; this script does not
      reboot, because a script that reboots is one whose output you read or not)
   2. $TS_UP
-  3. hand the record to \`fleet enroll\`, which writes a PROPOSED manifest entry
+  3. hand the record to 'fleet enroll', which writes a PROPOSED manifest entry
      and exits non-zero until a human commits it. Measurement is automated;
      DECLARATION STAYS A HUMAN ACT.
 EOF
