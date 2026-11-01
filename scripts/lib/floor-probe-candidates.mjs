@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { isCiDemandRow } from './floor-probe.mjs';
+import { isCiDemandRow } from './floor-probe-ranking.mjs';
 import { readDrains } from './expected-down.mjs';
 import { stateDir } from './paths.mjs';
 

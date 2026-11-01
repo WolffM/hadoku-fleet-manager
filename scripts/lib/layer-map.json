@@ -905,6 +905,41 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/floor-probe-ranking.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5q lane A split of floor-probe.mjs (plan §4.3, the 800-line ceiling): the §2-4 candidate-ranking rule and the §1.2 demand-ledger class rule, still with no IO — `core`, same as the file it was pulled out of."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-flaky.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5q lane A split of floor-probe.mjs: the §5 flaky rule, pure. `floor-probe-ranking.mjs` imports its `tripleKey` — one key function, not two that agree until one moves."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-window.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5q lane A split of floor-probe.mjs: the §7 quiet-window predicate, pure. The I/O half that reads shipped workflows and cron-worker's profiles is `floor-probe-window-check.mjs` (`run`), not here."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-rows.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5q lane A split of floor-probe.mjs: the two read-only tables (`unitTable`, `nodeZoneTable`), pure."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-safety.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5q lane A split of floor-probe.mjs: the §6 shadow-dispatch safety check, pure — a refusal list over the workflow text, no IO."
+  },
+  {
     "glob": "scripts/lib/floor-probe-candidates.mjs",
     "layer": "domain",
     "domain": "ci-scheduling",
@@ -922,6 +957,76 @@
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "run"
+  },
+  {
+    "glob": "scripts/lib/floor-probe-intent.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Wave 5q lane A split of scripts/floor-probe.mjs: `declareProbeIntent`, kept OUT of floor-probe-state.mjs (`state`) because it imports PROBE_INTENT_DIR/PROBE_INTENT_MAX_MS from dispatch-tick.ts, a ci-scheduling domain fact — `state` importing a domain constant is itself a cut (iii) violation."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-history.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Wave 5q lane A split of scripts/floor-probe.mjs (ctx restructure, the 800-line ceiling): reading job-history.jsonl, `run` like the CLI it was pulled out of."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-window-check.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Wave 5q lane A split of scripts/floor-probe.mjs: the §7 quiet-window I/O (shipped workflows, cron-worker profiles), calling the pure `quietWindow` in floor-probe-window.mjs (`core`) with what it found."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-mint-labels.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Wave 5q lane A split of scripts/floor-probe.mjs: the workload-gated mint label set `modeProbe`/`modeRerun` mint with, reading `$proof` from state."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-unit-lookup.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Wave 5q lane A split of scripts/floor-probe.mjs: picking/resolving the (repo, job) unit `table` and `candidates` share, over job-history rows."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-mode-report.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Wave 5q lane A ctx restructure: `fleet floor-probe report`'s own logic, taking the CLI's ctx; never imports it."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-mode-table.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Wave 5q lane A ctx restructure: `fleet floor-probe table`'s own logic, taking the CLI's ctx; never imports it."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-mode-candidates.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Wave 5q lane A ctx restructure: `fleet floor-probe candidates`'s own logic (including `provenCapabilities`/`exclusionsFor`), taking the CLI's ctx; never imports it."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-mode-probe.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Wave 5q lane A ctx restructure: `fleet floor-probe probe`'s own logic (the shadow-dispatch mint), taking the CLI's ctx — including its one `sh`/`probeSlotIsFree` runOn site, threaded through rather than imported; never imports the CLI."
+  },
+  {
+    "glob": "scripts/lib/floor-probe-mode-rerun.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Wave 5q lane A ctx restructure: `fleet floor-probe rerun`'s own logic (the forced re-run mint), taking the CLI's ctx — same `sh`/`probeSlotIsFree` threading as floor-probe-mode-probe.mjs; never imports the CLI."
   },
   {
     "glob": "scripts/floor-probe.mjs",
