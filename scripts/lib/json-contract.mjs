@@ -87,7 +87,15 @@
  * BY NAME, so a registry change that silently drops or renames one still
  * fails the build the same way an edit to a hand list used to.
  */
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { JOB_REGISTRY } from '../../dist/lib/job-registry.js';
+import { blankComments } from './blank-comments.mjs';
+
+/** scripts/lib/json-contract.mjs -> repo root. */
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /**
  * `JOB_REGISTRY` entries with `contract: 'json'`, reshaped into the exact
@@ -155,30 +163,108 @@ function deriveJsonContract(registry) {
 export const JSON_CONTRACT = deriveJsonContract(JOB_REGISTRY);
 
 /**
- * The `COMMANDS` table in `src/cli.ts`, as `subcommand -> script`.
- *
- * Parsed from source rather than imported: `src/cli.ts` is the CLI entry point
- * and runs `process.argv` at module scope, so importing it would execute it.
- * `tsconfig.json` has no `allowJs` either, which is the same reason
- * `node-identity-guard.test.mjs` lives in this directory.
- *
- * Comments must be blanked before calling this. A commented-out table entry is
- * not a subcommand, and this repo has been bitten three times by a grep that
- * read a COMMENT as evidence.
+ * `src/cli.ts`'s own import lines, as local-name -> specifier (`'./x.js'`).
+ * `import type` names are skipped — they carry no value to resolve.
  */
-export function parseCliCommands(blankedSource) {
-	const start = blankedSource.indexOf('const COMMANDS');
-	if (start === -1) return new Map();
-	const end = blankedSource.indexOf('\n};', start);
-	if (end === -1) return new Map();
-	const table = blankedSource.slice(start, end);
-
+function importSpecifiers(blankedSource) {
 	const out = new Map();
-	// A table entry: one tab of indent, an optionally-quoted key, then the
-	// `script:` field somewhere inside its braces.
-	const ENTRY = /\n\t(?:'([a-z0-9-]+)'|([a-z0-9-]+)):\s*\{[\s\S]*?script:\s*'([^']+)'/g;
-	for (const m of table.matchAll(ENTRY)) out.set(m[1] ?? m[2], m[3]);
+	const IMPORT = /import\s+(?:type\s+)?\{\s*([^}]*?)\s*\}\s*from\s*'([^']+)';/g;
+	for (const m of blankedSource.matchAll(IMPORT)) {
+		for (const raw of m[1].split(',')) {
+			const name = raw.trim();
+			if (!name) continue;
+			// `{ foo as bar }` — the LOCAL name (what a spread/reference uses) is
+			// the one after `as`.
+			const local = name
+				.split(/\s+as\s+/)
+				.at(-1)
+				.trim();
+			out.set(local, m[2]);
+		}
+	}
 	return out;
+}
+
+/**
+ * The source of a `./foo.js` import specifier, relative to `src/`, blanked —
+ * or `null` if it does not resolve to a `.ts` file under this package (an
+ * external/non-relative import, or one with no on-disk match).
+ */
+function resolveSplitModule(specifier) {
+	if (!specifier.startsWith('.')) return null;
+	const tsPath = join(ROOT, 'src', specifier.replace(/\.js$/, '.ts'));
+	if (!existsSync(tsPath)) return null;
+	return blankComments(readFileSync(tsPath, 'utf8'));
+}
+
+/** `marker` to the next top-level `\n};` (or `\n];` for an array), exclusive — or `null`. */
+function sliceTable(source, marker, closeSeq = '\n};') {
+	const start = source.indexOf(marker);
+	if (start === -1) return null;
+	const end = source.indexOf(closeSeq, start);
+	if (end === -1) return null;
+	return source.slice(start, end);
+}
+
+/**
+ * Every `{sub -> field}` pair the `COMMANDS` table declares, read as DATA from
+ * `src/cli.ts`'s source (never imported: `src/cli.ts` is the CLI entry point,
+ * runs `process.argv` at module scope, and `tsconfig.json` has no `allowJs`
+ * either, which is the same reason `node-identity-guard.test.mjs` lives in
+ * this directory) — resolving `cli.ts`'s own `const COMMANDS = {
+ * ...commandsFoo, ...commandsBar, usage: {...} }` ASSEMBLY (wave 5s lane C,
+ * TypeScript long tail: the table split by domain into `cli-commands-*.ts`
+ * once it crossed the 800-line ceiling) the same way Node resolves it at
+ * runtime — each spread identifier's own module, read and matched for entries
+ * the identical way — plus any entry still written literally in `cli.ts`
+ * itself (`usage`, today), in the table's own TEXT ORDER regardless of which
+ * file contributed which entry.
+ *
+ * `entryRegexSource` is the one difference between this and
+ * {@link parseCliCommandKinds}: which field of each entry is read back.
+ *
+ * Comments must be blanked in `blankedSource` before calling this (every
+ * split module is blanked here, internally, for the same reason). A
+ * commented-out table entry is not a subcommand, and this repo has been
+ * bitten three times by a grep that read a COMMENT as evidence.
+ */
+function parseCommandsTable(blankedSource, entryRegexSource) {
+	const out = new Map();
+	const mainBody = sliceTable(blankedSource, 'const COMMANDS');
+	if (mainBody === null) return out;
+
+	const ENTRY = new RegExp(entryRegexSource, 'g');
+	/** {pos: where in mainBody, pairs: [[sub, field], ...]} — sorted below into one ordered Map. */
+	const records = [];
+
+	for (const m of mainBody.matchAll(ENTRY)) {
+		records.push({ pos: m.index, pairs: [[m[1] ?? m[2], m[3]]] });
+	}
+
+	const specifiers = importSpecifiers(blankedSource);
+	for (const m of mainBody.matchAll(/\.\.\.(\w+)/g)) {
+		const specifier = specifiers.get(m[1]);
+		if (!specifier) continue;
+		const modSource = resolveSplitModule(specifier);
+		if (!modSource) continue;
+		const modBody = sliceTable(modSource, `const ${m[1]}`);
+		if (modBody === null) continue;
+		const pairs = [];
+		for (const em of modBody.matchAll(ENTRY)) pairs.push([em[1] ?? em[2], em[3]]);
+		records.push({ pos: m.index, pairs });
+	}
+
+	records.sort((a, b) => a.pos - b.pos);
+	for (const r of records) for (const [sub, field] of r.pairs) out.set(sub, field);
+	return out;
+}
+
+/** A table entry: one tab of indent, an optionally-quoted key, then the `script:` field somewhere inside its braces. */
+const SCRIPT_ENTRY = "\\n\\t(?:'([a-z0-9-]+)'|([a-z0-9-]+)):\\s*\\{[\\s\\S]*?script:\\s*'([^']+)'";
+
+/** The `COMMANDS` table in `src/cli.ts`, as `subcommand -> script`. See {@link parseCommandsTable}. */
+export function parseCliCommands(blankedSource) {
+	return parseCommandsTable(blankedSource, SCRIPT_ENTRY);
 }
 
 /**
@@ -193,17 +279,10 @@ export function parseCliCommands(blankedSource) {
  * entry's own, never a later entry's. Pass BLANKED source for the same reason
  * as every other parser here: a commented-out `kind:` must not be read as one.
  */
-export function parseCliCommandKinds(blankedSource) {
-	const start = blankedSource.indexOf('const COMMANDS');
-	if (start === -1) return new Map();
-	const end = blankedSource.indexOf('\n};', start);
-	if (end === -1) return new Map();
-	const table = blankedSource.slice(start, end);
+const KIND_ENTRY = "\\n\\t(?:'([a-z0-9-]+)'|([a-z0-9-]+)):\\s*\\{[\\s\\S]*?kind:\\s*'([a-z-]+)'";
 
-	const out = new Map();
-	const ENTRY = /\n\t(?:'([a-z0-9-]+)'|([a-z0-9-]+)):\s*\{[\s\S]*?kind:\s*'([a-z-]+)'/g;
-	for (const m of table.matchAll(ENTRY)) out.set(m[1] ?? m[2], m[3]);
-	return out;
+export function parseCliCommandKinds(blankedSource) {
+	return parseCommandsTable(blankedSource, KIND_ENTRY);
 }
 
 /**

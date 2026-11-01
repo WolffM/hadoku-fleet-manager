@@ -113,6 +113,16 @@
     "layer": "surfaces"
   },
   {
+    "glob": "src/cli-types.ts",
+    "layer": "surfaces",
+    "why": "Wave 5s lane C split of cli.ts (plan: TypeScript long tail): the `Kind`/`Command` shape the door's COMMANDS table and its domain modules are both typed against. Same layer as cli.ts, which keeps re-exporting both names for every existing importer."
+  },
+  {
+    "glob": "src/cli-commands-*.ts",
+    "layer": "surfaces",
+    "why": "Wave 5s lane C split of cli.ts (plan: TypeScript long tail): the COMMANDS table, by domain (fleet-ops, hosting, gates, lifecycle, onboarding), once it crossed the 800-line ceiling. Same layer as cli.ts, which assembles them in the original order — this is one surfaces-layer file's internal split, not a new edge."
+  },
+  {
     "glob": "src/server.ts",
     "layer": "surfaces"
   },
@@ -435,6 +445,16 @@
     "why": "wave 5e lane A: data + validation, no I/O"
   },
   {
+    "glob": "src/lib/job-registry-types.ts",
+    "layer": "config",
+    "why": "Wave 5s lane C split of job-registry.ts (plan: TypeScript long tail): the `JobEntry`/`JobCadence`/`CoveredSub` shapes JOB_REGISTRY and its domain modules are both typed against. Same layer as job-registry.ts, which keeps re-exporting every name for every existing importer."
+  },
+  {
+    "glob": "src/lib/job-registry-*.ts",
+    "layer": "config",
+    "why": "Wave 5s lane C split of job-registry.ts (plan: TypeScript long tail): JOB_REGISTRY, by its own comment dividers (fleet-pulse, repo-sync, benchmark, liveness, audit-gates, in-process), once it crossed the 800-line ceiling. Same layer as job-registry.ts, which assembles them in the original order — this is one config-layer file's internal split, not a new edge."
+  },
+  {
     "glob": "src/lib/manifest.ts",
     "layer": "config",
     "why": "F1 (wave 5c): the typed manifest loader"
@@ -454,7 +474,8 @@
   },
   {
     "glob": "scripts/lib/json-contract.mjs",
-    "layer": "config"
+    "layer": "automation",
+    "why": "Wave 5s lane C: reclassified from config to automation when parseCliCommands/parseCliCommandKinds started reading `blank-comments.mjs` (same \"generic, domain-blind, cross-cutting\" shape as emit.mjs/argv.mjs/blank-comments.mjs beside it) to resolve a split module's own source the same way cli.ts's text readers always have. No non-test source imports this file, so the move changes no other edge's legality; its only real outbound edge (job-registry.ts, via the dist specifier measure-layers.mjs resolves back to source) is automation -> config, still downward."
   },
   {
     "glob": "scripts/lib/node-profiles.mjs",

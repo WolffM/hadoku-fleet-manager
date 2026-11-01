@@ -44,7 +44,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { JSON_CONTRACT } from './json-contract.mjs';
+import { JSON_CONTRACT, parseCliCommands } from './json-contract.mjs';
 import { blankComments } from './blank-comments.mjs';
 import { createEmitter, keepStdoutWhole } from './emit.mjs';
 
@@ -60,12 +60,10 @@ const SCRIPTS = join(HERE, '..');
  */
 function scriptFor(sub) {
 	const cli = readFileSync(join(SCRIPTS, '..', 'src', 'cli.ts'), 'utf8');
-	const key = /^[a-z]+$/.test(sub) ? sub : `'${sub}'`;
-	const at = cli.indexOf(`\n\t${key}: {`);
-	assert.notEqual(at, -1, `cli.ts declares no subcommand ${sub}`);
-	const m = /script: '([^']+)'/.exec(cli.slice(at, at + 400));
-	assert.ok(m, `cli.ts entry for ${sub} names no script`);
-	return m[1];
+	const commands = parseCliCommands(blankComments(cli));
+	const script = commands.get(sub);
+	assert.ok(script, `cli.ts declares no subcommand ${sub}`);
+	return script;
 }
 
 /** Every way a Node script can put a character on stdout. */

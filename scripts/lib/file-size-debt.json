@@ -23,7 +23,5 @@
   "scripts/node-usb-prep.sh": 1124,
   "scripts/onboarding.sh": 814,
   "scripts/runners-slice-install.sh": 986,
-  "scripts/service-inventory.mjs": 977,
-  "src/cli.ts": 974,
-  "src/lib/job-registry.ts": 986
+  "scripts/service-inventory.mjs": 977
 }

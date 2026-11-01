@@ -19,6 +19,8 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { blankComments } from './blank-comments.mjs';
+import { parseCliCommands } from './json-contract.mjs';
 import { tempDir } from './test-tmpdir.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -53,10 +55,10 @@ test('the chain runs ENROLL FIRST, and only through provision — no sixth door'
 			`step ${i} must follow step ${i - 1} in the chain table`
 		);
 	// No new CLI door: cli.ts still maps provision to provision-fleet.mjs.
-	const cli = read('src', 'cli.ts');
-	assert.match(cli, /provision: \{\s*script: 'provision-fleet\.mjs'/);
+	const commands = parseCliCommands(blankComments(read('src', 'cli.ts')));
+	assert.equal(commands.get('provision'), 'provision-fleet.mjs');
 	assert.equal(
-		(cli.match(/script: 'provision-fleet\.mjs'/g) ?? []).length,
+		[...commands.values()].filter((s) => s === 'provision-fleet.mjs').length,
 		1,
 		'provision-fleet.mjs must stay the single runner behind one subcommand'
 	);

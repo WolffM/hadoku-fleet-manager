@@ -22,6 +22,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { blankComments } from './lib/blank-comments.mjs';
+import { parseCliCommands } from './lib/json-contract.mjs';
+
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'prove-job.mjs');
 const CLAW = 'fixture-claw-8.invalid';
 const BACKSTOP = 'fixture-backstop.invalid';
@@ -183,7 +186,8 @@ test('prove-job is a subcommand of the one door, and is deliberately not under t
 		'no cron parses it; add it here only with its consumer'
 	);
 	const cli = readFileSync(join(dirname(SCRIPT), '..', 'src', 'cli.ts'), 'utf8');
-	assert.match(cli, /'prove-job':\s*\{\s*script: 'prove-job\.mjs'/);
+	const commands = parseCliCommands(blankComments(cli));
+	assert.equal(commands.get('prove-job'), 'prove-job.mjs');
 });
 
 // --- the host-less path: AFTER a successful mint, BEFORE any dispatch ---------

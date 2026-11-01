@@ -22,7 +22,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { blankComments } from './blank-comments.mjs';
-import { JSON_CONTRACT, parseCliCommands } from './json-contract.mjs';
+import { JSON_CONTRACT, parseCliCommands, parseCliCommandKinds } from './json-contract.mjs';
 import { matchLayer } from './layer-map.mjs';
 import { tempDir, cleanupTempDirs } from './test-tmpdir.mjs';
 
@@ -227,10 +227,11 @@ const KNOWN_KINDS = [
 
 test('every COMMANDS entry declares a kind from the fixed vocabulary', () => {
 	const src = blankComments(readFileSync(join(ROOT, 'src', 'cli.ts'), 'utf8'));
-	const start = src.indexOf('const COMMANDS');
-	const end = src.indexOf('\n};', start);
-	const body = src.slice(start, end);
-	const kinds = [...body.matchAll(/\bkind: '([\w-]+)'/g)].map((m) => m[1]);
+	// `parseCliCommandKinds`, not a second ad hoc slice of `const COMMANDS`:
+	// since wave 5s lane C split the table by domain into `cli-commands-*.ts`,
+	// a local regex over `cli.ts`'s own text would see only the spread list,
+	// not the entries themselves.
+	const kinds = [...parseCliCommandKinds(src).values()];
 	assert.equal(
 		kinds.length,
 		commands.size,
