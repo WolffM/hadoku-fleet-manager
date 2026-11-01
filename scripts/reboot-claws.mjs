@@ -22,11 +22,12 @@
  * EXIT 0 when the pass raised no finding. `--json` is parseable either way.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
+import { writeFileAtomic } from '../dist/lib/atomic-json.js';
 import { isLocalNode } from '../dist/lib/node-identity.js';
 import { isBackstopNode } from '../dist/lib/node-role.js';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
@@ -72,9 +73,7 @@ function readState() {
 	return JSON.parse(readFileSync(STATE(), 'utf8'));
 }
 function writeState(s) {
-	mkdirSync(dirname(STATE()), { recursive: true });
-	writeFileSync(`${STATE()}.tmp`, `${JSON.stringify(s, null, 2)}\n`);
-	renameSync(`${STATE()}.tmp`, STATE());
+	writeFileAtomic(STATE(), `${JSON.stringify(s, null, 2)}\n`);
 }
 
 const clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };

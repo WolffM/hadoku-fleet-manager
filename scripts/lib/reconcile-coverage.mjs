@@ -17,7 +17,7 @@
  * `scripts/lib/json-contract.mjs` scans for is real code in
  * reconcile-fleet-runners.mjs, not here.
  */
-import { writeFileSync } from 'node:fs';
+import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
 import { manifest as manifestFile } from './paths.mjs';
 import { RESERVE_DRIFT_PCT, reserveDrift, shrinkRefusal } from './demand-derive.mjs';
 import { loadMountedApps, deriveFacets } from './reconcile-apply.mjs';
@@ -244,6 +244,6 @@ export function writeCoverageOrRefuse(ctx) {
 	// rewrites it on main as hadoku-format-bot, and every regeneration then
 	// shows up as a whole-file diff. Matching prettier here keeps the only
 	// real diff the one that matters: which repos are covered.
-	writeFileSync(COVERAGE, `${JSON.stringify(coverage, null, 2)}\n`);
+	writeFileAtomic(COVERAGE, `${JSON.stringify(coverage, null, 2)}\n`);
 	log(`wrote ${COVERAGE} (${coverage.repos.length} repos)`);
 }

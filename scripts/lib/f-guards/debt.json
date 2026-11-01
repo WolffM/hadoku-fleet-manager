@@ -6,40 +6,28 @@
     "scripts/node-users-cutover.mjs:p#2"
   ],
   "F3-write-then-rename": [
-    "scripts/check-fleet-preflight.mjs:writePendingState#1",
     "scripts/hosting-converge.mjs:p#1",
     "scripts/lib/fleet-source.mjs:abs#1",
     "scripts/lib/hosting-artifacts.mjs:tmp#1",
     "scripts/lib/hosting-artifacts.mjs:tmp#2",
     "scripts/lib/hosting-demand.mjs:p#1",
     "scripts/lib/tenant-registry.mjs:tmp#1",
-    "scripts/reboot-claws.mjs:writeState#1",
-    "src/lib/measured.ts:tmp#1",
     "src/runners/hosting-record.ts:tmp#1"
   ],
   "F3-non-atomic": [
     "scripts/check-tool-inventory.mjs:merged#1",
     "scripts/check-tool-inventory.mjs:snapshot#2",
-    "scripts/ci-watch.mjs:serialised#1",
     "scripts/converge-toolchain.mjs:tunnelRun#1",
-    "scripts/fleet-inventory.mjs:shrink#1",
     "scripts/join-workload-benchmark.mjs:report#1",
-    "scripts/lib/enroll-ssh.mjs:block#1",
-    "scripts/lib/floor-probe-intent.mjs:expiresAtMs#1",
-    "scripts/lib/refresh-cycle-live.mjs:log#1",
     "scripts/lib/slice-inventory-run.mjs:m#1",
     "scripts/node-status.mjs:document#3",
     "scripts/node-status.mjs:prev#1",
     "scripts/node-status.mjs:prev#2",
     "scripts/node-users-cutover.mjs:rendered#1",
     "scripts/prove-job.mjs:outFile#1",
-    "scripts/lib/reconcile-coverage.mjs:shrink#1",
     "scripts/service-inventory.mjs:merged#1",
     "scripts/version-bump.mjs:patched#1",
-    "src/lib/alert-ledger.ts:cutoff#1",
-    "src/runner-health-snapshot.ts:persistSnapshot#1",
-    "scripts/lib/floor-probe-state.mjs:ledgerPath#1",
-    "scripts/lib/fleet-source.mjs:failure#1"
+    "scripts/lib/floor-probe-state.mjs:ledgerPath#1"
   ],
   "F5": [],
   "F7-pm2-hosts": [

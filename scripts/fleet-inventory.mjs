@@ -32,10 +32,11 @@
  *
  * @guards docs/operations/SELF_HOSTED_RUNNERS.md (in hadoku_site)
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
+import { writeFileAtomic } from '../dist/lib/atomic-json.js';
 import { allRepos } from './lib/fleet-roster.mjs';
 import { siteRoot, manifest as manifestFile } from './lib/paths.mjs';
 import { tryShipped } from './lib/fleet-source.mjs';
@@ -275,7 +276,7 @@ async function main() {
 		if (problems.length) {
 			log(`REFUSING to write ${doc}: ${problems.length} finding(s) below.`);
 		} else {
-			writeFileSync(doc, spliceRegion(disk, rendered));
+			writeFileAtomic(doc, spliceRegion(disk, rendered));
 			wrote = true;
 			log(`wrote ${doc}`);
 		}

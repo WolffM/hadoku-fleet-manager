@@ -11,10 +11,11 @@
  * this pair of files needs to know the split happened.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
 import { hubRepo } from '../../dist/lib/fleet-config.js';
 import { reposDir, stateDir } from './paths.mjs';
 import { parseToolProbe, toolProbeScript } from '../check-fleet-toolchain.mjs';
@@ -178,7 +179,7 @@ export function createLiveDeps() {
 		markChecked: (node) => {
 			const log = readRecheckLog();
 			log[node] = Date.now();
-			writeFileSync(recheckLogPath(), `${JSON.stringify(log, null, 2)}\n`);
+			writeFileAtomic(recheckLogPath(), `${JSON.stringify(log, null, 2)}\n`);
 		},
 		// Re-record the node while the cycle holds it drained, through the cycle's
 		// OWN worktree reset to origin/main first (`writerManifestDir`). A refusal

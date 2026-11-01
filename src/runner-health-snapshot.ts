@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { logger, stateDir } from './host.js';
+import { writeJsonAtomic } from './lib/atomic-json.js';
 import { TICK_INTERVAL_MS } from './lib/runner-health-shared.js';
 import type { BackstopReason, ClawState } from './lib/fleet-vocabulary.js';
 import type { LabelFloorVerdict } from './label-floor.js';
@@ -151,8 +152,7 @@ export function __setSnapshotPathForTesting(path: string | null): void {
 
 function persistSnapshot(snap: RunnerHealthSnapshot): void {
 	try {
-		mkdirSync(dirname(SNAPSHOT_FILE()), { recursive: true });
-		writeFileSync(SNAPSHOT_FILE(), JSON.stringify(snap));
+		writeJsonAtomic(SNAPSHOT_FILE(), snap);
 	} catch (err) {
 		logger.warn(
 			`[runner-health] could not persist the health snapshot: ${err instanceof Error ? err.message : String(err)}`

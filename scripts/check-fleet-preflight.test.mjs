@@ -29,6 +29,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	writeFileSync,
@@ -206,6 +207,30 @@ test('a clean fleet exits 0, and nothing is retried on the success path', () => 
 		);
 		assert.equal(attempts(fx.ghLog, REGISTERED_CALL), 1);
 		assert.equal(attempts(fx.ghLog, USER_CALL), 1);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+// F3 (wave clean-1 lane A) — `writePendingState` moved off a hand-rolled
+// write-then-rename onto the shared `writeFileAtomic`. No test named this
+// write before: the clean-fleet run above already exercises it (every run
+// re-persists `security-pending.json`), but nothing checked its bytes.
+test('a clean run persists security-pending.json through the shared atomic writer', () => {
+	const fx = fixture();
+	try {
+		const r = run(fx);
+		assert.equal(r.code, 0, r.out);
+		const doc = JSON.parse(readFileSync(join(fx.root, 'security-pending.json'), 'utf8'));
+		// The fixture's security probe reports nothing pending (lib/preflight.mjs
+		// pendingSince over an empty `pending` list), so the node's own entry is
+		// an empty object — present, not absent, proving the write ran.
+		assert.deepEqual(doc, { [NODE]: {} });
+		// No leftover `.tmp` sibling: the atomic write cleaned up after itself.
+		assert.deepEqual(
+			readdirSync(fx.root).filter((f) => f.startsWith('security-pending.json')),
+			['security-pending.json']
+		);
 	} finally {
 		cleanup(fx);
 	}

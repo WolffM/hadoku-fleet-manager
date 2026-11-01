@@ -381,8 +381,9 @@ test('the ssh config writer never rewrites what the operator wrote', () => {
 	assert.match(src, /copyFileSync\(cfg, `\$\{cfg\}\.bak-fleet-enroll`\)/, 'back it up first');
 	// APPEND only. Rewriting the fleet's existing `Host claw1 claw-2 ...` line
 	// to add a name would edit a line the operator wrote, in the one file that
-	// locks you out of the fleet when it is wrong.
-	assert.match(src, /writeFileSync\(cfg, existing \+ block/, 'append, never rewrite');
+	// locks you out of the fleet when it is wrong. `writeFileAtomic` (F3, wave
+	// clean-1 lane A) is still handed `existing + block`, never `block` alone.
+	assert.match(src, /writeFileAtomic\(cfg, existing \+ block/, 'append, never rewrite');
 });
 
 /**

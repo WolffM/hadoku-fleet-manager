@@ -79,9 +79,8 @@
  * (`no-state-dir` / `no-file`) falls back.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import process from 'node:process';
 
 import { writeFileAtomic } from './atomic-json.js';
 import { stateDir } from './fleet-paths.js';
@@ -414,10 +413,7 @@ export function writeFacet(
 	const nodes: Record<string, FacetRecord> = current.ok ? { ...current.nodes } : {};
 	for (const [node, rec] of Object.entries(records)) nodes[node] = rec;
 
-	mkdirSync(dir, { recursive: true });
-	const tmp = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify({ nodes }, null, 2)}\n`);
-	renameSync(tmp, path);
+	writeFileAtomic(path, `${JSON.stringify({ nodes }, null, 2)}\n`);
 
 	const logPath = facetLogPath(facet, dir);
 	const loggedAt = new Date().toISOString();

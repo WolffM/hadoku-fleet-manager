@@ -10,7 +10,7 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -56,4 +56,46 @@ test('the known flags pass the guard (and then need a manifest)', () => {
 	assert.doesNotMatch(r.out, /unknown flag/);
 	assert.notEqual(r.status, 2);
 	assert.equal(existsSync(join(r.wrote[0] ?? '', 'claw-reboot.json')), false);
+});
+
+// F3 (wave clean-1 lane A) — `writeState` moved off a hand-rolled
+// write-then-rename onto the shared `writeFileAtomic`. Nothing covered the
+// REAL on-disk write before (`reboot-cycle.test.mjs` injects an in-memory
+// fake writeState). This resumes an in-flight 'draining' record with no
+// `fleet-drain.json` present, so `oursOn` reads false and `putBack` returns
+// without ever calling `deps.undrain` — no real ssh/drain call happens, only
+// the resume's own `save()`, which is the real `writeState`.
+test('a resumed in-flight reboot persists claw-reboot.json through the shared atomic writer', () => {
+	const state = tempDir('reboot-claws-state-');
+	const manifestDir = tempDir('reboot-claws-manifest-');
+	writeFileSync(
+		join(manifestDir, 'fleet-runner-manifest.json'),
+		JSON.stringify({ machines: { 'fixture-node': {} } })
+	);
+	mkdirSync(state, { recursive: true });
+	writeFileSync(
+		join(state, 'claw-reboot.json'),
+		JSON.stringify({
+			inFlight: {
+				node: 'fixture-node',
+				phase: 'draining',
+				reason: 'fixture',
+				since: new Date().toISOString(),
+			},
+		})
+	);
+	const r = spawnSync(process.execPath, [SCRIPT], {
+		encoding: 'utf8',
+		env: { ...process.env, FLEET_MANIFEST_DIR: manifestDir, HADOKU_STATE_DIR: state },
+	});
+	const out = r.stdout + r.stderr;
+	assert.equal(r.status, 0, out);
+	assert.deepEqual(
+		readdirSync(state),
+		['claw-reboot.json'],
+		'no leftover .tmp sibling — the atomic write cleaned up after itself'
+	);
+	const written = JSON.parse(readFileSync(join(state, 'claw-reboot.json'), 'utf8'));
+	assert.equal(written.inFlight, null, 'the resumed reboot clears inFlight');
+	assert.equal(written.decisions?.['fixture-node']?.status, 'abandoned');
 });

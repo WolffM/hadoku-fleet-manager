@@ -13,10 +13,11 @@
  * cut iii) the ledger functions do not carry — this file stays in the
  * domain's `run` part instead, same stratum as the dispatcher it declares to.
  */
-import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
+import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
 import { PROBE_INTENT_DIR, PROBE_INTENT_MAX_MS } from '../../dist/runners/dispatch-tick.js';
 import { stateDir } from './paths.mjs';
 
@@ -48,7 +49,6 @@ import { stateDir } from './paths.mjs';
 export function declareProbeIntent({ repo, job, node, runnerName }, { fail, ttlSeconds }) {
 	const dir = join(stateDir(), PROBE_INTENT_DIR);
 	const path = join(dir, `${runnerName}.json`);
-	mkdirSync(dir, { recursive: true });
 	// The runner's own TTL, which is the longest this probe can possibly be waiting
 	// for the job. PROBE_INTENT_MAX_MS is the reader's ceiling and is deliberately
 	// wider, for the two clocks; see that constant.
@@ -62,7 +62,7 @@ export function declareProbeIntent({ repo, job, node, runnerName }, { fail, ttlS
 				`${PROBE_INTENT_MAX_MS / 1000}s ceiling — it would be ignored, not honoured`
 		);
 	}
-	writeFileSync(
+	writeFileAtomic(
 		path,
 		`${JSON.stringify({ repo, job, node, runnerName, expiresAtMs, at: new Date().toISOString() })}\n`
 	);

@@ -8,9 +8,10 @@
  * `d6dcfa5`/`8fb8009` kept their closure-bound functions in their CLIs.
  */
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, readFileSync } from 'node:fs';
 import process from 'node:process';
 
+import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { DEFAULT_ADMIN_USER } from '../../dist/lib/node-users.js';
@@ -169,7 +170,12 @@ export function writeSshConfig(node, address) {
 	].join('\n');
 
 	if (existing) copyFileSync(cfg, `${cfg}.bak-fleet-enroll`);
-	writeFileSync(cfg, existing + block, { mode: 0o600 });
+	// F3 (write-then-rename, fsync'd): a rename always lands a freshly created
+	// inode, so the 0600 this file's security depends on is set explicitly
+	// after, rather than relying on `writeFileSync`'s create-only `mode` (which
+	// a pre-existing config left at some other mode anyway).
+	writeFileAtomic(cfg, existing + block);
+	chmodSync(cfg, 0o600);
 	return {
 		state: 'written',
 		address,

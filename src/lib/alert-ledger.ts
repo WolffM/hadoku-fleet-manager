@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { logger, stateDir, postDiscord as postDiscordSink } from '../host.js';
+import { writeJsonAtomic } from './atomic-json.js';
 import { createPager, HOUR_MS as RE_ALERT_MS } from './job-runner.js';
 
 // key → last alert time, ISO. A key absent (or older than RE_ALERT_MS) re-fires.
@@ -58,8 +59,7 @@ function saveAlertLedger(): void {
 		const cutoff = Date.now() - RE_ALERT_MS;
 		const out: Record<string, string> = {};
 		for (const [k, v] of Object.entries(pagedAlerts)) if (Date.parse(v) > cutoff) out[k] = v;
-		mkdirSync(dirname(ALERT_LEDGER()), { recursive: true });
-		writeFileSync(ALERT_LEDGER(), JSON.stringify(out));
+		writeJsonAtomic(ALERT_LEDGER(), out);
 	} catch (err) {
 		logger.warn(
 			`[runner-health] could not persist the alert ledger: ${err instanceof Error ? err.message : String(err)}`

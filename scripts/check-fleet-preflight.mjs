@@ -32,10 +32,11 @@
  * and `attempt N/M` rather than a bare error string.
  */
 import { execFile, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import process from 'node:process';
 
+import { writeFileAtomic } from '../dist/lib/atomic-json.js';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
 import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
 import {
@@ -281,9 +282,7 @@ function readPendingState() {
 	}
 }
 function writePendingState(doc) {
-	mkdirSync(dirname(PENDING_FILE()), { recursive: true });
-	writeFileSync(`${PENDING_FILE()}.tmp`, `${JSON.stringify(doc, null, 2)}\n`);
-	renameSync(`${PENDING_FILE()}.tmp`, PENDING_FILE());
+	writeFileAtomic(PENDING_FILE(), `${JSON.stringify(doc, null, 2)}\n`);
 }
 
 /**
