@@ -431,7 +431,7 @@ export const TENANT_CONTRACT = [
 		sub: 'hosting-placement',
 		argv: ['watchparty', '--json'],
 		consumer:
-			'the app layer: deploy-config and its placement drift gate for a `"placement": "fleet"` row (site#491 part 2, PENDING: not yet written); later cardtable, polling with --max-age 55',
+			'the app layer: deploy-config, the deploy hold and the ci:fleet-placement drift gate for a `"placement": "fleet"` row (site#491 part 2, live since 2ec6263c7); later cardtable, polling with --max-age 55',
 		fields: [
 			'contract',
 			'ok',

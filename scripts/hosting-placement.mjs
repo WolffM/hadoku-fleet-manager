@@ -247,15 +247,16 @@ if (APP) {
 	} catch (err) {
 		out.warn(`could not keep the document for --max-age: ${err.message}`);
 	}
-	out.emit(doc);
+	if (JSON_OUT) out.emit(doc);
 	process.exit(0);
 }
 const ok = docs.every((d) => d.ok);
-out.emit({
-	contract: HOSTING_PLACEMENT_CONTRACT,
-	generatedAt: new Date(NOW).toISOString(),
-	cached: false,
-	ok,
-	apps: docs,
-});
+if (JSON_OUT)
+	out.emit({
+		contract: HOSTING_PLACEMENT_CONTRACT,
+		generatedAt: new Date(NOW).toISOString(),
+		cached: false,
+		ok,
+		apps: docs,
+	});
 process.exit(0);

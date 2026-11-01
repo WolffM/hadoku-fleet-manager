@@ -161,11 +161,12 @@ Reverting either branch of the switch fails its test.
 `hostBound: true | false`. `true` means the subcommand reads something that
 belongs to THIS box specifically, not the fleet:
 
-| sub             | reads                                            | evidence                                     |
-| --------------- | ------------------------------------------------ | -------------------------------------------- |
-| `egress-slices` | this host's `pm2 jlist` and `/proc/<pid>/cgroup` | `scripts/check-egress-slices.mjs:39-40`      |
-| `reap-trend`    | this host's own mgmt-api pm2 log file            | `scripts/check-reap-timeout-trend.mjs:46-48` |
-| `srv-drift`     | the `~/srv/hadoku_site` checkout ON this box     | `scripts/check-srv-drift.mjs:8`              |
+| sub                 | reads                                                                                                                     | evidence                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `egress-slices`     | this host's `pm2 jlist` and `/proc/<pid>/cgroup`                                                                          | `scripts/check-egress-slices.mjs:39-40`      |
+| `reap-trend`        | this host's own mgmt-api pm2 log file                                                                                     | `scripts/check-reap-timeout-trend.mjs:46-48` |
+| `srv-drift`         | the `~/srv/hadoku_site` checkout ON this box                                                                              | `scripts/check-srv-drift.mjs:8`              |
+| `hosting-placement` | the controller's placement record (`fleet-hosting.json`, the tenant registry, the converger's last pass) in its state dir | `scripts/hosting-placement.mjs`              |
 
 There were eight. `header-audit`, `identity-model`, `inventory`,
 `check-runner-var` and `check-site-token` read the operator's sibling

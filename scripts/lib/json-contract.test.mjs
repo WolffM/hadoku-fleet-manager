@@ -180,6 +180,7 @@ const HOST_BOUND_SUBS = [
 	'contract-consumers',
 	'egress-slices',
 	'history-coverage',
+	'hosting-placement',
 	'label-floor',
 	'reap-trend',
 	'srv-drift',
@@ -1102,6 +1103,11 @@ const TODAYS_JSON_CONTRACT = [
 	],
 	['preflight', 'ci:fleet-preflight', 'services/mgmt-api/src/routes/jobs/fleet-preflight-check.ts'],
 	['srv-drift', 'ci:srv-drift', 'services/mgmt-api/src/routes/jobs/srv-drift-check.ts'],
+	[
+		'hosting-placement',
+		'ci:fleet-placement',
+		'services/mgmt-api/src/routes/jobs/fleet-placement-check.ts',
+	],
 	['inventory', 'ci:fleet-inventory', 'services/mgmt-api/src/routes/jobs/fleet-inventory-check.ts'],
 	[
 		'service-inventory',
@@ -1147,7 +1153,7 @@ const TODAYS_JSON_CONTRACT = [
 	['label-floor', 'ci:label-floor', 'services/mgmt-api/src/routes/jobs/label-floor-check.ts'],
 ].map(([sub, job, consumer]) => `${sub} -> ${job} -> ${consumer}`);
 
-void test("the derived JSON_CONTRACT equals today's 33 entries exactly — name, sub and consumer", () => {
+void test("the derived JSON_CONTRACT equals today's 34 entries exactly — name, sub and consumer", () => {
 	const derived = JSON_CONTRACT.map((e) => `${e.sub} -> ${e.job} -> ${e.consumer}`);
 	assert.deepEqual(derived.slice().sort(), TODAYS_JSON_CONTRACT.slice().sort());
 });

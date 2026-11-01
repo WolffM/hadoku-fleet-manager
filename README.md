@@ -205,6 +205,7 @@ code first would turn every real finding into "the checker broke".
 | `fleet reap-trend --json`                         | `ci:reap-timeout-trend` |
 | `fleet preflight --json`                          | `ci:fleet-preflight`    |
 | `fleet srv-drift --json`                          | `ci:srv-drift`          |
+| `fleet hosting-placement --json`                  | `ci:fleet-placement`    |
 | `fleet inventory --check --json`                  | `ci:fleet-inventory`    |
 | `fleet doctor --cadence --write --json`           | `ci:health-refresh`     |
 | `fleet service-inventory --slices --write --json` | `ci:slice-inventory`    |
