@@ -68,6 +68,20 @@ const PROFILES = resolve(ROOT, 'manifests', 'node-profiles.json');
 const code = blankShellComments(readFileSync(BOOTSTRAP, 'utf8'));
 const profiles = JSON.parse(readFileSync(PROFILES, 'utf8')).profiles;
 
+/**
+ * `lib/make-preseed.sh` is now a thin entry point that sources
+ * `make-preseed-render.sh` and `make-preseed-netinst.sh` (wave 5t lane B,
+ * 800-line ceiling) — every function a caller sees is unchanged, but the raw
+ * TEXT this file greps for (ASPM_FIX, WIFI_LATE, the 25-wireless.network
+ * printf) now lives in one of the siblings. Concatenating all three, in
+ * their sourcing order, reproduces exactly the text the old single file
+ * held, including the ASPM-before-WIFI_LATE ordering the test below checks.
+ */
+const makePreseedSrc = () =>
+	['make-preseed.sh', 'make-preseed-render.sh', 'make-preseed-netinst.sh']
+		.map((f) => readFileSync(resolve(ROOT, 'scripts', 'lib', f), 'utf8'))
+		.join('\n');
+
 /** Real keys only — `$why` and friends are prose. */
 const dataKeys = (o) => Object.keys(o ?? {}).filter((k) => !k.startsWith('$'));
 
@@ -469,9 +483,7 @@ test('every shell function is DEFINED before it is called', () => {
 // blacklist assertion below read the raw text and failed on the COMMENT that
 // explains why there is no blacklist — prose scoring as the thing it forbids,
 // which is the trap CLAUDE.md records this repo falling into three times.
-const preseedSrc = blankShellComments(
-	readFileSync(resolve(ROOT, 'scripts', 'lib', 'make-preseed.sh'), 'utf8')
-);
+const preseedSrc = blankShellComments(makePreseedSrc());
 
 test('the installer disables ASPM before it can lose its media', () => {
 	assert.match(
@@ -738,7 +750,7 @@ test("a box with no radio loses the preseed's networkd config — and ONLY the p
 		assert.ok(m, `could not find the 25-wireless.network content in ${label}`);
 		return m[1].trim();
 	};
-	const preseed = readFileSync(resolve(ROOT, 'scripts', 'lib', 'make-preseed.sh'), 'utf8');
+	const preseed = makePreseedSrc();
 	const branch = code.slice(
 		code.indexOf('WIFI_STATE="none no-wireless-hardware"'),
 		code.indexOf('WIFI_DRIVER="$(basename')

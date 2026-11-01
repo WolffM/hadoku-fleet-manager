@@ -8,7 +8,6 @@
   "scripts/hosting.mjs": 885,
   "scripts/lib/egress-slices-guard.test.mjs": 1007,
   "scripts/lib/hosting.mjs": 1158,
-  "scripts/lib/make-preseed.sh": 1087,
   "scripts/lib/slice-placement-guard.test.mjs": 2206,
   "scripts/lib/toolchain-floor.mjs": 981,
   "scripts/lib/toolchain-floor.test.mjs": 1482,
