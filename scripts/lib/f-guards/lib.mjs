@@ -45,6 +45,7 @@ const FIXTURE_FILES = new Set([
 	'scripts/lib/fleet-source-fixture.mjs',
 	'scripts/lib/bootcamp-fixtures.mjs',
 	'scripts/lib/ci-throttle-fixtures.mjs',
+	'scripts/lib/identity-model-fixtures.mjs',
 ]);
 
 function walk(dir, out) {

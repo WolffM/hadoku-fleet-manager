@@ -62,15 +62,9 @@ import { relative, basename } from 'node:path';
 import { allRepos } from './lib/fleet-roster.mjs';
 import { manifest as manifestFile } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
-import {
-	REPO_ROOT,
-	OWNER_MODULE,
-	OWNER_IMPORT,
-	EDGE_INDEX,
-	checkoutFreshness,
-	siblingRepos,
-	scanRepo,
-} from './lib/identity-rules.mjs';
+import { REPO_ROOT, scanRepo } from './lib/identity-rules.mjs';
+import { OWNER_MODULE, OWNER_IMPORT, EDGE_INDEX } from './lib/identity-constants.mjs';
+import { checkoutFreshness, siblingRepos } from './lib/identity-scan.mjs';
 
 /** When this run started. Every exit path reports against this. */
 const START_MS = Date.now();

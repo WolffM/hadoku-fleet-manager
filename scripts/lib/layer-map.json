@@ -1560,6 +1560,41 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/identity-constants.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave 5q lane C, pure move: identity-rules.mjs re-split to reach the 800-line ceiling. Owner + edge constants, same bucket as the rules that read them."
+  },
+  {
+    "glob": "scripts/lib/identity-scan.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave 5q lane C, pure move: identity-rules.mjs re-split. The repo/file discovery scanRepo walks over — same bucket as scanRepo itself."
+  },
+  {
+    "glob": "scripts/lib/identity-resolver.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave 5q lane C, pure move: identity-rules.mjs re-split. G7's resolver-binding machinery, same bucket as the other G1..G8 checks."
+  },
+  {
+    "glob": "scripts/lib/identity-checks.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave 5q lane C, pure move: identity-rules.mjs re-split. G1, G2, G3, G4, G5, G6 and G8, same bucket as the CLI they were cut from."
+  },
+  {
+    "glob": "scripts/lib/identity-model-fixtures.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave 5q lane C, pure move: shared CLI-test rig for check-identity-model's split test files, same bucket as doctor-fixtures.mjs."
+  },
+  {
     "glob": "scripts/lib/header-rules.mjs",
     "layer": "domain",
     "domain": "observation",

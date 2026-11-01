@@ -33,6 +33,11 @@ const ALLOWED = {
 		'a WRITER: commits manifests through a worktree of the hub clone, which needs a clone',
 	'src/lib/fleet-paths.ts': 'defines reposDir, and siteRoot() falls back to it',
 	'src/cli.ts': '--help text naming the variable',
+	'scripts/lib/identity-model-fixtures.mjs':
+		'a test rig (wave 5q lane C, split out of check-identity-model.test.mjs, which this walk ' +
+		'never scanned — a test file by name): it only sets REPOS_DIR in the env it hands the ' +
+		"spawned gate subprocess, exercising that CLI's own env-var contract, never reading a " +
+		'sibling checkout itself.',
 };
 
 const PATTERN = /\breposDir\s*\(|\bREPOS_DIR\b/;
