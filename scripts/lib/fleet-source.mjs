@@ -48,7 +48,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { READ_ATTEMPTS } from './queue-health.mjs';
+import { READ_ATTEMPTS } from './read-retry-policy.mjs';
 import { normalizeEol } from './yaml-comments.mjs';
 
 /** Where the shipped commit lands in each mirror. */

@@ -106,7 +106,7 @@ import { capability } from '../../dist/lib/capability-registry.js';
 import { provenCapabilities } from '../../dist/lib/bootcamp-proof.js';
 import { mayRunRepo } from './placement-rules.mjs';
 import { runOn } from './fleet-exec.mjs';
-import { READ_ATTEMPTS, describeReadFailure } from './queue-health.mjs';
+import { READ_ATTEMPTS, describeReadFailure } from './read-retry-policy.mjs';
 
 /**
  * Free-space floor, in MiB, on the filesystem holding a seed's cache. See the

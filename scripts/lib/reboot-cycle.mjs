@@ -43,9 +43,14 @@
  */
 
 import { errText } from './term.mjs';
+// REASON_PREFIX, HELD_PREFIX and heldByCycle moved to `reboot-hold.mjs` (wave
+// clean-1 lane D, cut (iii) layer debt): a declarative naming convention and
+// a pure predicate over it, filed under `config` so doctor-run.mjs
+// (observation) can read it without reaching into this file's lifecycle-domain
+// cycle logic. Re-exported below unchanged for every existing importer.
+import { REASON_PREFIX, HELD_PREFIX, heldByCycle } from './reboot-hold.mjs';
+export { REASON_PREFIX, HELD_PREFIX, heldByCycle };
 
-/** Every drain this cycle writes starts with this, and it undoes only those. */
-export const REASON_PREFIX = 'automated reboot';
 /** The drain's window (kind `reboot`): if the cycle dies outright, the node comes back by itself. */
 export const REBOOT_LEASE = '2h';
 /** From the reboot command to a reachable node on a new boot id. */
@@ -283,18 +288,6 @@ export function rebootNoticeArgs(node, reason, noticeMin) {
 		'--reason',
 		reason,
 	];
-}
-
-/** A node this cycle rebooted and could not verify is held under this; a human lifts it. */
-export const HELD_PREFIX = `${REASON_PREFIX} FAILED verification`;
-
-/**
- * Is this drain record a FAILED verification's hold? It starts with
- * REASON_PREFIX too, so without this the legacy-prefix rule in `oursOn` would
- * read the hold as the cycle's own drain and the next resume would undo it.
- */
-export function heldByCycle(rec) {
-	return String(rec?.reason ?? '').startsWith(HELD_PREFIX);
 }
 
 /**

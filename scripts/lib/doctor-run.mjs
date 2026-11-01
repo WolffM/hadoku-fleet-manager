@@ -93,7 +93,7 @@ import { pm2Peers, tenantsByNode } from './collect-offers.mjs';
 import { readDrainDoc } from './expected-down.mjs';
 import { claimPm2Units } from './hosting-claims.mjs';
 import { readTenantRegistry, tenantSpecFrom } from './tenant-registry.mjs';
-import { heldByCycle } from './reboot-cycle.mjs';
+import { heldByCycle } from './reboot-hold.mjs';
 import { stateDir } from './paths.mjs';
 import { measuredFacets, writeFacet } from '../../dist/lib/measured.js';
 

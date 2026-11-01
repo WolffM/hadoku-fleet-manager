@@ -47,7 +47,7 @@ import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.j
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
-import { parseLoad } from './lib/idle-measure.mjs';
+import { parseLoad } from './lib/probe-readers.mjs';
 import { dataEndpointUrl, probeScript, serviceStateRoot, unprobed } from './lib/probe-script.mjs';
 
 const DATA = dataEndpointUrl();

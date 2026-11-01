@@ -67,14 +67,19 @@
  *      the generic scheduling/paging machinery it plugs into is automation.
  *   3. Where neither says anything (a handful of generic, domain-blind
  *      utilities — `concurrency.ts`, `stdin.mjs`, `blank-comments.mjs`,
- *      `emit.mjs`, `yaml-comments.mjs`, the two usage-log halves, the two
- *      test-identity helpers, `f-guards/lib.mjs`) they are filed under
- *      `automation` as the least-wrong flat layer, since automation's own
- *      definition ("job runner, scheduler, pager ledger, report shapes") is
- *      already the plan's bucket for generic cross-cutting mechanics. This is
- *      a judgment call, named here rather than hidden: a later wave may want
- *      a dedicated layer for domain-blind utilities instead of folding them
- *      into automation.
+ *      `emit.mjs`, the two usage-log halves, `f-guards/lib.mjs`) they are
+ *      filed under `automation` as the least-wrong flat layer, since
+ *      automation's own definition ("job runner, scheduler, pager ledger,
+ *      report shapes") is already the plan's bucket for generic cross-cutting
+ *      mechanics. This is a judgment call, named here rather than hidden: a
+ *      later wave may want a dedicated layer for domain-blind utilities
+ *      instead of folding them into automation. `yaml-comments.mjs` and
+ *      `test-git-identity.mjs` WERE in this bucket but moved to `config`
+ *      (wave clean-1 lane D, cut (iii)): both are zero-import, with nothing
+ *      tying them to automation's actual definition, and config is the true
+ *      floor of the stack rather than a second judgment call about which flat
+ *      layer is "least wrong" — see their own entries in `layer-map.json` for
+ *      the edges this legalised.
  *
  * A FEW DELIBERATE DEPARTURES FROM A LITERAL READING OF SRC/RUNNERS/* AS
  * "CI-SCHEDULING": `drain.ts`, `hosting-record.ts`, `backstop-force.ts`,

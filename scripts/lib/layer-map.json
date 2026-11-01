@@ -244,7 +244,8 @@
   },
   {
     "glob": "scripts/lib/yaml-comments.mjs",
-    "layer": "automation"
+    "layer": "config",
+    "why": "Wave clean-1 lane D reclassify: zero imports, two pure text functions with no job-runner/scheduler/pager-ledger/report-shape content — automation's own definition. This file was one of layer-map.mjs's own named 'domain-blind utility, judgment call' bucket filed under automation only for lack of a better flat layer; config is the true floor and nothing beneath it to violate, so filing it there removes the judgment call rather than reinterpreting it. Legalises fleet-source.mjs (access) and site-token.mjs (config) reading it, with no new edge (the file has no outgoing imports to turn upward)."
   },
   {
     "glob": "scripts/lib/stdin.mjs",
@@ -252,7 +253,8 @@
   },
   {
     "glob": "scripts/lib/test-git-identity.mjs",
-    "layer": "automation"
+    "layer": "config",
+    "why": "Wave clean-1 lane D reclassify: a declarative fixture identity constant (FIXTURE_IDENTITY) plus two pure derivations, imports only node:process — same 'domain-blind utility, judgment call' bucket layer-map.mjs's header names for automation, with nothing tying it to automation's actual definition (job runner/scheduler/pager ledger/report shapes). config is the true floor. Legalises fleet-source-fixture.mjs (access) reading it, with no new edge."
   },
   {
     "glob": "scripts/lib/test-tmpdir.mjs",
@@ -793,9 +795,8 @@
   },
   {
     "glob": "scripts/lib/node-interfaces.mjs",
-    "layer": "domain",
-    "domain": "lifecycle",
-    "part": "core"
+    "layer": "access",
+    "why": "Wave clean-1 lane D reclassify: zero imports; every export either parses what a node's own `ip`/NetworkManager/ifupdown reports (INTERFACE_PROBE/parseInterfaces, WIFI_MANAGER_PROBE/parseWifiManager) or decides addressing purely from that same probed data (preferredAddress, proposeLanRecord, sshTarget, sshNameCandidates, chooseSshHostName) — none of it reads fleet state, the manifest, or a capability registry. §3.2 rule 2: 'another system owns (a node...) -> access'. Used identically by lifecycle callers (enroll-*.mjs) and observation callers (check-fleet-preflight.mjs, doctor-probe.mjs, preflight-lan.mjs) with no different treatment, which is what access content looks like rather than a lifecycle-specific decision. Every current importer sits at index <= access already, so this legalises the three observation reads with no new edge."
   },
   {
     "glob": "scripts/lib/node-users-cutover.mjs",
@@ -805,9 +806,8 @@
   },
   {
     "glob": "scripts/lib/probe-script.mjs",
-    "layer": "domain",
-    "domain": "lifecycle",
-    "part": "core"
+    "layer": "access",
+    "why": "Wave clean-1 lane D reclassify: assembles the capability-probe invocation from access-layer reads (readPm2Hosts in site-docs.mjs, nodeHome in node-users.ts) and an env override — no lifecycle state or decision beyond string assembly and URL validation. §3.2 rule 2. Its own imports (site-docs.mjs, node-users.ts: access; toolchain-floor.mjs: config) are all already at or below access, so reclassifying introduces no new outgoing edge; both current importers (bootcamp.mjs, lifecycle; check-capabilities.mjs, observation) sit at index <= access, so this legalises the observation read with no new edge."
   },
   {
     "glob": "scripts/lib/proof-drain.mjs",
@@ -1187,9 +1187,8 @@
   },
   {
     "glob": "scripts/lib/placement-rules.mjs",
-    "layer": "domain",
-    "domain": "ci-scheduling",
-    "part": "core"
+    "layer": "config",
+    "why": "Wave clean-1 lane D reclassify: zero imports, pure filters over the manifest's own `repos`/`machines` shape (`needs`, `excludeRepos`, `placement`) — declarative-input derivation per §3.2 rule 1, not a ci-scheduling runtime decision. Filed under ci-scheduling with no `why` before this; moving it to config (where every other manifest-shaped reader already sits) legalises reads from clean-runner-debris.mjs (lifecycle) and capability-seeds.mjs/reconcile-plan.mjs (config/lifecycle) with no new edge: every current importer sits at index <= config already."
   },
   {
     "glob": "scripts/lib/runner-var.mjs",
@@ -1889,6 +1888,21 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core"
+  },
+  {
+    "glob": "scripts/lib/probe-readers.mjs",
+    "layer": "access",
+    "why": "Wave clean-1 lane D, pure move: the parts of idle-measure.mjs's `parseLoad` that read a raw probe's stdout (`LOAD <id> <n|unknown>`) with zero other dependency — another system's data per §3.2 rule 2, same bucket as node-interfaces.mjs's probe parsers. Split off so check-capabilities.mjs (observation) can read it without reaching into idle-measure.mjs's lifecycle-domain verdict-carrying logic (carryMeasurements/measuredValue), which stays in idle-measure.mjs. idle-measure.mjs re-exports parseLoad unchanged for bootcamp.mjs/bootcamp-judge.mjs/bootcamp-write.mjs, which keep importing it from the old path."
+  },
+  {
+    "glob": "scripts/lib/read-retry-policy.mjs",
+    "layer": "config",
+    "why": "Wave clean-1 lane D, pure move: queue-health.mjs's READ_ATTEMPTS (the fleet-wide retry count, CLAUDE.md: 'READ_ATTEMPTS is 2') and describeReadFailure (a pure formatter over an error-like object) — a declarative retry policy, not queue-health's own FAIL_SECONDS verdict arithmetic, which stays put. Filed in config so capability-seeds.mjs and fleet-source.mjs (both config/access) can read the policy without reaching into queue-health.mjs's observation-domain verdict logic. queue-health.mjs re-exports both names unchanged for runner-var.mjs, which keeps importing them from the old path."
+  },
+  {
+    "glob": "scripts/lib/reboot-hold.mjs",
+    "layer": "config",
+    "why": "Wave clean-1 lane D, pure move: reboot-cycle.mjs's REASON_PREFIX/HELD_PREFIX naming convention and the heldByCycle predicate over it — a declarative tag-format constant and a pure string check, not the cycle's own orchestration (runRebootCycle, judgeReprove, etc.), which stays in reboot-cycle.mjs. Filed in config so doctor-run.mjs (observation) can read whether a drain record is a reboot-cycle hold without reaching into reboot-cycle.mjs's lifecycle-domain cycle logic. reboot-cycle.mjs re-exports all three names unchanged for its own internal use (oursOn, rebootNotice, runRebootCycle) and any other existing importer."
   },
   {
     "glob": "src/runners/*.ts",

@@ -4,18 +4,6 @@
     "to": "scripts/lib/refresh-cycle.mjs"
   },
   {
-    "from": "scripts/check-capabilities.mjs",
-    "to": "scripts/lib/idle-measure.mjs"
-  },
-  {
-    "from": "scripts/check-capabilities.mjs",
-    "to": "scripts/lib/probe-script.mjs"
-  },
-  {
-    "from": "scripts/check-fleet-preflight.mjs",
-    "to": "scripts/lib/node-interfaces.mjs"
-  },
-  {
     "from": "scripts/check-fleet-toolchain.mjs",
     "to": "scripts/lib/tool-release.mjs"
   },
@@ -48,10 +36,6 @@
     "to": "src/runners/speed-tier.ts"
   },
   {
-    "from": "scripts/clean-runner-debris.mjs",
-    "to": "scripts/lib/placement-rules.mjs"
-  },
-  {
     "from": "scripts/converge-toolchain.mjs",
     "to": "scripts/lib/service-peers.mjs"
   },
@@ -68,40 +52,12 @@
     "to": "scripts/lib/fleet-exec.mjs"
   },
   {
-    "from": "scripts/lib/capability-seeds.mjs",
-    "to": "scripts/lib/placement-rules.mjs"
-  },
-  {
-    "from": "scripts/lib/capability-seeds.mjs",
-    "to": "scripts/lib/queue-health.mjs"
-  },
-  {
     "from": "scripts/lib/doctor-run.mjs",
     "to": "scripts/lib/collect-offers.mjs"
   },
   {
     "from": "scripts/lib/doctor-run.mjs",
     "to": "scripts/lib/hosting-claims.mjs"
-  },
-  {
-    "from": "scripts/lib/doctor-run.mjs",
-    "to": "scripts/lib/reboot-cycle.mjs"
-  },
-  {
-    "from": "scripts/lib/doctor-probe.mjs",
-    "to": "scripts/lib/node-interfaces.mjs"
-  },
-  {
-    "from": "scripts/lib/fleet-source-fixture.mjs",
-    "to": "scripts/lib/test-git-identity.mjs"
-  },
-  {
-    "from": "scripts/lib/fleet-source.mjs",
-    "to": "scripts/lib/queue-health.mjs"
-  },
-  {
-    "from": "scripts/lib/fleet-source.mjs",
-    "to": "scripts/lib/yaml-comments.mjs"
   },
   {
     "from": "scripts/lib/hosting-offers.mjs",
@@ -124,16 +80,8 @@
     "to": "scripts/lib/emit.mjs"
   },
   {
-    "from": "scripts/lib/preflight-lan.mjs",
-    "to": "scripts/lib/node-interfaces.mjs"
-  },
-  {
     "from": "scripts/lib/preflight.mjs",
     "to": "src/runners/ephemeral.ts"
-  },
-  {
-    "from": "scripts/lib/site-token.mjs",
-    "to": "scripts/lib/yaml-comments.mjs"
   },
   {
     "from": "scripts/lib/slice-inventory-run.mjs",
@@ -174,10 +122,6 @@
   {
     "from": "scripts/node-users.mjs",
     "to": "scripts/node-users-cutover.mjs"
-  },
-  {
-    "from": "scripts/lib/reconcile-plan.mjs",
-    "to": "scripts/lib/placement-rules.mjs"
   },
   {
     "from": "scripts/lib/reconcile-apply.mjs",

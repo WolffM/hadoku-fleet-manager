@@ -9,22 +9,12 @@
  * count would be reading its own writer's intent (AGENTS.md).
  */
 
-/**
- * `LOAD <id> <n|unknown>` lines → `{ [id]: number | null }`. An id with no
- * LOAD line is ABSENT from the result, which `judgeMeasurement` reads as
- * uncounted — never as zero.
- *
- * @param {string} stdout
- * @returns {Record<string, number | null>}
- */
-export function parseLoad(stdout) {
-	const load = {};
-	for (const line of String(stdout).split('\n')) {
-		const m = /^LOAD\s+(\S+)\s+(\S+)\s*$/.exec(line.trim());
-		if (m) load[m[1]] = /^\d+$/.test(m[2]) ? Number(m[2]) : null;
-	}
-	return load;
-}
+// `parseLoad` moved to `probe-readers.mjs` (wave clean-1 lane D, cut (iii)
+// layer debt): it is a pure read of the probe's raw stdout with no dependency
+// on this file's verdict-carrying logic below, so it is filed under `access`
+// there ("another system's data"), re-exported here unchanged for every
+// existing importer.
+export { parseLoad } from './probe-readers.mjs';
 
 /**
  * The `$capabilities.measurements` facet: for each idle-only capability, the
