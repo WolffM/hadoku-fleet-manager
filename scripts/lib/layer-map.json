@@ -912,6 +912,34 @@
     "section": "ephemeral-exec-jit.ts and -reap.ts (wave 5o) fall to the src/runners/*.ts catch-all below."
   },
   {
+    "glob": "src/runners/placement-fork-safety.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5s lane A split of placement.ts (800-line ceiling): B8 fork safety (RunIdentity/isForkSafe), a pure move. Same part as placement.ts, which re-exports every name here."
+  },
+  {
+    "glob": "src/runners/placement-node-state.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5s lane A split of placement.ts (800-line ceiling): the NodeState shape and the capability check (satisfiesLabels/IMPLICIT_LABELS), a pure move. Same part as placement.ts, which re-exports every name here."
+  },
+  {
+    "glob": "src/runners/placement-slow.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5s lane A split of placement.ts (800-line ceiling): the slow-tier/per-kind spill thresholds (HEAVY_HOLD_SEC, SPILL_FLOOR_SEC, BACKSTOP_SOLE_CARRIER_SLOTS, slowKind, slowReposOn), a pure move. Same part as placement.ts, which re-exports every name here."
+  },
+  {
+    "glob": "src/runners/placement-refusal.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "Wave 5s lane A split of placement.ts (800-line ceiling): refusalFor, the per-node gate choosePlacement's walk calls, a pure move. Same part as placement.ts; SpillContext is re-exported from there."
+  },
+  {
     "glob": "src/runners/queue-discovery.ts",
     "layer": "domain",
     "domain": "ci-scheduling",

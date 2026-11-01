@@ -25,7 +25,5 @@
   "scripts/runners-slice-install.sh": 986,
   "scripts/service-inventory.mjs": 977,
   "src/cli.ts": 974,
-  "src/lib/job-registry.ts": 986,
-  "src/runners/placement.ts": 890,
-  "src/tests/prove-job.test.ts": 1272
+  "src/lib/job-registry.ts": 986
 }
