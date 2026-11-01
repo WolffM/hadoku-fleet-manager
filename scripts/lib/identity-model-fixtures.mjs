@@ -73,6 +73,8 @@ export function siteWith(source, toml) {
 	const root = mkdtempSync(join(tmpdir(), 'idmodel-'));
 	mkdirSync(join(root, 'scripts', 'admin'), { recursive: true });
 	writeFileSync(join(root, 'scripts', 'admin', 'identity-model-allowlist.json'), '{"allowed":[]}');
+	// No app declares an erase hook unless a test writes its own (R12 as amended).
+	writeFileSync(join(root, 'scripts', 'child-apps.json'), '{"apps":[]}');
 	mkdirSync(join(root, 'workers', 'demo-api', 'src'), { recursive: true });
 	writeFileSync(join(root, 'workers', 'demo-api', 'src', 'routes.ts'), source);
 	writeFileSync(join(root, 'workers', 'demo-api', 'wrangler.toml'), `name = "demo-api"\n${toml}`);
@@ -111,6 +113,8 @@ export function bareSite() {
 	const root = mkdtempSync(join(tmpdir(), 'idm-reach-'));
 	mkdirSync(join(root, 'scripts', 'admin'), { recursive: true });
 	writeFileSync(join(root, 'scripts', 'admin', 'identity-model-allowlist.json'), '{"allowed":[]}');
+	// No app declares an erase hook unless a test writes its own (R12 as amended).
+	writeFileSync(join(root, 'scripts', 'child-apps.json'), '{"apps":[]}');
 	return root;
 }
 

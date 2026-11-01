@@ -203,3 +203,70 @@ test('the gate does not report its own test files and fixtures, whatever they ar
 		assert.doesNotMatch(r.out, /hadoku-fleet-manager:/, r.out);
 	});
 });
+
+test('erasableFrom maps a sibling by repoName and a site worker by workers/<id>-api/', async () => {
+	const { erasableFrom } = await import('./lib/identity-r12.mjs');
+	const e = erasableFrom({
+		apps: [
+			{ id: 'task', repoName: 'hadoku-task', erase: { path: '/api/_account/erase' } },
+			{ id: 'study', repoName: 'hadoku-study' },
+		],
+	});
+	assert.equal(e('hadoku-task', 'worker/migrations/0002.sql'), true);
+	assert.equal(e(null, 'workers/task-api/migrations/0002.sql'), true);
+	assert.equal(e('hadoku-study', 'x.sql'), false, 'no erase declared');
+	assert.equal(e(null, 'workers/study-api/migrations/1.sql'), false);
+	assert.equal(erasableFrom(null)('hadoku-task', 'x'), false, 'nothing readable, nothing erasable');
+});
+
+// R12 AS AMENDED 2026-11-01: a person's app data may stay in the app when the app
+// declares an erase hook that account deletion calls. G9a is then not a finding;
+// G9b (a stored name) still is.
+const ERASABLE_DEMO = JSON.stringify({
+	apps: [{ id: 'demo', repoName: 'hadoku-demo', erase: { path: '/api/_account/erase' } }],
+});
+const VOTES =
+	'CREATE TABLE tierlist_votes (owner_user_id TEXT, item_id TEXT NOT NULL, PRIMARY KEY (owner_user_id, item_id));\n';
+
+test('G9a: a per-person table in an app that declares an erase hook is not a finding', () => {
+	const r = runFiles({
+		'scripts/child-apps.json': ERASABLE_DEMO,
+		[`${G9_SCHEMA}/0001.sql`]: VOTES,
+	});
+	assert.doesNotMatch(r.out, /G9a/, r.out);
+});
+
+test('G9a: the same table in an app with no erase hook still fails, and says how to fix it', () => {
+	const other = JSON.stringify({
+		apps: [{ id: 'other', repoName: 'hadoku-other', erase: { path: '/x' } }],
+	});
+	const r = runFiles({ 'scripts/child-apps.json': other, [`${G9_SCHEMA}/0001.sql`]: VOTES });
+	assert.equal(r.code, 1, r.out);
+	assert.match(r.out, /G9a/);
+	assert.match(r.out, /declares no erase hook/);
+});
+
+test('G9b: an erase hook does not excuse a stored name beside a userId', () => {
+	const r = runFiles({
+		'scripts/child-apps.json': ERASABLE_DEMO,
+		[`${G9_SCHEMA}/0001.sql`]:
+			'CREATE TABLE people_seen (room_id TEXT, user_id TEXT, display_name TEXT, PRIMARY KEY (room_id, user_id));\n',
+	});
+	assert.equal(r.code, 1, r.out);
+	assert.match(r.out, /G9b/);
+});
+
+test('erasableFrom maps a sibling by repoName and a site worker by workers/<id>-api/', async () => {
+	const { erasableFrom } = await import('./lib/identity-r12.mjs');
+	const e = erasableFrom({
+		apps: [
+			{ id: 'task', repoName: 'hadoku-task', erase: { path: '/api/_account/erase' } },
+			{ id: 'study', repoName: 'hadoku-study' },
+		],
+	});
+	assert.equal(e('hadoku-task', 'worker/migrations/0002.sql'), true);
+	assert.equal(e(null, 'workers/task-api/migrations/0002.sql'), true);
+	assert.equal(e('hadoku-study', 'x.sql'), false, 'no erase declared');
+	assert.equal(e(null, 'workers/study-api/migrations/1.sql'), false);
+	assert.equal(erasableFrom(null)('hadoku-task', 'x'), false, 'nothing readable, nothing erasable');
+});

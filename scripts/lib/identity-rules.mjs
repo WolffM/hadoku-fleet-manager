@@ -41,10 +41,26 @@ import {
 	collectUserIdReader,
 } from './identity-checks.mjs';
 import { checkG7, collectResolver } from './identity-resolver.mjs';
-import { checkG9Schemas, checkG9Files, checkG9Derived } from './identity-r12.mjs';
+import { checkG9Schemas, checkG9Files, checkG9Derived, erasableFrom } from './identity-r12.mjs';
+import { readChildApps } from './site-docs.mjs';
 import { isTestFile } from './identity-source-parse.mjs';
 
 export const REPO_ROOT = siteRoot();
+
+/**
+ * The apps account deletion reaches (R12 as amended), read once from the site's
+ * child-apps.json. An unreadable file THROWS: a scan that could not read the
+ * declarations would report every per-person table for the wrong reason.
+ */
+let erasableMemo;
+function erasable() {
+	if (!erasableMemo) {
+		const doc = readChildApps({ root: REPO_ROOT });
+		if (!doc.ok) throw new Error(`G9 cannot tell which apps are erasable: ${doc.why}`);
+		erasableMemo = erasableFrom(doc.doc);
+	}
+	return erasableMemo;
+}
 
 /**
  * Scan one repo root. `label` prefixes findings from a sibling checkout.
@@ -121,7 +137,7 @@ export function scanRepo(root, label, allow, violations, hits, tracked = tracked
 				const raw = readFileSync(full, 'utf8');
 				if (DECLARES_TABLE.test(raw)) {
 					checkG2Dir([{ rel, sql: raw }], add);
-					checkG9Schemas([{ rel, sql: raw }], label, add);
+					checkG9Schemas([{ rel, sql: raw }], label, add, erasable());
 				}
 			}
 			if (!CODE_EXT.some((e) => full.endsWith(e))) continue;
@@ -139,7 +155,7 @@ export function scanRepo(root, label, allow, violations, hits, tracked = tracked
 			// G9 (R12), like G8, exempts tests: a fixture writing a record with a
 			// name, or hashing a fake key, is not a store.
 			if (!isTest) {
-				checkG9Files(rel, src, label, add);
+				checkG9Files(rel, src, label, add, erasable());
 				checkG9Derived(rel, src, label, add);
 			}
 			// G5 is about code OUTSIDE the boundary impersonating a user. A test
@@ -161,6 +177,6 @@ export function scanRepo(root, label, allow, violations, hits, tracked = tracked
 	for (const [, files] of sqlByDir) {
 		files.sort((a, b) => a.rel.localeCompare(b.rel));
 		checkG2Dir(files, add);
-		checkG9Schemas(files, label, add);
+		checkG9Schemas(files, label, add, erasable());
 	}
 }

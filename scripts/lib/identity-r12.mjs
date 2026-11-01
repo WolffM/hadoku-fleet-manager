@@ -10,7 +10,8 @@
  *
  * Three checks, each statically decidable:
  *
- *   G9a · no per-person store    a table whose PRIMARY KEY includes ONE userId
+ *   G9a · no unerasable per-person store   a table whose PRIMARY KEY includes
+ *                                ONE userId, in an app that declares no erase hook
  *                                column (two is a relationship, shared), or a
  *                                file written to a path built from a userId
  *   G9b · no names beside a userId  a persisted record holding a userId AND a
@@ -197,7 +198,26 @@ function events(sql, rel) {
  * G9a + G9b over a group of schema sources (`[{rel, sql}]`, replayed in
  * order) — a migrations directory, or one file with an embedded schema.
  */
-export function checkG9Schemas(files, label, add) {
+/**
+ * WHICH APPS ACCOUNT DELETION REACHES, from hadoku_site's child-apps rows (R12 as
+ * amended 2026-11-01: a person's app data may stay in the app when the app
+ * declares an erase hook, `erase`, that the edge calls on account deletion).
+ * Returns `(label, rel) => boolean`: a sibling repo is erasable when its row
+ * (`repoName === label`) declares `erase`; a file of hadoku_site's own
+ * (`label === null`) when it sits in `workers/<id>-api/` and row `<id>` does.
+ * No rows, or no `erase` anywhere, makes nothing erasable: the strict direction.
+ */
+export function erasableFrom(childApps) {
+	const rows = (childApps?.apps ?? []).filter((r) => r && r.erase);
+	return (label, rel) =>
+		rows.some((r) =>
+			label === null ? String(rel).startsWith(`workers/${r.id}-api/`) : r.repoName === label
+		);
+}
+
+const NOT_ERASABLE = () => false;
+
+export function checkG9Schemas(files, label, add, erasable = NOT_ERASABLE) {
 	const tables = new Map();
 	for (const { rel, sql } of files) {
 		for (const e of events(strip(sql), rel)) e.apply(tables);
@@ -209,12 +229,12 @@ export function checkG9Schemas(files, label, add) {
 		const keyedBy = [...t.pk].filter((c) => PERSON_COLUMN.test(c));
 		// TWO people in the key is a relationship between them (a share, a
 		// grant): shared state, which R12 keeps in the app by userId.
-		if (keyedBy.length === 1) {
+		if (keyedBy.length === 1 && !erasable(label, t.rel)) {
 			add(
 				'G9a',
 				t.rel,
 				t.line,
-				`table \`${t.table}\` is keyed per person (PRIMARY KEY includes \`${keyedBy.join('`, `')}\`) — a person's data lives in prefs-api (R12)`
+				`table \`${t.table}\` is keyed per person (PRIMARY KEY includes \`${keyedBy.join('`, `')}\`) and its app declares no erase hook — account deletion cannot reach it: declare \`erase\` in its child-apps row, or keep only small config, in prefs-api (R12)`
 			);
 		}
 		for (const col of t.columns) {
@@ -267,17 +287,17 @@ const holdsPersonAndName = (text) => PERSON_KEY.test(text) && NAME_KEY.test(text
  * G9b: the payload is (or stringifies a `const` bound to) a literal holding a
  * userId and a name/sprite/avatar.
  */
-export function checkG9Files(rel, src, label, add) {
+export function checkG9Files(rel, src, label, add, erasable = NOT_ERASABLE) {
 	if (isR12Custodian(label, rel)) return;
 	for (const m of src.matchAll(WRITE_CALL)) {
 		const args = callArgs(src, m.index + m[0].length - 1);
 		const line = lineOf(src, m.index);
-		if (args[0] && PERSON_REF.test(args[0])) {
+		if (args[0] && PERSON_REF.test(args[0]) && !erasable(label, rel)) {
 			add(
 				'G9a',
 				rel,
 				line,
-				`a file store keyed by userId — a person's data lives in prefs-api (R12)`
+				`a file store keyed by userId, and its app declares no erase hook — account deletion cannot reach it: declare \`erase\` in its child-apps row (R12)`
 			);
 		}
 		const payload = args.slice(1).join(',');
