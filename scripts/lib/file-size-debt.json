@@ -5,7 +5,6 @@
   "scripts/check-fleet-toolchain.test.mjs": 1447,
   "scripts/check-identity-model.test.mjs": 1447,
   "scripts/ci-throttle.sh": 1036,
-  "scripts/ci-throttle.test.mjs": 1993,
   "scripts/deploy-runners-slice.mjs": 1108,
   "scripts/floor-probe.mjs": 1455,
   "scripts/hosting.mjs": 885,
@@ -53,6 +52,5 @@
   "src/tests/dispatch-tick.test.ts": 1168,
   "src/tests/ephemeral.test.ts": 1165,
   "src/tests/prove-job.test.ts": 1272,
-  "src/tests/runner-health.test.ts": 4417,
-  "src/tests/warm-cache.test.ts": 3252
+  "src/tests/runner-health.test.ts": 4417
 }

@@ -13,12 +13,13 @@
  * documentation.
  *
  * Fixtures and tests are excluded from the walk, the same way the existing
- * guards exclude them — by directory name and by the two fixture files this
- * repo already has that are not named `*.test.*` but exist only for tests to
- * import (`scripts/lib/fake-node.mjs`, `scripts/lib/fleet-source-fixture.mjs`).
- * Both are confirmed by grep to have zero non-test importers; a third file
- * that earns the same treatment should be added here with the same kind of
- * check, not guessed at.
+ * guards exclude them — by directory name and by the fixture files this repo
+ * has that are not named `*.test.*` but exist only for tests to import
+ * (`scripts/lib/fake-node.mjs`, `scripts/lib/fleet-source-fixture.mjs`,
+ * `scripts/lib/bootcamp-fixtures.mjs`, `scripts/lib/ci-throttle-fixtures.mjs`).
+ * Each is confirmed by grep to have zero non-test importers; a new one that
+ * earns the same treatment should be added here with the same kind of check,
+ * not guessed at.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -43,6 +44,7 @@ const FIXTURE_FILES = new Set([
 	'scripts/lib/fake-node.mjs',
 	'scripts/lib/fleet-source-fixture.mjs',
 	'scripts/lib/bootcamp-fixtures.mjs',
+	'scripts/lib/ci-throttle-fixtures.mjs',
 ]);
 
 function walk(dir, out) {

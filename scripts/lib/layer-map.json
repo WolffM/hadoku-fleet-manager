@@ -892,6 +892,13 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/ci-throttle-fixtures.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Shared fixtures for the ci-throttle-*.test.mjs files (wave 5p): ci-throttle gates jobs by node capacity, the same domain as floor-probe."
+  },
+  {
     "glob": "scripts/lib/floor-probe.mjs",
     "layer": "domain",
     "domain": "ci-scheduling",
