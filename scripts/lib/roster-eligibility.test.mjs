@@ -159,8 +159,16 @@ test('`now` is injected, so the window does not drift with the wall clock', () =
 test('the reconciler routes eligibility through this one rule, and reports departures', () => {
 	// Comments are not evidence — this repo has been bitten three times by a grep
 	// crediting prose (handoff §2). Blank them before looking.
+	//
+	// `autoIncludeDrop(` moved out of the CLI into `lib/reconcile-resolve.mjs`
+	// (wave 5q lane B, pure move off the 800-line ceiling); `departed` stays
+	// the CLI's own (the exit code and the --json summary are both still
+	// built there), so this reads BOTH sources, concatenated, rather than
+	// picking one.
 	const src = blankComments(
-		readFileSync(new URL('../reconcile-fleet-runners.mjs', import.meta.url), 'utf8')
+		readFileSync(new URL('../reconcile-fleet-runners.mjs', import.meta.url), 'utf8') +
+			'\n' +
+			readFileSync(new URL('./reconcile-resolve.mjs', import.meta.url), 'utf8')
 	);
 	assert.match(src, /autoIncludeDrop\(/, 'the reconciler must call the shared rule');
 	assert.doesNotMatch(

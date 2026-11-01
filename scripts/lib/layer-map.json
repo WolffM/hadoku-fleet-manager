@@ -625,6 +625,41 @@
     "part": "run"
   },
   {
+    "glob": "scripts/lib/reconcile-resolve.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave 5q lane B split off the 800-line ceiling (pure move): `resolveDesired`'s GitHub reads (`gh repo list`, per-repo workflow counts) make it I/O, same bucket as `reconcile-apply.mjs` above."
+  },
+  {
+    "glob": "scripts/lib/reconcile-coverage.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave 5q lane B split off the 800-line ceiling (ctx restructure): builds, writes and compares `fleet-runner-coverage.json`, reading GitHub trees/package.json and the CLI's own `readJobReserves` (passed in as `ctx.readJobReserves`, never imported — see the module header)."
+  },
+  {
+    "glob": "scripts/lib/reconcile-report.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave 5q lane B split off the 800-line ceiling (pure move): the CLI's human-readable plan report, which only ever logs."
+  },
+  {
+    "glob": "scripts/lib/reconcile-exec.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave 5q lane B split off the 800-line ceiling (ctx restructure): the `--confirm` apply step (register/relabel/remove), ssh- and gh-bound throughout; `ctx.ssh` is the CLI's own `ssh()`, passed in rather than imported — see the module header."
+  },
+  {
+    "glob": "scripts/lib/reconcile-fleet-runners-rig.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave 5q lane B test-file split: the shared rig (CLI path, stripped-GIT_* env) for reconcile-fleet-runners-{core,coverage}.test.mjs, same bucket as fake-node.mjs's fixtures but filed beside the CLI it spawns rather than under access, matching ci-throttle-fixtures.mjs's precedent."
+  },
+  {
     "glob": "scripts/seed-node-cache.mjs",
     "layer": "domain",
     "domain": "lifecycle",
@@ -1363,6 +1398,20 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run"
+  },
+  {
+    "glob": "scripts/lib/runner-identity-reads.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave 5q lane B split off the 800-line ceiling (pure move): reconcile-runner-identity.mjs's GitHub-read primitives (none call `runOn` — `probeNode` stays in the CLI, see that module's header)."
+  },
+  {
+    "glob": "scripts/lib/runner-identity-report.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave 5q lane B split off the 800-line ceiling (pure move): reconcile-runner-identity.mjs's human-readable report, which only ever logs."
   },
   {
     "glob": "scripts/split-check.mjs",

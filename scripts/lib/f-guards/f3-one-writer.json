@@ -14,7 +14,7 @@
     "fleet-backstop-force.json": ["src/runners/backstop-force.ts"],
     "fleet-drain.json": ["scripts/lib/expected-down.mjs", "src/runners/drain.ts"],
     "fleet-hosting.json": ["src/runners/hosting-record.ts"],
-    "fleet-runner-coverage.json": ["scripts/reconcile-fleet-runners.mjs"],
+    "fleet-runner-coverage.json": ["scripts/lib/reconcile-coverage.mjs"],
     "fleet-runner-manifest.json": ["scripts/node-users-cutover.mjs"],
     "gh-budget.json": ["src/gh-budget.ts"],
     "hosting-converge-last.json": ["scripts/hosting-converge.mjs"],

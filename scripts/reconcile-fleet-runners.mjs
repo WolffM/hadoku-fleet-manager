@@ -110,8 +110,7 @@
  *   reconcile-fleet-runners.test.mjs holds the two together.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { autoIncludeDrop, vanishedFromUniverse } from './lib/roster-eligibility.mjs';
+import { readFileSync } from 'node:fs';
 import {
 	loadManifest as readManifest,
 	manifestPath,
@@ -121,42 +120,23 @@ import {
 } from './lib/fleet-exec.mjs';
 import { manifest as manifestFile } from './lib/paths.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
-import {
-	RESERVE_DRIFT_PCT,
-	deriveJobReserves,
-	reserveDrift,
-	shrinkRefusal,
-} from './lib/demand-derive.mjs';
+import { deriveJobReserves } from './lib/demand-derive.mjs';
 import { metricsReadScript, metricsSince, perJobCosts, readOutcome } from './lib/job-metrics.mjs';
-import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { BUILDER_LABEL } from '../dist/lib/capability-registry.js';
-import { fleetOwner } from '../dist/lib/fleet-config.js';
 import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import { FAST_LOOP_SECONDS, RECONCILE_EVERY_TICKS } from '../dist/fleet-loop.js';
 import { createEmitter } from './lib/emit.mjs';
 import { checkGhReserve } from './lib/gh-reserve.mjs';
 import { useAppPool } from './lib/gh-app.mjs';
+import { offeredLabels, listRunners } from './lib/reconcile-apply.mjs';
+import { resolveDesired } from './lib/reconcile-resolve.mjs';
 import {
-	placementFor,
-	describeCoverageDrift,
-	withoutReserves,
-	reservesOf,
-} from './lib/reconcile-plan.mjs';
-import { repoSuffix, registerScript, startScript, removeScript } from './lib/reconcile-scripts.mjs';
-import {
-	offeredLabels,
-	ghWrite,
-	listRunners,
-	ghRepoListWithRetry,
-	loadMountedApps,
-	deriveFacets,
-	lookupRepo,
-	currentRunnerVersion,
-	provisionBeforeStart,
-	mintToken,
-	countWorkflows,
-	targetsSelfHostedFleet,
-} from './lib/reconcile-apply.mjs';
+	buildCoverageDoc,
+	checkCoverageVerdict,
+	writeCoverageOrRefuse,
+} from './lib/reconcile-coverage.mjs';
+import { printReport } from './lib/reconcile-report.mjs';
+import { applyRegistrations, applyRemovals } from './lib/reconcile-exec.mjs';
 
 const MANIFEST = manifestPath();
 
@@ -370,140 +350,6 @@ function loadManifest() {
 	return raw;
 }
 
-/**
- * Resolve the manifest against GitHub into the set of (repo, claw) pairs that
- * SHOULD exist, plus the repos whose coverage should be torn down.
- */
-function resolveDesired(manifest, committedRoster = []) {
-	const explicit = Object.entries(manifest.repos ?? {});
-	const ai = manifest.autoInclude ?? {};
-
-	// THE ROSTER SHRINKING IS ITSELF AN EVENT.
-	//
-	// autoInclude is a DERIVED set: a repo enters when it starts matching and
-	// leaves when it stops. Leaving used to be three bare `continue`s — no record,
-	// no report, nothing. That is how a coverage gap closes without being fixed:
-	//
-	//   08-30  29 repos / 87 pairs  missing=9   <- paged, nothing installed
-	//   08-31  26 repos / 78 pairs  missing=0   <- "recovered"
-	//
-	// Nobody installed a runner. Three repos stopped matching autoInclude and took
-	// their own gap out of scope with them, and the gate reported a clean fleet.
-	// That is precisely "'I could not look' must never render as 'nothing is
-	// wrong'" — one level up from the reads it was written about, because here the
-	// tool did not even know there was something it had stopped looking at.
-	//
-	// A repo in the COMMITTED roster that no longer matches is therefore recorded
-	// as a DEPARTURE with the rule that dropped it. The operator's answer is an
-	// explicit manifest entry — the same shape hadoku-registry already carries for
-	// exactly this reason ("Live infra with only one workflow, so autoInclude's
-	// minWorkflows would drop it") — or a deliberate `--write-coverage`.
-	const covered = new Set(committedRoster);
-	const departed = [];
-	const leaves = (name, why) => {
-		if (covered.has(name)) departed.push({ repo: name, why });
-	};
-
-	const all = ghRepoListWithRetry([
-		'repo',
-		'list',
-		// The manifest's `autoInclude.owner` wins; otherwise the ecosystem's own
-		// owner, resolved in ONE place (fleet-config) rather than spelled here.
-		ai.owner ?? fleetOwner(),
-		'--limit',
-		'500',
-		'--json',
-		'nameWithOwner,isFork,isArchived,pushedAt',
-	]);
-
-	// AN EMPTY UNIVERSE IS A FAILURE, NOT AN EMPTY FLEET.
-	//
-	// `gh` exits non-zero on a real error and execFileSync throws, so a BROKEN
-	// call already dies loudly. This is the other shape: a call that SUCCEEDS and
-	// returns nothing — a token scoped to no repositories, an owner typo in
-	// `autoInclude.owner`, a `gh` that authenticated as somebody else. Every
-	// count downstream is then legitimately zero, the summary is all zeros, and
-	// `ci:fleet-coverage` reads "every covered repo has a runner" off a fleet
-	// nobody looked at.
-	//
-	// This is CLAUDE.md's rule — "zero repos scanned FAILS; exit 0 with no
-	// evidence is a failure, not a pass" — and the guard `check-queue-health` and
-	// `check-capability-schema` both already carry. The coverage gate, which is
-	// the one that would act on the answer, did not.
-	if (!all.length) {
-		failEarly(
-			`gh repo list returned NO repositories for owner "${ai.owner ?? fleetOwner()}". ` +
-				'That is a fleet nobody could look at, not a fleet with nothing to do.'
-		);
-	}
-
-	const byName = new Map(all.map((r) => [r.nameWithOwner, r]));
-	const now = Date.now();
-
-	const desired = new Map(); // repo -> { claws, reason }
-	const retired = []; // repos whose coverage may be removed
-	const ignored = []; // repos deliberately outside the reconciler's scope
-
-	for (const repo of all) {
-		const name = repo.nameWithOwner;
-		const entry = manifest.repos?.[name];
-
-		// `ignore` is the third answer, and it has to come first. `skip` means
-		// "should have no runners" and therefore MAKES orphans; `ignore` means
-		// "whatever it has, leave it and stop telling me". Without this, a dead
-		// repo whose leftovers nobody intends to remove reports as an action item
-		// forever — and a permanently non-empty report is one nobody reads.
-		if (entry?.ignore) {
-			ignored.push({ repo: name, why: entry.$why ?? 'ignore: true in the manifest' });
-			continue;
-		}
-
-		if (entry?.skip) {
-			retired.push({ repo: name, why: 'skip: true in the manifest' });
-			continue;
-		}
-		if (repo.isArchived) {
-			retired.push({ repo: name, why: 'archived on GitHub' });
-			continue;
-		}
-
-		// An explicit entry is intent stated by a human and always wins — but it
-		// says WHETHER the repo is covered, never WHERE. Where is derived.
-		if (entry) {
-			desired.set(name, { claws: placementFor(name, manifest), reason: 'manifest' });
-			continue;
-		}
-
-		// ONE rule, in scripts/lib/roster-eligibility.mjs, returning the REASON.
-		// `probe` passes the two expensive answers as functions so the ordering is
-		// unchanged: countWorkflows is one API call and targetsSelfHostedFleet is
-		// one per workflow file, and only a repo the cheap proxy would drop pays.
-		const why = autoIncludeDrop(repo, ai, { countWorkflows, targetsSelfHostedFleet }, now);
-		if (why) {
-			leaves(name, why);
-			continue;
-		}
-
-		desired.set(name, { claws: placementFor(name, manifest), reason: 'autoInclude' });
-	}
-
-	// A manifest entry naming a repo that no longer exists is a typo or a
-	// deletion; either way say so rather than silently dropping it.
-	for (const [name] of explicit) {
-		if (!byName.has(name)) {
-			retired.push({ repo: name, why: 'named in the manifest but not found under the owner' });
-		}
-	}
-
-	// A covered repo the loop above never visited, because it is no longer in the
-	// list at all. See `vanishedFromUniverse` (#135).
-	departed.push(
-		...vanishedFromUniverse(committedRoster, byName, lookupRepo, new Set(explicit.map(([n]) => n)))
-	);
-
-	return { desired, retired, ignored, departed, allRepos: byName };
-}
-
 // ---------------------------------------------------------------------------
 // Actual state
 // ---------------------------------------------------------------------------
@@ -579,207 +425,37 @@ async function main() {
 		/* no committed baseline yet — reported as none, never as clean */
 	}
 	const committedRoster = onDiskCoverage?.repos ?? [];
-	const { desired, retired, ignored, departed } = resolveDesired(manifest, committedRoster);
+	const { desired, retired, ignored, departed } = resolveDesired(manifest, committedRoster, {
+		fail: failEarly,
+	});
 
 	// --- coverage file -----------------------------------------------------
 	// Derived purely from desired state, so it is correct on a dry run too — but
 	// only WRITTEN when asked, because `--dry-run means zero side effects` is a
-	// contract worth more than the convenience.
+	// contract worth more than the convenience. Facets cost one tree call per
+	// repo plus a package.json read, so `buildCoverageDoc` derives them only
+	// when WRITE_COVERAGE/CHECK_COVERAGE actually need them.
 	const repoList = [...desired.keys()].sort();
-
-	// Facets cost one tree call per repo plus a package.json read, so they are
-	// derived only when the file is actually being written or checked — a plain
-	// reconcile run must not pay for them.
-	let facets;
-	if (WRITE_COVERAGE || CHECK_COVERAGE) {
-		const { mounted, reason: mountedReason } = loadMountedApps();
-		// A failed registry read is not "zero apps mounted" — it is "I could not
-		// look", and it taints EVERY repo's `microFrontend` facet at once (send-back,
-		// 2026-10-04), so it is collected into the same refusal `deriveFacets`'s own
-		// per-repo failures feed below, rather than silently defaulting to an empty
-		// Set.
-		const unreadableFacets = mountedReason
-			? [`scripts/child-apps.json unreadable — ${mountedReason}`]
-			: [];
-		// The COMMITTED reserve map, read once above — the evidence #88 needs to
-		// tell "never measured" (fall to the fleet p95) from "measured before,
-		// quiet now" (keep the last figure).
-		const previousReserves = reservesOf(onDiskCoverage?.facets);
-		// Read BEFORE the tree calls: an unreadable node refuses the whole write
-		// or check, and there is no point spending a GitHub call per repo first.
-		const reserves = readJobReserves(manifest, repoList, previousReserves);
-		if (reserves.unreadable.length) {
-			failEarly(
-				`fleet-runner-coverage.json: cannot derive jobP95Mb — ${reserves.unreadable.length} ` +
-					`node(s) unreadable, and a p95 without their jobs is not the fleet's: ` +
-					reserves.unreadable.map((u) => `${u.node}: ${u.why}`).join('; ')
-			);
-		}
-		if (!reserves.byRepo) failEarly(`fleet-runner-coverage.json: ${reserves.reason}`);
-		const reserveEntries = Object.entries(reserves.byRepo);
-		const measured = reserveEntries.filter(([, r]) => r.basis === 'measured');
-		const kept = reserveEntries.filter(([, r]) => r.basis === 'kept-last-measured');
-		// NEVER MEASURED, not merely quiet — #88's whole point is that these two
-		// are different repos. A repo with its OWN evidence (a true percentile, or
-		// a capped floor) never lands here even on a 0-run night; see `kept` below.
-		const neverMeasured = reserveEntries
-			.filter(([, r]) => r.basis === 'fleet-p95')
-			.map(([repo, r]) => `${repo} (${r.runs} run${r.runs === 1 ? '' : 's'})`);
-		log(
-			`jobP95Mb: ${measured.length} repo(s) measured, ${kept.length} kept from last ` +
-				`measurement, fleet p95 ${reserves.fleetP95Mb}MB over ${reserves.fleetRuns} ` +
-				`per-job peaks from ${reserves.nodesRead} node(s), last ${reserves.windowDays} ` +
-				`days, min ${reserves.minRuns} runs` +
-				(reserves.undated ? `, ${reserves.undated} undated row(s) excluded` : '')
-		);
-		// SAID PER REPO, as the brief asks: a fallback figure is the fleet's, not
-		// the repo's, and a reader of the roster must be able to tell which.
-		if (neverMeasured.length) {
-			log(`jobP95Mb: on the fleet p95, never measured: ${neverMeasured.join(', ')}`);
-		}
-		// #88's exact report line: a repo under the min-runs floor that HAS a
-		// measurement of its own keeps it rather than falling to the fleet figure.
-		for (const [repo, r] of kept) {
-			log(
-				`jobP95Mb: ${repo}: kept last measured ${r.measuredMb}MB` +
-					(r.measuredAt ? ` from ${r.measuredAt}` : ' (measured-at date not on record)') +
-					`; ${r.runs} run${r.runs === 1 ? '' : 's'} in ${reserves.windowDays}d`
-			);
-		}
-		// A RESERVATION BUILT FROM CAPPED RUNS IS A LOWER BOUND (#76). Named here
-		// for the same reason the fallback list is: `deriveJobReserves` already
-		// raised `mb` to the highest cap the repo's own runs hit and set
-		// `lowerBound: true`, but that number still LOOKS like an ordinary measured
-		// figure in the roster unless a reader is told it is a floor, not a
-		// ceiling — which is exactly how brave-quartet's 3,091 MB read as exact
-		// before this.
-		const lowered = reserveEntries
-			.filter(([, r]) => r.lowerBound === true)
-			.map(([repo, r]) => `${repo} (${r.mb}MB)`);
-		if (lowered.length) log(`jobP95Mb: lower bound only (a run hit a cap): ${lowered.join(', ')}`);
-		facets = {};
-		for (const repo of repoList) {
-			const { facets: repoFacets, unreadable } = deriveFacets(repo, mounted);
-			if (unreadable) unreadableFacets.push(unreadable);
-			facets[repo] = { ...repoFacets, jobP95Mb: reserves.byRepo[repo] };
-		}
-		// REFUSE BEFORE EITHER BRANCH READS `facets`, not just before the write:
-		// `--check-coverage` against a degraded live derivation would report a
-		// MISSING content facet as structural drift — a false finding caused by
-		// this run's own read failure, not by anything that actually changed
-		// (send-back, 2026-10-04). "Compute fully, check completeness, THEN act"
-		// applies to a check exactly as much as to a write.
-		if (unreadableFacets.length) {
-			failEarly(
-				`fleet-runner-coverage.json: cannot derive facets — ${unreadableFacets.length} ` +
-					`read(s) failed, and a roster missing their content facets is not the fleet's: ` +
-					unreadableFacets.join('; ')
-			);
-		}
-	}
-
-	const coverage = {
-		$comment:
-			'GENERATED by reconcile-fleet-runners.mjs --write-coverage. Do not hand-edit. ' +
-			'`repos` is consumed by mgmt-api runner-health (CI_RUNNER hosted fallback) and the ' +
-			'repo-policy reconciler. `facets` is what each repo IS, so fleet checkers ' +
-			'(check-header-fleet, check-tier-fleet, check-mf-externals) filter this ONE roster ' +
-			'instead of keeping their own membership arrays — which had already drifted apart. ' +
-			"`facets[repo].jobP95Mb` is the p95 of that repo's per-job peak memory over the " +
-			"job-metrics window, read by JIT admission. `basis` is `measured` (this repo's own " +
-			'percentile this run), `kept-last-measured` (under the min runs THIS run, but ' +
-			'measured before — #88 — with `measuredMb`/`measuredAt` carrying the original figure ' +
-			"and `mb` never lower than today's fleet p95), or `fleet-p95` (never measured; `mb` " +
-			'is the fleet figure). `lowerBound: true` (additive; absent means false) means at ' +
-			'least one contributing run was itself capped — OOM-killed, or pinned at a node ' +
-			'ceiling — so `mb` is a FLOOR raised to the highest cap seen, never an exact ' +
-			'measurement; admission must not treat it as a number the job will stay under (#76).',
-		repos: repoList,
-		...(facets ? { facets } : {}),
-	};
+	const coverage = buildCoverageDoc({
+		manifest,
+		repoList,
+		onDiskCoverage,
+		log,
+		fail: failEarly,
+		readJobReserves,
+		WRITE_COVERAGE,
+		CHECK_COVERAGE,
+	});
 	if (CHECK_COVERAGE) {
-		// Read once, above, as `onDiskCoverage` — reused here rather than read a
-		// second time, so a concurrent `--write-coverage` cannot make this
-		// comparison disagree with the one the reserve derivation already saw.
-		const onDisk = onDiskCoverage;
-		// FACETS are compared too, not just the repo list. Three fleet checkers
-		// now derive their membership from them, so a stale facet map silently
-		// drops a repo out of scope — which is the exact failure this whole
-		// roster replaced. Checking only `repos` would have left that hole open
-		// one layer down.
-
-		const sameRepos = JSON.stringify(onDisk?.repos ?? null) === JSON.stringify(coverage.repos);
-		// Two comparisons, because the facets are two kinds of fact. The ones
-		// derived from a repo's CONTENTS change with a commit and compare exactly;
-		// `jobP95Mb` changes with the calendar — see `RESERVE_DRIFT_PCT` — and is
-		// handled entirely separately, below, as an ADVISORY (#86).
-		const diskFacets = onDisk?.facets ? withoutReserves(onDisk.facets) : null;
-		const sameFacets =
-			JSON.stringify(diskFacets) === JSON.stringify(withoutReserves(coverage.facets));
-
-		// STRUCTURAL drift (#86 ask 1): a repo joined or left the roster, or a
-		// content facet (`wolffmConsumer`, `uiApp`, `microFrontend`) changed. A
-		// daily `--write-coverage` cannot be assumed to be pending for this —
-		// it is real, and still fails the gate.
-		const structuralLines = [];
-		if (!sameRepos || !sameFacets) {
-			// Name WHAT differs, never just how many. This message used to print
-			// `repos on disk: 26  live: 26  <-- DIFFERS`, which is a count telling
-			// you the counts match while the sets do not — the reader is left with
-			// nothing to act on and no way to judge whether the drift is expected.
-			// Both real cases here (two repos picking up @wolffm/cdn-client, and a
-			// mis-sorted repo list) are invisible at that resolution.
-			const described = describeCoverageDrift(onDisk && { ...onDisk, facets: diskFacets ?? {} }, {
-				...coverage,
-				facets: withoutReserves(coverage.facets),
-			});
-			if (described) structuralLines.push(described);
-		}
-
-		// MEASURED drift (#86 ask 2/3): `jobP95Mb` only. `reserveDrift` already
-		// skips any repo under the min-runs floor on either side — "I could not
-		// look" never reads as drift — so what is left here is a REAL measured
-		// repo whose figure moved, which a daily `--write-coverage` repairs on its
-		// own. Always advisory, never a reason to fail this gate.
-		const advisories = reserveDrift(reservesOf(onDisk?.facets), reservesOf(coverage.facets)).map(
-			(l) => l.trim()
-		);
-
-		if (structuralLines.length) {
-			console.error(`fleet-runner-coverage.json is stale.\n${structuralLines.join('\n')}`);
-			console.error(`  fix: fleet reconcile --write-coverage`);
-			for (const a of advisories) console.error(`  (advisory, stale-but-self-healing) ${a}`);
-			if (JSON_OUT) emitter.emit({ ok: false, structuralDrift: structuralLines, advisories });
-			process.exit(1);
-		}
-		for (const a of advisories) {
-			log(`fleet-runner-coverage.json: stale-but-self-healing (advisory): ${a}`);
-		}
-		log(
-			`fleet-runner-coverage.json is current (${coverage.repos.length} repos, ` +
-				`${Object.keys(withoutReserves(coverage.facets)).length} with content facets` +
-				(advisories.length
-					? `, ${advisories.length} measured advisory(ies) — ${RESERVE_DRIFT_PCT}% band)`
-					: `, jobP95Mb within ${RESERVE_DRIFT_PCT}% for all ${Object.keys(reservesOf(coverage.facets)).length})`)
-		);
-		if (JSON_OUT) emitter.emit({ ok: true, structuralDrift: [], advisories });
-		process.exit(0);
+		// `--json`'s emit-and-exit stays here, literally, so
+		// `scripts/lib/json-contract.mjs` keeps scanning real code in this file
+		// rather than in `lib/reconcile-coverage.mjs` — see that module's header.
+		const verdict = checkCoverageVerdict({ onDiskCoverage, coverage, log });
+		if (JSON_OUT) emitter.emit(verdict.jsonBody);
+		process.exit(verdict.ok ? 0 : 1);
 	}
 	if (WRITE_COVERAGE) {
-		// THE SHRINK FLOOR (#84 part 3). Computed and checked BEFORE the write,
-		// same discipline as the unreadable-node and no-data refusals above —
-		// "wrote a degraded file, then failed" must stay unreachable here too.
-		const shrink = shrinkRefusal(committedRoster.length, coverage.repos.length, {
-			allowShrink: ALLOW_SHRINK,
-		});
-		if (shrink) failEarly(`fleet-runner-coverage.json: ${shrink}`);
-		// Two spaces, not a tab: .prettierrc overrides *.json to `useTabs: false`,
-		// so tab-indented output is valid but non-conforming — auto-format.yml
-		// rewrites it on main as hadoku-format-bot, and every regeneration then
-		// shows up as a whole-file diff. Matching prettier here keeps the only
-		// real diff the one that matters: which repos are covered.
-		writeFileSync(COVERAGE, `${JSON.stringify(coverage, null, 2)}\n`);
-		log(`wrote ${COVERAGE} (${coverage.repos.length} repos)`);
+		writeCoverageOrRefuse({ committedRoster, coverage, ALLOW_SHRINK, fail: failEarly, log });
 	}
 
 	const repos = [...desired.keys()].filter((r) => !ONLY_REPO || r === ONLY_REPO);
@@ -951,6 +627,18 @@ async function main() {
 		}
 	}
 
+	// EXPECTED-DOWN NOTES, one per claw with a deferred offline row. Computed
+	// here, with a literal `deferralNote(` call, rather than inside
+	// `lib/reconcile-report.mjs`: `expected-down-guard.test.mjs` pins this CLI
+	// file as one of #71/#74's seven gates that must call `deferralFor`,
+	// `deferralNote` AND `readDrains` itself, not merely through a lib.
+	const expectedDownNotes = new Map();
+	for (const o of offline) {
+		if (o.expectedDown && !expectedDownNotes.has(o.claw)) {
+			expectedDownNotes.set(o.claw, deferralNote(o.claw, deferralFor(o.claw, drains)));
+		}
+	}
+
 	// ---- report ----------------------------------------------------------
 	// --- capacity gate -----------------------------------------------------
 	// A node's limit is enforced here rather than trusted to prose. Until
@@ -995,356 +683,50 @@ async function main() {
 	};
 
 	if (!JSON_OUT) {
-		log(`Desired: ${summary.desiredRepos} repos × claws = ${summary.desiredPairs} pairs`);
-		log(
-			`Capacity: ${Object.entries(summary.capacity)
-				.map(([m, c]) => `${m} ${c.used}/${c.max}`)
-				.join('  ')}\n`
-		);
-
-		if (overCapacity.length) {
-			log(`OVER CAPACITY (${overCapacity.length}) — refusing to plan:`);
-			for (const o of overCapacity) {
-				log(
-					`  ${o.machine}: ${o.want} placements against maxRegistrations ${o.cap} (${o.cores} cores)`
-				);
-			}
-			log("  Raise the node's maxRegistrations, or add an excludeRepos entry, in the manifest.\n");
-		}
-
-		if (capDrift.length) {
-			const byCap = new Map();
-			for (const c of capDrift) {
-				const k = `${c.claw}: +${c.add.join(',')}`;
-				byCap.set(k, (byCap.get(k) ?? 0) + 1);
-			}
-			log(`CAPABILITY DRIFT (${capDrift.length} runner(s)):`);
-			for (const [k, n] of byCap) log(`  ${k}  on ${n} runner(s)`);
-			log(CONFIRM ? '' : '  (--confirm applies these)\n');
-		}
-
-		if (missing.length) {
-			log(`MISSING COVERAGE (${missing.length}):`);
-			const byRepo = new Map();
-			for (const m of missing) byRepo.set(m.repo, [...(byRepo.get(m.repo) ?? []), m.claw]);
-			for (const [repo, claws] of byRepo) log(`  ${repo}  →  ${claws.join(', ')}`);
-			log('');
-		} else {
-			log('MISSING COVERAGE: none — every desired pair has a registered runner.\n');
-		}
-
-		if (offline.length) {
-			const clawsOffline = offline.filter((o) => !o.expectedDown);
-			const expectedDownOffline = offline.filter((o) => o.expectedDown);
-			if (clawsOffline.length) {
-				log(
-					`OFFLINE (${clawsOffline.length}) — reported, never auto-reinstalled; this is an incident:`
-				);
-				for (const o of clawsOffline) log(`  ${o.repo}  ${o.runner}`);
-				log('');
-			}
-			if (expectedDownOffline.length) {
-				// A node a human powered off is EXPECTED down. Its registrations are
-				// still REPORTED — deferral removes the page, not the evidence — and
-				// never count toward the exit code below. See lib/expected-down.mjs.
-				const byClaw = new Map();
-				for (const o of expectedDownOffline) byClaw.set(o.claw, true);
-				log(`OFFLINE, EXPECTED DOWN (${expectedDownOffline.length}):`);
-				for (const [claw] of byClaw) log(`  · ${deferralNote(claw, deferralFor(claw, drains))}`);
-				for (const o of expectedDownOffline) log(`  ${o.repo}  ${o.runner}  (${o.claw})`);
-				log('');
-			}
-		}
-		if (orphans.length) {
-			log(`ORPHANS (${orphans.length}) — retired repos still holding runners:`);
-			for (const o of orphans) log(`  ${o.repo}  ${o.runner}  (${o.why})`);
-			log(REMOVE_ORPHANS ? '' : '  (pass --remove-orphans to tear these down)\n');
-		}
-		if (excluded.length) {
-			log(
-				`EXCLUDED (${excluded.length}) — the manifest no longer wants this pair, ` +
-					`but the runner is still registered and still taking jobs:`
-			);
-			for (const e of excluded) log(`  ${e.repo}  ${e.runner}  (${e.claw}, ${e.status})`);
-			log(REMOVE_EXCLUDED ? '' : '  (pass --remove-excluded to deregister these)\n');
-		}
-		if (unmanaged.length) {
-			log(`UNMANAGED (${unmanaged.length}) — not on a managed claw, left untouched:`);
-			for (const u of unmanaged) log(`  ${u.repo}  ${u.runner}  ${u.status}`);
-			log('');
-		}
-		if (unreadable.length) {
-			log(`UNREADABLE (${unreadable.length}) — could not list runners:`);
-			for (const u of unreadable) log(`  ${u.repo}  ${u.error}`);
-			log('');
-		}
-		if (departed.length) {
-			// Loud, and phrased as a question the operator has to answer. A
-			// departure is not drift to be applied — `--confirm` cannot fix it,
-			// because there is nothing to register. It is the roster deciding on
-			// its own that something is no longer the fleet's problem.
-			log(
-				`LEFT THE ROSTER (${departed.length}) — in fleet-runner-coverage.json, no longer eligible:`
-			);
-			for (const d of departed) log(`  ${d.repo}  ${d.why}`);
-			log('');
-			log('  A repo does not stop needing CI by aging out of a heuristic. Decide, do not');
-			log('  regenerate on reflex — `--write-coverage` makes this disappear WITHOUT');
-			log('  closing it, which is how a missing-coverage page self-resolves overnight.');
-			log('    keep it   -> add an entry under `repos` in fleet-runner-manifest.json');
-			log('    drop it   -> `skip: true` (should have no runners) or `ignore: true`');
-			log('                 (has runners nobody intends to remove), with a $why');
-			log('    then      -> fleet reconcile --write-coverage');
-			log('');
-		}
-		// One line, not a section: an ignored repo is a decision already made, so
-		// it should be visible without ever reading as something to act on.
-		if (ignored.length) {
-			log(`Ignored by manifest: ${ignored.map((i) => i.repo).join(', ')}\n`);
-		}
+		printReport({
+			summary,
+			overCapacity,
+			capDrift,
+			missing,
+			offline,
+			orphans,
+			excluded,
+			unmanaged,
+			unreadable,
+			departed,
+			ignored,
+			expectedDownNotes,
+			CONFIRM,
+			REMOVE_ORPHANS,
+			REMOVE_EXCLUDED,
+			log,
+		});
 	}
 
 	// ---- apply -----------------------------------------------------------
 	const results = { registered: [], removed: [], failed: [], advisories: [] };
+	await applyRegistrations({
+		CONFIRM,
+		overCapacity,
+		missing,
+		capDrift,
+		manifest,
+		log,
+		ssh,
+		results,
+	});
 
-	// A capacity breach REFUSES the apply, it does not merely colour the report.
-	// A gate that reports and then proceeds anyway is the "dead guard" shape:
-	// it reads as protection while protecting nothing.
-	if (CONFIRM && overCapacity.length) {
-		log("REFUSING to apply: the plan exceeds a node's maxRegistrations (see above).");
-		log('Nothing was registered. Resolve the capacity breach in the manifest first.\n');
-	}
-
-	if (CONFIRM && !overCapacity.length && missing.length) {
-		const version = currentRunnerVersion();
-		log(`Registering ${missing.length} runner(s) at release v${version}...\n`);
-
-		// Serialize per claw — config.sh and the shared tarball cache race on
-		// one host — and run the claws concurrently, which is the real win.
-		const byClaw = new Map();
-		for (const m of missing) byClaw.set(m.claw, [...(byClaw.get(m.claw) ?? []), m]);
-
-		await Promise.all(
-			[...byClaw.entries()].map(async ([claw, pairs]) => {
-				const unstarted = [];
-				for (const { repo } of pairs) {
-					const token = mintToken(repo, 'register');
-					// A runner's labels are the NODE's declared capabilities, projected
-					// onto it. Until now `machines[].labels` was read in exactly one
-					// place — the `needs` matcher, which decides PLACEMENT — and never
-					// applied to anything. So the manifest could say hokon has
-					// `pm2-host` while no hokon runner carried it, and the capability
-					// half of the model was only ever half wired.
-					//
-					// DERIVED from the capability registry rather than assembled here,
-					// and NEVER eligible: the fast loop grants `hadoku-builder` once the
-					// node is judged safe. See `registrationLabels`.
-					const labels = offeredLabels(manifest, claw);
-					// config.sh needs a non-empty --labels; `self-hosted` is implicit
-					// anyway, so it is the harmless identity value.
-					const labelArg = labels.length ? labels.join(',') : 'self-hosted';
-					const res = await ssh(
-						claw,
-						registerScript({ repo, claw, version, token, labels: labelArg })
-					);
-					// A claw's script ends in exactly one of two ways when it exits 0:
-					// UNIT-WRITTEN (enabled, waiting to be provisioned) or SKIP (a
-					// system unit already supervises this directory). Anything else is
-					// a script that succeeded without saying what it did.
-					const wrote = /^UNIT-WRITTEN /m.test(res.stdout);
-					const skipped = /^SKIP: /m.test(res.stderr);
-					if (res.ok && wrote) {
-						unstarted.push(repo);
-					} else if (res.ok && skipped) {
-						results.registered.push({ repo, claw });
-						log(`  ✓ ${claw}  ${repo}`);
-					} else if (res.ok) {
-						const error = 'registration exited 0 but wrote no unit and gave no SKIP reason';
-						results.failed.push({ repo, claw, error });
-						log(`  ✗ ${claw}  ${repo}\n      ${error}`);
-					} else {
-						results.failed.push({ repo, claw, error: res.stderr.trim().slice(0, 400) });
-						log(
-							`  ✗ ${claw}  ${repo}\n      ${res.stderr.trim().split('\n').slice(-3).join('\n      ')}`
-						);
-					}
-				}
-				if (!unstarted.length) return;
-
-				// BORN PROVISIONED (#1). Each unit is registered and enabled but has
-				// never run; its slice drop-in and throttle env go on disk now, so its
-				// first start is in the slice with the hook loaded and nothing ever
-				// needs `--restart`. A unit whose provisioning failed is NOT started:
-				// an offline runner fails the next reconcile loudly, an unthrottled
-				// one outside the slice ran unnoticed for two nights.
-				const prov = await provisionBeforeStart(claw);
-				for (const repo of unstarted) {
-					const unit = `actions-runner-${repoSuffix(repo)}.service`;
-					if (!prov.ok) {
-						results.failed.push({ repo, claw, error: `registered, NOT started: ${prov.why}` });
-						log(
-							`  ✗ ${claw}  ${repo} — registered and enabled, NOT started: ${prov.why}\n` +
-								`      fix: fleet slice --machine ${claw} --confirm && ` +
-								`fleet throttle --machine ${claw} --confirm --no-restart, ` +
-								`then: ssh ${claw} systemctl --user start ${unit}`
-						);
-						continue;
-					}
-					const started = await ssh(claw, startScript({ repo, sliceName: prov.sliceName }));
-					if (started.ok) {
-						results.registered.push({ repo, claw });
-						log(`  ✓ ${claw}  ${repo}  (started in ${prov.sliceName}, throttle env loaded)`);
-					} else {
-						results.failed.push({ repo, claw, error: started.stderr.trim().slice(0, 400) });
-						log(
-							`  ✗ ${claw}  ${repo} — provisioned, but its first start failed:\n      ` +
-								started.stderr.trim().split('\n').slice(-2).join('\n      ')
-						);
-					}
-				}
-			})
-		);
-		log('');
-	}
-
-	// Applied even when nothing needs registering: a capability the manifest
-	// declares is not optional just because coverage happens to be complete.
-	if (CONFIRM && capDrift.length) {
-		log(`Applying ${capDrift.length} capability label(s)...\n`);
-		for (const c of capDrift) {
-			const res = ghWrite('POST', `/repos/${c.repo}/actions/runners/${c.id}/labels`, {
-				labels: c.add,
-			});
-			if (res.ok) {
-				results.labelled = (results.labelled ?? 0) + 1;
-			} else {
-				results.failed.push({ repo: c.repo, claw: c.claw, error: `label: ${res.error}` });
-				log(`  ✗ ${c.claw}  ${c.repo}  +${c.add.join(',')}  ${res.error}`);
-			}
-		}
-		log(`  ✓ ${results.labelled ?? 0} runner(s) relabelled\n`);
-	}
-
-	/**
-	 * Remove one (repo, node) registration and report how it went. One function
-	 * for the orphan and excluded paths, which carried two copies of this.
-	 *
-	 * The BY-ID FALLBACK (#123): when config.sh remove fails on an install that
-	 * WAS found, the controller deletes the registration through the REST API by
-	 * its id and then has the node remove the install with deregistration
-	 * skipped. A renamed repo is the case: the install's .runner names the old
-	 * URL, the runner API does not follow the rename, and config.sh remove 404s
-	 * (hadoku-printTool -> hadoku-craft, hokon, 2026-10-19), while
-	 * DELETE repos/<current>/actions/runners/<id> works. The install is still
-	 * removed only after the registration is gone — the ordering removeScript's
-	 * header exists for.
-	 */
-	const removeRegistration = async ({ repo, claw, id }) => {
-		const runnerId = Number.isInteger(id) ? id : null;
-		const token = mintToken(repo, 'remove');
-		// No sudo on the backstop: a SYSTEM install there stops at NEEDS_ROOT
-		// without trying, and is the operator's (lib/operator-sudo.mjs).
-		const sudo = maySudo(manifest.machines?.[claw]);
-		let res = await ssh(claw, removeScript({ repo, token, sudo, runnerId }));
-		let byId = false;
-		if (!res.ok && /DEREGISTER_FAILED/.test(res.stderr) && runnerId !== null) {
-			const del = ghWrite('DELETE', `/repos/${repo}/actions/runners/${runnerId}`, {});
-			if (del.ok) {
-				byId = true;
-				res = await ssh(claw, removeScript({ repo, token, sudo, runnerId, deregistered: true }));
-			} else {
-				log(`  ! ${claw}  ${repo} — config.sh remove failed and so did DELETE by id: ${del.error}`);
-			}
-		}
-		const dir =
-			/DIR=(\S+?)\)/.exec(res.stderr)?.[1] ?? `~/runners/actions-runner-${repoSuffix(repo)}`;
-		if (res.ok) {
-			results.removed.push({ repo, claw });
-			log(
-				`  ✓ ${claw}  ${repo}` +
-					(byId
-						? ` (deregistered by id ${runnerId}: config.sh remove refused — a renamed repo?)`
-						: '')
-			);
-		} else if (/NOT_OURS/.test(res.stderr)) {
-			// No install of this registration on the node, looked for under the
-			// current name AND by agentId. Never a root command: there is no
-			// directory to run svc.sh in, which is what this hint used to send
-			// the operator after.
-			log(
-				`  ! ${claw}  ${repo} — no install of this registration on ${claw}. NOTHING was changed.\n` +
-					(runnerId !== null
-						? `      If no other user on ${claw} runs it, the registration is stale:\n` +
-							`      gh api -X DELETE repos/${repo}/actions/runners/${runnerId}`
-						: `      (no runner id was known, so only the current name was searched)`)
-			);
-			results.failed.push({ repo, claw, error: 'no install found for this registration' });
-		} else if (/NEEDS_ROOT/.test(res.stderr) && !sudo) {
-			const a = rootAdvisory(
-				claw,
-				`removing the system-service runner for ${repo}`,
-				`fleet reconcile --confirm --remove-orphans`
-			);
-			results.advisories.push(a);
-			log(`  ! ${claw}  ${repo} — ${a.message}. NOTHING was changed:\n      ${a.fix}`);
-		} else if (/NEEDS_ROOT/.test(res.stderr)) {
-			// The runner is a SYSTEM install and this node would not give it up
-			// unattended. Nothing was changed — say so, because the whole reason
-			// this branch exists is that a silent failure here used to end with a
-			// deleted directory.
-			log(
-				`  ! ${claw}  ${repo} — system service, root required. NOTHING was changed:\n` +
-					`      ssh ${claw} 'cd ${dir} && sudo ./svc.sh stop && sudo ./svc.sh uninstall'`
-			);
-			results.failed.push({ repo, claw, error: 'system service; root required' });
-		} else if (/DEREGISTER_FAILED/.test(res.stderr)) {
-			// Distinct from every other failure because the remedy is distinct: the
-			// directory was deliberately LEFT, so re-running is the fix. It used to
-			// be deleted here, which is what made claw-1's 21 failures on
-			// 2026-09-01 unrecoverable without the REST API.
-			log(
-				`  ! ${claw}  ${repo} — still registered; the local install was left intact. Re-run to retry.`
-			);
-			results.failed.push({ repo, claw, error: 'deregister failed; install left intact' });
-		} else {
-			results.failed.push({ repo, claw, error: res.stderr.trim().slice(0, 400) });
-			// The reason, not just the mark. A bare ✗ is how 21 identical failures
-			// on claw-1 read as 21 unrelated ones.
-			log(
-				`  ✗ ${claw}  ${repo}\n      ${res.stderr.trim().split('\n').slice(-2).join('\n      ')}`
-			);
-		}
-	};
-
-	if (CONFIRM && REMOVE_ORPHANS && orphans.length) {
-		log(`Removing ${orphans.length} orphaned runner(s)...\n`);
-		const byClaw = new Map();
-		for (const o of orphans) byClaw.set(o.claw, [...(byClaw.get(o.claw) ?? []), o]);
-
-		await Promise.all(
-			[...byClaw.entries()].map(async ([claw, items]) => {
-				for (const { repo, id } of items) await removeRegistration({ repo, claw, id });
-			})
-		);
-		log('');
-	}
-
-	// Excluded pairs are removed one (repo, node) at a time, and NEVER while
-	// the runner is busy. An orphan belongs to a repo that has retired, so losing
-	// its in-flight job costs nothing; an excluded pair belongs to a repo that is
-	// very much alive and simply should not run HERE, so tearing down mid-job
-	// would fail a real build to save an idle listener. The API's `busy` flag
-	// lags reality, which is why this only ever SKIPS on it — a stale `false`
-	// still leaves removeScript's own checks in front of the uninstall, while a
-	// stale `true` costs one deferred removal.
-	if (CONFIRM && REMOVE_EXCLUDED && excluded.length) {
-		const removable = excluded.filter((e) => !e.busy);
-		const busyCount = excluded.length - removable.length;
-		log(`Deregistering ${removable.length} excluded pair(s)...\n`);
-		if (busyCount) log(`  (${busyCount} busy, deferred to the next run)`);
-		for (const { repo, claw, id } of removable) await removeRegistration({ repo, claw, id });
-		log('');
-	}
+	await applyRemovals({
+		CONFIRM,
+		REMOVE_ORPHANS,
+		REMOVE_EXCLUDED,
+		orphans,
+		excluded,
+		manifest,
+		log,
+		ssh,
+		results,
+	});
 
 	if (JSON_OUT) {
 		emitter.emit({ ...summary, applied: CONFIRM ? results : null });

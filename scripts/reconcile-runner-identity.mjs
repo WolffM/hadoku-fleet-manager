@@ -122,10 +122,22 @@ import { manifest as manifestFile } from './lib/paths.mjs';
 // The queue-health precedent, imported rather than re-derived. READ_ATTEMPTS is
 // a measured property of `gh api` from this box (0.13% transient, 2026-09-07),
 // not a fact about queues, and a second copy of it is a second thing to tune.
-import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
+// Still needed here directly for `probeNode`'s own retry loop below —
+// `lib/runner-identity-reads.mjs` and `lib/runner-identity-report.mjs` each import their own
+// copy for the reads/report they carry.
+import { READ_ATTEMPTS } from './lib/queue-health.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
 import { warmOrphanUnreadable } from './lib/warm-orphan-doc.mjs';
+import {
+	sleep,
+	RETRY_DELAY_MS,
+	mintAgeMs,
+	readRunners,
+	canonical,
+	activeWarmUnits,
+} from './lib/runner-identity-reads.mjs';
+import { printIdentityReport } from './lib/runner-identity-report.mjs';
 // The dispatcher's own reap sweep — its grace and its cadence — so an orphan it
 // has not REACHED yet is told apart from one it has FAILED to clear by the
 // numbers that sweep actually runs on, never by a copy of them.
@@ -197,124 +209,7 @@ const GRACE_MS = 120_000;
  */
 const UNREAPED_AFTER_MS = JIT_REAP_GRACE_MS + 2 * REAP_INTERVAL_MS;
 
-/**
- * REQUIRED NAMING CONTRACT for anything the dispatcher mints:
- *
- *     jit-<node>-<repo-slug>-<epochSeconds>
- *
- * The trailing epoch is load-bearing, not decoration — it is the only mint-time
- * fact the GitHub API will give back to us. A JIT runner named without it is
- * treated as ageless and therefore immediately reapable.
- */
-function mintAgeMs(name, now) {
-	const m = /-(\d{10,})$/.exec(name);
-	if (!m) return Infinity;
-	return now - Number(m[1]) * 1000;
-}
-
 const log = emitter.log;
-
-/**
- * A read that never finishes is a read that never reports. 20s matches
- * `check-queue-health`, and it is what makes `describeReadFailure`'s timeout
- * branch reachable rather than decorative.
- */
-const READ_TIMEOUT_MS = 20_000;
-/** Long enough for a blip to pass, short enough to be invisible at a 0.13% rate. */
-const RETRY_DELAY_MS = 1_000;
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * One `gh api` call, as `{ok, data}` or `{ok: false, reason}`.
- *
- * This was `catch { res(null) }` — the shape CLAUDE.md names explicitly, where
- * the reason is discarded and the finding becomes unactionable. `describeReadFailure`
- * is written against `execFileSync`'s error shape, which spells the exit code
- * `status`; async `execFile` spells it `code`. Translated here rather than
- * re-implemented, because the interesting part — timeout vs exit vs stderr — is
- * the same question in both.
- */
-function ghOnce(path) {
-	return new Promise((res) => {
-		execFile(
-			'gh',
-			['api', path],
-			{ maxBuffer: 8 << 20, timeout: READ_TIMEOUT_MS },
-			(err, stdout, stderr) => {
-				if (err)
-					return res({
-						ok: false,
-						reason: describeReadFailure(
-							{
-								killed: err.killed,
-								signal: err.signal,
-								status: err.code,
-								stderr: stderr ?? '',
-								message: err.message,
-							},
-							READ_TIMEOUT_MS
-						),
-					});
-				try {
-					res({ ok: true, data: JSON.parse(stdout) });
-				} catch (e) {
-					res({ ok: false, reason: `gh returned unparseable JSON: ${String(e.message)}` });
-				}
-			}
-		);
-	});
-}
-
-/** Data or null, for callers that treat a failed read as "no answer". */
-async function gh(path) {
-	const r = await ghOnce(path);
-	return r.ok ? r.data : null;
-}
-
-/**
- * The runner listing for one repo, retried once, with the reason on failure.
- *
- * `{ok: false}` is COULD NOT LOOK and is never a pass — a repo whose listing
- * cannot be read is indistinguishable from a repo with no registrations, and
- * this whole file is about telling those apart.
- */
-async function readRunners(repo) {
-	let reason = 'no attempt was made';
-	for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
-		const r = await ghOnce(`repos/${repo}/actions/runners`);
-		if (r.ok && Array.isArray(r.data?.runners)) return { ok: true, runners: r.data.runners };
-		// The LAST reason wins: it is the one that stood after the blip had a
-		// moment to pass, which is the more informative of the two.
-		reason = `${r.ok ? 'gh answered with no `runners` array — not a runner listing' : r.reason} (attempt ${attempt}/${READ_ATTEMPTS})`;
-		if (attempt < READ_ATTEMPTS) await sleep(RETRY_DELAY_MS);
-	}
-	return { ok: false, reason };
-}
-
-/**
- * Resolve a repo slug to its CANONICAL full_name, following renames.
- *
- * A runner's .runner file records the URL it was configured with and is never
- * rewritten when the repo is renamed, so the fleet is full of stale names:
- * `WolffM/tenhands` is now `WolffM/hadoku-tenhands`, `WolffM/OSS-Issue-Aggregator`
- * is now `WolffM/hadoku-aggregator`. Comparing a coverage roster (canonical)
- * against .runner (historical) without this reports every renamed repo on every
- * node as an identity mismatch — the first run of this tool produced ten such
- * findings and zero real ones.
- *
- * GitHub redirects the API for a renamed repo, so one call per DISTINCT stale
- * name resolves it. Cached, because the same stale name appears on every node.
- */
-const canonCache = new Map();
-async function canonical(slug) {
-	if (!slug || slug === '?') return slug;
-	if (canonCache.has(slug)) return canonCache.get(slug);
-	const data = await gh(`repos/${slug}`);
-	const full = data?.full_name ?? slug;
-	canonCache.set(slug, full);
-	return full;
-}
 
 /**
  * The drain record, and the reason if it could not be read.
@@ -414,16 +309,6 @@ const clobbered = [];
  * where there is not — `r.out.trim()` alone rendered a failed spawn as an empty
  * string, which is a `catch {}` wearing a different hat.
  */
-/** The warm units a probe saw ACTIVE. A loaded-but-dead unit backs nothing. */
-function activeWarmUnits(out) {
-	const live = new Set();
-	for (const line of out.split('\n')) {
-		const p = line.trim().split(/\s+/);
-		if (p[0] === 'WARMUNIT' && p[2] === 'active') live.add(p[1]);
-	}
-	return live;
-}
-
 async function probeNode(machine) {
 	let error = 'no attempt was made';
 	for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
@@ -756,149 +641,29 @@ const FAILS = Boolean(
 );
 
 if (!JSON_OUT) {
-	if (ghosts.length) {
-		log(`BLACK HOLES (${ghosts.length}) — GitHub says online, NO listener anywhere:`);
-		for (const g of ghosts)
-			log(`  ${g.repo}  ${g.name}${g.busy ? '  BUSY — a job is stuck on it' : ''}`);
-		log('  These are never auto-deleted: a persistent registration is a node identity,');
-		log("  and GitHub's status field lags. Investigate before removing.\n");
-	}
-	if (jitOrphans.length) {
-		log(`JIT ORPHANS (${jitOrphans.length}) — ephemeral registration, no live unit:`);
-		for (const o of jitOrphans)
-			log(
-				`  ${o.repo}  ${o.name}  status=${o.status}  age=${o.ageMs === Infinity ? 'unknown (no epoch in name)' : Math.round(o.ageMs / 1000) + 's'}`
-			);
-		log(CONFIRM ? '' : '  (pass --confirm to reap these)\n');
-	}
-	if (unreaped.length) {
-		log(
-			`UNREAPED BLACK HOLES (${unreaped.length}) — ONLINE JIT orphans older than ` +
-				`${Math.round(UNREAPED_AFTER_MS / 60_000)}m, past the dispatcher's reap grace plus two sweeps:`
-		);
-		for (const u of unreaped)
-			log(
-				`  ${u.repo}  ${u.name}  age=${u.ageMs === Infinity ? 'unknown (no epoch in name)' : Math.round(u.ageMs / 1000) + 's'}`
-			);
-		log('  This FAILS. GitHub schedules onto an online registration and nothing answers;');
-		log("  the dispatcher's sweep should have deleted these and has not. Check that it is");
-		log('  running (mgmt-api up, token budget not spent) — --confirm reaps them here.\n');
-	}
-	if (young.length) {
-		// Named so a skipped reap is never silent — an orphan that is always
-		// "too young" is a dispatcher that is minting and failing to spawn.
-		log(`TOO YOUNG TO JUDGE (${young.length}) — inside the ${GRACE_MS / 1000}s mint grace:`);
-		for (const y of young) log(`  ${y.repo}  ${y.name}  age=${Math.round(y.ageMs / 1000)}s`);
-		log('');
-	}
-	if (warmOrphans.length) {
-		log(`WARM ORPHANS (${warmOrphans.length}) — warm registration, no live unit on its node:`);
-		for (const w of warmOrphans) log(`  ${w.repo}  ${w.name}  status=${w.status} — ${w.why}`);
-		log("  This FAILS. The warm reap only reaches a name its node's marker still holds, so");
-		log('  nothing is guaranteed to clear these (#61). Delete the registration by id.\n');
-	}
-	if (warmRechecked.length) {
-		log(`WARM, RESOLVED ON A SECOND LOOK (${warmRechecked.length}) — the cache rotated mid-sweep:`);
-		for (const w of warmRechecked) log(`  ${w.repo}  ${w.name} — ${w.outcome}`);
-		log('');
-	}
-	if (noInstall.length) {
-		log(`REGISTERED, NO INSTALL (${noInstall.length}) — no node is configured for this repo:`);
-		for (const d of noInstall)
-			log(
-				`  ${d.repo}  runner "${d.name}" status=${d.status}` +
-					(d.carriers.length ? `  (that name lives on: ${d.carriers.join(', ')})` : '')
-			);
-		log('');
-	}
-	if (expectedDown.length) {
-		// LISTED, never dropped. A deferral the report does not print is
-		// indistinguishable from a clean fleet, which is the failure this whole
-		// mechanism is one step away from.
-		const byNode = new Map();
-		for (const e of expectedDown) {
-			if (!byNode.has(e.node)) byNode.set(e.node, []);
-			byNode.get(e.node).push(e);
-		}
-		log(
-			`EXPECTED DOWN (${expectedDown.length}) — registered, no install, DEFERRED because the node is drained:`
-		);
-		for (const [node, rows] of byNode) {
-			log(`  ${rows[0].why}`);
-			log(`    ${rows.length} offline registration(s) still held by ${node}:`);
-			for (const r of rows) log(`      ${r.repo}`);
-		}
-		log('  Lift the drain, or let it expire, and every line above fails this gate again.\n');
-	}
-	if (drainUnreadable) {
-		log(`! DRAIN RECORD UNREADABLE — ${drainUnreadable}`);
-		log('  NOTHING was deferred on this run. A gate that cannot read the drain record');
-		log('  cannot tell a deliberate power-off from a dead node, so any registration');
-		log('  finding above may be either. Fix the file and re-run before acting on them.\n');
-	}
-	if (clobbered.length) {
-		log(`STOLEN IDENTITIES (${clobbered.length}) — a JIT probe overwrote a persistent install:`);
-		for (const c of clobbered) log(`  ${c.machine}  ${c.dir}  now claims "${c.name}" (${c.repo})`);
-		log('  Repair: ./config.sh remove --local, then re-register with --replace.\n');
-	}
-	if (unconfigured.length) {
-		log(`UNCONFIGURED LISTENERS (${unconfigured.length}) — running with no readable .runner:`);
-		for (const u of unconfigured) log(`  ${u.machine}  ${u.dir}`);
-		log('');
-	}
-	if (!FLEET_WIDE) {
-		log(
-			ONLY
-				? `Scoped to ${ONLY}: registration-side checks (black holes, registered-no-install) SKIPPED —\n  they need every node's installs to be meaningful.\n`
-				: `${unreachable.length} node(s) unreachable: registration-side checks SKIPPED —\n  a partial fleet view turns every unseen install into a false finding.\n`
-		);
-	}
-	if (unexpectedlyDark.length) {
-		log(
-			`COULD NOT LOOK — ${unexpectedlyDark.length} node(s) unreachable, after ${READ_ATTEMPTS} attempts:`
-		);
-		for (const u of unexpectedlyDark) log(`  ${u.machine}: ${u.error}  [${u.why}]`);
-		log("  This FAILS. A node that did not answer has installs nobody saw, and this gate's");
-		log('  registration half is skipped while one is dark — so a pass here would be a');
-		log("  statement about the boxes that answered, wearing the fleet's name.\n");
-	}
-	if (expectedDark.length) {
-		log(
-			`EXPECTED DOWN (${expectedDark.length}) — unreachable, DEFERRED because the node is drained:`
-		);
-		for (const u of expectedDark) log(`  ${u.why}\n    probe said: ${u.error}`);
-		log('  Lift the drain, or let it expire, and every line above fails this gate again.\n');
-	}
-	if (unreadableRepos.length) {
-		log(
-			`COULD NOT LOOK — ${unreadableRepos.length} repo(s) whose runner listing failed every one of ${READ_ATTEMPTS} attempts:`
-		);
-		for (const r of unreadableRepos) log(`  ${r.repo} — ${r.reason}`);
-		log('  This FAILS. An unread listing and a repo with no registrations are the same');
-		log('  bytes to everything downstream, and telling those apart is what this gate is.\n');
-	}
-	if (
-		!ghosts.length &&
-		!jitOrphans.length &&
-		!unreaped.length &&
-		!warmOrphans.length &&
-		!noInstall.length &&
-		!unconfigured.length &&
-		!clobbered.length &&
-		!drainUnreadable &&
-		!unreachable.length &&
-		!unreadableRepos.length
-	)
-		// THE ✓ IS A CLAIM ABOUT THE FLEET, so it may only be made when the fleet
-		// was seen. Under `--machine` the registration half never ran, and the old
-		// line said "every registration has a live listener" anyway — a sentence
-		// about 27 repos printed by a run that read none of them.
-		log(
-			(FLEET_WIDE
-				? '✓ every registration has a live listener, and every listener knows who it is.'
-				: `✓ nothing wrong with the listeners on ${ONLY} — but the registration half was SKIPPED, so this says nothing about the fleet.`) +
-				(expectedDown.length ? ` (${expectedDown.length} deferred — listed above)` : '')
-		);
+	printIdentityReport({
+		ghosts,
+		jitOrphans,
+		unreaped,
+		young,
+		warmOrphans,
+		warmRechecked,
+		noInstall,
+		expectedDown,
+		drainUnreadable,
+		clobbered,
+		unconfigured,
+		unreachable,
+		unreadableRepos,
+		unexpectedlyDark,
+		expectedDark,
+		FLEET_WIDE,
+		ONLY,
+		CONFIRM,
+		UNREAPED_AFTER_MS,
+		GRACE_MS,
+		log,
+	});
 }
 
 // ---- reap ----------------------------------------------------------------

@@ -33,7 +33,7 @@
     "scripts/node-status.mjs:prev#2",
     "scripts/node-users-cutover.mjs:rendered#1",
     "scripts/prove-job.mjs:outFile#1",
-    "scripts/reconcile-fleet-runners.mjs:shrink#1",
+    "scripts/lib/reconcile-coverage.mjs:shrink#1",
     "scripts/service-inventory.mjs:merged#1",
     "scripts/version-bump.mjs:patched#1",
     "src/lib/alert-ledger.ts:cutoff#1",

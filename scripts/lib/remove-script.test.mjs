@@ -26,14 +26,15 @@ import { fileURLToPath } from 'node:url';
 // removeScript's own definition moved to lib/reconcile-scripts.mjs (wave 5g
 // lane C, pure move); this test file is already in scripts/lib, so it is a
 // sibling now. Its CALL SITES and `removeRegistration` (the #123 by-id
-// fallback) stayed in the CLI, reconcile-fleet-runners.mjs, so CLI_SRC below
-// reads that file for the tests that check those.
+// fallback) moved again, wave 5q lane B (ctx restructure), into
+// lib/reconcile-exec.mjs — a sibling too, so CLI_SRC below (name kept for the
+// smallest diff) now reads that file for the tests that check those.
 const SRC = readFileSync(
 	join(dirname(fileURLToPath(import.meta.url)), 'reconcile-scripts.mjs'),
 	'utf8'
 );
 const CLI_SRC = readFileSync(
-	join(dirname(dirname(fileURLToPath(import.meta.url))), 'reconcile-fleet-runners.mjs'),
+	join(dirname(fileURLToPath(import.meta.url)), 'reconcile-exec.mjs'),
 	'utf8'
 );
 
@@ -244,7 +245,7 @@ test('#123: a config.sh remove that fails leaves the install; the by-id cleanup 
 });
 
 test('#123: the controller falls back to DELETE by id only after a FOUND install refused to deregister', () => {
-	const SRC_FALLBACK = CLI_SRC.slice(CLI_SRC.indexOf('const removeRegistration'));
+	const SRC_FALLBACK = CLI_SRC.slice(CLI_SRC.indexOf('async function removeRegistration'));
 	assert.match(
 		SRC_FALLBACK,
 		/DEREGISTER_FAILED[\s\S]{0,120}runnerId !== null[\s\S]{0,200}ghWrite\('DELETE', `\/repos\/\$\{repo\}\/actions\/runners\/\$\{runnerId\}`/

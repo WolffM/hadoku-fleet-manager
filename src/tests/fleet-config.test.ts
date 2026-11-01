@@ -266,15 +266,22 @@ test('site 2 — a target with no owner is watched under the CONFIGURED owner', 
 // ---- sites 3 and 4: reconcile-fleet-runners ------------------------------
 
 test('sites 3 and 4 — reconcile reads the resolver and spells no owner of its own', () => {
-	// Site 3 (`gh repo list`'s owner) is still in the CLI; site 4
+	// Site 3 (`gh repo list`'s owner) moved out of the CLI into
+	// `lib/reconcile-resolve.mjs` in wave 5q lane B's pure-move split; site 4
 	// (`loadMountedApps`'s `qualifyRepo`) moved to lib/reconcile-apply.mjs in
-	// wave 5g lane C's pure-move split, so both are read together.
+	// wave 5g lane C's. All three are read together.
 	const src =
 		readFileSync(join(ROOT, 'scripts', 'reconcile-fleet-runners.mjs'), 'utf8') +
+		readFileSync(join(ROOT, 'scripts', 'lib', 'reconcile-resolve.mjs'), 'utf8') +
 		readFileSync(join(ROOT, 'scripts', 'lib', 'reconcile-apply.mjs'), 'utf8');
 
-	assert.ok(
-		src.includes("from '../dist/lib/fleet-config.js'"),
+	assert.match(
+		src,
+		// Any depth of `../`: reconcile-fleet-runners.mjs sits in `scripts/` (one
+		// level from `dist/`) while reconcile-resolve.mjs and reconcile-apply.mjs
+		// sit in `scripts/lib/` (two) — the invariant is "imports the resolver",
+		// not which directory does the importing.
+		/from '(?:\.\.\/)+dist\/lib\/fleet-config\.js'/,
 		'reconcile must import the resolver rather than reimplement it'
 	);
 	// Site 3: the owner whose repos are the universe. The manifest's own
