@@ -26,15 +26,30 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { blankComments } from './blank-comments.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const CONTRACT = join(ROOT, 'src', 'fleet-report-types.ts');
+const SRC_DIR = join(ROOT, 'src');
 const REGISTRY = join(ROOT, 'src', 'telemetry-vocabulary.ts');
+
+/**
+ * The `GET /fleet` wire contract's full source text. Wave 5r lane A split
+ * the single `fleet-report-types.ts` barrel into `fleet-report-types-*.ts`
+ * section files it re-exports (machines, jobs, dispatch, capacity, budget,
+ * vocabulary, the job-registry report shapes) once it crossed the 800-line
+ * ceiling, so a source-text scan for a union or `FleetVocabulary` itself now
+ * has to read every section, not the one file that used to hold them all.
+ */
+function contractSource() {
+	const files = readdirSync(SRC_DIR).filter(
+		(f) => f === 'fleet-report-types.ts' || f.startsWith('fleet-report-types-')
+	);
+	return files.map((f) => readFileSync(join(SRC_DIR, f), 'utf8')).join('\n');
+}
 
 /**
  * Unions that legitimately carry no `TelemetryTerm` registry.
@@ -60,7 +75,7 @@ const EXEMPT = {
 		'rename it rather than leaving both true.',
 };
 
-const contract = blankComments(readFileSync(CONTRACT, 'utf8'));
+const contract = blankComments(contractSource());
 
 /** Every exported string-literal union in the contract. */
 function stringUnions(src) {

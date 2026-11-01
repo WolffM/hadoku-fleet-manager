@@ -121,6 +121,11 @@
     "layer": "surfaces"
   },
   {
+    "glob": "src/routes/fleet-*.ts",
+    "layer": "surfaces",
+    "why": "Wave 5r lane A split of routes/fleet.ts (plan: TypeScript long tail): the manifest read, admission math, vocabulary assembly, workload-gate proof reads and the buildFleetReport join itself, each its own module once routes/fleet.ts crossed the 800-line ceiling. Same layer as routes/fleet.ts, which keeps re-exporting buildFleetReport for every existing importer — this is one surfaces-layer file's internal split, not a new edge."
+  },
+  {
     "glob": "src/capacity-sample.ts",
     "layer": "surfaces",
     "why": "Wave 5n lane B (plan §7.3, T4): joins `buildFleetReport()` — the SAME cross-domain assembly GET /fleet reads — into a telemetry row; it is `surfaces`, not `domain`/`observation`, for the identical reason routes/fleet.ts itself is: nothing below surfaces may import a ci-scheduling-domain fact, and this file needs exactly the ones routes/fleet.ts already assembled rather than re-deriving them."
@@ -128,6 +133,11 @@
   {
     "glob": "src/fleet-report-types.ts",
     "layer": "surfaces"
+  },
+  {
+    "glob": "src/fleet-report-types-*.ts",
+    "layer": "surfaces",
+    "why": "Wave 5r lane A split of fleet-report-types.ts (plan: TypeScript long tail): the `GET /fleet` wire contract's TYPES, by section (machines, jobs, dispatch, capacity, budget, vocabulary, the job-registry report shapes), once the barrel crossed the 800-line ceiling. Same layer as fleet-report-types.ts, which keeps re-exporting every name for every existing importer — this is one surfaces-layer type-only barrel's internal split, not a new edge."
   },
   {
     "glob": "src/telemetry-vocabulary.ts",

@@ -1,7 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { execFileSync, spawn } from 'node:child_process';
-import { chmodSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { decideCiAlert, STALE_STATE_MS } from '../../dist/ci-alerts.js';
 import { tempDir } from './test-tmpdir.mjs';
@@ -23,6 +24,21 @@ import {
 	snapshotVerdict,
 	STATES,
 } from './herdr-fleet.mjs';
+
+const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
+
+/**
+ * The `GET /fleet` wire contract's full source text, as `fleet-report-types.ts`
+ * reads it — wave 5r lane A split that barrel into `fleet-report-types-*.ts`
+ * section files it re-exports, so a source-text scan for a union or a field
+ * now has to read every section, not the one file that used to hold them all.
+ */
+function fleetReportTypesSource() {
+	const files = readdirSync(SRC_DIR).filter(
+		(f) => f === 'fleet-report-types.ts' || f.startsWith('fleet-report-types-')
+	);
+	return files.map((f) => readFileSync(join(SRC_DIR, f), 'utf8')).join('\n');
+}
 
 // The real clock, not a pinned date: every fixture below is relative to NOW and
 // every classifier takes it as a parameter (fixture-clock-guard).
@@ -91,7 +107,7 @@ test('herdr-fleet: the TelemetryKind union is the five kinds this file decides o
 	// A sixth kind is a decision — page or not — and must not arrive silently.
 	// It would read blocked (anything not ok/reserve pages), but whoever adds
 	// it should say which it is.
-	const src = readFileSync(new URL('../../src/fleet-report-types.ts', import.meta.url), 'utf8');
+	const src = fleetReportTypesSource();
 	const union = src.match(/export type TelemetryKind = ([^;]+);/)[1];
 	const kinds = [...union.matchAll(/'([a-z]+)'/g)].map((m) => m[1]).sort();
 	assert.deepEqual(kinds, ['degraded', 'fault', 'ok', 'reserve', 'unknown']);
@@ -356,7 +372,7 @@ test('herdr-fleet: every GET /fleet field the plugin reads is still in the decla
 	// The fixtures above are hand-built, so a rename in fleet-report-types.ts
 	// would leave them green while the live pane read `undefined` — a
 	// `starved` renamed away would never page again. This reads the contract.
-	const src = readFileSync(new URL('../../src/fleet-report-types.ts', import.meta.url), 'utf8');
+	const src = fleetReportTypesSource();
 	const fields = [
 		'probedAt',
 		'healthAt',
