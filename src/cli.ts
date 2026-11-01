@@ -298,6 +298,13 @@ const COMMANDS: Record<string, Command> = {
 		summary:
 			"where the fleet placed an app: { state, epoch, nodes, target } and each slice's state, for its deploy to follow",
 	},
+	'hosting-eligibility': {
+		script: 'hosting-eligibility.mjs',
+		kind: 'operator',
+		flags: ['--json'],
+		summary:
+			'per node, the repos it holds a slice of (placed) and may be given one of (eligible), for service grants',
+	},
 	'hosting-demand': {
 		script: 'hosting-demand.mjs',
 		kind: 'recorder',

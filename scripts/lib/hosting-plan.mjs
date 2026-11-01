@@ -44,6 +44,35 @@ import { ruleHolds } from './hosting-placement.mjs';
 import { ADVISORY_UNTIL_DEFAULT } from './hosting-request.mjs';
 import { satisfies } from './tool-release.mjs';
 
+/**
+ * Does the node run what `request.runtime` names? `{ fails, cannot, all }`:
+ * what it does not run, what could not be told, and both in the order checked.
+ * The plan refuses on `all`; the eligibility reader
+ * (lib/hosting-eligibility.mjs) tells the two apart.
+ */
+export function runtimeReasons(request, o) {
+	const fails = [];
+	const cannot = [];
+	const all = [];
+	const say = (list, why) => {
+		list.push(why);
+		all.push(why);
+	};
+	const want = request.runtime ?? {};
+	if (want.node) {
+		const v = o.runtime?.node;
+		if (v === undefined) say(cannot, 'node version unknown');
+		else if (v === null) say(fails, 'no node on the service PATH');
+		else if (!satisfies(v, want.node)) say(fails, `node ${v} does not satisfy ${want.node}`);
+	}
+	for (const t of want.tools ?? []) {
+		const ran = o.runtime?.tools?.[t];
+		if (ran === undefined) say(cannot, `whether ${t} runs is unknown`);
+		else if (!ran) say(fails, `${t} does not run on the service PATH`);
+	}
+	return { fails, cannot, all };
+}
+
 /** Plan `request` (a NORMALIZED hosting request) against `offers` (from collectOffers). */
 export function planFor(request, offers) {
 	const { app, slices, disk, placement, isolation } = request;
@@ -71,18 +100,7 @@ export function planFor(request, offers) {
 		if (h.diskFreeGb === null) no.push('free disk unknown');
 		else if (h.diskFreeGb < disk.stateGb)
 			no.push(`${h.diskFreeGb} GB free, state needs ${disk.stateGb}`);
-		const want = request.runtime ?? {};
-		if (want.node) {
-			const v = o.runtime?.node;
-			if (v === undefined) no.push('node version unknown');
-			else if (v === null) no.push('no node on the service PATH');
-			else if (!satisfies(v, want.node)) no.push(`node ${v} does not satisfy ${want.node}`);
-		}
-		for (const t of want.tools ?? []) {
-			const ran = o.runtime?.tools?.[t];
-			if (ran === undefined) no.push(`whether ${t} runs is unknown`);
-			else if (!ran) no.push(`${t} does not run on the service PATH`);
-		}
+		no.push(...runtimeReasons(request, o).all);
 		for (const rule of placement.require) {
 			const holds = ruleHolds(rule, o);
 			if (holds === false) no.push(`fails "${rule}"`);

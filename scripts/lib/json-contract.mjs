@@ -356,6 +356,8 @@ export const PROSE_CONTRACT = deriveProseContract(JOB_REGISTRY);
  * from `notices`, and places by `ok`, `hosting.state` and `ciUser.state`.
  * `hosting-placement` is the one entry whose first reader is the app layer's
  * deploy, not cardtable (fleet-manager#16), and that reader is not written yet.
+ * `hosting-eligibility` is the app layer's too, for its machine service grants
+ * (fleet-manager#42), and its reader is not written yet either.
  *
  * Each `fields` entry is a dotted path into the document, `[]` marking an
  * array. Renaming or dropping one breaks a live game's failover, so the
@@ -455,6 +457,35 @@ export const TENANT_CONTRACT = [
 			'slices[].ci.heavyJobs',
 			'slices[].ci.at',
 			'offers.ranked[].ci',
+		],
+	},
+	{
+		// SERVICE ELIGIBILITY (fleet-manager#42): per node, the repos it holds a
+		// slice of and may be given one of, for hadoku_site's per-machine 7-day
+		// service credentials (its service-grants-2026-10-31.md). The consumer is
+		// NOT WRITTEN YET: keys:machine-grants (services/mgmt-api/src/routes/jobs/
+		// machine-grants.ts) still derives each claw's grants from child-apps
+		// placement. The paths below are held from the day the producer ships.
+		sub: 'hosting-eligibility',
+		argv: ['--json'],
+		consumer:
+			"the app layer: mgmt-api's keys:machine-grants, each claw's service identities (PENDING: not yet written; it derives claws from child-apps placement until then)",
+		fields: [
+			'contract',
+			'ok',
+			'error',
+			'generatedAt',
+			'at',
+			// `nodes` is a map keyed by node name; `<node>` stands for any key.
+			'nodes.<node>.placed',
+			'nodes.<node>.eligible',
+			'nodes.<node>.unknown[].repo',
+			'nodes.<node>.unknown[].why',
+			'notLent[].node',
+			'tenants[].app',
+			'tenants[].repo',
+			'tenants[].auto',
+			'tenants[].candidates',
 		],
 	},
 	{

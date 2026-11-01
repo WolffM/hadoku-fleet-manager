@@ -340,6 +340,74 @@ cardtable polls it every 60 s with `--max-age 55`, ranks by `ci` ahead of its
 own core speed, and ignores `epoch`. Until it has dual-read for a few weeks it
 keeps reading `node-status`, whose contract number is separate.
 
+## Service eligibility: which repos a node may run
+
+```sh
+fleet hosting-eligibility --json
+```
+
+hadoku_site gives each machine its own 7-day credential for each service
+identity it may run (its `service-grants-2026-10-31.md`), and the credential
+has to be on the node BEFORE the service starts there (fleet-manager#42). Where
+a tenant runs now is too narrow for that: the converger moves a
+`placement.auto` tenant by itself. So the document says both, per node:
+
+- **`placed`**: the node holds a slice of the tenant in force now, read from
+  the ledger. That covers a primary or a standby, one that is ending, and an
+  open move's target, which holds its slice before the mover starts it.
+- **`eligible`**: for an auto tenant, `placed` plus every **candidate**. A
+  candidate is a node that passes every rule of the tenant that is a fact about
+  the node. That means each `placement.require` rule, `runtime`, the unit
+  fitting the node with no slice on it, and the `ciMayRead` filter once it is
+  one. Anything a later pass may change is left out: a drain or lease, other
+  tenants' slices, `slices.max`. Those decide when the converger moves the
+  tenant, not whether it may. A credential that followed them would be minted
+  and retired every time a lease began. For a tenant without `auto`,
+  `eligible` is `placed`. Nothing moves it except a person going through
+  `fleet hosting`, which writes the slice before the service starts. A
+  credential on every node it merely fits would widen what a leak exposes.
+- **`unknown`**: an auto tenant's repo whose rules could not be read on that
+  node in the last pass, with `why`. The node is neither eligible nor ruled
+  out. Keep what was already granted there; do not read it as a revoke.
+
+The backstop (hokon) is never a candidate. It is not lent to tenants, and it is
+listed under `notLent`. hadoku_site grants it as the hub.
+
+```jsonc
+{
+  "contract": 1, "generatedAt": "…", "ok": true, "at": "<converger pass>",
+  "nodes": {
+    "claw-4": { "placed": ["WolffM/ArchiveBot", "WolffM/hadoku-pygmalion"],
+                "eligible": ["WolffM/ArchiveBot", "WolffM/hadoku-pygmalion", "WolffM/hadoku-watchparty"],
+                "unknown": [] },
+    "claw-1": { "placed": [], "eligible": [], "unknown": [] }
+  },
+  "notLent": [ { "node": "hokon", "role": "backstop", "why": "…" } ],
+  "tenants": [ { "app": "watchparty", "repo": "WolffM/hadoku-watchparty", "kind": "service",
+                 "auto": true, "singleton": true, "placed": [ { "node", "role", "mode", "until" } ],
+                 "eligible": [ … ], "candidates": [ … ], "unknown": [ … ], "ruledOut": [ { "node", "reasons" } ] } ]
+}
+```
+
+The repo is the one the tenant's hosting.json was registered from
+(`fleet hosting-request <owner/name> --register`), never a table typed here.
+Candidates come from the converger's last pass, which executes every tenant's
+rules on every claw. The reader itself reaches no node.
+
+**"I could not look" is `ok: false` with `error`, and `nodes: null`, never an
+empty map.** That covers an unreadable registry, manifest, drain record,
+hosting record or converger pass. It also covers no pass kept, a pass older
+than 30 minutes, a pass from before eligibility existed, a tenant the pass
+missed, a tenant registered from a local file (its repo is unknown), a slice
+of a tenant that is not registered, and no tenant registered at all. Exit 0
+when ok, 1 when not, 2 for a usage error. The document is on stdout in every
+case.
+
+No published file under `~/.hadoku-mgmt` goes with it. The reader is local
+and cheap, and mgmt-api's `keys:machine-grants` runs on the same box, so it
+can spawn the CLI like every other contracted reader. A file would need a
+writer on a clock of its own and a staleness rule of its own.
+
 ## Status
 
 `fleet node-status --json` reports, per node: `reachable` and `observedAt`

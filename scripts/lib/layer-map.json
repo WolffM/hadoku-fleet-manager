@@ -1157,6 +1157,12 @@
     "part": "run"
   },
   {
+    "glob": "scripts/hosting-eligibility.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
     "glob": "scripts/hosting-placement.mjs",
     "layer": "domain",
     "domain": "tenancy",
@@ -1218,6 +1224,12 @@
   },
   {
     "glob": "scripts/lib/hosting-plan.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-eligibility.mjs",
     "layer": "domain",
     "domain": "tenancy",
     "part": "core"

@@ -36,6 +36,7 @@ import { loadManifest } from './lib/fleet-exec.mjs';
 import { act, decide } from './lib/hosting-converge.mjs';
 import { readArtifact } from './lib/hosting-artifacts.mjs';
 import { readDemand } from './lib/hosting-demand.mjs';
+import { eligibilityFor } from './lib/hosting-eligibility.mjs';
 import { planFor } from './lib/hosting-plan.mjs';
 import { PKG_SCRIPTS, siteRoot, stateDir } from './lib/paths.mjs';
 import { spawnCapture } from './lib/spawn-json.mjs';
@@ -229,6 +230,9 @@ for (const [app, { request }] of tenants) {
 		// Where the next slice would go, kept for `fleet hosting-placement` so it
 		// answers without an ssh to every node. A singleton's is its move plan.
 		offers: offersOf(movePlan ?? plan),
+		// Every node the tenant's node rules admit, whatever this pass's drains and
+		// capacity say, for `fleet hosting-eligibility` (fleet-manager#42).
+		eligibility: eligibilityFor(request, offers, plan),
 	};
 }
 

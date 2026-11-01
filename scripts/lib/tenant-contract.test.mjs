@@ -41,6 +41,7 @@ const PRODUCERS = {
 		'scripts/lib/hosting-placement-view.mjs',
 		'scripts/lib/hosting-ci-pressure.mjs',
 	],
+	'hosting-eligibility': ['scripts/hosting-eligibility.mjs', 'scripts/lib/hosting-eligibility.mjs'],
 	'hosting-demand': [
 		'scripts/hosting-demand.mjs',
 		'scripts/hosting-converge.mjs',

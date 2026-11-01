@@ -25,7 +25,7 @@
   "scripts/runners-slice-install.sh": 986,
   "scripts/service-inventory.mjs": 977,
   "src/ci-alerts.ts": 982,
-  "src/cli.ts": 967,
+  "src/cli.ts": 974,
   "src/gh-budget.ts": 843,
   "src/lib/capability-registry.ts": 1166,
   "src/lib/job-registry.ts": 973,
