@@ -51,6 +51,12 @@
  * quota, so a tenant should size its pools explicitly
  * (`-XX:ActiveProcessorCount=N`) rather than trust the JVM's guess.
  */
+import {
+	judgeServiceDeploy,
+	observedDeploy,
+	parseServiceDeploy,
+	serviceObserveScript,
+} from './hosting-service-check.mjs';
 import { createHash } from 'node:crypto';
 
 import {
@@ -687,7 +693,7 @@ if [ -n "$CI_CG" ]; then
 fi
 echo "tailnet4=$(tailscale ip -4 2>/dev/null | head -n1)"
 echo "tailnet6=$(tailscale ip -6 2>/dev/null | head -n1)"
-echo OBSERVE-END
+${t.kind === 'service' ? serviceObserveScript(t) : ''}echo OBSERVE-END
 `;
 }
 
@@ -746,6 +752,7 @@ export function parseObserved(stdout) {
 		ciSliceHigh: kv.ciSliceHigh ?? null,
 		tailnet4: str('tailnet4'),
 		tailnet6: str('tailnet6'),
+		...parseServiceDeploy(kv),
 	};
 }
 
@@ -952,6 +959,7 @@ export function judgeHosting(
 				}
 			: null,
 		bootId: obs.bootId,
+		...(t.kind === 'service' ? { deploy: observedDeploy(t, obs) } : {}),
 	};
 
 	// 1. resources
@@ -1136,6 +1144,9 @@ export function judgeHosting(
 			}
 		}
 	}
+
+	// 6. what the app layer's deploy needs of a SERVICE tenant.
+	if (t.kind === 'service') judgeServiceDeploy(t, obs, block);
 
 	// Information for the tenant, not a fault in what is served.
 	if (obs.oomKills > 0)

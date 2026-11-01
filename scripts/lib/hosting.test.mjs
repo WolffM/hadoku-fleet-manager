@@ -755,3 +755,81 @@ test('the door refuses an action on a node with several tenants unless --tenant 
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+/**
+ * A SERVICE tenant (fleet-manager#16, the reader draft's items 5, 6, 8, 9):
+ * what the app layer's deploy needs, judged by doing it. archivebot's real
+ * request (ARCHIVEBOT, above), on a node serving it exactly, then each fact
+ * broken one at a time.
+ */
+const SERVICE_DECLARED = { tenant: 'archivebot', memoryMb: 8192, cores: 4, port: 3004 };
+const serviceAnswer = (over = {}) =>
+	answer({
+		sliceCgroup: `/hosting.slice/${ARCHIVEBOT.slice}`,
+		listenerCgroup: `/hosting.slice/${ARCHIVEBOT.slice}/${ARCHIVEBOT.service}`,
+		listenerAddrs: '127.0.0.1:3004',
+		homeStat: 'archivebot-svc:archivebot-svc:700',
+		actAsTenant: 'yes',
+		pm2Unit: 'active',
+		pm2Saved: 1,
+		siteClone: 'writable',
+		ingressService: 'http://127.0.0.1:3004',
+		...over,
+	});
+const judgeService = (over) =>
+	judgeHosting(SERVICE_DECLARED, parseObserved(serviceAnswer(over)), 'shared', null, ARCHIVEBOT);
+const serviceBlocks = (over) =>
+	judgeService(over)
+		.findings.filter(
+			(f) => f.class === 'blocking' && /^hosting-(user|pm2|site-clone|ingress)$/.test(f.category)
+		)
+		.map((f) => `${f.category}: ${f.why}`);
+
+test('a service tenant the deploy can reach, with pm2 saved and its tunnel routed here, raises none of the deploy checks', () => {
+	assert.deepEqual(serviceBlocks({}), []);
+	assert.deepEqual(judgeService({}).observed.deploy, {
+		actAsTenant: true,
+		pm2: { unit: 'active', saved: 1 },
+		siteClone: 'writable',
+		ingress: { hostname: 'archivebot.hadoku.me', service: 'http://127.0.0.1:3004' },
+	});
+});
+
+test('each deploy fact a service tenant lacks is BLOCKING, and says what breaks', () => {
+	const cases = [
+		[{ actAsTenant: 'no' }, /hosting-user: admin cannot act as archivebot-svc/],
+		[{ pm2Unit: 'inactive' }, /hosting-pm2: pm2-archivebot-svc\.service is inactive/],
+		[{ pm2Saved: 0 }, /hosting-pm2: archivebot-svc's pm2 has saved no app/],
+		[{ pm2Saved: 'none' }, /hosting-pm2: .*dump\.pm2 is missing or unreadable/],
+		[{ siteClone: 'missing' }, /hosting-site-clone: .*srv\/hadoku_site is missing/],
+		[{ siteClone: 'readonly' }, /hosting-site-clone: .*is readonly for archivebot-svc/],
+		// The catch-all rule MATCHES an unknown hostname; the service URL is what counts.
+		[
+			{ ingressService: 'http_status:404' },
+			/hosting-ingress: .*routes archivebot\.hadoku\.me to http_status:404/,
+		],
+		[{ ingressService: '' }, /hosting-ingress: .*could not be read/],
+	];
+	for (const [over, want] of cases) {
+		const got = serviceBlocks(over);
+		assert.equal(got.length, 1, `${JSON.stringify(over)} -> ${JSON.stringify(got)}`);
+		assert.match(got[0], want);
+	}
+	assert.deepEqual(
+		serviceBlocks({ ingressService: 'http://localhost:3004' }),
+		[],
+		'localhost is loopback too'
+	);
+});
+
+test('an agent tenant is never judged on the service deploy facts, and its observation never asks', () => {
+	assert.equal(
+		judge({}).findings.some((f) => /^hosting-(pm2|site-clone|ingress)$/.test(f.category)),
+		false
+	);
+	assert.doesNotMatch(observeScript(CARDTABLE, 'ci'), /actAsTenant|dump\.pm2|ingress rule/);
+	const s = observeScript(ARCHIVEBOT, 'ci');
+	assert.match(s, /sudo -n -u "\$AGENT_USER" true/);
+	assert.match(s, /ingress rule "https:\/\/\$HOSTNAME_WANT"/);
+	assert.doesNotMatch(s, /pm2 ping/, 'never spawn a daemon outside the unit');
+});

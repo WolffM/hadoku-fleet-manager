@@ -10,7 +10,7 @@
   "scripts/lib/doctor-findings.test.mjs": 1065,
   "scripts/lib/egress-slices-guard.test.mjs": 1007,
   "scripts/lib/expected-down-guard.test.mjs": 1024,
-  "scripts/lib/hosting.mjs": 1147,
+  "scripts/lib/hosting.mjs": 1158,
   "scripts/lib/json-contract.test.mjs": 1240,
   "scripts/lib/make-preseed.sh": 1087,
   "scripts/lib/make-preseed.test.mjs": 1628,

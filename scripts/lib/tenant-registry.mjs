@@ -49,6 +49,8 @@ export function tenantSpecFrom(request) {
 		exec: names.exec,
 		port: request.network.ports[0] ?? null,
 		ingress: request.network.ingress,
+		/** A `tunnel` service's public name: what the node's cloudflared must route to `port`. */
+		hostname: request.network.hostname ?? null,
 		workersOutliveRestart: request.runtime.workersOutliveRestart === true,
 		noticeMin: request.availability.noticeMin,
 	};

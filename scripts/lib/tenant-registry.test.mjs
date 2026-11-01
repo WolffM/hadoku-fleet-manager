@@ -45,6 +45,7 @@ test("cardtable's derived names are exactly the ones the hand-written table held
 			exec: '/opt/hosting/cardtable/run',
 			port: 7621,
 			ingress: 'controller',
+			hostname: null,
 			workersOutliveRestart: true,
 			noticeMin: 15,
 		}
