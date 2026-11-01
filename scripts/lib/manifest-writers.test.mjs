@@ -89,8 +89,12 @@ const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
  * and a listed one that has stopped calling `manifestEdit` FAILS too.
  */
 const WRITERS = [
-	{ file: 'scripts/bootcamp.mjs', facet: '$capabilities — `fleet bootcamp --write`' },
-	{ file: 'scripts/enroll-node.mjs', facet: '$measured — `fleet enroll --write`' },
+	// Moved from scripts/bootcamp.mjs and scripts/enroll-node.mjs respectively
+	// (wave 5p lane D, parameterizing restructure toward the 800-line ceiling):
+	// each CLI now calls its write through one lib function, taking the CLI's
+	// flags and run-scoped state in through `ctx`.
+	{ file: 'scripts/lib/bootcamp-write.mjs', facet: '$capabilities — `fleet bootcamp --write`' },
+	{ file: 'scripts/lib/enroll-write.mjs', facet: '$measured — `fleet enroll --write`' },
 	{ file: 'scripts/lan-reserve.mjs', facet: 'lan — `fleet lan-reserve <node> --write`' },
 	{
 		file: 'scripts/lib/provision-phases.mjs',

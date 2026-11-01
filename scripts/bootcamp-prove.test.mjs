@@ -171,18 +171,20 @@ test('--prove --due <n> skips a node with an existing FRESH pass — "not due ye
 
 // ── the canary's capture is file-based, not a pipe (F6, #33) ───────────────
 //
-// `runCanary` is not exported (bootcamp.mjs is a CLI, not a library) and the
-// comment above this block already explains why a real drain + a real
-// prove-job subprocess is not re-driven from this fixture: it would stand up
-// a second copy of that machinery. The CORRECTNESS of the file-vs-pipe fix is
-// proven directly against the shared helper in `spawn-json.test.mjs`
-// ("a large document survives whole"); this is the TOPOLOGY half — that
-// `runCanary` actually calls through that helper, with the same argv and
-// ceiling the old `execFileSync` call used, so a revert to the pipe-capturing
-// shape is caught here even though no fixture drives a real canary this big.
+// `runCanary` is not exported from the CLI; since wave 5p lane D it lives in
+// `scripts/lib/bootcamp-canary.mjs` (bootcamp.mjs passes its flags and
+// run-scoped state in through `ctx`), and the comment above this block
+// already explains why a real drain + a real prove-job subprocess is not
+// re-driven from this fixture: it would stand up a second copy of that
+// machinery. The CORRECTNESS of the file-vs-pipe fix is proven directly
+// against the shared helper in `spawn-json.test.mjs` ("a large document
+// survives whole"); this is the TOPOLOGY half — that `runCanary` actually
+// calls through that helper, with the same argv and ceiling the old
+// `execFileSync` call used, so a revert to the pipe-capturing shape is caught
+// here even though no fixture drives a real canary this big.
 test('the canary reads fleet prove-job through spawnJsonToFile, not a pipe', () => {
-	const src = readFileSync(join(SCRIPTS, 'bootcamp.mjs'), 'utf8');
-	assert.match(src, /import \{ spawnJsonToFile \} from '\.\/lib\/spawn-json\.mjs';/);
+	const src = readFileSync(join(SCRIPTS, 'lib', 'bootcamp-canary.mjs'), 'utf8');
+	assert.match(src, /import \{ spawnJsonToFile \} from '\.\/spawn-json\.mjs';/);
 	assert.ok(
 		!src.includes("from 'node:child_process'"),
 		'execFileSync is no longer imported at all'
@@ -198,7 +200,7 @@ test('the canary reads fleet prove-job through spawnJsonToFile, not a pipe', () 
 	);
 	assert.match(
 		canary,
-		/spawnJsonToFile\(\s*process\.execPath,\s*\[PROVE_JOB_SCRIPT, '--node', name, '--capability', id, '--json', '--under-own-drain'\],\s*\{ timeoutMs: 45 \* 60_000 \}\s*\)/,
+		/spawnJsonToFile\(\s*process\.execPath,\s*\[ctx\.PROVE_JOB_SCRIPT, '--node', name, '--capability', id, '--json', '--under-own-drain'\],\s*\{ timeoutMs: 45 \* 60_000 \}\s*\)/,
 		'the same argv and 45-minute ceiling the old execFileSync call used'
 	);
 	assert.match(

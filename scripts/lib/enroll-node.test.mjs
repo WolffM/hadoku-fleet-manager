@@ -309,7 +309,8 @@ test('but a DIFFERENT machine still fails on memory', () => {
 	// with no probe there is nothing to disagree with, and the write proceeds.
 	// The tolerance itself is asserted on the arithmetic below.
 	assert.equal(r.status, 0, 'a capture with no probe cannot conflict — that is by design');
-	const src = readFileSync(join(HERE, '..', 'enroll-node.mjs'), 'utf8');
+	// MEM_TOLERANCE moved to lib/enroll-hardware-compare.mjs (wave 5p lane D).
+	const src = readFileSync(join(HERE, 'enroll-hardware-compare.mjs'), 'utf8');
 	const tol = Number(src.match(/const MEM_TOLERANCE = ([\d.]+)/)?.[1]);
 	assert.ok(tol > 0 && tol <= 0.05, `the tolerance is ${tol}, which is not a rounding allowance`);
 	// 8GB vs 4GB must be far outside it.

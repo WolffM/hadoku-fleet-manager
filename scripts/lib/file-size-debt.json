@@ -1,5 +1,4 @@
 {
-  "scripts/bootcamp.mjs": 1283,
   "scripts/capability-probe.sh": 1030,
   "scripts/check-egress-slices.mjs": 1089,
   "scripts/check-fleet-toolchain.mjs": 1175,
@@ -8,7 +7,6 @@
   "scripts/ci-throttle.sh": 1036,
   "scripts/ci-throttle.test.mjs": 1993,
   "scripts/deploy-runners-slice.mjs": 1108,
-  "scripts/enroll-node.mjs": 888,
   "scripts/floor-probe.mjs": 1455,
   "scripts/hosting.mjs": 885,
   "scripts/lib/doctor-findings.mjs": 903,

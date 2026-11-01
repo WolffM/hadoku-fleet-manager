@@ -300,10 +300,16 @@ void test('`fleet enroll --update` cannot clobber a manifest facet — it assign
 	// `doc.machines[name] = measured` or a spread it would silently delete them.
 	//
 	// Reads the SOURCE with comments blanked, the same way `cli-commands.test.mjs`
-	// does, so the prose above this branch cannot satisfy the rule.
+	// does, so the prose above this branch cannot satisfy the rule. The
+	// surgical write moved to `scripts/lib/enroll-write.mjs` (wave 5p lane D);
+	// the "owes" assertions below still read the CLI itself.
 	const src = readFileSync(join(HERE, '..', 'enroll-node.mjs'), 'utf8');
 	const blanked = blankComments(src);
-	const branch = /if \(exists\) \{([\s\S]*?)\n\} else \{([\s\S]*?)\n\}/.exec(blanked);
+	const writeSrc = readFileSync(join(HERE, 'enroll-write.mjs'), 'utf8');
+	const writeBlanked = blankComments(writeSrc);
+	const branch = /if \(exists\) \{([\s\S]*?)\n\t\t\t\} else \{([\s\S]*?)\n\t\t\t\}/.exec(
+		writeBlanked
+	);
 	assert.ok(branch, 'the exists/else write branch must still be recognisable');
 	const updatePath = branch[1];
 	assert.match(updatePath, /current\.\$measured = measured\.\$measured;/);

@@ -69,10 +69,17 @@
  *   fleet enroll --file capture.txt     # from a console capture, no re-probe
  *   fleet enroll --stdin --json
  *
+ * SPLIT ACROSS FILES (wave 5p lane D, parameterizing restructure): argv
+ * parsing, the retired-name check, the `--help`/`--write` gates and the final
+ * summary print stay here; record/probe acquisition, the hardware comparison,
+ * the addressing facts, the manifest commit and the tailscale onboarding live
+ * in `scripts/lib/enroll-*.mjs`, taking this file's flags and helpers
+ * (`log`/`warn`/`die`) through one `ctx` object built once, below. No lib
+ * imports this file. `sshCapture`/`probeSshName`/`writeSshConfig` already
+ * lived in `scripts/lib/enroll-ssh.mjs` (wave 5o lane D).
+ *
  * @guards scripts/lib/enrollment-record.mjs
  */
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
 import process from 'node:process';
 
 import {
@@ -82,18 +89,13 @@ import {
 	derivedPlacement,
 } from './lib/enrollment-record.mjs';
 import { loadManifest, manifestPath } from './lib/fleet-exec.mjs';
-import { maySudo } from './lib/operator-sudo.mjs';
-import { landingLine } from './lib/manifest-target.mjs';
-import { manifestEdit } from './lib/manifest-edit.mjs';
-import {
-	INTERFACE_PROBE,
-	parseInterfaces,
-	preferredAddress,
-	proposeLanRecord,
-} from './lib/node-interfaces.mjs';
-import { sshCapture, writeSshConfig } from './lib/enroll-ssh.mjs';
+import { writeSshConfig } from './lib/enroll-ssh.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
-import { readStdinWhole } from './lib/stdin.mjs';
+import { obtainRecordText, probeNode } from './lib/enroll-record-source.mjs';
+import { compareHardware } from './lib/enroll-hardware-compare.mjs';
+import { printAddressing, probeAddressing } from './lib/enroll-addressing.mjs';
+import { commitManifestEntry } from './lib/enroll-write.mjs';
+import { bringUpTailscale } from './lib/enroll-tailscale.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
 // and on a pipe `process.exit` throws away whatever the stream still had
@@ -213,8 +215,23 @@ if (HARDWARE_CHANGED.length) {
 		die(`--hardware-changed accepts ${HARDWARE_FIELDS.join(', ')}; not ${bad.join(', ')}.`);
 	if (!HARDWARE_REASON) die('--hardware-changed needs --reason "<what was changed, and when>".');
 }
-/** Changes accepted this run: `{ field, from, to, reason, at }`. */
-const hardwareChanges = [];
+
+// ONE CONTEXT OBJECT, handed into every lib function EXPLICITLY — never a
+// reverse import (see the header's SPLIT ACROSS FILES note).
+const ctx = {
+	JSON_OUT,
+	WRITE,
+	NO_PUSH,
+	NODE,
+	ADDRESS,
+	FILE,
+	STDIN,
+	HARDWARE_CHANGED,
+	HARDWARE_REASON,
+	log,
+	warn,
+	die,
+};
 
 /**
  * A RETIRED NAME IS REFUSED. `fleet retire` adds a node's name to the
@@ -248,60 +265,8 @@ if (NODE) {
 	}
 }
 
-// ── 1. obtain the record ────────────────────────────────────────────────────
-let recordText = '';
-let probed = null;
-
-if (STDIN) {
-	recordText = readStdinWhole();
-	log(`[enroll] record from stdin${NODE ? '' : ' (no re-probe possible)'}`);
-} else if (FILE) {
-	if (!existsSync(FILE)) die(`no such capture: ${FILE}`);
-	recordText = readFileSync(FILE, 'utf8');
-	log(`[enroll] record from ${FILE}${NODE ? '' : ' (no re-probe possible)'}`);
-} else {
-	// The record lives in the bootstrap log because node-bootstrap.sh tees its
-	// whole run there. Newest wins: a re-bootstrapped box has several.
-	try {
-		// ALWAYS EXIT 0 REMOTELY, and decide from the OUTPUT. `cat ""` fails when
-		// the glob matches nothing, and execFileSync cannot tell that apart from
-		// a refused connection — so the first cut of this reported a perfectly
-		// reachable claw-1 as "cannot reach over ssh". That is a message naming a
-		// symptom four layers from the cause, which is the specific failure this
-		// repo keeps re-learning. Reachability and emptiness are now two answers.
-		// NODE, not `name` — `name` is derived from the RECORD, which this ssh call
-		// is about to fetch, so it is still in its temporal dead zone here. Using it
-		// threw "Cannot access 'name' before initialization" and enrolment reported
-		// it as "cannot reach claw-8 over ssh", which is the wrong diagnosis for a
-		// bug on the control host.
-		if (ADDRESS) {
-			const seeded = writeSshConfig(NODE, ADDRESS);
-			if (seeded.state === 'written')
-				log(`  ssh config: seeded ${NODE} -> ${seeded.hostName} so this run can reach it`);
-			else if (seeded.state === 'already')
-				log(`  ssh config: ${NODE} already resolves — --address ignored`);
-		}
-		recordText = sshCapture(
-			NODE,
-			'f="$(ls -t /var/log/node-bootstrap-*.log 2>/dev/null | head -1)"; ' +
-				'[ -n "$f" ] && cat "$f" 2>/dev/null; exit 0'
-		);
-	} catch (err) {
-		die(
-			`cannot reach ${NODE} over ssh: ${err.message.split('\n')[0]}\n` +
-				`  This is not "the node has nothing to report" — it is the control host ` +
-				`failing the half of enrollment only it can do.`
-		);
-	}
-	if (!recordText.trim()) {
-		die(
-			`${NODE} is reachable but has no /var/log/node-bootstrap-*.log.\n` +
-				`  Run node-bootstrap.sh on it first — enroll declares a CONVERTED box, ` +
-				`it does not convert one.`
-		);
-	}
-	log(`[enroll] record read from ${NODE}:/var/log/node-bootstrap-*.log`);
-}
+// ── 1. obtain the record, and the control host's own measurement ──────────
+const recordText = obtainRecordText(ctx);
 
 let parsed;
 try {
@@ -312,143 +277,10 @@ try {
 }
 const declared = parsed.fields;
 
-// ── 2. the control host's own measurement ───────────────────────────────────
-if (NODE) {
-	try {
-		const raw = sshCapture(
-			NODE,
-			[
-				'echo "cores=$(nproc 2>/dev/null)"',
-				'echo "memTotalKb=$(awk \'/^MemTotal/{print $2}\' /proc/meminfo 2>/dev/null)"',
-				'echo "diskFreeGb=$(df -BG --output=avail / 2>/dev/null | tail -1 | tr -dc 0-9)"',
-				'echo "hostname=$(hostname 2>/dev/null)"',
-				'echo "kernel=$(uname -r 2>/dev/null)"',
-			].join('; ')
-		);
-		probed = Object.fromEntries(
-			raw
-				.split('\n')
-				.filter((l) => l.includes('='))
-				.map((l) => {
-					const i = l.indexOf('=');
-					return [l.slice(0, i).trim(), l.slice(i + 1).trim()];
-				})
-		);
-	} catch (err) {
-		die(`re-probe of ${NODE} failed: ${err.message.split('\n')[0]}`);
-	}
-}
+const probed = probeNode(ctx);
 
-// ── 3. declared against observed ────────────────────────────────────────────
-const FATAL = ['cores', 'hostname'];
-/**
- * memTotalKb is fixed hardware, but NOT a fixed NUMBER.
- *
- * Measured on claw-6, 2026-09-02: the record said 8038384 and the re-probe said
- * 8038388 — four kilobytes, one page. The kernel reserves slightly different
- * amounts from boot to boot depending on what is loaded, so an exact comparison
- * refuses a perfectly good node and tells its operator the capture came from a
- * different machine. That is a false accusation, and the kind that trains people
- * to pass --force.
- *
- * A tolerance still catches what this check is for. The failure it exists to
- * prevent is a spliced capture or the wrong ssh target, and those differ by
- * gigabytes: 8GB against 16GB is 100% out, not 0.00005%.
- */
-const MEM_TOLERANCE = 0.01;
-const ADVISORY = ['kernel'];
-const conflicts = [];
-const notes = [];
-
-if (probed) {
-	log('[enroll] re-probing over ssh (declared vs observed)');
-	for (const key of [...FATAL, 'memTotalKb', ...ADVISORY, 'diskFreeGb']) {
-		const d = declared[key];
-		const o = probed[key] === '' || probed[key] === undefined ? null : probed[key];
-		let same = d === null || o === null ? null : String(d) === String(o);
-		if (same === false && key === 'memTotalKb') {
-			const drift = Math.abs(Number(d) - Number(o)) / Math.max(Number(d), Number(o));
-			if (Number.isFinite(drift) && drift <= MEM_TOLERANCE) same = true;
-		}
-		const verdict =
-			o === null ? 'not probed' : same === null ? 'unmeasured' : same ? 'ok' : 'DIFFERS';
-		log(
-			`  ${key.padEnd(14)} ${String(d ?? '—').padEnd(12)} ${String(o ?? '—').padEnd(12)} ${verdict}`
-		);
-		if (same === false && HARDWARE_CHANGED.includes(key)) {
-			// The box as it is NOW is the measurement: every derived field
-			// (memTotalMb, ramGb) is built from `declared`, so it takes the probe.
-			const now = Number.isFinite(Number(o)) ? Number(o) : o;
-			declared[key] = now;
-			hardwareChanges.push({
-				field: key,
-				from: d,
-				to: now,
-				reason: HARDWARE_REASON,
-				at: new Date().toISOString(),
-			});
-			warn(
-				`${key} changed: ${d} -> ${o}, accepted as a known hardware change (${HARDWARE_REASON})`
-			);
-		} else if (same === false) {
-			if (FATAL.includes(key) || key === 'memTotalKb')
-				conflicts.push({ key, declared: d, observed: o });
-			// diskFreeGb is EXPECTED to differ — it is silently refreshed below.
-			// Warning on it every single run is how a warning stops being read,
-			// which would cost the kernel advisory beside it its only reader.
-			else if (ADVISORY.includes(key)) notes.push({ key, declared: d, observed: o });
-		}
-	}
-	if (conflicts.length) {
-		die(
-			`the record and this host disagree on ${conflicts.map((c) => c.key).join(', ')}.\n` +
-				conflicts
-					.map((c) => `    ${c.key}: record says ${c.declared}, ${NODE} reports ${c.observed}`)
-					.join('\n') +
-				`\n  These cannot change between bootstrap and enroll. Either the capture came ` +
-				`from a different machine, or ${NODE} is not the box that was bootstrapped. ` +
-				`Enrolling would declare the wrong hardware under this name.`,
-			{ conflicts }
-		);
-	}
-	for (const n of notes) {
-		warn(`${n.key} changed since bootstrap: ${n.declared} -> ${n.observed} (advisory)`);
-	}
-}
-
-/** One renderer, used by both the proposal and the post-write summary. */
-function printAddressing(ad, node) {
-	if (!ad) return;
-	if (ad.state === 'error') {
-		warn(`could not read ${node}'s interfaces: ${ad.error}`);
-		return;
-	}
-	const r = ad.reservation;
-	log('');
-	log(`  addressing: ssh resolves ${node} to ${ad.sshResolvesTo ?? '<unresolved>'}`);
-	if (r) {
-		log(`  wireless:   ${r.iface}  ${r.mac}  ${r.ip ?? '<no address>'}`);
-		if (ad.finding) {
-			warn(ad.finding);
-			log(`  Reserve ${r.mac} on the gateway and point ssh at it, or this node is`);
-			log(`  reachable only while its cable is in.`);
-		} else {
-			log(`  the fleet addresses this node on the link that survives a cable pull.`);
-		}
-	}
-	// THE RESERVATION IS A REQUIRED STEP, NOT ADVICE (#65). Printed for every
-	// node, wired-only included — the branch above says nothing about a box with
-	// no radio, and that silence is how a step gets skipped. `fleet preflight`
-	// fails nightly on a node with no `lan` record, so skipping it pages.
-	const lan = proposeLanRecord(ad.interfaces ?? [], ad.sshResolvesTo);
-	if (lan) {
-		log('');
-		log(`  NEXT (required): reserve ${lan.mac} -> ${lan.ip} on the gateway`);
-		log(`  (Advanced -> DHCP Reservation; delete any Auto row for that MAC first), then`);
-		log(`    fleet lan-reserve --machine ${node} --write`);
-		log(`  \`fleet preflight\` fails every night until it is recorded.`);
-	}
-}
+// ── 2. declared against observed ────────────────────────────────────────────
+const { notes, hardwareChanges } = compareHardware(ctx, declared, probed);
 
 const entry = proposedManifestEntry(parsed);
 
@@ -466,7 +298,7 @@ const sshFromControl = probed ? 'ok' : (declared.sshFromControl ?? null);
 // path says it out loud.
 const verified = Boolean(probed);
 
-// ── 4. the proposal ─────────────────────────────────────────────────────────
+// ── 3. the proposal ─────────────────────────────────────────────────────────
 const MANIFEST = manifestPath();
 const doc = loadManifest(MANIFEST);
 doc.machines ??= {};
@@ -535,92 +367,13 @@ const result = {
 
 if (!JSON_OUT) {
 	log('');
-	/**
-	 * THE ADDRESSING FACTS, READ OFF THE NODE — so nobody has to transcribe a MAC.
-	 *
-	 * hokon reaches every claw by a hardcoded LAN IP in ~/.ssh/config. Ethernet and
-	 * wireless are different MACs drawing different DHCP leases, so a dual-homed
-	 * node that is addressed on its WIRED lease goes dark the moment its cable comes
-	 * out — and this codebase reports an unreachable node as a FAILURE, correctly,
-	 * across every gate at once.
-	 *
-	 * claw-3 is the worked example of the answer: its stable .203 lives on the
-	 * WIRELESS interface with its USB ethernet secondary, so the address is
-	 * identical whether or not a cable is in. Nothing fails over because nothing
-	 * moves.
-	 *
-	 * This step used to be a line in a runbook telling the operator to copy
-	 * `wirelessMac` out of the enrolment record and go type it into a router. That
-	 * is a lookup a program can do, and a lookup a human does once per box is a
-	 * lookup that eventually gets skipped. So enrolment reads it.
-	 *
-	 * IT REPORTS, IT DOES NOT REWRITE ~/.ssh/config. That file is the operator's,
-	 * shared with every other tool on this host, and enrolment is already the one
-	 * place in this system where a node speaks — widening it into "and it edits your
-	 * ssh config" is a second inversion for no gain. What it does is make the
-	 * mismatch impossible to miss.
-	 *
-	 * Nothing here fails the enrolment: the manifest is written and verified above.
-	 */
-	if (NODE) {
-		try {
-			const out = sshCapture(NODE, INTERFACE_PROBE);
-			const ifaces = parseInterfaces(out);
-			// `ssh -G` rather than parsing the config: it is the same resolver ssh
-			// itself uses, so it accounts for wildcards, Match blocks and Include.
-			let resolved = null;
-			try {
-				resolved = execFileSync('ssh', ['-G', NODE], { encoding: 'utf8' })
-					.split('\n')
-					.find((l) => l.startsWith('hostname '))
-					?.slice('hostname '.length)
-					.trim();
-			} catch {
-				resolved = null;
-			}
-			const radio = preferredAddress(ifaces);
-			result.addressing = {
-				interfaces: ifaces,
-				sshResolvesTo: resolved ?? null,
-				lan: proposeLanRecord(ifaces, resolved ?? null),
-			};
-
-			// A RADIO WITH NO ADDRESS IS NOT "FINE". The first version only raised a
-			// finding when the wireless IP DIFFERED from the resolved one, so a radio
-			// with a null IP fell through to the reassuring branch — and claw-7's
-			// enrolment duly printed "the fleet addresses this node on the link that
-			// survives a cable pull" about a node whose radio could not associate at
-			// all and whose .91 is its WIRED lease. "Could not look" rendering as
-			// "nothing is wrong", inside the step written to prevent it.
-			if (radio && !radio.ipv4) {
-				result.addressing.finding =
-					`${NODE} has a wireless interface (${radio.name}) with NO address, so it is ` +
-					`reachable ONLY while its cable is in. ssh resolves it to ${resolved ?? '<unresolved>'}, ` +
-					'which is its wired lease.';
-				result.addressing.reservation = { mac: radio.mac, ip: null, iface: radio.name };
-			} else if (radio && resolved && radio.ipv4 && resolved !== radio.ipv4) {
-				// The one finding worth making loud. A node addressed on a link that
-				// disappears is a node every gate loses at once.
-				result.addressing.finding =
-					`ssh resolves ${NODE} to ${resolved}, which is not its wireless address ` +
-					`${radio.ipv4}. If this box is ever unplugged, the fleet loses it.`;
-				result.addressing.reservation = { mac: radio.mac, ip: radio.ipv4, iface: radio.name };
-			} else if (radio) {
-				result.addressing.reservation = { mac: radio.mac, ip: radio.ipv4, iface: radio.name };
-			}
-		} catch (err) {
-			// "Could not look" is not "nothing is wrong" — it is recorded as its own
-			// state rather than left absent, which would read as a node with no
-			// interfaces.
-			result.addressing = { state: 'error', error: err.message.slice(0, 200) };
-		}
-	}
+	if (NODE) result.addressing = probeAddressing(name);
 
 	// Printed HERE, where it is computed. Three paths leave this script -- already
 	// declared, nothing written, and a successful write -- and calling the printer
 	// at each is three places to forget one, which is how it came to be printed on
 	// only the last of them.
-	printAddressing(result.addressing, name);
+	printAddressing(ctx, result.addressing, name);
 
 	log(`\x1b[1m── proposed manifest entry for ${name}\x1b[0m`);
 	log(JSON.stringify({ [name]: measured }, null, 2));
@@ -658,7 +411,7 @@ if (!JSON_OUT) {
 	log(`                        nothing and reports green.`);
 }
 
-// ── 5. commit, only when told ───────────────────────────────────────────────
+// ── 4. commit, only when told ───────────────────────────────────────────────
 if (exists && !UPDATE) {
 	die(
 		`${name} is ALREADY in the manifest. Re-enrolling would overwrite capacity ` +
@@ -689,84 +442,7 @@ if (!verified) {
 	);
 }
 
-// `manifestEdit` (scripts/lib/manifest-edit.mjs, wave 5c F4) owns asking
-// `writeTarget` BEFORE anything is written — the refusal this most needs to
-// make is the deploy tree, where the write SUCCEEDS, reads back true, and is
-// erased at the next publish — plus the fresh read, the atomic write, the
-// read-back comparison and `landWrite`. This closure only decides what the
-// entry should become.
-const editResult = await manifestEdit(
-	(freshDoc) => {
-		freshDoc.machines ??= {};
-		// A FRESH TRUTH, not the copy read at the top of this script's preview:
-		// `manifestEdit` always re-reads right before mutating, closing the
-		// window between this script printing its proposal (which may have
-		// walked the node over ssh) and actually writing it.
-		const exists = Object.prototype.hasOwnProperty.call(freshDoc.machines, name);
-		// A hardware change is history: every accepted one is kept, newest last,
-		// and rides in $measured so the surgical assignment below stays one line.
-		const priorChanges = freshDoc.machines[name]?.$measured?.hardwareChanges ?? [];
-		if (priorChanges.length || hardwareChanges.length)
-			measured.$measured.hardwareChanges = [...priorChanges, ...hardwareChanges];
-		if (exists) {
-			// SURGICAL, AND THAT NOW COVERS THE OTHER SUPPLY FACETS TOO.
-			//
-			// `machines[node]` carries four independently provenanced `{at, by, ...}`
-			// siblings — `$measured` (here), `$benchmark` (`fleet benchmark --write`),
-			// `$capabilities` (`fleet bootcamp --write`) and `$health` (`fleet doctor
-			// --write`, added 2026-09-10). This branch assigns THREE NAMED FIELDS rather
-			// than replacing the entry, so each of the other three facets survives a
-			// re-enroll untouched: a `--update` run re-measures cores and RAM and has
-			// nothing to say about whether the box is hot, what it has proved, or how
-			// fast it is. Replacing the entry here would silently delete a thermal and
-			// SMART record nothing else can reconstruct — `fleet doctor` would have to
-			// load the box for another minute to get it back, and until it did the
-			// inventory page would show a node with no health at all, which reads as
-			// "nothing is wrong" for the exact reason CLAUDE.md forbids.
-			//
-			// Pinned by `doctor-write.test.mjs`'s source guard, so a later rewrite of
-			// this branch into a spread cannot quietly drop a facet.
-			const current = freshDoc.machines[name];
-			current.cores = measured.cores;
-			current.ramGb = measured.ramGb;
-			current.$measured = measured.$measured;
-		} else {
-			freshDoc.machines[name] = measured;
-		}
-		// `--write`/`--update` always has something to record: the measurement
-		// itself, even when every value is unchanged from last time.
-		return true;
-	},
-	{
-		target: MANIFEST,
-		writer: 'enroll',
-		reason: `${exists ? 'refresh' : 'declare'} ${name}`,
-		push: !NO_PUSH,
-	}
-);
-
-if ('ok' in editResult && editResult.ok === false) {
-	die(editResult.why, { refusal: editResult.reason });
-}
-if (editResult.formatter === null) {
-	warn(
-		`the manifest was written UNFORMATTED: no prettier could be resolved from ` +
-			`${MANIFEST}'s own tree, so this is plain JSON.stringify output. The entry is ` +
-			`correct and saved; the owning repo's format:check will very likely reject the ` +
-			`file until it is run through prettier there.`
-	);
-}
-
-// AND NOW MAKE IT SURVIVE. A declaration that is not on main is a declaration
-// the deployed fleet cannot see, and every step this command tells the operator
-// to run next resolves the node through that file.
-const landed = editResult.landed;
-result.landed = landed;
-if (!landed.ok) {
-	warn(`the manifest entry for ${name} is NOT on main — ${landed.why}`);
-} else {
-	log(landingLine(landed, { writer: 'enroll' }));
-}
+await commitManifestEntry(ctx, result, { measured, name, exists, hardwareChanges });
 
 result.written = true;
 // THE NODE IS DECLARED; NOW MAKE IT REACHABLE BY NAME. Every step after this —
@@ -804,68 +480,8 @@ result.written = true;
 }
 result.mode = exists ? 'updated measured fields' : 'declared';
 
-/**
- * Put the node on the tailnet, TAGGED, and hand the operator the login URL.
- *
- * node-bootstrap.sh installs tailscale and then says "NOT authenticated. Run:
- * sudo tailscale up --ssh", leaving a manual step in the middle of an otherwise
- * automated onboarding. There is no reason it has to be manual: everything up
- * to the click is mechanical, and the click is the only part a machine cannot
- * do.
- *
- * THREE THINGS HERE ARE LOAD-BEARING.
- *
- * 1. `--advertise-tags=tag:claw` is the POINT, not a nicety. A tagged device is
- *    owned by the tailnet rather than by a person, which DISABLES node key
- *    expiry — it reads `expiry=NEVER` instead of the 180-day default. All four
- *    nodes were enrolled user-owned and therefore expired together: claw-1
- *    lapsed silently on 2026-08-31 and claw-2 was two days behind it. Without
- *    the tag this step just schedules the same outage for six months out.
- *
- * 2. IT MUST RUN OVER LAN, never over the tailnet. `tailscale up` tears the
- *    session down BEFORE auth completes, so running it through the tailnet
- *    kills the connection carrying it. This runs over whatever `ssh <node>`
- *    resolves to, which is the LAN address for every claw — see
- *    docs/planning/ for why LAN is the fleet's real control path.
- *
- * 3. `tailscaled` may not be running at all. claw-4 reported "failed to connect
- *    to local tailscaled" rather than "logged out" on 2026-09-02, because
- *    bootstrap installs the package without enabling the unit. Enabling first
- *    costs nothing when it is already up.
- *
- * Detached with nohup so the daemon keeps waiting for the click after this
- * process exits. Nothing here fails the enrolment: the manifest is already
- * written and verified above, and a node that is not yet on the tailnet is a
- * node the operator can still reach over LAN.
- *
- * NOT ON A NODE THE FLEET HAS NO SUDO ON (the backstop). Its tailnet login is
- * the operator's, and it is deliberately not `tag:claw`.
- */
-if (NODE && !maySudo(doc.machines?.[name])) {
-	result.tailscale = { state: 'operator', why: 'the fleet has no sudo on this node' };
-} else if (NODE) {
-	try {
-		const out = sshCapture(
-			NODE,
-			'if ! command -v tailscale >/dev/null 2>&1; then echo "TS_ABSENT"; exit 0; fi; ' +
-				'sudo -n systemctl enable --now tailscaled >/dev/null 2>&1; ' +
-				'st=$(tailscale status --json 2>/dev/null | ' +
-				`python3 -c 'import json,sys;print(json.load(sys.stdin).get("BackendState","?"))' ` +
-				'2>/dev/null || echo Unknown); ' +
-				'if [ "$st" = "Running" ]; then echo "TS_UP"; exit 0; fi; ' +
-				`nohup sudo -n tailscale up --ssh --advertise-tags=tag:claw --hostname=${name} ` +
-				'>/tmp/fleet-enroll-tsup.log 2>&1 & sleep 8; cat /tmp/fleet-enroll-tsup.log'
-		);
-		const url = /https:\/\/login\.tailscale\.com\/[^\s]+/.exec(out)?.[0] ?? null;
-		if (/TS_ABSENT/.test(out)) result.tailscale = { state: 'not-installed' };
-		else if (/TS_UP/.test(out)) result.tailscale = { state: 'already-on-tailnet' };
-		else if (url) result.tailscale = { state: 'awaiting-login', url };
-		else result.tailscale = { state: 'unknown', output: out.trim().slice(0, 400) };
-	} catch (err) {
-		// Never fatal. See the header: the manifest write already succeeded.
-		result.tailscale = { state: 'error', error: err.message.slice(0, 200) };
-	}
-}
+bringUpTailscale(ctx, result, { name, doc });
+
 if (JSON_OUT) console.log(JSON.stringify(result, null, 2));
 else {
 	log('');

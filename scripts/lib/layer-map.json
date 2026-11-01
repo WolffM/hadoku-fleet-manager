@@ -576,11 +576,11 @@
     "part": "run"
   },
   {
-    "glob": "scripts/lib/enroll-ssh.mjs",
+    "glob": "scripts/lib/enroll-*.mjs",
     "layer": "domain",
     "domain": "lifecycle",
     "part": "run",
-    "why": "Wave 5o lane D split of enroll-node.mjs (pure move): the pure ssh helpers (sshCapture, probeSshName, writeSshConfig) moved out; the CLI's own argv/die/log/warn closures stayed, per d6dcfa5/8fb8009. Same part as their source file for the same reason as the other wave-5o splits."
+    "why": "enroll-node.mjs's libs: the ssh helpers (wave 5o, pure move) and the record source, hardware comparison, addressing, manifest write and Tailscale bring-up (wave 5p, given the CLI's state as one context). Same domain and part as the CLI."
   },
   {
     "glob": "scripts/retire-node.mjs",

@@ -48,7 +48,9 @@ test('the flag is a claim the drain file must back, not a bypass', () => {
 // source: bootcamp passes the flag, and drains with the reason the flag checks.
 test('bootcamp passes --under-own-drain and drains with the reason prove-job accepts', async () => {
 	const { readFileSync } = await import('node:fs');
-	const src = readFileSync(new URL('../bootcamp.mjs', import.meta.url), 'utf8');
+	// Moved to lib/bootcamp-canary.mjs (wave 5p lane D): bootcamp.mjs hands its
+	// flags and run-scoped state into `runCanary` through `ctx`.
+	const src = readFileSync(new URL('./bootcamp-canary.mjs', import.meta.url), 'utf8');
 	assert.match(src, /PROVE_JOB_SCRIPT,[^\]]*'--under-own-drain'/);
 	assert.match(src, /reason: `\$\{OWN_DRAIN_REASON_PREFIX\} \$\{id\} workload canary`/);
 	assert.match(src, /canaryPlan\(\{ alreadyDrained, busy \}\)/);

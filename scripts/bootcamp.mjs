@@ -106,18 +106,18 @@
  * `Runner.Worker`s it saw while measuring — and `judgeMeasurement` judges the
  * number only when that is a counted zero. `--write` re-takes a busy
  * measurement on a node it has DRAINED and waited out, one node at a time
- * (PASS 2 below, `underIdleHold` in lib/proof-drain.mjs). Anything still not
- * measured idle is INCONCLUSIVE: the record on disk stands for that capability,
- * nothing new is written for it, and the run says so — a finding under
- * `--write`, a note without it.
+ * (lib/bootcamp-idle.mjs's `runIdlePass2`, `underIdleHold` in
+ * lib/proof-drain.mjs). Anything still not measured idle is INCONCLUSIVE: the
+ * record on disk stands for that capability, nothing new is written for it,
+ * and the run says so — a finding under `--write`, a note without it.
  *
  * USAGE
  *   fleet bootcamp                 # every managed node: probes and reports.
  *                                  # NOT a dry run for REVOCATIONS — a label this
  *                                  # run saw FAIL is withheld from routing at once,
- *                                  # with or without --write (see REVOCATION
- *                                  # VERDICTS below). --write is what gates the
- *                                  # `$capabilities` facet alone.
+ *                                  # with or without --write (see lib/bootcamp-revoke.mjs's
+ *                                  # `computeRevocationChanges`). --write is what gates
+ *                                  # the `$capabilities` facet alone.
  *   fleet bootcamp --machine claw-5   # one node (a bare positional is refused)
  *   fleet bootcamp --write         # ALSO record `$capabilities` on every node
  *                                  # reached (drains, one at a time, any node
@@ -133,11 +133,18 @@
  *                                          # the same 30-day cadence the GATE
  *                                          # itself uses)
  *
+ * SPLIT ACROSS FILES (wave 5p lane D, parameterizing restructure): PASS 1's
+ * `probe`/`ensureTools` stay here — they are the two places this file calls
+ * `runOn`, and `scripts/lib/expected-down-guard.test.mjs` scans only top-level
+ * `scripts/*.mjs` files for that pairing with `deferralFor`, which also stays
+ * here. Everything else — PASS 1's orchestration, PASS 2's idle re-measure,
+ * PASS 3's judging, the revocation write, the workload canary and the
+ * `--write` manifest write — lives in `scripts/lib/bootcamp-*.mjs`, taking
+ * this file's flags and run-scoped state through one `ctx` object built once,
+ * below. No lib imports this file.
+ *
  * @guards scripts/capability-probe.sh
  */
-import { canaryPlan, OWN_DRAIN_REASON_PREFIX, underIdleHold } from './lib/proof-drain.mjs';
-import { carryMeasurements, measuredValue, parseLoad } from './lib/idle-measure.mjs';
-import { spawnJsonToFile } from './lib/spawn-json.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -145,49 +152,39 @@ import process from 'node:process';
 import {
 	loadManifest,
 	machineArg,
-	manifestPath,
 	runOn,
 	selectMachines,
 	separateCiUser,
 } from './lib/fleet-exec.mjs';
-import { capability, judgeMeasurement, measuredIdleOnly } from '../dist/lib/capability-registry.js';
+import { capability, measuredIdleOnly } from '../dist/lib/capability-registry.js';
 import { probeableIds } from '../dist/lib/capability-labels.js';
-import { nodeOffer } from '../dist/lib/capability-offer.js';
-import { workloadGatedCapabilities, WORKLOAD_PROOF_DUE_DAYS } from '../dist/lib/workload-gate.js';
-import { readProof } from '../dist/lib/measured.js';
+import { WORKLOAD_PROOF_DUE_DAYS } from '../dist/lib/workload-gate.js';
 import { stateDir } from './lib/paths.mjs';
-import {
-	applyVerdicts,
-	readRevocations,
-	writeRevocations,
-} from '../dist/capability-revocations.js';
-import { describeProof, proofKey, readProofs } from './lib/job-proof-record.mjs';
+import { readProofs } from './lib/job-proof-record.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { dataEndpointUrl, probeScript, serviceStateRoot, unprobed } from './lib/probe-script.mjs';
-import { landingLine } from './lib/manifest-target.mjs';
-import { manifestEdit } from './lib/manifest-edit.mjs';
-import { sameCapabilityRecord } from './lib/bootcamp-required.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 import {
 	applicableRepairs,
 	installScript,
 	isVersionManaged,
 	probeRole,
-	qualifiesForCanary,
 	repairNeedsRoot,
 	resolveInstallTarget,
 } from './lib/toolchain-floor.mjs';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { reasonOf, releaseLookup } from './lib/bootcamp-tool-support.mjs';
-import { defaultSeedDeps, isSeedFinding, seedNode } from './lib/capability-seeds.mjs';
-import {
-	busyCount,
-	createLiveDeps,
-	DRAIN_TIMEOUT_MS,
-	POLL_MS,
-	SETTLE_MS,
-	waitUntilDrained,
-} from './lib/refresh-cycle.mjs';
+import { defaultSeedDeps } from './lib/capability-seeds.mjs';
+import { DRAIN_TIMEOUT_MS, POLL_MS, SETTLE_MS } from './lib/refresh-cycle.mjs';
+import { parseLoad } from './lib/idle-measure.mjs';
+
+import { runPass1 } from './lib/bootcamp-probe.mjs';
+import { runIdlePass2 } from './lib/bootcamp-idle.mjs';
+import { runPass3 } from './lib/bootcamp-judge.mjs';
+import { computeRevocationChanges } from './lib/bootcamp-revoke.mjs';
+import { proveWorkloads, printProveResults } from './lib/bootcamp-canary.mjs';
+import { printReport } from './lib/bootcamp-report-print.mjs';
+import { writeManifestFacet } from './lib/bootcamp-write.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
 // and on a pipe `process.exit` throws away whatever the stream still had
@@ -301,6 +298,10 @@ const NEVER_WRITTEN = new Set(
  * and what every other caller runs), `presence` (everything but the idle-only
  * measurements) or `measured` (only those). Returns the CAP verdicts and the
  * LOAD the probe observed while measuring.
+ *
+ * STAYS HERE, not in a lib: this is one of the two places bootcamp calls
+ * `runOn` (see the header's SPLIT ACROSS FILES note), and is handed to
+ * `lib/bootcamp-probe.mjs` and `lib/bootcamp-idle.mjs` through `ctx.probe`.
  */
 async function probe(node, phase = 'all') {
 	const r = await runOn(
@@ -353,6 +354,8 @@ const seedResultsByNode = {};
  * that could not say what to install is a FAILURE, carrying the reason —
  * never a silent fall-through to `installScript(id)`'s bare form, which
  * `installScript` itself now refuses for a version-managed tool anyway.
+ *
+ * STAYS HERE, not in a lib — see `probe`'s own note above.
  */
 async function ensureTools(name, m) {
 	const results = [];
@@ -419,24 +422,6 @@ async function ensureTools(name, m) {
 /** The proof ledger, read once. An unreadable one is SAID, never read as "no proofs". */
 const proofLedger = readProofs(stateDir());
 
-/** Last job-proof per job-proofed capability this node carries. Read-only. */
-function jobProofsFor(name, m) {
-	if (!proofLedger.ok) return [];
-	const rows = [];
-	for (const id of nodeOffer(m, { eligible: false })) {
-		const cap = capability(id);
-		if (!cap?.jobProof) continue;
-		const entry = proofLedger.proofs[proofKey(name, { capability: id })];
-		rows.push({
-			id,
-			...describeProof(entry, id, name, Date.now()),
-			last: entry?.last ?? null,
-			lastPass: entry?.lastPass ?? null,
-		});
-	}
-	return rows;
-}
-
 /**
  * IDLE-ONLY capabilities (2026-10-10): measured, and the measurement moves with
  * load — `cargo-bevy`'s all-core compile benchmark. The registry's answer
@@ -449,604 +434,53 @@ const probed = {};
 /** node -> the idle hold's outcome, for every node `--write` tried to hold. */
 const idleHolds = {};
 
-// PASS 1 — every node at once, exactly as before: install, then probe.
-await Promise.all(
-	nodes.map(async ([name, m]) => {
-		// BEFORE THE PROBE, so what the probe executes is what the node now has —
-		// except under --check-only, where nothing is installed.
-		if (CHECK_ONLY) {
-			toolResults[name] = [];
-			log(`── ${name}  --check-only: nothing will be installed or seeded`);
-		} else {
-			toolResults[name] = await ensureTools(name, m);
-		}
-		const got = await probe(name);
-		if (got === null) {
-			unreachable.push(name);
-			return;
-		}
-		probed[name] = got;
-	})
-);
+// ONE CONTEXT OBJECT, handed into every lib function EXPLICITLY — never a
+// reverse import (see the header's SPLIT ACROSS FILES note, and the
+// check-label-floor.mjs precedent this follows).
+const ctx = {
+	JSON_OUT,
+	WRITE,
+	NO_PUSH,
+	PROVE,
+	CHECK_ONLY,
+	DUE_DAYS,
+	IDLE_TIMING,
+	PROVE_JOB_SCRIPT,
+	log,
+	UNPROBED,
+	manifest,
+	nodes,
+	REQUIRED,
+	NEVER_WRITTEN,
+	IDLE_ONLY,
+	report,
+	revocationVerdicts,
+	unreachable,
+	toolResults,
+	seedResultsByNode,
+	probed,
+	idleHolds,
+	proofLedger,
+	seedDeps,
+	probe,
+	ensureTools,
+	findings: 0,
+};
 
-/**
- * PASS 2 — `--write` RE-TAKES every idle-only measurement PASS 1 took beside a
- * live job, on a node it has DRAINED and waited out. ONE NODE AT A TIME, in
- * manifest order: draining every claw at once to measure them in parallel would
- * stop the fleet's CI for the length of the slowest wait.
- *
- * WHY ONLY THE BUSY ONES. The probe counts live `Runner.Worker`s once a second
- * for the whole measurement (`LOAD`), and a node that read zero throughout WAS
- * idle — the drain is how bootcamp tries to get that zero, not the evidence for
- * it. Draining a node that is already quiet buys nothing and costs a settle.
- *
- * WHY ONLY UNDER `--write`. A drain takes a node out of service; a read-only run
- * that did that would be a surprise to anyone who typed `fleet bootcamp` to
- * look. Without `--write` a busy measurement is reported as unjudged, carried,
- * and not counted — nothing is being recorded on it.
- */
-const hold = { held: null };
-if (WRITE) {
-	const live = createLiveDeps();
-	// A process killed mid-wait must not leave the node out of service. The drain
-	// is dated and `fleet drain --status` would show it, but nothing would lift it.
-	for (const sig of ['SIGINT', 'SIGTERM']) {
-		process.once(sig, () => {
-			if (hold.held) live.undrain(hold.held);
-			process.exit(sig === 'SIGINT' ? 130 : 143);
-		});
-	}
-	for (const [name] of nodes) {
-		const got = probed[name];
-		if (!got) continue;
-		const busyIds = IDLE_ONLY.filter((id) => got.caps[id] && got.load[id] !== 0);
-		if (!busyIds.length) continue;
-		log(
-			`── ${name}  ${busyIds.join(', ')} measured beside a live job — draining to re-measure idle ` +
-				`(waits up to ${Math.round(IDLE_TIMING.timeoutMs / 60_000)} min)`
-		);
-		let outcome;
-		try {
-			outcome = await underIdleHold(
-				name,
-				busyIds,
-				{
-					isDrained: live.isDrained,
-					drain: live.drain,
-					undrain: live.undrain,
-					waitQuiet: (node) =>
-						waitUntilDrained({
-							node,
-							busy: busyCount,
-							clock: { now: Date.now, sleep: (ms) => new Promise((r) => setTimeout(r, ms)) },
-							...IDLE_TIMING,
-						}),
-				},
-				() => probe(name, 'measured'),
-				hold
-			);
-		} catch (e) {
-			outcome = { status: 'inconclusive', reason: `the idle hold failed: ${e.message}` };
-		}
-		if (outcome.status === 'measured' && outcome.result === null) {
-			outcome = {
-				...outcome,
-				status: 'inconclusive',
-				reason: 'unreachable during the idle re-measurement',
-			};
-		}
-		if (outcome.status === 'measured') {
-			for (const id of busyIds) {
-				const again = outcome.result.caps[id];
-				if (!again) continue;
-				got.caps[id] = again;
-				got.load[id] = id in outcome.result.load ? outcome.result.load[id] : null;
-			}
-		}
-		const { status, reason, heldBy, undrainFailed } = outcome;
-		idleHolds[name] = { status, reason, heldBy, undrainFailed, capabilities: busyIds };
-	}
-}
+// PASS 1 — every node at once: install, then probe.
+await runPass1(ctx);
+
+// PASS 2 — `--write` re-takes every idle-only measurement beside a live job.
+await runIdlePass2(ctx);
 
 // PASS 3 — judge, and seed what was earned.
-await Promise.all(
-	nodes.map(async ([name, m]) => {
-		const got = probed[name];
-		if (!got) return;
-		const { caps, load } = got;
-		const declared = new Set(m.labels ?? []);
-		// The record ON DISK before this run — observed state, not this process's
-		// belief — is what an unjudged measurement keeps.
-		const prevEarned = new Set(m.$capabilities?.earned ?? []);
-		// ONE judging rule, in the registry, for every capability — see
-		// `meetsBar`, and `judgeMeasurement` above it. A binary capability passes
-		// on `ok` exactly as before; a MEASURED one (`measure` declared) passes
-		// only if the number the probe printed clears the declared bar — and an
-		// IDLE-ONLY one is judged at all only if the probe counted zero live jobs
-		// while it measured. Bootcamp deliberately does no comparing of its own:
-		// the bar has one home, and the next payload capability is a registry
-		// entry rather than a branch here.
-		const barReason = {};
-		const proven = new Set();
-		// INCONCLUSIVE: an idle-only capability this run did not judge. It is
-		// neither earned nor stripped — whatever the record on disk said stands —
-		// and it is SAID. "I could not measure it quietly" is not "it is slow".
-		const inconclusive = [];
-		/** idle-only ids judged on a quiet node this run, for the record. */
-		const judgedIdle = {};
-		const heldOut = idleHolds[name]?.status === 'inconclusive' ? idleHolds[name].reason : null;
-		for (const [id, v] of Object.entries(caps)) {
-			const verdict = judgeMeasurement(capability(id), v.ok, v.detail ?? '', load[id]);
-			barReason[id] = verdict.reason;
-			if (!verdict.judged) {
-				inconclusive.push({
-					id,
-					reason: heldOut ? `${verdict.reason}; idle re-measure: ${heldOut}` : verdict.reason,
-					kept: prevEarned.has(id) ? 'earned' : 'not earned',
-				});
-				if (prevEarned.has(id)) proven.add(id);
-				continue;
-			}
-			if (measuredIdleOnly(capability(id))) {
-				judgedIdle[id] = { value: measuredValue(v.detail), earned: verdict.proven };
-			}
-			if (verdict.proven) proven.add(id);
-		}
-		// A capability this controller could not enable was never probed: the
-		// record on disk stands, and it is said.
-		for (const [id, reason] of Object.entries(UNPROBED)) {
-			if (caps[id]) continue;
-			inconclusive.push({ id, reason, kept: prevEarned.has(id) ? 'earned' : 'not earned' });
-			if (prevEarned.has(id)) proven.add(id);
-		}
+await runPass3(ctx);
 
-		// EARNED IS EVERYTHING THE PROBE EXECUTED SUCCESSFULLY (settled
-		// 2026-09-10), not `proven ∩ declared` among label capabilities.
-		//
-		// WHY IT CHANGED. The claw floor's eligibility input is
-		// `$capabilities.earned` (`claw-floor-design-2026-09-07.md` §1.1), and
-		// under the old rule `av1-nvenc` was the fleet's ONLY earnable label — so
-		// `earned` was `[]` on all seven claws while each of them had proved five
-		// capabilities, and the field the floor reads said the fleet could do
-		// nothing. `earned` is now the node's PROOF SET: one producer, one
-		// question, "what has this box demonstrated".
-		//
-		// REGISTERED IDS ONLY. A `CAP` line with no registry entry is drift
-		// `capability-schema`'s probe-drift rule owns; recording it here as earned
-		// would make a typo in the probe script read as a capability.
-		const earned = [...proven].filter((id) => capability(id)).sort();
-		const unjudged = new Set(inconclusive.map((i) => i.id));
+const revocationChanges = computeRevocationChanges(ctx);
 
-		const unearned = [];
-		const unclaimed = [];
-		const blocked = [];
+const proveResults = await proveWorkloads(ctx);
 
-		// UNCLAIMED/UNEARNED STAY LABEL-SCOPED. They are statements about ROUTING —
-		// "capacity the fleet cannot route to", "work routes here and fails" — and
-		// a toolchain capability is routable by nothing, so widening them with
-		// `earned` would turn every proven tool into a routing finding. Only LABEL
-		// capabilities a probe can answer are in scope: a `role` label — today
-		// `taskauto`, and `hadoku-builder`, which NEVER_WRITTEN excludes for a
-		// second reason — is a decision about what the box is FOR, and no probe
-		// can settle it. `pm2-host` LEFT that set on 2026-09-15 (#6): it is
-		// probed and therefore earnable here, so a claw that proves it appears as
-		// `unclaimed` rather than being invisible.
-		for (const id of probeableIds()) {
-			const cap = capability(id);
-			if (!cap || cap.surface !== 'label' || NEVER_WRITTEN.has(id)) continue;
-			const isProven = proven.has(id);
-			const isDeclared = declared.has(id);
-			// An UNJUDGED measurement says nothing either way, so it cannot make a
-			// declared label UNEARNED; the INCONCLUSIVE line carries it instead.
-			if (!isProven && isDeclared && !unjudged.has(id)) {
-				unearned.push({ id, detail: barReason[id] ?? caps[id]?.detail ?? 'not probed' });
-			} else if (isProven && !isDeclared) unclaimed.push(id);
-		}
-		// PREREQUISITES PROVEN, not just the ones that failed. A PASSES line that
-		// lists nothing is a pass with no evidence behind it — the state
-		// CLAUDE.md's "exit 0 with no evidence is a failure" rule is about — and
-		// on a homogeneous fleet that is most lines: `av1-nvenc` is the only
-		// earnable LABEL capability any node holds, so without this the report
-		// says almost nothing about the five nodes that are fine.
-		const prereqs = [];
-		const unprobed = [];
-		for (const id of REQUIRED) {
-			if (!caps[id]) {
-				// Declared required, and the probe never answered. Not a pass and not
-				// a failure — the probe and the manifest disagree about what exists,
-				// which `capability-schema`'s probe-drift rule exists to catch.
-				unprobed.push(id);
-				continue;
-			}
-			if (caps[id].ok) prereqs.push({ id, detail: caps[id].detail });
-			else blocked.push({ id, detail: caps[id].detail });
-		}
-		// EVERY `no` GETS A REASON, INCLUDING THE ONES NOTHING ELSE PRINTS.
-		//
-		// `unearned` covers a declared LABEL and `blocked` covers a required
-		// TOOLCHAIN capability. Between them they leave every `implicit`
-		// capability's failure completely silent: `cargo-bevy` below the bar,
-		// `cuda` on a box whose DKMS module is not in the running kernel,
-		// `pm2-capable` on a node that could not fetch a supervisor — each of them
-		// simply ABSENT from `earned`, which is CLAUDE.md's "I could not look must
-		// never render as nothing is wrong" one level down. A reader could see
-		// THAT a node did not earn something and never WHY, and a firewall, a
-		// kernel that has not rebooted and a card that cannot do AV1 are three
-		// different jobs.
-		//
-		// NOT A FINDING. A claw with no GPU is not broken, and an 8 GB box that
-		// cannot hold a 9,784 MiB role is not broken either — this is the evidence
-		// behind an absence, not a fault.
-		//
-		// AND DELIBERATELY NOT IN THE `$capabilities` RECORD. `meetsBar`'s reason
-		// for a MEASURED capability carries the measurement, and that moves on
-		// every pass — `cargo-bevy` prints a fresh throughput figure every run — so
-		// recording it would make every re-probe a changed file, every changed file
-		// a commit, and every commit an mgmt-api redeploy. That is issue #59
-		// exactly, re-entering through a different field. A per-run measurement
-		// belongs in the run's own output; the record keeps only what CHANGED.
-		// (`measurements`, below, records an idle-only figure WITHOUT reopening
-		// this: its entry moves only when that capability's verdict does.)
-		const notEarned = [];
-		const explained = new Set([
-			...unearned.map((u) => u.id),
-			...blocked.map((b) => b.id),
-			...unjudged,
-		]);
-		for (const id of probeableIds()) {
-			if (proven.has(id) || explained.has(id) || !caps[id] || !capability(id)) continue;
-			notEarned.push({ id, detail: barReason[id] ?? caps[id].detail ?? 'no reason given' });
-		}
-		// REVOCATION VERDICTS (src/capability-revocations.ts): this run EXECUTED
-		// these routing labels. A pass clears a revocation — the reboot cycle's
-		// re-prove lands here — and a failure revokes one the node was offering.
-		// An unjudged measurement moves nothing.
-		const offeredBefore = new Set(nodeOffer(m, { eligible: true }));
-		for (const id of probeableIds()) {
-			const cap = capability(id);
-			if (!cap || cap.surface !== 'label' || cap.kind !== 'identity') continue;
-			if (!caps[id] || unjudged.has(id)) continue;
-			const passed = proven.has(id);
-			if (!passed && !offeredBefore.has(id)) continue;
-			revocationVerdicts.push({
-				node: name,
-				capability: id,
-				passed,
-				reason: passed ? caps[id].detail : (barReason[id] ?? caps[id].detail ?? 'failed'),
-			});
-		}
-
-		report[name] = {
-			earned,
-			unearned,
-			unclaimed,
-			blocked,
-			prereqs,
-			unprobed,
-			notEarned,
-			inconclusive,
-			measuredIdle: judgedIdle,
-			...(idleHolds[name] ? { idleHold: idleHolds[name] } : {}),
-			declared: [...declared],
-			jobProofs: jobProofsFor(name, m),
-		};
-
-		// EARNED CAPABILITIES COME WITH THEIR ARTIFACTS (#102, wave 4c lane E), run
-		// unconditionally — like `ensureTools` above, NOT gated behind `--write`.
-		// `earned` here is THIS RUN's fresh proof, not the manifest's possibly
-		// stale `$capabilities` facet, so the synthetic node below carries it
-		// directly rather than asking `seedNode` to re-derive it from `m`.
-		seedResultsByNode[name] = CHECK_ONLY
-			? []
-			: await seedNode(name, { ...m, $capabilities: { earned, prereqs } }, manifest, seedDeps);
-	})
-);
-
-/**
- * Revoke what this run saw fail and clear what it saw pass — one write, after
- * every node answered. An unreadable record is left alone and said: rewriting
- * it from this run's partial view would re-grant whatever it held for nodes
- * this run did not probe.
- *
- * THIS WRITE IS NOT GATED BY `--write`, DELIBERATELY (#15). `--write` governs
- * the `$capabilities` facet alone; a revocation is a SAFETY stop, not a
- * finding to record later — a label a probe just watched FAIL must stop
- * routing to it immediately, or the next dispatch sends a job at a node this
- * very run proved cannot do it. Saying so only in a code comment is how a
- * dry run came to read as fully read-only: the output below says it in every
- * run that actually changes a revocation, and the `--json` document carries
- * it as `writesEvenWithoutWrite` so a caller never has to infer the rule from
- * prose.
- */
-const revocationChanges = (() => {
-	const read = readRevocations(stateDir());
-	if (read.corrupt) {
-		log(`── revocations: the record is unreadable (${read.why}) — nothing revoked or cleared.`);
-		return { revoked: [], cleared: [], unreadable: read.why, writesEvenWithoutWrite: true };
-	}
-	const applied = applyVerdicts(read.nodes, revocationVerdicts, 'bootcamp');
-	const changedRevocations = applied.revoked.length > 0 || applied.cleared.length > 0;
-	if (changedRevocations) writeRevocations(stateDir(), applied.nodes);
-	for (const v of applied.revoked) {
-		log(
-			`── ${v.node}  REVOKED ${v.capability} — withheld from routing until a probe passes (${v.reason})`
-		);
-	}
-	for (const v of applied.cleared)
-		log(`── ${v.node}  cleared ${v.capability} — proven again, routable`);
-	// SAID OUT LOUD, NOT ONLY IN A COMMENT (#15). Without this line a `--write`-
-	// less run that just revoked or cleared a label reads as a dry run that
-	// changed nothing on disk — exactly backwards.
-	if (!WRITE && changedRevocations) {
-		log(
-			`  revocations are written in every mode, with or without --write: a label this run\n` +
-				`  saw FAIL must stop routing immediately, so the above was not a dry run.`
-		);
-	}
-	return { revoked: applied.revoked, cleared: applied.cleared, writesEvenWithoutWrite: true };
-})();
-
-/**
- * `fleet bootcamp --prove`'s one node/capability attempt: drain, wait for
- * quiet, run the REAL canary through `fleet prove-job` (which records
- * `$proof` itself — see that script's own header), undrain on every path.
- *
- * SHELLS OUT rather than calling `proveJob` in-process, the same way
- * `refresh-cycle.mjs`'s `drainCli` and `benchmark-fleet.mjs`'s cadence already
- * shell out to `drain-node.mjs`: `scripts/prove-job.mjs` already owns the
- * mint/dispatch/teardown orchestration, the in-process host install it needs,
- * and the `$proof` write — reimplementing that here would be a second,
- * untested copy of all three.
- */
-async function runCanary(name, id) {
-	const live = createLiveDeps();
-	let alreadyDrained;
-	try {
-		alreadyDrained = await live.isDrained(name);
-	} catch {
-		alreadyDrained = null;
-	}
-	let busy;
-	try {
-		busy = busyCount(name);
-	} catch {
-		busy = null;
-	}
-	// Busy is a reason to drain and wait, never to skip — see lib/proof-drain.mjs.
-	const plan = canaryPlan({ alreadyDrained, busy });
-	if (plan.action === 'skip') {
-		return { node: name, capability: id, status: 'skipped', reason: plan.reason };
-	}
-	let drained;
-	try {
-		drained = live.drain(name, {
-			kind: 'training',
-			reason: `${OWN_DRAIN_REASON_PREFIX} ${id} workload canary`,
-		});
-	} catch (e) {
-		return { node: name, capability: id, status: 'skipped', reason: `drain failed: ${e.message}` };
-	}
-	if (drained?.ok === false) {
-		return {
-			node: name,
-			capability: id,
-			status: 'skipped',
-			reason: `drain refused: ${drained.reason}`,
-		};
-	}
-	try {
-		const wait = await waitUntilDrained({
-			node: name,
-			busy: busyCount,
-			clock: { now: Date.now, sleep: (ms) => new Promise((r) => setTimeout(r, ms)) },
-		});
-		if (!wait.drained) {
-			return {
-				node: name,
-				capability: id,
-				status: 'skipped',
-				reason: `never went quiet: ${wait.reason ?? 'timed out'}`,
-			};
-		}
-		// STDOUT TO A FILE, NEVER A PIPE (F6, #33): `fleet prove-job`'s `evidence`
-		// and `findings` arrays are long enough that the old `execFileSync` pipe
-		// capture here measurably lost data on a large doc (reproduced: a plain
-		// 1,000,000-byte child write landed as 146,176 through a pipe, intact
-		// through a file). `spawnJsonToFile` also drops the throw/catch dance:
-		// `prove-job.mjs` exits non-zero for everything but a pass and ALWAYS
-		// prints its one JSON document first, and parseable stdout wins over the
-		// exit code regardless of how the child ended.
-		const run = await spawnJsonToFile(
-			process.execPath,
-			[PROVE_JOB_SCRIPT, '--node', name, '--capability', id, '--json', '--under-own-drain'],
-			{ timeoutMs: 45 * 60_000 }
-		);
-		const doc = run.doc;
-		if (doc === null) {
-			return {
-				node: name,
-				capability: id,
-				status: 'error',
-				reason: `fleet prove-job did not produce JSON: ${run.why}`,
-			};
-		}
-		// An inconclusive canary (it never ran on the node) recorded nothing and
-		// is NOT a fail — see `proofConclusive` in src/runners/prove-job.ts.
-		if (doc.proofInconclusive) {
-			return {
-				node: name,
-				capability: id,
-				status: 'inconclusive',
-				runId: doc.runId ?? null,
-				reason: doc.proofInconclusive,
-			};
-		}
-		const verdict = doc.proofRecord?.verdict ?? (doc.ok ? 'pass' : 'fail');
-		return {
-			node: name,
-			capability: id,
-			status: verdict,
-			runId: doc.runId ?? null,
-			why: doc.proofRecord?.why ?? doc.findings?.map((f) => f.message).join('; ') ?? null,
-		};
-	} finally {
-		try {
-			live.undrain(name);
-		} catch {
-			// Best effort; a drain this process could not lift expires on its own
-			// (`fleet drain` is dated), and the outcome above still names what
-			// happened — an undrain failure is not a reason to hide the result.
-		}
-	}
-}
-
-/**
- * Every (node, capability) this run's fresh `earned` set makes a CANDIDATE
- * for a workload canary, skipping anything the CPU pre-filter or an
- * already-fresh pass rules out. Returns one outcome per candidate; empty,
- * always, when `--prove` was not given.
- */
-async function proveWorkloads() {
-	if (!PROVE) return [];
-	const outcomes = [];
-	for (const [name, m] of nodes) {
-		const r = report[name];
-		if (!r) continue; // this run could not reach it at all
-		for (const id of workloadGatedCapabilities()) {
-			if (!r.earned.includes(id)) continue; // tool not earned here, this run
-			if (!qualifiesForCanary(id, m)) {
-				outcomes.push({
-					node: name,
-					capability: id,
-					status: 'skipped',
-					reason: `CPU floor not met for the canary (cores=${m.cores ?? 'unmeasured'})`,
-				});
-				continue;
-			}
-			const existing = readProof(name, id, { dir: stateDir() });
-			if (existing?.verdict === 'pass') {
-				const ageDays = (Date.now() - Date.parse(existing.at)) / 86_400_000;
-				if (Number.isFinite(ageDays) && ageDays <= DUE_DAYS) {
-					outcomes.push({
-						node: name,
-						capability: id,
-						status: 'not-due',
-						reason: `last pass ${existing.at} (${ageDays.toFixed(1)}/${DUE_DAYS}d)`,
-					});
-					continue;
-				}
-			}
-			outcomes.push(await runCanary(name, id));
-		}
-	}
-	return outcomes;
-}
-
-const proveResults = await proveWorkloads();
-
-let findings = 0;
-for (const [name, r] of Object.entries(report).sort()) {
-	const failedTools = (toolResults[name] ?? []).filter((t) => t.action === 'failed');
-	const seedFindings = (seedResultsByNode[name] ?? []).filter((s) => isSeedFinding(s.status));
-	// Under `--write` an unjudged measurement is a run that was asked to record
-	// and could not look; without it, nothing was going to be recorded anyway.
-	const heldOut = WRITE ? r.inconclusive : [];
-	const verdict =
-		r.unearned.length ||
-		r.blocked.length ||
-		failedTools.length ||
-		seedFindings.length ||
-		heldOut.length ||
-		r.idleHold?.undrainFailed
-			? 'FAILS'
-			: 'PASSES';
-	log(`\n── ${name}  ${verdict}`);
-	for (const t of toolResults[name] ?? []) {
-		if (t.action === 'failed') {
-			findings++;
-			log(`   TOOL FAILED: ${t.id} — ${t.detail}`);
-		} else if (t.action === 'installed') log(`   installed: ${t.id} — ${t.detail}`);
-		else if (t.action === 'advisory') log(`   advisory: ${t.detail}\n     ${t.fix}`);
-	}
-	for (const s of seedResultsByNode[name] ?? []) {
-		if (s.status === 'seeded') {
-			log(`   seeded:    ${s.id} — ${s.proof} (pin ${s.pin}, ${s.freeMb} MiB free)`);
-		} else if (isSeedFinding(s.status)) {
-			findings++;
-			log(`   SEED FAILED: ${s.id} — ${s.reason}`);
-		} else if (s.status === 'busy') {
-			log(`   seed skipped: ${s.id} — a Runner.Worker is live`);
-		}
-	}
-	if (r.prereqs.length) {
-		log(`   proven:    ${r.prereqs.map((p) => `${p.id} (${p.detail})`).join(', ')}`);
-	}
-	if (r.earned.length) log(`   earned:    ${r.earned.join(', ')}`);
-	for (const p of r.jobProofs) log(`   ${p.line}`);
-	for (const u of r.unearned) {
-		findings++;
-		log(`   UNEARNED:  ${u.id} — declared here but the probe says: ${u.detail}`);
-		log(`              work routes here on that label and fails on arrival.`);
-	}
-	for (const b of r.blocked) {
-		findings++;
-		log(`   BLOCKED:   ${b.id} — a toolchain prerequisite this node fails: ${b.detail}`);
-		log(`              it should not be carrying general CI until this passes.`);
-	}
-	for (const n of r.notEarned) {
-		// Deliberately lower-case and uncounted: the UPPER-CASE lines above are
-		// faults, this is the reason behind an absence.
-		log(`   not earned: ${n.id} — ${n.detail}`);
-	}
-	if (r.idleHold?.status === 'measured') {
-		log(
-			`   idle re-measure: ${r.idleHold.capabilities.join(', ')} — ` +
-				(r.idleHold.heldBy === 'bootcamp'
-					? 'drained, waited out, re-measured, undrained'
-					: "waited out under someone else's drain (left in place), re-measured")
-		);
-	}
-	if (r.idleHold?.undrainFailed) {
-		findings++;
-		log(
-			`   STILL DRAINED: bootcamp could not lift its own idle-measurement drain: ${r.idleHold.undrainFailed}`
-		);
-		log(`              the node is out of service until \`fleet drain ${name} --undo\`.`);
-	}
-	for (const i of r.inconclusive) {
-		// LOUD, and never a verdict: the record on disk stands for this capability.
-		const kept = `previous record kept (${i.kept})`;
-		if (WRITE) {
-			findings++;
-			log(`   INCONCLUSIVE: ${i.id} — ${i.reason}; ${kept}`);
-			log(
-				`              nothing new was written for it: a busy measurement neither earns nor strips.`
-			);
-		} else {
-			log(`   not judged: ${i.id} — ${i.reason}; ${kept}`);
-			log(
-				`              read-only run, nothing recorded; \`--write\` drains the node to re-measure idle.`
-			);
-		}
-	}
-	for (const u of r.unclaimed) {
-		// NO LONGER "capacity the fleet cannot route to". Since the mint and the
-		// reconciler derive a node's label offer from `$capabilities.earned`
-		// (`nodeOffer`, issue #19), a proven label IS routed to without anybody
-		// declaring it. This line records which ones arrived that way.
-		log(`   unclaimed: ${u} — proven here, declared nowhere; routed from \`earned\`, not a label.`);
-	}
-	for (const id of r.unprobed) {
-		findings++;
-		log(`   UNPROBED:  ${id} — required of every node, and the probe never answered.`);
-		log(`              The manifest and capability-probe.sh disagree about what exists.`);
-	}
-	if (!r.prereqs.length && !r.earned.length && !r.unearned.length && !r.blocked.length) {
-		// Nothing proven AND nothing failed means the probe told us nothing at all.
-		findings++;
-		log(`   NO EVIDENCE: the probe returned no verdict for any declared capability.`);
-	}
-}
+printReport(ctx);
 
 // UNREACHABLE IS A FINDING, NEVER A PASS, AND NEVER A DEMOTION.
 //
@@ -1055,6 +489,11 @@ for (const [name, r] of Object.entries(report).sort()) {
 // are printed but not counted. Everything else here is unchanged — in
 // particular a deferred node's labels are left ALONE exactly as an unreachable
 // one's are, because "held out of service" is still not "it cannot do it".
+//
+// STAYS HERE, not in a lib: this is the other half of the pairing
+// `expected-down-guard.test.mjs` scans top-level `scripts/*.mjs` files for —
+// `probe`/`ensureTools` above call `runOn`, and this is where that same file
+// asks `deferralFor`.
 if (!proofLedger.ok) {
 	// Uncounted: the node is not at fault. But "no proof line" would read as "nothing to say".
 	log(`\n· job-proof ledger unreadable — proofs not reported: ${proofLedger.reason}`);
@@ -1067,11 +506,11 @@ if (_deferred.length) {
 	for (const n of _deferred) log(`\n· ${deferralNote(n, deferralFor(n, _drains))} — not probed`);
 }
 if (_reallyUnreachable.length) {
-	findings += _reallyUnreachable.length;
+	ctx.findings += _reallyUnreachable.length;
 	log(`\n✗ could not probe: ${_reallyUnreachable.join(', ')}`);
 	for (const n of _reallyUnreachable) {
 		for (const t of (toolResults[n] ?? []).filter((x) => x.action !== 'present')) {
-			if (t.action === 'failed') findings++;
+			if (t.action === 'failed') ctx.findings++;
 			log(`  ${n}: ${t.action} ${t.id} — ${t.detail}`);
 		}
 	}
@@ -1079,192 +518,15 @@ if (_reallyUnreachable.length) {
 	log(`  treating a timeout as a failed capability strips labels off a healthy fleet.`);
 }
 
-/**
- * What `--write` did to the record, for a caller that reads the document.
- * `null` without `--write`.
- */
-let written = null;
-if (WRITE) {
-	// THIS NO LONGER WRITES `machines[].labels` AT ALL.
-	//
-	// It used to append every `unclaimed` capability to the node's `labels`
-	// array, which was the right move while a declaration was how a label
-	// reached a registration. It is not any more: `nodeOffer` (src/capabilities.ts,
-	// issue #19) derives a node's label offer from `$capabilities.earned`, and
-	// every mint, warm listener, placement check and reconciled registration
-	// reads that one answer. So the facet below is the whole write.
-	//
-	// It is also now the only SAFE write. Under the 2026-09-10 `earned`
-	// semantics a proven capability is any capability the probe executed, and
-	// appending those to `labels` would have declared `ffmpeg`, `gh`,
-	// `python-venv`, `python-toolcache`, `playwright` and `jitconfig` as GitHub
-	// runner labels on all eight machines — which `validateCapabilities`
-	// rejects as `surface-mismatch` (a toolchain capability applies to every
-	// node, so routing on it says nothing) and which re-introduces exactly the
-	// hand-declared labels the 2026-09-07 "derived, never declared" decision
-	// removes.
-	const mp = manifestPath();
-	let recorded = 0;
-	// CHANGED, not merely re-probed. See the `sameCapabilityRecord` block below.
-	let changed = 0;
-	const at = new Date().toISOString();
-	// `manifestEdit` (scripts/lib/manifest-edit.mjs, wave 5c F4) owns: asking
-	// `writeTarget` BEFORE anything is written (the refusal this most needs to
-	// make — the deploy tree — is one where the write SUCCEEDS and is erased
-	// later, and a read-back cannot catch that, only refusing the target can),
-	// a FRESH read, rendering through `renderJson` (#12), writing ATOMICALLY,
-	// reading back and comparing, and `landWrite`. This closure only decides
-	// WHAT changes and whether anything needs writing at all.
-	const result = await manifestEdit(
-		(raw) => {
-			for (const [name, r] of Object.entries(report)) {
-				const node = raw.machines?.[name];
-				if (!node) continue;
-				// THE SUPPLY LEDGER'S CAPABILITY FACET — P1.1. `$benchmark` (fleet
-				// benchmark) and `$measured` (fleet enroll) already write a
-				// `{at, by, ...}` block straight onto this same machine entry; nothing
-				// did that for what bootcamp proves, so the earned/blocked/unprobed
-				// verdict lived only in a run's stdout and the manifest kept the
-				// labels a human had asserted, with no record of when — or whether —
-				// they were last checked. This is written for EVERY node this run
-				// could reach, not only the ones with something new to report, because
-				// it is a snapshot of what the probe found, not a diff. A node this
-				// run could not reach keeps whatever `$capabilities` it already had
-				// rather than being overwritten with silence — "I could not look" must
-				// not read as "nothing is here". See
-				// docs/planning/supply-ledger-2026-09-07.md.
-				const prev = node.$capabilities;
-				// THE IDLE MEASUREMENT BEHIND EACH IDLE-ONLY VERDICT (2026-10-10):
-				// `{ value, idle: true, earned, at }`, so a reader can tell an earn
-				// taken on a quiet node from one that predates the rule (no entry). It
-				// moves only when the verdict does — `carryMeasurements` says why
-				// (#59) — and an unjudged run leaves it exactly as it was.
-				const measurements = carryMeasurements(prev, r.measuredIdle, at);
-				const record = {
-					at,
-					by: 'fleet bootcamp',
-					declared: r.declared,
-					earned: r.earned,
-					unclaimed: r.unclaimed,
-					unearned: r.unearned,
-					blocked: r.blocked,
-					prereqs: r.prereqs,
-					unprobed: r.unprobed,
-					...(Object.keys(measurements).length ? { measurements } : {}),
-				};
-				// `at` MEANS "WHEN THIS FINDING LAST CHANGED", NOT "WHEN WE LAST LOOKED".
-				//
-				// Issue #59. The stamp above is fresh on every pass, so a node whose
-				// probe returned exactly what it returned last time still produced a
-				// changed file — and this writer LANDS ITS WRITES AS COMMITS on
-				// hadoku_site (`manifest-target.mjs`, and it has to: a write there that
-				// is not a commit is erased by the next redeploy). hadoku_site's
-				// `redeploy-mgmt-api.yml` filters on this exact path, so every
-				// no-op bootcamp restarted the production API. Observed on claw-9,
-				// 2026-09-23: `538c9d00` and `3faeb8fe`, eleven minutes apart, one
-				// changed line each, and the line was `at`.
-				//
-				// Carrying the PREVIOUS `at` forward when nothing else moved is what
-				// makes the write byte-identical, which is what makes `manifestEdit`
-				// report `changed: false` and commit nothing. "When did we last look"
-				// is still answered — on stdout, below, where a run's own bookkeeping
-				// belongs.
-				//
-				// AND THE GATE READS OBSERVED STATE, not this writer's intent
-				// (CLAUDE.md): the comparison is against what is ON DISK in the
-				// manifest, not against a record this process wrote earlier.
-				if (sameCapabilityRecord(prev, record)) record.at = prev.at;
-				else changed++;
-				node.$capabilities = record;
-				recorded++;
-			}
-			return changed > 0;
-		},
-		{
-			target: mp,
-			writer: 'bootcamp',
-			// THE SUBJECT COUNTS WHAT MOVED. `${recorded}` here read "for 1 node(s)"
-			// on a commit whose only changed line was a timestamp (#59). Evaluated
-			// lazily — only once `changed` is known — because `manifestEdit` calls
-			// this after the closure above has run.
-			reason: () => `$capabilities for ${changed} node(s)`,
-			push: !NO_PUSH,
-		}
-	);
-	if ('ok' in result && result.ok === false) {
-		log(result.why);
-		findings++;
-		written = { ok: false, reason: `${result.reason}: ${result.why}` };
-	} else if (!result.changed) {
-		if (recorded) {
-			written = { ok: true, reason: 'unchanged' };
-			// RE-PROBED AND IDENTICAL. Not "nothing to write" — every node this run
-			// reached was read, and the record already in the manifest is the record
-			// this run would have written. Saying so is the point: a run that goes
-			// quiet here is indistinguishable from one that probed nobody, which is
-			// the "exit 0 with no evidence" shape this repo refuses everywhere else.
-			log(
-				`\n✓ ${recorded} capability record(s) re-probed and UNCHANGED — nothing written, ` +
-					`nothing committed.\n` +
-					`  \`$capabilities.at\` still reads when each finding last CHANGED, not when it ` +
-					`was last checked;\n` +
-					`  restamping it on every pass is what made an idempotent run redeploy mgmt-api (#59).`
-			);
-		} else {
-			log(`\n  nothing to write — no node reachable`);
-			written = { ok: false, reason: 'no node reachable' };
-		}
-	} else {
-		// FORMATTED THE WAY THE OWNING REPO WOULD (#12), which is not optional for
-		// a file that lives in hadoku_site's checkout rather than this one. See
-		// `manifest-edit.mjs` for why an unresolvable prettier degrades to plain
-		// output rather than throwing or claiming the write was clean.
-		log(
-			`\n✓ wrote ${changed} changed capability record(s) of ${recorded} re-probed — ` +
-				'`$capabilities` only, never `labels`'
-		);
-		if (result.formatter) log(`  formatted by ${result.formatter}`);
-		else
-			log(
-				`  ! UNFORMATTED: no prettier could be resolved from ${mp}'s own tree, so this is plain\n` +
-					`    JSON.stringify output. The records are correct and saved; the owning repo's\n` +
-					`    format:check will very likely reject the file until it is run through prettier there.`
-			);
-		// AND NOW MAKE IT SURVIVE. The commit is the only part of this that a
-		// redeploy cannot undo (the write that was erased 40 seconds later on
-		// 2026-09-14 had already done everything else right).
-		const landed = result.landed;
-		log(landingLine(landed, { writer: 'bootcamp' }));
-		if (!landed.ok) findings++;
-		written = landed.ok
-			? { ok: true, reason: landed.reason ?? 'landed' }
-			: { ok: false, reason: `${landed.reason}: ${landed.why ?? ''}`.trim() };
-	}
-}
+const written = await writeManifestFacet(ctx);
 
-if (proveResults.length) {
-	log('\n── workload canaries (--prove) ──');
-	for (const p of proveResults) {
-		if (p.status === 'pass') log(`   PASS: ${p.capability}@${p.node} — ${p.why ?? ''}`);
-		else if (p.status === 'fail') {
-			findings++;
-			log(`   FAIL: ${p.capability}@${p.node} — ${p.why ?? 'no reason given'}`);
-		} else if (p.status === 'error') {
-			findings++;
-			log(`   ERROR: ${p.capability}@${p.node} — ${p.reason}`);
-		} else if (p.status === 'inconclusive') {
-			// Nothing recorded, and nothing proven: a finding, never a quiet pass.
-			findings++;
-			log(`   INCONCLUSIVE: ${p.capability}@${p.node} — ${p.reason} (no $proof written)`);
-		} else log(`   ${p.status}: ${p.capability}@${p.node} — ${p.reason ?? p.why ?? ''}`);
-	}
-}
+printProveResults(ctx, proveResults);
 
 if (JSON_OUT)
 	console.log(
 		JSON.stringify(
 			{
-				ok: findings === 0,
+				ok: ctx.findings === 0,
 				report,
 				unreachable,
 				tools: toolResults,
@@ -1278,6 +540,6 @@ if (JSON_OUT)
 			2
 		)
 	);
-else if (!findings) console.log(`\n✓ every declared label is backed by a passing probe`);
+else if (!ctx.findings) console.log(`\n✓ every declared label is backed by a passing probe`);
 
-process.exit(findings ? 1 : 0);
+process.exit(ctx.findings ? 1 : 0);
