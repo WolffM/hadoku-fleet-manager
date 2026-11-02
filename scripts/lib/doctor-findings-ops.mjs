@@ -110,8 +110,8 @@ export function opsFindings(health, { nowMs = Date.now() } = {}) {
 	// the bootcamp pointer: never stored, so a reader without those records
 	// draws nothing rather than a stale verdict. An unclaimed manager is memory
 	// no budget counts and keeps `not-beside-unbounded` tenants off the node, so
-	// it BLOCKS; a declared host with no apps and no ceiling is hadoku_site's
-	// call and is advisory.
+	// it BLOCKS; a declared host with no apps and no ceiling is advisory until
+	// the toolchain floor's pm2-boot bounds it.
 	if (health.pm2Units?.units === null) {
 		out.push(
 			f(

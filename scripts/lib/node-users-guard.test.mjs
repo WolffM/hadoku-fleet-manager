@@ -40,8 +40,8 @@ const ALLOWED = {
 		'a one-off repair from 2026-08-17, run by hand before the registry existed; kept as the record',
 	'literal:scripts/runners-slice-install.sh':
 		"the slice unit's Documentation= URL into the operator's checkout, not an identity",
-	'literal:scripts/lib/toolchain-floor.mjs':
-		"pm2-boot reads its own user with `id -un`: pm2 is admin's, and the entry must move to an admin-run check before a cutover (node-users plan P2)",
+	'literal:scripts/lib/pm2-boot-floor.mjs':
+		"pm2-boot reads its own user with `id -un`: pm2 is admin's, and the entry runs as the admin role (moved out of toolchain-floor.mjs, which is at its size ceiling)",
 	'literal:scripts/lib/reconcile-scripts.mjs':
 		'a log line printing who wrote the toolcache path; it decides nothing',
 	'literal:scripts/add-dvd.sh':

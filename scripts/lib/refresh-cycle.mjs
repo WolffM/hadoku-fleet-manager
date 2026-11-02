@@ -154,9 +154,10 @@ export function verdictAfter(work, tools, seen, latestById) {
  * THE DOWNGRADE GUARD lives here, as well as in the planner and the install
  * script: any install/update whose target is LOWER than the installed version
  * (when that is readable) is refused with the reason carried. A `link` runs the
- * tool's declared reachability script and nothing else.
+ * tool's declared reachability script and nothing else. `context` is the
+ * node's `installScript` options (fleet-exec's `repairContext`).
  */
-export function runWorkItem(w, run, { ciUser } = {}) {
+export function runWorkItem(w, run, context = {}) {
 	if (w.action === 'link') {
 		const script = linkScript(w.id);
 		if (!script) return { id: w.id, ok: false, reason: `${w.id} declares no link repair` };
@@ -171,7 +172,7 @@ export function runWorkItem(w, run, { ciUser } = {}) {
 			};
 		}
 	}
-	const script = `set -u\nexport DEBIAN_FRONTEND=noninteractive\n${installScript(w.id, w.target, { ciUser })}`;
+	const script = `set -u\nexport DEBIAN_FRONTEND=noninteractive\n${installScript(w.id, w.target, context)}`;
 	return settle(w.id, run(script));
 }
 

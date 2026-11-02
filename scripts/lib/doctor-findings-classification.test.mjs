@@ -17,6 +17,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { healthRecord } from './doctor-facet.mjs';
+import { claimPm2Units } from './hosting-claims.mjs';
+import { PM2_MEMORY_MAX_MB_DEFAULT } from './pm2-boot-floor.mjs';
 import {
 	ADVISORY,
 	BLOCKING,
@@ -296,4 +298,26 @@ void test('pm2 claims render by severity, and are never stored in the record', (
 	assert.equal('pm2Claims' in healthRecord(h), false);
 	// A stored record re-judged without the join (node-status) draws nothing.
 	assert.equal(find(doctorFindings(healthRecord(h), { nowMs: NOW }), 'pm2-claims').length, 0);
+});
+
+void test("claw-6's idle admin pm2, once pm2-boot bounds it, is a declared host and draws no finding", () => {
+	// The join doctor-run makes: the probe's units, claimed against the app
+	// layer's host list. Unbounded it is `app-layer-idle`; at the floor's
+	// default ceiling the same idle daemon is claimed and budgeted, so `ok`.
+	const judged = (lines) => {
+		const h = pm2Facet(lines);
+		h.pm2Claims = claimPm2Units({
+			units: h.pm2Units.units,
+			tenants: [],
+			declaredHere: [],
+			appLayer: { unit: 'pm2-hadoku.service', host: true },
+		});
+		return find(doctorFindings(h, { nowMs: NOW }), 'pm2-claims').map((f) => f.status);
+	};
+	assert.deepEqual(judged(PM2_CLAW6), ['app-layer-idle']);
+	const bounded = PM2_CLAW6.map((l) =>
+		l.replace(' max 0', ` ${PM2_MEMORY_MAX_MB_DEFAULT * 1048576} 0`)
+	);
+	assert.notDeepEqual(bounded, PM2_CLAW6);
+	assert.deepEqual(judged(bounded), []);
 });

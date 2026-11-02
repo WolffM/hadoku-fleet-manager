@@ -24,7 +24,7 @@ import { hubRepo } from '../../dist/lib/fleet-config.js';
 import { reposDir, stateDir } from './paths.mjs';
 import { parseToolProbe, toolProbeScript } from '../check-fleet-toolchain.mjs';
 import { deferralFor, readDrains } from './expected-down.mjs';
-import { runOnSync, separateCiUser } from './fleet-exec.mjs';
+import { repairContext, runOnSync } from './fleet-exec.mjs';
 import { byRole, resolveInstallTarget } from './toolchain-floor.mjs';
 import { createReleaseLookup } from './tool-release.mjs';
 import { errText } from './term.mjs';
@@ -140,7 +140,7 @@ export function createLiveDeps() {
 					w,
 					(script) =>
 						runOnSync(node, script, { as: 'admin', timeoutMs: 600_000, connectTimeout: 8 }),
-					{ ciUser: separateCiUser(node) }
+					repairContext(node)
 				)
 			),
 		queuePressure: liveQueuePressure,

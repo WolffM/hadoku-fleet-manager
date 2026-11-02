@@ -189,6 +189,20 @@ export function separateCiUser(node, manifest) {
 	return ciIsSeparate(m) ? nodeUser(m, 'ci') : undefined;
 }
 
+/**
+ * What a REPAIRS install script needs to know about its node, for
+ * `installScript`'s options: the separate ci user ({@link separateCiUser}) and
+ * the admin pm2's declared ceiling (`pm2MemoryMaxMb`, read by `pm2-boot`;
+ * absent, the repair's own default).
+ */
+export function repairContext(node, manifest) {
+	const m = (manifest ?? cachedManifest())?.machines?.[node] ?? null;
+	return {
+		ciUser: separateCiUser(node, manifest),
+		...(m?.pm2MemoryMaxMb !== undefined ? { pm2MemoryMaxMb: m.pm2MemoryMaxMb } : {}),
+	};
+}
+
 let manifestCache;
 /** The manifest, read once per process: a script's run is short, and roles do not change mid-run. */
 function cachedManifest() {

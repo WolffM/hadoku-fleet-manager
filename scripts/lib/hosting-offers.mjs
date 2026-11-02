@@ -4,7 +4,7 @@
  *
  * The arithmetic, stated once:
  *
- *   hostableMb = MemTotal − minFreeMb − ciReserveMb − Σ declared slices − unbounded neighbours
+ *   hostableMb = MemTotal − minFreeMb − ciReserveMb − Σ declared slices − pm2 managers
  *   ciReserveMb = ciJobMb × CI_KEEP_JOBS
  *
  * `ciJobMb` is what one CI job is charged: the node's hand-set `jobP95Mb`
@@ -15,8 +15,11 @@
  *
  * Facts come from the node (one ssh, as admin): MemTotal, cores, free disk
  * under the state filesystem, whether the default route is wired, and every
- * pm2 manager's memory ceiling (an unbounded one is charged at what it holds
- * now, and named, because `not-beside-unbounded` reads it). Nothing about the
+ * pm2 manager's memory ceiling. A BOUNDED manager is charged at its ceiling
+ * (the kernel's `memory.max`): that is what it may take, and charging it
+ * nothing would make its memory vanish from the offer the day it was bounded.
+ * An unbounded one is charged at what it holds now, and named, because
+ * `not-beside-unbounded` reads it. Nothing about the
  * node is taken from the manifest's rounded figures.
  */
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
@@ -90,7 +93,8 @@ export function parseOfferProbe(stdout) {
 			const mib = (x) => (/^\d+$/.test(x ?? '') ? Math.round(Number(x) / 1048576) : null);
 			pm2.push({
 				unit,
-				bounded: max !== 'max' && max !== '?',
+				// An unreadable ceiling is NOT a ceiling: only a number is bounded.
+				bounded: mib(max) !== null,
 				maxMb: mib(max),
 				currentMb: mib(cur),
 			});
@@ -152,11 +156,15 @@ export function offerFor({
 	const tenantCores = tenants.reduce((s, t) => s + t.cores, 0);
 	const unbounded = facts.pm2.filter((p) => !p.bounded);
 	const unboundedMb = unbounded.reduce((s, p) => s + (p.currentMb ?? 0), 0);
+	const boundedMb = facts.pm2.filter((p) => p.bounded).reduce((s, p) => s + p.maxMb, 0);
 	const ciReserveMb = ciJobMb === null ? null : ciJobMb * CI_KEEP_JOBS;
 	const memoryMb =
 		facts.memTotalMb === null || ciReserveMb === null
 			? null
-			: Math.max(0, facts.memTotalMb - minFreeMb - ciReserveMb - tenantMb - unboundedMb);
+			: Math.max(
+					0,
+					facts.memTotalMb - minFreeMb - ciReserveMb - tenantMb - unboundedMb - boundedMb
+				);
 	// CI keeps at least one core; a tenant quota beyond that is a promise the node cannot keep.
 	const cores = facts.nproc === null ? null : Math.max(0, facts.nproc - tenantCores - 1);
 	return {
@@ -173,7 +181,12 @@ export function offerFor({
 			cutOver: ciIsSeparate(machine),
 		},
 		tenants,
-		pm2: { present: facts.pm2.length > 0, unbounded: unbounded.map((p) => p.unit), unboundedMb },
+		pm2: {
+			present: facts.pm2.length > 0,
+			unbounded: unbounded.map((p) => p.unit),
+			unboundedMb,
+			boundedMb,
+		},
 		pm2Peer,
 		drain: drain ? { kind: drain.kind ?? 'maintenance', until: drain.until ?? null } : null,
 		labels,
@@ -195,6 +208,7 @@ export function ciJobsAfter(offer, extraMb) {
 		offer.minFreeMb -
 		offer.tenants.reduce((s, t) => s + t.memoryMb, 0) -
 		offer.pm2.unboundedMb -
+		(offer.pm2.boundedMb ?? 0) -
 		extraMb;
 	const fit = Math.floor(room / offer.ci.jobMb);
 	return Math.max(0, Math.min(offer.ci.maxConcurrent ?? fit, fit));

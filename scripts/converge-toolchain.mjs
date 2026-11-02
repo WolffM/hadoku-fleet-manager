@@ -43,7 +43,13 @@
  */
 
 import { writeFileSync } from 'node:fs';
-import { loadManifest, machineArg, runOnSync, separateCiUser } from './lib/fleet-exec.mjs';
+import {
+	loadManifest,
+	machineArg,
+	repairContext,
+	runOnSync,
+	separateCiUser,
+} from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import {
@@ -204,7 +210,7 @@ async function converge(node, missingPkgs, brokenCaps, manifest) {
 			`sudo -n apt-get update -qq && sudo -n apt-get install -y -qq --no-install-recommends ${missingPkgs.join(' ')}`
 		);
 	}
-	const ciUser = separateCiUser(node, manifest);
+	const context = repairContext(node, manifest);
 	for (const id of brokenCaps) {
 		let version;
 		if (isVersionManaged(REPAIRS[id])) {
@@ -217,7 +223,7 @@ async function converge(node, missingPkgs, brokenCaps, manifest) {
 			}
 			version = resolved.version;
 		}
-		steps.push(installScript(id, version, { ciUser }));
+		steps.push(installScript(id, version, context));
 	}
 	if (!steps.length) return { ok: !failed.length, reason: failed.join('; ') || null };
 	const res = onNode(node, `set -u\nexport DEBIAN_FRONTEND=noninteractive\n${steps.join('\n')}`, {

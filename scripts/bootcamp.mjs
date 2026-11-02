@@ -152,9 +152,9 @@ import process from 'node:process';
 import {
 	loadManifest,
 	machineArg,
+	repairContext,
 	runOn,
 	selectMachines,
-	separateCiUser,
 } from './lib/fleet-exec.mjs';
 import { capability, measuredIdleOnly } from '../dist/lib/capability-registry.js';
 import { probeableIds } from '../dist/lib/capability-labels.js';
@@ -391,14 +391,10 @@ async function ensureTools(name, m) {
 			}
 			version = resolved.version;
 		}
-		const ran = await runOn(
-			name,
-			installScript(id, version, { ciUser: separateCiUser(name, manifest) }),
-			{
-				as: 'admin',
-				timeoutMs: 600_000,
-			}
-		);
+		const ran = await runOn(name, installScript(id, version, repairContext(name, manifest)), {
+			as: 'admin',
+			timeoutMs: 600_000,
+		});
 		if (!ran.ok) {
 			results.push({ id, action: 'failed', detail: `install failed: ${reasonOf(ran)}` });
 			continue;

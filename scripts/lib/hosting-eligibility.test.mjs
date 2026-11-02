@@ -102,6 +102,16 @@ test('an unbounded neighbour counts against the empty node, as it does in the of
 	);
 });
 
+test('a bounded neighbour counts at its ceiling against the empty node, as it does in the offer', () => {
+	const el = forPlan(CARDTABLE, [
+		offer('claw-8', { pm2: { present: true, unbounded: [], unboundedMb: 0, boundedMb: 6000 } }),
+	]);
+	assert.match(
+		el.ruledOut[0].reasons.join(),
+		/empty, it would offer 3856 MiB; the unit needs 4096/
+	);
+});
+
 test('a node that did not answer, or a rule it could not tell, is unknown, never eligible or ruled out', () => {
 	const el = forPlan(CARDTABLE, [
 		{ node: 'claw-9', reachable: false, hostable: null, unknown: ['ssh: timeout'] },

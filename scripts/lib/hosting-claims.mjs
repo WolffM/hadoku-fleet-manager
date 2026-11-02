@@ -14,8 +14,10 @@
  *     `pm2-<admin>.service` on a node it declares a pm2 host.
  *
  * Anything else is unclaimed. A declared app-layer host running NO apps with no
- * memory ceiling is claimed but idle: hadoku_site's call whether to undeclare
- * or bound it, so it is advisory here, never failing.
+ * memory ceiling is claimed but idle, and advisory, never failing. The toolchain
+ * floor's `pm2-boot` gives every services host's admin pm2 a ceiling
+ * (lib/pm2-boot-floor.mjs), and a bounded one is budgeted at that ceiling by
+ * hosting-offers, so this verdict means the floor has not run there yet.
  *
  * Pure: the caller measures the units and reads the records. `appLayer.host`
  * and `apps` may be null ("could not look"), and that is never read as claimed
@@ -94,7 +96,7 @@ export function claimPm2Units({ units, tenants, declaredHere, appLayer, unreadab
 			return row(
 				'app-layer-idle',
 				'app-layer',
-				"a declared pm2 host running no apps, with no memory ceiling: the app layer's to undeclare or bound"
+				"a declared pm2 host running no apps, with no memory ceiling: the toolchain floor's pm2-boot bounds it (fleet converge-toolchain --write)"
 			);
 		}
 		return row('app-layer', 'app-layer', 'a declared pm2 host of the app layer');

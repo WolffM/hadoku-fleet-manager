@@ -14,6 +14,7 @@ import { hostsCiDocker, hostsPm2Services } from '../../dist/lib/node-role.js';
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
 import { DEFAULT_MIN_AGE_MINUTES, dispatchLookup, parseVersion } from './tool-release.mjs';
 import { RELEASE_TOOLS } from './toolchain-release-tools.mjs';
+import { PM2_BOOT } from './pm2-boot-floor.mjs';
 
 /**
  * The installed-RAM floor jdk21/maven apply through `when` (cardtable#5,
@@ -395,45 +396,7 @@ export const REPAIRS = {
 			'command -v pm2 >/dev/null 2>&1 || sudo -n npm install -g --no-fund --no-audit pm2',
 		].join('\n'),
 	},
-	'pm2-boot': {
-		when: pm2ServicesHost,
-		why:
-			'services must come back after a reboot without a human: pm2 runs under ' +
-			'pm2-<user>.service (pm2 resurrect), as claw-4 does. A daemon started by hand dies ' +
-			'with the box and takes every service with it.',
-		// Enabled AND active: an enabled unit that failed to start is a box whose
-		// services did not come back, which is the thing this entry exists for.
-		role: 'admin',
-		detect:
-			'u="$(id -un)"; systemctl is-enabled "pm2-$u.service" >/dev/null 2>&1 && ' +
-			'systemctl is-active "pm2-$u.service" >/dev/null 2>&1 && echo OK',
-		repair: [
-			'set -e',
-			'u="$(id -un)"',
-			'sudo -n env PATH="$PATH" "$(command -v pm2)" startup systemd -u "$u" --hp "$HOME" >/dev/null',
-			// ONE DAEMON, AND THE UNIT OWNS IT. Any `pm2` command spawns a daemon
-			// if none answers, so by now one may be running OUTSIDE the unit; the
-			// unit's `pm2 resurrect` then attaches to it instead of forking, never
-			// writes pm2.pid, and systemd fails it (`Failed with result 'protocol'`)
-			// — claw-6, 2026-10-25, and the reason claw-4's daemon was moved by
-			// hand on 2026-10-12. Moved here only while it supervises NOTHING:
-			// killing a daemon with services under it restarts them, which is an
-			// operator's call on a production host.
-			'if ! systemctl is-active --quiet "pm2-$u.service"; then',
-			'  n="$(pm2 jlist 2>/dev/null | tr -cd "{" | wc -c)"',
-			'  if [ "$n" -gt 0 ]; then',
-			'    echo "a pm2 daemon outside pm2-$u.service supervises processes; moving it under the unit restarts them" >&2',
-			'    exit 1',
-			'  fi',
-			'  pm2 kill >/dev/null 2>&1 || true',
-			'  sudo -n systemctl reset-failed "pm2-$u.service" 2>/dev/null || true',
-			'fi',
-			// Saving an EMPTY list over a populated dump would make the next boot
-			// resurrect nothing, so only save when pm2 is supervising something.
-			'[ "$(pm2 jlist 2>/dev/null | tr -cd "{" | wc -c)" -gt 0 ] && pm2 save >/dev/null || true',
-			'sudo -n systemctl enable --now "pm2-$u.service"',
-		].join('\n'),
-	},
+	'pm2-boot': { when: pm2ServicesHost, ...PM2_BOOT },
 	cloudflared: {
 		when: pm2ServicesHost,
 		why:
@@ -718,16 +681,26 @@ export const REPAIRS = {
  * Presence-only tools (rust, docker — no `latest`) are unaffected: they have
  * no vendor-latest to bypass, and `installScript(id)` with no version is the
  * only call they ever need.
+ *
+ * `ciUser` and `pm2MemoryMaxMb` are the node's, as `repairContext` in
+ * fleet-exec.mjs reads them: both land in the script, so both are validated here.
  */
-export function installScript(id, version, { ciUser } = {}) {
+export function installScript(id, version, { ciUser, pm2MemoryMaxMb } = {}) {
 	const r = REPAIRS[id];
 	if (!r) throw new Error(`unknown tool ${JSON.stringify(id)}`);
 	// The ci role's user, for a repair that installs FOR it (docker). Checked
 	// here because it lands in a shell script.
 	if (ciUser !== undefined && !/^[a-z_][a-z0-9_-]*$/.test(ciUser))
 		throw new Error(`refusing ci user ${JSON.stringify(ciUser)}`);
+	// The node's declared admin pm2 ceiling (`pm2-boot`); absent, the repair's default.
+	if (pm2MemoryMaxMb !== undefined && !(Number.isInteger(pm2MemoryMaxMb) && pm2MemoryMaxMb > 0))
+		throw new Error(`refusing pm2MemoryMaxMb ${JSON.stringify(pm2MemoryMaxMb)}`);
 	const ci = ciUser ? `CI_USER='${ciUser}'\nexport CI_USER\n` : '';
-	return ci + installBody(r, id, version);
+	const pm2 =
+		pm2MemoryMaxMb !== undefined
+			? `PM2_MEMORY_MAX_MB='${pm2MemoryMaxMb}'\nexport PM2_MEMORY_MAX_MB\n`
+			: '';
+	return ci + pm2 + installBody(r, id, version);
 }
 
 /** {@link installScript} without the ci user. */

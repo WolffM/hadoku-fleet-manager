@@ -74,6 +74,18 @@ export interface ManifestNode extends RegistryNode {
 	maxConcurrent?: number;
 	/** Node memory floor, in MB. A mint must not push below it. */
 	minFreeMb?: number;
+	/**
+	 * The admin user's pm2 (`pm2-<admin>.service`) memory ceiling, in MB, on a
+	 * `services: "pm2"` node. Read by the toolchain floor's `pm2-boot` repair
+	 * (scripts/lib/toolchain-floor.mjs), which writes it as a `MemoryMax=`
+	 * drop-in and applies it live; absent, `PM2_MEMORY_MAX_MB_DEFAULT` (512),
+	 * sized for an idle daemon. A pm2 that supervises apps holds them in the
+	 * same cgroup, so it needs a declared figure: the repair refuses the default
+	 * there. hosting-offers charges a bounded manager at this ceiling. Applied
+	 * only where the kernel reads none, so changing it later is a hand step.
+	 * Nothing in mgmt-api reads it; the member describes the file.
+	 */
+	pm2MemoryMaxMb?: number;
 	/** cgroup containment. `unitMaxMb` is the per-unit HARD CAP (MemoryMax). */
 	slice?: { unitMaxMb?: number };
 	/**

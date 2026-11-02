@@ -96,7 +96,12 @@ export function eligibilityFor(request, offers, plan) {
 		const ciMb = o.ci?.jobMb ?? null;
 		if (mem === null || ciMb === null) cannot.push('installed memory or CI job cost unknown');
 		else {
-			const roomMb = mem - o.minFreeMb - ciMb * o.ci.keepJobs - (o.pm2?.unboundedMb ?? 0);
+			const roomMb =
+				mem -
+				o.minFreeMb -
+				ciMb * o.ci.keepJobs -
+				(o.pm2?.unboundedMb ?? 0) -
+				(o.pm2?.boundedMb ?? 0);
 			if (roomMb < unit.memoryMb)
 				no.push(`empty, it would offer ${roomMb} MiB; the unit needs ${unit.memoryMb}`);
 		}

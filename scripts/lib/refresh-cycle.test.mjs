@@ -600,7 +600,10 @@ test('converge-toolchain reads as ci and installs through installScript, never t
 	);
 	assert.match(src, /byRole\(repairs\)/, 'each tool is read as its role');
 	assert.match(src, /onNode\(node, `[^`]*`, \{ role \}\)/, 'one read per role');
-	assert.match(src, /installScript\(id, version, \{ ciUser \}\)/);
+	assert.match(
+		src,
+		/= repairContext\(node, manifest\)[\s\S]*installScript\(id, version, context\)/
+	);
 	assert.match(src, /resolveInstallTarget\(/);
 	assert.doesNotMatch(
 		src,

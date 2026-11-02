@@ -558,6 +558,11 @@
     "layer": "config"
   },
   {
+    "glob": "scripts/lib/pm2-boot-floor.mjs",
+    "layer": "config",
+    "why": "the toolchain floor's pm2-boot entry, moved out of toolchain-floor.mjs (config) whole: the same table, in the same layer"
+  },
+  {
     "glob": "scripts/lib/toolchain-release-tools.mjs",
     "layer": "config"
   },
