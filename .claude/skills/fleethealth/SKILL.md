@@ -116,6 +116,15 @@ the state still matches the reason, then move on.
 - **`av1-nvenc=listed-but-encode-failed` on claw-1/2/3.** They do not declare
   that capability; only hokon's RTX 4090 does. claw-1's GTX 860M is a real
   NVIDIA GPU that genuinely cannot AV1-encode. The gate still passes.
+- **`throttle --check`: "hokon: the node's ci-throttle.conf is not what the
+  manifest renders … though its limits match".** Expected when you sweep from
+  a dev checkout. The `RESERVE_FILE` line is rendered for the LOCAL node only,
+  from the running checkout's site (`resolveReserveFile`), and hokon's file
+  names `~/srv/hadoku_site`, the production site. Prove it with
+  `FLEET_MANIFEST_DIR=~/srv/hadoku_site/scripts/admin node dist/cli.js throttle --check --machine hokon`:
+  the rendered `confsha` then equals `sha256sum ~/.hadoku/ci-throttle.conf`
+  (verified 2026-11-02). Never `--confirm` hokon from a dev checkout to
+  "fix" it; that writes the dev path into production's conf.
 - **`(pull_request && author_association not in OWNER/MEMBER/COLLABORATOR &&
 '["ubuntu-latest"]') || vars.CI_RUNNER`.** Untrusted fork PRs routed off the
   self-hosted fleet. A security control. Present in hadoku-aggregator,
