@@ -63,6 +63,7 @@ import {
 	repairNeedsRoot,
 	resolveInstallTarget,
 } from './lib/toolchain-floor.mjs';
+import { debInstalled } from './lib/deb-installed.mjs';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { createLiveDeps, runRefreshCycle } from './lib/refresh-cycle.mjs';
 import { createReleaseLookup } from './lib/tool-release.mjs';
@@ -167,7 +168,7 @@ function onNode(node, script, { role, timeoutMs = 600_000 }) {
 function observe(node, packages, repairs) {
 	const pkgCheck = `
 		for p in ${packages.join(' ')}; do
-			dpkg -s "$p" >/dev/null 2>&1 || printf 'PKG-MISSING %s\\n' "$p"
+			${debInstalled('"$p"')} || printf 'PKG-MISSING %s\\n' "$p"
 		done`;
 	const groups = byRole(repairs);
 	if (!groups.some(([role]) => role === 'ci')) groups.unshift(['ci', []]);

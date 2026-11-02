@@ -15,6 +15,7 @@ import { ciIsSeparate } from '../../dist/lib/node-users.js';
 import { DEFAULT_MIN_AGE_MINUTES, dispatchLookup, parseVersion } from './tool-release.mjs';
 import { RELEASE_TOOLS } from './toolchain-release-tools.mjs';
 import { PM2_BOOT } from './pm2-boot-floor.mjs';
+import { debInstalled } from './deb-installed.mjs';
 
 /**
  * The installed-RAM floor jdk21/maven apply through `when` (cardtable#5,
@@ -204,7 +205,7 @@ const aptRepair = (pkg) =>
 	[
 		'set -e',
 		'sudo apt-get update -qq',
-		`if dpkg -s ${pkg} >/dev/null 2>&1; then sudo apt-get install -y --only-upgrade ${pkg}; ` +
+		`if ${debInstalled(pkg)}; then sudo apt-get install -y --only-upgrade ${pkg}; ` +
 			`else sudo apt-get install -y ${pkg}; fi`,
 	].join('\n');
 
@@ -290,7 +291,7 @@ export const REPAIRS = {
 			'# ROOTLESS, for the ci user. Packages first, as admin.',
 			'need=""',
 			'for p in docker.io docker-cli docker-buildx rootlesskit uidmap slirp4netns dbus-user-session; do',
-			'  dpkg -s "$p" >/dev/null 2>&1 || need="$need $p"',
+			`  ${debInstalled('"$p"')} || need="$need $p"`,
 			'done',
 			'# shellcheck disable=SC2086',
 			'[ -z "$need" ] || sudo -n apt-get install -y -qq --no-install-recommends $need',
