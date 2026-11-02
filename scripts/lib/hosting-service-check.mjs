@@ -24,8 +24,24 @@ echo "actAsTenant=$(sudo -n -u "$AGENT_USER" true 2>/dev/null && echo yes || ech
 echo "pm2Unit=$(systemctl is-active "$SERVICE" 2>/dev/null)"
 echo "pm2Saved=$(sudo -n python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$AGENT_HOME/.pm2/dump.pm2" 2>/dev/null || echo none)"
 echo "siteClone=$(sudo -n -u "$AGENT_USER" sh -c '[ -d "$1" ] || { echo missing; exit 0; }; [ -w "$1" ] && echo writable || echo readonly' sh "$SITE_CLONE" 2>/dev/null || echo unreadable)"
-if [ -n "$HOSTNAME_WANT" ]; then
-	cfg=$(ps -eo args 2>/dev/null | grep -o 'cloudflared.*--config [^ ]*' | head -n1 | sed 's/.*--config //')
+${ingressProbe()}`;
+}
+
+/**
+ * The tunnel half of the observation: which service the node's RUNNING
+ * cloudflared routes \`$HOSTNAME_WANT\` to, asked of cloudflared itself with the
+ * config file that process was started with.
+ *
+ * The process is picked by its executable name (\`comm\`), never by a pattern
+ * over \`ps\` args: the pipeline's own \`grep\` carries that pattern in its argv,
+ * and on 2026-11-02 it sorted ahead of the root cloudflared on claw-4 and
+ * claw-6, so the config path read \`[^\` and every service tenant's slice went
+ * \`not-guaranteed\` ("the node's tunnel rule … could not be read") while each
+ * tunnel routed its hostname correctly.
+ */
+export function ingressProbe() {
+	return `if [ -n "$HOSTNAME_WANT" ]; then
+	cfg=$(ps -eo comm=,args= 2>/dev/null | awk '$1 == "cloudflared" { for (i = 2; i < NF; i++) if ($i == "--config") { print $(i + 1); exit } }')
 	echo "ingressService=$(sudo -n cloudflared tunnel --config "\${cfg:-/etc/cloudflared/config.yml}" ingress rule "https://$HOSTNAME_WANT" 2>/dev/null | awk '$1 == "service:" { print $2; exit }')"
 fi
 `;
