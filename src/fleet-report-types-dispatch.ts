@@ -23,12 +23,15 @@ export type { FleetDispatch } from './fleet-loop.js';
  * Did warm affinity DECIDE where the dispatcher's mints went, or were they warm
  * by chance? (`warm-affinity-measured-2-2026-09-15.md` §5e.)
  *
- * Moved to `src/runners/dispatch-pass.ts` (wave clean-1 lane C, cut (iii)):
- * its own `affinity` is the one mutable copy and `getDispatchAffinitySnapshot`
- * its one reader, so that domain module is the real owner — this file
- * imports and re-exports it from there under its original path.
+ * Moved to `src/runners/dispatch-pass-state.ts` (wave clean-1 lane C, cut
+ * (iii)): its own `affinity` is the one mutable copy and
+ * `getDispatchAffinitySnapshot` its one reader, so that domain module is the
+ * real owner — this file imports and re-exports it from there under its
+ * original path. `dispatch-pass.ts` only ever imported this type for its own
+ * use and never re-exported it (wave cruft-1 lane A dropped that unused
+ * middle hop).
  */
-export type { FleetDispatchAffinity } from './runners/dispatch-pass.js';
+export type { FleetDispatchAffinity } from './runners/dispatch-pass-state.js';
 
 export interface FleetReservation {
 	reserved: boolean;

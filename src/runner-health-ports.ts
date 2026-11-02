@@ -93,14 +93,6 @@ export function setHostedFallbackReset(fn: ResetFn): void {
 	hostedFallbackReset = fn;
 }
 
-/** Test seam: undo every wire, so a suite that forgets to wire fails loudly rather than reusing another file's. */
-export function __resetRunnerHealthPortsForTesting(): void {
-	backstopDecisionRunner = null;
-	hostedFallbackRunner = null;
-	backstopDecisionReset = noopReset;
-	hostedFallbackReset = noopReset;
-}
-
 /**
  * `checkLabelFloor`'s call site for the backstop decision. THROWS if nothing
  * wired it — "I could not look" must never render as "nothing is wrong", and

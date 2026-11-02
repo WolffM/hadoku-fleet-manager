@@ -107,14 +107,6 @@ export function checkMintSlice(nodes: EphemeralTickInput['nodes'], node: string)
 	);
 }
 
-/** Test seam: the warning is once-per-node-per-process, so a test asserting it
- *  fires must be able to start from a clean sheet. Exported rather than reset
- *  from inside the check, because the once-per-process behaviour IS the thing
- *  under test on the second call. */
-export function resetMintSliceWarnings(): void {
-	warnedSliceOverride.clear();
-}
-
 /**
  * Remove a warm registration whose listener is positively known dead — #61.
  *

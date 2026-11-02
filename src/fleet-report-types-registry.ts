@@ -7,11 +7,12 @@
  */
 
 /**
- * THE THREE JOB-REGISTRY REPORT SHAPES (refactor plan §6.2: "report shapes:
- * ConvergeDoc (exists), GateDoc, RecordDoc"), presented together because
+ * THE JOB-REGISTRY REPORT SHAPES (refactor plan §6.2: "report shapes:
+ * ConvergeDoc (exists), GateDoc, RecordDoc" — `RecordDoc` itself had no
+ * importer and was dropped, wave cruft-1 lane A), presented together because
  * `src/lib/job-runner.ts` classifies a job's tick by reading one of these,
  * never the other way around — a reader must not read its own writer's
- * artifact, but all three artifacts are read by the ONE runner, so their
+ * artifact, but every artifact here is read by the ONE runner, so their
  * shapes belong next to each other for every importer of this barrel.
  *
  * `ConvergeDoc`/`ConvergeRow` moved back to `src/scheduled-converger.ts`
@@ -32,18 +33,5 @@ export interface GateDoc {
 	ok: boolean;
 	findings: { node: string | null; kind: string; reason: string }[];
 	unreadable: { node: string | null; why: string }[];
-	why?: string;
-}
-
-/**
- * A recorder's `--json`: it writes measurements and converges nothing
- * (`benchmark`, `doctor --write` — plan §3.2 rule 6). `recorded` is what it
- * wrote this pass; `unreadable` is what it could not measure, which must
- * never read as "nothing to record".
- */
-export interface RecordDoc {
-	ok: boolean;
-	recorded: { node: string; facet: string }[];
-	unreadable: { node: string; facet: string; why: string }[];
 	why?: string;
 }

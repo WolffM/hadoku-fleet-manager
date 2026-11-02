@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseJsonStdout, spawnCapture, spawnJson, spawnJsonToFile } from './spawn-json.mjs';
+import { parseJsonStdout, spawnCapture, spawnJsonToFile } from './spawn-json.mjs';
 
 /**
  * `assert.throws` returns undefined, so the message — the whole point of this
@@ -101,11 +101,12 @@ test('a NON-ZERO exit with parseable stdout is a finding, not a failure', () => 
 	// as a FINDING. `fleet capabilities` exits 1 with a full report whenever a
 	// node is unreachable. A helper that refused that would break every caller
 	// it was written for, so this is the half that keeps the strictness honest.
-	const report = spawnJson(
+	const r = spawnCapture(
 		process.execPath,
 		['-e', 'console.log(JSON.stringify({ unreachable: ["a"] })); process.exit(1)'],
 		{ label: 'a gate with a finding' }
 	);
+	const report = parseJsonStdout(r);
 	assert.deepEqual(report, { unreachable: ['a'] });
 });
 
@@ -131,7 +132,8 @@ test('a command that never starts says so, with the errno', () => {
 test('spawnCapture keeps a large stdout whole when the child exits right after writing', () => {
 	const n = 1_000_000;
 	const src = `process.stdout.write(JSON.stringify({marker:'m',pad:'x'.repeat(${n})})); process.exit(0);`;
-	const doc = spawnJson(process.execPath, ['-e', src], { label: 'a large document' });
+	const r = spawnCapture(process.execPath, ['-e', src], { label: 'a large document' });
+	const doc = parseJsonStdout(r);
 	assert.equal(doc.marker, 'm');
 	assert.equal(doc.pad.length, n, 'every byte arrived, not a pipe-sized head');
 });

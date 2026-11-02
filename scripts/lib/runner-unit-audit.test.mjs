@@ -5,13 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-	repoFromUrl,
-	classifyInstall,
-	classifyUnit,
-	IGNORABLE,
-	lookupOutcome,
-} from './runner-unit-audit.mjs';
+import { repoFromUrl, classifyInstall, classifyUnit, lookupOutcome } from './runner-unit-audit.mjs';
 
 const roster = new Set([1129970414, 1124924177, 1116902949]); // tenhands, craft, aggregator
 
@@ -77,7 +71,6 @@ test('ignore: true downgrades OFF-ROSTER and NOTHING else', () => {
 	});
 	assert.equal(arch.kind, 'ARCHIVED');
 	assert.notEqual(arch.note, true, 'ignore must not quiet an archived repo');
-	assert.ok(!IGNORABLE.has('ARCHIVED'));
 });
 
 test('a healthy on-roster install is not a finding', () => {
@@ -177,7 +170,6 @@ test('a rename with a RUNNING install is cosmetic, not a dead registration', () 
 	});
 	assert.equal(v.kind, 'STALE-NAME');
 	assert.equal(v.note, true);
-	assert.ok(IGNORABLE.has('STALE-NAME'));
 });
 
 test('the same rename with a stopped install IS a finding', () => {

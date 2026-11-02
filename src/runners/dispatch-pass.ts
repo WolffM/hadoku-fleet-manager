@@ -18,8 +18,8 @@
  * in `dispatch-pass-types.ts`, the cross-tick bookkeeping (heavy marks, the
  * reap book, the affinity counters) in `dispatch-pass-state.ts`, the
  * placement order in `dispatch-pass-order.ts`, and the warm half of the
- * heavy hold in `dispatch-pass-warm-heavy.ts` — every name re-exported here
- * under its original path.
+ * heavy hold in `dispatch-pass-warm-heavy.ts`; every real importer resolves
+ * each name from the module that actually defines it.
  */
 import { logger } from '../host.js';
 import { withGhCaller } from '../gh-budget.js';
@@ -49,14 +49,11 @@ import {
 	mintedAtMs,
 	reapTargets,
 	__resetReapBookForTesting,
-	type FleetDispatchAffinity,
 	getDispatchAffinitySnapshot,
 	recordAffinityPass,
 } from './dispatch-pass-state.js';
 import { byPriority } from './dispatch-pass-order.js';
 import { closeWarmBesideHeavy } from './dispatch-pass-warm-heavy.js';
-
-export { type FleetDispatchAffinity };
 
 /**
  * When the reap last swept, epoch ms. "Not yet this process" until the first

@@ -34,14 +34,11 @@
  * prove it.
  *
  * THE FOURTH FACT LIVES NEXT DOOR. `stateDir` is already resolved from the
- * environment by `fleet-paths.ts`, so it is RE-EXPORTED rather than reimplemented
- * — a second spelling of the default would be a second source of truth, which is
- * the thing this file exists to remove. Callers get one door for all four facts
- * via `fleetIdentity()`.
+ * environment by `fleet-paths.ts`, so it is not reimplemented here — a second
+ * spelling of the default would be a second source of truth, which is the
+ * thing this file exists to remove.
  */
 import process from 'node:process';
-
-import { stateDir } from './fleet-paths.js';
 
 /** The GitHub account that owns the fleet's repos. */
 export const FLEET_OWNER_ENV = 'FLEET_OWNER';
@@ -115,26 +112,4 @@ export function packageName(): string {
  */
 export function userAgent(component: string): string {
 	return `${packageName().replace(/^@[^/]+\//, '')}/${component}`;
-}
-
-/** Every ecosystem-identity fact, resolved together. */
-export interface FleetIdentity {
-	owner: string;
-	/** BARE — see `hubRepo()`. */
-	hubRepo: string;
-	packageName: string;
-	stateDir: string;
-}
-
-/**
- * All four facts at once, for a caller that wants to print or log the identity
- * it resolved. Each field is the accessor above, so this cannot drift from them.
- */
-export function fleetIdentity(): FleetIdentity {
-	return {
-		owner: fleetOwner(),
-		hubRepo: hubRepo(),
-		packageName: packageName(),
-		stateDir: stateDir(),
-	};
 }

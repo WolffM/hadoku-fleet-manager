@@ -159,8 +159,3 @@ export function readProbeIntents(nowMs: number): ProbeIntent[] {
 	}
 	return live;
 }
-
-/** Tests only: the announce-once set is module state. */
-export function __resetProbeIntentStateForTesting(): void {
-	announcedIntents.clear();
-}

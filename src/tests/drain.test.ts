@@ -8,7 +8,6 @@ import { join } from 'node:path';
 import { __setHostForTesting } from '../host.js';
 import {
 	drainNotices,
-	drainOverrides,
 	drainStatus,
 	effectiveDrains,
 	HOSTING_NOTICE_MS,
@@ -26,24 +25,6 @@ import {
 const STATE: DrainState = {
 	'claw-3': { since: '2026-09-02T06:00:00Z', reason: 'semi-annual stress test', by: 'hadoku' },
 };
-
-test('a drained node is never eligible, whatever the ladder wanted', () => {
-	assert.deepEqual(drainOverrides('claw-3', true, STATE).eligible, false);
-	assert.match(drainOverrides('claw-3', true, STATE).reason ?? '', /stress test/);
-});
-
-test('a drain beats even a backstop promotion', () => {
-	// The backstop promotes to relieve a saturated fleet. If the alternative is
-	// placing work on a machine somebody has opened, the queue waits.
-	assert.equal(drainOverrides('claw-3', true, STATE).eligible, false);
-});
-
-test('a node not in the drain set is left exactly as the ladder decided', () => {
-	// Both directions: drain must not accidentally PROMOTE anything either.
-	assert.equal(drainOverrides('claw-1', true, STATE).eligible, true);
-	assert.equal(drainOverrides('claw-1', false, STATE).eligible, false);
-	assert.equal(drainOverrides('claw-1', false, STATE).reason, undefined);
-});
 
 test('DRAINING IS NOT DRAINED — the whole point of the word soft', () => {
 	// Only `drained` is safe to start maintenance on.

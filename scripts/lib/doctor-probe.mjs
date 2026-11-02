@@ -13,54 +13,6 @@ export const LOAD_SECONDS = 60;
  */
 export const SAFE_CACHE_PATH = /^~\/[A-Za-z0-9._/-]+$/;
 
-/**
- * Seed cache paths out of a manifest's `$seeds` (wave 4c §E), defensively.
- *
- * TWO SHAPES ARE ACCEPTED, because the two lanes that settle this disagree in
- * their own prose and neither had landed when this was written: the wave brief
- * asks doctor to read `$seeds[*][*].cache` (two wildcards — one capability,
- * several named seeds under it), while lane E's own write-up describes
- * `$seeds` as "keyed by capability. Each entry names a repo, a script path …"
- * — one object per capability, no second level. Rather than guess which shape
- * lane E actually shipped and silently report zero seed caches if wrong, this
- * reads BOTH: a capability entry with its own string `cache` field (shape A),
- * and a capability entry that is itself a map of named sub-entries each
- * carrying `cache` (shape B). Neither shape present is read as "no seed caches
- * declared" — same rule as an absent `$seeds` key entirely, never an error.
- *
- * Every returned `cache` matches {@link SAFE_CACHE_PATH}; anything else
- * (not a string, empty, or shaped wrong) is DROPPED rather than guessed at —
- * `check-capability-schema` (lane E) is where a malformed manifest value
- * belongs as a finding, not here.
- *
- * @param {unknown} manifest
- * @returns {{capability: string, seed: string|null, cache: string}[]}
- */
-export function seedCachePathsFromManifest(manifest) {
-	const seeds =
-		manifest && typeof manifest === 'object' ? /** @type {any} */ (manifest).$seeds : null;
-	if (!seeds || typeof seeds !== 'object') return [];
-	const out = [];
-	for (const [capability, entry] of Object.entries(seeds)) {
-		if (!entry || typeof entry !== 'object') continue;
-		if (typeof entry.cache === 'string' && SAFE_CACHE_PATH.test(entry.cache)) {
-			out.push({ capability, seed: null, cache: entry.cache });
-			continue;
-		}
-		for (const [seedName, sub] of Object.entries(entry)) {
-			if (
-				sub &&
-				typeof sub === 'object' &&
-				typeof sub.cache === 'string' &&
-				SAFE_CACHE_PATH.test(sub.cache)
-			) {
-				out.push({ capability, seed: seedName, cache: sub.cache });
-			}
-		}
-	}
-	return out;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // THE NODE-HALF PROBE
 // ═══════════════════════════════════════════════════════════════════════════
@@ -106,9 +58,9 @@ export const BACKSTOP_CADENCE_NO_LOAD_WHY =
  *   `seedCachePaths`: `~`-relative paths (wave 4c §E's manifest `$seeds[*].cache`
  *     / `$seeds[*][*].cache`) to size alongside the other known consumers. A
  *     path that does not match {@link SAFE_CACHE_PATH} is silently dropped
- *     here — never embedded into the remote shell unvalidated. See
- *     {@link seedCachePathsFromManifest}, which already filters to this same
- *     pattern; this is defense in depth for a caller that did not.
+ *     here — never embedded into the remote shell unvalidated. The caller is
+ *     responsible for deriving this from the manifest; this file only
+ *     validates what it is handed.
  */
 export function doctorProbe({
 	loadSeconds = LOAD_SECONDS,

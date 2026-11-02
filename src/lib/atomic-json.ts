@@ -16,13 +16,13 @@
  * write-then-rename by hand without the fsyncs; 35 call sites had no rename
  * at all — `scripts/lib/f-guards/f3-guard.test.mjs`).
  *
- * "I COULD NOT LOOK" IS NEVER "NOTHING IS WRONG" (AGENTS.md). A corrupt file
- * — one that exists, reads back, and does not parse — is a DIFFERENT finding
- * than a missing one, and `readJsonState` never collapses the two: a missing
- * file is `{ok:true, missing:true}` (nothing has been written yet, which is
- * normal on a fresh box), a corrupt one is `{ok:false, why}` (something wrote
- * a file that cannot be trusted, which is never normal and must not be read
- * back as though the state were empty).
+ * "I COULD NOT LOOK" IS NEVER "NOTHING IS WRONG" (AGENTS.md). A corrupt state
+ * file — one that exists, reads back, and does not parse — is a DIFFERENT
+ * finding than a missing one: a missing file is normal on a fresh box or
+ * before the first write, a corrupt one means something wrote a file that
+ * cannot be trusted, and the two must never collapse into each other. Every
+ * reader of a file this module writes is responsible for keeping that
+ * distinction on its own read path.
  *
  * WHAT THIS IS NOT. The JSONL appenders (`job-history.ts`'s history file,
  * `usage-store.ts`, `decision-log.ts`'s per-day files) are NOT routed through
@@ -48,7 +48,6 @@ import {
 	mkdirSync,
 	openSync,
 	readdirSync,
-	readFileSync,
 	renameSync,
 	statSync,
 	unlinkSync,
@@ -175,37 +174,4 @@ export function writeJsonAtomic(
 ): void {
 	const { space, ...rest } = opts;
 	writeFileAtomic(path, JSON.stringify(value, null, space), rest);
-}
-
-export type JsonStateRead<T> =
-	{ ok: true; doc: T; missing?: false } | { ok: true; missing: true } | { ok: false; why: string };
-
-/**
- * Read `path` as JSON. Three outcomes, never collapsed into each other:
- *   - no file at all (ENOENT): `{ok:true, missing:true}` — normal on a fresh
- *     box or before the first write, and the caller's "start from empty"
- *     path is exactly this branch.
- *   - a file that exists but will not parse: `{ok:false, why}` — "I could not
- *     look" (AGENTS.md), never silently treated as empty or missing. Every
- *     caller must decide for itself what a corrupt state file means for its
- *     own domain; this function's job stops at telling the truth about what
- *     it read.
- *   - a file that reads and parses: `{ok:true, doc}`.
- *
- * Any OTHER read failure (permissions, a directory where a file was
- * expected, …) is also `{ok:false, why}` — this never throws.
- */
-export function readJsonState<T = unknown>(path: string): JsonStateRead<T> {
-	let raw: string;
-	try {
-		raw = readFileSync(path, 'utf8');
-	} catch (err) {
-		if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { ok: true, missing: true };
-		return { ok: false, why: err instanceof Error ? err.message : String(err) };
-	}
-	try {
-		return { ok: true, doc: JSON.parse(raw) as T };
-	} catch (err) {
-		return { ok: false, why: `corrupt JSON: ${err instanceof Error ? err.message : String(err)}` };
-	}
 }

@@ -12,9 +12,8 @@ import { provenCapabilities } from './bootcamp-proof.js';
  * Lives here, not in `measured.ts`, even though `measured.ts` is what reads
  * and writes it: this is config's own edge into the state layer (wave
  * clean-1 lane C, cut (iii)), fixed by moving the plain data shape down to
- * the layer that needs it rather than importing it up. `measured.ts`
- * re-exports it (`export type { ProofRecord } from './workload-gate.js'`)
- * for every caller already importing it from there.
+ * the layer that needs it rather than importing it up. Every caller imports
+ * it from here directly; `measured.ts` no longer re-exports it.
  */
 export interface ProofRecord {
 	node: string;

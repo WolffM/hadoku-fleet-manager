@@ -1,7 +1,7 @@
 /**
  * The warm cache of one — the construction path (I/O): `mintWarmListener`,
- * `evictWarmListener`, `currentWarmSlot`/`readWarmMarker`, and `isRunnerBusy`,
- * tested through injected `gh`/`sh` exactly like `mintEphemeralRunner`. Split
+ * `evictWarmListener`, and `currentWarmSlot`/`readWarmMarker`, tested through
+ * injected `gh`/`sh` exactly like `mintEphemeralRunner`. Split
  * out of warm-cache.test.ts (wave 5p lane C) — see `helpers/warm-cache-rig.ts`
  * for the file-wide `beforeEach`/`afterEach` every split file installs.
  */
@@ -12,7 +12,6 @@ import {
 	currentWarmSlot,
 	evictWarmListener,
 	readWarmMarker,
-	isRunnerBusy,
 	mintWarmListener,
 } from '../runners/ephemeral-exec.js';
 import { warmRunnerName } from '../lib/jit-naming.js';
@@ -240,20 +239,4 @@ test('readWarmMarker: dead is FALSE, unreadable is NULL — and currentWarmSlot 
 
 	// No marker: nothing to say, and no second ssh spent asking.
 	assert.equal(await readWarmMarker('claw-1', async () => ''), null);
-});
-
-test('isRunnerBusy: null when the listing does not include it — cannot vouch for it', async () => {
-	const gh = fakeGh({ runners: [] });
-	assert.equal(
-		await isRunnerBusy('WolffM/hadoku_site', 'warm-claw-1-hadoku-site', 'tok', gh),
-		null
-	);
-});
-
-test('isRunnerBusy: reads the busy field when the registration is found', async () => {
-	const gh = fakeGh({ runners: [{ id: 1, name: 'warm-claw-1-hadoku-site', busy: true }] });
-	assert.equal(
-		await isRunnerBusy('WolffM/hadoku_site', 'warm-claw-1-hadoku-site', 'tok', gh),
-		true
-	);
 });

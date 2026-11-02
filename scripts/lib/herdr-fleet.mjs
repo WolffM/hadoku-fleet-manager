@@ -298,9 +298,6 @@ export function classify(target, snap, now, panedNodes = [], panedPm2 = null) {
 	return blocked(`unknown pane target "${target}"`);
 }
 
-/** The herdr agent label a target reports under. */
-export const agentLabel = (target) => (target.startsWith('node:') ? target.slice(5) : target);
-
 /** GET a JSON document, `READ_ATTEMPTS` tries, the last reason kept. */
 async function getJson(url, { fetchImpl, sleep, timeoutMs }) {
 	let reason = null;

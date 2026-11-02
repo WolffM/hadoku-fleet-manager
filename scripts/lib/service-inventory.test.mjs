@@ -33,7 +33,6 @@ import {
 	rowKey,
 	sliceProbe,
 	sliceRow,
-	sumColumn,
 	unmeasured,
 	validateResidentRow,
 } from './service-inventory.mjs';
@@ -116,16 +115,6 @@ void test('class, kind, name, host and provenance are each required', () => {
 		() => validateResidentRow(row({ provenance: { ...prov, scope: 'whole-box' } })),
 		/scope must be/
 	);
-});
-
-void test('sumColumn refuses a partial total and names the rows that blocked it', () => {
-	const rows = [row({ name: 'a', ram: 10 }), row({ name: 'b', ram: 20 })];
-	assert.equal(sumColumn(rows, 'ram'), 30);
-	rows.push(row({ name: 'c', ram: unmeasured('in-process') }));
-	const partial = sumColumn(rows, 'ram');
-	assert.equal(isMeasured(partial), false);
-	assert.match(partial.unmeasured, /pm2\/c/);
-	assert.match(partial.unmeasured, /1 of 3/);
 });
 
 // --- merge -----------------------------------------------------------------

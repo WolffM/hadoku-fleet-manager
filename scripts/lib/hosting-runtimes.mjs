@@ -42,9 +42,8 @@ ReadWritePaths=${t.home}`;
 export const RUNTIMES = {
 	/**
 	 * The tenant's own executable, supervised, as its user. With
-	 * `workersOutliveRestart` (WORKERS_OUTLIVE_RESTART in
-	 * lib/hosting-request.mjs) the agent gets its subtree and a restart
-	 * signals only the agent.
+	 * `workersOutliveRestart` (a hosting request field) the agent gets its
+	 * subtree and a restart signals only the agent.
 	 */
 	agent: {
 		kind: 'agent',

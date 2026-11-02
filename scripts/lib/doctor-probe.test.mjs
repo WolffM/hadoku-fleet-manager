@@ -1,11 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-	doctorProbe,
-	BACKSTOP_CADENCE_NO_LOAD_WHY,
-	seedCachePathsFromManifest,
-} from './doctor-probe.mjs';
+import { doctorProbe, BACKSTOP_CADENCE_NO_LOAD_WHY } from './doctor-probe.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // THE PROBE
@@ -73,57 +69,6 @@ void test('doctorProbe silently drops a seed cache path that does not match SAFE
 		/consumer\.seed\|~\/ok\/path/,
 		'a well-formed path alongside bad ones still gets through'
 	);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// `seedCachePathsFromManifest` — wave 4c §E's `$seeds`, read defensively
-// ═══════════════════════════════════════════════════════════════════════════
-
-void test('seedCachePathsFromManifest: absent $seeds is "no seed caches", never an error', () => {
-	assert.deepEqual(seedCachePathsFromManifest(null), []);
-	assert.deepEqual(seedCachePathsFromManifest({}), []);
-	assert.deepEqual(seedCachePathsFromManifest({ machines: {} }), []);
-});
-
-void test('seedCachePathsFromManifest: shape A — one cache directly on the capability entry', () => {
-	const manifest = {
-		$seeds: { 'cardtable-forge': { repo: 'WolffM/cardtable', cache: '~/.cache/cardtable-forge' } },
-	};
-	assert.deepEqual(seedCachePathsFromManifest(manifest), [
-		{ capability: 'cardtable-forge', seed: null, cache: '~/.cache/cardtable-forge' },
-	]);
-});
-
-void test('seedCachePathsFromManifest: shape B — named sub-entries under a capability', () => {
-	const manifest = {
-		$seeds: {
-			'cardtable-forge': {
-				bundle: { repo: 'WolffM/cardtable', cache: '~/.cache/cardtable-forge' },
-				assets: { repo: 'WolffM/cardtable', cache: '~/.cache/cardtable-assets' },
-			},
-		},
-	};
-	assert.deepEqual(
-		seedCachePathsFromManifest(manifest).sort((a, b) => a.cache.localeCompare(b.cache)),
-		[
-			{ capability: 'cardtable-forge', seed: 'assets', cache: '~/.cache/cardtable-assets' },
-			{ capability: 'cardtable-forge', seed: 'bundle', cache: '~/.cache/cardtable-forge' },
-		]
-	);
-});
-
-void test('seedCachePathsFromManifest: a malformed cache value is dropped, not guessed at', () => {
-	const manifest = {
-		$seeds: {
-			good: { cache: '~/.cache/good' },
-			noCache: { repo: 'WolffM/x' },
-			badShape: { cache: '/etc/passwd' },
-			badType: { cache: 42 },
-		},
-	};
-	assert.deepEqual(seedCachePathsFromManifest(manifest), [
-		{ capability: 'good', seed: null, cache: '~/.cache/good' },
-	]);
 });
 
 test('a --cadence backstop probe never loads the box, and says why in the record', () => {

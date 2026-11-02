@@ -78,14 +78,9 @@ export function eligibilityLabels(): string[] {
 		.map((c) => c.id);
 }
 
-/** Ids a probe can execute, and ids a probe cannot. Split by `verify`. */
+/** Ids a probe can execute — the `verify === 'probe'` half of CAPABILITIES. */
 export function probeableIds(): Set<string> {
 	return new Set(CAPABILITIES.filter((c) => c.verify === 'probe').map((c) => c.id));
-}
-
-/** Capabilities whose truth is declarative or proven by a mint, not by a probe. */
-export function unprobeableIds(): Set<string> {
-	return new Set(CAPABILITIES.filter((c) => c.verify !== 'probe').map((c) => c.id));
 }
 
 /**

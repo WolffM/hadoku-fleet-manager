@@ -291,15 +291,6 @@ export function measuredFacets(
 	return { file, nodes };
 }
 
-/** One node, one facet. Prefer {@link measuredFacets} in a loop — it reads once. */
-export function measuredFacet(
-	node: string,
-	facet: MeasuredFacetName,
-	{ machine, dir = stateDir() }: { machine?: Record<string, unknown> | null; dir?: string } = {}
-): MeasuredResult {
-	return mergeFacet(node, facet, machine, readFacetFile(facet, { dir }));
-}
-
 /**
  * One log line's age in ms since epoch, read from its own `loggedAt`, or
  * `null` when that cannot be determined — not JSON, no `loggedAt` string, or

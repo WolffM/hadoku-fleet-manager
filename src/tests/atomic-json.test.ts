@@ -7,10 +7,37 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { readJsonState, writeFileAtomic, writeJsonAtomic } from '../lib/atomic-json.js';
+import { writeFileAtomic, writeJsonAtomic } from '../lib/atomic-json.js';
 
 function tmpDir(): string {
 	return mkdtempSync(join(tmpdir(), 'atomic-json-test-'));
+}
+
+/**
+ * Local test helper, NOT a production export: `readJsonState` was dropped
+ * from `atomic-json.ts` (wave cruft-1 lane A) — every real writer in `src/`
+ * reads its own state back by hand instead, so nothing in production called
+ * it. These tests still need the same three-way read to check what
+ * `writeJsonAtomic`/`writeFileAtomic` (both live and multiply-called)
+ * actually left on disk, including the corrupt-vs-missing distinction a
+ * crash-safety test cares about.
+ */
+function readJsonState<T = unknown>(
+	path: string
+):
+	{ ok: true; doc: T; missing?: false } | { ok: true; missing: true } | { ok: false; why: string } {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(path, 'utf8');
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { ok: true, missing: true };
+		return { ok: false, why: err instanceof Error ? err.message : String(err) };
+	}
+	try {
+		return { ok: true, doc: JSON.parse(raw) as T };
+	} catch (err) {
+		return { ok: false, why: `corrupt JSON: ${err instanceof Error ? err.message : String(err)}` };
+	}
 }
 
 /**
@@ -80,43 +107,6 @@ test('writeJsonAtomic creates the parent directory, like every call site did by 
 		writeJsonAtomic(path, { ok: true });
 		const read = readJsonState(path);
 		assert.deepEqual(read, { ok: true, doc: { ok: true } });
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
-
-test('readJsonState: a missing file is {ok:true, missing:true}, never {ok:false}', () => {
-	const dir = tmpDir();
-	try {
-		const read = readJsonState(join(dir, 'does-not-exist.json'));
-		assert.deepEqual(read, { ok: true, missing: true });
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
-
-test('readJsonState: a corrupt file is {ok:false, why} — "I could not look" is never "nothing is wrong"', () => {
-	const dir = tmpDir();
-	try {
-		const path = join(dir, 'corrupt.json');
-		writeFileSync(path, '{"a": 1, "b": [unterminated');
-		const read = readJsonState(path);
-		assert.equal(read.ok, false);
-		assert.ok(!read.ok && typeof read.why === 'string' && read.why.length > 0);
-		// Never collapsed into "missing" or an empty-looking success.
-		assert.notDeepEqual(read, { ok: true, missing: true });
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
-
-test('readJsonState: an empty file (the exact failure mode a bare rename without fsync can leave) is corrupt, not empty-as-valid', () => {
-	const dir = tmpDir();
-	try {
-		const path = join(dir, 'empty.json');
-		writeFileSync(path, '');
-		const read = readJsonState(path);
-		assert.equal(read.ok, false);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

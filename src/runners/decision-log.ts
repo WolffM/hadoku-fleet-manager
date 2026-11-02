@@ -45,15 +45,12 @@
  * one written (dedup, below) and holding the sink that takes rows once it
  * has. The row shapes live in `decision-log-types.ts`, building rows for the
  * JIT and warm paths lives in `decision-log-record.ts`, and the day-file
- * storage lives in `decision-log-storage.ts` — each re-exported here under
- * its original name, so every existing importer of `decision-log.js` keeps
- * compiling unchanged.
+ * storage lives in `decision-log-storage.ts`; every real importer of
+ * `DecisionRecord` already resolves it from `decision-log-types.ts` directly.
  */
 import { logger } from '../host.js';
 import { type DecisionRecord } from './decision-log-types.js';
 import { appendToDayFile, __resetDecisionStorageForTesting } from './decision-log-storage.js';
-
-export { type DecisionRecord };
 
 // --------------------------------------------------------------------------
 // The sink. Default: the day files. Tests swap it, or switch the log off.

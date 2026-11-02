@@ -56,25 +56,6 @@ export function isMeasured(cell) {
 }
 
 /**
- * Sum one resource column across rows — or refuse.
- *
- * Returns a number only when EVERY row measured it. One `{unmeasured}` makes
- * the total unknowable, and a partial total presented as a total is the exact
- * inversion this schema exists to prevent: it understates demand, and the
- * understatement is invisible. The reason names the rows that blocked it.
- */
-export function sumColumn(rows, column) {
-	const gaps = rows.filter((r) => !isMeasured(r[column]));
-	if (gaps.length) {
-		return unmeasured(
-			`${gaps.length} of ${rows.length} row(s) did not measure ${column}: ` +
-				gaps.map((r) => `${r.kind}/${r.name}`).join(', ')
-		);
-	}
-	return rows.reduce((n, r) => n + r[column], 0);
-}
-
-/**
  * Refuse a row that is not schema-shaped, naming the field.
  *
  * A writer that emits a malformed row poisons a file four other gates read.

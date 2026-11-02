@@ -55,17 +55,6 @@ export const INGRESS = {
 	none: 'takes no inbound connections',
 };
 
-/**
- * What `runtime.workersOutliveRestart` MEANS, said once (cardtable asked for it
- * to be explicit): the agent's unit carries `Delegate=yes` and
- * `KillMode=process`, and the memory and cpu controllers are available to its
- * subtree. A restart signals only the agent; its workers keep running.
- */
-export const WORKERS_OUTLIVE_RESTART = {
-	unit: ['Delegate=yes', 'KillMode=process'],
-	subtreeControllers: ['memory', 'cpu'],
-};
-
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isPosInt = (v) => Number.isInteger(v) && v > 0;
 const isName = (v) => typeof v === 'string' && /^[a-z][a-z0-9-]{1,30}$/.test(v);

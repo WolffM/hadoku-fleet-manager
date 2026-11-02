@@ -365,26 +365,6 @@ export function isDraining(node: string, state: DrainState = readDrain()): boole
 }
 
 /**
- * Fold a drain into a node's eligibility.
- *
- * Exported separately from the state so the tier ladder and the dispatcher can
- * apply the SAME rule without either importing the other, and so it can be
- * tested without a filesystem.
- */
-export function drainOverrides(
-	node: string,
-	wouldBeEligible: boolean,
-	state: DrainState
-): { eligible: boolean; reason?: string } {
-	const rec = state[node];
-	if (!rec) return { eligible: wouldBeEligible };
-	// A drain BEATS every promotion, including the backstop's. The backstop
-	// promotes to relieve a saturated fleet; if the alternative is placing work
-	// on a machine somebody has opened, the queue waits.
-	return { eligible: false, reason: `drained: ${rec.reason} (since ${rec.since})` };
-}
-
-/**
  * Has a draining node actually gone quiet?
  *
  * `busy` is the count of its runners GitHub reports as running a job. Zero is

@@ -39,7 +39,6 @@ import {
 	FLEET_HUB_REPO_ENV,
 	FLEET_OWNER_ENV,
 	FLEET_PACKAGE_NAME_ENV,
-	fleetIdentity,
 	fleetOwner,
 	hubRepo,
 	hubRepoFull,
@@ -178,12 +177,12 @@ test('resolution is not cached — two environments in one process give two answ
 	// The 17th module-level singleton is the one this file exists to prevent.
 	// A `const` resolved at import time would be fixed before any test ran, and
 	// the FIRST suite in a process would decide the answer for every later one.
-	const first = withEnv({ ...UNSET, [FLEET_OWNER_ENV]: 'first-owner' }, () => fleetIdentity());
-	const second = withEnv({ ...UNSET, [FLEET_OWNER_ENV]: 'second-owner' }, () => fleetIdentity());
-	const back = withEnv(UNSET, () => fleetIdentity());
-	assert.equal(first.owner, 'first-owner');
-	assert.equal(second.owner, 'second-owner');
-	assert.equal(back.owner, 'WolffM');
+	const first = withEnv({ ...UNSET, [FLEET_OWNER_ENV]: 'first-owner' }, () => fleetOwner());
+	const second = withEnv({ ...UNSET, [FLEET_OWNER_ENV]: 'second-owner' }, () => fleetOwner());
+	const back = withEnv(UNSET, () => fleetOwner());
+	assert.equal(first, 'first-owner');
+	assert.equal(second, 'second-owner');
+	assert.equal(back, 'WolffM');
 });
 
 test('qualifyRepo adds the owner once and only when it is missing', () => {
@@ -203,17 +202,6 @@ test('the User-Agent names the package and is a legal product token', () => {
 		// product half must carry neither.
 		assert.ok(!ua.split('/')[0].includes('@'), 'the scope must be stripped');
 		assert.equal(ua.split('/').length, 2, 'product/component, nothing more');
-	});
-});
-
-test('fleetIdentity carries the state dir and cannot drift from the accessors', () => {
-	withEnv({ ...UNSET, ...STRANGER, HADOKU_STATE_DIR: '/var/lib/acme-fleet' }, () => {
-		assert.deepEqual(fleetIdentity(), {
-			owner: fleetOwner(),
-			hubRepo: hubRepo(),
-			packageName: packageName(),
-			stateDir: '/var/lib/acme-fleet',
-		});
 	});
 });
 

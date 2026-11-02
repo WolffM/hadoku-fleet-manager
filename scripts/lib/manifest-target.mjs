@@ -83,7 +83,6 @@
  * test of a writer that pushes is a test that mutates a real repository.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
@@ -426,9 +425,4 @@ export function landingLine(landed, { writer }) {
 	if (landed.committed)
 		return `  ! committed ${landed.sha?.slice(0, 8)}, NOT pushed: ${landed.why}`;
 	return `  ! NOT COMMITTED (${landed.reason}): ${landed.why}`;
-}
-
-/** True when the deployed site checkout is actually on disk to be read. */
-export function deploySiteExists(env = process.env) {
-	return existsSync(deploySiteRoot(env));
 }

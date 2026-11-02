@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 
-import { probeOriginOf, probeLedgerFile } from '../job-history-probe-ledger.js';
+import { loadProbeLedger, probeRuns, probeLedgerFile } from '../job-history-probe-ledger.js';
 import { RETENTION_DAYS, jobRecords } from '../job-history-store.js';
 import { ingestRuns } from '../job-history-ingest.js';
 import { job, installJobHistoryRig } from './helpers/job-history-rig.js';
@@ -27,6 +27,14 @@ function declareProbe(entries: { runId: number; repo: string; origin: string }[]
 		probeLedgerFile(),
 		entries.map((e) => JSON.stringify({ ...e, at: new Date().toISOString() })).join('\n') + '\n'
 	);
+}
+
+/** `job-history-ingest.ts`'s own read: load, then look up — no `probeOriginOf`
+ *  wrapper exists in production (wave cruft-1 lane A dropped it; nothing
+ *  called it outside this file), so the tests exercise the real two calls. */
+function probeOriginOf(runId: number): string | undefined {
+	loadProbeLedger();
+	return probeRuns.get(runId);
 }
 
 test('probe ledger: an absent ledger changes nothing at all', async () => {

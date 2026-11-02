@@ -140,6 +140,3 @@ export function classifyUnit({ active, sub, restarts = 0, workingDir = '', insta
 	}
 	return null;
 }
-
-/** Findings that a manifest `ignore: true` is allowed to downgrade to a note. */
-export const IGNORABLE = new Set(['OFF-ROSTER', 'STALE-NAME']);

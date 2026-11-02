@@ -121,12 +121,6 @@ export function loadProbeLedger(): void {
 	}
 }
 
-/** How run `runId` was manufactured, or undefined for organic traffic. */
-export function probeOriginOf(runId: number): ProbeOrigin | undefined {
-	loadProbeLedger();
-	return probeRuns.get(runId);
-}
-
 /** Test seam: cross-tick memory this module owns. */
 export function __resetProbeLedgerForTesting(): void {
 	probeRuns.clear();

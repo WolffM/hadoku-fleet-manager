@@ -139,6 +139,11 @@ export function spawnCapture(command, args, options = {}) {
 /**
  * Parse a captured child's stdout as JSON, or throw saying why it could not be.
  *
+ * Separate from {@link spawnCapture} rather than fused into one call: a
+ * legitimately empty stdout — a refusal that must not emit a parseable clean
+ * report — is a thing some callers assert on directly, before ever reaching
+ * a parse.
+ *
  * @param {{code: number, signal: string|null, out: string, err: string, elapsedMs: number, timeoutMs?: number, label?: string}} result
  * @param {string} [label] overrides `result.label` in the message
  * @returns {unknown}
@@ -163,13 +168,6 @@ export function parseJsonStdout(result, label) {
 	} catch (e) {
 		throw new Error(describe(name, `printed stdout that is not JSON (${e.message})`, fields));
 	}
-}
-
-/** Spawn, then parse. The two steps are separate because a legitimately empty
- * stdout — a refusal that must not emit a parseable clean report — is a thing
- * callers assert on directly. */
-export function spawnJson(command, args, options = {}) {
-	return parseJsonStdout(spawnCapture(command, args, options));
 }
 
 /**

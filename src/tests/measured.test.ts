@@ -21,7 +21,6 @@ import {
 	FACET_LOG_RETENTION_DAYS,
 	MANIFEST_KEY,
 	facetLogPath,
-	measuredFacet,
 	measuredFacets,
 	mergeFacet,
 	readFacetFile,
@@ -236,7 +235,6 @@ test('measuredFacets reads the file once and answers for every node in the roste
 	assert.equal(valueOf(nodes.a).from, 'state');
 	assert.equal(valueOf(nodes.b).from, 'manifest');
 	assert.equal(reasonOf(nodes.c), 'no-record-for-node');
-	assert.equal(valueOf(measuredFacet('a', 'health', { dir })).from, 'state');
 });
 
 // ── writing ──────────────────────────────────────────────────────────────────

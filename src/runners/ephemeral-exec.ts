@@ -387,22 +387,3 @@ export async function currentWarmSlot(
 export async function refreshWarmMarker(node: string, sh: ShellLike): Promise<void> {
 	await sh(node, 'touch "$HOME/.hadoku/warm/repo" 2>/dev/null || true');
 }
-
-/**
- * Is this registration busy right now, per GitHub? `null` means the listing
- * did not include it — gone, unreachable, or never registered — and the
- * caller must treat that as "cannot vouch for it", never as "safe", the same
- * fail-closed direction §12.8's reap takes on an unreachable node.
- */
-export async function isRunnerBusy(
-	repo: string,
-	name: string,
-	token: string,
-	gh: { get: (path: string, token: string, repo?: string) => Promise<unknown> }
-): Promise<boolean | null> {
-	const list = (await gh.get('/actions/runners?per_page=100', token, repo)) as
-		{ runners?: { name: string; busy?: boolean }[] } | undefined;
-	const hit = list?.runners?.find((r) => r.name === name);
-	if (!hit) return null;
-	return Boolean(hit.busy);
-}
