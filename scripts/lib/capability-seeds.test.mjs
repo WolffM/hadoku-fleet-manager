@@ -16,11 +16,11 @@ import {
 	buildRunScript,
 	parseSeedProof,
 	seedNode,
-	ghWithRetry,
 	BUSY_CHECK_SCRIPT,
 	diskCheckScript,
 	isSeedFinding,
 } from './capability-seeds.mjs';
+import { ghWithRetry } from './capability-seeds-live.mjs';
 
 const REPO = 'WolffM/hadoku-cardtable';
 const SCRIPT_PATH = 'scripts/forge-bundle.sh';

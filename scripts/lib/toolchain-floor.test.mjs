@@ -24,7 +24,6 @@ import {
 	linkScript,
 	minAgeOf,
 	isVersionManaged,
-	resolveInstallTarget,
 	JDK21_MIN_INSTALLED_MB,
 	JDK21_CANARY_MIN_THREADS,
 	installedMb,
@@ -38,6 +37,7 @@ import {
 	DEFAULT_MIN_AGE_MINUTES,
 	parseInstalledVersion,
 	createReleaseLookup,
+	resolveInstallTarget,
 } from './tool-release.mjs';
 
 const tmp = () => tempDir('toolchain-floor-');

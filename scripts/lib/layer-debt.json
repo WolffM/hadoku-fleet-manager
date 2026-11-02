@@ -1,35 +1,11 @@
 [
   {
-    "from": "scripts/check-fleet-toolchain.mjs",
-    "to": "scripts/lib/tool-release.mjs"
-  },
-  {
-    "from": "scripts/converge-toolchain.mjs",
-    "to": "scripts/lib/service-peers.mjs"
-  },
-  {
-    "from": "scripts/lib/capability-seeds.mjs",
-    "to": "scripts/lib/fleet-exec.mjs"
-  },
-  {
     "from": "scripts/lib/doctor-run.mjs",
     "to": "scripts/lib/collect-offers.mjs"
   },
   {
     "from": "scripts/lib/doctor-run.mjs",
     "to": "scripts/lib/hosting-claims.mjs"
-  },
-  {
-    "from": "scripts/lib/hosting-offers.mjs",
-    "to": "scripts/lib/tool-release.mjs"
-  },
-  {
-    "from": "scripts/lib/hosting-plan.mjs",
-    "to": "scripts/lib/tool-release.mjs"
-  },
-  {
-    "from": "scripts/lib/hosting-request.mjs",
-    "to": "scripts/lib/tool-release.mjs"
   },
   {
     "from": "scripts/lib/slice-inventory-run.mjs",
@@ -50,10 +26,6 @@
   {
     "from": "scripts/lib/tenant-registry.mjs",
     "to": "src/runners/hosting-record.ts"
-  },
-  {
-    "from": "scripts/lib/toolchain-floor.mjs",
-    "to": "scripts/lib/tool-release.mjs"
   },
   {
     "from": "scripts/lib/toolchain-floor.mjs",

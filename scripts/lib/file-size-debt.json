@@ -9,7 +9,7 @@
   "scripts/lib/egress-slices-guard.test.mjs": 1007,
   "scripts/lib/hosting.mjs": 1158,
   "scripts/lib/slice-placement-guard.test.mjs": 2214,
-  "scripts/lib/toolchain-floor.mjs": 961,
+  "scripts/lib/toolchain-floor.mjs": 933,
   "scripts/lib/toolchain-floor.test.mjs": 1493,
   "scripts/node-bootstrap.sh": 2700,
   "scripts/runners-slice-install.sh": 986,

@@ -693,6 +693,13 @@
     "part": "run"
   },
   {
+    "glob": "scripts/lib/capability-seeds-live.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Cut (iii) layer debt, wave layers-3 lane T, new module: the real {ssh, gh} pair (ghOnce/ghWithRetry/defaultSeedDeps) capability-seeds.mjs (config) used to wire up for its two callers, bootcamp.mjs and converge-toolchain.mjs, both lifecycle/run — moved out since it needs fleet-exec.mjs's runOn (access), which config may not import. Same shape as refresh-cycle-live.mjs's split off refresh-cycle.mjs."
+  },
+  {
     "glob": "scripts/provision-fleet.mjs",
     "layer": "domain",
     "domain": "lifecycle",
@@ -1034,10 +1041,14 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/version-algebra.mjs",
+    "layer": "config",
+    "why": "Cut (iii) layer debt, wave layers-3 lane T, new module: the zero-import pure half of tool-release.mjs (parse/compare/range-check a tool version, pick the newest cleared release out of a registry's time map) — no network call, no node read, so it is declarative version algebra and sits in config, the one layer every domain already imports legally. toolchain-floor.mjs (config) and refresh-cycle.mjs/refresh-cycle-live.mjs/hosting-offers.mjs/hosting-plan.mjs/hosting-request.mjs/backstop-tools.mjs (all lifecycle or tenancy) read these names from here or through tool-release.mjs's unchanged re-export."
+  },
+  {
     "glob": "scripts/lib/tool-release.mjs",
-    "layer": "domain",
-    "domain": "lifecycle",
-    "part": "core"
+    "layer": "access",
+    "why": "Cut (iii) layer debt, wave layers-3 lane T: its pure version algebra (parseVersion, compareVersions, parseRange, satisfies, parseInstalledVersion, newestCleared, DEFAULT_MIN_AGE_MINUTES) moved out to the new zero-import version-algebra.mjs (config), re-exported here unchanged. What is left — lookupLatest/lookupAdoptiumLatest/lookupMavenLatest/lookupGithubRelease/fetchGithubReleaseTimes/dispatchLookup/createReleaseLookup, plus assess and the resolver resolveInstallTarget moved in from toolchain-floor.mjs — is real I/O against npm, Adoptium, Maven Central and GitHub's release lists: 'another system's data' (refactor plan §3.2 rule 2), not a lifecycle decision. `domain`/`lifecycle` made hosting-offers/hosting-plan/hosting-request (tenancy) and check-fleet-toolchain.mjs (observation) each a cross-domain or upward edge for reading the SAME shared answer the file's own header describes sharing by design (issue #69: 'they share this file so they cannot disagree'); `access` is the one layer every domain and observation already import legally, which is the actual shape of what this file does."
   },
   {
     "glob": "src/fleet-loop.ts",
@@ -1604,9 +1615,8 @@
   },
   {
     "glob": "scripts/lib/service-peers.mjs",
-    "layer": "domain",
-    "domain": "tenancy",
-    "part": "core"
+    "layer": "access",
+    "why": "Cut (iii) layer debt, wave layers-3 lane T: closing a hot standby's peer port is reading and writing a NODE's own iptables/systemd state (refactor plan §3.2 rule 2, 'anything another system owns'), the same work its paired half for the same cadence, service-tunnels.mjs, already does as `access`. converge-toolchain.mjs (lifecycle, run) calls both from the same `serviceTunnels()` step; classifying this one `domain`/`tenancy` made it the one domain-to-domain edge of the pair, even though peerPorts()'s own decision (which apps need a protected peer port) is read straight off childApps/hostsDoc, the same declarative tenancy data service-tunnels.mjs also reads without being tenancy-domain itself."
   },
   {
     "glob": "src/runners/census.ts",

@@ -25,8 +25,8 @@ import { reposDir, stateDir } from './paths.mjs';
 import { parseToolProbe, toolProbeScript } from '../check-fleet-toolchain.mjs';
 import { deferralFor, readDrains } from './expected-down.mjs';
 import { repairContext, runOnSync } from './fleet-exec.mjs';
-import { byRole, resolveInstallTarget } from './toolchain-floor.mjs';
-import { createReleaseLookup } from './tool-release.mjs';
+import { byRole } from './toolchain-floor.mjs';
+import { createReleaseLookup, resolveInstallTarget } from './tool-release.mjs';
 import { errText } from './term.mjs';
 import { PRESSURE_OLDEST_SECONDS, runWorkItem } from './refresh-cycle.mjs';
 // busyCount/drainCli/isDrained/drain/undrain/waitUntilDrained moved to

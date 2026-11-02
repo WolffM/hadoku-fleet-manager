@@ -12,7 +12,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { nodeOffer } from '../../dist/lib/capability-offer.js';
 import { hostsCiDocker, hostsPm2Services } from '../../dist/lib/node-role.js';
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
-import { DEFAULT_MIN_AGE_MINUTES, dispatchLookup, parseVersion } from './tool-release.mjs';
+import { DEFAULT_MIN_AGE_MINUTES, parseVersion } from './version-algebra.mjs';
 import { RELEASE_TOOLS } from './toolchain-release-tools.mjs';
 import { PM2_BOOT } from './pm2-boot-floor.mjs';
 import { debInstalled } from './deb-installed.mjs';
@@ -771,43 +771,15 @@ export function isVersionManaged(tool) {
 }
 
 /**
- * THE ONE RESOLVER (issue #70): the install target for a tool, i.e. the newest
- * release that has cleared its debounce. Bootcamp and the refresh cycle both
- * call this rather than each computing "what to install" its own way — two
- * resolvers is #69's bug again, this time over the target version instead of
- * the declaration.
- *
- * A presence-only tool (no `latest`) has nothing to resolve:
- * `{ status: 'presence-only' }`. `installScript(id)` with no version is the
- * correct and only call for one of those.
- *
- * "COULD NOT LOOK" REFUSES, IT NEVER FALLS BACK. An unreachable, rate-limited
- * or malformed registry answer returns `{ status: 'unknown', reason }` and
- * NEVER a version — there is no path from here back to vendor-latest behind a
- * failed lookup. `installScript` enforces the other half: it throws rather
- * than install a version-managed tool with no version, so a caller cannot
- * skip this resolver and still get an install.
- *
- * @param {object} tool  a REPAIRS entry
- * @param {object} [opts]
- * @param {typeof dispatchLookup} [opts.lookup]  injectable; defaults to
- *        `dispatchLookup`, which reads the tool's own `latest.source.kind`
- *        (npm, Adoptium, Maven Central or a GitHub release). The default was a
- *        bare npm lookup until converge-toolchain, the one caller that passed
- *        none, failed jdk21/maven with "tool declares no upstream package".
- *        A caller asking for many nodes still passes `createReleaseLookup()`
- *        so upstream is asked once per run.
- * @returns {Promise<{status:'presence-only'}
- *          | {status:'known', version:string, publishedAt:string}
- *          | {status:'unknown', reason:string}>}
+ * THE ONE RESOLVER (issue #70) — the install target for a tool, i.e. the
+ * newest release that has cleared its debounce — now lives in
+ * `tool-release.mjs` as {@link resolveInstallTarget} (cut (iii) layer debt,
+ * wave layers-3 lane T). It needs `dispatchLookup`, a real network call
+ * against another system's registry, and this file is `config`, which may
+ * import nothing above config; `tool-release.mjs` is `access`, and imports
+ * {@link minAgeOf} and {@link isVersionManaged} back from here, both of
+ * which stay since `check-fleet-toolchain.mjs` also reads them from here.
  */
-export async function resolveInstallTarget(tool, opts = {}) {
-	if (!isVersionManaged(tool)) return { status: 'presence-only' };
-	const { lookup = dispatchLookup, ...rest } = opts;
-	const latest = await lookup(tool.latest.source, { minAge: minAgeOf(tool), ...rest });
-	if (latest.status !== 'known') return { status: 'unknown', reason: latest.reason };
-	return { status: 'known', version: latest.version, publishedAt: latest.publishedAt };
-}
 
 /**
  * Does this tool apply to this node?

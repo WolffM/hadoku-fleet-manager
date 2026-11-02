@@ -101,12 +101,9 @@
  * "exited 0 and printed nothing we understood".
  */
 
-import { execFile } from 'node:child_process';
 import { capability } from '../../dist/lib/capability-registry.js';
 import { provenCapabilities } from '../../dist/lib/bootcamp-proof.js';
 import { mayRunRepo } from './placement-rules.mjs';
-import { runOn } from './fleet-exec.mjs';
-import { READ_ATTEMPTS, describeReadFailure } from './read-retry-policy.mjs';
 
 /**
  * Free-space floor, in MiB, on the filesystem holding a seed's cache. See the
@@ -493,47 +490,6 @@ export async function seedNode(name, node, manifest, deps) {
 	return results;
 }
 
-/** One `gh api` call, never throwing: `{ok, stdout, stderr, error}`. The controller's own `gh` auth. */
-function ghOnce(args, { timeoutMs = 30_000 } = {}) {
-	return new Promise((resolve) => {
-		execFile(
-			'gh',
-			args,
-			{ encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
-			(err, stdout, stderr) => {
-				resolve({
-					ok: !err,
-					stdout: String(stdout ?? ''),
-					stderr: String(stderr ?? ''),
-					error: err
-						? describeReadFailure({ status: err.code, stderr, message: err.message }, timeoutMs)
-						: null,
-				});
-			}
-		);
-	});
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Wrap a one-shot `gh(args)` in {@link READ_ATTEMPTS} retries — the same
- * tolerance for the measured 0.13% transient `gh api` failure rate every other
- * controller-side `gh` reader in this repo applies (CLAUDE.md). Retrying is
- * NOT tolerating: a call that fails every attempt still returns `ok: false`.
- */
-export function ghWithRetry(ghOneShot, { attempts = READ_ATTEMPTS, delayMs = 1000 } = {}) {
-	return async (args) => {
-		let last;
-		for (let attempt = 1; attempt <= attempts; attempt++) {
-			last = await ghOneShot(args);
-			if (last.ok) return last;
-			if (attempt < attempts) await sleep(delayMs);
-		}
-		return { ...last, error: `${last.error} (attempt ${attempts}/${attempts})` };
-	};
-}
-
 /**
  * The reason behind a failed ssh result. STDERR WINS over the transport's own
  * `.error` when both are present — `.error` on a `runOn` result is often just
@@ -547,7 +503,8 @@ function describeSshFailure(r) {
 	return r?.error || 'unknown failure';
 }
 
-/** The real {ssh, gh} pair: ssh over `fleet-exec.mjs`'s `runOn`, gh retried per {@link READ_ATTEMPTS}. */
-export function defaultSeedDeps() {
-	return { ssh: runOn, gh: ghWithRetry(ghOnce) };
-}
+// `ghOnce`, `ghWithRetry` and `defaultSeedDeps` — the real `ssh`/`gh` pair —
+// moved to `capability-seeds-live.mjs` (cut (iii) layer debt, wave layers-3
+// lane T): the only part of this file that imported `fleet-exec.mjs`
+// (access), which `config` may not. `seedNode`/`seedNodeFor` above take
+// `deps` as a parameter and stay exactly as they were.

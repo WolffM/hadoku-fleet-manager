@@ -61,14 +61,14 @@ import {
 	isVersionManaged,
 	parseObservation,
 	repairNeedsRoot,
-	resolveInstallTarget,
 } from './lib/toolchain-floor.mjs';
 import { debInstalled } from './lib/deb-installed.mjs';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { createLiveDeps, runRefreshCycle } from './lib/refresh-cycle.mjs';
-import { createReleaseLookup } from './lib/tool-release.mjs';
+import { createReleaseLookup, resolveInstallTarget } from './lib/tool-release.mjs';
 import { parseSuperseded, supersededScript } from './lib/superseded-installs.mjs';
-import { defaultSeedDeps, isSeedFinding, seedNode } from './lib/capability-seeds.mjs';
+import { isSeedFinding, seedNode } from './lib/capability-seeds.mjs';
+import { defaultSeedDeps } from './lib/capability-seeds-live.mjs';
 import {
 	TOKEN_ENV,
 	cloudflare,

@@ -170,11 +170,11 @@ import {
 	isVersionManaged,
 	probeRole,
 	repairNeedsRoot,
-	resolveInstallTarget,
 } from './lib/toolchain-floor.mjs';
+import { resolveInstallTarget } from './lib/tool-release.mjs';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { reasonOf, releaseLookup } from './lib/bootcamp-tool-support.mjs';
-import { defaultSeedDeps } from './lib/capability-seeds.mjs';
+import { defaultSeedDeps } from './lib/capability-seeds-live.mjs';
 import { DRAIN_TIMEOUT_MS, POLL_MS, SETTLE_MS } from './lib/refresh-cycle.mjs';
 import { parseLoad } from './lib/idle-measure.mjs';
 
