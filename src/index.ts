@@ -55,7 +55,7 @@ export type * from './fleet-report-types.js';
 // mgmt-api's cron dispatch reports into the same reservation this component
 // reads, so these two stay part of the public surface. With `meterGhPool`
 // below they are the ONLY inbound calls: everything else here is an output port.
-export { noteCronStart, noteCronEnd, inFlightCronJobs } from './node-reservation.js';
+export { noteCronStart, noteCronEnd } from './node-reservation.js';
 
 /** mgmt-api wraps each cron dispatch in this, so the GitHub budget's books can
  *  name what a cron spent outside this process (fleet-manager#9). */
@@ -64,10 +64,6 @@ export type { GhPoolReading } from './gh-budget.js';
 
 /** The job schedule declaration (wave 5e). mgmt-api's in-process staleness watcher feature-detects this — an installed copy from before 2026-10-31 will not have it. */
 export { JOB_REGISTRY, cadencePeriodMs, parseDurationMs } from './lib/job-registry.js';
-
-/** The GitHub client the component already owns. Exported so a host that needs
- *  one does not build a second — it has no non-fleet consumers today. */
-export { ghGet, ghWrite } from './lib/github-client.js';
 
 /**
  * Whether the fleet's own control loops are still ticking — dispatch, the
@@ -82,47 +78,27 @@ export { getFleetLiveness } from './lib/liveness.js';
 export type { FleetLiveness, LoopLiveness } from './lib/liveness.js';
 
 /**
- * THE BACKSTOP DECISION, as a pure library. hokon is the emergency backstop
- * for cardtable's Forge matches with the CI backstop's rules (operator,
- * 2026-10-25; hadoku-cardtable FLEET_MANAGER_FORGE_HOSTING.md §6), and
- * cardtable calls these with its own inputs rather than copying them — so a
- * rule changed here reaches both backstops in one publish. Pure functions and
- * constants only: the force record's file I/O (`readForce`/`writeForce`)
- * stays inside, because it is THIS fleet's state, not a rule.
+ * THE BACKSTOP DECISION's TYPES, as a pure contract. hokon is the emergency
+ * backstop for cardtable's Forge matches with the CI backstop's rules
+ * (operator, 2026-10-25; hadoku-cardtable FLEET_MANAGER_FORGE_HOSTING.md
+ * §6) — the plan was for cardtable to call this package's backstop
+ * functions with its own inputs rather than copy them, but cardtable does
+ * not depend on `@wolffm/fleet-manager` (it only runs the `fleet` CLI), so
+ * it ended up with its own parallel `BackstopState`/`BackstopInput`
+ * (`hadoku-cardtable/apps/server/src/play/placement/rules.ts`) instead. The
+ * functions and constants these types went with (`decideBackstop`,
+ * `isHostIdle`, `BACKLOG_QUEUE_SECONDS`, the force-record helpers,
+ * `TMP_FREE_FLOOR_MB`, …) had no consumer anywhere and were removed in wave
+ * cruft-1 (fleet-manager, 2026-11-02). These type-only exports remain in
+ * case something still structurally needs the shape.
  */
-export {
-	BACKLOG_QUEUE_SECONDS,
-	BACKSTOP_CALM_TICKS,
-	BACKSTOP_IDLE_MAX_LOAD_PER_CORE,
-	BACKSTOP_IDLE_MIN_AVAILABLE_MB,
-	SATURATION_QUEUE_SECONDS,
-	clawsAreHealthy,
-	decideBackstop,
-	describeSaturationHost,
-	explainBackstop,
-	hostMayTakeSaturation,
-	isAtCapacity,
-	isHostIdle,
-} from './runners/backstop.js';
 export type {
 	BackstopDecision,
 	BackstopInput,
 	BackstopState,
 	SaturationHostVerdict,
 } from './runners/backstop.js';
-export {
-	FORCE_DEFAULT_MINUTES,
-	FORCE_MAX_MINUTES,
-	activeForces,
-	describeForce,
-	forceRecord,
-	isForced,
-	parseForceMinutes,
-	pruneForce,
-} from './runners/backstop-force.js';
 export type { ForceRecord, ForceState } from './runners/backstop-force.js';
-/** The /tmp floor the idle gate's caller applies beside `isHostIdle`. */
-export { TMP_FREE_FLOOR_MB } from './runners/ephemeral.js';
 
 /**
  * Moved to `server.ts` (wave clean-1 lane C, cut (iii)): that is the one
