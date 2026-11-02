@@ -99,10 +99,16 @@ export function classifyZone(record: ZoneInput | null | undefined): FailureZone 
 	if (!name) return 'runner';
 	if (RUNNER_STEPS.some((re) => re.test(name))) return 'runner';
 	if (RUNNER_PREFIXES.some((re) => re.test(name))) return 'runner';
-	// The phase is consulted only AFTER the name has had its say: GitHub's
-	// synthetic steps are already matched above, and a consumer step that happens
-	// to land in the setup phase is still theirs.
-	if (record?.failedPhase === 'setup' || record?.failedPhase === 'cleanup') return 'runner';
+	// NO PHASE RULE HERE, and that is deliberate (2026-11-02). One read
+	// `failedPhase` setup or cleanup as the runner's. But a step's phase is its
+	// position (`phaseByOrder` in job-history-phases.ts): the only steps that can
+	// sit in setup or cleanup are "Set up job", `Post *` and "Complete job",
+	// and the two lines above already claim every one of them by NAME. So the
+	// rule could only ever fire on a phase that was wrong, and before the order
+	// fix it was wrong often: records written then carry clock-derived phases,
+	// one-second ties and a DST hour among them, which put 155 consumer
+	// failures in the box column over 14 days. Ignoring the phase corrects
+	// those stored records as they are read, with no re-fetch.
 	if (SEAM_STEPS.some((re) => re.test(name))) return 'seam';
 	return 'content';
 }

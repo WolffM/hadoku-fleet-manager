@@ -58,6 +58,33 @@ test('the two known real fleet bugs both classify as seam', () => {
 	);
 });
 
+test('a consumer-named step is content whatever its recorded phase (records before the order fix)', () => {
+	// Records written before 2026-11-02 carry clock-derived phases: a one-second
+	// tie put hadoku-cardtable's `check` aggregator in cleanup, and the DST hour
+	// put hadoku_site's `Identity-model gate` in setup. The NAME decides.
+	assert.equal(
+		classifyZone({
+			failedStep: 'Every job is green',
+			failedPhase: 'cleanup',
+			conclusion: 'failure',
+		}),
+		'content'
+	);
+	assert.equal(
+		classifyZone({
+			failedStep: 'Identity-model gate',
+			failedPhase: 'setup',
+			conclusion: 'failure',
+		}),
+		'content'
+	);
+	assert.equal(classifyZone({ failedStep: 'Complete job', failedPhase: 'cleanup' }), 'runner');
+	assert.equal(
+		classifyZone({ failedStep: 'Post Cache cargo build', failedPhase: 'cleanup' }),
+		'runner'
+	);
+});
+
 test("a consumer's own run: step is the content zone and does NOT earn a probe", () => {
 	const rec = { failedStep: 'Run inventory test', failedPhase: 'run', conclusion: 'failure' };
 	assert.equal(classifyZone(rec), 'content');

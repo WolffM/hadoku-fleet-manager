@@ -121,9 +121,41 @@ export function stepFailure(
 	const phases = jobPhases(j, start, end);
 	const startedAt = failed.started_at ? Date.parse(failed.started_at) : NaN;
 	if (!phases || !Number.isFinite(startedAt)) return { failedStep: failed.name };
-	const setupEndAbs = start + phases.setupSec * 1000;
-	const cleanupStartAbs = end - phases.cleanupSec * 1000;
-	const failedPhase: 'setup' | 'run' | 'cleanup' =
-		startedAt < setupEndAbs ? 'setup' : startedAt < cleanupStartAbs ? 'run' : 'cleanup';
-	return { failedStep: failed.name, failedPhase };
+	return { failedStep: failed.name, failedPhase: phaseByOrder(j.steps ?? [], failed) };
+}
+
+/**
+ * Which phase a step is in, by its POSITION among the job's steps — never by
+ * its clock.
+ *
+ * It was by clock (`started_at` against `jobPhases`' boundaries) until
+ * 2026-11-02, and the clock is wrong for this in two measured ways:
+ *
+ *   - GitHub stamps steps to the SECOND. A step that fails at once (a `check`
+ *     aggregator reading a verdict and exiting) starts in the same second as
+ *     the `Post *` / "Complete job" teardown, the tie went to `cleanup`, and
+ *     `classifyZone` read cleanup as the runner's. 142 of the 177 "box"
+ *     failures in the 14 days to 2026-11-02 were hadoku-cardtable's `check`
+ *     and `judge` aggregators, red because a test shard was.
+ *   - On 2026-11-01 between 09:00 and 10:00Z (the US fall-back hour) step
+ *     stamps ran ONE HOUR behind the job's own `started_at`, so every failed
+ *     step fell before "setup ended": nine `Identity-model gate` failures read
+ *     as the box's.
+ *
+ * Order has neither problem. Setup is "Set up job" and anything before it;
+ * cleanup opens at the first teardown step; everything between is `run`.
+ */
+function phaseByOrder(
+	steps: NonNullable<GhJob['steps']>,
+	failed: NonNullable<GhJob['steps']>[number]
+): 'setup' | 'run' | 'cleanup' {
+	const ordered = [...steps].sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
+	const at = ordered.indexOf(failed);
+	const setupAt = ordered.findIndex((st) => st.name === SETUP_STEP);
+	const cleanupAt = ordered.findIndex(
+		(st) => st.name === CLEANUP_STEP || (st.name ?? '').startsWith('Post ')
+	);
+	if (at <= setupAt) return 'setup';
+	if (cleanupAt !== -1 && at >= cleanupAt) return 'cleanup';
+	return 'run';
 }

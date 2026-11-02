@@ -262,3 +262,96 @@ test('ingestRuns: a failed job records failedStep/failedPhase with zero extra fe
 	assert.equal(r.failedStep, 'Tests');
 	assert.equal(r.failedPhase, 'run');
 });
+
+// ── phase by ORDER, not by clock (2026-11-02) ───────────────────────────────
+//
+// Both shapes are copied from real responses: hadoku-cardtable job
+// 125294424486 (`check`, the tie) and hadoku_site job 124992584027's sibling
+// `lint` on 2026-11-01 09:44Z (step stamps an hour behind the job's own).
+
+const numbered = (n: number, name: string, from: string, to: string, conclusion = 'success') => ({
+	number: n,
+	...step(name, from, to, conclusion),
+});
+
+test('stepFailure: a step that fails in the same SECOND teardown starts is run, not cleanup', () => {
+	const start = Date.parse('2026-11-02T13:09:59Z');
+	const end = Date.parse('2026-11-02T13:10:03Z');
+	const r = stepFailure(
+		{
+			conclusion: 'failure',
+			steps: [
+				numbered(1, 'Set up job', '2026-11-02T13:10:00Z', '2026-11-02T13:10:00Z'),
+				numbered(
+					2,
+					'Every job is green',
+					'2026-11-02T13:10:00Z',
+					'2026-11-02T13:10:00Z',
+					'failure'
+				),
+				numbered(4, 'Complete runner', '2026-11-02T13:10:00Z', '2026-11-02T13:10:00Z'),
+				numbered(5, 'Complete job', '2026-11-02T13:10:00Z', '2026-11-02T13:10:00Z'),
+			],
+		},
+		start,
+		end
+	);
+	assert.equal(r?.failedStep, 'Every job is green');
+	assert.equal(r?.failedPhase, 'run');
+});
+
+test('stepFailure: step stamps an hour behind the job (the DST hour) still place the step in run', () => {
+	const start = Date.parse('2026-11-01T09:44:24Z');
+	const end = Date.parse('2026-11-01T09:46:10Z');
+	const r = stepFailure(
+		{
+			conclusion: 'failure',
+			steps: [
+				numbered(1, 'Set up job', '2026-11-01T08:44:25Z', '2026-11-01T08:44:27Z'),
+				numbered(4, 'Run actions/checkout@v6', '2026-11-01T08:44:27Z', '2026-11-01T08:44:29Z'),
+				numbered(
+					14,
+					'Identity-model gate',
+					'2026-11-01T08:45:00Z',
+					'2026-11-01T08:45:40Z',
+					'failure'
+				),
+				numbered(
+					20,
+					'Post Run actions/checkout@v6',
+					'2026-11-01T08:45:40Z',
+					'2026-11-01T08:45:41Z'
+				),
+				numbered(22, 'Complete job', '2026-11-01T08:45:41Z', '2026-11-01T08:45:42Z'),
+			],
+		},
+		start,
+		end
+	);
+	assert.equal(r?.failedPhase, 'run');
+});
+
+test('stepFailure: a Post step that fails is cleanup, by position', () => {
+	const start = Date.parse('2026-11-02T13:09:59Z');
+	const end = Date.parse('2026-11-02T13:10:09Z');
+	const r = stepFailure(
+		{
+			conclusion: 'failure',
+			steps: [
+				numbered(1, 'Set up job', '2026-11-02T13:10:00Z', '2026-11-02T13:10:01Z'),
+				numbered(2, 'Tests', '2026-11-02T13:10:01Z', '2026-11-02T13:10:05Z'),
+				numbered(
+					3,
+					'Post Cache cargo build',
+					'2026-11-02T13:10:05Z',
+					'2026-11-02T13:10:07Z',
+					'failure'
+				),
+				numbered(4, 'Complete job', '2026-11-02T13:10:07Z', '2026-11-02T13:10:08Z'),
+			],
+		},
+		start,
+		end
+	);
+	assert.equal(r?.failedPhase, 'cleanup');
+});
