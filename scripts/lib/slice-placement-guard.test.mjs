@@ -416,9 +416,12 @@ test('an INACTIVE slice is not read as a missing one', () => {
  */
 test('the gate’s mint slice is the minter’s mint slice', () => {
 	const REPO = dirname(SCRIPTS);
-	const ts = readFileSync(join(REPO, 'src', 'runners', 'ephemeral-slice.ts'), 'utf8');
+	// DEFAULT_RUNNER_SLICE moved to ci-unit-properties.ts (wave layers-3 lane
+	// S, cut (iii) layer debt): ephemeral-slice.ts/ephemeral.ts re-export it
+	// unchanged, but the LITERAL now lives at its new home.
+	const ts = readFileSync(join(REPO, 'src', 'runners', 'ci-unit-properties.ts'), 'utf8');
 	const minter = ts.match(/export const DEFAULT_RUNNER_SLICE = '([^']+)'/);
-	assert.ok(minter, 'DEFAULT_RUNNER_SLICE must still be a literal in ephemeral-slice.ts');
+	assert.ok(minter, 'DEFAULT_RUNNER_SLICE must still be a literal in ci-unit-properties.ts');
 	const gate = code(mjs()).match(/const MINT_SLICE = '([^']+)'/);
 	assert.ok(gate, 'MINT_SLICE must still be a literal in deploy-runners-slice.mjs');
 	assert.equal(
@@ -1326,8 +1329,13 @@ test('the deployer computes the per-unit cap with the MINTER’s rule', () => {
 	const src = code(mjs());
 	assert.match(
 		src,
-		/import \{ unitMemoryMaxMb \} from '\.\.\/dist\/runners\/ephemeral\.js'/,
-		'the cap rule is unitMemoryMaxMb in src/runners/ephemeral.ts, imported BUILT so there is ' +
+		/import \{ unitMemoryMaxMb \} from '\.\.\/dist\/lib\/job-reserve\.js'/,
+		// unitMemoryMaxMb moved to src/lib/job-reserve.ts (wave clean-2 lane C)
+		// and this deployer now imports it from there directly rather than
+		// through src/runners/ephemeral.ts (wave layers-3 lane S, cut (iii)
+		// layer debt) — still imported BUILT, still only one implementation
+		// to drift from — the isLocalNode rule, applied here.
+		'the cap rule is unitMemoryMaxMb in src/lib/job-reserve.ts, imported BUILT so there is ' +
 			'only one implementation to drift from — the isLocalNode rule, applied here'
 	);
 	assert.match(

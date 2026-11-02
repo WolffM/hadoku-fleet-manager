@@ -58,7 +58,7 @@ import { packageVersion } from '../dist/lib/provenance.js';
 import { isBackstopNode } from '../dist/lib/node-role.js';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 // ONE RULE FOR THE PER-UNIT CEILING, and this is the same built copy the minter
-// runs. `unitMemoryMaxMb` is `src/runners/ephemeral.ts` — the fleet's answer to
+// runs. `unitMemoryMaxMb` is `src/lib/job-reserve.ts` — the fleet's answer to
 // "how much memory may ONE runner unit hold" — and until 2026-09-19 this
 // deployer did not ask it: it passed the DECLARED `slice.unitMaxMb` flat, so a
 // node's standing runners sat at 4 GiB while the runners the same node minted
@@ -66,8 +66,12 @@ import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 // `actions-runner-hadoku-fleet-manager.service` at MemoryMax=4294967296 beside
 // `warm-claw-4-hadoku-fleet-manager.service` at 14562623488, on one box. #26
 // already ruled the flat one wrong, and two provisioning paths with two rules
-// is how only one of them got the ruling.
-import { unitMemoryMaxMb } from '../dist/runners/ephemeral.js';
+// is how only one of them got the ruling. Imported directly from
+// `lib/job-reserve.js` rather than `runners/ephemeral.js` (wave layers-3 lane
+// S, cut (iii) layer debt): this file is lifecycle, ephemeral.ts is
+// ci-scheduling, and the two domains may not import each other directly —
+// `job-reserve.js` (config) is where `unitMemoryMaxMb` actually lives.
+import { unitMemoryMaxMb } from '../dist/lib/job-reserve.js';
 import { ciIsSeparate } from '../dist/lib/node-users.js';
 import { ciNotes, mergeSplitSummary } from './lib/slice-split.mjs';
 import { CI_OOM_SCORE_ADJ } from '../dist/runners/hosting-record.js';

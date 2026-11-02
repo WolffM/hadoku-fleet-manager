@@ -2,7 +2,7 @@
   {
     "glob": "src/runners/drain.ts",
     "layer": "state",
-    "section": "\"One declared writer, read back by something else\" — rule 3 of §3.2 — regardless of which domain the record is about. Listed first because several of these sit under src/runners/, which a later glob also claims for ci-scheduling."
+    "section": "\"One declared writer, read back by something else\" \u2014 rule 3 of \u00a73.2 \u2014 regardless of which domain the record is about. Listed first because several of these sit under src/runners/, which a later glob also claims for ci-scheduling."
   },
   {
     "glob": "src/runners/hosting-record.ts",
@@ -19,7 +19,7 @@
   {
     "glob": "src/runners/backstop-machines.ts",
     "layer": "state",
-    "why": "Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the manifest's machines, as the backstop reads them, with a test-seam override — read by `checkDiskWatch` (observation, stays in runner-health.ts) AND by the moved `runBackstopDecision` (ci-scheduling). Neither side may own the other's import, so this is the shared leaf both read from, same shape as its neighbours above."
+    "why": "Wave 5i lane A split of runner-health.ts (plan \u00a74.3 #1): the manifest's machines, as the backstop reads them, with a test-seam override \u2014 read by `checkDiskWatch` (observation, stays in runner-health.ts) AND by the moved `runBackstopDecision` (ci-scheduling). Neither side may own the other's import, so this is the shared leaf both read from, same shape as its neighbours above."
   },
   {
     "glob": "src/runners/capacity-ledger.ts",
@@ -40,17 +40,17 @@
   {
     "glob": "src/runners/decision-log-*.ts",
     "layer": "state",
-    "why": "Wave shrink-1 lane B split of decision-log.ts (800-line ceiling): the row types (decision-log-types.ts), the per-path row builders (decision-log-record.ts) and the day-file storage (decision-log-storage.ts). Same state shape as decision-log.ts itself, which re-exports every name here — explicit, since the directory catch-all below would otherwise place these as ci-scheduling/domain and make decision-log.ts's own import of them a layer violation."
+    "why": "Wave shrink-1 lane B split of decision-log.ts (800-line ceiling): the row types (decision-log-types.ts), the per-path row builders (decision-log-record.ts) and the day-file storage (decision-log-storage.ts). Same state shape as decision-log.ts itself, which re-exports every name here \u2014 explicit, since the directory catch-all below would otherwise place these as ci-scheduling/domain and make decision-log.ts's own import of them a layer violation."
   },
   {
     "glob": "src/runners/warm-backoff.ts",
     "layer": "state",
-    "why": "Wave 5g lane B split of ephemeral-tick.ts (plan §4.3 #3): the persisted warm-fill backoff streak, same \"one declared writer, read back by something else\" shape as its neighbours above."
+    "why": "Wave 5g lane B split of ephemeral-tick.ts (plan \u00a74.3 #3): the persisted warm-fill backoff streak, same \"one declared writer, read back by something else\" shape as its neighbours above."
   },
   {
     "glob": "src/runners/stuck-runs.ts",
     "layer": "state",
-    "why": "Wave 5i lane C split of dispatch-tick.ts (plan §4.3 #16): the announced-stuck book persisted to dispatch-stuck-announced.json — same \"one declared writer, read back by something else\" shape."
+    "why": "Wave 5i lane C split of dispatch-tick.ts (plan \u00a74.3 #16): the announced-stuck book persisted to dispatch-stuck-announced.json \u2014 same \"one declared writer, read back by something else\" shape."
   },
   {
     "glob": "src/capability-revocations.ts",
@@ -63,7 +63,7 @@
   {
     "glob": "src/lib/measured-proof.ts",
     "layer": "state",
-    "why": "Wave shrink-1 lane C: the $proof facet split out of measured.ts (pure move) to bring that file under the 600-line target. Same layer as the file it split from — it reads and writes through measured.ts's own readFacetFile/writeFacet."
+    "why": "Wave shrink-1 lane C: the $proof facet split out of measured.ts (pure move) to bring that file under the 600-line target. Same layer as the file it split from \u2014 it reads and writes through measured.ts's own readFacetFile/writeFacet."
   },
   {
     "glob": "src/lib/sick-node.ts",
@@ -72,7 +72,7 @@
   {
     "glob": "src/job-history-store.ts",
     "layer": "state",
-    "why": "Wave 5h lane C split of job-history.ts (plan §4.3 #5): the ledger store — the in-memory window, the probe ledger and the one writer of job-history.jsonl. job-history.ts itself is now a thin re-export barrel (see the domain/observation section below) kept only for runner-health.ts, not touched this wave."
+    "why": "Wave 5h lane C split of job-history.ts (plan \u00a74.3 #5): the ledger store \u2014 the in-memory window, the probe ledger and the one writer of job-history.jsonl. job-history.ts itself is now a thin re-export barrel (see the domain/observation section below) kept only for runner-health.ts, not touched this wave."
   },
   {
     "glob": "src/job-history-probe-ledger.ts",
@@ -86,7 +86,7 @@
   {
     "glob": "src/job-run-store.ts",
     "layer": "state",
-    "why": "Wave 5n lane C (plan §6.2/§7.3 T7): the job sink — one declared writer (job-run-store.ts itself, the only file that calls appendFileSync on its own day files), read back by job-runner.ts and emit.mjs through its exported functions, same \"state\" shape as its neighbours above."
+    "why": "Wave 5n lane C (plan \u00a76.2/\u00a77.3 T7): the job sink \u2014 one declared writer (job-run-store.ts itself, the only file that calls appendFileSync on its own day files), read back by job-runner.ts and emit.mjs through its exported functions, same \"state\" shape as its neighbours above."
   },
   {
     "glob": "src/day-file-list.ts",
@@ -96,27 +96,27 @@
   {
     "glob": "src/capacity-sample-store.ts",
     "layer": "state",
-    "why": "Wave 5n lane B (plan §7.3, T4): one declared writer, read back by nothing yet but `capacity-sample.ts`'s own tests — same \"JSONL store behind a one-file module\" shape as job-rollup-store.ts right above."
+    "why": "Wave 5n lane B (plan \u00a77.3, T4): one declared writer, read back by nothing yet but `capacity-sample.ts`'s own tests \u2014 same \"JSONL store behind a one-file module\" shape as job-rollup-store.ts right above."
   },
   {
     "glob": "src/fleet-probe-store.ts",
     "layer": "state",
-    "why": "Wave clean-1 lane C (cut (iii)): the fast loop's per-node probe snapshot, moved out of fleet-loop.ts (ci-scheduling). One declared writer (fleet-loop.ts's tick), read back by runner-health-label-floor.ts (observation) and routes/fleet-report.ts (surfaces) — rule 5's \"a domain reads another domain's fact through a state record\", in-memory rather than on disk but otherwise the same shape as its neighbours above."
+    "why": "Wave clean-1 lane C (cut (iii)): the fast loop's per-node probe snapshot, moved out of fleet-loop.ts (ci-scheduling). One declared writer (fleet-loop.ts's tick), read back by runner-health-label-floor.ts (observation) and routes/fleet-report.ts (surfaces) \u2014 rule 5's \"a domain reads another domain's fact through a state record\", in-memory rather than on disk but otherwise the same shape as its neighbours above."
   },
   {
     "glob": "src/pm2-host-busy-store.ts",
     "layer": "state",
-    "why": "Wave clean-1 lane C (cut (iii)): which nodes are serving pm2-host work, moved out of node-reservation.ts (ci-scheduling). node-reservation.ts's own header already said it — \"runner-health is still the only writer\" — so the writer (runner-health-label-floor.ts, observation) and the record were already in different domains; rule 3 (one declared writer, regardless of domain) is the fix."
+    "why": "Wave clean-1 lane C (cut (iii)): which nodes are serving pm2-host work, moved out of node-reservation.ts (ci-scheduling). node-reservation.ts's own header already said it \u2014 \"runner-health is still the only writer\" \u2014 so the writer (runner-health-label-floor.ts, observation) and the record were already in different domains; rule 3 (one declared writer, regardless of domain) is the fix."
   },
   {
     "glob": "src/admission-verdict-store.ts",
     "layer": "state",
-    "why": "Wave clean-2 lane A (cut (iii)): the dispatcher's generic admission-verdict snapshot, moved out of runners/ephemeral-tick.ts (ci-scheduling). One declared writer (ephemeral-tick.ts's dispatchEphemeral, through setAdmissionVerdicts), read back by runner-health-mint.ts (observation) and routes/fleet-report.ts (surfaces) — same shape as fleet-probe-store.ts above."
+    "why": "Wave clean-2 lane A (cut (iii)): the dispatcher's generic admission-verdict snapshot, moved out of runners/ephemeral-tick.ts (ci-scheduling). One declared writer (ephemeral-tick.ts's dispatchEphemeral, through setAdmissionVerdicts), read back by runner-health-mint.ts (observation) and routes/fleet-report.ts (surfaces) \u2014 same shape as fleet-probe-store.ts above."
   },
   {
     "glob": "src/workload-gate-store.ts",
     "layer": "state",
-    "why": "Wave clean-2 lane A (cut (iii)): this tick's WorkloadGateContext ($proof + revocations), moved out of runners/ephemeral-shared.ts (ci-scheduling). runner-health-mint.ts (observation) asks the SAME state-dir question dispatchEphemeral does, and neither domain can host the other's import legally — same shape as fleet-probe-store.ts above."
+    "why": "Wave clean-2 lane A (cut (iii)): this tick's WorkloadGateContext ($proof + revocations), moved out of runners/ephemeral-shared.ts (ci-scheduling). runner-health-mint.ts (observation) asks the SAME state-dir question dispatchEphemeral does, and neither domain can host the other's import legally \u2014 same shape as fleet-probe-store.ts above."
   },
   {
     "glob": "scripts/lib/enrollment-record.mjs",
@@ -129,12 +129,12 @@
   {
     "glob": "scripts/lib/floor-probe-state.mjs",
     "layer": "state",
-    "why": "Wave 5k lane D split of floor-probe.mjs (plan §4.3 #12): the harness's own probe ledger, read and written in exactly these two functions — the same \"one declared writer, read back by something else\" shape as its neighbours here."
+    "why": "Wave 5k lane D split of floor-probe.mjs (plan \u00a74.3 #12): the harness's own probe ledger, read and written in exactly these two functions \u2014 the same \"one declared writer, read back by something else\" shape as its neighbours here."
   },
   {
     "glob": "scripts/lib/manifest-edit.mjs",
     "layer": "state",
-    "why": "The transactional writer of fleet-runner-manifest.json (wave 5c F4). The \"one declared writer, read back by something else\" state pattern rule 3 describes — the same reason drain.ts/hosting-record.ts above are `state` rather than their directory's domain — not `access` like `manifest-target.mjs`: THAT file is the generic \"commit onto another system's repo\" mechanism (shared with benchmark/doctor/node-users-cutover), while this one is the domain-specific record of placement/capability facts every reader in `src/lib/manifest.ts` consumes."
+    "why": "The transactional writer of fleet-runner-manifest.json (wave 5c F4). The \"one declared writer, read back by something else\" state pattern rule 3 describes \u2014 the same reason drain.ts/hosting-record.ts above are `state` rather than their directory's domain \u2014 not `access` like `manifest-target.mjs`: THAT file is the generic \"commit onto another system's repo\" mechanism (shared with benchmark/doctor/node-users-cutover), while this one is the domain-specific record of placement/capability facts every reader in `src/lib/manifest.ts` consumes."
   },
   {
     "glob": "src/index.ts",
@@ -160,7 +160,7 @@
   {
     "glob": "src/cli-commands-*.ts",
     "layer": "surfaces",
-    "why": "Wave 5s lane C split of cli.ts (plan: TypeScript long tail): the COMMANDS table, by domain (fleet-ops, hosting, gates, lifecycle, onboarding), once it crossed the 800-line ceiling. Same layer as cli.ts, which assembles them in the original order — this is one surfaces-layer file's internal split, not a new edge."
+    "why": "Wave 5s lane C split of cli.ts (plan: TypeScript long tail): the COMMANDS table, by domain (fleet-ops, hosting, gates, lifecycle, onboarding), once it crossed the 800-line ceiling. Same layer as cli.ts, which assembles them in the original order \u2014 this is one surfaces-layer file's internal split, not a new edge."
   },
   {
     "glob": "src/server.ts",
@@ -173,12 +173,12 @@
   {
     "glob": "src/routes/fleet-*.ts",
     "layer": "surfaces",
-    "why": "Wave 5r lane A split of routes/fleet.ts (plan: TypeScript long tail): the manifest read, admission math, vocabulary assembly, workload-gate proof reads and the buildFleetReport join itself, each its own module once routes/fleet.ts crossed the 800-line ceiling. Same layer as routes/fleet.ts, which keeps re-exporting buildFleetReport for every existing importer — this is one surfaces-layer file's internal split, not a new edge."
+    "why": "Wave 5r lane A split of routes/fleet.ts (plan: TypeScript long tail): the manifest read, admission math, vocabulary assembly, workload-gate proof reads and the buildFleetReport join itself, each its own module once routes/fleet.ts crossed the 800-line ceiling. Same layer as routes/fleet.ts, which keeps re-exporting buildFleetReport for every existing importer \u2014 this is one surfaces-layer file's internal split, not a new edge."
   },
   {
     "glob": "src/capacity-sample.ts",
     "layer": "surfaces",
-    "why": "Wave 5n lane B (plan §7.3, T4): joins `buildFleetReport()` — the SAME cross-domain assembly GET /fleet reads — into a telemetry row; it is `surfaces`, not `domain`/`observation`, for the identical reason routes/fleet.ts itself is: nothing below surfaces may import a ci-scheduling-domain fact, and this file needs exactly the ones routes/fleet.ts already assembled rather than re-deriving them."
+    "why": "Wave 5n lane B (plan \u00a77.3, T4): joins `buildFleetReport()` \u2014 the SAME cross-domain assembly GET /fleet reads \u2014 into a telemetry row; it is `surfaces`, not `domain`/`observation`, for the identical reason routes/fleet.ts itself is: nothing below surfaces may import a ci-scheduling-domain fact, and this file needs exactly the ones routes/fleet.ts already assembled rather than re-deriving them."
   },
   {
     "glob": "src/fleet-report-types.ts",
@@ -187,7 +187,7 @@
   {
     "glob": "src/fleet-report-types-*.ts",
     "layer": "surfaces",
-    "why": "Wave 5r lane A split of fleet-report-types.ts (plan: TypeScript long tail): the `GET /fleet` wire contract's TYPES, by section (machines, jobs, dispatch, capacity, budget, vocabulary, the job-registry report shapes), once the barrel crossed the 800-line ceiling. Same layer as fleet-report-types.ts, which keeps re-exporting every name for every existing importer — this is one surfaces-layer type-only barrel's internal split, not a new edge."
+    "why": "Wave 5r lane A split of fleet-report-types.ts (plan: TypeScript long tail): the `GET /fleet` wire contract's TYPES, by section (machines, jobs, dispatch, capacity, budget, vocabulary, the job-registry report shapes), once the barrel crossed the 800-line ceiling. Same layer as fleet-report-types.ts, which keeps re-exporting every name for every existing importer \u2014 this is one surfaces-layer type-only barrel's internal split, not a new edge."
   },
   {
     "glob": "src/telemetry-vocabulary.ts",
@@ -196,7 +196,7 @@
   {
     "glob": "scripts/lib/herdr-fleet.mjs",
     "layer": "surfaces",
-    "section": "herdr/ plugin support: physically under scripts/lib, but it IS the surfaces-layer herdr door (plan §3.5: \"surfaces: … herdr/\")."
+    "section": "herdr/ plugin support: physically under scripts/lib, but it IS the surfaces-layer herdr door (plan \u00a73.5: \"surfaces: \u2026 herdr/\")."
   },
   {
     "glob": "scripts/lib/herdr-fleet-freshness.mjs",
@@ -226,12 +226,12 @@
   {
     "glob": "src/lib/liveness.ts",
     "layer": "automation",
-    "why": "Wave 5e lane C: a generic, domain-blind tick ledger every control loop (ci-scheduling's dispatch/fast loop, observation's runner-health, lifecycle's claw-reboot) calls into — same \"cross-cutting mechanics\" shape as concurrency.ts beside it."
+    "why": "Wave 5e lane C: a generic, domain-blind tick ledger every control loop (ci-scheduling's dispatch/fast loop, observation's runner-health, lifecycle's claw-reboot) calls into \u2014 same \"cross-cutting mechanics\" shape as concurrency.ts beside it."
   },
   {
     "glob": "src/lib/every.ts",
     "layer": "automation",
-    "why": "Wave5j lane D (plan §6.2 tier 1): the one timer primitive the control loops (ci-scheduling's dispatch/fast loop, observation's runner-health) now share — domain-blind scheduling mechanics, same shape as liveness.ts beside it, which it calls into directly."
+    "why": "Wave5j lane D (plan \u00a76.2 tier 1): the one timer primitive the control loops (ci-scheduling's dispatch/fast loop, observation's runner-health) now share \u2014 domain-blind scheduling mechanics, same shape as liveness.ts beside it, which it calls into directly."
   },
   {
     "glob": "src/lib/usage-log.ts",
@@ -244,12 +244,12 @@
   {
     "glob": "src/lib/runner-health-shared.ts",
     "layer": "automation",
-    "why": "Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the tick cadence and the hostname accessor, generic values both the checks that stay in runner-health.ts (observation) and the moved backstop-decision / hosted-fallback checks (ci-scheduling) call — the least-wrong flat layer for a domain-blind value neither side may own the other's import of, same reasoning as concurrency.ts/liveness.ts above."
+    "why": "Wave 5i lane A split of runner-health.ts (plan \u00a74.3 #1): the tick cadence and the hostname accessor, generic values both the checks that stay in runner-health.ts (observation) and the moved backstop-decision / hosted-fallback checks (ci-scheduling) call \u2014 the least-wrong flat layer for a domain-blind value neither side may own the other's import of, same reasoning as concurrency.ts/liveness.ts above."
   },
   {
     "glob": "src/lib/alert-ledger.ts",
     "layer": "automation",
-    "why": "Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the persisted alert-suppression ledger (`runner-health-alerts.json`), a thin wrapper over `job-runner.ts`'s `createPager` — same layer as its automation neighbours above, and the reason it cannot be `state`: it imports `createPager`/`HOUR_MS` from job-runner.ts (automation), and a `state` file may not import upward from automation. Read by checks that stay in runner-health.ts (observation) AND by the moved backstop decision and hosted-fallback checks (ci-scheduling), so it is the shared leaf both sides import."
+    "why": "Wave 5i lane A split of runner-health.ts (plan \u00a74.3 #1): the persisted alert-suppression ledger (`runner-health-alerts.json`), a thin wrapper over `job-runner.ts`'s `createPager` \u2014 same layer as its automation neighbours above, and the reason it cannot be `state`: it imports `createPager`/`HOUR_MS` from job-runner.ts (automation), and a `state` file may not import upward from automation. Read by checks that stay in runner-health.ts (observation) AND by the moved backstop decision and hosted-fallback checks (ci-scheduling), so it is the shared leaf both sides import."
   },
   {
     "glob": "scripts/fleet-usage.mjs",
@@ -258,7 +258,7 @@
   {
     "glob": "scripts/file-size-debt.mjs",
     "layer": "automation",
-    "why": "Wave 5n lane D: the file-size ceiling guard's regenerator CLI — a generic, domain-blind maintenance tool over `file-size-guard.mjs` below, same bucket as `fleet-usage.mjs` right above it."
+    "why": "Wave 5n lane D: the file-size ceiling guard's regenerator CLI \u2014 a generic, domain-blind maintenance tool over `file-size-guard.mjs` below, same bucket as `fleet-usage.mjs` right above it."
   },
   {
     "glob": "scripts/lib/emit.mjs",
@@ -267,7 +267,7 @@
   {
     "glob": "scripts/lib/gate-doc.mjs",
     "layer": "automation",
-    "why": "Wave 5f lane B: the GateDoc shape builder — same \"generic, domain-blind, shared report-shape mechanics\" as emit.mjs right above it (one of the three report shapes plan §6.2 names: ConvergeDoc, GateDoc, RecordDoc)."
+    "why": "Wave 5f lane B: the GateDoc shape builder \u2014 same \"generic, domain-blind, shared report-shape mechanics\" as emit.mjs right above it (one of the three report shapes plan \u00a76.2 names: ConvergeDoc, GateDoc, RecordDoc)."
   },
   {
     "glob": "scripts/lib/argv.mjs",
@@ -276,7 +276,7 @@
   {
     "glob": "scripts/lib/term.mjs",
     "layer": "automation",
-    "why": "F10: the ANSI palette + errText sweep (wave 5d lane B) — same \"generic, domain-blind, cross-cutting\" shape as argv.mjs beside it."
+    "why": "F10: the ANSI palette + errText sweep (wave 5d lane B) \u2014 same \"generic, domain-blind, cross-cutting\" shape as argv.mjs beside it."
   },
   {
     "glob": "scripts/lib/blank-comments.mjs",
@@ -285,7 +285,7 @@
   {
     "glob": "scripts/lib/yaml-comments.mjs",
     "layer": "config",
-    "why": "Wave clean-1 lane D reclassify: zero imports, two pure text functions with no job-runner/scheduler/pager-ledger/report-shape content — automation's own definition. This file was one of layer-map.mjs's own named 'domain-blind utility, judgment call' bucket filed under automation only for lack of a better flat layer; config is the true floor and nothing beneath it to violate, so filing it there removes the judgment call rather than reinterpreting it. Legalises fleet-source.mjs (access) and site-token.mjs (config) reading it, with no new edge (the file has no outgoing imports to turn upward)."
+    "why": "Wave clean-1 lane D reclassify: zero imports, two pure text functions with no job-runner/scheduler/pager-ledger/report-shape content \u2014 automation's own definition. This file was one of layer-map.mjs's own named 'domain-blind utility, judgment call' bucket filed under automation only for lack of a better flat layer; config is the true floor and nothing beneath it to violate, so filing it there removes the judgment call rather than reinterpreting it. Legalises fleet-source.mjs (access) and site-token.mjs (config) reading it, with no new edge (the file has no outgoing imports to turn upward)."
   },
   {
     "glob": "scripts/lib/stdin.mjs",
@@ -294,7 +294,7 @@
   {
     "glob": "scripts/lib/test-git-identity.mjs",
     "layer": "config",
-    "why": "Wave clean-1 lane D reclassify: a declarative fixture identity constant (FIXTURE_IDENTITY) plus two pure derivations, imports only node:process — same 'domain-blind utility, judgment call' bucket layer-map.mjs's header names for automation, with nothing tying it to automation's actual definition (job runner/scheduler/pager ledger/report shapes). config is the true floor. Legalises fleet-source-fixture.mjs (access) reading it, with no new edge."
+    "why": "Wave clean-1 lane D reclassify: a declarative fixture identity constant (FIXTURE_IDENTITY) plus two pure derivations, imports only node:process \u2014 same 'domain-blind utility, judgment call' bucket layer-map.mjs's header names for automation, with nothing tying it to automation's actual definition (job runner/scheduler/pager ledger/report shapes). config is the true floor. Legalises fleet-source-fixture.mjs (access) reading it, with no new edge."
   },
   {
     "glob": "scripts/lib/test-tmpdir.mjs",
@@ -308,7 +308,7 @@
   {
     "glob": "scripts/lib/file-size-guard.mjs",
     "layer": "automation",
-    "why": "Wave 5n lane D: the file-size ceiling guard's size/debt-list mechanics (ceilings, `wc -l` counting, the ratchet rules). It has no opinion about any domain — it counts lines in files under src/scripts/herdr/deploy wholesale — so it is the same \"generic, domain-blind, cross-cutting\" shape as f-guards/*.mjs right above it."
+    "why": "Wave 5n lane D: the file-size ceiling guard's size/debt-list mechanics (ceilings, `wc -l` counting, the ratchet rules). It has no opinion about any domain \u2014 it counts lines in files under src/scripts/herdr/deploy wholesale \u2014 so it is the same \"generic, domain-blind, cross-cutting\" shape as f-guards/*.mjs right above it."
   },
   {
     "glob": "src/lib/node-identity.ts",
@@ -325,7 +325,7 @@
   {
     "glob": "src/lib/dispatch-poll-cache.ts",
     "layer": "access",
-    "why": "Wave 5i lane C split of dispatch-tick.ts (plan §4.3 #16, \"poll cache -> access\"): the ETag/disk-store bookkeeping with no domain-shaped payload (the cached response BODIES stay in dispatch-tick.ts — they are typed by QueuedRun/QueuedJob, a ci-scheduling domain type, and an access file importing a domain type is itself a cut (iii) violation)."
+    "why": "Wave 5i lane C split of dispatch-tick.ts (plan \u00a74.3 #16, \"poll cache -> access\"): the ETag/disk-store bookkeeping with no domain-shaped payload (the cached response BODIES stay in dispatch-tick.ts \u2014 they are typed by QueuedRun/QueuedJob, a ci-scheduling domain type, and an access file importing a domain type is itself a cut (iii) violation)."
   },
   {
     "glob": "src/node-shell.ts",
@@ -343,12 +343,12 @@
   {
     "glob": "src/gh-budget-history-store.ts",
     "layer": "access",
-    "why": "Wave 5n lane B (plan §7.3, T5): `gh-budget.ts`'s own history store, same \"access, not state\" reasoning as the comment on atomic-json.ts below — `gh-budget.ts` is itself `access`, not `state`, and access importing state is the illegal direction, so this stays beside it rather than beside job-rollup-store.ts above."
+    "why": "Wave 5n lane B (plan \u00a77.3, T5): `gh-budget.ts`'s own history store, same \"access, not state\" reasoning as the comment on atomic-json.ts below \u2014 `gh-budget.ts` is itself `access`, not `state`, and access importing state is the illegal direction, so this stays beside it rather than beside job-rollup-store.ts above."
   },
   {
     "glob": "src/gh-budget-pool.ts",
     "layer": "access",
-    "why": "Wave 5r lane C: the shared-pool metering (`readGhPool`/`meterGhPool`) split out of `gh-budget.ts` to bring that file under the 800-line ceiling (pure move). Same layer as the file it split from — it reads and writes the exact same window bookkeeping, through accessors `gh-budget.ts` exports for it."
+    "why": "Wave 5r lane C: the shared-pool metering (`readGhPool`/`meterGhPool`) split out of `gh-budget.ts` to bring that file under the 800-line ceiling (pure move). Same layer as the file it split from \u2014 it reads and writes the exact same window bookkeeping, through accessors `gh-budget.ts` exports for it."
   },
   {
     "glob": "src/conditional-cache-store.ts",
@@ -380,12 +380,12 @@
   {
     "glob": "scripts/fleet-source.mjs",
     "layer": "surfaces",
-    "why": "Wave clean-2 lane D: this is the CLI door onto lib/fleet-source.mjs for callers that cannot import it (hadoku_site#483), not another access-layer reader of git — a thin argv/emit shell with no shipped-code logic of its own. Plan §3.1 names the layer directly: \"surfaces: CLI door · HTTP routes · herdr plugins · mgmt-api adapter\". Legalises its existing `./lib/emit.mjs` import (automation) with no new edge; it already imported `./lib/fleet-source.mjs` (access), also downward from surfaces."
+    "why": "Wave clean-2 lane D: this is the CLI door onto lib/fleet-source.mjs for callers that cannot import it (hadoku_site#483), not another access-layer reader of git \u2014 a thin argv/emit shell with no shipped-code logic of its own. Plan \u00a73.1 names the layer directly: \"surfaces: CLI door \u00b7 HTTP routes \u00b7 herdr plugins \u00b7 mgmt-api adapter\". Legalises its existing `./lib/emit.mjs` import (automation) with no new edge; it already imported `./lib/fleet-source.mjs` (access), also downward from surfaces."
   },
   {
     "glob": "scripts/node-profiles.mjs",
     "layer": "surfaces",
-    "why": "Wave clean-2 lane D: a new CLI door, split out of scripts/lib/node-profiles.mjs's `./emit.mjs` import so the validation library below stays config-layer and importable by every lifecycle-domain script that already reads it as a library (apt-security.mjs, converge-toolchain.mjs). Same shape as scripts/fleet-source.mjs right above: a thin argv/emit shell, no validation logic of its own. Plan §3.1: \"surfaces: CLI door · HTTP routes · herdr plugins · mgmt-api adapter\"."
+    "why": "Wave clean-2 lane D: a new CLI door, split out of scripts/lib/node-profiles.mjs's `./emit.mjs` import so the validation library below stays config-layer and importable by every lifecycle-domain script that already reads it as a library (apt-security.mjs, converge-toolchain.mjs). Same shape as scripts/fleet-source.mjs right above: a thin argv/emit shell, no validation logic of its own. Plan \u00a73.1: \"surfaces: CLI door \u00b7 HTTP routes \u00b7 herdr plugins \u00b7 mgmt-api adapter\"."
   },
   {
     "glob": "scripts/lib/fleet-source.mjs",
@@ -410,7 +410,7 @@
   {
     "glob": "scripts/lib/gh-runners.mjs",
     "layer": "access",
-    "why": "`gh api .../actions/runners` with retry, shared by reconcile-fleet-runners and check-label-floor (plan §4.1 F2b, wave 5d lane A)."
+    "why": "`gh api .../actions/runners` with retry, shared by reconcile-fleet-runners and check-label-floor (plan \u00a74.1 F2b, wave 5d lane A)."
   },
   {
     "glob": "scripts/lib/sibling-repos.mjs",
@@ -447,17 +447,17 @@
   {
     "glob": "scripts/lib/manifest-target.mjs",
     "layer": "access",
-    "why": "Commits a manifest edit onto hadoku_site's main — another system's repo."
+    "why": "Commits a manifest edit onto hadoku_site's main \u2014 another system's repo."
   },
   {
     "glob": "src/lib/capability-registry.ts",
     "layer": "config",
-    "section": "Wave 5j lane C split of capabilities.ts (plan §4.3 #4): the registry DATA and label queries (capability-registry.ts, capability-labels.ts) land in config exactly as the plan says. bootcamp-proof.ts, workload-gate.ts, capability-offer.ts and capability-validate.ts DEPART from the plan's \"lifecycle core\" / \"ci-scheduling\" / \"lifecycle\" assignments and stay config too — a DELIBERATE decision, not an oversight: Every one of those four is imported directly by files in ALL FOUR domains (measured from the real import graph before the split): e.g. `src/label-floor.ts` (observation) and `src/runners/ephemeral-shared.ts` (ci-scheduling) both import `nodeOffer`; `src/runners/prove-job.ts` (lifecycle) imports `judgeWorkloadProof`/`proofBudget`; `scripts/lib/collect-offers.mjs` (tenancy) imports `workloadGateContext`. Placing any one of them in a single domain would turn those existing edges into NEW domain-to-domain violations (rule 5, §3.2) — cut (iii) would grow by one violation per cross-domain importer, not stay flat. `config` is the one layer every domain already imports legally, which is exactly why the whole file sat there as one piece before this split. Re-cutting these four into their target domains is real work for a LATER wave, once the callers themselves go through a domain-owned record instead of calling the registry straight across a domain boundary."
+    "section": "Wave 5j lane C split of capabilities.ts (plan \u00a74.3 #4): the registry DATA and label queries (capability-registry.ts, capability-labels.ts) land in config exactly as the plan says. bootcamp-proof.ts, workload-gate.ts, capability-offer.ts and capability-validate.ts DEPART from the plan's \"lifecycle core\" / \"ci-scheduling\" / \"lifecycle\" assignments and stay config too \u2014 a DELIBERATE decision, not an oversight: Every one of those four is imported directly by files in ALL FOUR domains (measured from the real import graph before the split): e.g. `src/label-floor.ts` (observation) and `src/runners/ephemeral-shared.ts` (ci-scheduling) both import `nodeOffer`; `src/runners/prove-job.ts` (lifecycle) imports `judgeWorkloadProof`/`proofBudget`; `scripts/lib/collect-offers.mjs` (tenancy) imports `workloadGateContext`. Placing any one of them in a single domain would turn those existing edges into NEW domain-to-domain violations (rule 5, \u00a73.2) \u2014 cut (iii) would grow by one violation per cross-domain importer, not stay flat. `config` is the one layer every domain already imports legally, which is exactly why the whole file sat there as one piece before this split. Re-cutting these four into their target domains is real work for a LATER wave, once the callers themselves go through a domain-owned record instead of calling the registry straight across a domain boundary."
   },
   {
     "glob": "src/lib/capability-registry-ids.ts",
     "layer": "config",
-    "why": "Wave 5r lane D split of capability-registry.ts (800-line ceiling): the shared label ids and entry-building helpers capability-registry-label.ts needs as VALUES, pulled into their own leaf module so that import and capability-registry.ts's own import of the assembled label array do not close a cycle. Same layer as its neighbours — it is still registry data, just the part that must load before the entries that reference it."
+    "why": "Wave 5r lane D split of capability-registry.ts (800-line ceiling): the shared label ids and entry-building helpers capability-registry-label.ts needs as VALUES, pulled into their own leaf module so that import and capability-registry.ts's own import of the assembled label array do not close a cycle. Same layer as its neighbours \u2014 it is still registry data, just the part that must load before the entries that reference it."
   },
   {
     "glob": "src/lib/capability-registry-label.ts",
@@ -515,7 +515,7 @@
   {
     "glob": "src/lib/job-registry-*.ts",
     "layer": "config",
-    "why": "Wave 5s lane C split of job-registry.ts (plan: TypeScript long tail): JOB_REGISTRY, by its own comment dividers (fleet-pulse, repo-sync, benchmark, liveness, audit-gates, in-process), once it crossed the 800-line ceiling. Same layer as job-registry.ts, which assembles them in the original order — this is one config-layer file's internal split, not a new edge."
+    "why": "Wave 5s lane C split of job-registry.ts (plan: TypeScript long tail): JOB_REGISTRY, by its own comment dividers (fleet-pulse, repo-sync, benchmark, liveness, audit-gates, in-process), once it crossed the 800-line ceiling. Same layer as job-registry.ts, which assembles them in the original order \u2014 this is one config-layer file's internal split, not a new edge."
   },
   {
     "glob": "src/lib/manifest.ts",
@@ -530,27 +530,27 @@
   {
     "glob": "src/lib/ci-runner-values.ts",
     "layer": "config",
-    "why": "Wave clean-1 lane C/D (cut (iii)): FLEET_VALUE, moved out of ci-runner-fallback.ts (ci-scheduling) because scripts/check-label-floor.mjs (observation) reads the same literal and neither domain can host the other's import legally — same shape as fleet-vocabulary.ts above."
+    "why": "Wave clean-1 lane C/D (cut (iii)): FLEET_VALUE, moved out of ci-runner-fallback.ts (ci-scheduling) because scripts/check-label-floor.mjs (observation) reads the same literal and neither domain can host the other's import legally \u2014 same shape as fleet-vocabulary.ts above."
   },
   {
     "glob": "src/lib/queue-thresholds.ts",
     "layer": "config",
-    "why": "Wave clean-1 lane C/D (cut (iii)): MAX_QUEUED_MS, moved out of src/runners/queue-discovery.ts (ci-scheduling) because scripts/check-queue-health.mjs (observation) reads the same one-hour boundary and neither domain can host the other's import legally — same shape as fleet-vocabulary.ts above."
+    "why": "Wave clean-1 lane C/D (cut (iii)): MAX_QUEUED_MS, moved out of src/runners/queue-discovery.ts (ci-scheduling) because scripts/check-queue-health.mjs (observation) reads the same one-hour boundary and neither domain can host the other's import legally \u2014 same shape as fleet-vocabulary.ts above."
   },
   {
     "glob": "src/lib/job-reserve.ts",
     "layer": "config",
-    "why": "Wave clean-1 lane C/D (cut (iii)): JOB_RESERVE_DEFAULT_MB/RepoReserve/ReserveSource/jobReserve, moved out of src/runners/ephemeral-slice.ts and ephemeral-shared.ts (ci-scheduling) because jobReserve is pure and scripts/check-warm-canary.mjs (observation) needs the same answer admitMint does — same shape as fleet-vocabulary.ts above."
+    "why": "Wave clean-1 lane C/D (cut (iii)): JOB_RESERVE_DEFAULT_MB/RepoReserve/ReserveSource/jobReserve, moved out of src/runners/ephemeral-slice.ts and ephemeral-shared.ts (ci-scheduling) because jobReserve is pure and scripts/check-warm-canary.mjs (observation) needs the same answer admitMint does \u2014 same shape as fleet-vocabulary.ts above."
   },
   {
     "glob": "src/lib/fast-loop-cadence.ts",
     "layer": "config",
-    "why": "Wave clean-1 lane C/D (cut (iii)): FAST_LOOP_SECONDS/RECONCILE_EVERY_TICKS, moved out of fleet-loop.ts (ci-scheduling) because scripts/reconcile-fleet-runners.mjs (lifecycle) derives a minutes-between-reconciles figure from both — same shape as fleet-vocabulary.ts above."
+    "why": "Wave clean-1 lane C/D (cut (iii)): FAST_LOOP_SECONDS/RECONCILE_EVERY_TICKS, moved out of fleet-loop.ts (ci-scheduling) because scripts/reconcile-fleet-runners.mjs (lifecycle) derives a minutes-between-reconciles figure from both \u2014 same shape as fleet-vocabulary.ts above."
   },
   {
     "glob": "src/lib/jit-reap-cadence.ts",
     "layer": "config",
-    "why": "Wave clean-1 lane C/D (cut (iii)): REAP_INTERVAL_MS/JIT_REAP_GRACE_MS, moved out of src/runners/ephemeral-exec-reap.ts (ci-scheduling) because scripts/reconcile-runner-identity.mjs (observation, fleet identity) tells an orphan the sweep has not reached from one it failed to clear using these same two numbers — same shape as fleet-vocabulary.ts above."
+    "why": "Wave clean-1 lane C/D (cut (iii)): REAP_INTERVAL_MS/JIT_REAP_GRACE_MS, moved out of src/runners/ephemeral-exec-reap.ts (ci-scheduling) because scripts/reconcile-runner-identity.mjs (observation, fleet identity) tells an orphan the sweep has not reached from one it failed to clear using these same two numbers \u2014 same shape as fleet-vocabulary.ts above."
   },
   {
     "glob": "src/lib/covered-repos.ts",
@@ -560,12 +560,12 @@
   {
     "glob": "src/lib/jit-naming.ts",
     "layer": "config",
-    "why": "Wave clean-1 lane C (cut (iii)): JIT_PREFIX/WARM_PREFIX/parseJitName and the TMP_FREE_FLOOR_MB mint floor, moved out of src/runners/ephemeral.ts and ephemeral-admission.ts (both ci-scheduling) because observation's disk-watch.ts and runner-health-watch.ts read the same naming convention and the same floor to explain their own alerts, and neither domain can host the other's import legally — same shape as fleet-vocabulary.ts above."
+    "why": "Wave clean-1 lane C (cut (iii)): JIT_PREFIX/WARM_PREFIX/parseJitName and the TMP_FREE_FLOOR_MB mint floor, moved out of src/runners/ephemeral.ts and ephemeral-admission.ts (both ci-scheduling) because observation's disk-watch.ts and runner-health-watch.ts read the same naming convention and the same floor to explain their own alerts, and neither domain can host the other's import legally \u2014 same shape as fleet-vocabulary.ts above."
   },
   {
     "glob": "src/lib/warm-eligibility.ts",
     "layer": "config",
-    "why": "Wave clean-2 lane C (cut (iii) layer debt): WarmEligibilityInput/warmEligibleSlots/warmMemorySlots/warmCacheEligible, moved out of src/runners/ephemeral.ts (ci-scheduling) because scripts/check-warm-canary.mjs (observation) measures the identical 'does this node have room for a warm listener' question over ssh and needs the same pure answer. Every export is total over its inputs with no file/network/clock access (isBackstopNode from lib/node-role.ts, already config, is the only import) — same 'one declaration, config layer' shape as jit-naming.ts and job-reserve.ts beside it. ephemeral.ts re-exports every name here unchanged."
+    "why": "Wave clean-2 lane C (cut (iii) layer debt): WarmEligibilityInput/warmEligibleSlots/warmMemorySlots/warmCacheEligible, moved out of src/runners/ephemeral.ts (ci-scheduling) because scripts/check-warm-canary.mjs (observation) measures the identical 'does this node have room for a warm listener' question over ssh and needs the same pure answer. Every export is total over its inputs with no file/network/clock access (isBackstopNode from lib/node-role.ts, already config, is the only import) \u2014 same 'one declaration, config layer' shape as jit-naming.ts and job-reserve.ts beside it. ephemeral.ts re-exports every name here unchanged."
   },
   {
     "glob": "src/lib/node-role.ts",
@@ -633,7 +633,7 @@
   {
     "glob": "scripts/lib/layer-map.mjs",
     "layer": "config",
-    "why": "This file and measure-layers.mjs are themselves DATA/measurement about the target shape — config is the layer for the package's own declarative inputs, which this is."
+    "why": "This file and measure-layers.mjs are themselves DATA/measurement about the target shape \u2014 config is the layer for the package's own declarative inputs, which this is."
   },
   {
     "glob": "scripts/lib/argv-specs.mjs",
@@ -652,21 +652,21 @@
     "layer": "domain",
     "domain": "lifecycle",
     "part": "run",
-    "why": "`prove-job.ts` is `lifecycle` per §3.5's own misplacement note (\"sits in runners/ but is an operator library\")."
+    "why": "`prove-job.ts` is `lifecycle` per \u00a73.5's own misplacement note (\"sits in runners/ but is an operator library\")."
   },
   {
     "glob": "src/runners/prove-job-lifecycle.ts",
     "layer": "domain",
     "domain": "lifecycle",
     "part": "run",
-    "why": "Wave shrink-1 lane B split of prove-job.ts (800-line ceiling): teardown/stale-reap/dispatch-ref — real ssh and GitHub calls, not pure. Same part as prove-job.ts, which re-exports every name here; placed ahead of the prove-job-*.ts catch-all below, which is `core` and would otherwise misclassify this file as pure."
+    "why": "Wave shrink-1 lane B split of prove-job.ts (800-line ceiling): teardown/stale-reap/dispatch-ref \u2014 real ssh and GitHub calls, not pure. Same part as prove-job.ts, which re-exports every name here; placed ahead of the prove-job-*.ts catch-all below, which is `core` and would otherwise misclassify this file as pure."
   },
   {
     "glob": "src/runners/prove-job-verdict.ts",
     "layer": "domain",
     "domain": "lifecycle",
     "part": "run",
-    "why": "Wave shrink-1 lane B split of prove-job.ts (800-line ceiling): awaits the landed job and reads its verdict from the GitHub API — real I/O via the injected `read`/`d.gh`, not pure. Same part as prove-job.ts; placed ahead of the prove-job-*.ts catch-all below for the same reason as prove-job-lifecycle.ts above."
+    "why": "Wave shrink-1 lane B split of prove-job.ts (800-line ceiling): awaits the landed job and reads its verdict from the GitHub API \u2014 real I/O via the injected `read`/`d.gh`, not pure. Same part as prove-job.ts; placed ahead of the prove-job-*.ts catch-all below for the same reason as prove-job-lifecycle.ts above."
   },
   {
     "glob": "src/runners/prove-job-*.ts",
@@ -765,7 +765,7 @@
     "layer": "domain",
     "domain": "lifecycle",
     "part": "run",
-    "why": "Wave 5s lane D test-file split of make-preseed.test.mjs (1,000-line test ceiling): the shared rig (render_preseed's output, the sandboxed wifi-branch execution, sfdisk's PATH) for the eight make-preseed-*.test.mjs files, same 'shared rig, domain-blind-except-for-what-it-drives' bucket as runner-health-rig.ts — make-preseed.sh and node-usb-prep.sh are node provisioning, the same domain as enroll-node.mjs just above."
+    "why": "Wave 5s lane D test-file split of make-preseed.test.mjs (1,000-line test ceiling): the shared rig (render_preseed's output, the sandboxed wifi-branch execution, sfdisk's PATH) for the eight make-preseed-*.test.mjs files, same 'shared rig, domain-blind-except-for-what-it-drives' bucket as runner-health-rig.ts \u2014 make-preseed.sh and node-usb-prep.sh are node provisioning, the same domain as enroll-node.mjs just above."
   },
   {
     "glob": "scripts/retire-node.mjs",
@@ -821,7 +821,7 @@
     "layer": "domain",
     "domain": "lifecycle",
     "part": "run",
-    "why": "Wave 5q lane B split off the 800-line ceiling (ctx restructure): builds, writes and compares `fleet-runner-coverage.json`, reading GitHub trees/package.json and the CLI's own `readJobReserves` (passed in as `ctx.readJobReserves`, never imported — see the module header)."
+    "why": "Wave 5q lane B split off the 800-line ceiling (ctx restructure): builds, writes and compares `fleet-runner-coverage.json`, reading GitHub trees/package.json and the CLI's own `readJobReserves` (passed in as `ctx.readJobReserves`, never imported \u2014 see the module header)."
   },
   {
     "glob": "scripts/lib/reconcile-report.mjs",
@@ -835,7 +835,7 @@
     "layer": "domain",
     "domain": "lifecycle",
     "part": "run",
-    "why": "Wave 5q lane B split off the 800-line ceiling (ctx restructure): the `--confirm` apply step (register/relabel/remove), ssh- and gh-bound throughout; `ctx.ssh` is the CLI's own `ssh()`, passed in rather than imported — see the module header."
+    "why": "Wave 5q lane B split off the 800-line ceiling (ctx restructure): the `--confirm` apply step (register/relabel/remove), ssh- and gh-bound throughout; `ctx.ssh` is the CLI's own `ssh()`, passed in rather than imported \u2014 see the module header."
   },
   {
     "glob": "scripts/lib/reconcile-claw-owner.mjs",
@@ -907,7 +907,7 @@
     "layer": "domain",
     "domain": "lifecycle",
     "part": "run",
-    "why": "Wave shrink-1 lane D, pure move: deploy-ci-throttle.mjs's post-loop reporting — the --confirm stale-listener gate, the unbounded-node warning, and the --check gate's fix hints. Same bucket as the CLI it was cut from."
+    "why": "Wave shrink-1 lane D, pure move: deploy-ci-throttle.mjs's post-loop reporting \u2014 the --confirm stale-listener gate, the unbounded-node warning, and the --check gate's fix hints. Same bucket as the CLI it was cut from."
   },
   {
     "glob": "scripts/deploy-runners-slice.mjs",
@@ -936,7 +936,7 @@
   {
     "glob": "scripts/lib/operator-sudo.mjs",
     "layer": "config",
-    "why": "What the role declaration says the fleet may do as root — read off config."
+    "why": "What the role declaration says the fleet may do as root \u2014 read off config."
   },
   {
     "glob": "scripts/lib/idle-measure.mjs",
@@ -947,7 +947,7 @@
   {
     "glob": "scripts/lib/node-interfaces.mjs",
     "layer": "access",
-    "why": "Wave clean-1 lane D reclassify: zero imports; every export either parses what a node's own `ip`/NetworkManager/ifupdown reports (INTERFACE_PROBE/parseInterfaces, WIFI_MANAGER_PROBE/parseWifiManager) or decides addressing purely from that same probed data (preferredAddress, proposeLanRecord, sshTarget, sshNameCandidates, chooseSshHostName) — none of it reads fleet state, the manifest, or a capability registry. §3.2 rule 2: 'another system owns (a node...) -> access'. Used identically by lifecycle callers (enroll-*.mjs) and observation callers (check-fleet-preflight.mjs, doctor-probe.mjs, preflight-lan.mjs) with no different treatment, which is what access content looks like rather than a lifecycle-specific decision. Every current importer sits at index <= access already, so this legalises the three observation reads with no new edge."
+    "why": "Wave clean-1 lane D reclassify: zero imports; every export either parses what a node's own `ip`/NetworkManager/ifupdown reports (INTERFACE_PROBE/parseInterfaces, WIFI_MANAGER_PROBE/parseWifiManager) or decides addressing purely from that same probed data (preferredAddress, proposeLanRecord, sshTarget, sshNameCandidates, chooseSshHostName) \u2014 none of it reads fleet state, the manifest, or a capability registry. \u00a73.2 rule 2: 'another system owns (a node...) -> access'. Used identically by lifecycle callers (enroll-*.mjs) and observation callers (check-fleet-preflight.mjs, doctor-probe.mjs, preflight-lan.mjs) with no different treatment, which is what access content looks like rather than a lifecycle-specific decision. Every current importer sits at index <= access already, so this legalises the three observation reads with no new edge."
   },
   {
     "glob": "scripts/lib/node-users-cutover.mjs",
@@ -958,7 +958,7 @@
   {
     "glob": "scripts/lib/probe-script.mjs",
     "layer": "access",
-    "why": "Wave clean-1 lane D reclassify: assembles the capability-probe invocation from access-layer reads (readPm2Hosts in site-docs.mjs, nodeHome in node-users.ts) and an env override — no lifecycle state or decision beyond string assembly and URL validation. §3.2 rule 2. Its own imports (site-docs.mjs, node-users.ts: access; toolchain-floor.mjs: config) are all already at or below access, so reclassifying introduces no new outgoing edge; both current importers (bootcamp.mjs, lifecycle; check-capabilities.mjs, observation) sit at index <= access, so this legalises the observation read with no new edge."
+    "why": "Wave clean-1 lane D reclassify: assembles the capability-probe invocation from access-layer reads (readPm2Hosts in site-docs.mjs, nodeHome in node-users.ts) and an env override \u2014 no lifecycle state or decision beyond string assembly and URL validation. \u00a73.2 rule 2. Its own imports (site-docs.mjs, node-users.ts: access; toolchain-floor.mjs: config) are all already at or below access, so reclassifying introduces no new outgoing edge; both current importers (bootcamp.mjs, lifecycle; check-capabilities.mjs, observation) sit at index <= access, so this legalises the observation read with no new edge."
   },
   {
     "glob": "scripts/lib/proof-drain.mjs",
@@ -994,9 +994,9 @@
   {
     "glob": "scripts/lib/drain-wait.mjs",
     "layer": "domain",
-    "domain": "lifecycle",
+    "domain": "observation",
     "part": "run",
-    "why": "The drain, wait-until-idle and undrain primitive shared by refresh-cycle and benchmark --cadence. Draining and undraining a node is a lifecycle action, so it is filed there even though it reads expected-down's drain record. benchmark-fleet (observation) importing it stays recorded as layer debt: the real fix is moving --cadence's drain orchestration out of an observation tool."
+    "why": "Wave layers-3 lane S (cut (iii) layer debt): RECLASSIFIED from lifecycle to observation. drain-wait.mjs's own header already says so (\"Classified observation/run here instead \u2014 the same stratum expected-down.mjs's readDrains already sits in\"), and benchmark-fleet.mjs's import comment makes the identical claim (\"drain-wait.mjs is the shared stratum both may reach\") \u2014 the layer-map entry had drifted out of sync with the design both callers already document. Verified empirically: reclassifying removes exactly the benchmark-fleet.mjs -> drain-wait.mjs edge from cuts (iii)/(iv) with nothing added, and refresh-cycle.mjs/refresh-cycle-live.mjs (lifecycle) keep importing it legally (domain -> observation, legal under cut (iii)). drain/undrain/drainCli are still real actions (spawn scripts/drain-node.mjs, itself lifecycle), but they are read by both an observation tool measuring a node on its own cadence and a lifecycle tool refreshing one, same as expected-down.mjs's drain record \u2014 observation is where both may legally meet, exactly the role the plan's observation stratum exists for."
   },
   {
     "glob": "scripts/lib/roster-eligibility.mjs",
@@ -1096,7 +1096,7 @@
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "core",
-    "section": "Wave 5k lane C split of ephemeral.ts (plan §4.3 #11, pure move): the mint plan builders (buildSpawnPlan/buildWarmSpawnPlan and the sizing/labelling they need) and the warm-cache SELECTION decision (planWarmCache/planWarmFleet and their scoring) moved out; admission, naming and warm ELIGIBILITY stayed, keyed by which other-domain files reach in by name. Same part as their source file for the same reason."
+    "section": "Wave 5k lane C split of ephemeral.ts (plan \u00a74.3 #11, pure move): the mint plan builders (buildSpawnPlan/buildWarmSpawnPlan and the sizing/labelling they need) and the warm-cache SELECTION decision (planWarmCache/planWarmFleet and their scoring) moved out; admission, naming and warm ELIGIBILITY stayed, keyed by which other-domain files reach in by name. Same part as their source file for the same reason."
   },
   {
     "glob": "src/runners/ephemeral-admission.ts",
@@ -1104,6 +1104,11 @@
     "domain": "ci-scheduling",
     "part": "core",
     "why": "Wave 5r lane D split of ephemeral.ts (800-line ceiling): admitMint/spaceRefusal/assertSafeJitConfig, a pure move. Same part as ephemeral.ts, which re-exports every name here."
+  },
+  {
+    "glob": "src/runners/ci-unit-properties.ts",
+    "layer": "state",
+    "why": "Wave layers-3 lane S (cut (iii) layer debt): ciUnitProperties, resolveSliceName and DEFAULT_RUNNER_SLICE moved out of ephemeral-slice.ts (ci-scheduling) because deploy-runners-slice.mjs (lifecycle) and scripts/lib/hosting.mjs (tenancy) both need the identical pure answer \u2014 the same \"pure helper, lower flat layer\" shape as job-reserve.ts and warm-eligibility.ts beside it, placed at `state` rather than `config` because ciUnitProperties' one import, CI_OOM_SCORE_ADJ, is itself a `state` constant (hosting-record.ts) and a flat layer may only import another flat layer at the same or a lower stratum. ephemeral.ts / ephemeral-slice.ts re-export every name here under its original path, so every existing ci-scheduling importer (ephemeral-mint.ts and the rest) keeps compiling and behaving byte-identically."
   },
   {
     "glob": "src/runners/ephemeral-slice.ts",
@@ -1123,7 +1128,7 @@
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "core",
-    "why": "Wave shrink-1 lane B split of ephemeral-warm.ts (614-line ceiling): the fleet-wide joint allocation (planWarmFleet etc.), a pure move. Same part as ephemeral-warm.ts, which re-exports every name here — explicit, since the directory catch-all below would otherwise place this as ci-scheduling/run, and it is as pure as its sibling."
+    "why": "Wave shrink-1 lane B split of ephemeral-warm.ts (614-line ceiling): the fleet-wide joint allocation (planWarmFleet etc.), a pure move. Same part as ephemeral-warm.ts, which re-exports every name here \u2014 explicit, since the directory catch-all below would otherwise place this as ci-scheduling/run, and it is as pure as its sibling."
   },
   {
     "glob": "src/runners/placement.ts",
@@ -1184,19 +1189,19 @@
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "core",
-    "why": "Wave 5g lane B split of ephemeral-tick.ts (plan §4.3 #3, \"speed/heavy caches -> scheduling core\"): the cached speed/heavy-kind models both dispatch-warm-cache.ts and ephemeral-tick.ts read, same part as the speed-tier.ts/traffic.ts models it rebuilds from, just ahead of this file's own src/runners/*.ts catch-all (which would otherwise tag it 'run')."
+    "why": "Wave 5g lane B split of ephemeral-tick.ts (plan \u00a74.3 #3, \"speed/heavy caches -> scheduling core\"): the cached speed/heavy-kind models both dispatch-warm-cache.ts and ephemeral-tick.ts read, same part as the speed-tier.ts/traffic.ts models it rebuilds from, just ahead of this file's own src/runners/*.ts catch-all (which would otherwise tag it 'run')."
   },
   {
     "glob": "src/runners/probe-backoff.ts",
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "core",
-    "why": "Wave 5i lane C split of dispatch-tick.ts (plan §4.3 #16, \"probe backoff -> own module\"): the pure placement fingerprint and the per-run backoff map it gates, same part as its neighbours above, ahead of this file's own src/runners/*.ts catch-all (which would otherwise tag it 'run')."
+    "why": "Wave 5i lane C split of dispatch-tick.ts (plan \u00a74.3 #16, \"probe backoff -> own module\"): the pure placement fingerprint and the per-run backoff map it gates, same part as its neighbours above, ahead of this file's own src/runners/*.ts catch-all (which would otherwise tag it 'run')."
   },
   {
     "glob": "src/lib/job-kind.ts",
     "layer": "automation",
-    "why": "Reclassified wave clean-1 lane C (cut (iii)): `jobKind` is domain-blind (one pure regex strip, no imports at all) and is already imported identically by ci-scheduling (speed-tier.ts, traffic.ts — same domain, legal), observation (job-history-stats.ts, job-rollups.ts, node-regression.ts) and lifecycle (prove-job.ts). Filing it under ci-scheduling made every one of those other-domain imports a violation that is not really about scheduling at all. `layer-map.mjs`'s own header already names this shape — a generic, domain-blind utility with no placement rule of its own — and assigns it to automation as the least-wrong flat layer (blank-comments.mjs, emit.mjs, yaml-comments.mjs); jobKind fits the same description, so it moves to the same layer rather than staying a one-off exception."
+    "why": "Reclassified wave clean-1 lane C (cut (iii)): `jobKind` is domain-blind (one pure regex strip, no imports at all) and is already imported identically by ci-scheduling (speed-tier.ts, traffic.ts \u2014 same domain, legal), observation (job-history-stats.ts, job-rollups.ts, node-regression.ts) and lifecycle (prove-job.ts). Filing it under ci-scheduling made every one of those other-domain imports a violation that is not really about scheduling at all. `layer-map.mjs`'s own header already names this shape \u2014 a generic, domain-blind utility with no placement rule of its own \u2014 and assigns it to automation as the least-wrong flat layer (blank-comments.mjs, emit.mjs, yaml-comments.mjs); jobKind fits the same description, so it moves to the same layer rather than staying a one-off exception."
   },
   {
     "glob": "scripts/backstop-switch.mjs",
@@ -1246,21 +1251,21 @@
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "core",
-    "why": "Wave 5q lane A split of floor-probe.mjs (plan §4.3, the 800-line ceiling): the §2-4 candidate-ranking rule and the §1.2 demand-ledger class rule, still with no IO — `core`, same as the file it was pulled out of."
+    "why": "Wave 5q lane A split of floor-probe.mjs (plan \u00a74.3, the 800-line ceiling): the \u00a72-4 candidate-ranking rule and the \u00a71.2 demand-ledger class rule, still with no IO \u2014 `core`, same as the file it was pulled out of."
   },
   {
     "glob": "scripts/lib/floor-probe-flaky.mjs",
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "core",
-    "why": "Wave 5q lane A split of floor-probe.mjs: the §5 flaky rule, pure. `floor-probe-ranking.mjs` imports its `tripleKey` — one key function, not two that agree until one moves."
+    "why": "Wave 5q lane A split of floor-probe.mjs: the \u00a75 flaky rule, pure. `floor-probe-ranking.mjs` imports its `tripleKey` \u2014 one key function, not two that agree until one moves."
   },
   {
     "glob": "scripts/lib/floor-probe-window.mjs",
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "core",
-    "why": "Wave 5q lane A split of floor-probe.mjs: the §7 quiet-window predicate, pure. The I/O half that reads shipped workflows and cron-worker's profiles is `floor-probe-window-check.mjs` (`run`), not here."
+    "why": "Wave 5q lane A split of floor-probe.mjs: the \u00a77 quiet-window predicate, pure. The I/O half that reads shipped workflows and cron-worker's profiles is `floor-probe-window-check.mjs` (`run`), not here."
   },
   {
     "glob": "scripts/lib/floor-probe-rows.mjs",
@@ -1274,14 +1279,14 @@
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "core",
-    "why": "Wave 5q lane A split of floor-probe.mjs: the §6 shadow-dispatch safety check, pure — a refusal list over the workflow text, no IO."
+    "why": "Wave 5q lane A split of floor-probe.mjs: the \u00a76 shadow-dispatch safety check, pure \u2014 a refusal list over the workflow text, no IO."
   },
   {
     "glob": "scripts/lib/floor-probe-candidates.mjs",
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "run",
-    "section": "Wave 5k lane D split of floor-probe.mjs (plan §4.3 #12). Each still does I/O (the exclusion reads, the ledger merge, the metered GitHub calls) so each is `run`, same as the CLI they were pulled out of — the split moved the code, not its placement."
+    "section": "Wave 5k lane D split of floor-probe.mjs (plan \u00a74.3 #12). Each still does I/O (the exclusion reads, the ledger merge, the metered GitHub calls) so each is `run`, same as the CLI they were pulled out of \u2014 the split moved the code, not its placement."
   },
   {
     "glob": "scripts/lib/floor-probe-table.mjs",
@@ -1300,7 +1305,7 @@
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "run",
-    "why": "Wave 5q lane A split of scripts/floor-probe.mjs: `declareProbeIntent`, kept OUT of floor-probe-state.mjs (`state`) because it imports PROBE_INTENT_DIR/PROBE_INTENT_MAX_MS from dispatch-tick.ts, a ci-scheduling domain fact — `state` importing a domain constant is itself a cut (iii) violation."
+    "why": "Wave 5q lane A split of scripts/floor-probe.mjs: `declareProbeIntent`, kept OUT of floor-probe-state.mjs (`state`) because it imports PROBE_INTENT_DIR/PROBE_INTENT_MAX_MS from dispatch-tick.ts, a ci-scheduling domain fact \u2014 `state` importing a domain constant is itself a cut (iii) violation."
   },
   {
     "glob": "scripts/lib/floor-probe-history.mjs",
@@ -1314,7 +1319,7 @@
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "run",
-    "why": "Wave 5q lane A split of scripts/floor-probe.mjs: the §7 quiet-window I/O (shipped workflows, cron-worker profiles), calling the pure `quietWindow` in floor-probe-window.mjs (`core`) with what it found."
+    "why": "Wave 5q lane A split of scripts/floor-probe.mjs: the \u00a77 quiet-window I/O (shipped workflows, cron-worker profiles), calling the pure `quietWindow` in floor-probe-window.mjs (`core`) with what it found."
   },
   {
     "glob": "scripts/lib/floor-probe-mint-labels.mjs",
@@ -1356,14 +1361,14 @@
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "run",
-    "why": "Wave 5q lane A ctx restructure: `fleet floor-probe probe`'s own logic (the shadow-dispatch mint), taking the CLI's ctx — including its one `sh`/`probeSlotIsFree` runOn site, threaded through rather than imported; never imports the CLI."
+    "why": "Wave 5q lane A ctx restructure: `fleet floor-probe probe`'s own logic (the shadow-dispatch mint), taking the CLI's ctx \u2014 including its one `sh`/`probeSlotIsFree` runOn site, threaded through rather than imported; never imports the CLI."
   },
   {
     "glob": "scripts/lib/floor-probe-mode-rerun.mjs",
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "run",
-    "why": "Wave 5q lane A ctx restructure: `fleet floor-probe rerun`'s own logic (the forced re-run mint), taking the CLI's ctx — same `sh`/`probeSlotIsFree` threading as floor-probe-mode-probe.mjs; never imports the CLI."
+    "why": "Wave 5q lane A ctx restructure: `fleet floor-probe rerun`'s own logic (the forced re-run mint), taking the CLI's ctx \u2014 same `sh`/`probeSlotIsFree` threading as floor-probe-mode-probe.mjs; never imports the CLI."
   },
   {
     "glob": "scripts/lib/floor-probe-mint-watch.mjs",
@@ -1381,19 +1386,24 @@
   {
     "glob": "scripts/lib/placement-rules.mjs",
     "layer": "config",
-    "why": "Wave clean-1 lane D reclassify: zero imports, pure filters over the manifest's own `repos`/`machines` shape (`needs`, `excludeRepos`, `placement`) — declarative-input derivation per §3.2 rule 1, not a ci-scheduling runtime decision. Filed under ci-scheduling with no `why` before this; moving it to config (where every other manifest-shaped reader already sits) legalises reads from clean-runner-debris.mjs (lifecycle) and capability-seeds.mjs/reconcile-plan.mjs (config/lifecycle) with no new edge: every current importer sits at index <= config already."
+    "why": "Wave clean-1 lane D reclassify: zero imports, pure filters over the manifest's own `repos`/`machines` shape (`needs`, `excludeRepos`, `placement`) \u2014 declarative-input derivation per \u00a73.2 rule 1, not a ci-scheduling runtime decision. Filed under ci-scheduling with no `why` before this; moving it to config (where every other manifest-shaped reader already sits) legalises reads from clean-runner-debris.mjs (lifecycle) and capability-seeds.mjs/reconcile-plan.mjs (config/lifecycle) with no new edge: every current importer sits at index <= config already."
   },
   {
     "glob": "scripts/lib/runner-var.mjs",
     "layer": "config",
-    "why": "Wave clean-2 lane C (cut (iii) layer debt): RECLASSIFIED from domain/ci-scheduling to config. Every export (runnerVarForm/readRunnerVar/repoVerdict) is pure — no I/O at all; readRunnerVar takes its own network call (readOnce) as a parameter rather than making one. That is the plan's own placement rule for 'declarative input', and it is why the file's own header already called itself 'pure, so the classification can be tested without a checkout or a token'. check-runner-var.mjs (observation) and reconcile-apply.mjs (lifecycle) both read this one pure rule; config is the layer BELOW both where a shared, domain-blind verdict legally lives — the same reason yaml-comments.mjs and read-retry-policy.mjs (which this file now imports directly, not through queue-health.mjs) sit there."
+    "why": "Wave clean-2 lane C (cut (iii) layer debt): RECLASSIFIED from domain/ci-scheduling to config. Every export (runnerVarForm/readRunnerVar/repoVerdict) is pure \u2014 no I/O at all; readRunnerVar takes its own network call (readOnce) as a parameter rather than making one. That is the plan's own placement rule for 'declarative input', and it is why the file's own header already called itself 'pure, so the classification can be tested without a checkout or a token'. check-runner-var.mjs (observation) and reconcile-apply.mjs (lifecycle) both read this one pure rule; config is the layer BELOW both where a shared, domain-blind verdict legally lives \u2014 the same reason yaml-comments.mjs and read-retry-policy.mjs (which this file now imports directly, not through queue-health.mjs) sit there."
+  },
+  {
+    "glob": "src/host-lease-record.ts",
+    "layer": "state",
+    "why": "Wave layers-3 lane S (cut (iii) layer debt): the in-memory lease ledger itself, split out of host-lease.ts. host-lease.ts stays tenancy (plan \u00a73.5 names it there explicitly, despite the state-record shape \u2014 see its own why), but node-reservation.ts (ci-scheduling) reading that ledger through host-lease.ts directly is exactly the rule-5 violation \u00a73.2 describes (\"a domain reads another domain's facts through a state record\", not the other domain's own module). This file is that state record: \"one declared writer (the host's scheduler, via takeLease/releaseLease), read back by something else\" \u2014 rule 3 of \u00a73.2, regardless of which domain the record is about. host-lease.ts re-exports every name here unchanged for its own callers (server.ts's /api/host-lease routes); node-reservation.ts imports activeLeases from here directly."
   },
   {
     "glob": "src/host-lease.ts",
     "layer": "domain",
     "domain": "tenancy",
     "part": "run",
-    "why": "§3.5 names it here explicitly, despite the state-record shape"
+    "why": "\u00a73.5 names it here explicitly, despite the state-record shape"
   },
   {
     "glob": "src/hosting-converge.ts",
@@ -1598,7 +1608,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core",
-    "why": "§3.5 names this under observation despite the ci-scheduling directory"
+    "why": "\u00a73.5 names this under observation despite the ci-scheduling directory"
   },
   {
     "glob": "src/runner-health*.ts",
@@ -1656,14 +1666,14 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core",
-    "why": "T3 (plan §7.3, wave 5n lane A): the per-node-vs-fleet statistic. PURE — same shape as job-history-stats.ts beside it."
+    "why": "T3 (plan \u00a77.3, wave 5n lane A): the per-node-vs-fleet statistic. PURE \u2014 same shape as job-history-stats.ts beside it."
   },
   {
     "glob": "src/fleet-stats.ts",
     "layer": "domain",
     "domain": "observation",
     "part": "core",
-    "why": "T6 (plan §7.3): the `fleet stats` computation over the T2/T4/T5/T7 stores. PURE — same shape as failure-rates.ts beside it."
+    "why": "T6 (plan \u00a77.3): the `fleet stats` computation over the T2/T4/T5/T7 stores. PURE \u2014 same shape as failure-rates.ts beside it."
   },
   {
     "glob": "src/job-history-ingest.ts",
@@ -1722,7 +1732,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run",
-    "why": "Wave 5i lane A split of runner-health.ts (plan §4.3 #1): the dropped-job rerun `checkRunsAndFailover` (observation, stays) calls — a narrow reaction to something THIS tick observed (an offline runner, a SIGKILL), not a scheduling policy, so it stays observation rather than falling to the ci-scheduling catch-all below. Keeping it here, rather than in ci-scheduling, is also what keeps cut (iii) from growing on this split: `backstop-decision.ts` (ci-scheduling, per the plan) swaps one existing debt edge for another (net zero) and removes a second (ZOMBIE_MS no longer reached from runner-health.ts directly); `hosted-fallback.ts` (ci-scheduling, below) adds one genuinely new edge. This file staying observation is what keeps the set from growing by a second edge too."
+    "why": "Wave 5i lane A split of runner-health.ts (plan \u00a74.3 #1): the dropped-job rerun `checkRunsAndFailover` (observation, stays) calls \u2014 a narrow reaction to something THIS tick observed (an offline runner, a SIGKILL), not a scheduling policy, so it stays observation rather than falling to the ci-scheduling catch-all below. Keeping it here, rather than in ci-scheduling, is also what keeps cut (iii) from growing on this split: `backstop-decision.ts` (ci-scheduling, per the plan) swaps one existing debt edge for another (net zero) and removes a second (ZOMBIE_MS no longer reached from runner-health.ts directly); `hosted-fallback.ts` (ci-scheduling, below) adds one genuinely new edge. This file staying observation is what keeps the set from growing by a second edge too."
   },
   {
     "glob": "src/runners/node-regression.ts",
@@ -1785,14 +1795,14 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run",
-    "why": "T6 (plan §7.3): the `fleet stats` CLI — reads job-rollup-store.ts, job-run-store.ts, capacity-sample-store.ts and gh-budget-history-store.ts and wires them into fleet-stats.ts. Same shape as job-rollups.mjs/failures.mjs beside it."
+    "why": "T6 (plan \u00a77.3): the `fleet stats` CLI \u2014 reads job-rollup-store.ts, job-run-store.ts, capacity-sample-store.ts and gh-budget-history-store.ts and wires them into fleet-stats.ts. Same shape as job-rollups.mjs/failures.mjs beside it."
   },
   {
     "glob": "scripts/failures.mjs",
     "layer": "domain",
     "domain": "observation",
     "part": "run",
-    "why": "T3 reader (plan §7.3, wave 5n lane A) — same shape as job-rollups.mjs beside it."
+    "why": "T3 reader (plan \u00a77.3, wave 5n lane A) \u2014 same shape as job-rollups.mjs beside it."
   },
   {
     "glob": "scripts/join-workload-benchmark.mjs",
@@ -1811,7 +1821,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run",
-    "why": "Wave 5q lane B split off the 800-line ceiling (pure move): reconcile-runner-identity.mjs's GitHub-read primitives (none call `runOn` — `probeNode` stays in the CLI, see that module's header)."
+    "why": "Wave 5q lane B split off the 800-line ceiling (pure move): reconcile-runner-identity.mjs's GitHub-read primitives (none call `runOn` \u2014 `probeNode` stays in the CLI, see that module's header)."
   },
   {
     "glob": "scripts/lib/runner-identity-report.mjs",
@@ -1846,7 +1856,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run",
-    "why": "Lane D's split-check (plan §4.1 step 1, §10): a repo-hygiene review tool in the same bucket as check-exports.mjs below — it audits a DIFF, not fleet state, but \"observation: check-*\" is this map's home for exactly that shape of meta/repo-tooling script."
+    "why": "Lane D's split-check (plan \u00a74.1 step 1, \u00a710): a repo-hygiene review tool in the same bucket as check-exports.mjs below \u2014 it audits a DIFF, not fleet state, but \"observation: check-*\" is this map's home for exactly that shape of meta/repo-tooling script."
   },
   {
     "glob": "scripts/lib/benchmark-cadence.mjs",
@@ -2089,7 +2099,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run",
-    "why": "Wave 5q lane D: shared fixture helpers for runner-mem-harvest.test.mjs and runner-mem-report.test.mjs, split out of the former single runner-mem.test.mjs (same \"-fixtures.mjs\" shape as ci-throttle-fixtures.mjs/doctor-fixtures.mjs above) — the memory pipeline's own domain is observation, same as the two .py scripts it drives (cli.ts's UNMEASURED_DOMAIN)."
+    "why": "Wave 5q lane D: shared fixture helpers for runner-mem-harvest.test.mjs and runner-mem-report.test.mjs, split out of the former single runner-mem.test.mjs (same \"-fixtures.mjs\" shape as ci-throttle-fixtures.mjs/doctor-fixtures.mjs above) \u2014 the memory pipeline's own domain is observation, same as the two .py scripts it drives (cli.ts's UNMEASURED_DOMAIN)."
   },
   {
     "glob": "scripts/lib/runs-on-demand.mjs",
@@ -2132,14 +2142,14 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core",
-    "why": "Wave 5j lane B: the warm-orphan GateDoc classifier, pulled out for the same reason throttle-drift-doc.mjs above was — same layer."
+    "why": "Wave 5j lane B: the warm-orphan GateDoc classifier, pulled out for the same reason throttle-drift-doc.mjs above was \u2014 same layer."
   },
   {
     "glob": "scripts/lib/identity-rules.mjs",
     "layer": "domain",
     "domain": "observation",
     "part": "core",
-    "section": "Split #8 (wave 5k lane A, pure move): check-identity-model.mjs's G1..G8 rules, repo/file discovery and scanRepo orchestration, plus the generic text-parsing primitives they read through. Same bucket as the CLI they were cut from — \"observation: check-*\" — since cut (iii) treats observation as one flat layer and core/run does not gate it there."
+    "section": "Split #8 (wave 5k lane A, pure move): check-identity-model.mjs's G1..G8 rules, repo/file discovery and scanRepo orchestration, plus the generic text-parsing primitives they read through. Same bucket as the CLI they were cut from \u2014 \"observation: check-*\" \u2014 since cut (iii) treats observation as one flat layer and core/run does not gate it there."
   },
   {
     "glob": "scripts/lib/identity-source-parse.mjs",
@@ -2159,7 +2169,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core",
-    "why": "Wave 5q lane C, pure move: identity-rules.mjs re-split. The repo/file discovery scanRepo walks over — same bucket as scanRepo itself."
+    "why": "Wave 5q lane C, pure move: identity-rules.mjs re-split. The repo/file discovery scanRepo walks over \u2014 same bucket as scanRepo itself."
   },
   {
     "glob": "scripts/lib/identity-resolver.mjs",
@@ -2194,7 +2204,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core",
-    "section": "Split #13 (wave 5m lane D, pure move): check-header-fleet.mjs's per-repo rules, the allowlist loader and the uniform repo-reading layer it reads through. Same bucket as the CLI they were cut from — \"observation: check-*\" — since cut (iii) treats observation as one flat layer and core/run does not gate it there."
+    "section": "Split #13 (wave 5m lane D, pure move): check-header-fleet.mjs's per-repo rules, the allowlist loader and the uniform repo-reading layer it reads through. Same bucket as the CLI they were cut from \u2014 \"observation: check-*\" \u2014 since cut (iii) treats observation as one flat layer and core/run does not gate it there."
   },
   {
     "glob": "scripts/lib/header-allowlist.mjs",
@@ -2234,7 +2244,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core",
-    "section": "Split #21 (wave 5m lane D, pure move): check-label-floor.mjs's small standalone offer/cause predicates, and — extended past the first pass to clear the operator's 800-line file-size ceiling — its derivation check, JSON emitter and exit-branch guards. Same bucket and same reasoning as the header-fleet split above."
+    "section": "Split #21 (wave 5m lane D, pure move): check-label-floor.mjs's small standalone offer/cause predicates, and \u2014 extended past the first pass to clear the operator's 800-line file-size ceiling \u2014 its derivation check, JSON emitter and exit-branch guards. Same bucket and same reasoning as the header-fleet split above."
   },
   {
     "glob": "scripts/lib/label-floor-gate.mjs",
@@ -2287,24 +2297,24 @@
   {
     "glob": "scripts/lib/probe-readers.mjs",
     "layer": "access",
-    "why": "Wave clean-1 lane D, pure move: the parts of idle-measure.mjs's `parseLoad` that read a raw probe's stdout (`LOAD <id> <n|unknown>`) with zero other dependency — another system's data per §3.2 rule 2, same bucket as node-interfaces.mjs's probe parsers. Split off so check-capabilities.mjs (observation) can read it without reaching into idle-measure.mjs's lifecycle-domain verdict-carrying logic (carryMeasurements/measuredValue), which stays in idle-measure.mjs. idle-measure.mjs re-exports parseLoad unchanged for bootcamp.mjs/bootcamp-judge.mjs/bootcamp-write.mjs, which keep importing it from the old path."
+    "why": "Wave clean-1 lane D, pure move: the parts of idle-measure.mjs's `parseLoad` that read a raw probe's stdout (`LOAD <id> <n|unknown>`) with zero other dependency \u2014 another system's data per \u00a73.2 rule 2, same bucket as node-interfaces.mjs's probe parsers. Split off so check-capabilities.mjs (observation) can read it without reaching into idle-measure.mjs's lifecycle-domain verdict-carrying logic (carryMeasurements/measuredValue), which stays in idle-measure.mjs. idle-measure.mjs re-exports parseLoad unchanged for bootcamp.mjs/bootcamp-judge.mjs/bootcamp-write.mjs, which keep importing it from the old path."
   },
   {
     "glob": "scripts/lib/read-retry-policy.mjs",
     "layer": "config",
-    "why": "Wave clean-1 lane D, pure move: queue-health.mjs's READ_ATTEMPTS (the fleet-wide retry count, CLAUDE.md: 'READ_ATTEMPTS is 2') and describeReadFailure (a pure formatter over an error-like object) — a declarative retry policy, not queue-health's own FAIL_SECONDS verdict arithmetic, which stays put. Filed in config so capability-seeds.mjs and fleet-source.mjs (both config/access) can read the policy without reaching into queue-health.mjs's observation-domain verdict logic. queue-health.mjs re-exports both names unchanged for runner-var.mjs, which keeps importing them from the old path."
+    "why": "Wave clean-1 lane D, pure move: queue-health.mjs's READ_ATTEMPTS (the fleet-wide retry count, CLAUDE.md: 'READ_ATTEMPTS is 2') and describeReadFailure (a pure formatter over an error-like object) \u2014 a declarative retry policy, not queue-health's own FAIL_SECONDS verdict arithmetic, which stays put. Filed in config so capability-seeds.mjs and fleet-source.mjs (both config/access) can read the policy without reaching into queue-health.mjs's observation-domain verdict logic. queue-health.mjs re-exports both names unchanged for runner-var.mjs, which keeps importing them from the old path."
   },
   {
     "glob": "scripts/lib/reboot-hold.mjs",
     "layer": "config",
-    "why": "Wave clean-1 lane D, pure move: reboot-cycle.mjs's REASON_PREFIX/HELD_PREFIX naming convention and the heldByCycle predicate over it — a declarative tag-format constant and a pure string check, not the cycle's own orchestration (runRebootCycle, judgeReprove, etc.), which stays in reboot-cycle.mjs. Filed in config so doctor-run.mjs (observation) can read whether a drain record is a reboot-cycle hold without reaching into reboot-cycle.mjs's lifecycle-domain cycle logic. reboot-cycle.mjs re-exports all three names unchanged for its own internal use (oursOn, rebootNotice, runRebootCycle) and any other existing importer."
+    "why": "Wave clean-1 lane D, pure move: reboot-cycle.mjs's REASON_PREFIX/HELD_PREFIX naming convention and the heldByCycle predicate over it \u2014 a declarative tag-format constant and a pure string check, not the cycle's own orchestration (runRebootCycle, judgeReprove, etc.), which stays in reboot-cycle.mjs. Filed in config so doctor-run.mjs (observation) can read whether a drain record is a reboot-cycle hold without reaching into reboot-cycle.mjs's lifecycle-domain cycle logic. reboot-cycle.mjs re-exports all three names unchanged for its own internal use (oursOn, rebootNotice, runRebootCycle) and any other existing importer."
   },
   {
     "glob": "src/runners/*.ts",
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "run",
-    "section": "§3.5's own blanket line: everything else left under src/runners/* that is not named individually above (and not already carved to `state` or `observation` elsewhere in this file) is ci-scheduling's run half. Directory-level fallbacks, LAST: everything under src/runners/* or scripts/check-*.mjs not named explicitly above falls through to these. Because matching is a single ordered pass (first match in this array wins), every specific override for a runners/* or check-*.mjs file above MUST stay ahead of its catch-all here."
+    "section": "\u00a73.5's own blanket line: everything else left under src/runners/* that is not named individually above (and not already carved to `state` or `observation` elsewhere in this file) is ci-scheduling's run half. Directory-level fallbacks, LAST: everything under src/runners/* or scripts/check-*.mjs not named explicitly above falls through to these. Because matching is a single ordered pass (first match in this array wins), every specific override for a runners/* or check-*.mjs file above MUST stay ahead of its catch-all here."
   },
   {
     "glob": "scripts/check-*.mjs",

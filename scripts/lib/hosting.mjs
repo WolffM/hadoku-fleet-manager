@@ -67,7 +67,7 @@ import {
 	hostingSliceCgroup,
 	hostingSliceName,
 } from '../../dist/runners/hosting-record.js';
-import { ciUnitProperties } from '../../dist/runners/ephemeral.js';
+import { ciUnitProperties } from '../../dist/runners/ci-unit-properties.js';
 import { runtimeFor } from './hosting-runtimes.mjs';
 import { isBackstopNode } from '../../dist/lib/node-role.js';
 

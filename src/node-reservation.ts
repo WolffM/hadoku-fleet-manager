@@ -58,7 +58,13 @@
 
 import { readFileSync } from 'node:fs';
 import { cronProfilesPath } from './host.js';
-import { activeLeases } from './host-lease.js';
+// `activeLeases` is read from the ledger directly, not through `host-lease.ts`
+// (`tenancy`): a domain reading another domain's facts through that other
+// domain's own module, rather than through a state record, is the rule-5
+// violation plan §3.2 describes. `host-lease-record.ts` is the state record
+// (wave layers-3 lane S, cut (iii)); `host-lease.ts` re-exports the same name
+// for its own callers.
+import { activeLeases } from './host-lease-record.js';
 import { __resetPm2HostBusyForTesting } from './pm2-host-busy-store.js';
 export { setPm2HostBusy, getPm2HostBusy } from './pm2-host-busy-store.js';
 

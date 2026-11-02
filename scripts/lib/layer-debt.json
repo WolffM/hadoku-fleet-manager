@@ -1,19 +1,11 @@
 [
   {
-    "from": "scripts/benchmark-fleet.mjs",
-    "to": "scripts/lib/drain-wait.mjs"
-  },
-  {
     "from": "scripts/check-fleet-toolchain.mjs",
     "to": "scripts/lib/tool-release.mjs"
   },
   {
     "from": "scripts/converge-toolchain.mjs",
     "to": "scripts/lib/service-peers.mjs"
-  },
-  {
-    "from": "scripts/deploy-runners-slice.mjs",
-    "to": "src/runners/ephemeral.ts"
   },
   {
     "from": "scripts/lib/capability-seeds.mjs",
@@ -38,10 +30,6 @@
   {
     "from": "scripts/lib/hosting-request.mjs",
     "to": "scripts/lib/tool-release.mjs"
-  },
-  {
-    "from": "scripts/lib/hosting.mjs",
-    "to": "src/runners/ephemeral.ts"
   },
   {
     "from": "scripts/lib/slice-inventory-run.mjs",
@@ -86,10 +74,6 @@
   {
     "from": "scripts/service-inventory.mjs",
     "to": "scripts/lib/slice-inventory-run.mjs"
-  },
-  {
-    "from": "src/node-reservation.ts",
-    "to": "src/host-lease.ts"
   },
   {
     "from": "src/runners/prove-job.ts",
