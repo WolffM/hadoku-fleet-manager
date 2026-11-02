@@ -1,16 +1,9 @@
 import { logger } from '../host.js';
 import { postDiscord as postDiscordSink } from '../host.js';
-import { ghWrite, type GhRunner } from '../lib/github-client.js';
+import { type GhRunner } from '../lib/github-client.js';
 import { withGhCaller } from '../gh-budget.js';
 import { BUILDER_LABEL, nodeOf } from './census.js';
-import {
-	backstopLabelWrite,
-	clawsAreHealthy,
-	decideBackstop,
-	explainBackstop,
-	hostMayTakeSaturation,
-	describeSaturationHost,
-} from './backstop.js';
+import { clawsAreHealthy, decideBackstop, hostMayTakeSaturation } from './backstop.js';
 import {
 	isBackstopNode,
 	mintsOnDemand,
@@ -19,14 +12,12 @@ import {
 } from '../lib/node-role.js';
 import { backstopHold, setBackstopHold } from './backstop-hold.js';
 import { describeForce, isForced, readForce, type ForceState } from './backstop-force.js';
-import { getCapacityLedger } from './capacity-ledger.js';
 import { nodeIsSick } from '../lib/sick-node.js';
 import { isDraining, readDrain } from './drain.js';
-import { nodeReservation, type Reservation } from '../node-reservation.js';
+import { nodeReservation } from '../node-reservation.js';
 import { backstopMachinesReader } from './backstop-machines.js';
-import { alertOnce, clearAlert } from '../lib/alert-ledger.js';
 import { subCadenceDue, markSubCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
-import { TICK_INTERVAL_MS, selfHostname } from '../lib/runner-health-shared.js';
+import { selfHostname } from '../lib/runner-health-shared.js';
 import type { TickReport } from '../runner-health.js';
 
 import { readHostLoad } from './backstop-host-load.js';
@@ -41,18 +32,34 @@ export {
 	type QueuePressure,
 } from './backstop-queue-probe.js';
 
-/**
- * Last backstop state we pushed to the NON-self repos. `null` = unknown, which
- * is the state after every mgmt-api restart, and it deliberately forces one
- * converge pass rather than assuming the fleet matches: a restart during an
- * outage would otherwise leave 25 repos promoted with nothing left to demote
- * them.
- */
-let backstopFleetState: boolean | null = null;
+import {
+	getBackstopFleetState,
+	setBackstopFleetState,
+	getBackstopAlerted,
+	setBackstopAlerted,
+	getBackstopCalmTicks,
+	setBackstopCalmTicks,
+	getBackstopLastReason,
+	setBackstopLastReason,
+	getQueueZombiesLogged,
+	setQueueZombiesLogged,
+	getReservationOverride,
+	__setReservationForTesting,
+	__resetBackstopDecisionStateForTesting,
+} from './backstop-decision-state.js';
+export { __setReservationForTesting };
+import {
+	CAPACITY_TICKS_BEFORE_ALERT,
+	checkCapacityInvariant,
+	__resetCapacityInvariantForTesting,
+} from './backstop-decision-capacity.js';
+export { CAPACITY_TICKS_BEFORE_ALERT };
+import { logBackstopEligibility } from './backstop-decision-report.js';
+import { applyBackstopLabels } from './backstop-decision-labels.js';
 
 /**
  * When the fan-out last READ the fleet's registrations, rather than trusting
- * `backstopFleetState`.
+ * `getBackstopFleetState()`.
  *
  * THE BELIEF IS THE BUG THIS BOUNDS. The fan-out ran only on a change of that
  * boolean, so it only ever looked when IT had changed its own mind — and a
@@ -95,85 +102,11 @@ const CONVERGE_CADENCE_NAME = 'backstop-decision:converge';
 export const BACKSTOP_CONVERGE_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
- * Whether the operator has an open 🔻 for the backstop. Gates the 🔺 so a
- * recovery note only ever closes a promote the operator actually saw — a
- * saturation promote is silent, and a silent promote must not produce a loud
- * "a claw is back" for an outage that never happened.
- */
-let backstopAlerted = false;
-
-/**
- * Consecutive ticks the backstop has been UNwanted. Demotion waits for this to
- * reach BACKSTOP_CALM_TICKS; promotion never waits.
+ * Cross-tick memory this file reads/writes lives beside the functions that
+ * own it — `backstop-decision-state.ts` (getBackstopFleetState etc.) and
+ * `backstop-decision-capacity.ts` (the ledger invariant); see each module's
+ * own doc.
  *
- * The asymmetry is the point. Promoting early costs one extra label on a box
- * that was going to sit idle; demoting early costs a flap, because saturation
- * is computed from an instantaneous `atCapacity && queuePressure >= 100s` that
- * toggles every time a job starts or finishes. Measured on 2026-08-25 the
- * backstop promoted and demoted on almost every tick:
- *
- *   05:04 promote (saturation): 2/2 online, 0 free
- *   05:13 promote (saturation): 2/2 online, 0 free
- *   05:23 demote: 3 claw(s) online → stripped temporary labels
- *   05:25 promote (saturation): 3/3 online, 0 free
- *   05:51 promote (saturation): 3/3 online, 0 free
- *
- * Each of those rewrites `hadoku-builder` on 13-25 runners across the fleet, so
- * the flap is both the source of the 🔺 spam and a standing pile of GitHub API
- * writes. It also defeats the `backstopAlerted` gate below: over the fifteen
- * days to 2026-08-28 the channel got 19 "a claw is back online" against 3
- * outage notices, six of them on 2026-08-21 alone, a day with no outage at all.
- */
-let backstopCalmTicks = 0;
-
-/**
- * Why the backstop was last wanted. Hysteresis applies to SATURATION only.
- *
- * Every flap in the logs says `(saturation)` — that is the condition computed
- * from an instantaneous `atCapacity && queuePressure >= 100s`, and it is the one
- * that oscillates. An outage ending is a real state change, and a cron
- * reservation taking the node back is a priority decision that must land in
- * the same tick: "declining to promote is not enough — a promotion from 23:50
- * would otherwise sit through the whole run." Damping either of those would turn
- * a noise fix into a 30-minute delay on the thing the ladder exists to protect.
- */
-let backstopLastReason: 'outage' | 'saturation' | null = null;
-
-/**
- * Zombie count last announced, so the warning fires on CHANGE rather than every
- * tick. `null` is "never announced", which is why zero is not the initial value:
- * a fleet that starts with zero zombies must not print the all-clear.
- *
- * Cross-tick memory, so it is in `__resetRunnerHealthAlertsForTesting`.
- */
-let queueZombiesLogged: number | null = null;
-
-/**
- * Reservation override for tests.
- *
- * REQUIRED, not a convenience: the real `nodeReservation` consults the
- * DECLARED cron window derived from profiles.json, so a suite run inside the 90
- * minutes after any daily cron would see the backstop correctly decline to
- * promote and read that as a broken test. A wall-clock-dependent test is a flake
- * with a schedule.
- */
-let reservationOverride: ((pm2Busy: boolean) => Reservation) | null = null;
-export function __setReservationForTesting(fn: ((pm2Busy: boolean) => Reservation) | null): void {
-	reservationOverride = fn;
-}
-
-/**
- * Consecutive ticks the dispatcher's capacity ledger (`capacity-ledger.ts`)
- * must show a node charged more than it is running before it pages. Three,
- * not two: a unit listed between a job's end and its unit's exit, or a probe
- * one fast-loop tick behind a warm assignment, can break the invariant for one
- * pass honestly; three ticks is a quarter of an hour, and no race lasts that.
- */
-const CAPACITY_TICKS_BEFORE_ALERT = 3;
-/** NODE name → consecutive ticks its ledger entry has been broken. */
-const capacityBrokenTicks = new Map<string, number>();
-
-/**
  * Check 1 — the label floor: is every DEMANDED routing label SERVED — carried
  * by a standing online runner, or offered by a minting node the dispatcher
  * could mint on now? One rule for every label; see `label-floor.ts`.
@@ -281,8 +214,8 @@ export async function runBackstopDecision(args: {
 	// file is about: the operator had no way to know the saturation trigger was
 	// reading a 40-day-old run, and the only number printed was the inflated
 	// one. Logged when the count MOVES, and carried on the snapshot every tick.
-	if (queue.zombies !== queueZombiesLogged) {
-		queueZombiesLogged = queue.zombies;
+	if (queue.zombies !== getQueueZombiesLogged()) {
+		setQueueZombiesLogged(queue.zombies);
 		if (queue.zombies > 0) {
 			logger.warn(
 				`[runner-health] queue probe ignored ${queue.zombies} run(s) queued longer than ` +
@@ -342,7 +275,7 @@ export async function runBackstopDecision(args: {
 		);
 	}
 	const poolPm2Busy = backstopNodes.length > 0 && backstopNodes.every((n) => pm2BusyNodes.has(n));
-	const reservation = (reservationOverride ?? ((busy) => nodeReservation(new Date(), busy)))(
+	const reservation = (getReservationOverride() ?? ((busy) => nodeReservation(new Date(), busy)))(
 		poolPm2Busy
 	);
 
@@ -357,12 +290,12 @@ export async function runBackstopDecision(args: {
 		ephemeralUnknown: ephemeralUnknown,
 	};
 	const decision = decideBackstop(backstopInput, {
-		calmTicks: backstopCalmTicks,
-		lastReason: backstopLastReason,
-		promoted: backstopFleetState,
+		calmTicks: getBackstopCalmTicks(),
+		lastReason: getBackstopLastReason(),
+		promoted: getBackstopFleetState(),
 	});
-	backstopCalmTicks = decision.next.calmTicks;
-	backstopLastReason = decision.next.lastReason;
+	setBackstopCalmTicks(decision.next.calmTicks);
+	setBackstopLastReason(decision.next.lastReason);
 
 	const outage = decision.outage;
 	const backstopWanted = decision.wanted;
@@ -372,7 +305,7 @@ export async function runBackstopDecision(args: {
 	data.at_capacity = decision.atCapacity;
 	data.reserved_reason = reservation.reserved ? reservation.reason : null;
 	data.backstop_reason = backstopReason;
-	data.backstop_calm_ticks = backstopCalmTicks;
+	data.backstop_calm_ticks = getBackstopCalmTicks();
 
 	// Tell the fast loop before touching a single label. The two are
 	// phase-locked ~8s apart and the ladder does not know tier4 exists as far
@@ -474,178 +407,41 @@ export async function runBackstopDecision(args: {
 		}
 	}
 
-	// THE CAPACITY INVARIANT, PAGED (2026-10-21, `capacity-ledger.ts`). The
-	// dispatcher judges what it charged each node against what it could see
-	// every pass; this reads its last ledger and pages once when a node has
-	// stayed broken for CAPACITY_TICKS_BEFORE_ALERT consecutive ticks. One
-	// broken pass is a race between the unit listing and the probe; a quarter
-	// of an hour of it is the 2026-10-07 bug, which ran fourteen days unseen
-	// because every number on every panel was a different number from the
-	// one that was wrong. A ledger older than two ticks is a dispatcher that
-	// is not running, which is a different page (`dispatch.failingSince`),
-	// not this one.
-	const capLedger = getCapacityLedger();
-	const freshLedger =
-		capLedger !== null && Date.now() - Date.parse(capLedger.at) <= 2 * TICK_INTERVAL_MS
-			? capLedger
-			: null;
-	const brokenNow = new Set((freshLedger?.nodes ?? []).filter((e) => !e.ok).map((e) => e.node));
-	for (const node of [...capacityBrokenTicks.keys()]) {
-		if (!brokenNow.has(node)) capacityBrokenTicks.delete(node);
-	}
-	const sustainedBroken: string[] = [];
-	for (const node of brokenNow) {
-		const seen = (capacityBrokenTicks.get(node) ?? 0) + 1;
-		capacityBrokenTicks.set(node, seen);
-		if (seen >= CAPACITY_TICKS_BEFORE_ALERT) sustainedBroken.push(node);
-	}
-	if (!sustainedBroken.length) {
-		clearAlert('capacity-invariant');
-	} else {
-		const detail = (freshLedger?.nodes ?? [])
-			.filter((e) => sustainedBroken.includes(e.node))
-			.map((e) => `${e.node}: ${e.why}`)
-			.join('; ');
-		const mins = Math.round((CAPACITY_TICKS_BEFORE_ALERT * TICK_INTERVAL_MS) / 60000);
-		await alertOnce(
-			'capacity-invariant',
-			`🚨 **dispatcher accounting** has been wrong on ${sustainedBroken.join(', ')} for ` +
-				`${mins}+ min — a node is charged more in-flight jobs than it is running or ` +
-				`starting, so it refuses mints it has room for (this is the 2026-10-07 double ` +
-				`count's shape). ${detail}. Read \`[dispatch] skipped run\` lines and ` +
-				'`GET /fleet` machines[].dispatchLedger.'
-		);
-	}
+	// THE CAPACITY INVARIANT, PAGED (2026-10-21) — see `backstop-decision-
+	// capacity.ts`'s own doc for the full reasoning (the 2026-10-07 bug this
+	// guards against, and why a ledger older than two ticks pages elsewhere).
+	await checkCapacityInvariant();
 
-	// WHY THE PRODUCTION HOST IS REACHABLE, ON THE TICK IT IS REACHABLE.
-	//
-	// Until now the only lines this decision ever printed were its two EDGES,
-	// the promote and the demote. Everything in between — the whole interval
-	// during which hokon actually takes jobs — was silent, and a standing
-	// registration wins GitHub's assignment race outright (hokon builder queue
-	// p50 2s against a claw JIT's 16s), so that interval is where all the
-	// traffic is. Over 2026-09-10 → 09-19 hokon served 204 `hadoku-builder`
-	// jobs, 98 of them with ZERO claw jobs running anywhere, and there is not
-	// one promote line in any retained log to explain a single one: the label
-	// came from elsewhere and this function never knew. An operator asking
-	// "why did hokon take that job" had nothing to read.
-	//
-	// So the eligible state says so every tick, and it says it through
-	// `explainBackstop`, which lives beside the decision — a log line written
-	// here by hand is a second copy of the reasoning and drifts from it. Six
-	// lines an hour, and only while the reserve is actually in play.
-	const why = explainBackstop(backstopInput, decision);
-	if (backstopWanted && heldNodes.length) {
-		logger.info(
-			`[runner-health] BACKSTOP ELIGIBLE — ${heldNodes
-				.map((n) =>
-					outage ? n : `${n} (${describeSaturationHost(saturationHost(n), queuePressureSec)})`
-				)
-				.join(', ')} may take '${BUILDER_LABEL}' work: ${why}`
-		);
-	} else if (backstopWanted) {
-		// WANTED AND REACHED NOBODY. "We rejected them" and "they never asked"
-		// are different facts and the fleet could not tell them apart (wave 3l);
-		// so is "every holder is quarantined" against "every holder is serving
-		// pm2-host", which are two different jobs for the operator. Say which,
-		// per node.
-		//
-		// NOT IDLE IS THE COMMON REASON AND IT READ `unknown`. The host gate
-		// (`hostMayTakeSaturation`, 2026-10-09/21) is the fourth clause of
-		// `wantedOnNode`, and this map named the other three. On 2026-10-21
-		// hokon sat at load 30-46 on 12 cores under the operator's own sessions
-		// while a 20-run fan-out queued for 25 minutes, and every tick printed
-		// `hokon=unknown` — the one word that sends an operator to the wrong
-		// problem. The verdict carries its own measurement against the gate, so
-		// the line says what would have to change.
-		const because = backstopNodes.length
-			? backstopNodes
-					.map((n) => {
-						const host = saturationHost(n);
-						return `${n}=${
-							nodeIsSick(n)
-								? 'quarantined'
-								: isDraining(n, drain)
-									? 'drained'
-									: pm2BusyNodes.has(n)
-										? 'serving pm2-host'
-										: !host.ok
-											? host.why
-											: 'unknown'
-						}`;
-					})
-					.join(', ')
-			: 'the pool is EMPTY — no runner in this repo carries pm2-host or backstop';
-		logger.warn(
-			`[runner-health] BACKSTOP wanted but REACHED NOBODY (${because}): ${why} — ` +
-				'jobs queue until a claw returns or a holder frees up'
-		);
-	} else if (decision.unmeasured) {
-		// "I could not look" must never render as "nothing is wrong", and it
-		// must say WHY. This branch decided nothing at all.
-		logger.info(`[runner-health] BACKSTOP could not look: ${why}`);
-	}
+	// WHY THE PRODUCTION HOST IS REACHABLE, ON THE TICK IT IS REACHABLE — see
+	// `backstop-decision-report.ts`'s own doc. `why` is reused in the demote
+	// line further down, in the same tick.
+	const why = logBackstopEligibility({
+		backstopInput,
+		decision,
+		backstopWanted,
+		heldNodes,
+		outage,
+		saturationHost,
+		queuePressureSec,
+		backstopNodes,
+		drain,
+		pm2BusyNodes,
+	});
 
-	const promoted: string[] = [];
-	const demoted: string[] = [];
-
-	// COULD NOT LOOK IS NOT AN ORDER. On an unmeasured tick (the first after
-	// every restart) `decision.wanted` is the remembered state, and memory is
-	// empty after a restart — so this loop and the sweep below DEMOTED a
-	// promoted hokon on every deploy, and the next measured tick promoted it
-	// again ten minutes later (2026-10-09 20:36, 20:52). Nothing is written
-	// until a tick has actually measured the fleet.
-	for (const runner of decision.unmeasured ? [] : backstopPool) {
-		// THE RUNG IS THIS NODE'S, NOT THE FLEET'S. A pool node serving pm2-host
-		// work stays off builder duty while the rest of the pool is promoted;
-		// fleet-wide, this was the whole pool or none of it.
-		const runnerNode = nodeOf(runner.name, fleetNodes);
-		const nodeWanted = wantedOnNode(runnerNode) && labelsMayPromote(runnerNode);
-		// ONE PREDICATE, shared with the fan-out — see `backstopLabelWrite`.
-		// Spelled out twice, the two came to disagree about offline runners.
-		const write = backstopLabelWrite(
-			{ hasBuilder: has(runner, BUILDER_LABEL), online: runner.status === 'online' },
-			nodeWanted
-		);
-		const missing = [BUILDER_LABEL];
-		if (write === 'promote') {
-			const res = await ghWrite('POST', `/actions/runners/${runner.id}/labels`, token, {
-				labels: missing,
-			});
-			if (res.ok) {
-				for (const l of missing) (runner.labels ??= []).push({ name: l });
-				promoted.push(runner.name);
-			} else {
-				logger.warn(
-					`[runner-health] promote ${runner.name} → ${missing.join(',')} failed: HTTP ${res.status} ` +
-						'(token may lack runner-admin) — all-claws-down jobs will queue until a claw returns'
-				);
-			}
-		} else if (write === 'demote') {
-			// Strip only what we grant. hokon keeps pm2-host, the backstops keep
-			// their own label, so the pool returns to being invisible to CI.
-			// One label, since hadoku-builder-heavy was retired on 2026-08-19 and no
-			// runner reports it any more (checked across four repos, 2026-08-29).
-			const res = await ghWrite(
-				'DELETE',
-				`/actions/runners/${runner.id}/labels/${BUILDER_LABEL}`,
-				token
-			);
-			if (res.ok) {
-				runner.labels = (runner.labels ?? []).filter((l) => l.name !== BUILDER_LABEL);
-				if (!demoted.includes(runner.name)) demoted.push(runner.name);
-			} else {
-				logger.warn(
-					`[runner-health] demote ${runner.name} (remove ${BUILDER_LABEL}) failed: HTTP ${res.status}`
-				);
-			}
-		}
-	}
-
-	for (const n of heldNodes) if (onDemand(n) && !wasHeld.has(n)) promoted.push(`${n} (mint)`);
-	for (const n of wasHeld) {
-		if (onDemand(n) && !heldNodes.includes(n)) demoted.push(`${n} (mint)`);
-	}
+	// See `backstop-decision-labels.ts`'s own doc for the "could not look is
+	// not an order" reasoning and the mint-hold edges folded in here.
+	const { promoted, demoted } = await applyBackstopLabels({
+		unmeasured: decision.unmeasured,
+		backstopPool,
+		fleetNodes,
+		wantedOnNode,
+		labelsMayPromote,
+		has,
+		token,
+		heldNodes,
+		onDemand,
+		wasHeld,
+	});
 
 	// Fan the same decision out to the rest of the fleet. Edge-triggered, plus a
 	// re-assert while up; see syncBackstopAcrossFleet for why this cannot be
@@ -663,7 +459,7 @@ export async function runBackstopDecision(args: {
 	const convergeDue = subCadenceDue(CONVERGE_CADENCE_NAME, BACKSTOP_CONVERGE_INTERVAL_MS);
 	if (
 		!decision.unmeasured &&
-		(backstopFleetState !== backstopWanted || (backstopWanted && relabels) || convergeDue)
+		(getBackstopFleetState() !== backstopWanted || (backstopWanted && relabels) || convergeDue)
 	) {
 		try {
 			const fleet = await withGhCaller('backstop', () =>
@@ -677,10 +473,10 @@ export async function runBackstopDecision(args: {
 			// the verify clock: a sweep that could not read every repo has not
 			// verified anything, and must not buy itself another hour of silence.
 			if (!fleet.failed.length) {
-				backstopFleetState = backstopWanted;
+				setBackstopFleetState(backstopWanted);
 				markSubCadence(CONVERGE_CADENCE_NAME);
 			}
-			if (convergeDue && fleet.changed.length && backstopFleetState === backstopWanted) {
+			if (convergeDue && fleet.changed.length && getBackstopFleetState() === backstopWanted) {
 				// A divergence the belief could not have shown. Warn, not info:
 				// somebody other than this function wrote the one label it owns.
 				logger.warn(
@@ -727,7 +523,7 @@ export async function runBackstopDecision(args: {
 					'Degraded backstop on the prod host; reverts automatically when a claw returns.',
 				'runner-health'
 			);
-			backstopAlerted = true;
+			setBackstopAlerted(true);
 		}
 	}
 	if (demoted.length) {
@@ -737,35 +533,27 @@ export async function runBackstopDecision(args: {
 		);
 		// Mirror of the promote arm: only announce the recovery the operator was
 		// told about. A demote after mere saturation never had a 🔻 to close.
-		if (backstopAlerted) {
+		if (getBackstopAlerted()) {
 			await postDiscordSink(
 				`🔺 **runners** on \`${selfHostname()}\`: a claw is back online — released the backstop on ` +
 					`${demoted.map((n) => `\`${n}\``).join(', ')}.`,
 				'runner-health'
 			);
-			backstopAlerted = false;
+			setBackstopAlerted(false);
 		}
 	}
 }
 
 /** Test seam: cross-tick memory this module owns. */
 export function __resetBackstopDecisionForTesting(): void {
-	capacityBrokenTicks.clear();
 	// Same leak class as `hostedRepos` below: a promoted backstop would otherwise
 	// carry into the next test, which would then see no fan-out because the state
-	// already matched, and pass while measuring nothing.
-	backstopFleetState = null;
-	backstopAlerted = false;
+	// already matched, and pass while measuring nothing. Delegated to the two
+	// modules that actually own this cross-tick memory.
+	__resetBackstopDecisionStateForTesting();
+	__resetCapacityInvariantForTesting();
 	// Cross-tick memory — see the comment below. A leaked timestamp would make
 	// the verify sweep "not due" for an hour of test time and pass while
 	// measuring nothing.
 	__resetSubCadenceKeyForTesting(CONVERGE_CADENCE_NAME);
-	// Every piece of cross-tick memory has to be listed here — see the comment
-	// below. Hysteresis is cross-tick by definition.
-	backstopCalmTicks = 0;
-	backstopLastReason = null;
-	// Cross-tick memory — see the comment below. A leaked count would suppress the
-	// zombie warning in the next test, which would then pass while measuring
-	// nothing.
-	queueZombiesLogged = null;
 }

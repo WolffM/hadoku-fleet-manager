@@ -1,58 +1,36 @@
 import { isDraining, readDrain } from './drain.js';
-import { readHostingDoc, sharedMbOn } from './hosting-record.js';
+import { readHostingDoc } from './hosting-record.js';
 import { spaceRefusal } from './ephemeral.js';
-import { unitMemoryMaxMb } from './ephemeral.js';
-import { warmCacheEligible } from './ephemeral.js';
-import { warmListenerSlots } from './ephemeral.js';
 import { warmRunnerName } from './ephemeral.js';
 import { planWarmFleet } from './ephemeral-warm.js';
 import { warmSlotLocked } from './ephemeral-warm.js';
 import { type WarmFleetNode } from './ephemeral-warm.js';
-import {
-	evictWarmListener,
-	withholdWarmListener,
-	warmRegistration,
-	readWarmMarker,
-	mintWarmListener,
-	refreshWarmMarker,
-	type GhLike,
-} from './ephemeral-exec.js';
+import { evictWarmListener, withholdWarmListener, type GhLike } from './ephemeral-exec.js';
 import { runnerTarballUrl } from './ephemeral-exec-jit.js';
+import { observeWarmNode } from './dispatch-warm-cache-observe.js';
+import { actOnWarmNode } from './dispatch-warm-cache-act.js';
 import { heavyMarkedRecently } from './dispatch-pass.js';
 import { slowReposOn } from './placement.js';
 import { recordWarmListenerDecisions, type WarmListenerDecision } from './decision-log.js';
-import { nodeHome } from '../lib/node-users.js';
-import { workloadGatedCapabilities } from '../lib/workload-gate.js';
 import { logger } from '../host.js';
 import {
 	withoutBackstops,
-	offerFor,
 	loadWorkloadGateContext,
-	jobReserve,
 	shellOnNode,
-	SPACE_PROBE_DF_CMD,
-	parseSpaceProbe,
 	type EphemeralTickInput,
 } from './ephemeral-shared.js';
 import { getSpeedModel, getHeavyModel } from './speed-heavy-cache.js';
-import {
-	WARM_CACHE_INTERVAL_MS,
-	warmBackoffActive,
-	recordWarmFailure,
-	clearWarmFailures,
-} from './warm-backoff.js';
+import { WARM_CACHE_INTERVAL_MS, warmBackoffActive } from './warm-backoff.js';
 import {
 	fleetServedJobs,
 	checkMintSlice,
 	resetMintSliceWarnings,
-	reapDeadWarmListener,
 	warmRepoByNode,
 	setWarmRepos,
 	warmReposForPlacement,
 	__resetWarmReposForTesting,
 	EMPTY_WARM_RESULT,
 	type WarmCacheResult,
-	type ObservedWarmSlot,
 	type ObservedWarmNode,
 } from './dispatch-warm-cache-state.js';
 
@@ -154,125 +132,15 @@ export async function dispatchWarmCache(
 	// does: a tick that cannot tell what a tenant was promised mints nothing.
 	const hostingDoc = readHostingDoc();
 
+	// Per-node eligibility, current slot and installed memory — see
+	// `dispatch-warm-cache-observe.ts`'s own doc for the full reasoning
+	// (issues #7, #101, #61, #17). `observedWarm` is set by a node whose
+	// slot is confirmed ONLINE, for the affinity map published below.
 	const observed = (
 		await Promise.all(
-			[...input.ephemeral].map(async (node): Promise<ObservedWarmNode | null> => {
-				try {
-					const m = input.nodes[node];
-					const p = input.fleetProbe.get(node);
-					if (!m || !p?.reachable) return null;
-
-					// issue #7 clause (b), the eligibility half: MEASURED installed
-					// capacity, never `mintBudget`'s job-concurrency cap AS THE MEMORY
-					// FIGURE — see warmEligibleSlots for why feeding it maxConcurrent
-					// was the bug that put a warm listener on claw-2's single
-					// 4GB-class slot. The cap is a SECOND, independent condition
-					// (`warmConcurrencySlots`, folded into `warmListenerSlots` below),
-					// not a substitute for the first: one asks whether the box has the
-					// memory, the other whether its ceiling has the slot.
-					// Read live, the same shape of call dispatchEphemeral already makes
-					// for available memory, just the TOTAL column instead of the
-					// available one — this is INSTALLED capacity, which does not move
-					// tick to tick, but the manifest's ramGb is display-only and must
-					// never be gated on (fleet-runner-manifest.json's own
-					// $why-display-only note).
-					const totalOut = await sh(
-						node,
-						"free -m | awk '/^Mem:/{print $2}'; " + SPACE_PROBE_DF_CMD
-					);
-					const { first, tmpFreeMb, workFreeMb } = parseSpaceProbe(totalOut);
-					// A SHARED HOSTING SLICE is not CI's to count on: installed memory
-					// includes it, so the whole declaration comes off what a listener
-					// may plan around (src/runners/hosting-record.ts).
-					const hostedMb = sharedMbOn(hostingDoc, node);
-					const installedMb = Number(first);
-					if (!Number.isFinite(installedMb) || installedMb <= 0) {
-						logger.warn(
-							`[warm-cache] ${node}: could not read installed memory — not eligible this tick`
-						);
-						return null;
-					}
-					// #101: this pass's OWN measurement — see `ObservedWarmNode`'s
-					// docblock for why the pre-pass below must not borrow
-					// `dispatchEphemeral`'s verdict instead.
-					const minFreeMb = m.minFreeMb ?? 1536;
-					// THE SAME CALL dispatchEphemeral makes to decide how many slots of
-					// this node's cap to hold BACK for the listener this may place —
-					// same `usableMb`, same `jobMb`, same tick. See warmListenerSlots:
-					// if the two ever disagreed, the node would carry a listener nobody
-					// reserved for, which is the 48 four-concurrent starts on claw-3.
-					const slots = warmListenerSlots({
-						usableMb: installedMb - minFreeMb - hostedMb,
-						role: m.role,
-						maxConcurrent: m.maxConcurrent,
-						// A MINT's worth — the same figure admission reserves below for a
-						// job whose repo it cannot name.
-						jobMb: jobReserve({
-							nodeJobP95Mb: m.jobP95Mb,
-							capMb: unitMemoryMaxMb({
-								requestedMb: m.slice?.unitMaxMb,
-								sliceCeilingMb: installedMb - minFreeMb,
-							}),
-						}).mb,
-					});
-					if (!warmCacheEligible(slots)) return null;
-
-					const marker = await readWarmMarker(node, sh);
-					// #61. A marker whose unit systemd positively reports dead is a
-					// registration this tick is about to walk away from: the planner
-					// below sees `current: null` and FILLS, and the fill's `RESET=1`
-					// overwrites the marker with a different repo. Deleting it here —
-					// before the plan, so the act pass cannot mint over the evidence —
-					// is the only place in the fleet that holds the dead repo's name.
-					if (marker?.active === false) {
-						if (await reapDeadWarmListener(node, marker.repo, marker.unit, token, gh, sh)) {
-							result.reaped++;
-						}
-					}
-					const slot = marker?.active === true ? marker : null;
-					let current: ObservedWarmSlot | null = null;
-					if (slot) {
-						const reg = await warmRegistration(slot.repo, slot.unit, token, gh);
-						const busy = reg ? reg.busy : null;
-						if (busy) await refreshWarmMarker(node, sh);
-						// P5.1'S PLACEMENT INPUT, AND THE ONLY SOURCE IT IS ALLOWED TO
-						// HAVE. Three independent facts must agree before this node is
-						// preferred for this repo: the marker names it (the node's own
-						// record), systemd reports the unit ACTIVE (`currentWarmSlot` —
-						// the kernel, not our bookkeeping), and GitHub's listing reports
-						// the registration ONLINE. Issue #17 is precisely the case where
-						// the first holds and the third does not.
-						//
-						// NOT SET BY THE FILL OR ROTATE BELOW, deliberately. A mint that
-						// has just returned has not appeared in GitHub's listing yet, and
-						// recording it here would be this file believing its own write —
-						// the exact failure it exists to guard against. The next tick's
-						// listing confirms it 60 s later, which costs at most four
-						// dispatch cycles of missed affinity and cannot manufacture a
-						// false one.
-						if (reg?.online) observedWarm.set(node, slot.repo);
-						current = {
-							repo: slot.repo,
-							// `null` (could not confirm) fails toward LOCKED — the same
-							// direction every other "I could not look" in this workstream
-							// takes. A slot we cannot vouch for is not safe to evict.
-							busy: busy ?? true,
-							mintedOrRefreshedAtMs: busy ? nowMs : slot.markerAtMs,
-							// `null` here (reg unreadable) must NOT be read as "carries no
-							// gated label" — the workload-gate rotate check below treats a
-							// null the same way it treats `null` busy: cannot vouch for it,
-							// so it must not churn the slot on a guess.
-							labels: reg ? reg.labels : null,
-						};
-					}
-
-					return { node, m, installedMb, current, tmpFreeMb, workFreeMb };
-				} catch (err) {
-					result.failed++;
-					logger.warn(`[warm-cache] ${node}: ${err instanceof Error ? err.message : String(err)}`);
-					return null;
-				}
-			})
+			[...input.ephemeral].map((node) =>
+				observeWarmNode(node, input, hostingDoc, token, gh, sh, nowMs, result, observedWarm)
+			)
 		)
 	).filter((o): o is ObservedWarmNode => o !== null);
 
@@ -545,211 +413,27 @@ export async function dispatchWarmCache(
 		nowMs
 	);
 
+	// Carries out each node's decision — see `dispatch-warm-cache-act.ts`'s
+	// own doc for the full per-action reasoning (mint, evict-then-mint, or
+	// leave alone, plus the workload-gate rotation `planWarmFleet` never
+	// decides).
 	await Promise.all(
-		observed.map(async ({ node, m, installedMb, current }) => {
-			if (neverWarm.has(node)) return;
-			try {
-				const decision = decisions.get(node) ?? { action: 'idle' };
-				// #82, THE OTHER HALF: `planWarmFleet` is told each node's exclusions
-				// (fleet-manager#36) and should never propose FILLING or ROTATING a
-				// node onto one. Checked again here, before any mint, so a slip in the
-				// allocator is a withheld fill rather than a listener on a node that
-				// must not hold that repo.
-				//
-				// COUNTED AS `locked`, not a new field on `WarmCacheResult`: both mean
-				// "the allocator wanted to change this slot and something outside its
-				// own model said no" — a busy/assign-window lock for `locked`'s usual
-				// case, a manifest exclusion for this one. A dedicated counter was
-				// tried and reverted: `WarmCacheResult` is asserted by exact shape
-				// (`assert.deepEqual`) in a dozen-plus existing tests this lane does
-				// not own, and even a strictly additive field broke a chain of them —
-				// one assertion without a try/finally around its own
-				// `WARM_CACHE_DISABLED` mutation threw before restoring it, which left
-				// the kill switch ON for every test after it in the same process.
-				const target =
-					decision.action === 'fill'
-						? decision.repo
-						: decision.action === 'rotate'
-							? decision.to
-							: null;
-				if (target !== null) {
-					const reason = warmExcluded(node, m, target);
-					if (reason !== undefined) {
-						result.locked++;
-						logger.info(
-							`[warm-cache] ${node}: withholding a ${decision.action} onto ${target} — ${reason}`
-						);
-						return;
-					}
-				}
-				// THE SLICE CEILING for this node, from the SAME measured total the
-				// eligibility check above already read — `installedMb` is `free -m`'s
-				// `$2`, and `minFreeMb` is the floor that keeps the claw alive. A warm
-				// listener serves the same jobs a JIT unit does, so capping it lower
-				// would reintroduce #26 on exactly the path the cache exists to make
-				// faster.
-				const memoryMaxMb = unitMemoryMaxMb({
-					requestedMb: m.slice?.unitMaxMb,
-					sliceCeilingMb: installedMb - (m.minFreeMb ?? 1536),
-				});
-				// The warm half of the containment assertion. A warm listener sits in
-				// its slice for HOURS rather than for one job, so a node whose declared
-				// slice the minter cannot honour is worth saying out loud here too.
-				checkMintSlice(input.nodes, node);
-				const mintFor = async (repo: string) =>
-					mintWarmListener(
-						{
-							node,
-							repo,
-							runnerName: warmRunnerName(node, repo),
-							// DERIVED, not declared — see `offerFor`. `warmLabels` subtracts
-							// the ephemeral-only ones on top of this, because a warm listener
-							// is STANDING and must never be able to answer the canary.
-							labels: offerFor(input.nodes, node, workloadGate),
-							homeDir: nodeHome(input.nodes[node], 'ci'),
-							memoryMaxMb,
-							tarballUrl: await tarballUrl(),
-						},
-						token,
-						gh,
-						sh
-					);
-
-				switch (decision.action) {
-					case 'idle':
-					case 'keep': {
-						// WORKLOAD-GATE ROTATION (wave 4e follow-up, #102). A slot
-						// `planWarmFleet` is content to KEEP can still be carrying a
-						// WORKLOAD-GATED label `offerFor` no longer offers this node —
-						// claw-3's own shape, if claw-3 holds a warm listener for
-						// cardtable: its jdk21 FAILS, placement and the JIT mint both
-						// stop offering it from that tick on, but this already-registered
-						// listener answers `jdk21` to GitHub until something else evicts
-						// it. Only a GATED label triggers this — any other label drift
-						// is out of scope for this wave and must not start churning
-						// slots on its own.
-						//
-						// NO NEW API CALL: `current.labels` is read off the SAME
-						// `/actions/runners` listing `warmRegistration` already fetched
-						// for the busy/online check above. `null` means that listing
-						// could not confirm the registration's labels (same reason
-						// `busy` would be `null`) — "could not look" must not churn a
-						// slot on a guess, so it is treated exactly like "nothing stale
-						// found": kept, not rotated.
-						const stale = current?.labels
-							? workloadGatedCapabilities().find(
-									(id) =>
-										current.labels!.includes(id) &&
-										!offerFor(input.nodes, node, workloadGate).includes(id)
-								)
-							: undefined;
-						// BUSY IS NEVER ROTATED (same rule `locked`/the eviction passes
-						// above already enforce): a listener running a job is not killed
-						// mid-job. `current.busy` already fails toward `true` ("could not
-						// confirm" — see its own assignment above), so an unreadable
-						// registration is treated as busy here too, which is the same
-						// safe direction.
-						if (!stale || !current || current.busy) {
-							result.kept++;
-							return;
-						}
-						if (warmBackoffActive(node, nowMs)) {
-							result.kept++;
-							return;
-						}
-						logger.info(
-							`[warm-cache] ${node}: rotating ${current.repo} — workload-gate: ` +
-								`offerFor no longer offers "${stale}" for this node, which the ` +
-								`existing registration still advertises to GitHub`
-						);
-						const evicted = await evictWarmListener(
-							node,
-							current.repo,
-							warmRunnerName(node, current.repo),
-							token,
-							gh,
-							sh
-						);
-						if (!evicted) {
-							result.failed++;
-							logger.warn(
-								`[warm-cache] could not evict ${current.repo} warm slot on ${node} for a workload-gate relabel`
-							);
-							return;
-						}
-						result.evicted++;
-						const outcome = await mintFor(current.repo);
-						if (outcome.ok) {
-							clearWarmFailures(node);
-							result.rotated++;
-						} else {
-							recordWarmFailure(node, nowMs);
-							result.failed++;
-							logger.warn(
-								`[warm-cache] workload-gate rotate failed on ${node} for ${current.repo}: ${outcome.reason}`
-							);
-						}
-						return;
-					}
-					case 'locked':
-						result.locked++;
-						return;
-					case 'fill': {
-						// issue #7 clause (c): backed off, skip SILENTLY. This is the
-						// difference between "the log stops repeating every minute"
-						// and "the log repeats but nobody pays for it" — a node stuck
-						// on a real fault (e.g. the runner root is unreachable) must
-						// not cost a registration-token call and a heavy provisioning
-						// ssh every single tick.
-						if (warmBackoffActive(node, nowMs)) return;
-						const outcome = await mintFor(decision.repo);
-						if (outcome.ok) {
-							clearWarmFailures(node);
-							result.filled++;
-						} else {
-							recordWarmFailure(node, nowMs);
-							result.failed++;
-							logger.warn(
-								`[warm-cache] fill failed on ${node} for ${decision.repo}: ${outcome.reason}`
-							);
-						}
-						return;
-					}
-					case 'rotate': {
-						if (warmBackoffActive(node, nowMs)) return;
-						const evicted = await evictWarmListener(
-							node,
-							decision.from,
-							warmRunnerName(node, decision.from),
-							token,
-							gh,
-							sh
-						);
-						if (!evicted) {
-							result.failed++;
-							logger.warn(`[warm-cache] could not evict ${decision.from} warm slot on ${node}`);
-							return;
-						}
-						result.evicted++;
-						const outcome = await mintFor(decision.to);
-						if (outcome.ok) {
-							clearWarmFailures(node);
-							result.rotated++;
-						} else {
-							recordWarmFailure(node, nowMs);
-							result.failed++;
-							logger.warn(
-								`[warm-cache] rotate failed on ${node} for ${decision.to}: ${outcome.reason}`
-							);
-						}
-						return;
-					}
-				}
-			} catch (err) {
-				result.failed++;
-				logger.warn(`[warm-cache] ${node}: ${err instanceof Error ? err.message : String(err)}`);
-			}
-		})
+		observed.map((o) =>
+			actOnWarmNode({
+				observed: o,
+				decision: decisions.get(o.node) ?? { action: 'idle' },
+				neverWarm,
+				warmExcluded,
+				input,
+				workloadGate,
+				token,
+				gh,
+				sh,
+				tarballUrl,
+				nowMs,
+				result,
+			})
+		)
 	);
 
 	// PUBLISHED AFTER EVERY NODE HAS BEEN WALKED, never incrementally: the map is

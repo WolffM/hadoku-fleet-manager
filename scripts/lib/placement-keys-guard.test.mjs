@@ -54,6 +54,14 @@ const MINT_WARM_CACHE = 'src/runners/dispatch-warm-cache.ts';
 // below looks for) moved to ephemeral-tick-verdict.ts. `dispatchEphemeral`
 // itself stayed in MINT_TICK, so every OTHER pattern keyed to it is unaffected.
 const MINT_TICK_VERDICT = 'src/runners/ephemeral-tick-verdict.ts';
+// Wave shrink-1 lane B split of ephemeral-tick.ts (800-line ceiling, pure
+// move): the per-node `NodeState` build — including the `m.placement`/
+// `m.excludeRepos` reads below — moved to `buildNodeStates` in
+// ephemeral-tick-nodestate.ts. `dispatchEphemeral` itself stayed in
+// MINT_TICK and now calls `buildNodeStates`, so the 'placement' and
+// 'excludeRepos' keys are checked against THIS file instead; every other
+// pattern keyed to MINT_TICK is unaffected.
+const MINT_TICK_NODESTATE = 'src/runners/ephemeral-tick-nodestate.ts';
 
 function read(rel) {
 	return readFileSync(join(ROOT, rel), 'utf8');
@@ -161,16 +169,18 @@ const PLACEMENT_FOR_EXTRA_KEYS = ['ephemeral', 'residentRepos', 'mint', 'standin
  */
 const PLACEMENT_KEYS = {
 	placement: {
-		mint: MINT_TICK,
+		mint: MINT_TICK_NODESTATE,
 		// `m.placement !== 'excluded'` — added wave 3w (#82's shape, found while
 		// writing this guard: nothing on the mint path read this key before).
+		// Moved to `buildNodeStates` (wave shrink-1 lane B); see MINT_TICK_NODESTATE.
 		pattern: /m\.placement\s*!==\s*['"]excluded['"]/,
 	},
 	excludeRepos: {
-		mint: MINT_TICK,
+		mint: MINT_TICK_NODESTATE,
 		// `m.excludeRepos ? new Map(Object.entries(m.excludeRepos)) : undefined` —
 		// carried into `NodeState.excludedRepos`, enforced in `placement.ts`'s
-		// `refusalFor`. Added wave 3w, #82.
+		// `refusalFor`. Added wave 3w, #82. Moved to `buildNodeStates` (wave
+		// shrink-1 lane B); see MINT_TICK_NODESTATE.
 		pattern: /m\.excludeRepos/,
 	},
 	labels: {
@@ -249,6 +259,7 @@ void test('every placement key is honoured by the JIT mint path, or explicitly r
 		[MINT_TICK]: blankComments(read(MINT_TICK)),
 		[MINT_PLACEMENT]: blankComments(read(MINT_PLACEMENT)),
 		[MINT_TICK_VERDICT]: blankComments(read(MINT_TICK_VERDICT)),
+		[MINT_TICK_NODESTATE]: blankComments(read(MINT_TICK_NODESTATE)),
 	};
 	const offenders = [];
 	for (const [key, rule] of Object.entries(PLACEMENT_KEYS)) {
@@ -290,13 +301,15 @@ void test('every placement key is honoured by the JIT mint path, or explicitly r
  * case that table cannot see, so it is asserted directly, per function body.
  */
 void test('excludeRepos is honoured on BOTH of ephemeral-tick.ts’s own assignment paths — mint AND warm', () => {
-	const blanked = blankComments(read(MINT_TICK));
 	const pattern = /\.excludeRepos\b/;
-	const mintBody = functionBody(blanked, 'dispatchEphemeral');
+	// `buildNodeStates` moved to ephemeral-tick-nodestate.ts (wave shrink-1
+	// lane B split) — read ITS body from there now, not from MINT_TICK's.
+	// `dispatchEphemeral` (MINT_TICK) still calls it on every mint pass.
+	const mintBody = functionBody(blankComments(read(MINT_TICK_NODESTATE)), 'buildNodeStates');
 	assert.match(
 		mintBody,
 		pattern,
-		'excludeRepos is not read anywhere in dispatchEphemeral (the JIT mint path) any more'
+		'excludeRepos is not read anywhere in buildNodeStates (the JIT mint path) any more'
 	);
 	// dispatchWarmCache moved to dispatch-warm-cache.ts (wave 5g lane B split) —
 	// read ITS body from there now, not from MINT_TICK's.

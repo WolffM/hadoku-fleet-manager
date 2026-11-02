@@ -48,17 +48,11 @@
  * every registered job, a few hundred bytes each) is nowhere near a cap this
  * store would ever need to reason about.
  */
-import {
-	appendFileSync,
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	readdirSync,
-	unlinkSync,
-} from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 
+import { listDayFilesSince, readDayFiles } from './day-file-list.js';
 import { JOB_REGISTRY, type JobEntry, type JobKind } from './lib/job-registry.js';
 
 export const JOB_RUN_SCHEMA = 1;
@@ -246,40 +240,26 @@ export function readJobRuns(dir: string, filter: JobRunFilter = {}): JobRunRead 
 	if (!existsSync(dir)) return out;
 	const sinceMs = filter.sinceMs ?? 0;
 	const sinceDay = utcDay(sinceMs);
-	const files = readdirSync(dir)
-		.filter((f) => {
-			const m = DAY_FILE.exec(f);
-			return m !== null && m[1] >= sinceDay;
-		})
-		.sort();
-	for (const f of files) {
-		let raw: string;
+	const files = listDayFilesSince(dir, DAY_FILE, sinceDay);
+	const { filesRead, unreadable } = readDayFiles(dir, files, (line) => {
+		let parsed: unknown;
 		try {
-			raw = readFileSync(join(dir, f), 'utf8');
-		} catch (err) {
-			out.unreadable.push({ file: f, why: err instanceof Error ? err.message : String(err) });
-			continue;
+			parsed = JSON.parse(line);
+		} catch {
+			out.badLines++;
+			return;
 		}
-		out.files++;
-		for (const line of raw.split('\n')) {
-			if (!line.trim()) continue;
-			let parsed: unknown;
-			try {
-				parsed = JSON.parse(line);
-			} catch {
-				out.badLines++;
-				continue;
-			}
-			if (!isJobRunRow(parsed)) {
-				out.badLines++;
-				continue;
-			}
-			const t = Date.parse(parsed.startedAt);
-			if (t < sinceMs) continue;
-			if (filter.job !== undefined && parsed.job !== filter.job) continue;
-			out.rows.push(parsed);
+		if (!isJobRunRow(parsed)) {
+			out.badLines++;
+			return;
 		}
-	}
+		const t = Date.parse(parsed.startedAt);
+		if (t < sinceMs) return;
+		if (filter.job !== undefined && parsed.job !== filter.job) return;
+		out.rows.push(parsed);
+	});
+	out.files = filesRead;
+	out.unreadable = unreadable;
 	out.rows.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 	return out;
 }

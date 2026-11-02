@@ -76,15 +76,15 @@ import { capability } from '../lib/capability-registry.js';
 import { nodeOffer } from '../lib/capability-offer.js';
 import { mintsJitRunners, mintsOnDemand } from '../lib/node-role.js';
 import {
-	JIT_UNIT_MAX_SEC,
 	admitMint,
-	backstopUnitMemoryMaxMb,
-	slotDir,
-	unitMemoryMaxMb,
-	liveJitSlots,
 	liveJitUnits,
+	liveJitSlots,
+	slotDir,
 	mintEphemeralRunner,
 	runnerTarballUrl,
+	backstopUnitMemoryMaxMb,
+	unitMemoryMaxMb,
+	JIT_UNIT_MAX_SEC,
 } from './ephemeral-exec.js';
 import { jobKind } from '../lib/job-kind.js';
 import {
@@ -94,26 +94,26 @@ import {
 	type ProveDeps,
 	type ProofAttempt,
 	type ProofResult,
-	type RunnerTeardown,
 	type Owned,
 	type RunRow,
 	type JobRow,
-	jobDurationSec,
 	Abort,
 	Unreadable,
-	sq,
 	type ListedRunner,
 } from './prove-job-types.js';
 import {
-	proofRunnerName,
 	proofLabel,
-	scratchBranchName,
-	isProofRunnerName,
+	proofRunnerName,
 	dispatchBody,
 	runsOnForJob,
 	isDispatchable,
-	extractEvidence,
 } from './prove-job-parse.js';
+import {
+	teardownProofRunners,
+	reapStaleProofRunner,
+	resolveDispatchRef,
+} from './prove-job-lifecycle.js';
+import { awaitLandedVerdict } from './prove-job-verdict.js';
 
 // `runner-health.ts` (out of scope for this split) imports `isProofRunnerName`
 // from this path; everything else moved below is imported from its real new
@@ -209,120 +209,18 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 		return res.runners;
 	};
 
-	/** Teardown, once. Never throws; what it could not do is recorded, loudly. */
+	/**
+	 * Teardown, once. Never throws; what it could not do is recorded, loudly.
+	 * The guard and the `tornDown = true` live HERE, not inside the extracted
+	 * {@link teardownProofRunners}: they are what makes every `nap`/`read`
+	 * call from this point on (including ones inside `listRunners`, which
+	 * teardown itself calls) stop honouring the abort signal — see
+	 * `prove-job-lifecycle.ts`'s own header.
+	 */
 	const teardown = async (): Promise<void> => {
 		if (tornDown) return;
 		tornDown = true;
-		const td = r.teardown;
-		const problem = (m: string): void => {
-			td.ok = false;
-			td.problems.push(m);
-			find('teardown-failed', m);
-		};
-		// 1. A run we dispatched that is still going holds the workflow's concurrency
-		//    group and, worse, may still be using the proof runner.
-		for (const id of dispatched) {
-			try {
-				const run = (await d.gh.get(`/actions/runs/${id}`, NO_TOKEN, spec.repo)) as RunRow | null;
-				if (run?.status && run.status !== 'completed') {
-					const res = await d.gh.write(
-						'POST',
-						`/actions/runs/${id}/cancel`,
-						NO_TOKEN,
-						undefined,
-						spec.repo
-					);
-					if (!res.ok && res.status !== 409)
-						problem(`could not cancel run ${id}: HTTP ${res.status}`);
-					else td.cancelledRuns.push(id);
-				}
-			} catch (e) {
-				problem(`could not read or cancel run ${id}: ${why(e)}`);
-			}
-		}
-		// 1b. The scratch branch. Deleted even when a run on it was just cancelled:
-		//     a cancelled run keeps its record, and a left branch is litter in the repo.
-		if (scratch) {
-			try {
-				const res = await d.gh.write(
-					'DELETE',
-					`/git/refs/heads/${scratch}`,
-					NO_TOKEN,
-					undefined,
-					spec.repo
-				);
-				if (!res.ok && res.status !== 404 && res.status !== 422)
-					problem(`could not delete the scratch branch ${scratch}: HTTP ${res.status}`);
-			} catch (e) {
-				problem(`could not delete the scratch branch ${scratch}: ${why(e)}`);
-			}
-		}
-		// 2. The node: stop the unit, remove any staged config, prove both from the node.
-		for (const o of owned) {
-			const t: RunnerTeardown = {
-				name: o.name,
-				unitStopped: false,
-				configGone: false,
-				listenerGone: false,
-				deregistered: false,
-			};
-			td.runners.push(t);
-			const cfg = `${o.slot}/.jitconfig`;
-			const out = await d.sh(
-				spec.node,
-				[
-					`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop ${sq(o.unit)} 2>/dev/null`,
-					`rm -f ${sq(cfg)}`,
-					`if XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user is-active --quiet ${sq(o.unit)}; then echo UNIT-ACTIVE; else echo UNIT-GONE; fi`,
-					`if [ -e ${sq(cfg)} ]; then echo CFG-PRESENT; else echo CFG-GONE; fi`,
-					`if pgrep -f ${sq(`jit/slot${o.slotIndex}/bin/Runner\\.Listener`)} >/dev/null 2>&1; then echo LISTENER-UP; else echo LISTENER-GONE; fi`,
-					'true',
-				].join('\n')
-			);
-			if (out === null) {
-				problem(
-					`could not reach ${spec.node} to tear down ${o.name} — its unit may still be running`
-				);
-			} else {
-				t.unitStopped = out.includes('UNIT-GONE');
-				t.configGone = out.includes('CFG-GONE');
-				t.listenerGone = out.includes('LISTENER-GONE');
-				if (!t.unitStopped) problem(`unit ${o.unit} is still active on ${spec.node} after stop`);
-				if (!t.configGone) problem(`${cfg} is still staged on ${spec.node}`);
-				if (!t.listenerGone)
-					problem(`a Runner.Listener is still running in slot${o.slotIndex} on ${spec.node}`);
-			}
-		}
-		// 3. GitHub: an ephemeral runner deregisters itself after its job, so give it a
-		//    moment, then delete whatever is left and VERIFY from the API.
-		if (owned.length) {
-			const names = new Set(owned.map((o) => o.name));
-			try {
-				let left: { id: number; name: string }[] = [];
-				for (let i = 0; i < 6; i++) {
-					left = (await listRunners()).filter((x) => names.has(x.name));
-					if (!left.length) break;
-					if (i < 2) await nap(3_000);
-					else break;
-				}
-				for (const x of left) {
-					const res = await d.gh.write(
-						'DELETE',
-						`/actions/runners/${x.id}`,
-						NO_TOKEN,
-						undefined,
-						spec.repo
-					);
-					if (!res.ok && res.status !== 404)
-						problem(`could not deregister ${x.name}: HTTP ${res.status}`);
-				}
-				const after = (await listRunners()).filter((x) => names.has(x.name));
-				for (const t of td.runners) t.deregistered = !after.some((x) => x.name === t.name);
-				for (const x of after) problem(`LEAK: ${x.name} is still registered in ${spec.repo}`);
-			} catch (e) {
-				problem(`could not verify the proof runner is deregistered: ${why(e)}`);
-			}
-		}
+		await teardownProofRunners(spec, d, find, owned, dispatched, scratch, listRunners, r.teardown);
 	};
 
 	const slice = d.node.slice as { unitMaxMb?: number; maxMb?: number } | undefined;
@@ -471,81 +369,28 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 		if (!admission.ok) return finalise(refuse('admission', `${spec.node}: ${admission.reason}`));
 
 		// --- a proof runner an earlier run left behind ---------------------------
-		const listed = await listRunners();
-		const stale = listed.filter((x) => isProofRunnerName(x.name, spec.node));
-		for (const x of stale) {
-			if (x.busy) {
-				return finalise(
-					refuse(
-						'proof-in-flight',
-						`${x.name} is BUSY — another proof is running a job on ${spec.node}`
-					)
-				);
-			}
-			if (units.includes(x.name) && !spec.reapStale) {
-				return finalise(
-					refuse(
-						'stale-proof-live',
-						`${x.name} has a LIVE unit on ${spec.node}: another prove-job is running, or one was killed. Re-run with --reap-stale to tear it down`
-					)
-				);
-			}
+		// See `prove-job-lifecycle.ts`'s own doc for the full reasoning.
+		const staleOutcome = await reapStaleProofRunner(spec, d, units, listRunners);
+		if (staleOutcome.kind === 'refused') {
+			return finalise(refuse(staleOutcome.rule, staleOutcome.message));
 		}
-		for (const x of stale) {
-			if (units.includes(x.name)) {
-				await d.sh(
-					spec.node,
-					`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop ${sq(x.name)} 2>/dev/null; true`
-				);
-			}
-			const res = await d.gh.write(
-				'DELETE',
-				`/actions/runners/${x.id}`,
-				NO_TOKEN,
-				undefined,
-				spec.repo
-			);
-			if (!res.ok) {
-				find('stale-cleanup', `could not remove stale proof runner ${x.name}: HTTP ${res.status}`);
-				r.verdict = 'error';
-				return finalise(r);
-			}
-			r.staleCleaned.push(x.name);
+		if (staleOutcome.kind === 'error') {
+			r.staleCleaned.push(...staleOutcome.cleaned);
+			find('stale-cleanup', staleOutcome.message);
+			r.verdict = 'error';
+			return finalise(r);
 		}
+		r.staleCleaned.push(...staleOutcome.cleaned);
 
 		// --- the branch the run is dispatched on -------------------------------------
-		r.dispatchRef = spec.ref;
-		if (spec.scratchBranch) {
-			let sha: string | undefined;
-			try {
-				const head = (await read(`ref ${spec.ref}`, () =>
-					d.gh.get(`/git/ref/heads/${encodeURIComponent(spec.ref)}`, NO_TOKEN, spec.repo)
-				)) as { object?: { sha?: string } } | null;
-				sha = head?.object?.sha;
-			} catch (e) {
-				find('ref-unreadable', why(e));
-			}
-			if (!sha) {
-				if (!r.findings.length) find('ref-unreadable', `${spec.ref} has no head sha`);
-				r.verdict = 'error';
-				return finalise(r);
-			}
-			const name = scratchBranchName(spec.node, d.now());
-			scratch = name; // before the write, so a half-made branch is still torn down
-			const made = await d.gh.write(
-				'POST',
-				'/git/refs',
-				NO_TOKEN,
-				{ ref: `refs/heads/${name}`, sha },
-				spec.repo
-			);
-			if (!made.ok) {
-				find('scratch-branch', `could not create ${name} at ${spec.ref}: HTTP ${made.status}`);
-				r.verdict = 'error';
-				return finalise(r);
-			}
-			r.dispatchRef = name;
+		// See `prove-job-lifecycle.ts`'s own doc for the full reasoning.
+		const refOutcome = await resolveDispatchRef(spec, d, find, read);
+		scratch = refOutcome.scratch;
+		if (!refOutcome.ok) {
+			r.verdict = 'error';
+			return finalise(r);
 		}
+		r.dispatchRef = refOutcome.ref;
 		const on = { ...spec, ref: r.dispatchRef };
 
 		// --- mint once, then dispatch ---------------------------------------------
@@ -719,64 +564,8 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 		}
 
 		// --- landed: wait for it, read the verdict from the API ------------------
-		let done: JobRow | null = landed.job;
-		for (let t = d.now(); done && done.status !== 'completed' && d.now() - t < jobMs;) {
-			await nap(pollMs);
-			const res = (await read('jobs listing', () =>
-				d.gh.get(`/actions/runs/${landed.run.id}/jobs?per_page=100`, NO_TOKEN, spec.repo)
-			)) as { jobs?: JobRow[] } | null;
-			done = res?.jobs?.find((j) => j.id === landed.job.id) ?? null;
-		}
-		if (!done || done.status !== 'completed') {
-			r.verdict = 'timeout';
-			find(
-				'timeout',
-				`the job was still ${done?.status ?? 'unreadable'} after ${Math.round(jobMs / 60_000)} minutes`
-			);
-			return finalise(r);
-		}
-		r.jobId = done.id;
-		r.jobConclusion = done.conclusion ?? null;
-		r.runnerName = done.runner_name ?? null;
-		r.durationSec = jobDurationSec(done);
-		// Read AGAIN from the final object: what counts is where it finished.
-		r.ranOnTarget = isTarget(done.runner_name);
-		const last = r.attempts[r.attempts.length - 1];
-		last.jobConclusion = r.jobConclusion;
-		last.ranOnTarget = r.ranOnTarget;
-		if (!r.ranOnTarget) {
-			r.verdict = 'lost-race';
-			find(
-				'lost-race',
-				`the job finished on ${done.runner_name ?? 'no runner'}, not a proof runner on ${spec.node}`
-			);
-			return finalise(r);
-		}
-
-		let logFound = false;
-		if (spec.evidence !== undefined) {
-			try {
-				const log = await read('job log', () =>
-					d.gh.text(`/actions/jobs/${done.id}/logs`, NO_TOKEN, spec.repo)
-				);
-				logFound = true;
-				r.evidence = extractEvidence(log, spec.evidence);
-			} catch (e) {
-				find('log-unreadable', why(e));
-			}
-		}
-		if (r.jobConclusion !== 'success') {
-			r.verdict = 'fail';
-			find('job-failed', `the job ran on ${spec.node} and concluded "${r.jobConclusion}"`);
-		} else if (spec.evidence !== undefined && !logFound) {
-			r.verdict = 'error';
-		} else if (spec.evidence !== undefined && !r.evidence.length) {
-			r.verdict = 'fail';
-			find(
-				'no-evidence',
-				`the job went green on ${spec.node} but no log line matched /${spec.evidence}/i — a pass with no evidence is not a pass`
-			);
-		} else r.verdict = 'pass';
+		// See `prove-job-verdict.ts`'s own doc; mutates `r` in place.
+		await awaitLandedVerdict(spec, d, r, find, read, nap, jobMs, landed, isTarget, pollMs);
 		return finalise(r);
 	} catch (e) {
 		if (e instanceof Abort) {

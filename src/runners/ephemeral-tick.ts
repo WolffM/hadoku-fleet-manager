@@ -13,23 +13,12 @@
  */
 
 import { readDrain } from './drain.js';
-import {
-	effectiveSlices,
-	heldBackMb,
-	readHostingDoc,
-	sliceUsageProbe,
-	takeSliceUsage,
-} from './hosting-record.js';
+import { effectiveSlices, readHostingDoc } from './hosting-record.js';
 import { backstopUnitMemoryMaxMb } from './ephemeral.js';
 import { JIT_UNIT_MAX_SEC } from './ephemeral.js';
 import { JOB_RESERVE_DEFAULT_MB } from './ephemeral.js';
-import { mintBudget } from './ephemeral.js';
-import { TMP_FREE_FLOOR_MB } from './ephemeral.js';
 import { unitMemoryMaxMb } from './ephemeral.js';
-import { WORK_FREE_FLOOR_MB } from './ephemeral.js';
-import { warmListenersHeld } from './ephemeral.js';
 import { orderCandidates, type TrafficNode } from './traffic.js';
-import { recordDiskReadings } from './disk-watch.js';
 import { isSchedulable } from './schedulable.js';
 import { nodeHome } from '../lib/node-users.js';
 import { isBackstopHeld } from './backstop-hold.js';
@@ -39,21 +28,16 @@ import { withGhCaller } from '../gh-budget.js';
 import { runDispatchTick } from './dispatch-tick.js';
 import { SATURATED_QUEUED_MS } from './queue-discovery.js';
 import { type DispatchPassResult } from './dispatch-pass.js';
-import { type NodeState } from './placement.js';
-import { chargedLikeDispatch, getCapacityLedger } from './capacity-ledger.js';
 import {
 	withoutBackstops,
 	offerFor,
 	loadWorkloadGateContext,
-	jobReserve,
 	loadRepoReserves,
 	shellOnNode,
-	SPACE_PROBE_DF_CMD,
-	parseSpaceProbe,
 	type EphemeralTickInput,
 	type RepoReserve,
 } from './ephemeral-shared.js';
-import { dispatchWarmCache, warmRepoByNode } from './dispatch-warm-cache.js';
+import { dispatchWarmCache } from './dispatch-warm-cache.js';
 import { getSpeedModel, getHeavyModel } from './speed-heavy-cache.js';
 import {
 	type AdmissionClause,
@@ -62,6 +46,8 @@ import {
 	onDemandBackstops,
 	recentJobsPerDay,
 } from './ephemeral-tick-verdict.js';
+import { probeNodeMemory, __resetSpaceProbeLogForTesting } from './ephemeral-tick-probe.js';
+import { buildNodeStates } from './ephemeral-tick-nodestate.js';
 
 // Bare re-export for runner-health.ts (lane A, untouched this wave).
 export { loadWorkloadGateContext, __setWorkloadGateContextForTesting } from './ephemeral-shared.js';
@@ -94,23 +80,16 @@ import {
 } from '../admission-verdict-store.js';
 export { admissionVerdictsForReport, __setAdmissionVerdictsForTesting };
 
-/** #101: which nodes have already had their `/tmp`/`_work` free space logged
- * once this process's lifetime — see the probe in `dispatchEphemeral`'s node
- * loop. Module-level so "once" means once per mgmt-api process, not once per
- * 15 s tick; reset is never needed because a restart clears it along with
- * everything else in-memory here. */
-const loggedSpaceProbeOnce = new Set<string>();
-
 /**
  * Test seam. Not part of the supported API. Delegates the verdict snapshot's
- * own reset to `admission-verdict-store.ts` (its one writer) and clears this
- * file's OWN `loggedSpaceProbeOnce`, which that store knows nothing about —
+ * own reset to `admission-verdict-store.ts` (its one writer) and the space
+ * probe's own "logged once" set to `ephemeral-tick-probe.ts` (its owner) —
  * a delegating reset, same shape every moved `__reset*ForTesting` seam keeps
  * (wave5r lane rules).
  */
 export function __resetAdmissionVerdictsForTesting(): void {
 	__resetAdmissionVerdictStoreForTesting();
-	loggedSpaceProbeOnce.clear();
+	__resetSpaceProbeLogForTesting();
 }
 
 /**
@@ -204,110 +183,19 @@ export async function dispatchEphemeral(
 		logger.warn(`[warm-cache] tick failed: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
-	// REAL free memory, in MB, read from the nodes.
-	//
-	// The tier probe's `free` is FREE SLOTS (`cap - workers`), not megabytes, and
-	// passing it as `freeMb` made admission compute `3 - 4096` and refuse every
-	// mint forever — a units mismatch that reads as a correctly-wired dispatcher
-	// declining work. One ssh per EPHEMERAL node per tick, so the cost is
-	// bounded by the pilot's size, not the fleet's.
-	//
-	// INSTALLED capacity rides the same call, in the same `free -m` line. It is
-	// what the per-unit cap is derived from (`MemTotal − minFreeMb`, the slice's
-	// own ceiling — see `unitMemoryMaxMb`), and adding a second ssh for a number
-	// already on this line would have doubled the tick's per-node cost for
-	// nothing. `$7` is available, `$2` is total; the warm half reads the same two
-	// columns the same way.
-	const freeMbByNode = new Map<string, number>();
-	const sliceCeilingMbByNode = new Map<string, number>();
-	// #101: SPACE, read on the SAME ssh call as `free -m` rather than a second
-	// round-trip — the fleet already blacked itself out once on an
-	// unconditional per-node call run too often (REAP_INTERVAL_MS,
-	// 2026-09-06), and this one piggybacks on a call this tick already makes.
-	// `df -Pm` (POSIX, MB) on `/tmp`, and on whichever of `~/.hadoku/jit`,
-	// `~/.hadoku`, or `$HOME` exists — a node that has never minted has no
-	// `jit` directory yet, and that absence is not "unreadable". ALWAYS set,
-	// never left unset: `undefined` on `AdmissionInput.tmpFreeMb`/`workFreeMb`
-	// means "this caller never looked" (prove-job's literal only) and the
-	// live tick must never silently become that caller — see `AdmissionInput`.
-	const tmpFreeMbByNode = new Map<string, number | null>();
-	const tmpSizeMbByNode = new Map<string, number | null>();
-	const workFreeMbByNode = new Map<string, number | null>();
-	// SHARED HOSTING (src/runners/hosting-record.ts): a hosting node's probe also
-	// reads the tenant slice's usage, on the same ssh, so admission can hold back
-	// exactly the part of the slice the tenant is not using yet.
+	// REAL free memory, in MB, read from the nodes — see
+	// `ephemeral-tick-probe.ts`'s own doc for the full reasoning (why this is
+	// megabytes and not the tier probe's free-slot count, why space rides the
+	// same ssh, and the shared-hosting held-back share).
 	const sharedHosting = effectiveSlices(readHostingDoc());
-	const heldBackMbByNode = new Map<string, number>();
-	await Promise.all(
-		minting.map(async (name) => {
-			const hosted = sharedHosting[name] ?? [];
-			const raw = await sh(
-				name,
-				"free -m | awk '/^Mem:/{print $7, $2}'; " +
-					SPACE_PROBE_DF_CMD +
-					(hosted.length ? `; ${sliceUsageProbe(hosted.map((h) => h.tenant))}` : '')
-			);
-			const { rest: out, sliceCurrentMb } = takeSliceUsage(raw);
-			if (hosted.length) {
-				heldBackMbByNode.set(
-					name,
-					hosted.reduce(
-						(sum, h) =>
-							sum +
-							heldBackMb({
-								declaredMb: h.memoryMb,
-								sliceCurrentMb: sliceCurrentMb.get(h.tenant) ?? null,
-								since: h.since,
-							}),
-						0
-					)
-				);
-			}
-			const { first, tmpFreeMb, tmpSizeMb, workFreeMb } = parseSpaceProbe(out);
-			const [free, total] = first.split(/\s+/).map(Number);
-			if (Number.isFinite(free) && free > 0) freeMbByNode.set(name, free);
-			// The FLOOR that keeps the claw alive, subtracted here rather than on
-			// the node: `minFreeMb` is operator config and MemTotal is measured, so
-			// this is the one place both are in hand. A node whose total is smaller
-			// than its own floor is a manifest error — `runners-slice-install.sh`
-			// answers SLICE-FAIL for it — and it must not become a cap of zero.
-			//
-			// A BACKSTOP'S CEILING IS ITS ALLOWANCE. On the production host CI gets
-			// `slice.maxMb`, deliberately far below MemTotal − minFreeMb, and
-			// admission must measure a backstop job against what the slice will
-			// actually let it have, not against memory production is using.
-			const floorCeiling = total - (input.nodes[name]?.minFreeMb ?? 1536);
-			const allowance = isBackstop(name) ? input.nodes[name]?.slice?.maxMb : undefined;
-			const ceiling =
-				typeof allowance === 'number' && allowance > 0
-					? Math.min(floorCeiling, allowance)
-					: floorCeiling;
-			if (Number.isFinite(total) && total > 0 && ceiling > 0)
-				sliceCeilingMbByNode.set(name, ceiling);
-			tmpFreeMbByNode.set(name, tmpFreeMb);
-			tmpSizeMbByNode.set(name, tmpSizeMb);
-			workFreeMbByNode.set(name, workFreeMb);
-			// LOGGED ONCE PER PROCESS LIFETIME PER NODE, not every 15 s tick —
-			// `runner-health.ts`'s own tick, and any verdict CHANGE below, are the
-			// other two places this is visible. grep: "space probe".
-			if (!loggedSpaceProbeOnce.has(name)) {
-				loggedSpaceProbeOnce.add(name);
-				logger.info(
-					`[ephemeral-tick] space probe ${name}: /tmp free=${tmpFreeMb ?? 'unreadable'}MB ` +
-						`of ${tmpSizeMb ?? 'unknown'}MB, ` +
-						`_work free=${workFreeMb ?? 'unreadable'}MB`
-				);
-			}
-		})
-	);
-	// Wave 4c §F: hand the SAME per-node space-probe maps this tick already
-	// built for admission's own space clause to the early-warning registry in
-	// disk-watch.ts/runner-health.ts. No second probe, no second ssh — see
-	// disk-watch.ts's own header for why this registry lives there instead of
-	// beside the admission verdict snapshot here, and why WHOLESALE replace is the rule.
-	recordDiskReadings(tmpFreeMbByNode, workFreeMbByNode, tmpSizeMbByNode);
+	const {
+		freeMbByNode,
+		sliceCeilingMbByNode,
+		tmpFreeMbByNode,
+		workFreeMbByNode,
+		heldBackMbByNode,
+	} = await probeNodeMemory(minting, input, sh, isBackstop, sharedHosting);
 
-	const nodes: NodeState[] = [];
 	// Once per tick. A drain is operator state on disk; re-reading it per node
 	// would let a node change status halfway through one placement decision.
 	const drainRecords = readDrain();
@@ -325,289 +213,27 @@ export async function dispatchEphemeral(
 	// THE SAME CACHED HEAVY MODEL `dispatchWarmCache` uses (#102) — see
 	// `getHeavyModel`'s own cadence note.
 	const heavyModel = getHeavyModel(nowMs);
-	const candidates: string[] = [];
-	// THE GENERIC ADMISSION VERDICT (wave 4a §A.1, #100), built fresh this pass
-	// and published wholesale after the loop — see `admission-verdict-store.ts`'s
-	// own note on why wholesale, not merged.
-	const nextVerdicts = new Map<string, AdmissionVerdict>();
-	// LAST pass's published snapshot, read ONCE before this pass starts writing
-	// `nextVerdicts` — the store's one value does not change again until
-	// `setAdmissionVerdicts` below, so one copy here reads exactly what every
-	// per-node `.get(name)` in the loop used to read off the live module
-	// variable directly.
-	const prevVerdicts = admissionVerdictsForReport();
-	for (const name of minting) {
-		const p = input.fleetProbe.get(name);
-		const m = input.nodes[name];
-		if (!p?.reachable || !m) continue;
-		// An unreadable memory figure must not silently become 0 and refuse every
-		// mint. Declining is right — admission needs a real number — but it has to
-		// be VISIBLE, because the previous failure of this exact shape produced a
-		// dispatcher that looked healthy and minted nothing.
-		if (!freeMbByNode.has(name)) {
-			logger.warn(
-				`[ephemeral-tick] ${name} mints but its free memory could not be read — not minting there this tick`
-			);
-			continue;
-		}
-		// The SAME refusal for the total, and for the same reason. The per-unit cap
-		// is now derived from it, so a node here without a measured ceiling would
-		// mint at the fallback — a tighter cap than the operator asked for, applied
-		// silently, which is #26 coming back through the "I could not look" door.
-		// Both numbers come off one `free -m` line, so this fires only when that
-		// line was malformed rather than absent.
-		if (!sliceCeilingMbByNode.has(name)) {
-			logger.warn(
-				`[ephemeral-tick] ${name} mints but its installed memory could not be read ` +
-					`(or is not above minFreeMb=${m.minFreeMb ?? 1536}) — not minting there this tick`
-			);
-			continue;
-		}
-		candidates.push(name);
-		const sliceCeilingMb = sliceCeilingMbByNode.get(name);
-		const capMb = isBackstop(name)
-			? backstopUnitMemoryMaxMb({ requestedMb: m.slice?.unitMaxMb, sliceMaxMb: m.slice?.maxMb })
-			: unitMemoryMaxMb({ requestedMb: m.slice?.unitMaxMb, sliceCeilingMb });
-		// PER NODE HERE, per repo once the run is known — hoisted out of the literal
-		// below because the warm reservation is measured in the same unit and must
-		// be the same number, not a second estimate of it. `.from` rides along for
-		// the generic admission verdict below — it is the same `reserveBasis` a
-		// per-run `admitMint` call would have reserved against, absent a repo.
-		const genericReserve = jobReserve({ nodeJobP95Mb: m.jobP95Mb, capMb });
-		const requiredMb = genericReserve.mb;
-		// THE REPO'S OWN ANSWER, BUT ONLY WHEN IT IS A PROVEN FLOOR (#76, scoped
-		// 2026-10-02). `requiredMb` above is the node-level fallback every repo
-		// has always reserved. Activating a repo's own `jobP95Mb` for EVERY
-		// covered repo — not only the capped ones — would be a second, unasked
-		// admission change: a repo measured ABOVE the node figure would newly
-		// refuse a node it fits on today, and one measured BELOW it would newly
-		// pack tighter than today. Neither is what #76 asked for — "Only a
-		// reservation PROVEN to be a lower bound is raised" — so an ORDINARY
-		// repo (measured or fleet-p95, `lowerBound` false) gets NO entry here at
-		// all and `refusalFor` falls straight through to `requiredMb`, bit for
-		// bit today's behaviour. Only a repo whose own capped runs proved a
-		// floor is in this map, and even then the stored figure is the RAW
-		// floor — `refusalFor` takes `max(requiredMb, floor)` at the point of
-		// use, so the override can only RAISE the reservation, never lower it.
-		const requiredMbByRepo = new Map<string, { mb: number; lowerBound: boolean }>();
-		for (const repo of input.repos) {
-			const r = jobReserve({
-				repoReserve: repoReserves.get(repo),
-				nodeJobP95Mb: m.jobP95Mb,
-				capMb,
-			});
-			if (!r.lowerBound) continue;
-			requiredMbByRepo.set(repo, { mb: r.mb, lowerBound: true });
-		}
-		// THE WARM RESERVATION — the other half of the warm placement decision
-		// `dispatchWarmCache` made a few lines above, in the unit THIS pass spends.
-		// A node the warm cache may place a listener on holds one slot of its
-		// `maxConcurrent` back for it, because a listener is handed work by GitHub
-		// without passing `admitMint` at all: the cap bound mints exactly (max 3
-		// concurrent JIT units on claw-3 against `maxConcurrent: 3`) and was
-		// exceeded only by the path it does not sit on (max 4 including the warm
-		// listener, at 48 job starts in the 14 days to 2026-09-22).
-		//
-		// DERIVED FROM ELIGIBILITY, NOT FROM AN OBSERVATION OF THE SLOT, and that
-		// is deliberate. `warmRepoByNode` — the affinity map read below — is empty
-		// for the first 60 s after each of mgmt-api's ~5 daily restarts and drops
-		// any node whose listing call failed; its own note says staleness there is
-		// safe in ONE direction, because affinity only ever PREFERS a node. A
-		// reservation read from it would be unsafe in precisely the other one: a
-		// live listener with no slot held for it, after every restart. Eligibility
-		// is measured fresh on this tick from the same `free -m` line, so it can
-		// neither go stale nor read empty after a restart. What it costs is a slot
-		// held on an eligible node whose listener is MISSING — and a cache that is
-		// not filling is a fault `fleet check-warm-canary` already fails on, not a
-		// state to size the thermal cap around.
-		const warmListeners = warmListenersHeld({
-			usableMb: sliceCeilingMb!,
-			jobMb: requiredMb,
-			role: m.role,
-			maxConcurrent: m.maxConcurrent,
-		});
-		const ns: NodeState = {
-			name,
-			healthy: !input.isSick(name),
-			// An operator holding this box out of service. Read HERE and passed
-			// down, because placement.ts is pure on purpose — decisions there
-			// must be assertable without a filesystem.
-			drained: drainedNodes.has(name),
-			drainedAs: drainRecords[name],
-			// NODE-WIDE `placement: "excluded"` (reconcile-fleet-runners.mjs's own
-			// `placementFor`/`mayRunRepo`: "the reconciler must not register here
-			// at all"). Found while writing the placement-keys guard (#82's shape,
-			// for a different key): nothing on the JIT path read this before —
-			// `eligible` was hardcoded `true` for every node, so a node an operator
-			// marked `excluded` from STANDING registration would still mint
-			// EPHEMERAL ones, which is exactly the "two assignment paths disagree"
-			// bug this wave's guard exists to catch. No manifest machine sets this
-			// today (verified: neither `manifests/fleet-runner-manifest.json` nor
-			// the production copy declares it), so this changes nothing live; it
-			// closes the gap for the day one does.
-			eligible: m.placement !== 'excluded',
-			// THE MANIFEST'S PER-REPO REFUSALS, carried through verbatim (#82).
-			// Read HERE, beside `drained` above, for the same reason: a `Map`
-			// rather than the raw `Record` so `placement.ts` gets O(1) lookup, and
-			// built fresh every tick rather than cached, so an operator editing
-			// the manifest takes effect on the next tick like every other
-			// manifest-sourced field here.
-			excludedRepos: m.excludeRepos ? new Map(Object.entries(m.excludeRepos)) : undefined,
-			// THE SPEED MODEL (#83), the SAME object for every node this tick —
-			// see `getSpeedModel`'s own cadence note just above the loop.
-			speedModel,
-			// WHAT THIS NODE OFFERS, derived — not the manifest's declared array.
-			// `placement.ts:287` refuses a node whose labels do not satisfy the
-			// job, so the fleet breaks HERE, one step before the mint, if this
-			// reads a stripped declaration. Substituted at this line rather than
-			// inside `choosePlacement`: placement.ts is pure on purpose and is
-			// handed a label list, exactly like `drained` above.
-			labels: offerFor(input.nodes, name, workloadGate, eligibleFor(name)),
-			// #15: placement keeps part of a backstop back from overflow work.
-			onDemandBackstop: isBackstop(name),
-			// P5.1 (`warm-listener-cache-2026-09-05.md`): "placement must gain
-			// warm-affinity as a first-order term ahead of least-loaded". The term
-			// shipped in `a6a19a4` and was INERT for five days and ~2,000 jobs
-			// because this line did not exist and nothing anywhere ever assigned
-			// `NodeState.warmRepo` — `warm-affinity-measured-2026-09-14.md` §3
-			// proved it in source and in the deployed package. This is the FLEET
-			// half of that wiring; the queued job's own repo is the other half,
-			// supplied by `dispatcher.ts`'s `choosePlacement` call. Either one
-			// missing makes both inert, which is why they were wired together.
-			//
-			// Read from the warm tick's last observation, which is GitHub's runner
-			// listing rather than this process's fill/rotate bookkeeping — see
-			// `warmRepoByNode` and `warmRegistration`. `undefined` for a node the
-			// warm cache is not eligible for, has not reached yet, or could not
-			// confirm; placement documents that as "falls through to plain
-			// ordering", never as a reason to refuse the node.
-			warmRepo: warmRepoByNode.get(name),
-			liveUnits: 0,
-			// Standing registrations GitHub can assign WITHOUT asking us. On a
-			// node mid-migration this is non-zero and must count against the cap,
-			// or the mint budget is computed against a fiction.
-			//
-			// JOBS, NOT DISTINCT REPOS (#102.1). This was
-			// `[...p.busyRepos.values()].filter((n) => n > 0).length` — the COUNT
-			// OF REPOS with at least one running worker, not the count of workers —
-			// so three simultaneous cardtable Forge jobs on one claw read as
-			// `standingBusy: 1`, and `TrafficNode.busy` (built from this same
-			// field below) looked perfectly idle for the second and third job. The
-			// tick already has the real count on the SAME probe line
-			// (`ProbeResult.workers`, `fleet-loop.ts`) — no second probe.
-			// `p.workers` absent (a caller that predates #102) falls back to the
-			// old distinct-repo approximation rather than 0.
-			standingBusy:
-				p.workers ?? (p.busyRepos ? [...p.busyRepos.values()].filter((n) => n > 0).length : 0),
-			// `p.workers` is EVERY Runner.Worker on the box — a JIT unit's and the
-			// held warm listener's included. `dispatch-pass.ts` takes those back
-			// out once it has listed the units; it needs the held count to do so.
-			warmHeld: warmListeners,
-			// GitHub cannot currently place a job here — see `NodeState.schedulable`'s
-			// own doc for why `choosePlacement` needs this now that it re-ranks by
-			// busy itself, rather than only trusting the order an already-schedulability-
-			// aware `orderCandidates` produced upstream.
-			schedulable: isSchedulable(name),
-			// THE HEAVY MODEL (#102), the SAME object for every node this tick —
-			// see `getHeavyModel`'s own cadence note, mirroring `speedModel` just
-			// below.
-			heavyModel,
-			// THE OBSERVED INITIAL VALUE (#102.4): is this node CURRENTLY running a
-			// job from a repo that runs heavy kinds? REPO-LEVEL ONLY — see
-			// `HeavyModel.isHeavyRepo`'s own doc for why a running worker's exact
-			// job name is not observable here without a new per-job read, and the
-			// conservative direction that approximation takes. `planTick` RAISES
-			// this to `true` on the SAME object as it places heavy jobs within the
-			// tick; this is only the floor it starts from.
-			runningHeavy:
-				heavyModel !== undefined && p.busyRepos
-					? [...p.busyRepos.entries()].some(([repo, n]) => n > 0 && heavyModel.isHeavyRepo(repo))
-					: false,
-			// ONE expression of the budget, shared with the fleet panel. See
-			// `mintBudget`: this used to be the only copy, and the route's copy
-			// disagreed with it.
-			//
-			// WHAT THE PANEL REPORTS IS STILL THE CEILING, and it is still true:
-			// `routes/fleet` calls this with the manifest entry alone, so it prints
-			// `maxConcurrent` — the bound on CONCURRENT WORK here, which the listener
-			// is part of. What the dispatcher may MINT is that ceiling less the slots
-			// held for listeners. The two numbers answer different questions; they do
-			// not disagree.
-			maxConcurrent: mintBudget({ maxConcurrent: m.maxConcurrent, warmListeners }).slots,
-			freeMb: freeMbByNode.get(name) ?? 0,
-			// The ESTIMATE, not the cap. Reserving unitMaxMb per job made claw-1
-			// admit ONE concurrent mint at 10GB free, which is how 13 jobs sat
-			// queued on 2026-09-01 while dispatch logged 'no node can take this
-			// job right now'. MemoryMax still caps the unit at unitMaxMb.
-			//
-			// CLAMPED to the cap. The estimate is operator-edited; the cap is what
-			// the kernel enforces. A jobP95Mb above the cap would admit work the
-			// unit is then OOM-killed for - a reservation promising room the job is
-			// not permitted to use. Min() lets the two disagree only safely.
-			//
-			// THE FALLBACK IS NO LONGER THE CAP (2026-09-14). It was
-			// `jobP95Mb ?? unitMaxMb`, which read as one number because the two
-			// happened to be the same 4096. The cap is now this node's slice
-			// ceiling, and reserving ~13.8 GB for an unmeasured job would admit ONE
-			// mint and queue the rest — the 2026-09-01 shape this very comment was
-			// written about. An unmeasured job reserves JOB_RESERVE_DEFAULT_MB; the
-			// clamp still holds, it is simply no longer doing the work.
-			//
-			// PER NODE HERE, per repo once the run is known: this is the answer for
-			// a job whose repo has no figure (`jobReserve`'s `node`/`default`). The
-			// queued run's own figure is `jobReserve` with its `repoReserve`, read
-			// via `requiredMbByRepo` below.
-			requiredMb,
-			// A shared hosting slice's unused share is held back on top of the floor,
-			// so no job is admitted into memory the tenant was promised.
-			minFreeMb: (m.minFreeMb ?? 1536) + (heldBackMbByNode.get(name) ?? 0),
-			// #76: `refusalFor` (placement.ts) looks this up by the queued job's
-			// repo and overrides `requiredMb`/`requiredIsLowerBound` with it when
-			// present. A repo not in the map (never measured) leaves `requiredMb`
-			// above untouched.
-			requiredMbByRepo,
-			// #76: what `admitMint`'s placement clause compares a lower-bound
-			// `requiredMb` against — this node's own ceiling, the same number
-			// `capMb` above was derived from.
-			sliceCeilingMb,
-			// #101: ALWAYS a number or `null` here, never left `undefined` — the
-			// probe above sets both maps for every node in `input.ephemeral`
-			// unconditionally, so `.get(name)` is never missing for a node that
-			// reaches this point. `undefined` is reserved for callers with no
-			// node to probe at all (`prove-job.ts`).
-			tmpFreeMb: tmpFreeMbByNode.get(name) ?? null,
-			workFreeMb: workFreeMbByNode.get(name) ?? null,
-		};
-		nodes.push(ns);
-		// THE GENERIC VERDICT (wave 4a §A.1, #100) — `admitMint` run on the SAME
-		// `ns` placement just built, before any queued run is known. See
-		// `admissionVerdictFor`'s own docblock for why this is display and not a
-		// second gate.
-		// Charged as the dispatcher charged it, when its ledger is fresh — see
-		// `chargedLikeDispatch`. Display only: `ns` itself goes to placement as is.
-		const verdict = admissionVerdictFor(
-			chargedLikeDispatch(name, ns, getCapacityLedger()),
-			genericReserve.from
-		);
-		nextVerdicts.set(name, verdict);
-		// #101: LOGGED ON CHANGE, not every 15 s tick — the probe above already
-		// logs once per process lifetime; this catches a node crossing the
-		// floor in either direction afterwards. grep: "space verdict".
-		{
-			const wasSpace = (() => {
-				const prev = prevVerdicts.get(name);
-				return !!prev && !prev.ok && prev.clause === 'space';
-			})();
-			const isSpace = !verdict.ok && verdict.clause === 'space';
-			if (wasSpace !== isSpace) {
-				logger.info(
-					`[ephemeral-tick] space verdict change ${name}: tmpFree=${ns.tmpFreeMb ?? 'unreadable'}MB ` +
-						`(floor ${TMP_FREE_FLOOR_MB}MB), _workFree=${ns.workFreeMb ?? 'unreadable'}MB ` +
-						`(floor ${WORK_FREE_FLOOR_MB}MB) -> ${isSpace ? 'REFUSED' : 'admitted'}`
-				);
-			}
-		}
-	}
+
+	// THIS TICK'S PLACEMENT-READY NODE STATES — see `ephemeral-tick-nodestate.ts`'s
+	// own doc for the full per-field reasoning; moved there verbatim.
+	const { nodes, candidates, nextVerdicts } = buildNodeStates({
+		minting,
+		input,
+		isBackstop,
+		eligibleFor,
+		workloadGate,
+		repoReserves,
+		speedModel,
+		heavyModel,
+		drainedNodes,
+		drainRecords,
+		freeMbByNode,
+		sliceCeilingMbByNode,
+		tmpFreeMbByNode,
+		workFreeMbByNode,
+		heldBackMbByNode,
+	});
+
 	// PUBLISHED EVEN WHEN EMPTY — see `admission-verdict-store.ts`'s own note.
 	// Every node this pass could not reach, or could not read memory for, is
 	// simply absent from `nextVerdicts`, which is exactly "could not look" for

@@ -13,17 +13,19 @@
  * shared with runners GitHub places without asking (B2), and after an mgmt-api
  * restart the truth about what is in flight lives on the NODES, not here.
  * Folding that into the label loop would have hidden all three.
+ *
+ * SPLIT (wave shrink-1 lane B, 800-line ceiling): the input/output types live
+ * in `dispatch-pass-types.ts`, the cross-tick bookkeeping (heavy marks, the
+ * reap book, the affinity counters) in `dispatch-pass-state.ts`, the
+ * placement order in `dispatch-pass-order.ts`, and the warm half of the
+ * heavy hold in `dispatch-pass-warm-heavy.ts` — every name re-exported here
+ * under its original path.
  */
 import { logger } from '../host.js';
 import { withGhCaller } from '../gh-budget.js';
 import { subCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
-import { planTick, type PendingRun, type SkipReason } from './dispatcher.js';
-import {
-	evictWarmListener,
-	warmRegistration,
-	type GhLike,
-	type ShellLike,
-} from './ephemeral-exec.js';
+import { planTick } from './dispatcher.js';
+import { type GhLike, type ShellLike } from './ephemeral-exec.js';
 import {
 	mintEphemeralRunner,
 	liveJitUnitRecords,
@@ -31,126 +33,44 @@ import {
 	retireStrandedJit,
 	type LiveJitUnit,
 } from './ephemeral-exec-jit.js';
-import { reapJitRunners, REAP_INTERVAL_MS, REAP_IDLE_INTERVAL_MS } from './ephemeral-exec-reap.js';
-import { JIT_PREFIX, WARM_PREFIX, parseJitName, warmRunnerName } from './ephemeral.js';
+import { reapJitRunners, REAP_INTERVAL_MS } from './ephemeral-exec-reap.js';
+import { JIT_PREFIX, WARM_PREFIX, parseJitName } from './ephemeral.js';
 import { recordCapacityLedger } from './capacity-ledger.js';
 import { nodeOf } from './census.js';
 import { recordDispatchDay } from './dispatch-daily.js';
 import { JitDecisionBook, decisionLogEnabled, recordWarmAssignments } from './decision-log.js';
 import { makeCapacityOf, toJitObservation } from './dispatch-decision-flatten.js';
-import { satisfiesLabels, type NodeState } from './placement.js';
+import { satisfiesLabels } from './placement.js';
+import type { DispatchPassInput, DispatchPassResult, RunningJob } from './dispatch-pass-types.js';
+import {
+	HEAVY_MARK_MS,
+	heavyMarkedRecently,
+	__resetHeavyMarksForTesting,
+	__markHeavyForTesting,
+	reapBook,
+	mintedAtMs,
+	reapTargets,
+	__resetReapBookForTesting,
+	type FleetDispatchAffinity,
+	getDispatchAffinitySnapshot,
+	recordAffinityPass,
+	__resetAffinityCountersForTesting,
+} from './dispatch-pass-state.js';
+import { BAND_HEAD_START_MS, byPriority } from './dispatch-pass-order.js';
+import { closeWarmBesideHeavy } from './dispatch-pass-warm-heavy.js';
 
-export interface DispatchPassInput {
-	/** Nodes allowed to mint, in placement order (see runners/traffic.ts). */
-	order: string[];
-	nodes: NodeState[];
-	/** Queued runs the poll found, already filtered to `queued`. */
-	pending: PendingRun[];
-	/** Labels each node must project onto anything it mints. */
-	labelsFor: (node: string) => string[];
-	/** The node's ci user's home (`nodeHome(machine, 'ci')`): where its slots live. */
-	homeDirFor: (node: string) => string;
-	/**
-	 * Where a node with no standing install may fetch a runner release.
-	 * Resolved once per tick by the caller — see runnerTarballUrl.
-	 */
-	tarballUrl?: string | null;
-	/**
-	 * The unit's `MemoryMax` for a mint of `repo` on `node`. Asked per mint,
-	 * once placement has chosen the node, because a backstop's cap is its own
-	 * declared one and a claw's is not (see `backstopUnitMemoryMaxMb`).
-	 */
-	memoryMaxMbFor: (repo: string, node: string) => number;
-	/**
-	 * The slice a unit on `node` is placed in, from the manifest. Absent means
-	 * every unit goes to the default slice.
-	 */
-	sliceNameFor?: (node: string) => string | null | undefined;
-	ttlSeconds: number;
-	/** Repos to sweep for orphaned JIT registrations. */
-	repos?: string[];
-	/** Injectable clock. Absent means `Date.now()`; tests drive the reap gate. */
-	nowMs?: number;
-	/**
-	 * The in-progress SIBLINGS of every run `pending` came from, off the job
-	 * listings the producer already read to find the waiting jobs.
-	 *
-	 * Two things only this knows. Its freshness: `NodeState.standingBusy` is
-	 * the fleet probe's worker count, up to a fast-loop tick old, and a WARM
-	 * listener's job is not a live JIT unit either — so on 2026-10-08 22:08:09Z
-	 * claw-4 read `busy 0` with forge-e2e (3) eleven seconds into its warm
-	 * listener, and took forge-e2e (2) and forge-jvm on top of it. And the
-	 * running job's exact NAME, which the probe cannot see, so it is the one
-	 * source of `NodeState.heavyJobs`. Absent is "none known", today's walk.
-	 */
-	runningJobs?: readonly RunningJob[];
-	/**
-	 * `placementFingerprint` for one job's labels, from the tick that owns the
-	 * probe backoff — stamped on the decision log's rows (`decision-log.ts`)
-	 * so a row says whether the nodes that could take the job had changed.
-	 * Absent: the rows carry no fingerprint. Placement never reads it.
-	 */
-	fingerprintFor?: (repo: string, labels: readonly string[]) => string;
-}
-
-/** One in-progress job, by the runner GitHub assigned it to. */
-export interface RunningJob {
-	repo: string;
-	runner: string;
-	jobName: string;
-	/** The job's and its run's ids, for the decision log's warm rows only. */
-	jobId?: number;
-	runId?: number;
-}
-
-export interface DispatchPassResult {
-	minted: number;
-	failed: number;
-	skipped: number;
-	inFlight: number;
-	/**
-	 * Orphans deleted, or `null` for a pass that did not sweep — the reap runs
-	 * on its own clock (REAP_INTERVAL_MS), so most passes do not. Not `0`: this
-	 * is the "I could not look" distinction, and `fleet-report-types` already
-	 * types the field `number | null` for exactly that reason.
-	 */
-	reaped: number | null;
-	/**
-	 * The pass's `unplaceable` skips, for the dispatcher's probe backoff (#117).
-	 * Optional so every existing result literal stands; absent is "none".
-	 */
-	unplaceable?: SkipReason[];
-	/**
-	 * `repo#runId` of every held (backed-off) run this pass reserved a slot for.
-	 * The dispatcher lifts their backoff so the next tick re-reads and mints.
-	 */
-	reserved?: string[];
-}
-
-/**
- * How long a node stays "running heavy" for the WARM tick after this pass
- * placed or saw a heavy job there — two fast-loop probes, by which time the
- * probe's own repo-level attribution has caught up.
- */
-export const HEAVY_MARK_MS = 120_000;
-
-/** node -> when this pass last placed or saw a heavy job there. Module state:
- *  lost on restart, which only reopens the ≤60 s window the probe leaves. */
-const heavyMarkedAtMs = new Map<string, number>();
-
-/** Did a dispatch pass place or see a heavy job on `node` within HEAVY_MARK_MS? */
-export function heavyMarkedRecently(node: string, nowMs: number): boolean {
-	const at = heavyMarkedAtMs.get(node);
-	return at !== undefined && nowMs - at < HEAVY_MARK_MS;
-}
-
-/** Test seams. */
-export function __resetHeavyMarksForTesting(): void {
-	heavyMarkedAtMs.clear();
-}
-export function __markHeavyForTesting(node: string, atMs: number): void {
-	heavyMarkedAtMs.set(node, atMs);
-}
+export type { DispatchPassInput, DispatchPassResult, RunningJob };
+export {
+	HEAVY_MARK_MS,
+	heavyMarkedRecently,
+	__resetHeavyMarksForTesting,
+	__markHeavyForTesting,
+	reapTargets,
+	type FleetDispatchAffinity,
+	getDispatchAffinitySnapshot,
+	__resetAffinityCountersForTesting,
+};
+export { BAND_HEAD_START_MS, byPriority };
 
 /**
  * When the reap last swept, epoch ms. "Not yet this process" until the first
@@ -174,93 +94,10 @@ export function __markHeavyForTesting(node: string, atMs: number): void {
  */
 const REAP_CADENCE_NAME = 'dispatch-pass:reap';
 
-/**
- * Per repo: when the sweep last READ its listing, and whether that listing still
- * held a `jit-*` registration afterwards. See REAP_IDLE_INTERVAL_MS (#116).
- *
- * The same kind of state as `lastReapMs` — a rate limiter, not a fact any
- * decision reads. Lost on restart, the next sweep walks every repo: the safe
- * direction, once.
- *
- * `heldJit` is GitHub's answer, off the reap's own listing — not a record of
- * what this process minted. The mint record below only ever ADDS a repo to a
- * sweep; nothing in this process's memory can take one out of it.
- */
-const reapBook = new Map<string, { listedAtMs: number; heldJit: boolean }>();
-/** repo -> when this process last minted there. Adds work; never removes it. */
-const mintedAtMs = new Map<string, number>();
-
-/**
- * The repos this sweep must list: any never listed, any that last held a JIT
- * registration, any minted to since its listing, and every other one once
- * REAP_IDLE_INTERVAL_MS has passed.
- */
-export function reapTargets(repos: readonly string[], nowMs: number): string[] {
-	return repos.filter((repo) => {
-		const seen = reapBook.get(repo);
-		if (!seen || seen.heldJit) return true;
-		if ((mintedAtMs.get(repo) ?? -Infinity) >= seen.listedAtMs) return true;
-		return nowMs - seen.listedAtMs >= REAP_IDLE_INTERVAL_MS;
-	});
-}
-
 /** Test seam. Not part of the supported API. */
 export function __resetReapClockForTesting(): void {
 	__resetSubCadenceKeyForTesting(REAP_CADENCE_NAME);
-	reapBook.clear();
-	mintedAtMs.clear();
-}
-
-/**
- * Did warm affinity DECIDE where the dispatcher's mints went, or were they warm
- * by chance? (`warm-affinity-measured-2-2026-09-15.md` §5e.)
- *
- * Three counts per mint that SUCCEEDED, each a subset of the one before:
- *   minted              every successful JIT mint
- *   mintedViaAffinity   ...landing on a node warm for that repo (the
- *                       concentration metric: 74 % with the term OFF)
- *   mintedAffinityMoved ...that plain ordering would have sent ELSEWHERE —
- *                       the term's own effect
- *
- * `lastPass` is the last pass that minted anything (`null` = none since
- * restart); `totals` are since process start. Neither is persisted: mgmt-api
- * restarts several times a day, so the RECORD is the per-pass `[dispatch]` log
- * line, summed across restarts. These are for a glance, not a re-cut.
- *
- * Defined here, not in `fleet-report-types-dispatch.ts` (wave clean-1 lane C,
- * cut (iii)): this is this module's own in-memory state — `affinity` below is
- * the one mutable copy, `getDispatchAffinitySnapshot` its one reader — so
- * `dispatch-pass.ts` is the real owner. `fleet-report-types-dispatch.ts`
- * imports and re-exports it from here under its original path.
- */
-export interface FleetDispatchAffinity {
-	lastPass: {
-		at: string;
-		minted: number;
-		mintedViaAffinity: number;
-		mintedAffinityMoved: number;
-	} | null;
-	totals: { minted: number; mintedViaAffinity: number; mintedAffinityMoved: number };
-}
-
-/** Module state for {@link FleetDispatchAffinity}; resets on restart and is
- *  never read for a decision (see that type's own doc). */
-let affinity: FleetDispatchAffinity = {
-	lastPass: null,
-	totals: { minted: 0, mintedViaAffinity: 0, mintedAffinityMoved: 0 },
-};
-
-/** The affinity counters, for `GET /fleet`'s `dispatch.affinity`. */
-export function getDispatchAffinitySnapshot(): FleetDispatchAffinity {
-	return affinity;
-}
-
-/** Test seam. Not part of the supported API. */
-export function __resetAffinityCountersForTesting(): void {
-	affinity = {
-		lastPass: null,
-		totals: { minted: 0, mintedViaAffinity: 0, mintedAffinityMoved: 0 },
-	};
+	__resetReapBookForTesting();
 }
 
 /**
@@ -655,22 +492,7 @@ export async function runDispatchPass(
 				plan.reserved.map((r) => `${r.repo}#${r.runId}@${r.node}`).join(', ')
 		);
 	}
-	if (minted) {
-		const t = affinity.totals;
-		affinity = {
-			lastPass: {
-				at: new Date(nowMs).toISOString(),
-				minted,
-				mintedViaAffinity,
-				mintedAffinityMoved,
-			},
-			totals: {
-				minted: t.minted + minted,
-				mintedViaAffinity: t.mintedViaAffinity + mintedViaAffinity,
-				mintedAffinityMoved: t.mintedAffinityMoved + mintedAffinityMoved,
-			},
-		};
-	}
+	recordAffinityPass(nowMs, minted, mintedViaAffinity, mintedAffinityMoved);
 	recordDispatchDay(nowMs, { minted, failed, mintedViaAffinity });
 	if (minted || failed) {
 		// THE RECORD for W's after-arm (§5e): the re-cut greps these lines and sums
@@ -678,12 +500,13 @@ export async function runDispatchPass(
 		// since process start and do not. Append new fields at the END — the
 		// re-cut's parser keys on `name=value`, but a reader eyeballing a pm2 tail
 		// should not have to relearn the order.
+		const totals = getDispatchAffinitySnapshot().totals;
 		logger.info(
 			`[dispatch] minted=${minted} failed=${failed} in-flight=${inFlight} ` +
 				`via-affinity=${mintedViaAffinity} affinity-moved=${mintedAffinityMoved} ` +
-				`total-minted=${affinity.totals.minted} ` +
-				`total-via-affinity=${affinity.totals.mintedViaAffinity} ` +
-				`total-affinity-moved=${affinity.totals.mintedAffinityMoved} ` +
+				`total-minted=${totals.minted} ` +
+				`total-via-affinity=${totals.mintedViaAffinity} ` +
+				`total-affinity-moved=${totals.mintedAffinityMoved} ` +
 				// #102.4 — ADDITIVE, appended after every existing token so a reader
 				// or a parser keyed on the fields above sees them byte-identical.
 				`heavy=${mintedHeavy} heavy-on-busy=${mintedHeavyOnBusy} ` +
@@ -699,101 +522,4 @@ export async function runDispatchPass(
 		unplaceable: plan.skipped.filter((x) => x.kind === 'unplaceable'),
 		reserved: [...new Set(plan.reserved.map((r) => `${r.repo}#${r.runId}`))],
 	};
-}
-
-/**
- * THE WARM HALF OF THE HEAVY HOLD (#102). The hold refuses a JIT mint beside
- * a heavy job, but a warm listener is a standing registration GitHub hands
- * work to without asking: cardtable run 37857873226 (2026-10-08 23:10Z) had
- * forge-e2e (2) held off claw-8 and claw-9 by `heavy hold`, and claw-4's idle
- * warm listener took it 54 s after claw-4 started forge-e2e (1) — inside the
- * warm tick's 60 s, whose own heavy check reads the probe and had not seen it.
- *
- * So the moment a node is running a heavy job — placed this pass, or a heavy
- * sibling seen in a queued run's listing — its warm listener for a heavy-kind
- * repo goes, if idle. A BUSY one is left alone: stopping it would kill its job.
- * The node is marked so the warm tick does not refill it before the probe
- * catches up ({@link heavyMarkedRecently}). One runner listing per such node,
- * only on the pass that FIRST marks it, so a long shard costs one call, not
- * one every 15 s.
- */
-async function closeWarmBesideHeavy(
-	nodes: readonly NodeState[],
-	mintedHeavyOn: readonly string[],
-	heavyModel: NodeState['heavyModel'],
-	nowMs: number,
-	token: string,
-	gh: GhLike & { get: (path: string, token: string, repo?: string) => Promise<unknown> },
-	sh: ShellLike
-): Promise<void> {
-	if (!heavyModel) return;
-	const heavyNow = new Set(mintedHeavyOn);
-	for (const m of nodes) if ((m.heavyJobs ?? 0) > 0) heavyNow.add(m.name);
-	for (const m of nodes) {
-		if (!heavyNow.has(m.name)) continue;
-		const fresh = !heavyMarkedRecently(m.name, nowMs);
-		heavyMarkedAtMs.set(m.name, nowMs);
-		if (!fresh || !m.warmRepo || !heavyModel.isHeavyRepo(m.warmRepo)) continue;
-		const name = warmRunnerName(m.name, m.warmRepo);
-		const reg = await warmRegistration(m.warmRepo, name, token, gh);
-		if (!reg || reg.busy) {
-			logger.info(
-				`[dispatch] ${m.name} is running a heavy job; its warm listener for ${m.warmRepo} is ` +
-					`${reg ? 'busy' : 'unreadable'} and stays — the warm tick evicts it once idle`
-			);
-			continue;
-		}
-		const evicted = await evictWarmListener(m.name, m.warmRepo, name, token, gh, sh);
-		logger.info(
-			`[dispatch] ${m.name} is running a heavy job: ${evicted ? 'evicted' : 'could not evict'} ` +
-				`its idle warm listener for ${m.warmRepo} (#102)`
-		);
-	}
-}
-
-/**
- * How far ahead of the queue each event band starts, in milliseconds of age.
- *
- * A HEAD START, NOT A LANE. A push still goes first among jobs that arrived
- * within a few minutes of it — the 2026-10-09 case below — but a job that has
- * waited longer than its band's head start outranks every push that arrived
- * after that. Until 2026-10-25 the bands were strict, and a strict lane starves
- * the lower one for as long as the upper one keeps arriving: that morning a
- * package fan-out queued 57 `repository_dispatch` auto-update runs, every one
- * of which pushes a commit, so pushes never ran out. hadoku-study run
- * 40165607402 (queued 05:27:37Z) and hadoku-resume-bot 40165520825 (05:26:07Z)
- * waited 47 minutes; between 05:27:37 and their mints at 06:12–06:14 the
- * dispatcher minted 87 runners, 65 of them for push runs created AFTER them,
- * and not one for a younger auto-update run — age order held inside the band
- * and the band was the whole wait.
- *
- * 300 s per band is the fan-out's own p90 job wait that day (571 self-hosted
- * jobs, created_at -> started_at: p50 84 s, p90 311 s) and the line at which
- * ci:queue-health declares the fleet not serving work. It keeps the 2026-10-09
- * order exactly: a verify-branch dispatch (band 2, ten minutes) still yields
- * to a push that arrived up to ten minutes after it.
- */
-export const BAND_HEAD_START_MS = 300_000;
-
-/**
- * The order a pass places queued jobs in: oldest first, with a PUSH given a
- * head start over everything else and a manual dispatch starting furthest back
- * (see {@link BAND_HEAD_START_MS}).
- *
- * Capacity a job kind can use is sometimes three nodes deep (jdk21), and then
- * order is the whole policy. On 2026-10-09 20:27Z cardtable's push to main —
- * the run its deploy waits on — had three Forge shards queued since 20:05
- * behind eleven verify-branch dispatches that arrived after it, because the
- * pass placed jobs in the order repos and runs were listed. A dispatch is
- * somebody checking a branch; a push is the branch everyone else builds on.
- * Stable, and a job with no readable age sorts last.
- */
-export function byPriority(pending: readonly PendingRun[]): PendingRun[] {
-	const band = (r: PendingRun): number =>
-		r.event === 'push' ? 0 : r.event === 'workflow_dispatch' ? 2 : 1;
-	const rank = (r: PendingRun): number => {
-		const t = Date.parse(r.jobCreatedAt ?? (r as { created_at?: string }).created_at ?? '');
-		return Number.isFinite(t) ? t + band(r) * BAND_HEAD_START_MS : Number.POSITIVE_INFINITY;
-	};
-	return [...pending].sort((a, b) => rank(a) - rank(b) || band(a) - band(b));
 }
