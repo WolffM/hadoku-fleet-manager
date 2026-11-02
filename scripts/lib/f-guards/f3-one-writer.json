@@ -16,7 +16,7 @@
     "fleet-hosting.json": ["src/runners/hosting-record.ts"],
     "fleet-runner-coverage.json": ["scripts/lib/reconcile-coverage.mjs"],
     "fleet-runner-manifest.json": ["scripts/node-users-cutover.mjs"],
-    "gh-budget.json": ["src/gh-budget.ts"],
+    "gh-budget.json": ["src/gh-budget-windows.ts"],
     "hosting-converge-last.json": ["scripts/hosting-converge.mjs"],
     "hosting-demand.json": ["scripts/lib/hosting-demand.mjs"],
     "hosting-tenants.json": ["scripts/lib/tenant-registry.mjs"],

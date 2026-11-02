@@ -205,9 +205,20 @@ function callersOf(name) {
 	const found = blankedSources()
 		.filter(({ src }) => new RegExp(String.raw`(?<![\w$.])${name}\(`).test(src))
 		.map(({ file }) => file);
-	// The definitions are not callers.
+	// The definitions are not callers. `measured-proof.ts` is the `$proof`
+	// facet's own writer (`writeProof` calling `writeFacet`), split out of
+	// `measured.ts` (wave shrink-1 lane C, pure move) to bring that file under
+	// the 600-line target — `proof` is a THIRD state-dir facet, distinct from
+	// the benchmark/health pair `STATE_WRITERS` names, and was exempted the
+	// same way before the split simply by living in the same file as the
+	// definition.
 	return found
-		.filter((f) => f !== 'scripts/lib/manifest-target.mjs' && f !== 'src/lib/measured.ts')
+		.filter(
+			(f) =>
+				f !== 'scripts/lib/manifest-target.mjs' &&
+				f !== 'src/lib/measured.ts' &&
+				f !== 'src/lib/measured-proof.ts'
+		)
 		.sort();
 }
 

@@ -68,9 +68,11 @@ import getpass  # noqa: F401 — kept importable as `mem_report.getpass` for
 # `runner_mem_report_test.py`'s `mock.patch.object(mem_report.getpass, ...)`,
 # which patches the shared stdlib module every caller (including
 # mem_report_env.py's own `import getpass`) sees — not this file's own code.
+import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -108,8 +110,6 @@ def _sibling(name):
     """
     if name in sys.modules:
         return sys.modules[name]
-    import importlib.util
-
     path = (HERE / f"{name}.py").resolve()
     if not path.is_file():
         raise SystemExit(
@@ -394,8 +394,6 @@ def hub_repo():
     if _HUB_CACHE:
         return _HUB_CACHE[0]
     mod = (HERE.parent / "dist" / "lib" / "fleet-config.js").resolve()
-    import shutil
-
     exe = shutil.which("node")
     why = None
     if not exe:

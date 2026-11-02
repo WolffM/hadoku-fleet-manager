@@ -56,6 +56,11 @@
     "layer": "state"
   },
   {
+    "glob": "src/lib/measured-proof.ts",
+    "layer": "state",
+    "why": "Wave shrink-1 lane C: the $proof facet split out of measured.ts (pure move) to bring that file under the 600-line target. Same layer as the file it split from — it reads and writes through measured.ts's own readFacetFile/writeFacet."
+  },
+  {
     "glob": "src/lib/sick-node.ts",
     "layer": "state"
   },
@@ -63,6 +68,11 @@
     "glob": "src/job-history-store.ts",
     "layer": "state",
     "why": "Wave 5h lane C split of job-history.ts (plan §4.3 #5): the ledger store — the in-memory window, the probe ledger and the one writer of job-history.jsonl. job-history.ts itself is now a thin re-export barrel (see the domain/observation section below) kept only for runner-health.ts, not touched this wave."
+  },
+  {
+    "glob": "src/job-history-probe-ledger.ts",
+    "layer": "state",
+    "why": "Wave shrink-1 lane C: the probe ledger split out of job-history-store.ts (pure move) to bring that file under the 600-line target. Same layer as the file it split from."
   },
   {
     "glob": "src/job-rollup-store.ts",
@@ -316,6 +326,11 @@
     "layer": "access"
   },
   {
+    "glob": "src/gh-budget-windows.ts",
+    "layer": "access",
+    "why": "Wave shrink-1 lane C: the window ledger (map, persistence, open/absorb/close) split out of gh-budget.ts (pure move) to bring that file under the 600-line target and narrow the surface gh-budget.ts had to export just so gh-budget-pool.ts could reach in. Same layer as the file it split from."
+  },
+  {
     "glob": "src/gh-budget-history-store.ts",
     "layer": "access",
     "why": "Wave 5n lane B (plan §7.3, T5): `gh-budget.ts`'s own history store, same \"access, not state\" reasoning as the comment on atomic-json.ts below — `gh-budget.ts` is itself `access`, not `state`, and access importing state is the illegal direction, so this stays beside it rather than beside job-rollup-store.ts above."
@@ -332,6 +347,16 @@
   {
     "glob": "src/lib/github-client.ts",
     "layer": "access"
+  },
+  {
+    "glob": "src/lib/github-client-blackout.ts",
+    "layer": "access",
+    "why": "Wave shrink-1 lane C: failure classification and the primary-rate-limit blackout split out of github-client.ts (pure move) to bring that file under the 600-line target. Same layer as the file it split from."
+  },
+  {
+    "glob": "src/lib/github-client-cache.ts",
+    "layer": "access",
+    "why": "Wave shrink-1 lane C: the raw conditional-request cache store split out of github-client.ts (pure move) to bring that file under the 600-line target. Same layer as the file it split from."
   },
   {
     "glob": "src/lib/atomic-json.ts",
@@ -1610,10 +1635,31 @@
     "section": "Wave 5h lane C split of job-history.ts: GitHub ingest (job-history-ingest.ts, run) and zone/kill classification + stats (job-history-stats.ts, core). job-history.ts's own bare re-export barrel (kept in 5h only for runner-health.ts) is removed in wave 5i lane A: runner-health.ts and its test now import job-history-store.ts/job-history-ingest.ts directly."
   },
   {
+    "glob": "src/job-history-phases.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave shrink-1 lane C: job-phase/step-failure derivation split out of job-history-ingest.ts (pure move) to bring that file under the 600-line target. Same layer as the file it split from."
+  },
+  {
+    "glob": "src/job-history-backfill.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave shrink-1 lane C: the failed-step backfill split out of job-history-ingest.ts (pure move) to bring that file under the 600-line target. Same layer as the file it split from."
+  },
+  {
     "glob": "src/job-history-stats.ts",
     "layer": "domain",
     "domain": "observation",
     "part": "core"
+  },
+  {
+    "glob": "src/job-history-zone.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane C: the failure-zone classifier split out of job-history-stats.ts (pure move) to bring that file under the 600-line target. Same layer as the file it split from."
   },
   {
     "glob": "src/run-listing-gap.ts",

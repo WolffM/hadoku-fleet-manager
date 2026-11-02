@@ -1,11 +1,9 @@
-import { logger } from './host.js';
 import {
 	appendToDisk,
 	compactHistory,
 	forcedLifted,
 	loadHistory,
 	loadProbeLedger,
-	persistHistory,
 	probeRuns,
 	records,
 	remember,
@@ -14,6 +12,17 @@ import {
 	type JobRecord,
 } from './job-history-store.js';
 import { WARM_PREFIX, parseJitName } from './lib/jit-naming.js';
+import { jobPhases, stepFailure, type GhJob } from './job-history-phases.js';
+
+/**
+ * The job-phase/step-failure derivation (`jobPhases`/`stepFailure`/`GhJob`)
+ * and the failed-step backfill (`backfillFailedSteps`/`BackfillReport`) moved
+ * to their own files (wave shrink-1 lane C, pure move) to bring this file
+ * under the 600-line target. Re-exported here so every existing importer of
+ * `job-history-ingest.js` compiles unchanged.
+ */
+export { jobPhases, stepFailure, type GhJob };
+export { backfillFailedSteps, type BackfillReport } from './job-history-backfill.js';
 
 /**
  * Runs whose jobs we may fetch per tick, SHARED across every repo in the sweep.
@@ -64,246 +73,6 @@ export const MAX_FETCH_PER_TICK = 30;
  * wider than any busy repo's listing turnover, far short of RETENTION_DAYS.
  */
 export const FRESH_HORIZON_H = 48;
-
-/** What one {@link backfillFailedSteps} pass did. */
-export interface BackfillReport {
-	/** Records in the window that lacked `failedStep` and could be looked up. */
-	candidates: number;
-	/** Jobs actually fetched from GitHub this pass (bounded by `max`). */
-	fetched: number;
-	/** Records that gained a `failedStep`. */
-	patched: number;
-	/** Fetches GitHub answered with "no such job" — aged out, unrecoverable. */
-	expired: number;
-	/** Fetches that failed for any OTHER reason — retryable, unlike `expired`. */
-	failed: number;
-	/** True when the window was written back to disk. */
-	persisted: boolean;
-	/** Candidates left because `max` ran out — re-run to continue. */
-	remaining: number;
-}
-
-/**
- * Fill `failedStep`/`failedPhase` on records that predate 0.22.24, IN THE LIVE
- * WINDOW, and persist through the one writer.
- *
- * WHY THIS IS A LIBRARY FUNCTION AND NOT A SCRIPT. `scripts/backfill-failed-steps.mjs`
- * did this correctly against the FILE — it even re-read immediately before
- * writing and refused to write if the file had moved under it. It still lost all
- * 502 records, because the race it guarded is not the race that exists: the
- * running mgmt-api does not read this file after boot, so the window it holds
- * had never heard of the patches, and its next `compactHistory()` wrote that
- * window over them. There is no file-level protocol that survives that. The only
- * way to durably change a record is to change the object the live process is
- * holding — which means running inside that process.
- *
- * `fetchJob` is injected for the same reason `ingestRuns` injects its fetcher:
- * the tests must not reach the network, and the caller owns the credential.
- * It returns null for "I could not look" and must distinguish that from a 404
- * via `expired`, because the two mean opposite things — an aged-out job is
- * permanently gone and a timeout is worth another pass.
- *
- * Idempotent: a record that already has `failedStep` is never a candidate, and a
- * job whose steps do not explain the failure is left alone rather than guessed,
- * so re-running costs only the fetches for what is still missing.
- */
-export async function backfillFailedSteps(
-	fetchJob: (repo: string, jobId: number) => Promise<{ job: GhJob | null; expired: boolean }>,
-	opts: { max?: number; concurrency?: number } = {}
-): Promise<BackfillReport> {
-	// Read the window back first, exactly as `ingestRuns` does: a backfill that
-	// ran before the first load would patch an empty window and then persist it
-	// OVER the file, which is the very failure this function exists to prevent.
-	loadHistory();
-	const max = opts.max ?? 2000;
-	const concurrency = Math.max(1, opts.concurrency ?? 5);
-
-	const candidates = records.filter(
-		(r) =>
-			r.conclusion &&
-			r.conclusion !== 'success' &&
-			!r.failedStep &&
-			typeof r.jobId === 'number' &&
-			typeof r.startedAt === 'string' &&
-			typeof r.durationSec === 'number' &&
-			Number.isFinite(Date.parse(r.startedAt))
-	);
-	const toFetch = candidates.slice(0, max);
-
-	let fetched = 0;
-	let patched = 0;
-	let expired = 0;
-	let failed = 0;
-
-	let next = 0;
-	const worker = async (): Promise<void> => {
-		while (next < toFetch.length) {
-			const rec = toFetch[next++];
-			if (!rec) continue;
-			const res = await fetchJob(rec.repo, rec.jobId);
-			fetched++;
-			if (!res.job) {
-				if (res.expired) expired++;
-				else failed++;
-				continue;
-			}
-			const start = Date.parse(rec.startedAt);
-			const end = start + rec.durationSec * 1000;
-			// The record's OWN stored conclusion is the frame — a rerun since then
-			// may have changed the job's live one, which is not what this record
-			// described. Only the step data is being backfilled.
-			const sf = stepFailure({ ...res.job, conclusion: rec.conclusion }, start, end);
-			if (!sf) continue; // steps do not explain it either — left as it was, never guessed
-			// Mutating the object the live window holds IS the mechanism. A copy
-			// would be written once and then lost to the next compaction.
-			Object.assign(rec, sf);
-			patched++;
-		}
-	};
-	await Promise.all(Array.from({ length: Math.min(concurrency, toFetch.length) }, worker));
-
-	// Persist even when nothing was patched? No — an unconditional rewrite of an
-	// unchanged window is pure risk for no gain. But when anything WAS patched the
-	// write is mandatory, or the whole pass evaporates at the next restart.
-	const persisted = patched > 0 ? persistHistory() : false;
-	if (patched) {
-		logger.info(
-			`[job-history] backfill: ${patched} record(s) gained failedStep ` +
-				`(fetched ${fetched}, expired ${expired}, failed ${failed}, persisted ${persisted})`
-		);
-	}
-	return {
-		candidates: candidates.length,
-		fetched,
-		patched,
-		expired,
-		failed,
-		persisted,
-		remaining: candidates.length - toFetch.length,
-	};
-}
-
-// Exported since 2026-09-07: `backfillFailedSteps` takes a fetcher that returns
-// one of these, so the shape is part of this module's public surface whether or
-// not the name is — and an un-exported name in an exported signature is a .d.ts
-// that consumers cannot implement against.
-export interface GhJob {
-	id?: number;
-	name?: string;
-	runner_name?: string | null;
-	labels?: string[];
-	created_at?: string | null;
-	started_at?: string | null;
-	completed_at?: string | null;
-	conclusion?: string | null;
-	status?: string;
-	/** The commit this job ran at. See {@link JobRecord.headSha}. */
-	head_sha?: string | null;
-	/**
-	 * Per-step timings. ALREADY IN THE RESPONSE — `/actions/runs/{id}/jobs`
-	 * returns them and this module discarded them, so the phase breakdown below
-	 * costs no extra request against a budget that is deliberately small.
-	 */
-	steps?: {
-		name?: string;
-		number?: number;
-		started_at?: string | null;
-		completed_at?: string | null;
-		conclusion?: string | null;
-	}[];
-}
-
-/** GitHub's own synthetic first step. Everything before it ends is setup. */
-const SETUP_STEP = 'Set up job';
-/** GitHub's own synthetic last step, and the `Post <name>` teardown before it. */
-const CLEANUP_STEP = 'Complete job';
-
-/**
- * Split a job's wall time into the phases an operator can act on.
- *
- * DERIVED FROM STEPS WE ALREADY FETCH, not from new telemetry. The four phases
- * are the ones GitHub actually distinguishes:
- *
- *   setup    `started_at` -> end of "Set up job". Includes the gap BEFORE the
- *            first step, which is the runner coming up — on a JIT node that is
- *            the mint itself, and it is invisible in every other number here.
- *   run      the job's own steps.
- *   cleanup  the first `Post *` / "Complete job" step -> `completed_at`.
- *
- * Queue time is not in here: it precedes `started_at` and is `queueSec`.
- *
- * There is deliberately no "waiting" or "finalizing" bucket. The API exposes no
- * signal that separates either from `run` and `cleanup`, and a phase invented to
- * fill out a legend is a bar segment that means nothing.
- *
- * Returns undefined when the steps are absent or unusable — never a guessed
- * zero, for the same reason `queueSec` is optional: a fabricated 0 drags every
- * percentile down silently.
- */
-export function jobPhases(
-	j: GhJob,
-	start: number,
-	end: number
-): { setupSec: number; runSec: number; cleanupSec: number } | undefined {
-	const steps = (j.steps ?? []).filter((st) => st.started_at && st.completed_at);
-	if (!steps.length) return undefined;
-	const setup = steps.find((st) => st.name === SETUP_STEP);
-	// `Post *` are the teardown halves of composite actions and always trail the
-	// job's own work; "Complete job" is GitHub's own last step. The earliest of
-	// them opens cleanup.
-	const teardown = steps.filter(
-		(st) => st.name === CLEANUP_STEP || (st.name ?? '').startsWith('Post ')
-	);
-	const setupEnd = setup?.completed_at ? Date.parse(setup.completed_at) : start;
-	const cleanupStart = teardown.length
-		? Math.min(...teardown.map((st) => Date.parse(st.started_at as string)))
-		: end;
-	if (![setupEnd, cleanupStart].every(Number.isFinite)) return undefined;
-	// Clamp rather than trust: a step clock that disagrees with the job clock
-	// must not produce a negative segment that renders as a bar running backwards.
-	const a = Math.min(Math.max(setupEnd, start), end);
-	const b = Math.min(Math.max(cleanupStart, a), end);
-	return {
-		setupSec: Math.round((a - start) / 1000),
-		runSec: Math.round((b - a) / 1000),
-		cleanupSec: Math.round((end - b) / 1000),
-	};
-}
-
-/** GitHub step conclusions that mean the step is why the job did not pass. */
-const FAILURE_STEP_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled', 'action_required']);
-
-/**
- * Which step failed, and which phase it falls in — see `jobPhases`, and
- * `JobRecord.failedStep`/`failedPhase` for what each field means.
- *
- * DERIVED FROM STEPS WE ALREADY FETCH, same as `jobPhases`: zero extra API
- * calls. Boundaries come from `jobPhases` itself so the two never disagree
- * about where setup ends and cleanup begins.
- *
- * undefined when the job succeeded, when no step record names a failure, or
- * when the failing step has no usable timestamp — never guessed, for the same
- * reason `queueSec` and the phase fields are optional rather than zeroed.
- */
-export function stepFailure(
-	j: GhJob,
-	start: number,
-	end: number
-): { failedStep: string; failedPhase?: 'setup' | 'run' | 'cleanup' } | undefined {
-	if (!j.conclusion || j.conclusion === 'success') return undefined;
-	const failed = (j.steps ?? []).find(
-		(st) => st.conclusion && FAILURE_STEP_CONCLUSIONS.has(st.conclusion)
-	);
-	if (!failed?.name) return undefined;
-	const phases = jobPhases(j, start, end);
-	const startedAt = failed.started_at ? Date.parse(failed.started_at) : NaN;
-	if (!phases || !Number.isFinite(startedAt)) return { failedStep: failed.name };
-	const setupEndAbs = start + phases.setupSec * 1000;
-	const cleanupStartAbs = end - phases.cleanupSec * 1000;
-	const failedPhase: 'setup' | 'run' | 'cleanup' =
-		startedAt < setupEndAbs ? 'setup' : startedAt < cleanupStartAbs ? 'run' : 'cleanup';
-	return { failedStep: failed.name, failedPhase };
-}
 
 /**
  * The share of a listing that counts as AT RISK of scrolling out before the

@@ -8,10 +8,13 @@
  *
  * The window bookkeeping (`windows`, `lastWindowByToken`, `loadBooks`,
  * `saveBooks`, `openWindow`, `absorbReading`, `windowFor`, `closeSuperseded`,
- * `chargedByThisProcess`) stays OWNED by `gh-budget.ts` — `recordGhResponse`
- * reads and writes the exact same state this file's `bookMetered` does, and
- * duplicating it here would be two copies of one ledger. Each piece that
- * `bookMetered` needs is exported from there instead.
+ * `chargedByThisProcess`) is owned by `gh-budget-windows.ts` (wave shrink-1
+ * lane C, moved out of `gh-budget.ts` itself): `recordGhResponse` there and
+ * this file's `bookMetered` read and write the exact same state, and
+ * duplicating it in either file would be two copies of one ledger. This file
+ * now imports those primitives from the ledger module directly, rather than
+ * through `gh-budget.ts` — which no longer needs to export them just so this
+ * file could reach in.
  */
 import { githubToken, hostInstalled, logger } from './host.js';
 import { ghFetchRaw } from './lib/github-client.js';
@@ -26,7 +29,7 @@ import {
 	RESET_TOLERANCE_MS,
 	saveBooks,
 	windowFor,
-} from './gh-budget.js';
+} from './gh-budget-windows.js';
 
 /** The shared pool as `GET /rate_limit` reports it. */
 export interface GhPoolReading {
