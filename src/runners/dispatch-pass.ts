@@ -37,6 +37,7 @@ import { recordCapacityLedger } from './capacity-ledger.js';
 import { nodeOf } from './census.js';
 import { recordDispatchDay } from './dispatch-daily.js';
 import { JitDecisionBook, decisionLogEnabled, recordWarmAssignments } from './decision-log.js';
+import { makeCapacityOf, toJitObservation } from './dispatch-decision-flatten.js';
 import { satisfiesLabels, type NodeState } from './placement.js';
 
 export interface DispatchPassInput {
@@ -339,7 +340,7 @@ export async function runDispatchPass(
 	const warmTaken = (input.runningJobs ?? []).filter((j) => j.runner.startsWith(WARM_PREFIX));
 	if (warmTaken.length) {
 		const known = input.nodes.map((m) => m.name);
-		recordWarmAssignments(warmTaken, (r) => nodeOf(r, known), input.nodes, nowMs);
+		recordWarmAssignments(warmTaken, (r) => nodeOf(r, known), makeCapacityOf(input.nodes), nowMs);
 	}
 
 	// Held entries only matter when something fresh could take their slot, so
@@ -567,7 +568,7 @@ export async function runDispatchPass(
 		// `Date.now()` here let a test on a fixed clock read every run as queued
 		// for weeks, which clears the slow-tier spill threshold trivially.
 		nowMs,
-		book?.observe
+		book ? (o) => book.observe(toJitObservation(o)) : undefined
 	);
 	let minted = 0;
 	let failed = 0;

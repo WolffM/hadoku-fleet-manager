@@ -10,15 +10,18 @@
  * WAVE 5O LANE D SPLIT (pure move): the JIT mint (generate-jitconfig, the
  * slot/tarball machinery, `liveJitSlots`/`liveJitUnits`) moved to
  * `ephemeral-exec-jit.ts`, and the reap sweep to `ephemeral-exec-reap.ts`.
- * `GhLike`/`ShellLike` stay here — every external importer already reaches
- * them at this path — and this file re-exports `__resetTarballCacheForTesting`
- * so `src/tests/warm-cache.test.ts` (out of scope for this split) keeps
- * resolving it from here unchanged. What stays is the WARM (standing)
- * listener: its own mint/evict/withhold/read path never shared a GitHub call
- * shape with the JIT side, only a few small helpers it now imports back.
+ * `GhLike`/`ShellLike` stayed here until wave clean2 lane B moved the TYPE
+ * (not the logic) to `fleet-vocabulary.ts`, re-exported from here so every
+ * external importer still resolves them at this path. This file re-exports
+ * `__resetTarballCacheForTesting` so `src/tests/warm-cache.test.ts` (out of
+ * scope for this split) keeps resolving it from here unchanged. What stays
+ * is the WARM (standing) listener: its own mint/evict/withhold/read path
+ * never shared a GitHub call shape with the JIT side, only a few small
+ * helpers it now imports back.
  */
 import { ephemeralOnlyLabels } from '../lib/capability-labels.js';
 import { logger } from '../host.js';
+import type { GhLike, ShellLike } from '../lib/fleet-vocabulary.js';
 import { warmRunnerName } from './ephemeral.js';
 import { warmSlotDir } from './ephemeral.js';
 import { buildWarmSpawnPlan } from './ephemeral-mint.js';
@@ -32,7 +35,13 @@ import { shellSingleQuote } from './ephemeral-exec-jit.js';
 export { __resetTarballCacheForTesting } from './ephemeral-exec-jit.js';
 // The one door the prove-job family (lifecycle) and reconcile-runner-identity
 // use into ci-scheduling: each importer keeps a single declared layer-debt edge
-// to this module however the scheduling side is split (wave 5o).
+// to this module however the scheduling side is split (wave 5o). Wave clean2
+// lane B looked at closing prove-job.ts's edge with a lifecycle-owned port
+// (a `MintPort`, mirroring `GhLike`/`ShellLike` below) and an adapter beside
+// this file, but every composition that could construct the real adapter —
+// `scripts/prove-job.mjs` included — is itself `layer-map.json`-classified
+// `domain`, so the port would only relocate the edge, not close it; left as
+// a design, not landed (see this wave's report).
 export {
 	liveJitSlots,
 	liveJitUnits,
@@ -50,18 +59,13 @@ export {
 	unitMemoryMaxMb,
 } from './ephemeral.js';
 
-export interface GhLike {
-	write: (
-		method: 'POST' | 'DELETE',
-		path: string,
-		token: string,
-		body?: unknown,
-		repo?: string
-	) => Promise<{ ok: boolean; status: number; body?: unknown }>;
-}
-
-/** Run a command on a node. Returns stdout, or null if it failed. */
-export type ShellLike = (node: string, command: string) => Promise<string | null>;
+// Moved to fleet-vocabulary.ts (wave clean2 lane B): `prove-job-types.ts`
+// needed the TYPE alone, with no logic, and neither lifecycle nor
+// ci-scheduling may import the other's module for it — the same
+// "neither domain can host the other's import" reason `ClawState`/
+// `BackstopReason` sit there for. Re-exported from here so every existing
+// ci-scheduling importer of this path resolves them unchanged.
+export type { GhLike, ShellLike } from '../lib/fleet-vocabulary.js';
 
 export interface MintOutcome {
 	ok: boolean;

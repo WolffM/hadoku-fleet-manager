@@ -92,18 +92,6 @@
     "to": "src/host-lease.ts"
   },
   {
-    "from": "src/runners/decision-log.ts",
-    "to": "src/runners/dispatcher.ts"
-  },
-  {
-    "from": "src/runners/decision-log.ts",
-    "to": "src/runners/placement.ts"
-  },
-  {
-    "from": "src/runners/prove-job-types.ts",
-    "to": "src/runners/ephemeral-exec.ts"
-  },
-  {
     "from": "src/runners/prove-job.ts",
     "to": "src/runners/ephemeral-exec.ts"
   }

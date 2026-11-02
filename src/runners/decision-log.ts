@@ -63,8 +63,6 @@ import { join } from 'node:path';
 
 import { logger, stateDir } from '../host.js';
 import { RETENTION_DAYS } from '../job-history-store.js';
-import type { PlanObservation } from './dispatcher.js';
-import { busyOf, type NodeState, type WalkKey } from './placement.js';
 
 export const DECISION_SCHEMA = 1;
 export const DECISION_LOG_DIR = 'dispatch-decisions';
@@ -141,8 +139,11 @@ export interface NodeFigures {
 export interface DecisionRule {
 	/** The winner's index in `candidates`: how many nodes were asked first. */
 	position: number;
-	/** The node right behind the winner, and the walk term that put it behind. */
-	rankedOver: { node: string; key: WalkKey } | null;
+	/**
+	 * The node right behind the winner, and the walk term that put it behind.
+	 * `key` is `placement.ts`'s `WalkKey` widened to `string` (erased either way).
+	 */
+	rankedOver: { node: string; key: string } | null;
 	viaAffinity: boolean;
 	/** The affinity term changed the node (the counterfactual walk differed). */
 	affinityMoved: boolean;
@@ -383,27 +384,10 @@ export function __resetDecisionLogForTesting(): void {
 // --------------------------------------------------------------------------
 // Building rows.
 // --------------------------------------------------------------------------
-
-export function nodeFigures(m: NodeState): NodeFigures {
-	return {
-		node: m.name,
-		busy: busyOf(m),
-		max: m.maxConcurrent,
-		units: m.liveUnits,
-		standing: m.standingBusy,
-		warmBusy: m.warmBusy ?? 0,
-		warmHeld: m.warmHeld ?? 0,
-		freeMb: m.freeMb,
-		requiredMb: m.requiredMb,
-		minFreeMb: m.minFreeMb,
-		heavyJobs: m.heavyJobs ?? 0,
-		runningHeavy: m.runningHeavy ?? false,
-		warmRepo: m.warmRepo ?? null,
-		healthy: m.healthy,
-		drained: m.drained ?? false,
-		schedulable: m.schedulable ?? null,
-	};
-}
+//
+// `nodeFigures` (NodeState -> NodeFigures) moved to
+// `dispatch-decision-flatten.ts` (wave clean2 lane B): this file is `state`
+// and may not import the `domain` layer its writer lives in.
 
 /** A short, stable hash of a fingerprint string. */
 export function fingerprintHash(fp: string): string {
@@ -443,9 +427,44 @@ function blank(at: string, path: DecisionPath, kind: DecisionKind, repo: string)
 }
 
 /**
- * The JIT half: collects {@link PlanObservation}s during `planTick`, learns
- * each mint's result, and writes the changed decisions at the end of the pass.
- * Every method catches: an observer that throws would throw out of planTick.
+ * `dispatcher.ts`'s `PlanObservation`, flattened at `dispatch-pass.ts`'s own
+ * boundary (wave clean2 lane B): this file is `state` and may not import
+ * `NodeState`/`WalkKey` (`domain`). `candidates` is pre-converted to
+ * {@link NodeFigures}; `rankedOver.key` is a plain string, erased either way.
+ */
+export interface JitPlacementObservation {
+	run: {
+		id: number;
+		jobId: number;
+		jobName?: string;
+		labels?: string[];
+		event?: string;
+		repo: string;
+	};
+	/** Where this job stood in the pass's placement order (singleNodeFirst). */
+	passIndex: number;
+	outcome: 'in-flight' | 'fork' | 'unplaceable' | 'held' | 'placed' | 'reserved';
+	/** The eligible nodes the walk was offered, already as this file's own flat shape. */
+	candidates: readonly NodeFigures[];
+	placed?: {
+		heavy: boolean;
+		walk?: readonly string[];
+		passed: readonly { node: string; reason: string; holdSec?: number }[];
+		node?: string;
+		rankedOver?: { node: string; key: string };
+		viaAffinity: boolean;
+	};
+	affinityMoved?: boolean;
+	busyAtChoice?: number;
+	queuedSec?: number;
+	reason?: string;
+}
+
+/**
+ * The JIT half: collects {@link JitPlacementObservation}s during `planTick`
+ * (via `dispatch-pass.ts`'s flattening adapter), learns each mint's result,
+ * and writes the changed decisions at the end of the pass. Every method
+ * catches: an observer that throws would throw out of planTick.
  */
 export class JitDecisionBook {
 	private readonly rows = new Map<number, DecisionRecord>();
@@ -461,8 +480,8 @@ export class JitDecisionBook {
 		this.at = new Date(nowMs).toISOString();
 	}
 
-	/** planTick's observer. Copies what it needs inside the call; keeps no node. */
-	readonly observe = (o: PlanObservation): void => {
+	/** planTick's observer, via dispatch-pass.ts's flattening adapter. Copies what it needs inside the call. */
+	readonly observe = (o: JitPlacementObservation): void => {
 		if (this.broken) return;
 		try {
 			const r = blank(this.at, 'jit', o.outcome, o.run.repo);
@@ -474,7 +493,7 @@ export class JitDecisionBook {
 			r.queuedSec = roundSec(o.queuedSec);
 			r.order = [...this.order];
 			r.reason = o.reason ?? null;
-			r.capacity = o.candidates.map(nodeFigures);
+			r.capacity = [...o.candidates];
 			const p = o.placed;
 			if (p) {
 				r.heavy = p.heavy;
@@ -535,17 +554,21 @@ export interface WarmAssignment {
 	runId?: number;
 }
 
-/** The warm path's per-job rows. Jobs with no id in the listing are skipped. */
+/**
+ * The warm path's per-job rows. Jobs with no id in the listing are skipped.
+ *
+ * `capacityOf` replaces a `NodeState[]` param (lane B): this file may not
+ * import `placement.ts`, so the caller looks up the flattened figures itself.
+ */
 export function recordWarmAssignments(
 	jobs: readonly WarmAssignment[],
 	nodeOfRunner: (runner: string) => string,
-	nodes: readonly NodeState[],
+	capacityOf: (node: string) => NodeFigures | undefined,
 	nowMs: number
 ): number {
 	if (!sink || !jobs.length) return 0;
 	try {
 		const at = new Date(nowMs).toISOString();
-		const byName = new Map(nodes.map((n) => [n.name, n]));
 		const rows: DecisionRecord[] = [];
 		for (const j of jobs) {
 			if (j.jobId === undefined) continue;
@@ -558,8 +581,8 @@ export function recordWarmAssignments(
 			r.candidates = [node];
 			r.runner = j.runner;
 			r.reason = `GitHub assigned it to ${node}'s warm listener for ${j.repo}`;
-			const m = byName.get(node);
-			r.capacity = m ? [nodeFigures(m)] : [];
+			const m = capacityOf(node);
+			r.capacity = m ? [m] : [];
 			rows.push(r);
 		}
 		return emitDecisions(rows, nowMs);

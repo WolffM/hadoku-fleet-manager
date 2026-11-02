@@ -96,3 +96,25 @@ export type AdmissionVerdict =
 			 *  cannot carry (e.g. the exact capacity count, or the exact MB gap). */
 			reason: string;
 	  };
+
+/**
+ * A read-only GitHub write call — just the shape `ephemeral-exec.ts`'s mint
+ * and reap paths need. Moved here (wave clean2 lane B) from `ephemeral-exec.ts`
+ * because `prove-job-types.ts` (lifecycle) needed the TYPE alone, with no
+ * logic: the same "neither domain can host the other's import" reason
+ * `ClawState`/`BackstopReason` moved here for, above. `ephemeral-exec.ts`
+ * re-exports it from here so its existing ci-scheduling importers resolve it
+ * unchanged.
+ */
+export interface GhLike {
+	write: (
+		method: 'POST' | 'DELETE',
+		path: string,
+		token: string,
+		body?: unknown,
+		repo?: string
+	) => Promise<{ ok: boolean; status: number; body?: unknown }>;
+}
+
+/** Run a command on a node. Returns stdout, or null if it failed. */
+export type ShellLike = (node: string, command: string) => Promise<string | null>;

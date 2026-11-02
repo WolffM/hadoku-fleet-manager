@@ -62,6 +62,14 @@
  * PURE ORCHESTRATION OVER INJECTED PORTS. `gh`, `sh`, the clock and the sleeper
  * are parameters, so the order of operations — where the leaks live — is tested
  * without a node or a token. `scripts/prove-job.mjs` is the real wiring.
+ *
+ * THE MINT ITSELF STILL COMES THROUGH `ephemeral-exec.ts` DIRECTLY (wave
+ * clean2 lane B looked at a lifecycle-owned `MintPort` port/adapter here,
+ * same shape as `GhLike`/`ShellLike`, but every file that could construct
+ * the REAL adapter — `scripts/prove-job.mjs` included — is itself
+ * `layer-map.json`-classified `domain`, same as this file, so the port
+ * would only relocate the edge, not close it; see
+ * `docs/planning/wave-clean2-2026-11-01.md` and this wave's report).
  */
 
 import { capability } from '../lib/capability-registry.js';

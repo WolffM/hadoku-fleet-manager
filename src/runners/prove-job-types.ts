@@ -4,15 +4,22 @@
  * hands back. No logic lives here — see `prove-job.ts` for the orchestration,
  * `prove-job-parse.ts` for the pure naming/parsing helpers, and
  * `prove-job-record.ts` for turning a result into a `$proof` record.
+ *
+ * WAVE CLEAN2 LANE B: `GhLike`/`ShellLike` come from `fleet-vocabulary.ts`
+ * (config), not `ephemeral-exec.ts` (ci-scheduling) — moving just the TYPE
+ * closed that edge
+ * (`docs/planning/wave-clean2-2026-11-01.md`). `ProveDeps.gh`/`.sh` are the
+ * only ci-scheduling-shaped ports this file still needs; `prove-job.ts`
+ * itself still calls `ephemeral-exec.ts`'s real mint functions directly — a
+ * `MintPort`-style indirection was designed but not landed; see this wave's
+ * report for why (every call site that could construct the real adapter is
+ * itself classified `domain` by `layer-map.json`, so the edge only
+ * relocates, it does not close).
  */
 import type { ManifestNode } from '../lib/capability-registry.js';
-import type { GhLike, ShellLike } from './ephemeral-exec.js';
+import type { GhLike, ShellLike } from '../lib/fleet-vocabulary.js';
 // prove-job-parse's two naming names. JIT_PREFIX/jitRunnerName are config
-// (wave clean-1 lane C, cut (iii) — src/lib/jit-naming.ts), so this is no
-// longer routed through ephemeral-exec.ts; the edge into ci-scheduling below
-// is GhLike/ShellLike alone (the mint ports prove-job.ts's own orchestration
-// of ephemeral-exec's minting needs — see prove-job.ts's header; a real fix
-// there is a redesign, not a move).
+// (wave clean-1 lane C, cut (iii) — src/lib/jit-naming.ts).
 export { JIT_PREFIX, jitRunnerName } from '../lib/jit-naming.js';
 
 /** A retry of the WHOLE dispatch is bounded; this is the ceiling, not the default. */
