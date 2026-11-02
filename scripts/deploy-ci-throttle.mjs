@@ -103,24 +103,21 @@ import {
 	selectMachines,
 } from './lib/fleet-exec.mjs';
 import { manifest as manifestFile } from './lib/paths.mjs';
-import {
-	NODE_SIDE_FILES,
-	OBSOLETE_NODE_FILES,
-	provenanceDrift,
-	shippedHashes,
-} from './lib/script-provenance.mjs';
-import {
-	runnerEnvDrift,
-	staleRemainingFindings,
-	throttleSummaryDrift,
-} from './lib/runner-env-drift.mjs';
+import { NODE_SIDE_FILES, OBSOLETE_NODE_FILES, shippedHashes } from './lib/script-provenance.mjs';
+import { runnerEnvDrift, throttleSummaryDrift } from './lib/runner-env-drift.mjs';
 import { packageVersion } from '../dist/lib/provenance.js';
 import { mintsJitRunners } from '../dist/lib/node-role.js';
-import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { createEmitter, keepStdoutWhole } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
 import { classifyDrift } from './lib/throttle-drift-doc.mjs';
+import { remotePayload, fileDrift } from './lib/ci-throttle-payload.mjs';
+import {
+	computeConfirmGate,
+	reportUnbounded,
+	runConfirmGate,
+	runCheckGate,
+} from './lib/ci-throttle-report.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
 // and on a pipe `process.exit` throws away whatever the stream still had
@@ -270,56 +267,26 @@ function resolveReserveFile() {
 /**
  * The remote half. Written as one script so the whole node-side transaction
  * is in a single readable place rather than smeared across N ssh round-trips.
- */
-/**
- * Ship the node-side script with its inputs.
  *
- * The remote half lives in ci-throttle-install.sh — a REAL file, not a template
- * literal. Embedding it in one cost three separate parse failures (an octal
- * escape, a JS interpolation, and a backtick in a comment that ended the string)
- * and none of them were shell bugs; they broke the .mjs itself. Inputs are
- * prepended as plain variable assignments so nothing has to be substituted into
- * the script text at all.
+ * `remotePayload` itself moved to `lib/ci-throttle-payload.mjs` (wave
+ * shrink-1 lane D, ctx restructure — the file paths it read as module
+ * constants are now passed in explicitly). The call site below supplies
+ * them.
  */
-function remotePayload({ hook, conf, apply, restart, ephemeral }) {
-	const b64 = (v) => Buffer.from(v, 'utf8').toString('base64');
-	const preamble = [
-		`APPLY=${apply ? 1 : 0}`,
-		`RESTART=${restart ? 1 : 0}`,
-		`HOOK_B64=${b64(hook)}`,
-		`CONF_B64=${b64(conf)}`,
-		// A node that mints gets runner.env for its slots. The minters themselves
-		// are not shipped: they travel with each mint (src/runners/node-script.ts).
-		`MINTS=${ephemeral ? 1 : 0}`,
-		// Shipped to EVERY node. A standing runner and a
-		// JIT slot both complete jobs, and the memory question is asked of the
-		// whole fleet — a hook present on only half of it would produce a
-		// comparison between measured and unmeasured boxes, which is the shape
-		// of every bad conclusion in this repo's history.
-		`METRICS_B64=${b64(readFileSync(METRICS_SRC, 'utf8'))}`,
-		// The sampler behind that hook, plus the user unit that runs it. Same
-		// every-node rule and for the same reason: a memory distribution sized
-		// from half the fleet is not a distribution, and the 2026-09-22 finding
-		// was that five of nine nodes had no sampler at all while every cap on
-		// them was being set from data that no longer existed.
-		`HARVEST_B64=${b64(readFileSync(HARVEST_SRC, 'utf8'))}`,
-		`HARVEST_UNIT_B64=${b64(readFileSync(HARVEST_UNIT_SRC, 'utf8'))}`,
-		'',
-	].join('\n');
-	// The tool-cache rule is PREPENDED as shell, not passed as a value: the
-	// answer depends on `id -un` ON THE NODE, and this driver does not know
-	// which user a given runner runs as. Deciding it here would reintroduce
-	// exactly the hardcoding that made fix-runner-tool-cache.sh dangerous.
-	return (
-		preamble +
-		readFileSync(TOOLCACHE_RULE, 'utf8') +
-		readFileSync(INSTALL_SRC, 'utf8') +
-		// APPENDED, not prepended: it publishes `$LINE`/`$TCLINE`/`$MLINE`, which
-		// the node half derives, so it has to run after them. It emits its own
-		// STANDING-ENV line rather than joining the SUMMARY, because SUMMARY is
-		// already printed by the time it runs.
-		readFileSync(STANDING_ENV_RULE, 'utf8')
-	);
+function buildRemotePayload({ hook, conf, apply, restart, ephemeral }) {
+	return remotePayload({
+		hook,
+		conf,
+		apply,
+		restart,
+		ephemeral,
+		metricsSrc: METRICS_SRC,
+		harvestSrc: HARVEST_SRC,
+		harvestUnitSrc: HARVEST_UNIT_SRC,
+		toolcacheRule: TOOLCACHE_RULE,
+		installSrc: INSTALL_SRC,
+		standingEnvRule: STANDING_ENV_RULE,
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -334,40 +301,10 @@ function remotePayload({ hook, conf, apply, restart, ephemeral }) {
  */
 const SHIPPED = shippedHashes(__dirname);
 const VERSION = packageVersion();
-
-/**
- * One deployed file's verdict — issue #13.
- *
- * TWO HASHES DIFFERING SAYS NOTHING ABOUT WHICH ONE IS OLD. The message this
- * replaced ended `— that node is running an older deploy, so anything fixed in
- * that file since is inert there`, which is a CONCLUSION from evidence that
- * cannot support it: a sha256 mismatch is equally consistent with the node being
- * behind, with the node being AHEAD (a newer deploy from another checkout), and
- * with this process having resolved the wrong package entirely — the four-trees
- * problem, which is the single most expensive mistake in this repo's history
- * (docs/planning/deployed-not-published-2026-09-05.md, six correct-and-inert
- * fixes). An operator who read "that node is stale" went and re-deployed from
- * the tree that was itself the stale one.
- *
- * So: say the two hashes DIFFER, name both, and name the package this run
- * resolved — version AND path — so the reader can settle which side is old from
- * facts rather than from this tool's assumption. The three cases that genuinely
- * ARE one-sided (no hash reported, absent, unreadable) still come from
- * `provenanceDrift`, because for those the evidence does support the verdict.
- */
-function fileDrift(node, file, deployed, want, dest = `~/.hadoku/${file}`) {
-	if (deployed !== undefined && deployed !== 'absent' && deployed !== 'unreadable') {
-		if (deployed === want) return null;
-		return (
-			`${node}: ${dest} does not match this package's copy ` +
-			`(node ${deployed}, package ${want}). ` +
-			`This run resolved fleet-manager ${VERSION} at ${PKG_ROOT}. ` +
-			`Which side is stale is NOT known from a hash difference — check that path is ` +
-			`the tree you meant before deploying over the node`
-		);
-	}
-	return provenanceDrift(node, file, deployed, want, VERSION, dest);
-}
+// Carried into `fileDrift` (moved to `lib/ci-throttle-payload.mjs`, wave
+// shrink-1 lane D) as one object rather than two closed-over module
+// constants — see that file's own doc comment for issue #13's reasoning.
+const PROVENANCE = { version: VERSION, pkgRoot: PKG_ROOT };
 
 const hook = readFileSync(HOOK_SRC, 'utf8');
 
@@ -427,7 +364,7 @@ for (const [name, m] of nodes) {
 	);
 	const r = await runOn(
 		name,
-		remotePayload({
+		buildRemotePayload({
 			hook,
 			conf,
 			apply: CONFIRM,
@@ -531,7 +468,7 @@ for (const [name, m] of nodes) {
 	const scriptDrift = [];
 	if (CHECK && kv) {
 		for (const { file, summaryKey, dest } of NODE_SIDE_FILES) {
-			const d = fileDrift(name, file, kv[summaryKey], SHIPPED[file], dest);
+			const d = fileDrift(name, file, kv[summaryKey], SHIPPED[file], PROVENANCE, dest);
 			if (d) {
 				drift.push(d);
 				scriptDrift.push(file);
@@ -571,38 +508,10 @@ for (const [name, m] of nodes) {
 	});
 }
 
-// #102: --confirm's own gate. A node this run never reached (expectedDown,
-// or ok:false) was not acted on at all, so it has nothing to say about
-// whether a stale listener survived THIS run — that is `failed`'s and the
-// deferral note's territory, not this one's.
-//
-// The hook and the scripts under ~/.hadoku are the node user's own, so the
-// backstop gets them like any claw. Restarting a SYSTEM unit's listener is
-// root, which the fleet does not have there (`fleetHasSudo`): its
-// NEEDS-OPERATOR line is an ADVISORY naming the hand-run, never this gate's
-// failure (lib/operator-sudo.mjs).
-const sudoAdvisories = [];
-const confirmRemaining = CONFIRM
-	? results.flatMap((r) => {
-			if (!r.ok || r.expectedDown) return [];
-			const found = staleRemainingFindings({
-				name: r.machine,
-				staleRemaining: r.staleRemaining ?? 0,
-				notes: r.notes ?? [],
-			});
-			if (maySudo(Object.fromEntries(allNodes)[r.machine])) return found;
-			const root = found.filter((f) => / NEEDS-OPERATOR /.test(f));
-			for (const f of root)
-				sudoAdvisories.push(
-					rootAdvisory(
-						r.machine,
-						`restarting a system unit's stale listener (${f})`,
-						`fleet throttle --machine ${r.machine} --confirm`
-					)
-				);
-			return found.filter((f) => !root.includes(f));
-		})
-	: [];
+// #102: --confirm's own gate, and the sudo advisories a root-only restart
+// implies. Moved to `lib/ci-throttle-report.mjs` (wave shrink-1 lane D,
+// pure move); see that file for the reasoning.
+const { confirmRemaining, sudoAdvisories } = computeConfirmGate({ results, allNodes, CONFIRM });
 for (const a of sudoAdvisories) log(`⚠ advisory: ${a.message}\n    ${a.fix}`);
 
 if (JSON_OUT) {
@@ -646,93 +555,13 @@ if (JSON_OUT) {
 }
 
 if (unbounded.length) {
-	// Printed on EVERY run, not only under --check: a `--confirm` that quietly
-	// skipped a node is exactly as misleading as an audit that did.
-	const detail = unbounded
-		.map((n) => `${n} declares no maxConcurrent/minFreeMb, so it was NOT deployed to`)
-		.join('; ');
-	console.error(
-		`\n✗ ${unbounded.length} declared node(s) SKIPPED: ${unbounded.join(', ')}\n` +
-			'  They are in the manifest and nothing bounds them. ci-throttle.sh would fall\n' +
-			'  through to MAX_CONCURRENT=99, MIN_FREE_MB=0 on a node with no numbers, so the\n' +
-			'  deployer refuses rather than writing that — but a node in this state is one\n' +
-			'  label away from taking work with no limit at all.\n' +
-			'  Fix: set maxConcurrent and minFreeMb on each, then re-run.'
-	);
+	// Moved to `lib/ci-throttle-report.mjs` (wave shrink-1 lane D, pure move).
+	const detail = reportUnbounded(unbounded);
 	if (CHECK) drift.push(detail);
 }
 
-if (CONFIRM) {
-	// A stale (written but NOT LOADED) listener surviving this run is not a
-	// clean pass just because every ssh round-trip succeeded — the exit code
-	// before this existed was `results.some((r) => !r.ok)` alone, which is
-	// true ONLY of unreachable nodes, so a fleet full of busy or
-	// restart-failed stale listeners reported success every time.
-	if (confirmRemaining.length) {
-		console.error(
-			`\n✗ throttle --confirm: ${confirmRemaining.length} stale listener(s) (written but ` +
-				`NOT LOADED) remain after this run:`
-		);
-		for (const f of confirmRemaining) console.error(`  ${f}`);
-		console.error(
-			'\n  A busy one is left alone on purpose — re-run this command once the job ends.\n' +
-				'  Anything else (restart-failed, no-unit, needs-operator) needs attention before\n' +
-				'  the next job lands on it with no concurrency limit.'
-		);
-		process.exit(1);
-	}
-	log('\n✓ no stale (written but not loaded) listener remains.');
-}
+if (CONFIRM) runConfirmGate({ confirmRemaining, log });
 
-if (CHECK) {
-	if (drift.length) {
-		// `drift` counts FINDINGS, not nodes — one node can be both partly
-		// wrong on disk and partly stale, and calling that "2 nodes" when there
-		// is one would be the same count-instead-of-content mistake this tool's
-		// messages were just fixed for.
-		console.error(`\n✗ throttle drift (${drift.length} finding(s)):`);
-		for (const d of drift) console.error(`  ${d}`);
-		if (drift.some((d) => d.includes('wrong env on disk'))) {
-			console.error(
-				'\n  Fix (wrong on disk): fleet throttle --confirm\n' +
-					'  A runner whose env is wrong has NO concurrency limit and cannot see the\n' +
-					'  seeded tool cache — the manifest values are inert until this has run there.'
-			);
-		}
-		if (
-			drift.some(
-				(d) =>
-					d.includes("does not match this package's copy") || d.includes('is not deployed at all')
-			)
-		) {
-			console.error(
-				`\n  Fix (mismatched or missing node-side script): fleet throttle --confirm, run from\n` +
-					`  the tree you mean. This run resolved fleet-manager ${VERSION} at\n` +
-					`  ${PKG_ROOT}. A node keeps whatever was last deployed to it and publishing a\n` +
-					'  fix does not move it — but a hash difference does not say which side is old,\n' +
-					'  and a --confirm from the wrong checkout deploys the wrong bytes over the right\n' +
-					'  ones. See docs/planning/deployed-not-published-2026-09-05.md.'
-			);
-		}
-		if (drift.some((d) => d.includes('NOT LOADED'))) {
-			console.error(
-				'\n  Fix (written but not loaded): fleet throttle --confirm. For a claw this is a\n' +
-					'  systemctl --user unit and needs no sudo — --confirm stops it if idle (the warm\n' +
-					'  pass or the unit itself then refills it) and leaves a busy one alone, reported.\n' +
-					'  A node without passwordless sudo needs an operator to restart a stale\n' +
-					'  listener by hand.'
-			);
-		}
-		process.exit(1);
-	}
-	// The PATH, not just the version. A green line naming only a version is the
-	// same claim from either of the four trees; naming the one that answered is
-	// what makes it checkable.
-	log(
-		`✓ every runner on every node is wired to the throttle, every node has the ` +
-			`standing-runner env, and every node-side script matches fleet-manager ` +
-			`${VERSION} at ${PKG_ROOT}.`
-	);
-}
+if (CHECK) runCheckGate({ drift, VERSION, PKG_ROOT, log });
 
 process.exit(results.some((r) => !r.ok) ? 1 : 0);

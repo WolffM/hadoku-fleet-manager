@@ -506,8 +506,19 @@ void test('#98: no conf on disk is conf=0 with "-" values and an absent hash —
 });
 
 void test('#98: the driver hashes the conf it RENDERS and hands it to throttleSummaryDrift', () => {
+	// `remotePayload` (the function that embeds CONF_B64) moved to
+	// lib/ci-throttle-payload.mjs (wave shrink-1 lane D, pure move); the
+	// driver still renders `conf` and passes it straight through to that
+	// function via `buildRemotePayload`, so this now checks both files for
+	// the two halves of the same invariant.
 	const src = readFileSync(join(ROOT, 'scripts', 'deploy-ci-throttle.mjs'), 'utf8');
-	assert.match(src, /CONF_B64=\$\{b64\(conf\)\}/, 'the payload ships the rendered `conf`');
+	const payloadSrc = readFileSync(join(ROOT, 'scripts', 'lib', 'ci-throttle-payload.mjs'), 'utf8');
+	assert.match(payloadSrc, /CONF_B64=\$\{b64\(conf\)\}/, 'the payload ships the rendered `conf`');
+	assert.match(
+		src,
+		/buildRemotePayload\(\{[^}]*\bconf\b/s,
+		'the driver must pass the rendered `conf` into the payload builder'
+	);
 	assert.match(
 		src,
 		/throttleSummaryDrift\(\{[^}]*wantConfSha: createHash\('sha256'\)\.update\(conf, 'utf8'\)/s,

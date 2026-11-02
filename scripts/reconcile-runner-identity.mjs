@@ -130,22 +130,15 @@ import { createEmitter } from './lib/emit.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
-import { warmOrphanUnreadable } from './lib/warm-orphan-doc.mjs';
-import {
-	sleep,
-	RETRY_DELAY_MS,
-	mintAgeMs,
-	readRunners,
-	canonical,
-	activeWarmUnits,
-} from './lib/runner-identity-reads.mjs';
+import { sleep, RETRY_DELAY_MS, canonical, activeWarmUnits } from './lib/runner-identity-reads.mjs';
 import { printIdentityReport } from './lib/runner-identity-report.mjs';
+import { diffGithubBelief } from './lib/runner-identity-diff.mjs';
+import { recheckWarmSuspects } from './lib/runner-identity-warm-recheck.mjs';
+import { buildIdentityGateDoc } from './lib/runner-identity-gatedoc.mjs';
 // The dispatcher's own reap sweep — its grace and its cadence — so an orphan it
 // has not REACHED yet is told apart from one it has FAILED to clear by the
 // numbers that sweep actually runs on, never by a copy of them.
 import { JIT_REAP_GRACE_MS, REAP_INTERVAL_MS } from '../dist/lib/jit-reap-cadence.js';
-import { WARM_PREFIX } from '../dist/lib/jit-naming.js';
-import { nodeOf } from '../dist/runners/census.js';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
 // and on a pipe `process.exit` throws away whatever the stream still had
@@ -172,13 +165,6 @@ const JSON_OUT = emitter.json;
 // Via `machineArg`, not a private copy. The private copies had the same hole:
 // a bare positional was IGNORED, so `... claw-3` scoped to the whole fleet.
 const ONLY = machineArg(args);
-
-/**
- * The name prefix that marks a registration as OURS and disposable.
- * Anything minted by the dispatcher must carry it; anything not carrying it is
- * treated as a persistent runner and is never deleted by this tool.
- */
-const JIT_PREFIX = 'jit-';
 
 /**
  * A registration younger than this is not judged.
@@ -374,19 +360,9 @@ for (const list of installs.values()) {
 }
 
 // ---- GitHub's belief -----------------------------------------------------
+// Moved to `lib/runner-identity-diff.mjs` (wave shrink-1 lane D, pure move);
+// see that file for the WARM/JIT/persistent-registration rules.
 const NOW = Date.now();
-const ghosts = [];
-const jitOrphans = [];
-/** Online JIT orphans older than UNREAPED_AFTER_MS — the sweep is not clearing them. */
-const unreaped = [];
-/** Minted within GRACE_MS — too young to judge, reported so the skip is visible. */
-const young = [];
-const noInstall = [];
-/** Registered-no-install rows held back because the node is drained ON PURPOSE. */
-const expectedDown = [];
-const unreadableRepos = [];
-/** Warm registrations the snapshot did not back — judged after a second look. */
-const warmSuspects = [];
 
 // The registration-side rules need a COMPLETE picture of the fleet: "no node
 // holds an install for this repo" and "no node has a live listener" are both
@@ -395,145 +371,37 @@ const warmSuspects = [];
 // the whole fleet. Caught by a mutation test that ran clean fleet-wide and then
 // reported a healthy claw-2 runner as install-less under --machine hokon.
 const FLEET_WIDE = !ONLY && unreachable.length === 0;
-for (const repo of FLEET_WIDE ? repos : []) {
-	const listing = await readRunners(repo);
-	if (!listing.ok) {
-		unreadableRepos.push({ repo, reason: listing.reason });
-		continue;
-	}
-	for (const r of listing.runners) {
-		const isJit = r.name.startsWith(JIT_PREFIX);
-
-		// A WARM registration is backed by a transient unit on the node its name
-		// carries, never by an install dir (#112, after #61/#103). Falling through
-		// to the install check reported every live warm listener the warm cache
-		// had rotated in since that node was probed: the nodes are probed one by
-		// one BEFORE any listing is read, and the 2026-10-15 13:18Z red was two
-		// listeners minted at 13:15:20, mid-sweep.
-		if (r.name.startsWith(WARM_PREFIX)) {
-			const node = nodeOf(r.name, nodes);
-			if (!warmUnits.get(node)?.has(`${r.name}.service`))
-				warmSuspects.push({ repo, name: r.name, id: r.id, status: r.status, node });
-			continue;
-		}
-		const local = (installs.get(r.name) ?? []).filter((i) => i.repo === repo);
-		const liveHere = local.some((i) => i.alive);
-
-		// A JIT registration is backed by a transient unit, not an install dir.
-		const jitLive = isJit && [...jitUnits.values()].some((s) => s.has(`${r.name}.service`));
-
-		if (isJit && !jitLive) {
-			const age = mintAgeMs(r.name, NOW);
-			if (age < GRACE_MS) {
-				young.push({ repo, name: r.name, ageMs: age });
-			} else {
-				jitOrphans.push({ repo, name: r.name, id: r.id, status: r.status, ageMs: age });
-				if (r.status === 'online' && age > UNREAPED_AFTER_MS)
-					unreaped.push({ repo, name: r.name, ageMs: age });
-			}
-			continue;
-		}
-		if (isJit) continue;
-
-		// A registration exists for this repo, but no node holds an install
-		// configured against it. Either the install was removed without
-		// deregistering, or its identity was overwritten — the 2026-08-26
-		// signature. Report the nodes that DO carry this runner name so the
-		// reader can see which box to look at, not the 26 repos it also serves.
-		if (!local.length) {
-			// A persistent registration is named for the node that holds it, so the
-			// drain record can be asked about it by name. Only an OFFLINE one: a
-			// drained node reporting `online` with nothing listening is a black hole
-			// wearing a drain as a disguise, and it fails here exactly as it would on
-			// any other node.
-			const defer = r.status === 'online' ? null : deferralFor(r.name, drains);
-			if (defer?.deferred) {
-				expectedDown.push({
-					repo,
-					node: r.name,
-					status: r.status,
-					why: deferralNote(r.name, defer),
-				});
-				continue;
-			}
-			const carriers = [...new Set((installs.get(r.name) ?? []).map((i) => i.machine))];
-			noInstall.push({ repo, name: r.name, status: r.status, carriers });
-			continue;
-		}
-
-		if (r.status === 'online' && !liveHere) {
-			ghosts.push({ repo, name: r.name, id: r.id, busy: r.busy === true });
-		}
-	}
-}
+const {
+	ghosts,
+	jitOrphans,
+	unreaped,
+	young,
+	noInstall,
+	expectedDown,
+	unreadableRepos,
+	warmSuspects,
+} = await diffGithubBelief({
+	repos,
+	fleetWide: FLEET_WIDE,
+	nodes,
+	installs,
+	jitUnits,
+	warmUnits,
+	drains,
+	nowMs: NOW,
+	graceMs: GRACE_MS,
+	unreapedAfterMs: UNREAPED_AFTER_MS,
+});
 
 // ---- warm: a second look ------------------------------------------------
-/**
- * A warm registration whose unit the snapshot did not see is either an orphan
- * or a listener that changed while the sweep ran. The warm cache rotates on a
- * 60s tick, so the second case is ordinary, and the snapshot alone cannot tell
- * them apart. So the NAMED node is probed again and the registration re-read:
- *
- *   - unit active now           → minted after the snapshot; live.
- *   - registration gone now     → evicted after the snapshot; nothing to judge.
- *   - still registered, no unit → a WARM ORPHAN, and it FAILS, online or not.
- *
- * It fails offline too, unlike a JIT orphan. A JIT orphan is routine because
- * `reapJitRunners` sweeps every `jit-` name; the warm reap
- * (`reapDeadWarmListener`) only reaches a name the node's marker still holds,
- * and a RESET=1 mint overwrites the marker — #61's leak. Nothing is guaranteed
- * to clear one, so one that survives two looks is a finding, not leakage.
- *
- * A second look that cannot be taken is "I could not look": the suspect stays
- * an orphan, carrying why, rather than being waved through.
- */
-const warmOrphans = [];
-/** Unbacked in the snapshot, resolved by the second look — printed so a rotation is visible. */
-const warmRechecked = [];
-const suspectsByNode = new Map();
-for (const s of warmSuspects) {
-	if (!suspectsByNode.has(s.node)) suspectsByNode.set(s.node, []);
-	suspectsByNode.get(s.node).push(s);
-}
-const relisted = new Map();
-for (const [node, suspects] of suspectsByNode) {
-	if (!nodes.includes(node)) {
-		for (const s of suspects)
-			warmOrphans.push({ ...s, why: 'names no manifest node, so no unit can back it' });
-		continue;
-	}
-	const again = await probeNode(node);
-	const live = again.ok ? activeWarmUnits(again.out) : null;
-	for (const s of suspects) {
-		if (!live) {
-			warmOrphans.push({ ...s, why: `second look at ${node} failed: ${again.error}` });
-			continue;
-		}
-		if (live.has(`${s.name}.service`)) {
-			warmRechecked.push({ ...s, outcome: 'unit active on second look' });
-			continue;
-		}
-		if (!relisted.has(s.repo)) relisted.set(s.repo, await readRunners(s.repo));
-		const listing = relisted.get(s.repo);
-		if (!listing.ok) {
-			warmOrphans.push({
-				...s,
-				why: `no unit on ${node}; re-reading the registration failed: ${listing.reason}`,
-			});
-			continue;
-		}
-		const still = listing.runners.find((x) => x.id === s.id);
-		if (!still) {
-			warmRechecked.push({ ...s, outcome: 'registration removed since the listing' });
-			continue;
-		}
-		warmOrphans.push({
-			...s,
-			status: still.status,
-			why: `no active unit on ${node} on either look`,
-		});
-	}
-}
+// Moved to `lib/runner-identity-warm-recheck.mjs` (wave shrink-1 lane D,
+// pure move); see that file for why an unbacked warm registration gets a
+// second look rather than being judged off the first snapshot.
+const { warmOrphans, warmRechecked } = await recheckWarmSuspects({
+	warmSuspects,
+	nodes,
+	probeNode,
+});
 
 // ---- report --------------------------------------------------------------
 /**
@@ -561,87 +429,20 @@ const summary = {
 	unreadableRepos,
 };
 
-/**
- * GateDoc (wave 5j lane B). Built once, here, from the arrays `summary` above
- * already carries — every one of them is the FULL result of a decision this
- * sweep already made, so there is no second pass of logic to keep in sync, in
- * contrast to a gate that exits on the first bad thing it sees (`label-floor`,
- * `boundary-contracts`) and has no single point where every array is final.
- *
- * `unreadable` IS "I could not look": a repo listing or a node probe that
- * never came back, a drain record this run could not parse, and — within
- * `warmOrphans` — the one case where the SECOND look itself failed rather
- * than resolving (`warmOrphanUnreadable`, `lib/warm-orphan-doc.mjs`). `young`,
- * `jitOrphans` (the ones not yet past `UNREAPED_AFTER_MS`), `warmRechecked`,
- * `expectedDown` and `expectedDark` are deliberately in NEITHER array — each
- * is this gate choosing NOT to judge something yet (too young, routine
- * leakage, resolved on a second look, or drained on purpose), the same shape
- * warm-canary's own `drained`/`skippedByRole` and label-floor's
- * `noWorkflows` precedent (that one, unlike this, counts as unreadable — see
- * that file) stay out of its GateDoc too. Everything else is a conclusion
- * reached from data this run actually read.
- */
-const gateFindings = [
-	...ghosts.map((g) => ({
-		node: null,
-		kind: 'black-hole',
-		reason: `${g.repo} ${g.name}${g.busy ? ' — BUSY, a job is stuck on it' : ''}: GitHub says online, no listener anywhere`,
-	})),
-	...unreaped.map((u) => ({
-		node: null,
-		kind: 'unreaped-black-hole',
-		reason:
-			`${u.repo} ${u.name}: ONLINE JIT orphan past the dispatcher's reap grace, age ` +
-			`${u.ageMs === Infinity ? 'unknown (no epoch in name)' : `${Math.round(u.ageMs / 1000)}s`}`,
-	})),
-	...warmOrphans
-		.filter((w) => !warmOrphanUnreadable(w.why))
-		.map((w) => ({
-			node: w.node ?? null,
-			kind: 'warm-orphan',
-			reason: `${w.repo} ${w.name} status=${w.status ?? 'unknown'}: ${w.why}`,
-		})),
-	...noInstall.map((d) => ({
-		node: null,
-		kind: 'registered-no-install',
-		reason:
-			`${d.repo} runner "${d.name}" status=${d.status}` +
-			(d.carriers.length ? ` (that name lives on: ${d.carriers.join(', ')})` : ''),
-	})),
-	...unconfigured.map((u) => ({
-		node: u.machine,
-		kind: 'unconfigured-listener',
-		reason: `${u.machine} ${u.dir}: running with no readable .runner`,
-	})),
-	...clobbered.map((c) => ({
-		node: c.machine,
-		kind: 'stolen-identity',
-		reason: `${c.machine} ${c.dir} now claims "${c.name}" (${c.repo})`,
-	})),
-];
-const gateUnreadable = [
-	...(drainUnreadable ? [{ node: null, why: `drain record unreadable: ${drainUnreadable}` }] : []),
-	...warmOrphans
-		.filter((w) => warmOrphanUnreadable(w.why))
-		.map((w) => ({ node: w.node ?? null, why: `${w.repo} ${w.name}: ${w.why}` })),
-	...unexpectedlyDark.map((u) => ({ node: u.machine, why: u.error })),
-	...unreadableRepos.map((r) => ({ node: null, why: `${r.repo}: ${r.reason}`, repo: r.repo })),
-];
-// The SAME booleans the exit code below already keys on — computed once, so
-// the GateDoc's `ok` and the real exit code can never read differently from
-// each other, which `buildGateDoc`'s own array-emptiness default would not
-// guarantee if a future term were added to one list and not the other.
-const FAILS = Boolean(
-	ghosts.length ||
-	unreaped.length ||
-	warmOrphans.length ||
-	noInstall.length ||
-	unconfigured.length ||
-	clobbered.length ||
-	drainUnreadable ||
-	unexpectedlyDark.length ||
-	unreadableRepos.length
-);
+// GateDoc (wave 5j lane B) assembly, moved to
+// `lib/runner-identity-gatedoc.mjs` (wave shrink-1 lane D, pure move); see
+// that file for which arrays land in `findings` vs `unreadable` vs neither.
+const { gateFindings, gateUnreadable, FAILS } = buildIdentityGateDoc({
+	ghosts,
+	unreaped,
+	warmOrphans,
+	noInstall,
+	unconfigured,
+	clobbered,
+	drainUnreadable,
+	unexpectedlyDark,
+	unreadableRepos,
+});
 
 if (!JSON_OUT) {
 	printIdentityReport({

@@ -111,26 +111,17 @@
  */
 
 import { readFileSync } from 'node:fs';
-import {
-	loadManifest as readManifest,
-	manifestPath,
-	runOn,
-	runOnSync,
-	selectMachines,
-} from './lib/fleet-exec.mjs';
+import { loadManifest as readManifest, manifestPath, runOn } from './lib/fleet-exec.mjs';
 import { manifest as manifestFile } from './lib/paths.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
-import { deriveJobReserves } from './lib/demand-derive.mjs';
-import { metricsReadScript, metricsSince, perJobCosts, readOutcome } from './lib/job-metrics.mjs';
 import { BUILDER_LABEL } from '../dist/lib/capability-registry.js';
-import { RETENTION_DAYS } from '../dist/job-history-store.js';
 import { FAST_LOOP_SECONDS, RECONCILE_EVERY_TICKS } from '../dist/lib/fast-loop-cadence.js';
 import { createEmitter } from './lib/emit.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { checkGhReserve } from './lib/gh-reserve.mjs';
 import { useAppPool } from './lib/gh-app.mjs';
-import { offeredLabels, listRunners } from './lib/reconcile-apply.mjs';
+import { listRunners } from './lib/reconcile-apply.mjs';
 import { resolveDesired } from './lib/reconcile-resolve.mjs';
 import {
 	buildCoverageDoc,
@@ -139,6 +130,8 @@ import {
 } from './lib/reconcile-coverage.mjs';
 import { printReport } from './lib/reconcile-report.mjs';
 import { applyRegistrations, applyRemovals } from './lib/reconcile-exec.mjs';
+import { readJobReserves } from './lib/reconcile-job-reserves.mjs';
+import { computeDrift, computeCapacityGate } from './lib/reconcile-drift.mjs';
 
 const MANIFEST = manifestPath();
 
@@ -170,47 +163,6 @@ const COVERAGE = manifestFile('fleet-runner-coverage.json');
 //     from the CI it now hosts.
 //   - Orphan removal only ever targets repos being RETIRED, so nothing here can
 //     remove a live runner.
-
-/**
- * Declared nodes, read once at load so `clawOfRunner` can derive ownership
- * instead of matching hand-written name patterns.
- */
-const NODE_NAMES = (() => {
-	try {
-		return readManifest().machines ?? {};
-	} catch {
-		return {};
-	}
-})();
-
-/**
- * Which node owns a runner. What matters to a queued job is that SOME
- * labelled runner on that node can take it, not which unix user supervises
- * it, so every instance on a box satisfies coverage for that box.
- *
- * Returns null for a name it does not recognise, and BOTH call sites fail safe
- * on that: the present-registration scan reports it as `unmanaged` and leaves it
- * alone, and the orphan sweep skips it entirely. That is what keeps a live JIT
- * runner — named `jit-<node>-…`, which this deliberately does not fold —
- * from being deregistered mid-job by a sweep that did not recognise it.
- */
-const clawOfRunner = (name) => {
-	// DERIVED from the declared nodes, never an enumerated suffix list. The
-	// previous version hardcoded two incompatible patterns —
-	// /^(claw-[123])(-b)?$/ and /^hokon(-b|-c|-d|-tenhands)?$/ — so every new
-	// instance or hand-made runner name needed a code change, and the two forms
-	// had already drifted apart.
-	//
-	// A runner belongs to the node whose name it exactly matches, or to the
-	// LONGEST declared node name it is prefixed by. Longest wins so that a
-	// future `claw-1x` cannot be captured by `claw-1`.
-	const names = Object.keys(NODE_NAMES);
-	if (names.includes(name)) return name;
-	const owner = names
-		.filter((m) => name.startsWith(`${m}-`))
-		.sort((a, b) => b.length - a.length)[0];
-	return owner ?? null;
-};
 
 const args = process.argv.slice(2);
 // F8 (plan §4.1): strict, from the one spec argv-specs.mjs declares.
@@ -252,60 +204,6 @@ function failEarly(message) {
 	if (JSON_OUT) emitter.emit({ ok: false, error: message });
 	else console.error(`\u2717 ${message}`);
 	process.exit(1);
-}
-
-/**
- * `jobP95Mb` per covered repo, read off the nodes' job-metrics files.
- *
- * WAVE 3g J2. Admission reserved one hand-set number per NODE; the axis is the
- * REPO (see `deriveJobReserves`), so the figure lives beside the other per-repo
- * facets and `ephemeral-tick.ts` reads it for the queued run's repo.
- *
- * Every node is read, the backstop included: its jobs run in minted units,
- * whose rows are per-job costs like a claw's.
- *
- * "I COULD NOT LOOK" FAILS. A claw whose file cannot be read would leave its
- * jobs out of every repo's p95 — a partial fleet written as the whole one — so
- * any unreadable node returns `unreadable` with its class and reason, and the
- * caller refuses. A node with NO file is a node that has run no hooked job —
- * `readOutcome` calls that `ok` with zero rows, an empty contribution.
- *
- * `previousByRepo` is the COMMITTED roster's own `jobP95Mb` map, read by the
- * caller before this derivation runs — it is what lets a repo under the
- * min-runs floor keep its last measured reserve instead of the fleet p95
- * (#88). See `deriveJobReserves` for the carry-forward rule.
- */
-function readJobReserves(manifest, repos, previousByRepo = {}) {
-	const nodes = selectMachines(manifest);
-	const nowMs = Date.now();
-	// The SAME read `fleet job-metrics` makes: the window filtered node-side,
-	// the rotated `.1` included, and a read that did not finish classed as a
-	// read-error rather than returned as a short file. A second spelling of the
-	// read here would miss the next rotation change the first one gets.
-	const readScript = metricsReadScript(metricsSince(nowMs, RETENTION_DAYS));
-	const rows = [];
-	const unreadable = [];
-	for (const [node] of nodes) {
-		const read = readOutcome(node, runOnSync(node, readScript, { as: 'ci', timeoutMs: 60_000 }));
-		if (read.read !== 'ok') {
-			unreadable.push({
-				node,
-				why: `${read.read}${read.errno ? ` ${read.errno}` : ''}: ${read.why}`,
-			});
-			continue;
-		}
-		// The loop's node, not the row's own hostname — same rule as
-		// `collect-job-metrics.mjs`: a row cannot be attributed to a box it did
-		// not come from.
-		for (const r of read.rows) rows.push({ ...r, node });
-	}
-	const derived = deriveJobReserves(perJobCosts(rows).rows, {
-		repos,
-		nowMs,
-		windowDays: RETENTION_DAYS,
-		previousByRepo,
-	});
-	return { ...derived, nodesRead: nodes.length - unreadable.length, unreadable };
 }
 
 // ---------------------------------------------------------------------------
@@ -485,147 +383,19 @@ async function main() {
 	const probes = await pool(probeList, 8, (repo) => listRunners(repo));
 	const actual = new Map(probeList.map((r, i) => [r, probes[i]]));
 
-	const missing = []; // (repo, claw) to register
-	const capDrift = []; // runners lacking a capability their node declares
-	const offline = [];
-	const unmanaged = [];
-	const orphans = []; // removable: retired repo that still has claw runners
-	// Registrations on a node the manifest no longer wants for this repo.
-	//
-	// Until 2026-08-26 this category did not exist and the diff ran in ONE
-	// direction only (`want -> seen`), so a registration outside `want` was not
-	// missing, not an orphan, not unmanaged — it was invisible. That is why
-	// adding a repo to a node's `excludeRepos` appeared to offload it and in
-	// fact removed nothing, uninstalled nothing, and reported nothing.
-	const excluded = [];
-	const unreadable = [];
-
-	for (const repo of repos) {
-		const state = actual.get(repo);
-		if (!state.ok) {
-			unreadable.push({ repo, error: state.error });
-			continue;
-		}
-		const want = desired.get(repo).claws;
-		const seen = new Map();
-		// EVERY managed registration, recorded before any of the short-circuits
-		// below. `seen` deliberately skips demoted and offline runners, so it
-		// cannot answer "does this pair exist at all" — which is exactly the
-		// question the reverse diff needs.
-		const present = new Map();
-		for (const r of state.runners) {
-			const claw = clawOfRunner(r.name);
-			if (!claw) {
-				unmanaged.push({ repo, runner: r.name, status: r.status });
-				continue;
-			}
-			present.set(claw, r);
-
-			// --- capability drift ---------------------------------------------
-			// A node's declared `labels` are its CAPABILITIES, and until now the
-			// only thing that ever applied them was registration. So a capability
-			// added to the manifest reached new runners and no existing ones, and
-			// 27 hokon runners carried none of hokon's own `pm2-host`.
-			//
-			// ADDITIVE ONLY. Undeclared labels are reported, never stripped: this
-			// file does not know about `hokon-backstop`, which runner-health writes
-			// and nothing declares, and a reconcile that removed what it had not
-			// been told about would silently unroute live jobs. Same asymmetry the
-			// rest of this script uses — registering restores, removing takes away.
-			//
-			// ELIGIBILITY capabilities are excluded on both sides, and `identityLabels`
-			// is what knows which those are. It used to be a literal
-			// `.filter(l => l !== BUILDER_LABEL)` — correct, and only ever correct
-			// about the one eligibility label whoever wrote it remembered to name.
-			// `hadoku-builder` is owned by the fast loop (and, on the backstop, by
-			// the backstop decision), which flip it as nodes become safe or unsafe; treating it
-			// as a capability here would make the tools fight over the same label.
-			// WHAT THE NODE OFFERS — declared AND earned, workload-gated — not the
-			// declared array alone. Against `identityLabels` a standing runner never
-			// gained a label its node EARNED: hokon earned jdk21 and cargo-bevy on
-			// 2026-10-09 and its 28 runners kept the three it declared, so a promoted
-			// hokon could never take a Forge job. Additive: nothing is stripped.
-			const offered = offeredLabels(manifest, claw);
-			const have = new Set(r.labels.map((l) => l.name));
-			const missingCaps = offered.filter((l) => !have.has(l));
-			if (missingCaps.length) {
-				capDrift.push({ repo, claw, runner: r.name, id: r.id, add: missingCaps });
-			}
-
-			// A REGISTRATION THAT EXISTS IS COVERAGE, whatever its labels. Labels
-			// are eligibility, written by the fast loop as a node becomes safe or
-			// unsafe (and by the backstop decision on the backstop); a runner without one is
-			// present and simply not eligible right now. Reading it as MISSING made
-			// --confirm re-register over it with `config.sh --replace`, stealing a
-			// healthy registration. Until 2026-09-21 only surge-tier nodes were
-			// spared that reading — so a resident registration on claw-2 or claw-4,
-			// born unlabelled, was one reconcile away from being stolen.
-			// An OFFLINE runner is a registration that EXISTS, so it is NOT missing
-			// coverage. Counting it as both made this tool contradict its own
-			// contract ("Reinstall an offline runner. That is an incident" — see the
-			// header): `missing` is exactly what --confirm registers, and registering
-			// a name that is already taken runs `config.sh --replace`, which STEALS
-			// the registration from the live runner and orphans its listener.
-			//
-			// The trigger is not rare. GitHub reports a runner offline during any
-			// blip in its own control plane; on 2026-08-25 a burst of 503s on
-			// /acquirejob flipped hadoku_site's claw-3 to `offline busy=true` for
-			// under two minutes WHILE IT WAS RUNNING A JOB, and a reconcile in that
-			// window listed it as missing. The daily ci:fleet-coverage job auto-
-			// applies up to 6 pairs, so a blip was one scheduling coincidence away
-			// from killing a healthy mid-job runner.
-			//
-			// Same rule as the unlabelled case above: the runner is present, so
-			// report the anomaly, never re-register over it.
-			seen.set(claw, true);
-			if (r.status !== 'online') {
-				// mgmt-api types this array as `{repo, claw, runner}[]` and ignores
-				// extra fields. `expectedDown` is carried ON THE ROW, so
-				// the --json consumer and the exit code read the same fact from the
-				// same place. Only a node drained for maintenance, dated and fresh,
-				// qualifies (`deferralFor`); a registration that is merely offline on
-				// an undrained node is exactly the incident this array exists to
-				// report, and still fails. See lib/expected-down.mjs.
-				//
-				// `|| undefined` so `--json` stays additive in the strict sense, not
-				// just the loose one: a row for a node nothing has drained is
-				// byte-identical to the shape this array has always had —
-				// `JSON.stringify` drops an `undefined` property — matching
-				// `check-fleet-toolchain.mjs`'s own `drainNote: defer.deferred ? ... :
-				// undefined` for the same reason.
-				offline.push({
-					repo,
-					runner: r.name,
-					claw,
-					expectedDown: deferralFor(claw, drains).deferred || undefined,
-				});
-			}
-		}
-		for (const claw of want) if (!seen.has(claw)) missing.push({ repo, claw });
-		// The other direction. Reported always; removed only under
-		// --remove-excluded, matching this file's standing asymmetry that
-		// registering restores coverage while removing takes it away.
-		for (const [claw, r] of present) {
-			if (want.includes(claw)) continue;
-			excluded.push({
-				repo,
-				claw,
-				runner: r.name,
-				id: r.id,
-				status: r.status,
-				busy: r.busy === true,
-			});
-		}
-	}
-
-	for (const { repo, why } of retiredScoped) {
-		const state = actual.get(repo);
-		if (!state?.ok) continue;
-		for (const r of state.runners) {
-			const claw = clawOfRunner(r.name);
-			if (claw) orphans.push({ repo, claw, runner: r.name, id: r.id, why });
-		}
-	}
+	// EVERY AND-OF-THE-ACTUAL-STATE diff — capability drift, offline/missing/
+	// excluded pairs, orphans on a retired repo. Moved to
+	// `lib/reconcile-drift.mjs` (wave shrink-1 lane D, pure move); see that
+	// file for the asymmetry (registering restores, removing takes away) and
+	// why an offline registration is never read as missing.
+	const { missing, capDrift, offline, unmanaged, orphans, excluded, unreadable } = computeDrift({
+		repos,
+		retiredScoped,
+		desired,
+		actual,
+		manifest,
+		drains,
+	});
 
 	// EXPECTED-DOWN NOTES, one per claw with a deferred offline row. Computed
 	// here, with a literal `deferralNote(` call, rather than inside
@@ -641,26 +411,10 @@ async function main() {
 
 	// ---- report ----------------------------------------------------------
 	// --- capacity gate -----------------------------------------------------
-	// A node's limit is enforced here rather than trusted to prose. Until
-	// 2026-08-23 the "~2.8 runners per core" rule lived only inside ten repo
-	// entries' $why strings, so nothing noticed claw-3 reaching 19 registrations
-	// (4.8/core) before the watchdog rebooted it at 92C on 2026-08-17.
-	//
-	// This bounds REGISTRATIONS, which is a proxy for disk and install footprint
-	// — NOT a thermal control. Registrations sit idle at no cost; concurrent
-	// builds are what cook a box, and nothing caps those yet.
-	const perNode = new Map();
-	for (const r of repos)
-		for (const c of desired.get(r).claws) perNode.set(c, (perNode.get(c) ?? 0) + 1);
-	const overCapacity = [];
-	for (const [node, cfg] of Object.entries(manifest.machines)) {
-		const cap = cfg.maxRegistrations;
-		if (cap === undefined) continue;
-		const want = perNode.get(node) ?? 0;
-		// `node` is a --json KEY: this subcommand is in JSON_CONTRACT and
-		// ci:fleet-coverage parses its stdout. See docs/VOCABULARY.md.
-		if (want > cap) overCapacity.push({ machine: node, want, cap, cores: cfg.cores });
-	}
+	// Moved to `lib/reconcile-drift.mjs` (wave shrink-1 lane D, pure move); see
+	// that file for why this bounds REGISTRATIONS rather than being a thermal
+	// control.
+	const { perNode, overCapacity } = computeCapacityGate({ repos, desired, manifest });
 
 	const summary = {
 		capabilityDrift: capDrift.length,

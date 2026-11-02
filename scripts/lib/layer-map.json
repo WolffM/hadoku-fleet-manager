@@ -784,6 +784,27 @@
     "why": "Wave 5q lane B split off the 800-line ceiling (ctx restructure): the `--confirm` apply step (register/relabel/remove), ssh- and gh-bound throughout; `ctx.ssh` is the CLI's own `ssh()`, passed in rather than imported — see the module header."
   },
   {
+    "glob": "scripts/lib/reconcile-claw-owner.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave shrink-1 lane D, pure move: reconcile-fleet-runners.mjs's clawOfRunner (derives which managed node owns a GitHub runner name from the declared manifest). Same bucket as the CLI it was cut from."
+  },
+  {
+    "glob": "scripts/lib/reconcile-job-reserves.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave shrink-1 lane D, pure move: reconcile-fleet-runners.mjs's readJobReserves, reading each node's job-metrics file over ssh. Same bucket as the CLI it was cut from."
+  },
+  {
+    "glob": "scripts/lib/reconcile-drift.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave shrink-1 lane D, pure move: reconcile-fleet-runners.mjs's desired-vs-actual diff (capability drift, missing/offline/excluded pairs, orphans) and the per-node capacity gate. Same bucket as the CLI it was cut from."
+  },
+  {
     "glob": "scripts/lib/reconcile-fleet-runners-rig.mjs",
     "layer": "domain",
     "domain": "lifecycle",
@@ -819,6 +840,20 @@
     "layer": "domain",
     "domain": "lifecycle",
     "part": "run"
+  },
+  {
+    "glob": "scripts/lib/ci-throttle-payload.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave shrink-1 lane D, pure move: deploy-ci-throttle.mjs's node-side install payload builder and one-file provenance verdict. Same bucket as the CLI it was cut from."
+  },
+  {
+    "glob": "scripts/lib/ci-throttle-report.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave shrink-1 lane D, pure move: deploy-ci-throttle.mjs's post-loop reporting — the --confirm stale-listener gate, the unbounded-node warning, and the --check gate's fix hints. Same bucket as the CLI it was cut from."
   },
   {
     "glob": "scripts/deploy-runners-slice.mjs",
@@ -1683,6 +1718,27 @@
     "why": "Wave 5q lane B split off the 800-line ceiling (pure move): reconcile-runner-identity.mjs's human-readable report, which only ever logs."
   },
   {
+    "glob": "scripts/lib/runner-identity-diff.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave shrink-1 lane D, pure move: reconcile-runner-identity.mjs's GitHub-belief-vs-node-truth diff (ghosts, JIT orphans, registered-no-install, warm suspects). Same bucket as the CLI it was cut from."
+  },
+  {
+    "glob": "scripts/lib/runner-identity-warm-recheck.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave shrink-1 lane D, pure move: reconcile-runner-identity.mjs's warm-registration second look. Same bucket as the CLI it was cut from."
+  },
+  {
+    "glob": "scripts/lib/runner-identity-gatedoc.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave shrink-1 lane D, pure move: reconcile-runner-identity.mjs's GateDoc findings/unreadable/FAILS assembly. Same bucket as the CLI it was cut from."
+  },
+  {
     "glob": "scripts/split-check.mjs",
     "layer": "domain",
     "domain": "observation",
@@ -1762,6 +1818,48 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/doctor-findings-record.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: doctorFindings' one finding-shape constructor, split out so each per-facet judge module below can build a finding without importing the orchestrator. Same bucket as doctor-findings.mjs itself."
+  },
+  {
+    "glob": "scripts/lib/doctor-findings-thermal.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: doctorFindings' CPU thermal + sensor-agreement judgement, split by facet to bring doctor-findings.mjs under the 600-line target. Same bucket as doctor-findings.mjs itself."
+  },
+  {
+    "glob": "scripts/lib/doctor-findings-watchdog.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: doctorFindings' watchdog-daemon judgement. Same bucket as doctor-findings.mjs itself."
+  },
+  {
+    "glob": "scripts/lib/doctor-findings-storage.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: doctorFindings' disk-free (root + _work) and SMART judgement. Same bucket as doctor-findings.mjs itself."
+  },
+  {
+    "glob": "scripts/lib/doctor-findings-network.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: doctorFindings' wifi-manager/link judgement. Same bucket as doctor-findings.mjs itself."
+  },
+  {
+    "glob": "scripts/lib/doctor-findings-ops.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: doctorFindings' reboot/runner-units/failed-units/pm2-claims/bootcamp-pointer judgement. Same bucket as doctor-findings.mjs itself."
+  },
+  {
     "glob": "scripts/lib/doctor-fixtures.mjs",
     "layer": "domain",
     "domain": "observation",
@@ -1790,6 +1888,48 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core"
+  },
+  {
+    "glob": "scripts/lib/job-metrics-primitives.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: job-metrics.mjs's mb/percentile unit helpers, split out so the other job-metrics-*.mjs modules can import them without a cycle through the barrel. Same bucket as job-metrics.mjs."
+  },
+  {
+    "glob": "scripts/lib/job-metrics-join.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: job-metrics.mjs's metric-row-to-job-history join. Same bucket as job-metrics.mjs."
+  },
+  {
+    "glob": "scripts/lib/job-metrics-cost.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: job-metrics.mjs's cumulative-to-per-job cost derivation. Same bucket as job-metrics.mjs."
+  },
+  {
+    "glob": "scripts/lib/job-metrics-groups.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: job-metrics.mjs's facet/costFacets/byNode/byUnit/byNodeRepo groupings. Same bucket as job-metrics.mjs."
+  },
+  {
+    "glob": "scripts/lib/job-metrics-variance.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: job-metrics.mjs's node-vs-repo variance and duration-ratio analysis. Same bucket as job-metrics.mjs."
+  },
+  {
+    "glob": "scripts/lib/job-metrics-read.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: job-metrics.mjs's node-side read script, sentinel and parser. Same bucket as job-metrics.mjs."
   },
   {
     "glob": "scripts/lib/mf-built.mjs",
@@ -1966,6 +2106,27 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/header-fleet-audit.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: check-header-fleet.mjs's per-repo FLEET pass (package staleness, update/landing path, private theme copies, header/favicon/provider). Same bucket as header-rules.mjs."
+  },
+  {
+    "glob": "scripts/lib/header-roster-completeness.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: check-header-fleet.mjs's owner-wide roster-completeness pass (`not-in-fleet`/`new-repo-grace`). Same bucket as header-rules.mjs."
+  },
+  {
+    "glob": "scripts/lib/header-template-audit.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: check-header-fleet.mjs's template-scaffolding pass. Same bucket as header-rules.mjs."
+  },
+  {
     "glob": "scripts/lib/label-floor-check.mjs",
     "layer": "domain",
     "domain": "observation",
@@ -1977,6 +2138,48 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core"
+  },
+  {
+    "glob": "scripts/lib/label-floor-holdings.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: check-label-floor.mjs's bootcamp-eligibility and nodeOffer-derived holdings setup, split out to bring that CLI under the 600-line target. Same bucket as label-floor-check.mjs/label-floor-gate.mjs."
+  },
+  {
+    "glob": "scripts/lib/label-floor-transitions.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: check-label-floor.mjs's label-transition diff/persist/report block. Same bucket as label-floor-check.mjs/label-floor-gate.mjs."
+  },
+  {
+    "glob": "scripts/lib/label-floor-demand.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: check-label-floor.mjs's static (shipped-workflow) + observed (job-history) demand collection and the mint-only/unoffered split over it. Same bucket as label-floor-check.mjs/label-floor-gate.mjs."
+  },
+  {
+    "glob": "scripts/lib/label-floor-persist.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: check-label-floor.mjs's static-demand persistence for the runtime floor and the read-back that computes what it actually watches. Same bucket as label-floor-check.mjs/label-floor-gate.mjs."
+  },
+  {
+    "glob": "scripts/lib/label-floor-resident.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: check-label-floor.mjs's resident-backstop GitHub read (via the access-layer gh-runners.mjs, same cross-layer shape the CLI used). Same bucket as label-floor-check.mjs/label-floor-gate.mjs."
+  },
+  {
+    "glob": "scripts/lib/label-floor-required.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave shrink-1 lane D, pure move: check-label-floor.mjs's demand-ledger required-set derivation and per-node contract verdicts. Same bucket as label-floor-check.mjs/label-floor-gate.mjs."
   },
   {
     "glob": "scripts/lib/probe-readers.mjs",
