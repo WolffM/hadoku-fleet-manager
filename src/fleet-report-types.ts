@@ -55,6 +55,12 @@ import type { FleetCapacity } from './fleet-report-types-capacity.js';
 import type { FleetGithubBudget } from './gh-budget.js';
 import type { FleetVocabulary } from './fleet-report-types-vocabulary.js';
 
+// Part of the public type surface: `src/index.ts` re-exports this barrel with
+// `export type *`, and hadoku_site's panel imports both names from the package.
+// Nothing in this repo imports them through here, so a dead-export sweep that
+// only counts in-repo imports reads them as unused; public-surface.test.ts pins them.
+export type { ClawState, BackstopReason } from './lib/fleet-vocabulary.js';
+
 export * from './fleet-report-types-machines.js';
 export * from './fleet-report-types-jobs.js';
 export * from './fleet-report-types-dispatch.js';
