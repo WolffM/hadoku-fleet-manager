@@ -208,3 +208,67 @@ test('bad arguments are refused, never ignored', () => {
 	const doc = JSON.parse(fleet(state, '--frobnicate', '--json').stdout);
 	assert.equal(doc.why, 'bad-args');
 });
+
+/** job-history rows, shaped as `job-history-store.ts` appends them. */
+function withHistory(state, rows) {
+	writeFileSync(
+		join(state, 'job-history.jsonl'),
+		rows.map((r) => JSON.stringify(r)).join('\n') + '\n'
+	);
+	return state;
+}
+const served = (jobId, runner) => ({
+	repo: 'WolffM/hadoku-cardtable',
+	runId: 41002,
+	jobId,
+	name: 'x',
+	runner,
+	labels: ['self-hosted', 'hadoku-builder'],
+	startedAt: iso(60),
+	durationSec: 100,
+	conclusion: 'success',
+});
+
+test('a job served by a runner minted for ANOTHER job is shown where it ran, not where it was placed (fleet-manager-private#137)', () => {
+	const state = withHistory(stateWith({ [`${day(120)}.jsonl`]: [placed, refusedShard] }), [
+		// 9002 was placed on claw-9, but a claw-8 runner minted for 9003 took it.
+		served(9002, 'jit-claw-8-hadoku-cardtable-j9003-r41002-1790000000'),
+	]);
+	const r = fleet(state);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(
+		r.stdout,
+		/job 9002 \(forge-e2e \(1\)\): ran on claw-8 .* NOT where it was placed: runner minted for job 9003, decided claw-9/
+	);
+	assert.match(r.stdout, /job 9003 \(forge-e2e \(2\)\): not in job-history yet/);
+
+	const doc = JSON.parse(fleet(state, '--json').stdout);
+	assert.equal(doc.history.ok, true);
+	const j = doc.ranOn.find((x) => x.jobId === 9002);
+	assert.deepEqual(
+		{ node: j.node, mintedForJobId: j.mintedForJobId, decidedOn: j.decidedOn, swapped: j.swapped },
+		{ node: 'claw-8', mintedForJobId: 9003, decidedOn: 'claw-9', swapped: true }
+	);
+	assert.equal(doc.ranOn.find((x) => x.jobId === 9003).swapped, null, 'unknown, not false');
+});
+
+test('a job that ran where it was placed is not flagged', () => {
+	const state = withHistory(stateWith({ [`${day(120)}.jsonl`]: [placed] }), [
+		served(9002, placed.runner),
+	]);
+	const r = fleet(state);
+	assert.match(r.stdout, /job 9002 \(forge-e2e \(1\)\): ran on claw-9 \(jit-claw-9-[^)]*\)$/m);
+	assert.equal(JSON.parse(fleet(state, '--json').stdout).ranOn[0].swapped, false);
+});
+
+test('no job-history is said, never rendered as "nothing was swapped"', () => {
+	const state = stateWith({ [`${day(120)}.jsonl`]: [placed] });
+	const r = fleet(state);
+	assert.match(
+		r.stderr,
+		/where each job ran is unknown: .*job-history\.jsonl: no job-history file/
+	);
+	const doc = JSON.parse(fleet(state, '--json').stdout);
+	assert.equal(doc.history.ok, false);
+	assert.deepEqual(doc.ranOn, []);
+});
