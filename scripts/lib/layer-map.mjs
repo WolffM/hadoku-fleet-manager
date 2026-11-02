@@ -96,13 +96,13 @@
  * (Each of these is ALSO recorded as a `why` on its own entry in
  * `layer-map.json`; this paragraph is the one-place summary.)
  *
- * `node-reservation.ts` (ci-scheduling) importing `host-lease.ts` (tenancy)
- * directly, rather than through a state record, is exactly the rule-5
- * violation §3.2 describes ("a domain reads another domain's facts through a
- * state record") — left in place on purpose, as a real finding for the
- * measurement to surface, not fixed here (this wave MEASURES, it does not
- * move code). Tracked as a debt pair in `scripts/lib/layer-debt.json`, not
- * here: this file's data does not carry import-edge debt, only placement.
+ * `node-reservation.ts` (ci-scheduling) used to import `host-lease.ts`
+ * (tenancy) directly, the rule-5 violation §3.2 describes ("a domain reads
+ * another domain's facts through a state record"). Wave layers-3 (2026-11-02)
+ * moved the lease ledger into `src/host-lease-record.ts` (state), which it
+ * reads now. Import-edge debt that remains is listed in
+ * `scripts/lib/layer-debt.json`, not here: this file's data carries
+ * placement only.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
