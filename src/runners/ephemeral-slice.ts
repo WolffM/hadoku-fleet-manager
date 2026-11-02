@@ -120,70 +120,14 @@ import { JOB_RESERVE_DEFAULT_MB } from '../lib/job-reserve.js';
 export { JOB_RESERVE_DEFAULT_MB };
 
 /**
- * The per-unit `MemoryMax` for a minted runner: the slice's own ceiling, never
- * a number below it.
- *
- * THE FLAT 4096 KILLED REAL WORK (issue #26). brave-quartet's `wasm-size` job of
- * run 34543150470 was OOM-killed on claw-2 — `oom-kill:constraint=CONSTRAINT_MEMCG`
- * against the unit's own 4 GiB, eight parallel `rustc` processes resident, the
- * largest ~830 MB RSS. GitHub recorded the step as CANCELLED rather than failed,
- * which is the shape you get when the runner is killed out from under the job,
- * so nothing in CI said "out of memory" either. A parallel cargo build and a
- * flat 4 GiB per unit are simply incompatible, and every candidate the original
- * harvest considered (3072 and up) was chosen against a sample that contained no
- * such build.
- *
- * THE OPERATOR'S RULE, 2026-09-12: no hard per-job memory cap; a floor keeps the
- * claw alive. The floor is `minFreeMb`, and it is already expressed — the slice
- * ceiling IS `measured MemTotal − minFreeMb`. So a unit permitted to reach the
- * slice ceiling can consume everything CI is allowed to have and not one byte of
- * what the box needs to stay reachable.
- *
- * WHY A NUMBER AND NOT `infinity`. Two things are lost by dropping the property:
- * the kill stops being ATTRIBUTABLE to a named unit (§12.2 — the difference
- * between a cgroup kill naming `jit-claw-2-…` and an unexplained exit 137), and
- * `MemorySwapMax=0` is the only remaining bound on a runaway, which on claw-1's
- * 7200rpm disk means thrashing instead of failing fast. A cap equal to the
- * ceiling keeps both and can never be the thing that kills a job the slice would
- * have allowed — which is the whole complaint #26 made.
- *
- * SAFE ONLY BECAUSE THE UNIT IS IN THE SLICE. The slice bounds the SUM; this
- * bounds ONE. Raising the per-unit cap without containment would have been the
- * 2026-08-04 outage with extra steps — which is why `--property=Slice=` shipped
- * first, in its own commit, and was verified live before this landed.
- *
- * THIS IS THE CEILING {@link AdmissionInput.sliceCeilingMb} CARRIES INTO
- * `admitMint` (#76). The two read the same measurement for two different
- * questions: this function grants a RUNNING unit room up to the whole slice
- * because there is no hard per-job cap; `admitMint`'s placement clause asks
- * whether a job's own KNOWN FLOOR (from capped runs) fits inside that same
- * ceiling before the unit is ever spawned. A node that would happily let the
- * unit grow this far is still the wrong node to START a job on whose floor
- * already exceeds it.
- *
- * TOTAL over its inputs, like {@link JIT_UNIT_MAX_SEC}'s floor. A ceiling that
- * is not a usable positive number falls back to the requested cap: the caller
- * is `dispatchEphemeral`, which refuses to mint on a node whose memory it could
- * not read, so the fallback is unreachable from production — but a builder that
- * throws or emits `MemoryMax=0M` on a bad input would turn one unreadable node
- * into a dead mint, and this runs after the registration exists.
+ * The per-unit `MemoryMax` for a minted runner. Moved to `src/lib/job-reserve.ts`
+ * (wave clean-2 lane C, cut (iii) layer debt): pure over `JOB_RESERVE_DEFAULT_MB`
+ * alone, and `scripts/check-warm-canary.mjs` (observation) needs the identical
+ * answer the dispatcher's own sizing (ci-scheduling) does — the same "one
+ * declaration, config layer" shape as `JOB_RESERVE_DEFAULT_MB` right above.
+ * Re-exported here under its original path.
  */
-export function unitMemoryMaxMb(o: {
-	/** The node's declared `slice.unitMaxMb`. It may only WIDEN the cap. */
-	requestedMb?: number | null;
-	/** Measured `MemTotal − minFreeMb` for the node the unit will run on. */
-	sliceCeilingMb?: number | null;
-}): number {
-	const requested =
-		typeof o.requestedMb === 'number' && o.requestedMb > 0
-			? Math.floor(o.requestedMb)
-			: JOB_RESERVE_DEFAULT_MB;
-	const ceiling =
-		typeof o.sliceCeilingMb === 'number' && Number.isFinite(o.sliceCeilingMb)
-			? Math.floor(o.sliceCeilingMb)
-			: 0;
-	return ceiling > 0 ? Math.max(requested, ceiling) : requested;
-}
+export { unitMemoryMaxMb } from '../lib/job-reserve.js';
 
 /**
  * The containment every CI unit carries: a JIT runner, a warm listener, and

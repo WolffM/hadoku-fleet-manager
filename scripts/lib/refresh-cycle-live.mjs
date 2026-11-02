@@ -4,11 +4,15 @@
  * 5s lane D, 800-line ceiling): that file keeps the pure orchestration and
  * is exercised by fixtures; this one is exercised only by
  * `fleet converge-toolchain --refresh` (`createLiveDeps()`), `reboot-claws.mjs`
- * and `benchmark-fleet.mjs`'s cadence mode (`busyCount`/`waitUntilDrained`
- * directly), and `bootcamp.mjs`'s idle/canary checks.
+ * and `bootcamp.mjs`'s idle/canary checks. `benchmark-fleet.mjs`'s cadence
+ * mode now imports `busyCount`/`drain`/`undrain`/`isDrained`/`waitUntilDrained`
+ * straight from `drain-wait.mjs` rather than through this file (wave clean-2
+ * lane C: this file is lifecycle, `benchmark-fleet.mjs` is observation, and
+ * cut (iii) forbids that edge) — `createLiveDeps()` below uses the exact same
+ * functions, so behaviour is unchanged.
  *
- * Every name here is re-exported from `refresh-cycle.mjs`, so nothing outside
- * this pair of files needs to know the split happened.
+ * Every name defined IN THIS FILE is re-exported from `refresh-cycle.mjs`, so
+ * nothing outside this pair of files needs to know the split happened.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -24,48 +28,17 @@ import { runOnSync, separateCiUser } from './fleet-exec.mjs';
 import { byRole, resolveInstallTarget } from './toolchain-floor.mjs';
 import { createReleaseLookup } from './tool-release.mjs';
 import { errText } from './term.mjs';
-import { PRESSURE_OLDEST_SECONDS, runWorkItem, waitUntilDrained } from './refresh-cycle.mjs';
+import { PRESSURE_OLDEST_SECONDS, runWorkItem } from './refresh-cycle.mjs';
+// busyCount/drainCli/isDrained/drain/undrain/waitUntilDrained moved to
+// drain-wait.mjs (wave clean-2 lane C, cut (iii) layer debt): classified
+// observation/run, the stratum both this (lifecycle) file and
+// benchmark-fleet.mjs (observation) may import. `createLiveDeps()` below
+// delegates to the shared `isDrained`/`drain`/`undrain` rather than
+// reimplementing them, so its own behaviour stays byte-identical.
+import { busyCount, drain, isDrained, undrain, waitUntilDrained } from './drain-wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS = join(HERE, '..');
-
-/**
- * Job count on a node, or null for "could not look" (treated as busy).
- *
- * EXPORTED (wave 3x, #87) so `benchmark-fleet.mjs`'s cadence mode can ask the
- * same question before committing to a drain, rather than growing a second
- * "is this node busy" prober. No behaviour change — this is the function
- * `createLiveDeps()` already wired into `waitUntilDrained` below.
- */
-export function busyCount(node) {
-	const res = runOnSync(node, 'pgrep -c -f "[R]unner\\.Worker" || true', {
-		as: 'admin',
-		timeoutMs: 20_000,
-		connectTimeout: 6,
-	});
-	if (!res.ok) return null;
-	const n = parseInt(String(res.out).trim().split('\n')[0], 10);
-	return Number.isFinite(n) ? n : null;
-}
-
-/** `fleet drain <args>`, as `{ ok, reason? }`. Also the reboot cycle's (lib/reboot-cycle.mjs) one way to drain. */
-export function drainCli(args) {
-	try {
-		execFileSync(process.execPath, [join(SCRIPTS, 'drain-node.mjs'), ...args], {
-			encoding: 'utf8',
-			timeout: 60_000,
-			stdio: ['ignore', 'pipe', 'pipe'],
-		});
-		return { ok: true };
-	} catch (e) {
-		return {
-			ok: false,
-			reason: String(e.stderr || e.message)
-				.trim()
-				.slice(0, 300),
-		};
-	}
-}
 
 /** Queue pressure from `check-queue-health --json` (its zombie band applies). */
 export function judgePressure(doc) {
@@ -157,13 +130,9 @@ export function createLiveDeps() {
 			return { ...p, expectedDown: defer.deferred };
 		},
 		reprobe: (node, tools) => probe(node, tools),
-		isDrained: (node) => Boolean(readDrains()[node]),
-		drain: (node, { kind, reason }) => {
-			const r = drainCli([node, '--reason', reason, '--kind', kind]);
-			if (!r.ok) throw new Error(r.reason);
-			return r;
-		},
-		undrain: (node) => drainCli([node, '--undo']),
+		isDrained,
+		drain,
+		undrain,
 		waitDrained: (node) => waitUntilDrained({ node, busy: busyCount, clock }),
 		update: (node, work) =>
 			work.map((w) =>

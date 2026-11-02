@@ -61,13 +61,16 @@ import { warmCanaryVerdict, slowTierCandidates } from './lib/warm-canary.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 // The BUILT copy, deliberately — see the header note above and
 // scripts/lib/fleet-exec.mjs's own note on importing isLocalNode the same way.
-import {
-	unitMemoryMaxMb,
-	warmCacheEligible,
-	warmEligibleSlots,
-	warmRunnerName,
-} from '../dist/runners/ephemeral.js';
-import { jobReserve } from '../dist/lib/job-reserve.js';
+// unitMemoryMaxMb/jobReserve from lib/job-reserve.js, warmCacheEligible/
+// warmEligibleSlots from lib/warm-eligibility.js, and warmRunnerName from
+// lib/jit-naming.js — not runners/ephemeral.js (wave clean-2 lane C, cut
+// (iii) layer debt): this file is observation, ephemeral.ts is
+// ci-scheduling, and observation may not import a ci-scheduling file
+// directly. All three source modules are config, the stratum below every
+// domain; ephemeral.ts re-exports the exact same names unchanged.
+import { unitMemoryMaxMb, jobReserve } from '../dist/lib/job-reserve.js';
+import { warmCacheEligible, warmEligibleSlots } from '../dist/lib/warm-eligibility.js';
+import { warmRunnerName } from '../dist/lib/jit-naming.js';
 import { readHostingDoc, sharedMbOn } from '../dist/runners/hosting-record.js';
 import { buildSpeedModel } from '../dist/runners/speed-tier.js';
 

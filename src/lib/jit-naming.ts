@@ -98,6 +98,34 @@ export function jitRunnerName(
 }
 
 /**
+ * `warm-<node>-<repo-slug>`. No run id, no epoch: a warm listener is not
+ * per-job, and the cache is of ONE per node, so nothing needs to disambiguate
+ * two live warm listeners on the same node — there is only ever one, and the
+ * previous one is evicted before this name is ever minted.
+ *
+ * Same 64-character GitHub ceiling as {@link jitRunnerName} and the same
+ * response to running out of room: drop the slug rather than mint a name
+ * GitHub will reject or truncate unpredictably.
+ *
+ * Moved out of `src/runners/ephemeral.ts` (wave clean-2 lane C, cut (iii)
+ * layer debt): the same naming-convention shape as {@link jitRunnerName}
+ * above, and `scripts/check-warm-canary.mjs` (observation) needs the same
+ * name `warm-provision.sh`'s own marker file is checked against. Re-exported
+ * from `ephemeral.ts` under its original path.
+ */
+export function warmRunnerName(node: string, repo: string): string {
+	const slug = repo
+		.split('/')
+		.pop()!
+		.toLowerCase()
+		.replace(/[^a-z0-9._-]/g, '-');
+	const head = `${WARM_PREFIX}${node}-`;
+	const budget = MAX_RUNNER_NAME - head.length;
+	if (budget < 1) return `${WARM_PREFIX}${node}`.slice(0, MAX_RUNNER_NAME);
+	return `${head}${slug.slice(0, budget)}`;
+}
+
+/**
  * Recover the run id and mint time from a JIT unit or runner name.
  *
  * Parsing a name back is not elegant, but the alternative is state, and state is

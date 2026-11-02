@@ -14,6 +14,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createLiveDeps } from './refresh-cycle-live.mjs';
+import { drain, isDrained, undrain } from './drain-wait.mjs';
+
+/**
+ * DELEGATION, NOT REIMPLEMENTATION (wave clean-2 lane C, cut (iii) layer
+ * debt): `isDrained`/`drain`/`undrain` moved to `drain-wait.mjs` so
+ * `benchmark-fleet.mjs` (observation) can use them without reaching into
+ * this (lifecycle) file. This is the characterization that pins
+ * `createLiveDeps()`'s behaviour as byte-identical across that move — a
+ * plain reference-equality check, no fleet and no fake needed, because
+ * `createLiveDeps()` hands back the exact same function objects rather than
+ * wrappers around them.
+ */
+test('createLiveDeps() delegates isDrained/drain/undrain to the shared drain-wait primitive', () => {
+	const deps = createLiveDeps();
+	assert.equal(deps.isDrained, isDrained);
+	assert.equal(deps.drain, drain);
+	assert.equal(deps.undrain, undrain);
+});
 
 test('markChecked persists recheck-log.json through the shared atomic writer', () => {
 	const dir = mkdtempSync(join(tmpdir(), 'refresh-cycle-live-'));

@@ -528,6 +528,11 @@
     "why": "Wave clean-1 lane C (cut (iii)): JIT_PREFIX/WARM_PREFIX/parseJitName and the TMP_FREE_FLOOR_MB mint floor, moved out of src/runners/ephemeral.ts and ephemeral-admission.ts (both ci-scheduling) because observation's disk-watch.ts and runner-health-watch.ts read the same naming convention and the same floor to explain their own alerts, and neither domain can host the other's import legally — same shape as fleet-vocabulary.ts above."
   },
   {
+    "glob": "src/lib/warm-eligibility.ts",
+    "layer": "config",
+    "why": "Wave clean-2 lane C (cut (iii) layer debt): WarmEligibilityInput/warmEligibleSlots/warmMemorySlots/warmCacheEligible, moved out of src/runners/ephemeral.ts (ci-scheduling) because scripts/check-warm-canary.mjs (observation) measures the identical 'does this node have room for a warm listener' question over ssh and needs the same pure answer. Every export is total over its inputs with no file/network/clock access (isBackstopNode from lib/node-role.ts, already config, is the only import) — same 'one declaration, config layer' shape as jit-naming.ts and job-reserve.ts beside it. ephemeral.ts re-exports every name here unchanged."
+  },
+  {
     "glob": "src/lib/node-role.ts",
     "layer": "config"
   },
@@ -899,7 +904,14 @@
     "layer": "domain",
     "domain": "lifecycle",
     "part": "run",
-    "why": "Wave 5s lane D split of refresh-cycle.mjs (800-line ceiling): every live dependency that touches a real node, ssh, or this package's own CLIs (busyCount, drainCli, judgePressure, liveQueuePressure, createLiveDeps), a pure move. `part: run` rather than refresh-cycle.mjs's `core`, since this half is exactly the I/O the plan's core/run split is for; refresh-cycle.mjs re-exports every name here."
+    "why": "Wave 5s lane D split of refresh-cycle.mjs (800-line ceiling): every live dependency that touches a real node, ssh, or this package's own CLIs (judgePressure, liveQueuePressure, createLiveDeps), a pure move. busyCount/drainCli moved on again, to drain-wait.mjs (wave clean-2 lane C, cut (iii) layer debt). part: run rather than refresh-cycle.mjs's core, since this half is exactly the I/O the plan's core/run split is for; refresh-cycle.mjs re-exports every name here."
+  },
+  {
+    "glob": "scripts/lib/drain-wait.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "The drain, wait-until-idle and undrain primitive shared by refresh-cycle and benchmark --cadence. Draining and undraining a node is a lifecycle action, so it is filed there even though it reads expected-down's drain record. benchmark-fleet (observation) importing it stays recorded as layer debt: the real fix is moving --cadence's drain orchestration out of an observation tool."
   },
   {
     "glob": "scripts/lib/roster-eligibility.mjs",
@@ -1044,8 +1056,9 @@
   {
     "glob": "src/runners/speed-tier.ts",
     "layer": "domain",
-    "domain": "ci-scheduling",
-    "part": "core"
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave clean-2 lane C (cut (iii) layer debt): RECLASSIFIED from ci-scheduling to observation. The file's own header already says it: 'a PURE model of which claws are measurably slow, built from observed job history... PURE ON PURPOSE... no manifest read, no fs, no clock except the injectable nowMs'. Its one substantive dependency, job-history-stats.ts, is ALREADY observation/core. Every existing ci-scheduling consumer (placement-slow.ts, placement-node-state.ts, speed-heavy-cache.ts, scripts/traffic-status.mjs) keeps compiling and behaving unchanged: ci-scheduling importing observation is legal under cut (iii) (a domain reading an observation fact, never the reverse), the same direction census.ts reads in despite sitting under src/runners/. This is what lets scripts/check-warm-canary.mjs (observation) import buildSpeedModel directly without reaching UP into a ci-scheduling file."
   },
   {
     "glob": "src/runners/traffic.ts",
@@ -1252,9 +1265,8 @@
   },
   {
     "glob": "scripts/lib/runner-var.mjs",
-    "layer": "domain",
-    "domain": "ci-scheduling",
-    "part": "core"
+    "layer": "config",
+    "why": "Wave clean-2 lane C (cut (iii) layer debt): RECLASSIFIED from domain/ci-scheduling to config. Every export (runnerVarForm/readRunnerVar/repoVerdict) is pure — no I/O at all; readRunnerVar takes its own network call (readOnce) as a parameter rather than making one. That is the plan's own placement rule for 'declarative input', and it is why the file's own header already called itself 'pure, so the classification can be tested without a checkout or a token'. check-runner-var.mjs (observation) and reconcile-apply.mjs (lifecycle) both read this one pure rule; config is the layer BELOW both where a shared, domain-blind verdict legally lives — the same reason yaml-comments.mjs and read-retry-policy.mjs (which this file now imports directly, not through queue-health.mjs) sit there."
   },
   {
     "glob": "src/host-lease.ts",

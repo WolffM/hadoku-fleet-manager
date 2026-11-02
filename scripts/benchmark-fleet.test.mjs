@@ -412,8 +412,9 @@ test('zero failed units records an empty name list, not null', (t) => {
 
 /**
  * `--cadence` VALIDATES BEFORE IT EVER TOUCHES A NODE. Every one of these
- * refuses before `createLiveDeps()` is even constructed, so they are safe to
- * run against the real CLI with no fleet, no ssh and no state dir reachable.
+ * refuses before `runCadenceCli` ever calls `drain`/`busyCount`/`isDrained`,
+ * so they are safe to run against the real CLI with no fleet, no ssh and no
+ * state dir reachable.
  */
 test('--cadence refuses every flag combination that would defeat it', (t) => {
 	const s = sandbox(t);
@@ -443,15 +444,35 @@ test('--cadence refuses every flag combination that would defeat it', (t) => {
  * comment describing a bound that the code does not enforce is exactly the
  * failure this lane exists to prevent (AGENTS.md).
  */
-test('runCadenceCli never calls the UNBOUNDED liveDeps.waitDrained — only the bounded waitUntilDrained', () => {
+test('runCadenceCli never calls the UNBOUNDED createLiveDeps().waitDrained — only the bounded waitUntilDrained', () => {
 	const src = readFileSync(CLI, 'utf8');
 	const body = src.slice(src.indexOf('async function runCadenceCli'));
 	assert.doesNotMatch(
 		body,
-		/liveDeps\.waitDrained/,
-		'runCadenceCli must not call the 45-minute default — see CADENCE_WAIT_TIMEOUT_MS'
+		/liveDeps\.waitDrained|createLiveDeps/,
+		"runCadenceCli must not call the 45-minute default, or reach into lifecycle's " +
+			'createLiveDeps() at all — see lib/drain-wait.mjs (wave clean-2 lane C)'
 	);
 	assert.match(body, /waitUntilDrained\(\{[^}]*timeoutMs:\s*CADENCE_WAIT_TIMEOUT_MS/s);
+});
+
+/**
+ * THE DRAIN -> WAIT -> UNDRAIN SEQUENCE ITSELF is proven against fakes in
+ * `benchmark-cadence.test.mjs` (`runCadence`'s own tests) — unaffected by
+ * this file's wiring. What is new here, and only provable by reading the
+ * source the same way the test above does: `runCadenceCli` builds that
+ * sequence's `deps` from the SHARED `drain`/`undrain`/`isDrained` (wave
+ * clean-2 lane C's `lib/drain-wait.mjs`), not a private reimplementation —
+ * the same functions `refresh-cycle-live.mjs`'s `createLiveDeps()` delegates
+ * to (see `refresh-cycle-live.test.mjs`'s delegation test).
+ */
+test('runCadenceCli wires drain/undrain/isDrained from the shared drain-wait primitive', () => {
+	const src = readFileSync(CLI, 'utf8');
+	const body = src.slice(src.indexOf('async function runCadenceCli'));
+	assert.match(body, /drain:\s*\(n,\s*opts\)\s*=>\s*drain\(n,\s*opts\)/);
+	assert.match(body, /undrain:\s*\(n\)\s*=>\s*undrain\(n\)/);
+	assert.match(body, /isDrained:\s*\(n\)\s*=>\s*isDrained\(n\)/);
+	assert.match(src, /import\s*\{[^}]*\bdrain\b[^}]*\}\s*from\s*'\.\/lib\/drain-wait\.mjs'/s);
 });
 
 test('runCadenceCli measures with the bounded CADENCE_MEASURE_TIMEOUT_MS, not the 420s multi-node default', () => {

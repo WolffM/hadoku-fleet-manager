@@ -21,7 +21,12 @@
  * where it was never written; neither existed until now.
  */
 import { stripYamlComments } from './yaml-comments.mjs';
-import { READ_ATTEMPTS, describeReadFailure } from './queue-health.mjs';
+// From read-retry-policy.mjs directly, not queue-health.mjs (wave clean-2
+// lane C, cut (iii) layer debt): this file is a pure declarative verdict —
+// config, per the plan's own placement rule — and config may not reach up
+// into queue-health.mjs's observation-domain verdict logic, even though
+// queue-health.mjs re-exports the same two names unchanged.
+import { READ_ATTEMPTS, describeReadFailure } from './read-retry-policy.mjs';
 
 /** `vars.CI_RUNNER` in real YAML, never in a comment. */
 const REFERENCES = /vars\.CI_RUNNER/;

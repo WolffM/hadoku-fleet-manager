@@ -54,15 +54,6 @@ import {
 import { compareVersions, parseVersion } from './tool-release.mjs';
 import { errText } from './term.mjs';
 
-/** How long to wait for a node to go quiet before giving up and putting it back. */
-export const DRAIN_TIMEOUT_MS = 45 * 60_000;
-export const POLL_MS = 15_000;
-/**
- * A standing node's `hadoku-builder` label is stripped on the fast loop's NEXT
- * tick (~60s), so zero jobs at one instant is not quiet: a job can still be
- * assigned before the strip lands. Zero must HOLD for longer than a tick.
- */
-export const SETTLE_MS = 90_000;
 /** A waiting run younger than this is the normal trickle, not pressure. */
 export const PRESSURE_OLDEST_SECONDS = 60;
 
@@ -75,39 +66,6 @@ export const PRESSURE_OLDEST_SECONDS = 60;
  * per run, the most stale first, so the cycle stays one node out at a time.
  */
 export const RECHECK_DAYS = 7;
-
-/**
- * Poll `busy(node)` until it has read ZERO continuously for `settleMs`.
- * `busy` returns a job count, or null for "could not look", which is BUSY.
- * Pure over an injected clock `{ now(), sleep(ms) }`.
- */
-export async function waitUntilDrained({
-	node,
-	busy,
-	clock,
-	timeoutMs = DRAIN_TIMEOUT_MS,
-	pollMs = POLL_MS,
-	settleMs = SETTLE_MS,
-}) {
-	const start = clock.now();
-	let quietSince = null;
-	let last = 'no reading';
-	for (;;) {
-		const n = await busy(node);
-		if (n === 0) {
-			quietSince ??= clock.now();
-			if (clock.now() - quietSince >= settleMs) return { drained: true };
-			last = `idle for ${clock.now() - quietSince} ms of the ${settleMs} ms settle`;
-		} else {
-			quietSince = null;
-			last = n === null ? 'could not count running jobs (treated as busy)' : `${n} job(s) running`;
-		}
-		if (clock.now() - start >= timeoutMs) {
-			return { drained: false, reason: `not drained after ${timeoutMs} ms: ${last}` };
-		}
-		await clock.sleep(pollMs);
-	}
-}
 
 /**
  * Turn a node's probe into work and findings. Pure.
@@ -594,10 +552,22 @@ function lastCheckedMs(deps, name) {
 // (`./lib/refresh-cycle.mjs` / `./refresh-cycle.mjs`) keeps compiling
 // unchanged.
 // ---------------------------------------------------------------------------
+export { createLiveDeps, judgePressure, liveQueuePressure } from './refresh-cycle-live.mjs';
+
+// ---------------------------------------------------------------------------
+// THE DRAIN-AND-WAIT PRIMITIVE moved to drain-wait.mjs (wave clean-2 lane C,
+// cut (iii) layer debt): busyCount/drainCli/waitUntilDrained, plus the
+// timing constants waitUntilDrained defaults from, are observation/run so
+// `benchmark-fleet.mjs` may import them directly without reaching into this
+// (lifecycle) file. Re-exported here so every existing importer of THIS file
+// (bootcamp.mjs, bootcamp-idle.mjs, bootcamp-canary.mjs, reboot-claws.mjs,
+// refresh-cycle.test.mjs) keeps compiling and behaving unchanged.
+// ---------------------------------------------------------------------------
 export {
 	busyCount,
-	createLiveDeps,
 	drainCli,
-	judgePressure,
-	liveQueuePressure,
-} from './refresh-cycle-live.mjs';
+	waitUntilDrained,
+	DRAIN_TIMEOUT_MS,
+	POLL_MS,
+	SETTLE_MS,
+} from './drain-wait.mjs';

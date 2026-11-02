@@ -63,19 +63,25 @@ import {
 } from './lib/benchmark-inventory.mjs';
 import { measureOneNode } from './lib/benchmark-measure.mjs';
 // THE SAME DRAIN `ci:toolchain-refresh` (#69) USES, reused rather than
-// reimplemented: `createLiveDeps()` already wraps drain-node.mjs and the
-// wait-until-quiet poll; `busyCount` is the one-shot "is it busy right now"
-// question the cadence asks BEFORE committing to a drain-wait on a node that
-// is already busy — see `runCadence` below for why that distinction matters
-// on a cron with a 1500s timeout.
+// reimplemented: `drain`/`undrain`/`isDrained` already wrap drain-node.mjs
+// and `waitUntilDrained` the wait-until-quiet poll; `busyCount` is the
+// one-shot "is it busy right now" question the cadence asks BEFORE
+// committing to a drain-wait on a node that is already busy — see
+// `runCadence` below for why that distinction matters on a cron with a
+// 1500s timeout. Imported from `lib/drain-wait.mjs` rather than
+// `lib/refresh-cycle.mjs` (which still re-exports every one of these for
+// its OTHER callers): this file is observation, refresh-cycle.mjs is
+// lifecycle, and the two domains may not import each other directly —
+// `drain-wait.mjs` is the shared stratum both may reach (wave clean-2
+// lane C, cut (iii) layer debt).
 //
-// `waitUntilDrained` is imported DIRECTLY rather than through
-// `createLiveDeps().waitDrained` — that wrapper bakes in `DRAIN_TIMEOUT_MS`
-// (45 minutes), sized for an OPERATOR'S drain where "it eventually comes
-// back" is the only promise. The cadence runs inside a 1500s cron; see
+// `waitUntilDrained` is called with an explicit `timeoutMs` rather than
+// through a `waitDrained` wrapper that bakes in `DRAIN_TIMEOUT_MS` (45
+// minutes), sized for an OPERATOR'S drain where "it eventually comes back"
+// is the only promise. The cadence runs inside a 1500s cron; see
 // `CADENCE_WAIT_TIMEOUT_MS` below for the bounded call this file makes
 // instead, with the same `busyCount` and a fresh clock.
-import { busyCount, createLiveDeps, waitUntilDrained } from './lib/refresh-cycle.mjs';
+import { busyCount, drain, isDrained, undrain, waitUntilDrained } from './lib/drain-wait.mjs';
 import { BOLD, YELLOW, RESET } from './lib/term.mjs';
 
 // F10: the raw escapes and errText live once in scripts/lib/term.mjs; this
@@ -86,13 +92,14 @@ const OFF = RESET;
 
 /**
  * THE CLI GLUE FOR `--cadence`: validates the flag combination, wires
- * `runCadence` to the REAL fleet (the live manifest, `createLiveDeps()`,
- * `busyCount`, and `measureOneNode` over ssh), bands the rest of the lead
- * window into advisories/findings, persists what it measured, and exits.
+ * `runCadence` to the REAL fleet (the live manifest, `drain`/`undrain`/
+ * `isDrained`/`busyCount`, and `measureOneNode` over ssh), bands the rest of
+ * the lead window into advisories/findings, persists what it measured, and
+ * exits.
  *
  * Everything decision-shaped above this function is pure and tested directly;
  * this is the one place that touches argv, a real node, and stdout, which is
- * why it is untested on its own — same division as `createLiveDeps()` itself.
+ * why it is untested on its own — same division as `drain-wait.mjs` itself.
  */
 async function runCadenceCli({ dueDays, jsonOut, passthru, force, refuseIf, log, emitter }) {
 	const refuse = (msg) => {
@@ -126,10 +133,9 @@ async function runCadenceCli({ dueDays, jsonOut, passthru, force, refuseIf, log,
 	// into skippedByRole by dueNodes, same split --report relies on.
 	const leadAged = dueNodes(leadDays, null);
 
-	const liveDeps = createLiveDeps();
-	// A FRESH CLOCK, not `createLiveDeps()`'s — that one is private to its own
-	// `waitDrained`, which is exactly the unbounded (45-minute) call this file
-	// must NOT make. `busyCount` is the same prober either way.
+	// A FRESH CLOCK, used only with the explicit `timeoutMs` below — never the
+	// unbounded (45-minute) `DRAIN_TIMEOUT_MS` default, which this cron-bound
+	// file must NOT wait out. `busyCount` is the same prober either way.
 	const clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
 
 	// `state.held` is the node WE hold drained, named for `cadenceSignalHandler`
@@ -146,15 +152,15 @@ async function runCadenceCli({ dueDays, jsonOut, passthru, force, refuseIf, log,
 		outcome = await runCadence({
 			candidates: leadAged.due,
 			deps: {
-				isDrained: (n) => liveDeps.isDrained(n),
+				isDrained: (n) => isDrained(n),
 				busy: (n) => busyCount(n),
-				drain: (n, opts) => liveDeps.drain(n, opts),
+				drain: (n, opts) => drain(n, opts),
 				// BOUNDED (the manager's safety finding on this lane): `--cadence`
 				// runs off a cron with a real, enforced ceiling; see
 				// `CADENCE_WAIT_TIMEOUT_MS`'s own comment for the full budget.
 				waitDrained: (n) =>
 					waitUntilDrained({ node: n, busy: busyCount, clock, timeoutMs: CADENCE_WAIT_TIMEOUT_MS }),
-				undrain: (n) => liveDeps.undrain(n),
+				undrain: (n) => undrain(n),
 			},
 			measure: (n) => {
 				const res = measureOneNode(n, {

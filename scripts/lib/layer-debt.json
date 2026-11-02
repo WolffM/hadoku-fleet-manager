@@ -1,23 +1,11 @@
 [
   {
     "from": "scripts/benchmark-fleet.mjs",
-    "to": "scripts/lib/refresh-cycle.mjs"
+    "to": "scripts/lib/drain-wait.mjs"
   },
   {
     "from": "scripts/check-fleet-toolchain.mjs",
     "to": "scripts/lib/tool-release.mjs"
-  },
-  {
-    "from": "scripts/check-runner-var.mjs",
-    "to": "scripts/lib/runner-var.mjs"
-  },
-  {
-    "from": "scripts/check-warm-canary.mjs",
-    "to": "src/runners/ephemeral.ts"
-  },
-  {
-    "from": "scripts/check-warm-canary.mjs",
-    "to": "src/runners/speed-tier.ts"
   },
   {
     "from": "scripts/converge-toolchain.mjs",
@@ -96,10 +84,6 @@
     "to": "scripts/node-users-cutover.mjs"
   },
   {
-    "from": "scripts/lib/reconcile-apply.mjs",
-    "to": "scripts/lib/runner-var.mjs"
-  },
-  {
     "from": "scripts/service-inventory.mjs",
     "to": "scripts/lib/slice-inventory-run.mjs"
   },
@@ -116,11 +100,11 @@
     "to": "src/runners/placement.ts"
   },
   {
-    "from": "src/runners/prove-job.ts",
+    "from": "src/runners/prove-job-types.ts",
     "to": "src/runners/ephemeral-exec.ts"
   },
   {
-    "from": "src/runners/prove-job-types.ts",
+    "from": "src/runners/prove-job.ts",
     "to": "src/runners/ephemeral-exec.ts"
   }
 ]
