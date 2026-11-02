@@ -17,6 +17,20 @@ export const FFMPEG_CAPABILITY: Capability = {
 	verify: 'probe',
 	description: 'A working ffmpeg binary. Required of every managed node.',
 };
+export const MPV_CAPABILITY: Capability = {
+	id: 'mpv',
+	label: 'mpv',
+	kind: 'identity',
+	surface: 'toolchain',
+	verify: 'probe',
+	description:
+		'A working headless mpv (`--ao=null --vo=null`). Required of every managed node: ' +
+		'nightvibe joined the roster on 2026-11-01 and runs on the general pool, and ' +
+		'its suite drives a REAL mpv over IPC (tests/test_speaker.py). claw-2 had none, so ' +
+		"the job died at its tool check and nightvibe's deploys, gated on that job, stopped " +
+		'(fleet-manager#44). Toolchain rather than a label for the reason rust gives: any ' +
+		'claw can draw the job.',
+};
 export const GH_CAPABILITY: Capability = {
 	id: 'gh',
 	label: 'GitHub CLI',

@@ -266,6 +266,13 @@ else
 	say ffmpeg no absent
 fi
 
+# --- mpv: PLAY 0.2s of a sine through the null outputs, as nightvibe's suite does
+if ! command -v mpv >/dev/null 2>&1; then say mpv no absent
+elif timeout 20 mpv --no-config --really-quiet --ao=null --vo=null --idle=no \
+	'av://lavfi:sine=frequency=440:duration=0.2' </dev/null >/dev/null 2>&1; then
+	say mpv ok "$(mpv --version 2>/dev/null | head -1 | cut -d' ' -f2)"
+else say mpv no play-failed; fi
+
 # --- the NVENC family: a REAL encode per codec, never an encoder listing -----
 #
 # One loop, because the trap is identical for every codec and it was written out

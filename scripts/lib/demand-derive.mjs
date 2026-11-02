@@ -182,6 +182,7 @@ export function deriveCapabilities(jobText) {
 	)
 		caps.push('playwright');
 	if (/(^|[\s;&|("'`])ffmpeg[\s]/m.test(jobText)) caps.push('ffmpeg');
+	if (/(^|[\s;&|("'`])mpv[\s]/m.test(jobText)) caps.push('mpv');
 	if (/uses:\s*docker\//.test(jobText) || /(^|[\s;&|("'`])docker[\s]/m.test(jobText))
 		caps.push('docker');
 	// `jdk21` — NOT `jdk`. the earned capability is registered as `jdk21`

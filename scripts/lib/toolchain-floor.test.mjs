@@ -429,7 +429,18 @@ test('an unscoped tool applies to every managed node, the backstop included', ()
 		applicableRepairs(backstop)
 			.map(([id]) => id)
 			.sort(),
-		['claude', 'deno-user', 'docker', 'ffmpeg', 'gh', 'jdk21', 'rust', 'rust-wasm32', 'yt-dlp-user']
+		[
+			'claude',
+			'deno-user',
+			'docker',
+			'ffmpeg',
+			'gh',
+			'jdk21',
+			'mpv',
+			'rust',
+			'rust-wasm32',
+			'yt-dlp-user',
+		]
 	);
 });
 

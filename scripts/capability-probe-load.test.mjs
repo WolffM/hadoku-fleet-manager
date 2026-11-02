@@ -237,3 +237,27 @@ test('a probe killed mid-measurement removes its scratch, though the dir was mad
 		rmSync(h.root, { recursive: true, force: true });
 	}
 });
+
+// mpv is PLAYED, not listed: nightvibe's suite drives a real headless mpv, so a
+// binary that exists but cannot open a stream must answer `no` (#44).
+test('mpv: absent, plays, or present-but-cannot-play — three different answers', () => {
+	const h = harness();
+	try {
+		const bin = join(h.root, 'bin');
+		for (const u of ['timeout', 'head', 'cut']) symlinkSync(which(u), join(bin, u));
+		const mpv = (playExit) => {
+			writeFileSync(
+				join(bin, 'mpv'),
+				`#!/bin/sh\n[ "$1" = --version ] && { echo 'mpv v0.40.0 Copyright'; exit 0; }\nexit ${playExit}\n`
+			);
+			chmodSync(join(bin, 'mpv'), 0o755);
+		};
+		assert.match(h.run('presence'), /^CAP mpv no absent$/m);
+		mpv(0);
+		assert.match(h.run('presence'), /^CAP mpv ok v0\.40\.0$/m);
+		mpv(2);
+		assert.match(h.run('presence'), /^CAP mpv no play-failed$/m);
+	} finally {
+		rmSync(h.root, { recursive: true, force: true });
+	}
+});

@@ -222,6 +222,12 @@ export const REPAIRS = {
 		detect: 'ffmpeg -version >/dev/null 2>&1 && echo OK',
 		repair: aptRepair('ffmpeg'),
 	},
+	mpv: {
+		apt: 'mpv',
+		why: 'nightvibe’s suite drives a real headless mpv on the general pool (#44).',
+		detect: 'mpv --version >/dev/null 2>&1 && echo OK',
+		repair: aptRepair('mpv'),
+	},
 	rust: {
 		why:
 			'brave-quartet builds on the general pool, so rustc is a requirement of every ' +

@@ -398,6 +398,7 @@ test('the backstop is evaluated for REAL, never reported as tools: []', async ()
 				'ffmpeg',
 				'gh',
 				'jdk21',
+				'mpv',
 				'rust',
 				'rust-wasm32',
 				'yt-dlp-user',

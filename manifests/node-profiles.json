@@ -150,7 +150,7 @@
           }
         }
       },
-      "capabilities": ["ffmpeg", "python-venv"],
+      "capabilities": ["ffmpeg", "mpv", "python-venv"],
       "$why-capabilities": "THE TOOLCHAIN FLOOR, expressed as capabilities rather than as a package list, and validated against src/capabilities.ts at load time. A package name is one distro's answer to a capability question; `python3-venv` does not exist on Arch because venv ships with python, and every declared package would have read as MISSING on a machine that had the capability. node-bootstrap.sh proves these by EXECUTING scripts/capability-probe.sh, and reports a node that misses one as not ready. `gh` is NOT added here — see toolchain.$why-gh: this array is the imaging-time PROBE floor, and P1.5 only owed the package that puts the binary on disk.",
       "toolchain": {
         "$why": "The apt package list is distro-specific, which is why it lives inside a profile whose id names the distro rather than in a shared block. Everything here is either something a gate reads (jq, git), something a probe needs (ffmpeg, python3-venv), or something an operator needed at 2am and did not have (btop, lsof, strace, smartmontools).",
@@ -178,6 +178,7 @@
           "extra-cmake-modules",
           "fail2ban",
           "ffmpeg",
+          "mpv",
           "gettext",
           "gh",
           "git",
@@ -382,7 +383,7 @@
           }
         ]
       },
-      "capabilities": ["ffmpeg", "python-venv"],
+      "capabilities": ["ffmpeg", "mpv", "python-venv"],
       "$why-capabilities": "gh is NOT added here — see toolchain.$why-gh on the desktop profile, which this one shares word for word: this array is the imaging-time PROBE floor and P1.5 only owed the package that puts the binary on disk.",
       "toolchain": {
         "$why-gh": "See toolchain.$why-gh on desktop-debian-trixie, which this profile shares. Note it was CORRECTED on 2026-09-08: gh IS in trixie/main at 2.46.0-3, so the third-party source is a currency fix (claw-4 runs 2.100.0) and never was the thing making the package resolvable.",
@@ -409,6 +410,7 @@
           "extra-cmake-modules",
           "fail2ban",
           "ffmpeg",
+          "mpv",
           "gettext",
           "gh",
           "git",

@@ -73,6 +73,7 @@ const TOOLS = [
 	'bash',
 	'cargo',
 	'ffmpeg',
+	'mpv',
 	'docker',
 	'unzip',
 	'trunk',
