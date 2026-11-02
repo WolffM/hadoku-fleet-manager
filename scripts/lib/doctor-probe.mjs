@@ -305,9 +305,7 @@ export function doctorProbe({
 		// ── every pm2 manager, its ceiling and how many apps it runs ─────────────
 		//
 		// Claimed against the tenant registry and the app layer's host list by
-		// doctor-run (lib/hosting-claims.mjs); the node only measures. The
-		// parent cgroup's ceiling rides along: a tenant manager is bounded by
-		// its hosting slice, not its own unit (lib/pm2-ceiling.mjs). The app
+		// doctor-run (lib/hosting-claims.mjs); the node only measures. The app
 		// count is the daemon's direct children, from the kernel: pm2's own list
 		// also carries stopped apps, and an "idle" manager is one RUNNING none.
 		"if PU=$(systemctl list-units --no-legend --plain 'pm2-*.service' 2>/dev/null); then",
@@ -315,7 +313,7 @@ export function doctorProbe({
 		'  for u in $(printf "%s\\n" "$PU" | awk "NF{print \\$1}"); do',
 		'    cg=$(systemctl show -P ControlGroup "$u" 2>/dev/null); m=$(systemctl show -P MainPID "$u" 2>/dev/null)',
 		'    if [ "${m:-0}" -gt 0 ] 2>/dev/null; then a=$(ps --ppid "$m" --no-headers 2>/dev/null | wc -l); else a=U; fi',
-		'    say "pm2Unit.$u" "$(cat "/sys/fs/cgroup$cg/memory.max" 2>/dev/null || echo U) $a ${cg:-U} $(cat "/sys/fs/cgroup${cg%/*}/memory.max" 2>/dev/null || echo U)"',
+		'    say "pm2Unit.$u" "$(cat "/sys/fs/cgroup$cg/memory.max" 2>/dev/null || echo U) $a"',
 		'  done',
 		'else unk pm2Units "systemctl could not list this node\'s pm2 units"; fi',
 		'if E=$(journalctl -b 0 -p err --no-pager 2>/dev/null); then say errorsThisBoot "$(printf "%s\\n" "$E" | grep -vcE "ACPI|Bluetooth")"; else unk errorsThisBoot "the journal could not be read by this user"; fi',

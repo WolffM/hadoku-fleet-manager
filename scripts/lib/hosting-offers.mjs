@@ -19,14 +19,10 @@
  * (the kernel's `memory.max`): that is what it may take, and charging it
  * nothing would make its memory vanish from the offer the day it was bounded.
  * An unbounded one is charged at what it holds now, and named, because
- * `not-beside-unbounded` reads it. A tenant's own manager runs in its hosting
- * slice, which holds the ceiling (lib/pm2-ceiling.mjs); when that tenant is
- * declared here its memory is already in the tenant's charge, so it is not
- * charged again (fleet-manager#46). Nothing about the
+ * `not-beside-unbounded` reads it. Nothing about the
  * node is taken from the manifest's rounded figures.
  */
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
-import { mib, pm2Ceiling } from './pm2-ceiling.mjs';
 import { parseInstalledVersion } from './tool-release.mjs';
 
 /** CI jobs a hosting node keeps by default. The operator's dial; see the header. */
@@ -73,7 +69,7 @@ echo "routeDev=$dev"
 echo "wireless=$([ -n "$dev" ] && [ -d "/sys/class/net/$dev/wireless" ] && echo yes || echo no)"
 for u in $(systemctl list-units --no-legend --plain 'pm2-*.service' 2>/dev/null | awk '{print $1}'); do
 	cg=$(systemctl show "$u" -p ControlGroup --value 2>/dev/null)
-	echo "pm2=$u $(cat /sys/fs/cgroup$cg/memory.max 2>/dev/null || echo ?) $(cat /sys/fs/cgroup$cg/memory.current 2>/dev/null || echo ?) \${cg:-?} $(cat /sys/fs/cgroup\${cg%/*}/memory.max 2>/dev/null || echo ?)"
+	echo "pm2=$u $(cat /sys/fs/cgroup$cg/memory.max 2>/dev/null || echo ?) $(cat /sys/fs/cgroup$cg/memory.current 2>/dev/null || echo ?)"
 done
 echo OFFER-END
 `;
@@ -93,8 +89,15 @@ export function parseOfferProbe(stdout) {
 		const k = line.slice(0, i).trim();
 		const v = line.slice(i + 1).trim();
 		if (k === 'pm2') {
-			const [unit, ownMax, cur, cg, sliceMax] = v.split(/\s+/);
-			pm2.push({ unit, ...pm2Ceiling({ ownMax, sliceMax, cg }), currentMb: mib(cur) });
+			const [unit, max, cur] = v.split(/\s+/);
+			const mib = (x) => (/^\d+$/.test(x ?? '') ? Math.round(Number(x) / 1048576) : null);
+			pm2.push({
+				unit,
+				// An unreadable ceiling is NOT a ceiling: only a number is bounded.
+				bounded: mib(max) !== null,
+				maxMb: mib(max),
+				currentMb: mib(cur),
+			});
 		} else if (k === 'tool') {
 			const [name, verdict] = v.split(/\s+/);
 			tools[name] = verdict === 'ok';
@@ -151,14 +154,9 @@ export function offerFor({
 	const minFreeMb = machine?.minFreeMb ?? 1024;
 	const tenantMb = tenants.reduce((s, t) => s + t.memoryMb, 0);
 	const tenantCores = tenants.reduce((s, t) => s + t.cores, 0);
-	// A tenant's own manager, in the slice of a tenant declared here, is
-	// already in `tenantMb`: charging it again would count that tenant twice.
-	const declared = new Set(tenants.map((t) => t.tenant));
-	const byTenant = (p) => p.tenant !== null && declared.has(p.tenant);
-	const neighbours = facts.pm2.filter((p) => !byTenant(p));
-	const unbounded = neighbours.filter((p) => !p.bounded);
+	const unbounded = facts.pm2.filter((p) => !p.bounded);
 	const unboundedMb = unbounded.reduce((s, p) => s + (p.currentMb ?? 0), 0);
-	const boundedMb = neighbours.filter((p) => p.bounded).reduce((s, p) => s + p.maxMb, 0);
+	const boundedMb = facts.pm2.filter((p) => p.bounded).reduce((s, p) => s + p.maxMb, 0);
 	const ciReserveMb = ciJobMb === null ? null : ciJobMb * CI_KEEP_JOBS;
 	const memoryMb =
 		facts.memTotalMb === null || ciReserveMb === null
@@ -186,7 +184,6 @@ export function offerFor({
 		pm2: {
 			present: facts.pm2.length > 0,
 			unbounded: unbounded.map((p) => p.unit),
-			tenantCharged: facts.pm2.filter(byTenant).map((p) => p.unit),
 			unboundedMb,
 			boundedMb,
 		},

@@ -1,6 +1,5 @@
 import { cpuSensor, sensorMap, parseSmart } from './doctor-parse.mjs';
 import { parseWifiManager } from './doctor-probe.mjs';
-import { pm2Ceiling } from './pm2-ceiling.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // THE FACET
@@ -322,13 +321,12 @@ function failedUnits(facts, unknown) {
 }
 
 /**
- * The probe's pm2 managers: `bounded` from the unit's own cgroup ceiling or
- * its tenant's hosting slice (lib/pm2-ceiling.mjs), `tenant` the app whose
- * slice holds it, `apps` the daemon's running children (null: not counted).
+ * The probe's pm2 managers: `bounded` from the unit's own cgroup ceiling,
+ * `apps` the daemon's running children (null: not counted).
  *
  * `units: null` with a `why` is "could not look"; `units: []` is a counted zero.
  *
- * @returns {{units: {unit: string, bounded: boolean, tenant: string|null, apps: number|null}[]|null, why: string|null}}
+ * @returns {{units: {unit: string, bounded: boolean, apps: number|null}[]|null, why: string|null}}
  */
 function pm2Units(facts, unknown) {
 	if (facts['pm2Units.count'] === undefined) {
@@ -341,13 +339,11 @@ function pm2Units(facts, unknown) {
 		.filter((k) => k.startsWith('pm2Unit.'))
 		.sort()
 		.map((k) => {
-			const [ownMax, apps, cg, sliceMax] = facts[k].split(/\s+/);
-			// An unreadable ceiling is NOT a ceiling: `U` reads as unbounded.
-			const { bounded, tenant } = pm2Ceiling({ ownMax, sliceMax, cg });
+			const [max, apps] = facts[k].split(/\s+/);
 			return {
 				unit: k.slice('pm2Unit.'.length),
-				bounded,
-				tenant,
+				// An unreadable ceiling is NOT a ceiling: `U` reads as unbounded.
+				bounded: /^\d+$/.test(max ?? ''),
 				apps: /^\d+$/.test(apps ?? '') ? Number(apps) : null,
 			};
 		});

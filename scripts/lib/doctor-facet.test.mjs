@@ -17,7 +17,6 @@ import {
 	FAILED_CLAW4,
 	failedFacet,
 	PM2_HOKON,
-	PM2_CLAW4,
 	PM2_CLAW6,
 	PM2_CLAW5,
 	pm2Facet,
@@ -280,35 +279,19 @@ void test('healthFacet: a failed unit whose timestamp the node withheld is kept,
 
 void test('healthFacet: pm2Units carries each manager, its ceiling and running apps, off the real capture', () => {
 	assert.deepEqual(pm2Facet(PM2_HOKON).pm2Units, {
-		units: [{ unit: 'pm2-hadoku.service', bounded: true, tenant: null, apps: 28 }],
+		units: [{ unit: 'pm2-hadoku.service', bounded: true, apps: 28 }],
 		why: null,
 	});
 	assert.deepEqual(pm2Facet(PM2_CLAW6).pm2Units.units, [
-		{ unit: 'pm2-hadoku.service', bounded: false, tenant: null, apps: 0 },
+		{ unit: 'pm2-hadoku.service', bounded: false, apps: 0 },
 	]);
 	assert.deepEqual(pm2Facet(PM2_CLAW5).pm2Units, { units: [], why: null });
-});
-
-void test('healthFacet: a tenant manager is bounded by its hosting slice, though its own unit reads max (claw-4, fleet-manager#46)', () => {
-	assert.deepEqual(pm2Facet(PM2_CLAW4).pm2Units.units, [
-		{ unit: 'pm2-archivebot-svc.service', bounded: true, tenant: 'archivebot', apps: 1 },
-		{ unit: 'pm2-hadoku.service', bounded: true, tenant: null, apps: 0 },
-		{ unit: 'pm2-pygmalion-svc.service', bounded: true, tenant: 'pygmalion', apps: 1 },
-	]);
-	// system.slice's ceiling is shared by the whole node: it bounds no one manager.
-	assert.deepEqual(
-		pm2Facet([
-			'D pm2Units.count 1',
-			'D pm2Unit.pm2-hadoku.service max 0 /system.slice/pm2-hadoku.service 8589934592',
-		]).pm2Units.units,
-		[{ unit: 'pm2-hadoku.service', bounded: false, tenant: null, apps: 0 }]
-	);
 });
 
 void test('healthFacet: an unreadable ceiling is unbounded and an uncounted manager has apps null', () => {
 	assert.deepEqual(
 		pm2Facet(['D pm2Units.count 1', 'D pm2Unit.pm2-hadoku.service U U']).pm2Units.units,
-		[{ unit: 'pm2-hadoku.service', bounded: false, tenant: null, apps: null }]
+		[{ unit: 'pm2-hadoku.service', bounded: false, apps: null }]
 	);
 	const blind = pm2Facet(["U pm2Units systemctl could not list this node's pm2 units"]);
 	assert.equal(blind.pm2Units.units, null, 'could not look is never an empty list');
