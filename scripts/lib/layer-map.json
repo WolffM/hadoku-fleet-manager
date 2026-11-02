@@ -1516,6 +1516,12 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/pm2-ceiling.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core"
+  },
+  {
     "glob": "scripts/lib/hosting-plan.mjs",
     "layer": "domain",
     "domain": "tenancy",

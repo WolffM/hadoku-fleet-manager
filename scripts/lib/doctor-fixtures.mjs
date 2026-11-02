@@ -289,6 +289,13 @@ export const failedFacet = (lines) =>
 export const PM2_HOKON = ['D pm2Units.count 1', 'D pm2Unit.pm2-hadoku.service 34359738368 28'];
 export const PM2_CLAW6 = ['D pm2Units.count 1', 'D pm2Unit.pm2-hadoku.service max 0'];
 export const PM2_CLAW5 = ['D pm2Units.count 0'];
+/** claw-4, 2026-11-02: two service tenants bounded by their hosting slice, and the admin pm2 by its own unit. */
+export const PM2_CLAW4 = [
+	'D pm2Units.count 3',
+	'D pm2Unit.pm2-archivebot-svc.service max 1 /hosting.slice/hosting-archivebot.slice/pm2-archivebot-svc.service 1073741824',
+	'D pm2Unit.pm2-hadoku.service 536870912 0 /system.slice/pm2-hadoku.service max',
+	'D pm2Unit.pm2-pygmalion-svc.service max 1 /hosting.slice/hosting-pygmalion.slice/pm2-pygmalion-svc.service 536870912',
+];
 
 export const pm2Facet = (lines) =>
 	healthFacet({ node: 'claw-x', probe: parseDoctor(workProbe(lines)) });
