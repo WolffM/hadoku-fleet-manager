@@ -110,7 +110,7 @@ Every `fleet …` command below is checked against `src/cli.ts`'s door table by
    smaller roster; `fleet node-status` no longer lists `<node>`.
 
 5. **Tailnet removal.** GAP, operator-only (manual by design: this repo does
-   not hold tailnet admin credentials — see `docs/hokon-fleet-ownership`-style
+   not hold tailnet admin credentials — see the ownership
    boundaries in this repo's `AGENTS.md`). Where: the Tailscale admin console.
    As: the operator, directly — not through any `fleet` command. `fleet
 retire` prints this as a remaining step; it cannot do it for you.

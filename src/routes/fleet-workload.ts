@@ -13,7 +13,7 @@ import { logger, stateDir } from '../host.js';
  * id, PLUS whether the facet file itself is corrupt (wave 4e, #102) — the one
  * state-dir read `buildFleetReport` needs to render each node's
  * `workloadGates` reason via the shared `workloadGateContext`
- * (`src/capabilities.ts`). A real read on every call, like
+ * (`src/lib/workload-gate.ts`). A real read on every call, like
  * `loadManifestNodes()` in `fleet-manifest.ts`; `buildFleetReport`'s own
  * parameter is where a test replaces it. See `measured.ts#proofFileStatus`
  * for why `corrupt` is checked FIRST and the per-capability reads are

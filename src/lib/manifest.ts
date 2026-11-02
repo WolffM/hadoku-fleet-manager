@@ -122,7 +122,7 @@ export interface ManifestNode extends RegistryNode {
 	 */
 	/**
 	 * Repos this ephemeral node keeps a STANDING runner for. Declared in the
-	 * manifest and read by scripts/admin/reconcile-fleet-runners.mjs, which
+	 * manifest and read by scripts/reconcile-fleet-runners.mjs, which
 	 * parses the file itself — nothing in mgmt-api reads it, so this member
 	 * exists to describe the file, not to be consumed here.
 	 */

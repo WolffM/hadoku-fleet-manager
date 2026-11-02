@@ -492,7 +492,7 @@ export const REPAIRS = {
 	 * `minAgeOf` and `resolveInstallTarget` all key off ONE `version`+`latest`
 	 * pair per tool, and merging the two would force one minAge clock and one
 	 * `latest` shape onto two vendors that do not share either. The CAPABILITY
-	 * (`src/capabilities.ts` `jdk21`) is still singular: a node either proves
+	 * (`src/lib/capability-registry-label.ts` `jdk21`) is still singular: a node either proves
 	 * both halves by execution or it does not earn the label.
 	 *
 	 * SCOPED BY MEMORY, NOT BY NAME (`installedRamAtLeast`, above) — forge's

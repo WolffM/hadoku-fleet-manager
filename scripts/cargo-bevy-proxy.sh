@@ -23,7 +23,7 @@
 # claw-2 differ by 2% and rank swapped — cannot flip anyone across it.
 #
 # THE PROBE MEASURES, THE REGISTRY JUDGES: this prints a number and never
-# decides. See `CapabilityMeasure` in src/capabilities.ts.
+# decides. See `CapabilityMeasure` in src/lib/capability-registry.ts.
 #
 # Must fit inside capability-probe.sh's 180s budget alongside every other
 # capability, so it cannot build a workspace. It compiles synthetic,

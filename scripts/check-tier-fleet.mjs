@@ -128,7 +128,7 @@ const usedAllowlist = new Set();
  *
  * DERIVED from the one roster, never hand-listed: the array this replaces held
  * 15 repos and disagreed with the header checker's 14 on seven names in both
- * directions. See scripts/admin/lib/fleet-roster.mjs.
+ * directions. See scripts/lib/fleet-roster.mjs.
  */
 const FLEET = allRepos().map((r) => r.split('/')[1]);
 

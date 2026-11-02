@@ -13,7 +13,7 @@
  * `GhLike`/`ShellLike` stayed here until wave clean2 lane B moved the TYPE
  * (not the logic) to `fleet-vocabulary.ts`, re-exported from here so every
  * external importer still resolves them at this path. This file re-exports
- * `__resetTarballCacheForTesting` so `src/tests/warm-cache.test.ts` (out of
+ * `__resetTarballCacheForTesting` so `src/tests/helpers/warm-cache-rig.ts` (out of
  * scope for this split) keeps resolving it from here unchanged. What stays
  * is the WARM (standing) listener: its own mint/evict/withhold/read path
  * never shared a GitHub call shape with the JIT side, only a few small

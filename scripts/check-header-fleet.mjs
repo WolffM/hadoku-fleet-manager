@@ -152,7 +152,7 @@ const REF = 'the shipped default branch';
  * hand-listed. The array this replaces held 14 repos while the tier checker
  * held 15 and coverage held 24; `hadoku-filetransfer` consumes the package in
  * `packages/ui/package.json` and had never been added, so every rule below
- * silently skipped it. See scripts/admin/lib/fleet-roster.mjs.
+ * silently skipped it. See scripts/lib/fleet-roster.mjs.
  */
 const FLEET = namesWith('uiApp');
 

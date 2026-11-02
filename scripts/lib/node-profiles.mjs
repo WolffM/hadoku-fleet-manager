@@ -165,7 +165,7 @@ function validateCapabilityFloor(ids, what) {
 		const cap = capability(id);
 		if (!cap) {
 			fail(
-				`${what}.capabilities claims "${id}", which src/capabilities.ts does not define. ` +
+				`${what}.capabilities claims "${id}", which src/lib/capability-registry*.ts does not define. ` +
 					`A capability nothing defines is a promise nothing can check.`
 			);
 		}

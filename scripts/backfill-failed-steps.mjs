@@ -25,7 +25,7 @@
  *
  * The only way to durably change a record is to change the object the live
  * process is holding. So the work moved INTO the library — `backfillFailedSteps`
- * in `src/job-history.ts`, reached over the loopback API — and this file is now
+ * in `src/job-history-backfill.ts`, reached over the loopback API — and this file is now
  * the operator's door to it, nothing more.
  *
  *   node scripts/backfill-failed-steps.mjs [--max 2000] [--concurrency 5]

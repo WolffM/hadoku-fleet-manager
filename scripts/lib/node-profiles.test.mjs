@@ -234,7 +234,10 @@ test('a capability the registry does not define is refused', () => {
 			p.capabilities = ['ffmpeg', 'rustc'];
 		})
 	);
-	assert.throws(() => loadNodeProfiles({ path }), /claims "rustc", which src\/capabilities\.ts/);
+	assert.throws(
+		() => loadNodeProfiles({ path }),
+		/claims "rustc", which src\/lib\/capability-registry\*\.ts/
+	);
 });
 
 test('a capability no PROBE can execute is refused, even though it is real', () => {

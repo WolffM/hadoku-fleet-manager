@@ -95,7 +95,7 @@ export function ruleHolds(rule, offer) {
 /**
  * Every rule a request is placed by: its own `placement.require`, plus what its
  * KIND implies. A `service` tenant needs a node that has PROVEN it can serve a
- * placed service, `label:service-host` (src/capabilities.ts; fleet-manager#16):
+ * placed service, `label:service-host` (src/lib/capability-registry-label.ts; fleet-manager#16):
  * deploy tools on a tenant's PATH, the node's own tunnel up, and its state root.
  * Implied rather than written into each hosting.json, so no service tenant can
  * forget it and none is placed on a node that would fail its first deploy.

@@ -69,7 +69,7 @@ export function validateCapabilities(
 					id,
 					`declares label "${id}", which is in no capability registry entry. A label is a ` +
 						`PROMISE that GitHub routes on: an unregistered one has no meaning, no floor ` +
-						`alert and nothing that can verify it. Add it to CAPABILITIES in src/capabilities.ts.`
+						`alert and nothing that can verify it. Add it to CAPABILITIES in src/lib/capability-registry.ts.`
 				);
 				continue;
 			}

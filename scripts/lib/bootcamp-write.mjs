@@ -21,7 +21,7 @@ export async function writeManifestFacet(ctx) {
 	//
 	// It used to append every `unclaimed` capability to the node's `labels`
 	// array, which was the right move while a declaration was how a label
-	// reached a registration. It is not any more: `nodeOffer` (src/capabilities.ts,
+	// reached a registration. It is not any more: `nodeOffer` (src/lib/capability-offer.ts,
 	// issue #19) derives a node's label offer from `$capabilities.earned`, and
 	// every mint, warm listener, placement check and reconciled registration
 	// reads that one answer. So the facet below is the whole write.

@@ -118,7 +118,7 @@ test('unprovenRequired: a missing machines object does not throw', () => {
 //
 // `jdk21` only earns the general pool's required set if the demand ledger
 // ever actually asks for it there — it does not today (`requiredIdentitySet`
-// in src/capabilities.ts; no covered repo's general-pool job demands it). This
+// in src/lib/bootcamp-proof.ts; no covered repo's general-pool job demands it). This
 // file has no business knowing that: it is pure I/O over whatever `required`
 // it is handed, exactly like `av1-nvenc`, `cargo-bevy` or any other
 // differentiator capability — the point this test pins.

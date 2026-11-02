@@ -78,8 +78,8 @@ package persists lives under it:
 
 | file                            | written by                                                                          | what it is                                                 |
 | ------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `job-history.jsonl`             | `src/job-history.ts:286,480` (`appendFileSync`)                                     | the append-only job ledger every placement decision reads  |
-| `probe-ledger.json`-shaped file | `src/job-history.ts:356` (`PROBE_LEDGER_FILE`)                                      | per-node probe history                                     |
+| `job-history.jsonl`             | `src/job-history-store.ts` (`appendFileSync`)                                       | the append-only job ledger every placement decision reads  |
+| `probe-ledger.json`-shaped file | `src/job-history-probe-ledger.ts` (`PROBE_LEDGER_FILE`)                             | per-node probe history                                     |
 | `benchmark.json`, `health.json` | `src/lib/measured.ts:22`                                                            | the `$benchmark` / `$health` measured facets (Wave 3h)     |
 | the stuck-run announcement book | `src/runners/dispatch-tick.ts:174,245-252` (`stuckStorePath`, `persistWarnedStuck`) | which (repo, job) zombies have already been announced once |
 
@@ -304,7 +304,7 @@ rediscover them one outage at a time. Re-check each before relying on it.
   duty. Moving it needs gh, claude, a site-token npmrc, a `systemd --user`
   scope and the `~/.taskauto/repos` cache on the target.
 - **Docker is not a claw capability.** It has zero CI demand, so it is not
-  registered (`src/capabilities.ts`). games-host, cardtable's stream
+  registered (`src/lib/capability-registry*.ts`). games-host, cardtable's stream
   containers, privatebin and filetransfer's gokapi all need it, so none of
   them can move until a claw earns Docker through bootcamp.
 - **No claw has a stable name** (#65). ssh pins each claw to a LAN IP, so a

@@ -186,7 +186,7 @@ const PLACEMENT_KEYS = {
 	labels: {
 		mint: MINT_TICK,
 		// Not read as `m.labels` directly here — `offerFor` DERIVES the offer
-		// from the manifest node through `nodeOffer` (src/capabilities.ts),
+		// from the manifest node through `nodeOffer` (src/lib/capability-offer.ts),
 		// which is the whole point (labels are EARNED, not declared verbatim).
 		// The structural fact this checks is that the mint path still asks that
 		// function rather than hardcoding a label list.

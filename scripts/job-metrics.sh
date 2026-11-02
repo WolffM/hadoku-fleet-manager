@@ -195,7 +195,7 @@ umask 022
 
 OUT="${JOB_METRICS_OUT:-$HOME/.hadoku/job-metrics.jsonl}"
 # ROTATED AT THE RETENTION BOUNDARY, keeping ONE `.1` (#37). The window is
-# job-history's `RETENTION_DAYS` (src/job-history.ts) — a row older than that
+# job-history's `RETENTION_DAYS` (src/job-history-store.ts) — a row older than that
 # has nothing left to join to — and `job-metrics-guard.test.mjs` fails the
 # build if the two numbers part. See the rotation block at the end for why it
 # is a rename and never a rewrite.

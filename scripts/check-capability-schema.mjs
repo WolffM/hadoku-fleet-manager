@@ -42,7 +42,7 @@
  * `--json` is a contract: cron jobs parse this stdout.
  *
  * @guards scripts/admin/fleet-runner-manifest.json
- * @guards src/capabilities.ts
+ * @guards src/lib/capability-registry.ts
  * @guards scripts/capability-probe.sh
  */
 import process from 'node:process';

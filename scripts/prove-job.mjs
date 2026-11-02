@@ -16,7 +16,7 @@
  * directory, and the exit code.
  *
  * THE JOB COMES FROM THE CAPABILITY when `--capability` is given: its `jobProof`
- * declaration in `src/capabilities.ts` (repo, workflow, job, evidence). Any of
+ * declaration in `src/lib/capability-registry-label.ts` (repo, workflow, job, evidence). Any of
  * `--repo --workflow --job --ref --evidence` overrides one field of it.
  *
  * FLAGS

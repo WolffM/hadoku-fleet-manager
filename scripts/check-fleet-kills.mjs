@@ -33,7 +33,7 @@
  * the bug cost. So every TTL the fleet has ever minted with is listed, with the
  * dates it was live, and a new one is APPENDED rather than swapped in.
  *
- * That list, and the signature that reads it, now live in `src/job-history.ts`
+ * That list, and the signature that reads it, now live in `src/job-history-zone.ts`
  * as `KNOWN_TTL_SEC` / `TTL_MATCH_SEC` / `isFleetKill`, and this file imports
  * the BUILT copy. It moved when `floor-probe report` needed the same rule to
  * fold a fleet kill into its own zone: a second copy of "did the fleet stop

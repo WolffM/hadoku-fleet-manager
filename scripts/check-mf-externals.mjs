@@ -106,7 +106,7 @@ const JSON_OUT = out.json;
  * 9 entries with hand-written paths; the derived set reproduces all nine
  * EXACTLY — `frontend/vite.config.ts` for tenhands, `apps/ui/vite.config.ts`
  * for watchparty — and adds six that had simply never been added.
- * See scripts/admin/lib/fleet-roster.mjs.
+ * See scripts/lib/fleet-roster.mjs.
  */
 const FLEET = reposWith('microFrontend').map(({ repo, vite, src }) => ({
 	repo: repo.split('/')[1],

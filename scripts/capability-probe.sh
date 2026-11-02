@@ -64,7 +64,7 @@ trap 'scratch_reap; exit 129' HUP
 # therefore re-takes such a measurement on a node it has DRAINED and waited
 # out (`measured`), and skips it when it may not drain the node (`presence`).
 # Which capabilities are idle-only is the REGISTRY's answer
-# (`measuredIdleOnly` in src/capabilities.ts); `capabilities.test.ts` holds
+# (`measuredIdleOnly` in src/lib/capability-registry.ts); `capabilities.test.ts` holds
 # the section between the two markers below to exactly that set.
 CAP_PROBE_PHASE="${CAP_PROBE_PHASE:-all}"
 
@@ -105,7 +105,7 @@ max_workers() {
 # --- cargo-bevy: MEASURE the throughput, and NEVER judge it ------------------
 #
 # THE PROBE MEASURES; THE REGISTRY JUDGES. The bar (`>= 1200`) lives in exactly
-# one place — `cargo-bevy`'s `measure` entry in src/capabilities.ts, with its
+# one place — `cargo-bevy`'s `measure` entry in src/lib/capability-registry-label.ts, with its
 # derivation beside it — and `meetsBar` is the only comparator. Putting the
 # number here would give it two homes and make re-tuning it an edit to a file
 # that runs on every node on every pass. So this block prints a bare integer
@@ -291,7 +291,7 @@ else say mpv no play-failed; fi
 # encoder really initialises the GPU rather than short-circuiting.
 # THE HELPER RETURNS A VERDICT; THE CALL SITE SAYS IT. That split is not style
 # — it is what keeps this script STATICALLY READABLE, and the test suite caught
-# the version that was not. `parseProbeCapabilities` (src/capabilities.ts) finds
+# the version that was not. `parseProbeCapabilities` (src/lib/capability-validate.ts) finds
 # a capability by matching a literal `say <id>` at the start of a line, and it
 # exists so the registry and this script can be checked against each other with
 # nothing hand-maintained in between. A first attempt folded the `say` inside
@@ -784,7 +784,7 @@ say pm2-host $(pm2_host_try)
 #      restart from a re-attach;
 #   4. installed memory, printed as a bare integer for the registry to judge
 #      (`meetsBar`). THE PROBE MEASURES, THE REGISTRY JUDGES — the bar and its
-#      derivation live in `pm2-capable`'s `measure` entry in src/capabilities.ts
+#      derivation live in `pm2-capable`'s `measure` entry in src/lib/capability-registry-implicit.ts
 #      and nowhere else, exactly as `cargo-bevy` does it.
 #
 # AND IT STOPS THERE. Whether the node has ROOM for the role today is
@@ -793,7 +793,7 @@ say pm2-host $(pm2_host_try)
 # disagree, because free memory moves with whatever CI is running and a
 # capability is an IDENTITY — "facts do not change between ticks". A capability
 # that flickers with load is an eligibility lever wearing an identity's clothes,
-# which is the P2 collapse src/capabilities.ts opens with. Installed memory is
+# which is the P2 collapse src/lib/capability-registry.ts opens with. Installed memory is
 # the hardware floor and does not move; the fit is the rule's to decide.
 pm2cap_try() {
 	if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
@@ -943,7 +943,7 @@ say jdk21 $(jdk21_try)
 
 # --- java21: a Java 21 that RUNS, nothing more -------------------------------
 #
-# What a node needs to host Forge matches (src/capabilities.ts `java21`). The
+# What a node needs to host Forge matches (src/lib/capability-registry-implicit.ts `java21`). The
 # same compile-and-run as jdk21 above without Maven, plus the MAJOR version:
 # a working Java 17 is a working Java, and the wrong one for Forge.
 java21_try() {
@@ -983,7 +983,7 @@ say java21 $(java21_try)
 
 # --- docker: BUILD an image, then read a file back out of it ----------------
 #
-# What brave-quartet's publish-server-image job needs (src/capabilities.ts
+# What brave-quartet's publish-server-image job needs (src/lib/capability-registry-label.ts
 # `docker`): a daemon this user can reach, buildx, and a storage driver that
 # round-trips a layer. `docker info` alone passes on a daemon that cannot
 # build. FROM scratch and a build-context file, so the probe needs no

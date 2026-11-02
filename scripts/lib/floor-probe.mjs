@@ -36,7 +36,7 @@ import { classifyZone, zoneOf } from '../../dist/job-history-stats.js';
 /**
  * §5.5's zone classifier, and the `fleet` fold on top of it.
  *
- * DEFINED IN `src/job-history.ts`, RE-EXPORTED HERE, and that direction is
+ * DEFINED IN `src/job-history-zone.ts`, RE-EXPORTED HERE, and that direction is
  * deliberate. The rule started life in this file because it was the harness's
  * alone; it is now also what `summarise` folds `NodeJobStats.failuresByZone`
  * with and therefore what `GET /fleet` puts on the wire. Two copies of one

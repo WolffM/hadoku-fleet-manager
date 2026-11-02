@@ -4,7 +4,7 @@
  *
  * WHAT IT INSTALLS
  * ----------------
- *   ~/.hadoku/ci-throttle.sh      the hook (scripts/admin/ci-throttle.sh verbatim)
+ *   ~/.hadoku/ci-throttle.sh      the hook (scripts/ci-throttle.sh verbatim)
  *   ~/.hadoku/ci-throttle.conf    that node's limits, RENDERED FROM THE MANIFEST
  *   <each runner>/.env            ACTIONS_RUNNER_HOOK_JOB_STARTED=...
  *   ~/.hadoku/standing.env        THE SAME THREE LINES, as a file

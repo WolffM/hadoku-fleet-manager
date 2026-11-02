@@ -23,7 +23,7 @@
  *
  * EARNED IS THE PROOF SET, NOT `proven ∩ declared` (settled 2026-09-10). It is
  * every capability this probe EXECUTED successfully, and it is what
- * `src/capabilities.ts`'s `nodeOffer` derives a node's GitHub label set from —
+ * `src/lib/capability-offer.ts`'s `nodeOffer` derives a node's GitHub label set from —
  * so this command is the producer the claw floor's eligibility input
  * (`claw-floor-design-2026-09-07.md` §1.1) never had. `--write` records the
  * facet and NOTHING ELSE: it no longer touches `machines[].labels`.

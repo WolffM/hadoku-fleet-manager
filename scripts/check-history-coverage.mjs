@@ -408,7 +408,7 @@ if (!ok) {
 			'\n\n  Every per-node median, idle time and backstop threshold is computed over' +
 			'\n  this sample, so a gap here is not a missing graph — it is every number' +
 			'\n  being quietly wrong, and biased toward whatever the recorder drops.' +
-			'\n  Start at ingestRuns in @wolffm/fleet-manager src/job-history.ts.'
+			'\n  Start at ingestRuns in @wolffm/fleet-manager src/job-history-ingest.ts.'
 	);
 	process.exit(1);
 }

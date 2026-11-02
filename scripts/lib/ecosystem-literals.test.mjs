@@ -228,7 +228,7 @@ const TERMS = [
  * precedents this entry follows.
  *
  * WAVE 4E: WolffM 8 -> 9, hadoku 112 -> 113, ONE literal each. jdk21's own
- * `jobProof` (`src/capabilities.ts`, #102) names `WolffM/hadoku-cardtable` —
+ * `jobProof` (`src/lib/capability-registry-label.ts`, #102) names `WolffM/hadoku-cardtable` —
  * the repo whose `forge-e2e` job is jdk21's WORKLOAD proof, exactly the same
  * pattern `taskauto`'s `jobProof` already set the precedent for at the +8/+112
  * baseline above: a declaration of which job proves the capability is the

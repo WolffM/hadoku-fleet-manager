@@ -11,7 +11,7 @@
 # Inputs, supplied as leading variable assignments on stdin by the driver:
 #   APPLY=0|1       write anything at all
 #   RESTART=0|1     restart idle runners after wiring them
-#   HOOK_B64        base64 of scripts/admin/ci-throttle.sh
+#   HOOK_B64        base64 of scripts/ci-throttle.sh
 #   CONF_B64        base64 of this node's rendered ci-throttle.conf
 #   METRICS_B64     base64 of scripts/job-metrics.sh (every node)
 #   MINTS=0|1       this node mints JIT/warm runners, so write runner.env for its slots

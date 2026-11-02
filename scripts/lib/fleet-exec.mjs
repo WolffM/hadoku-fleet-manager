@@ -218,8 +218,8 @@ export function loadManifest(path = manifestPath()) {
  * Nodes a command should act on.
  *
  * Still spelled `selectMachines`: this is a published subpath export
- * (`@wolffm/fleet-manager/fleet-exec`) and hadoku_site's
- * `scripts/admin/check-boundary-contracts.mjs` imports it by that name. Same
+ * (`@wolffm/fleet-manager/fleet-exec`) and
+ * `scripts/check-boundary-contracts.mjs` imports it by that name. Same
  * reason `machineArg` below keeps its spelling — it is named for the
  * `--machine` FLAG, which is operator UI. See docs/VOCABULARY.md §"Where the
  * rename stops".

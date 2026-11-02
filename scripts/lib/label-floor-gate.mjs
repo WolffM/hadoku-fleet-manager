@@ -448,14 +448,14 @@ export function checkRequiredGaps(ctx) {
 							`    pool, and no node's \`fleet bootcamp --write\` finding proves it. That is\n` +
 							`    the shape of the 2026-09-02 claw-5/claw-6 outage: registered, carrying\n` +
 							`    hadoku-builder, no Python tool cache at all.`
-					: `  "${id}" — the demand ledger asks for it and NOTHING in src/capabilities.ts\n` +
+					: `  "${id}" — the demand ledger asks for it and NOTHING in src/lib/capability-registry*.ts\n` +
 							`    registers it, so no probe can ever prove it. Both python-toolcache/\n` +
 							`    playwright/ffmpeg started exactly here before a job died on them.`
 			);
 		}
 		console.error(
 			`\n  Fix: run \`fleet bootcamp --write\` on a node that should carry it, or — if it is\n` +
-				`  genuinely new — register it in src/capabilities.ts and add it to\n` +
+				`  genuinely new — register it in src/lib/capability-registry*.ts and add it to\n` +
 				`  \`toolchain.capabilities\` in fleet-runner-manifest.json.`
 		);
 		for (const id of ctx.requiredGaps)
@@ -478,7 +478,7 @@ export function checkDerivationFailures(ctx) {
 			`\n  WHY THIS FAILS THE GATE (issue #19). The manifest's \`labels\` array is the JIT\n` +
 				`  mint's label WRITER — fleet-loop -> ephemeral-tick -> dispatch-pass ->\n` +
 				`  mintLabels() — and it is ALSO read by placement and by floor-probe. Since\n` +
-				`  2026-09-10 src/capabilities.ts's \`nodeOffer\` derives that set from\n` +
+				`  2026-09-10 src/lib/capability-offer.ts's \`nodeOffer\` derives that set from\n` +
 				`  \`$capabilities.earned\` instead. If the two disagree, one of them is wrong about\n` +
 				`  what GitHub will see, and the symptom is jobs queueing silently while this gate\n` +
 				`  reports a healthy fleet — which is exactly what it did on a stripped manifest\n` +

@@ -183,7 +183,7 @@ export function warmSlotDir(home: string): string {
  *
  * WHY THE CAP HAS TO BE CONSULTED AT ALL. `maxConcurrent` is enforced on the
  * MINT path (`admitMint`) and nowhere else, and on the machine by
- * `scripts/admin/ci-throttle.sh`, whose own manifest note records that it
+ * `scripts/ci-throttle.sh`, whose own manifest note records that it
  * "cannot enforce because MAX_WAIT_S=90 admits rather than fails". A standing
  * listener takes neither path: it is already registered and long-polling, so
  * GitHub hands it work directly. Until 2026-09-24 this function did not exist
