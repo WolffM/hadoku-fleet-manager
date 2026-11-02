@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 
 import { parseDoctor, cpuSensor, independentCpuSensors, parseSmart } from './doctor-parse.mjs';
 import { healthFacet } from './doctor-facet.mjs';
-import { BLOCKING, doctorFindings } from './doctor-findings.mjs';
+import { doctorFindings } from './doctor-findings.mjs';
+import { BLOCKING } from './preflight.mjs';
 import { CLAW1, CLAW9, CLAW7_SMART, facetOf } from './doctor-fixtures.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════

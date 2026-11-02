@@ -9,33 +9,30 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-	tick,
-	SWEEP_CONCURRENCY,
-	getRunnerHealthSnapshot,
-	__setFleetReposForTesting,
-} from '../runner-health.js';
+import { tick, __setFleetReposForTesting } from '../runner-health.js';
+import { SWEEP_CONCURRENCY } from '../lib/concurrency.js';
+import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
 import { __setBackstopMachinesForTesting } from '../runners/backstop-machines.js';
 import { BACKSTOP_CONVERGE_INTERVAL_MS } from '../runners/backstop-decision.js';
-import {
-	__setHostLoadReaderForTesting,
-	__setReservationForTesting,
-} from '../runners/backstop-decision.js';
+import { __setHostLoadReaderForTesting } from '../runners/backstop-host-load.js';
+import { __setReservationForTesting } from '../runners/backstop-decision-state.js';
 import { markNodeSick } from '../lib/sick-node.js';
 import { writeDrain } from '../runners/drain.js';
 import {
 	installRunnerHealthRig,
 	installFetch,
-	clawLabels,
-	hokonLabels,
-	hokonPromotedLabels,
-	minutesAgo,
 	discordPosts,
 	labelOps,
 	labelPostBodies,
 	runnerListings,
 	variableOps,
 } from './helpers/runner-health-rig.js';
+import {
+	clawLabels,
+	hokonLabels,
+	hokonPromotedLabels,
+	minutesAgo,
+} from './helpers/runner-health-fixtures.js';
 
 installRunnerHealthRig();
 

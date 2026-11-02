@@ -9,7 +9,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { manifest as manifestFile, siteRoot } from './paths.mjs';
+import { manifest as manifestFile, siteRoot } from '../../dist/lib/fleet-paths.js';
 import { tryShipped } from './fleet-source.mjs';
 import { stripYamlComments } from './yaml-comments.mjs';
 import { dailyCronMinutes, quietWindow } from './floor-probe-window.mjs';

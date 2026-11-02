@@ -118,14 +118,14 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
-import { manifest as manifestFile } from './lib/paths.mjs';
+import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 // The queue-health precedent, imported rather than re-derived. READ_ATTEMPTS is
 // a measured property of `gh api` from this box (0.13% transient, 2026-09-07),
 // not a fact about queues, and a second copy of it is a second thing to tune.
 // Still needed here directly for `probeNode`'s own retry loop below —
 // `lib/runner-identity-reads.mjs` and `lib/runner-identity-report.mjs` each import their own
 // copy for the reads/report they carry.
-import { READ_ATTEMPTS } from './lib/queue-health.mjs';
+import { READ_ATTEMPTS } from './lib/read-retry-policy.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';

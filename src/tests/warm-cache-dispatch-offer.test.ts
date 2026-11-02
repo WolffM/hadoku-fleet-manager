@@ -20,12 +20,14 @@ import {
 	__resetDecisionLogForTesting,
 	__restoreDecisionSinkForTesting,
 	__setDecisionSinkForTesting,
-	type DecisionRecord,
 } from '../runners/decision-log.js';
-import { __resetWarmCacheClockForTesting } from '../runners/dispatch-warm-cache.js';
+import { type DecisionRecord } from '../runners/decision-log-types.js';
+import {
+	__resetWarmCacheClockForTesting,
+	dispatchWarmCache,
+} from '../runners/dispatch-warm-cache.js';
 import { WARM_CACHE_INTERVAL_MS } from '../runners/warm-backoff.js';
-import { dispatchWarmCache } from '../runners/dispatch-warm-cache.js';
-import { __setWorkloadGateContextForTesting } from '../runners/ephemeral-shared.js';
+import { __setWorkloadGateContextForTesting } from '../workload-gate-store.js';
 import { workloadGateContext } from '../lib/workload-gate.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
 import {

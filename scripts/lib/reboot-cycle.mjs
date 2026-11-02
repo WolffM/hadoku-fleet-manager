@@ -49,7 +49,6 @@ import { errText } from './term.mjs';
 // (observation) can read it without reaching into this file's lifecycle-domain
 // cycle logic. Re-exported below unchanged for every existing importer.
 import { REASON_PREFIX, HELD_PREFIX, heldByCycle } from './reboot-hold.mjs';
-export { REASON_PREFIX, HELD_PREFIX, heldByCycle };
 
 /** The drain's window (kind `reboot`): if the cycle dies outright, the node comes back by itself. */
 export const REBOOT_LEASE = '2h';

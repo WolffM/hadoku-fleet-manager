@@ -16,11 +16,10 @@ import {
 	noteCronStart,
 	noteCronEnd,
 	inFlightCronJobs,
-	setPm2HostBusy,
-	getPm2HostBusy,
 	__resetReservationForTesting,
 } from '../node-reservation.js';
-import { PM2_HOST_LABEL } from '../lib/capability-registry.js';
+import { setPm2HostBusy, getPm2HostBusy } from '../pm2-host-busy-store.js';
+import { PM2_HOST_LABEL } from '../lib/capability-registry-ids.js';
 
 beforeEach(() => __resetReservationForTesting());
 

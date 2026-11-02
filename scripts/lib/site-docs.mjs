@@ -34,7 +34,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { siteRoot } from './paths.mjs';
+import { siteRoot } from '../../dist/lib/fleet-paths.js';
 
 /** hadoku_site's `scripts/pm2-hosts.json` — which boxes host pm2 services. */
 export const PM2_HOSTS_FILE = 'scripts/pm2-hosts.json';

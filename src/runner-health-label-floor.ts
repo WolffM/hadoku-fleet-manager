@@ -5,15 +5,10 @@ import { getFleetProbeSnapshot } from './fleet-probe-store.js';
 // Re-exported so runner-health-runs.ts's own queuedMintView() does not open a
 // second direct edge to fleet-probe-store.ts for the same probe this file
 // already reads.
-export { getFleetProbeSnapshot };
+
 import { loadClawNodes, loadEphemeralNodes, loadFleetNodeNames } from './lib/manifest.js';
-import {
-	BACKSTOP_LABEL,
-	BUILDER_LABEL,
-	PM2_HOST_LABEL,
-	nodeOf,
-	runnerCensus,
-} from './runners/census.js';
+import { nodeOf, runnerCensus } from './runners/census.js';
+import { BACKSTOP_LABEL, BUILDER_LABEL, PM2_HOST_LABEL } from './lib/capability-registry-ids.js';
 import {
 	FLOOR_DEMAND_FILE,
 	floorLabels,
@@ -41,23 +36,18 @@ import type { ClawState } from './lib/fleet-vocabulary.js';
 // (no-demand/mint-unknown/truncated/escalating-page) and per-node (a single
 // dead box, degraded but the floor still met). Re-exported below under their
 // original path for every existing importer.
-import {
-	readRunnerListing,
-	__setFloorConfirmDelayForTesting,
-} from './runner-health-label-floor-confirm.js';
+import { readRunnerListing } from './runner-health-label-floor-confirm.js';
 import {
 	runLabelFloorAlerts,
 	__resetLabelFloorAlertsForTesting,
 } from './runner-health-label-floor-alerts.js';
 import {
 	runOfflineNodeAlerts,
-	__setQuietRecorderForTesting,
 	__resetOfflineNodeAlertsForTesting,
 } from './runner-health-label-floor-nodes.js';
-export { __setFloorConfirmDelayForTesting, __setQuietRecorderForTesting };
+
 // `runner-health-runs.ts` imports `quietRecorder` straight from this module's
 // original path — re-exported live from its new owner (wave shrink-1 lane C).
-export { quietRecorder } from './runner-health-label-floor-nodes.js';
 
 /**
  * Did the last tick read the fleet as UNMEASURED (no fast-loop probe snapshot

@@ -24,13 +24,8 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-	isLocalNode,
-	loadManifest,
-	machineArg,
-	runOnSync,
-	selectMachines,
-} from './lib/fleet-exec.mjs';
+import { loadManifest, machineArg, runOnSync, selectMachines } from './lib/fleet-exec.mjs';
+import { isLocalNode } from '../dist/lib/node-identity.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import {
@@ -44,7 +39,8 @@ import {
 } from './lib/toolchain-floor.mjs';
 import { shadowVerdict } from './lib/tool-shadow.mjs';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
-import { assess, createReleaseLookup, parseInstalledVersion } from './lib/tool-release.mjs';
+import { createReleaseLookup } from './lib/tool-release.mjs';
+import { assess, parseInstalledVersion } from './lib/version-algebra.mjs';
 import { isBackstopNode } from '../dist/lib/node-role.js';
 
 /**

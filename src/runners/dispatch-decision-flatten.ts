@@ -6,8 +6,10 @@
  * boundary instead. `dispatch-pass.ts` is the only caller.
  */
 import type { PlanObservation } from './dispatcher.js';
-import { busyOf, type NodeState } from './placement.js';
-import type { NodeFigures, JitPlacementObservation } from './decision-log.js';
+import { busyOf } from './placement.js';
+import { type NodeState } from './placement-node-state.js';
+import type { NodeFigures } from './decision-log-types.js';
+import type { JitPlacementObservation } from './decision-log-record.js';
 
 /** A node-name -> figures lookup over `nodes` — `nodeOf` (census.ts) may fall back to a name not in it. */
 export function makeCapacityOf(

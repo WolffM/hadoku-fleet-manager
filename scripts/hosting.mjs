@@ -59,7 +59,7 @@ import {
 	withoutSlice,
 	writeHostingDoc,
 } from '../dist/runners/hosting-record.js';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readTenantRegistry, tenantSpec } from './lib/tenant-registry.mjs';
 import { isBackstopNode } from '../dist/lib/node-role.js';
 import { nodeUser } from '../dist/lib/node-users.js';

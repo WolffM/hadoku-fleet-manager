@@ -61,9 +61,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
-import { KNOWN_TTL_SEC, TTL_MATCH_SEC, isFleetKill } from '../dist/job-history-stats.js';
+import { KNOWN_TTL_SEC, TTL_MATCH_SEC, isFleetKill } from '../dist/job-history-zone.js';
 
 const JSON_OUT = process.argv.includes('--json');
 const out = createEmitter({ argv: process.argv });

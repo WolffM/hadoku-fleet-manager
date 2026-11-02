@@ -10,13 +10,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-	formatCiTickSummary,
-	runEndedAt,
-	runsEndedSince,
-	stateKey,
-	type CiState,
-} from '../ci-alerts.js';
+import { stateKey } from '../ci-alerts.js';
+import { formatCiTickSummary } from '../ci-alerts-summary.js';
+import { runEndedAt, runsEndedSince, type CiState } from '../ci-alerts-decide.js';
 import { BEFORE, ghRun, pollTicks, TICKS, WATCHPARTY } from './helpers/ci-alerts-rig.js';
 
 test('a watched workflow with no state row is reported as null, not omitted', () => {

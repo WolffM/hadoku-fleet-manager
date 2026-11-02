@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildFleetReport } from '../routes/fleet.js';
+import { buildFleetReport } from '../routes/fleet-report.js';
 import type { JobHistorySummary } from '../job-history-stats.js';
 import { NO_JOBS, MANIFEST, installFleetReportRig } from './helpers/fleet-report-rig.js';
 

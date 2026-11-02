@@ -15,7 +15,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildFleetReport } from '../routes/fleet.js';
+import { buildFleetReport } from '../routes/fleet-report.js';
 import {
 	NO_JOBS,
 	health,

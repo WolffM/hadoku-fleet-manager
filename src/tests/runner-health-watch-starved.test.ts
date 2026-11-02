@@ -12,25 +12,14 @@ import assert from 'node:assert/strict';
 import { appendFileSync } from 'node:fs';
 import { __resetJobHistoryForTesting, historyFile } from '../job-history-store.js';
 
-import {
-	tick,
-	STARVED_NO_JOB_MS,
-	__resetRunnerHealthAlertsForTesting,
-	__setSupervisionCheckerForTesting,
-	getRunnerHealthSnapshot,
-} from '../runner-health.js';
-import {
-	__resetAdmissionVerdictsForTesting,
-	__setAdmissionVerdictsForTesting,
-	type AdmissionVerdict,
-} from '../runners/ephemeral-tick.js';
-import {
-	installRunnerHealthRig,
-	installFetch,
-	hokonPromotedLabels,
-	discordPosts,
-	LIVE_LISTING,
-} from './helpers/runner-health-rig.js';
+import { tick, __resetRunnerHealthAlertsForTesting } from '../runner-health.js';
+import { STARVED_NO_JOB_MS, __setSupervisionCheckerForTesting } from '../runner-health-watch.js';
+import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
+import { __resetAdmissionVerdictsForTesting } from '../runners/ephemeral-tick.js';
+import { __setAdmissionVerdictsForTesting } from '../admission-verdict-store.js';
+import { type AdmissionVerdict } from '../lib/fleet-vocabulary.js';
+import { installRunnerHealthRig, installFetch, discordPosts } from './helpers/runner-health-rig.js';
+import { hokonPromotedLabels, LIVE_LISTING } from './helpers/runner-health-fixtures.js';
 
 installRunnerHealthRig();
 

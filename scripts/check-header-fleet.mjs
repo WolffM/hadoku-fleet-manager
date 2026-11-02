@@ -125,7 +125,7 @@
  */
 
 import { namesWith } from './lib/fleet-roster.mjs';
-import { siteRoot } from './lib/paths.mjs';
+import { siteRoot } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import { git, openRepo, resetFileCache } from './lib/header-source.mjs';
 import { loadAllowlist } from './lib/header-allowlist.mjs';

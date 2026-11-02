@@ -22,8 +22,7 @@
  * `GET /api/fleet`. The first thing an operator types in an incident should
  * answer "why not", and the second thing should fix it.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { statfsSync } from 'node:fs';
+import { existsSync, readFileSync, statfsSync } from 'node:fs';
 import { cpus, userInfo } from 'node:os';
 import process from 'node:process';
 
@@ -44,7 +43,7 @@ import {
 	BACKLOG_QUEUE_SECONDS,
 	isHostIdle,
 } from '../dist/runners/backstop.js';
-import { TMP_FREE_FLOOR_MB } from '../dist/runners/ephemeral.js';
+import { TMP_FREE_FLOOR_MB } from '../dist/lib/jit-naming.js';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { readDrains } from './lib/expected-down.mjs';

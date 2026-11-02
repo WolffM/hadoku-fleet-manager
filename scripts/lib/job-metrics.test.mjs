@@ -13,28 +13,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runOnSync, LOCAL } from './fleet-exec.mjs';
+import { mb, percentile } from './job-metrics-primitives.mjs';
+import { joinMetrics, selfUnit, withUnits } from './job-metrics-join.mjs';
+import { byNode, byUnit, byNodeRepo, costFacets, facet } from './job-metrics-groups.mjs';
+import { varianceAxis, durationRatios } from './job-metrics-variance.mjs';
+import { perJobCosts, cpuSec } from './job-metrics-cost.mjs';
 import {
-	mb,
-	percentile,
-	joinMetrics,
-	byNode,
-	byUnit,
-	byNodeRepo,
-	varianceAxis,
-	durationRatios,
-	perJobCosts,
-	costFacets,
-	cpuSec,
-	facet,
 	parseMetrics,
-	selfUnit,
-	withUnits,
 	READ_END,
 	metricsSince,
 	metricsReadScript,
 	readOutcome,
 	perNodeWithReads,
-} from './job-metrics.mjs';
+} from './job-metrics-read.mjs';
 
 const history = [
 	{

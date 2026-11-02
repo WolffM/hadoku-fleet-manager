@@ -68,14 +68,15 @@ import { deferralFor, deferralNote, readDrainDoc, writeDrainDoc } from './lib/ex
 import { mintToken, listRunners, ghWrite } from './lib/reconcile-apply.mjs';
 import { removeScript } from './lib/reconcile-scripts.mjs';
 import { maySudo } from './lib/operator-sudo.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 // The BUILT copies, for the same reason every other script in this door reads
 // a decision from `dist/` rather than keeping a second implementation that
 // can drift from it (docs/VOCABULARY.md: "one question, one answer").
 import { nodeOf } from '../dist/runners/census.js';
 import { drainStatus, effectiveDrains } from '../dist/runners/drain.js';
 import { writeFileAtomic } from '../dist/lib/atomic-json.js';
-import { readFacetFile, MEASURED_FACETS } from '../dist/lib/measured.js';
+import { readFacetFile } from '../dist/lib/measured.js';
+import { MEASURED_FACETS } from '../dist/lib/measured-paths.js';
 
 const parsed = parseStrict(ARGV_SPECS['retire-node.mjs'], process.argv.slice(2));
 const emitter = createEmitter({ json: parsed.json });

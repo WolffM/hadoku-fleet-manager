@@ -40,7 +40,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
 
-const { siteRoot, manifestDir } = await import('./paths.mjs');
+const { siteRoot, manifestDir } = await import('../../dist/lib/fleet-paths.js');
 
 /** A throwaway git repo shaped like a hadoku_site checkout. */
 function fakeCheckout() {

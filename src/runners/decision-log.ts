@@ -50,67 +50,10 @@
  * compiling unchanged.
  */
 import { logger } from '../host.js';
-import {
-	DECISION_SCHEMA,
-	type DecisionPath,
-	type DecisionKind,
-	type NodeFigures,
-	type DecisionRule,
-	type DecisionRecord,
-} from './decision-log-types.js';
-import {
-	DECISION_LOG_DIR,
-	DECISION_RETENTION_DAYS,
-	DECISION_LOG_MAX_BYTES,
-	decisionLogDir,
-	appendToDayFile,
-	__resetDecisionStorageForTesting,
-	pruneDecisionLog,
-	readDecisions,
-	filterDecisions,
-	type PruneResult,
-	type DecisionRead,
-	type DecisionFilter,
-} from './decision-log-storage.js';
-import {
-	fingerprintHash,
-	JitDecisionBook,
-	recordWarmAssignments,
-	recordWarmListenerDecisions,
-	type JitPlacementObservation,
-	type WarmAssignment,
-	type WarmListenerDecision,
-} from './decision-log-record.js';
+import { type DecisionRecord } from './decision-log-types.js';
+import { appendToDayFile, __resetDecisionStorageForTesting } from './decision-log-storage.js';
 
-export {
-	DECISION_SCHEMA,
-	type DecisionPath,
-	type DecisionKind,
-	type NodeFigures,
-	type DecisionRule,
-	type DecisionRecord,
-};
-export {
-	DECISION_LOG_DIR,
-	DECISION_RETENTION_DAYS,
-	DECISION_LOG_MAX_BYTES,
-	decisionLogDir,
-	pruneDecisionLog,
-	readDecisions,
-	filterDecisions,
-	type PruneResult,
-	type DecisionRead,
-	type DecisionFilter,
-};
-export {
-	fingerprintHash,
-	JitDecisionBook,
-	recordWarmAssignments,
-	recordWarmListenerDecisions,
-	type JitPlacementObservation,
-	type WarmAssignment,
-	type WarmListenerDecision,
-};
+export { type DecisionRecord };
 
 // --------------------------------------------------------------------------
 // The sink. Default: the day files. Tests swap it, or switch the log off.

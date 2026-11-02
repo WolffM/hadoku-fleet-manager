@@ -8,7 +8,8 @@
 import type { NodeProbe } from '../lib/node-probe.js';
 import { mintBudget } from '../runners/ephemeral.js';
 import { activeForces, readForce } from '../runners/backstop-force.js';
-import type { AdmissionBasis, AdmissionCaveat, FleetReport } from '../fleet-report-types.js';
+import type { FleetReport } from '../fleet-report-types.js';
+import type { AdmissionBasis, AdmissionCaveat } from '../fleet-report-types-machines.js';
 import type { ManifestNode } from './fleet-manifest.js';
 
 /**

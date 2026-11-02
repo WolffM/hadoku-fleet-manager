@@ -12,9 +12,10 @@
  * module's own callers' point of view (dispatch-warm-cache.ts does not
  * re-export them further, since nothing outside it ever read them).
  */
-import { DEFAULT_RUNNER_SLICE, resolveSliceName } from './ephemeral.js';
+import { DEFAULT_RUNNER_SLICE, resolveSliceName } from './ci-unit-properties.js';
 import { type WarmServedJob, type WarmSlotState } from './ephemeral-warm.js';
-import { evictWarmListener, warmRegistration, type GhLike } from './ephemeral-exec.js';
+import { evictWarmListener, warmRegistration } from './ephemeral-exec.js';
+import { type GhLike } from '../lib/fleet-vocabulary.js';
 import { type EphemeralTickInput, shellOnNode } from './ephemeral-shared.js';
 import { jobRecords } from '../job-history-store.js';
 import { logger } from '../host.js';

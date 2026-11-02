@@ -67,20 +67,8 @@
  * (it is what the watchdog may be aimed at) and not the same problem as a hot CPU.
  */
 
-import { ADVISORY, BLOCKING } from './preflight.mjs';
-import {
-	BOOTCAMP_STALE_DAYS,
-	THERMAL_BLOCKING_C,
-	THERMAL_ADVISORY_C,
-	SENSOR_DISAGREE_C,
-	DISK_BLOCKING_FREE_PCT,
-	DISK_ADVISORY_FREE_PCT,
-	SMART_HOURS_ADVISORY,
-	SMART_HOURS_BLOCKING,
-	IMPLAUSIBLE_RISE_C,
-	SENSOR_MOVED_C,
-	SENSOR_TRACKS_DIVISOR,
-} from './doctor-findings-thresholds.mjs';
+import { BLOCKING } from './preflight.mjs';
+
 import { f } from './doctor-findings-record.mjs';
 import { thermalFindings } from './doctor-findings-thermal.mjs';
 import { watchdogFindings } from './doctor-findings-watchdog.mjs';
@@ -88,8 +76,6 @@ import { storageFindings } from './doctor-findings-storage.mjs';
 import { networkFindings } from './doctor-findings-network.mjs';
 import { opsFindings } from './doctor-findings-ops.mjs';
 
-export { ADVISORY, BLOCKING };
-export { advisoryFindings, blockingFindings } from './preflight.mjs';
 /**
  * The BACKSTOP's findings are advisory, and the rule lives in `preflight.mjs` so
  * `check-fleet-preflight` and `fleet doctor` cannot classify the same box two
@@ -100,7 +86,6 @@ export { advisoryFindings, blockingFindings } from './preflight.mjs';
  * them — except `unreachable`, which {@link BACKSTOP_BLOCKING_CATEGORIES} keeps
  * blocking: a backstop nothing can reach is no use in an emergency.
  */
-export { backstopAdvisory, BACKSTOP_BLOCKING_CATEGORIES } from './preflight.mjs';
 
 /**
  * THRESHOLDS — SAFETY CONTROLS, NOT TUNING. Moved to
@@ -110,19 +95,6 @@ export { backstopAdvisory, BACKSTOP_BLOCKING_CATEGORIES } from './preflight.mjs'
  * `THERMAL_BLOCKING_C` etc. straight off `doctor-findings.mjs`) compiles
  * unchanged. See that file for the doc comment on each number.
  */
-export {
-	THERMAL_BLOCKING_C,
-	THERMAL_ADVISORY_C,
-	SENSOR_DISAGREE_C,
-	DISK_BLOCKING_FREE_PCT,
-	DISK_ADVISORY_FREE_PCT,
-	SMART_HOURS_ADVISORY,
-	SMART_HOURS_BLOCKING,
-	IMPLAUSIBLE_RISE_C,
-	SENSOR_MOVED_C,
-	SENSOR_TRACKS_DIVISOR,
-	BOOTCAMP_STALE_DAYS,
-};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FINDINGS

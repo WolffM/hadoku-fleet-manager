@@ -19,10 +19,10 @@ import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
 import {
 	__resetWarmCacheClockForTesting,
 	dispatchWarmCache,
-	warmReposForPlacement,
 } from '../runners/dispatch-warm-cache.js';
+import { warmReposForPlacement } from '../runners/dispatch-warm-cache-state.js';
 import { runDispatchPass } from '../runners/dispatch-pass.js';
-import { warmRunnerName } from '../runners/ephemeral.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
 import {
 	m,

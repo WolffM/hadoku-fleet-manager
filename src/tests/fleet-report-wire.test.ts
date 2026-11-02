@@ -14,13 +14,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildFleetReport } from '../routes/fleet.js';
+import { buildFleetReport } from '../routes/fleet-report.js';
 import type { JobRecord } from '../job-history-store.js';
 import type { RecentJobRecord } from '../job-history-stats.js';
-import {
-	__resetAdmissionVerdictsForTesting,
-	__setAdmissionVerdictsForTesting,
-} from '../runners/ephemeral-tick.js';
+import { __resetAdmissionVerdictsForTesting } from '../runners/ephemeral-tick.js';
+import { __setAdmissionVerdictsForTesting } from '../admission-verdict-store.js';
 import {
 	NO_JOBS,
 	upProbe,

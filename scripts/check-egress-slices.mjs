@@ -160,7 +160,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createEmitter } from './lib/emit.mjs';
-import { manifest, stateDir } from './lib/paths.mjs';
+import { manifest, stateDir } from '../dist/lib/fleet-paths.js';
 
 const JSON_OUT = process.argv.includes('--json');
 const emitter = createEmitter({ argv: process.argv });

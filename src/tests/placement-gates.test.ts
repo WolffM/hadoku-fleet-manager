@@ -14,18 +14,18 @@ import assert from 'node:assert/strict';
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { choosePlacement } from '../runners/placement.js';
 import {
-	choosePlacement,
 	BACKSTOP_SOLE_CARRIER_SLOTS,
 	slowKind,
 	slowReposOn,
 	SPILL_FLOOR_SEC,
-	type NodeState,
-} from '../runners/placement.js';
+} from '../runners/placement-slow.js';
+import { type NodeState } from '../runners/placement-node-state.js';
 import { buildSpeedModel, type SpeedModel, type SpeedTier } from '../runners/speed-tier.js';
 import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
 import { dispatchWarmCache } from '../runners/dispatch-warm-cache.js';
-import { warmRunnerName } from '../runners/ephemeral.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
 import { type JobRecord } from '../job-history-store.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
 import {

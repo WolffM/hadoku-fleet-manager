@@ -41,17 +41,18 @@ import type {
 	AdmissionBasis,
 	AdmissionCaveat,
 	AdmissionClause,
-	BackstopReason,
-	CapacityKind,
+} from './fleet-report-types-machines.js';
+import type { BackstopReason, ClawState } from './lib/fleet-vocabulary.js';
+import type { CapacityKind } from './fleet-report-types-capacity.js';
+import type {
 	CapabilitySurface,
 	CapabilityVerification,
-	ClawState,
 	FailureZoneTerm,
-	FleetFailuresByZone,
-	GhCaller,
 	LabelledTerm,
 	TelemetryTerm,
-} from './fleet-report-types.js';
+} from './fleet-report-types-vocabulary.js';
+import type { FleetFailuresByZone } from './fleet-report-types-jobs.js';
+import type { GhCaller } from './gh-budget.js';
 
 /**
  * What a machine is doing, in one word.

@@ -18,31 +18,32 @@ import { testHost } from './install-test-host.js';
 import {
 	tick,
 	startRunnerHealthMonitor,
-	SWEEP_CONCURRENCY,
 	__awaitInFlightTickForTesting,
 	__stopRunnerHealthMonitorForTesting,
 	__setRemeasureDelayForTesting,
 	__setPostBlackoutSlackForTesting,
 	__setTokenRetryForTesting,
 	__setFleetReposForTesting,
-	__setSupervisionCheckerForTesting,
-	getRunnerHealthSnapshot,
+	__logTokenCapabilitiesForTesting,
+} from '../runner-health.js';
+import { SWEEP_CONCURRENCY } from '../lib/concurrency.js';
+import { __setSupervisionCheckerForTesting } from '../runner-health-watch.js';
+import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
+import {
 	classifyGhReadFailure,
 	unreadableTickError,
 	__resetGhBlackoutForTesting,
-	ghGet,
-	__logTokenCapabilitiesForTesting,
-} from '../runner-health.js';
-import { __setFleetProbeForTesting } from '../fleet-loop.js';
+} from '../lib/github-client-blackout.js';
+import { ghGet } from '../lib/github-client.js';
+import { __setFleetProbeForTesting } from '../fleet-probe-store.js';
 import {
 	installRunnerHealthRig,
 	installFetch,
 	jobSinkPosts,
 	jobListings,
 	runnerListings,
-	minutesAgo,
-	FLEET_ALL_UP,
 } from './helpers/runner-health-rig.js';
+import { minutesAgo, FLEET_ALL_UP } from './helpers/runner-health-fixtures.js';
 
 installRunnerHealthRig();
 

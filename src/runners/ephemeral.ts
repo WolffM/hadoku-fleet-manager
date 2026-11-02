@@ -20,46 +20,15 @@
  */
 
 import { isBackstopNode } from '../lib/node-role.js';
-export {
-	JIT_PREFIX,
-	WARM_PREFIX,
-	parseJitName,
-	MAX_RUNNER_NAME,
-	jitRunnerName,
-	warmRunnerName,
-} from '../lib/jit-naming.js';
-export {
-	type AdmissionInput,
-	type AdmissionResult,
-	LOWER_BOUND_HEADROOM,
-	TMP_FREE_FLOOR_MB,
-	WORK_FREE_FLOOR_MB,
-	admitMint,
-	spaceRefusal,
-	assertSafeJitConfig,
-} from './ephemeral-admission.js';
-export {
-	GITHUB_JOB_CEILING_SEC,
-	JIT_UNIT_MAX_SEC,
-	DEFAULT_RUNNER_SLICE,
-	resolveSliceName,
-	JOB_RESERVE_DEFAULT_MB,
-	unitMemoryMaxMb,
-	ciUnitProperties,
-	backstopUnitMemoryMaxMb,
-} from './ephemeral-slice.js';
+
+export { TMP_FREE_FLOOR_MB, admitMint } from './ephemeral-admission.js';
+export { JIT_UNIT_MAX_SEC, unitMemoryMaxMb, backstopUnitMemoryMaxMb } from './ephemeral-slice.js';
 // Warm-cache eligibility moved to src/lib/warm-eligibility.ts (wave clean-2
 // lane C, cut (iii) layer debt): config, the stratum both this (ci-scheduling)
 // file and scripts/check-warm-canary.mjs (observation) may import.
 // `warmListenerSlots` below still needs `warmMemorySlots`, so it is imported
 // (not just re-exported) alongside the rest.
 import { warmMemorySlots } from '../lib/warm-eligibility.js';
-export {
-	type WarmEligibilityInput,
-	warmEligibleSlots,
-	warmMemorySlots,
-	warmCacheEligible,
-} from '../lib/warm-eligibility.js';
 
 /** The JIT root under a node's home directory — the one place this path is
  * spelled; `slotDir` and the space probe both derive from it. */

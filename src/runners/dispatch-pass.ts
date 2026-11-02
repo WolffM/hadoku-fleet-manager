@@ -25,7 +25,7 @@ import { logger } from '../host.js';
 import { withGhCaller } from '../gh-budget.js';
 import { subCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
 import { planTick } from './dispatcher.js';
-import { type GhLike, type ShellLike } from './ephemeral-exec.js';
+import { type GhLike, type ShellLike } from '../lib/fleet-vocabulary.js';
 import {
 	mintEphemeralRunner,
 	liveJitUnitRecords,
@@ -33,20 +33,18 @@ import {
 	retireStrandedJit,
 	type LiveJitUnit,
 } from './ephemeral-exec-jit.js';
-import { reapJitRunners, REAP_INTERVAL_MS } from './ephemeral-exec-reap.js';
-import { JIT_PREFIX, WARM_PREFIX, parseJitName } from './ephemeral.js';
+import { reapJitRunners } from './ephemeral-exec-reap.js';
+import { REAP_INTERVAL_MS } from '../lib/jit-reap-cadence.js';
+import { JIT_PREFIX, WARM_PREFIX, parseJitName } from '../lib/jit-naming.js';
 import { recordCapacityLedger } from './capacity-ledger.js';
 import { nodeOf } from './census.js';
 import { recordDispatchDay } from './dispatch-daily.js';
-import { JitDecisionBook, decisionLogEnabled, recordWarmAssignments } from './decision-log.js';
+import { decisionLogEnabled } from './decision-log.js';
+import { JitDecisionBook, recordWarmAssignments } from './decision-log-record.js';
 import { makeCapacityOf, toJitObservation } from './dispatch-decision-flatten.js';
-import { satisfiesLabels } from './placement.js';
-import type { DispatchPassInput, DispatchPassResult, RunningJob } from './dispatch-pass-types.js';
+import { satisfiesLabels } from './placement-node-state.js';
+import type { DispatchPassInput, DispatchPassResult } from './dispatch-pass-types.js';
 import {
-	HEAVY_MARK_MS,
-	heavyMarkedRecently,
-	__resetHeavyMarksForTesting,
-	__markHeavyForTesting,
 	reapBook,
 	mintedAtMs,
 	reapTargets,
@@ -54,23 +52,11 @@ import {
 	type FleetDispatchAffinity,
 	getDispatchAffinitySnapshot,
 	recordAffinityPass,
-	__resetAffinityCountersForTesting,
 } from './dispatch-pass-state.js';
-import { BAND_HEAD_START_MS, byPriority } from './dispatch-pass-order.js';
+import { byPriority } from './dispatch-pass-order.js';
 import { closeWarmBesideHeavy } from './dispatch-pass-warm-heavy.js';
 
-export type { DispatchPassInput, DispatchPassResult, RunningJob };
-export {
-	HEAVY_MARK_MS,
-	heavyMarkedRecently,
-	__resetHeavyMarksForTesting,
-	__markHeavyForTesting,
-	reapTargets,
-	type FleetDispatchAffinity,
-	getDispatchAffinitySnapshot,
-	__resetAffinityCountersForTesting,
-};
-export { BAND_HEAD_START_MS, byPriority };
+export { type FleetDispatchAffinity };
 
 /**
  * When the reap last swept, epoch ms. "Not yet this process" until the first

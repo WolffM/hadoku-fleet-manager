@@ -29,7 +29,7 @@
  * NOT A GATE. A failed query logs and dispatches nothing; the promoter still
  * runs on every CI completion.
  */
-import { coveredRepos } from './ci-runner-fallback.js';
+import { coveredRepos } from './lib/covered-repos.js';
 import { withGhCaller } from './gh-budget.js';
 import { githubToken, logger } from './host.js';
 import { userAgent } from './lib/fleet-config.js';

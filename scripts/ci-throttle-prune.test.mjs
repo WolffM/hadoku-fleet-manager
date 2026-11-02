@@ -15,7 +15,7 @@
  * deterministically.
  */
 import { after, test } from 'node:test';
-import { TMP_FREE_FLOOR_MB } from '../dist/runners/ephemeral.js';
+import { TMP_FREE_FLOOR_MB } from '../dist/lib/jit-naming.js';
 import assert from 'node:assert/strict';
 import {
 	existsSync,

@@ -16,16 +16,22 @@ import {
 	__resetCapacityLedgerForTesting,
 	recordCapacityLedger,
 } from '../runners/capacity-ledger.js';
-import { admissionVerdictsForReport } from '../runners/ephemeral-tick.js';
-import { __resetAdmissionVerdictsForTesting } from '../runners/ephemeral-tick.js';
-import { __setAdmissionVerdictsForTesting } from '../runners/ephemeral-tick.js';
-import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
-import { __setWorkloadGateContextForTesting } from '../runners/ephemeral-shared.js';
+import {
+	admissionVerdictsForReport,
+	__setAdmissionVerdictsForTesting,
+} from '../admission-verdict-store.js';
+import {
+	__resetAdmissionVerdictsForTesting,
+	dispatchEphemeral,
+} from '../runners/ephemeral-tick.js';
+import { __setWorkloadGateContextForTesting } from '../workload-gate-store.js';
 import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
-import { __resetWarmReposForTesting } from '../runners/dispatch-warm-cache.js';
+import {
+	__resetWarmReposForTesting,
+	warmReposForPlacement,
+} from '../runners/dispatch-warm-cache-state.js';
 import { dispatchWarmCache } from '../runners/dispatch-warm-cache.js';
-import { warmReposForPlacement } from '../runners/dispatch-warm-cache.js';
-import { warmRunnerName } from '../runners/ephemeral.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
 import { WARM_ASSIGN_WINDOW_MS } from '../runners/ephemeral-warm.js';
 import { WARM_CACHE_INTERVAL_MS } from '../runners/warm-backoff.js';
 import { workloadGateContext } from '../lib/workload-gate.js';

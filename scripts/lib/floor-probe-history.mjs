@@ -8,7 +8,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 
 const historyPath = join(stateDir(), 'job-history.jsonl');
 

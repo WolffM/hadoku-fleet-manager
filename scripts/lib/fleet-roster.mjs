@@ -31,7 +31,7 @@
  * with reality is a list that will be wrong.
  */
 import { readFileSync } from 'node:fs';
-import { manifest as manifestFile } from './paths.mjs';
+import { manifest as manifestFile } from '../../dist/lib/fleet-paths.js';
 
 const COVERAGE = manifestFile('fleet-runner-coverage.json');
 
@@ -86,5 +86,3 @@ export function reposWith(facet, { includeHost = false } = {}) {
 export function namesWith(facet, opts) {
 	return reposWith(facet, opts).map((e) => e.repo.split('/')[1]);
 }
-
-export { HOST_REPO };

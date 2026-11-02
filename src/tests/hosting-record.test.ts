@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { ciUnitProperties } from '../runners/ephemeral.js';
+import { ciUnitProperties } from '../runners/ci-unit-properties.js';
 import { buildSpawnPlan, buildWarmSpawnPlan } from '../runners/ephemeral-mint.js';
 import { drainNotices, noticeRefusal, type DrainDoc } from '../runners/drain.js';
 import {

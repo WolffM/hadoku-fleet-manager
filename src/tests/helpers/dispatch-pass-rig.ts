@@ -21,15 +21,15 @@
  */
 import { beforeEach, afterEach } from 'node:test';
 
+import { __resetReapClockForTesting } from '../../runners/dispatch-pass.js';
 import {
 	__resetHeavyMarksForTesting,
 	__resetAffinityCountersForTesting,
-	__resetReapClockForTesting,
-	type DispatchPassInput,
-} from '../../runners/dispatch-pass.js';
+} from '../../runners/dispatch-pass-state.js';
+import { type DispatchPassInput } from '../../runners/dispatch-pass-types.js';
 import { __setHostForTesting } from '../../host.js';
 import { testHost } from '../install-test-host.js';
-import type { NodeState } from '../../runners/placement.js';
+import type { NodeState } from '../../runners/placement-node-state.js';
 import { fakeGh, fakeShell } from './fleet-fakes.js';
 
 export const node = (name: string, over: Partial<NodeState> = {}): NodeState => ({

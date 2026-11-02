@@ -27,7 +27,7 @@
  * argument. The one import below is the BUILT zone classifier and it reads
  * neither — see the note on it.
  */
-import { classifyZone, zoneOf } from '../../dist/job-history-stats.js';
+import { classifyZone } from '../../dist/job-history-zone.js';
 
 // ---------------------------------------------------------------------------
 // §1.3 / master §5.5 — the zone classifier
@@ -52,7 +52,6 @@ import { classifyZone, zoneOf } from '../../dist/job-history-stats.js';
  * consults would have changed that decision as a side effect of adding a
  * counter.
  */
-export { classifyZone, zoneOf };
 
 /**
  * Is this failure worth a forced re-run? §5.1 — runner or seam zone only.

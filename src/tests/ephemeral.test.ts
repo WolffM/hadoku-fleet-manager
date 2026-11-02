@@ -1,17 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { JIT_PREFIX } from '../runners/ephemeral.js';
-import { LOWER_BOUND_HEADROOM } from '../runners/ephemeral.js';
-import { MAX_RUNNER_NAME } from '../runners/ephemeral.js';
-import { TMP_FREE_FLOOR_MB } from '../runners/ephemeral.js';
-import { WORK_FREE_FLOOR_MB } from '../runners/ephemeral.js';
-import { admitMint } from '../runners/ephemeral.js';
-import { assertSafeJitConfig } from '../runners/ephemeral.js';
-import { jitRunnerName } from '../runners/ephemeral.js';
-import { parseJitName } from '../runners/ephemeral.js';
+import {
+	JIT_PREFIX,
+	MAX_RUNNER_NAME,
+	TMP_FREE_FLOOR_MB,
+	jitRunnerName,
+	parseJitName,
+} from '../lib/jit-naming.js';
+import {
+	LOWER_BOUND_HEADROOM,
+	WORK_FREE_FLOOR_MB,
+	admitMint,
+	assertSafeJitConfig,
+} from '../runners/ephemeral-admission.js';
 import { slotDir } from '../runners/ephemeral.js';
-import { choosePlacement, type NodeState } from '../runners/placement.js';
+import { choosePlacement } from '../runners/placement.js';
+import { type NodeState } from '../runners/placement-node-state.js';
 import { nodeOf } from '../runners/census.js';
 import { BASE } from './helpers/ephemeral-rig.js';
 

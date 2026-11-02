@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
-import { manifest as manifestFile } from './lib/paths.mjs';
+import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { reposOnNode } from './lib/placement-rules.mjs';
 import { reclaimableCaches } from './lib/tool-caches.mjs';
 import { createEmitter } from './lib/emit.mjs';

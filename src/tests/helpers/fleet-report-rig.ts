@@ -16,8 +16,9 @@
  */
 import { beforeEach } from 'node:test';
 
-import type { RunnerHealthSnapshot } from '../../runner-health.js';
-import type { CapacityKind, FleetReport } from '../../fleet-report-types.js';
+import type { RunnerHealthSnapshot } from '../../runner-health-snapshot.js';
+import type { FleetReport } from '../../fleet-report-types.js';
+import type { CapacityKind } from '../../fleet-report-types-capacity.js';
 import type { NodeProbe } from '../../lib/node-probe.js';
 import type { JobHistorySummary } from '../../job-history-stats.js';
 import { __resetAdmissionVerdictsForTesting } from '../../runners/ephemeral-tick.js';

@@ -52,8 +52,6 @@ import { stateDir } from '../host.js';
 import { hostingSliceName } from '../lib/hosting-slice.js';
 import type { DrainDoc, DrainNotice, HostingResources } from './drain.js';
 
-export { hostingSliceName };
-
 /**
  * The OOM score every CI unit runs at. The kernel scores a process at roughly
  * its RAM share × 1000 plus this, so +500 puts any CI process ahead of pm2

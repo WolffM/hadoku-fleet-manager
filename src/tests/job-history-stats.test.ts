@@ -10,9 +10,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { nodeOf } from '../job-history-stats.js';
-import { median } from '../job-history-stats.js';
-import { percentile } from '../job-history-stats.js';
+import { nodeOf } from '../runners/census.js';
+import { median, percentile } from '../job-history-stats.js';
 import { installJobHistoryRig } from './helpers/job-history-rig.js';
 
 installJobHistoryRig();

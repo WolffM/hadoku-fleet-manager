@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { __setHostForTesting } from '../host.js';
 import { testHost } from './install-test-host.js';
 import { capacitySampleStore, CAPACITY_SAMPLE_FILE } from '../capacity-sample-store.js';
-import { buildFleetReport } from '../routes/fleet.js';
+import { buildFleetReport } from '../routes/fleet-report.js';
 import type { DrainState } from '../runners/drain.js';
 import { capacitySampleTick, sampleCapacityNow } from '../capacity-sample.js';
 

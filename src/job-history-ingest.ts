@@ -1,16 +1,14 @@
 import {
 	appendToDisk,
 	compactHistory,
-	forcedLifted,
 	loadHistory,
-	loadProbeLedger,
-	probeRuns,
 	records,
 	remember,
 	seenRuns,
 	trimToBudget,
 	type JobRecord,
 } from './job-history-store.js';
+import { forcedLifted, loadProbeLedger, probeRuns } from './job-history-probe-ledger.js';
 import { WARM_PREFIX, parseJitName } from './lib/jit-naming.js';
 import { jobPhases, stepFailure, type GhJob } from './job-history-phases.js';
 
@@ -21,8 +19,6 @@ import { jobPhases, stepFailure, type GhJob } from './job-history-phases.js';
  * under the 600-line target. Re-exported here so every existing importer of
  * `job-history-ingest.js` compiles unchanged.
  */
-export { jobPhases, stepFailure, type GhJob };
-export { backfillFailedSteps, type BackfillReport } from './job-history-backfill.js';
 
 /**
  * Runs whose jobs we may fetch per tick, SHARED across every repo in the sweep.

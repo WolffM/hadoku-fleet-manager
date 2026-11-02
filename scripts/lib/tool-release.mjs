@@ -47,17 +47,6 @@ import {
 	newestCleared,
 } from './version-algebra.mjs';
 
-export {
-	assess,
-	DEFAULT_MIN_AGE_MINUTES,
-	parseVersion,
-	compareVersions,
-	parseRange,
-	satisfies,
-	parseInstalledVersion,
-	newestCleared,
-} from './version-algebra.mjs';
-
 /**
  * Ask npm for one package's per-version publish times and resolve the newest
  * cleared version.

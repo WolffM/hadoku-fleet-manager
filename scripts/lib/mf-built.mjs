@@ -32,7 +32,7 @@
  * A bundle that cannot be fetched, or an app with no registry entry, is a
  * FINDING: "I could not look" is not a pass.
  */
-import { READ_ATTEMPTS, describeReadFailure } from './queue-health.mjs';
+import { READ_ATTEMPTS, describeReadFailure } from './read-retry-policy.mjs';
 
 /** React's element `$$typeof` key, either generation. */
 export const ELEMENT_KEY = /Symbol\.for\(\s*["']react\.(?:transitional\.)?element["']\s*\)/;

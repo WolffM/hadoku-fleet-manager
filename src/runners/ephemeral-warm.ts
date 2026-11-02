@@ -5,12 +5,6 @@
  * under their original path so every existing importer of this module
  * keeps compiling unchanged.
  */
-export {
-	WARM_INCUMBENT_RATIO,
-	warmUnitValues,
-	planWarmFleet,
-	type WarmFleetNode,
-} from './ephemeral-warm-fleet.js';
 
 /** The busy-lock's other half — see {@link warmSlotLocked}. Same value as the
  * dispatcher's own SATURATED_QUEUED_MS-adjacent reasoning: GitHub's assign

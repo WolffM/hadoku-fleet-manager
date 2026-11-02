@@ -7,16 +7,10 @@
  * every time this workstream learned something by pointing a probe at real
  * infrastructure it cost an outage (§12.9) or a leaked registration (§12.8).
  */
-import {
-	isForkSafe,
-	choosePlacement,
-	busyOf,
-	satisfiesLabels,
-	type NodeState,
-	type Placement,
-	type RunIdentity,
-} from './placement.js';
-import { jitRunnerName } from './ephemeral.js';
+import { choosePlacement, busyOf, type Placement } from './placement.js';
+import { isForkSafe, type RunIdentity } from './placement-fork-safety.js';
+import { satisfiesLabels, type NodeState } from './placement-node-state.js';
+import { jitRunnerName } from '../lib/jit-naming.js';
 import { observedQueuedSinceMs } from './queue-discovery.js';
 
 export interface PendingRun extends RunIdentity {

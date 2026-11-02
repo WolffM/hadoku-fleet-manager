@@ -72,7 +72,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { loadManifest, runOnSync, selectMachines } from './lib/fleet-exec.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
@@ -80,18 +80,12 @@ import { readJsonlRecords } from './lib/read-jsonl-records.mjs';
 // job-history's window, BUILT — the same import `collect-job-metrics` makes, so
 // the two commands read the same rows from every node.
 import { RETENTION_DAYS } from '../dist/job-history-store.js';
-import {
-	metricsSince,
-	metricsReadScript,
-	readOutcome,
-	joinMetrics,
-	percentile,
-	mb,
-	byNodeRepo,
-	varianceAxis,
-	durationRatios,
-	perJobCosts,
-} from './lib/job-metrics.mjs';
+import { metricsSince, metricsReadScript, readOutcome } from './lib/job-metrics-read.mjs';
+import { joinMetrics } from './lib/job-metrics-join.mjs';
+import { percentile, mb } from './lib/job-metrics-primitives.mjs';
+import { byNodeRepo } from './lib/job-metrics-groups.mjs';
+import { varianceAxis, durationRatios } from './lib/job-metrics-variance.mjs';
+import { perJobCosts } from './lib/job-metrics-cost.mjs';
 import { isBackstopNode } from '../dist/lib/node-role.js';
 import { measuredFacets } from '../dist/lib/measured.js';
 

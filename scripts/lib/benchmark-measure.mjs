@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
-import { isLocalNode, scriptExecCommand } from './fleet-exec.mjs';
+import { scriptExecCommand } from './fleet-exec.mjs';
+import { isLocalNode } from '../../dist/lib/node-identity.js';
 import { parse } from './benchmark-inventory.mjs';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));

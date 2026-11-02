@@ -58,7 +58,7 @@ import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
-import { manifest, stateDir } from './lib/paths.mjs';
+import { manifest, stateDir } from '../dist/lib/fleet-paths.js';
 import { loadManifest, remoteCommand } from './lib/fleet-exec.mjs';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
@@ -85,7 +85,7 @@ import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
 // `reconcile-runner-identity.mjs` already carry for their own `gh` reads
 // (#80). Imported, not duplicated: a third copy of this retry is a third
 // place for "retrying is not tolerating" to drift.
-import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
+import { READ_ATTEMPTS, describeReadFailure } from './lib/read-retry-policy.mjs';
 import { BOLD, GREEN, RED, RESET, YELLOW } from './lib/term.mjs';
 
 // The STATE dir, not the manifest dir — see src/runners/drain.ts for why.

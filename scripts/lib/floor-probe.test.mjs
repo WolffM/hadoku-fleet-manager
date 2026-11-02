@@ -22,13 +22,13 @@ import {
 	RERUN_CALL_CEILING,
 	SHADOW_CALL_BUDGET,
 	callsPerProbe,
-	classifyZone,
 	foreignFlags,
 	maxProbesPerRun,
 	parseMode,
 	probeGate,
 	warrantsForcedRerun,
 } from './floor-probe.mjs';
+import { classifyZone } from '../../dist/job-history-zone.js';
 
 // The zone classifier
 // ---------------------------------------------------------------------------

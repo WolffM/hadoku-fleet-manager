@@ -42,7 +42,7 @@
 import { ALL_ZONES, type FailureZoneName } from './failure-rates.js';
 import type { CapacitySampleRow } from './capacity-sample-store.js';
 import type { GhBudgetHistoryRow } from './gh-budget-history-store.js';
-import type { FailuresByZone } from './job-history-stats.js';
+import type { FailuresByZone } from './job-history-zone.js';
 import type { JobRunRow, JobRunVerdict } from './job-run-store.js';
 import type { DayRollup, Spread } from './job-rollups.js';
 

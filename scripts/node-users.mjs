@@ -32,7 +32,7 @@ import {
 	parseUsersObservation,
 	usersObserveScript,
 } from './lib/node-users-facet.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readTenantRegistry, registeredTenantUsers } from './lib/tenant-registry.mjs';
 
 const emitter = createEmitter({ argv: process.argv });

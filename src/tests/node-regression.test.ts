@@ -21,7 +21,8 @@ import {
 	type GatedKind,
 } from '../runners/node-regression.js';
 import type { JobRecord } from '../job-history-store.js';
-import type { ProofRecord, WriteFacetResult } from '../lib/measured.js';
+import type { WriteFacetResult } from '../lib/measured.js';
+import type { ProofRecord } from '../lib/workload-gate.js';
 
 const NODES = ['claw-3', 'claw-4', 'claw-8', 'claw-9', 'hokon'];
 const JDK21: GatedKind = { capability: 'jdk21', repo: 'WolffM/hadoku-cardtable', job: 'forge-e2e' };

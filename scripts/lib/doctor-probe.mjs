@@ -1,6 +1,4 @@
-import { WIFI_MANAGER_PROBE, parseWifiManager } from './node-interfaces.mjs';
-
-export { parseWifiManager };
+import { WIFI_MANAGER_PROBE } from './node-interfaces.mjs';
 
 /** Seconds of all-core load the thermal reading is taken under. Fixed, by §H. */
 export const LOAD_SECONDS = 60;

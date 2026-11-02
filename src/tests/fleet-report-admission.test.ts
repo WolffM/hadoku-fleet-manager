@@ -13,8 +13,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { FleetReport } from '../fleet-report-types.js';
-import { buildFleetReport } from '../routes/fleet.js';
-import { __setAdmissionVerdictsForTesting } from '../runners/ephemeral-tick.js';
+import { buildFleetReport } from '../routes/fleet-report.js';
+import { __setAdmissionVerdictsForTesting } from '../admission-verdict-store.js';
 import { setBackstopHold } from '../runners/backstop-hold.js';
 import {
 	NO_JOBS,

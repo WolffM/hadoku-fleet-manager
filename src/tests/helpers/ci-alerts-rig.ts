@@ -9,18 +9,17 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tempDir } from '../tmpdir.js';
 
+import { runCiAlerts, stateKey } from '../../ci-alerts.js';
 import {
 	decideCiAlert,
-	runCiAlerts,
 	runEndedAt,
 	runsEndedSince,
-	stateKey,
 	type CiAction,
 	type CiDecision,
 	type CiRun,
 	type CiState,
-	type CiTickSummary,
-} from '../../ci-alerts.js';
+} from '../../ci-alerts-decide.js';
+import { type CiTickSummary } from '../../ci-alerts-summary.js';
 import { __setHostForTesting } from '../../host.js';
 import { testHost } from '../install-test-host.js';
 

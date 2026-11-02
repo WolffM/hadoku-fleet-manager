@@ -11,19 +11,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-	tick,
-	TICK_INTERVAL_MS,
-	__setFleetReposForTesting,
-	getRunnerHealthSnapshot,
-} from '../runner-health.js';
+import { tick, __setFleetReposForTesting } from '../runner-health.js';
+import { TICK_INTERVAL_MS } from '../lib/runner-health-shared.js';
+import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
 import { __setBackstopMachinesForTesting } from '../runners/backstop-machines.js';
-import {
-	__setHostLoadReaderForTesting,
-	QUEUE_ZOMBIE_SECONDS,
-} from '../runners/backstop-decision.js';
+import { __setHostLoadReaderForTesting } from '../runners/backstop-host-load.js';
+import { QUEUE_ZOMBIE_SECONDS } from '../runners/backstop-queue-probe.js';
 import { refusedAtAdmission } from '../runners/failover.js';
-import { __setFleetProbeForTesting } from '../fleet-loop.js';
+import { __setFleetProbeForTesting } from '../fleet-probe-store.js';
 import { writeDrain } from '../runners/drain.js';
 import { writeForce } from '../runners/backstop-force.js';
 import {
@@ -34,17 +29,19 @@ import { backstopHold } from '../runners/backstop-hold.js';
 import {
 	installRunnerHealthRig,
 	installFetch,
-	clawLabels,
-	hokonLabels,
-	hokonPromotedLabels,
 	discordPosts,
 	labelOps,
 	labelPostBodies,
 	queuedListings,
 	variableOps,
+} from './helpers/runner-health-rig.js';
+import {
+	clawLabels,
+	hokonLabels,
+	hokonPromotedLabels,
 	minutesAgo,
 	daysAgo,
-} from './helpers/runner-health-rig.js';
+} from './helpers/runner-health-fixtures.js';
 
 installRunnerHealthRig();
 

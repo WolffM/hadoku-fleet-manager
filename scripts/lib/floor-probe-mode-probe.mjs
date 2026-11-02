@@ -15,15 +15,15 @@ import {
 	PROBE_CALLS,
 	SHADOW_CALL_BUDGET,
 	callsPerProbe,
-	classifyZone,
 	maxProbesPerRun,
 } from './floor-probe.mjs';
+import { classifyZone } from '../../dist/job-history-zone.js';
 import { githubToken, meteredGh, sleep } from './floor-probe-dispatch.mjs';
 import { appendLedger } from './floor-probe-state.mjs';
 import { declareProbeIntent } from './floor-probe-intent.mjs';
 import { mintProbeRunner, watchProbeJobToSettle } from './floor-probe-mint-watch.mjs';
-import { PROBE_INTENT_DIR } from '../../dist/runners/dispatch-tick.js';
-import { jitRunnerName } from '../../dist/runners/ephemeral.js';
+import { PROBE_INTENT_DIR } from '../../dist/runners/dispatch-tick-probe-intents.js';
+import { jitRunnerName } from '../../dist/lib/jit-naming.js';
 
 /**
  * §6's shadow path: one probe, one node.

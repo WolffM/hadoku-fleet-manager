@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { ManifestNode } from '../lib/capability-registry.js';
-import type { ProofRecord } from '../lib/measured.js';
+import type { ProofRecord } from '../lib/workload-gate.js';
 
 export const HERE = fileURLToPath(new URL('.', import.meta.url));
 /** dist/tests/ -> dist/ -> <repo root> */

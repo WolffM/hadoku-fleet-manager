@@ -518,12 +518,3 @@ export function rebootFindings(probes, opts = {}) {
 // existing importer (`./lib/preflight.mjs` / `./preflight.mjs`) keeps
 // compiling unchanged.
 // ---------------------------------------------------------------------------
-export { lanReservationFinding, lanReservationFindings } from './preflight-lan.mjs';
-export {
-	LISTS_STALE_DAYS,
-	SECURITY_PROBE,
-	SECURITY_STALE_DAYS,
-	parseSecurityProbe,
-	pendingSince,
-	securityUpdateFinding,
-} from './preflight-security.mjs';

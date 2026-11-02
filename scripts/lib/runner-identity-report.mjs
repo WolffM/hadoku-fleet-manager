@@ -5,7 +5,7 @@
  * `--json` GateDoc itself is still built and emitted by the CLI, which is
  * what `scripts/lib/json-contract.mjs` scans for.
  */
-import { READ_ATTEMPTS } from './queue-health.mjs';
+import { READ_ATTEMPTS } from './read-retry-policy.mjs';
 
 /**
  * @param {object} ctx

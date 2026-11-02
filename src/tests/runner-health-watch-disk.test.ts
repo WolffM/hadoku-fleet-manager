@@ -13,12 +13,9 @@ import assert from 'node:assert/strict';
 import { appendFileSync } from 'node:fs';
 import { historyFile } from '../job-history-store.js';
 
-import {
-	tick,
-	__resetRunnerHealthAlertsForTesting,
-	getRunnerHealthSnapshot,
-	RE_ALERT_MS,
-} from '../runner-health.js';
+import { tick, __resetRunnerHealthAlertsForTesting } from '../runner-health.js';
+import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
+import { HOUR_MS as RE_ALERT_MS } from '../lib/job-runner.js';
 import { __setBackstopMachinesForTesting } from '../runners/backstop-machines.js';
 import { __reloadAlertLedgerForTesting } from '../lib/alert-ledger.js';
 import {
@@ -31,13 +28,9 @@ import {
 	__setReadProofForTesting,
 	type GatedKind,
 } from '../runners/node-regression.js';
-import type { ProofRecord } from '../lib/measured.js';
-import {
-	installRunnerHealthRig,
-	installFetch,
-	discordPosts,
-	LIVE_LISTING,
-} from './helpers/runner-health-rig.js';
+import type { ProofRecord } from '../lib/workload-gate.js';
+import { installRunnerHealthRig, installFetch, discordPosts } from './helpers/runner-health-rig.js';
+import { LIVE_LISTING } from './helpers/runner-health-fixtures.js';
 
 installRunnerHealthRig();
 

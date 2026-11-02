@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
 import { hubRepo } from '../../dist/lib/fleet-config.js';
-import { reposDir, stateDir } from './paths.mjs';
+import { reposDir, stateDir } from '../../dist/lib/fleet-paths.js';
 import { parseToolProbe, toolProbeScript } from '../check-fleet-toolchain.mjs';
 import { deferralFor, readDrains } from './expected-down.mjs';
 import { repairContext, runOnSync } from './fleet-exec.mjs';

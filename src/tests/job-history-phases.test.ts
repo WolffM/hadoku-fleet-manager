@@ -14,8 +14,7 @@ import assert from 'node:assert/strict';
 
 import { jobRecords } from '../job-history-store.js';
 import { ingestRuns } from '../job-history-ingest.js';
-import { jobPhases } from '../job-history-ingest.js';
-import { stepFailure } from '../job-history-ingest.js';
+import { jobPhases, stepFailure } from '../job-history-phases.js';
 import { job, at, installJobHistoryRig } from './helpers/job-history-rig.js';
 
 installJobHistoryRig();

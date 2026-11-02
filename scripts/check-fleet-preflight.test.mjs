@@ -38,7 +38,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { READ_ATTEMPTS } from './lib/queue-health.mjs';
+import { READ_ATTEMPTS } from './lib/read-retry-policy.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GATE = join(HERE, 'check-fleet-preflight.mjs');

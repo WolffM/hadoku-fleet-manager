@@ -29,12 +29,3 @@
  * explicitly, and re-exports every name below unchanged so `server.ts`'s
  * `/api/host-lease` routes compile exactly as before.
  */
-
-export {
-	type HostLease,
-	MAX_LEASE_SECONDS,
-	takeLease,
-	releaseLease,
-	activeLeases,
-	__resetLeasesForTesting,
-} from './host-lease-record.js';

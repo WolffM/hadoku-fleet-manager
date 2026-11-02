@@ -24,7 +24,7 @@
 import { join } from 'node:path';
 
 import { logger, stateDir } from './host.js';
-import { buildFleetReport } from './routes/fleet.js';
+import { buildFleetReport } from './routes/fleet-report.js';
 import { isDraining, readDrain, type DrainState } from './runners/drain.js';
 import {
 	capacitySampleStore,

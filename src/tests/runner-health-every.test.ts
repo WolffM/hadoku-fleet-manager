@@ -32,12 +32,12 @@ import {
 	__stopRunnerHealthMonitorForTesting,
 	__awaitInFlightTickForTesting,
 	__setTokenRetryForTesting,
-	__setSupervisionCheckerForTesting,
 	__setRemeasureDelayForTesting,
 	__setPostBlackoutSlackForTesting,
 	__setFleetReposForTesting,
-	TICK_INTERVAL_MS,
 } from '../runner-health.js';
+import { __setSupervisionCheckerForTesting } from '../runner-health-watch.js';
+import { TICK_INTERVAL_MS } from '../lib/runner-health-shared.js';
 import { getFleetLiveness, __resetLivenessForTesting } from '../lib/liveness.js';
 import { __setHostForTesting } from '../host.js';
 import { testHost } from './install-test-host.js';

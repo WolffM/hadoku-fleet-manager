@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 
 import { nodeOffer } from '../lib/capability-offer.js';
 import type { ManifestNode } from '../lib/capability-registry.js';
-import { isProofRunnerName } from '../runners/prove-job-parse.js';
+import { isProofRunnerName } from '../lib/jit-naming.js';
 import { proveJob } from '../runners/prove-job.js';
 import { MAX_ATTEMPTS_CEILING, type ProofGh, type ProveSpec } from '../runners/prove-job-types.js';
 import { extractEvidence } from '../runners/prove-job-parse.js';

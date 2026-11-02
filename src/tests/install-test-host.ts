@@ -20,7 +20,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { __setHostForTesting, type FleetHost } from '../host.js';
 import { __setBackstopMachinesForTesting } from '../runners/backstop-machines.js';
-import { __setHostLoadReaderForTesting } from '../runners/backstop-decision.js';
+import { __setHostLoadReaderForTesting } from '../runners/backstop-host-load.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 /** dist/tests/ -> dist/ -> <repo root>/manifests */

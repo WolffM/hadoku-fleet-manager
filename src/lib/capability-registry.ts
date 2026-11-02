@@ -54,7 +54,6 @@
  * modules that DO decide can stop carrying their own copy of the list.
  */
 
-import { BACKSTOP_LABEL, BUILDER_LABEL, PM2_HOST_LABEL } from './capability-registry-ids.js';
 import {
 	AV1_NVENC_CAPABILITY,
 	BACKSTOP_CAPABILITY,
@@ -482,7 +481,6 @@ export function judgeMeasurement(
 // node-eligibility.ts, routes/fleet.ts, and several scripts/) compiles unchanged.
 // The canonical declaration moved to capability-registry-ids.ts (see its own
 // doc) so capability-registry-label.ts can use them without a cycle.
-export { BACKSTOP_LABEL, BUILDER_LABEL, PM2_HOST_LABEL };
 
 /**
  * THE REGISTRY.

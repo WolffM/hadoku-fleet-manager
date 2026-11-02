@@ -74,26 +74,8 @@ import {
 	type CiState,
 	type GhGet,
 } from './ci-alerts-decide.js';
-export {
-	decideCiAlert,
-	runEndedAt,
-	runsEndedSince,
-	isForeignRun,
-	cancelledByTimeout,
-	STALE_STATE_MS,
-	STALE_RUN_MS,
-	TIMEOUT_ANNOTATION,
-	REPAGE_INTERVAL_MS,
-	type CiAction,
-	type CiConclusion,
-	type CiDecision,
-	type CiRun,
-	type CiState,
-	type GhGet,
-} from './ci-alerts-decide.js';
 
 import { emptySummary, logCiTickSummary, type CiTickSummary } from './ci-alerts-summary.js';
-export { formatCiTickSummary, type CiTickSummary } from './ci-alerts-summary.js';
 
 import {
 	readStates,
@@ -101,16 +83,6 @@ import {
 	readRepoStates,
 	writeRepoStates,
 	recordCleanPass,
-	type CiRepoState,
-} from './ci-alerts-state.js';
-export {
-	readStates,
-	writeStates,
-	readRepoStates,
-	ciAlertsBootPassDue,
-	lastCleanCiAlertsPassMs,
-	CI_ALERTS_PASS_FILE,
-	CI_ALERTS_BOOT_SKIP_MS,
 	type CiRepoState,
 } from './ci-alerts-state.js';
 

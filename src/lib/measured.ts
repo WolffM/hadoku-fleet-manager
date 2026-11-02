@@ -84,10 +84,8 @@ import { join } from 'node:path';
 
 import { writeFileAtomic } from './atomic-json.js';
 import { stateDir } from './fleet-paths.js';
-import { assertFacet, facetPath, MEASURED_FACETS, measuredFacetPaths } from './measured-paths.js';
+import { assertFacet, facetPath } from './measured-paths.js';
 import type { MeasuredFacetName } from './measured-paths.js';
-
-export { MEASURED_FACETS, facetPath, measuredFacetPaths, type MeasuredFacetName };
 
 /** Kept this long in `<facet>.log`; see the module header for why 30. */
 export const FACET_LOG_RETENTION_DAYS = 30;
@@ -439,12 +437,3 @@ export function writeFacet(
  * under the 600-line target. Re-exported here so every existing importer of
  * `measured.js` compiles unchanged.
  */
-export {
-	readProof,
-	proofFileStatus,
-	readProofsForCapability,
-	writeProof,
-	markProofStale,
-	type ProofFileStatus,
-	type ProofRecord,
-} from './measured-proof.js';

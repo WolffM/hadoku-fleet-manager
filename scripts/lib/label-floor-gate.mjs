@@ -26,10 +26,10 @@
  * assembles it.
  */
 import { join } from 'node:path';
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { buildGateDoc } from './gate-doc.mjs';
 import { mintsJitRunners } from '../../dist/lib/node-role.js';
-import { BUILDER_LABEL } from '../../dist/runners/census.js';
+import { BUILDER_LABEL } from '../../dist/lib/capability-registry-ids.js';
 import { RETENTION_DAYS } from '../../dist/job-history-store.js';
 import { eligibilityLabels } from '../../dist/lib/capability-labels.js';
 import { offerersOf, declarationIsRight, derivedByEarning } from './label-floor-check.mjs';

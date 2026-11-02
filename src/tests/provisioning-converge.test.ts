@@ -20,10 +20,10 @@ import {
 	convergeScriptPath,
 	runConvergeScript,
 	DEFER_PAGE_MS,
-	REPAGE_MS,
 	type ConvergeDoc,
 	type ConvergeRunner,
 } from '../provisioning-converge.js';
+import { DAY_MS as REPAGE_MS } from '../lib/job-runner.js';
 
 let posts: string[] = [];
 let infos: string[] = [];

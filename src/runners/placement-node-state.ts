@@ -9,7 +9,7 @@
  * importers compile unchanged.
  */
 import { IMPLICIT_LABELS as REGISTRY_IMPLICIT_LABELS } from '../lib/capability-labels.js';
-import type { AdmissionInput } from './ephemeral.js';
+import type { AdmissionInput } from './ephemeral-admission.js';
 import type { SpeedModel } from './speed-tier.js';
 import type { HeavyModel } from './traffic.js';
 

@@ -54,7 +54,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isBackstopNode } from '../dist/lib/node-role.js';
 import { loadManifest, runOnSync, selectMachines } from './lib/fleet-exec.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
 import { warmCanaryVerdict, slowTierCandidates } from './lib/warm-canary.mjs';

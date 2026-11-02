@@ -20,10 +20,10 @@ import {
 	rebootScriptPath,
 	runRebootScript,
 	FAIL_PAGE_MS,
-	REPAGE_MS,
 	type RebootDoc,
 	type RebootRunner,
 } from '../claw-reboot.js';
+import { DAY_MS as REPAGE_MS } from '../lib/job-runner.js';
 
 let posts: string[] = [];
 let infos: string[] = [];

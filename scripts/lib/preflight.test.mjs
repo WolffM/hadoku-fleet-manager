@@ -20,17 +20,18 @@ import {
 	blockingFindings,
 	advisoryFindings,
 	backstopAdvisory,
-	lanReservationFinding,
-	lanReservationFindings,
 	BACKSTOP_BLOCKING_CATEGORIES,
 	BLOCKING,
 	ADVISORY,
 	REBOOT_ESCALATE_DAYS,
+} from './preflight.mjs';
+import { lanReservationFinding, lanReservationFindings } from './preflight-lan.mjs';
+import {
 	SECURITY_STALE_DAYS,
 	parseSecurityProbe,
 	pendingSince,
 	securityUpdateFinding,
-} from './preflight.mjs';
+} from './preflight-security.mjs';
 
 const SCRIPTS = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DRIVER = resolve(SCRIPTS, 'check-fleet-preflight.mjs');

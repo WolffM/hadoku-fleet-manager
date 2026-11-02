@@ -10,16 +10,28 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { dispatchBetweenTicks, __resetDispatchInputForTesting } from '../fleet-loop.js';
-import { __setDispatchInputForTesting, tickFleet, RECONCILE_EVERY_TICKS } from '../fleet-loop.js';
-import { __resetFleetLoopForTesting, recordDispatch, getDispatchSnapshot } from '../fleet-loop.js';
-import { startFastLoop, __setFastLoopTokenRetryForTesting } from '../fleet-loop.js';
+import {
+	dispatchBetweenTicks,
+	__resetDispatchInputForTesting,
+	__setDispatchInputForTesting,
+	tickFleet,
+	__resetFleetLoopForTesting,
+	recordDispatch,
+	getDispatchSnapshot,
+	startFastLoop,
+	__setFastLoopTokenRetryForTesting,
+} from '../fleet-loop.js';
+import { RECONCILE_EVERY_TICKS } from '../lib/fast-loop-cadence.js';
 import { loadResidentRepos } from '../runners/node-eligibility.js';
-import { markNodeSick, nodeIsSick } from '../lib/sick-node.js';
-import { sickNodeNames, __resetSickForTesting } from '../lib/sick-node.js';
+import {
+	markNodeSick,
+	nodeIsSick,
+	sickNodeNames,
+	__resetSickForTesting,
+} from '../lib/sick-node.js';
 import { loadClawNodes } from '../lib/manifest.js';
 import { __resetReservationForTesting } from '../node-reservation.js';
-import type { DispatchPassResult } from '../runners/dispatch-pass.js';
+import type { DispatchPassResult } from '../runners/dispatch-pass-types.js';
 import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
 import { setBackstopHold } from '../runners/backstop-hold.js';
 import { writeDrain } from '../runners/drain.js';

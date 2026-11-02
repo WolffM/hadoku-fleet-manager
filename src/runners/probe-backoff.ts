@@ -1,6 +1,6 @@
 import { logger } from '../host.js';
 import type { SkipReason } from './dispatcher.js';
-import { satisfiesLabels, type NodeState } from './placement.js';
+import { satisfiesLabels, type NodeState } from './placement-node-state.js';
 
 /**
  * How long a run that NO node could take goes un-probed (#117).

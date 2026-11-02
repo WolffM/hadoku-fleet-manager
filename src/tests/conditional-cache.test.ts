@@ -16,19 +16,19 @@ import { join } from 'node:path';
 
 import { stateDir } from '../host.js';
 import { CONDITIONAL_CACHE_DIR, conditionalCacheStore } from '../conditional-cache-store.js';
+import { __resetRunnerHealthAlertsForTesting } from '../runner-health.js';
 import {
 	ghGet,
 	readRunnerListingShared,
-	__resetGhBlackoutForTesting,
-	__resetRunnerHealthAlertsForTesting,
 	__restartGhCacheForTesting,
-} from '../runner-health.js';
+} from '../lib/github-client.js';
+import { __resetGhBlackoutForTesting } from '../lib/github-client-blackout.js';
 import {
-	FLEET_VALUE,
 	syncHostedFallback,
 	__resetFallbackConvergenceForTesting,
 	__restartFallbackForTesting,
 } from '../ci-runner-fallback.js';
+import { FLEET_VALUE } from '../lib/ci-runner-values.js';
 
 const realFetch = globalThis.fetch;
 /** Every request's If-None-Match, in order; null when none was sent. */

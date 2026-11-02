@@ -11,10 +11,8 @@
  * reports anything itself; each function returns a result and leaves
  * rendering it to the caller.
  */
-import { ROLLUP_FILE, jsonlRollupStore } from '../../dist/job-rollup-store.js';
+import { jsonlRollupStore } from '../../dist/job-rollup-store.js';
 import { SETTLE_HOURS, utcDay } from '../../dist/job-rollups.js';
-
-export { ROLLUP_FILE };
 
 export const DAY_MS = 86_400_000;
 

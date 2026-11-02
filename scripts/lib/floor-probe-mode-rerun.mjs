@@ -7,18 +7,14 @@
  * CLI — `expected-down-guard.test.mjs` scans only top-level `scripts/*.mjs`
  * files for that pairing — and are threaded through here instead.
  */
-import {
-	classifyZone,
-	warrantsForcedRerun,
-	CallBudget,
-	RERUN_CALL_CEILING,
-} from './floor-probe.mjs';
+import { warrantsForcedRerun, CallBudget, RERUN_CALL_CEILING } from './floor-probe.mjs';
+import { classifyZone } from '../../dist/job-history-zone.js';
 import { githubToken, meteredGh } from './floor-probe-dispatch.mjs';
 import { appendLedger } from './floor-probe-state.mjs';
 import { declareProbeIntent } from './floor-probe-intent.mjs';
 import { mintProbeRunner, watchProbeJobToSettle } from './floor-probe-mint-watch.mjs';
 import { nodeOf } from '../../dist/runners/census.js';
-import { jitRunnerName } from '../../dist/runners/ephemeral.js';
+import { jitRunnerName } from '../../dist/lib/jit-naming.js';
 import { ghWrite } from '../../dist/lib/github-client.js';
 
 /**

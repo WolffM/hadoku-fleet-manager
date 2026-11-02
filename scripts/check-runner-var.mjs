@@ -48,9 +48,9 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
-import { manifest as manifestFile } from './lib/paths.mjs';
+import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { tryShipped, UnreadableRepo } from './lib/fleet-source.mjs';
-import { READ_ATTEMPTS } from './lib/queue-health.mjs';
+import { READ_ATTEMPTS } from './lib/read-retry-policy.mjs';
 import { fleetOwner } from '../dist/lib/fleet-config.js';
 import { readRunnerVar, runnerVarForm, repoVerdict } from './lib/runner-var.mjs';
 import { createEmitter } from './lib/emit.mjs';

@@ -99,10 +99,6 @@ import {
 	spenderLine,
 	windowFor,
 	allBudgetWindows,
-	GH_BUDGET_SAVE_MS,
-	__resetGhBudgetForTesting,
-	__restartGhBudgetForTesting,
-	labelGhToken,
 	nameOf,
 	type BudgetWindow,
 } from './gh-budget-windows.js';
@@ -157,10 +153,8 @@ export const BUDGET_ALERT_FRACTION = 0.2;
 export const BUDGET_ALERT_MIN_LEFT_MS = 10 * 60_000;
 
 /** Re-exported: both the ledger (saveBooks on an alert) and tests need the name. */
-export { GH_BUDGET_SAVE_MS, __resetGhBudgetForTesting, __restartGhBudgetForTesting, labelGhToken };
 
 /** A token's identity in a report. Never the token: a prefix of its hash. */
-export { ghTokenFingerprint };
 
 /** The headers a response carries — `Headers` satisfies this, and so does a test double. */
 export interface HeaderBag {
@@ -337,7 +331,7 @@ export function getGhBudgetSnapshot(nowMs = Date.now()): FleetGithubBudget[] {
  * the 800-line ceiling. Re-exported so every existing importer — `index.ts`
  * among them — compiles unchanged.
  */
-export { readGhPool, meterGhPool, type GhPoolReading } from './gh-budget-pool.js';
+export { meterGhPool, type GhPoolReading } from './gh-budget-pool.js';
 
 /** The top spenders across every open window, for a line that has no room for more. */
 export function ghBudgetSummary(): string {

@@ -73,12 +73,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
+import { manifest as manifestFile, stateDir } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
 import { checkGhReserve } from './lib/gh-reserve.mjs';
 import { useAppPool } from './lib/gh-app.mjs';
-import { describeReadFailure, readQueuedWithRetry } from './lib/queue-health.mjs';
+import { readQueuedWithRetry } from './lib/queue-health.mjs';
+import { describeReadFailure } from './lib/read-retry-policy.mjs';
 
 const JSON_OUT = process.argv.includes('--json');
 const emitter = createEmitter({ json: JSON_OUT });

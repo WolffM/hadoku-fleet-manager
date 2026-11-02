@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 
 import { parseDoctor } from './doctor-parse.mjs';
 import { healthFacet, healthRecord, bootcampPointer } from './doctor-facet.mjs';
-import { ADVISORY, doctorFindings } from './doctor-findings.mjs';
+import { doctorFindings } from './doctor-findings.mjs';
+import { ADVISORY } from './preflight.mjs';
 import {
 	CLAW1,
 	CLAW5,

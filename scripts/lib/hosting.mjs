@@ -65,8 +65,8 @@ import {
 	HOSTING_CPU_WEIGHT,
 	HOSTING_PARENT_SLICE,
 	hostingSliceCgroup,
-	hostingSliceName,
 } from '../../dist/runners/hosting-record.js';
+import { hostingSliceName } from '../../dist/lib/hosting-slice.js';
 import { ciUnitProperties } from '../../dist/runners/ci-unit-properties.js';
 import { runtimeFor } from './hosting-runtimes.mjs';
 import { isBackstopNode } from '../../dist/lib/node-role.js';

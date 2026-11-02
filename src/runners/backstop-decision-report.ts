@@ -16,7 +16,7 @@ import {
 } from './backstop.js';
 import { nodeIsSick } from '../lib/sick-node.js';
 import { isDraining, type DrainState } from './drain.js';
-import { BUILDER_LABEL } from './census.js';
+import { BUILDER_LABEL } from '../lib/capability-registry-ids.js';
 
 /**
  * WHY THE PRODUCTION HOST IS REACHABLE, ON THE TICK IT IS REACHABLE.

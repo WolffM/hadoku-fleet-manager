@@ -10,18 +10,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { WARM_PREFIX } from '../runners/ephemeral.js';
-import { warmCacheEligible } from '../runners/ephemeral.js';
-import { warmEligibleSlots } from '../runners/ephemeral.js';
-import { warmRunnerName } from '../runners/ephemeral.js';
+import { WARM_PREFIX, warmRunnerName } from '../lib/jit-naming.js';
+import { warmCacheEligible, warmEligibleSlots } from '../lib/warm-eligibility.js';
 import { warmSlotDir } from '../runners/ephemeral.js';
 import { buildWarmSpawnPlan } from '../runners/ephemeral-mint.js';
-import { WARM_ASSIGN_WINDOW_MS } from '../runners/ephemeral-warm.js';
-import { planWarmCache } from '../runners/ephemeral-warm.js';
-import { planWarmFleet } from '../runners/ephemeral-warm.js';
-import { WARM_INCUMBENT_RATIO } from '../runners/ephemeral-warm.js';
-import { warmUnitValues } from '../runners/ephemeral-warm.js';
-import { warmSlotLocked } from '../runners/ephemeral-warm.js';
+import { WARM_ASSIGN_WINDOW_MS, planWarmCache, warmSlotLocked } from '../runners/ephemeral-warm.js';
+import {
+	planWarmFleet,
+	WARM_INCUMBENT_RATIO,
+	warmUnitValues,
+} from '../runners/ephemeral-warm-fleet.js';
 import { SPACE_PROBE_DF_CMD } from '../runners/ephemeral-shared.js';
 import { nodeOf } from '../runners/census.js';
 import {

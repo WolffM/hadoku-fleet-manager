@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { stripYamlComments } from './yaml-comments.mjs';
 import { runnerVarForm } from './runner-var.mjs';
 import { runFleetScript } from './run-fleet-script.mjs';
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { readChildApps } from './site-docs.mjs';
 import { readRevocations, revokedSets } from '../../dist/capability-revocations.js';
 import { registrationLabels } from '../../dist/lib/capability-offer.js';
@@ -13,13 +13,13 @@ import {
 	workloadGateContext,
 	workloadGatedCapabilities,
 } from '../../dist/lib/workload-gate.js';
-import { proofFileStatus, readProofsForCapability } from '../../dist/lib/measured.js';
+import { proofFileStatus, readProofsForCapability } from '../../dist/lib/measured-proof.js';
 import { qualifyRepo } from '../../dist/lib/fleet-config.js';
 // The queue-health precedent, imported rather than re-derived — that gate
 // measured the transient rate (0.13% of `gh api` calls, 2026-09-07) and one
 // number is the point, exactly as `check-fleet-preflight.mjs` and
 // `reconcile-runner-identity.mjs` already use it (#80).
-import { READ_ATTEMPTS, describeReadFailure } from './queue-health.mjs';
+import { READ_ATTEMPTS, describeReadFailure } from './read-retry-policy.mjs';
 import { listRunners as ghListRunners } from './gh-runners.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));

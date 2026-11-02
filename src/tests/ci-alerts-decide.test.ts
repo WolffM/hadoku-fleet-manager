@@ -12,7 +12,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { decideCiAlert, REPAGE_INTERVAL_MS, STALE_RUN_MS, STALE_STATE_MS } from '../ci-alerts.js';
+import { decideCiAlert, STALE_RUN_MS, STALE_STATE_MS } from '../ci-alerts-decide.js';
+import { DAY_MS as REPAGE_INTERVAL_MS } from '../lib/job-runner.js';
 import { NOW, ghRun, poll, run, state } from './helpers/ci-alerts-rig.js';
 
 test('announces a fresh break', () => {

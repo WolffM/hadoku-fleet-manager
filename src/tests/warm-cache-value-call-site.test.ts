@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { dispatchWarmCache } from '../runners/dispatch-warm-cache.js';
-import { warmRunnerName } from '../runners/ephemeral.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
 import { WARM_ASSIGN_WINDOW_MS } from '../runners/ephemeral-warm.js';
 import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
 import { WARM_CACHE_INTERVAL_MS } from '../runners/warm-backoff.js';

@@ -43,7 +43,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { drainViolations, drainHonoured, recordNodeOf } from './lib/drain-enforcement.mjs';

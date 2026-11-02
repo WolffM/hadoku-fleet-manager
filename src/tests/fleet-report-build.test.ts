@@ -15,7 +15,7 @@ import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { buildFleetReport } from '../routes/fleet.js';
+import { buildFleetReport } from '../routes/fleet-report.js';
 import { probeFleet } from '../lib/node-probe.js';
 import {
 	__resetJobHistoryForTesting,

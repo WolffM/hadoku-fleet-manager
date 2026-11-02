@@ -43,7 +43,7 @@
 import { ciJobsAfter } from './hosting-offers.mjs';
 import { requiredRules, ruleHolds } from './hosting-placement.mjs';
 import { ADVISORY_UNTIL_DEFAULT } from './hosting-request.mjs';
-import { satisfies } from './tool-release.mjs';
+import { satisfies } from './version-algebra.mjs';
 
 /**
  * Does the node run what `request.runtime` names? `{ fails, cannot, all }`:

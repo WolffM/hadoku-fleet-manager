@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { logger, stateDir } from '../host.js';
-import { coveredRepos } from '../ci-runner-fallback.js';
-import { BUILDER_LABEL } from './census.js';
+import { coveredRepos } from '../lib/covered-repos.js';
+import { BUILDER_LABEL } from '../lib/capability-registry-ids.js';
 import {
 	provesRequiredSet,
 	requiredIdentitySet,

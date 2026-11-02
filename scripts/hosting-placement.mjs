@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { writeJsonAtomic } from '../dist/lib/atomic-json.js';
-import { decisionLogDir } from '../dist/runners/decision-log.js';
+import { decisionLogDir } from '../dist/runners/decision-log-storage.js';
 import { drainNotices } from '../dist/runners/drain.js';
 import { hostingNotices, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { createEmitter } from './lib/emit.mjs';
@@ -46,7 +46,7 @@ import {
 	appRecords,
 	placementDocument,
 } from './lib/hosting-placement-view.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readTenantRegistry, tenantSpec } from './lib/tenant-registry.mjs';
 
 const LAST_FILE = 'hosting-converge-last.json';

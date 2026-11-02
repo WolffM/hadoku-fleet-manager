@@ -10,7 +10,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ADVISORY, BLOCKING, doctorFindings } from './doctor-findings.mjs';
+import { doctorFindings } from './doctor-findings.mjs';
+import { ADVISORY, BLOCKING } from './preflight.mjs';
 import { NOW, find } from './doctor-fixtures.mjs';
 
 /**

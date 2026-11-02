@@ -37,7 +37,7 @@ import {
 	STRAY_OBSERVE_SCRIPT,
 } from './lib/hosting-pm2-strays.mjs';
 import { planVerify } from './lib/hosting-verify.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { runFleetScript } from './lib/run-fleet-script.mjs';
 import { readTenantRegistry, tenantSpecFrom } from './lib/tenant-registry.mjs';
 

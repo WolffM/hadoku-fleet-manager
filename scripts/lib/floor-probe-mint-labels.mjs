@@ -5,10 +5,10 @@
  * than importing the CLI: no lib imports it, per
  * `docs/planning/wave5q-2026-10-31.md`.
  */
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { nodeOffer } from '../../dist/lib/capability-offer.js';
 import { workloadGateContext, workloadGatedCapabilities } from '../../dist/lib/workload-gate.js';
-import { proofFileStatus, readProofsForCapability } from '../../dist/lib/measured.js';
+import { proofFileStatus, readProofsForCapability } from '../../dist/lib/measured-proof.js';
 
 /**
  * This RUN's `WorkloadGateContext` (wave 4e follow-up, #102) — one state-dir

@@ -22,17 +22,18 @@
 import { ephemeralOnlyLabels } from '../lib/capability-labels.js';
 import { logger } from '../host.js';
 import type { GhLike, ShellLike } from '../lib/fleet-vocabulary.js';
-import { warmRunnerName } from './ephemeral.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
 import { warmSlotDir } from './ephemeral.js';
 import { buildWarmSpawnPlan } from './ephemeral-mint.js';
 import { nodeScriptCommand } from './node-script.js';
-import { mintLabels } from './ephemeral-exec-jit.js';
-import { describeGhError } from './ephemeral-exec-jit.js';
-import { deleteRunnerAndStopUnit } from './ephemeral-exec-jit.js';
-import { shellQuote } from './ephemeral-exec-jit.js';
-import { shellSingleQuote } from './ephemeral-exec-jit.js';
+import {
+	mintLabels,
+	describeGhError,
+	deleteRunnerAndStopUnit,
+	shellQuote,
+	shellSingleQuote,
+} from './ephemeral-exec-jit.js';
 
-export { __resetTarballCacheForTesting } from './ephemeral-exec-jit.js';
 // The one door the prove-job family (lifecycle) and reconcile-runner-identity
 // use into ci-scheduling: each importer keeps a single declared layer-debt edge
 // to this module however the scheduling side is split (wave 5o). Wave clean2
@@ -48,13 +49,11 @@ export {
 	mintEphemeralRunner,
 	runnerTarballUrl,
 } from './ephemeral-exec-jit.js';
-export { JIT_REAP_GRACE_MS, REAP_INTERVAL_MS } from './ephemeral-exec-reap.js';
+
 export {
-	JIT_PREFIX,
 	JIT_UNIT_MAX_SEC,
 	admitMint,
 	backstopUnitMemoryMaxMb,
-	jitRunnerName,
 	slotDir,
 	unitMemoryMaxMb,
 } from './ephemeral.js';
@@ -65,7 +64,6 @@ export {
 // "neither domain can host the other's import" reason `ClawState`/
 // `BackstopReason` sit there for. Re-exported from here so every existing
 // ci-scheduling importer of this path resolves them unchanged.
-export type { GhLike, ShellLike } from '../lib/fleet-vocabulary.js';
 
 export interface MintOutcome {
 	ok: boolean;

@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { hostingSliceCgroup, readHostingDoc } from '../../dist/runners/hosting-record.js';
 import { readDrainDoc } from './expected-down.mjs';
 import { runOn } from './fleet-exec.mjs';
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 import {
 	RESIDENT_CLASS,
 	mergeResidentRows,

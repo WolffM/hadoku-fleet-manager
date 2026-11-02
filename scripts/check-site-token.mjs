@@ -25,7 +25,7 @@ import process from 'node:process';
 import { createEmitter } from './lib/emit.mjs';
 import { tryShipped, UnreadableRepo } from './lib/fleet-source.mjs';
 import { fleetOwner } from '../dist/lib/fleet-config.js';
-import { manifest } from './lib/paths.mjs';
+import { manifest } from '../dist/lib/fleet-paths.js';
 import {
 	devvaultRefs,
 	holders,

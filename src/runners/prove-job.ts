@@ -118,7 +118,6 @@ import { awaitLandedVerdict } from './prove-job-verdict.js';
 // `runner-health.ts` (out of scope for this split) imports `isProofRunnerName`
 // from this path; everything else moved below is imported from its real new
 // module by every importer that needs it.
-export { isProofRunnerName } from './prove-job-parse.js';
 
 /** GitHub calls here go through the operator's own `gh` auth, never a token we hold. */
 const NO_TOKEN = '';

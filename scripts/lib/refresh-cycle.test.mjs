@@ -7,13 +7,13 @@ import assert from 'node:assert/strict';
 
 import {
 	RECHECK_DAYS,
-	judgePressure,
 	planNode,
 	runRefreshCycle,
 	runWorkItem,
 	verdictAfter,
-	waitUntilDrained,
 } from './refresh-cycle.mjs';
+import { judgePressure } from './refresh-cycle-live.mjs';
+import { waitUntilDrained } from './drain-wait.mjs';
 import { REPAIRS, applicableRepairs, isVersionManaged } from './toolchain-floor.mjs';
 
 const CLAW = { labels: [] };

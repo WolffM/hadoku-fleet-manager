@@ -38,7 +38,7 @@ import process from 'node:process';
 
 import { writeFileAtomic } from '../dist/lib/atomic-json.js';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
-import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
+import { READ_ATTEMPTS, describeReadFailure } from './lib/read-retry-policy.mjs';
 import {
 	nodeKeyFindings,
 	tokenExpiryFinding,
@@ -50,14 +50,16 @@ import {
 	blockingFindings,
 	advisoryFindings,
 	backstopAdvisory,
-	lanReservationFindings,
 	BLOCKING,
+} from './lib/preflight.mjs';
+import { lanReservationFindings } from './lib/preflight-lan.mjs';
+import {
 	SECURITY_PROBE,
 	parseSecurityProbe,
 	pendingSince,
 	securityUpdateFinding,
-} from './lib/preflight.mjs';
-import { stateDir } from './lib/paths.mjs';
+} from './lib/preflight-security.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { INTERFACE_PROBE, parseInterfaces, proposeLanRecord } from './lib/node-interfaces.mjs';
 import { backstopNodeNames } from '../dist/lib/node-role.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';

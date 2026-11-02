@@ -21,9 +21,11 @@
 
 import { mintsOnDemand } from '../lib/node-role.js';
 import { jobRecords } from '../job-history-store.js';
-import { admitMint, spaceRefusal, TMP_FREE_FLOOR_MB } from './ephemeral.js';
-import { type EphemeralTickInput, type ReserveSource } from './ephemeral-shared.js';
-import { type NodeState } from './placement.js';
+import { admitMint, spaceRefusal } from './ephemeral-admission.js';
+import { TMP_FREE_FLOOR_MB } from '../lib/jit-naming.js';
+import { type EphemeralTickInput } from './ephemeral-shared.js';
+import { type ReserveSource } from '../lib/job-reserve.js';
+import { type NodeState } from './placement-node-state.js';
 
 /**
  * The backstops the dispatcher mints for on demand (#120), in manifest order.
@@ -52,7 +54,7 @@ export function onDemandBackstops(input: EphemeralTickInput): string[] {
  * Re-exported here under the original path so every existing importer
  * (including this file) compiles unchanged.
  */
-export type { AdmissionClause, AdmissionVerdict } from '../lib/fleet-vocabulary.js';
+
 import type { AdmissionClause, AdmissionVerdict } from '../lib/fleet-vocabulary.js';
 
 function classifyAdmissionClause(reason: string): AdmissionClause {

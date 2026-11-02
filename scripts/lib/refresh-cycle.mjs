@@ -51,7 +51,7 @@ import {
 	linkScript,
 	repairNeedsRoot,
 } from './toolchain-floor.mjs';
-import { compareVersions, parseVersion } from './tool-release.mjs';
+import { compareVersions, parseVersion } from './version-algebra.mjs';
 import { errText } from './term.mjs';
 
 /** A waiting run younger than this is the normal trickle, not pressure. */
@@ -559,7 +559,6 @@ function lastCheckedMs(deps, name) {
 // (`./lib/refresh-cycle.mjs` / `./refresh-cycle.mjs`) keeps compiling
 // unchanged.
 // ---------------------------------------------------------------------------
-export { createLiveDeps, judgePressure, liveQueuePressure } from './refresh-cycle-live.mjs';
 
 // ---------------------------------------------------------------------------
 // THE DRAIN-AND-WAIT PRIMITIVE moved to drain-wait.mjs (wave clean-2 lane C,
@@ -570,11 +569,3 @@ export { createLiveDeps, judgePressure, liveQueuePressure } from './refresh-cycl
 // (bootcamp.mjs, bootcamp-idle.mjs, bootcamp-canary.mjs, reboot-claws.mjs,
 // refresh-cycle.test.mjs) keeps compiling and behaving unchanged.
 // ---------------------------------------------------------------------------
-export {
-	busyCount,
-	drainCli,
-	waitUntilDrained,
-	DRAIN_TIMEOUT_MS,
-	POLL_MS,
-	SETTLE_MS,
-} from './drain-wait.mjs';

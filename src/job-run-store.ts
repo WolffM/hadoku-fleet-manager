@@ -53,7 +53,8 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 import { listDayFilesSince, readDayFiles } from './day-file-list.js';
-import { JOB_REGISTRY, type JobEntry, type JobKind } from './lib/job-registry.js';
+import { JOB_REGISTRY } from './lib/job-registry.js';
+import { type JobEntry, type JobKind } from './lib/job-registry-types.js';
 
 export const JOB_RUN_SCHEMA = 1;
 /** The directory name under a `stateDir()`-shaped root. */

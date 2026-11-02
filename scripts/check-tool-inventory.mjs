@@ -39,7 +39,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { loadManifest, runOn, selectMachines } from './lib/fleet-exec.mjs';
-import { manifest as manifestFile, stateDir } from './lib/paths.mjs';
+import { manifest as manifestFile, stateDir } from '../dist/lib/fleet-paths.js';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { hubRepoFull } from '../dist/lib/fleet-config.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';

@@ -49,7 +49,7 @@
  * must never read as "there was nothing to find".
  */
 import { readFileSync } from 'node:fs';
-import { manifest as manifestFile } from './lib/paths.mjs';
+import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { loadManifest } from './lib/fleet-exec.mjs';
 import { isFloorDemandLabel } from '../dist/label-floor.js';
 import { createEmitter } from './lib/emit.mjs';

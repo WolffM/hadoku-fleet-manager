@@ -19,9 +19,10 @@
  */
 import { beforeEach, afterEach } from 'node:test';
 
-import { resetRecoveryClock, __resetPollStateForTesting } from '../../runners/dispatch-tick.js';
-import type { DispatchTickInput } from '../../runners/dispatch-tick.js';
-import type { NodeState } from '../../runners/placement.js';
+import { resetRecoveryClock } from '../../runners/dispatch-tick-config.js';
+import { __resetPollStateForTesting } from '../../runners/dispatch-tick-reset.js';
+import type { DispatchTickInput } from '../../runners/dispatch-tick-config.js';
+import type { NodeState } from '../../runners/placement-node-state.js';
 import { fakeGh, fakeShell } from './fleet-fakes.js';
 import { __setHostForTesting } from '../../host.js';
 import { testHost } from '../install-test-host.js';

@@ -15,7 +15,7 @@ import {
 	isRunnerBusy,
 	mintWarmListener,
 } from '../runners/ephemeral-exec.js';
-import { warmRunnerName } from '../runners/ephemeral.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
 import { ephemeralOnlyLabels } from '../lib/capability-labels.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
 import { installWarmCacheRig } from './helpers/warm-cache-rig.js';

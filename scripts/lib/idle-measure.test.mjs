@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { carryMeasurements, measuredValue, parseLoad } from './idle-measure.mjs';
+import { carryMeasurements, measuredValue } from './idle-measure.mjs';
+import { parseLoad } from './probe-readers.mjs';
 
 test('parseLoad: a counted number, `unknown` as null, and a missing line ABSENT — never zero', () => {
 	const out = [

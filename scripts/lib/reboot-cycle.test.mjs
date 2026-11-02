@@ -8,9 +8,7 @@ import assert from 'node:assert/strict';
 
 import {
 	BOOT_TIMEOUT_MS,
-	REASON_PREFIX,
 	REBOOT_LEASE,
-	HELD_PREFIX,
 	oursOn,
 	parseRebootProbe,
 	dkmsGap,
@@ -20,6 +18,7 @@ import {
 	runRebootCycle,
 	verifyAfter,
 } from './reboot-cycle.mjs';
+import { REASON_PREFIX, HELD_PREFIX } from './reboot-hold.mjs';
 
 /** Anchored to now: the cycle reads only that a record EXISTS, but a pinned date still ages. */
 const inDays = (d) => new Date(Date.now() + d * 86_400_000).toISOString();

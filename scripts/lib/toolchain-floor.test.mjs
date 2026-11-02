@@ -33,12 +33,8 @@ import {
 	needsRoot,
 	repairNeedsRoot,
 } from './toolchain-floor.mjs';
-import {
-	DEFAULT_MIN_AGE_MINUTES,
-	parseInstalledVersion,
-	createReleaseLookup,
-	resolveInstallTarget,
-} from './tool-release.mjs';
+import { createReleaseLookup, resolveInstallTarget } from './tool-release.mjs';
+import { DEFAULT_MIN_AGE_MINUTES, parseInstalledVersion } from './version-algebra.mjs';
 
 const tmp = () => tempDir('toolchain-floor-');
 // Anything that puts a directory a login shell would add in front of a detector.

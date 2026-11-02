@@ -16,8 +16,11 @@ import { join } from 'node:path';
 
 import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
 import { dispatchWarmCache } from '../runners/dispatch-warm-cache.js';
-import { __markHeavyForTesting, __resetHeavyMarksForTesting } from '../runners/dispatch-pass.js';
-import { warmRunnerName } from '../runners/ephemeral.js';
+import {
+	__markHeavyForTesting,
+	__resetHeavyMarksForTesting,
+} from '../runners/dispatch-pass-state.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
 import {
 	WIRE_NODE,

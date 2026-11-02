@@ -18,7 +18,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildFleetReport } from '../routes/fleet.js';
+import { buildFleetReport } from '../routes/fleet-report.js';
 import { mintBudget } from '../runners/ephemeral.js';
 import {
 	ADMISSION_BASES,
@@ -27,7 +27,7 @@ import {
 	CLAW_STATES,
 } from '../telemetry-vocabulary.js';
 import type { JobHistorySummary } from '../job-history-stats.js';
-import type { TelemetryKind, TelemetryTerm } from '../fleet-report-types.js';
+import type { TelemetryKind, TelemetryTerm } from '../fleet-report-types-vocabulary.js';
 
 const NO_JOBS: JobHistorySummary = {
 	since: null,

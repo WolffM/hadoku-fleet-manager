@@ -12,7 +12,7 @@
  * job-metrics rows it has already read, so the memory half is rows in, data
  * out, on the same terms.
  */
-import { mb, percentile } from './job-metrics.mjs';
+import { mb, percentile } from './job-metrics-primitives.mjs';
 import { normalizeEol } from './yaml-comments.mjs';
 
 /** A tool named here is supplied by the runner image when runs-on is hosted. */

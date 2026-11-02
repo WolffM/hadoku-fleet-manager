@@ -20,10 +20,10 @@ test('herdr-fleet-freshness: the import walk finds every dist/ module the plugin
 	const { dist, mjs, missing } = importGraph(REPO);
 	assert.deepEqual(missing, []);
 	for (const m of [
-		'ci-alerts',
-		'fleet-loop',
+		'ci-alerts-decide',
+		'lib/fast-loop-cadence',
 		'gh-budget',
-		'runner-health',
+		'lib/runner-health-shared',
 		'lib/node-identity',
 		'lib/fleet-config',
 	]) {

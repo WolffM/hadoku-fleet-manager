@@ -5,7 +5,7 @@
  * here either; see that file's own header for why the split exists at all.
  */
 import { median, percentile } from './floor-probe-ranking.mjs';
-import { zoneOf } from './floor-probe.mjs';
+import { zoneOf } from '../../dist/job-history-zone.js';
 
 // ---------------------------------------------------------------------------
 // The table

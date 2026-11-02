@@ -103,7 +103,7 @@ import { readFileSync } from 'node:fs';
 import process from 'node:process';
 
 import { loadManifest, runOn, selectMachines, machineArg } from './lib/fleet-exec.mjs';
-import { manifest as manifestFile } from './lib/paths.mjs';
+import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import {
 	repoFromUrl,

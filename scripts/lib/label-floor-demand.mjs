@@ -21,7 +21,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { tryShipped } from './fleet-source.mjs';
 import { hubRepoFull } from '../../dist/lib/fleet-config.js';
 import { FLEET_VALUE } from '../../dist/lib/ci-runner-values.js';

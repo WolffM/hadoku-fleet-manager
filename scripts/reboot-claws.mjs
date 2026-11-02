@@ -35,7 +35,7 @@ import { parseStrict } from './lib/argv.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, readDrainDoc, readDrains } from './lib/expected-down.mjs';
 import { loadManifest, machineArg, runOnSync } from './lib/fleet-exec.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { HOSTING_NOTICE_MS } from '../dist/runners/drain.js';
 import { hostingsOn, readHostingDoc } from '../dist/runners/hosting-record.js';
 import {
@@ -47,7 +47,8 @@ import {
 	rebootNoticeArgs,
 	runRebootCycle,
 } from './lib/reboot-cycle.mjs';
-import { busyCount, drainCli, liveQueuePressure, waitUntilDrained } from './lib/refresh-cycle.mjs';
+import { busyCount, drainCli, waitUntilDrained } from './lib/drain-wait.mjs';
+import { liveQueuePressure } from './lib/refresh-cycle-live.mjs';
 
 const argv = process.argv.slice(2);
 

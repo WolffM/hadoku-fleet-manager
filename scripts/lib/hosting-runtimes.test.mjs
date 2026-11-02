@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 
 import { KINDS, validateHostingRequest } from './hosting-request.mjs';
-import { RUNTIMES, SERVICE_MANAGERS, runtimeFor, runtimeOf } from './hosting-runtimes.mjs';
+import { RUNTIMES, SERVICE_MANAGERS, runtimeFor } from './hosting-runtimes.mjs';
+import { runtimeOf } from './tenant-runtime-names.mjs';
 
 const ARCHIVEBOT = JSON.parse(
 	readFileSync(new URL('./fixtures/hosting-archivebot.json', import.meta.url), 'utf8')

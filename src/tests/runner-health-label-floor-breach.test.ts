@@ -14,31 +14,30 @@ import { join } from 'node:path';
 import { historyFile } from '../job-history-store.js';
 import { testStateDir } from './install-test-host.js';
 
-import {
-	tick,
-	__resetRunnerHealthAlertsForTesting,
-	getRunnerHealthSnapshot,
-	__setFloorDemandForTesting,
-} from '../runner-health.js';
+import { tick, __resetRunnerHealthAlertsForTesting } from '../runner-health.js';
+import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
+import { __setFloorDemandForTesting } from '../runner-health-label-floor.js';
 import { __reloadAlertLedgerForTesting } from '../lib/alert-ledger.js';
-import { __setFleetProbeForTesting } from '../fleet-loop.js';
+import { __setFleetProbeForTesting } from '../fleet-probe-store.js';
 import { writeDrain } from '../runners/drain.js';
-import { __setWorkloadGateContextForTesting } from '../runners/ephemeral-tick.js';
+import { __setWorkloadGateContextForTesting } from '../workload-gate-store.js';
 import { workloadGateContext } from '../lib/workload-gate.js';
-import type { ProofRecord } from '../lib/measured.js';
+import type { ProofRecord } from '../lib/workload-gate.js';
 import {
 	installRunnerHealthRig,
 	installFetch,
-	clawLabels,
-	hokonLabels,
-	hokonPromotedLabels,
 	discordPosts,
 	jobSinkPosts,
 	labelOps,
 	runnerListingUrls,
+} from './helpers/runner-health-rig.js';
+import {
+	clawLabels,
+	hokonLabels,
+	hokonPromotedLabels,
 	minutesAgo,
 	LIVE_LISTING,
-} from './helpers/runner-health-rig.js';
+} from './helpers/runner-health-fixtures.js';
 
 installRunnerHealthRig();
 

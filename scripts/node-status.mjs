@@ -64,7 +64,7 @@ import {
 	parseUsersObservation,
 	usersObserveScript,
 } from './lib/node-users-facet.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readTenantRegistry, tenantSpec } from './lib/tenant-registry.mjs';
 
 /** The health writer runs daily; a day and a half covers one late run and no more. */

@@ -26,7 +26,6 @@ export const FAIL_SECONDS = 300;
 // fleet-source.mjs can read the policy without reaching into this file's
 // observation-domain verdict arithmetic below. Re-exported here unchanged for
 // every existing importer (`runner-var.mjs` among them).
-export { READ_ATTEMPTS, describeReadFailure } from './read-retry-policy.mjs';
 
 /**
  * Read one repo, retrying a transient failure.

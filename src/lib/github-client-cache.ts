@@ -4,7 +4,7 @@
  * persistence, and hydration. Split out of `github-client.ts` (wave shrink-1
  * lane C, pure move) to bring that file under the 600-line target.
  */
-import { ghTokenFingerprint } from '../gh-budget.js';
+import { ghTokenFingerprint } from '../gh-budget-windows.js';
 import { conditionalCacheStore } from '../conditional-cache-store.js';
 
 /**

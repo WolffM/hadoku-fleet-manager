@@ -25,7 +25,7 @@ import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest } from './lib/fleet-exec.mjs';
 import { readArtifact } from './lib/hosting-artifacts.mjs';
 import { demandProblems, readDemand, tenantSlices, writeDemand } from './lib/hosting-demand.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readTenantRegistry } from './lib/tenant-registry.mjs';
 
 /** The view's version, pinned by the tenant like node-status's. Additive changes only. */

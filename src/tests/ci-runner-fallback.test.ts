@@ -17,13 +17,13 @@ import { __setHostForTesting } from '../host.js';
 import { testHost } from './install-test-host.js';
 
 import {
-	coveredRepos,
 	syncHostedFallback,
 	__resetFallbackConvergenceForTesting,
 	HOSTED_VALUE,
-	FLEET_VALUE,
 	VAR_SYNC_CONCURRENCY,
 } from '../ci-runner-fallback.js';
+import { coveredRepos } from '../lib/covered-repos.js';
+import { FLEET_VALUE } from '../lib/ci-runner-values.js';
 
 let originalFetch: typeof globalThis.fetch;
 let deletes: string[];

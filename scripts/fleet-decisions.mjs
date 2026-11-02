@@ -19,14 +19,14 @@
  */
 import process from 'node:process';
 
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import {
 	DECISION_RETENTION_DAYS,
 	decisionLogDir,
 	filterDecisions,
 	readDecisions,
-} from '../dist/runners/decision-log.js';
+} from '../dist/runners/decision-log-storage.js';
 
 const out = createEmitter({ argv: process.argv });
 const argv = process.argv.slice(2);

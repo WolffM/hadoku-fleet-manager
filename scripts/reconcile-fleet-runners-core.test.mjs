@@ -44,7 +44,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createFakeNode } from './lib/fake-node.mjs';
-import { READ_ATTEMPTS } from './lib/queue-health.mjs';
+import { READ_ATTEMPTS } from './lib/read-retry-policy.mjs';
 import { SCRIPT, NO_GIT_ENV } from './lib/reconcile-fleet-runners-rig.mjs';
 
 const CLAW = 'fixture-claw';

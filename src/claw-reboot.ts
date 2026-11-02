@@ -66,7 +66,7 @@ export const FAIL_PAGE_MS = 6 * 60 * 60_000;
  * (F12, plan §4.1). Re-exported, kept for `claw-reboot.test.ts`, which
  * imports it by this name.
  */
-export { REPAGE_MS };
+
 /**
  * Longest pass: a hosting node's 15-minute notice, a 45-minute idle wait, a
  * 12-minute boot window, a 6-minute services window and the re-prove, with

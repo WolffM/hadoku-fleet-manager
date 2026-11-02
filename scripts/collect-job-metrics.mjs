@@ -61,17 +61,15 @@ import { readJsonlRecords } from './lib/read-jsonl-records.mjs';
 // reads it from there: a row older than job-history keeps has nothing left to
 // join to, and a second spelling of 14 here would be free to drift from it.
 import { RETENTION_DAYS } from '../dist/job-history-store.js';
+import { joinMetrics, withUnits } from './lib/job-metrics-join.mjs';
+import { byNode, byUnit } from './lib/job-metrics-groups.mjs';
+import { perJobCosts } from './lib/job-metrics-cost.mjs';
 import {
-	joinMetrics,
-	byNode,
-	byUnit,
-	withUnits,
-	perJobCosts,
 	metricsSince,
 	metricsReadScript,
 	readOutcome,
 	perNodeWithReads,
-} from './lib/job-metrics.mjs';
+} from './lib/job-metrics-read.mjs';
 
 // F8 (plan §4.1): strict, from the one spec argv-specs.mjs declares. The
 // spec's usage carries a `{RETENTION_DAYS}` placeholder — see job-rollups.mjs's

@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { capability } from '../lib/capability-registry.js';
-import type { ProofRecord } from '../lib/measured.js';
+import type { ProofRecord } from '../lib/workload-gate.js';
 import { buildProofRecord } from '../runners/prove-job-record.js';
 import type { ProofResult } from '../runners/prove-job-types.js';
 

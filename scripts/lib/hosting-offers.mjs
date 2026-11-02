@@ -23,7 +23,7 @@
  * node is taken from the manifest's rounded figures.
  */
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
-import { parseInstalledVersion } from './tool-release.mjs';
+import { parseInstalledVersion } from './version-algebra.mjs';
 
 /** CI jobs a hosting node keeps by default. The operator's dial; see the header. */
 export const CI_KEEP_JOBS = 1;

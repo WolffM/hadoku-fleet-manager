@@ -37,7 +37,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseJsonStdout, spawnCapture } from './lib/spawn-json.mjs';
-import { writeProof } from '../dist/lib/measured.js';
+import { writeProof } from '../dist/lib/measured-proof.js';
 
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 

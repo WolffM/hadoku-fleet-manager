@@ -9,7 +9,7 @@
 
 import { ADVISORY, BLOCKING, rebootFinding } from './preflight.mjs';
 import { f } from './doctor-findings-record.mjs';
-import { BOOTCAMP_STALE_DAYS } from './doctor-findings-thresholds.mjs';
+import { BOOTCAMP_STALE_DAYS } from '../../dist/lib/workload-gate.js';
 
 /**
  * @param {ReturnType<import('./doctor-facet.mjs').healthFacet>} health

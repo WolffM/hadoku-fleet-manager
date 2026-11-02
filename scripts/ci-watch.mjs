@@ -58,7 +58,7 @@ import { writeFileAtomic } from '../dist/lib/atomic-json.js';
 import { allRepos } from './lib/fleet-roster.mjs';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { jobNamesIn } from './lib/ci-watch-jobnames.mjs';
-import { manifest as manifestFile, siteRoot } from './lib/paths.mjs';
+import { manifest as manifestFile, siteRoot } from '../dist/lib/fleet-paths.js';
 import { keepStdoutWhole } from './lib/emit.mjs';
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,

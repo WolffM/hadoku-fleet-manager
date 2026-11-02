@@ -5,7 +5,7 @@
  * cross-tick streak (`labelZeroTicks`) this alerting debounces on.
  */
 import { logger } from './host.js';
-import { BUILDER_LABEL } from './runners/census.js';
+import { BUILDER_LABEL } from './lib/capability-registry-ids.js';
 import { SELF_REPO } from './lib/github-client.js';
 import {
 	confirmFloorZero,
@@ -13,8 +13,11 @@ import {
 	type FloorConfirmation,
 } from './runner-health-label-floor-confirm.js';
 import { alertOnce, clearAlert } from './lib/alert-ledger.js';
-import { TICK_INTERVAL_MS, OFFLINE_TICKS_BEFORE_ALERT } from './lib/runner-health-shared.js';
-import { selfHostname } from './lib/runner-health-shared.js';
+import {
+	TICK_INTERVAL_MS,
+	OFFLINE_TICKS_BEFORE_ALERT,
+	selfHostname,
+} from './lib/runner-health-shared.js';
 import type { LabelFloorVerdict, MintView } from './label-floor.js';
 
 export interface MintProbe {

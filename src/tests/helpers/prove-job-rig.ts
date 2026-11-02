@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict';
 
 import type { ManifestNode } from '../../lib/capability-registry.js';
-import { isProofRunnerName } from '../../runners/prove-job-parse.js';
+import { isProofRunnerName } from '../../lib/jit-naming.js';
 import type { ProofGh, ProveSpec } from '../../runners/prove-job-types.js';
 import { __resetTarballCacheForTesting } from '../../runners/ephemeral-exec-jit.js';
 import { proveJob } from '../../runners/prove-job.js';

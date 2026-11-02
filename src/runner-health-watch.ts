@@ -8,7 +8,7 @@ import { logger, postDiscord as postDiscordSink } from './host.js';
 import { loadFleetNodeNames, loadEphemeralNodes } from './lib/manifest.js';
 import { jobRecords } from './job-history-store.js';
 import { nodeOf } from './runners/census.js';
-import { admissionVerdictsForReport } from './runner-health-mint.js';
+import { admissionVerdictsForReport } from './admission-verdict-store.js';
 import { alertOnce, clearAlert } from './lib/alert-ledger.js';
 import { selfHostname } from './lib/runner-health-shared.js';
 import {
@@ -25,10 +25,10 @@ import {
 } from './runners/disk-watch.js';
 import { backstopMachinesReader } from './runners/backstop-machines.js';
 import { mintsOnDemand, type MintBearingNode } from './lib/node-role.js';
-import { TMP_FREE_FLOOR_MB, parseJitName } from './lib/jit-naming.js';
+import { TMP_FREE_FLOOR_MB } from './lib/jit-naming.js';
 // Re-exported so runner-health-queue-classify.ts's mismatchedMints/deafMints
 // do not open a second direct edge to lib/jit-naming.ts for this parser.
-export { parseJitName };
+
 import { checkNodeRegressions, defaultGatedKinds } from './runners/node-regression.js';
 import { lastSnapshot, getRunnerHealthSnapshot } from './runner-health-snapshot.js';
 import type { TickReport } from './runner-health-snapshot.js';

@@ -12,8 +12,8 @@ import { join } from 'node:path';
 
 import { __setHistoryPathForTesting, __resetJobHistoryForTesting } from '../job-history-store.js';
 import { parseSpaceProbe } from '../runners/ephemeral-shared.js';
-import { planWarmFleet } from '../runners/ephemeral-warm.js';
-import { fleetServedJobs } from '../runners/dispatch-warm-cache.js';
+import { planWarmFleet } from '../runners/ephemeral-warm-fleet.js';
+import { fleetServedJobs } from '../runners/dispatch-warm-cache-state.js';
 import {
 	SITE,
 	histAt,

@@ -14,7 +14,7 @@ import type {
 	AdmissionClause,
 } from './fleet-report-types-machines.js';
 import type { CapacityKind } from './fleet-report-types-capacity.js';
-import type { GhCaller } from './fleet-report-types-budget.js';
+import type { GhCaller } from './gh-budget.js';
 import type { FleetFailuresByZone, JobPhase } from './fleet-report-types-jobs.js';
 
 /**

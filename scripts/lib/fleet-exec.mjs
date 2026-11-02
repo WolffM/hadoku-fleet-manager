@@ -34,7 +34,7 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { manifest as manifestFile } from './paths.mjs';
+import { manifest as manifestFile } from '../../dist/lib/fleet-paths.js';
 // The BUILT copy, deliberately. TypeScript is the source of truth for this rule
 // and `tsconfig.json` sets no `allowJs`, so a second .mjs implementation was the
 // only alternative — which is the exact thing being deleted here. dist/ ships

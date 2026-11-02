@@ -54,7 +54,6 @@ const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
  * calls it) rather than left as an internal-only import, since
  * `runs-on-demand.test.mjs` imports `isHostedLabel` from here directly.
  */
-export { isHostedLabel };
 
 function unquote(s) {
 	return s

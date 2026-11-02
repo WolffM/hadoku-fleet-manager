@@ -42,14 +42,16 @@
  */
 
 import { logger, githubToken, TOKEN_RETRY_MS, recordJobResult } from './host.js';
-import { labelGhToken, withGhCaller } from './gh-budget.js';
-import { HOUR_MS as RE_ALERT_MS } from './lib/job-runner.js';
+import { withGhCaller } from './gh-budget.js';
+import { labelGhToken } from './gh-budget-windows.js';
+
 import { coveredRepos } from './lib/covered-repos.js';
 import { setBackstopHold } from './runners/backstop-hold.js';
 import { __resetAlertLedgerForTesting } from './lib/alert-ledger.js';
 import { writeClosedDays } from './job-rollups.js';
 import { loadFleetNodeNames } from './lib/manifest.js';
-import { CI_ALERTS_BOOT_SKIP_MS, ciAlertsBootPassDue, runCiAlerts } from './ci-alerts.js';
+import { runCiAlerts } from './ci-alerts.js';
+import { CI_ALERTS_BOOT_SKIP_MS, ciAlertsBootPassDue } from './ci-alerts-state.js';
 import { userAgent } from './lib/fleet-config.js';
 import { noteTick, registerLoop, TOKEN_WAIT_GRACE_MS } from './lib/liveness.js';
 import { every } from './lib/every.js';
@@ -57,25 +59,18 @@ import { TICK_INTERVAL_MS, selfHostname } from './lib/runner-health-shared.js';
 import {
 	checkLabelFloor,
 	__resetLabelFloorForTesting,
-	__setFloorDemandForTesting,
-	__setFloorConfirmDelayForTesting,
-	__setQuietRecorderForTesting,
 	lastTickEphemeralUnknown,
 	__clearLastTickEphemeralUnknownForTesting,
 } from './runner-health-label-floor.js';
+
 // The umbrella reset below resets the backstop decision's and the hosted
 // fallback's own cross-tick memory through these PORTS, not by importing
 // `runners/backstop-decision.ts`/`runners/hosted-fallback.ts` directly —
 // this file is observation, those are ci-scheduling (rule 5, §3.2). See
 // `runner-health-ports.ts`'s header.
 import { resetBackstopDecisionPort, resetHostedFallbackPort } from './runner-health-ports.js';
-import {
-	checkRunsAndFailover,
-	__resetRunsForTesting,
-	QUEUED_WARN_MINUTES,
-	type GhRun,
-} from './runner-health-runs.js';
-import type { GhJob, RepoRunnerState } from './runner-health-queue-classify.js';
+import { checkRunsAndFailover, __resetRunsForTesting } from './runner-health-runs.js';
+
 import { __resetFailoverForTesting } from './runners/failover.js';
 import {
 	checkStarvation,
@@ -83,15 +78,10 @@ import {
 	checkNodeRegression,
 	checkHostSupervision,
 	installDefaultSupervisionCheck,
-	__setSupervisionCheckerForTesting,
-	STARVED_NO_JOB_MS,
 } from './runner-health-watch.js';
 import {
 	captureSnapshot,
-	getRunnerHealthSnapshot,
 	__resetSnapshotForTesting,
-	__setSnapshotPathForTesting,
-	SNAPSHOT_RESTORE_MAX_AGE_MS,
 	type RunnerHealthSnapshot,
 	type TickReport,
 } from './runner-health-snapshot.js';
@@ -101,37 +91,17 @@ import {
 	ghUrl,
 	ghGet,
 	ghFetchRaw,
+	__resetGhCacheStateForTesting,
+} from './lib/github-client.js';
+import {
 	ghBlackoutRemainingMs,
 	unreadableTickError,
 	resetGhReadFailureForTick,
 	currentGhReadFailure,
-	__resetGhCacheStateForTesting,
-} from './lib/github-client.js';
+} from './lib/github-client-blackout.js';
 // Re-exported for routes/fleet.ts and the non-lane test suites that still import these from here.
-export {
-	SELF_REPO,
-	ghGet,
-	readRunnerListingShared,
-	unreadableTickError,
-	classifyGhReadFailure,
-	__restartGhCacheForTesting,
-	__resetGhBlackoutForTesting,
-} from './lib/github-client.js';
 
-export { TICK_INTERVAL_MS };
-export type { GhRun, GhJob, RepoRunnerState };
-export type { RunnerHealthSnapshot, TickReport };
-export {
-	QUEUED_WARN_MINUTES,
-	getRunnerHealthSnapshot,
-	__setSnapshotPathForTesting,
-	SNAPSHOT_RESTORE_MAX_AGE_MS,
-	__setFloorDemandForTesting,
-	__setFloorConfirmDelayForTesting,
-	__setQuietRecorderForTesting,
-	__setSupervisionCheckerForTesting,
-	STARVED_NO_JOB_MS,
-};
+export type { RunnerHealthSnapshot };
 
 /**
  * Repos swept at once in `checkRunsAndFailover`. Sequential, 27 repos took ~35s
@@ -140,7 +110,6 @@ export {
  * fast loop, and a wide burst risks GitHub's secondary rate limit, which would
  * stall both. Six turns 27 listings into five rounds — single-digit seconds.
  */
-export { SWEEP_CONCURRENCY } from './lib/concurrency.js';
 
 // re-ping a sustained condition at most hourly: job-runner.ts's shared
 // HOUR_MS, imported under this module's own name (F12, plan §4.1) — see the
@@ -148,7 +117,7 @@ export { SWEEP_CONCURRENCY } from './lib/concurrency.js';
 // Exported so a test can assert the actual boundary rather than only "still
 // inside some window" (no test did, before this — the characterization test
 // beside `alertOnce` in runner-health.test.ts).
-export { RE_ALERT_MS };
+
 const JOB_NAME = 'ci:runner-health';
 
 /**

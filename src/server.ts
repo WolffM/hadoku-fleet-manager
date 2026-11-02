@@ -10,7 +10,7 @@
 import express, { type Express, type Request, type Response, type Router } from 'express';
 
 import type { RunnerHealthSnapshot } from './runner-health-snapshot.js';
-import { MAX_LEASE_SECONDS, activeLeases, releaseLease, takeLease } from './host-lease.js';
+import { MAX_LEASE_SECONDS, activeLeases, releaseLease, takeLease } from './host-lease-record.js';
 
 /**
  * The shape `createFleetManager` (`index.ts`, composition) returns. Defined

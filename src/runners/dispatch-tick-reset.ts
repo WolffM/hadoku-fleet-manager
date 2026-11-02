@@ -34,13 +34,8 @@ import {
 	__setPollCacheHydratedForTesting,
 } from './dispatch-tick-poll.js';
 import { __resetWarnedStuckLoadedForTesting } from './dispatch-tick-stuck-load.js';
-import {
-	announcedIntents,
-	__resetProbeIntentStateForTesting,
-} from './dispatch-tick-probe-intents.js';
+import { announcedIntents } from './dispatch-tick-probe-intents.js';
 import { PENDING_CADENCE_NAME } from './dispatch-tick-config.js';
-
-export { __resetProbeIntentStateForTesting };
 
 /** Test seam: the poll cadence is module state and a test must be able to reset it. */
 export function __resetPollStateForTesting(): void {

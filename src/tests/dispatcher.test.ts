@@ -7,7 +7,8 @@ import {
 	singleNodeFirst,
 	type PendingRun,
 } from '../runners/dispatcher.js';
-import { HEAVY_HOLD_SEC, type NodeState } from '../runners/placement.js';
+import { HEAVY_HOLD_SEC } from '../runners/placement-slow.js';
+import { type NodeState } from '../runners/placement-node-state.js';
 import type { HeavyModel } from '../runners/traffic.js';
 import type { SpeedModel } from '../runners/speed-tier.js';
 

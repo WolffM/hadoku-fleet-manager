@@ -38,7 +38,7 @@ import process from 'node:process';
 
 import { writeFileAtomic } from '../dist/lib/atomic-json.js';
 import { allRepos } from './lib/fleet-roster.mjs';
-import { siteRoot, manifest as manifestFile } from './lib/paths.mjs';
+import { siteRoot, manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { loadPrettier } from './lib/prettier-json.mjs';

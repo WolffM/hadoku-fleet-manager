@@ -43,7 +43,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { createEmitter } from './lib/emit.mjs';
@@ -62,7 +62,6 @@ import {
 } from '../dist/fleet-stats.js';
 import {
 	DAY_MS,
-	ROLLUP_FILE,
 	makeFail,
 	missingDaysSince,
 	parseDaysArg,
@@ -71,6 +70,7 @@ import {
 	rollupWindow,
 	tryReadStore,
 } from './lib/rollup-cli.mjs';
+import { ROLLUP_FILE } from '../dist/job-rollup-store.js';
 
 const argv = process.argv.slice(2);
 const parsed = parseStrict(ARGV_SPECS['stats.mjs'], argv);

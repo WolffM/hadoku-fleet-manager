@@ -12,34 +12,35 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } fro
 import { join } from 'node:path';
 
 import {
-	DECISION_LOG_MAX_BYTES,
-	DECISION_RETENTION_DAYS,
 	__resetDecisionLogForTesting,
 	__restoreDecisionSinkForTesting,
 	__setDecisionSinkForTesting,
-	decisionLogDir,
 	emitDecisions,
+} from '../runners/decision-log.js';
+import {
+	DECISION_LOG_MAX_BYTES,
+	DECISION_RETENTION_DAYS,
+	decisionLogDir,
 	filterDecisions,
 	pruneDecisionLog,
 	readDecisions,
-	recordWarmListenerDecisions,
-	type DecisionRecord,
-} from '../runners/decision-log.js';
+} from '../runners/decision-log-storage.js';
+import { recordWarmListenerDecisions } from '../runners/decision-log-record.js';
+import { type DecisionRecord } from '../runners/decision-log-types.js';
+import { runDispatchPass, __resetReapClockForTesting } from '../runners/dispatch-pass.js';
 import {
-	runDispatchPass,
 	__resetAffinityCountersForTesting,
 	__resetHeavyMarksForTesting,
-	__resetReapClockForTesting,
-	type DispatchPassInput,
-} from '../runners/dispatch-pass.js';
+} from '../runners/dispatch-pass-state.js';
+import { type DispatchPassInput } from '../runners/dispatch-pass-types.js';
 import { planTick, type PendingRun, type PlanObservation } from '../runners/dispatcher.js';
-import type { NodeState } from '../runners/placement.js';
+import type { NodeState } from '../runners/placement-node-state.js';
 import type { HeavyModel } from '../runners/traffic.js';
 import { __setHostForTesting, stateDir } from '../host.js';
 import { testHost } from './install-test-host.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import { tempDir, cleanupTempDirs } from './tmpdir.js';
-import { jitRunnerName } from '../runners/ephemeral.js';
+import { jitRunnerName } from '../lib/jit-naming.js';
 
 const NOW = Date.now();
 /** A live unit minted for job 9006 a minute ago, named the way the mint names it. */

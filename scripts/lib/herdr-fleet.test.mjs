@@ -4,7 +4,7 @@ import { chmodSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { decideCiAlert, STALE_STATE_MS } from '../../dist/ci-alerts.js';
+import { decideCiAlert, STALE_STATE_MS } from '../../dist/ci-alerts-decide.js';
 import { tempDir } from './test-tmpdir.mjs';
 import { BUDGET_ALERT_FRACTION } from '../../dist/gh-budget.js';
 import { CLAW_STATES } from '../../dist/telemetry-vocabulary.js';

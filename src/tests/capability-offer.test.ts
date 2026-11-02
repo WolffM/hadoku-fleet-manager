@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 
 import { nodeOffer, registrationLabels } from '../lib/capability-offer.js';
 import { type ManifestNode } from '../lib/capability-registry.js';
-import { BUILDER_LABEL, PM2_HOST_LABEL } from '../runners/census.js';
+import { BUILDER_LABEL, PM2_HOST_LABEL } from '../lib/capability-registry-ids.js';
 import { healthyClaw, jdk21Earner, proof, ROOT } from './capability-fixtures.js';
 
 // ---------------------------------------------------------------------------

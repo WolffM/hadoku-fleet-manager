@@ -17,17 +17,6 @@ import type { NodeState } from './placement-node-state.js';
 import { satisfiesLabels } from './placement-node-state.js';
 import { refusalFor, type SpillContext } from './placement-refusal.js';
 
-export { type RunIdentity, isForkSafe } from './placement-fork-safety.js';
-export { IMPLICIT_LABELS, satisfiesLabels, type NodeState } from './placement-node-state.js';
-export {
-	HEAVY_HOLD_SEC,
-	SPILL_FLOOR_SEC,
-	BACKSTOP_SOLE_CARRIER_SLOTS,
-	slowKind,
-	slowReposOn,
-} from './placement-slow.js';
-export { type SpillContext } from './placement-refusal.js';
-
 export interface Placement {
 	node?: string;
 	/** Why each node ahead of the chosen one was passed over. Kept because a

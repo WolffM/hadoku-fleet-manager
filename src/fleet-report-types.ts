@@ -48,17 +48,12 @@ import type {
 	FleetDailyJobStats,
 	FleetJobRecord,
 } from './fleet-report-types-jobs.js';
-import type {
-	FleetDispatch,
-	FleetDispatchAffinity,
-	FleetReservation,
-} from './fleet-report-types-dispatch.js';
+import type { FleetReservation } from './fleet-report-types-dispatch.js';
+import type { FleetDispatch } from './fleet-loop.js';
+import type { FleetDispatchAffinity } from './runners/dispatch-pass-state.js';
 import type { FleetCapacity } from './fleet-report-types-capacity.js';
-import type { FleetGithubBudget } from './fleet-report-types-budget.js';
+import type { FleetGithubBudget } from './gh-budget.js';
 import type { FleetVocabulary } from './fleet-report-types-vocabulary.js';
-
-export type { ClawState } from './lib/fleet-vocabulary.js';
-export type { BackstopReason } from './lib/fleet-vocabulary.js';
 
 export * from './fleet-report-types-machines.js';
 export * from './fleet-report-types-jobs.js';

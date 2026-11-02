@@ -74,28 +74,22 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { loadManifest, machineArg, runOn, selectMachines } from './fleet-exec.mjs';
-import { deferralFor, deferralNote, readDrains } from './expected-down.mjs';
+import { deferralFor, deferralNote, readDrains, readDrainDoc } from './expected-down.mjs';
 import { createEmitter } from './emit.mjs';
 import { parseDoctor } from './doctor-parse.mjs';
 import { LOAD_SECONDS, doctorProbe, BACKSTOP_CADENCE_NO_LOAD_WHY } from './doctor-probe.mjs';
 import { bootcampPointer, healthFacet, healthRecord } from './doctor-facet.mjs';
-import {
-	ADVISORY,
-	advisoryFindings,
-	blockingFindings,
-	doctorFindings,
-	backstopAdvisory,
-} from './doctor-findings.mjs';
+import { doctorFindings } from './doctor-findings.mjs';
+import { ADVISORY, advisoryFindings, blockingFindings, backstopAdvisory } from './preflight.mjs';
 import { backstopNodeNames } from '../../dist/lib/node-role.js';
 import { nodeUser } from '../../dist/lib/node-users.js';
 import { readHostingDoc } from '../../dist/runners/hosting-record.js';
-import { readDrainDoc } from './expected-down.mjs';
 import { claimPm2Units } from './hosting-claims.mjs';
 import { pm2Peers } from './pm2-app-layer.mjs';
 import { readTenantRegistry, tenantSpecFrom } from './tenant-registry.mjs';
 import { tenantsByNode } from './tenant-declarations.mjs';
 import { heldByCycle } from './reboot-hold.mjs';
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { measuredFacets, writeFacet } from '../../dist/lib/measured.js';
 
 // Through the shared emitter, which every subcommand under the `--json`

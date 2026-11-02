@@ -11,11 +11,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { JOB_RESERVE_DEFAULT_MB } from '../runners/ephemeral.js';
-import { admitMint } from '../runners/ephemeral.js';
-import { unitMemoryMaxMb } from '../runners/ephemeral.js';
+import { JOB_RESERVE_DEFAULT_MB, unitMemoryMaxMb, jobReserve } from '../lib/job-reserve.js';
+import { admitMint } from '../runners/ephemeral-admission.js';
 import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
-import { jobReserve, loadRepoReserves, withoutBackstops } from '../runners/ephemeral-shared.js';
+import { loadRepoReserves, withoutBackstops } from '../runners/ephemeral-shared.js';
 import { setBackstopHold } from '../runners/backstop-hold.js';
 import { SATURATED_QUEUED_MS } from '../runners/queue-discovery.js';
 import { BASE } from './helpers/ephemeral-rig.js';

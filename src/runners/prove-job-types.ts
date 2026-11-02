@@ -20,7 +20,6 @@ import type { ManifestNode } from '../lib/capability-registry.js';
 import type { GhLike, ShellLike } from '../lib/fleet-vocabulary.js';
 // prove-job-parse's two naming names. JIT_PREFIX/jitRunnerName are config
 // (wave clean-1 lane C, cut (iii) — src/lib/jit-naming.ts).
-export { JIT_PREFIX, jitRunnerName } from '../lib/jit-naming.js';
 
 /** A retry of the WHOLE dispatch is bounded; this is the ceiling, not the default. */
 export const MAX_ATTEMPTS_CEILING = 6;

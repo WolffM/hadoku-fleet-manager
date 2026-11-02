@@ -63,7 +63,7 @@
 import { execFileSync } from 'node:child_process';
 import { loadManifest, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
-import { READ_ATTEMPTS, describeReadFailure } from './lib/queue-health.mjs';
+import { READ_ATTEMPTS, describeReadFailure } from './lib/read-retry-policy.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
 

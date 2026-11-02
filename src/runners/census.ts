@@ -30,8 +30,8 @@
  * modules import them from `./census.js` and the point of a registry is to
  * stop the vocabulary being copied, not to make every consumer re-import it.
  */
-export { BUILDER_LABEL, PM2_HOST_LABEL, BACKSTOP_LABEL } from '../lib/capability-registry.js';
-import { BUILDER_LABEL, PM2_HOST_LABEL, BACKSTOP_LABEL } from '../lib/capability-registry.js';
+
+import { BUILDER_LABEL, PM2_HOST_LABEL, BACKSTOP_LABEL } from '../lib/capability-registry-ids.js';
 
 export interface CensusRunner {
 	name: string;

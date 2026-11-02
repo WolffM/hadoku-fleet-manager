@@ -1,6 +1,7 @@
 import { logger } from '../host.js';
 import { ghGet, ghWrite } from '../lib/github-client.js';
-import type { GhRun, GhJob, RepoRunnerState } from '../runner-health.js';
+import type { GhRun } from '../runner-health-runs.js';
+import type { GhJob, RepoRunnerState } from '../runner-health-queue-classify.js';
 
 const MAX_RERUN_ATTEMPTS = 2; // failover: auto-rerun once — only when run_attempt < this
 const FAILOVER_RECENT_MINUTES = 30; // ignore stale failures (e.g. on monitor restart)

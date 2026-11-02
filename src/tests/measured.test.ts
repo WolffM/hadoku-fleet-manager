@@ -20,23 +20,24 @@ import { missingMeasuredFiles } from '../host.js';
 import {
 	FACET_LOG_RETENTION_DAYS,
 	MANIFEST_KEY,
-	MEASURED_FACETS,
 	facetLogPath,
-	facetPath,
-	markProofStale,
 	measuredFacet,
 	measuredFacets,
 	mergeFacet,
 	readFacetFile,
-	readProof,
-	readProofsForCapability,
 	writeFacet,
-	writeProof,
 	type FacetFileRead,
 	type FacetRecord,
 	type MeasuredResult,
-	type ProofRecord,
 } from '../lib/measured.js';
+import { MEASURED_FACETS, facetPath } from '../lib/measured-paths.js';
+import {
+	markProofStale,
+	readProof,
+	readProofsForCapability,
+	writeProof,
+} from '../lib/measured-proof.js';
+import { type ProofRecord } from '../lib/workload-gate.js';
 
 const made: string[] = [];
 process.on('exit', () => {

@@ -98,7 +98,7 @@
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { manifestDir, stateDir, siteRoot } from './lib/paths.mjs';
+import { manifestDir, stateDir, siteRoot } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';

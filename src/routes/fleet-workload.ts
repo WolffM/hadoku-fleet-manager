@@ -4,8 +4,8 @@
  * source ceiling. `loadWorkloadGateInputs` is the one state-dir read
  * `buildFleetReport` needs to render each node's `workloadGates` reason.
  */
-import { proofFileStatus, readProofsForCapability, type ProofRecord } from '../lib/measured.js';
-import { workloadGatedCapabilities } from '../lib/workload-gate.js';
+import { proofFileStatus, readProofsForCapability } from '../lib/measured-proof.js';
+import { type ProofRecord, workloadGatedCapabilities } from '../lib/workload-gate.js';
 import { logger, stateDir } from '../host.js';
 
 /**

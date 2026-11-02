@@ -14,10 +14,8 @@
 
 import { readDrain } from './drain.js';
 import { effectiveSlices, readHostingDoc } from './hosting-record.js';
-import { backstopUnitMemoryMaxMb } from './ephemeral.js';
-import { JIT_UNIT_MAX_SEC } from './ephemeral.js';
-import { JOB_RESERVE_DEFAULT_MB } from './ephemeral.js';
-import { unitMemoryMaxMb } from './ephemeral.js';
+import { backstopUnitMemoryMaxMb, JIT_UNIT_MAX_SEC } from './ephemeral-slice.js';
+import { JOB_RESERVE_DEFAULT_MB, unitMemoryMaxMb, type RepoReserve } from '../lib/job-reserve.js';
 import { orderCandidates, type TrafficNode } from './traffic.js';
 import { isSchedulable } from './schedulable.js';
 import { nodeHome } from '../lib/node-users.js';
@@ -27,40 +25,26 @@ import { logger } from '../host.js';
 import { withGhCaller } from '../gh-budget.js';
 import { runDispatchTick } from './dispatch-tick.js';
 import { SATURATED_QUEUED_MS } from './queue-discovery.js';
-import { type DispatchPassResult } from './dispatch-pass.js';
+import { type DispatchPassResult } from './dispatch-pass-types.js';
 import {
 	withoutBackstops,
 	offerFor,
-	loadWorkloadGateContext,
 	loadRepoReserves,
 	shellOnNode,
 	type EphemeralTickInput,
-	type RepoReserve,
 } from './ephemeral-shared.js';
+import { loadWorkloadGateContext } from '../workload-gate-store.js';
 import { dispatchWarmCache } from './dispatch-warm-cache.js';
 import { getSpeedModel, getHeavyModel } from './speed-heavy-cache.js';
-import {
-	type AdmissionClause,
-	type AdmissionVerdict,
-	admissionVerdictFor,
-	onDemandBackstops,
-	recentJobsPerDay,
-} from './ephemeral-tick-verdict.js';
+import { onDemandBackstops, recentJobsPerDay } from './ephemeral-tick-verdict.js';
+
 import { probeNodeMemory, __resetSpaceProbeLogForTesting } from './ephemeral-tick-probe.js';
 import { buildNodeStates } from './ephemeral-tick-nodestate.js';
 
 // Bare re-export for runner-health.ts (lane A, untouched this wave).
-export { loadWorkloadGateContext, __setWorkloadGateContextForTesting } from './ephemeral-shared.js';
 
 // Re-exported (not just imported above) so every existing importer of these
 // five from THIS module keeps compiling unchanged.
-export {
-	type AdmissionClause,
-	type AdmissionVerdict,
-	admissionVerdictFor,
-	onDemandBackstops,
-	recentJobsPerDay,
-};
 
 /**
  * THE VERDICT SNAPSHOT — moved to `../admission-verdict-store.ts` (wave
@@ -73,12 +57,9 @@ export {
  * changes.
  */
 import {
-	admissionVerdictsForReport,
 	setAdmissionVerdicts,
-	__setAdmissionVerdictsForTesting,
 	__resetAdmissionVerdictsForTesting as __resetAdmissionVerdictStoreForTesting,
 } from '../admission-verdict-store.js';
-export { admissionVerdictsForReport, __setAdmissionVerdictsForTesting };
 
 /**
  * Test seam. Not part of the supported API. Delegates the verdict snapshot's

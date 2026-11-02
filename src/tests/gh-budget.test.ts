@@ -9,21 +9,21 @@ import {
 	recordGhResponse,
 	withGhCaller,
 	getGhBudgetSnapshot,
+	BUDGET_ALERT_MIN_LEFT_MS,
+} from '../gh-budget.js';
+import {
 	labelGhToken,
 	__resetGhBudgetForTesting,
 	__restartGhBudgetForTesting,
-	BUDGET_ALERT_MIN_LEFT_MS,
 	GH_BUDGET_SAVE_MS,
-	meterGhPool,
-	readGhPool,
-} from '../gh-budget.js';
+} from '../gh-budget-windows.js';
+import { meterGhPool, readGhPool } from '../gh-budget-pool.js';
 import { GH_BUDGET_HISTORY_FILE, ghBudgetHistoryStore } from '../gh-budget-history-store.js';
+import { ghGet, ghGetConditional } from '../lib/github-client.js';
 import {
-	ghGet,
-	ghGetConditional,
 	__resetGhBlackoutForTesting,
 	ghBlackoutRemainingMs,
-} from '../lib/github-client.js';
+} from '../lib/github-client-blackout.js';
 
 /**
  * #119: the budget was invisible until the 403. On 2026-10-16 the first signal

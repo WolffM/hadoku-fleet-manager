@@ -4,8 +4,8 @@ import type { AddressInfo } from 'node:net';
 import { Router } from 'express';
 
 import { createFleetServer } from '../server.js';
-import { __resetLeasesForTesting } from '../host-lease.js';
-import type { FleetManager } from '../index.js';
+import { __resetLeasesForTesting } from '../host-lease-record.js';
+import type { FleetManager } from '../server.js';
 
 const router = Router();
 router.get('/fleet', (_req, res) => res.json({ success: true, stub: 'fleet' }));

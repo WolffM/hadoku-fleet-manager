@@ -39,7 +39,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { manifest } from './paths.mjs';
+import { manifest } from '../../dist/lib/fleet-paths.js';
 import { loadPrettier, renderJson } from './prettier-json.mjs';
 
 /**

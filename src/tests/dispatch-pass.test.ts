@@ -2,11 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { runDispatchPass } from '../runners/dispatch-pass.js';
-import {
-	REAP_INTERVAL_MS,
-	REAP_IDLE_INTERVAL_MS,
-	JIT_REAP_GRACE_MS,
-} from '../runners/ephemeral-exec-reap.js';
+import { REAP_IDLE_INTERVAL_MS } from '../runners/ephemeral-exec-reap.js';
+import { REAP_INTERVAL_MS, JIT_REAP_GRACE_MS } from '../lib/jit-reap-cadence.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import { node, run, base, harness, installDispatchPassRig } from './helpers/dispatch-pass-rig.js';
 

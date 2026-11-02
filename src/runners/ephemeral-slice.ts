@@ -68,7 +68,6 @@ export const JIT_UNIT_MAX_SEC = GITHUB_JOB_CEILING_SEC + 30 * 60;
  * existing `ci-scheduling` importer keeps compiling and behaving
  * byte-identically.
  */
-export { DEFAULT_RUNNER_SLICE, resolveSliceName, ciUnitProperties } from './ci-unit-properties.js';
 
 /**
  * What a job is RESERVED at when nothing has measured it. Moved to
@@ -77,7 +76,6 @@ export { DEFAULT_RUNNER_SLICE, resolveSliceName, ciUnitProperties } from './ci-u
  * answer. Re-exported here under its original path.
  */
 import { JOB_RESERVE_DEFAULT_MB } from '../lib/job-reserve.js';
-export { JOB_RESERVE_DEFAULT_MB };
 
 /**
  * The per-unit `MemoryMax` for a minted runner. Moved to `src/lib/job-reserve.ts`

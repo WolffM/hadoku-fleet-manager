@@ -7,7 +7,7 @@
  * ahead of. Every name here is re-exported from `placement.ts` so its
  * existing importers compile unchanged.
  */
-import type { AdmissionResult } from './ephemeral.js';
+import type { AdmissionResult } from './ephemeral-admission.js';
 
 export interface RunIdentity {
 	/** The repo the workflow belongs to. */

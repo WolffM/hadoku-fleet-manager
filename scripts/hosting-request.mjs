@@ -20,7 +20,7 @@ import process from 'node:process';
 import { createEmitter } from './lib/emit.mjs';
 import { shipped } from './lib/fleet-source.mjs';
 import { validateHostingRequest } from './lib/hosting-request.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { registerTenant } from './lib/tenant-registry.mjs';
 
 const target = process.argv.slice(2).find((a) => !a.startsWith('-'));

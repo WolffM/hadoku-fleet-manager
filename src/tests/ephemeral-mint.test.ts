@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { DEFAULT_RUNNER_SLICE } from '../runners/ci-unit-properties.js';
 import {
-	DEFAULT_RUNNER_SLICE,
 	GITHUB_JOB_CEILING_SEC,
 	JIT_UNIT_MAX_SEC,
-	JOB_RESERVE_DEFAULT_MB,
 	backstopUnitMemoryMaxMb,
-} from '../runners/ephemeral.js';
+} from '../runners/ephemeral-slice.js';
+import { JOB_RESERVE_DEFAULT_MB } from '../lib/job-reserve.js';
 import { buildSpawnPlan, buildWarmSpawnPlan } from '../runners/ephemeral-mint.js';
 
 // --- spawn plan -------------------------------------------------------------

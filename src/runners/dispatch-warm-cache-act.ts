@@ -7,9 +7,10 @@
  * `Promise.all`.
  */
 import { logger } from '../host.js';
-import { unitMemoryMaxMb } from './ephemeral.js';
-import { warmRunnerName } from './ephemeral.js';
-import { evictWarmListener, mintWarmListener, type GhLike } from './ephemeral-exec.js';
+import { unitMemoryMaxMb } from '../lib/job-reserve.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
+import { evictWarmListener, mintWarmListener } from './ephemeral-exec.js';
+import { type GhLike } from '../lib/fleet-vocabulary.js';
 import { offerFor, shellOnNode, type EphemeralTickInput } from './ephemeral-shared.js';
 import { nodeHome } from '../lib/node-users.js';
 import { workloadGatedCapabilities } from '../lib/workload-gate.js';

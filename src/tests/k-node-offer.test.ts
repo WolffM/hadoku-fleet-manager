@@ -23,7 +23,7 @@ import {
 } from '../lib/bootcamp-proof.js';
 import { workloadGateStatus } from '../lib/workload-gate.js';
 import type { ManifestNode } from '../lib/capability-registry.js';
-import type { ProofRecord } from '../lib/measured.js';
+import type { ProofRecord } from '../lib/workload-gate.js';
 
 /** The five capabilities every claw on the live manifest proves today. */
 const LIVE_PREREQS = [

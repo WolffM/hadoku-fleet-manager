@@ -30,11 +30,13 @@ import { join } from 'node:path';
 import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
 import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
 import { runDispatchPass, __resetReapClockForTesting } from '../runners/dispatch-pass.js';
-import { choosePlacement, satisfiesLabels, type NodeState } from '../runners/placement.js';
+import { choosePlacement } from '../runners/placement.js';
+import { satisfiesLabels, type NodeState } from '../runners/placement-node-state.js';
 import { nodeOffer } from '../lib/capability-offer.js';
 import { manifest as manifestPath } from '../lib/fleet-paths.js';
 import { fakeGh, fakeShell, type GhFake, type ShellFake } from './helpers/fleet-fakes.js';
-import { TMP_FREE_FLOOR_MB, WORK_FREE_FLOOR_MB } from '../runners/ephemeral.js';
+import { TMP_FREE_FLOOR_MB } from '../lib/jit-naming.js';
+import { WORK_FREE_FLOOR_MB } from '../runners/ephemeral-admission.js';
 
 /** What `vars.CI_RUNNER` resolves to on every covered repo. */
 const FLEET_LABELS = ['self-hosted', 'hadoku-builder'];

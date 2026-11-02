@@ -8,16 +8,13 @@
  */
 import { logger } from '../host.js';
 import { sharedMbOn, type HostingDoc } from './hosting-record.js';
-import { unitMemoryMaxMb, warmCacheEligible, warmListenerSlots } from './ephemeral.js';
-import {
-	readWarmMarker,
-	refreshWarmMarker,
-	warmRegistration,
-	type GhLike,
-} from './ephemeral-exec.js';
+import { warmListenerSlots } from './ephemeral.js';
+import { unitMemoryMaxMb, jobReserve } from '../lib/job-reserve.js';
+import { warmCacheEligible } from '../lib/warm-eligibility.js';
+import { readWarmMarker, refreshWarmMarker, warmRegistration } from './ephemeral-exec.js';
+import { type GhLike } from '../lib/fleet-vocabulary.js';
 import { reapDeadWarmListener } from './dispatch-warm-cache-state.js';
 import {
-	jobReserve,
 	shellOnNode,
 	SPACE_PROBE_DF_CMD,
 	parseSpaceProbe,

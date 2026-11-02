@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { failuresByZone } from '../job-history-stats.js';
+import { failuresByZone } from '../job-history-zone.js';
 import type { DayRollup, RollupRow, Spread } from '../job-rollups.js';
 import {
 	ALL_ZONES,

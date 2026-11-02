@@ -8,7 +8,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { MODE_FLAGS, classifyZone, foreignFlags, zoneOf } from './floor-probe.mjs';
+import { MODE_FLAGS, foreignFlags } from './floor-probe.mjs';
+import { classifyZone, zoneOf } from '../../dist/job-history-zone.js';
 import { ZONE_NAMES, nodeZoneTable, unitTable } from './floor-probe-rows.mjs';
 
 const KEY = { repo: 'WolffM/hadoku_site', job: 'Build variants' };

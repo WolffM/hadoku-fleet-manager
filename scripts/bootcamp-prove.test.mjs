@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { writeProof } from '../dist/lib/measured.js';
+import { writeProof } from '../dist/lib/measured-proof.js';
 
 import {
 	CLAW,

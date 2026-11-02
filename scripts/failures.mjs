@@ -21,7 +21,7 @@
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { createEmitter } from './lib/emit.mjs';
@@ -30,12 +30,12 @@ import { computeFailureRates, FLEET_ORIGIN_ZONES } from '../dist/failure-rates.j
 import {
 	makeFail,
 	missingDaysSince,
-	ROLLUP_FILE,
 	parseDaysArg,
 	rawFlag as sharedRawFlag,
 	readRollupStore,
 	rollupWindow,
 } from './lib/rollup-cli.mjs';
+import { ROLLUP_FILE } from '../dist/job-rollup-store.js';
 
 const argv = process.argv.slice(2);
 const SPEC = {

@@ -25,9 +25,7 @@
  * (cardtable's JVMs). tenant-registry.test.mjs pins both renders.
  */
 import { AGENT_OOM_SCORE_ADJ } from '../../dist/runners/hosting-record.js';
-import { TENANT_RUNTIME_NAMES, runtimeOf } from './tenant-runtime-names.mjs';
-
-export { runtimeOf };
+import { TENANT_RUNTIME_NAMES } from './tenant-runtime-names.mjs';
 
 /** `cardtable` → `CARDTABLE`: the prefix of the environment a tenant's unit hands it. */
 const envPrefix = (app) => app.toUpperCase().replace(/-/g, '_');

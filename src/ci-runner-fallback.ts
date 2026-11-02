@@ -63,7 +63,7 @@
  */
 
 import { logger } from './host.js';
-import { ghTokenFingerprint } from './gh-budget.js';
+import { ghTokenFingerprint } from './gh-budget-windows.js';
 import { conditionalCacheStore } from './conditional-cache-store.js';
 import { mapConcurrent } from './lib/concurrency.js';
 import { userAgent } from './lib/fleet-config.js';
@@ -80,7 +80,6 @@ export const HOSTED_VALUE = '"ubuntu-latest"';
  * Re-exported here under its original path for every existing importer.
  */
 import { FLEET_VALUE } from './lib/ci-runner-values.js';
-export { FLEET_VALUE };
 
 /**
  * Repos to steer. Moved to `src/lib/covered-repos.ts` (wave clean-1 lane C,
@@ -89,7 +88,6 @@ export { FLEET_VALUE };
  * Re-exported here under its original path.
  */
 import { coveredRepos } from './lib/covered-repos.js';
-export { coveredRepos };
 
 /**
  * The raw `fetch` moved to `github-client.ts`'s `ghFetchRaw` (plan §4.1 F2b)

@@ -4,8 +4,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runDispatchTick } from '../runners/dispatch-tick.js';
-import { __restartAnnouncedStuckForTesting } from '../runners/dispatch-tick.js';
-import { getDispatchQueueSnapshot } from '../runners/dispatch-tick.js';
+import { __restartAnnouncedStuckForTesting } from '../runners/dispatch-tick-reset.js';
+import { getDispatchQueueSnapshot } from '../runners/dispatch-tick-poll.js';
 import { STUCK_ANNOUNCED_FILE } from '../runners/stuck-runs.js';
 import { SATURATED_QUEUED_MS } from '../runners/queue-discovery.js';
 import { testStateDir } from './install-test-host.js';

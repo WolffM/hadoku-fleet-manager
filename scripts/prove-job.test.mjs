@@ -396,7 +396,7 @@ test('--input requires key=value', () => {
 test('a jdk21-shaped PASS writes $proof, read back through the built measured.ts library', async () => {
 	const f = fixture();
 	try {
-		const { readProof } = await import('../dist/lib/measured.js');
+		const { readProof } = await import('../dist/lib/measured-proof.js');
 		// RELATIVE TO NOW, never an absolute date: `fixture-clock-guard.test.mjs`
 		// flags any literal ISO date a fixture carries, because a reader that
 		// treats it as "recent" would age it out on its own. The 300s gap is

@@ -20,7 +20,7 @@ import {
 	readJobRuns,
 	registryKindFor,
 } from '../job-run-store.js';
-import type { JobEntry } from '../lib/job-registry.js';
+import type { JobEntry } from '../lib/job-registry-types.js';
 import { tempDir, cleanupTempDirs } from './tmpdir.js';
 
 afterEach(() => cleanupTempDirs());

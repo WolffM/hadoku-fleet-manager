@@ -28,20 +28,22 @@ import { logger } from '../host.js';
 import { noteTick } from '../lib/liveness.js';
 import { subCadence } from '../lib/every.js';
 import { withGhCaller } from '../gh-budget.js';
-import { runDispatchPass, type DispatchPassResult, type RunningJob } from './dispatch-pass.js';
+import { runDispatchPass } from './dispatch-pass.js';
+import { type DispatchPassResult, type RunningJob } from './dispatch-pass-types.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
-import { DEFAULT_POLL_POLICY } from './queue-discovery.js';
-import { deriveHotRepos } from './queue-discovery.js';
-import { observedQueuedSinceMs } from './queue-discovery.js';
-import { MIN_QUEUED_MS } from './queue-discovery.js';
-import { ZOMBIE_MS } from './queue-discovery.js';
-import { mintableRuns } from './queue-discovery.js';
-import { reposDue } from './queue-discovery.js';
-import { runnableJobs } from './queue-discovery.js';
-import type { QueuedJob } from './queue-discovery.js';
-import type { QueuedRun } from './queue-discovery.js';
+import {
+	DEFAULT_POLL_POLICY,
+	deriveHotRepos,
+	observedQueuedSinceMs,
+	MIN_QUEUED_MS,
+	ZOMBIE_MS,
+	mintableRuns,
+	reposDue,
+	runnableJobs,
+} from './queue-discovery.js';
+import type { QueuedJob, QueuedRun } from './queue-discovery.js';
 import { runnerTarballUrl } from './ephemeral-exec-jit.js';
-import type { GhLike, ShellLike } from './ephemeral-exec.js';
+import type { GhLike, ShellLike } from '../lib/fleet-vocabulary.js';
 import {
 	etagByRepo,
 	runsDisk,
@@ -61,7 +63,6 @@ import {
 } from './stuck-runs.js';
 import {
 	hydratePollCache,
-	getDispatchQueueSnapshot,
 	cachedRunsByRepo,
 	cachedPendingByRepo,
 	lastReadByRepo,
@@ -69,13 +70,9 @@ import {
 } from './dispatch-tick-poll.js';
 import { loadWarnedStuck } from './dispatch-tick-stuck-load.js';
 import {
-	PROBE_INTENT_DIR,
-	PROBE_INTENT_MAX_MS,
 	INTENT_KEY_SEP,
 	announcedIntents,
 	readProbeIntents,
-	__resetProbeIntentStateForTesting,
-	type ProbeIntent,
 } from './dispatch-tick-probe-intents.js';
 import {
 	DISPATCH_TICK_EXPECTED_MS,
@@ -85,37 +82,9 @@ import {
 	PENDING_CADENCE_NAME,
 	MAX_RECOVERY_PROBES,
 	RECOVERY_CADENCE_NAME,
-	resetRecoveryClock,
 	entryFor,
 	type DispatchTickInput,
 } from './dispatch-tick-config.js';
-import {
-	__resetPollStateForTesting,
-	__restartPollCacheForTesting,
-	__restartAnnouncedStuckForTesting,
-} from './dispatch-tick-reset.js';
-
-export { getDispatchQueueSnapshot };
-export {
-	PROBE_INTENT_DIR,
-	PROBE_INTENT_MAX_MS,
-	readProbeIntents,
-	__resetProbeIntentStateForTesting,
-};
-export type { ProbeIntent };
-export {
-	RECOVERY_INTERVAL_MS,
-	PENDING_INTERVAL_MS,
-	MAX_PENDING_PROBES,
-	MAX_RECOVERY_PROBES,
-	resetRecoveryClock,
-	type DispatchTickInput,
-};
-export {
-	__resetPollStateForTesting,
-	__restartPollCacheForTesting,
-	__restartAnnouncedStuckForTesting,
-};
 
 export async function runDispatchTick(
 	input: DispatchTickInput,

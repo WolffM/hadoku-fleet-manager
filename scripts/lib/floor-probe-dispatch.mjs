@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
 
-import { ghBlackoutRemainingMs, ghGet, ghWrite } from '../../dist/lib/github-client.js';
+import { ghGet, ghWrite } from '../../dist/lib/github-client.js';
+import { ghBlackoutRemainingMs } from '../../dist/lib/github-client-blackout.js';
 import { probeGate } from './floor-probe.mjs';
 
 export function githubToken() {

@@ -11,18 +11,10 @@ import assert from 'node:assert/strict';
 
 import { writeFileSync } from 'node:fs';
 
-import {
-	tick,
-	SNAPSHOT_RESTORE_MAX_AGE_MS,
-	__resetRunnerHealthAlertsForTesting,
-	getRunnerHealthSnapshot,
-} from '../runner-health.js';
-import {
-	installRunnerHealthRig,
-	installFetch,
-	snapshotPath,
-	FLEET_ALL_UP,
-} from './helpers/runner-health-rig.js';
+import { tick, __resetRunnerHealthAlertsForTesting } from '../runner-health.js';
+import { SNAPSHOT_RESTORE_MAX_AGE_MS, getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
+import { installRunnerHealthRig, installFetch, snapshotPath } from './helpers/runner-health-rig.js';
+import { FLEET_ALL_UP } from './helpers/runner-health-fixtures.js';
 
 installRunnerHealthRig();
 

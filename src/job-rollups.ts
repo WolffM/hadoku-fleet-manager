@@ -44,7 +44,9 @@ import { join } from 'node:path';
 import { logger, stateDir } from './host.js';
 import { FRESH_HORIZON_H } from './job-history-ingest.js';
 import { historyCompleteSinceMs, jobRecords, type JobRecord } from './job-history-store.js';
-import { failuresByZone, nodeOf, percentile, type FailuresByZone } from './job-history-stats.js';
+import { percentile } from './job-history-stats.js';
+import { failuresByZone, type FailuresByZone } from './job-history-zone.js';
+import { nodeOf, HOSTED_NODE } from './runners/census.js';
 import {
 	ROLLUP_FILE,
 	jsonlRollupStore,
@@ -52,7 +54,6 @@ import {
 	type RollupDay,
 } from './job-rollup-store.js';
 import { jobKind } from './lib/job-kind.js';
-import { HOSTED_NODE } from './runners/census.js';
 import { JIT_PREFIX, WARM_PREFIX } from './lib/jit-naming.js';
 
 /** Bumped when a row's meaning changes, so a reader can refuse a mix. */

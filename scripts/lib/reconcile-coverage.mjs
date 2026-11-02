@@ -18,7 +18,7 @@
  * reconcile-fleet-runners.mjs, not here.
  */
 import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
-import { manifest as manifestFile } from './paths.mjs';
+import { manifest as manifestFile } from '../../dist/lib/fleet-paths.js';
 import { RESERVE_DRIFT_PCT, reserveDrift, shrinkRefusal } from './demand-derive.mjs';
 import { loadMountedApps, deriveFacets } from './reconcile-apply.mjs';
 import { describeCoverageDrift, withoutReserves, reservesOf } from './reconcile-plan.mjs';

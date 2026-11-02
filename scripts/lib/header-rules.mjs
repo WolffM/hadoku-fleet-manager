@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile, readBlanked, openRepo } from './header-source.mjs';
 import { stripYamlComments } from './yaml-comments.mjs';
 import { readChildApps } from './site-docs.mjs';
-import { READ_ATTEMPTS } from './queue-health.mjs';
+import { READ_ATTEMPTS } from './read-retry-policy.mjs';
 import { fleetOwner, hubRepo, qualifyRepo } from '../../dist/lib/fleet-config.js';
 import { tryShipped } from './fleet-source.mjs';
 

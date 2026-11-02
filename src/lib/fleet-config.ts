@@ -43,8 +43,6 @@ import process from 'node:process';
 
 import { stateDir } from './fleet-paths.js';
 
-export { stateDir };
-
 /** The GitHub account that owns the fleet's repos. */
 export const FLEET_OWNER_ENV = 'FLEET_OWNER';
 /** The hub repo's BARE name — no owner. `hubRepoFull()` qualifies it. */

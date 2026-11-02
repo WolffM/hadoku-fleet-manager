@@ -10,13 +10,11 @@
  */
 import { IMPLICIT_LABELS } from '../lib/capability-labels.js';
 import { logger } from '../host.js';
-import { assertSafeJitConfig } from './ephemeral.js';
+import { assertSafeJitConfig, type AdmissionResult } from './ephemeral-admission.js';
 import { slotDir } from './ephemeral.js';
-import { type AdmissionResult } from './ephemeral.js';
-import { buildSpawnPlan } from './ephemeral-mint.js';
-import { labelsFromUnitDescription } from './ephemeral-mint.js';
+import { buildSpawnPlan, labelsFromUnitDescription } from './ephemeral-mint.js';
 import { nodeScriptCommand } from './node-script.js';
-import { type GhLike, type ShellLike } from './ephemeral-exec.js';
+import { type GhLike, type ShellLike } from '../lib/fleet-vocabulary.js';
 
 export interface MintRequest {
 	node: string;

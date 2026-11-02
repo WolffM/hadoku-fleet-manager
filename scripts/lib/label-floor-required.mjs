@@ -29,7 +29,7 @@
  */
 
 import { join } from 'node:path';
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { requiredIdentitySet, provesRequiredSet } from '../../dist/lib/bootcamp-proof.js';
 import { probeableIds } from '../../dist/lib/capability-labels.js';
 import {

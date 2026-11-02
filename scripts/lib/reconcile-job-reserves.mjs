@@ -26,7 +26,8 @@
 
 import { runOnSync, selectMachines } from './fleet-exec.mjs';
 import { deriveJobReserves } from './demand-derive.mjs';
-import { metricsReadScript, metricsSince, perJobCosts, readOutcome } from './job-metrics.mjs';
+import { metricsReadScript, metricsSince, readOutcome } from './job-metrics-read.mjs';
+import { perJobCosts } from './job-metrics-cost.mjs';
 import { RETENTION_DAYS } from '../../dist/job-history-store.js';
 
 /**

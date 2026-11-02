@@ -63,7 +63,7 @@
  * still folded per-node (`zoneExcess`) so a reader can see WHY a node is
  * flagged, not only THAT it is.
  */
-import type { FailuresByZone } from './job-history-stats.js';
+import type { FailuresByZone } from './job-history-zone.js';
 import type { DayRollup } from './job-rollups.js';
 
 /** Mirrors `FailuresByZone`'s five keys. Cross-checked against the real shape in tests. */

@@ -15,8 +15,6 @@
  * because a threshold constant closes over nothing.
  */
 
-import { BOOTCAMP_STALE_DAYS } from '../../dist/lib/workload-gate.js';
-
 // ═══════════════════════════════════════════════════════════════════════════
 // THRESHOLDS — SAFETY CONTROLS, NOT TUNING
 // ═══════════════════════════════════════════════════════════════════════════
@@ -155,4 +153,3 @@ export const SENSOR_TRACKS_DIVISOR = 3;
 
 /** How stale `$capabilities` may be before `$health` flags it — one number
  *  with `GET /fleet`'s `vocabulary.bootcampStaleDays`, owned by capabilities.ts. */
-export { BOOTCAMP_STALE_DAYS };

@@ -69,7 +69,7 @@ import { buildSpeedModel } from '../dist/runners/speed-tier.js';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { loadManifest, runOnSync } from './lib/fleet-exec.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readDrains } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 import { BOLD, DIM, GREEN, RED, RESET, YELLOW } from './lib/term.mjs';

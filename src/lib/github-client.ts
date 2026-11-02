@@ -30,18 +30,6 @@ import {
 	__resetGhCacheStoreForTesting,
 } from './github-client-cache.js';
 
-export {
-	type GhReadFailureKind,
-	type GhReadFailure,
-	classifyGhReadFailure,
-	unreadableTickError,
-	resetGhReadFailureForTick,
-	currentGhReadFailure,
-	ghBlackoutRemainingMs,
-	__resetGhBlackoutForTesting,
-} from './github-client-blackout.js';
-export { GH_CACHE_MAX_BYTES } from './github-client-cache.js';
-
 export const FETCH_TIMEOUT_MS = 10_000;
 
 /**

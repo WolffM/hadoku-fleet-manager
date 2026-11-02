@@ -66,7 +66,6 @@ import { cronProfilesPath } from './host.js';
 // for its own callers.
 import { activeLeases } from './host-lease-record.js';
 import { __resetPm2HostBusyForTesting } from './pm2-host-busy-store.js';
-export { setPm2HostBusy, getPm2HostBusy } from './pm2-host-busy-store.js';
 
 /**
  * How long after a profile's cron fires we keep the declared reservation open.

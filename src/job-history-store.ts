@@ -302,16 +302,7 @@ export function __setRecordBudgetForTesting(n: number): void {
  * bring this file under the 600-line target. Re-exported here so every
  * existing importer of `job-history-store.js` compiles unchanged.
  */
-export {
-	PROBE_LEDGER_FILE,
-	probeRuns,
-	forcedLifted,
-	probeLedgerFile,
-	loadProbeLedger,
-	probeOriginOf,
-	__resetProbeLedgerForTesting,
-	type ProbeLedgerEntry,
-} from './job-history-probe-ledger.js';
+
 import { __resetProbeLedgerForTesting } from './job-history-probe-ledger.js';
 
 export function cutoffIso(now = Date.now()): string {

@@ -12,7 +12,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { siteRoot } from './paths.mjs';
+import { siteRoot } from '../../dist/lib/fleet-paths.js';
 
 /** The app layer's pm2 hosts as `{ set }`, or `{ set: null, why }`: could not look is not "none". */
 export function pm2Peers() {

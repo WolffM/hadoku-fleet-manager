@@ -6,10 +6,9 @@
  */
 import { logger } from '../host.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
-import { JIT_PREFIX } from './ephemeral.js';
-import { parseJitName } from './ephemeral.js';
+import { JIT_PREFIX, parseJitName } from '../lib/jit-naming.js';
 import { liveJitUnits } from './ephemeral-exec-jit.js';
-import { type GhLike, type ShellLike } from './ephemeral-exec.js';
+import { type GhLike, type ShellLike } from '../lib/fleet-vocabulary.js';
 
 /**
  * `REAP_INTERVAL_MS`/`JIT_REAP_GRACE_MS` moved to `src/lib/jit-reap-cadence.ts`
@@ -17,8 +16,7 @@ import { type GhLike, type ShellLike } from './ephemeral-exec.js';
  * (observation) needs the same two numbers. Re-exported here under their
  * original path.
  */
-import { REAP_INTERVAL_MS, JIT_REAP_GRACE_MS } from '../lib/jit-reap-cadence.js';
-export { REAP_INTERVAL_MS, JIT_REAP_GRACE_MS };
+import { JIT_REAP_GRACE_MS } from '../lib/jit-reap-cadence.js';
 
 /**
  * How often the sweep re-lists a repo that has NOTHING TO REAP (#116).

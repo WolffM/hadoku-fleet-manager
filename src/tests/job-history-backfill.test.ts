@@ -14,10 +14,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 
-import { historyFile } from '../job-history-store.js';
-import { compactHistory } from '../job-history-store.js';
-import { jobRecords } from '../job-history-store.js';
-import { backfillFailedSteps } from '../job-history-ingest.js';
+import { historyFile, compactHistory, jobRecords } from '../job-history-store.js';
+import { backfillFailedSteps } from '../job-history-backfill.js';
 import { job, at, seed, restart, installJobHistoryRig } from './helpers/job-history-rig.js';
 
 installJobHistoryRig();

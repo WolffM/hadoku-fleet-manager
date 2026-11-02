@@ -64,7 +64,7 @@ import { readFileSync, writeSync } from 'node:fs';
 import { relative, basename } from 'node:path';
 
 import { allRepos } from './lib/fleet-roster.mjs';
-import { manifest as manifestFile } from './lib/paths.mjs';
+import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import { REPO_ROOT, scanRepo } from './lib/identity-rules.mjs';
 import { OWNER_MODULE, OWNER_IMPORT, EDGE_INDEX } from './lib/identity-constants.mjs';

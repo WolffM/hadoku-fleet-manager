@@ -8,14 +8,10 @@
  * imports it directly).
  */
 import { logger } from '../host.js';
-import {
-	evictWarmListener,
-	warmRegistration,
-	type GhLike,
-	type ShellLike,
-} from './ephemeral-exec.js';
-import { warmRunnerName } from './ephemeral.js';
-import type { NodeState } from './placement.js';
+import { evictWarmListener, warmRegistration } from './ephemeral-exec.js';
+import { type GhLike, type ShellLike } from '../lib/fleet-vocabulary.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
+import type { NodeState } from './placement-node-state.js';
 import { heavyMarkedAtMs, heavyMarkedRecently } from './dispatch-pass-state.js';
 
 /**

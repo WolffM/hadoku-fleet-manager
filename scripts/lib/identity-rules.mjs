@@ -19,7 +19,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve, relative, sep, basename } from 'node:path';
 
 import { blankComments } from './blank-comments.mjs';
-import { siteRoot } from './paths.mjs';
+import { siteRoot } from '../../dist/lib/fleet-paths.js';
 import { IDENTITY_BOUNDARY, SELF, isSelfFixture } from './identity-constants.mjs';
 import {
 	CODE_EXT,

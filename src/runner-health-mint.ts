@@ -8,10 +8,10 @@ import { buildMintView, type MintView } from './label-floor.js';
 // `ephemeral-tick.ts`/`ephemeral-shared.ts` still re-export both names under
 // their original path for every other existing importer.
 import { loadWorkloadGateContext } from './workload-gate-store.js';
-import { admissionVerdictsForReport } from './admission-verdict-store.js';
+
 // Re-exported so runner-health-watch.ts's checkStarvation does not open a
 // second direct edge to admission-verdict-store.ts for this reader.
-export { admissionVerdictsForReport };
+
 import { nodeIsSick } from './lib/sick-node.js';
 import { isBackstopHeld } from './runners/backstop-hold.js';
 import type { GhRunner } from './lib/github-client.js';

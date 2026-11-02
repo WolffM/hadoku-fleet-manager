@@ -11,14 +11,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { admitMint } from '../runners/ephemeral.js';
-import { mintBudget } from '../runners/ephemeral.js';
-import { warmCacheEligible } from '../runners/ephemeral.js';
-import { warmEligibleSlots } from '../runners/ephemeral.js';
-import { warmListenersHeld } from '../runners/ephemeral.js';
-import { warmListenerSlots } from '../runners/ephemeral.js';
-import { warmRunnerName } from '../runners/ephemeral.js';
-import { warmConcurrencySlots } from '../runners/ephemeral.js';
+import { admitMint } from '../runners/ephemeral-admission.js';
+import {
+	mintBudget,
+	warmListenersHeld,
+	warmListenerSlots,
+	warmConcurrencySlots,
+} from '../runners/ephemeral.js';
+import { warmCacheEligible, warmEligibleSlots } from '../lib/warm-eligibility.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
 import { dispatchWarmCache } from '../runners/dispatch-warm-cache.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
 import {

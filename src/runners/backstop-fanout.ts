@@ -7,7 +7,7 @@
  */
 import { ghWrite, readRunnerListingShared, SELF_REPO } from '../lib/github-client.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
-import { BACKSTOP_LABEL, BUILDER_LABEL, PM2_HOST_LABEL } from './census.js';
+import { BACKSTOP_LABEL, BUILDER_LABEL, PM2_HOST_LABEL } from '../lib/capability-registry-ids.js';
 import { backstopLabelWrite } from './backstop.js';
 
 /**

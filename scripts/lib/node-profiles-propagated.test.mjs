@@ -29,7 +29,7 @@ import { test } from 'node:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { manifestDir } from './paths.mjs';
+import { manifestDir } from '../../dist/lib/fleet-paths.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PKG = resolve(ROOT, 'manifests', 'node-profiles.json');

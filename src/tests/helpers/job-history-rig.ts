@@ -24,8 +24,8 @@ import {
 	__resetJobHistoryForTesting,
 	__setHistoryPathForTesting,
 	historyFile,
-	probeLedgerFile,
 } from '../../job-history-store.js';
+import { probeLedgerFile } from '../../job-history-probe-ledger.js';
 import { ingestRuns } from '../../job-history-ingest.js';
 
 /**

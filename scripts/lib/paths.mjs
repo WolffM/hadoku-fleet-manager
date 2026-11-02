@@ -17,7 +17,5 @@
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export { reposDir, siteRoot, manifestDir, manifest, stateDir } from '../../dist/lib/fleet-paths.js';
-
 /** This package's own `scripts/` directory — a sibling asset, not operator config. */
 export const PKG_SCRIPTS = dirname(fileURLToPath(new URL('.', import.meta.url)));

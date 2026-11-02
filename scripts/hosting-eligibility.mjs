@@ -30,7 +30,7 @@ import { createEmitter } from './lib/emit.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest } from './lib/fleet-exec.mjs';
 import { HOSTING_ELIGIBILITY_CONTRACT, eligibilityDocument } from './lib/hosting-eligibility.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readTenantRegistry } from './lib/tenant-registry.mjs';
 
 const LAST_FILE = 'hosting-converge-last.json';

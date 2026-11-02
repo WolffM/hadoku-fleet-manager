@@ -8,7 +8,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { choosePlacement, isForkSafe } from '../runners/placement.js';
+import { choosePlacement } from '../runners/placement.js';
+import { isForkSafe } from '../runners/placement-fork-safety.js';
 import { m, ORDER, installPlacementRig } from './helpers/placement-rig.js';
 
 installPlacementRig();

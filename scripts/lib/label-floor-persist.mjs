@@ -10,7 +10,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
 import { FLOOR_DEMAND_FILE, floorLabels } from '../../dist/label-floor.js';
 

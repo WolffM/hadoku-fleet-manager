@@ -21,7 +21,8 @@ import { backstopNodeNames } from '../dist/lib/node-role.js';
 import { createEmitter } from './lib/emit.mjs';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
 import { BACKSTOP_TOOLS, judgeTool } from './lib/backstop-tools.mjs';
-import { fetchGithubReleaseTimes, parseInstalledVersion } from './lib/tool-release.mjs';
+import { fetchGithubReleaseTimes } from './lib/tool-release.mjs';
+import { parseInstalledVersion } from './lib/version-algebra.mjs';
 
 const args = process.argv.slice(2);
 for (const a of args) {

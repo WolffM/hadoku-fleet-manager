@@ -51,7 +51,7 @@ import {
 	manifestSays,
 	parseSteps,
 } from './lib/node-users-cutover.mjs';
-import { manifest } from './lib/paths.mjs';
+import { manifest } from '../dist/lib/fleet-paths.js';
 import { renderJson } from './lib/prettier-json.mjs';
 
 const argv = process.argv.slice(2);

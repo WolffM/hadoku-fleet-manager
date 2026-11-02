@@ -7,10 +7,11 @@ import {
 	ghWrite,
 	readRunnerListingShared,
 	SHARED_LISTING_MAX_AGE_MS,
-	GH_CACHE_MAX_BYTES,
-	__resetGhBlackoutForTesting,
 } from '../lib/github-client.js';
-import { __resetGhBudgetForTesting, getGhBudgetSnapshot, withGhCaller } from '../gh-budget.js';
+import { GH_CACHE_MAX_BYTES } from '../lib/github-client-cache.js';
+import { __resetGhBlackoutForTesting } from '../lib/github-client-blackout.js';
+import { getGhBudgetSnapshot, withGhCaller } from '../gh-budget.js';
+import { __resetGhBudgetForTesting } from '../gh-budget-windows.js';
 
 /**
  * #118: the shared runner listing. Every successful `/actions/runners` read

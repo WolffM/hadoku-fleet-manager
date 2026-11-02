@@ -9,7 +9,8 @@
  */
 import { installHost, type FleetHost } from './host.js';
 import { ghGetConditional, ghGet, ghWrite } from './lib/github-client.js';
-import { startRunnerHealthMonitor, getRunnerHealthSnapshot } from './runner-health.js';
+import { startRunnerHealthMonitor } from './runner-health.js';
+import { getRunnerHealthSnapshot } from './runner-health-snapshot.js';
 import { startFastLoop } from './fleet-loop.js';
 import { router as fleetRouter } from './routes/fleet.js';
 import { startClawReboot } from './claw-reboot.js';

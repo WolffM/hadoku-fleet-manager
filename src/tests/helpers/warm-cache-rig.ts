@@ -34,17 +34,17 @@ import {
 	__setHistoryPathForTesting,
 	historyFile,
 } from '../../job-history-store.js';
-import { __resetTarballCacheForTesting } from '../../runners/ephemeral-exec.js';
+import { __resetTarballCacheForTesting } from '../../runners/ephemeral-exec-jit.js';
 import { __resetAdmissionVerdictsForTesting } from '../../runners/ephemeral-tick.js';
 import {
 	__resetWorkloadGateCorruptionLogForTesting,
 	__setWorkloadGateContextForTesting,
-} from '../../runners/ephemeral-shared.js';
+} from '../../workload-gate-store.js';
 import type { EphemeralTickInput } from '../../runners/ephemeral-shared.js';
 import { __resetWarmCacheClockForTesting } from '../../runners/dispatch-warm-cache.js';
 import { __resetSpeedModelForTesting } from '../../runners/speed-heavy-cache.js';
 import { __resetWarmBackoffForTesting } from '../../runners/warm-backoff.js';
-import type { ProofRecord } from '../../lib/measured.js';
+import type { ProofRecord } from '../../lib/workload-gate.js';
 
 // --- the measured fleet (eligibility) ---------------------------------------
 

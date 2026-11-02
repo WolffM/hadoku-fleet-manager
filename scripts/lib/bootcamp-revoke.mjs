@@ -8,7 +8,7 @@ import {
 	readRevocations,
 	writeRevocations,
 } from '../../dist/capability-revocations.js';
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 
 /**
  * Revoke what this run saw fail and clear what it saw pass — one write, after

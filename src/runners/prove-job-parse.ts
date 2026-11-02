@@ -5,8 +5,9 @@
  * node — see `prove-job.ts` for the orchestration this feeds.
  */
 import { capability, type JobProof } from '../lib/capability-registry.js';
-export { isProofRunnerName } from '../lib/jit-naming.js';
-import { jitRunnerName, type ProveSpec } from './prove-job-types.js';
+
+import { type ProveSpec } from './prove-job-types.js';
+import { jitRunnerName } from '../lib/jit-naming.js';
 
 /** `owner/repo` -> `repo`, narrowed to what a unit name admits. */
 function repoSlug(repo: string): string {

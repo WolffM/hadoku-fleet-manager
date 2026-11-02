@@ -3,7 +3,7 @@ import { logger } from '../host.js';
 import { syncHostedFallback } from '../ci-runner-fallback.js';
 import { alertOnce, clearAlert } from '../lib/alert-ledger.js';
 import { TICK_INTERVAL_MS, OFFLINE_TICKS_BEFORE_ALERT } from '../lib/runner-health-shared.js';
-import type { TickReport } from '../runner-health.js';
+import type { TickReport } from '../runner-health-snapshot.js';
 
 /**
  * Repo → consecutive ticks its CI_RUNNER write has FAILED.

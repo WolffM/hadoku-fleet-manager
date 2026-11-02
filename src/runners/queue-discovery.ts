@@ -355,7 +355,6 @@ export const SATURATED_QUEUED_MS = 30_000;
  * Re-exported here under its original path.
  */
 import { MAX_QUEUED_MS } from '../lib/queue-thresholds.js';
-export { MAX_QUEUED_MS };
 
 /**
  * Past THIS, a stuck run is a ZOMBIE rather than merely stranded.

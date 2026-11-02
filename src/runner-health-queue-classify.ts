@@ -1,7 +1,7 @@
 import { ghGet } from './lib/github-client.js';
 import type { GhRunner } from './lib/github-client.js';
 import { isHostedLabel, judgeJobMint, type MintView } from './label-floor.js';
-import { parseJitName } from './runner-health-watch.js';
+import { parseJitName } from './lib/jit-naming.js';
 import { nodeOf } from './runners/census.js';
 
 export interface GhJob {

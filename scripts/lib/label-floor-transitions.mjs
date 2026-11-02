@@ -35,7 +35,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
 import { causeFor } from './label-floor-check.mjs';
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 
 /**
  * The basename literal and the write call live in the SAME file on purpose

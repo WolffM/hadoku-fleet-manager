@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { declareProbeIntent } from './floor-probe-intent.mjs';
-import { PROBE_INTENT_DIR } from '../../dist/runners/dispatch-tick.js';
+import { PROBE_INTENT_DIR } from '../../dist/runners/dispatch-tick-probe-intents.js';
 
 function withStateDir(fn) {
 	const dir = mkdtempSync(join(tmpdir(), 'floor-probe-intent-'));

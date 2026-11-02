@@ -40,7 +40,7 @@
  * @guards scripts/node-usb-prep.sh
  */
 import { readFileSync } from 'node:fs';
-import { manifest as manifestFile } from './paths.mjs';
+import { manifest as manifestFile } from '../../dist/lib/fleet-paths.js';
 import { capability } from '../../dist/lib/capability-registry.js';
 
 /** The file name, in one place, because three callers name it. */

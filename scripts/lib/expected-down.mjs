@@ -73,7 +73,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { manifest, stateDir } from './paths.mjs';
+import { manifest, stateDir } from '../../dist/lib/fleet-paths.js';
 import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
 import { effectiveDrains, parseDrainDoc, pruneDrainDoc } from '../../dist/runners/drain.js';
 

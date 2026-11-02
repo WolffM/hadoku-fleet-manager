@@ -7,7 +7,8 @@
  */
 import process from 'node:process';
 import { underIdleHold } from './proof-drain.mjs';
-import { busyCount, waitUntilDrained, createLiveDeps } from './refresh-cycle.mjs';
+import { busyCount, waitUntilDrained } from './drain-wait.mjs';
+import { createLiveDeps } from './refresh-cycle-live.mjs';
 
 /**
  * PASS 2 — `--write` RE-TAKES every idle-only measurement PASS 1 took beside a

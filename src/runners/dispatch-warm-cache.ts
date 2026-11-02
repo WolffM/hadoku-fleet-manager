@@ -1,48 +1,29 @@
 import { isDraining, readDrain } from './drain.js';
 import { readHostingDoc } from './hosting-record.js';
-import { spaceRefusal } from './ephemeral.js';
-import { warmRunnerName } from './ephemeral.js';
-import { planWarmFleet } from './ephemeral-warm.js';
+import { spaceRefusal } from './ephemeral-admission.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
+import { planWarmFleet, type WarmFleetNode } from './ephemeral-warm-fleet.js';
 import { warmSlotLocked } from './ephemeral-warm.js';
-import { type WarmFleetNode } from './ephemeral-warm.js';
-import { evictWarmListener, withholdWarmListener, type GhLike } from './ephemeral-exec.js';
+import { evictWarmListener, withholdWarmListener } from './ephemeral-exec.js';
+import { type GhLike } from '../lib/fleet-vocabulary.js';
 import { runnerTarballUrl } from './ephemeral-exec-jit.js';
 import { observeWarmNode } from './dispatch-warm-cache-observe.js';
 import { actOnWarmNode } from './dispatch-warm-cache-act.js';
-import { heavyMarkedRecently } from './dispatch-pass.js';
-import { slowReposOn } from './placement.js';
-import { recordWarmListenerDecisions, type WarmListenerDecision } from './decision-log.js';
+import { heavyMarkedRecently } from './dispatch-pass-state.js';
+import { slowReposOn } from './placement-slow.js';
+import { recordWarmListenerDecisions, type WarmListenerDecision } from './decision-log-record.js';
 import { logger } from '../host.js';
-import {
-	withoutBackstops,
-	loadWorkloadGateContext,
-	shellOnNode,
-	type EphemeralTickInput,
-} from './ephemeral-shared.js';
+import { withoutBackstops, shellOnNode, type EphemeralTickInput } from './ephemeral-shared.js';
+import { loadWorkloadGateContext } from '../workload-gate-store.js';
 import { getSpeedModel, getHeavyModel } from './speed-heavy-cache.js';
 import { WARM_CACHE_INTERVAL_MS, warmBackoffActive } from './warm-backoff.js';
 import {
 	fleetServedJobs,
-	checkMintSlice,
-	resetMintSliceWarnings,
-	warmRepoByNode,
 	setWarmRepos,
-	warmReposForPlacement,
-	__resetWarmReposForTesting,
 	EMPTY_WARM_RESULT,
 	type WarmCacheResult,
 	type ObservedWarmNode,
 } from './dispatch-warm-cache-state.js';
-
-export {
-	fleetServedJobs,
-	checkMintSlice,
-	resetMintSliceWarnings,
-	warmRepoByNode,
-	warmReposForPlacement,
-	__resetWarmReposForTesting,
-	type WarmCacheResult,
-};
 
 let lastWarmCacheMs = 0;
 

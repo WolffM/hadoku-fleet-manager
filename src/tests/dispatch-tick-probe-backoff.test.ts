@@ -2,11 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { runDispatchTick } from '../runners/dispatch-tick.js';
-import { __restartPollCacheForTesting } from '../runners/dispatch-tick.js';
-import { __resetPollStateForTesting } from '../runners/dispatch-tick.js';
+import {
+	__restartPollCacheForTesting,
+	__resetPollStateForTesting,
+} from '../runners/dispatch-tick-reset.js';
 import { PROBE_BACKOFF_MS } from '../runners/probe-backoff.js';
-import type { NodeState } from '../runners/placement.js';
-import { jitRunnerName } from '../runners/ephemeral.js';
+import type { NodeState } from '../runners/placement-node-state.js';
+import { jitRunnerName } from '../lib/jit-naming.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import {
 	node,

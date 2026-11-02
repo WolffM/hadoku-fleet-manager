@@ -2,6 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+	lookupLatest,
+	lookupAdoptiumLatest,
+	lookupGithubRelease,
+	lookupMavenLatest,
+	createReleaseLookup,
+} from './tool-release.mjs';
+import {
 	DEFAULT_MIN_AGE_MINUTES,
 	parseVersion,
 	compareVersions,
@@ -9,13 +16,8 @@ import {
 	satisfies,
 	parseInstalledVersion,
 	newestCleared,
-	lookupLatest,
-	lookupAdoptiumLatest,
-	lookupGithubRelease,
-	lookupMavenLatest,
-	createReleaseLookup,
 	assess,
-} from './tool-release.mjs';
+} from './version-algebra.mjs';
 
 // Anchored to the clock: every age below is relative, so the fixture cannot age out.
 const NOW = Date.now();

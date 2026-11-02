@@ -18,9 +18,9 @@ import {
 	startFastLoop,
 	__resetFleetLoopForTesting,
 	__resetDispatchInputForTesting,
-	FAST_LOOP_SECONDS,
 	DISPATCH_SECONDS,
 } from '../fleet-loop.js';
+import { FAST_LOOP_SECONDS } from '../lib/fast-loop-cadence.js';
 import { getFleetLiveness, __resetLivenessForTesting } from '../lib/liveness.js';
 import { __setHostForTesting } from '../host.js';
 import { testHost } from './install-test-host.js';

@@ -10,7 +10,7 @@
  */
 import { readManifestState } from '../lib/manifest.js';
 import { logger } from '../host.js';
-import { PM2_HOST_LABEL } from '../lib/capability-registry.js';
+import { PM2_HOST_LABEL } from '../lib/capability-registry-ids.js';
 
 /** Static per-node facts. The manifest is the single source for placement. */
 export interface ManifestNode {

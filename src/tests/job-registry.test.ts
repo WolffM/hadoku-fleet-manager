@@ -8,8 +8,8 @@ import {
 	parseDurationMs,
 	registeredSubs,
 	validateRegistry,
-	type JobEntry,
 } from '../lib/job-registry.js';
+import { type JobEntry } from '../lib/job-registry-types.js';
 
 void test('every entry has a unique name, a why, an args array and a parseable cadence+budget', () => {
 	const seen = new Set<string>();

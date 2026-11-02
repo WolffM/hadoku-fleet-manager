@@ -27,7 +27,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { READ_ATTEMPTS } from './lib/queue-health.mjs';
+import { READ_ATTEMPTS } from './lib/read-retry-policy.mjs';
 import { fixtureRemotes } from './lib/fleet-source-fixture.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));

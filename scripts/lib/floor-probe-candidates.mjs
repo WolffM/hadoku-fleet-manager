@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { isCiDemandRow } from './floor-probe-ranking.mjs';
 import { readDrains } from './expected-down.mjs';
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 
 /** Drain state, read from where the DISPATCHER reads it — not a git checkout. */
 export function drainedNodes() {

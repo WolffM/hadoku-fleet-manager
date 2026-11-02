@@ -6,7 +6,7 @@
  */
 import type { Capability } from '../lib/capability-registry.js';
 import { judgeWorkloadProof, proofBudget } from '../lib/workload-gate.js';
-import type { ProofRecord } from '../lib/measured.js';
+import type { ProofRecord } from '../lib/workload-gate.js';
 import type { ProofResult } from './prove-job-types.js';
 
 /**

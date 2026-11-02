@@ -6,7 +6,7 @@
  * `dispatch-tick.ts` re-exports every name here under its original path.
  */
 import { __resetSubCadenceKeyForTesting } from '../lib/every.js';
-import type { NodeState } from './placement.js';
+import type { NodeState } from './placement-node-state.js';
 import type { QueuedRun, QueuedJob } from './queue-discovery.js';
 
 /**

@@ -51,7 +51,7 @@ import { readPm2Hosts } from './lib/site-docs.mjs';
 import { loadManifest, manifestPath } from './lib/fleet-exec.mjs';
 import { validateCapabilities, parseProbeCapabilities } from '../dist/lib/capability-validate.js';
 import { workloadGateContext, workloadGatedCapabilities } from '../dist/lib/workload-gate.js';
-import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.js';
+import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured-proof.js';
 import {
 	BACKSTOP_MINT_MODE,
 	LEGACY_BACKSTOP_ROLE,

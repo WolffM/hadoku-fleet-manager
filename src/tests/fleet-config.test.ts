@@ -49,7 +49,7 @@ import {
 } from '../lib/fleet-config.js';
 import { siteRoot } from '../lib/fleet-paths.js';
 import { __setHostForTesting } from '../host.js';
-import { coveredRepos } from '../ci-runner-fallback.js';
+import { coveredRepos } from '../lib/covered-repos.js';
 import { runCiAlerts, stateKey, targetOwner } from '../ci-alerts.js';
 import { testHost } from './install-test-host.js';
 

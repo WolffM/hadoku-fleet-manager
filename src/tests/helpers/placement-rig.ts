@@ -25,23 +25,22 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { NodeState } from '../../runners/placement.js';
-import { TMP_FREE_FLOOR_MB, WORK_FREE_FLOOR_MB } from '../../runners/ephemeral.js';
+import type { NodeState } from '../../runners/placement-node-state.js';
+import { TMP_FREE_FLOOR_MB } from '../../lib/jit-naming.js';
+import { WORK_FREE_FLOOR_MB } from '../../runners/ephemeral-admission.js';
 import {
 	__resetJobHistoryForTesting,
 	__setHistoryPathForTesting,
 } from '../../job-history-store.js';
-import {
-	__resetWarmCacheClockForTesting,
-	__resetWarmReposForTesting,
-} from '../../runners/dispatch-warm-cache.js';
+import { __resetWarmCacheClockForTesting } from '../../runners/dispatch-warm-cache.js';
+import { __resetWarmReposForTesting } from '../../runners/dispatch-warm-cache-state.js';
 import {
 	__resetSpeedModelForTesting,
 	__resetHeavyModelForTesting,
 } from '../../runners/speed-heavy-cache.js';
 import { __resetWarmBackoffForTesting } from '../../runners/warm-backoff.js';
 import { __resetReapClockForTesting } from '../../runners/dispatch-pass.js';
-import { __resetTarballCacheForTesting } from '../../runners/ephemeral-exec.js';
+import { __resetTarballCacheForTesting } from '../../runners/ephemeral-exec-jit.js';
 import { fakeShell } from './fleet-fakes.js';
 
 // --- B8/B10/#76/#77/P5.1/#102/#82/#83/#8/#15: the base NodeState builder ----

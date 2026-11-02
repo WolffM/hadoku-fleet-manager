@@ -17,7 +17,7 @@ import {
 import { probeableIds } from '../lib/capability-labels.js';
 import { registrationLabels } from '../lib/capability-offer.js';
 import { workloadGateContext, type WorkloadGateContext } from '../lib/workload-gate.js';
-import type { ProofRecord } from '../lib/measured.js';
+import type { ProofRecord } from '../lib/workload-gate.js';
 import { healthyClaw, proof, ROOT } from './capability-fixtures.js';
 
 /**

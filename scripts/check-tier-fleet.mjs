@@ -61,8 +61,7 @@ import {
 	findNonTopTierEquality,
 } from './lib/tier-detectors.mjs';
 import { allRepos } from './lib/fleet-roster.mjs';
-import { reposDir } from './lib/sibling-repos.mjs';
-import { manifest as manifestFile } from './lib/paths.mjs';
+import { reposDir, manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { fleetOwner } from '../dist/lib/fleet-config.js';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { createEmitter } from './lib/emit.mjs';

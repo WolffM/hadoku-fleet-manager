@@ -16,11 +16,10 @@ import {
 	workloadGateContext,
 	workloadGatedCapabilities,
 	type WorkloadGateContext,
+	type ProofRecord,
 } from './lib/workload-gate.js';
 import { readRevocations, REVOCATIONS_FILE, revokedSets } from './capability-revocations.js';
-import { proofFileStatus, readProofsForCapability, type ProofRecord } from './lib/measured.js';
-
-export type { WorkloadGateContext };
+import { proofFileStatus, readProofsForCapability } from './lib/measured-proof.js';
 
 /**
  * The last `(reason, why)` this function logged about a corrupt `$proof`

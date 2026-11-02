@@ -12,7 +12,7 @@
  * call the setter instead of assigning the variable directly).
  */
 import { logger } from '../host.js';
-import { ghTokenFingerprint } from '../gh-budget.js';
+import { ghTokenFingerprint } from '../gh-budget-windows.js';
 import {
 	etagByRepo,
 	runsDisk,

@@ -40,11 +40,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { logger, manifestDir } from '../host.js';
-import {
-	PM2_HOST_LABEL,
-	type BootcampFacet,
-	type ManifestNode as RegistryNode,
-} from './capability-registry.js';
+import { type BootcampFacet, type ManifestNode as RegistryNode } from './capability-registry.js';
+import { PM2_HOST_LABEL } from './capability-registry-ids.js';
 import { isBackstopNode } from './node-role.js';
 
 const MANIFEST_FILE = 'fleet-runner-manifest.json';

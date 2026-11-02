@@ -11,17 +11,15 @@ import {
 	workloadGatedCapabilities,
 } from '../../dist/lib/workload-gate.js';
 import { readRevocations, revokedSets } from '../../dist/capability-revocations.js';
-import { proofFileStatus, readProofsForCapability } from '../../dist/lib/measured.js';
+import { proofFileStatus, readProofsForCapability } from '../../dist/lib/measured-proof.js';
 import { readHostingDoc } from '../../dist/runners/hosting-record.js';
 import { isBackstopNode } from '../../dist/lib/node-role.js';
 import { deferralFor, readDrainDoc, readDrains } from './expected-down.mjs';
 import { runOn, selectMachines } from './fleet-exec.mjs';
 import { offerFor, offerProbe, parseOfferProbe } from './hosting-offers.mjs';
-import { stateDir } from './paths.mjs';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { pm2Peers } from './pm2-app-layer.mjs';
 import { tenantsByNode } from './tenant-declarations.mjs';
-
-export { pm2Peers, tenantsByNode };
 
 /**
  * The routing labels each node offers now, by the mint's own rule: `nodeOffer`

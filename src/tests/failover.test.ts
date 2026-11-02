@@ -8,22 +8,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-	tick,
-	SWEEP_CONCURRENCY,
-	getRunnerHealthSnapshot,
-	__setFleetReposForTesting,
-} from '../runner-health.js';
+import { tick, __setFleetReposForTesting } from '../runner-health.js';
+import { SWEEP_CONCURRENCY } from '../lib/concurrency.js';
+import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
 import { MAX_RERUNS_PER_TICK } from '../runners/failover.js';
 import {
 	installRunnerHealthRig,
 	installFetch,
-	clawLabels,
-	hokonLabels,
-	minutesAgo,
 	discordPosts,
 	rerunPosts,
 } from './helpers/runner-health-rig.js';
+import { clawLabels, hokonLabels, minutesAgo } from './helpers/runner-health-fixtures.js';
 
 installRunnerHealthRig();
 

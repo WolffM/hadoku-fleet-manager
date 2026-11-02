@@ -1,12 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-	runDispatchPass,
-	getDispatchAffinitySnapshot,
-	type DispatchPassInput,
-} from '../runners/dispatch-pass.js';
-import { buildFleetReport } from '../routes/fleet.js';
+import { runDispatchPass } from '../runners/dispatch-pass.js';
+import { getDispatchAffinitySnapshot } from '../runners/dispatch-pass-state.js';
+import { type DispatchPassInput } from '../runners/dispatch-pass-types.js';
+import { buildFleetReport } from '../routes/fleet-report.js';
 import { getCapacityLedger } from '../runners/capacity-ledger.js';
 import type { HeavyModel } from '../runners/traffic.js';
 import type { PendingRun } from '../runners/dispatcher.js';

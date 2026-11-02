@@ -6,13 +6,10 @@
  * `FleetVocabulary` for the wire; see that type's own doc for why the
  * values travel with the report at all.
  */
-import { QUEUED_WARN_MINUTES, SELF_REPO } from '../runner-health.js';
-import {
-	BACKSTOP_LABEL,
-	BUILDER_LABEL,
-	CAPABILITIES,
-	PM2_HOST_LABEL,
-} from '../lib/capability-registry.js';
+import { QUEUED_WARN_MINUTES } from '../runner-health-runs.js';
+import { SELF_REPO } from '../lib/github-client.js';
+import { CAPABILITIES } from '../lib/capability-registry.js';
+import { BACKSTOP_LABEL, BUILDER_LABEL, PM2_HOST_LABEL } from '../lib/capability-registry-ids.js';
 import { IMPLICIT_LABELS, labelCapabilities, ladder } from '../lib/capability-labels.js';
 import { BOOTCAMP_STALE_DAYS, workloadGatedCapabilities } from '../lib/workload-gate.js';
 import {
@@ -27,7 +24,8 @@ import {
 	CLAW_STATES,
 	FAILURE_ZONES,
 } from '../telemetry-vocabulary.js';
-import type { FleetVocabulary, JobPhase } from '../fleet-report-types.js';
+import type { FleetVocabulary } from '../fleet-report-types-vocabulary.js';
+import type { JobPhase } from '../fleet-report-types-jobs.js';
 import { backstopNodeOf, type ManifestNode } from './fleet-manifest.js';
 
 /**

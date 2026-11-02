@@ -11,11 +11,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { capability } from '../lib/capability-registry.js';
-import { parseJitName } from '../runners/ephemeral.js';
+import { parseJitName, isProofRunnerName } from '../lib/jit-naming.js';
 import { reapJitRunners } from '../runners/ephemeral-exec-reap.js';
 import {
 	isDispatchable,
-	isProofRunnerName,
 	proofRunnerName,
 	runsOnForJob,
 	specFromCapability,

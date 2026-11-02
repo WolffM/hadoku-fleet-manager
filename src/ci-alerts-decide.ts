@@ -144,7 +144,6 @@ export const STALE_RUN_MS = 6 * 60 * 60 * 1000;
  * by this name) stays exactly as it reads today. What moved is only that this
  * file no longer DECLARES the value — see the import above.
  */
-export { REPAGE_INTERVAL_MS };
 
 /**
  * A run whose code is not the repo's own: a pull request from a fork. Its red is

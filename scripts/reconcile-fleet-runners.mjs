@@ -112,9 +112,9 @@
 
 import { readFileSync } from 'node:fs';
 import { loadManifest as readManifest, manifestPath, runOn } from './lib/fleet-exec.mjs';
-import { manifest as manifestFile } from './lib/paths.mjs';
+import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
-import { BUILDER_LABEL } from '../dist/lib/capability-registry.js';
+import { BUILDER_LABEL } from '../dist/lib/capability-registry-ids.js';
 import { FAST_LOOP_SECONDS, RECONCILE_EVERY_TICKS } from '../dist/lib/fast-loop-cadence.js';
 import { createEmitter } from './lib/emit.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';

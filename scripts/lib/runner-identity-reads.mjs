@@ -9,7 +9,7 @@
  * thing the guard looks for in the first place.
  */
 import { execFile } from 'node:child_process';
-import { READ_ATTEMPTS, describeReadFailure } from './queue-health.mjs';
+import { READ_ATTEMPTS, describeReadFailure } from './read-retry-policy.mjs';
 
 /**
  * A read that never finishes is a read that never reports. 20s matches

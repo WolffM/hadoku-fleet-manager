@@ -7,9 +7,9 @@ import {
 	queueFindings,
 	isSaturated,
 	readQueuedWithRetry,
-	describeReadFailure,
 	FAIL_SECONDS,
 } from './queue-health.mjs';
+import { describeReadFailure } from './read-retry-policy.mjs';
 // The BUILT copy: the backstop's backlog threshold must be THIS gate's fail
 // floor, so the line that pages and the line that promotes hokon never drift.
 import { BACKLOG_QUEUE_SECONDS } from '../../dist/runners/backstop.js';

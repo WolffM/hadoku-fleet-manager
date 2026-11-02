@@ -51,7 +51,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { reposDir, siteRoot } from './lib/paths.mjs';
+import { reposDir, siteRoot } from '../dist/lib/fleet-paths.js';
 import { blankComments } from './lib/blank-comments.mjs';
 import {
 	JSON_CONTRACT,

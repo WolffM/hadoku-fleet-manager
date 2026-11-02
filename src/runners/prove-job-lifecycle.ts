@@ -30,7 +30,8 @@ import {
 	sq,
 	type ListedRunner,
 } from './prove-job-types.js';
-import { isProofRunnerName, scratchBranchName } from './prove-job-parse.js';
+import { scratchBranchName } from './prove-job-parse.js';
+import { isProofRunnerName } from '../lib/jit-naming.js';
 
 /** GitHub calls here go through the operator's own `gh` auth, never a token we hold. */
 const NO_TOKEN = '';

@@ -51,8 +51,6 @@ import {
 } from './scheduled-converger.js';
 import { DAY_MS as REPAGE_MS } from './lib/job-runner.js';
 
-export type { ConvergeTickSummary };
-
 /** Between converger passes. Each pass is two fleet-wide `--check` sweeps (~20s) and no GitHub call. */
 export const PROVISIONING_CONVERGE_MS = 30 * 60_000;
 /** A deferral, or a converger that cannot run, pages after this long. */
@@ -65,7 +63,7 @@ export const DEFER_PAGE_MS = 6 * 60 * 60_000;
  * the export below, kept for `provisioning-converge.test.ts`, which imports
  * it by this name.
  */
-export { REPAGE_MS };
+
 /**
  * The earliest a pass runs after boot, however overdue it is. Boot is when the
  * fast loop probes every node, and a converger due at once would put two ssh

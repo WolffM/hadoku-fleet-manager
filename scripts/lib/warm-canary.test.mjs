@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { warmCanaryVerdict, slowTierCandidates } from './warm-canary.mjs';
-import { warmCacheEligible, warmEligibleSlots } from '../../dist/runners/ephemeral.js';
+import { warmCacheEligible, warmEligibleSlots } from '../../dist/lib/warm-eligibility.js';
 
 // The REAL threshold, from the build — a local copy of the arithmetic is a
 // second implementation that the predicate can change under without this file

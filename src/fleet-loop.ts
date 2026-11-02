@@ -29,10 +29,11 @@
  * them strands capacity. The worst outcome of a bug here must be "we used a
  * node we did not need", never "CI queued because a node was left dark".
  */
-import { nodeReservation, getPm2HostBusy, type Reservation } from './node-reservation.js';
+import { nodeReservation, type Reservation } from './node-reservation.js';
+import { getPm2HostBusy } from './pm2-host-busy-store.js';
 import { logger, TOKEN_RETRY_MS } from './host.js';
 import { withGhCaller } from './gh-budget.js';
-import { coveredRepos } from './ci-runner-fallback.js';
+import { coveredRepos } from './lib/covered-repos.js';
 import { dispatchEphemeral } from './runners/ephemeral-tick.js';
 import { mintsOnDemand } from './lib/node-role.js';
 import { isBackstopHeld } from './runners/backstop-hold.js';
@@ -47,16 +48,24 @@ import { every } from './lib/every.js';
 // imported from there below, not restated here. `readFleetManifest` is still
 // needed directly: the tick reads the manifest once per pass to enumerate
 // `allNodes` and hands that same `fleetManifest` to `nodeIsSafe`.
-import { readFleetManifest, loadEphemeralNodes, loadBackstopNodes } from './lib/manifest.js';
-import { loadNodeCapacity } from './lib/manifest.js';
+import {
+	readFleetManifest,
+	loadEphemeralNodes,
+	loadBackstopNodes,
+	loadNodeCapacity,
+} from './lib/manifest.js';
 import { probeNode, probeFleet, type ProbeResultLike } from './lib/node-probe.js';
 import { markNodeSick, nodeIsSick, sickNodeNames } from './lib/sick-node.js';
 import { repairSickNode } from './runners/node-repair.js';
-import { loadResidentRepos, loadRequiredSet } from './runners/node-eligibility.js';
-import { nodeIsSafe, setNodeEligibility, type LabelAction } from './runners/node-eligibility.js';
-import { type LabelConvergenceGh } from './runners/node-eligibility.js';
+import {
+	loadResidentRepos,
+	loadRequiredSet,
+	nodeIsSafe,
+	setNodeEligibility,
+	type LabelAction,
+	type LabelConvergenceGh,
+} from './runners/node-eligibility.js';
 import { __setFleetProbeForTesting } from './fleet-probe-store.js';
-export { getFleetProbeSnapshot, __setFleetProbeForTesting } from './fleet-probe-store.js';
 
 /**
  * The last dispatch input a fast-loop tick built, so the dispatcher can run WITHOUT one.
@@ -296,8 +305,7 @@ export function __resetDispatchInputForTesting(): void {
  * (wave clean-1 lane C/D, cut (iii)): `scripts/reconcile-fleet-runners.mjs`
  * needs the same figure. Re-exported here under its original path.
  */
-import { RECONCILE_EVERY_TICKS } from './lib/fast-loop-cadence.js';
-export { RECONCILE_EVERY_TICKS };
+import { RECONCILE_EVERY_TICKS, FAST_LOOP_SECONDS } from './lib/fast-loop-cadence.js';
 
 /** Ticks since process start. Drives the periodic full reconcile above. */
 let tickCount = 0;
@@ -469,8 +477,7 @@ export async function tickFleet(
  * `scripts/reconcile-fleet-runners.mjs` needs the same figure. Re-exported
  * here under its original path.
  */
-import { FAST_LOOP_SECONDS } from './lib/fast-loop-cadence.js';
-export { FAST_LOOP_SECONDS };
+
 /**
  * Seconds between dispatcher passes. Faster than the loop because discovery
  * latency IS queue latency under all-JIT: nothing starts until a poll finds it

@@ -1,4 +1,5 @@
-import { ciUnitProperties, JIT_UNIT_MAX_SEC } from './ephemeral.js';
+import { ciUnitProperties } from './ci-unit-properties.js';
+import { JIT_UNIT_MAX_SEC } from './ephemeral-slice.js';
 
 const UNIT_LABELS_PREFIX = 'jit labels=';
 /** A label the description can carry and `list-units`' whitespace split gives back intact. */

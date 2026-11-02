@@ -18,8 +18,11 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
-import { PROBE_INTENT_DIR, PROBE_INTENT_MAX_MS } from '../../dist/runners/dispatch-tick.js';
-import { stateDir } from './paths.mjs';
+import {
+	PROBE_INTENT_DIR,
+	PROBE_INTENT_MAX_MS,
+} from '../../dist/runners/dispatch-tick-probe-intents.js';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 
 /**
  * Tell the dispatcher this job is already being served, so it mints no competitor.

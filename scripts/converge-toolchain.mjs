@@ -66,7 +66,8 @@ import {
 import { shadowNote } from './lib/tool-shadow.mjs';
 import { debInstalled } from './lib/deb-installed.mjs';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
-import { createLiveDeps, runRefreshCycle } from './lib/refresh-cycle.mjs';
+import { runRefreshCycle } from './lib/refresh-cycle.mjs';
+import { createLiveDeps } from './lib/refresh-cycle-live.mjs';
 import { createReleaseLookup, resolveInstallTarget } from './lib/tool-release.mjs';
 import { parseSuperseded, supersededScript } from './lib/superseded-installs.mjs';
 import { isSeedFinding, seedNode } from './lib/capability-seeds.mjs';
@@ -79,7 +80,7 @@ import {
 	readSiteDocs,
 } from './lib/service-tunnels.mjs';
 import { convergePeerPorts } from './lib/service-peers.mjs';
-import { siteRoot } from './lib/paths.mjs';
+import { siteRoot } from '../dist/lib/fleet-paths.js';
 // THE PROFILE MANIFEST IS OPERATOR CONFIG, SO IT IS RESOLVED THE WAY EVERY
 // OTHER MANIFEST IS — see `profilesPath()` below.
 import { profileManifestPath } from './lib/node-profiles.mjs';

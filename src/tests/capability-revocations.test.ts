@@ -16,7 +16,7 @@ import {
 	writeRevocations,
 } from '../capability-revocations.js';
 import { __setHostForTesting } from '../host.js';
-import { loadWorkloadGateContext } from '../runners/ephemeral-shared.js';
+import { loadWorkloadGateContext } from '../workload-gate-store.js';
 
 const PREREQS = [
 	{ id: 'ffmpeg', detail: '7.1' },

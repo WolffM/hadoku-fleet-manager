@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test, beforeEach } from 'node:test';
 
-import { admitMint } from '../runners/ephemeral.js';
+import { admitMint } from '../runners/ephemeral-admission.js';
 import {
 	__resetCapacityLedgerForTesting,
 	LEDGER_FRESH_MS,

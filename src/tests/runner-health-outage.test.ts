@@ -10,15 +10,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { tick } from '../runner-health.js';
-import { __setFleetProbeForTesting } from '../fleet-loop.js';
+import { __setFleetProbeForTesting } from '../fleet-probe-store.js';
 import {
 	installRunnerHealthRig,
 	installFetch,
-	clawLabels,
-	hokonLabels,
 	discordPosts,
 	offlineAlerts,
 } from './helpers/runner-health-rig.js';
+import { clawLabels, hokonLabels } from './helpers/runner-health-fixtures.js';
 
 installRunnerHealthRig();
 

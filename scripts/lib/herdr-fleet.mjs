@@ -36,10 +36,10 @@
 import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
-import { STALE_STATE_MS } from '../../dist/ci-alerts.js';
-import { FAST_LOOP_SECONDS } from '../../dist/fleet-loop.js';
+import { STALE_STATE_MS } from '../../dist/ci-alerts-decide.js';
+import { FAST_LOOP_SECONDS } from '../../dist/lib/fast-loop-cadence.js';
 import { BUDGET_ALERT_FRACTION } from '../../dist/gh-budget.js';
-import { TICK_INTERVAL_MS } from '../../dist/runner-health.js';
+import { TICK_INTERVAL_MS } from '../../dist/lib/runner-health-shared.js';
 
 /**
  * The herdr states this plugin reports, and only these two.

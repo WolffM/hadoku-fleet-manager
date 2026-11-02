@@ -73,16 +73,6 @@
  */
 
 import type { JobKind, JobEntry, JobCadence } from './job-registry-types.js';
-export type {
-	JobKind,
-	JobEntry,
-	JobCadence,
-	JobCadenceCron,
-	JobCadenceClock,
-	JobPager,
-	CoveredSub,
-	JobContract,
-} from './job-registry-types.js';
 
 /** The COMMANDS kinds a mismatch against is worth checking — the other four never carry a clock. */
 const GUARD_KINDS: ReadonlySet<string> = new Set<string>(['gate', 'converger', 'recorder']);

@@ -7,28 +7,21 @@
  * (speed, heavy) it was handed; no I/O of its own.
  */
 import { logger } from '../host.js';
-import {
-	backstopUnitMemoryMaxMb,
-	mintBudget,
-	TMP_FREE_FLOOR_MB,
-	unitMemoryMaxMb,
-	WORK_FREE_FLOOR_MB,
-	warmListenersHeld,
-} from './ephemeral.js';
+import { mintBudget, warmListenersHeld } from './ephemeral.js';
+import { backstopUnitMemoryMaxMb } from './ephemeral-slice.js';
+import { TMP_FREE_FLOOR_MB } from '../lib/jit-naming.js';
+import { unitMemoryMaxMb, jobReserve, type RepoReserve } from '../lib/job-reserve.js';
+import { WORK_FREE_FLOOR_MB } from './ephemeral-admission.js';
 import { isSchedulable } from './schedulable.js';
-import {
-	offerFor,
-	jobReserve,
-	type EphemeralTickInput,
-	type RepoReserve,
-} from './ephemeral-shared.js';
+import { offerFor, type EphemeralTickInput } from './ephemeral-shared.js';
 import type { WorkloadGateContext } from '../lib/workload-gate.js';
-import { warmRepoByNode } from './dispatch-warm-cache.js';
+import { warmRepoByNode } from './dispatch-warm-cache-state.js';
 import { chargedLikeDispatch, getCapacityLedger } from './capacity-ledger.js';
-import type { NodeState } from './placement.js';
+import type { NodeState } from './placement-node-state.js';
 import type { SpeedModel } from './speed-tier.js';
 import type { HeavyModel } from './traffic.js';
-import { type AdmissionVerdict, admissionVerdictFor } from './ephemeral-tick-verdict.js';
+import { admissionVerdictFor } from './ephemeral-tick-verdict.js';
+import { type AdmissionVerdict } from '../lib/fleet-vocabulary.js';
 import { admissionVerdictsForReport } from '../admission-verdict-store.js';
 import type { DrainRecord } from './drain.js';
 

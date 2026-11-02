@@ -10,36 +10,39 @@
  * snapshots `buildFleetReport` reads by default are already-ticking module
  * state, injected here only so a test never drives the real loops.
  */
-import { getRunnerHealthSnapshot, type RunnerHealthSnapshot } from '../runner-health.js';
-import { getDispatchSnapshot, getFleetProbeSnapshot } from '../fleet-loop.js';
-import { getReservationSnapshot } from '../fleet-loop.js';
+import { getRunnerHealthSnapshot, type RunnerHealthSnapshot } from '../runner-health-snapshot.js';
+import { getDispatchSnapshot, getReservationSnapshot } from '../fleet-loop.js';
+import { getFleetProbeSnapshot } from '../fleet-probe-store.js';
 import { type NodeProbe } from '../lib/node-probe.js';
 import { summarise, type JobHistorySummary } from '../job-history-stats.js';
 import { ephemeralState } from '../runners/claw-state.js';
 import { isBackstopHeld } from '../runners/backstop-hold.js';
 import { mintsOnDemand } from '../lib/node-role.js';
 import { mintableCapacity } from '../runners/census.js';
-import { BUILDER_LABEL } from '../lib/capability-registry.js';
+import { BUILDER_LABEL } from '../lib/capability-registry-ids.js';
 import { bootcampFacet } from '../lib/bootcamp-proof.js';
-import { workloadGateContext, workloadGateReasons } from '../lib/workload-gate.js';
-import { type ProofRecord } from '../lib/measured.js';
+import {
+	workloadGateContext,
+	workloadGateReasons,
+	type ProofRecord,
+} from '../lib/workload-gate.js';
 import { getGhBudgetSnapshot } from '../gh-budget.js';
 import { getCapacityLedger } from '../runners/capacity-ledger.js';
-import { admissionVerdictsForReport } from '../runners/ephemeral-tick.js';
-import { getDispatchAffinitySnapshot } from '../runners/dispatch-pass.js';
-import { getDispatchQueueSnapshot } from '../runners/dispatch-tick.js';
-import { coveredRepos } from '../ci-runner-fallback.js';
+import { admissionVerdictsForReport } from '../admission-verdict-store.js';
+import { getDispatchAffinitySnapshot } from '../runners/dispatch-pass-state.js';
+import { getDispatchQueueSnapshot } from '../runners/dispatch-tick-poll.js';
+import { coveredRepos } from '../lib/covered-repos.js';
 import { dispatchForDay, readDispatchDaily } from '../runners/dispatch-daily.js';
+import type { FleetReport } from '../fleet-report-types.js';
 import type {
 	AdmissionCaveat,
-	CapacitySlice,
-	ClawState,
 	FleetMachine,
 	FleetMachineLedger,
 	FleetMachineMeasured,
 	FleetWorkloadProof,
-	FleetReport,
-} from '../fleet-report-types.js';
+} from '../fleet-report-types-machines.js';
+import type { CapacitySlice } from '../fleet-report-types-capacity.js';
+import type { ClawState } from '../lib/fleet-vocabulary.js';
 import { backstopNodeOf, requireManifestNodes, type ManifestNode } from './fleet-manifest.js';
 import { admission, forcedForReport } from './fleet-admission.js';
 import { buildVocabulary } from './fleet-vocabulary.js';

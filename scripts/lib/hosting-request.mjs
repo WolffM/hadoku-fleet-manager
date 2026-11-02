@@ -23,7 +23,7 @@
  */
 import { checkRule } from './hosting-placement.mjs';
 import { SERVICE_MANAGERS } from './hosting-runtimes.mjs';
-import { parseRange } from './tool-release.mjs';
+import { parseRange } from './version-algebra.mjs';
 
 /** An executable's name, safe to put in the offer probe's shell: no path, no quoting. */
 const TOOL_NAME = /^[a-z0-9][a-z0-9._+-]{0,63}$/;

@@ -63,7 +63,7 @@ import process from 'node:process';
 import { loadManifest, runOn, unconsumedArgs } from './lib/fleet-exec.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
-import { manifestDir, stateDir } from './lib/paths.mjs';
+import { manifestDir, stateDir } from '../dist/lib/fleet-paths.js';
 import { readDrains } from './lib/expected-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { recordProof } from './lib/job-proof-record.mjs';
@@ -74,7 +74,7 @@ import { workloadGatedCapabilities } from '../dist/lib/workload-gate.js';
 import { proveJob } from '../dist/runners/prove-job.js';
 import { specFromCapability } from '../dist/runners/prove-job-parse.js';
 import { buildProofRecord } from '../dist/runners/prove-job-record.js';
-import { readProofsForCapability, writeProof } from '../dist/lib/measured.js';
+import { readProofsForCapability, writeProof } from '../dist/lib/measured-proof.js';
 
 /**
  * The mint logs through the in-process host (`src/host.ts`), which only

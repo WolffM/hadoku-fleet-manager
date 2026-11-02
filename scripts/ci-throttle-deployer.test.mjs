@@ -4,7 +4,7 @@
  * (`renderConf`/`resolveReserveFile`) that CONTENT-test the conf this script
  * renders and never touches ssh. Split out of ci-throttle.test.mjs (wave 5p
  * lane C) — see `lib/ci-throttle-fixtures.mjs` for the shared `SCRIPTS`
- * this file resolves `deploy-ci-throttle.mjs` and `lib/paths.mjs` against.
+ * this file resolves `deploy-ci-throttle.mjs` and `dist/lib/fleet-paths.js` against.
  *
  * EVERY CASE BELOW IS DRIVEN AGAINST A TEMP MANIFEST AND REACHES NO NODE —
  * see the DEPLOYER section's own header comment below for why `--confirm`
@@ -158,7 +158,7 @@ function b64Field(payload, key) {
 // extraction (a non-greedy regex would stop at the first inner `}`, e.g. the
 // `catch { }` block's own close, truncating the function), and run as their
 // own tiny module via a `data:` URL import. `resolveReserveFile()`'s one real
-// dependency (`manifest` from `./lib/paths.mjs`) is imported by its real
+// dependency (`manifest` from `../dist/lib/fleet-paths.js`) is imported by its real
 // absolute path, so the resolution under test is the production resolver
 // (`manifestDir()` -> `FLEET_MANIFEST_DIR`/`siteRoot()`), not a stand-in.
 
@@ -190,9 +190,9 @@ function extractFunction(source, name) {
 async function loadRealFunction(name, { needsPaths = false } = {}) {
 	const source = readFileSync(DEPLOYER, 'utf8');
 	const fn = extractFunction(source, name);
-	const pathsUrl = pathToFileURL(join(SCRIPTS, 'lib', 'paths.mjs')).href;
+	const pathsUrl = pathToFileURL(join(SCRIPTS, '..', 'dist', 'lib', 'fleet-paths.js')).href;
 	// Aliased `manifest as manifestFile`, matching the REAL source's own import
-	// (`import { manifest as manifestFile } from './lib/paths.mjs';`) — the
+	// (`import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';`) — the
 	// extracted function body calls it as `manifestFile(...)`, so an unaliased
 	// import here would leave that name undefined and silently fall into the
 	// function's own `catch`, returning `null` for every case alike.

@@ -1,8 +1,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { PROBE_LEDGER_FILE } from '../../dist/job-history-store.js';
-import { stateDir } from './paths.mjs';
+import { PROBE_LEDGER_FILE } from '../../dist/job-history-probe-ledger.js';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 
 /** The harness's own ledger. Append-only; job-history reads it and never writes it. */
 export function loadLedger() {

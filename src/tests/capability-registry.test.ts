@@ -13,7 +13,7 @@ import {
 } from '../lib/capability-registry.js';
 import { eligibilityLabels } from '../lib/capability-labels.js';
 import { parseProbeCapabilities } from '../lib/capability-validate.js';
-import { BUILDER_LABEL, PM2_HOST_LABEL, BACKSTOP_LABEL } from '../runners/census.js';
+import { BUILDER_LABEL, PM2_HOST_LABEL, BACKSTOP_LABEL } from '../lib/capability-registry-ids.js';
 import { ROOT } from './capability-fixtures.js';
 
 // ---------------------------------------------------------------------------

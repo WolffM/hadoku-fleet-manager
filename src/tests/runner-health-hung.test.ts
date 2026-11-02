@@ -13,10 +13,10 @@ import { tick } from '../runner-health.js';
 import {
 	installRunnerHealthRig,
 	installFetch,
-	hokonPromotedLabels,
 	discordPosts,
 	quietRecords,
 } from './helpers/runner-health-rig.js';
+import { hokonPromotedLabels } from './helpers/runner-health-fixtures.js';
 
 installRunnerHealthRig();
 

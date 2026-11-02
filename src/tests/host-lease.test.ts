@@ -7,7 +7,7 @@ import {
 	activeLeases,
 	releaseLease,
 	takeLease,
-} from '../host-lease.js';
+} from '../host-lease-record.js';
 import { __resetReservationForTesting, nodeReservation } from '../node-reservation.js';
 
 beforeEach(() => {

@@ -10,7 +10,8 @@
 import { logger } from '../host.js';
 import { ghWrite, type GhRunner } from '../lib/github-client.js';
 import { backstopLabelWrite } from './backstop.js';
-import { BUILDER_LABEL, nodeOf } from './census.js';
+import { nodeOf } from './census.js';
+import { BUILDER_LABEL } from '../lib/capability-registry-ids.js';
 
 /**
  * COULD NOT LOOK IS NOT AN ORDER. On an unmeasured tick (the first after

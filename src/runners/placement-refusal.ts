@@ -9,7 +9,7 @@
  * module boundary. `SpillContext` is re-exported from `placement.ts` so its
  * existing importers compile unchanged.
  */
-import { admitMint } from './ephemeral.js';
+import { admitMint } from './ephemeral-admission.js';
 import type { NodeState } from './placement-node-state.js';
 import { satisfiesLabels } from './placement-node-state.js';
 import {

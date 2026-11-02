@@ -1,4 +1,4 @@
-import { ghTokenFingerprint } from '../gh-budget.js';
+import { ghTokenFingerprint } from '../gh-budget-windows.js';
 import { conditionalCacheStore } from '../conditional-cache-store.js';
 
 /**

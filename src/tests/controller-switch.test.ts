@@ -39,7 +39,8 @@ import { __stopBackstopToolsForTesting } from '../backstop-tools.js';
 import { __stopHostingConvergeForTesting } from '../hosting-converge.js';
 import { __stopHostingVerifyForTesting } from '../hosting-verify.js';
 import { __stopProvisioningConvergeForTesting } from '../provisioning-converge.js';
-import { __stopRunnerHealthMonitorForTesting, getRunnerHealthSnapshot } from '../runner-health.js';
+import { __stopRunnerHealthMonitorForTesting } from '../runner-health.js';
+import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
 import { __setHostForTesting, type FleetHost } from '../host.js';
 import { testHost } from './install-test-host.js';
 

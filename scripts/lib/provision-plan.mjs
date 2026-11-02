@@ -1,5 +1,6 @@
 import { bootcampPointer } from './doctor-facet.mjs';
-import { blockingFindings, doctorFindings } from './doctor-findings.mjs';
+import { doctorFindings } from './doctor-findings.mjs';
+import { blockingFindings } from './preflight.mjs';
 
 // ── the pure decisions, exported so the tests can hold them ─────────────────
 

@@ -121,7 +121,7 @@ export function percentile(xs: number[], p: number): number | null {
  * single implementation — this file used to carry its own copy of the same
  * longest-prefix rule, and census.ts carried a DIFFERENT one.
  */
-export { nodeOf } from './runners/census.js';
+
 import { nodeOf } from './runners/census.js';
 
 /**
@@ -131,18 +131,8 @@ import { nodeOf } from './runners/census.js';
  * `job-history-stats.js` compiles unchanged; imported (not just re-exported)
  * because `summarise`/`repoStats`/`dailyStats` below still call `failuresByZone`.
  */
-export {
-	classifyZone,
-	isFleetKill,
-	zoneOf,
-	KNOWN_TTL_SEC,
-	TTL_MATCH_SEC,
-	type FailureZone,
-	type ObservedZone,
-	type ZoneInput,
-} from './job-history-zone.js';
+
 import { failuresByZone, type FailuresByZone } from './job-history-zone.js';
-export { failuresByZone, type FailuresByZone };
 
 export interface NodeJobStats {
 	/**

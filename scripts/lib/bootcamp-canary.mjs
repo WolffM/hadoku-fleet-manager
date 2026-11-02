@@ -6,11 +6,12 @@
  */
 import process from 'node:process';
 import { canaryPlan, OWN_DRAIN_REASON_PREFIX } from './proof-drain.mjs';
-import { busyCount, createLiveDeps, waitUntilDrained } from './refresh-cycle.mjs';
+import { busyCount, waitUntilDrained } from './drain-wait.mjs';
+import { createLiveDeps } from './refresh-cycle-live.mjs';
 import { spawnJsonToFile } from './spawn-json.mjs';
 import { workloadGatedCapabilities } from '../../dist/lib/workload-gate.js';
-import { readProof } from '../../dist/lib/measured.js';
-import { stateDir } from './paths.mjs';
+import { readProof } from '../../dist/lib/measured-proof.js';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { qualifiesForCanary } from './toolchain-floor.mjs';
 
 /**

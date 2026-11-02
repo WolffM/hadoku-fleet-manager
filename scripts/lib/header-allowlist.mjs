@@ -12,7 +12,7 @@
  */
 import { readFileSync } from 'node:fs';
 
-import { manifest as manifestFile } from './paths.mjs';
+import { manifest as manifestFile } from '../../dist/lib/fleet-paths.js';
 
 /**
  * Exemptions keyed `repo:rule` or `repo:path`. Every entry needs a `why`, and

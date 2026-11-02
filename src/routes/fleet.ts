@@ -24,17 +24,18 @@
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
 
-import { backfillFailedSteps, type GhJob } from '../job-history-ingest.js';
+import { backfillFailedSteps } from '../job-history-backfill.js';
+import { type GhJob } from '../job-history-phases.js';
 import { githubToken, logger, stateDir } from '../host.js';
 import { packageVersion } from '../lib/provenance.js';
 import { recordRouteHit } from '../lib/usage-log.js';
 import { withGhCaller } from '../gh-budget.js';
 import { ghFetchRaw } from '../lib/github-client.js';
 import { userAgent } from '../lib/fleet-config.js';
-import { loadTargets, readStates, stateKey } from '../ci-alerts.js';
+import { loadTargets, stateKey } from '../ci-alerts.js';
+import { readStates } from '../ci-alerts-state.js';
 import { ManifestUnreadableError } from './fleet-manifest.js';
 
-export { buildFleetReport } from './fleet-report.js';
 import { buildFleetReport } from './fleet-report.js';
 
 // Annotated explicitly: this package emits declarations (mgmt-api did not), and

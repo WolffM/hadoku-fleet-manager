@@ -7,7 +7,7 @@ import {
 	SATURATED_QUEUED_MS,
 	MIN_QUEUED_MS,
 } from '../../dist/runners/queue-discovery.js';
-import { PENDING_INTERVAL_MS } from '../../dist/runners/dispatch-tick.js';
+import { PENDING_INTERVAL_MS } from '../../dist/runners/dispatch-tick-config.js';
 
 /**
  * THE TWO NUMBERS THAT CONTRADICTED EACH OTHER.

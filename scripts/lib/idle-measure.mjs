@@ -14,7 +14,6 @@
 // on this file's verdict-carrying logic below, so it is filed under `access`
 // there ("another system's data"), re-exported here unchanged for every
 // existing importer.
-export { parseLoad } from './probe-readers.mjs';
 
 /**
  * The `$capabilities.measurements` facet: for each idle-only capability, the

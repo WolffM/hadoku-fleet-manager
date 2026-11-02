@@ -14,10 +14,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 
-import { probeOriginOf } from '../job-history-store.js';
-import { RETENTION_DAYS } from '../job-history-store.js';
-import { probeLedgerFile } from '../job-history-store.js';
-import { jobRecords } from '../job-history-store.js';
+import { probeOriginOf, probeLedgerFile } from '../job-history-probe-ledger.js';
+import { RETENTION_DAYS, jobRecords } from '../job-history-store.js';
 import { ingestRuns } from '../job-history-ingest.js';
 import { job, installJobHistoryRig } from './helpers/job-history-rig.js';
 

@@ -13,11 +13,6 @@ import type { UserBearingNode } from '../lib/node-users.js';
 // THIS file, which is ci-scheduling, and neither domain can host the other's
 // import legally. Re-exported here under the original path, so no existing
 // importer of this file changes.
-export {
-	loadWorkloadGateContext,
-	__setWorkloadGateContextForTesting,
-	__resetWorkloadGateCorruptionLogForTesting,
-} from '../workload-gate-store.js';
 
 /** The half of the fast loop's probe this needs. Declared locally, not imported,
  *  so the dependency stays one-directional. */
@@ -135,7 +130,6 @@ export function withoutBackstops(input: EphemeralTickInput): EphemeralTickInput 
  * path for every existing importer.
  */
 import { type RepoReserve } from '../lib/job-reserve.js';
-export { type RepoReserve, type ReserveSource, jobReserve } from '../lib/job-reserve.js';
 
 /**
  * `facets[repo].jobP95Mb` for every covered repo, read fresh.

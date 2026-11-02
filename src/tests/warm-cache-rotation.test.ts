@@ -10,11 +10,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { dispatchWarmCache } from '../runners/dispatch-warm-cache.js';
-import { __resetWarmCacheClockForTesting } from '../runners/dispatch-warm-cache.js';
-import { warmRunnerName } from '../runners/ephemeral.js';
+import {
+	dispatchWarmCache,
+	__resetWarmCacheClockForTesting,
+} from '../runners/dispatch-warm-cache.js';
+import { warmRunnerName } from '../lib/jit-naming.js';
 import { WARM_ASSIGN_WINDOW_MS } from '../runners/ephemeral-warm.js';
-import { __setWorkloadGateContextForTesting } from '../runners/ephemeral-shared.js';
+import { __setWorkloadGateContextForTesting } from '../workload-gate-store.js';
 import { workloadGateContext } from '../lib/workload-gate.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
 import {

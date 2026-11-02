@@ -17,14 +17,13 @@
  */
 import { stateDir } from './fleet-paths.js';
 import {
-	facetPath,
 	readFacetFile,
 	writeFacet,
 	type FacetRecord,
 	type FileUnavailable,
 	type WriteFacetResult,
 } from './measured.js';
-export type { WriteFacetResult };
+import { facetPath } from './measured-paths.js';
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -36,7 +35,6 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 // state-layer file. Re-exported so every existing `from './measured.js'` (or
 // `./measured-proof.js`) import keeps working unchanged.
 import type { ProofRecord } from './workload-gate.js';
-export type { ProofRecord };
 
 /** The composite key a `(node, capability)` proof is filed under in `proof.json`. */
 function proofRecordKey(node: string, capability: string): string {

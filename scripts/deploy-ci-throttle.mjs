@@ -94,7 +94,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-	isLocalNode,
 	loadManifest,
 	manifestPath,
 	machineArg,
@@ -102,7 +101,8 @@ import {
 	runOn,
 	selectMachines,
 } from './lib/fleet-exec.mjs';
-import { manifest as manifestFile } from './lib/paths.mjs';
+import { isLocalNode } from '../dist/lib/node-identity.js';
+import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { NODE_SIDE_FILES, OBSOLETE_NODE_FILES, shippedHashes } from './lib/script-provenance.mjs';
 import { runnerEnvDrift, throttleSummaryDrift } from './lib/runner-env-drift.mjs';
 import { packageVersion } from '../dist/lib/provenance.js';

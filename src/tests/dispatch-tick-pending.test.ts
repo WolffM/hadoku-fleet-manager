@@ -2,9 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { runDispatchTick } from '../runners/dispatch-tick.js';
-import { __resetPollStateForTesting } from '../runners/dispatch-tick.js';
-import { PENDING_INTERVAL_MS } from '../runners/dispatch-tick.js';
-import { MAX_PENDING_PROBES } from '../runners/dispatch-tick.js';
+import { __resetPollStateForTesting } from '../runners/dispatch-tick-reset.js';
+import { PENDING_INTERVAL_MS, MAX_PENDING_PROBES } from '../runners/dispatch-tick-config.js';
 import { MIN_QUEUED_MS, ZOMBIE_MS } from '../runners/queue-discovery.js';
 import {
 	base,

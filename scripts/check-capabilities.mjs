@@ -29,7 +29,7 @@
  * rename `check-contract-consumers.mjs` made in wave 5f lane B.
  */
 import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import {
 	applyVerdicts,
 	readRevocations,
@@ -43,7 +43,7 @@ import {
 	workloadGatedCapabilities,
 	workloadGateStatus,
 } from '../dist/lib/workload-gate.js';
-import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured.js';
+import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured-proof.js';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';

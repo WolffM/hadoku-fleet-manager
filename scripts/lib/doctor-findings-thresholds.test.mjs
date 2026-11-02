@@ -21,9 +21,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { doctorFindings } from './doctor-findings.mjs';
+import { ADVISORY, BLOCKING, blockingFindings } from './preflight.mjs';
 import {
-	ADVISORY,
-	BLOCKING,
 	DISK_ADVISORY_FREE_PCT,
 	DISK_BLOCKING_FREE_PCT,
 	SENSOR_DISAGREE_C,
@@ -34,9 +34,7 @@ import {
 	SMART_HOURS_BLOCKING,
 	THERMAL_ADVISORY_C,
 	THERMAL_BLOCKING_C,
-	blockingFindings,
-	doctorFindings,
-} from './doctor-findings.mjs';
+} from './doctor-findings-thresholds.mjs';
 import { CLAW1, CLAW5, CLAW9, HOKON, facetOf, NOW, find } from './doctor-fixtures.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════

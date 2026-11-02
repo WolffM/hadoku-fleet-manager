@@ -2,15 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-	BACKSTOP_LABEL,
-	BUILDER_LABEL,
-	PM2_HOST_LABEL,
 	HOSTED_NODE,
 	nodeOf,
 	runnerCensus,
 	type CensusInput,
 	type CensusRunner,
 } from '../runners/census.js';
+import { BACKSTOP_LABEL, BUILDER_LABEL, PM2_HOST_LABEL } from '../lib/capability-registry-ids.js';
 
 const runner = (
 	name: string,

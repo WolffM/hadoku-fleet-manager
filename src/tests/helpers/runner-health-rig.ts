@@ -30,17 +30,17 @@ import { __resetFallbackConvergenceForTesting } from '../../ci-runner-fallback.j
 import {
 	__resetRunnerHealthAlertsForTesting,
 	__setFleetReposForTesting,
-	__setSnapshotPathForTesting,
-	__setSupervisionCheckerForTesting,
-	__setQuietRecorderForTesting,
-	__setFloorConfirmDelayForTesting,
-	__setFloorDemandForTesting,
 } from '../../runner-health.js';
+import { __setSnapshotPathForTesting } from '../../runner-health-snapshot.js';
+import { __setSupervisionCheckerForTesting } from '../../runner-health-watch.js';
+import { __setQuietRecorderForTesting } from '../../runner-health-label-floor-nodes.js';
+import { __setFloorConfirmDelayForTesting } from '../../runner-health-label-floor-confirm.js';
+import { __setFloorDemandForTesting } from '../../runner-health-label-floor.js';
 import {
-	__setReservationForTesting,
 	runBackstopDecision,
 	__resetBackstopDecisionForTesting,
 } from '../../runners/backstop-decision.js';
+import { __setReservationForTesting } from '../../runners/backstop-decision-state.js';
 import {
 	runHostedFallback,
 	__resetHostedFallbackForTesting,
@@ -51,38 +51,17 @@ import {
 	setBackstopDecisionReset,
 	setHostedFallbackReset,
 } from '../../runner-health-ports.js';
-import { __setFleetProbeForTesting } from '../../fleet-loop.js';
+import { __setFleetProbeForTesting } from '../../fleet-probe-store.js';
 import { __resetSickForTesting } from '../../lib/sick-node.js';
 import { writeDrain } from '../../runners/drain.js';
-import {
-	__resetAdmissionVerdictsForTesting,
-	__setWorkloadGateContextForTesting,
-} from '../../runners/ephemeral-tick.js';
+import { __resetAdmissionVerdictsForTesting } from '../../runners/ephemeral-tick.js';
+import { __setWorkloadGateContextForTesting } from '../../workload-gate-store.js';
 import { __resetDiskReadingsForTesting } from '../../runners/disk-watch.js';
 import { __resetNodeRegressionForTesting } from '../../runners/node-regression.js';
 // Static fixture data (wave shrink-1 lane C, pure move) — re-exported below
 // so every existing `from '.../helpers/runner-health-rig.js'` import of these
 // names keeps working unchanged.
-import {
-	FAKE_WEBHOOK,
-	clawLabels,
-	hokonLabels,
-	hokonPromotedLabels,
-	FLEET_ALL_UP,
-	LIVE_LISTING,
-	minutesAgo,
-	daysAgo,
-} from './runner-health-fixtures.js';
-export {
-	FAKE_WEBHOOK,
-	clawLabels,
-	hokonLabels,
-	hokonPromotedLabels,
-	FLEET_ALL_UP,
-	LIVE_LISTING,
-	minutesAgo,
-	daysAgo,
-};
+import { FAKE_WEBHOOK } from './runner-health-fixtures.js';
 
 // `tick()` calls `checkLabelFloor` straight from `runner-health.js` in these
 // tests — there is no `createFleetManager()` in a test process, so nothing

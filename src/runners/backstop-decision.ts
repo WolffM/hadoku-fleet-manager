@@ -1,8 +1,8 @@
-import { logger } from '../host.js';
-import { postDiscord as postDiscordSink } from '../host.js';
+import { logger, postDiscord as postDiscordSink } from '../host.js';
 import { type GhRunner } from '../lib/github-client.js';
 import { withGhCaller } from '../gh-budget.js';
-import { BUILDER_LABEL, nodeOf } from './census.js';
+import { nodeOf } from './census.js';
+import { BUILDER_LABEL } from '../lib/capability-registry-ids.js';
 import { clawsAreHealthy, decideBackstop, hostMayTakeSaturation } from './backstop.js';
 import {
 	isBackstopNode,
@@ -18,19 +18,13 @@ import { nodeReservation } from '../node-reservation.js';
 import { backstopMachinesReader } from './backstop-machines.js';
 import { subCadenceDue, markSubCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
 import { selfHostname } from '../lib/runner-health-shared.js';
-import type { TickReport } from '../runner-health.js';
+import type { TickReport } from '../runner-health-snapshot.js';
 
 import { readHostLoad } from './backstop-host-load.js';
-export { __setHostLoadReaderForTesting, type HostLoad } from './backstop-host-load.js';
 
 import { syncBackstopAcrossFleet } from './backstop-fanout.js';
 
 import { probeQueuePressure, QUEUE_ZOMBIE_SECONDS } from './backstop-queue-probe.js';
-export {
-	probeQueuePressure,
-	QUEUE_ZOMBIE_SECONDS,
-	type QueuePressure,
-} from './backstop-queue-probe.js';
 
 import {
 	getBackstopFleetState,
@@ -44,16 +38,14 @@ import {
 	getQueueZombiesLogged,
 	setQueueZombiesLogged,
 	getReservationOverride,
-	__setReservationForTesting,
 	__resetBackstopDecisionStateForTesting,
 } from './backstop-decision-state.js';
-export { __setReservationForTesting };
+
 import {
-	CAPACITY_TICKS_BEFORE_ALERT,
 	checkCapacityInvariant,
 	__resetCapacityInvariantForTesting,
 } from './backstop-decision-capacity.js';
-export { CAPACITY_TICKS_BEFORE_ALERT };
+
 import { logBackstopEligibility } from './backstop-decision-report.js';
 import { applyBackstopLabels } from './backstop-decision-labels.js';
 

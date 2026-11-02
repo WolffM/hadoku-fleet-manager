@@ -24,8 +24,8 @@
  * gate reads live state rather than a declaration.
  */
 
-import { BUILDER_LABEL } from '../../dist/runners/census.js';
-import { READ_ATTEMPTS, describeReadFailure } from './queue-health.mjs';
+import { BUILDER_LABEL } from '../../dist/lib/capability-registry-ids.js';
+import { READ_ATTEMPTS, describeReadFailure } from './read-retry-policy.mjs';
 import { listRunners } from './gh-runners.mjs';
 import { drainedNodeNames } from './label-floor-check.mjs';
 

@@ -19,14 +19,14 @@ import { fileURLToPath } from 'node:url';
 import { healthRecord } from './doctor-facet.mjs';
 import { claimPm2Units } from './hosting-claims.mjs';
 import { PM2_MEMORY_MAX_MB_DEFAULT } from './pm2-boot-floor.mjs';
+import { doctorFindings } from './doctor-findings.mjs';
 import {
 	ADVISORY,
 	BLOCKING,
 	advisoryFindings,
 	blockingFindings,
-	doctorFindings,
 	backstopAdvisory,
-} from './doctor-findings.mjs';
+} from './preflight.mjs';
 import {
 	CLAW1,
 	HOKON,

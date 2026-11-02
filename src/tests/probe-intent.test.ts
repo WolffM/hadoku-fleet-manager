@@ -18,16 +18,15 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { runDispatchTick } from '../runners/dispatch-tick.js';
 import {
 	PROBE_INTENT_DIR,
 	PROBE_INTENT_MAX_MS,
 	readProbeIntents,
-	runDispatchTick,
-	resetRecoveryClock,
-	__resetPollStateForTesting,
-	type DispatchTickInput,
-} from '../runners/dispatch-tick.js';
-import type { NodeState } from '../runners/placement.js';
+} from '../runners/dispatch-tick-probe-intents.js';
+import { resetRecoveryClock, type DispatchTickInput } from '../runners/dispatch-tick-config.js';
+import { __resetPollStateForTesting } from '../runners/dispatch-tick-reset.js';
+import type { NodeState } from '../runners/placement-node-state.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import { testStateDir } from './install-test-host.js';
 

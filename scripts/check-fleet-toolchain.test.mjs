@@ -29,7 +29,7 @@ import {
 	judgeTool,
 	runDoctor,
 } from './check-fleet-toolchain.mjs';
-import { isLocalNode } from './lib/fleet-exec.mjs';
+import { isLocalNode } from '../dist/lib/node-identity.js';
 import { createReleaseLookup } from './lib/tool-release.mjs';
 import { REPAIRS, toolAppliesTo } from './lib/toolchain-floor.mjs';
 import { parseJsonStdout, spawnCapture } from './lib/spawn-json.mjs';

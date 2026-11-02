@@ -52,7 +52,7 @@ import {
 	validateResidentRow,
 } from './lib/service-inventory.mjs';
 import { createEmitter } from './lib/emit.mjs';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { hubRepo } from '../dist/lib/fleet-config.js';
 
 // Every stdout write goes through the shared emitter: `--slices --write --json`

@@ -159,7 +159,7 @@ import {
 import { capability, measuredIdleOnly } from '../dist/lib/capability-registry.js';
 import { probeableIds } from '../dist/lib/capability-labels.js';
 import { WORKLOAD_PROOF_DUE_DAYS } from '../dist/lib/workload-gate.js';
-import { stateDir } from './lib/paths.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readProofs } from './lib/job-proof-record.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { dataEndpointUrl, probeScript, serviceStateRoot, unprobed } from './lib/probe-script.mjs';
@@ -175,8 +175,8 @@ import { resolveInstallTarget } from './lib/tool-release.mjs';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { reasonOf, releaseLookup } from './lib/bootcamp-tool-support.mjs';
 import { defaultSeedDeps } from './lib/capability-seeds-live.mjs';
-import { DRAIN_TIMEOUT_MS, POLL_MS, SETTLE_MS } from './lib/refresh-cycle.mjs';
-import { parseLoad } from './lib/idle-measure.mjs';
+import { DRAIN_TIMEOUT_MS, POLL_MS, SETTLE_MS } from './lib/drain-wait.mjs';
+import { parseLoad } from './lib/probe-readers.mjs';
 
 import { runPass1 } from './lib/bootcamp-probe.mjs';
 import { runIdlePass2 } from './lib/bootcamp-idle.mjs';

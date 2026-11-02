@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { reposDir } from './sibling-repos.mjs';
+import { reposDir } from '../../dist/lib/fleet-paths.js';
 import { tryShipped, UnreadableRepo } from './fleet-source.mjs';
 import { blankComments } from './blank-comments.mjs';
 import { qualifyRepo } from '../../dist/lib/fleet-config.js';

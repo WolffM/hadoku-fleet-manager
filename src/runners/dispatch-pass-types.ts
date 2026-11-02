@@ -6,7 +6,7 @@
  * `dispatch-pass.ts` re-exports both types under their original path.
  */
 import type { PendingRun, SkipReason } from './dispatcher.js';
-import type { NodeState } from './placement.js';
+import type { NodeState } from './placement-node-state.js';
 
 export interface DispatchPassInput {
 	/** Nodes allowed to mint, in placement order (see runners/traffic.ts). */

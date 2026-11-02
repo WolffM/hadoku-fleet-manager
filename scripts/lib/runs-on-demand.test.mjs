@@ -10,13 +10,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-	isHostedLabel,
-	jobRunsOn,
-	observedDemand,
-	resolveRunsOn,
-	workflowDemand,
-} from './runs-on-demand.mjs';
+import { jobRunsOn, observedDemand, resolveRunsOn, workflowDemand } from './runs-on-demand.mjs';
+import { isHostedLabel } from '../../dist/label-floor.js';
 
 const FLEET = '["self-hosted","hadoku-builder"]';
 const ctx = { fleetValue: FLEET };

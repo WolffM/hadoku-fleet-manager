@@ -1,5 +1,5 @@
 import { cpuSensor, sensorMap, parseSmart } from './doctor-parse.mjs';
-import { parseWifiManager } from './doctor-probe.mjs';
+import { parseWifiManager } from './node-interfaces.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // THE FACET
