@@ -60,8 +60,10 @@ import {
 	installScript,
 	isVersionManaged,
 	parseObservation,
+	probeRole,
 	repairNeedsRoot,
 } from './lib/toolchain-floor.mjs';
+import { shadowNote } from './lib/tool-shadow.mjs';
 import { debInstalled } from './lib/deb-installed.mjs';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { createLiveDeps, runRefreshCycle } from './lib/refresh-cycle.mjs';
@@ -189,8 +191,8 @@ function observe(node, packages, repairs) {
 		}
 		out += res.out ?? '';
 	}
-	const { missingPackages, brokenCapabilities } = parseObservation(out);
-	return { readable: true, missingPkgs: missingPackages, brokenCaps: brokenCapabilities };
+	const { missingPackages, brokenCapabilities, shadowed } = parseObservation(out);
+	return { readable: true, missingPkgs: missingPackages, brokenCaps: brokenCapabilities, shadowed };
 }
 
 /**
@@ -479,12 +481,13 @@ async function main() {
 			continue;
 		}
 
-		let { missingPkgs, brokenCaps } = state;
+		let { missingPkgs, brokenCaps, shadowed } = state;
 		// What the fleet may repair here: everything on a node with sudo; on the
-		// backstop, only what needs no root.
+		// backstop, only what needs no root. Never a SHADOWED tool: its install is
+		// fine and a repair only rewrites the link the shadow already beats.
 		const fixable = (pkgs, caps) => ({
 			pkgs: sudo ? pkgs : [],
-			caps: sudo ? caps : caps.filter((id) => !repairNeedsRoot(id)),
+			caps: caps.filter((id) => !(id in shadowed) && (sudo || !repairNeedsRoot(id))),
 		});
 		let repair = null;
 		const todo = fixable(missingPkgs, brokenCaps);
@@ -499,11 +502,11 @@ async function main() {
 				results.push({ node, status: 'unreadable', reason: state.reason });
 				continue;
 			}
-			({ missingPkgs, brokenCaps } = state);
+			({ missingPkgs, brokenCaps, shadowed } = state);
 		}
 
 		const left = fixable(missingPkgs, brokenCaps);
-		const clean = !left.pkgs.length && !left.caps.length;
+		const clean = !left.pkgs.length && !left.caps.length && !Object.keys(shadowed).length;
 		const advisories = [
 			...(missingPkgs.length > left.pkgs.length
 				? [
@@ -515,7 +518,7 @@ async function main() {
 					]
 				: []),
 			...brokenCaps
-				.filter((id) => !left.caps.includes(id))
+				.filter((id) => !left.caps.includes(id) && !(id in shadowed))
 				.map((id) =>
 					rootAdvisory(
 						node,
@@ -531,9 +534,14 @@ async function main() {
 			drifted++;
 			log(`── ${node}  [${WRITE ? 'STILL DRIFTED' : 'drift'}]`);
 			if (missingPkgs.length) log(`   packages missing: ${missingPkgs.join(' ')}`);
-			for (const id of brokenCaps) log(`   capability "${id}": ${REPAIRS[id].why}`);
+			for (const id of brokenCaps) {
+				if (id in shadowed)
+					log(`   capability "${id}": ${shadowNote(shadowed[id], probeRole(REPAIRS[id]))}`);
+				else log(`   capability "${id}": ${REPAIRS[id].why}`);
+			}
 			if (repair && !repair.ok) log(`   repair failed: ${repair.reason}`);
-			if (!WRITE) log('   fix: fleet converge-toolchain --write');
+			if (!WRITE && (left.pkgs.length || left.caps.length))
+				log('   fix: fleet converge-toolchain --write');
 		}
 		results.push({
 			node,
@@ -541,6 +549,7 @@ async function main() {
 			missingPackages: missingPkgs,
 			brokenCapabilities: brokenCaps,
 			converged: Boolean(repair?.ok),
+			...(Object.keys(shadowed).length ? { shadowed } : {}),
 			...(advisories.length ? { advisories } : {}),
 		});
 	}

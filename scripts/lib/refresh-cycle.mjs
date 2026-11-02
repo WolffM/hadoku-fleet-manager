@@ -80,6 +80,8 @@ export const RECHECK_DAYS = 7;
  *                        binary newer than the newest debounce-cleared release,
  *                        and an unreadable version must not be reinstalled over.
  *                        A login-only tool with no declared `link` keeps the old path.
+ *   absent, shadowed  -> finding: the fleet's link is sound and an earlier PATH
+ *                        entry beats it; no install or link can move that file.
  *   absent            -> version-managed: install pinned to the cleared release
  *                        (needs a KNOWN latest, or it is a finding — an install
  *                        with no debounce answer would skip the debounce);
@@ -96,7 +98,11 @@ export function planNode(tools, seen, latestById) {
 		if (j.status === 'behind') {
 			work.push({ id, action: 'update', from: j.installed, target: j.target });
 		} else if (j.status === 'absent') {
-			if ((j.loginOnly || j.runnerPathOnly) && tool.link) {
+			if (j.shadowed) {
+				// The install is fine; an earlier PATH entry wins. Nothing the
+				// cadence installs or links can move it.
+				findings.push({ tool: id, kind: 'shadowed', reason: j.reason });
+			} else if ((j.loginOnly || j.runnerPathOnly) && tool.link) {
 				work.push({
 					id,
 					action: 'link',

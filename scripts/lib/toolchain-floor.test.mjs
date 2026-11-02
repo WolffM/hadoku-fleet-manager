@@ -185,11 +185,9 @@ test('parseObservation reads missing packages and broken capabilities', () => {
 });
 
 test('a clean node parses as clean, and empty output is not a crash', () => {
-	assert.deepEqual(parseObservation('REPAIR rust OK'), {
-		missingPackages: [],
-		brokenCapabilities: [],
-	});
-	assert.deepEqual(parseObservation(''), { missingPackages: [], brokenCapabilities: [] });
+	const none = { missingPackages: [], brokenCapabilities: [], shadowed: {} };
+	assert.deepEqual(parseObservation('REPAIR rust OK'), none);
+	assert.deepEqual(parseObservation(''), none);
 });
 
 // ── WHERE THE FLOOR IS READ FROM (issue #58) ────────────────────────────────

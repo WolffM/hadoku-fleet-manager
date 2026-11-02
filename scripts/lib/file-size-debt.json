@@ -1,7 +1,7 @@
 {
   "scripts/capability-probe.sh": 1037,
   "scripts/check-egress-slices.mjs": 1089,
-  "scripts/check-fleet-toolchain.mjs": 1175,
+  "scripts/check-fleet-toolchain.mjs": 1178,
   "scripts/check-fleet-toolchain.test.mjs": 1466,
   "scripts/ci-throttle.sh": 1036,
   "scripts/deploy-runners-slice.mjs": 1112,
@@ -9,8 +9,8 @@
   "scripts/lib/egress-slices-guard.test.mjs": 1007,
   "scripts/lib/hosting.mjs": 1158,
   "scripts/lib/slice-placement-guard.test.mjs": 2214,
-  "scripts/lib/toolchain-floor.mjs": 933,
-  "scripts/lib/toolchain-floor.test.mjs": 1493,
+  "scripts/lib/toolchain-floor.mjs": 936,
+  "scripts/lib/toolchain-floor.test.mjs": 1491,
   "scripts/node-bootstrap.sh": 2700,
   "scripts/runners-slice-install.sh": 986,
   "scripts/service-inventory.mjs": 977

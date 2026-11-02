@@ -16,6 +16,7 @@ import { DEFAULT_MIN_AGE_MINUTES, parseVersion } from './version-algebra.mjs';
 import { RELEASE_TOOLS } from './toolchain-release-tools.mjs';
 import { PM2_BOOT } from './pm2-boot-floor.mjs';
 import { debInstalled } from './deb-installed.mjs';
+import { parseShadow, shadowedBy } from './tool-shadow.mjs';
 
 /**
  * The installed-RAM floor jdk21/maven apply through `when` (cardtable#5,
@@ -530,7 +531,7 @@ export const REPAIRS = {
 			// A java that works from a user's home is still not the install: the
 			// cadence put 21.0.13 in admin's home on claw-4 and claw-5 and this
 			// read OK, so nothing ever moved it. Only the opt root passes.
-			`[ "$ok" = 1 ] && ${UNDER_OPT('java')} && echo OK`,
+			`{ [ "$ok" = 1 ] && ${UNDER_OPT('java')} && echo OK; } || ${shadowedBy('java', TOOL_OPT)}`,
 		// major.minor.security ONLY — never the raw banner. `check-fleet-toolchain.mjs`'s
 		// `judgeTool` reads this through the SHARED `parseInstalledVersion`
 		// (`tool-release.mjs`), which looks for the FIRST run of three dotted
@@ -622,7 +623,7 @@ export const REPAIRS = {
 			'forge-e2e/forge-jvm build with Maven, not a bare javac invocation. `command -v mvn` ' +
 			'is not proof — a `mvn` that cannot actually run (no JAVA_HOME it can resolve, a ' +
 			'corrupt wrapper) exits non-zero on `-v` the same way an absent one does.',
-		detect: `mvn -v 2>&1 | grep -q "Apache Maven" && ${UNDER_OPT('mvn')} && echo OK`,
+		detect: `{ mvn -v 2>&1 | grep -q "Apache Maven" && ${UNDER_OPT('mvn')} && echo OK; } || ${shadowedBy('mvn', TOOL_OPT)}`,
 		version: 'mvn -v 2>/dev/null | head -n1',
 		latest: { source: { kind: 'maven-metadata', majorMinor: '3.9' } },
 		// Apache publishes SHA-512 for its release tarballs, not SHA-256 — the
@@ -926,8 +927,10 @@ export function qualifiesForCanary(capabilityId, node) {
 /** Parse one node's observed state out of the probe's lines. */
 export function parseObservation(out) {
 	const missingPackages = [...String(out).matchAll(/^PKG-MISSING (\S+)$/gm)].map((m) => m[1]);
-	const brokenCapabilities = [...String(out).matchAll(/^REPAIR (\S+) (\S*)$/gm)]
-		.filter((m) => m[2] !== 'OK')
-		.map((m) => m[1]);
-	return { missingPackages, brokenCapabilities };
+	// `(.*)`, not `(\S*)`: a detect that prints a path with a space in it must
+	// still read as broken. A line the pattern skips would read as nothing wrong.
+	const broken = [...String(out).matchAll(/^REPAIR (\S+) (.*)$/gm)].filter((m) => m[2] !== 'OK');
+	const shadowed = {};
+	for (const [, id, said] of broken) if (parseShadow(said)) shadowed[id] = parseShadow(said);
+	return { missingPackages, brokenCapabilities: broken.map((m) => m[1]), shadowed };
 }

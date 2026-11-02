@@ -42,6 +42,7 @@ import {
 	repairNeedsRoot,
 	REPAIRS,
 } from './lib/toolchain-floor.mjs';
+import { shadowVerdict } from './lib/tool-shadow.mjs';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { assess, createReleaseLookup, parseInstalledVersion } from './lib/tool-release.mjs';
 import { isBackstopNode } from '../dist/lib/node-role.js';
@@ -323,6 +324,8 @@ function judgeApt(id, line) {
  */
 export function judgeTool(id, tool, seen, latest) {
 	const s = seen ?? {};
+	const shadow = shadowVerdict(id, s.detect, probeRole(tool));
+	if (shadow) return shadow;
 	if (s.detect !== 'OK') {
 		const why =
 			s.login === 'OK'

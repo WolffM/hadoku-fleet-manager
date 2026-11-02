@@ -619,6 +619,11 @@
     "why": "the toolchain floor's pm2-boot entry, moved out of toolchain-floor.mjs (config) whole: the same table, in the same layer"
   },
   {
+    "glob": "scripts/lib/tool-shadow.mjs",
+    "layer": "config",
+    "why": "the SHADOWED detect answer for tarball tools, split out of toolchain-floor.mjs (config) for size: pure string builders with no imports, in the same layer"
+  },
+  {
     "glob": "scripts/lib/deb-installed.mjs",
     "layer": "config",
     "why": "the toolchain floor's package-installed shell test, split out of toolchain-floor.mjs (config) for size: a pure string builder with no imports, in the same layer"
