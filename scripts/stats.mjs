@@ -48,8 +48,7 @@ import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { createEmitter } from './lib/emit.mjs';
 
-import { ROLLUP_FILE, jsonlRollupStore } from '../dist/job-rollup-store.js';
-import { SETTLE_HOURS, utcDay } from '../dist/job-rollups.js';
+import { utcDay } from '../dist/job-rollups.js';
 import { jobRunDir, readJobRuns } from '../dist/job-run-store.js';
 import { JOB_REGISTRY } from '../dist/lib/job-registry.js';
 import { CAPACITY_SAMPLE_FILE, capacitySampleStore } from '../dist/capacity-sample-store.js';
@@ -61,33 +60,27 @@ import {
 	dailyJobStats,
 	repoJobStats,
 } from '../dist/fleet-stats.js';
+import {
+	DAY_MS,
+	ROLLUP_FILE,
+	makeFail,
+	missingDaysSince,
+	parseDaysArg,
+	rawFlag as sharedRawFlag,
+	readRollupStore,
+	rollupWindow,
+	tryReadStore,
+} from './lib/rollup-cli.mjs';
 
 const argv = process.argv.slice(2);
 const parsed = parseStrict(ARGV_SPECS['stats.mjs'], argv);
 const out = createEmitter({ argv: process.argv });
 
-/**
- * `null` when the flag was never given; `''` when given with nothing after
- * it — same "say loudly, never default quietly" rule `job-rollups.mjs`'s own
- * `rawFlag` states.
- * @param {string} name
- */
-function rawFlag(name) {
-	const present = argv.includes(name) || argv.some((a) => a.startsWith(`${name}=`));
-	if (!present) return null;
-	return parsed.value(name) ?? '';
-}
+const rawFlag = (name) => sharedRawFlag(argv, parsed, name);
 
-const daysRaw = rawFlag('--days');
-const days = daysRaw === null ? 14 : Number(daysRaw);
-if (!Number.isInteger(days) || days < 1) {
-	const error = `--days must be a positive integer, got "${daysRaw}"`;
-	if (out.json) out.emit({ ok: false, error });
-	else console.error(`✗ ${error}`);
-	process.exit(1);
-}
+const { days, error: daysError } = parseDaysArg(rawFlag('--days'));
+if (daysError) makeFail(out)(daysError);
 
-const DAY_MS = 86_400_000;
 const now = Date.now();
 const fromDay = utcDay(now - days * DAY_MS);
 const sinceMs = now - days * DAY_MS;
@@ -98,24 +91,9 @@ const dir = stateDir();
 
 function rollupSection() {
 	const file = join(dir, ROLLUP_FILE);
-	let read;
-	try {
-		read = jsonlRollupStore(file).read();
-	} catch (err) {
-		return {
-			ok: false,
-			why: `could not read ${file}: ${err instanceof Error ? err.message : String(err)}`,
-		};
-	}
-	if (!read.exists || !read.days.length) {
-		return {
-			ok: false,
-			why:
-				`no rollups at ${file} — the writer (mgmt-api's runner-health tick) has never ` +
-				'written one into this state dir. That is "could not look", not "no jobs".',
-		};
-	}
-	const inRange = read.days.filter((d) => d.day >= fromDay);
+	const { read, error } = readRollupStore(file, { requireDays: true, contrastPhrase: '"no jobs"' });
+	if (error) return { ok: false, why: error };
+	const { inRange } = rollupWindow(read, { days, now });
 	if (!inRange.length) {
 		return {
 			ok: false,
@@ -124,12 +102,7 @@ function rollupSection() {
 	}
 	// Same "name every gap" discipline as job-rollups.mjs: a day the writer
 	// never closed is listed, never silently skipped.
-	const lastClosable = utcDay(now - SETTLE_HOURS * 3600_000 - DAY_MS);
-	const held = new Set(inRange.map((d) => d.day));
-	const missingDays = [];
-	for (let ms = Date.parse(`${fromDay}T00:00:00Z`); utcDay(ms) <= lastClosable; ms += DAY_MS) {
-		if (!held.has(utcDay(ms))) missingDays.push(utcDay(ms));
-	}
+	const missingDays = missingDaysSince(inRange, { fromDay, now });
 	return {
 		ok: true,
 		file,
@@ -169,62 +142,58 @@ function automationSection() {
 	};
 }
 
+/**
+ * The open/empty/window-filter/empty shape T4 and T5 share: open the store,
+ * refuse an empty result or one with nothing in the `--days` window as
+ * COULD NOT LOOK (never a zero), then hand the in-range rows to `compute`.
+ * Pulled out of `capacitySection`/`budgetSection` (wave shrink-1 lane A
+ * dedup) — the two were byte-identical apart from the store, the field a
+ * row's timestamp lives on, and the two "why" messages.
+ * @param {{
+ *   file: string,
+ *   read: () => unknown,
+ *   emptyWhy: string,
+ *   sinceKey: string,
+ *   windowWhy: string,
+ *   compute: (rows: unknown[]) => unknown,
+ * }} opts
+ */
+function timeRangeSection({ file, read: readFn, emptyWhy, sinceKey, windowWhy, compute }) {
+	const opened = tryReadStore(readFn, file);
+	if (!opened.ok) return opened;
+	const read = opened.read;
+	if (!read.exists || !read.rows.length) return { ok: false, why: emptyWhy };
+	const inRange = read.rows.filter((r) => r[sinceKey] >= sinceIso);
+	if (!inRange.length) return { ok: false, why: windowWhy };
+	return { ok: true, file, unreadableLines: read.unreadableLines, rows: compute(inRange) };
+}
+
 // ── (d): the T4 capacity samples ─────────────────────────────────────────────
 
 function capacitySection() {
 	const file = join(dir, CAPACITY_SAMPLE_FILE);
-	let read;
-	try {
-		read = capacitySampleStore(file).read();
-	} catch (err) {
-		return {
-			ok: false,
-			why: `could not read ${file}: ${err instanceof Error ? err.message : String(err)}`,
-		};
-	}
-	if (!read.exists || !read.rows.length) {
-		return {
-			ok: false,
-			why: `no capacity samples at ${file} — the sampler has never written one into this state dir`,
-		};
-	}
-	const inRange = read.rows.filter((r) => r.at >= sinceIso);
-	if (!inRange.length) {
-		return {
-			ok: false,
-			why: `samples exist at ${file} but none fall in the last ${days} day(s) (since ${sinceIso})`,
-		};
-	}
-	return { ok: true, file, unreadableLines: read.unreadableLines, rows: capacityStats(inRange) };
+	return timeRangeSection({
+		file,
+		read: () => capacitySampleStore(file).read(),
+		emptyWhy: `no capacity samples at ${file} — the sampler has never written one into this state dir`,
+		sinceKey: 'at',
+		windowWhy: `samples exist at ${file} but none fall in the last ${days} day(s) (since ${sinceIso})`,
+		compute: capacityStats,
+	});
 }
 
 // ── (e): the T5 GitHub-budget window history ────────────────────────────────
 
 function budgetSection() {
 	const file = join(dir, GH_BUDGET_HISTORY_FILE);
-	let read;
-	try {
-		read = ghBudgetHistoryStore(file).read();
-	} catch (err) {
-		return {
-			ok: false,
-			why: `could not read ${file}: ${err instanceof Error ? err.message : String(err)}`,
-		};
-	}
-	if (!read.exists || !read.rows.length) {
-		return {
-			ok: false,
-			why: `no GitHub budget history at ${file} — gh-budget.ts has never closed a window into this state dir`,
-		};
-	}
-	const inRange = read.rows.filter((r) => r.windowEnd >= sinceIso);
-	if (!inRange.length) {
-		return {
-			ok: false,
-			why: `budget history exists at ${file} but no window closed in the last ${days} day(s) (since ${sinceIso})`,
-		};
-	}
-	return { ok: true, file, unreadableLines: read.unreadableLines, rows: budgetStats(inRange) };
+	return timeRangeSection({
+		file,
+		read: () => ghBudgetHistoryStore(file).read(),
+		emptyWhy: `no GitHub budget history at ${file} — gh-budget.ts has never closed a window into this state dir`,
+		sinceKey: 'windowEnd',
+		windowWhy: `budget history exists at ${file} but no window closed in the last ${days} day(s) (since ${sinceIso})`,
+		compute: budgetStats,
+	});
 }
 
 const rollup = rollupSection();

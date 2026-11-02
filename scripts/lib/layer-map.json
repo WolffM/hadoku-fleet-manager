@@ -1335,6 +1335,13 @@
     "why": "Wave 5q lane A ctx restructure: `fleet floor-probe rerun`'s own logic (the forced re-run mint), taking the CLI's ctx — same `sh`/`probeSlotIsFree` threading as floor-probe-mode-probe.mjs; never imports the CLI."
   },
   {
+    "glob": "scripts/lib/floor-probe-mint-watch.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "Wave shrink-1 lane A dedup: the mint-and-cleanup and watch-until-settled mechanics floor-probe-mode-probe.mjs's shadow path and floor-probe-mode-rerun.mjs's forced re-run shared byte-for-byte, pulled out rather than left duplicated. Same layer/domain/part as the two files it was extracted from."
+  },
+  {
     "glob": "scripts/floor-probe.mjs",
     "layer": "domain",
     "domain": "ci-scheduling",
@@ -1715,6 +1722,20 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run"
+  },
+  {
+    "glob": "scripts/lib/read-jsonl-records.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave shrink-1 lane A dedup: the job-history.jsonl reader collect-job-metrics.mjs and join-workload-benchmark.mjs both carried byte-identical, pulled out rather than left duplicated. Same layer/domain/part as those two callers."
+  },
+  {
+    "glob": "scripts/lib/rollup-cli.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave shrink-1 lane A dedup: the `--days` validation, the \"name every gap\" missing-day loop and the rollup-store-open sequence job-rollups.mjs, failures.mjs and stats.mjs each carried their own copy of, pulled out rather than left duplicated. Same layer/domain/part as those three callers."
   },
   {
     "glob": "scripts/collect-job-metrics.mjs",

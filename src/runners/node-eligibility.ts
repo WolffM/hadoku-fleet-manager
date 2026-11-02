@@ -193,6 +193,25 @@ export interface LabelAction {
 }
 
 /**
+ * The metered-GitHub shape `tickFleet` (fleet-loop.ts) and `setNodeEligibility`
+ * both take: a runner listing read and a label write, trimmed to exactly what
+ * label convergence needs — no `body` on the write's resolved value, unlike
+ * the mint path's `GhLike` (fleet-vocabulary.ts), which this is not that: a
+ * failed mint's caller reads the body for a reason string, a failed label
+ * write does not.
+ */
+export interface LabelConvergenceGh {
+	get: (path: string, token: string, repo?: string) => Promise<unknown>;
+	write: (
+		method: 'POST' | 'DELETE',
+		path: string,
+		token: string,
+		body?: unknown,
+		repo?: string
+	) => Promise<{ ok: boolean; status: number }>;
+}
+
+/**
  * Converge one node's STANDING registrations onto `hadoku-builder` = safe.
  *
  * SAFE means: not quarantined, not drained, and not disqualified by its last
@@ -214,16 +233,7 @@ export interface LabelAction {
 export async function setNodeEligibility(
 	node: string,
 	token: string,
-	gh: {
-		get: (path: string, token: string, repo?: string) => Promise<unknown>;
-		write: (
-			method: 'POST' | 'DELETE',
-			path: string,
-			token: string,
-			body?: unknown,
-			repo?: string
-		) => Promise<{ ok: boolean; status: number }>;
-	},
+	gh: LabelConvergenceGh,
 	/** Whether the node should carry the label — see `nodeIsSafe`. */
 	want: boolean,
 	/** Resident repos for an ephemeral node; `undefined` means every covered repo. */

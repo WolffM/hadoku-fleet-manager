@@ -12,15 +12,13 @@ import {
 	warrantsForcedRerun,
 	CallBudget,
 	RERUN_CALL_CEILING,
-	PROBE_CALLS,
 } from './floor-probe.mjs';
-import { githubToken, meteredGh, sleep } from './floor-probe-dispatch.mjs';
+import { githubToken, meteredGh } from './floor-probe-dispatch.mjs';
 import { appendLedger } from './floor-probe-state.mjs';
 import { declareProbeIntent } from './floor-probe-intent.mjs';
+import { mintProbeRunner, watchProbeJobToSettle } from './floor-probe-mint-watch.mjs';
 import { nodeOf } from '../../dist/runners/census.js';
-import { mintEphemeralRunner } from '../../dist/runners/ephemeral-exec-jit.js';
 import { jitRunnerName } from '../../dist/runners/ephemeral.js';
-import { nodeHome } from '../../dist/lib/node-users.js';
 import { ghWrite } from '../../dist/lib/github-client.js';
 
 /**
@@ -155,37 +153,20 @@ export async function modeRerun(ctx, rows) {
 	// buys here is the blackout check and a bound against a spinning watch loop,
 	// not an allowance that could refuse to investigate a real failure.
 	const gh = meteredGh(new CallBudget(RERUN_CALL_CEILING), token);
-	const mint = await mintEphemeralRunner(
-		{
-			node: onto,
-			repo,
-			runnerName,
-			labels: mintLabelsFor(onto),
-			slotIndex: PROBE_SLOT,
-			homeDir: nodeHome(machines[onto], 'ci'),
-			tarballUrl: null,
-			memoryMaxMb: machines[onto]?.slice?.unitMaxMb ?? 4096,
-			ttlSeconds: PROBE_TTL_SECONDS,
-		},
+	const cleanUp = await mintProbeRunner({
+		node: onto,
+		repo,
+		runnerName,
+		mintLabelsFor,
+		machines,
 		token,
-		{ write: (m, p, t, b, r) => gh.write(m, p, t, b, r) },
-		sh
-	);
-	if (!mint.ok) {
-		releaseIntent();
-		fail(`could not mint on ${onto}: ${mint.reason}`);
-	}
-
-	const cleanUp = async () => {
-		releaseIntent();
-		const list = await gh.get('/actions/runners?per_page=100', repo);
-		const r = (list.body?.runners ?? []).find((x) => x.name === runnerName);
-		if (r) await gh.write('DELETE', `/actions/runners/${r.id}`, token, undefined, repo);
-		await sh(
-			onto,
-			`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop ${runnerName} 2>/dev/null || true`
-		);
-	};
+		gh,
+		sh,
+		releaseIntent,
+		fail,
+		PROBE_SLOT,
+		PROBE_TTL_SECONDS,
+	});
 
 	// DECLARED BEFORE THE POST. `ingestRuns` lifts its `seenRuns` skip for a run
 	// the ledger names as `forced-rerun` and for nothing else — a declaration
@@ -209,39 +190,19 @@ export async function modeRerun(ctx, rows) {
 	// WATCH THE NEW ATTEMPT. `rerun-failed-jobs` keeps the run id and increments
 	// the attempt, so the same jobs listing answers — with the new attempt's jobs,
 	// which is exactly why `ingestRuns` had to lift its skip for this run id.
-	let observed = null;
-	let conclusion = null;
-	let durationSec = null;
-	let failedStep = null;
-	let jobId = null;
-	let servedBy = null;
-	for (let i = 0; i < PROBE_CALLS.jobPolls; i++) {
-		const r = await gh.get(`/actions/runs/${runId}/jobs`, repo);
-		if (r.ok) {
-			const j = (r.body?.jobs ?? []).find((x) => x.name === jobName);
-			if (j) {
-				jobId = j.id ?? jobId;
-				if (j.runner_name) {
-					servedBy = j.runner_name;
-					observed = nodeOf(j.runner_name, NODES);
-				}
-				if (j.status === 'completed') {
-					conclusion = j.conclusion;
-					failedStep = (j.steps ?? []).find((s) => s.conclusion === 'failure')?.name ?? null;
-					const s = Date.parse(j.started_at ?? '');
-					const e = Date.parse(j.completed_at ?? '');
-					if (Number.isFinite(s) && Number.isFinite(e)) durationSec = Math.round((e - s) / 1000);
-					break;
-				}
-			}
-		}
-		await sleep(20_000);
-	}
-	// Same rule as the shadow path: clean up unless OUR runner was consumed. See
-	// the note there — a re-run that landed back on the failing node completes
-	// normally and leaves this one listening.
-	if (servedBy !== runnerName) await cleanUp();
-	releaseIntent();
+	// Cleans up our runner unless it was the one consumed (same rule as the
+	// shadow path — a re-run that landed back on the failing node completes
+	// normally and leaves this one listening) and releases the intent either way.
+	const { observed, conclusion, durationSec, failedStep, jobId } = await watchProbeJobToSettle({
+		gh,
+		runId,
+		repo,
+		jobName,
+		NODES,
+		runnerName,
+		cleanUp,
+		releaseIntent,
+	});
 
 	const forced = observed === onto;
 	const out = {

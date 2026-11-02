@@ -28,7 +28,7 @@ import { buildWarmSpawnPlan } from './ephemeral-mint.js';
 import { nodeScriptCommand } from './node-script.js';
 import { mintLabels } from './ephemeral-exec-jit.js';
 import { describeGhError } from './ephemeral-exec-jit.js';
-import { deleteRunnerByName } from './ephemeral-exec-jit.js';
+import { deleteRunnerAndStopUnit } from './ephemeral-exec-jit.js';
 import { shellQuote } from './ephemeral-exec-jit.js';
 import { shellSingleQuote } from './ephemeral-exec-jit.js';
 
@@ -240,12 +240,8 @@ export async function evictWarmListener(
 	gh: GhLike & { get?: (path: string, token: string, repo?: string) => Promise<unknown> },
 	sh: ShellLike
 ): Promise<boolean> {
-	const removed = await deleteRunnerByName(repo, runnerName, token, gh);
+	const removed = await deleteRunnerAndStopUnit(node, repo, runnerName, token, gh, sh);
 	if (!removed) return false;
-	await sh(
-		node,
-		`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop ${shellQuote(runnerName)} 2>/dev/null || true`
-	);
 	// Best-effort. A stale marker naming a repo nothing is registered for would
 	// make the NEXT tick believe a slot exists when it does not, and lock it
 	// against eviction for no reason (planWarmCache reads "no slot" from its

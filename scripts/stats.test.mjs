@@ -293,6 +293,38 @@ test('budget: peak used/limit and top callers', () => {
 	assert.equal(doc.budget.rows[0].topCallers[0].caller, 'ci:queue-health');
 });
 
+/**
+ * Characterization for wave shrink-1 lane A dedup: `capacitySection` and
+ * `budgetSection` shared a byte-identical open/empty/window-filter/empty
+ * shape (jscpd's own self-clone finding against this file). Neither
+ * section's "store exists but nothing falls in the window" branch had a
+ * test before this move.
+ */
+test('capacity: samples exist but none fall in the requested window — COULD NOT LOOK, not zero', () => {
+	const sb = sandbox();
+	writeCapacityFixture(sb, [{ at: new Date(Date.now() - 30 * 86_400_000).toISOString() }]);
+	const r = run(['--days', '7', '--json'], sb);
+	// Every other section is also could-not-look in this bare fixture, so the
+	// command's own `ok` (true only when at least one section is) is false.
+	assert.equal(r.status, 1, r.stdout + r.stderr);
+	const doc = JSON.parse(r.stdout);
+	assert.equal(doc.capacity.ok, false);
+	assert.match(doc.capacity.why, /samples exist at .* but none fall in the last 7 day\(s\)/);
+});
+
+test('budget: history exists but no window closed in range — COULD NOT LOOK, not zero', () => {
+	const sb = sandbox();
+	writeBudgetFixture(sb, { windowEnd: new Date(Date.now() - 30 * 86_400_000).toISOString() });
+	const r = run(['--days', '7', '--json'], sb);
+	assert.equal(r.status, 1, r.stdout + r.stderr);
+	const doc = JSON.parse(r.stdout);
+	assert.equal(doc.budget.ok, false);
+	assert.match(
+		doc.budget.why,
+		/budget history exists at .* but no window closed in the last 7 day\(s\)/
+	);
+});
+
 test('one section available, the rest could-not-look: overall ok true, those sections still COULD NOT LOOK', () => {
 	const sb = sandbox();
 	writeBudgetFixture(sb);

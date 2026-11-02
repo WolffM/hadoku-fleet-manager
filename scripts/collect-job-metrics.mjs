@@ -47,7 +47,6 @@
  * UNREAD, and that is still printed via `deferralNote` — the deferral removes
  * the page, never the evidence. See lib/expected-down.mjs.
  */
-import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -57,6 +56,7 @@ import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
+import { readJsonlRecords } from './lib/read-jsonl-records.mjs';
 // The window is job-history's, BUILT, for the same reason `floor-probe.mjs`
 // reads it from there: a row older than job-history keeps has nothing left to
 // join to, and a second spelling of 14 here would be free to drift from it.
@@ -101,18 +101,7 @@ const machines = selectMachines(manifest, { only });
 
 /** job-history lives beside mgmt-api's state, on the host this runs from. */
 const HISTORY = join(homedir(), '.hadoku-mgmt', 'job-history.jsonl');
-const history = [];
-if (existsSync(HISTORY)) {
-	for (const line of readFileSync(HISTORY, 'utf8').split('\n')) {
-		const t = line.trim();
-		if (!t) continue;
-		try {
-			history.push(JSON.parse(t));
-		} catch {
-			/* a truncated final line costs one record, by design of the writer */
-		}
-	}
-}
+const history = readJsonlRecords(HISTORY);
 
 // ONLY THE WINDOW CROSSES THE WIRE. The node-side awk drops rows older than
 // job-history's retention before they are sent — see `metricsReadScript` for

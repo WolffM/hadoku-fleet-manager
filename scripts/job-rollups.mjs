@@ -24,8 +24,16 @@ import { stateDir } from './lib/paths.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { createEmitter } from './lib/emit.mjs';
-import { ROLLUP_FILE, jsonlRollupStore } from '../dist/job-rollup-store.js';
-import { FLEET_NODE, SETTLE_HOURS, utcDay } from '../dist/job-rollups.js';
+import { FLEET_NODE, SETTLE_HOURS } from '../dist/job-rollups.js';
+import {
+	makeFail,
+	missingDaysSince,
+	ROLLUP_FILE,
+	parseDaysArg,
+	rawFlag as sharedRawFlag,
+	readRollupStore,
+	rollupWindow,
+} from './lib/rollup-cli.mjs';
 
 const argv = process.argv.slice(2);
 // F8 (plan §4.1): strict, from the one spec `argv-specs.mjs` declares and the
@@ -38,31 +46,12 @@ const SPEC = {
 };
 const parsed = parseStrict(SPEC, argv);
 const out = createEmitter({ argv: process.argv });
+const fail = makeFail(out);
 
-/** @param {string} msg */
-function fail(msg) {
-	if (out.json) out.emit({ ok: false, error: msg });
-	else console.error(`✗ ${msg}`);
-	process.exit(1);
-}
+const rawFlag = (name) => sharedRawFlag(argv, parsed, name);
 
-/**
- * `null` when the flag was never given; `''` when it was given with nothing
- * after it (`fleet job-rollups --node`, trailing). `parsed.value` reads both
- * of those as `null` — right for a script that treats "absent" and "given
- * blank" the same, wrong here: `--days` with no value must fail loudly
- * rather than quietly default to 14.
- */
-function rawFlag(name) {
-	const present = argv.includes(name) || argv.some((a) => a.startsWith(`${name}=`));
-	if (!present) return null;
-	return parsed.value(name) ?? '';
-}
-
-const daysRaw = rawFlag('--days');
-const days = daysRaw === null ? 14 : Number(daysRaw);
-if (!Number.isInteger(days) || days < 1)
-	fail(`--days must be a positive integer, got "${daysRaw}"`);
+const { days, error: daysError } = parseDaysArg(rawFlag('--days'));
+if (daysError) fail(daysError);
 const node = rawFlag('--node');
 if (node === '') fail('--node needs a value');
 const repoRaw = rawFlag('--repo');
@@ -71,33 +60,15 @@ if (repoRaw === '') fail('--repo needs a value');
 const repoMatches = (repo) => repoRaw === null || repo === repoRaw || repo.endsWith(`/${repoRaw}`);
 
 const file = join(stateDir(), ROLLUP_FILE);
-/** @type {import('../dist/job-rollup-store.js').RollupRead} */
-let read;
-try {
-	read = jsonlRollupStore(file).read();
-} catch (err) {
-	fail(`could not read ${file}: ${err instanceof Error ? err.message : String(err)}`);
-}
-if (!read.exists) {
-	fail(
-		`no rollups at ${file} — the writer (mgmt-api's runner-health tick) has never written ` +
-			'one into this state dir. That is "could not look", not "no jobs".'
-	);
-}
+const { read, error: storeError } = readRollupStore(file, {
+	requireDays: false,
+	contrastPhrase: '"no jobs"',
+});
+if (storeError) fail(storeError);
 
-const DAY_MS = 86_400_000;
 const now = Date.now();
-const fromDay = utcDay(now - days * DAY_MS);
-const inRange = read.days.filter((d) => d.day >= fromDay);
-
-// Every day from the range start up to the newest day that COULD be closed by
-// now. One the store lacks is named, so a gap never reads as a quiet day.
-const lastClosable = utcDay(now - SETTLE_HOURS * 3600_000 - DAY_MS);
-const held = new Set(inRange.map((d) => d.day));
-const missingDays = [];
-for (let ms = Date.parse(`${fromDay}T00:00:00Z`); utcDay(ms) <= lastClosable; ms += DAY_MS) {
-	if (!held.has(utcDay(ms))) missingDays.push(utcDay(ms));
-}
+const { fromDay, inRange } = rollupWindow(read, { days, now });
+const missingDays = missingDaysSince(inRange, { fromDay, now });
 
 /** @param {import('../dist/job-rollups.js').RollupRow} r */
 function keep(r, wantedKeys) {

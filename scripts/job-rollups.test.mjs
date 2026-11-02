@@ -95,3 +95,67 @@ test('fleet-manager#F8: --help still answers, even in the same sandbox', () => {
 	assert.equal(r.status, 0, r.stdout + r.stderr);
 	assert.equal(touched, '', `job-rollups.mjs --help called external tools:\n${touched}`);
 });
+
+/**
+ * Characterization for wave shrink-1 lane A dedup: `--days` validation, the
+ * "no store" refusal and the `missingDays` gap-naming moved to
+ * `scripts/lib/rollup-cli.mjs`, shared with `failures.mjs`/`stats.mjs`.
+ * Nothing here was covered before this move — this file previously carried
+ * only the two strict-argv tests above.
+ */
+test('--days must be a positive integer', () => {
+	const sb = sandbox();
+	const r = run(['--days', 'nope', '--json'], sb);
+	assert.equal(r.status, 1, r.stdout + r.stderr);
+	const doc = JSON.parse(r.stdout);
+	assert.equal(doc.ok, false);
+	assert.match(doc.error, /--days must be a positive integer, got "nope"/);
+});
+
+test('no store at all is "could not look", not "no jobs" — exit 1', () => {
+	const sb = sandbox();
+	const r = run(['--json'], sb);
+	assert.equal(r.status, 1, r.stdout + r.stderr);
+	const doc = JSON.parse(r.stdout);
+	assert.equal(doc.ok, false);
+	assert.match(doc.error, /no rollups at/);
+	assert.match(doc.error, /not "no jobs"/);
+});
+
+test('an EXISTING store with zero days is not a failure here (unlike failures.mjs/stats.mjs) — job-rollups.mjs still has a fromDay to report against', () => {
+	const sb = sandbox();
+	writeFileSync(join(sb.dir, 'state', 'job-rollups.jsonl'), '');
+	const r = run(['--json'], sb);
+	assert.equal(r.status, 0, r.stdout + r.stderr);
+	const doc = JSON.parse(r.stdout);
+	assert.equal(doc.ok, true);
+	assert.deepEqual(doc.rollups, []);
+});
+
+test('missingDays: a day the store never closed is named, not silently skipped', () => {
+	const sb = sandbox();
+	// A rollup 10 days ago — `--days 14` pulls it into range. 12 days ago sits
+	// well inside that window and well past the settle horizon (comfortably
+	// closable), but nothing was ever written for it, so it must be named.
+	// Both days are picked well clear of either window edge (the fixture-dates
+	// note: a boundary pinned to "today" is one UTC midnight from flaking).
+	const day = (n) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+	const held = day(10);
+	const gap = day(12);
+	const rollup = {
+		schema: 1,
+		day: held,
+		writtenAt: `${held}T06:00:00.000Z`,
+		completeSince: `${held}T00:00:00.000Z`,
+		records: 1,
+		probesExcluded: 0,
+		rows: [],
+	};
+	writeFileSync(join(sb.dir, 'state', 'job-rollups.jsonl'), `${JSON.stringify(rollup)}\n`);
+	const r = run(['--days', '14', '--json'], sb);
+	assert.equal(r.status, 0, r.stdout + r.stderr);
+	const doc = JSON.parse(r.stdout);
+	assert.equal(doc.ok, true);
+	assert.ok(doc.missingDays.includes(gap), JSON.stringify(doc.missingDays));
+	assert.ok(!doc.missingDays.includes(held), JSON.stringify(doc.missingDays));
+});

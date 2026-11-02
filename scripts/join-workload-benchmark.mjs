@@ -67,7 +67,7 @@
  * this CAN say on its own: whether claw-5 is slower at all on memory-heavy
  * work, and by how much — the wall-clock fact, not its attribution.
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
@@ -76,6 +76,7 @@ import { stateDir } from './lib/paths.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
+import { readJsonlRecords } from './lib/read-jsonl-records.mjs';
 // job-history's window, BUILT — the same import `collect-job-metrics` makes, so
 // the two commands read the same rows from every node.
 import { RETENTION_DAYS } from '../dist/job-history-store.js';
@@ -176,18 +177,7 @@ for (const [node] of machines) {
 // The same state dir `benchmark.json` is read from — one resolver
 // (`stateDir()`), not a second spelling of `~/.hadoku-mgmt`.
 const HISTORY = join(stateDir(), 'job-history.jsonl');
-const history = [];
-if (existsSync(HISTORY)) {
-	for (const line of readFileSync(HISTORY, 'utf8').split('\n')) {
-		const t = line.trim();
-		if (!t) continue;
-		try {
-			history.push(JSON.parse(t));
-		} catch {
-			/* a truncated final line costs one record, by design of the writer */
-		}
-	}
-}
+const history = readJsonlRecords(HISTORY);
 
 // ── gather: job-metrics per node, over ssh — same probe collect-job-metrics
 // makes, so the two commands never disagree about what a node reported. ─────

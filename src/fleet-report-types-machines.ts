@@ -7,6 +7,7 @@
  * every existing importer.
  */
 import type { ClawState } from './lib/fleet-vocabulary.js';
+import type { BootcampFacet } from './lib/capability-registry.js';
 
 /** @see FleetMachine.admissionBasis */
 export type AdmissionBasis = 'dispatcher' | 'standing';
@@ -292,23 +293,15 @@ export interface FleetMachine {
 	os: { release: string | null; kernel: string | null } | null;
 }
 
-/** Mirrors `capabilities.BootcampFacet` — every key optional, as the producer writes it. */
-export interface FleetMachineCapabilities {
-	at?: string;
-	by?: string;
-	declared?: string[];
-	earned?: string[];
-	unclaimed?: string[];
-	unearned?: { id: string; detail?: string }[];
-	blocked?: { id: string; detail?: string }[];
-	prereqs?: { id: string; detail?: string }[];
-	unprobed?: string[];
-	/** The idle measurement behind each idle-only verdict (2026-10-10). */
-	measurements?: Record<
-		string,
-		{ value: number | null; idle: boolean; earned: boolean; at: string }
-	>;
-}
+/**
+ * `capabilities.BootcampFacet`, named for the wire field it fills
+ * (`FleetMachine.capabilities`). A type alias, not a copy: `config` sits
+ * below `surfaces` in the layer order (it is the one layer every domain may
+ * already import), so this is a legal edge, and the field-for-field mirror
+ * it replaced had drifted from nothing only because nothing ever forced it
+ * to — the producer and this wire shape are the same facet by construction.
+ */
+export type FleetMachineCapabilities = BootcampFacet;
 
 /** Mirrors `capabilities.WorkloadGateStatus`. */
 export interface FleetWorkloadGate {

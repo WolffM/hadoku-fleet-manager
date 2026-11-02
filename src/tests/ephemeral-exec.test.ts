@@ -6,10 +6,11 @@ import {
 	liveJitUnitRecords,
 	liveJitUnits,
 	mintEphemeralRunner,
+	retireStrandedJit,
 	runnerTarballUrl,
 } from '../runners/ephemeral-exec-jit.js';
 import { jitUnitDescription, labelsFromUnitDescription } from '../runners/ephemeral-mint.js';
-import { GOOD_JITCONFIG, jitConfig } from './helpers/fleet-fakes.js';
+import { GOOD_JITCONFIG, fakeGh, jitConfig } from './helpers/fleet-fakes.js';
 
 const REQ = {
 	node: 'hokon',
@@ -406,4 +407,42 @@ test('runnerTarballUrl fails SOFT — a mint that needs no payload must not brea
 		await runnerTarballUrl(async () => [{ os: 'win', architecture: 'x64' }], 'tok', 'r'),
 		null
 	);
+});
+
+/**
+ * Characterization for the mechanics `retireStrandedJit` and
+ * `evictWarmListener` (ephemeral-exec.ts) share before extraction: delete the
+ * registration by name, and stop its unit ONLY once that delete succeeded.
+ * Written first on the base, same style as `evictWarmListener`'s own pair in
+ * warm-cache-mint-exec.test.ts, so both callers are pinned before the shared
+ * mechanics move to one place.
+ */
+test('retireStrandedJit deletes the registration BEFORE stopping the unit', async () => {
+	const order: string[] = [];
+	const sh = async (_n: string, cmd: string) => {
+		if (cmd.includes('systemctl --user stop')) order.push('stop');
+		return '';
+	};
+	const gh = fakeGh({ runners: [{ id: 7, name: REQ.runnerName }] });
+	const origWrite = gh.write;
+	gh.write = async (m, p, t, b, r) => {
+		if (m === 'DELETE') order.push('delete');
+		return origWrite(m, p, t, b, r);
+	};
+	const ok = await retireStrandedJit('hokon', REQ.repo, REQ.runnerName, 'tok', gh, sh);
+	assert.equal(ok, true);
+	assert.deepEqual(order, ['delete', 'stop']);
+});
+
+test("retireStrandedJit stops NOTHING when GitHub refuses the delete — a runner GitHub won't delete is one still running a job", async () => {
+	const cmds: string[] = [];
+	const sh = async (_n: string, cmd: string) => {
+		cmds.push(cmd);
+		return '';
+	};
+	const gh = fakeGh({ runners: [{ id: 7, name: REQ.runnerName }] });
+	gh.write = async () => ({ ok: false, status: 422 });
+	const ok = await retireStrandedJit('hokon', REQ.repo, REQ.runnerName, 'tok', gh, sh);
+	assert.equal(ok, false);
+	assert.deepEqual(cmds, []);
 });

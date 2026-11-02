@@ -355,12 +355,17 @@ export async function liveJitUnitRecords(node: string, sh: ShellLike): Promise<L
 }
 
 /**
- * Retire a JIT runner that can never serve the job it was minted for: its
- * registration, then its unit — {@link evictWarmListener}'s order, for its
- * reason. GitHub refuses to delete a runner that is running a job, so a runner
- * that took some OTHER job its labels fit is left to finish it.
+ * Delete a runner's registration by name, then stop whatever unit was serving
+ * it — the two steps every "this runner is gone" path shares, JIT or warm
+ * (see {@link retireStrandedJit} and `evictWarmListener` in
+ * `ephemeral-exec.ts`, which adds its own marker cleanup on top of this).
+ *
+ * Registration FIRST. GitHub refuses to delete a runner that is running a
+ * job, so deleting first makes an earlier busy-check atomic on GitHub's
+ * side — an assignment that won the race turns the delete into a refusal,
+ * and `false` here means stop NOTHING, leaving that runner to finish its job.
  */
-export async function retireStrandedJit(
+export async function deleteRunnerAndStopUnit(
 	node: string,
 	repo: string,
 	runnerName: string,
@@ -376,6 +381,19 @@ export async function retireStrandedJit(
 	);
 	return true;
 }
+
+/**
+ * Retire a JIT runner that can never serve the job it was minted for: its
+ * registration, then its unit — {@link deleteRunnerAndStopUnit}'s order, for
+ * its reason. GitHub refuses to delete a runner that is running a job, so a
+ * runner that took some OTHER job its labels fit is left to finish it.
+ *
+ * The SAME function under its JIT-specific name: there is nothing left for a
+ * wrapper to add once the mechanics moved to `deleteRunnerAndStopUnit`, and a
+ * forwarding function here would only repeat that function's own parameter
+ * list a second time.
+ */
+export const retireStrandedJit = deleteRunnerAndStopUnit;
 
 /**
  * Quote one argv element for a remote shell.

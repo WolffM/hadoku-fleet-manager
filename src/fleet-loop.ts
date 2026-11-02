@@ -54,6 +54,7 @@ import { markNodeSick, nodeIsSick, sickNodeNames } from './lib/sick-node.js';
 import { repairSickNode } from './runners/node-repair.js';
 import { loadResidentRepos, loadRequiredSet } from './runners/node-eligibility.js';
 import { nodeIsSafe, setNodeEligibility, type LabelAction } from './runners/node-eligibility.js';
+import { type LabelConvergenceGh } from './runners/node-eligibility.js';
 import { __setFleetProbeForTesting } from './fleet-probe-store.js';
 export { getFleetProbeSnapshot, __setFleetProbeForTesting } from './fleet-probe-store.js';
 
@@ -137,19 +138,28 @@ export interface FleetDispatch {
 	recent: { since: string; minted: number; failed: number };
 }
 
-let lastDispatch: FleetDispatch = {
-	at: null,
-	minted: null,
-	failed: null,
-	skipped: null,
-	inFlight: null,
-	reaped: null,
-	error: null,
-	failingSince: null,
-	totals: { minted: 0, failed: 0 },
-	lastMintAt: null,
-	recent: { since: new Date().toISOString(), minted: 0, failed: 0 },
-};
+/**
+ * The quiet-fleet starting point for {@link lastDispatch} — at module load
+ * AND on `__resetFleetLoopForTesting`, which must restart from exactly this,
+ * not a hand-copied second literal that can drift from it.
+ */
+function initialFleetDispatch(): FleetDispatch {
+	return {
+		at: null,
+		minted: null,
+		failed: null,
+		skipped: null,
+		inFlight: null,
+		reaped: null,
+		error: null,
+		failingSince: null,
+		totals: { minted: 0, failed: 0 },
+		lastMintAt: null,
+		recent: { since: new Date().toISOString(), minted: 0, failed: 0 },
+	};
+}
+
+let lastDispatch: FleetDispatch = initialFleetDispatch();
 
 const RECENT_WINDOW_MS = 60 * 60 * 1000;
 /** Passes that minted or failed something, for `recent`. Quiet passes add nothing. */
@@ -320,19 +330,7 @@ let dispatchTimerHandle: { stop(): void } | null = null;
 
 export function __resetFleetLoopForTesting(): void {
 	__setFleetProbeForTesting(null);
-	lastDispatch = {
-		at: null,
-		minted: null,
-		failed: null,
-		skipped: null,
-		inFlight: null,
-		reaped: null,
-		error: null,
-		failingSince: null,
-		totals: { minted: 0, failed: 0 },
-		lastMintAt: null,
-		recent: { since: new Date().toISOString(), minted: 0, failed: 0 },
-	};
+	lastDispatch = initialFleetDispatch();
 	recentPasses = [];
 	dispatchStartMs = Date.now();
 	believedLabel = new Map();
@@ -355,16 +353,7 @@ export interface FleetTickResult {
  */
 export async function tickFleet(
 	token: string,
-	gh: {
-		get: (path: string, token: string, repo?: string) => Promise<unknown>;
-		write: (
-			method: 'POST' | 'DELETE',
-			path: string,
-			token: string,
-			body?: unknown,
-			repo?: string
-		) => Promise<{ ok: boolean; status: number }>;
-	},
+	gh: LabelConvergenceGh,
 	/** Injectable so the tick is testable. Without it every test sshes for real. */
 	probe: (node: string) => Promise<ProbeResultLike | null> = probeNode,
 	/**

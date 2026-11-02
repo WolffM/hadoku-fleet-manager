@@ -21,11 +21,9 @@ import {
 import { githubToken, meteredGh, sleep } from './floor-probe-dispatch.mjs';
 import { appendLedger } from './floor-probe-state.mjs';
 import { declareProbeIntent } from './floor-probe-intent.mjs';
-import { nodeOf } from '../../dist/runners/census.js';
+import { mintProbeRunner, watchProbeJobToSettle } from './floor-probe-mint-watch.mjs';
 import { PROBE_INTENT_DIR } from '../../dist/runners/dispatch-tick.js';
-import { mintEphemeralRunner } from '../../dist/runners/ephemeral-exec-jit.js';
 import { jitRunnerName } from '../../dist/runners/ephemeral.js';
-import { nodeHome } from '../../dist/lib/node-users.js';
 
 /**
  * §6's shadow path: one probe, one node.
@@ -176,52 +174,21 @@ export async function modeProbe(ctx) {
 		{ repo, job: jobName, node, runnerName },
 		{ fail, ttlSeconds: PROBE_TTL_SECONDS }
 	);
-	const mint = await mintEphemeralRunner(
-		{
-			node,
-			repo,
-			runnerName,
-			// DERIVED, not the declared array (issue #19, lane K's carve-out in this
-			// file). A declaration-read mint becomes unschedulable the moment the
-			// eight `hadoku-builder` declarations go, and the `?? ['hadoku-builder']`
-			// fallback hid that by guessing the label for a node with none.
-			labels: mintLabelsFor(node),
-			slotIndex: PROBE_SLOT,
-			homeDir: nodeHome(machines[node], 'ci'),
-			tarballUrl: null,
-			memoryMaxMb: machines[node]?.slice?.unitMaxMb ?? 4096,
-			ttlSeconds: PROBE_TTL_SECONDS,
-		},
+	const cleanUp = await mintProbeRunner({
+		node,
+		repo,
+		runnerName,
+		mintLabelsFor,
+		machines,
 		token,
-		{ write: (m, p, t, b, r) => gh.write(m, p, t, b, r) },
-		sh
-	);
-	if (!mint.ok) {
-		releaseIntent();
-		fail(`could not mint on ${node}: ${mint.reason}`, { node, spent: gh.spent() });
-	}
-
-	/**
-	 * Remove our runner. Every exit path that does not CONSUME it comes here.
-	 *
-	 * A registration with nothing listening is §12.8's black hole — GitHub will
-	 * schedule onto it and the job hangs. The reaper would eventually take it,
-	 * but "eventually" is a 10-minute grace, and a probe that leaves a hole open
-	 * for ten minutes has cost a consumer more than it measured.
-	 */
-	const cleanUp = async () => {
-		// THE INTENT GOES FIRST. Once our runner is being torn down the declaration is
-		// a licence to not mint for a job nothing is listening for, and under all-JIT
-		// the dispatcher is the only thing that would.
-		releaseIntent();
-		const list = await gh.get('/actions/runners?per_page=100', repo);
-		const r = (list.body?.runners ?? []).find((x) => x.name === runnerName);
-		if (r) await gh.write('DELETE', `/actions/runners/${r.id}`, token, undefined, repo);
-		await sh(
-			node,
-			`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop ${runnerName} 2>/dev/null || true`
-		);
-	};
+		gh,
+		sh,
+		releaseIntent,
+		fail,
+		PROBE_SLOT,
+		PROBE_TTL_SECONDS,
+		mintFailDetail: () => ({ node, spent: gh.spent() }),
+	});
 
 	const started = Date.now();
 	// 5. DISPATCH.
@@ -261,51 +228,20 @@ export async function modeProbe(ctx) {
 	//    the ranking cannot tell a probe from organic traffic.
 	appendLedger({ runId, repo, origin: 'shadow', job: jobName, intendedNode: node, runnerName });
 
-	// 8. WATCH. Bounded by PROBE_CALLS.jobPolls.
-	let observed = null;
-	let conclusion = null;
-	let durationSec = null;
-	let failedStep = null;
-	let jobId = null;
-	let servedBy = null;
-	for (let i = 0; i < PROBE_CALLS.jobPolls; i++) {
-		const r = await gh.get(`/actions/runs/${runId}/jobs`, repo);
-		if (r.ok) {
-			const j = (r.body?.jobs ?? []).find((x) => x.name === jobName);
-			if (j) {
-				jobId = j.id ?? jobId;
-				if (j.runner_name) {
-					servedBy = j.runner_name;
-					observed = nodeOf(j.runner_name, NODES);
-				}
-				if (j.status === 'completed') {
-					conclusion = j.conclusion;
-					failedStep = (j.steps ?? []).find((s) => s.conclusion === 'failure')?.name ?? null;
-					const s = Date.parse(j.started_at ?? '');
-					const e = Date.parse(j.completed_at ?? '');
-					if (Number.isFinite(s) && Number.isFinite(e)) durationSec = Math.round((e - s) / 1000);
-					break;
-				}
-			}
-		}
-		await sleep(20_000);
-	}
-	// CLEAN UP UNLESS OUR RUNNER WAS CONSUMED.
-	//
-	// `conclusion === null` is not the only case that leaks. A probe that MISSED
-	// still completes — the job simply ran somewhere else — and our runner is then
-	// sitting there LISTENING, with a 900s TTL, free to pick up an unrelated job
-	// in the same repo. Observed at 18:29 on 2026-09-08:
-	// `jit-claw-2-hadoku-pygmalion-j0-r0-1788891783` still online and idle six
-	// minutes after its probe had reported success on another node.
-	//
-	// The test is the runner NAME, not the node: the dispatcher's competitor mint
-	// can land on the same node, which still makes the probe FORCED (the evidence
-	// is about the node) while leaving ours unconsumed.
-	if (servedBy !== runnerName) await cleanUp();
-	// CONSUMED OR NOT, the job is no longer waiting for a runner, so the
-	// declaration has done its job and must stop suppressing mints for this unit.
-	releaseIntent();
+	// 8. WATCH. Bounded by PROBE_CALLS.jobPolls. Cleans up our runner unless it
+	// was the one consumed, and releases the slot's intent declaration either
+	// way — see `watchProbeJobToSettle`'s own header for the §12.8/observed-at
+	// reasoning this carries.
+	const { observed, conclusion, durationSec, failedStep, jobId } = await watchProbeJobToSettle({
+		gh,
+		runId,
+		repo,
+		jobName,
+		NODES,
+		runnerName,
+		cleanUp,
+		releaseIntent,
+	});
 
 	// 9. SETTLE. Intended AND observed, always — a probe that silently retargets
 	//    itself is worse than one that admits it did.
