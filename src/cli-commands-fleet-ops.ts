@@ -77,7 +77,16 @@ export const commandsFleetOps: Record<string, Command> = {
 		kind: 'converger',
 		// `--refresh` drains and updates nodes, and `--plan` is what makes it a
 		// dry run: a typo of the one must never fall through to the other.
-		flags: ['--json', '--write', '--refresh', '--plan', '--machine=', '--budget-min=', '--out='],
+		flags: [
+			'--json',
+			'--write',
+			'--refresh',
+			'--plan',
+			'--operator-sudo',
+			'--machine=',
+			'--budget-min=',
+			'--out=',
+		],
 		summary: 'check — and with --write, REFRESH — the build toolchain on every node',
 	},
 	toolpack: {

@@ -398,6 +398,8 @@ export const ARGV_SPECS = {
 			'  --write-coverage   regenerate fleet-runner-coverage.json',
 			'  --check-coverage   is the coverage file still current (structural drift only)',
 			'  --allow-shrink     with --write-coverage: allow a drop below half the roster',
+			'  --operator-sudo    the operator, on a node the fleet has no sudo on, after',
+			'                     sudo -v: do the root work there too (otherwise an advisory)',
 		].join('\n'),
 		booleans: [
 			'--confirm',
@@ -407,6 +409,7 @@ export const ARGV_SPECS = {
 			'--write-coverage',
 			'--check-coverage',
 			'--allow-shrink',
+			'--operator-sudo',
 		],
 		valued: ['--repo'],
 		positionals: false,

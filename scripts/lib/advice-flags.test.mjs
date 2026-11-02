@@ -238,3 +238,146 @@ test('every `fleet <sub> --flag` this repo prints names a flag that subcommand h
 	}
 	assert.deepEqual(bad, [], `advice problems:\n  ${bad.join('\n  ')}`);
 });
+
+// ---------------------------------------------------------------------------
+// The DOOR: advice must survive the CLI's own flag allowlist, not just grep.
+// ---------------------------------------------------------------------------
+//
+// 2026-11-02: converge-toolchain printed "on hokon, as the operator: sudo -v &&
+// fleet converge-toolchain --machine hokon --write --operator-sudo", and the
+// operator typed it. The door refused: "unknown flag(s) --operator-sudo —
+// nothing was run." Two holes let that through the scan above. It asks whether
+// the SCRIPT mentions a flag (converge-toolchain.mjs mentions --operator-sudo
+// in a comment), while a subcommand with a `flags` allowlist is refused at the
+// door before the script ever runs. And `rootAdvisory` APPENDS the flag at run
+// time, so no literal in the source carried it for any regex to find. The
+// same advice was broken for bootcamp and reconcile too.
+//
+// So the check below runs every advised command through `unknownFlags`, the
+// algorithm `src/cli.ts` refuses with, against the door's real flag list:
+// the built command tables, with an ARGV_SPECS entry overriding exactly as the
+// door does. Every `rootAdvisory(...)` command is checked WITH the flag it will
+// be printed with.
+
+import { ARGV_SPECS } from './argv-specs.mjs';
+import { doorFlags, unknownFlags } from './argv.mjs';
+import { OPERATOR_SUDO } from './operator-sudo.mjs';
+
+/** Placeholders in printed advice stand for a VALUE, never a flag. */
+const PLACEHOLDER = /\$\{[^}]+\}|<[^>]+>/g;
+
+/**
+ * Advice the door would refuse. `doorFor(sub)` returns the door's flag list,
+ * or `undefined` for a subcommand with no allowlist (the door passes anything,
+ * and the script-text scan above is the only check that applies).
+ */
+export function doorViolations(src, doorFor) {
+	const bad = [];
+	for (const m of src.matchAll(ADVICE)) {
+		const [, sub, tail] = m;
+		const flags = doorFor(sub);
+		if (!flags) continue;
+		const argv = tail.replace(PLACEHOLDER, 'VALUE').trim().split(/\s+/);
+		const unknown = unknownFlags(flags, argv);
+		if (unknown.length) bad.push(`fleet ${sub}${tail} — the door refuses ${unknown.join(' ')}`);
+	}
+	return bad;
+}
+
+/**
+ * The `command` argument of every `rootAdvisory(...)` call: the first
+ * `` `fleet …` `` literal after the call opens and before the next call.
+ * `null` where there is none, so a command built some other way FAILS rather
+ * than going unchecked.
+ */
+export function rootAdvisoryCommands(src) {
+	const starts = [...src.matchAll(/\brootAdvisory\(/g)]
+		.map((m) => m.index)
+		.filter((i) => !/function\s+$/.test(src.slice(Math.max(0, i - 20), i)));
+	return starts.map((start, k) => {
+		const seg = src.slice(start, starts[k + 1] ?? src.length);
+		return seg.match(/`(fleet [^`]*)`/)?.[1] ?? null;
+	});
+}
+
+test('planted: a flag the door does not list is refused, even if the script mentions it', () => {
+	const door = (sub) => (sub === 'converge-toolchain' ? ['--write', '--machine='] : undefined);
+	const bad = doorViolations(
+		'sudo -v && fleet converge-toolchain --machine ${name} --write --operator-sudo',
+		door
+	);
+	assert.equal(bad.length, 1);
+	assert.match(bad[0], /refuses --operator-sudo/);
+});
+
+test('planted: a valued flag followed by a placeholder is not read as two flags', () => {
+	const door = () => ['--write', '--machine='];
+	assert.deepEqual(doorViolations('fleet x --machine ${node.name} --write', door), []);
+	assert.deepEqual(doorViolations('fleet x --machine <node> --write', door), []);
+});
+
+test('planted: a subcommand with no allowlist is not judged by the door', () => {
+	assert.deepEqual(
+		doorViolations('fleet slice --whatever', () => undefined),
+		[]
+	);
+});
+
+test('planted: rootAdvisory commands are found per call, and a non-literal one is null', () => {
+	const src =
+		'export function rootAdvisory(name, what, command) {}\n' +
+		'rootAdvisory(n, `a (${x.join("; ")})`, `fleet slice --machine ${n} --confirm`);\n' +
+		'rootAdvisory(n, "b", cmd);\n';
+	assert.deepEqual(rootAdvisoryCommands(src), ['fleet slice --machine ${n} --confirm', null]);
+});
+
+async function liveDoor() {
+	const dist = join(ROOT, 'dist');
+	const tables = readdirSync(dist).filter((f) => /^cli-commands-[a-z-]+\.js$/.test(f));
+	assert.ok(tables.length >= 5, `found ${tables.length} cli-commands-*.js in dist — build first`);
+	const door = new Map();
+	for (const f of tables) {
+		const mod = await import(join(dist, f));
+		for (const table of Object.values(mod)) {
+			for (const [name, cmd] of Object.entries(table)) {
+				const spec = ARGV_SPECS[cmd.script];
+				const flags = spec ? doorFlags(spec) : cmd.flags;
+				if (flags) door.set(name, flags);
+			}
+		}
+	}
+	return door;
+}
+
+test('every printed `fleet <sub> --flag` gets past the door', async () => {
+	const door = await liveDoor();
+	const bad = [];
+	for (const file of sourceFiles()) {
+		const src = blankComments(readFileSync(file, 'utf8'));
+		for (const v of doorViolations(src, (sub) => door.get(sub))) {
+			bad.push(`${file.slice(ROOT.length + 1)}: ${v}`);
+		}
+	}
+	assert.deepEqual(bad, [], `advice the door refuses:\n  ${bad.join('\n  ')}`);
+});
+
+test(`every rootAdvisory fix line, printed WITH ${OPERATOR_SUDO}, gets past the door`, async () => {
+	const door = await liveDoor();
+	const bad = [];
+	let seen = 0;
+	for (const file of sourceFiles()) {
+		const rel = file.slice(ROOT.length + 1);
+		for (const command of rootAdvisoryCommands(blankComments(readFileSync(file, 'utf8')))) {
+			seen++;
+			if (command === null) {
+				bad.push(`${rel}: a rootAdvisory command that is not a \`fleet …\` literal`);
+				continue;
+			}
+			for (const v of doorViolations(`${command} ${OPERATOR_SUDO}`, (sub) => door.get(sub))) {
+				bad.push(`${rel}: ${v}`);
+			}
+		}
+	}
+	assert.ok(seen >= 10, `found only ${seen} rootAdvisory call(s) — the scan is not looking`);
+	assert.deepEqual(bad, [], `advisories the door refuses:\n  ${bad.join('\n  ')}`);
+});

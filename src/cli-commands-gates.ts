@@ -10,6 +10,7 @@ export const commandsGates: Record<string, Command> = {
 			'--no-push',
 			'--prove',
 			'--check-only',
+			'--operator-sudo',
 			'--machine=',
 			'--due=',
 			'--idle-wait=',
