@@ -161,7 +161,7 @@ different things. Read it before naming anything new.
   queued-runs listing sends an ETag and a 304 is genuinely free — measured, the
   budget does not move — so its ceiling is not its spend and it can run as often
   as you like. **Since 2026-10-16 every `ghGet` is conditional too** (`ghCache`
-  in `runner-health.ts`). This file used to say that a reader needing CURRENT
+  in `src/lib/github-client-cache.ts`). This file used to say that a reader needing CURRENT
   state cannot send an ETag; that was wrong — a 304 is GitHub saying the body it
   would serve NOW is the one we hold, so the reap may delete on it. What stays
   true is that a listing which CHANGED between calls is charged: a busy repo's
@@ -237,7 +237,7 @@ different things. Read it before naming anything new.
   minutes. `census` draws the line as `ephemeralUnknown` and every consumer must
   consult it. The type does NOT enforce this at the call site: the sum of the two
   counts is a `number`, which satisfies `number | null` perfectly well. The guard
-  is held by a tick-level test in `runner-health.test.ts`, not by the compiler.
+  is held by a tick-level test in `src/tests/hosted-fallback.test.ts`, not by the compiler.
 
   **Detection is guarded. WRITING still is not.** `fleet check-runner-var`
   (`scripts/check-runner-var.mjs`) and the `ci:runner-var` cron that consumes it
@@ -299,6 +299,38 @@ different things. Read it before naming anything new.
   the same shape as the zero-repo case that gate now refuses. Left unfixed
   deliberately: a guard against a limit the fleet is not close to is speculative,
   and the fix is a page-until-empty loop rather than a bigger number.
+
+## Layers and the structure guards
+
+Every non-test `.ts`/`.mjs` file under `src/` and `scripts/` has a layer.
+Imports point DOWN this stack, and a domain never imports another domain:
+
+    composition  →  surfaces  →  domain (lifecycle | ci-scheduling | tenancy)
+                 →  observation  →  automation  →  state  →  access  →  config
+
+- **`scripts/lib/layer-map.json` is the placement data.** Entries are ordered
+  globs and the first match wins; `scripts/lib/layer-map.mjs` is the matcher
+  and documents the placement rules in its header. A new file that no glob
+  classifies correctly gets an entry with a `why`.
+- **`scripts/measure-layers.mjs --json`** (after `pnpm run build`) walks the
+  real import graph. Cut (iii), with observation as its own stratum below the
+  domains, is the gated one. `scripts/lib/layer-guard.test.mjs` fails a NEW
+  violation; `scripts/lib/layer-debt.json` lists the three left on purpose.
+  Cuts (i), (ii) and (iv) are reported, not gated.
+- **Fix an edge by moving the shared thing down** (a pure helper to config,
+  a one-writer record to state, another system's data to access), never by
+  reclassifying a file to whatever layer passes. A re-export from the old
+  module does not clear the edge; the importer must point at the new home.
+- **File size:** 800 lines for source, 1,000 for tests
+  (`scripts/lib/file-size-guard.mjs`). Files already over it are listed in
+  `scripts/lib/file-size-debt.json`, which may only shrink:
+  `node scripts/file-size-debt.mjs --write` after a split.
+- **`scripts/lib/f-guards/`** holds the other ratchets (one writer per
+  record in `f3-one-writer.json`, the allowed readers of `pm2-hosts.json` in
+  `debt.json`, and so on). Moving a function that a ratchet names moves its
+  key in the same commit.
+
+The target shape and why it was cut this way: `docs/planning/refactor-plan-2026-10-28.md` §3.
 
 ## Layout
 
