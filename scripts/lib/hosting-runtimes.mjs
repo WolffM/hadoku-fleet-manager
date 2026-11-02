@@ -25,6 +25,9 @@
  * (cardtable's JVMs). tenant-registry.test.mjs pins both renders.
  */
 import { AGENT_OOM_SCORE_ADJ } from '../../dist/runners/hosting-record.js';
+import { TENANT_RUNTIME_NAMES, runtimeOf } from './tenant-runtime-names.mjs';
+
+export { runtimeOf };
 
 /** `cardtable` → `CARDTABLE`: the prefix of the environment a tenant's unit hands it. */
 const envPrefix = (app) => app.toUpperCase().replace(/-/g, '_');
@@ -47,13 +50,7 @@ export const RUNTIMES = {
 	 */
 	agent: {
 		kind: 'agent',
-		names: (app) => ({
-			user: `${app}-agent`,
-			service: `${app}-agent.service`,
-			pathUnit: `${app}-agent.path`,
-			/** Root-owned, written only by `--install`. */
-			exec: `/opt/hosting/${app}/run`,
-		}),
+		names: TENANT_RUNTIME_NAMES.agent,
 		unit(t) {
 			const outlive = t.workersOutliveRestart
 				? `
@@ -139,12 +136,7 @@ ${t.home}/.pm2/pm2.log ${t.home}/.pm2/logs/*.log {
 }
 `,
 		}),
-		names: (app) => ({
-			user: `${app}-svc`,
-			service: `pm2-${app}-svc.service`,
-			pathUnit: null,
-			exec: null,
-		}),
+		names: TENANT_RUNTIME_NAMES.pm2,
 		unit: (t) => `[Unit]
 Description=fleet hosting: ${t.app} pm2 daemon, as ${t.user}
 
@@ -170,10 +162,6 @@ WantedBy=multi-user.target`,
 
 /** The managers a `service` may name: every runtime that serves the service kind. */
 export const SERVICE_MANAGERS = Object.keys(RUNTIMES).filter((r) => RUNTIMES[r].kind === 'service');
-
-/** Which runtime a NORMALIZED request runs under. */
-export const runtimeOf = (request) =>
-	request.kind === 'agent' ? 'agent' : request.runtime.manager;
 
 /** The runtime entry for a tenant spec. Throws on a spec naming none: it would render nothing. */
 export function runtimeFor(t) {

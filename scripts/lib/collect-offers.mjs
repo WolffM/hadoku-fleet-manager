@@ -4,9 +4,6 @@
  * `fleet hosting-offers` and `fleet hosting-plan`, so both read the same
  * facts the same way.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
 import { nodeOffer } from '../../dist/lib/capability-offer.js';
 import {
 	revokedFor,
@@ -20,36 +17,11 @@ import { isBackstopNode } from '../../dist/lib/node-role.js';
 import { deferralFor, readDrainDoc, readDrains } from './expected-down.mjs';
 import { runOn, selectMachines } from './fleet-exec.mjs';
 import { offerFor, offerProbe, parseOfferProbe } from './hosting-offers.mjs';
-import { siteRoot, stateDir } from './paths.mjs';
+import { stateDir } from './paths.mjs';
+import { pm2Peers } from './pm2-app-layer.mjs';
+import { tenantsByNode } from './tenant-declarations.mjs';
 
-/** The app layer's pm2 hosts as `{ set }`, or `{ set: null, why }`: could not look is not "none". */
-export function pm2Peers() {
-	let p;
-	try {
-		p = join(siteRoot(), 'scripts', 'pm2-hosts.json');
-		const doc = JSON.parse(readFileSync(p, 'utf8'));
-		return { set: new Set(Object.keys(doc.hosts ?? doc)) };
-	} catch (err) {
-		return { set: null, why: `${p ?? 'the site checkout'}: ${err.message}` };
-	}
-}
-
-/** Every hosting declaration per node, whole-box (a drain) and shared (its own file). */
-export function tenantsByNode(drainDoc, hostingDoc) {
-	const out = new Map();
-	const add = (node, t) => out.set(node, [...(out.get(node) ?? []), t]);
-	for (const [node, rec] of Object.entries(drainDoc.nodes))
-		if (rec.kind === 'hosting' && rec.hosting) add(node, { ...pick(rec.hosting), mode: 'whole' });
-	for (const [node, recs] of Object.entries(hostingDoc.nodes))
-		for (const rec of recs) add(node, { ...pick(rec), mode: 'shared' });
-	return out;
-}
-const pick = ({ tenant, memoryMb, cores, role }) => ({
-	tenant,
-	memoryMb,
-	cores,
-	...(role ? { role } : {}),
-});
+export { pm2Peers, tenantsByNode };
 
 /**
  * The routing labels each node offers now, by the mint's own rule: `nodeOffer`

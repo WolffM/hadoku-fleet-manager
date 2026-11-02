@@ -1,51 +1,11 @@
 [
   {
-    "from": "scripts/lib/doctor-run.mjs",
-    "to": "scripts/lib/collect-offers.mjs"
-  },
-  {
-    "from": "scripts/lib/doctor-run.mjs",
-    "to": "scripts/lib/hosting-claims.mjs"
-  },
-  {
-    "from": "scripts/lib/slice-inventory-run.mjs",
-    "to": "scripts/lib/collect-offers.mjs"
-  },
-  {
-    "from": "scripts/lib/slice-inventory-run.mjs",
-    "to": "scripts/lib/service-inventory.mjs"
-  },
-  {
     "from": "scripts/lib/tenant-registry.mjs",
     "to": "scripts/lib/hosting-request.mjs"
   },
   {
-    "from": "scripts/lib/tenant-registry.mjs",
-    "to": "scripts/lib/hosting-runtimes.mjs"
-  },
-  {
-    "from": "scripts/lib/tenant-registry.mjs",
-    "to": "src/runners/hosting-record.ts"
-  },
-  {
     "from": "scripts/lib/toolchain-floor.mjs",
     "to": "src/lib/node-users.ts"
-  },
-  {
-    "from": "scripts/node-users.mjs",
-    "to": "scripts/lib/emit.mjs"
-  },
-  {
-    "from": "scripts/node-users.mjs",
-    "to": "scripts/lib/expected-down.mjs"
-  },
-  {
-    "from": "scripts/node-users.mjs",
-    "to": "scripts/node-users-cutover.mjs"
-  },
-  {
-    "from": "scripts/service-inventory.mjs",
-    "to": "scripts/lib/slice-inventory-run.mjs"
   },
   {
     "from": "src/runners/prove-job.ts",

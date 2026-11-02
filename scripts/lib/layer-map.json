@@ -9,6 +9,11 @@
     "layer": "state"
   },
   {
+    "glob": "src/lib/hosting-slice.ts",
+    "layer": "config",
+    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): hostingSliceName moved out of hosting-record.ts (state) — zero-import and declarative, so it sits at config, below state, where scripts/lib/tenant-registry.mjs (config) can reach it without climbing into state. hosting-record.ts re-exports it."
+  },
+  {
     "glob": "src/runners/backstop-force.ts",
     "layer": "state"
   },
@@ -442,7 +447,13 @@
   },
   {
     "glob": "scripts/node-users.mjs",
-    "layer": "access"
+    "layer": "surfaces",
+    "why": "Reclassified wave layers-3 lane H (cut (iii) layer debt): a CLI entry with no logic of its own, same shape as scripts/node-profiles.mjs (also surfaces) — every judgement it reports (judgeNodeUsers, judgeNodeAccounts) is delegated to node-users-facet.mjs, and its own body only assembles the probe script, concatenates the facet's findings, and derives an exit code from counts the facet already classified. Filing it under access made its own imports (emit.mjs, expected-down.mjs, node-users-cutover.mjs) look like access reaching into automation/observation/lifecycle, which they are not: this file makes no access-layer decision of its own."
+  },
+  {
+    "glob": "scripts/lib/pm2-app-layer.mjs",
+    "layer": "access",
+    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): pm2Peers moved out of collect-offers.mjs (tenancy/run) — it reads hadoku_site's own pm2-hosts.json as-is, another system's data (§3.2's access rule), not tenancy content. doctor-run.mjs (observation) reaches it without climbing into collect-offers' tenancy table. collect-offers.mjs re-exports it."
   },
   {
     "glob": "scripts/lib/manifest-target.mjs",
@@ -587,6 +598,16 @@
   {
     "glob": "scripts/lib/tenant-registry.mjs",
     "layer": "config"
+  },
+  {
+    "glob": "scripts/lib/tenant-runtime-names.mjs",
+    "layer": "config",
+    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): runtimeOf and each runtime's names() moved out of hosting-runtimes.mjs (tenancy/core) — both zero-import and pure, declarative over `app`/`request` alone, where the rest of that file's RUNTIMES table reaches into state (AGENT_OOM_SCORE_ADJ) to render unit text, so only this half could move below domain. scripts/lib/tenant-registry.mjs (config) reaches it without climbing into tenancy. hosting-runtimes.mjs re-exports runtimeOf and assembles RUNTIMES[*].names from it."
+  },
+  {
+    "glob": "scripts/lib/tenant-declarations.mjs",
+    "layer": "state",
+    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): tenantsByNode moved out of collect-offers.mjs (tenancy/run) — zero-import, a pure merge of two already-read hosting records into one map, the same \"runtime record, regardless of which domain it's about\" shape state already holds (rule 3, §3.2). doctor-run.mjs (observation) and slice-inventory-run.mjs (tenancy) each reach it without climbing into collect-offers' tenancy table. collect-offers.mjs re-exports it."
   },
   {
     "glob": "scripts/lib/toolchain-floor.mjs",
@@ -1019,8 +1040,9 @@
   {
     "glob": "scripts/lib/slice-inventory-run.mjs",
     "layer": "domain",
-    "domain": "lifecycle",
-    "part": "run"
+    "domain": "tenancy",
+    "part": "run",
+    "why": "Reclassified wave layers-3 lane H (cut (iii) layer debt), from lifecycle to tenancy: `fleet service-inventory --slices` measures DECLARED HOSTING SLICES, the same tenancy-domain fact `collect-offers.mjs` and `hosting.mjs` read, not a lifecycle (toolchain/node-bootstrap) concern — its own header calls it \"every DECLARED hosting slice\". Its only importer is service-inventory.mjs (tenancy/run, dynamic import), so reclassifying costs nothing: the lifecycle label was the misplacement, not service-inventory's tenancy one."
   },
   {
     "glob": "scripts/lib/slice-split.mjs",
@@ -1586,8 +1608,9 @@
   {
     "glob": "scripts/lib/hosting-claims.mjs",
     "layer": "domain",
-    "domain": "tenancy",
-    "part": "core"
+    "domain": "observation",
+    "part": "core",
+    "why": "Reclassified wave layers-3 lane H (cut (iii) layer debt), from tenancy to observation: claimPm2Units judges what doctor-run (observation/run) finds on a node against already-lowered facts (tenant specs, a declared-here set, an app-layer boolean) — it is `fleet doctor`'s own pm2-claims judgement, the same bucket doctor-findings-ops.mjs's pm2-claims findings already sit in, not a tenancy-domain decision about placement or request validity (those stay in hosting-placement.mjs / hosting-request.mjs). Zero-import and its only production importer is doctor-run.mjs, so reclassifying costs nothing."
   },
   {
     "glob": "scripts/lib/hosting-placement.mjs",

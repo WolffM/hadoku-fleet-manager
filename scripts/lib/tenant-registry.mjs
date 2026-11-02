@@ -17,9 +17,9 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { hostingSliceName } from '../../dist/runners/hosting-record.js';
+import { hostingSliceName } from '../../dist/lib/hosting-slice.js';
 import { validateHostingRequest } from './hosting-request.mjs';
-import { RUNTIMES, runtimeOf } from './hosting-runtimes.mjs';
+import { TENANT_RUNTIME_NAMES, runtimeOf } from './tenant-runtime-names.mjs';
 
 const FILE = 'hosting-tenants.json';
 
@@ -32,7 +32,7 @@ const FILE = 'hosting-tenants.json';
 export function tenantSpecFrom(request) {
 	const { app, kind } = request;
 	const runtime = runtimeOf(request);
-	const names = RUNTIMES[runtime].names(app);
+	const names = TENANT_RUNTIME_NAMES[runtime](app);
 	return {
 		app,
 		kind,
@@ -81,8 +81,8 @@ export function readTenantRegistry(dir) {
  * the runtimes that create them, so a new runtime is listed without an edit
  * anywhere that matches tenant users on a node.
  */
-export const TENANT_USER_SUFFIXES = Object.values(RUNTIMES).map((r) =>
-	r.names('APP').user.replace(/^APP/, '')
+export const TENANT_USER_SUFFIXES = Object.values(TENANT_RUNTIME_NAMES).map((namesFor) =>
+	namesFor('APP').user.replace(/^APP/, '')
 );
 
 /** Every registered tenant's app and the user it runs as on a node. */

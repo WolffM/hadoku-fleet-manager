@@ -25,7 +25,7 @@
   ],
   "F5": [],
   "F7-pm2-hosts": [
-    "scripts/lib/collect-offers.mjs:pm2Peers#1",
+    "scripts/lib/pm2-app-layer.mjs:pm2Peers#1",
     "scripts/lib/service-tunnels.mjs:read#1"
   ],
   "F7-child-apps": ["scripts/lib/service-tunnels.mjs:read#1"],

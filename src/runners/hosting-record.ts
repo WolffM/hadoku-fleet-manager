@@ -49,7 +49,10 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path';
 
 import { stateDir } from '../host.js';
+import { hostingSliceName } from '../lib/hosting-slice.js';
 import type { DrainDoc, DrainNotice, HostingResources } from './drain.js';
+
+export { hostingSliceName };
 
 /**
  * The OOM score every CI unit runs at. The kernel scores a process at roughly
@@ -409,9 +412,6 @@ export function heldBackMb(o: {
 
 /** The parent of every hosting slice. Its weight and protection are what the root cgroup compares. */
 export const HOSTING_PARENT_SLICE = 'hosting.slice';
-
-/** The system slice a tenant's resources are served from: `hosting.slice/hosting-<tenant>.slice`. */
-export const hostingSliceName = (tenant: string): string => `hosting-${tenant}.slice`;
 
 /** Where that slice's cgroup is, from the root of the cgroup2 mount. */
 export const hostingSliceCgroup = (tenant: string): string =>

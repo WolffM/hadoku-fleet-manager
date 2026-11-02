@@ -17,7 +17,6 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { hostingSliceCgroup, readHostingDoc } from '../../dist/runners/hosting-record.js';
-import { tenantsByNode } from './collect-offers.mjs';
 import { readDrainDoc } from './expected-down.mjs';
 import { runOn } from './fleet-exec.mjs';
 import { stateDir } from './paths.mjs';
@@ -29,6 +28,7 @@ import {
 	sliceRow,
 	validateResidentRow,
 } from './service-inventory.mjs';
+import { tenantsByNode } from './tenant-declarations.mjs';
 
 const READ_ATTEMPTS = 2;
 const BY = 'fleet service-inventory --slices';

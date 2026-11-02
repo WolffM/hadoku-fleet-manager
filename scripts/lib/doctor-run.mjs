@@ -89,10 +89,11 @@ import {
 import { backstopNodeNames } from '../../dist/lib/node-role.js';
 import { nodeUser } from '../../dist/lib/node-users.js';
 import { readHostingDoc } from '../../dist/runners/hosting-record.js';
-import { pm2Peers, tenantsByNode } from './collect-offers.mjs';
 import { readDrainDoc } from './expected-down.mjs';
 import { claimPm2Units } from './hosting-claims.mjs';
+import { pm2Peers } from './pm2-app-layer.mjs';
 import { readTenantRegistry, tenantSpecFrom } from './tenant-registry.mjs';
+import { tenantsByNode } from './tenant-declarations.mjs';
 import { heldByCycle } from './reboot-hold.mjs';
 import { stateDir } from './paths.mjs';
 import { measuredFacets, writeFacet } from '../../dist/lib/measured.js';
