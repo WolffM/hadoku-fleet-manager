@@ -62,7 +62,12 @@ const TMP_KEEP_MIN = args.includes('--tmp-keep-min')
 // rather than merely absent.
 const emitter = createEmitter({ json: JSON_OUT });
 const log = emitter.log;
-const TIMEOUT_MS = 600_000;
+// Per NODE, and the nodes run concurrently (see the bottom of the file), so
+// this is also the whole run's ceiling. It must sit well inside mgmt-api's
+// 600 s for `ci:claw-cleanup`, or the consumer kills the run before a slow
+// node's own timeout can name it. Measured 2026-11-03 once #50's lsof fixes
+// landed: every node 2-10 s (hokon slowest), from 600 s+ before.
+const NODE_TIMEOUT_MS = 90_000;
 const GB = (kb) => (kb / 1048576).toFixed(2);
 
 const script = readFileSync(SCRIPT_SRC, 'utf8');
@@ -107,7 +112,9 @@ let totalKb = 0;
 // expires after DEFER_DAYS. See lib/expected-down.mjs.
 const DRAINS = readDrains();
 
-for (const m of nodes) {
+async function cleanNode(m) {
+	const lines = [];
+	const say = (l) => lines.push(l);
 	// Declared cache paths go DOWN so the node can answer "is it here, how big";
 	// which of them are abandoned is decided up here, from ownership.
 	const cachePaths = Object.values(FLEET.toolCaches ?? {})
@@ -131,20 +138,22 @@ for (const m of nodes) {
 		`MAX_CONCURRENT_NODE='${MAX_CONCURRENT_NODE}'\nCACHE_PATHS='${cachePaths}'\n${script}`;
 	const r = await runOn(m, payload, {
 		as: 'ci',
-		timeoutMs: TIMEOUT_MS,
+		timeoutMs: NODE_TIMEOUT_MS,
 		maxBuffer: 32 * 1024 * 1024,
 	});
 	const summary = r.out.split('\n').find((l) => l.startsWith('SUMMARY ')) ?? '';
 	if (!r.ok && !summary) {
 		const defer = deferralFor(m, DRAINS);
 		if (defer.deferred) {
-			log(`── ${m}\n   · ${deferralNote(m, defer)} — not cleaned`);
-			results.push({ machine: m, ok: true, expectedDown: true, skipped: 'expected down' });
-			continue;
+			say(`── ${m}\n   · ${deferralNote(m, defer)} — not cleaned`);
+			return {
+				lines,
+				kb: 0,
+				result: { machine: m, ok: true, expectedDown: true, skipped: 'expected down' },
+			};
 		}
-		log(`── ${m}\n   ✗ unreachable: ${r.out.trim().slice(0, 160)}`);
-		results.push({ machine: m, ok: false, error: r.out.trim().slice(0, 300) });
-		continue;
+		say(`── ${m}\n   ✗ unreachable: ${r.out.trim().slice(0, 160)}`);
+		return { lines, kb: 0, result: { machine: m, ok: false, error: r.out.trim().slice(0, 300) } };
 	}
 	const f = Object.fromEntries(
 		summary
@@ -164,7 +173,6 @@ for (const m of nodes) {
 		Number(f.tmpfs_kb ?? 0) +
 		Number(f.venv_kb ?? 0) +
 		Number(f.unclassified_kb ?? 0);
-	totalKb += kb;
 	// What the backstop sweep found that no rule names, by class. Printed and
 	// carried in --json so a new kind of debris is visible the first night it
 	// appears, which is the point of reporting it at all.
@@ -181,7 +189,7 @@ for (const m of nodes) {
 		)
 		.map((u) => ({ root: u.root, class: u.class, n: Number(u.n), kb: Number(u.kb) }));
 	const busy = Number(f.busy_skipped ?? 0);
-	log(
+	say(
 		`── ${m}${r.local ? ' (local)' : ''}\n` +
 			`   stale ${GB(f.stale_kb ?? 0)} GB   _update ${GB(f.update_kb ?? 0)} GB   ` +
 			// Reported on its own line rather than folded into `stale`, because an
@@ -242,12 +250,36 @@ for (const m of nodes) {
 		if (live.length) {
 			cacheFindings.set(m, live);
 			for (const c of live) {
-				log(`     CACHE-ABANDONED ${c.path}  ${GB(present.get(c.path))} GB — ${c.reason}`);
+				say(`     CACHE-ABANDONED ${c.path}  ${GB(present.get(c.path))} GB — ${c.reason}`);
 			}
 		}
 	}
 
-	results.push({ machine: m, ok: true, ...f, reclaimKb: kb, unclassified });
+	return { lines, kb, result: { machine: m, ok: true, ...f, reclaimKb: kb, unclassified } };
+}
+
+// CONCURRENTLY, each node on its own clock (#50). One after another, every
+// node shared mgmt-api's single 600 s budget for the whole run, so one slow
+// node spent it and the cron died naming nobody; on 2026-11-01..03 that was
+// hokon, whose un-flagged `lsof` resolved every socket's name for 6 minutes.
+// Each node now gets NODE_TIMEOUT_MS, a hang fails as THAT node's finding, and
+// the run ends inside the consumer's budget. One stderr line per node as it
+// finishes carries its duration, so the slow one is named even in --json.
+const runs = await Promise.all(
+	nodes.map(async (m) => {
+		const t0 = Date.now();
+		const run = await cleanNode(m);
+		const seconds = Math.round((Date.now() - t0) / 1000);
+		console.error(`clean-runner-debris: ${m} ${run.result.ok ? 'done' : 'FAILED'} in ${seconds}s`);
+		return { ...run, result: { ...run.result, seconds } };
+	})
+);
+// Printed in manifest order once all are back, so the report reads the same
+// whichever node answered first.
+for (const run of runs) {
+	for (const l of run.lines) log(l);
+	results.push(run.result);
+	totalKb += run.kb;
 }
 
 if (JSON_OUT) {

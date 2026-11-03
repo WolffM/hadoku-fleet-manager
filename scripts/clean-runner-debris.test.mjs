@@ -88,7 +88,7 @@ function baseEnv(fixtureRoot, overrides = {}) {
  *  regardless of what is actually installed or running on the host this
  *  suite executes on (CI runs it mid-job, with a real live Worker/Listener
  *  and a real tmpfs /tmp on the node; none of that may leak in). */
-function mkStubBin({ workerPid, listenerPid, lsofHit, lsofOpen } = {}) {
+function mkStubBin({ workerPid, listenerPid, lsofHit, lsofOpen, lsofLog } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'crd-bin-'));
 	created.push(dir);
 	writeFileSync(
@@ -105,7 +105,10 @@ function mkStubBin({ workerPid, listenerPid, lsofHit, lsofOpen } = {}) {
 		: lsofHit
 			? 'echo fake-open; exit 0'
 			: 'exit 1';
-	writeFileSync(join(dir, 'lsof'), `#!/bin/sh\n${lsofBody}\n`);
+	// `lsofLog`: a file each call appends its argv to, for asserting HOW lsof
+	// was asked, not only what it answered.
+	const logLine = lsofLog ? `echo "$*" >> '${lsofLog}'\n` : '';
+	writeFileSync(join(dir, 'lsof'), `#!/bin/sh\n${logLine}${lsofBody}\n`);
 	writeFileSync(join(dir, 'fuser'), `#!/bin/sh\nexit 1\n`);
 	for (const f of ['pgrep', 'lsof', 'fuser']) chmodSync(join(dir, f), 0o755);
 	return dir;
@@ -655,6 +658,41 @@ test('an entry something holds open survives, however old: one lsof per root, no
 	assert.equal(existsSync(heldSo), true, 'a mapped extract stays');
 	assert.equal(existsSync(idleDir), false);
 	assert.equal(existsSync(idleSo), false);
+});
+
+/**
+ * #50, hokon on 2026-11-03: 309 `cardtable-e2e-web-*` dirs, each sent through
+ * in_use's `lsof +D` (a full process scan apiece), and every `-Fn` call without
+ * `-n -P` resolving each socket's name: 600 s+ for one node. Glob dirs now ask
+ * open_tops' one answer, and every lsof is asked not to resolve names.
+ * MUTATION: put `in_use "$d"` back in sweep_glob's dir loop, or drop `-n -P`
+ * from open_tops, and this fails.
+ */
+test('glob dirs use the one lsof per root, never lsof +D each, and lsof never resolves names', () => {
+	const fixtureRoot = mkfixture();
+	const env = baseEnv(fixtureRoot);
+	mkdirSync(env.TMPFS_ROOT, { recursive: true });
+	const held = join(env.TMPFS_ROOT, 'cardtable-e2e-web-held01');
+	const idle = [];
+	for (let i = 0; i < 5; i++) idle.push(join(env.TMPFS_ROOT, `cardtable-e2e-web-idle0${i}`));
+	for (const d of [held, ...idle]) {
+		mkdirSync(join(d, 'x'), { recursive: true });
+		writeFileSync(join(d, 'x', 'f'), 'x');
+		ageAll(d, 120);
+	}
+	const lsofLog = join(fixtureRoot, 'lsof-calls.log');
+	const stubBin = mkStubBin({ lsofOpen: [join(held, 'x', 'f')], lsofLog });
+	const r = run(fixtureRoot, env, { stubBin });
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(existsSync(held), true, 'a dir with a file open inside it stays');
+	for (const d of idle) assert.equal(existsSync(d), false, `${d} is idle and old`);
+	const calls = readFileSync(lsofLog, 'utf8').trim().split('\n');
+	assert.equal(
+		calls.filter((c) => c.includes('+D') && c.includes('cardtable-e2e-web-')).length,
+		0,
+		`no per-dir lsof +D for glob dirs:\n${calls.join('\n')}`
+	);
+	for (const c of calls) assert.match(c, /(^| )-n -P( |$)/, `lsof asked to resolve names: ${c}`);
 });
 
 test('a dry run counts named debris once, under its own rule, never again as unclassified', () => {

@@ -188,13 +188,13 @@ done
 # under it open. The open-file check uses `lsof +D` (falling back to `fuser`)
 # when one is installed; tests stub both. The claws DO have lsof (2026-10-10,
 # though this comment said otherwise for a month), and `lsof +D` scans every
-# process on the box, so it is fine here, on the handful of named debris
-# dirs, and ruinous per entry: see open_tops() for the bulk passes.
+# process on the box, so it is fine on a handful of dirs and ruinous per
+# entry: see open_tops() for the bulk passes, sweep_glob's dirs included.
 in_use() {
 	d="$1"
 	[ -n "$(find "$d" -mmin "-$TMP_KEEP_MIN" -print -quit 2>/dev/null)" ] && return 0
 	if command -v lsof >/dev/null 2>&1; then
-		[ -n "$(lsof +D "$d" 2>/dev/null)" ] && return 0
+		[ -n "$(lsof -n -P +D "$d" 2>/dev/null)" ] && return 0
 	elif command -v fuser >/dev/null 2>&1; then
 		fuser -s "$d" >/dev/null 2>&1 && return 0
 	fi
@@ -210,15 +210,17 @@ declare -A OPEN_TOP=()
 open_tops() {
 	OPEN_TOP=()
 	command -v lsof >/dev/null 2>&1 || return 0
-	local line rel
-	while IFS= read -r line; do
-		case "$line" in
-		n"$1"/*)
-			rel="${line#n"$1"/}"
-			OPEN_TOP[${rel%%/*}]=1
-			;;
-		esac
-	done < <(lsof -u "$(id -u)" -Fn 2>/dev/null)
+	local top
+	# FILTERED BEFORE BASH SEES IT (#50). On hokon this user owns the desktop,
+	# so lsof prints ~48,000 names per call; a bash `read` per line made the
+	# calls in one run cost minutes. awk keeps only names under ROOT, one per
+	# top-level entry. `-n -P`: without them lsof resolves every socket's host
+	# and port name, which took 6m21s on hokon (0.5s with them) and was the
+	# whole of the 600 s overrun on 2026-11-01..03.
+	while IFS= read -r top; do
+		OPEN_TOP[$top]=1
+	done < <(lsof -n -P -u "$(id -u)" -Fn 2>/dev/null |
+		awk -v p="n$1/" 'index($0, p) == 1 { t = substr($0, length(p) + 1); sub(/\/.*/, "", t); if (t != "" && !(t in seen)) { seen[t] = 1; print t } }')
 }
 
 # is_safe_compile_cache_dir PATH — guards a WHOLE-directory rm -rf sourced
@@ -522,9 +524,14 @@ sweep_glob() {
 			rm -f -- "$f" 2>/dev/null && removed=$((removed + 1))
 		fi
 	done < <(find "$root" -mindepth 1 -maxdepth 1 -name "$pat" -type f -mmin "+$TMP_KEEP_MIN" -printf '%k %p\0' 2>/dev/null)
+	# Directories ask the same one-lsof answer (OPEN_TOP) rather than in_use's
+	# `lsof +D` each (#50): "a handful of named debris dirs" was 309
+	# cardtable-e2e-web-* on hokon on 2026-11-03, a full process scan apiece
+	# and about 150 s of that node's run. The deep-mtime half of in_use stays.
 	for d in "$root"/$pat; do
 		[ -d "$d" ] && [ ! -L "$d" ] || continue
-		in_use "$d" && continue
+		[ -n "${OPEN_TOP[${d##*/}]+x}" ] && continue
+		[ -n "$(find "$d" -mmin "-$TMP_KEEP_MIN" -print -quit 2>/dev/null)" ] && continue
 		sz=$(du -sk "$d" 2>/dev/null | awk '{print $1+0}')
 		kb_tmpfs=$((kb_tmpfs + sz))
 		if [ "$APPLY" = 1 ]; then
@@ -557,8 +564,9 @@ sweep_unclassified() {
 	# one process afterwards: one `du` for every directory's size, one `sed` to
 	# fold every name, one `xargs rm`. The first version forked sed, du and rm
 	# per entry and took 4m16s for claw-6's 6,618 entries (2026-10-10), against
-	# a 600 s per-node budget. Freshness is one walk and the open-file check one
-	# lsof (open_tops), so nothing here forks per entry at all.
+	# what was then a 600 s per-node budget (90 s since #50). Freshness is one
+	# walk and the open-file check one lsof (open_tops), so nothing here forks
+	# per entry at all.
 	local -a paths=() names=() kbs=() dirs=()
 	# Which top-level entries hold ANYTHING written inside UNKNOWN_KEEP_MIN, in
 	# one walk of the whole root. Asking each directory separately was a fork
@@ -566,9 +574,13 @@ sweep_unclassified() {
 	open_tops "$root"
 	local -A fresh=()
 	local top
+	# Cut to the top-level name and de-duplicated before the loop: a busy root
+	# holds hundreds of thousands of fresh entries (224k on hokon, 2026-11-03),
+	# and a bash `read` each was most of that node's run.
 	while IFS= read -r -d '' top; do
-		fresh[${top%%/*}]=1
-	done < <(find "$root" -mindepth 1 -mmin "-$UNKNOWN_KEEP_MIN" -printf '%P\0' 2>/dev/null)
+		fresh[$top]=1
+	done < <(find "$root" -mindepth 1 -mmin "-$UNKNOWN_KEEP_MIN" -printf '%P\0' 2>/dev/null |
+		cut -z -d/ -f1 | sort -zu)
 	while IFS= read -r -d '' rec; do
 		kind="${rec%% *}"
 		rest="${rec#* }"
