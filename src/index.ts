@@ -9,16 +9,19 @@
  */
 import { installHost, type FleetHost } from './host.js';
 import { ghGetConditional, ghGet, ghWrite } from './lib/github-client.js';
-import { startRunnerHealthMonitor } from './runner-health.js';
+import { startRunnerHealthMonitor, __stopRunnerHealthMonitorForTesting } from './runner-health.js';
 import { getRunnerHealthSnapshot } from './runner-health-snapshot.js';
-import { startFastLoop } from './fleet-loop.js';
+import { startFastLoop, __resetFleetLoopForTesting } from './fleet-loop.js';
 import { router as fleetRouter } from './routes/fleet.js';
-import { startClawReboot } from './claw-reboot.js';
-import { startBackstopTools } from './backstop-tools.js';
-import { startHostingConverge } from './hosting-converge.js';
-import { startHostingVerify } from './hosting-verify.js';
-import { startProvisioningConverge } from './provisioning-converge.js';
-import { startCapacitySampling } from './capacity-sample.js';
+import { startClawReboot, __stopClawRebootForTesting } from './claw-reboot.js';
+import { startBackstopTools, __stopBackstopToolsForTesting } from './backstop-tools.js';
+import { startHostingConverge, __stopHostingConvergeForTesting } from './hosting-converge.js';
+import { startHostingVerify, __stopHostingVerifyForTesting } from './hosting-verify.js';
+import {
+	startProvisioningConverge,
+	__stopProvisioningConvergeForTesting,
+} from './provisioning-converge.js';
+import { startCapacitySampling, __stopCapacitySamplingForTesting } from './capacity-sample.js';
 // runner-health (observation) calls the backstop decision and the hosted
 // fallback (both ci-scheduling) through a port it does not own the import
 // side of (rule 5, §3.2; see `runner-health-ports.ts`'s header). THIS file
@@ -35,7 +38,7 @@ import {
 	setBackstopDecisionReset,
 	setHostedFallbackReset,
 } from './runner-health-ports.js';
-import { startPpeSweep } from './ppe-sweep.js';
+import { startPpeSweep, __stopPpeSweepForTesting } from './ppe-sweep.js';
 
 export type { FleetHost, FleetHostLogger } from './host.js';
 export type { RunnerHealthSnapshot } from './runner-health.js';
@@ -193,7 +196,25 @@ export function createFleetManager(host: FleetHost): FleetManager {
 	};
 }
 
-/** Test seam. Not part of the supported API. */
+/**
+ * Test seam. Not part of the supported API.
+ *
+ * Undoes a `createFleetManager()` AND everything its `start()` started: one stop
+ * per `start*()` call above, in the same order, so a test that starts the real
+ * loops leaves no timer behind. The list lives here, beside `start()`, because a
+ * teardown kept in a test file drifted: it stopped seven of the nine loops, and
+ * the capacity sampler and the ppe sweep kept their timers for the rest of the
+ * test process. Every stop is safe when its loop never started.
+ */
 export function __resetFleetManagerForTesting(): void {
+	__stopRunnerHealthMonitorForTesting();
+	__resetFleetLoopForTesting();
+	__stopProvisioningConvergeForTesting();
+	__stopClawRebootForTesting();
+	__stopHostingConvergeForTesting();
+	__stopHostingVerifyForTesting();
+	__stopBackstopToolsForTesting();
+	__stopCapacitySamplingForTesting();
+	__stopPpeSweepForTesting();
 	constructed = false;
 }

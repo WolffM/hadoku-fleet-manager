@@ -21,25 +21,19 @@
  * absence or presence of these log lines after `start()` is a direct read of
  * whether the call site actually reached them, not an inference from timing.
  *
- * `createFleetManager` is itself a singleton (throws on a second call) —
- * `__resetFleetManagerForTesting()` is the existing test seam for that.
- * `__resetFleetLoopForTesting()` and `__stopRunnerHealthMonitorForTesting()`
- * are the existing seams that clear each module's own `started` flag, so this
- * file can exercise the switch more than once in one process without one
- * case's real activation making the next case's assertion vacuous.
+ * `createFleetManager` is itself a singleton (throws on a second call).
+ * `__resetFleetManagerForTesting()` clears that guard AND stops every loop
+ * `start()` started, clearing each module's own `started` flag, so this file
+ * can exercise the switch more than once in one process without one case's
+ * real activation making the next case's assertion vacuous. The last test
+ * below holds that the reset's stop list keeps up with `start()`.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFleetManager, __resetFleetManagerForTesting } from '../index.js';
-import { __resetFleetLoopForTesting } from '../fleet-loop.js';
-import { __stopClawRebootForTesting } from '../claw-reboot.js';
-import { __stopBackstopToolsForTesting } from '../backstop-tools.js';
-import { __stopHostingConvergeForTesting } from '../hosting-converge.js';
-import { __stopHostingVerifyForTesting } from '../hosting-verify.js';
-import { __stopProvisioningConvergeForTesting } from '../provisioning-converge.js';
-import { __stopRunnerHealthMonitorForTesting } from '../runner-health.js';
 import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
 import { __setHostForTesting, type FleetHost } from '../host.js';
 import { testHost } from './install-test-host.js';
@@ -82,17 +76,6 @@ function hostWith(lines: string[], controller: boolean | undefined): FleetHost {
 	};
 }
 
-/** Tear down after a case that actually started the real loops. */
-function stopRealLoops(): void {
-	__resetFleetLoopForTesting();
-	__stopRunnerHealthMonitorForTesting();
-	__stopProvisioningConvergeForTesting();
-	__stopHostingConvergeForTesting();
-	__stopHostingVerifyForTesting();
-	__stopBackstopToolsForTesting();
-	__stopClawRebootForTesting();
-}
-
 test('controller: false — start() starts neither loop, logs one line, router/snapshot still work', () => {
 	const lines: string[] = [];
 	const mgr = createFleetManager(hostWith(lines, false));
@@ -125,8 +108,6 @@ test('controller: false — start() starts neither loop, logs one line, router/s
 		assert.equal(mgr.snapshot(), null, 'a passive host must report snapshot() as null');
 		assert.equal(getRunnerHealthSnapshot(), null);
 	} finally {
-		// Neither real loop started, so there is nothing to stop — only the
-		// singleton guard in index.ts needs resetting for the next case.
 		__resetFleetManagerForTesting();
 		__setHostForTesting(testHost);
 	}
@@ -151,7 +132,6 @@ test('controller omitted — defaults to true, start() starts both loops', () =>
 			'must not log the passive-host line when controller is omitted'
 		);
 	} finally {
-		stopRealLoops();
 		__resetFleetManagerForTesting();
 		__setHostForTesting(testHost);
 	}
@@ -176,8 +156,31 @@ test('controller: true — explicit true behaves exactly like omitted', () => {
 			`the provisioning converger must have started with controller: true: ${JSON.stringify(lines)}`
 		);
 	} finally {
-		stopRealLoops();
 		__resetFleetManagerForTesting();
 		__setHostForTesting(testHost);
+	}
+});
+
+/**
+ * The reset's stop list keeps up with `start()`. A teardown kept by hand in this
+ * file once stopped seven of the nine loops `start()` starts, and the capacity
+ * sampler and the ppe sweep kept their timers for the rest of the process: the
+ * timers are unref'd, so nothing hung and nothing failed. Read off the source,
+ * every module index.ts imports a `start*` from must also give it a
+ * `__stop*ForTesting`/`__reset*ForTesting`, and `__resetFleetManagerForTesting`
+ * must call it.
+ */
+test('__resetFleetManagerForTesting stops every loop start() starts', () => {
+	const src = readFileSync(resolve(HERE, '..', '..', 'src', 'index.ts'), 'utf8');
+	const reset = src.slice(src.indexOf('export function __resetFleetManagerForTesting'));
+	const resetBody = reset.slice(0, reset.indexOf('\n}\n'));
+	const starters = [
+		...src.matchAll(/import\s*\{([^}]*\bstart[A-Z]\w*[^}]*)\}\s*from\s*'([^']+)'/g),
+	];
+	assert.ok(starters.length >= 9, `expected the nine loop imports, found ${starters.length}`);
+	for (const [, names, from] of starters) {
+		const stop = names.match(/__(?:stop|reset)\w*ForTesting/)?.[0];
+		assert.ok(stop, `${from}: index.ts imports a start*() from it but no stop seam`);
+		assert.ok(resetBody.includes(`${stop}();`), `${from}: the reset never calls ${stop}()`);
 	}
 });
