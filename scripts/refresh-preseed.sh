@@ -22,6 +22,7 @@ die() { printf '\n!!! %s\n\n' "$*" >&2; exit 1; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/make-preseed.sh
 . "$HERE/lib/make-preseed.sh"
+. "$HERE/lib/stick-stamp.sh"
 
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 OWNER="${SUDO_USER:-$(id -un)}"
@@ -212,6 +213,9 @@ if [ "$HAS_NETINST" = true ]; then
 	preseed_build_initrd_cpio "$RENDERED" "$KM/$NETINST_CPIO_REL" ||
 		die "could not build $NETINST_CPIO_REL"
 	chmod 600 "$KM/$NETINST_CPIO_REL"
+	# The cpio is on CLAWKIT, so the manifest usb-prep just wrote no longer
+	# describes the stick. Re-record it, or `sha256sum -c` fails on this file.
+	manifest_write "$KM" || die "could not rewrite MANIFEST.sha256"
 fi
 rm -f "$RENDERED"
 sync

@@ -18,10 +18,26 @@ hdr()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 V=$(blkid -L Ventoy) || { echo "no Ventoy partition"; exit 1; }
 K=$(blkid -L CLAWKIT) || { echo "no CLAWKIT partition"; exit 1; }
-MV=$(mktemp -d); MK=$(mktemp -d)
-trap 'umount "$MV" 2>/dev/null; umount "$MK" 2>/dev/null; rmdir "$MV" "$MK" 2>/dev/null' EXIT
-mount -o ro "$V" "$MV" || exit 1
-mount -o ro "$K" "$MK" || exit 1
+# REUSE A MOUNT THAT IS ALREADY THERE. Every desktop auto-mounts a stick the
+# moment it is plugged in, read-write, and a second `mount -o ro` then dies
+# with "would change RO state" — so this verifier refused the normal case
+# (claw-10's stick, 2026-11-03). refresh-preseed.sh already tolerated it. Only
+# what this script mounted itself is unmounted on exit.
+OURS=""
+mounted_at() { awk -v d="$1" '$1==d {print $2; exit}' /proc/mounts; }
+mount_ro() { # $1 = device, $2 = variable to receive the mountpoint
+	local at
+	at="$(mounted_at "$1")"
+	if [ -z "$at" ]; then
+		at="$(mktemp -d)"
+		mount -o ro "$1" "$at" || { rmdir "$at"; return 1; }
+		OURS="$OURS $at"
+	fi
+	printf -v "$2" '%s' "$at"
+}
+trap 'for m in $OURS; do umount "$m" 2>/dev/null; rmdir "$m" 2>/dev/null; done' EXIT
+mount_ro "$V" MV || exit 1
+mount_ro "$K" MK || exit 1
 
 # §6.1 (#51): Ventoy's ISO file is now OPTIONAL. A stick built with
 # `node-usb-prep.sh --netinst-iso` carries Debian on its own numbered
@@ -140,7 +156,14 @@ fi
 fi # [ -n "$ISO" ] — legacy Ventoy-ISO sub-checks
 
 hdr "CLAWKIT payload ($K)"
-( cd "$MK" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1 ) && ok "MANIFEST.sha256 verifies" || bad "payload checksums FAIL"
+# NAME THE FILES. "checksums FAIL" alone cannot tell a stale record from a
+# corrupt payload, and those are a rebuild versus nothing.
+if SUMS="$(cd "$MK" && sha256sum -c MANIFEST.sha256 2>&1)"; then
+  ok "MANIFEST.sha256 verifies"
+else
+  bad "payload checksums FAIL:"
+  printf '%s\n' "$SUMS" | grep -v ': OK$' | sed 's/^/      /'
+fi
 
 # WHETHER THE PAYLOAD IS CURRENT, which MANIFEST.sha256 structurally cannot say:
 # it checks the writer's files against the writer's own record. This re-hashes

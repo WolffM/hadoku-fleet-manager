@@ -109,6 +109,19 @@ stamp_compare() {
 	return 0
 }
 
+# Write MANIFEST.sha256 over every file on the stick. $1 = stick mount.
+#
+# ONE WRITER, CALLED BY EVERY SCRIPT THAT CHANGES A FILE ON CLAWKIT. The
+# manifest used to be written inline by usb-prep alone, and refresh-preseed
+# rewrote install/preseed-initrd.cpio.gz after it without updating it, so
+# EVERY refreshed netinst stick failed `sha256sum -c` on that one file
+# (claw-10's stick, 2026-11-03). A failure that fires on every correct stick
+# teaches the operator to ignore it.
+manifest_write() {
+	(cd "$1" && find . -type f ! -name MANIFEST.sha256 ! -path './lost+found/*' -print0 |
+		sed -z 's|^\./||' | sort -z | xargs -0 -r sha256sum >MANIFEST.sha256)
+}
+
 # One line an operator can act on.
 stamp_verdict() {
 	local mnt="$1" root="$2"

@@ -180,3 +180,55 @@ test('the payload list is non-empty — an empty one would compare nothing', () 
 	assert.ok(BOOTSTRAP_FILES.length >= 2, `parsed only ${BOOTSTRAP_FILES.length} bootstrap files`);
 	assert.ok(BOOTSTRAP_FILES.includes('convert.sh'), 'convert.sh is payload and must be stamped');
 });
+
+const manifestCheck = (d) =>
+	spawnSync('sha256sum', ['-c', 'MANIFEST.sha256'], { cwd: d, encoding: 'utf8' });
+
+test('manifest_write records every file, including nested and spaced names', () => {
+	const d = stick();
+	mkdirSync(join(d, 'install'));
+	writeFileSync(join(d, 'install', 'preseed-initrd.cpio.gz'), 'cpio v1');
+	writeFileSync(join(d, 'README with space.txt'), 'hi');
+	assert.equal(sh(`manifest_write "${d}"`).status, 0);
+	const m = readFileSync(join(d, 'MANIFEST.sha256'), 'utf8');
+	assert.match(m, / {2}install\/preseed-initrd\.cpio\.gz$/m);
+	assert.match(m, / {2}README with space\.txt$/m);
+	assert.doesNotMatch(m, /MANIFEST\.sha256/, 'the manifest must not checksum itself');
+	assert.equal(manifestCheck(d).status, 0, manifestCheck(d).stdout);
+});
+
+test('a file rewritten after the manifest fails until manifest_write runs again', () => {
+	// claw-10's stick, 2026-11-03: refresh-preseed rewrote the cpio after
+	// usb-prep's manifest and every refreshed netinst stick failed sha256sum -c.
+	const d = stick();
+	mkdirSync(join(d, 'install'));
+	writeFileSync(join(d, 'install', 'preseed-initrd.cpio.gz'), 'cpio v1');
+	sh(`manifest_write "${d}"`);
+	writeFileSync(join(d, 'install', 'preseed-initrd.cpio.gz'), 'cpio v2');
+	const stale = manifestCheck(d);
+	assert.notEqual(stale.status, 0, 'the planted rewrite was not detected');
+	assert.match(stale.stdout, /preseed-initrd\.cpio\.gz: FAILED/);
+	sh(`manifest_write "${d}"`);
+	assert.equal(manifestCheck(d).status, 0);
+});
+
+test('every script that writes a file onto CLAWKIT re-records the manifest after its last write', () => {
+	// One writer (manifest_write), and it runs AFTER the final write in each
+	// script. Reading the source is the only way to hold this without a block
+	// device: both scripts need root and a real stick.
+	for (const [script, lastWrite] of [
+		['node-usb-prep.sh', /stamp_write "\$MNT"/],
+		['refresh-preseed.sh', /preseed_build_initrd_cpio "\$RENDERED" "\$KM/],
+	]) {
+		const src = readFileSync(join(ROOT, 'scripts', script), 'utf8');
+		const w = src.search(lastWrite);
+		const m = src.search(/^\s*manifest_write "\$(MNT|KM)"/m);
+		assert.ok(w > -1, `${script}: could not find its last write — update this test`);
+		assert.ok(m > w, `${script}: manifest_write must run after its last write to CLAWKIT`);
+		assert.doesNotMatch(
+			src,
+			/xargs[^\n]*sha256sum\s*>\s*MANIFEST/,
+			`${script}: a second manifest writer`
+		);
+	}
+});

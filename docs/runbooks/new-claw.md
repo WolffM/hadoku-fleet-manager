@@ -29,6 +29,18 @@ door does not know fails the build.
   hardware is `claw-N+1`, never a reused name** (see R3, and the memory note
   `node-names-immutable`).
 
+## Who does what
+
+**The operator does steps 1–3, at the box, and nothing else** except the
+one gateway click in step 6. Everything from step 4 on runs from the control
+host and is the agent's job, not the operator's, the moment
+`ssh <admin>@<node>` works. Do not hand the operator a list of `fleet …`
+commands to type (operator, 2026-11-03: "all of those things should be
+handled by you as soon as ssh works"). What the agent needs from the operator
+is "ssh works" plus the node's LAN IP, then later a DHCP reservation for one
+MAC/IP pair. No code holds the gateway's credential, so that click stays
+human. Report back when step 7 verifies, not after each step in between.
+
 ## Steps
 
 1. **Boot the stick.** Where: at the new box, console. As: nobody (no OS yet).
@@ -74,22 +86,32 @@ up` invocation it chose (tags come from the node's profile) at the end of
    Command:
 
    ```
-   fleet enroll <node>              # propose — reads the node's own
-                                     # /var/log/node-bootstrap-*.log over ssh,
-                                     # re-probes it independently, and exits
-                                     # non-zero: nothing is written yet
-   fleet enroll <node> --write      # commit the proposal to the manifest
+   fleet enroll <node> --address <lan-ip>          # propose — reads the node's own
+                                                    # /var/log/node-bootstrap-*.log over ssh,
+                                                    # re-probes it independently, and exits
+                                                    # non-zero: nothing is written yet
+   fleet enroll <node> --address <lan-ip> --write  # commit the proposal to the manifest
    ```
+
+   **`--address` is not optional on a new node.** The control host has no
+   `~/.ssh/config` entry for `<node>` yet, so without it enroll has nothing
+   to connect to. `--address` is what writes that entry: a delimited block,
+   appended, with the file backed up first. It prefers the node's tailnet
+   name once that name actually opens a session, and otherwise pins the
+   LAN IP (`scripts/lib/enroll-ssh.mjs`). Once the entry exists,
+   `--address` is redundant and harmless.
 
    No manual `tee`/copy-down step exists any more: `fleet enroll <node>`
    reads the node's newest bootstrap log itself. Measurement is automated;
-   **declaration stays a human act** — `--write` is the only thing that
+   declaration is a deliberate act, and `--write` is the only thing that
    commits it (`docs/VOCABULARY.md`, "ENROLL is the only inversion in the
-   system").
+   system"). The agent runs it once the proposal's measured hardware matches
+   the box (see "Who does what").
    Verify: `fleet enroll <node>` a second time reports the node already
    declared, not a fresh proposal.
 
-5. **Node-users cutover** (manual; owned by the node-users workstream, d3).
+5. **Node-users cutover** (a separate command, never chained; owned by the
+   node-users workstream, d3. The agent runs it, not the operator).
    Where: from the control host. As: `fleet node-users` connects as `admin`;
    the cutover itself creates and moves the node's `ci` role user.
    Command:
@@ -132,10 +154,11 @@ up` invocation it chose (tags come from the node's profile) at the end of
      than trusting its own write. It CANNOT make the reservation itself — no
      code holds the gateway's admin credential (memory `lan-reservations`) —
      so a dry run (`fleet provision --machine <node>`, no `--confirm`) prints
-     the exact MAC/IP to reserve if the gateway doesn't have it yet: do that
-     by hand (Advanced → DHCP Reservation → delete any Auto row for that MAC →
-     select the MAC → pick the address → Add) BEFORE re-running with
-     `--confirm`. hokon reaches every claw by this LAN IP in `~/.ssh/config`;
+     the exact MAC/IP to reserve if the gateway doesn't have it yet. This is
+     the operator's one control-host-side action: the agent asks for exactly
+     that pair (Advanced → DHCP Reservation → delete any Auto row for that
+     MAC → select the MAC → pick the address → Add) and waits for it BEFORE
+     re-running with `--confirm`. hokon reaches every claw by this LAN IP in `~/.ssh/config`;
      without the reservation on record, it is a DHCP lease that can move
      under the node.
    - **Toolchain floor.** The chain installs the benchmark instrument floor

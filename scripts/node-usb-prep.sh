@@ -719,7 +719,7 @@ fi
 stamp_write "$MNT" "$(cd "$HERE/.." && pwd)" "$PROFILE"
 echo "    stamped: $(sed -n 's/^version=//p' "$MNT/STAMP") $(sed -n 's/^commit=//p' "$MNT/STAMP")"
 
-(cd "$MNT" && find . -type f ! -name MANIFEST.sha256 | sed 's|^\./||' | sort | xargs sha256sum >MANIFEST.sha256)
+manifest_write "$MNT"
 sync
 
 KIT_REPORT="$KIT_PART"
