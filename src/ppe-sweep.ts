@@ -34,7 +34,13 @@ import { withGhCaller } from './gh-budget.js';
 import { githubToken, logger } from './host.js';
 import { userAgent } from './lib/fleet-config.js';
 import { ghFetchRaw } from './lib/github-client.js';
-import { computeFirstDelayMs, createOverlapGuard, scheduleRepeating } from './lib/job-runner.js';
+import {
+	computeFirstDelayMs,
+	createOverlapGuard,
+	finishTick,
+	scheduleRepeating,
+	type Verdict,
+} from './lib/job-runner.js';
 
 /** Between passes. Matches `fleet:ppe-sweep`'s registry row. */
 export const PPE_SWEEP_MS = 5 * 60_000;
@@ -223,6 +229,28 @@ export async function ppeSweepTick(
 	return { woke, failed };
 }
 
+/**
+ * One scheduled pass: the tick, then {@link finishTick}. The loop registers
+ * with liveness when it is scheduled, so a pass that never notes its tick
+ * reads as `stale` on GET /mgmt/api/status from ~5 minutes after every boot
+ * and pages as a critical outage (2026-11-02, both this loop and
+ * capacity-sample, since they shipped). Could not look is still a COMPLETED
+ * pass: the loop is alive, and the run row says it could not look.
+ */
+export async function ppeSweepPass(nowMs: number = Date.now()): Promise<void> {
+	const r = await ppeSweepTick(nowMs);
+	const verdict: Verdict = r === null ? 'unavailable' : r.failed.length ? 'findings' : 'ok';
+	await finishTick({
+		jobName: JOB_NAME,
+		intervalMs: PPE_SWEEP_MS,
+		now: nowMs,
+		verdict,
+		durationMs: Date.now() - nowMs,
+		why: r === null ? 'could not read ppe state' : undefined,
+		data: r ? { woke: r.woke, failed: r.failed } : undefined,
+	});
+}
+
 let started = false;
 let guard = createOverlapGuard();
 let scheduled: ReturnType<typeof scheduleRepeating> | null = null;
@@ -240,10 +268,7 @@ export function __stopPpeSweepForTesting(): void {
 export function startPpeSweep(): void {
 	if (started) return;
 	started = true;
-	const pass = () =>
-		guard.run(async () => {
-			await ppeSweepTick();
-		});
+	const pass = () => guard.run(() => ppeSweepPass());
 	const firstIn = computeFirstDelayMs(
 		{ intervalMs: PPE_SWEEP_MS, firstPassMinMs: FIRST_PASS_MIN_MS },
 		null

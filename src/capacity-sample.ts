@@ -31,7 +31,13 @@ import {
 	CAPACITY_SAMPLE_FILE,
 	type CapacitySampleRow,
 } from './capacity-sample-store.js';
-import { computeFirstDelayMs, createOverlapGuard, scheduleRepeating } from './lib/job-runner.js';
+import {
+	computeFirstDelayMs,
+	createOverlapGuard,
+	finishTick,
+	scheduleRepeating,
+	type Verdict,
+} from './lib/job-runner.js';
 
 /** Between passes. Matches the job-registry row's `clockMs`. */
 export const CAPACITY_SAMPLE_MS = 5 * 60_000;
@@ -77,7 +83,7 @@ export function sampleCapacityNow(
 
 /**
  * One tick: sample, then append. NEVER THROWS — a sampling fault or a write
- * fault is logged and swallowed here, the same contract every other
+ * fault is logged and returned as the tick's verdict here, the same contract every other
  * in-process loop in this package keeps (`decision-log.ts`'s own `warn`):
  * this job's only job is to have an opinion about admission state, and a
  * fault in forming that opinion must never cost the dispatcher, the fast
@@ -87,7 +93,7 @@ export function capacitySampleTick(
 	nowMs: number = Date.now(),
 	report?: ReturnType<typeof buildFleetReport>,
 	drain?: DrainState
-): void {
+): { verdict: Verdict; why?: string; rows: number } {
 	let rows: CapacitySampleRow[];
 	try {
 		rows =
@@ -95,19 +101,38 @@ export function capacitySampleTick(
 				? sampleCapacityNow(nowMs)
 				: sampleCapacityNow(nowMs, report, drain ?? readDrain(nowMs));
 	} catch (err) {
-		logger.warn(
-			`[capacity-sample] could not sample this tick: ${err instanceof Error ? err.message : String(err)}`
-		);
-		return;
+		const why = `could not sample this tick: ${err instanceof Error ? err.message : String(err)}`;
+		logger.warn(`[capacity-sample] ${why}`);
+		return { verdict: 'unavailable', why, rows: 0 };
 	}
-	if (!rows.length) return;
+	if (!rows.length) return { verdict: 'ok', rows: 0 };
 	try {
 		capacitySampleStore(samplePath()).append(rows, nowMs);
 	} catch (err) {
-		logger.warn(
-			`[capacity-sample] could not record ${rows.length} row(s): ${err instanceof Error ? err.message : String(err)}`
-		);
+		const why = `could not record ${rows.length} row(s): ${err instanceof Error ? err.message : String(err)}`;
+		logger.warn(`[capacity-sample] ${why}`);
+		return { verdict: 'broke', why, rows: 0 };
 	}
+	return { verdict: 'ok', rows: rows.length };
+}
+
+/**
+ * One scheduled pass: the tick, then {@link finishTick}. Without it the loop
+ * registered with liveness and never noted a tick, so it read `stale` from
+ * ~5 minutes after every boot and paged as a critical outage (2026-11-02).
+ */
+export async function capacitySamplePass(nowMs: number = Date.now()): Promise<void> {
+	const r = capacitySampleTick(nowMs);
+	await finishTick({
+		jobName: JOB_NAME,
+		intervalMs: CAPACITY_SAMPLE_MS,
+		now: nowMs,
+		verdict: r.verdict,
+		durationMs: Date.now() - nowMs,
+		why: r.why,
+		data: { rows: r.rows },
+		kind: 'recorder',
+	});
 }
 
 let started = false;
@@ -126,7 +151,7 @@ export function __stopCapacitySamplingForTesting(): void {
 export function startCapacitySampling(): void {
 	if (started) return;
 	started = true;
-	const pass = () => guard.run(() => Promise.resolve(capacitySampleTick()));
+	const pass = () => guard.run(() => capacitySamplePass());
 	const firstIn = computeFirstDelayMs(
 		{ intervalMs: CAPACITY_SAMPLE_MS, firstPassMinMs: FIRST_PASS_MIN_MS },
 		null
