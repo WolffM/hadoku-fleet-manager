@@ -44,9 +44,19 @@ human. Report back when step 7 verifies, not after each step in between.
 ## Steps
 
 1. **Boot the stick.** Where: at the new box, console. As: nobody (no OS yet).
-   Command: boot from the stick; it auto-selects the installer after 5s and
-   installs unattended, asking only the **hostname** and, if the box has more
-   than one, the **disk**.
+   Command: boot from the stick. **Ventoy's menu opens, and on a stick built
+   with `--netinst-iso` it says "no ISO available". That is expected. Press
+   F6**, then pick _Install Debian (fleet netinst partition)_. The installer
+   then runs unattended, asking only the **hostname** (type the node's name
+   exactly) and, if the box has more than one, the **disk**.
+
+   Why the extra key: the installer is not an `.iso` file on Ventoy's
+   partition any more. It is raw on its own partition (`DINSTALL`, number
+   4), so Ventoy's own list is empty, and `ventoy/ventoy_grub.cfg` (F6) is
+   the only menu that boots it (`scripts/lib/make-preseed-netinst.sh`,
+   `render_netinst_grub_cfg`). A legacy stick, with a Debian `.iso` on
+   Ventoy's partition, instead auto-selects that ISO after 5s with no F6.
+   `fleet verify-stick` says which kind you are holding.
    Verify: the box reboots into the name you gave it.
 
 2. **Convert it to a fleet node.** Where: at the new box, over the console
