@@ -280,7 +280,7 @@ const rows = await Promise.all(
 					why: `the health record is ${ageHours} h old, past ${HEALTH_STALE_HOURS} h — the writer has stopped`,
 				});
 			}
-			for (const f of doctorFindings(h, { nowMs: NOW })) {
+			for (const f of doctorFindings(h, { nowMs: NOW, machine: manifest.machines?.[name] })) {
 				findings.push({ class: f.class, category: f.category, why: f.why });
 			}
 		}

@@ -21,11 +21,15 @@ import {
 
 /**
  * @param {ReturnType<import('./doctor-facet.mjs').healthFacet>} health
+ * @param {{noDieTemperature?: boolean}} [declared] the node's manifest
+ *   `thermal` block, passed in by the caller so this judge stays a pure
+ *   function of what it is handed. See the `tracking-unjudgeable` branch.
  * @returns {object[]}
  */
-export function thermalFindings(health) {
+export function thermalFindings(health, declared = {}) {
 	const out = [];
 	const t = health.thermal ?? {};
+	const declaredNoDie = declared?.noDieTemperature === true;
 	if (t.sensor === null) {
 		out.push(
 			f(
@@ -104,7 +108,34 @@ export function thermalFindings(health) {
 			besideRiseC === null
 				? null
 				: Math.max(SENSOR_MOVED_C, Math.ceil(besideRiseC / SENSOR_TRACKS_DIVISOR));
-		if (besideRiseC === null) {
+		if (besideRiseC === null && declaredNoDie) {
+			// DECLARED, NOT DISMISSED (operator, 2026-11-02). The manifest says this
+			// node has no sensor that reports a die temperature. On claw-5 that is
+			// established, not assumed: the FX-8350's k10temp is a relative control
+			// value (16 -> 19 -> 17 C across a 28s all-core load), and the board's
+			// Fintek F71868A Super I/O, the one sensor that could witness it, cannot
+			// be bound: `f71882fg: failed to claim resource 0: [io 0x0480-0x0487]`,
+			// because the firmware's own PnP reservation 0x0485-0x0494 overlaps it.
+			// So this is still "I could not look", printed with its numbers; it is
+			// ADVISORY because a red that can never turn green teaches every reader
+			// to ignore red. Only THIS branch is relaxed: a reading at the blocking
+			// line, a missing sensor, or a sensor that stays still while sensors
+			// beside it move all still block on a declared node.
+			out.push(
+				f(
+					health,
+					'cpu-thermal',
+					ADVISORY,
+					'declared-no-die-temperature',
+					`${t.sensor} is the only CPU sensor this node emitted, and the manifest declares ` +
+						`it carries no die temperature (machines.${health.node}.thermal.noDieTemperature). ` +
+						`It rose ${t.riseC} °C (${t.idleC} → ${t.loadC} °C) under ${t.loadSeconds}s of ` +
+						`load on ${t.loadWorkers} cores. This node's temperature is UNKNOWN, by ` +
+						"declaration; the CPU's own thermal trip is the only thing guarding it.",
+					{ sensor: t.sensor, idleC: t.idleC, loadC: t.loadC, riseC: t.riseC }
+				)
+			);
+		} else if (besideRiseC === null) {
 			// ONE SENSOR, NO WITNESS. Tracking cannot be judged on a single
 			// reading — claw-5's FX-8350 exposes exactly one k10temp channel — so
 			// this node is NOT called healthy on the strength of it. The rise is
@@ -191,6 +222,29 @@ export function thermalFindings(health) {
 				{ sensor: t.sensor, idleC: t.idleC, loadC: t.loadC, riseC: t.riseC }
 			)
 		);
+	}
+
+	// A DECLARATION THE NODE HAS OUTGROWN. If a declared node now reports a CPU
+	// sensor beside its die reading, its temperature can be judged after all
+	// (say the Super I/O driver was made to bind), and the exemption should go
+	// before it outlives its reason.
+	if (declaredNoDie && t.sensor) {
+		const witnesses = independentCpuSensors(t.sensor, Object.keys(t.idleSensors ?? {}));
+		if (witnesses.length) {
+			out.push(
+				f(
+					health,
+					'cpu-thermal',
+					ADVISORY,
+					'declaration-outgrown',
+					`the manifest declares machines.${health.node}.thermal.noDieTemperature, but this ` +
+						`node now reports ${witnesses.length} CPU sensor(s) beside ${t.sensor} ` +
+						`(${witnesses.join(', ')}), so its temperature can be judged. Remove the ` +
+						'declaration so the normal thermal rules apply.',
+					{ sensor: t.sensor, witnesses }
+				)
+			);
+		}
 	}
 
 	// A SENSOR THAT DISAGREES WITH THE DIE IS ITS OWN FINDING. Not folded into

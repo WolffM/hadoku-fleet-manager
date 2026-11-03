@@ -342,7 +342,7 @@ for (const [name, h] of Object.entries(health).sort()) {
 			continue;
 		}
 	}
-	for (const fd of doctorFindings(h)) {
+	for (const fd of doctorFindings(h, { machine: manifest.machines?.[name] })) {
 		if (deferred.has(name) && fd.category === 'cpu-thermal' && fd.status === 'no-load-reading') {
 			findings.push({
 				...fd,

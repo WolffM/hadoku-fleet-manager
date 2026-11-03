@@ -118,10 +118,15 @@ import { opsFindings } from './doctor-findings-ops.mjs';
  * output in this order reproduces exactly what the one function used to do
  * inline.
  *
+ * `machine` is the node's manifest entry, for the few judgements that take a
+ * DECLARED fact as well as an observed one (only `thermal.noDieTemperature`
+ * today). Absent, every judge is as strict as it ever was, which is right for
+ * `provision-plan`, whose node is not in the manifest yet.
+ *
  * @param {ReturnType<healthFacet>} health
- * @param {{nowMs?: number}} [opts]
+ * @param {{nowMs?: number, machine?: {thermal?: {noDieTemperature?: boolean}}}} [opts]
  */
-export function doctorFindings(health, { nowMs = Date.now() } = {}) {
+export function doctorFindings(health, { nowMs = Date.now(), machine } = {}) {
 	if (!health || health.reachable === false) {
 		return [
 			f(
@@ -135,7 +140,7 @@ export function doctorFindings(health, { nowMs = Date.now() } = {}) {
 	}
 
 	return [
-		...thermalFindings(health),
+		...thermalFindings(health, machine?.thermal),
 		...watchdogFindings(health),
 		...storageFindings(health),
 		...networkFindings(health),

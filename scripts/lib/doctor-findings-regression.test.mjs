@@ -406,3 +406,57 @@ void test('the recorded fleet: every node’s thermal verdict is unchanged by th
 	}
 	assert.equal(Object.keys(expected).length, 9, 'every recorded node is pinned');
 });
+
+// ── a DECLARED missing die temperature (claw-5, 2026-11-02) ─────────────────
+//
+// claw-5's k10temp is a relative value and its Super I/O cannot be bound, so
+// the manifest declares `thermal.noDieTemperature`. The declaration relaxes
+// exactly one verdict and nothing worse.
+
+const DECLARED = { thermal: { noDieTemperature: true } };
+const thermalOf = (node, thermal, machine) =>
+	find(doctorFindings({ node, reachable: true, thermal }, { nowMs: NOW, machine }), 'cpu-thermal');
+
+test('claw-5 declared: one sensor and no witness is ADVISORY, still printed with its numbers', () => {
+	const fs = thermalOf('claw-5', RECORDED_THERMAL['claw-5'], DECLARED);
+	assert.equal(fs.length, 1);
+	assert.equal(fs[0].status, 'declared-no-die-temperature');
+	assert.equal(fs[0].class, ADVISORY);
+	assert.match(fs[0].why, /rose 5 °C \(19 → 24 °C\)/);
+	assert.match(fs[0].why, /UNKNOWN, by declaration/);
+});
+
+test('claw-5 undeclared: the same record still BLOCKS', () => {
+	for (const machine of [
+		undefined,
+		{},
+		{ thermal: {} },
+		{ thermal: { noDieTemperature: 'yes' } },
+	]) {
+		const fs = thermalOf('claw-5', RECORDED_THERMAL['claw-5'], machine);
+		assert.deepEqual([fs[0].status, fs[0].class], ['tracking-unjudgeable', BLOCKING]);
+	}
+});
+
+test('a declared node at the blocking line still blocks: the declaration never loosens a worse reading', () => {
+	const pinned = { ...RECORDED_THERMAL['claw-5'], loadC: 100, riseC: 81 };
+	const fs = thermalOf('claw-5', pinned, DECLARED);
+	assert.deepEqual([fs[0].status, fs[0].class], ['pinned', BLOCKING]);
+});
+
+test('a declared node that grows a witness sensor is told to drop the declaration', () => {
+	const t = RECORDED_THERMAL['claw-5'];
+	const witnessed = {
+		...t,
+		riseC: 30,
+		loadC: 49,
+		idleSensors: { ...t.idleSensors, 'hwmon.1.k10temp.Tccd1': 20 },
+		loadSensors: { ...t.loadSensors, 'hwmon.1.k10temp.Tccd1': 52 },
+	};
+	const fs = thermalOf('claw-5', witnessed, DECLARED);
+	assert.deepEqual(
+		fs.map((x) => [x.status, x.class]),
+		[['declaration-outgrown', ADVISORY]]
+	);
+	assert.match(fs[0].why, /hwmon\.1\.k10temp\.Tccd1/);
+});
