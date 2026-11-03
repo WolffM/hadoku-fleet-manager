@@ -640,3 +640,62 @@ test('after a committed move the old slice is never kept, even when the new node
 		[['keep', 'claw-6']]
 	);
 });
+
+test('the reboot cycle’s own reboot keeps the slice serving: notice and downtime declare nothing (2026-11-03, claw-8)', () => {
+	const two = {
+		demand: { slices: 2, releaseOrder: [] },
+		plan: plan('claw-5'),
+		slices: [{ node: 'claw-8' }, { node: 'claw-9' }],
+	};
+	const cycleNotice = {
+		node: 'claw-8',
+		event: 'starts',
+		kind: 'reboot',
+		at: at(9),
+		reason: 'automated reboot: kernel 6.12.115 staged',
+	};
+	// 21:38: the 15 min notice is inside the horizon.
+	const noticed = run({
+		...two,
+		offers: [offer('claw-8'), offer('claw-9')],
+		notices: [cycleNotice],
+	});
+	assert.deepEqual(noticed.serving, ['claw-8', 'claw-9']);
+	assert.deepEqual(noticed.actions, [], 'a planned reboot is no reason to declare');
+
+	// 21:49: the box is down, and the cycle's in-flight record names it.
+	const down = [offer('claw-8', { reachable: false }), offer('claw-9')];
+	const rebooting = run({ ...two, offers: down, rebooting: new Set(['claw-8']) });
+	assert.deepEqual(rebooting.serving, ['claw-8', 'claw-9']);
+	assert.deepEqual(rebooting.actions, []);
+
+	// Down with no cycle reboot under way (or past its timeouts) is a fault, as before.
+	const outage = run({ ...two, offers: down });
+	assert.deepEqual(
+		outage.unplaceable.map((u) => [u.node, u.why]),
+		[['claw-8', 'cannot be reached']]
+	);
+	assert.deepEqual(
+		outage.actions.map((a) => [a.op, a.node]),
+		[['declare', 'claw-5']]
+	);
+});
+
+test('a reboot drain the cycle did not write is still a fault inside the horizon', () => {
+	const d = run({
+		demand: { slices: 1 },
+		offers: [offer('claw-8')],
+		slices: [{ node: 'claw-8' }],
+		notices: [
+			{
+				node: 'claw-8',
+				event: 'starts',
+				kind: 'reboot',
+				at: at(5),
+				reason: 'operator: swap the NIC',
+			},
+		],
+	});
+	assert.deepEqual(d.serving, []);
+	assert.match(d.unplaceable[0].why, /has a reboot drain starting/);
+});

@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 import {
 	BOOT_TIMEOUT_MS,
 	REBOOT_LEASE,
+	SERVICES_TIMEOUT_MS,
+	cycleRebooting,
 	oursOn,
 	parseRebootProbe,
 	dkmsGap,
@@ -800,4 +802,23 @@ test('judgeReprove: exit 0, no findings, and the node actually in the results', 
 	);
 	assert.equal(judgeReprove('claw-1', 0, 'not json').ok, false);
 	assert.equal(judgeReprove('claw-1', 0, '').ok, false);
+});
+
+test('cycleRebooting: only a `rebooting` node, still under the cycle’s drain, inside its own timeouts', () => {
+	const now = Date.now();
+	const rebootAt = now - 16_000;
+	const ours = { nodes: { 'claw-8': { kind: 'reboot', reason: `${REASON_PREFIX}: kernel` } } };
+	const rebooting = { inFlight: { node: 'claw-8', phase: 'rebooting', rebootAt } };
+	assert.deepEqual([...cycleRebooting(rebooting, ours, now)], ['claw-8']);
+
+	const none = (state, doc = ours, at = now) =>
+		assert.equal(cycleRebooting(state, doc, at).size, 0);
+	none(null);
+	none({ inFlight: null });
+	none({ inFlight: { ...rebooting.inFlight, phase: 'draining' } }, ours);
+	none(rebooting, ours, rebootAt + BOOT_TIMEOUT_MS + SERVICES_TIMEOUT_MS);
+	none(rebooting, { nodes: {} });
+	none(rebooting, {
+		nodes: { 'claw-8': { kind: 'maintenance', reason: `${HELD_PREFIX}: not back on a new boot` } },
+	});
 });

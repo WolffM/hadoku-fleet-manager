@@ -48,14 +48,23 @@ import { errText } from './term.mjs';
 // a pure predicate over it, filed under `config` so doctor-run.mjs
 // (observation) can read it without reaching into this file's lifecycle-domain
 // cycle logic. Re-exported below unchanged for every existing importer.
-import { REASON_PREFIX, HELD_PREFIX, heldByCycle } from './reboot-hold.mjs';
+import {
+	REASON_PREFIX,
+	HELD_PREFIX,
+	heldByCycle,
+	BOOT_TIMEOUT_MS,
+	SERVICES_TIMEOUT_MS,
+	oursOn,
+	rebootNotice,
+	cycleRebooting,
+} from './reboot-hold.mjs';
+// The two timeouts, oursOn, rebootNotice and cycleRebooting followed them on
+// 2026-11-03 so the hosting converger (another domain) can tell the cycle's
+// own reboot from an outage without importing this file.
+export { BOOT_TIMEOUT_MS, SERVICES_TIMEOUT_MS, oursOn, rebootNotice, cycleRebooting };
 
 /** The drain's window (kind `reboot`): if the cycle dies outright, the node comes back by itself. */
 export const REBOOT_LEASE = '2h';
-/** From the reboot command to a reachable node on a new boot id. */
-export const BOOT_TIMEOUT_MS = 12 * 60_000;
-/** From a new boot to every runner unit and pm2 app back. */
-export const SERVICES_TIMEOUT_MS = 6 * 60_000;
 export const VERIFY_POLL_MS = 15_000;
 
 const END = 'END reboot-probe';
@@ -246,32 +255,6 @@ async function attempt(fn) {
 /** The `fleet drain` arguments for this cycle's drain: kind `reboot`, with an end. */
 export function rebootDrainArgs(node, reason) {
 	return [node, '--kind', 'reboot', '--for', REBOOT_LEASE, '--reason', reason];
-}
-
-/**
- * Is the node's CURRENT drain record this cycle's own?
- *
- * By kind first. The reason prefix still counts, so a record a pass wrote as a
- * `lease` before the `reboot` kind existed is still finished and undone by the
- * next pass rather than stranded.
- */
-export function oursOn(doc, node) {
-	const rec = doc?.nodes?.[node];
-	if (rebootNotice(doc, node)) return true;
-	if (heldByCycle(rec)) return false;
-	return rec?.kind === 'reboot' || String(rec?.reason ?? '').startsWith(REASON_PREFIX);
-}
-
-/**
- * The cycle's PLANNED reboot drain on a node, or undefined: the notice a
- * hosting node's tenant is owed. On a whole-box host it sits in `planned`
- * over the hosting record, so `fleet drain --undo` cancels it and leaves the
- * tenant's record alone.
- */
-export function rebootNotice(doc, node) {
-	return (doc?.planned ?? []).find(
-		(p) => p.node === node && p.kind === 'reboot' && !heldByCycle(p)
-	);
 }
 
 /** The `fleet drain` arguments that announce a reboot `noticeMin` minutes out. */

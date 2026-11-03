@@ -2357,7 +2357,7 @@
   {
     "glob": "scripts/lib/reboot-hold.mjs",
     "layer": "config",
-    "why": "Wave clean-1 lane D, pure move: reboot-cycle.mjs's REASON_PREFIX/HELD_PREFIX naming convention and the heldByCycle predicate over it \u2014 a declarative tag-format constant and a pure string check, not the cycle's own orchestration (runRebootCycle, judgeReprove, etc.), which stays in reboot-cycle.mjs. Filed in config so doctor-run.mjs (observation) can read whether a drain record is a reboot-cycle hold without reaching into reboot-cycle.mjs's lifecycle-domain cycle logic. reboot-cycle.mjs re-exports all three names unchanged for its own internal use (oursOn, rebootNotice, runRebootCycle) and any other existing importer."
+    "why": "Wave clean-1 lane D, pure move: reboot-cycle.mjs's REASON_PREFIX/HELD_PREFIX naming convention and the heldByCycle predicate over it \u2014 a declarative tag-format constant and a pure string check, not the cycle's own orchestration (runRebootCycle, judgeReprove, etc.), which stays in reboot-cycle.mjs. Filed in config so doctor-run.mjs (observation) can read whether a drain record is a reboot-cycle hold without reaching into reboot-cycle.mjs's lifecycle-domain cycle logic. reboot-cycle.mjs re-exports all three names unchanged for its own internal use (oursOn, rebootNotice, runRebootCycle) and any other existing importer. 2026-11-03: BOOT_TIMEOUT_MS, SERVICES_TIMEOUT_MS, oursOn, rebootNotice and cycleRebooting followed, pure predicates over the same convention plus the two timeouts that bound them, so the hosting converger can tell the cycle's own reboot from an outage without importing the lifecycle domain; reboot-cycle.mjs re-exports them."
   },
   {
     "glob": "src/runners/*.ts",

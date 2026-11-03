@@ -23,7 +23,7 @@
  * USAGE
  *   fleet hosting-converge [--json] [--dry-run] [--tenant <app>]
  */
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
@@ -38,6 +38,7 @@ import { readArtifact } from './lib/hosting-artifacts.mjs';
 import { readDemand } from './lib/hosting-demand.mjs';
 import { eligibilityFor } from './lib/hosting-eligibility.mjs';
 import { planFor } from './lib/hosting-plan.mjs';
+import { cycleRebooting } from './lib/reboot-hold.mjs';
 import { PKG_SCRIPTS } from './lib/paths.mjs';
 import { siteRoot, stateDir } from '../dist/lib/fleet-paths.js';
 import { spawnCapture } from './lib/spawn-json.mjs';
@@ -83,13 +84,18 @@ const finish = () => {
 	process.exit(doc.ok ? 0 : 1);
 };
 
-let registry, demand, drainDoc, hostingDoc, manifest;
+let registry, demand, drainDoc, hostingDoc, manifest, rebootState;
 try {
 	registry = readTenantRegistry(stateDir());
 	demand = readDemand(stateDir());
 	drainDoc = readDrainDoc();
 	hostingDoc = readHostingDoc(stateDir());
 	manifest = loadManifest();
+	// The reboot cycle's in-flight record (its one writer is reboot-claws.mjs).
+	// Absent is "no reboot under way"; unparseable throws here exactly as it
+	// does in the cycle itself.
+	const rebootFile = join(stateDir(), 'claw-reboot.json');
+	rebootState = existsSync(rebootFile) ? JSON.parse(readFileSync(rebootFile, 'utf8')) : null;
 } catch (err) {
 	// Could not look: every tenant's facet is unreadable, so nothing recovers on it.
 	doc.unreadable.push({
@@ -122,6 +128,7 @@ try {
 	siteWhy = err.message;
 }
 const notices = [...drainNotices(drainDoc, NOW), ...hostingNotices(hostingDoc, NOW)];
+const rebooting = cycleRebooting(rebootState, drainDoc, NOW);
 const nodes = Object.keys(manifest.machines ?? {});
 
 /** A plan's picks and refusals, in the shape `fleet hosting-placement` publishes. */
@@ -201,6 +208,7 @@ for (const [app, { request }] of tenants) {
 		removeDue,
 		pastEnd,
 		notices,
+		rebooting,
 		now: NOW,
 		appLayer:
 			request.kind !== 'service'

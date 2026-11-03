@@ -16,6 +16,17 @@
  *             horizon. A rule that cannot be told (null) is NOT a fault.
  * serving   = held − ending − unplaceable.
  *
+ * THE REBOOT CYCLE'S OWN REBOOT IS NOT A FAULT. Its notice (a `reboot` drain
+ * whose reason carries the cycle's REASON_PREFIX) does not make the node
+ * unplaceable, and neither does the box being down while `rebooting` names it:
+ * the subcommand builds that set from the cycle's in-flight record, bounded by
+ * the cycle's own boot and services timeouts, so a reboot that fails
+ * verification, or a cycle that died mid-reboot, is a fault again at the moment
+ * the cycle itself would hold the node. On 2026-11-03 claw-8's 15 min notice
+ * and 56 s of downtime made the converger declare claw-5 at 21:38, end it at
+ * 21:52 and remove it at 22:12, while cardtable's demand never moved off 2.
+ * A `reboot` drain anyone else writes is still a fault.
+ *
  * TOO FEW, AND ONE OF ITS OWN IS ENDING: take the end back (`--keep`) before
  * declaring anywhere new, latest in the release order first. That includes a
  * slice past its end whose units are still there: demand that came back
@@ -47,6 +58,7 @@
  * no release order is needed. An unplaceable standby is replaced, not ended.
  */
 import { requiredRules, ruleHolds } from './hosting-placement.mjs';
+import { REASON_PREFIX } from './reboot-hold.mjs';
 
 /** A drain of another kind starting this long past the tenant's notice counts as now. */
 export const HORIZON_MARGIN_MS = 15 * 60_000;
@@ -65,6 +77,8 @@ export const YOUNG_SLICE_MS = 10 * 60_000;
  * @param {string[]} i.removeDue  nodes whose slice end has passed and still has units
  * @param {string[]} [i.pastEnd]  the primaries among removeDue: what `--keep` may take back
  * @param {object[]} i.notices drainNotices + hostingNotices
+ * @param {Set<string>} [i.rebooting] nodes the reboot cycle is rebooting now, inside its own
+ *        timeouts (`cycleRebooting`): their being down is not a fault
  * @param {{node: string|null}|{unreadable: string}} [i.appLayer] for a service:
  *        where hadoku_site runs it now (appLayerHost), or why that could not be read
  * @param {{from: string, to: string, epoch: number}|null} [i.move] a singleton's open
@@ -81,6 +95,7 @@ export function decide({
 	removeDue,
 	pastEnd = [],
 	notices,
+	rebooting = new Set(),
 	now,
 	appLayer = null,
 	move = null,
@@ -90,7 +105,7 @@ export function decide({
 	const horizonMs = availability.noticeMin * 60_000 + HORIZON_MARGIN_MS;
 	const offerOf = new Map(offers.map((o) => [o.node, o]));
 	const fault = (node) =>
-		faultOf(node, offerOf.get(node), requiredRules(request), notices, now, horizonMs);
+		faultOf(node, offerOf.get(node), requiredRules(request), notices, rebooting, now, horizonMs);
 
 	const primaries = allSlices.filter((s) => s.role !== 'standby');
 	const live = primaries.filter((s) => !s.until && !fault(s.node)).length;
@@ -328,9 +343,12 @@ function meetStandby({
 	return { wanted, serving, ending, unplaceable };
 }
 
+/** The reboot cycle's own notice: it reboots, verifies and lifts, so the node keeps serving. */
+const cycleReboot = (n) => n.kind === 'reboot' && String(n.reason ?? '').startsWith(REASON_PREFIX);
+
 /** Why a held slice's node cannot serve, or null. */
-function faultOf(node, offer, require, notices, now, horizonMs) {
-	if (!offer?.reachable) return 'cannot be reached';
+function faultOf(node, offer, require, notices, rebooting, now, horizonMs) {
+	if (!offer?.reachable) return rebooting.has(node) ? null : 'cannot be reached';
 	for (const rule of require) if (ruleHolds(rule, offer) === false) return `fails "${rule}"`;
 	const soon = notices.find(
 		(n) =>
@@ -338,6 +356,7 @@ function faultOf(node, offer, require, notices, now, horizonMs) {
 			n.event === 'starts' &&
 			n.kind !== 'hosting' &&
 			n.kind !== 'lease' &&
+			!cycleReboot(n) &&
 			Date.parse(n.at) - now <= horizonMs
 	);
 	return soon ? `has a ${soon.kind} drain starting ${soon.at}` : null;
