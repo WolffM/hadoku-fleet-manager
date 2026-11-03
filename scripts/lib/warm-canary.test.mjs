@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { warmCanaryVerdict, slowTierCandidates } from './warm-canary.mjs';
+import { warmCanaryVerdict, slowTierCandidates, heavyBusyCandidates } from './warm-canary.mjs';
 import { warmCacheEligible, warmEligibleSlots } from '../../dist/lib/warm-eligibility.js';
 
 // The REAL threshold, from the build — a local copy of the arithmetic is a
@@ -187,4 +187,28 @@ test('a slow-tier node is taken out of the canary candidates, with its p25', () 
 
 test('with no usable history no node is slow, so the canary stays strict', () => {
 	assert.deepEqual(slowTierCandidates([], ['claw-4', 'claw-5'], fakeModel({}), 0), []);
+});
+
+// #102.4: the warm cache withholds a listener from a node running a heavy-kind
+// job. The canary paged claw-4/8/9 for exactly that on 2026-11-02.
+const heavy = { isHeavyRepo: (r) => r === 'WolffM/hadoku-cardtable' };
+
+test('a node running a heavy-kind repo is set aside, naming the repo', () => {
+	const probes = new Map([
+		['claw-8', { busyRepos: new Map([['WolffM/hadoku-cardtable', 1]]) }],
+		['claw-1', { busyRepos: new Map([['WolffM/hadoku_site', 2]]) }],
+		['claw-3', { busyRepos: new Map() }],
+	]);
+	assert.deepEqual(heavyBusyCandidates(probes, heavy), [
+		{ node: 'claw-8', repos: ['WolffM/hadoku-cardtable'] },
+	]);
+});
+
+test('an unread probe or no repo attribution keeps the node a candidate: not knowing stays strict', () => {
+	const probes = new Map([
+		['claw-4', null],
+		['claw-9', { busyRepos: null }],
+		['claw-6', { busyRepos: new Map([['WolffM/hadoku-cardtable', 0]]) }],
+	]);
+	assert.deepEqual(heavyBusyCandidates(probes, heavy), []);
 });

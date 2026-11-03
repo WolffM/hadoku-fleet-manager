@@ -1,31 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hostname } from 'node:os';
-import { chmodSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tempDir } from './tmpdir.js';
-import {
-	probeNode,
-	probeFleet,
-	__parseProbeForTesting,
-	__PROBE_CMD_FOR_TESTING,
-} from '../lib/node-probe.js';
+import { probeNode, probeFleet, parseProbe, PROBE_CMD } from '../lib/node-probe.js';
 
 test('probe parsing: an idle node reports 0 workers, not an unreadable box', () => {
 	// This test used to declare its own `parse` and assert against that copy, so
 	// it passed no matter what parseProbe did — deleting the real parser outright
 	// would not have failed it, while its name claimed to pin the regression
 	// below. It drives the real one now.
-	const idle = __parseProbeForTesting('0 8 0 ');
+	const idle = parseProbe('0 8 0 ');
 	assert.equal(idle?.workers, 0, 'idle box must read as 0 workers');
 	assert.equal(idle?.cores, 8, 'of 8 cores');
-	const busy = __parseProbeForTesting('3 8 0 ');
+	const busy = parseProbe('3 8 0 ');
 	assert.equal(busy?.workers, 3);
 	assert.equal(busy?.cores, 8);
 	// The old buggy output — must still be rejected rather than silently misread.
-	assert.equal(__parseProbeForTesting('0\n0 8'), null, 'the double-zero form is garbage');
-	assert.equal(__parseProbeForTesting(''), null);
+	assert.equal(parseProbe('0\n0 8'), null, 'the double-zero form is garbage');
+	assert.equal(parseProbe(''), null);
 });
 
 // ── probing THIS node ────────────────────────────────────────────────────
@@ -46,7 +41,7 @@ test('probeNode: the local host is probed WITHOUT ssh', async () => {
 });
 
 test('probe parses the tagged OS field and still finds the repo list after it', () => {
-	const p = __parseProbeForTesting('2 8 0 g=1 o=13.6,6.12.94+deb13-amd64 WolffM/a,WolffM/b,');
+	const p = parseProbe('2 8 0 g=1 o=13.6,6.12.94+deb13-amd64 WolffM/a,WolffM/b,');
 	assert.deepEqual(p?.os, { release: '13.6', kernel: '6.12.94+deb13-amd64' });
 	assert.equal(p?.githubDns, true);
 	assert.deepEqual(
@@ -56,11 +51,11 @@ test('probe parses the tagged OS field and still finds the repo list after it', 
 			['WolffM/b', 1],
 		]
 	);
-	assert.deepEqual(__parseProbeForTesting('0 8 0 g=1 o=-,6.12.94')?.os, {
+	assert.deepEqual(parseProbe('0 8 0 g=1 o=-,6.12.94')?.os, {
 		release: null,
 		kernel: '6.12.94',
 	});
-	assert.equal(__parseProbeForTesting('0 8 0 g=1 ')?.os, undefined, 'absent claims nothing');
+	assert.equal(parseProbe('0 8 0 g=1 ')?.os, undefined, 'absent claims nothing');
 });
 
 test('probe runs here and reports this host’s real OS', async () => {
@@ -83,11 +78,65 @@ test('probe counts SPAWNED workers only, never a process merely named Runner.Wor
 			'echo "102 /tmp/ci-throttle-1-node-x/Runner.Worker -c sleep 60"\n'
 	);
 	chmodSync(join(bin, 'pgrep'), 0o755);
-	const out = execFileSync('bash', ['-c', __PROBE_CMD_FOR_TESTING], {
+	const out = execFileSync('bash', ['-c', PROBE_CMD], {
 		env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
 		encoding: 'utf8',
 	});
-	assert.equal(__parseProbeForTesting(out)?.workers, 1);
+	assert.equal(parseProbe(out)?.workers, 1);
+});
+
+test('probe attributes a JIT worker AND a standing one to their repos: .runner spells the key two ways', () => {
+	// config.sh writes `gitHubUrl`; a JIT runner writes `GitHubUrl`, compact.
+	// Matching only the first attributed no JIT worker on the all-JIT fleet
+	// (2026-11-02), so busyRepos was null on every busy node.
+	const root = tempDir('probe-runner-');
+	const jit = join(root, 'jit', 'slot0');
+	const standing = join(root, 'actions-runner');
+	mkdirSync(jit, { recursive: true });
+	mkdirSync(standing, { recursive: true });
+	writeFileSync(
+		join(jit, '.runner'),
+		'{"AgentId":"1","Ephemeral":"True","GitHubUrl":"https://github.com/WolffM/hadoku-cardtable","UseV2Flow":"true"}'
+	);
+	writeFileSync(
+		join(standing, '.runner'),
+		'{\n  "agentId": 2,\n  "gitHubUrl": "https://github.com/WolffM/hadoku_site"\n}\n'
+	);
+	const bin = tempDir('probe-pgrep-');
+	writeFileSync(
+		join(bin, 'pgrep'),
+		'#!/bin/sh\n' +
+			`echo "101 ${jit}/bin.2.338.0/Runner.Worker spawnclient 149 152"\n` +
+			`echo "102 ${standing}/bin.2.338.0/Runner.Worker spawnclient 150 153"\n`
+	);
+	chmodSync(join(bin, 'pgrep'), 0o755);
+	const out = execFileSync('bash', ['-c', PROBE_CMD], {
+		env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+		encoding: 'utf8',
+	});
+	assert.deepEqual(
+		[...(parseProbe(out)?.busyRepos ?? new Map())],
+		[
+			['WolffM/hadoku-cardtable', 1],
+			['WolffM/hadoku_site', 1],
+		]
+	);
+});
+
+test('probe: a busy worker whose .runner cannot be read leaves busyRepos UNKNOWN, never empty', () => {
+	const bin = tempDir('probe-pgrep-');
+	writeFileSync(
+		join(bin, 'pgrep'),
+		`#!/bin/sh\necho "101 ${tempDir('probe-norunner-')}/bin.2.338.0/Runner.Worker spawnclient 149 152"\n`
+	);
+	chmodSync(join(bin, 'pgrep'), 0o755);
+	const out = execFileSync('bash', ['-c', PROBE_CMD], {
+		env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+		encoding: 'utf8',
+	});
+	const probe = parseProbe(out);
+	assert.equal(probe?.workers, 1);
+	assert.equal(probe?.busyRepos, null);
 });
 
 test('probeFleet: the local host reports reachable, not down', async () => {
@@ -105,13 +154,13 @@ test('probeFleet: the local host reports reachable, not down', async () => {
 // 2026-08-29 as unconsumed) and it will matter again for the next one.
 
 test('probe: an IDLE node invents no repo from a trailing field', () => {
-	const p = __parseProbeForTesting('0 8 0 ');
+	const p = parseProbe('0 8 0 ');
 	assert.equal(p?.workers, 0);
 	assert.equal(p?.busyRepos?.size, 0, 'no repo may be invented from an empty tail');
 });
 
 test('probe: a busy node reports its repos', () => {
-	const p = __parseProbeForTesting('2 8 0 WolffM/hadoku_site,WolffM/hadoku-rally');
+	const p = parseProbe('2 8 0 WolffM/hadoku_site,WolffM/hadoku-rally');
 	assert.equal(p?.busyRepos?.get('WolffM/hadoku_site'), 1);
 	assert.equal(p?.busyRepos?.get('WolffM/hadoku-rally'), 1);
 });
@@ -123,16 +172,16 @@ test('probe: a busy node reports its repos', () => {
 // connected. The field is TAGGED so it cannot be confused with the repo list.
 
 test('probe: g=1 resolves, g=0 does not, and the repo list after it still parses', () => {
-	const ok = __parseProbeForTesting('2 8 0 g=1 WolffM/hadoku_site,');
+	const ok = parseProbe('2 8 0 g=1 WolffM/hadoku_site,');
 	assert.equal(ok?.githubDns, true);
 	assert.equal(ok?.busyRepos?.get('WolffM/hadoku_site'), 1);
-	const blind = __parseProbeForTesting('0 8 0 g=0 ');
+	const blind = parseProbe('0 8 0 g=0 ');
 	assert.equal(blind?.githubDns, false);
 	assert.equal(blind?.busyRepos?.size, 0, 'the tag is not a repo');
 });
 
 test('probe: an untagged probe claims nothing about DNS and keeps its repo field', () => {
-	const p = __parseProbeForTesting('1 8 0 WolffM/hadoku_site');
+	const p = parseProbe('1 8 0 WolffM/hadoku_site');
 	assert.equal(p?.githubDns, undefined);
 	assert.equal(p?.busyRepos?.get('WolffM/hadoku_site'), 1);
 });

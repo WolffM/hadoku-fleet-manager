@@ -6,7 +6,7 @@ import { getDispatchAffinitySnapshot } from '../runners/dispatch-pass-state.js';
 import { type DispatchPassInput } from '../runners/dispatch-pass-types.js';
 import { buildFleetReport } from '../routes/fleet-report.js';
 import { getCapacityLedger } from '../runners/capacity-ledger.js';
-import type { HeavyModel } from '../runners/traffic.js';
+import type { HeavyModel } from '../runners/heavy-model.js';
 import type { PendingRun } from '../runners/dispatcher.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import {

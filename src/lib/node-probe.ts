@@ -14,7 +14,7 @@ const SSH_TIMEOUT_MS = 8000;
  * fleet. Capture the count, then default it; never chain `||` onto a command
  * that prints on failure.
  */
-const PROBE_CMD =
+export const PROBE_CMD =
 	's=0; [ -s "$HOME/.hadoku/sick-runner" ] && s=1; ' +
 	// A JOB is a Worker the runner SPAWNED: `.../bin*/Runner.Worker spawnclient
 	// <in> <out>`. Matching the process name alone counted anything called
@@ -44,10 +44,21 @@ const PROBE_CMD =
 	// while the Listener runs from the plain `bin` symlink. Stripping `/bin/`
 	// matched the listener path, produced no directory for any worker, and made
 	// this field come back empty on a node that was demonstrably busy.
+	//
+	// `[gG]itHubUrl`: config.sh writes `gitHubUrl`, a JIT runner writes
+	// `GitHubUrl`. Matching only the first left every JIT worker unattributed,
+	// so on the all-JIT fleet `busyRepos` was null on every busy node and the
+	// warm cache and placement never saw a heavy job from the probe (found
+	// 2026-11-02: claw-9 ran three cardtable jobs and attributed none). The
+	// `printf` ends every read: a JIT `.runner` has no trailing newline, so two
+	// JIT workers came out as ONE slug, both repos glued together. It prints
+	// only what sed found, so an unreadable `.runner` still adds nothing and a
+	// node with no attribution at all stays `null`, never an empty map.
 	'r=$(pgrep -ax Runner.Worker 2>/dev/null | grep " spawnclient " | while read -r _ c _; do ' +
 	'd=${c%/bin*/Runner.Worker}; ' +
-	'sed -n \'s#.*"gitHubUrl"[^"]*"https://github.com/\\([^"]*\\)".*#\\1#p\' ' +
-	'"$d/.runner" 2>/dev/null; done | tr "\\n" ","); ' +
+	'u=$(sed -n \'s#.*"[gG]itHubUrl"[^"]*"https://github.com/\\([^"]*\\)".*#\\1#p\' ' +
+	'"$d/.runner" 2>/dev/null); [ -n "$u" ] && printf "%s\\n" "$u"; ' +
+	'done | tr "\\n" ","); ' +
 	// There was a fifth field here until 2026-08-29: the runners.slice OOM
 	// counters, read from memory.events. Nothing ever consumed it — probeFleet
 	// dropped it building NodeProbe, and the alert it was collected FOR was
@@ -107,15 +118,13 @@ export interface ProbeResult {
 	os?: { release: string | null; kernel: string | null };
 }
 
-/** Test seam: the probe command itself, so a test can run it against a stub `pgrep`. */
-export const __PROBE_CMD_FOR_TESTING = PROBE_CMD;
-
-/** Test seam: the probe's wire format is the contract between two nodes. */
-export function __parseProbeForTesting(stdout: string): ProbeResult | null {
-	return parseProbe(stdout);
-}
-
-function parseProbe(stdout: string): ProbeResult | null {
+/**
+ * The probe's wire format, the contract between two nodes. Exported for the
+ * readers that run {@link PROBE_CMD} over their own ssh: the warm canary reads
+ * `busyRepos` exactly as the fast loop does, so a node running a heavy-kind
+ * job is judged by the same observation the warm cache acted on.
+ */
+export function parseProbe(stdout: string): ProbeResult | null {
 	const fields = String(stdout).trim().split(/\s+/);
 	const [w, c, sickField] = fields;
 	// The TAGGED fields (`g=`, `o=`) are optional and precede the repo list,

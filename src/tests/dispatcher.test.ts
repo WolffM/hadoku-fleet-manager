@@ -9,7 +9,7 @@ import {
 } from '../runners/dispatcher.js';
 import { HEAVY_HOLD_SEC } from '../runners/placement-slow.js';
 import { type NodeState } from '../runners/placement-node-state.js';
-import type { HeavyModel } from '../runners/traffic.js';
+import type { HeavyModel } from '../runners/heavy-model.js';
 import type { SpeedModel } from '../runners/speed-tier.js';
 
 const ORDER = ['claw-2', 'claw-1'];

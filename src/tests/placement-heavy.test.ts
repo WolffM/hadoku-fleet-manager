@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 
 import { choosePlacement } from '../runners/placement.js';
 import { HEAVY_HOLD_SEC } from '../runners/placement-slow.js';
-import type { HeavyModel } from '../runners/traffic.js';
+import type { HeavyModel } from '../runners/heavy-model.js';
 import type { PendingRun } from '../runners/dispatcher.js';
 import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
 import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';

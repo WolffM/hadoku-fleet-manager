@@ -19,7 +19,7 @@ import { warmRepoByNode } from './dispatch-warm-cache-state.js';
 import { chargedLikeDispatch, getCapacityLedger } from './capacity-ledger.js';
 import type { NodeState } from './placement-node-state.js';
 import type { SpeedModel } from './speed-tier.js';
-import type { HeavyModel } from './traffic.js';
+import type { HeavyModel } from './heavy-model.js';
 import { admissionVerdictFor } from './ephemeral-tick-verdict.js';
 import { type AdmissionVerdict } from '../lib/fleet-vocabulary.js';
 import { admissionVerdictsForReport } from '../admission-verdict-store.js';

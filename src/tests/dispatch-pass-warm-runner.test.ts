@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { runDispatchPass } from '../runners/dispatch-pass.js';
 import { byPriority, BAND_HEAD_START_MS } from '../runners/dispatch-pass-order.js';
 import { heavyMarkedRecently, HEAVY_MARK_MS } from '../runners/dispatch-pass-state.js';
-import type { HeavyModel } from '../runners/traffic.js';
+import type { HeavyModel } from '../runners/heavy-model.js';
 import type { PendingRun } from '../runners/dispatcher.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import {

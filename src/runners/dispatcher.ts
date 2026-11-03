@@ -26,7 +26,7 @@ export interface PendingRun extends RunIdentity {
 	 * for {@link SpeedModel.expectedExtraSec}'s (repo, job) lookup; without it,
 	 * that call still works, just falling back to a coarser repo-level estimate
 	 * (see `expectedExtraSec`'s own documented fallback order). #102's heavy-kind
-	 * classifier (`HeavyModel.isHeavy`, `traffic.ts`) reuses this SAME field for
+	 * classifier (`HeavyModel.isHeavy`, `heavy-model.ts`) reuses this SAME field for
 	 * the SAME reason — one (repo, job) key, not a second one.
 	 *
 	 * POPULATED by the producer since #89 (`dispatch-tick.ts`'s `pending.push`

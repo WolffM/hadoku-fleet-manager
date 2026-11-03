@@ -208,3 +208,31 @@ export function slowTierCandidates(records, nodeNames, buildSpeedModel, nowMs) {
 		.filter((n) => model.tierOf(n) === 'slow')
 		.map((n) => ({ node: n, p25: model.describe(n).p25 }));
 }
+
+/**
+ * Nodes the warm cache withholds a listener from because they are RUNNING a
+ * heavy-kind job right now (#102.4, `dispatch-warm-cache.ts`'s
+ * `runningHeavyNow`). The canary scored them "not warm" and paged: on
+ * 2026-11-02 claw-4, claw-8 and claw-9 each went red minutes after the warm
+ * cache evicted their listener for a heavy job, which is that rule working.
+ *
+ * Judged on the SAME observation the warm cache reads: the node probe's
+ * per-repo `busyRepos` and the heavy model's repo-level `isHeavyRepo`. A
+ * node whose probe could not be read, or that reported no repo attribution
+ * (`busyRepos: null`), stays a candidate: not knowing is never a reason to
+ * stop demanding a listener.
+ *
+ * @param {ReadonlyMap<string, {busyRepos: ReadonlyMap<string, number> | null} | null>} probes - node -> parsed probe
+ * @param {{isHeavyRepo: (repo: string) => boolean}} heavyModel
+ * @returns {{node: string, repos: string[]}[]}
+ */
+export function heavyBusyCandidates(probes, heavyModel) {
+	const out = [];
+	for (const [node, probe] of probes) {
+		const repos = [...(probe?.busyRepos ?? [])]
+			.filter(([repo, n]) => n > 0 && heavyModel.isHeavyRepo(repo))
+			.map(([repo]) => repo);
+		if (repos.length) out.push({ node, repos });
+	}
+	return out;
+}

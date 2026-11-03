@@ -35,7 +35,7 @@ import {
 import { type DispatchPassInput } from '../runners/dispatch-pass-types.js';
 import { planTick, type PendingRun, type PlanObservation } from '../runners/dispatcher.js';
 import type { NodeState } from '../runners/placement-node-state.js';
-import type { HeavyModel } from '../runners/traffic.js';
+import type { HeavyModel } from '../runners/heavy-model.js';
 import { __setHostForTesting, stateDir } from '../host.js';
 import { testHost } from './install-test-host.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';

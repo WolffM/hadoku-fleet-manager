@@ -8,7 +8,7 @@ import {
 	HEAVY_P75_SEC,
 	HEAVY_REPO_MIN_SHARE,
 	MIN_HEAVY_SAMPLES,
-} from '../runners/traffic.js';
+} from '../runners/heavy-model.js';
 
 const CARDTABLE = 'WolffM/hadoku-cardtable';
 

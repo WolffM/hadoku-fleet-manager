@@ -27,7 +27,8 @@
  * memory could not fail.
  *
  * ELIGIBLE is the dispatcher's own rule, reused rather than re-typed:
- * ephemeral, not drained, not the backstop, and MEASURED usable memory whose warm
+ * ephemeral, not drained, not the backstop, not running a heavy-kind job
+ * (#102.4, read with the fleet's own probe), and MEASURED usable memory whose warm
  * half holds one busy listener (a job's worth, `jobReserve`'s node answer)
  * beside the 50% mint reserve — `warmEligibleSlots`/`warmCacheEligible`
  * are imported from the BUILT package (`dist/runners/ephemeral.js`), the same
@@ -57,7 +58,7 @@ import { loadManifest, runOnSync, selectMachines } from './lib/fleet-exec.mjs';
 import { stateDir } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
-import { warmCanaryVerdict, slowTierCandidates } from './lib/warm-canary.mjs';
+import { warmCanaryVerdict, slowTierCandidates, heavyBusyCandidates } from './lib/warm-canary.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 // The BUILT copy, deliberately — see the header note above and
 // scripts/lib/fleet-exec.mjs's own note on importing isLocalNode the same way.
@@ -73,6 +74,8 @@ import { warmCacheEligible, warmEligibleSlots } from '../dist/lib/warm-eligibili
 import { warmRunnerName } from '../dist/lib/jit-naming.js';
 import { readHostingDoc, sharedMbOn } from '../dist/runners/hosting-record.js';
 import { buildSpeedModel } from '../dist/runners/speed-tier.js';
+import { buildHeavyModel } from '../dist/runners/heavy-model.js';
+import { PROBE_CMD, parseProbe } from '../dist/lib/node-probe.js';
 
 const JSON_OUT = process.argv.includes('--json');
 const out = createEmitter({ argv: process.argv });
@@ -201,14 +204,28 @@ function main() {
 	const hasDrainRow = (name) => Boolean(drains?.[name]);
 	const drainedCandidates = selected.filter(([name]) => hasDrainRow(name));
 	// The slow tier never holds a warm listener (#83); see slowTierCandidates.
+	const history = readJobHistory();
 	const slowTier = slowTierCandidates(
-		readJobHistory(),
+		history,
 		Object.keys(manifest.machines ?? {}),
 		buildSpeedModel,
 		Date.now()
 	);
 	const isSlow = (name) => slowTier.some((s) => s.node === name);
-	const active = selected.filter(([name]) => !hasDrainRow(name) && !isSlow(name));
+	const notDrainedOrSlow = selected.filter(([name]) => !hasDrainRow(name) && !isSlow(name));
+	// A node RUNNING a heavy-kind job holds no listener by design (#102.4): the
+	// warm cache evicts it and withholds the refill. Read with the fleet's own
+	// probe, as `ci` like the fast loop, so this judges the observation the warm
+	// cache acted on. See heavyBusyCandidates for why an unread probe stays in.
+	const probes = new Map(
+		notDrainedOrSlow.map(([name]) => {
+			const r = runOnSync(name, PROBE_CMD, { as: 'ci' });
+			return [name, r.ok ? parseProbe(r.stdout) : null];
+		})
+	);
+	const heavyBusy = heavyBusyCandidates(probes, buildHeavyModel(history));
+	const isHeavyBusy = (name) => heavyBusy.some((h) => h.node === name);
+	const active = notDrainedOrSlow.filter(([name]) => !isHeavyBusy(name));
 
 	const measurements = active.map(([name, m]) => measure(name, m));
 	const verdict = warmCanaryVerdict(measurements, { warmEligibleSlots, warmCacheEligible });
@@ -249,6 +266,7 @@ function main() {
 			skippedByRole,
 			drained,
 			slowTier,
+			heavyBusy,
 			...buildGateDoc({
 				findings,
 				unreadable,
@@ -264,6 +282,10 @@ function main() {
 			out.log(
 				`  · ${s.node} [slow tier, p25 ${s.p25}] — never holds a warm listener (#83), not probed`
 			);
+		for (const h of heavyBusy)
+			out.log(
+				`  · ${h.node} [running heavy: ${h.repos.join(', ')}] — the warm cache withholds its listener (#102.4), not scored`
+			);
 		out.log(
 			`✓ warm cache canary: ${verdict.warm.map((w) => `${w.node} (${w.repo})`).join(', ')} ` +
 				`— ${verdict.eligible.length} eligible node(s) checked` +
@@ -277,6 +299,10 @@ function main() {
 		for (const s of slowTier)
 			console.error(
 				`  · ${s.node} [slow tier, p25 ${s.p25}] — never holds a warm listener (#83), not probed`
+			);
+		for (const h of heavyBusy)
+			console.error(
+				`  · ${h.node} [running heavy: ${h.repos.join(', ')}] — the warm cache withholds its listener (#102.4), not scored`
 			);
 		console.error(`✗ warm cache canary: ${verdict.reason}`);
 	}

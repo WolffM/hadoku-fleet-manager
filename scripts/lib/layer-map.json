@@ -1222,6 +1222,13 @@
     "why": "Wave clean-2 lane C (cut (iii) layer debt): RECLASSIFIED from ci-scheduling to observation. The file's own header already says it: 'a PURE model of which claws are measurably slow, built from observed job history... PURE ON PURPOSE... no manifest read, no fs, no clock except the injectable nowMs'. Its one substantive dependency, job-history-stats.ts, is ALREADY observation/core. Every existing ci-scheduling consumer (placement-slow.ts, placement-node-state.ts, speed-heavy-cache.ts, scripts/traffic-status.mjs) keeps compiling and behaving unchanged: ci-scheduling importing observation is legal under cut (iii) (a domain reading an observation fact, never the reverse), the same direction census.ts reads in despite sitting under src/runners/. This is what lets scripts/check-warm-canary.mjs (observation) import buildSpeedModel directly without reaching UP into a ci-scheduling file."
   },
   {
+    "glob": "src/runners/heavy-model.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Split out of traffic.ts (ci-scheduling) on 2026-11-02 so scripts/check-warm-canary.mjs (observation) can ask the warm cache's own #102.4 question — is this node running a heavy-kind job — without reaching up into a ci-scheduling file. Same shape and reason as speed-tier.ts: a pure model built from observed job history, no fs, no network, no clock; ci-scheduling reading it is legal under cut (iii)."
+  },
+  {
     "glob": "src/runners/traffic.ts",
     "layer": "domain",
     "domain": "ci-scheduling",
