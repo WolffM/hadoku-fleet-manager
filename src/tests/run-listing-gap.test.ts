@@ -7,7 +7,7 @@ import { __setHostForTesting } from '../host.js';
 import { testHost, testStateDir } from './install-test-host.js';
 import { __setHistoryPathForTesting } from '../job-history-store.js';
 import { __resetJobHistoryForTesting } from '../job-history-store.js';
-import { jobRecords } from '../job-history-store.js';
+import { jobRecords, remember } from '../job-history-store.js';
 import { FetchBudget, ingestRuns } from '../job-history-ingest.js';
 import {
 	closeListingGap,
@@ -51,9 +51,20 @@ afterEach(() => {
 function runs(from: number, to: number, status = 'completed'): ListedRun[] {
 	const out: ListedRun[] = [];
 	for (let id = from; id >= to; id--) {
-		out.push({ id, status, updated_at: new Date(NOW - (from - id) * 60_000).toISOString() });
+		const at = new Date(NOW - (from - id) * 60_000).toISOString();
+		out.push({ id, status, created_at: at, updated_at: at });
 	}
 	return out;
+}
+
+/**
+ * A page-1 listing as runner-health hands it over: `ingestRuns` runs first and
+ * fetches every completed run on it, so by the time `closeListingGap` sees the
+ * listing those runs are settled.
+ */
+function ingested(listing: ListedRun[]): ListedRun[] {
+	for (const r of listing) if (r.status === 'completed') remember(r.id!);
+	return listing;
 }
 
 /** A repo whose runs are `from` down to 1: page n of its newest-first listing. */
@@ -70,21 +81,24 @@ const neverPaged = async () => {
 };
 
 test('the first listing of a repo is never a gap', async () => {
-	assert.deepEqual(await closeListingGap(REPO, runs(130, 101), neverPaged, NOW), []);
+	assert.deepEqual(await closeListingGap(REPO, ingested(runs(130, 101)), neverPaged, NOW), []);
 });
 
 test('a listing that overlaps the mark, or is short, reads nothing more', async () => {
-	await closeListingGap(REPO, runs(130, 101), neverPaged, NOW);
-	assert.deepEqual(await closeListingGap(REPO, runs(140, 111), neverPaged, NOW), []);
-	await closeListingGap('WolffM/quiet', runs(12, 1), neverPaged, NOW);
-	assert.deepEqual(await closeListingGap('WolffM/quiet', runs(20, 1), neverPaged, NOW), []);
+	await closeListingGap(REPO, ingested(runs(130, 101)), neverPaged, NOW);
+	assert.deepEqual(await closeListingGap(REPO, ingested(runs(140, 111)), neverPaged, NOW), []);
+	await closeListingGap('WolffM/quiet', ingested(runs(12, 1)), neverPaged, NOW);
+	assert.deepEqual(
+		await closeListingGap('WolffM/quiet', ingested(runs(20, 1)), neverPaged, NOW),
+		[]
+	);
 });
 
 test('a full listing past the mark pages back to it and queues what was skipped', async () => {
-	await closeListingGap(REPO, runs(130, 101), neverPaged, NOW);
+	await closeListingGap(REPO, ingested(runs(130, 101)), neverPaged, NOW);
 	// The blackout: 70 runs completed while nothing read the listing.
 	const reads: number[] = [];
-	const backlog = await closeListingGap(REPO, runs(200, 171), pager(200, reads), NOW);
+	const backlog = await closeListingGap(REPO, ingested(runs(200, 171)), pager(200, reads), NOW);
 	assert.deepEqual(reads, [2, 3], 'page 3 reaches run 130, which closes the gap');
 	assert.deepEqual(
 		backlog.map((r) => r.id),
@@ -93,15 +107,15 @@ test('a full listing past the mark pages back to it and queues what was skipped'
 	);
 	assert.match(infos.join('\n'), /skipped past run 130; read 2 more page\(s\), 40 unrecorded/);
 	// The next ordinary tick overlaps the new mark and reads nothing.
-	await closeListingGap(REPO, runs(205, 176), neverPaged, NOW);
+	await closeListingGap(REPO, ingested(runs(205, 176)), neverPaged, NOW);
 });
 
 test('a run still in progress on a gap page is not queued', async () => {
-	await closeListingGap(REPO, runs(130, 101), neverPaged, NOW);
+	await closeListingGap(REPO, ingested(runs(130, 101)), neverPaged, NOW);
 	const page2 = [...runs(170, 166, 'in_progress'), ...runs(165, 141)];
 	const backlog = await closeListingGap(
 		REPO,
-		runs(200, 171),
+		ingested(runs(200, 171)),
 		async (n) => (n === 2 ? page2 : runs(140, 111)),
 		NOW
 	);
@@ -110,22 +124,27 @@ test('a run still in progress on a gap page is not queued', async () => {
 });
 
 test('a page that cannot be read keeps the gap open for the next tick', async () => {
-	await closeListingGap(REPO, runs(130, 101), neverPaged, NOW);
-	assert.deepEqual(await closeListingGap(REPO, runs(200, 171), async () => null, NOW), []);
+	await closeListingGap(REPO, ingested(runs(130, 101)), neverPaged, NOW);
+	assert.deepEqual(
+		await closeListingGap(REPO, ingested(runs(200, 171)), async () => null, NOW),
+		[]
+	);
 	assert.match(warns.join('\n'), /could not be read, so the gap stays open/);
 	const reads: number[] = [];
-	const backlog = await closeListingGap(REPO, runs(201, 172), pager(201, reads), NOW);
+	const backlog = await closeListingGap(REPO, ingested(runs(201, 172)), pager(201, reads), NOW);
 	assert.deepEqual(reads, [2, 3], 'the mark did not move, so the next tick paged again');
-	assert.equal(backlog.length, 41);
+	// 41 runs sit between the mark and page 1, and 171 was fetched on the tick
+	// whose page could not be read: its listing still went through ingest.
+	assert.equal(backlog.length, 40);
 });
 
 test('a gap still open after MAX_GAP_PAGES is given up, and says the rest is lost', async () => {
-	await closeListingGap(REPO, runs(130, 101), neverPaged, NOW);
+	await closeListingGap(REPO, ingested(runs(130, 101)), neverPaged, NOW);
 	const newest = 130 + LISTING_PAGE * (MAX_GAP_PAGES + 2);
 	const reads: number[] = [];
 	const backlog = await closeListingGap(
 		REPO,
-		runs(newest, newest - LISTING_PAGE + 1),
+		ingested(runs(newest, newest - LISTING_PAGE + 1)),
 		pager(newest, reads),
 		NOW
 	);
@@ -135,29 +154,29 @@ test('a gap still open after MAX_GAP_PAGES is given up, and says the rest is los
 		warns.join('\n'),
 		/older runs in the gap are lost, and history-coverage will count them/
 	);
-	await closeListingGap(REPO, runs(newest + 5, newest - 24), neverPaged, NOW);
+	await closeListingGap(REPO, ingested(runs(newest + 5, newest - 24)), neverPaged, NOW);
 });
 
 test('nothing older than the horizon is read for, or kept', async () => {
-	await closeListingGap(REPO, runs(130, 101), neverPaged, NOW);
+	await closeListingGap(REPO, ingested(runs(130, 101)), neverPaged, NOW);
 	const later = NOW + 49 * 3600_000;
 	const reads: number[] = [];
-	const backlog = await closeListingGap(REPO, runs(200, 171), pager(200, reads), later);
+	const backlog = await closeListingGap(REPO, ingested(runs(200, 171)), pager(200, reads), later);
 	assert.deepEqual(reads, [2], 'page 2 is entirely past FRESH_HORIZON_H, which closes the gap');
 	assert.deepEqual(backlog, []);
 });
 
 test('the mark and the backlog survive a restart', async () => {
-	await closeListingGap(REPO, runs(130, 101), neverPaged, NOW);
-	await closeListingGap(REPO, runs(200, 171), pager(200), NOW);
+	await closeListingGap(REPO, ingested(runs(130, 101)), neverPaged, NOW);
+	await closeListingGap(REPO, ingested(runs(200, 171)), pager(200), NOW);
 	__resetListingGapForTesting();
-	const backlog = await closeListingGap(REPO, runs(200, 171), neverPaged, NOW);
+	const backlog = await closeListingGap(REPO, ingested(runs(200, 171)), neverPaged, NOW);
 	assert.equal(backlog.length, 40, 'the backlog came back, and the restored mark is not a gap');
 });
 
 test('the backlog drains through ingestRuns as safe runs, and leaves once recorded', async () => {
-	await closeListingGap(REPO, runs(130, 101), neverPaged, NOW);
-	const backlog = await closeListingGap(REPO, runs(200, 171), pager(200), NOW);
+	await closeListingGap(REPO, ingested(runs(130, 101)), neverPaged, NOW);
+	const backlog = await closeListingGap(REPO, ingested(runs(200, 171)), pager(200), NOW);
 	const fetched: number[] = [];
 	const fetchJobs = async (_repo: string, runId: number) => {
 		fetched.push(runId);
@@ -188,10 +207,64 @@ test('the backlog drains through ingestRuns as safe runs, and leaves once record
 		'oldest first'
 	);
 	assert.equal(jobRecords().length, 20);
-	const left = await closeListingGap(REPO, runs(200, 171), neverPaged, NOW);
+	const left = await closeListingGap(REPO, ingested(runs(200, 171)), neverPaged, NOW);
 	assert.deepEqual(
 		left.map((r) => r.id),
 		runs(170, 151).map((r) => r.id),
 		'recorded runs leave the backlog; the rest wait for the next tick'
 	);
+});
+
+/**
+ * #52, hadoku_site 2026-11-03 07:33-08:11Z: 23 recordable runs lost in one
+ * burst. Each was listed while IN PROGRESS, which advanced the mark past it,
+ * then scrolled off page 1 before the next tick, and the gap pages, which read
+ * only ids above the mark, never saw it again.
+ * MUTATION: make settledThrough return `newest` and this fails.
+ */
+test('a run listed in progress that scrolls off before it completes is recovered', async () => {
+	// Tick 1: 130..101, with 105 still running.
+	const tick1 = runs(130, 101).map((r) => (r.id === 105 ? { ...r, status: 'in_progress' } : r));
+	await closeListingGap(REPO, ingested(tick1), neverPaged, NOW);
+	// Tick 2: the burst pushed 105 off page 1, and it has finished since.
+	const reads: number[] = [];
+	const backlog = await closeListingGap(REPO, ingested(runs(160, 131)), pager(160, reads), NOW);
+	assert.deepEqual(reads, [2], 'the held mark makes 105 scrolling off a gap');
+	assert.deepEqual(
+		backlog.map((r) => r.id),
+		[105],
+		'only the run that was never settled; its neighbours were fetched on tick 1'
+	);
+	// Settled now, so the next ordinary tick overlaps and pages nothing.
+	await closeListingGap(REPO, ingested(runs(165, 136)), neverPaged, NOW);
+});
+
+test('a completed run the tick budget left unfetched is recovered the same way', async () => {
+	const tick1 = runs(130, 101);
+	ingested(tick1.filter((r) => r.id !== 102));
+	await closeListingGap(REPO, tick1, neverPaged, NOW);
+	const backlog = await closeListingGap(REPO, ingested(runs(160, 131)), pager(160), NOW);
+	assert.deepEqual(
+		backlog.map((r) => r.id),
+		[102]
+	);
+});
+
+test('a held run still on page 1 overlaps: no paging while it runs', async () => {
+	const tick1 = runs(130, 101).map((r) => (r.id === 101 ? { ...r, status: 'in_progress' } : r));
+	await closeListingGap(REPO, ingested(tick1), neverPaged, NOW);
+	// 101 is now the OLDEST row of a full page and nothing older is listed:
+	// min(ids) is mark + 1, which is the held run itself, not a gap.
+	assert.deepEqual(await closeListingGap(REPO, ingested(tick1), neverPaged, NOW), []);
+});
+
+test('a run created before the horizon never holds the mark', async () => {
+	// The fleet carries runs queued since August that cannot be cancelled.
+	const zombie: ListedRun = {
+		id: 101,
+		status: 'queued',
+		created_at: new Date(NOW - 60 * 86_400_000).toISOString(),
+	};
+	await closeListingGap(REPO, ingested([...runs(130, 102), zombie]), neverPaged, NOW);
+	assert.deepEqual(await closeListingGap(REPO, ingested(runs(140, 111)), neverPaged, NOW), []);
 });

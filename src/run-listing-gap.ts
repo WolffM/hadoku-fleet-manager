@@ -17,8 +17,11 @@
  * HOW A GAP IS FOUND: FROM THE LISTINGS, NOT FROM THE BLACKOUT
  * ------------------------------------------------------------
  * A per-repo MARK is the newest run id every older run of which has been
- * listed at least once. A listing that is FULL and whose oldest id is still
- * newer than the mark may have runs between the two that nothing listed. A
+ * SETTLED: listed once completed, and fetched or queued for backfill (#52; it
+ * was "listed at least once" until 2026-11-03, which lost every run listed in
+ * progress that scrolled off before it finished — see settledThrough). A
+ * listing that is FULL and whose oldest id is still newer than the mark may
+ * have runs between the two that nothing settled. A
  * short listing is the whole repo, and one that reaches the mark overlaps, so
  * neither has a gap. Run ids are monotonic per repo, which job-history's
  * oldest-first ordering already relies on.
@@ -47,8 +50,8 @@
  *
  * Only COMPLETED runs are kept. A run still in progress on a gap page has no
  * jobs to record yet, and this module never re-reads a run, so it would sit in
- * the backlog with a stale status. Those are lost; a 48-hour backlog of
- * in-flight runs would be the cure, and a blackout leaves a handful at most.
+ * the backlog with a stale status. It HOLDS THE MARK instead, so a later tick
+ * pages back to it again and finds it completed.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -77,7 +80,11 @@ export interface ListedRun {
 }
 
 interface RepoMark {
-	/** Every run at or below this id has been listed. */
+	/**
+	 * Every run at or below this id has been SETTLED: listed once it was
+	 * completed and either fetched by ingest or queued in the backlog. Not merely
+	 * listed — see {@link settledThrough}.
+	 */
 	mark: number;
 	backlog: ListedRun[];
 }
@@ -129,6 +136,44 @@ const idsOf = (runs: readonly ListedRun[]): number[] =>
 const freshAt = (r: ListedRun): number => Date.parse(r.updated_at ?? r.created_at ?? '');
 
 /**
+ * The newest id the mark may advance to: just below the oldest UNSETTLED fresh
+ * run in `rows`, or `newest` when every one is settled (#52).
+ *
+ * The mark used to advance to the newest id LISTED. A run listed while still in
+ * progress, or completed but left unfetched when the tick's budget ran out, was
+ * then below the mark. If it scrolled off page 1 before the next tick, the gap
+ * pages, which collect only ids above the mark, never looked at it again. On
+ * 2026-11-03 07:33-08:11Z a hadoku_site burst (116 runs in two hours, three
+ * mgmt-api restarts stretching the ticks) lost 23 recordable runs that way, and
+ * history-coverage read 61/82. Run 41598893060 ran 07:49-08:02: in progress at
+ * the tick that set the mark to 41599240436, off page 1 by the 08:03 tick.
+ *
+ * Unsettled: not completed, or completed and neither fetched by ingest nor
+ * already in the backlog. Holding the mark at one makes its scrolling off a gap,
+ * and the gap pages then find it completed. Only runs CREATED inside
+ * FRESH_HORIZON_H hold: a run queued since August must not pin the mark (and the
+ * paging it costs) forever, and nothing older is ingested anyway. An undated
+ * run does not hold either, for the same reason.
+ */
+function settledThrough(
+	rows: readonly ListedRun[],
+	newest: number,
+	backlog: ReadonlySet<number>,
+	now: number
+): number {
+	const horizon = now - FRESH_HORIZON_H * 3600_000;
+	let hold = Infinity;
+	for (const r of rows) {
+		if (typeof r.id !== 'number' || r.id >= hold) continue;
+		const created = Date.parse(r.created_at ?? '');
+		if (!Number.isFinite(created) || created < horizon) continue;
+		const unsettled = r.status !== 'completed' || (!jobHistoryHasRun(r.id) && !backlog.has(r.id));
+		if (unsettled) hold = r.id;
+	}
+	return Math.min(newest, hold - 1);
+}
+
+/**
  * Note the listing `repo` just returned, close any gap behind it with
  * `fetchPage(n)` (page `n` of the same listing, or null when it could not be
  * read), and return the repo's backlog: runs past the end of the listing that
@@ -147,13 +192,17 @@ export async function closeListingGap(
 	const newest = Math.max(...ids);
 	if (!st) {
 		// First sight of this repo: nothing to compare against, so nothing is a gap.
-		marks.set(repo, { mark: newest, backlog: [] });
+		marks.set(repo, { mark: settledThrough(listing, newest, new Set(), now), backlog: [] });
 		save();
 		return [];
 	}
 	const startMark = st.mark;
-	if (listing.length < LISTING_PAGE || Math.min(...ids) <= st.mark) {
-		st.mark = Math.max(st.mark, newest);
+	// `+ 1`: a held mark sits just below the run that holds it, so a listing
+	// that still shows that run overlaps. Ids are unique integers; nothing else
+	// can be mark + 1.
+	const reaches = (id: number) => id <= st.mark + 1;
+	if (listing.length < LISTING_PAGE || ids.some(reaches)) {
+		st.mark = Math.max(st.mark, settledThrough(listing, newest, new Set(idsOf(st.backlog)), now));
 		if (st.mark !== startMark) save();
 		return prune(repo, st, now);
 	}
@@ -173,7 +222,7 @@ export async function closeListingGap(
 		const pageIds = idsOf(rows);
 		if (
 			rows.length < LISTING_PAGE ||
-			pageIds.some((id) => id <= st.mark) ||
+			pageIds.some(reaches) ||
 			rows.every((r) => freshAt(r) < horizon)
 		) {
 			outcome = 'closed';
@@ -185,13 +234,19 @@ export async function closeListingGap(
 		(r) => r.status === 'completed' && !known.has(r.id!) && !jobHistoryHasRun(r.id!)
 	);
 	st.backlog.push(...added);
+	const settled = settledThrough(
+		[...listing, ...recovered],
+		newest,
+		new Set(idsOf(st.backlog)),
+		now
+	);
 	const msg =
 		`[job-history] ${repo}: the listing skipped past run ${startMark}; read ${pages} more page(s), ` +
 		`${added.length} unrecorded run(s) queued for backfill`;
 	if (outcome === 'unread') {
 		logger.warn(`${msg}. A page could not be read, so the gap stays open for the next tick`);
 	} else {
-		st.mark = Math.max(st.mark, newest);
+		st.mark = Math.max(st.mark, settled);
 		if (outcome === 'closed') logger.info(msg);
 		else
 			logger.warn(
