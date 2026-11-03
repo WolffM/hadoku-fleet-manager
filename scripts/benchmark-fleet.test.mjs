@@ -523,6 +523,37 @@ test('a counter that goes from a value to a measured 0 is written, and stored as
 	assert.equal(rec.rootDisk.pendingSectors, 0);
 });
 
+/**
+ * #51, claw-5 on 2026-11-03: the stored record named one failed unit, the box
+ * rebooted, and the run measured none. lostFacets walked the list element by
+ * element and refused the write daily: "stability.failedUnitNames.0 went
+ * unmeasured". MUTATION: drop the Array.isArray branch and this fails.
+ */
+test('a failed-unit list that empties is a measurement, and is written as []', (t) => {
+	const s = sandbox(t);
+	s.write(
+		claw9Capture({
+			'capture.root': 'yes',
+			'stability.failedUnits': '1',
+			'stability.failedUnitNames': 'systemd-networkd-wait-online.service',
+		})
+	);
+	let r = runCli(['claw-9', '--from', s.capture, '--write'], { env: s.env, scratch: s.dir });
+	assert.equal(r.status, 0, `first write exited ${r.status}\n${r.stderr}`);
+	s.write(
+		claw9Capture({
+			'capture.root': 'yes',
+			'stability.failedUnits': '0',
+			'stability.failedUnitNames': '',
+		})
+	);
+	r = runCli(['claw-9', '--from', s.capture, '--write'], { env: s.env, scratch: s.dir });
+	assert.equal(r.status, 0, `the emptied list was refused\n${r.stdout}\n${r.stderr}`);
+	const rec = JSON.parse(readFileSync(join(s.state, 'benchmark.json'), 'utf8')).nodes['claw-9'];
+	assert.deepEqual(rec.stability.failedUnitNames, []);
+	assert.equal(rec.stability.failedUnits, 0);
+});
+
 test('a value that becomes UNKNOWN is still refused, and the finding names the field', (t) => {
 	const s = sandbox(t);
 	s.write(claw9Capture({ 'capture.root': 'yes', 'stability.aerCorrectable': '0' }));

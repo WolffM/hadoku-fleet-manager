@@ -135,7 +135,13 @@ function lostFacets(before, after, path = '') {
 	for (const [k, v] of Object.entries(before)) {
 		const n = after?.[k];
 		const at = path ? `${path}.${k}` : k;
-		if (v && typeof v === 'object') lost.push(...lostFacets(v, n, at));
+		// A list is ONE value, not a record of fields (#51): claw-5's
+		// `failedUnitNames` went from one unit to `[]` after a reboot, and walking
+		// it element by element read the emptied list as "`.0` went unmeasured".
+		// An empty list is a measurement; only a list that became null is lost.
+		if (Array.isArray(v)) {
+			if (n === null || n === undefined) lost.push(at);
+		} else if (v && typeof v === 'object') lost.push(...lostFacets(v, n, at));
 		else if (v !== null && v !== undefined && v !== '' && (n === null || n === undefined))
 			lost.push(at);
 	}
