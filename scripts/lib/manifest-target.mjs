@@ -93,6 +93,7 @@ import process from 'node:process';
 // library and the scripts cannot drift apart. It reads `process.env` on every
 // call and caches nothing, which is why the deploy root below is a function.
 import { hubRepo } from '../../dist/lib/fleet-config.js';
+import { deploySiteRoot } from '../../dist/lib/fleet-paths.js';
 
 /**
  * The ambient environment with every `GIT_*` variable REMOVED, except the four
@@ -141,20 +142,13 @@ export function runGit(args, cwd, env = process.env) {
 }
 
 /**
- * The DEPLOYED hadoku_site checkout — the one mgmt-api serves from and the one
- * every redeploy resets.
- *
- * One answer to "where is the deploy tree", for the reason CLAUDE.md gives
- * about `isLocalNode()`: `check-srv-drift` reads this tree and the manifest writers
- * refuse it, and two implementations of that question would disagree the first
- * time the path moved. `FLEET_DEPLOY_SITE_ROOT` overrides it — the fixture
- * tests need a tree they may safely mutate, and an operator whose deploy lives
- * elsewhere needs the same door.
+ * The DEPLOYED hadoku_site checkout: one answer to "where is the deploy tree",
+ * defined in src/lib/fleet-paths.ts and re-exported here. `check-srv-drift`
+ * reads this tree, the manifest writers refuse it, and (since 2026-11-04)
+ * `siteRoot()` falls back to it for READS, so a hand run reads what production
+ * reads. Until then the readers never asked it.
  */
-export function deploySiteRoot(env = process.env) {
-	const fromEnv = env.FLEET_DEPLOY_SITE_ROOT?.trim();
-	return fromEnv ? resolve(fromEnv) : join(homedir(), 'srv', hubRepo());
-}
+export { deploySiteRoot };
 
 /**
  * Every tree a publish resets. A write landing under one of these is lost.

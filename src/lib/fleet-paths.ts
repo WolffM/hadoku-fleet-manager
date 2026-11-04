@@ -163,9 +163,33 @@ function gitToplevel(): string | null {
 }
 
 /**
- * The hadoku_site checkout. `HADOKU_SITE_ROOT` wins; otherwise it is derived
- * from `reposDir()`, which asks git for the main checkout and honours
- * `REPOS_DIR` — the variable the cron jobs already set.
+ * The DEPLOYED hadoku_site: the tree mgmt-api runs from and every production
+ * reader reads, kept at origin/main by hub-sync and reset by every publish.
+ * `FLEET_DEPLOY_SITE_ROOT` overrides it (fixture tests need a tree they may
+ * safely mutate). One definition: lib/manifest-target.mjs re-exports it for the
+ * write guard, which refuses this tree as a WRITE target.
+ */
+export function deploySiteRoot(env: NodeJS.ProcessEnv = process.env): string {
+	const fromEnv = env.FLEET_DEPLOY_SITE_ROOT?.trim();
+	return fromEnv ? resolve(fromEnv) : join(homedir(), 'srv', hubRepo());
+}
+
+/**
+ * The hadoku_site checkout. In order: `HADOKU_SITE_ROOT`; the hadoku_site
+ * checkout you are standing in; an explicit `REPOS_DIR`'s; the DEPLOYED tree;
+ * and last the canonical checkout beside this one.
+ *
+ * THE DEPLOYED TREE BEFORE THE OPERATOR'S CHECKOUT (2026-11-04). mgmt-api runs
+ * every fleet subcommand from inside `~/srv/hadoku_site`, so production always
+ * resolved the deployed tree; a hand run from anywhere else fell through to
+ * `~/repos/hadoku_site`, the operator's WORKING checkout, on whatever branch and
+ * commit it was left at. The same command read two fleets depending on who ran
+ * it: on 2026-11-03 a health sweep ran 10 commits behind production and
+ * reported a ci-watch finding production did not have. A write is not loosened
+ * by this: a writer that resolves the deployed tree is refused there
+ * (`deploy-tree`, lib/manifest-target.mjs) and must name a checkout it can commit.
+ * An explicit `REPOS_DIR` still wins over it, so a fixture that sets one never
+ * reads the real deployed tree.
  */
 export function siteRoot(): string {
 	const fromEnv = process.env.HADOKU_SITE_ROOT?.trim();
@@ -188,6 +212,15 @@ export function siteRoot(): string {
 	// anywhere else falls back to the canonical checkout.
 	const here = gitToplevel();
 	if (here && existsSync(join(here, 'scripts', 'admin'))) return here;
+
+	// Under a test runner only when the test NAMES its deployed tree: a test that
+	// fell through to this box's real ~/srv would pass while reading production
+	// (the guard fleet-source keeps for GitHub, `testWithoutFixture`).
+	const underTest = Boolean(process.env.NODE_TEST_CONTEXT) && !process.env.FLEET_DEPLOY_SITE_ROOT;
+	if (!process.env.REPOS_DIR && !underTest) {
+		const deployed = deploySiteRoot();
+		if (existsSync(join(deployed, 'scripts', 'admin'))) return deployed;
+	}
 
 	return must(
 		`the ${hubRepo()} checkout`,

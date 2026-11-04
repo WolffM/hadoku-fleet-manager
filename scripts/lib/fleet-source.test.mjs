@@ -153,6 +153,20 @@ test('within FLEET_SOURCE_MAX_AGE_S the reader reuses ITS OWN last fetch', () =>
 	});
 });
 
+test('`fresh` fetches NOW inside the reuse window: a registration never copies the pre-push file', () => {
+	// 2026-11-04: `hosting-request --register` right after a push reused a fetch
+	// from before it and stored pygmalion's previous request.
+	withRemotes((fx) => {
+		fx.push('WolffM/registered', { 'v.txt': '1\n' });
+		shipped('WolffM/registered');
+		fx.push('WolffM/registered', { 'v.txt': '2\n' });
+		forgetHandles();
+		process.env.FLEET_SOURCE_MAX_AGE_S = '3600';
+		assert.equal(shipped('WolffM/registered').read('v.txt'), '1\n', 'the reuse window still holds');
+		assert.equal(shipped('WolffM/registered', { fresh: true }).read('v.txt'), '2\n');
+	});
+});
+
 test('a repo that does not exist is UnreadableRepo with the reason', () => {
 	withRemotes(() => {
 		assert.throws(

@@ -43,7 +43,8 @@ if (existsSync(target)) {
 } else {
 	source = `${target}:hosting.json`;
 	try {
-		text = shipped(target).read('hosting.json');
+		// A registration COPIES what it reads, so it reads what is shipped NOW.
+		text = shipped(target, { fresh: process.argv.includes('--register') }).read('hosting.json');
 	} catch (err) {
 		fail(`cannot read ${target}: ${err.reason ?? err.message}`);
 	}

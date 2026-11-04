@@ -30,7 +30,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tempDir } from './tmpdir.js';
 import { fileURLToPath } from 'node:url';
@@ -46,7 +46,7 @@ import {
 	qualifyRepo,
 	userAgent,
 } from '../lib/fleet-config.js';
-import { siteRoot } from '../lib/fleet-paths.js';
+import { reposDir, siteRoot } from '../lib/fleet-paths.js';
 import { __setHostForTesting } from '../host.js';
 import { coveredRepos } from '../lib/covered-repos.js';
 import { runCiAlerts, stateKey, targetOwner } from '../ci-alerts.js';
@@ -318,6 +318,31 @@ test('site 5 — siteRoot looks for the CONFIGURED hub repo, not this one', () =
 		/hadoku_site/,
 		"this fleet's hub repo must not appear in a stranger's resolution"
 	);
+});
+
+test('site 5b — a hand run reads the DEPLOYED tree before the operator checkout, unless REPOS_DIR is explicit', () => {
+	// 2026-11-03: a health sweep run by hand resolved ~/repos/hadoku_site, the
+	// operator's working checkout, 10 commits behind the ~/srv tree production
+	// reads, and reported a finding production did not have. Same command, two
+	// fleets. The deployed tree is the reader's default now; an explicit REPOS_DIR
+	// (every fixture's) still wins, so no test reads the real ~/srv.
+	const deployed = tempDir('deployed-site-');
+	mkdirSync(join(deployed, 'scripts', 'admin'), { recursive: true });
+	const fromDeploy = withEnv(
+		{ HADOKU_SITE_ROOT: undefined, REPOS_DIR: undefined, FLEET_DEPLOY_SITE_ROOT: deployed },
+		() => siteRoot()
+	);
+	assert.equal(fromDeploy, deployed, 'no explicit root: read what production reads');
+
+	const repos = tempDir('repos-dir-');
+	mkdirSync(join(repos, 'hadoku_site', 'scripts', 'admin'), { recursive: true });
+	const fromRepos = withEnv(
+		{ HADOKU_SITE_ROOT: undefined, REPOS_DIR: repos, FLEET_DEPLOY_SITE_ROOT: deployed },
+		// reposDir() caches its first answer for the process; refresh it so this
+		// case reads the REPOS_DIR it sets, not an earlier test's.
+		() => (reposDir({ refresh: true }), siteRoot())
+	);
+	assert.equal(fromRepos, join(repos, 'hadoku_site'), 'an explicit REPOS_DIR is never overridden');
 });
 
 // ---- site 6: runner-health -----------------------------------------------

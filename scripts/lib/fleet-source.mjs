@@ -217,7 +217,7 @@ function stampAgeMs(dir) {
 }
 
 /** Fetch the default branch unless this module already did, recently. */
-function refresh(repo, dir, { fetch }) {
+function refresh(repo, dir, { fetch, fresh = false }) {
 	const hasRef = () => {
 		try {
 			git(dir, ['rev-parse', '--verify', '--quiet', `${SHIPPED_REF}^{commit}`]);
@@ -231,7 +231,7 @@ function refresh(repo, dir, { fetch }) {
 			throw new UnreadableRepo(repo, 'no fetch was allowed and the mirror holds no shipped ref');
 		return;
 	}
-	if (stampAgeMs(dir) < maxAgeMs() && hasRef()) return;
+	if (!fresh && stampAgeMs(dir) < maxAgeMs() && hasRef()) return;
 	const started = Date.now();
 	const failure = attempt(() =>
 		git(
@@ -311,7 +311,13 @@ const handles = new Map();
  * @param {string} repo
  * @param {{ fetch?: boolean }} [opts]
  */
-export function shipped(repo, { fetch = true } = {}) {
+/**
+ * `fresh`: fetch now, never reuse a recent fetch. For a reader whose answer is
+ * COPIED and kept (registration): reusing a fetch made before the push being
+ * registered silently registers the previous file (2026-11-04, pygmalion's
+ * standby: the first --register stored the pre-push request).
+ */
+export function shipped(repo, { fetch = true, fresh = false } = {}) {
 	if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new UnreadableRepo(repo, 'not an owner/name slug');
 	if (testWithoutFixture()) {
 		throw new UnreadableRepo(
@@ -320,7 +326,7 @@ export function shipped(repo, { fetch = true } = {}) {
 				'remotes (lib/fleet-source-fixture.mjs), never at GitHub'
 		);
 	}
-	const key = `${cacheDir()}\0${repo}\0${fetch}`;
+	const key = `${cacheDir()}\0${repo}\0${fetch}\0${fresh}`;
 	if (handles.has(key)) return handles.get(key);
 
 	let dir;
@@ -328,7 +334,7 @@ export function shipped(repo, { fetch = true } = {}) {
 	let tree;
 	try {
 		dir = ensureMirror(repo);
-		refresh(repo, dir, { fetch });
+		refresh(repo, dir, { fetch, fresh });
 		sha = git(dir, ['rev-parse', `${SHIPPED_REF}^{commit}`]).trim();
 		tree = readTree(dir, sha);
 	} catch (err) {

@@ -1496,6 +1496,12 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/tenant-drift.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
     "glob": "scripts/hosting.mjs",
     "layer": "domain",
     "domain": "tenancy",

@@ -96,20 +96,32 @@ test('a directory that is not a site checkout does not masquerade as one', () =>
 	// at that repo.
 	const dir = mkdtempSync(join(tmpdir(), 'fleet-notsite-'));
 	execFileSync('git', ['init', '-q'], { cwd: dir, env: FIXTURE_ENV, stdio: 'ignore' });
+	const deployed = mkdtempSync(join(tmpdir(), 'fleet-deployed-'));
 	const prevCwd = process.cwd();
 	const prevEnv = process.env.HADOKU_SITE_ROOT;
+	const prevDeploy = process.env.FLEET_DEPLOY_SITE_ROOT;
 	delete process.env.HADOKU_SITE_ROOT;
 	try {
 		process.chdir(dir);
+		// The deployed-tree fallback (2026-11-04) points at a tree that does not
+		// exist here, so this never reads the real ~/srv of the box running it.
+		process.env.FLEET_DEPLOY_SITE_ROOT = join(deployed, 'absent');
 		// It REFUSES rather than returning a wrong path. From here reposDir() is
 		// /tmp, so the canonical candidate /tmp/hadoku_site does not exist — and
 		// `must()` throws naming it. Guessing would be the failure mode: every
 		// manifest read behind this resolves to empty, which renders as a clean
 		// audit of a fleet with nothing in it.
 		assert.throws(() => siteRoot(), /hadoku_site checkout does not exist/);
+		// A deployed tree that IS a site is read instead of the random repo.
+		mkdirSync(join(deployed, 'scripts', 'admin'), { recursive: true });
+		process.env.FLEET_DEPLOY_SITE_ROOT = deployed;
+		assert.equal(siteRoot(), deployed, 'the random repo never masquerades as the site');
 	} finally {
 		process.chdir(prevCwd);
 		if (prevEnv !== undefined) process.env.HADOKU_SITE_ROOT = prevEnv;
+		if (prevDeploy === undefined) delete process.env.FLEET_DEPLOY_SITE_ROOT;
+		else process.env.FLEET_DEPLOY_SITE_ROOT = prevDeploy;
 		rmSync(dir, { recursive: true, force: true });
+		rmSync(deployed, { recursive: true, force: true });
 	}
 });

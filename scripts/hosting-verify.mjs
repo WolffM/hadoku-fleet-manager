@@ -22,6 +22,11 @@
  * user (lib/hosting-pm2-strays.mjs, fleet-manager#43). A stray is unconverged
  * and never removed here: deleting a pm2 app is the operator's act.
  *
+ * It also holds the TENANT REGISTRY to each app's shipped hosting.json
+ * (lib/tenant-drift.mjs, 2026-11-04): a valid request that changed in the app
+ * repo is re-registered, an invalid one is unconverged (the last valid copy
+ * stands), so the registry is a cache of the repo and never a second truth.
+ *
  * It also asks whether any service depends on one claw (lib/hosting-redundancy.mjs,
  * 2026-11-03): a service with no standby is an `advisories` entry; one that
  * asked for N standbys and has fewer guaranteed on other nodes is unconverged.
@@ -40,12 +45,14 @@ import {
 	parseStrayObservation,
 	STRAY_OBSERVE_SCRIPT,
 } from './lib/hosting-pm2-strays.mjs';
+import { shipped } from './lib/fleet-source.mjs';
 import { judgeRedundancy } from './lib/hosting-redundancy.mjs';
+import { judgeTenantDrift, repoOfSource } from './lib/tenant-drift.mjs';
 import { planVerify } from './lib/hosting-verify.mjs';
 import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readHostingDoc } from '../dist/runners/hosting-record.js';
 import { runFleetScript } from './lib/run-fleet-script.mjs';
-import { readTenantRegistry, tenantSpecFrom } from './lib/tenant-registry.mjs';
+import { readTenantRegistry, registerTenant, tenantSpecFrom } from './lib/tenant-registry.mjs';
 
 const HOSTING = resolve(dirname(fileURLToPath(import.meta.url)), 'hosting.mjs');
 /** A re-assert deploys and then checks one slice: two ssh round trips and a port probe. */
@@ -155,6 +162,45 @@ async function main() {
 			node: '*',
 			facet: 'hosting-pm2',
 			why: `the pm2 stray sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+		});
+	}
+
+	// THE REGISTRY AGAINST WHAT EACH APP SHIPS, before anything reads it below.
+	try {
+		for (const [app, entry] of Object.entries(readTenantRegistry(stateDir()).tenants)) {
+			const facet = `tenant:${app}`;
+			const repo = repoOfSource(entry.source);
+			let text = null;
+			if (repo) {
+				try {
+					text = shipped(repo).read('hosting.json');
+				} catch (err) {
+					unreadable.push({ node: '*', facet, why: `${repo}: ${err.reason ?? err.message}` });
+					continue;
+				}
+			}
+			const d = judgeTenantDrift(entry, text);
+			if (d.verdict === 'unknown') {
+				advisories.push({ node: '*', tenant: app, facet, category: 'tenant-source', why: d.why });
+			} else if (d.verdict === 'invalid') {
+				unconverged.push({ node: '*', tenant: app, facet, why: d.why });
+				log(`unconverged * ${facet}: ${d.why}`);
+			} else if (d.verdict === 'changed') {
+				const what = `${entry.source} changed (${d.fields.join(', ')})`;
+				if (DRY_RUN) {
+					log(`would re-register ${app}: ${what}`);
+				} else {
+					registerTenant(stateDir(), d.request, { source: entry.source, by: 'hosting-verify' });
+					changed.push({ node: '*', facet, changed: `re-registered: ${what}` });
+					log(`re-registered ${app}: ${what}`);
+				}
+			}
+		}
+	} catch (err) {
+		unreadable.push({
+			node: '*',
+			facet: 'tenant-registry',
+			why: `the tenant registry could not be read: ${err instanceof Error ? err.message : String(err)}`,
 		});
 	}
 
