@@ -32,6 +32,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { ciIsSeparate, cutoverCiUser, nodeHome, nodeUser } from '../dist/lib/node-users.js';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 import { isBackstopNode } from '../dist/lib/node-role.js';
 import { hostingsOn, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { readDrainDoc, readDrains } from './lib/expected-down.mjs';
@@ -238,7 +239,11 @@ async function main() {
 	// node side runs again (claw-8 and claw-6, 2026-10-31: not-guaranteed with
 	// no CI running, and cardtable promoted hokon for want of claw-8).
 	// One re-assert per tenant: a node may hold several (fleet-manager#32).
-	const hosted = hostingsOn(NODE, readDrainDoc(), readHostingDoc());
+	// stateDir() from fleet-paths, passed EXPLICITLY. readHostingDoc's default is
+	// host.ts's, which throws in a standalone script: the first real cutover
+	// (claw-10, 2026-11-03) crashed here after the manifest flip, skipping this
+	// whole re-prove chain.
+	const hosted = hostingsOn(NODE, readDrainDoc(), readHostingDoc(stateDir()));
 	chain.splice(
 		1,
 		0,

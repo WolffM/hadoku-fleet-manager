@@ -44,20 +44,40 @@ human. Report back when step 7 verifies, not after each step in between.
 ## Steps
 
 1. **Boot the stick.** Where: at the new box, console. As: nobody (no OS yet).
-   Command: boot from the stick. **Ventoy's menu opens, and on a stick built
-   with `--netinst-iso` it says "no ISO available". That is expected. Press
-   F6**, then pick _Install Debian (fleet netinst partition)_. The installer
-   then runs unattended, asking only the **hostname** (type the node's name
-   exactly) and, if the box has more than one, the **disk**.
+   Command: boot from the stick (claw-10 installed from a rear USB 2.0 port;
+   on an old board, prefer one over USB 3.0 or the front panel). Ventoy's
+   menu auto-selects the Debian
+   `.iso` after 5s. At **Debian's own menu, pick `Install`** (the text
+   installer). Do **not** pick `Graphical install`: it went to a black screen
+   on claw-10's GTX 1060. Debian's menu has no timeout, so this is always a
+   choice. The installer then runs unattended, asking only the **hostname**
+   (type the node's name exactly), the **disk** if the box has more than
+   one, and, again on a box with more than one fixed disk, **where to
+   install GRUB**.
 
-   Why the extra key: the installer is not an `.iso` file on Ventoy's
-   partition any more. It is raw on its own partition (`DINSTALL`, number
-   4), so Ventoy's own list is empty, and `ventoy/ventoy_grub.cfg` (F6) is
-   the only menu that boots it (`scripts/lib/make-preseed-netinst.sh`,
-   `render_netinst_grub_cfg`). A legacy stick, with a Debian `.iso` on
-   Ventoy's partition, instead auto-selects that ISO after 5s with no F6.
-   `fleet verify-stick` says which kind you are holding.
-   Verify: the box reboots into the name you gave it.
+   **The GRUB question:** answer it with the disk that holds `/target`.
+   Ctrl+Alt+F2, then `mount | grep target`, then strip the partition number
+   (`/dev/sdc1` → `/dev/sdc`), then Ctrl+Alt+F1 to go back and type it. The
+   preseed pins GRUB only when there is exactly one fixed disk; Debian's own
+   default would be the first disk, which is the claw-9 failure
+   (`make-preseed-render.sh`, "Bootloader").
+
+   **When the install reboots, pull the stick before Ventoy's 5s
+   countdown.** The BIOS boots USB first, and Ventoy will start the
+   installer again. Device letters also change between the installer and
+   the installed system (claw-10's root was `sdc` in d-i and `sdb` after),
+   so name disks by model, never by letter.
+
+   **A stick built with `--netinst-iso` and no `.iso` on Ventoy** says "no
+   ISO available" and boots only through F6, then _Install Debian (fleet
+   netinst partition)_. That path **hung on the first real board it met**
+   (claw-10, a 2011 Award legacy BIOS, at GRUB's `linux` load, on every USB
+   port; that board cannot boot USB in UEFI). Put the `.iso` on Ventoy's
+   partition for any board you have not booted this way before.
+   `fleet verify-stick` says which kind of stick you are holding.
+   Verify: the box reboots into the name you gave it. **If its console is
+   black after GRUB** on a box with an NVIDIA card, the system is probably
+   up and the display is not: check over ssh before rebooting anything.
 
 2. **Convert it to a fleet node.** Where: at the new box, over the console
    (keep it attached for this step — see Preconditions). As: `admin` (the
@@ -128,8 +148,14 @@ up` invocation it chose (tags come from the node's profile) at the end of
 
    ```
    fleet node-users --machine <node>                     # check only
+   fleet drain <node> --reason "node-users cutover"      # the cutover refuses an undrained node
    fleet node-users --cutover <node> --confirm            # create + move the ci role
    ```
+
+   The drain is required even on a node that has never served a job. Leave
+   it in place through step 6 and undo it (`fleet drain <node> --undo`)
+   once provision verifies: the cutover's own closing line says when the
+   deployed manifest agrees.
 
    Until this runs, the node's CI jobs execute as `admin` — correct for a
    node mid-migration, not a target state (see `docs/VOCABULARY.md` §"Node
