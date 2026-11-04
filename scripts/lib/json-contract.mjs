@@ -527,6 +527,10 @@ export const TENANT_CONTRACT = [
 			'slices[].state',
 			'slices[].why',
 			'slices[].until',
+			// The app layer commits a standby only from a reachable slice, and a
+			// fleet row's `fence` from the tenant's (hadoku_site 6b5e54929, R9).
+			'slices[].reachable',
+			'tenant.fence',
 			'slices[].declared.port',
 			'ended[].node',
 			'ended[].until',

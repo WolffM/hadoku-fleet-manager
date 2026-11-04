@@ -14,19 +14,19 @@
  * Every name defined IN THIS FILE is re-exported from `refresh-cycle.mjs`, so
  * nothing outside this pair of files needs to know the split happened.
  */
-import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
-import { hubRepo } from '../../dist/lib/fleet-config.js';
-import { reposDir, stateDir } from '../../dist/lib/fleet-paths.js';
+import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { parseToolProbe, toolProbeScript } from '../check-fleet-toolchain.mjs';
 import { deferralFor, readDrains } from './expected-down.mjs';
 import { repairContext, runOnSync } from './fleet-exec.mjs';
 import { byRole } from './toolchain-floor.mjs';
 import { createReleaseLookup, resolveInstallTarget } from './tool-release.mjs';
+import { SITE_WRITER_ENV, siteWriterDir } from './manifest-target.mjs';
 import { errText } from './term.mjs';
 import { PRESSURE_OLDEST_SECONDS, runWorkItem } from './refresh-cycle.mjs';
 // busyCount/drainCli/isDrained/drain/undrain/waitUntilDrained moved to
@@ -151,12 +151,12 @@ export function createLiveDeps() {
 			writeFileAtomic(recheckLogPath(), `${JSON.stringify(log, null, 2)}\n`);
 		},
 		// Re-record the node while the cycle holds it drained, through the cycle's
-		// OWN worktree reset to origin/main first (`writerManifestDir`). A refusal
+		// OWN worktree reset to origin/main first (`siteWriterDir`, lib/manifest-target.mjs). A refusal
 		// comes back as a finding, never a hold.
 		rebootcamp: (node) => {
 			let dir;
 			try {
-				dir = writerManifestDir();
+				dir = siteWriterDir();
 			} catch (e) {
 				return { ok: false, reason: `could not prepare the writer tree: ${errText(e)}` };
 			}
@@ -166,12 +166,8 @@ export function createLiveDeps() {
 				{
 					encoding: 'utf8',
 					timeout: REBOOTCAMP_TIMEOUT_MS,
-					// SKIP_GATES: hadoku_site's pre-push hook runs its whole code-gate
-					// set (predev, lint, gate-coverage…) and the writer tree has no
-					// dev environment, so every automated record was committed and
-					// NOT pushed (claw-2, 2026-10-09). The commit is a data record;
-					// hadoku_site's CI runs every gate on main after it lands.
-					env: { ...process.env, FLEET_MANIFEST_DIR: dir, SKIP_GATES: '1' },
+					// The fleet's writer tree and its env (lib/manifest-target.mjs says why).
+					env: { ...process.env, FLEET_MANIFEST_DIR: dir, ...SITE_WRITER_ENV },
 				}
 			);
 			if (r.error) return { ok: false, reason: errText(r.error) };
@@ -209,32 +205,4 @@ function readRecheckLog() {
 		// makes the cycle MORE eager to recheck — the safe direction.
 		return {};
 	}
-}
-
-/**
- * The manifest dir bootcamp writes through: a detached worktree of the dev
- * repo, owned by this cycle and RESET to a fresh origin/main before every write.
- *
- * Not the dev checkout itself. The writer commits on whatever HEAD it finds and
- * pushes only a fast-forward, and the shared checkout drifts: on 2026-10-09 it
- * sat 18 commits behind, so claw-1's re-recorded `$capabilities` was committed
- * there and NOT pushed — the record the cycle exists to refresh would never
- * have reached main. Not ~/srv either: the writer refuses it (every deploy
- * resets it). A tree of its own, reset each time, always fast-forwards.
- */
-function writerManifestDir() {
-	const env = Object.fromEntries(
-		Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))
-	);
-	const git = (args) => execFileSync('git', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
-	const repo = join(reposDir(), hubRepo());
-	const tree = join(stateDir(), 'site-writer');
-	git(['-C', repo, 'fetch', '-q', 'origin', 'main']);
-	if (!existsSync(join(tree, '.git'))) {
-		git(['-C', repo, 'worktree', 'add', '-q', '--detach', '-f', tree, 'origin/main']);
-	} else {
-		git(['-C', tree, 'checkout', '-q', '--detach', '-f', 'origin/main']);
-		git(['-C', tree, 'clean', '-fdq', '--', 'scripts/admin']);
-	}
-	return join(tree, 'scripts', 'admin');
 }

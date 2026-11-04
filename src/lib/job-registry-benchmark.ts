@@ -55,4 +55,18 @@ export const jobRegistryBenchmark: JobEntry[] = [
 		contract: 'json',
 		why: "Drain -> wait DRAINED -> update -> re-probe -> undrain, one node at a time. Runs inside fleet-benchmark's declared deploy-hold window (profiles.json names it explicitly beside ci:fleet-benchmark and ci:health-refresh) because it can take up to its full 10800s timeout.",
 	},
+	{
+		name: 'ci:bootcamp',
+		sub: 'bootcamp',
+		args: ['--write', '--site-writer', '--idle-wait', '20', '--json'],
+		kind: 'converger',
+		detectionBudget: '48h',
+		cadence: { cron: '0 12 * * *' },
+		timeoutS: 7200,
+		deployHold: true,
+		hostBound: false,
+		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/bootcamp.ts',
+		contract: 'json',
+		why: "Re-measures every node's EARNED labels and records them (`$capabilities`) through the fleet's writer tree, after ci:toolchain-refresh in the same window. Placement reads the earned record, and until 2026-11-04 nothing scheduled bootcamp: claw-8 probed service-host=ok for hours while its record lacked it and placement refused it. Idle-only measurements wait up to 20 min for quiet.",
+	},
 ];

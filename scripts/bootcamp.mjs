@@ -163,7 +163,7 @@ import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readProofs } from './lib/job-proof-record.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { dataEndpointUrl, probeScript, serviceStateRoot, unprobed } from './lib/probe-script.mjs';
-import { keepStdoutWhole } from './lib/emit.mjs';
+import { createEmitter, keepStdoutWhole } from './lib/emit.mjs';
 import {
 	applicableRepairs,
 	installScript,
@@ -185,6 +185,18 @@ import { computeRevocationChanges } from './lib/bootcamp-revoke.mjs';
 import { proveWorkloads, printProveResults } from './lib/bootcamp-canary.mjs';
 import { printReport } from './lib/bootcamp-report-print.mjs';
 import { writeManifestFacet } from './lib/bootcamp-write.mjs';
+import { SITE_WRITER_ENV, siteWriterDir } from './lib/manifest-target.mjs';
+
+// --site-writer: record through the fleet's own writer tree (a fresh
+// origin/main worktree it owns, lib/manifest-target.mjs `siteWriterDir`), the
+// way the toolchain cycle's re-bootcamp does. For the scheduled `ci:bootcamp`:
+// run from ~/srv, a plain --write resolves the deploy tree and is refused there,
+// and the record placement reads would never be refreshed (2026-11-04: claw-8
+// probed service-host=ok for hours while its record still lacked it).
+if (process.argv.includes('--site-writer')) {
+	process.env.FLEET_MANIFEST_DIR = siteWriterDir();
+	Object.assign(process.env, SITE_WRITER_ENV);
+}
 
 // STDOUT MUST ARRIVE WHOLE. This script prints a JSON document and then exits,
 // and on a pipe `process.exit` throws away whatever the stream still had
@@ -281,8 +293,11 @@ const IDLE_TIMING = {
 	...(process.env.FLEET_TEST_IDLE_TIMING ? JSON.parse(process.env.FLEET_TEST_IDLE_TIMING) : {}),
 };
 
-const out = [];
-const log = (m) => (JSON_OUT ? out.push(m) : console.log(m));
+// ONE stdout writer (lib/emit.mjs), because ci:bootcamp parses `--json`: human
+// lines go to stderr in that mode, with the provenance banner naming the tree
+// and install that answered, and the document is the only thing on stdout.
+const emitter = createEmitter({ argv: process.argv });
+const log = (m) => emitter.log(m);
 
 /**
  * ELIGIBILITY is the fast loop's to write, never bootcamp's. See the header.
@@ -518,24 +533,18 @@ const written = await writeManifestFacet(ctx);
 
 printProveResults(ctx, proveResults);
 
-if (JSON_OUT)
-	console.log(
-		JSON.stringify(
-			{
-				ok: ctx.findings === 0,
-				report,
-				unreachable,
-				tools: toolResults,
-				seeds: seedResultsByNode,
-				revocations: revocationChanges,
-				written,
-				...(proofLedger.ok ? {} : { jobProofLedgerError: proofLedger.reason }),
-				...(PROVE ? { prove: proveResults } : {}),
-			},
-			null,
-			2
-		)
-	);
-else if (!ctx.findings) console.log(`\n✓ every declared label is backed by a passing probe`);
+if (emitter.json)
+	emitter.emit({
+		ok: ctx.findings === 0,
+		report,
+		unreachable,
+		tools: toolResults,
+		seeds: seedResultsByNode,
+		revocations: revocationChanges,
+		written,
+		...(proofLedger.ok ? {} : { jobProofLedgerError: proofLedger.reason }),
+		...(PROVE ? { prove: proveResults } : {}),
+	});
+else if (!ctx.findings) log(`\n✓ every declared label is backed by a passing probe`);
 
 process.exit(ctx.findings ? 1 : 0);

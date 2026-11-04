@@ -75,7 +75,8 @@ void test('MANUAL names exactly the subcommands that are automated but carry no 
 	const expected = [
 		'apt-security',
 		'toolpack',
-		'bootcamp',
+		// bootcamp left this list 2026-11-04: ci:bootcamp records the earned
+		// labels placement reads; with no clock, they drifted from the probe.
 		'hosting-request',
 		'capability-schema',
 		'hosting-demand',

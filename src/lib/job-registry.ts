@@ -122,8 +122,6 @@ export const MANUAL: Record<string, string> = {
 		"Driven as a facet inside ci:converge-provisioning's own 30-minute pass (scripts/converge-provisioning.mjs's DRIVER map resolves apt-security.mjs by its own script path, not through the `fleet` door). `fleet apt-security` as a standalone subcommand is operator-only; its registered automation is the converge-provisioning row above.",
 	toolpack:
 		'A standalone operator tool ("run it before bootcamp" — converge-toolchain.md): nothing calls toolpack.mjs from a cron or a converger (grepped; the only callers are src/cli.ts and the operator).',
-	bootcamp:
-		'Invoked only by scripts/provision-fleet.mjs (an operator-run mutator, "bring a node up from bare") and by hand; never on a timer. A node earns its labels when an operator runs provision or bootcamp, not on a schedule.',
 	'hosting-request':
 		"An operator/tenant debugging aid — reads one app's hosting.json the way the fleet will, before that tenant declares a slice. No cron parses it; TENANT_CONTRACT's `hosting --check` (a separate COMMANDS entry, kind: 'mutator', polled by hadoku-cardtable) is what a tenant actually reads on its own cadence.",
 	'capability-schema':

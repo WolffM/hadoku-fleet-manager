@@ -83,6 +83,7 @@
  * test of a writer that pushes is a test that mutates a real repository.
  */
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
@@ -93,7 +94,7 @@ import process from 'node:process';
 // library and the scripts cannot drift apart. It reads `process.env` on every
 // call and caches nothing, which is why the deploy root below is a function.
 import { hubRepo } from '../../dist/lib/fleet-config.js';
-import { deploySiteRoot } from '../../dist/lib/fleet-paths.js';
+import { deploySiteRoot, reposDir, stateDir } from '../../dist/lib/fleet-paths.js';
 
 /**
  * The ambient environment with every `GIT_*` variable REMOVED, except the four
@@ -149,6 +150,44 @@ export function runGit(args, cwd, env = process.env) {
  * reads. Until then the readers never asked it.
  */
 export { deploySiteRoot };
+
+/**
+ * WHERE AN AUTOMATED FLEET WRITE LANDS: a detached worktree of the hub repo,
+ * owned by the fleet in its state dir and RESET to a fresh origin/main before
+ * every write, so the writer's commit always fast-forwards. Returns its
+ * `scripts/admin`, for FLEET_MANIFEST_DIR.
+ *
+ * Not the dev checkout: the writer commits on whatever HEAD it finds and pushes
+ * only a fast-forward, and the shared checkout drifts (2026-10-09 it sat 18
+ * commits behind, and claw-1's re-recorded `$capabilities` was committed there
+ * and never pushed). Not ~/srv: the guard above refuses it. One home since
+ * 2026-11-04: it lived privately in refresh-cycle-live.mjs, so the toolchain
+ * cycle could write `$capabilities` and a scheduled bootcamp could not.
+ *
+ * Pair it with SITE_WRITER_ENV: the tree has no dev environment, so hadoku_site's
+ * pre-push code gates cannot run there (every automated record was committed and
+ * NOT pushed, claw-2 2026-10-09); the commit is a data record, and hadoku_site's
+ * CI runs every gate on main after it lands.
+ */
+export function siteWriterDir() {
+	const env = Object.fromEntries(
+		Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))
+	);
+	const git = (args) => execFileSync('git', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+	const repo = join(reposDir(), hubRepo());
+	const tree = join(stateDir(), 'site-writer');
+	git(['-C', repo, 'fetch', '-q', 'origin', 'main']);
+	if (!existsSync(join(tree, '.git'))) {
+		git(['-C', repo, 'worktree', 'add', '-q', '--detach', '-f', tree, 'origin/main']);
+	} else {
+		git(['-C', tree, 'checkout', '-q', '--detach', '-f', 'origin/main']);
+		git(['-C', tree, 'clean', '-fdq', '--', 'scripts/admin']);
+	}
+	return join(tree, 'scripts', 'admin');
+}
+
+/** The env an automated write through {@link siteWriterDir} runs with. */
+export const SITE_WRITER_ENV = Object.freeze({ SKIP_GATES: '1' });
 
 /**
  * Every tree a publish resets. A write landing under one of these is lost.

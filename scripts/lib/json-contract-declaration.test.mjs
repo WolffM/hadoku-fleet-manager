@@ -473,6 +473,7 @@ const TODAYS_JSON_CONTRACT = [
 		'ci:toolchain-refresh',
 		'services/mgmt-api/src/routes/jobs/toolchain-refresh.ts',
 	],
+	['bootcamp', 'ci:bootcamp', 'services/mgmt-api/src/routes/jobs/bootcamp.ts'],
 	['header-audit', 'ci:header-fleet', 'services/mgmt-api/src/routes/jobs/header-fleet-check.ts'],
 	[
 		'identity-model',
@@ -541,7 +542,7 @@ const TODAYS_JSON_CONTRACT = [
 	['label-floor', 'ci:label-floor', 'services/mgmt-api/src/routes/jobs/label-floor-check.ts'],
 ].map(([sub, job, consumer]) => `${sub} -> ${job} -> ${consumer}`);
 
-void test("the derived JSON_CONTRACT equals today's 34 entries exactly — name, sub and consumer", () => {
+void test("the derived JSON_CONTRACT equals today's 35 entries exactly — name, sub and consumer", () => {
 	const derived = JSON_CONTRACT.map((e) => `${e.sub} -> ${e.job} -> ${e.consumer}`);
 	assert.deepEqual(derived.slice().sort(), TODAYS_JSON_CONTRACT.slice().sort());
 });

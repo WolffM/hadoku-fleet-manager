@@ -7,6 +7,7 @@ export const commandsGates: Record<string, Command> = {
 		flags: [
 			'--json',
 			'--write',
+			'--site-writer',
 			'--no-push',
 			'--prove',
 			'--check-only',
