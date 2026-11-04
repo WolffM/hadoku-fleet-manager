@@ -24,6 +24,8 @@ import { CAPACITY_SAMPLE_FILE, capacitySampleStore } from '../../dist/capacity-s
 import { reliabilityOf } from './host-reliability.mjs';
 import { pm2Peers } from './pm2-app-layer.mjs';
 import { tenantsByNode } from './tenant-declarations.mjs';
+import { requiredRules } from './hosting-placement.mjs';
+import { readTenantRegistry } from './tenant-registry.mjs';
 
 /**
  * The routing labels each node offers now, by the mint's own rule: `nodeOffer`
@@ -73,6 +75,7 @@ export async function collectOffers(manifest, { tools = [] } = {}) {
 	const drains = readDrains();
 	const labelsOf = offeredLabels(manifest.machines ?? {});
 	const reliability = reliabilityOf(readSamples(), Date.now());
+	const rulesOf = registeredRules();
 
 	const offers = await Promise.all(
 		nodes.map(async ([node, machine]) => {
@@ -96,11 +99,28 @@ export async function collectOffers(manifest, { tools = [] } = {}) {
 				offer.expectedDown = deferralFor(node, drains).deferred;
 			} else if (peers.set === null) offer.unknown.push(peers.why);
 			offer.reliability = reliability(node);
+			// Every tenant already here carries ITS rules, so a plan for a newcomer
+			// can refuse a node where the newcomer would break them (cardtable,
+			// 2026-11-04, its hosting contract §12.1).
+			if (Array.isArray(offer.tenants))
+				offer.tenants = offer.tenants.map((t) => ({ ...t, require: rulesOf(t.tenant) }));
 			return offer;
 		})
 	);
 
 	return { offers, skippedByRole };
+}
+
+/** tenant -> its required rules, from the registry; null when that could not be read or it is not registered. */
+function registeredRules() {
+	let tenants = null;
+	try {
+		tenants = readTenantRegistry(stateDir()).tenants;
+	} catch {
+		// Unreadable: every neighbour's rules are null, "cannot tell", which a
+		// plan refuses rather than reading as "no rules".
+	}
+	return (app) => (tenants?.[app]?.request ? requiredRules(tenants[app].request) : null);
 }
 
 /** The capacity samples, or why they could not be read: "could not look" is carried, never empty. */

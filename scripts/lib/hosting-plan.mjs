@@ -41,7 +41,7 @@
  * primary holds or is about to be given.
  */
 import { ciJobsAfter } from './hosting-offers.mjs';
-import { requiredRules, ruleDetail, ruleHolds } from './hosting-placement.mjs';
+import { requiredRules, ruleDetail, ruleHolds, ruleHoldsHeld } from './hosting-placement.mjs';
 import { ADVISORY_UNTIL_DEFAULT } from './hosting-request.mjs';
 import { satisfies } from './version-algebra.mjs';
 
@@ -72,6 +72,43 @@ export function runtimeReasons(request, o) {
 		else if (!ran) say(fails, `${t} does not run on the service PATH`);
 	}
 	return { fails, cannot, all };
+}
+
+/**
+ * A newcomer must not break the rules of a tenant ALREADY on the node, as well
+ * as pass its own (cardtable's hosting contract §12.1, 2026-11-04). Each held
+ * tenant's rules are judged as the converger judges a held slice (KEEP), with
+ * the newcomer added: a rule that held and would stop holding refuses the node.
+ * A neighbour whose rules are unknown refuses too: cannot tell is not "none".
+ */
+function neighbourReasons(request, o) {
+	const others = (o.tenants ?? []).filter((t) => t.tenant !== request.app);
+	if (!others.length) return [];
+	const after = {
+		...o,
+		tenants: [
+			...o.tenants,
+			{
+				tenant: request.app,
+				memoryMb: request.slices.unit.memoryMb,
+				cores: request.slices.unit.cores,
+			},
+		],
+	};
+	const out = [];
+	for (const t of others) {
+		if (!Array.isArray(t.require)) {
+			out.push(
+				`cannot tell whether it breaks ${t.tenant}'s rules (not readable from the registry)`
+			);
+			continue;
+		}
+		for (const rule of t.require) {
+			if (ruleHoldsHeld(rule, o) !== false && ruleHoldsHeld(rule, after) === false)
+				out.push(`would break ${t.tenant}'s "${rule}"`);
+		}
+	}
+	return out;
 }
 
 /** Plan `request` (a NORMALIZED hosting request) against `offers` (from collectOffers). */
@@ -109,6 +146,7 @@ export function planFor(request, offers) {
 			else if (holds === null)
 				no.push(`cannot tell whether "${rule}" holds${seen ? `: ${seen}` : ''}`);
 		}
+		no.push(...neighbourReasons(request, o));
 		const before = ciJobsAfter(o, 0);
 		const after = ciJobsAfter(o, need.memoryMb);
 		return {

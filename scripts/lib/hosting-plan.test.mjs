@@ -300,3 +300,29 @@ test('a service tenant needs a node the fleet OBSERVED staying up: EARN for a ne
 	const agent = planFor(CARDTABLE, [offer('claw-4', { reliability: flaky.reliability })]);
 	assert.deepEqual(nodes(agent), ['claw-4'], 'an agent tenant is not asked the service bar');
 });
+
+test('a newcomer may not break a held tenant’s rules (cardtable’s hosting contract §12.1)', () => {
+	const ct = { tenant: 'cardtable', memoryMb: 4096, cores: 4 };
+	// A neighbour that refuses to sit beside archivebot: the node is refused, named.
+	const guarded = offer('claw-8', {
+		pm2Peer: true,
+		tenants: [{ ...ct, require: ['wired', 'not-with:archivebot'] }],
+	});
+	const plan = planFor(ARCHIVEBOT, [guarded, offer('claw-9', { pm2Peer: true })]);
+	assert.deepEqual(nodes(plan), ['claw-9']);
+	assert.match(why(plan, 'claw-8'), /would break cardtable's "not-with:archivebot"/);
+
+	// not-beside-unbounded: a hosted newcomer runs in a bounded slice, so it never breaks it.
+	const bounded = offer('claw-8', {
+		pm2Peer: true,
+		tenants: [{ ...ct, require: ['wired', 'not-beside-unbounded'] }],
+	});
+	assert.deepEqual(nodes(planFor(ARCHIVEBOT, [bounded])), ['claw-8']);
+
+	// A neighbour whose rules could not be read refuses: cannot tell is not "none".
+	const unknown = offer('claw-8', { pm2Peer: true, tenants: [{ ...ct, require: null }] });
+	assert.match(
+		why(planFor(ARCHIVEBOT, [unknown]), 'claw-8'),
+		/cannot tell whether it breaks cardtable's rules/
+	);
+});
