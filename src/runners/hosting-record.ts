@@ -73,6 +73,13 @@ export interface SharedHosting extends HostingResources {
 	reason: string;
 	/** Set by `fleet hosting --end`. From then the slice is no longer reserved. */
 	until?: string;
+	/**
+	 * Set by `fleet hosting --end --memory --cores`: the end is a SHRINK, not an
+	 * end. The slice keeps its full size, reserved, past `until`, until the
+	 * converger re-declares it at this size (a slice of k units, 2026-11-04).
+	 * It never lapses, so nothing admits CI into memory the cgroup still holds.
+	 */
+	shrinkTo?: { memoryMb: number; cores: number };
 }
 
 /** A slice `--remove` took away, kept for {@link ENDED_KEEP_MS} so a reader can tell "ended" from "vanished". */
@@ -134,13 +141,14 @@ export interface HostingOn extends HostingResources {
 	mode: 'whole' | 'shared';
 	until?: string;
 	since?: string;
+	shrinkTo?: { memoryMb: number; cores: number };
 }
 
 const FILE = 'fleet-hosting.json';
 const hostingPath = (dir: string): string => join(dir, FILE);
 
-const lapsed = (rec: { until?: string }, nowMs: number): boolean => {
-	if (!rec.until) return false;
+const lapsed = (rec: { until?: string; shrinkTo?: unknown }, nowMs: number): boolean => {
+	if (!rec.until || rec.shrinkTo) return false;
 	const t = Date.parse(rec.until);
 	// Unparseable is NOT lapsed: still reserved is the side that fails safe.
 	return Number.isFinite(t) && t <= nowMs;
@@ -170,6 +178,9 @@ export function parseHostingDoc(raw: string): HostingDoc {
 			) {
 				throw new Error(`${FILE}: a record for ${node} has no tenant, memoryMb or cores`);
 			}
+			const to = rec.shrinkTo;
+			if (to !== undefined && !(Number.isFinite(to?.memoryMb) && Number.isFinite(to?.cores)))
+				throw new Error(`${FILE}: ${node}'s ${rec.tenant} shrinkTo has no memoryMb or cores`);
 		}
 		const tenants = recs.map((r) => r.tenant);
 		const twice = tenants.find((t, i) => tenants.indexOf(t) !== i);
@@ -258,7 +269,7 @@ export function hostingsOn(
 	}
 	return [...(effectiveSlices(hostingDoc, nowMs)[node] ?? [])]
 		.sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
-		.map(({ tenant, memoryMb, cores, port, role, epoch, until, since }) => ({
+		.map(({ tenant, memoryMb, cores, port, role, epoch, until, since, shrinkTo }) => ({
 			mode: 'shared' as const,
 			tenant,
 			memoryMb,
@@ -267,6 +278,7 @@ export function hostingsOn(
 			...(role ? { role } : {}),
 			...(epoch !== undefined ? { epoch } : {}),
 			...(until ? { until } : {}),
+			...(shrinkTo ? { shrinkTo } : {}),
 			since,
 		}));
 }
@@ -369,6 +381,7 @@ export function hostingNotices(doc: HostingDoc, nowMs: number = Date.now()): Dra
 			at: r.until!,
 			kind: 'hosting' as const,
 			reason: r.reason,
+			...(r.shrinkTo ? { shrinkTo: r.shrinkTo } : {}),
 		}))
 		.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }

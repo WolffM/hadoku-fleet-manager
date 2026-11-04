@@ -1,11 +1,10 @@
 /**
  * HOSTING — a node lent to a tenant's RESIDENT service.
  *
- * The request it answers: hadoku-cardtable's
- * docs/requests/FLEET_MANAGER_FORGE_HOSTING.md §3–§9 (2026-10-24/25). The
- * scope line is the operator's: the fleet gets the node online, reports its
- * status, and FAITHFULLY SERVES THE RESOURCES IT DECLARES. Which node hosts
- * what, failover and alerting are the tenant's. Nothing here chooses a node.
+ * The request it answers: hadoku-cardtable's docs/requests/FLEET_MANAGER_FORGE_HOSTING.md
+ * §3–§9 (2026-10-24/25). The scope line is the operator's: the fleet gets the node online,
+ * reports its status, and FAITHFULLY SERVES THE RESOURCES IT DECLARES: k units are one slice,
+ * resized in place. Failover and alerting are the tenant's; nothing here chooses a node.
  *
  * TWO MODES, ONE SET OF UNITS:
  *   - `whole`: CI is held off the node by a drain of `kind: 'hosting'`
@@ -420,8 +419,7 @@ $S install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$AGENT_HOME"
 ${homeFilesScript(t)}
 ${systemFilesScript(t)}
 ${t.exec ? '$S install -d -o root -g root -m 0755 "$(dirname "$EXEC")"' : ''}
-# Write a unit only when its text changed, and remember which did: a re-deploy
-# that changes nothing must not restart the agent (it kills the tenant's JVMs).
+# Write a unit only when its text changed, and remember which: a no-op re-deploy must not restart the agent (it kills the tenant's JVMs).
 CHANGED=" "
 unit() {
 	new=$(cat)
@@ -462,9 +460,11 @@ $S systemctl start "$PARENT" "$SLICE"
 ${t.ingress === 'controller' ? CONTROLLER_PORT_START : ''}
 ${t.pathUnit ? '$S systemctl enable --now "$PATH_UNIT" >/dev/null 2>&1' : ''}
 $S systemctl enable "$SERVICE" >/dev/null 2>&1
+# A resize (k units) rewrites only the slices: daemon-reload leaves a running cgroup's limits as they were (measured on claw-5, 2026-11-04), so set them now, and leave the agent running.
+case "$CHANGED" in *" $SLICE "*|*" $PARENT "*) $S systemctl set-property --runtime "$PARENT" "MemoryMin=\${NODE_MB}M" && $S systemctl set-property --runtime "$SLICE" "MemoryMin=\${MEMORY_MB}M" "MemoryMax=\${MEMORY_MB}M" "CPUQuota=\${CPU_PCT}%" ;; esac
 if ${t.exec ? '[ -x "$EXEC" ]' : 'true'}; then
 	case "$CHANGED" in
-		*" $SLICE "*|*" $SERVICE "*) $S systemctl restart "$SERVICE" ;;
+		*" $SERVICE "*) $S systemctl restart "$SERVICE" ;;
 		*) $S systemctl start "$SERVICE" ;;
 	esac
 fi

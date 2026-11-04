@@ -55,7 +55,7 @@ test('the same N restated changes nothing but when it was asked', () => {
 		assert.deepEqual(again.doc.recorded, { changed: false });
 		assert.equal(again.doc.demand.since, first.doc.demand.since);
 		assert.deepEqual(again.doc.demand.releaseOrder, ['claw-6', 'claw-5']);
-		assert.deepEqual(again.doc.limits, { min: 1, max: 4 });
+		assert.deepEqual(again.doc.limits, { min: 1, max: 4, minNodes: 3 });
 		assert.equal(again.doc.auto, false);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });

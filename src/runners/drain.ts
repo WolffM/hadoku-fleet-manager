@@ -189,6 +189,8 @@ export interface DrainNotice {
 	at: string;
 	kind: DrainKind;
 	reason: string;
+	/** A shared slice's end that is a SHRINK: it goes on serving at this size. */
+	shrinkTo?: { memoryMb: number; cores: number };
 }
 
 /** Every scheduled start and every scheduled end still ahead of `nowMs`, soonest first. */

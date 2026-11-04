@@ -176,7 +176,9 @@ for (const [app, { request }] of tenants) {
 					{
 						node: n,
 						...(h.role ? { role: h.role } : {}),
+						memoryMb: h.memoryMb,
 						...(h.until ? { until: h.until } : {}),
+						...(h.shrinkTo ? { shrinkTo: h.shrinkTo } : {}),
 						...(h.since ? { since: h.since } : {}),
 					},
 				]
@@ -190,7 +192,10 @@ for (const [app, { request }] of tenants) {
 			.map(([n, r]) => [n, { ...r.hosting, until: r.until }]),
 	].filter(
 		([, r]) =>
-			r.tenant === app && Number.isFinite(Date.parse(r.until ?? '')) && Date.parse(r.until) <= NOW
+			r.tenant === app &&
+			!r.shrinkTo && // a due shrink is re-declared smaller (decide's `resize`), never removed
+			Number.isFinite(Date.parse(r.until ?? '')) &&
+			Date.parse(r.until) <= NOW
 	);
 	const removeDue = pastDue.map(([n]) => n);
 	const pastEnd = pastDue.filter(([, r]) => r.role !== 'standby').map(([n]) => n);

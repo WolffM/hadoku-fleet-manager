@@ -27,6 +27,7 @@ import { readArtifact } from './lib/hosting-artifacts.mjs';
 import { demandProblems, readDemand, tenantSlices, writeDemand } from './lib/hosting-demand.mjs';
 import { stateDir } from '../dist/lib/fleet-paths.js';
 import { readTenantRegistry } from './lib/tenant-registry.mjs';
+import { nodesWanted } from './lib/hosting-request.mjs';
 
 /** The view's version, pinned by the tenant like node-status's. Additive changes only. */
 export const HOSTING_DEMAND_CONTRACT = 1;
@@ -125,7 +126,8 @@ try {
 finish(true, {
 	recorded: recorded ? { changed: recorded.changed } : null,
 	demand,
-	limits: { min: request.slices.min, max: request.slices.max },
+	// min/max count UNITS; minNodes is the claws they spread over (spread, else the fleet's floor).
+	limits: { min: request.slices.min, max: request.slices.max, minNodes: nodesWanted(request) },
 	auto: request.placement.auto === true,
 	declared,
 	ending,

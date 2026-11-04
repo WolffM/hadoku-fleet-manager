@@ -70,8 +70,12 @@ import { collectOffers } from './lib/collect-offers.mjs';
 import { checkSlice, hostingRecords, observeNode, slicesMb } from './lib/hosting-check.mjs';
 import { keepArtifact } from './lib/hosting-artifacts.mjs';
 import { planFor } from './lib/hosting-plan.mjs';
+import { shrinkOf, unitsRefusal } from './lib/hosting-units.mjs';
 import {
-	CONTROLLER_NODE,
+	controllerAddrs as controllerAddrsOf,
+	controllerIp as controllerIpOf,
+} from './lib/hosting-controller.mjs';
+import {
 	INSTALL_MAX_BYTES,
 	ciShapedScript,
 	deployScript,
@@ -152,6 +156,7 @@ if (has('--help') || has('-h')) {
 			'        re-run the node side of the slice it holds, from its record; the record is not touched.',
 			'fleet hosting <node> --end (--in 30m | --at <iso>) [--force]',
 			`        schedule the end; the tenant is owed ${HOSTING_NOTICE_MS / 60_000} min notice.`,
+			'        with --memory/--cores: a SHRINK to that size, re-declared by the converger at the end.',
 			'fleet hosting <node> --keep',
 			'        take a scheduled end back, while the units are still there.',
 			'fleet hosting <node> --remove [--force]',
@@ -212,40 +217,12 @@ try {
 }
 const by = process.env.SUDO_USER || process.env.USER || 'unknown';
 
-/** The controller's reserved LAN address — the only source the port is opened to. */
-function controllerIp() {
-	const ip = manifest.machines?.[CONTROLLER_NODE]?.lan?.ip;
-	if (!ip) {
-		refuse(
-			`machines.${CONTROLLER_NODE}.lan.ip is not recorded, so there is no address to open the ` +
-				'port to. Record the reservation first (`fleet preflight` names it).'
-		);
-	}
-	return ip;
-}
-
-/**
- * The controller's addresses: its reserved LAN address from the manifest, and
- * its tailnet addresses as tailscale reports them on the controller itself.
- * The tailnet ones are opened above the mesh allow, so they must be read.
- */
-async function controllerAddrs() {
-	const lan = controllerIp();
-	const r = await runOn(CONTROLLER_NODE, 'tailscale ip -4; tailscale ip -6', {
-		as: 'admin',
-		timeoutMs: 15_000,
-	});
-	const ips = r.stdout.split('\n').map((l) => l.trim());
-	const tailnet4 = ips.find((l) => /^\d+\.\d+\.\d+\.\d+$/.test(l)) ?? null;
-	const tailnet6 = ips.find((l) => l.includes(':')) ?? null;
-	if (!tailnet4) {
-		refuse(
-			`could not read ${CONTROLLER_NODE}'s tailnet address (${r.error ?? r.stderr.trim() ?? 'no answer'}), ` +
-				'so the tailnet rule would shut the controller out with everyone else.'
-		);
-	}
-	return { lan, tailnet4, tailnet6 };
-}
+/** The controller's addresses (lib/hosting-controller.mjs), or the door refuses with why not. */
+const controllerIp = () => controllerIpOf(manifest).ip ?? refuse(controllerIpOf(manifest).why);
+const controllerAddrs = async () => {
+	const { addrs, why } = await controllerAddrsOf(manifest);
+	return addrs ?? refuse(why);
+};
 
 /** A registered tenant's spec (lib/tenant-registry.mjs), or null. */
 const specOf = (tenant) => (tenant ? tenantSpec(registry, tenant) : null);
@@ -477,7 +454,17 @@ if (action === 'end') {
 	if (refusal && !has('--force'))
 		refuse(`${refusal} Use --in 15m or later, or --force if the box is failing.`);
 	const until = new Date(endMs).toISOString();
-	const { doc: closedDoc, closed } = closingMove(hostingDoc, current.tenant);
+	// With a size, the end is a SHRINK (lib/hosting-units.mjs): it keeps serving, then is re-declared smaller.
+	const shrink = shrinkOf(
+		valueOf('--memory'),
+		valueOf('--cores'),
+		current.mode === 'shared' && sharedRec
+	);
+	if (shrink.why) refuse(shrink.why);
+	const { shrinkTo } = shrink;
+	const { doc: closedDoc, closed } = shrinkTo
+		? { doc: hostingDoc }
+		: closingMove(hostingDoc, current.tenant);
 	if (current.mode === 'whole') {
 		writeDrainDoc(
 			{
@@ -488,17 +475,23 @@ if (action === 'end') {
 		);
 		if (closed) writeHostingDoc(closedDoc, stateDir());
 	} else {
-		writeHostingDoc(withSlice(closedDoc, node, { ...sharedRec, until }), stateDir());
+		writeHostingDoc(
+			withSlice(closedDoc, node, { ...sharedRec, until, ...(shrinkTo ? { shrinkTo } : {}) }),
+			stateDir()
+		);
 	}
 	const named = sharedRecs.length > 1 ? ` --tenant ${current.tenant}` : '';
 	say(
-		`✓ ${node} stops hosting ${current.tenant} at ${until}. Then: fleet hosting ${node}${named} --remove`
+		shrinkTo
+			? `✓ ${node} shrinks ${current.tenant} to ${shrinkTo.memoryMb} MiB at ${until}; the converger re-declares it then.`
+			: `✓ ${node} stops hosting ${current.tenant} at ${until}. Then: fleet hosting ${node}${named} --remove`
 	);
 	if (closed)
 		say(`  the move ${closed.from} → ${closed.to} (epoch ${closed.epoch}) is ${closed.outcome}.`);
 	finish(true, {
-		state: 'ending',
+		state: shrinkTo ? 'shrinking' : 'ending',
 		until,
+		...(shrinkTo ? { shrinkTo } : {}),
 		mode: current.mode,
 		tenant: current.tenant,
 		...(closed ? { move: closed } : {}),
@@ -519,7 +512,7 @@ if (action === 'keep') {
 				`${keptTenant} is a singleton and ${other.node} holds it; keeping ${node} would be a second writer.`
 			);
 	}
-	const { until: was, ...kept } = rec;
+	const { until: was, shrinkTo: _, ...kept } = rec;
 	if (wholeRec)
 		writeDrainDoc(
 			{ nodes: { ...drainDoc.nodes, [node]: kept }, planned: drainDoc.planned },
@@ -695,6 +688,12 @@ if (MOVE) {
 			'A second place is a move: --move.'
 	);
 const moveFrom = MOVE ? elsewhere[0].node : null;
+// slices.max counts UNITS across the tenant's primaries; a resize is this node's new count.
+const tooMany =
+	role || MOVE
+		? null
+		: unitsRefusal(registry.tenants[tenant].request, elsewhere, resources.memoryMb);
+if (tooMany) refuse(tooMany);
 const drained = drainDoc.nodes[node];
 if (!shared && drained && !['hosting', 'lease'].includes(drained.kind) && !has('--force')) {
 	refuse(
@@ -750,8 +749,7 @@ if (shared && !sharedRec) {
 			refuse(
 				`${tenant} already holds ${plan.standby.held.length} of its ${wanted} standby slice(s).`
 			);
-	} else if (plan.atMax)
-		refuse(`${tenant} already holds ${plan.held.length} of its ${request.slices.max} slices.`);
+	}
 	if (refused && !has('--force'))
 		refuse(
 			`${tenant}'s own placement refuses ${node}: ${refused.reasons.join('; ')}. --force overrides.`,

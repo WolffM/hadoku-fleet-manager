@@ -8,9 +8,20 @@
  * acts through the `fleet hosting` door, which checks fit and the tenant's
  * own placement again at the moment of each declare.
  *
- * desired   = demand, else slices.min, clamped to min..max.
+ * UNITS AND CLAWS ARE TWO NUMBERS (operator, 2026-11-04). A unit is
+ * capacity, `slices.unit`; a claw is a failure domain. One claw holds one
+ * slice of a tenant, k units big, and k follows what the claw can lend: a
+ * strong claw takes several, a weaker one may hold its one.
+ *
+ * demanded  = demand, else slices.min, clamped to min..max. In UNITS.
+ * minNodes  = the spread floor: `spread.minNodes`, else FLEET_MIN_NODES
+ *             (lib/hosting-request.mjs `nodesWanted`). In CLAWS.
+ * desired   = max(demanded, minNodes), never past max: each claw holds a unit.
  * held      = slices declared and not past their end.
  * ending    = held, with an end scheduled. Not counted as serving.
+ * shrinking = held, with an end that carries `shrinkTo`: it serves until the
+ *             end at its full size, is counted at the smaller one, and is
+ *             re-declared at it once the notice has run (op `resize`).
  * unplaceable = held, on a node that is unreachable, fails a required rule,
  *             or has a drain of another kind starting within the notice
  *             horizon. A rule that cannot be told (null) is NOT a fault.
@@ -33,13 +44,17 @@
  * between one pass and the next must not cost the tenant its node. On
  * 2026-10-28 cardtable went 2 → 1 → 2 within 14 min; the converger removed
  * claw-9 36 s past its end and declared claw-5 beside it to make up the count.
- * TOO FEW: declare on the plan's top picks, one slice per node, never past
- * `max`. A SINGLETON whose one slice is unplaceable needs a MOVE, which is
+ * TOO FEW (claws under minNodes, or units under desired): a unit on each new
+ * claw from the plan's top picks until the floor is met, then each further
+ * unit to the best-ranked claw with room, held (`resize`) or new (`declare`),
+ * never past `max` units (`allocate`). A SINGLETON whose one slice is unplaceable needs a MOVE, which is
  * the mover's (hadoku_site#491) and is not done here. It is blocked, and the
  * block says why. A singleton on a node that cannot be reached and has no
  * fence is never moved: two writers is worse than none.
- * TOO MANY: end from the head of the tenant's releaseOrder, with notice. With
- * no order, end nothing and say so. While any slice it holds is younger than
+ * TOO MANY UNITS: from the head of the tenant's releaseOrder, with notice,
+ * end a whole claw while more than minNodes would remain and it holds no more
+ * than the excess; else shrink it toward one unit. With no order, end
+ * nothing and say so. While any slice it holds is younger than
  * YOUNG_SLICE_MS, end nothing: the tenant has not judged that node yet, and
  * cardtable puts a claw it has not canaried at the HEAD of its order. On
  * 2026-10-29 claw-9 was re-declared and read [claw-9, claw-5, claw-8] for 81 s;
@@ -58,6 +73,7 @@
  * no release order is needed. An unplaceable standby is replaced, not ended.
  */
 import { requiredRules, ruleDetail, ruleHoldsHeld } from './hosting-placement.mjs';
+import { nodesWanted, unitsOf } from './hosting-request.mjs';
 import { REASON_PREFIX } from './reboot-hold.mjs';
 
 /** A drain of another kind starting this long past the tenant's notice counts as now. */
@@ -101,14 +117,26 @@ export function decide({
 	move = null,
 }) {
 	const { app, slices: size, availability } = request;
-	const desired = Math.min(size.max, Math.max(size.min, demand?.slices ?? size.min));
+	// TWO NUMBERS: units (capacity, the demand) and claws (failure domains,
+	// the spread floor). Every claw holds at least one unit, so the units
+	// wanted are never fewer than the claws wanted.
+	const demanded = Math.min(size.max, Math.max(size.min, demand?.slices ?? size.min));
+	const minNodes = nodesWanted(request);
+	const desired = Math.min(size.max, Math.max(demanded, minNodes));
 	const horizonMs = availability.noticeMin * 60_000 + HORIZON_MARGIN_MS;
 	const offerOf = new Map(offers.map((o) => [o.node, o]));
 	const fault = (node) =>
 		faultOf(node, offerOf.get(node), requiredRules(request), notices, rebooting, now, horizonMs);
+	// A slice is k units. One that is SHRINKING (an end with `shrinkTo`) serves
+	// until its end, and is counted at the size it is going to.
+	const fullUnits = (s) => unitsOf(request, s.memoryMb);
+	const unitsAt = (s) => unitsOf(request, s.shrinkTo?.memoryMb ?? s.memoryMb);
+	const ends = (s) => s.until && !s.shrinkTo;
 
 	const primaries = allSlices.filter((s) => s.role !== 'standby');
-	const live = primaries.filter((s) => !s.until && !fault(s.node)).length;
+	const liveSlices = primaries.filter((s) => !ends(s) && !fault(s.node));
+	let liveNodes = liveSlices.length;
+	let liveUnits = liveSlices.reduce((n, s) => n + unitsAt(s), 0);
 	const rank = (node) => {
 		const i = (demand?.releaseOrder ?? []).indexOf(node);
 		return i === -1 ? Infinity : i;
@@ -117,45 +145,70 @@ export function decide({
 	// force: after a committed move the old node's copy is stopped and its
 	// state is gone, so keeping it would name two places that may run it.
 	const otherInForce = availability.singleton && primaries.some((s) => !s.until);
-	const keeps = otherInForce
-		? []
-		: [
-				...primaries.filter((s) => s.until).map((s) => s.node),
-				...pastEnd.filter((n) => !primaries.some((s) => s.node === n)),
-			]
-				.filter((n) => !fault(n))
-				.sort((a, b) => rank(b) - rank(a))
-				.slice(0, Math.max(0, desired - live));
+	const keeps = [];
+	if (!otherInForce) {
+		const candidates = [
+			...primaries.filter((s) => s.until),
+			// Past its end and out of force: an end, never a shrink (the subcommand keeps those out).
+			...pastEnd
+				.filter((n) => !primaries.some((s) => s.node === n))
+				.map((node) => ({ node, until: 'passed' })),
+		]
+			.filter((s) => !fault(s.node))
+			.sort((a, b) => rank(b.node) - rank(a.node));
+		for (const s of candidates) {
+			if (liveNodes >= minNodes && liveUnits >= desired) break;
+			keeps.push(s.node);
+			// Keeping an end brings the claw back; keeping a shrink, the units it was giving up.
+			if (ends(s)) liveNodes++;
+			liveUnits += ends(s) ? fullUnits(s) : fullUnits(s) - unitsAt(s);
+		}
+	}
 	const kept = new Set(keeps);
 	const slices = [
-		...primaries.map(({ until, ...s }) =>
-			kept.has(s.node) ? s : { ...s, ...(until ? { until } : {}) }
+		...primaries.map(({ until, shrinkTo, ...s }) =>
+			kept.has(s.node)
+				? s
+				: { ...s, ...(until ? { until } : {}), ...(shrinkTo ? { shrinkTo } : {}) }
 		),
 		...keeps.filter((n) => !primaries.some((s) => s.node === n)).map((node) => ({ node })),
 	];
 	const standbySlices = allSlices.filter((s) => s.role === 'standby');
 
-	const ending = slices.filter((s) => s.until).map((s) => ({ node: s.node, until: s.until }));
+	const ending = slices.filter(ends).map((s) => ({ node: s.node, until: s.until }));
+	const shrinking = slices
+		.filter((s) => s.shrinkTo)
+		.map((s) => ({ node: s.node, until: s.until, units: unitsAt(s) }));
 	const unplaceable = [];
-	for (const s of slices.filter((x) => !x.until)) {
+	for (const s of slices.filter((x) => !ends(x))) {
 		const why = fault(s.node);
 		if (why)
 			unplaceable.push({ node: s.node, why, reachable: offerOf.get(s.node)?.reachable === true });
 	}
 	const bad = new Set(unplaceable.map((u) => u.node));
-	const serving = slices.filter((s) => !s.until && !bad.has(s.node)).map((s) => s.node);
+	const servingSlices = slices.filter((s) => !ends(s) && !bad.has(s.node));
+	const serving = servingSlices.map((s) => s.node);
+	const unitsOn = new Map(servingSlices.map((s) => [s.node, unitsAt(s)]));
+	const servingUnits = [...unitsOn.values()].reduce((a, b) => a + b, 0);
+	const wanted = `${desired} unit(s) on at least ${minNodes} claw(s)`;
+	const have = `${servingUnits} unit(s) on ${serving.length} claw(s) serving`;
 
 	const actions = [
 		...keeps.map((node) => ({
 			op: 'keep',
 			node,
-			why: `${live} serving of ${desired} wanted; its own slice is kept, not replaced`,
+			why: `${liveSlices.length} serving of ${wanted}; its own slice is kept, not replaced`,
 		})),
 		...removeDue
 			.filter((node) => !kept.has(node))
 			.map((node) => ({ op: 'remove', node, why: 'its end has passed' })),
+		// A SHRINK WHOSE NOTICE HAS RUN is a re-declare at the smaller size.
+		...slices
+			.filter((s) => s.shrinkTo && Date.parse(s.until) <= now)
+			.map((s) => ({ op: 'resize', node: s.node, units: unitsAt(s), why: 'its shrink is due' })),
 	];
 	const blocked = [];
+	const short = serving.length < minNodes || servingUnits < desired;
 
 	// A SERVICE THE APP LAYER ALREADY RUNS is adopted by a move, never declared
 	// beside itself: no slice is not "not running". Could not look is the same block.
@@ -176,7 +229,7 @@ export function decide({
 				`the mover commits it by ending ${move.from}'s slice`,
 			soft: true,
 		});
-	} else if (serving.length < desired && (adoptFrom || runningAt)) {
+	} else if (short && (adoptFrom || runningAt)) {
 		const target = plan.ranked[0]?.node ?? null;
 		blocked.push({
 			node: adoptFrom ?? '*',
@@ -187,7 +240,7 @@ export function decide({
 				: `where the app layer runs ${app} could not be read (${runningAt}); nothing is declared ` +
 					'beside an instance that may be running',
 		});
-	} else if (serving.length < desired) {
+	} else if (short) {
 		if (availability.singleton && slices.length > 0) {
 			for (const u of unplaceable) {
 				const target = movePlan?.ranked[0]?.node ?? null;
@@ -202,27 +255,35 @@ export function decide({
 				});
 			}
 		} else {
-			const room = size.max - slices.length;
-			const want = Math.min(desired - serving.length, room);
-			const picks = plan.ranked.slice(0, Math.max(0, want));
-			for (const r of picks)
+			const held = slices.reduce((n, s) => n + (ends(s) ? fullUnits(s) : unitsAt(s)), 0);
+			const grown = allocate({
+				request,
+				plan,
+				offerOf,
+				slices,
+				unitsOn,
+				minNodes,
+				desired,
+				budget: size.max - held,
+			});
+			for (const g of grown.picks)
 				actions.push({
-					op: 'declare',
-					node: r.node,
-					why: `${serving.length} serving of ${desired} wanted`,
+					op: unitsOn.has(g.node) ? 'resize' : 'declare',
+					node: g.node,
+					units: g.units,
+					why: `${have}; ${wanted}`,
 				});
-			if (picks.length < desired - serving.length)
+			if (grown.nodes < minNodes || grown.units < desired)
 				blocked.push({
 					node: '*',
-					why:
-						room < desired - serving.length
-							? `${app} holds ${slices.length} of its ${size.max} slices and ${unplaceable.length} cannot serve`
-							: `${desired} wanted, ${serving.length} serving, and only ${picks.length} more node(s) fit: ` +
-								summarizeRefused(plan.refused),
+					why: grown.atMax
+						? `${app} holds ${held} of its ${size.max} units and ${unplaceable.length} cannot serve`
+						: `${wanted}, ${grown.units} on ${grown.nodes} claw(s) after this pass, and no claw has room ` +
+							`for another: ${summarizeRefused(plan.refused)}`,
 				});
 		}
-	} else if (serving.length > desired) {
-		const excess = serving.length - desired;
+	} else if (servingUnits > desired) {
+		const excess = servingUnits - desired;
 		const young = slices
 			.filter((s) => !s.until && now - Date.parse(s.since ?? '') < YOUNG_SLICE_MS)
 			.map((s) => s.node);
@@ -230,25 +291,50 @@ export function decide({
 			blocked.push({
 				node: '*',
 				why:
-					`${excess} slice(s) above demand, and ${young.join(', ')} was declared under ` +
+					`${excess} unit(s) above demand, and ${young.join(', ')} was declared under ` +
 					`${YOUNG_SLICE_MS / 60_000} min ago: nothing is ended until ${app} has judged it`,
 				soft: true,
 			});
 		} else {
-			const order = (demand?.releaseOrder ?? []).filter((n) => serving.includes(n));
-			for (const node of order.slice(0, excess))
-				actions.push({
-					op: 'end',
-					node,
-					inMin: availability.noticeMin,
-					why: `${serving.length} serving, ${desired} wanted; first in ${app}'s release order`,
-				});
-			if (order.length < excess)
+			// From the head of the tenant's release order: a whole claw while
+			// more than the floor would remain and it holds no more than the
+			// excess, else its units down to one. Both with the tenant's notice.
+			const order = (demand?.releaseOrder ?? []).filter(
+				(n) => unitsOn.has(n) && !slices.find((s) => s.node === n).shrinkTo
+			);
+			let left = excess;
+			let nodesLeft = serving.length;
+			for (const node of order) {
+				if (left <= 0) break;
+				const u = unitsOn.get(node);
+				if (nodesLeft > minNodes && u <= left) {
+					actions.push({
+						op: 'end',
+						node,
+						inMin: availability.noticeMin,
+						why: `${have}, ${wanted}; first in ${app}'s release order`,
+					});
+					left -= u;
+					nodesLeft--;
+				} else if (u > 1) {
+					const to = u - Math.min(u - 1, left);
+					actions.push({
+						op: 'shrink',
+						node,
+						units: to,
+						inMin: availability.noticeMin,
+						why: `${have}, ${wanted}; ${node} goes from ${u} to ${to} unit(s)`,
+					});
+					left -= u - to;
+				}
+			}
+			if (left > 0)
 				blocked.push({
 					node: '*',
 					why:
-						`${excess} slice(s) above demand and the release order names ${order.length} serving ` +
-						`one(s); nothing else is ended, because only ${app} knows what each slice holds`,
+						`${left} unit(s) above demand and ${app}'s release order names no serving claw that ` +
+						`can give them up without going under ${minNodes} claw(s); nothing else is ended, ` +
+						`because only ${app} knows what each slice holds`,
 					soft: true,
 				});
 		}
@@ -258,7 +344,7 @@ export function decide({
 		request,
 		plan,
 		standbySlices,
-		primaryHeld: slices.filter((s) => !s.until).length,
+		primaryHeld: slices.filter((s) => !ends(s)).length,
 		fault,
 		offerOf,
 		actions,
@@ -267,12 +353,77 @@ export function decide({
 	return {
 		app,
 		desired,
+		demanded,
+		minNodes,
 		serving,
+		servingUnits,
 		ending,
+		...(shrinking.length ? { shrinking } : {}),
 		unplaceable,
 		actions,
 		blocked,
 		...(standby ? { standby } : {}),
+	};
+}
+
+/**
+ * Where the missing units go, one at a time. First one unit on each new claw
+ * until the spread floor is met, in the plan's ranking. Then each further unit
+ * to the best claw with room for it, held or new, by the tenant's
+ * `placement.order` (a held claw before a new one at the same rank): a strong
+ * claw takes several, a weaker one may hold its one. A held claw's room is
+ * what its offer still lends (the offer already charges every slice on it); a
+ * shrinking one gives, it does not take. `budget`: units left under `max`.
+ */
+function allocate({ request, plan, offerOf, slices, unitsOn, minNodes, desired, budget }) {
+	const { unit } = request.slices;
+	const order = request.placement?.order ?? [];
+	const orderRank = (n) => (order.includes(n) ? order.indexOf(n) : Infinity);
+	const roomOf = (n) => {
+		const h = offerOf.get(n)?.hostable;
+		if (!Number.isFinite(h?.memoryMb) || !Number.isFinite(h?.cores)) return 0;
+		return Math.max(
+			0,
+			Math.min(Math.floor(h.memoryMb / unit.memoryMb), Math.floor(h.cores / unit.cores))
+		);
+	};
+	const holding = new Set(slices.map((s) => s.node));
+	const shrinking = new Set(slices.filter((s) => s.shrinkTo).map((s) => s.node));
+	const fresh = plan.ranked.map((r) => r.node).filter((n) => !holding.has(n));
+	const add = new Map();
+	// A new claw's first unit is the plan's fit; every unit past it is the offer's room.
+	const spare = (n) =>
+		shrinking.has(n)
+			? 0
+			: (unitsOn.has(n) ? roomOf(n) : Math.max(1, roomOf(n))) - (add.get(n) ?? 0);
+	let nodes = unitsOn.size;
+	let units = [...unitsOn.values()].reduce((a, b) => a + b, 0);
+	let left = budget;
+	let next = 0;
+	const take = (n) => {
+		add.set(n, (add.get(n) ?? 0) + 1);
+		units++;
+		left--;
+	};
+	while (nodes < minNodes && left > 0 && next < fresh.length) {
+		take(fresh[next++]);
+		nodes++;
+	}
+	while (units < desired && left > 0) {
+		const pool = [...new Set([...unitsOn.keys(), ...add.keys()])].filter((n) => spare(n) > 0);
+		const best = pool.sort((a, b) => orderRank(a) - orderRank(b))[0];
+		const newcomer = fresh[next];
+		if (newcomer !== undefined && (best === undefined || orderRank(newcomer) < orderRank(best))) {
+			take(fresh[next++]);
+			nodes++;
+		} else if (best !== undefined) take(best);
+		else break;
+	}
+	return {
+		picks: [...add].map(([node, k]) => ({ node, units: (unitsOn.get(node) ?? 0) + k })),
+		nodes,
+		units,
+		atMax: left <= 0,
 	};
 }
 
@@ -387,23 +538,23 @@ function summarizeRefused(refused) {
  */
 export function doorArgs(request, a) {
 	const reason = ['--reason', `hosting-converge: ${a.why}`];
-	if (a.op === 'declare') {
-		const { memoryMb, cores } = request.slices.unit;
+	// A slice of k units is one slice of k times the unit; a resize re-declares it.
+	const { memoryMb, cores } = request.slices.unit;
+	const k = a.units ?? 1;
+	const size = ['--memory', `${memoryMb * k}M`, '--cores', String(cores * k)];
+	const tenant = ['--tenant', request.app];
+	if (a.op === 'declare' || a.op === 'resize')
 		return [
 			a.node,
-			'--tenant',
-			request.app,
-			'--memory',
-			`${memoryMb}M`,
-			'--cores',
-			String(cores),
+			...tenant,
+			...size,
 			'--shared',
 			...(a.role ? ['--role', a.role] : []),
 			...reason,
 		];
-	}
-	const tenant = ['--tenant', request.app];
 	if (a.op === 'end') return [a.node, ...tenant, '--end', '--in', `${a.inMin}m`, ...reason];
+	if (a.op === 'shrink')
+		return [a.node, ...tenant, '--end', '--in', `${a.inMin}m`, ...size, ...reason];
 	if (a.op === 'keep') return [a.node, ...tenant, '--keep'];
 	return [a.node, ...tenant, '--remove'];
 }
@@ -459,9 +610,13 @@ export async function act(request, decision, { live, door, artifact = null }) {
 			const changed =
 				a.op === 'end'
 					? `ends ${doc.until ?? `in ${a.inMin} min`}`
-					: a.op === 'keep'
-						? `kept, the end at ${doc.was} taken back`
-						: `${a.op}d (${doc.state})`;
+					: a.op === 'shrink'
+						? `shrinks to ${a.units} unit(s) ${doc.until ?? `in ${a.inMin} min`}`
+						: a.op === 'keep'
+							? `kept, the end at ${doc.was} taken back`
+							: a.op === 'resize'
+								? `resized to ${a.units} unit(s) (${doc.state})`
+								: `${a.op}d (${doc.state})`;
 			rows.converged.push({ ...row, changed });
 			rows.changed.push({ node: a.node, facet, changed });
 		} else if (declared) {

@@ -190,13 +190,49 @@ fleet hosting-converge --dry-run --json      # what the converger would do now
 The tenant says how many slices it wants, as a **count**, on every poll. The
 same N is a no-op, so a restart, a lost call or a duplicate cannot drift it.
 The controller runs `fleet hosting-converge` every 5 minutes, and it meets
-the count within the request's `slices.min..max`:
+the count within the request's `slices.min..max`.
 
-- **Too few:** it declares on `fleet hosting-plan`'s top picks through `fleet
-hosting`, which observes the node and applies the tenant's placement again.
-- **Too many:** it ends slices from the head of the tenant's
-  `--release-order`, always with the tenant's `noticeMin`. Only the tenant
-  knows what a slice holds, so with no order it ends nothing and says so.
+**Units and claws are two numbers** (operator, 2026-11-04). The count is in
+**units**: `slices.unit` is one unit of capacity, and `slices.min..max` count
+units. A **claw** is a failure domain. Each claw holds at most one slice of a
+tenant, and that slice is **k units** big: k follows what the claw can lend,
+so a strong claw takes several units and a weaker one may hold its one. How
+many claws the units spread over is the **spread floor**: the tenant's own
+`spread.minNodes`, else the fleet's `FLEET_MIN_NODES` (3,
+`scripts/lib/hosting-request.mjs`). The tenant's number overrules the fleet's,
+up or down. A singleton or a one-slice service is one claw by definition: its
+other copies are `availability.standby`, below.
+
+```json
+"slices": { "unit": { "memoryMb": 4096, "cores": 4 }, "min": 2, "max": 6 },
+"spread": { "minNodes": 3 }
+```
+
+The converger wants `max(demand, minNodes)` units, never past `max`, on at
+least `minNodes` claws. `hosting-demand` reports `limits.minNodes`, and the
+last pass carries `demanded`, `minNodes`, `desired` and `servingUnits`.
+
+- **Too few:** first one unit on each new claw from `fleet hosting-plan`'s top
+  picks until the floor is met. Then each further unit goes to the best claw
+  with room for it, by the tenant's `placement.order`: a held claw is
+  **resized** in place, a new one is **declared**, and a held claw wins a tie.
+  Both go through `fleet hosting`, which observes the node and applies the
+  tenant's placement and `slices.max` again. A resize sets the new limits on
+  the running cgroups (`systemctl set-property --runtime`) and does not
+  restart the agent: `daemon-reload` alone leaves a running slice's limits as
+  they were (measured on claw-5, 2026-11-04).
+- **Too many:** from the head of the tenant's `--release-order`, always with
+  the tenant's `noticeMin`: it ends a whole claw while more than `minNodes`
+  would remain and the claw holds no more than the excess. Otherwise it
+  **shrinks** the claw toward one unit. Only the tenant knows what a slice
+  holds, so with no order it ends nothing and says so.
+- **A shrink** is an end with a size, `fleet hosting <node> --tenant <t> --end
+--in 15m --memory 4G --cores 4`. The record gets `until` and `shrinkTo`. It
+  goes on serving at full size, still reserved against CI, and never lapses.
+  Its `ends` notice carries `shrinkTo`, and `hosting-demand` lists it under
+  `declared` with both fields, not under `ending`. Once the notice has run, the
+  converger re-declares it at the smaller size. `--keep` takes a shrink back,
+  as it does an end.
 - **Past an end:** it removes the units.
 
 It **acts only for a tenant whose hosting.json says `placement.auto: true`**.

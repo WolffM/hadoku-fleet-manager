@@ -19,6 +19,8 @@ const agent = {
 	app: 'cardtable',
 	kind: 'agent',
 	slices: { unit: { memoryMb: 4096, cores: 4 }, min: 1, max: 4 },
+	// One claw is enough here: these cases are about the unit count. The floor has its own.
+	spread: { minNodes: 1 },
 	availability: { noticeMin: 15, stateful: false, singleton: false },
 	placement: { require: ['wired'], prefer: [] },
 };
@@ -66,7 +68,7 @@ test('demand above what serves declares on the plan’s top picks, one per node,
 		slices: [{ node: 'a' }, { node: 'b' }, { node: 'c' }],
 	});
 	assert.equal(capped.actions.length, 1, 'three held + one is max; the unplaceable still count');
-	assert.match(capped.blocked[0].why, /holds 3 of its 4 slices and 3 cannot serve/);
+	assert.match(capped.blocked[0].why, /holds 3 of its 4 units and 3 cannot serve/);
 });
 
 test('the same demand restated is no action', () => {
@@ -518,7 +520,7 @@ test('a shortfall names the nodes that could host, and only counts the Wi-Fi one
 		offers: [offer('claw-5'), offer('claw-9')],
 		slices: [{ node: 'claw-5' }, { node: 'claw-9' }],
 	});
-	const b = d.blocked.find((x) => /more node\(s\) fit/.test(x.why));
+	const b = d.blocked.find((x) => /no claw has room for another/.test(x.why));
 	assert.ok(b, JSON.stringify(d.blocked));
 	assert.match(b.why, /claw-6: offers 1 cores, the unit needs 4; 2 Wi-Fi node\(s\) never host it$/);
 	assert.doesNotMatch(b.why, /claw-1|claw-2/);
@@ -721,4 +723,215 @@ test('a held service slice is judged by KEEP, not EARN: a node that may not be g
 
 	const unknown = held({ earn: null, keep: null, why: '2 h of samples' });
 	assert.deepEqual(unknown.serving, ['claw-4'], 'could-not-judge never strips a held slice');
+});
+
+/* ── Units and claws (operator, 2026-11-04) ─────────────────────────────── */
+
+/** cardtable as it registers: no spread of its own, so the fleet's floor of 3 applies. */
+const floored = {
+	...agent,
+	spread: undefined,
+	placement: { ...agent.placement, order: ['claw-8', 'claw-9', 'claw-10', 'claw-5'] },
+};
+/** An offer that can still lend `units` more cardtable units. */
+const room = (node, units) =>
+	offer(node, { hostable: { memoryMb: 4096 * units + 100, cores: 4 * units, diskFreeGb: 50 } });
+const runF = (over) => run({ request: floored, ...over });
+const ops = (d) => d.actions.map((a) => [a.op, a.node, a.units]);
+
+test('the fleet floor wants 3 claws when the demand is 2 units; the tenant’s own spread overrules it', () => {
+	const d = runF({
+		demand: { slices: 2 },
+		plan: plan('claw-10', 'claw-5'),
+		offers: [room('claw-8', 2), room('claw-9', 2)],
+		slices: [
+			{ node: 'claw-8', memoryMb: 4096 },
+			{ node: 'claw-9', memoryMb: 4096 },
+		],
+	});
+	assert.equal(d.demanded, 2);
+	assert.equal(d.minNodes, 3);
+	assert.equal(d.desired, 3, 'a unit on each of 3 claws');
+	assert.deepEqual(ops(d), [['declare', 'claw-10', 1]]);
+
+	const own = run({
+		request: { ...floored, spread: { minNodes: 2 } },
+		demand: { slices: 2 },
+		plan: plan('claw-10'),
+		offers: [room('claw-8', 2), room('claw-9', 2)],
+		slices: [
+			{ node: 'claw-8', memoryMb: 4096 },
+			{ node: 'claw-9', memoryMb: 4096 },
+		],
+	});
+	assert.deepEqual(own.actions, [], 'the tenant said 2 claws, and 2 serve');
+});
+
+test('units past the floor go to the best-ranked claw with room: claw-8 grows, a weak claw keeps its one', () => {
+	const d = run({
+		request: { ...floored, slices: { ...floored.slices, max: 6 } },
+		demand: { slices: 5 },
+		plan: plan('claw-5'),
+		offers: [room('claw-8', 1), room('claw-9', 3), room('claw-10', 0)],
+		slices: [
+			{ node: 'claw-8', memoryMb: 4096 },
+			{ node: 'claw-9', memoryMb: 4096 },
+			{ node: 'claw-10', memoryMb: 4096 },
+		],
+	});
+	assert.deepEqual(ops(d), [
+		['resize', 'claw-8', 2],
+		['resize', 'claw-9', 2],
+	]);
+	assert.equal(d.servingUnits, 3);
+	assert.deepEqual(d.blocked, []);
+});
+
+test('a new claw ranked ahead of every held one with room takes the unit before a held claw grows', () => {
+	const d = runF({
+		demand: { slices: 4 },
+		plan: plan('claw-8'),
+		offers: [room('claw-9', 2), room('claw-10', 2), room('claw-5', 2), room('claw-8', 2)],
+		slices: [
+			{ node: 'claw-9', memoryMb: 4096 },
+			{ node: 'claw-10', memoryMb: 4096 },
+			{ node: 'claw-5', memoryMb: 4096 },
+		],
+	});
+	assert.deepEqual(ops(d), [['declare', 'claw-8', 1]]);
+});
+
+test('growth stops at max units, and says so', () => {
+	const d = runF({
+		demand: { slices: 4 },
+		plan: plan(),
+		offers: [room('claw-8', 4), room('claw-9', 0), room('claw-10', 0)],
+		slices: [
+			{ node: 'claw-8', memoryMb: 4096 * 2 },
+			{ node: 'claw-9', memoryMb: 4096 },
+			{ node: 'claw-10', memoryMb: 4096, until: at(5) },
+		],
+	});
+	assert.deepEqual(ops(d), [['keep', 'claw-10', undefined]], 'its own ending claw first');
+	const full = runF({
+		demand: { slices: 4 },
+		plan: plan('claw-5'),
+		offers: [room('claw-8', 4), room('claw-9', 4), room('claw-10', 4)],
+		slices: [
+			{ node: 'claw-8', memoryMb: 4096 * 2 },
+			{ node: 'claw-9', memoryMb: 4096 },
+			{ node: 'claw-10', memoryMb: 4096 },
+		],
+	});
+	assert.deepEqual(full.actions, [], '4 of 4 units on 3 claws');
+});
+
+test('no claw with room: the shortfall is blocked with the refusals, never declared past the floor’s claws', () => {
+	const d = runF({
+		demand: { slices: 4 },
+		plan: {
+			ranked: [],
+			refused: [{ node: 'claw-6', reasons: ['offers 1 cores, the unit needs 4'] }],
+		},
+		offers: [room('claw-8', 0), room('claw-9', 0), room('claw-10', 0)],
+		slices: ['claw-8', 'claw-9', 'claw-10'].map((node) => ({ node, memoryMb: 4096 })),
+	});
+	assert.deepEqual(d.actions, []);
+	assert.match(
+		d.blocked[0].why,
+		/3 on 3 claw\(s\) after this pass, and no claw has room.*claw-6: offers 1 cores/
+	);
+});
+
+test('too many units at the floor SHRINKS a claw with notice; it never ends one under the floor', () => {
+	const d = runF({
+		demand: { slices: 3, releaseOrder: ['claw-10', 'claw-9', 'claw-8'] },
+		offers: [room('claw-8', 0), room('claw-9', 0), room('claw-10', 0)],
+		slices: [
+			{ node: 'claw-8', memoryMb: 4096 * 3 },
+			{ node: 'claw-9', memoryMb: 4096 },
+			{ node: 'claw-10', memoryMb: 4096 },
+		],
+	});
+	assert.deepEqual(
+		d.actions.map((a) => [a.op, a.node, a.units, a.inMin]),
+		[['shrink', 'claw-8', 1, 15]]
+	);
+	assert.deepEqual(doorArgs(floored, d.actions[0]).slice(0, 10), [
+		'claw-8',
+		'--tenant',
+		'cardtable',
+		'--end',
+		'--in',
+		'15m',
+		'--memory',
+		'4096M',
+		'--cores',
+		'4',
+	]);
+});
+
+test('too many claws above the floor ends a whole one first in the release order', () => {
+	const d = runF({
+		demand: { slices: 3, releaseOrder: ['claw-5', 'claw-8'] },
+		offers: ['claw-8', 'claw-9', 'claw-10', 'claw-5'].map((n) => room(n, 0)),
+		slices: ['claw-8', 'claw-9', 'claw-10', 'claw-5'].map((node) => ({ node, memoryMb: 4096 })),
+	});
+	assert.deepEqual(ops(d), [['end', 'claw-5', undefined]]);
+});
+
+test('a shrinking slice serves at the size it is going to, and is re-declared at it once due', () => {
+	const shrinking = { node: 'claw-8', memoryMb: 4096 * 3, shrinkTo: { memoryMb: 4096, cores: 4 } };
+	const others = ['claw-9', 'claw-10'].map((node) => ({ node, memoryMb: 4096 }));
+	const offers = ['claw-8', 'claw-9', 'claw-10'].map((n) => room(n, 0));
+	const pending = runF({
+		demand: { slices: 3 },
+		offers,
+		slices: [{ ...shrinking, until: at(5) }, ...others],
+	});
+	assert.deepEqual(pending.actions, []);
+	assert.deepEqual(pending.serving, ['claw-8', 'claw-9', 'claw-10']);
+	assert.deepEqual(pending.shrinking, [{ node: 'claw-8', until: at(5), units: 1 }]);
+	assert.deepEqual(pending.ending, [], 'a shrink is not an end');
+
+	const due = runF({
+		demand: { slices: 3 },
+		offers,
+		slices: [{ ...shrinking, until: at(-1) }, ...others],
+	});
+	assert.deepEqual(ops(due), [['resize', 'claw-8', 1]]);
+	assert.deepEqual(doorArgs(floored, due.actions[0]).slice(0, 8), [
+		'claw-8',
+		'--tenant',
+		'cardtable',
+		'--memory',
+		'4096M',
+		'--cores',
+		'4',
+		'--shared',
+	]);
+
+	const back = runF({
+		demand: { slices: 5 },
+		offers,
+		slices: [{ ...shrinking, until: at(5) }, ...others],
+	});
+	assert.deepEqual(
+		ops(back),
+		[['keep', 'claw-8', undefined]],
+		'demand came back: take the shrink back'
+	);
+});
+
+test('a declare of k units asks the door for k times the unit', () => {
+	assert.deepEqual(
+		doorArgs(floored, { op: 'declare', node: 'claw-8', units: 2, why: 'x' }).slice(3, 7),
+		['--memory', '8192M', '--cores', '8']
+	);
+});
+
+test('a singleton and a one-slice service want one claw, whatever the fleet floor', () => {
+	const d = run({ request: service, offers: [offer('claw-4')], slices: [{ node: 'claw-4' }] });
+	assert.equal(d.minNodes, 1);
+	assert.deepEqual(d.actions, []);
 });

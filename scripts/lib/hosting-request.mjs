@@ -43,6 +43,15 @@ export const KINDS = ['agent', 'service'];
  */
 export const ADVISORY_UNTIL_DEFAULT = 3;
 
+/**
+ * THE FLEET'S SPREAD FLOOR: how many distinct claws a scalable tenant's slices
+ * sit on (operator, 2026-11-04: "3 claws minimum"). A claw is a failure domain;
+ * a slice is capacity, and one claw may hold several units of one tenant. A
+ * tenant's own `spread.minNodes` overrules this, up or down. A singleton has
+ * one primary, so its other copies are `availability.standby`, not this.
+ */
+export const FLEET_MIN_NODES = 3;
+
 /** `availability.fence`: what keeps a moved singleton from becoming two writers. */
 export const FENCES = ['data-lease'];
 
@@ -98,6 +107,21 @@ export function validateHostingRequest(raw) {
 			bad('slices.max', 'a whole number, at least 1 and at least min');
 		slices = { unit: { memoryMb, cores, ...(steadyMb ? { steadyMb } : {}) }, min, max };
 	}
+
+	// spread: how many distinct claws the slices sit on. Read with nodesWanted().
+	const sp = isObj(raw.spread) ? raw.spread : {};
+	if (raw.spread !== undefined && !isObj(raw.spread)) bad('spread', 'an object: { "minNodes": 3 }');
+	const minNodesWhy =
+		sp.minNodes === undefined
+			? null
+			: !isPosInt(sp.minNodes)
+				? 'a whole number of claws, at least 1'
+				: raw.availability?.singleton === true || slices?.max === 1
+					? "one slice sits on one claw; a singleton's copies are availability.standby"
+					: slices && sp.minNodes > slices.max
+						? `at most slices.max (${slices.max}): every claw holds a unit`
+						: null;
+	if (minNodesWhy) bad('spread.minNodes', minNodesWhy);
 
 	const rt = isObj(raw.runtime) ? raw.runtime : {};
 	if (raw.kind === 'service' && slices && slices.max !== 1)
@@ -233,6 +257,7 @@ export function validateHostingRequest(raw) {
 			app: raw.app,
 			kind: raw.kind,
 			slices,
+			...(sp.minNodes !== undefined ? { spread: { minNodes: sp.minNodes } } : {}),
 			runtime: { ...rt, workersOutliveRestart: rt.workersOutliveRestart === true },
 			network: { ingress, ports, egress, ...(net.hostname ? { hostname: net.hostname } : {}) },
 			disk: {
@@ -260,3 +285,21 @@ export function validateHostingRequest(raw) {
 		},
 	};
 }
+
+/**
+ * How many distinct claws `request` wants its primary slices on: its own
+ * `spread.minNodes`, else the fleet's floor, never past `slices.max` (each
+ * claw holds at least one unit). 1 for a tenant that holds one slice.
+ */
+export function nodesWanted(request) {
+	const { slices, availability } = request;
+	if (availability?.singleton || slices.max === 1) return 1;
+	return Math.min(slices.max, request.spread?.minNodes ?? FLEET_MIN_NODES);
+}
+
+/** How many units of `request` a slice of `memoryMb` is: a held slice is k units, k >= 1. */
+export const unitsOf = (request, memoryMb) =>
+	Math.max(
+		1,
+		Math.round((memoryMb ?? request.slices.unit.memoryMb) / request.slices.unit.memoryMb)
+	);

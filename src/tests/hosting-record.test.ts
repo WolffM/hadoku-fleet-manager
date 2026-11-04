@@ -15,6 +15,7 @@ import {
 	HOLD_FULL_MS,
 	effectiveSlices,
 	heldBackMb,
+	hostingNotices,
 	hostingsOn,
 	issueEpoch,
 	parseHostingDoc,
@@ -474,5 +475,42 @@ test('a removed slice is kept for a day, then dropped on the next write', () => 
 	assert.deepEqual(
 		doc.apps?.cardtable.ended?.map((e) => e.node),
 		['claw-9']
+	);
+});
+
+test('a SHRINK never lapses: it stays reserved at full size past its end, and its notice says the size it goes to', () => {
+	const now = Date.parse('2026-11-04T20:00:00Z');
+	const rec = (until: string, shrinkTo?: { memoryMb: number; cores: number }) => ({
+		tenant: 'cardtable',
+		memoryMb: 12288,
+		cores: 12,
+		port: 7621,
+		since: '2026-11-04T10:00:00Z',
+		by: 't',
+		reason: 'r',
+		until,
+		...(shrinkTo ? { shrinkTo } : {}),
+	});
+	const shrink = {
+		nodes: { 'claw-8': [rec('2026-11-04T19:00:00Z', { memoryMb: 4096, cores: 4 })] },
+	};
+	const end = { nodes: { 'claw-8': [rec('2026-11-04T19:00:00Z')] } };
+	assert.equal(effectiveSlices(shrink, now)['claw-8']?.[0]?.memoryMb, 12288);
+	assert.equal(effectiveSlices(end, now)['claw-8'], undefined, 'a plain end lapses');
+	const drain: DrainDoc = { nodes: {}, planned: [] };
+	assert.deepEqual(hostingsOn('claw-8', drain, shrink, now)[0]?.shrinkTo, {
+		memoryMb: 4096,
+		cores: 4,
+	});
+	const ahead = {
+		nodes: { 'claw-8': [rec('2026-11-04T21:00:00Z', { memoryMb: 4096, cores: 4 })] },
+	};
+	assert.deepEqual(hostingNotices(ahead, now)[0]?.shrinkTo, { memoryMb: 4096, cores: 4 });
+	assert.throws(
+		() =>
+			parseHostingDoc(
+				JSON.stringify({ nodes: { 'claw-8': [{ ...rec('x'), shrinkTo: { memoryMb: 1 } }] } })
+			),
+		/shrinkTo has no memoryMb or cores/
 	);
 });

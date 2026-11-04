@@ -10,7 +10,8 @@
  *
  * HARD RULES, every one a reason when it refuses:
  *   - the tenant is not already at `slices.max`;
- *   - one slice of a tenant per node;
+ *   - one slice of a tenant per node (a slice of k units; growing one is the
+ *     converger's, lib/hosting-converge.mjs, not a second slice here);
  *   - the node answered, and is not drained or leased;
  *   - the unit fits the offer: memory, cores, and disk for `stateGb`;
  *   - every rule `requiredRules` names holds: `placement.require`, plus
@@ -42,7 +43,7 @@
  */
 import { ciJobsAfter } from './hosting-offers.mjs';
 import { requiredRules, ruleDetail, ruleHolds, ruleHoldsHeld } from './hosting-placement.mjs';
-import { ADVISORY_UNTIL_DEFAULT } from './hosting-request.mjs';
+import { ADVISORY_UNTIL_DEFAULT, unitsOf } from './hosting-request.mjs';
 import { satisfies } from './version-algebra.mjs';
 
 /**
@@ -117,7 +118,14 @@ export function planFor(request, offers) {
 	const holds = (o, standby) =>
 		o.reachable && o.tenants.some((t) => t.tenant === app && (t.role === 'standby') === standby);
 	const held = offers.filter((o) => holds(o, false));
-	const atMax = held.length >= slices.max;
+	// slices.max counts UNITS: one claw may hold several of one tenant.
+	const heldUnits = held.reduce(
+		(n, o) =>
+			n +
+			unitsOf(request, o.tenants.find((t) => t.tenant === app && t.role !== 'standby').memoryMb),
+		0
+	);
+	const atMax = heldUnits >= slices.max;
 
 	const rows = offers.map((o) => {
 		const no = [];
@@ -189,6 +197,7 @@ export function planFor(request, offers) {
 	return {
 		app,
 		held: held.map((o) => o.node),
+		heldUnits,
 		atMax,
 		ciMayReadPolicy: isolation.ciMayRead ? 'not asked' : strict ? 'filter' : 'advisory',
 		ranked: atMax ? [] : ranked,

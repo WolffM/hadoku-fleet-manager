@@ -38,6 +38,7 @@
  */
 
 import { ENDED_KEEP_MS } from '../../dist/runners/hosting-record.js';
+import { nodesWanted } from './hosting-request.mjs';
 
 /** The document's version, pinned by its readers. Additive changes only. */
 export const HOSTING_PLACEMENT_CONTRACT = 1;
@@ -188,10 +189,12 @@ export function convergerView(last, app) {
 		live: t.live === true,
 		desired: t.desired,
 		serving: t.serving ?? [],
-		actions: (t.actions ?? []).map(({ op, node, role, why }) => ({
+		actions: (t.actions ?? []).map(({ op, node, role, units, why }) => ({
 			op,
 			node,
 			...(role ? { role } : {}),
+			// A slice of k units: what a declare, resize or shrink leaves on the node.
+			...(units ? { units } : {}),
 			why,
 		})),
 		blocked: (t.blocked ?? []).map(({ node, why, soft }) => ({ node, why, soft: soft === true })),
@@ -209,7 +212,8 @@ export function tenantView(request) {
 		// The site commits a fleet row's `backstop` from this, as it does `fence`
 		// (R11.2): one source, the tenant's hosting.json.
 		backstop: request.availability?.backstop ?? null,
-		slices: { min: request.slices.min, max: request.slices.max },
+		// min/max count units; minNodes is the claws they spread over.
+		slices: { min: request.slices.min, max: request.slices.max, minNodes: nodesWanted(request) },
 		noticeMin: request.availability?.noticeMin ?? null,
 		port: request.network?.ports?.[0] ?? null,
 	};

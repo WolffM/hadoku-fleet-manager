@@ -54,7 +54,7 @@ const { offers } = await collectOffers(loadManifest(), { tools: request.runtime.
 const plan = planFor(request, offers);
 const unit = request.slices.unit;
 log(
-	`${plan.app}: one slice is ${unit.memoryMb} MiB / ${unit.cores} cores; holds ${plan.held.length} of ${request.slices.max}${plan.held.length ? ` (${plan.held.join(', ')})` : ''}.`
+	`${plan.app}: one slice is ${unit.memoryMb} MiB / ${unit.cores} cores; holds ${plan.heldUnits} of ${request.slices.max} units on ${plan.held.length} node(s)${plan.held.length ? ` (${plan.held.join(', ')})` : ''}.`
 );
 log(`CI-may-read policy: ${plan.ciMayReadPolicy}.`);
 if (plan.atMax) log('At its maximum: no further slice is offered.');

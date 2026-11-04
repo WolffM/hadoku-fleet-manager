@@ -1645,6 +1645,18 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/hosting-units.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
+    "glob": "scripts/lib/hosting-controller.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "run"
+  },
+  {
     "glob": "scripts/lib/hosting-claims.mjs",
     "layer": "domain",
     "domain": "observation",

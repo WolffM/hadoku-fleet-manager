@@ -216,3 +216,25 @@ test('a backstop is `cold`, needs the data-lease fence, and is carried to the re
 	const none = validateHostingRequest(av({ fence: 'data-lease' }));
 	assert.ok(!('backstop' in none.request.availability), 'absent stays absent');
 });
+
+test('spread.minNodes: the fleet floor unless the tenant says, never past max, never for a one-slice tenant', async () => {
+	const { FLEET_MIN_NODES, nodesWanted, unitsOf } = await import('./hosting-request.mjs');
+	const wide = { ...CARDTABLE, slices: { ...CARDTABLE.slices, max: 6 } };
+	const at = (raw) => nodesWanted(validateHostingRequest(raw).request);
+	assert.equal(at(wide), FLEET_MIN_NODES, 'no spread of its own: the fleet floor');
+	assert.equal(at({ ...wide, spread: { minNodes: 2 } }), 2, 'the tenant overrules it down');
+	assert.equal(at({ ...wide, spread: { minNodes: 5 } }), 5, 'and up');
+	assert.equal(
+		at({ ...CARDTABLE, slices: { ...CARDTABLE.slices, max: 2 } }),
+		2,
+		'every claw holds a unit'
+	);
+	assert.equal(at(ARCHIVEBOT), 1, "a singleton's copies are availability.standby");
+	assert.deepEqual(paths({ ...wide, spread: { minNodes: 7 } }), ['spread.minNodes']);
+	assert.deepEqual(paths({ ...wide, spread: { minNodes: 0 } }), ['spread.minNodes']);
+	assert.deepEqual(paths({ ...ARCHIVEBOT, spread: { minNodes: 2 } }), ['spread.minNodes']);
+	assert.deepEqual(paths({ ...wide, spread: 3 }), ['spread']);
+	const req = validateHostingRequest(wide).request;
+	assert.equal(unitsOf(req, 4096 * 3), 3);
+	assert.equal(unitsOf(req, undefined), 1, 'a record without a size is one unit');
+});

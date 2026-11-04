@@ -28,8 +28,9 @@ export function readDemand(dir) {
 }
 
 /**
- * The tenant's own slices, split as the view reports them: `declared` (serving,
- * no end set) and `ending`. Another tenant's slice is never listed, and neither
+ * The tenant's own slices, split as the view reports them: `declared` (serving:
+ * no end set, or a shrink) and `ending`. A slice is k units: `memoryMb` is k
+ * times the unit. Another tenant's slice is never listed, and neither
  * is a hot standby (`role: "standby"`): a tenant reads `declared` as the slices
  * serving it, and the converger counts it against the demand.
  * `hostingsOn(node)` is hosting-record's answer for one node: every tenant on it.
@@ -40,8 +41,16 @@ export function tenantSlices(app, nodes, hostingsOn) {
 	for (const node of nodes) {
 		const h = hostingsOn(node).find((x) => x.tenant === app);
 		if (!h || h.role === 'standby') continue;
-		if (h.until) ending.push({ node, until: h.until });
-		else declared.push({ node, mode: h.mode, memoryMb: h.memoryMb, cores: h.cores });
+		// A SHRINK is not an end: the slice keeps serving, at `shrinkTo` from `until`.
+		if (h.until && !h.shrinkTo) ending.push({ node, until: h.until });
+		else
+			declared.push({
+				node,
+				mode: h.mode,
+				memoryMb: h.memoryMb,
+				cores: h.cores,
+				...(h.shrinkTo ? { until: h.until, shrinkTo: h.shrinkTo } : {}),
+			});
 	}
 	return { declared, ending };
 }

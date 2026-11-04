@@ -295,13 +295,18 @@ test('the deploy closes the port to the tailnet BEFORE tailscale accepts it, con
 	assert.match(s, /ufw --force delete/);
 });
 
-test('a re-deploy that changes no unit does not restart the agent', () => {
+test('a re-deploy restarts the agent only for its own unit; a resized slice takes its limits in place', () => {
 	const s = deployScript(
 		CARDTABLE,
 		{ memoryMb: 4096, cores: 4 },
 		{ lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null }
 	);
-	assert.match(s, /\*" \$SLICE "\*\|\*" \$SERVICE "\*\) \$S systemctl restart "\$SERVICE"/);
+	assert.match(s, /\t\t\*" \$SERVICE "\*\) \$S systemctl restart "\$SERVICE"/);
+	assert.doesNotMatch(s, /\$SLICE "\*\|\*" \$SERVICE "\*\) \$S systemctl restart/);
+	assert.match(
+		s,
+		/\*" \$SLICE "\*\|\*" \$PARENT "\*\) \$S systemctl set-property --runtime "\$PARENT" "MemoryMin=\$\{NODE_MB\}M" && \$S systemctl set-property --runtime "\$SLICE" "MemoryMin=\$\{MEMORY_MB\}M" "MemoryMax=\$\{MEMORY_MB\}M" "CPUQuota=\$\{CPU_PCT\}%"/
+	);
 	assert.doesNotMatch(s, /then \$S systemctl restart "\$SERVICE"; fi/);
 });
 
