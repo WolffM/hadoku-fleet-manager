@@ -268,7 +268,15 @@ const ports = {
 		return r.stdout.trim() ? JSON.parse(r.stdout) : null;
 	},
 	text: async (path, _token, repo, accept) => {
-		const r = await gh([...(accept ? ['-H', `Accept: ${accept}`] : []), repoPath(repo, path)]);
+		const args = [...(accept ? ['-H', `Accept: ${accept}`] : []), repoPath(repo, path)];
+		let r = await gh(args);
+		// gh >= 2.103 refuses to print a body carrying terminal escapes (a job
+		// log's colour codes) unless told to. Only then, and extractEvidence
+		// strips them before any line reaches a terminal. An older gh never
+		// refuses, so it never sees the flag it would not know.
+		if (!r.ok && /--allow-escape-sequences/.test(r.error ?? '')) {
+			r = await gh(['--allow-escape-sequences', ...args]);
+		}
 		if (!r.ok) throw new Error(r.error);
 		return r.stdout;
 	},

@@ -163,10 +163,21 @@ export function isDispatchable(yaml: string): boolean {
  * 8 KB pipe cliff (`keepStdoutWhole` copes, but a consumer reading a file should
  * not have to).
  */
+/**
+ * Terminal escape sequences: CSI (colour, cursor), OSC (title, hyperlink) and
+ * the two-byte ESC forms. A job log carries colour codes, and evidence lines
+ * are printed back to the operator's terminal, so they are matched and
+ * reported WITHOUT them. gh 2.103 refuses to write them at all unless told
+ * to (claw-10's first proof, 2026-11-03, read as `log-unreadable`).
+ */
+const TERMINAL_ESCAPES =
+	// eslint-disable-next-line no-control-regex
+	/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+
 export function extractEvidence(log: string, pattern: string, max = 40): string[] {
 	const re = new RegExp(pattern, 'i');
 	const seen = new Set<string>();
-	for (const raw of log.split(/\r?\n/)) {
+	for (const raw of log.replace(TERMINAL_ESCAPES, '').split(/\r?\n/)) {
 		const line = raw.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s?/, '').trim();
 		if (line && re.test(line)) seen.add(line.length > 300 ? `${line.slice(0, 300)}…` : line);
 		if (seen.size >= max) break;

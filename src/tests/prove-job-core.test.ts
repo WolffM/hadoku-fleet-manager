@@ -371,3 +371,16 @@ test('extractEvidence: regex, case, timestamps stripped, de-duplicated, bounded'
 	assert.equal(extractEvidence('a\na\nb', 'a|b', 1).length, 1);
 	assert.deepEqual(extractEvidence('nothing', 'zzz'), []);
 });
+
+test('extractEvidence: terminal escapes are stripped before matching and reporting', () => {
+	// claw-10's first proof (2026-11-03): a job log's colour codes made gh
+	// refuse the body, and any that reach here must not reach the terminal.
+	const log = [
+		'2026-11-04T02:20:01.000Z \x1b[32mTests run: 12, Failures: 0\x1b[0m',
+		'\x1b]8;;https://example.invalid\x07link\x1b]8;;\x07 BUILD SUCCESS',
+		'\x1b[1;31mERROR\x1b[0m nothing to see',
+	].join('\n');
+	const ev = extractEvidence(log, 'tests run: \\d+, failures: 0|build success');
+	assert.deepEqual(ev, ['Tests run: 12, Failures: 0', 'link BUILD SUCCESS']);
+	for (const line of ev) assert.ok(!line.includes('\x1b'), line);
+});
