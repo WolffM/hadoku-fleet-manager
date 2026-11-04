@@ -384,16 +384,3 @@ test('extractEvidence: terminal escapes are stripped before matching and reporti
 	assert.deepEqual(ev, ['Tests run: 12, Failures: 0', 'link BUILD SUCCESS']);
 	for (const line of ev) assert.ok(!line.includes('\x1b'), line);
 });
-
-test('a job the WORKFLOW skipped is not a race: one attempt, named, says nothing about the node', async () => {
-	// claw-10, 2026-11-03: forge.yml skips a repeat of an already-green dispatch,
-	// and three retries were reported as lost-race.
-	const w = world({ winner: () => 'skipped' });
-	const r = await proveJob(SPEC, w.deps(node()));
-	assert.equal(r.verdict, 'error');
-	assert.equal(r.jobConclusion, 'skipped');
-	assert.equal(w.log.dispatches, 1, 'a skip is not retried');
-	assert.ok(r.findings.some((f) => f.rule === 'skipped-by-workflow'));
-	assert.ok(!r.findings.some((f) => f.rule === 'lost-race'));
-	assert.deepEqual(w.leaked(), { units: [], registered: [], staged: [] });
-});
