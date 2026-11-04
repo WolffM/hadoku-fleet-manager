@@ -284,6 +284,27 @@ export const FAILED_CLAW4 = ['D failedUnits.count 0'];
 export const failedFacet = (lines) =>
 	healthFacet({ node: 'claw-x', probe: parseDoctor(workProbe(lines)) });
 
+// 2026-11-03: claw-4 during the cable incident (633 drops, every reconnect at
+// 100 Mbps), and claw-9 the same evening, as every wired node read.
+export const NIC_CLAW4_INCIDENT = [
+	'D nic.iface enp0s31f6',
+	'D nic.kind wired',
+	'D nic.speedMbps 100',
+	'D nic.linkDowns 633',
+];
+export const NIC_CLAW9 = [
+	'D nic.iface enp8s0',
+	'D nic.kind wired',
+	'D nic.speedMbps 1000',
+	'D nic.linkDowns 0',
+];
+export const NIC_WIFI = [
+	'D nic.iface wlp1s0',
+	'D nic.kind wifi',
+	'U nic.speedMbps the kernel reports no link speed for wlp1s0',
+	'D nic.linkDowns 0',
+];
+
 // VERBATIM, 2026-10-28, from `doctorProbe({ loadSeconds: 0 })` on each node.
 // claw-6 is a declared pm2 host of the app layer running nothing, uncapped.
 export const PM2_HOKON = ['D pm2Units.count 1', 'D pm2Unit.pm2-hadoku.service 34359738368 28'];

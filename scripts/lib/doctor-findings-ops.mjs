@@ -1,15 +1,21 @@
 /**
  * doctor-findings-ops — judges the operational bookkeeping facets of
  * `$health`: a staged/cycled reboot, failed `actions.runner` units, every
- * other failed systemd unit, unclaimed pm2 managers, and the age of the
- * bootcamp pointer.
+ * other failed systemd unit, the default-route NIC's link, unclaimed pm2
+ * managers, and the age of the bootcamp pointer.
  *
  * Moved out of `doctor-findings.mjs` (wave shrink-1 lane D), body unchanged.
  */
 
 import { ADVISORY, BLOCKING, rebootFinding } from './preflight.mjs';
 import { f } from './doctor-findings-record.mjs';
+
 import { BOOTCAMP_STALE_DAYS } from '../../dist/lib/workload-gate.js';
+
+/** A wired link below this has lost a pair or a port: every wired node read 1000 on 2026-11-03. */
+export const NIC_FULL_MBPS = 1000;
+/** More link drops than this in one boot is flapping: the same evening every node read 0-1, claw-4 633. */
+export const NIC_FLAP_DOWNS = 5;
 
 /**
  * @param {ReturnType<import('./doctor-facet.mjs').healthFacet>} health
@@ -99,6 +105,65 @@ export function opsFindings(health, { nowMs = Date.now() } = {}) {
 						'. `systemctl status <unit>` on the node says why; `systemctl reset-failed` clears a ' +
 						'stale one only once its cause is gone.',
 					{ units }
+				)
+			);
+		}
+	}
+
+	// ── the default-route NIC ─────────────────────────────────────────────────
+	// ADVISORY. 2026-11-03: claw-4's link dropped 633 times in 1h43m, each time
+	// back at 100 Mbps (a damaged cable), with two services on the node. A wired
+	// link below gigabit, or more than NIC_FLAP_DOWNS drops this boot, is a cable
+	// or port to look at before it becomes an outage; every wired node read 1000
+	// Mbps and 0-1 drops the same evening. Wi-Fi links are not judged here. A
+	// record written before this probe existed has no `nic` and draws nothing.
+	const nic = health.nic;
+	if (nic && nic.iface === null) {
+		out.push(
+			f(
+				health,
+				'nic-link',
+				ADVISORY,
+				'unknown',
+				`the default-route NIC could not be read: ${nic.why}.`
+			)
+		);
+	} else if (nic?.kind === 'wired') {
+		if (nic.speedMbps === null || nic.linkDowns === null) {
+			out.push(
+				f(
+					health,
+					'nic-link',
+					ADVISORY,
+					'unknown',
+					`${nic.iface}'s link could not be fully read: ${nic.why}.`
+				)
+			);
+		}
+		if (nic.speedMbps !== null && nic.speedMbps < NIC_FULL_MBPS) {
+			out.push(
+				f(
+					health,
+					'nic-link',
+					ADVISORY,
+					'degraded',
+					`${nic.iface} negotiated ${nic.speedMbps} Mbps, below ${NIC_FULL_MBPS}. Gigabit needs all four ` +
+						'pairs, so a damaged or half-seated cable falls back to 100: reseat or replace it, then check ' +
+						`\`cat /sys/class/net/${nic.iface}/speed\`.`,
+					{ iface: nic.iface, speedMbps: nic.speedMbps }
+				)
+			);
+		}
+		if (nic.linkDowns !== null && nic.linkDowns > NIC_FLAP_DOWNS) {
+			out.push(
+				f(
+					health,
+					'nic-link',
+					ADVISORY,
+					'flapping',
+					`${nic.iface} dropped its link ${nic.linkDowns} times this boot (more than ${NIC_FLAP_DOWNS}). ` +
+						`\`journalctl -k -b | grep "${nic.iface}.*Link is"\` shows when, and at what speed it came back.`,
+					{ iface: nic.iface, linkDowns: nic.linkDowns }
 				)
 			);
 		}

@@ -252,6 +252,24 @@ export function doctorProbe({
 		'    say "failedUnit.$u" "$(systemctl show -P StateChangeTimestamp --timestamp=unix "$u" 2>/dev/null | tr -d @)"',
 		'  done',
 		'else unk failedUnits "systemctl could not list this node\'s units"; fi',
+		// ── the default-route NIC: link speed and flaps this boot ─────────────
+		//
+		// 2026-11-03: claw-4's NIC dropped its link 633 times in 1h43m, each time
+		// renegotiating at 100 Mbps (a damaged cable: gigabit needs all four
+		// pairs), and the node was off the network with two services on it.
+		// Nothing read either number. Speed is the kernel's own; a Wi-Fi link has
+		// none worth judging, so only `kind` is said for it. The flap count is
+		// this boot's kernel journal, matched on the interface's name.
+		'NIC=$(ip -o route show default 2>/dev/null | awk "{print \\$5; exit}")',
+		'if [ -n "$NIC" ]; then',
+		'  say nic.iface "$NIC"',
+		'  if [ -d "/sys/class/net/$NIC/wireless" ]; then say nic.kind wifi; else say nic.kind wired; fi',
+		'  SP=$(cat "/sys/class/net/$NIC/speed" 2>/dev/null)',
+		'  case "$SP" in ""|-*) unk nic.speedMbps "the kernel reports no link speed for $NIC";; *) say nic.speedMbps "$SP";; esac',
+		'  if KL=$(journalctl -k -b --no-pager -o cat 2>/dev/null); then',
+		'    say nic.linkDowns "$(printf "%s\\n" "$KL" | grep -c "$NIC.*Link is Down")"',
+		'  else unk nic.linkDowns "this boot\'s kernel journal could not be read"; fi',
+		'else unk nic "no default route"; fi',
 		// ── every pm2 manager, its ceiling and how many apps it runs ─────────────
 		//
 		// Claimed against the tenant registry and the app layer's host list by

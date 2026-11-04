@@ -279,6 +279,7 @@ export function healthFacet({
 			busy: num('runners.busy'),
 		},
 		failedUnits: failedUnits(facts, unknown),
+		nic: nicFacet(facts, unknown),
 		pm2Units: pm2Units(facts, unknown),
 		crashes: num('crashes'),
 		errorsThisBoot: num('errorsThisBoot'),
@@ -318,6 +319,28 @@ function failedUnits(facts, unknown) {
 		};
 	});
 	return { units, why: null };
+}
+
+/**
+ * The default-route NIC: which interface, wired or Wi-Fi, the kernel's link
+ * speed and this boot's link drops. A null field carries its `why`: could not
+ * look, never zero.
+ *
+ * @returns {{iface: string|null, kind: 'wired'|'wifi'|null, speedMbps: number|null, linkDowns: number|null, why: string|null}}
+ */
+function nicFacet(facts, unknown) {
+	const n = (k) => (facts[k] === undefined ? null : Number(facts[k]));
+	const iface = facts['nic.iface'] ?? null;
+	return {
+		iface,
+		kind: facts['nic.kind'] === 'wired' || facts['nic.kind'] === 'wifi' ? facts['nic.kind'] : null,
+		speedMbps: n('nic.speedMbps'),
+		linkDowns: n('nic.linkDowns'),
+		why:
+			iface === null
+				? (unknown.nic ?? 'the probe reported no default-route interface')
+				: (unknown['nic.speedMbps'] ?? unknown['nic.linkDowns'] ?? null),
+	};
 }
 
 /**

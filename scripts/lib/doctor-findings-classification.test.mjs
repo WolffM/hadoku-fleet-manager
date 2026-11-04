@@ -36,6 +36,9 @@ import {
 	FAILED_CLAW3,
 	FAILED_CLAW4,
 	failedFacet,
+	NIC_CLAW4_INCIDENT,
+	NIC_CLAW9,
+	NIC_WIFI,
 	PM2_CLAW6,
 	pm2Facet,
 } from './doctor-fixtures.mjs';
@@ -320,4 +323,50 @@ void test("claw-6's idle admin pm2, once pm2-boot bounds it, is a declared host 
 	);
 	assert.notDeepEqual(bounded, PM2_CLAW6);
 	assert.deepEqual(judged(bounded), []);
+});
+
+void test('NIC: the 2026-11-03 cable reads as degraded AND flapping, both advisory; a gigabit, quiet link draws nothing', () => {
+	const incident = find(
+		doctorFindings(failedFacet(NIC_CLAW4_INCIDENT), { nowMs: NOW }),
+		'nic-link'
+	);
+	assert.deepEqual(
+		incident.map((x) => [x.status, x.class]),
+		[
+			['degraded', ADVISORY],
+			['flapping', ADVISORY],
+		]
+	);
+	assert.match(incident[0].why, /enp0s31f6 negotiated 100 Mbps, below 1000/);
+	assert.match(incident[1].why, /dropped its link 633 times this boot/);
+	assert.equal(find(doctorFindings(failedFacet(NIC_CLAW9), { nowMs: NOW }), 'nic-link').length, 0);
+});
+
+void test('NIC: Wi-Fi is not judged on speed; an unreadable link is an advisory, never silence', () => {
+	assert.equal(find(doctorFindings(failedFacet(NIC_WIFI), { nowMs: NOW }), 'nic-link').length, 0);
+	const blind = find(
+		doctorFindings(failedFacet(['U nic no default route']), { nowMs: NOW }),
+		'nic-link'
+	);
+	assert.deepEqual(
+		blind.map((x) => x.status),
+		['unknown']
+	);
+	const noJournal = find(
+		doctorFindings(
+			failedFacet([
+				'D nic.iface enp8s0',
+				'D nic.kind wired',
+				'D nic.speedMbps 1000',
+				"U nic.linkDowns this boot's kernel journal could not be read",
+			]),
+			{ nowMs: NOW }
+		),
+		'nic-link'
+	);
+	assert.deepEqual(
+		noJournal.map((x) => x.status),
+		['unknown']
+	);
+	assert.match(noJournal[0].why, /kernel journal could not be read/);
 });
