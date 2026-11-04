@@ -75,6 +75,7 @@
 import { requiredRules, ruleDetail, ruleHoldsHeld } from './hosting-placement.mjs';
 import { nodesWanted, unitsOf } from './hosting-request.mjs';
 import { REASON_PREFIX } from './reboot-hold.mjs';
+import { endingSlice } from '../../dist/lib/hosting-slice.js';
 
 /** A drain of another kind starting this long past the tenant's notice counts as now. */
 export const HORIZON_MARGIN_MS = 15 * 60_000;
@@ -131,7 +132,7 @@ export function decide({
 	// until its end, and is counted at the size it is going to.
 	const fullUnits = (s) => unitsOf(request, s.memoryMb);
 	const unitsAt = (s) => unitsOf(request, s.shrinkTo?.memoryMb ?? s.memoryMb);
-	const ends = (s) => s.until && !s.shrinkTo;
+	const ends = endingSlice;
 
 	const primaries = allSlices.filter((s) => s.role !== 'standby');
 	const liveSlices = primaries.filter((s) => !ends(s) && !fault(s.node));

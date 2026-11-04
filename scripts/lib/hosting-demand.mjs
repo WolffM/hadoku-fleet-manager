@@ -17,6 +17,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { endingSlice } from '../../dist/lib/hosting-slice.js';
+
 const FILE = 'hosting-demand.json';
 
 export function readDemand(dir) {
@@ -42,7 +44,7 @@ export function tenantSlices(app, nodes, hostingsOn) {
 		const h = hostingsOn(node).find((x) => x.tenant === app);
 		if (!h || h.role === 'standby') continue;
 		// A SHRINK is not an end: the slice keeps serving, at `shrinkTo` from `until`.
-		if (h.until && !h.shrinkTo) ending.push({ node, until: h.until });
+		if (endingSlice(h)) ending.push({ node, until: h.until });
 		else
 			declared.push({
 				node,
