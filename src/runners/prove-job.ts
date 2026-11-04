@@ -522,6 +522,20 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 				landed = { run, job };
 				break;
 			}
+			// THE WORKFLOW SKIPPED IT, before any runner was asked: an `if:` or a
+			// `needs:` job decided. Not a race, and a re-dispatch with the same ref
+			// and inputs decides the same way. forge.yml answers a repeat of an
+			// already-green dispatch exactly like this (claw-10, 2026-11-03: three
+			// "lost-race" attempts, all skipped by the workflow).
+			if (job.status === 'completed' && job.conclusion === 'skipped' && !job.runner_name) {
+				r.jobConclusion = 'skipped';
+				find(
+					'skipped-by-workflow',
+					`run ${run.id}: the workflow skipped "${spec.job}" before any runner was asked, so the dispatch, not the node, decided. Re-dispatching the same ref and inputs decides the same way: change an input the workflow keys on, or the ref.`
+				);
+				r.verdict = 'error';
+				return finalise(r);
+			}
 			// MISSED. Cancel our run so it frees the concurrency group and stops burning
 			// the other runner, then let the next attempt try again.
 			row.note = job.runner_name

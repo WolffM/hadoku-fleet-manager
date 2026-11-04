@@ -53,7 +53,8 @@ export const LOG = [
 	'1203 passed, 2 deselected in 41.2s',
 ].join('\n');
 
-export type Who = 'proof' | 'hokon' | 'none';
+/** `skipped`: the workflow's own gate skips the job; no runner is ever asked. */
+export type Who = 'proof' | 'hokon' | 'none' | 'skipped';
 export interface Scenario {
 	/** The node the proof runner is minted on. Default: claw-8. */
 	target?: string;
@@ -146,6 +147,8 @@ export function world(sc: Scenario = {}) {
 		};
 		if (r.cancelled)
 			return { ...base, status: 'completed', conclusion: 'cancelled', runner_name: r.runner };
+		if (r.who === 'skipped')
+			return { ...base, status: 'completed', conclusion: 'skipped', runner_name: null };
 		if (r.runner === null && r.who === 'proof') {
 			const p = hasProof();
 			if (p && prereqTaken < (sc.prereqTakes ?? 0)) {
