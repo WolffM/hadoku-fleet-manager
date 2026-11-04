@@ -92,7 +92,24 @@ export function standbysOfRow(app) {
  * standing by on it,
  * with the port and hostname hadoku_site's own tools use (`service-move.mjs`).
  */
-export function placementsFor(node, childApps) {
+/**
+ * The path a service answers its health on: the pathname of its deploy-config
+ * `health.url`, the URL its deploy and the site's lease follower probe, or
+ * `/health` for a service that declares none. ONE path per service, the
+ * service's own: probing `/health` everywhere let watchparty's 404 (it serves
+ * `/healthz`) read as a routed name (health sweep, 2026-11-04).
+ */
+export function healthPathOf(id, deployConfig) {
+	const url = (deployConfig?.services ?? []).find((s) => s?.name === id)?.health?.url;
+	if (typeof url !== 'string') return '/health';
+	try {
+		return new URL(url).pathname || '/health';
+	} catch {
+		return '/health';
+	}
+}
+
+export function placementsFor(node, childApps, deployConfig = null) {
 	const out = [];
 	for (const app of childApps.apps ?? []) {
 		const host = placedHostOf(app);
@@ -106,6 +123,7 @@ export function placementsFor(node, childApps) {
 			role,
 			port: String(port),
 			hostname: app.handWired?.hostname ?? `${app.id}.${ZONE}`,
+			healthPath: healthPathOf(app.id, deployConfig),
 			...(role === 'primary' && standbys.length ? { standby: standbys[0], standbys } : {}),
 		});
 	}
@@ -254,7 +272,15 @@ export function connectorLive(ready, connections) {
 
 export function readSiteDocs(siteRoot) {
 	const read = (f) => JSON.parse(readFileSync(join(siteRoot, 'scripts', f), 'utf8'));
-	return { hostsDoc: read('pm2-hosts.json'), childApps: read('child-apps.json') };
+	return {
+		hostsDoc: read('pm2-hosts.json'),
+		childApps: read('child-apps.json'),
+		// Where each service answers its health (healthPathOf). The same file the
+		// site's deploy and lease follower probe from.
+		deployConfig: JSON.parse(
+			readFileSync(join(siteRoot, 'services', 'mgmt-api', 'deploy-config.json'), 'utf8')
+		),
+	};
 }
 
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -266,7 +292,16 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
  * `deps`: `onNode(node, script) → {ok, out, stderr, error}`, `cf` (see
  * `cloudflare`), `health(url) → {status} | {error}`, `wait(ms)`.
  */
-export async function convergeTunnels({ manifest, hostsDoc, childApps, token, write, deps, log }) {
+export async function convergeTunnels({
+	manifest,
+	hostsDoc,
+	childApps,
+	deployConfig = null,
+	token,
+	write,
+	deps,
+	log,
+}) {
 	const findings = [];
 	const tunnels = [];
 	const find = (node, kind, reason) => findings.push({ node, kind, reason });
@@ -296,7 +331,7 @@ export async function convergeTunnels({ manifest, hostsDoc, childApps, token, wr
 	for (const { node, declared } of hosts) {
 		const rec = { node, declared, status: 'unverified' };
 		tunnels.push(rec);
-		const placements = placementsFor(node, childApps);
+		const placements = placementsFor(node, childApps, deployConfig);
 		rec.placements = placements.map((p) => `${p.hostname}:${p.port} (${p.role})`);
 		if (declared !== null && declared !== node) {
 			find(
@@ -476,18 +511,23 @@ export async function convergeTunnels({ manifest, hostsDoc, childApps, token, wr
 				);
 				continue;
 			}
-			const h = await deps.health(`https://${p.hostname}/health`);
+			const url = `https://${p.hostname}${p.healthPath ?? '/health'}`;
+			const h = await deps.health(url);
 			// Cloudflare's edge keeps sending some requests down the old tunnel for
 			// minutes after a switchover, so a pair's name can land on its standby,
-			// which reports itself truthfully on /health (and forwards every other
-			// route to the lease holder). That is a routed name, not a broken one.
+			// which reports itself truthfully on its health path (503, standby).
+			// That is a routed name, not a broken one.
 			const standbyAnswered = p.standby && h.status === 503 && h.standby;
-			if (!(h.status < 500) && !standbyAnswered) {
+			// ROUTED MEANS THE SERVICE SAID SO: a 2xx on its own health path. A 404
+			// is cloudflared's catch-all for a missing ingress rule, or a path the
+			// service does not serve, and used to pass as `< 500`.
+			const ok = Number.isInteger(h.status) && h.status >= 200 && h.status < 300;
+			if (!ok && !standbyAnswered) {
 				routed = false;
 				find(
 					node,
 					'tunnel-route',
-					`https://${p.hostname}/health: ${h.error ?? `HTTP ${h.status}`}`
+					`${url}: ${h.error ?? `HTTP ${h.status}`}${h.bodyError ? ` (body: ${h.bodyError})` : ''}`
 				);
 			}
 		}
@@ -513,11 +553,19 @@ export async function healthStatus(url) {
 		const r = await fetch(url, { signal: AbortSignal.timeout(10_000), redirect: 'manual' });
 		// A hot standby answers its own /health 503 by design (docs/service-state.md).
 		let standby = false;
+		let bodyError = null;
 		if (r.status === 503) {
-			const body = await r.json().catch(() => null);
+			let body = null;
+			try {
+				body = await r.json();
+			} catch (err) {
+				// Said, not dropped: a 503 that is not the standby's JSON is a
+				// different finding from a standby, and the reason tells which.
+				bodyError = `not JSON: ${err.message}`;
+			}
 			standby = body?.detail?.central?.state === 'standby';
 		}
-		return { status: r.status, standby };
+		return { status: r.status, standby, ...(bodyError ? { bodyError } : {}) };
 	} catch (err) {
 		return { error: err.message };
 	}

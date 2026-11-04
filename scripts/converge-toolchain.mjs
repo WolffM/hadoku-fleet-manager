@@ -407,6 +407,7 @@ async function serviceTunnels(manifest) {
 		manifest,
 		hostsDoc: { ...docs.hostsDoc, hosts },
 		childApps: docs.childApps,
+		deployConfig: docs.deployConfig,
 		token,
 		write: !PLAN,
 		deps: { cf: cloudflare(token), onNode: run, health: healthStatus },

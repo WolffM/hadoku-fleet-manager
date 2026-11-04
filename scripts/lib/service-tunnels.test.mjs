@@ -10,6 +10,7 @@ import {
 	credentialsFromRunToken,
 	parseObserve,
 	appLayerHost,
+	healthPathOf,
 	placementsFor,
 	renderConfig,
 	repairScript,
@@ -82,8 +83,14 @@ test('placements: host and standby route; a hand-wired app keeps its own hostnam
 		],
 	};
 	assert.deepEqual(placementsFor('claw-6', apps), [
-		{ id: 'archive-bot', role: 'primary', port: '3004', hostname: 'archivebot.hadoku.me' },
-		{ id: 'pyg2', role: 'standby', port: '9', hostname: 'pyg2.hadoku.me' },
+		{
+			id: 'archive-bot',
+			role: 'primary',
+			port: '3004',
+			hostname: 'archivebot.hadoku.me',
+			healthPath: '/health',
+		},
+		{ id: 'pyg2', role: 'standby', port: '9', hostname: 'pyg2.hadoku.me', healthPath: '/health' },
 	]);
 });
 
@@ -534,4 +541,42 @@ test('routedHostnames reads the hostnames a config routes, never the catch-all',
 	]);
 	assert.deepEqual(routedHostnames(renderConfig(ID, [])), []);
 	assert.deepEqual(routedHostnames(null), []);
+});
+
+test("healthPathOf: the service's own deploy-config health path, /health when it declares none", () => {
+	const dc = {
+		services: [{ name: 'watchparty', health: { url: 'http://127.0.0.1:8079/healthz' } }],
+	};
+	assert.equal(healthPathOf('watchparty', dc), '/healthz');
+	assert.equal(healthPathOf('pygmalion', dc), '/health');
+	assert.equal(healthPathOf('watchparty', null), '/health');
+});
+
+test('a name is routed only when its OWN health path answers 2xx: a 404 is a missing rule, not a route', async () => {
+	const placed = placementsFor('claw-4', childApps);
+	const dc = {
+		services: placed.map((p) => ({
+			name: p.id,
+			health: { url: `http://127.0.0.1:${p.port}/healthz` },
+		})),
+	};
+	const cname = Object.fromEntries(placed.map((p) => [p.hostname, `${ID}.cfargotunnel.com`]));
+	const seen = [];
+	for (const [status, routed] of [
+		[200, true],
+		[404, false],
+	]) {
+		const w = world({ tunnels: { 'claw-4': ID }, hosts: { 'claw-4': claw4Live() }, cname });
+		w.deps.health = async (url) => {
+			seen.push(url);
+			return { status };
+		};
+		const r = await run(w, {
+			deployConfig: dc,
+			hostsDoc: { ...hostsDoc, hosts: { 'claw-4': { tunnel: 'claw-4' } } },
+		});
+		const route = r.findings.filter((f) => f.kind === 'tunnel-route');
+		assert.equal(route.length === 0, routed, `HTTP ${status}: ${JSON.stringify(r.findings)}`);
+	}
+	assert.ok(seen.length && seen.every((u) => u.endsWith('/healthz')), seen.join(' '));
 });
