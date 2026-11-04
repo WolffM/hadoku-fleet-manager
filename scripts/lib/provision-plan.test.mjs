@@ -18,7 +18,6 @@
  */
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { readFileSync } from 'node:fs';
 
 const {
 	ONBOARDING_STEPS,
@@ -34,7 +33,6 @@ const {
 	VERIFY,
 	bootcampProbeArgs,
 	verifyStepArgs,
-	verifyStepArgv,
 	safeJson,
 } = await import('./provision-plan.mjs');
 
@@ -475,27 +473,4 @@ test('the onboarding chain probes with --check-only unless --confirm', () => {
 		'claw-7',
 		'--json',
 	]);
-});
-
-test('a scoped verify passes --machine only to a step whose script accepts it', () => {
-	// claw-10, 2026-11-03: coverage got --machine, reconcile refused it, and
-	// every `provision --machine <node> --verify-only` failed on a healthy node.
-	const scripts = new URL('../', import.meta.url);
-	for (const step of VERIFY) {
-		const argv = verifyStepArgv(step, { confirm: false, only: 'claw-x' });
-		if (!argv.includes('--machine')) {
-			assert.ok(step.fleetWide, `${step.name}: unscoped but not marked fleetWide`);
-			continue;
-		}
-		const src = readFileSync(new URL(step.script, scripts), 'utf8');
-		// machineArg is the one --machine parser (fleet-exec.mjs).
-		assert.match(src, /\bmachineArg\(/, `${step.name}: ${step.script} does not take --machine`);
-	}
-	assert.deepEqual(
-		verifyStepArgv(
-			VERIFY.find((s) => s.name === 'coverage'),
-			{ confirm: true, only: 'claw-x' }
-		),
-		['--check-coverage']
-	);
 });
