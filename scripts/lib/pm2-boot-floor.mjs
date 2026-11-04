@@ -50,8 +50,15 @@ export const PM2_BOOT = {
 		// hand on 2026-10-12. Moved here only while it supervises NOTHING:
 		// killing a daemon with services under it restarts them, which is an
 		// operator's call on a production host.
+		//
+		// AND ASKING SPAWNS ONE. `pm2 jlist` starts a daemon when none runs, so
+		// counting apps after the kill below started a fresh one OUTSIDE the
+		// unit again, and the unit failed exactly as described (claw-10,
+		// 2026-11-03, the first node to take this repair fresh). `apps` asks
+		// only a daemon that is already running.
+		'  apps() { pgrep -u "$u" -f "God Daemon \\($HOME/\\.pm2\\)" >/dev/null || { echo 0; return; }; pm2 jlist 2>/dev/null | tr -cd "{" | wc -c; }',
 		'  if ! systemctl is-active --quiet "$s"; then',
-		'    n="$(pm2 jlist 2>/dev/null | tr -cd "{" | wc -c)"',
+		'    n="$(apps)"',
 		'    if [ "$n" -gt 0 ]; then',
 		'      echo "a pm2 daemon outside $s supervises processes; moving it under the unit restarts them" >&2',
 		'      exit 1',
@@ -61,7 +68,7 @@ export const PM2_BOOT = {
 		'  fi',
 		// Saving an EMPTY list over a populated dump would make the next boot
 		// resurrect nothing, so only save when pm2 is supervising something.
-		'  [ "$(pm2 jlist 2>/dev/null | tr -cd "{" | wc -c)" -gt 0 ] && pm2 save >/dev/null || true',
+		'  [ "$(apps)" -gt 0 ] && pm2 save >/dev/null || true',
 		'  sudo -n systemctl enable --now "$s"',
 		'fi',
 		// THE CEILING, applied LIVE: a drop-in for every later boot, and

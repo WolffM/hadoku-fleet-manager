@@ -133,3 +133,58 @@ test('installScript refuses a pm2MemoryMaxMb that is not a positive integer', ()
 		/^PM2_MEMORY_MAX_MB='768'\nexport PM2_MEMORY_MAX_MB\n/
 	);
 });
+
+test('pm2-boot on a FRESH node: nothing asks pm2 between the kill and the unit start, so no daemon is left outside it', (t) => {
+	// claw-10, 2026-11-03: the first node to take this repair fresh. `pm2 jlist`
+	// spawns a daemon when none runs, so counting apps AFTER the kill started
+	// one outside the unit; `pm2 resurrect` attached to it, never wrote
+	// pm2.pid, and systemd failed the unit with result 'protocol'.
+	const node = createFakeNode({ runnerVersion: '2.337.0' });
+	t.after(() => node.cleanup());
+	const env = {
+		...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))),
+		...node.env,
+		PATH: `${node.callerBin}:${process.env.PATH}`,
+	};
+	const bin = node.env.FAKE_NODE_BIN;
+	// Real pm2's shape: every command but kill/startup leaves a daemon running.
+	writeFileSync(
+		join(bin, 'pm2'),
+		`#!/bin/sh
+echo "pm2 $*" >> "$FAKE_STATE/pm2.log"
+case "$1" in
+kill) rm -f "$FAKE_STATE/pm2-daemon" ;;
+startup) printf '[Service]\\nType=forking\\nExecStart=/usr/bin/env pm2 resurrect\\n' > "$SYS_DIR/${UNIT}" ;;
+*) # Once the unit runs, its own resurrect owns the daemon: not a stray.
+   systemctl is-active --quiet ${UNIT} || [ -f "$FAKE_STATE/pm2-daemon" ] || echo "pm2 DAEMON-SPAWNED" >> "$FAKE_STATE/pm2.log"; touch "$FAKE_STATE/pm2-daemon"
+   [ "$1" = jlist ] && printf '[]' ;;
+esac
+exit 0
+`,
+		{ mode: 0o755 }
+	);
+	writeFileSync(
+		join(bin, 'pgrep'),
+		`#!/bin/sh\n[ -f "$FAKE_STATE/pm2-daemon" ] && { echo 4242; exit 0; }\nexit 1\n`,
+		{ mode: 0o755 }
+	);
+	const ssh = (script) =>
+		spawnSync('ssh', ['fixture-claw'], { env, input: script, encoding: 'utf8' });
+	assert.equal(ssh('mkdir -p "$SYS_DIR"').status, 0);
+	// The repair's own earlier calls left a stray daemon, as on claw-10.
+	writeFileSync(join(node.env.FAKE_STATE, 'pm2-daemon'), '');
+
+	ssh(installScript('pm2-boot'));
+	const calls = readFileSync(join(node.env.FAKE_STATE, 'pm2.log'), 'utf8').trim().split('\n');
+	const kill = calls.indexOf('pm2 kill');
+	assert.ok(kill > -1, `the stray daemon is killed: ${calls.join(' | ')}`);
+	assert.deepEqual(
+		calls.slice(kill + 1).filter((c) => c === 'pm2 DAEMON-SPAWNED'),
+		[],
+		`no pm2 command after the kill may spawn a daemon outside the unit: ${calls.join(' | ')}`
+	);
+	assert.ok(
+		node.starts().some((s) => s.startsWith(`START ${UNIT}`)),
+		'and the unit is started'
+	);
+});
