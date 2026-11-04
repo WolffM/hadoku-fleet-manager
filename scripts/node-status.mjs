@@ -359,6 +359,8 @@ const rows = await Promise.all(
 				state,
 				declared,
 				until: h.rec.until ?? null,
+				// A shrink is not an end: the slice serves at full size until `until`, then smaller.
+				...(h.rec.shrinkTo ? { shrinkTo: h.rec.shrinkTo } : {}),
 				observed: judged.observed,
 			});
 			// With several tenants, a finding says whose slice it is about.

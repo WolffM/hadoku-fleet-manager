@@ -142,3 +142,11 @@ test('an unreadable slice record decides nothing: promote is null, not true', ()
 	assert.equal(b.promote, null);
 	assert.match(b.why, /could not look/);
 });
+
+test('a shrinking slice keeps serving: an end that carries shrinkTo is usable, not released', () => {
+	const v = tenantUsableOn(
+		row('claw-8', {}, { until: '2026-01-01T00:00:00Z', shrinkTo: { memoryMb: 4096, cores: 4 } }),
+		'cardtable'
+	);
+	assert.equal(v?.verdict, 'usable');
+});

@@ -23,7 +23,8 @@
  *   drain.kind                         an active maintenance/training/reboot drain
  *   tenants[].declared.tenant          the slice this tenant holds there
  *   tenants[].state                    the slice's kernel ceilings verified (`guaranteed`)
- *   tenants[].until                    set = the slice is being released
+ *   tenants[].until                    set = the slice is being released, unless
+ *   tenants[].shrinkTo                 is beside it: a shrink keeps serving, just smaller
  *   tenants[].observed.agent           the process tree shows the tenant listening
  *   tenants[].observed.portReach.controller   the port answered a connect (agent kind)
  * Never `ok`: that also carries CI-only findings (claw-10 read `ok: false` on a
@@ -39,6 +40,8 @@ const OUT_OF_SERVICE_DRAINS = new Set(['maintenance', 'training', 'reboot']);
 export interface UsableSlice {
 	state?: string;
 	until?: string | null;
+	/** A shrink, not an end: the slice serves at full size until `until`, then at this. */
+	shrinkTo?: { memoryMb: number; cores: number } | null;
 	declared?: { tenant?: string; role?: string };
 	observed?: {
 		agent?: string | null;
@@ -93,7 +96,8 @@ export function tenantUsableOn(row: UsableNodeRow, app: string): TenantUsable | 
 	const drain = row.drain?.kind;
 	if (drain && OUT_OF_SERVICE_DRAINS.has(drain))
 		return out('unusable', `the node is under a ${drain} drain`);
-	if (slice.until) return out('unusable', `the slice is being released (until ${slice.until})`);
+	if (slice.until && !slice.shrinkTo)
+		return out('unusable', `the slice is being released (until ${slice.until})`);
 	if (slice.state !== 'guaranteed')
 		return out(
 			'unusable',
