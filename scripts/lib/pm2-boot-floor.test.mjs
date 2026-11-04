@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { createFakeNode } from './fake-node.mjs';
 import { PM2_MEMORY_MAX_MB_DEFAULT } from './pm2-boot-floor.mjs';
 import { REPAIRS, installScript, repairNeedsRoot } from './toolchain-floor.mjs';
+import { tempDir } from './test-tmpdir.mjs';
 
 const MIB = 1048576;
 const USER = execFileSync('id', ['-un'], { encoding: 'utf8' }).trim();
@@ -186,5 +187,60 @@ exit 0
 	assert.ok(
 		node.starts().some((s) => s.startsWith(`START ${UNIT}`)),
 		'and the unit is started'
+	);
+});
+
+// Moved from toolchain-floor.test.mjs, which sits past its size ceiling, when
+// the stubs grew a `pgrep` (2026-11-04).
+/**
+ * Runs the pm2-boot repair against stub `pm2`, `pgrep`, `sudo` and
+ * `systemctl`; returns what each was asked. A stray daemon is RUNNING until the
+ * stub `pm2 kill` runs. `pgrep` must be a stub too: the repair asks the process
+ * table whether a daemon runs before it counts apps (fc927de), and the real one
+ * answered for whichever host ran the suite, so this passed on ppe's runner and
+ * failed the 2026-11-04 publish, which kept that fix out of production.
+ */
+function runPm2Boot({ supervised }) {
+	const dir = tempDir('pm2-boot-');
+	const log = join(dir, 'calls');
+	const killed = join(dir, 'killed');
+	const stub = (name, body) =>
+		writeFileSync(join(dir, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\n${body}\n`, {
+			mode: 0o755,
+		});
+	stub(
+		'pm2',
+		`[ "$1" = kill ] && : > "${killed}"; ` +
+			`[ "$1" = jlist ] && printf '%s' '${supervised ? '[{"name":"pygmalion"}]' : '[]'}'; exit 0`
+	);
+	stub('pgrep', `[ -e "${killed}" ] && exit 1; exit 0`);
+	stub('systemctl', '[ "$1" = is-active ] && exit 3; exit 0');
+	stub('sudo', '[ "$1" = -n ] && shift; "$@"');
+	const r = spawnSync('bash', ['-c', REPAIRS['pm2-boot'].repair], {
+		env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+		encoding: 'utf8',
+	});
+	return { code: r.status, err: r.stderr, calls: readFileSync(log, 'utf8').trim().split('\n') };
+}
+
+test('pm2-boot: a stray daemon supervising nothing is killed so the UNIT owns pm2 (claw-6, 2026-10-25)', () => {
+	// The unit's `pm2 resurrect` attaches to a daemon it did not fork, never
+	// writes pm2.pid, and systemd fails it on 'protocol'. MUTATION: drop the
+	// kill and the enable below starts a unit that fails.
+	const r = runPm2Boot({ supervised: false });
+	assert.equal(r.code, 0, r.err);
+	const kill = r.calls.indexOf('pm2 kill');
+	assert.ok(kill >= 0, r.calls.join('\n'));
+	assert.ok(kill < r.calls.findIndex((c) => c.startsWith('systemctl enable --now')));
+});
+
+test('pm2-boot: a stray daemon WITH services under it is refused, never killed', () => {
+	const r = runPm2Boot({ supervised: true });
+	assert.notEqual(r.code, 0);
+	assert.match(r.err, /supervises processes/);
+	assert.equal(r.calls.includes('pm2 kill'), false);
+	assert.ok(
+		r.calls.some((c) => c.startsWith('pgrep ')),
+		'the stub, not the host running the suite, answered whether a daemon runs'
 	);
 });
