@@ -58,6 +58,7 @@ import {
 import { readRevocations } from '../dist/capability-revocations.js';
 import { hostingNotices, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { isBackstopNode } from '../dist/lib/node-role.js';
+import { judgeTenantBackstop } from '../dist/lib/tenant-usable.js';
 import { nodeUser } from '../dist/lib/node-users.js';
 import {
 	judgeNodeUsers,
@@ -464,6 +465,16 @@ if (out.json) {
 			noticeMinutes: HOSTING_NOTICE_MS / 60_000,
 		},
 		nodes: rows,
+		// Per hosted tenant: is any claw usable for it, and so does hokon step in
+		// (src/lib/tenant-usable.ts; operator 2026-11-04, fleet-manager decides).
+		backstops: [
+			...new Set([
+				...Object.keys(registry.tenants ?? {}),
+				...rows.flatMap((r) => r.tenants.map((t) => t.declared.tenant)),
+			]),
+		]
+			.sort()
+			.map((app) => judgeTenantBackstop(rows, app, hostingUnreadable)),
 		skippedByRole,
 		lines: out.held(),
 	};

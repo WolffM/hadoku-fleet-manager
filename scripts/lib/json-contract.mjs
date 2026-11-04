@@ -473,6 +473,16 @@ export const TENANT_CONTRACT = [
 			'nodes[].hosting.observed.portReach',
 			'nodes[].hosting.observed.memoryInUseMb',
 			'nodes[].hosting.until',
+			// Added 2026-11-04 with cardtable: whether hokon takes new matches,
+			// decided here (src/lib/tenant-usable.ts). null = could not decide.
+			'backstops[].app',
+			'backstops[].promote',
+			'backstops[].why',
+			'backstops[].usable',
+			'backstops[].unknown',
+			'backstops[].nodes[].node',
+			'backstops[].nodes[].verdict',
+			'backstops[].nodes[].why',
 		],
 	},
 	{

@@ -583,6 +583,11 @@
     "layer": "config"
   },
   {
+    "glob": "src/lib/tenant-usable.ts",
+    "layer": "config",
+    "why": "The hosted tenant's backstop decision (operator 2026-11-04): pure over a node-status row, no imports, no file/network/clock access. node-status (observation) publishes it and the app layer imports it from the package root, so it sits in the lowest layer both may read, beside node-role.ts."
+  },
+  {
     "glob": "src/lib/provenance.ts",
     "layer": "config"
   },

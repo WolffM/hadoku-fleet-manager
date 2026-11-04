@@ -78,14 +78,21 @@ const PUBLIC_SURFACE = [
 	'SaturationHostVerdict',
 	'TelemetryKind',
 	'TelemetryTerm',
+	'TenantBackstop',
+	'TenantUsable',
+	'UsableNodeRow',
+	'UsableSlice',
+	'UsableVerdict',
 	'__resetFleetManagerForTesting',
 	'cadencePeriodMs',
 	'createFleetManager',
 	'getFleetLiveness',
+	'judgeTenantBackstop',
 	'meterGhPool',
 	'noteCronEnd',
 	'noteCronStart',
 	'parseDurationMs',
+	'tenantUsableOn',
 ];
 
 test('the package exports exactly the pinned public surface', () => {

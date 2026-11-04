@@ -33,6 +33,7 @@ const PRODUCERS = {
 		'scripts/lib/hosting.mjs',
 		'scripts/lib/node-users-facet.mjs',
 		'src/runners/drain.ts',
+		'src/lib/tenant-usable.ts',
 	],
 	hosting: ['scripts/hosting.mjs', 'scripts/lib/hosting.mjs'],
 	'hosting-plan': ['scripts/hosting-plan.mjs', 'scripts/lib/hosting-plan.mjs'],

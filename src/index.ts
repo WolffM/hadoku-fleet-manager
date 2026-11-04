@@ -81,6 +81,21 @@ export { getFleetLiveness } from './lib/liveness.js';
 export type { FleetLiveness, LoopLiveness } from './lib/liveness.js';
 
 /**
+ * Whether a claw can serve a hosted tenant now, and whether hokon steps in
+ * (operator, 2026-11-04: fleet-manager decides). `fleet node-status --json`
+ * publishes the same verdicts as `backstops[]`; the app layer's lease follower
+ * imports these to read its own node-status document the same way.
+ */
+export { judgeTenantBackstop, tenantUsableOn } from './lib/tenant-usable.js';
+export type {
+	TenantBackstop,
+	TenantUsable,
+	UsableNodeRow,
+	UsableSlice,
+	UsableVerdict,
+} from './lib/tenant-usable.js';
+
+/**
  * THE BACKSTOP DECISION's TYPES, as a pure contract. hokon is the emergency
  * backstop for cardtable's Forge matches with the CI backstop's rules
  * (operator, 2026-10-25; hadoku-cardtable FLEET_MANAGER_FORGE_HOSTING.md
