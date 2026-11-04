@@ -239,11 +239,11 @@ const primariesOf = (tenant) =>
  * `doc` with a singleton's open move closed, when this action's slice is one
  * end of it: ending or removing the node it leaves COMMITS the move (the
  * mover has stopped it there and the new node serves), ending or removing
- * the node it goes to ABORTS it. Any other slice leaves the move alone.
+ * the node it goes to ABORTS it. Any other slice, or a SHRINK, leaves the move alone.
  */
-function closingMove(doc, tenant) {
+function closingMove(doc, tenant, shrink = null) {
 	const move = doc.apps?.[tenant]?.move;
-	if (!move || (move.from !== node && move.to !== node)) return { doc, closed: null };
+	if (shrink || !move || (move.from !== node && move.to !== node)) return { doc, closed: null };
 	const outcome = move.from === node ? 'committed' : 'aborted';
 	return {
 		doc: withMoveClosed(doc, tenant, outcome, new Date(NOW).toISOString()),
@@ -462,9 +462,7 @@ if (action === 'end') {
 	);
 	if (shrink.why) refuse(shrink.why);
 	const { shrinkTo } = shrink;
-	const { doc: closedDoc, closed } = shrinkTo
-		? { doc: hostingDoc }
-		: closingMove(hostingDoc, current.tenant);
+	const { doc: closedDoc, closed } = closingMove(hostingDoc, current.tenant, shrinkTo);
 	if (current.mode === 'whole') {
 		writeDrainDoc(
 			{
@@ -528,11 +526,13 @@ if (action === 'remove') {
 	if (!rec && drainDoc.nodes[node])
 		refuse(`${node} is drained as '${drainDoc.nodes[node].kind}', not hosting.`);
 	const endMs = Date.parse(rec?.until ?? '');
-	if (rec && !(endMs <= NOW) && !has('--force')) {
+	if (rec && (rec.shrinkTo || !(endMs <= NOW)) && !has('--force')) {
 		refuse(
-			rec.until
-				? `${node} hosts until ${rec.until}. Remove it after that, or --force.`
-				: `${node} has no end scheduled. Run --end --in 30m first, so the tenant sees it coming.`
+			rec.shrinkTo
+				? `${node} shrinks to ${rec.shrinkTo.memoryMb} MiB at ${rec.until}; the converger re-declares it. --force removes it all.`
+				: rec.until
+					? `${node} hosts until ${rec.until}. Remove it after that, or --force.`
+					: `${node} has no end scheduled. Run --end --in 30m first, so the tenant sees it coming.`
 		);
 	}
 	const tenant = recordTenant ?? valueOf('--tenant');

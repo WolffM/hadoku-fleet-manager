@@ -21,6 +21,7 @@
  *
  * PURE.
  */
+import { lapsed } from '../../dist/runners/hosting-record.js';
 
 /**
  * @param {Record<string, {request: object}>} tenants  the tenant registry's `tenants`
@@ -33,7 +34,7 @@ export function judgeRedundancy(tenants, hostingDoc, rows, nowMs) {
 	const guaranteed = new Set(
 		rows.filter((r) => r.state === 'guaranteed').map((r) => `${r.node}\0${r.declared?.tenant}`)
 	);
-	const inForce = (rec) => !rec.until || Date.parse(rec.until) > nowMs;
+	const inForce = (rec) => !lapsed(rec, nowMs);
 	const slicesOf = (app) =>
 		Object.entries(hostingDoc.nodes ?? {}).flatMap(([node, recs]) =>
 			(recs ?? [])

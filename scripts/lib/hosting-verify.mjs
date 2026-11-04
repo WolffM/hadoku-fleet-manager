@@ -17,6 +17,7 @@
  *   - a tenant that is not registered has no spec to re-deploy from;
  *   - a slice past its end belongs to `--remove` (the hosting converger's).
  */
+import { lapsed as pastEnd } from '../../dist/runners/hosting-record.js';
 
 /** Categories the node side cannot repair: there is nothing to re-deploy, or no node to deploy to. */
 const NOT_REPAIRABLE = new Set(['hosting-unobserved', 'hosting-tenant']);
@@ -46,9 +47,9 @@ export function planVerify(rows, nowMs) {
 		const categories = new Set(
 			(row.findings ?? []).filter((f) => f.class === 'blocking').map((f) => f.category)
 		);
-		const endMs = Date.parse(row.until ?? '');
 		if (categories.has('hosting-unobserved')) unreadable.push(item);
-		else if (Number.isFinite(endMs) && endMs <= nowMs) lapsed.push(item);
+		// A shrink never lapses: it is still the full slice, so it is repaired like one.
+		else if (pastEnd(row, nowMs)) lapsed.push(item);
 		else if ([...categories].some((c) => NOT_REPAIRABLE.has(c))) unrepairable.push(item);
 		else repair.push(item);
 	}

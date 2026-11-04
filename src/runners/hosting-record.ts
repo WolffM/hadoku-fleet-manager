@@ -147,7 +147,16 @@ export interface HostingOn extends HostingResources {
 const FILE = 'fleet-hosting.json';
 const hostingPath = (dir: string): string => join(dir, FILE);
 
-const lapsed = (rec: { until?: string; shrinkTo?: unknown }, nowMs: number): boolean => {
+/**
+ * Is this record past its end? THE ONE ANSWER for every reader: a SHRINK
+ * (`shrinkTo`) never lapses, because the slice serves at full size until the
+ * converger re-declares it smaller. A reader that judges `until` alone reads
+ * a shrinking slice as released (node-status did until 49b58ed).
+ */
+export const lapsed = (
+	rec: { until?: string | null; shrinkTo?: unknown },
+	nowMs: number
+): boolean => {
 	if (!rec.until || rec.shrinkTo) return false;
 	const t = Date.parse(rec.until);
 	// Unparseable is NOT lapsed: still reserved is the side that fails safe.

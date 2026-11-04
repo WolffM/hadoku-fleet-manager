@@ -37,18 +37,11 @@
  * `unplaced` is only ever said about a record that was read and is empty.
  */
 
-import { ENDED_KEEP_MS } from '../../dist/runners/hosting-record.js';
+import { ENDED_KEEP_MS, lapsed } from '../../dist/runners/hosting-record.js';
 import { nodesWanted } from './hosting-request.mjs';
 
 /** The document's version, pinned by its readers. Additive changes only. */
 export const HOSTING_PLACEMENT_CONTRACT = 1;
-
-const lapsed = (until, nowMs) => {
-	if (!until) return false;
-	const t = Date.parse(until);
-	// Unparseable is NOT lapsed, as everywhere the record is read.
-	return Number.isFinite(t) && t <= nowMs;
-};
 
 /**
  * Every record `app` holds, lapsed ones included, whichever file it lives in.
@@ -56,7 +49,7 @@ const lapsed = (until, nowMs) => {
  */
 export function appRecords(app, drainDoc, hostingDoc, nowMs) {
 	const rows = [];
-	const row = (node, mode, rec, until, since) => ({
+	const row = (node, mode, rec, until, since, shrinkTo) => ({
 		node,
 		mode,
 		role: rec.role === 'standby' ? 'standby' : 'primary',
@@ -64,14 +57,16 @@ export function appRecords(app, drainDoc, hostingDoc, nowMs) {
 		since: since ?? null,
 		until: until ?? null,
 		declared: { memoryMb: rec.memoryMb, cores: rec.cores, port: rec.port },
-		lapsed: lapsed(until, nowMs),
+		...(shrinkTo ? { shrinkTo } : {}),
+		lapsed: lapsed({ until, shrinkTo }, nowMs),
 	});
 	for (const [node, rec] of Object.entries(drainDoc.nodes ?? {}))
 		if (rec.kind === 'hosting' && rec.hosting?.tenant === app)
 			rows.push(row(node, 'whole', rec.hosting, rec.until, rec.since));
 	for (const [node, recs] of Object.entries(hostingDoc.nodes ?? {}))
 		for (const rec of recs)
-			if (rec.tenant === app) rows.push(row(node, 'shared', rec, rec.until, rec.since));
+			if (rec.tenant === app)
+				rows.push(row(node, 'shared', rec, rec.until, rec.since, rec.shrinkTo));
 	return rows.sort((a, b) => Date.parse(a.since ?? '') - Date.parse(b.since ?? ''));
 }
 
@@ -139,6 +134,7 @@ export function sliceRow(rec, probe, { notices = [], registeredPort = null, ci =
 		epoch: rec.epoch,
 		since: rec.since,
 		until: rec.until,
+		...(rec.shrinkTo ? { shrinkTo: rec.shrinkTo } : {}),
 		declared: rec.declared,
 		notices,
 		ci: rec.lapsed ? null : ci,

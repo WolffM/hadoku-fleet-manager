@@ -39,6 +39,7 @@ export function hostingRecords(drainDoc, hostingDoc) {
 				mode: 'shared',
 				declared: { tenant, memoryMb, cores, port },
 				until: rec.until ?? null,
+				...(rec.shrinkTo ? { shrinkTo: rec.shrinkTo } : {}),
 			});
 		}
 	}
@@ -64,7 +65,7 @@ export async function observeNode({ manifest, run }, name, spec) {
  * `ctx`: `{ manifest, hostingDoc, specOf(tenant), run }`, `run` being
  * fleet-exec's `runOn`.
  */
-export async function checkSlice(ctx, { name, mode, declared, until }) {
+export async function checkSlice(ctx, { name, mode, declared, until, shrinkTo }) {
 	const { manifest, hostingDoc, specOf, run } = ctx;
 	const spec = specOf(declared.tenant);
 	const { obs, error } = await observeNode(ctx, name, spec);
@@ -93,6 +94,7 @@ export async function checkSlice(ctx, { name, mode, declared, until }) {
 			mode,
 			declared,
 			until,
+			...(shrinkTo ? { shrinkTo } : {}),
 			state: blocking ? 'not-guaranteed' : 'guaranteed',
 			...judged,
 		},

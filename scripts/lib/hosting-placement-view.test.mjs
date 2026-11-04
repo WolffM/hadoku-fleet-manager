@@ -442,3 +442,15 @@ test('tenant.backstop: the hosting.json value, or null (R11.2)', () => {
 	};
 	assert.equal(doc({ request: cold }).tenant.backstop, 'cold');
 });
+
+test('a shrinking slice past its end is not lapsed, and carries shrinkTo; a plain end is lapsed', () => {
+	const past = iso(-60_000);
+	const [shrink] = recordsOf('watchparty', {
+		'claw-6': [shared('watchparty', { until: past, shrinkTo: { memoryMb: 512, cores: 1 } })],
+	});
+	assert.equal(shrink.lapsed, false);
+	assert.deepEqual(shrink.shrinkTo, { memoryMb: 512, cores: 1 });
+	const [ended] = recordsOf('watchparty', { 'claw-6': [shared('watchparty', { until: past })] });
+	assert.equal(ended.lapsed, true);
+	assert.ok(!('shrinkTo' in ended));
+});

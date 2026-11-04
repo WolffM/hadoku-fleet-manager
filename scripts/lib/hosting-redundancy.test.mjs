@@ -85,3 +85,21 @@ test('an ended slice and a non-service tenant are not counted', () => {
 		['watchparty']
 	);
 });
+
+test('a shrinking slice past its end still counts as a copy; a plain end does not', () => {
+	const past = new Date(NOW - 60_000).toISOString();
+	const judge = (rec) =>
+		judgeRedundancy(
+			{ pygmalion: fenced(1) },
+			{
+				nodes: {
+					'claw-4': [{ tenant: 'pygmalion' }],
+					'claw-9': [{ tenant: 'pygmalion', role: 'standby', ...rec }],
+				},
+			},
+			[row('claw-4', 'pygmalion'), row('claw-9', 'pygmalion')],
+			NOW
+		).findings.length;
+	assert.equal(judge({ until: past, shrinkTo: { memoryMb: 512, cores: 1 } }), 0);
+	assert.ok(judge({ until: past }) > 0, 'the ended standby is missing');
+});

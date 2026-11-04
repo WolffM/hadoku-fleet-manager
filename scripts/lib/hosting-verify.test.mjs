@@ -74,3 +74,12 @@ test('an advisory finding alone is not a repair: only the state decides', () => 
 	);
 	assert.deepEqual(p.repair, []);
 });
+
+test('a SHRINK past its end is still the full slice: repaired like one, never filed as lapsed', () => {
+	const p = planVerify(
+		[row('cardtable', { until: '2026-10-31T17:00:00Z', shrinkTo: { memoryMb: 256, cores: 1 } })],
+		NOW
+	);
+	assert.deepEqual(p.lapsed, []);
+	assert.equal(p.repair[0].tenant, 'cardtable');
+});
