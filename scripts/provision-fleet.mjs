@@ -135,7 +135,7 @@ import {
 	ONBOARDING_STEPS,
 	FLEET_APPLY,
 	VERIFY,
-	verifyStepArgs,
+	verifyStepArgv,
 } from './lib/provision-plan.mjs';
 import {
 	run,
@@ -330,15 +330,13 @@ async function fleetRun({ confirm, verifyOnly }) {
 }
 
 async function verifyPass(only, { confirm }) {
-	const machineFlag = only ? ['--machine', only] : [];
 	P(`\n\x1b[1m═══ verify (each step re-reads OBSERVED state) ═══\x1b[0m`);
 	for (const step of VERIFY) {
 		P(`\n\x1b[1m── verify: ${step.name}\x1b[0m`);
 		if (
 			run(process.execPath, [
 				resolve(HERE, step.script),
-				...verifyStepArgs(step, { confirm }),
-				...machineFlag,
+				...verifyStepArgv(step, { confirm, only }),
 			]).status !== 0
 		)
 			verifyFailed.push(step.name);
