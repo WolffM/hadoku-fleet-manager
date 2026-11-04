@@ -4,6 +4,8 @@
  * `fleet hosting-offers` and `fleet hosting-plan`, so both read the same
  * facts the same way.
  */
+import { join } from 'node:path';
+
 import { nodeOffer } from '../../dist/lib/capability-offer.js';
 import {
 	revokedFor,
@@ -18,6 +20,8 @@ import { deferralFor, readDrainDoc, readDrains } from './expected-down.mjs';
 import { runOn, selectMachines } from './fleet-exec.mjs';
 import { offerFor, offerProbe, parseOfferProbe } from './hosting-offers.mjs';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
+import { CAPACITY_SAMPLE_FILE, capacitySampleStore } from '../../dist/capacity-sample-store.js';
+import { reliabilityOf } from './host-reliability.mjs';
 import { pm2Peers } from './pm2-app-layer.mjs';
 import { tenantsByNode } from './tenant-declarations.mjs';
 
@@ -68,6 +72,7 @@ export async function collectOffers(manifest, { tools = [] } = {}) {
 	const peers = pm2Peers();
 	const drains = readDrains();
 	const labelsOf = offeredLabels(manifest.machines ?? {});
+	const reliability = reliabilityOf(readSamples(), Date.now());
 
 	const offers = await Promise.all(
 		nodes.map(async ([node, machine]) => {
@@ -90,9 +95,19 @@ export async function collectOffers(manifest, { tools = [] } = {}) {
 				// A drained node may be down on purpose; it offers nothing, and that is not a failure.
 				offer.expectedDown = deferralFor(node, drains).deferred;
 			} else if (peers.set === null) offer.unknown.push(peers.why);
+			offer.reliability = reliability(node);
 			return offer;
 		})
 	);
 
 	return { offers, skippedByRole };
+}
+
+/** The capacity samples, or why they could not be read: "could not look" is carried, never empty. */
+function readSamples() {
+	try {
+		return capacitySampleStore(join(stateDir(), CAPACITY_SAMPLE_FILE)).read();
+	} catch (err) {
+		return { error: err.message };
+	}
 }

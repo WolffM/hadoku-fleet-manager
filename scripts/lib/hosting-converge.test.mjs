@@ -699,3 +699,26 @@ test('a reboot drain the cycle did not write is still a fault inside the horizon
 	assert.deepEqual(d.serving, []);
 	assert.match(d.unplaceable[0].why, /has a reboot drain starting/);
 });
+
+test('a held service slice is judged by KEEP, not EARN: a node that may not be given more keeps what it hosts', () => {
+	const held = (reliability) =>
+		run({
+			request: { ...service, slices: { ...service.slices, max: 1 } },
+			demand: { slices: 1 },
+			offers: [offer('claw-4', { reliability })],
+			slices: [{ node: 'claw-4' }],
+		});
+	const earnOnly = held({ earn: false, keep: true, why: '95 min down, 1 outage(s)' });
+	assert.deepEqual(earnOnly.serving, ['claw-4']);
+	assert.deepEqual(earnOnly.unplaceable, []);
+
+	const lost = held({ earn: false, keep: false, why: '300 min down, 4 outage(s)' });
+	assert.deepEqual(lost.serving, []);
+	assert.deepEqual(
+		lost.unplaceable.map((u) => u.why),
+		['fails "reliable-host": 300 min down, 4 outage(s)']
+	);
+
+	const unknown = held({ earn: null, keep: null, why: '2 h of samples' });
+	assert.deepEqual(unknown.serving, ['claw-4'], 'could-not-judge never strips a held slice');
+});

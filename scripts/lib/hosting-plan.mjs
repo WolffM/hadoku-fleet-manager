@@ -41,7 +41,7 @@
  * primary holds or is about to be given.
  */
 import { ciJobsAfter } from './hosting-offers.mjs';
-import { requiredRules, ruleHolds } from './hosting-placement.mjs';
+import { requiredRules, ruleDetail, ruleHolds } from './hosting-placement.mjs';
 import { ADVISORY_UNTIL_DEFAULT } from './hosting-request.mjs';
 import { satisfies } from './version-algebra.mjs';
 
@@ -104,8 +104,10 @@ export function planFor(request, offers) {
 		no.push(...runtimeReasons(request, o).all);
 		for (const rule of requiredRules(request)) {
 			const holds = ruleHolds(rule, o);
-			if (holds === false) no.push(`fails "${rule}"`);
-			else if (holds === null) no.push(`cannot tell whether "${rule}" holds`);
+			const seen = ruleDetail(rule, o);
+			if (holds === false) no.push(`fails "${rule}"${seen ? `: ${seen}` : ''}`);
+			else if (holds === null)
+				no.push(`cannot tell whether "${rule}" holds${seen ? `: ${seen}` : ''}`);
 		}
 		const before = ciJobsAfter(o, 0);
 		const after = ciJobsAfter(o, need.memoryMb);

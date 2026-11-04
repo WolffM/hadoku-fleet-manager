@@ -1636,6 +1636,12 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/host-reliability.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
     "glob": "scripts/lib/hosting-runtimes.mjs",
     "layer": "domain",
     "domain": "tenancy",

@@ -30,6 +30,14 @@ const FIXED = {
 		why: 'the node is a declared pm2 host of the app layer (its data endpoint and secrets listener answer it)',
 		holds: (o) => o.pm2Peer,
 	},
+	'reliable-host': {
+		why:
+			'the fleet observed the node staying up: a new slice needs EARN, a held one KEEP ' +
+			'(lib/host-reliability.mjs, from the 5-minute capacity samples)',
+		holds: (o) => o.reliability?.earn ?? null,
+		heldHolds: (o) => o.reliability?.keep ?? null,
+		detail: (o) => o.reliability?.why ?? null,
+	},
 	'low-reboot-churn': {
 		why: 'prefer nodes the reboot cycle touches rarely',
 		// A preference with no data behind it yet; never refuses.
@@ -93,15 +101,35 @@ export function ruleHolds(rule, offer) {
 }
 
 /**
+ * Does `offer` satisfy `rule` for a slice it ALREADY HOLDS? The same as
+ * `ruleHolds`, except for a rule with a looser bar for keeping than for
+ * earning (`reliable-host`: KEEP, not EARN), so a node is not stripped of
+ * what it hosts by the bar that keeps it from being given more.
+ */
+export function ruleHoldsHeld(rule, offer) {
+	const f = Object.hasOwn(FIXED, rule) ? FIXED[rule] : null;
+	return f?.heldHolds ? f.heldHolds(offer) : ruleHolds(rule, offer);
+}
+
+/** What a rule saw on this node, for a reason line, or null. */
+export function ruleDetail(rule, offer) {
+	const f = Object.hasOwn(FIXED, rule) ? FIXED[rule] : null;
+	return f?.detail ? f.detail(offer) : null;
+}
+
+/**
  * Every rule a request is placed by: its own `placement.require`, plus what its
  * KIND implies. A `service` tenant needs a node that has PROVEN it can serve a
  * placed service, `label:service-host` (src/lib/capability-registry-label.ts; fleet-manager#16):
  * deploy tools on a tenant's PATH, the node's own tunnel up, and its state root.
- * Implied rather than written into each hosting.json, so no service tenant can
- * forget it and none is placed on a node that would fail its first deploy.
+ * And one the fleet has OBSERVED staying up, `reliable-host` (2026-11-03: claw-4
+ * dropped off the network with two services on it and still carried
+ * service-host). Implied rather than written into each hosting.json, so no
+ * service tenant can forget them and none is placed on a node that would fail
+ * its first deploy or drop out from under it.
  */
 export function requiredRules(request) {
 	const own = request.placement?.require ?? [];
-	const implied = request.kind === 'service' ? ['label:service-host'] : [];
+	const implied = request.kind === 'service' ? ['label:service-host', 'reliable-host'] : [];
 	return [...own, ...implied.filter((r) => !own.includes(r))];
 }

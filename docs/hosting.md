@@ -209,6 +209,25 @@ that has another drain starting within its notice is **unplaceable**. It is
 not counted as serving, and it is never ended by the converger: the tenant
 moves its work off and names the slice in its release order.
 
+**A service is placed only on a node the fleet has watched stay up.** Every
+`kind: service` tenant is implicitly held to `label:service-host` (the node
+CAN serve) and `reliable-host` (it DOES stay up), judged from the 5-minute
+capacity samples over the last 14 days (`scripts/lib/host-reliability.mjs`).
+A sample counts as down when the node was unreachable, offline or sick
+without being drained, so a planned reboot does not count. An outage is two or
+more down samples in a row. There are two bars:
+
+| bar  | asked of                      | passes with            |
+| ---- | ----------------------------- | ---------------------- |
+| EARN | a node offered a NEW slice    | ≤ 30 min, ≤ 1 outage   |
+| KEEP | a node about a slice it holds | ≤ 240 min, ≤ 3 outages |
+
+A node that fails EARN keeps what it hosts and is given nothing new until the
+outage ages out of the window. One that fails KEEP makes its slices
+unplaceable, so a service with a standby moves to it. Under 72 hours of
+samples is "cannot tell" on both bars: no new slice, and no held one taken
+away. `fleet hosting-plan` names the minutes and outages behind every refusal.
+
 **A singleton service is never given a second slice.** Its move goes through
 hadoku_site's mover (`service-move`, hadoku_site#491), and the converger says
 which node the plan would pick. A singleton on a node that cannot be reached

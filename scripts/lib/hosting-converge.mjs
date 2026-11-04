@@ -57,7 +57,7 @@
  * past the count is ended with the tenant's notice; it holds no authority, so
  * no release order is needed. An unplaceable standby is replaced, not ended.
  */
-import { requiredRules, ruleHolds } from './hosting-placement.mjs';
+import { requiredRules, ruleDetail, ruleHoldsHeld } from './hosting-placement.mjs';
 import { REASON_PREFIX } from './reboot-hold.mjs';
 
 /** A drain of another kind starting this long past the tenant's notice counts as now. */
@@ -349,7 +349,11 @@ const cycleReboot = (n) => n.kind === 'reboot' && String(n.reason ?? '').startsW
 /** Why a held slice's node cannot serve, or null. */
 function faultOf(node, offer, require, notices, rebooting, now, horizonMs) {
 	if (!offer?.reachable) return rebooting.has(node) ? null : 'cannot be reached';
-	for (const rule of require) if (ruleHolds(rule, offer) === false) return `fails "${rule}"`;
+	for (const rule of require) {
+		if (ruleHoldsHeld(rule, offer) !== false) continue;
+		const seen = ruleDetail(rule, offer);
+		return `fails "${rule}"${seen ? `: ${seen}` : ''}`;
+	}
 	const soon = notices.find(
 		(n) =>
 			n.node === node &&

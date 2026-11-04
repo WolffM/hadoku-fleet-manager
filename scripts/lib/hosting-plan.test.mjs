@@ -28,6 +28,8 @@ const offer = (node, over = {}) => ({
 	// Every fixture node has earned service-host (#16), so a service tenant's
 	// refusals below are about the rule each test names.
 	labels: ['service-host'],
+	// …and has stayed up (2026-11-03), for the same reason.
+	reliability: { earn: true, keep: true, why: '0 min down, 0 outage(s) in 336 h of samples' },
 	gpu: [],
 	runtime: { node: '22.23.2', tools: {} },
 	unknown: [],
@@ -271,4 +273,30 @@ test('#16: a service tenant needs a node that EARNED service-host; an agent tena
 	assert.match(why(svc, 'claw-4'), /fails "label:service-host"/);
 	const agent = planFor(CARDTABLE, [bare('claw-8')]);
 	assert.deepEqual(nodes(agent), ['claw-8'], 'cardtable is an agent: the label is not asked of it');
+});
+
+test('a service tenant needs a node the fleet OBSERVED staying up: EARN for a new slice, and unknown never earns', () => {
+	const flaky = offer('claw-4', {
+		pm2Peer: true,
+		reliability: {
+			earn: false,
+			keep: true,
+			why: '95 min down, 1 outage(s) (11-03 23:02Z 95 min) in 80 h of samples; a new slice needs ≤ 30 min',
+		},
+	});
+	const young = offer('claw-10', {
+		pm2Peer: true,
+		reliability: {
+			earn: null,
+			keep: null,
+			why: '2.3 h of samples in the window; 72 h are needed to judge',
+		},
+	});
+	const steady = offer('claw-9', { pm2Peer: true });
+	const svc = planFor(ARCHIVEBOT, [flaky, young, steady]);
+	assert.deepEqual(nodes(svc), ['claw-9']);
+	assert.match(why(svc, 'claw-4'), /fails "reliable-host": 95 min down, 1 outage/);
+	assert.match(why(svc, 'claw-10'), /cannot tell whether "reliable-host" holds: 2\.3 h of samples/);
+	const agent = planFor(CARDTABLE, [offer('claw-4', { reliability: flaky.reliability })]);
+	assert.deepEqual(nodes(agent), ['claw-4'], 'an agent tenant is not asked the service bar');
 });
