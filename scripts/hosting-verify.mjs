@@ -22,8 +22,12 @@
  * user (lib/hosting-pm2-strays.mjs, fleet-manager#43). A stray is unconverged
  * and never removed here: deleting a pm2 app is the operator's act.
  *
- * EXIT 0 only when every slice is guaranteed or was made so, and no node holds
- * a stray.
+ * It also asks whether any service depends on one claw (lib/hosting-redundancy.mjs,
+ * 2026-11-03): a service with no standby is an `advisories` entry; one that
+ * asked for N standbys and has fewer guaranteed on other nodes is unconverged.
+ *
+ * EXIT 0 only when every slice is guaranteed or was made so, no node holds a
+ * stray, and every service has the standbys it asked for.
  */
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,8 +40,10 @@ import {
 	parseStrayObservation,
 	STRAY_OBSERVE_SCRIPT,
 } from './lib/hosting-pm2-strays.mjs';
+import { judgeRedundancy } from './lib/hosting-redundancy.mjs';
 import { planVerify } from './lib/hosting-verify.mjs';
 import { stateDir } from '../dist/lib/fleet-paths.js';
+import { readHostingDoc } from '../dist/runners/hosting-record.js';
 import { runFleetScript } from './lib/run-fleet-script.mjs';
 import { readTenantRegistry, tenantSpecFrom } from './lib/tenant-registry.mjs';
 
@@ -89,6 +95,7 @@ async function main() {
 	const converged = [];
 	const unconverged = [];
 	const changed = [];
+	const advisories = [];
 
 	const check = await runFleetScript(HOSTING, ['--check', '--json'], { timeoutMs: 10 * 60_000 });
 	const rows = Array.isArray(check.json?.nodes) ? check.json.nodes : null;
@@ -151,6 +158,31 @@ async function main() {
 		});
 	}
 
+	if (rows) {
+		try {
+			const r = judgeRedundancy(
+				readTenantRegistry(stateDir()).tenants,
+				readHostingDoc(stateDir()),
+				rows,
+				Date.now()
+			);
+			for (const f of r.findings) {
+				unconverged.push(f);
+				log(`unconverged ${f.node} ${f.facet}: ${f.why}`);
+			}
+			for (const a of r.advisories) {
+				advisories.push(a);
+				log(`advisory    ${a.node} ${a.facet}: ${a.why}`);
+			}
+		} catch (err) {
+			unreadable.push({
+				node: '*',
+				facet: 'hosting-redundancy',
+				why: `the tenant registry or hosting ledger could not be read: ${err instanceof Error ? err.message : String(err)}`,
+			});
+		}
+	}
+
 	for (const u of unreadable) log(`unreadable  ${u.node} ${u.facet}: ${u.why}`);
 	if (rows && !plan.repair.length && !unconverged.length && !unreadable.length)
 		log(`✓ every hosted slice (${rows.length}) is guaranteed.`);
@@ -168,6 +200,7 @@ async function main() {
 			unreadable,
 			changed,
 			strays,
+			advisories,
 		});
 	process.exitCode = ok ? 0 : 1;
 }

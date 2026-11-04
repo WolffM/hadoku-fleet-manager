@@ -1485,6 +1485,12 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/hosting-redundancy.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core"
+  },
+  {
     "glob": "scripts/hosting.mjs",
     "layer": "domain",
     "domain": "tenancy",
