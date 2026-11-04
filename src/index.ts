@@ -22,6 +22,7 @@ import {
 	__stopProvisioningConvergeForTesting,
 } from './provisioning-converge.js';
 import { startCapacitySampling, __stopCapacitySamplingForTesting } from './capacity-sample.js';
+import { startPerfSampling, __stopPerfSamplingForTesting } from './perf-sample.js';
 // runner-health (observation) calls the backstop decision and the hosted
 // fallback (both ci-scheduling) through a port it does not own the import
 // side of (rule 5, §3.2; see `runner-health-ports.ts`'s header). THIS file
@@ -198,6 +199,8 @@ export function createFleetManager(host: FleetHost): FleetManager {
 			startHostingConverge();
 			// Every hosted tenant's home, re-asserted when it drifted (#31).
 			startHostingVerify();
+			// Every node's latency, link, disk, pressure and temperature, every 5 minutes.
+			startPerfSampling();
 			// The backstop's hand-installed yt-dlp and deno: a reminder, at most monthly (#34).
 			startBackstopTools();
 			// T4 (refactor plan §7.3): one admission-state row per node, every 5
@@ -230,6 +233,7 @@ export function __resetFleetManagerForTesting(): void {
 	__stopHostingVerifyForTesting();
 	__stopBackstopToolsForTesting();
 	__stopCapacitySamplingForTesting();
+	__stopPerfSamplingForTesting();
 	__stopPpeSweepForTesting();
 	constructed = false;
 }

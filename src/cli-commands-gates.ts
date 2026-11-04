@@ -88,6 +88,13 @@ export const commandsGates: Record<string, Command> = {
 		summary:
 			"per-node CI failure rate standardized against the fleet's own rate for the same repo+kind (T3, read-only)",
 	},
+	perf: {
+		script: 'perf.mjs',
+		kind: 'operator',
+		help: true,
+		summary:
+			"every node's measured performance over a window: LAN latency/jitter/loss, link, disk, pressure, temperature (read-only)",
+	},
 	stats: {
 		script: 'stats.mjs',
 		kind: 'operator',

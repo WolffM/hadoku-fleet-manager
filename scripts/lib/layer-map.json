@@ -104,6 +104,11 @@
     "why": "Wave 5n lane B (plan \u00a77.3, T4): one declared writer, read back by nothing yet but `capacity-sample.ts`'s own tests \u2014 same \"JSONL store behind a one-file module\" shape as job-rollup-store.ts right above."
   },
   {
+    "glob": "src/perf-sample-store.ts",
+    "layer": "state",
+    "why": "The measured-performance store (operator 2026-11-04: extensive data on each claw): one declared writer, the in-process perf sampler, appending day files; read by `fleet perf`. Same JSONL-behind-one-module shape as capacity-sample-store.ts and job-run-store.ts."
+  },
+  {
     "glob": "src/fleet-probe-store.ts",
     "layer": "state",
     "why": "Wave clean-1 lane C (cut (iii)): the fast loop's per-node probe snapshot, moved out of fleet-loop.ts (ci-scheduling). One declared writer (fleet-loop.ts's tick), read back by runner-health-label-floor.ts (observation) and routes/fleet-report.ts (surfaces) \u2014 rule 5's \"a domain reads another domain's fact through a state record\", in-memory rather than on disk but otherwise the same shape as its neighbours above."
@@ -326,6 +331,11 @@
   {
     "glob": "src/lib/node-probe.ts",
     "layer": "access"
+  },
+  {
+    "glob": "src/perf-probe.ts",
+    "layer": "access",
+    "why": "The read-only performance probe a node runs (link counters, radio signal, gateway ping, /proc/pressure, diskstats, temperature) and its pure parsers: another system's data as-is, the same shape as node-probe.ts beside it. Its one import is a TYPE from lib/perf-row.ts (config)."
   },
   {
     "glob": "src/lib/dispatch-poll-cache.ts",
@@ -581,6 +591,11 @@
   {
     "glob": "src/lib/node-role.ts",
     "layer": "config"
+  },
+  {
+    "glob": "src/lib/perf-row.ts",
+    "layer": "config",
+    "why": "The performance row's shape, zero-import: perf-probe.ts (access) fills it and perf-sample-store.ts (state) keeps it, so it sits below both."
   },
   {
     "glob": "src/lib/tenant-usable.ts",
@@ -1771,6 +1786,13 @@
     "why": "T6 (plan \u00a77.3): the `fleet stats` computation over the T2/T4/T5/T7 stores. PURE \u2014 same shape as failure-rates.ts beside it."
   },
   {
+    "glob": "src/perf-sample.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "The 5-minute performance recorder: pings each node from the controller, runs perf-probe.ts over node-shell, appends to perf-sample-store.ts, reports through job-runner. Observation run, like the other in-process recorders' clocks."
+  },
+  {
     "glob": "src/job-history-ingest.ts",
     "layer": "domain",
     "domain": "observation",
@@ -1891,6 +1913,20 @@
     "domain": "observation",
     "part": "run",
     "why": "T6 (plan \u00a77.3): the `fleet stats` CLI \u2014 reads job-rollup-store.ts, job-run-store.ts, capacity-sample-store.ts and gh-budget-history-store.ts and wires them into fleet-stats.ts. Same shape as job-rollups.mjs/failures.mjs beside it."
+  },
+  {
+    "glob": "scripts/perf.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "The `fleet perf` CLI: reads perf-sample-store.ts and wires it into perf-summary.mjs. Same shape as stats.mjs beside it."
+  },
+  {
+    "glob": "scripts/lib/perf-summary.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Per-node performance over a window from perf-sample rows (percentiles, per-boot counter deltas). PURE, same shape as fleet-stats.ts."
   },
   {
     "glob": "scripts/failures.mjs",

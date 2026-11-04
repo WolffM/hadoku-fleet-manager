@@ -72,6 +72,15 @@ export const jobRegistryInProcess: JobEntry[] = [
 		why: 'T4 (refactor plan §7.3): one admission-state row per node — declared maxConcurrent, the admitting budget, drained, and the refusal reason when one is on record — written to capacity-sample-store.ts every 5 minutes. src/capacity-sample.ts owns the clock; unlike the three converger rows above it spawns nothing — it reads buildFleetReport() and fleet-drain.json, both already in this process, so there is no `sub` and no mgmtApiFile at all.',
 	},
 	{
+		name: 'fleet:perf-samples',
+		args: [],
+		kind: 'recorder',
+		detectionBudget: '15m',
+		cadence: { clockMs: 5 * 60_000 },
+		contract: 'in-process',
+		why: "Every node's measured performance (operator 2026-11-04: extensive data on each claw, so host bars come from measurements): the controller pings each node's LAN address, and each node runs a read-only probe (default-route link counters and radio signal, a ping to its own gateway, /proc/pressure, load, memory, /proc/diskstats for the disk under /, CPU temperature). One row per node to perf-sample-store.ts every 5 minutes, ok:false with the reason when a node cannot be measured. src/perf-sample.ts owns the clock; it spawns ssh and ping, not a `fleet` subcommand, so there is no `sub` and no mgmtApiFile.",
+	},
+	{
 		name: 'fleet:ppe-sweep',
 		args: [],
 		kind: 'converger',
