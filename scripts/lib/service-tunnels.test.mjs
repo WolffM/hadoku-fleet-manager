@@ -391,6 +391,59 @@ test('a primary with a hot standby: a CNAME on the standby tunnel is routed, a t
 	assert.match(findings[0].reason, /or its standby claw-6's 2222/);
 });
 
+test('two standbys (R11): each standby node routes the name, and DNS on EITHER standby tunnel is routed', async () => {
+	const apps = {
+		apps: [
+			...childApps.apps,
+			{
+				id: 'pyg3',
+				host: 'claw-4',
+				standby: 'claw-6',
+				standbys: ['claw-6', 'claw-8'],
+				tunnel: { port: 9 },
+			},
+		],
+	};
+	assert.ok(placementsFor('claw-8', apps).some((p) => p.id === 'pyg3' && p.role === 'standby'));
+	assert.deepEqual(placementsFor('claw-4', apps).find((p) => p.id === 'pyg3').standbys, [
+		'claw-6',
+		'claw-8',
+	]);
+
+	const SB6 = '22222222-2222-2222-2222-222222222222';
+	const SB8 = '88888888-8888-8888-8888-888888888888';
+	const paired = {
+		...childApps,
+		apps: childApps.apps.map((a) =>
+			a.id === 'pygmalion' ? { ...a, standby: 'claw-6', standbys: ['claw-6', 'claw-8'] } : a
+		),
+	};
+	const opts = {
+		childApps: paired,
+		hostsDoc: { ...hostsDoc, hosts: { 'claw-4': { tunnel: 'claw-4' } } },
+	};
+	const onSecond = world({
+		tunnels: { 'claw-4': ID, 'claw-6': SB6, 'claw-8': SB8 },
+		hosts: { 'claw-4': claw4Live() },
+		cname: { 'pygmalion.hadoku.me': `${SB8}.cfargotunnel.com` },
+	});
+	onSecond.hosts['claw-4'].config = renderConfig(ID, placementsFor('claw-4', paired));
+	assert.deepEqual(
+		(await run(onSecond, opts)).findings,
+		[],
+		'the lease on the SECOND standby is routed'
+	);
+
+	const stray = world({
+		tunnels: { 'claw-4': ID, 'claw-6': SB6, 'claw-8': SB8 },
+		hosts: { 'claw-4': claw4Live() },
+		cname: { 'pygmalion.hadoku.me': 'other.cfargotunnel.com' },
+	});
+	stray.hosts['claw-4'].config = renderConfig(ID, placementsFor('claw-4', paired));
+	const { findings } = await run(stray, opts);
+	assert.match(findings[0].reason, /or its standby claw-6's 2222.* or its standby claw-8's 8888/);
+});
+
 test("a pair's public /health answered by its standby is routed; any other 5xx is not", async () => {
 	const paired = {
 		...childApps,
