@@ -149,8 +149,14 @@ up` invocation it chose (tags come from the node's profile) at the end of
    ```
    fleet node-users --machine <node>                     # check only
    fleet drain <node> --reason "node-users cutover"      # the cutover refuses an undrained node
-   fleet node-users --cutover <node> --confirm            # create + move the ci role
+   fleet node-users --cutover <node> --confirm --docker   # create + move the ci role, + rootless docker
    ```
+
+   **`--docker` on every claw.** It writes `containers: "docker"`, which gives
+   the ci user a rootless daemon (`hostsCiDocker`, `src/lib/node-role.ts`).
+   Without it the node never even attempts the `docker` capability: every
+   claw carries the key, `fleet enroll` does not derive it, and claw-10 was
+   admitted without docker until the cutover was re-run with the flag.
 
    The drain is required even on a node that has never served a job. Leave
    it in place through step 6 and undo it (`fleet drain <node> --undo`)
