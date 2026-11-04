@@ -65,9 +65,11 @@ export async function applyRegistrations(ctx) {
 					// config.sh needs a non-empty --labels; `self-hosted` is implicit
 					// anyway, so it is the harmless identity value.
 					const labelArg = labels.length ? labels.join(',') : 'self-hosted';
+					// As the node's CI user: the runner, its unit and its home are that user's.
 					const res = await ssh(
 						claw,
-						registerScript({ repo, claw, version, token, labels: labelArg })
+						registerScript({ repo, claw, version, token, labels: labelArg }),
+						'ci'
 					);
 					// A claw's script ends in exactly one of two ways when it exits 0:
 					// UNIT-WRITTEN (enabled, waiting to be provisioned) or SKIP (a
@@ -112,7 +114,7 @@ export async function applyRegistrations(ctx) {
 						);
 						continue;
 					}
-					const started = await ssh(claw, startScript({ repo, sliceName: prov.sliceName }));
+					const started = await ssh(claw, startScript({ repo, sliceName: prov.sliceName }), 'ci');
 					if (started.ok) {
 						results.registered.push({ repo, claw });
 						log(`  ✓ ${claw}  ${repo}  (started in ${prov.sliceName}, throttle env loaded)`);
@@ -168,13 +170,21 @@ async function removeRegistration({ repo, claw, id }, { manifest, log, ssh, resu
 	// No sudo on the backstop: a SYSTEM install there stops at NEEDS_ROOT
 	// without trying, and is the operator's (lib/operator-sudo.mjs).
 	const sudo = maySudo(manifest.machines?.[claw]);
-	let res = await ssh(claw, removeScript({ repo, token, sudo, runnerId }));
+	// The CI user's install first, where every runner belongs. Admin only when it
+	// has none: a system-unit install (svc.sh needs sudo, which ci never has) or
+	// one registered as admin before reconcile named a role (claw-10, 2026-11-04).
+	let as = 'ci';
+	let res = await ssh(claw, removeScript({ repo, token, sudo, runnerId }), as);
+	if (!res.ok && res.stderr.includes('NOT_OURS')) {
+		as = 'admin';
+		res = await ssh(claw, removeScript({ repo, token, sudo, runnerId }), as);
+	}
 	let byId = false;
 	if (!res.ok && /DEREGISTER_FAILED/.test(res.stderr) && runnerId !== null) {
 		const del = ghWrite('DELETE', `/repos/${repo}/actions/runners/${runnerId}`, {});
 		if (del.ok) {
 			byId = true;
-			res = await ssh(claw, removeScript({ repo, token, sudo, runnerId, deregistered: true }));
+			res = await ssh(claw, removeScript({ repo, token, sudo, runnerId, deregistered: true }), as);
 		} else {
 			log(`  ! ${claw}  ${repo} — config.sh remove failed and so did DELETE by id: ${del.error}`);
 		}

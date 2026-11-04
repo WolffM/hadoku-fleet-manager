@@ -275,10 +275,16 @@ async function pool(items, size, fn) {
  * is refused (no sshd on 22), and hokon is now a managed node, so a
  * blind ssh would make every hokon registration fail with a connection error
  * that reads like the box is down.
+ *
+ * `as` is REQUIRED, no default. A runner belongs to the node's `ci` user; the
+ * register script installs under `$HOME`, so run as admin it put
+ * WolffM/hadoku-fleet-manager under the admin user on claw-10 (2026-11-04),
+ * outside the CI user's manager, the slice and the throttle.
  */
-async function ssh(claw, script) {
+async function ssh(claw, script, role) {
+	if (role !== 'admin' && role !== 'ci') throw new Error(`reconcile ssh needs a role, got ${role}`);
 	const r = await runOn(claw, script, {
-		as: 'admin',
+		as: role,
 		timeoutMs: 15 * 60_000,
 		maxBuffer: 8 * 1024 * 1024,
 	});
