@@ -619,6 +619,11 @@
     "why": "the toolchain floor's pm2-boot entry, moved out of toolchain-floor.mjs (config) whole: the same table, in the same layer"
   },
   {
+    "glob": "scripts/lib/toolchain-rust.mjs",
+    "layer": "config",
+    "why": "the toolchain floor's rust and rust-wasm32 entries and the AS_CI wrapper, moved out of toolchain-floor.mjs (config) whole for size: the same table, in the same layer, with no imports"
+  },
+  {
     "glob": "scripts/lib/tool-shadow.mjs",
     "layer": "config",
     "why": "the SHADOWED detect answer for tarball tools, split out of toolchain-floor.mjs (config) for size: pure string builders with no imports, in the same layer"

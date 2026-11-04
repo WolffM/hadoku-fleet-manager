@@ -373,7 +373,7 @@ async function ensureTools(name, m) {
 			continue;
 		}
 		// Root work where the fleet has no sudo (the backstop) is the operator's.
-		if (!maySudo(m) && repairNeedsRoot(id)) {
+		if (!maySudo(m) && repairNeedsRoot(id, 'install', m)) {
 			const a = rootAdvisory(name, `installing ${id}`, `fleet bootcamp --machine ${name}`);
 			results.push({ id, action: 'advisory', detail: a.message, fix: a.fix });
 			continue;

@@ -256,7 +256,7 @@ export async function runRefreshCycle({
 		for (const f of toolFindings) finding(name, f.kind, `${f.tool}: ${f.reason}`);
 		// Root work is withheld where the fleet has no sudo, and said.
 		const mayRoot = sudo(name, entry);
-		const work = planned.work.filter((w) => mayRoot || !repairNeedsRoot(w.id, w.action));
+		const work = planned.work.filter((w) => mayRoot || !repairNeedsRoot(w.id, w.action, entry));
 		const withheld = planned.work
 			.filter((w) => !work.includes(w))
 			.map((w) =>

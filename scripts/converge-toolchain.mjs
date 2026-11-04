@@ -488,7 +488,9 @@ async function main() {
 		// fine and a repair only rewrites the link the shadow already beats.
 		const fixable = (pkgs, caps) => ({
 			pkgs: sudo ? pkgs : [],
-			caps: caps.filter((id) => !(id in shadowed) && (sudo || !repairNeedsRoot(id))),
+			caps: caps.filter(
+				(id) => !(id in shadowed) && (sudo || !repairNeedsRoot(id, 'install', entry))
+			),
 		});
 		let repair = null;
 		const todo = fixable(missingPkgs, brokenCaps);

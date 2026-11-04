@@ -24,7 +24,8 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
@@ -35,6 +36,7 @@ const {
 	runOn,
 	runOnSync,
 	sshDestination,
+	rsyncEndpoint,
 	remoteCommand,
 	scriptExecCommand,
 	runRsync,
@@ -326,6 +328,23 @@ test('sshDestination logs in as the role the node names', () => {
 	const manifest = { machines: { 'claw-5': { users: { ci: 'hadoku-ci' } } } };
 	assert.equal(sshDestination('claw-5', 'ci', manifest), 'hadoku-ci@claw-5');
 	assert.match(sshDestination('claw-5', 'admin', manifest), /^[a-z_][a-z0-9_-]*@claw-5$/);
+});
+
+test('rsyncEndpoint is user@node:path remotely and a plain local path on this box', () => {
+	// hokon refuses ssh to itself: claw-10's seed died on `hadoku@hokon:` (2026-11-03).
+	const manifest = { machines: { 'claw-5': { users: { ci: 'hadoku-ci' } } } };
+	assert.equal(
+		rsyncEndpoint('claw-5', 'ci', '.cache/ms-playwright', manifest),
+		'hadoku-ci@claw-5:.cache/ms-playwright'
+	);
+	const me = userInfo().username;
+	const local = { machines: { [LOCAL]: { users: { admin: me, ci: me } } } };
+	assert.equal(
+		rsyncEndpoint(LOCAL, 'ci', '.cache/ms-playwright', local),
+		join(homedir(), '.cache/ms-playwright')
+	);
+	const other = { machines: { [LOCAL]: { users: { admin: me, ci: `${me}-ci` } } } };
+	assert.throws(() => rsyncEndpoint(LOCAL, 'ci', 'x', other), /cannot act as it/);
 });
 
 test('a call killed at its timeout SAYS it timed out, not just "Command failed"', async () => {

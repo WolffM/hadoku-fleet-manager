@@ -39,7 +39,7 @@ import {
 	runOn,
 	runRsync,
 	selectMachines,
-	sshDestination,
+	rsyncEndpoint,
 } from './lib/fleet-exec.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 import { maySudo } from './lib/operator-sudo.mjs';
@@ -289,8 +289,8 @@ for (const what of wanted) {
 			const tmp = `/tmp/fleet-seed-${what}`;
 			// F5: rsync is spawned through the one canonical wrapper
 			// (`runRsync`) rather than directly — see scripts/lib/fleet-exec.mjs.
-			runRsync(['-a', '--delete', `${sshDestination(source, 'ci')}:${spec.path}/`, `${tmp}/`]);
-			runRsync(['-a', `${tmp}/`, `${sshDestination(node, 'ci')}:${spec.path}/`]);
+			runRsync(['-a', '--delete', `${rsyncEndpoint(source, 'ci', spec.path)}/`, `${tmp}/`]);
+			runRsync(['-a', `${tmp}/`, `${rsyncEndpoint(node, 'ci', spec.path)}/`]);
 		} catch (err) {
 			console.error(`✗ ${node}: copy of ${what} failed: ${String(err.message).slice(0, 160)}`);
 			result.seeds.push({ node, what, state: 'copy-failed' });

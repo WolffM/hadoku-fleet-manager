@@ -33,7 +33,8 @@
 
 import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { hostname } from 'node:os';
+import { homedir, hostname, userInfo } from 'node:os';
+import { join } from 'node:path';
 import { manifest as manifestFile } from '../../dist/lib/fleet-paths.js';
 // The BUILT copy, deliberately. TypeScript is the source of truth for this rule
 // and `tsconfig.json` sets no `allowJs`, so a second .mjs implementation was the
@@ -123,6 +124,29 @@ function scriptCommand(node, role, connectTimeout, manifest) {
 export function sshDestination(node, role, manifest) {
 	const m = manifest ?? cachedManifest();
 	return `${nodeUser(m?.machines?.[node] ?? null, role)}@${node}`;
+}
+
+/**
+ * One end of an rsync: `<user>@<node>:<path>` remotely, or the plain local path
+ * when `node` is the box this runs on. `path` is relative to the role's home,
+ * as an rsync remote path is.
+ *
+ * hokon refuses ssh to itself, so a `user@hokon:` endpoint fails there.
+ * `seed-node-cache` picked hokon as the richest playwright source and died on
+ * exactly that (claw-10, 2026-11-03). Locally the role must be this process's
+ * own user, as `nodeCommand` requires, because a plain rsync cannot act as
+ * anyone else.
+ */
+export function rsyncEndpoint(node, role, path, manifest) {
+	const m = manifest ?? cachedManifest();
+	if (!isLocalNode(node)) return `${sshDestination(node, role, m)}:${path}`;
+	const user = nodeUser(m?.machines?.[node] ?? null, role);
+	if (user !== userInfo().username) {
+		throw new Error(
+			`fleet-exec: ${role} on ${node} is ${user}, not this process's user, and a local rsync cannot act as it.`
+		);
+	}
+	return join(homedir(), path);
 }
 
 /**

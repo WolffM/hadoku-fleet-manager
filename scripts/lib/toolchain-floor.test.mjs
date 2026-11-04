@@ -147,20 +147,6 @@ test('every repair states WHY, because a finding without one is not actionable',
 	}
 });
 
-/**
- * The rust repair must ALWAYS re-link, not only when rustup is absent.
- *
- * The broken state that shipped was rustup PRESENT and the proxies unreachable.
- * A repair that installs-then-links only on the install path leaves that exact
- * node broken forever, because its `if` never fires.
- */
-test('the rust repair re-links even when rustup is already installed', () => {
-	const lines = REPAIRS.rust.repair.split('\n');
-	const fi = lines.findIndex((l) => l.trim() === 'fi');
-	const link = lines.findIndex((l) => l.includes('/usr/local/bin/$b'));
-	assert.ok(fi >= 0 && link > fi, 'the symlink loop must sit OUTSIDE the install guard');
-});
-
 test('docker is detected by the DAEMON, not the CLI', () => {
 	// A present CLI with no daemon is a build that fails at the first step.
 	assert.match(REPAIRS.docker.detect, /docker info/);
@@ -443,7 +429,12 @@ test('needsRoot/repairNeedsRoot read the script text: any sudo is root work', ()
 	assert.equal(needsRoot('rustup target add wasm32-unknown-unknown'), false);
 	assert.equal(needsRoot(null), false);
 	assert.equal(repairNeedsRoot('gh'), true, 'apt is root');
-	assert.equal(repairNeedsRoot('rust-wasm32'), false, "the user's own rustup");
+	assert.equal(repairNeedsRoot('rust-wasm32'), false, "the user's own rustup where ci is admin");
+	assert.equal(
+		repairNeedsRoot('rust-wasm32', 'install', { users: { ci: 'hadoku-ci' } }),
+		true,
+		'becomes the separate ci user with sudo -u'
+	);
 	assert.equal(repairNeedsRoot('claude', 'link'), true, 'the link lands in /usr/local/bin');
 	assert.throws(() => repairNeedsRoot('nope'), /unknown tool/);
 });

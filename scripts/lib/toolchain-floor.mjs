@@ -15,6 +15,7 @@ import { ciIsSeparate } from '../../dist/lib/node-users.js';
 import { DEFAULT_MIN_AGE_MINUTES, parseVersion } from './version-algebra.mjs';
 import { RELEASE_TOOLS } from './toolchain-release-tools.mjs';
 import { PM2_BOOT } from './pm2-boot-floor.mjs';
+import { AS_CI, RUST_REPAIRS } from './toolchain-rust.mjs';
 import { debInstalled } from './deb-installed.mjs';
 import { parseShadow, shadowedBy } from './tool-shadow.mjs';
 
@@ -231,39 +232,7 @@ export const REPAIRS = {
 		detect: 'mpv --version >/dev/null 2>&1 && echo OK',
 		repair: aptRepair('mpv'),
 	},
-	rust: {
-		why:
-			'brave-quartet builds on the general pool, so rustc is a requirement of every ' +
-			'managed node rather than a differentiator between them.',
-		// THE STOCK PATH, deliberately. On 2026-09-10 all seven claws were given
-		// rustup and a hand-check over ssh passed on all seven — because the check
-		// exported ~/.cargo/bin first, the way a login shell does. A workflow
-		// `run:` step is non-interactive and sources no profile, so the first fleet
-		// run died on `rustup: command not found` against seven boxes that all
-		// "had" rustup. Detecting with a widened PATH would reproduce that lie.
-		detect: 'command -v rustc >/dev/null 2>&1 && echo OK',
-		// Installs if absent, and ALWAYS re-links: the symlinks are the half that
-		// was missing, and a node can have rustup without them.
-		repair: [
-			'if ! [ -x "$HOME/.cargo/bin/rustup" ]; then',
-			"  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |" +
-				' sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path',
-			'fi',
-			'export PATH="$HOME/.cargo/bin:$PATH"',
-			'rustup component add rustfmt clippy >/dev/null 2>&1 || true',
-			'rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true',
-			'for b in rustup cargo rustc rustdoc rustfmt cargo-fmt cargo-clippy clippy-driver; do',
-			'  [ -e "$HOME/.cargo/bin/$b" ] && sudo -n ln -sfn "$HOME/.cargo/bin/$b" "/usr/local/bin/$b"',
-			'done',
-		].join('\n'),
-	},
-	'rust-wasm32': {
-		why: 'brave-quartet’s wasm-size job builds for wasm32-unknown-unknown.',
-		detect:
-			'command -v rustup >/dev/null 2>&1 && ' +
-			'rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown && echo OK',
-		repair: 'export PATH="$HOME/.cargo/bin:$PATH"; rustup target add wasm32-unknown-unknown',
-	},
+	...RUST_REPAIRS,
 	docker: {
 		when: dockerHost,
 		why:
@@ -744,11 +713,17 @@ export function needsRoot(script) {
  * Does this tool's install (`action` anything but `link`) or link need root?
  * Read off the script text, so a repair that gains a `sudo` is gated with no
  * second list to keep in step.
+ *
+ * `node` is the manifest entry. The {@link AS_CI} wrapper's `sudo -u` runs
+ * only where ci is a separate user, so on a node where it is not (the
+ * backstop) the wrapper is not root work, and `rust-wasm32` stays the user's
+ * own rustup there. Omitted, ci is taken as not separate.
  */
-export function repairNeedsRoot(id, action = 'install') {
+export function repairNeedsRoot(id, action = 'install', node = undefined) {
 	const r = REPAIRS[id];
 	if (!r) throw new Error(`unknown tool ${JSON.stringify(id)}`);
-	return needsRoot(action === 'link' ? r.link : r.repair);
+	const text = String((action === 'link' ? r.link : r.repair) ?? '');
+	return needsRoot(ciIsSeparate(node) ? text : text.replace(AS_CI.join('\n'), ''));
 }
 
 /** Minutes a release must have been public before this tool is moved to it. */

@@ -898,7 +898,7 @@ export async function runDoctor({
 		// (the backstop), is the operator's: an ADVISORY with the hand-run, never
 		// drift that pages (lib/operator-sudo.mjs).
 		const sudo = maySudo(m);
-		const rootOnly = (t) => !sudo && REPAIRS[t.id] && repairNeedsRoot(t.id);
+		const rootOnly = (t) => !sudo && REPAIRS[t.id] && repairNeedsRoot(t.id, 'install', m);
 		const toolFindings = toolReports.filter((t) => t.finding && !rootOnly(t));
 		const advisories = toolReports
 			.filter((t) => t.finding && rootOnly(t))
