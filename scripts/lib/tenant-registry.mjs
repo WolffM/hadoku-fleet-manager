@@ -45,6 +45,17 @@ export function tenantSpecFrom(request) {
 		portUnit: `hosting-${app}-port.service`,
 		user: names.user,
 		home: `/var/lib/${names.user}`,
+		/**
+		 * The home holds nothing only the node has: the tenant keeps no state,
+		 * or keeps it behind the data lease (the store is the truth, the disk a
+		 * working copy). Then a teardown deletes it. Operator, 2026-11-04: every
+		 * lifecycle is zero-sum; until then the home was kept as a warm cache,
+		 * and two cardtable removals that day left 777 MB and 529 MB behind with
+		 * no expiry. A stateful tenant WITHOUT the fence keeps its home: there
+		 * it is the data.
+		 */
+		homeIsCache:
+			request.availability.stateful !== true || request.availability.fence === 'data-lease',
 		/** Root-owned, written only by `--install`. A service has none: its app layer deploys it. */
 		exec: names.exec,
 		port: request.network.ports[0] ?? null,

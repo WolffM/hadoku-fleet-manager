@@ -833,3 +833,33 @@ test('an agent tenant is never judged on the service deploy facts, and its obser
 	assert.match(s, /ingress rule "https:\/\/\$HOSTNAME_WANT"/);
 	assert.doesNotMatch(s, /pm2 ping/, 'never spawn a daemon outside the unit');
 });
+
+test('teardown deletes a CACHE home and the read-back calls a surviving one residue; a data home stays (2026-11-04)', () => {
+	const req = validateHostingRequest(
+		JSON.parse(readFileSync(new URL('./fixtures/hosting-cardtable.json', import.meta.url), 'utf8'))
+	).request;
+	const spec = (availability) =>
+		tenantSpecFrom({ ...req, availability: { ...req.availability, ...availability } });
+	const cache = spec({ stateful: false });
+	assert.equal(cache.homeIsCache, true);
+	assert.equal(
+		spec({ stateful: true, fence: 'data-lease' }).homeIsCache,
+		true,
+		'state behind the lease is a copy'
+	);
+	assert.equal(
+		spec({ stateful: true, fence: undefined }).homeIsCache,
+		false,
+		'an unfenced stateful home is the data'
+	);
+
+	const rm = removeScript(cache, '192.0.2.10');
+	assert.match(rm, /HOME_IS_CACHE='?1'?/);
+	assert.match(rm, /rm -rf --one-file-system -- "\$AGENT_HOME"/);
+	assert.match(rm, /\/var\/lib\/\?\*\)/, 'only a home under /var/lib is ever deleted');
+	assert.match(leftoversScript(cache), /LEFT home \$AGENT_HOME/);
+	assert.match(
+		removeScript(spec({ stateful: true, fence: undefined }), '192.0.2.10'),
+		/HOME_IS_CACHE='?0'?/
+	);
+});

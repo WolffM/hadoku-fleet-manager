@@ -42,6 +42,8 @@ test("cardtable's derived names are exactly the ones the hand-written table held
 			portUnit: 'hosting-cardtable-port.service',
 			user: 'cardtable-agent',
 			home: '/var/lib/cardtable-agent',
+			// cardtable keeps no state: a teardown deletes its home (2026-11-04).
+			homeIsCache: true,
 			exec: '/opt/hosting/cardtable/run',
 			port: 7621,
 			ingress: 'controller',

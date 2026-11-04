@@ -241,6 +241,7 @@ const tenantVars = (t) => ({
 	PORT_UNIT: t.portUnit,
 	AGENT_USER: t.user,
 	AGENT_HOME: t.home,
+	HOME_IS_CACHE: t.homeIsCache === true ? '1' : '0',
 	EXEC: t.exec ?? '',
 	PORT: t.port,
 });
@@ -476,13 +477,11 @@ echo HOSTING-DEPLOYED
 }
 
 /**
- * The teardown: every unit, the slice cgroups, the ufw rule and the
- * executable. The agent's user and home stay: they hold what the tenant
- * fetched, and a user id is cheap to keep and costly to reuse by accident.
- *
- * `othersMb`: the slices that STAY on the node, summed. While any do, the
- * parent slice and CI's headroom are theirs, so they are left for the caller
- * to re-assert at the new size rather than torn down.
+ * The teardown: every unit, the slice cgroups, the ufw rule, the executable
+ * and, when it is a cache, the HOME (zero-sum: tenant-registry `homeIsCache`
+ * says why and when). The user stays: a uid owning nothing is harmless.
+ * `othersMb`: the slices that STAY on the node, summed. While any do, the parent
+ * slice and CI's headroom are theirs, left for the caller to re-assert.
  */
 export function removeScript(t, controllerIp, { ciUser = '', othersMb = 0 } = {}) {
 	const own = othersMb > 0 ? '"$SLICE"' : '"$SLICE" "$PARENT"';
@@ -494,6 +493,7 @@ $S systemctl kill --kill-whom=all --signal=SIGKILL "$SERVICE" >/dev/null 2>&1 ||
 $S systemctl disable --now "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" >/dev/null 2>&1 || true
 $S systemctl stop ${own} >/dev/null 2>&1 || true
 for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" ${own}; do $S rm -f "/etc/systemd/system/$u"; done
+[ "$HOME_IS_CACHE" = 1 ] && case "$AGENT_HOME" in /var/lib/?*) $S pkill -KILL -U "$AGENT_USER" >/dev/null 2>&1 || true; $S rm -rf --one-file-system -- "$AGENT_HOME" ;; *) echo "refusing to delete a home outside /var/lib: $AGENT_HOME" >&2; exit 1 ;; esac
 $S rm -f "$EXEC" "$EXEC.new"${Object.keys(systemFilesOf(t))
 		.map((f) => ` ${shellQuote(f)}`)
 		.join('')}
@@ -508,10 +508,9 @@ echo HOSTING-REMOVED
 }
 
 /**
- * What a teardown must leave behind: NOTHING the tenant was given, read back
- * from the node (cardtable A11). The agent's user and home are kept on
- * purpose (see {@link removeScript}); everything else is listed here if it
- * survived, one `LEFT <what>` line each, then `LEFTOVERS-END`.
+ * What a teardown must leave: NOTHING the tenant was given but its user, read
+ * back from the node (cardtable A11), the cache home included. Each survivor is
+ * one `LEFT <what>` line, then `LEFTOVERS-END`.
  */
 export function leftoversScript(t, { ciUser = '', othersMb = 0 } = {}) {
 	const stays = othersMb > 0;
@@ -523,6 +522,7 @@ for u in "$PATH_UNIT" "$SERVICE" "$PORT_UNIT" "$SLICE"${stays ? '' : ' "$PARENT"
 done
 ${stays ? '[ -d "/sys/fs/cgroup$SLICE_CG" ] && echo "LEFT cgroup /sys/fs/cgroup$SLICE_CG"' : '[ -d "/sys/fs/cgroup/$PARENT" ] && echo "LEFT cgroup /sys/fs/cgroup/$PARENT"'}
 [ -e "$EXEC" ] && echo "LEFT executable $EXEC"
+[ "$HOME_IS_CACHE" = 1 ] && $S test -e "$AGENT_HOME" && echo "LEFT home $AGENT_HOME"
 ${Object.keys(systemFilesOf(t))
 	.map((f) => `[ -e ${shellQuote(f)} ] && echo ${shellQuote(`LEFT file ${f}`)}`)
 	.join('\n')}
