@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { ciUnitProperties } from '../runners/ci-unit-properties.js';
 import { buildSpawnPlan, buildWarmSpawnPlan } from '../runners/ephemeral-mint.js';
 import { drainNotices, noticeRefusal, type DrainDoc } from '../runners/drain.js';
+import { endingSlice } from '../lib/hosting-slice.js';
 import {
 	AGENT_UP_MIN_MB,
 	CI_OOM_SCORE_ADJ,
@@ -17,6 +18,7 @@ import {
 	heldBackMb,
 	hostingNotices,
 	hostingsOn,
+	lapsed,
 	issueEpoch,
 	parseHostingDoc,
 	readHostingDoc,
@@ -513,4 +515,19 @@ test('a SHRINK never lapses: it stays reserved at full size past its end, and it
 			),
 		/shrinkTo has no memoryMb or cores/
 	);
+});
+
+void test('lapsed is built on endingSlice: a shrink never lapses, an unparseable end is not lapsed, a passed end is', () => {
+	const now = Date.now();
+	const past = new Date(now - 3_600_000).toISOString();
+	const future = new Date(now + 3_600_000).toISOString();
+	const shrink = { memoryMb: 2048, cores: 2 };
+	assert.equal(endingSlice({}), false);
+	assert.equal(endingSlice({ until: null }), false);
+	assert.equal(endingSlice({ until: future }), true);
+	assert.equal(endingSlice({ until: future, shrinkTo: shrink }), false);
+	assert.equal(lapsed({ until: past }, now), true);
+	assert.equal(lapsed({ until: future }, now), false);
+	assert.equal(lapsed({ until: past, shrinkTo: shrink }, now), false);
+	assert.equal(lapsed({ until: 'not a date' }, now), false);
 });

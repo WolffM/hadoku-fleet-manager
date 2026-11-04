@@ -33,6 +33,8 @@
  * "Could not look" is `unknown`, never `usable`.
  */
 
+import { endingSlice } from './hosting-slice.js';
+
 /** Drains that take a node out of service. `lease` and `hosting` are a tenant's own holds. */
 const OUT_OF_SERVICE_DRAINS = new Set(['maintenance', 'training', 'reboot']);
 
@@ -96,7 +98,7 @@ export function tenantUsableOn(row: UsableNodeRow, app: string): TenantUsable | 
 	const drain = row.drain?.kind;
 	if (drain && OUT_OF_SERVICE_DRAINS.has(drain))
 		return out('unusable', `the node is under a ${drain} drain`);
-	if (slice.until && !slice.shrinkTo)
+	if (endingSlice(slice))
 		return out('unusable', `the slice is being released (until ${slice.until})`);
 	if (slice.state !== 'guaranteed')
 		return out(

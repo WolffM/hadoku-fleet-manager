@@ -49,7 +49,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path';
 
 import { stateDir } from '../host.js';
-import { hostingSliceName } from '../lib/hosting-slice.js';
+import { endingSlice, hostingSliceName } from '../lib/hosting-slice.js';
 import type { DrainDoc, DrainNotice, HostingResources } from './drain.js';
 
 /**
@@ -157,8 +157,8 @@ export const lapsed = (
 	rec: { until?: string | null; shrinkTo?: unknown },
 	nowMs: number
 ): boolean => {
-	if (!rec.until || rec.shrinkTo) return false;
-	const t = Date.parse(rec.until);
+	if (!endingSlice(rec)) return false;
+	const t = Date.parse(rec.until!);
 	// Unparseable is NOT lapsed: still reserved is the side that fails safe.
 	return Number.isFinite(t) && t <= nowMs;
 };
