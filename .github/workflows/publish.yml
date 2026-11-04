@@ -27,9 +27,6 @@ concurrency:
 permissions:
   contents: read
   packages: write
-  # Read this workflow's own run history: the change check reaches back to
-  # the last commit a publish succeeded on.
-  actions: read
 
 jobs:
   publish:
@@ -55,8 +52,6 @@ jobs:
       # publishes nothing; a change to a shipped module must publish.
       - name: Did the published surface change?
         id: gate
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           # pipefail, because the `| tr` below otherwise MASKS a failing git.
           # That is precisely how this gate failed open: git wrote its error to
@@ -74,27 +69,6 @@ jobs:
             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
             CHANGED="src/forced"          # first push, dispatch, or base not in the clone
           else
-            # The concurrency group keeps ONE run waiting, so a third push cancels it
-            # and its range is never diffed; a failed run strands its range too. Reach
-            # back to the last commit a publish SUCCEEDED on when that is older than the
-            # push base (hadoku-dataplatform#31). An unreadable history keeps the base.
-            last=$(node -e '
-              const file = process.env.GITHUB_WORKFLOW_REF.split("@")[0].split("/").pop();
-              const url = `${process.env.GITHUB_API_URL}/repos/${process.env.GITHUB_REPOSITORY}` +
-                `/actions/workflows/${file}/runs?status=success&per_page=1` +
-                `&branch=${encodeURIComponent(process.env.GITHUB_REF_NAME)}`;
-              fetch(url, { headers: { authorization: `Bearer ${process.env.GH_TOKEN}`,
-                                      accept: "application/vnd.github+json" } })
-                .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-                .then(j => console.log(j.workflow_runs[0]?.head_sha ?? ""))
-                .catch(e => { console.error(e.message); process.exit(1); });
-            ') || { echo "::warning::Could not read the last successful publish; using the push base"; last=""; }
-            if [ -n "$last" ] && git cat-file -e "${last}^{commit}" 2>/dev/null \
-              && [ "$(git rev-parse "$last")" != "$(git rev-parse "$BASE")" ] \
-              && git merge-base --is-ancestor "$last" "$BASE"; then
-              echo "Last successful publish was ${last}, before the push base: widening the range to it"
-              BASE="$last"
-            fi
             CHANGED=$(git diff --name-only "$BASE" "${{ github.sha }}" -- \
               package.json src scripts deploy | tr '\n' ' ')
           fi
