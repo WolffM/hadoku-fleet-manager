@@ -1,4 +1,5 @@
 import { WIFI_MANAGER_PROBE } from './node-interfaces.mjs';
+import { EFFECTIVE_MEMORY_MAX_SH } from './cgroup-ceiling.mjs';
 
 /** Seconds of all-core load the thermal reading is taken under. Fixed, by §H. */
 export const LOAD_SECONDS = 60;
@@ -276,12 +277,15 @@ export function doctorProbe({
 		// doctor-run (lib/hosting-claims.mjs); the node only measures. The app
 		// count is the daemon's direct children, from the kernel: pm2's own list
 		// also carries stopped apps, and an "idle" manager is one RUNNING none.
+		// The ceiling is the EFFECTIVE one (lib/cgroup-ceiling.mjs): a tenant's
+		// pm2 is bounded by its hosting slice, not by its own unit file.
+		EFFECTIVE_MEMORY_MAX_SH,
 		"if PU=$(systemctl list-units --no-legend --plain 'pm2-*.service' 2>/dev/null); then",
 		'  say pm2Units.count "$(printf "%s\\n" "$PU" | grep -c .)"',
 		'  for u in $(printf "%s\\n" "$PU" | awk "NF{print \\$1}"); do',
 		'    cg=$(systemctl show -P ControlGroup "$u" 2>/dev/null); m=$(systemctl show -P MainPID "$u" 2>/dev/null)',
 		'    if [ "${m:-0}" -gt 0 ] 2>/dev/null; then a=$(ps --ppid "$m" --no-headers 2>/dev/null | wc -l); else a=U; fi',
-		'    say "pm2Unit.$u" "$(cat "/sys/fs/cgroup$cg/memory.max" 2>/dev/null || echo U) $a"',
+		'    say "pm2Unit.$u" "$(effmax "$cg" U) $a"',
 		'  done',
 		'else unk pm2Units "systemctl could not list this node\'s pm2 units"; fi',
 		'if E=$(journalctl -b 0 -p err --no-pager 2>/dev/null); then say errorsThisBoot "$(printf "%s\\n" "$E" | grep -vcE "ACPI|Bluetooth")"; else unk errorsThisBoot "the journal could not be read by this user"; fi',

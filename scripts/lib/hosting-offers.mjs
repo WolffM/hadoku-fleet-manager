@@ -24,6 +24,7 @@
  */
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
 import { parseInstalledVersion } from './version-algebra.mjs';
+import { EFFECTIVE_MEMORY_MAX_SH } from './cgroup-ceiling.mjs';
 
 /** CI jobs a hosting node keeps by default. The operator's dial; see the header. */
 export const CI_KEEP_JOBS = 1;
@@ -67,9 +68,10 @@ echo "diskFreeGb=$(df -BG --output=avail ${STATE_FS} 2>/dev/null | tail -1 | tr 
 dev=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
 echo "routeDev=$dev"
 echo "wireless=$([ -n "$dev" ] && [ -d "/sys/class/net/$dev/wireless" ] && echo yes || echo no)"
+${EFFECTIVE_MEMORY_MAX_SH}
 for u in $(systemctl list-units --no-legend --plain 'pm2-*.service' 2>/dev/null | awk '{print $1}'); do
 	cg=$(systemctl show "$u" -p ControlGroup --value 2>/dev/null)
-	echo "pm2=$u $(cat /sys/fs/cgroup$cg/memory.max 2>/dev/null || echo ?) $(cat /sys/fs/cgroup$cg/memory.current 2>/dev/null || echo ?)"
+	echo "pm2=$u $(effmax "$cg" ?) $(cat /sys/fs/cgroup$cg/memory.current 2>/dev/null || echo ?)"
 done
 echo OFFER-END
 `;

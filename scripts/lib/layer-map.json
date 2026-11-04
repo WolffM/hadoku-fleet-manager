@@ -634,6 +634,11 @@
     "why": "the toolchain floor's package-installed shell test, split out of toolchain-floor.mjs (config) for size: a pure string builder with no imports, in the same layer"
   },
   {
+    "glob": "scripts/lib/cgroup-ceiling.mjs",
+    "layer": "config",
+    "why": "the effective cgroup memory ceiling as one shell function, shared by hosting-offers.mjs and doctor-probe.mjs (both domain): a pure string builder with no imports, in config beside deb-installed.mjs"
+  },
+  {
     "glob": "scripts/lib/toolchain-release-tools.mjs",
     "layer": "config"
   },
