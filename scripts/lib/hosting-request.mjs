@@ -46,6 +46,15 @@ export const ADVISORY_UNTIL_DEFAULT = 3;
 /** `availability.fence`: what keeps a moved singleton from becoming two writers. */
 export const FENCES = ['data-lease'];
 
+/**
+ * `availability.backstop`: what the backstop (hokon, the hub) keeps of the
+ * tenant (operator, 2026-11-04: "3 claws minimum + 1 backstop (hokon)").
+ * `cold`: present and NOT running, started by the site's lease follower only
+ * when no claw copy has held the lease for 5 minutes. The app layer builds it
+ * (hadoku_site, hub `backstopRoot`); the fleet never places a slice on the hub.
+ */
+export const BACKSTOPS = ['cold'];
+
 /** How traffic reaches the tenant. A closed set: each one is a firewall shape the fleet knows. */
 export const INGRESS = {
 	/** The coordinator on the controller calls it: LAN + the controller's tailnet; everyone else dropped. */
@@ -166,6 +175,16 @@ export function validateHostingRequest(raw) {
 			'a standby runs beside the primary, so it needs fence "data-lease" to stay a reader'
 		);
 
+	// `backstop`: a copy on the hub, which takes the lease only when no claw
+	// copy can. The lease is what makes it safe, as for a standby.
+	if (av.backstop !== undefined && !BACKSTOPS.includes(av.backstop))
+		bad('availability.backstop', `one of ${BACKSTOPS.join(', ')}`);
+	else if (av.backstop !== undefined && av.fence !== 'data-lease')
+		bad(
+			'availability.backstop',
+			'a backstop copy takes the lease when no claw copy holds it, so it needs fence "data-lease"'
+		);
+
 	const pl = isObj(raw.placement) ? raw.placement : {};
 	// `auto`: the fleet's hosting converger declares and ends this tenant's
 	// slices to meet its demand (fleet-manager#16). Off unless said.
@@ -227,6 +246,7 @@ export function validateHostingRequest(raw) {
 				...(av.coldStartS ? { coldStartS: av.coldStartS } : {}),
 				...(av.fence ? { fence: av.fence } : {}),
 				...(standby > 0 ? { standby } : {}),
+				...(av.backstop ? { backstop: av.backstop } : {}),
 			},
 			placement: {
 				require,

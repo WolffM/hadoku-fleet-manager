@@ -206,6 +206,9 @@ export function tenantView(request) {
 		auto: request.placement?.auto === true,
 		singleton: request.availability?.singleton === true,
 		fence: request.availability?.fence ?? null,
+		// The site commits a fleet row's `backstop` from this, as it does `fence`
+		// (R11.2): one source, the tenant's hosting.json.
+		backstop: request.availability?.backstop ?? null,
 		slices: { min: request.slices.min, max: request.slices.max },
 		noticeMin: request.availability?.noticeMin ?? null,
 		port: request.network?.ports?.[0] ?? null,

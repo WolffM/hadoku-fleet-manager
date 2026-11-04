@@ -531,6 +531,8 @@ export const TENANT_CONTRACT = [
 			// fleet row's `fence` from the tenant's (hadoku_site 6b5e54929, R9).
 			'slices[].reachable',
 			'tenant.fence',
+			// and its `backstop` (the hub's cold copy, R11.2).
+			'tenant.backstop',
 			'slices[].declared.port',
 			'ended[].node',
 			'ended[].until',

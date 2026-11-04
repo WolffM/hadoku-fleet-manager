@@ -433,3 +433,12 @@ test('ci rides on each slice and each ranked offer, null where the node is unmea
 	// No ci map at all: every slice reads null.
 	assert.equal(doc({ records, probes: new Map([['claw-6', answered()]]) }).slices[0].ci, null);
 });
+
+test('tenant.backstop: the hosting.json value, or null (R11.2)', () => {
+	assert.equal(doc({}).tenant.backstop, null);
+	const cold = {
+		...WATCHPARTY,
+		availability: { ...WATCHPARTY.availability, fence: 'data-lease', backstop: 'cold' },
+	};
+	assert.equal(doc({ request: cold }).tenant.backstop, 'cold');
+});

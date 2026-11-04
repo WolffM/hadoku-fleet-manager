@@ -204,3 +204,15 @@ test('runtime.node must be a range the fleet can evaluate, and runtime.tools pla
 	for (const tools of [['/usr/bin/x'], ['a b'], ['x;rm'], 'ffmpeg'])
 		assert.ok(rt({ tools }).includes('runtime.tools'), JSON.stringify(tools));
 });
+
+test('a backstop is `cold`, needs the data-lease fence, and is carried to the request (R11.2)', () => {
+	const av = (a) => ({ ...ARCHIVEBOT, availability: { ...ARCHIVEBOT.availability, ...a } });
+	const ok = validateHostingRequest(av({ fence: 'data-lease', backstop: 'cold' }));
+	assert.equal(ok.ok, true);
+	assert.equal(ok.request.availability.backstop, 'cold');
+	assert.ok(paths(av({ backstop: 'cold' })).includes('availability.backstop'), 'no fence');
+	assert.ok(paths(av({ fence: 'data-lease', backstop: 'hot' })).includes('availability.backstop'));
+	assert.ok(paths(av({ fence: 'data-lease', backstop: true })).includes('availability.backstop'));
+	const none = validateHostingRequest(av({ fence: 'data-lease' }));
+	assert.ok(!('backstop' in none.request.availability), 'absent stays absent');
+});
