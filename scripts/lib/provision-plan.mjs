@@ -461,7 +461,15 @@ const FLEET_APPLY = [
 ];
 
 export const VERIFY = [
-	{ name: 'coverage', script: 'reconcile-fleet-runners.mjs', args: ['--check-coverage'] },
+	// FLEET-WIDE: the coverage file is one fact about every repo, and reconcile
+	// takes no --machine. Scoped, it refused the flag and ran nothing, so every
+	// `provision --machine <node> --verify-only` failed here (claw-10, 2026-11-03).
+	{
+		name: 'coverage',
+		script: 'reconcile-fleet-runners.mjs',
+		args: ['--check-coverage'],
+		fleetWide: true,
+	},
 	{ name: 'runner identity', script: 'reconcile-runner-identity.mjs', args: [] },
 	{ name: 'throttle + tool cache', script: 'deploy-ci-throttle.mjs', args: ['--check'] },
 	{ name: 'slice + supervision', script: 'deploy-runners-slice.mjs', args: ['--check'] },
@@ -476,6 +484,12 @@ export const VERIFY = [
 /** A verify step's arguments: its dry-run form unless --confirm (a dry run installs nothing). */
 export function verifyStepArgs(step, { confirm }) {
 	return confirm ? step.args : (step.dryArgs ?? step.args);
+}
+
+/** {@link verifyStepArgs}, scoped to `only` unless the step is fleet-wide. */
+export function verifyStepArgv(step, { confirm, only }) {
+	const scope = only && !step.fleetWide ? ['--machine', only] : [];
+	return [...verifyStepArgs(step, { confirm }), ...scope];
 }
 
 /** The onboarding chain's bootcamp probe: `--check-only` unless --confirm, for the same reason. */
