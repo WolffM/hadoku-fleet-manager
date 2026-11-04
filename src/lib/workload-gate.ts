@@ -101,8 +101,22 @@ export interface ProofBudgetVerdict {
 }
 
 /**
+ * How recent a peer's pass must be to set a BUDGET, as opposed to counting as
+ * PROVEN ({@link WORKLOAD_PROOF_DUE_DAYS}). A budget compares durations, which
+ * is only meaningful against the same suite, and a workload's suite grows: on
+ * 2026-11-03 claw-10's forge-e2e was judged against passes from 2026-10-08 and
+ * failed 6.9 min vs 5.0, while the fastest claw ran the same specs on the same
+ * commit only 1.1-1.5x faster. A week keeps peers close to the suite being
+ * judged. With fewer comparable peers than `minProven` the budget is
+ * unbootstrapped, and the proof is judged on what can still be judged: green,
+ * on the node, with evidence.
+ */
+export const WORKLOAD_BUDGET_PEER_DAYS = 7;
+
+/**
  * The duration budget for a capability's workload proof, derived from the
- * durations of already fresh-passing proofs on OTHER nodes.
+ * durations of RECENT passing proofs on OTHER nodes
+ * ({@link WORKLOAD_BUDGET_PEER_DAYS}; not the whole freshness window).
  *
  * PURE: the caller reads the state dir (`measured.ts#readProofsForCapability`)
  * and hands in the result, filtered to nodes other than the one being judged
@@ -116,6 +130,7 @@ export function proofBudget(
 	const budget = cap?.jobProof?.budget;
 	if (!budget || !cap) return { bootstrapped: false, budgetSec: null, provenCount: 0 };
 	const durations = freshPassingProofs(otherNodesProofs, cap.id, now)
+		.filter((r) => (now.getTime() - Date.parse(r.at)) / 86_400_000 <= WORKLOAD_BUDGET_PEER_DAYS)
 		.map((r) => r.durationSec)
 		.filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0)
 		.sort((a, b) => a - b);

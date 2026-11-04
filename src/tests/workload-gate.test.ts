@@ -7,6 +7,7 @@ import {
 	isProofFresh,
 	freshPassingProofs,
 	proofBudget,
+	WORKLOAD_BUDGET_PEER_DAYS,
 	judgeWorkloadProof,
 	workloadGateStatus,
 	workloadGateReasons,
@@ -225,4 +226,33 @@ test('workloadGateReasons: reports only ids the node EARNED the tool for, one ga
 	const reasons = workloadGateReasons(jdk21Earner(), { jdk21: null }, { jdk21: 2 });
 	assert.deepEqual(Object.keys(reasons), ['jdk21']);
 	assert.equal(reasons.jdk21.offer, false);
+});
+
+test('proofBudget: only RECENT peers set a budget, while freshness for "proven" stays monthly', () => {
+	// claw-10, 2026-11-03: judged against month-old passes on a suite that had
+	// since grown, it failed a budget the fastest claw would also have missed.
+	const cap = capability('jdk21')!; // minProven 2
+	const now = new Date('2026-11-04T00:00:00Z');
+	const ago = (d: number) => new Date(now.getTime() - d * 86_400_000).toISOString();
+	const old = [
+		proof({ node: 'claw-4', durationSec: 196, at: ago(27) }),
+		proof({ node: 'claw-8', durationSec: 178, at: ago(27) }),
+	];
+	assert.equal(freshPassingProofs(old, 'jdk21', now).length, 2, 'still PROVEN: within the month');
+	const stale = proofBudget(cap, old, now);
+	assert.equal(stale.bootstrapped, false, 'month-old peers set no budget');
+	assert.equal(stale.budgetSec, null);
+
+	const recent = proofBudget(
+		cap,
+		[
+			proof({ node: 'claw-4', durationSec: 300, at: ago(WORKLOAD_BUDGET_PEER_DAYS) }),
+			proof({ node: 'claw-8', durationSec: 500, at: ago(1) }),
+			proof({ node: 'claw-9', durationSec: 100, at: ago(WORKLOAD_BUDGET_PEER_DAYS + 1) }),
+		],
+		now
+	);
+	assert.equal(recent.bootstrapped, true);
+	assert.equal(recent.provenCount, 2, 'the peer one day past the window is left out');
+	assert.equal(recent.budgetSec, 400 * 1.5);
 });
