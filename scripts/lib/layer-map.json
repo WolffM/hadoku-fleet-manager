@@ -1793,6 +1793,13 @@
     "why": "The 5-minute performance recorder: pings each node from the controller, runs perf-probe.ts over node-shell, appends to perf-sample-store.ts, reports through job-runner. Observation run, like the other in-process recorders' clocks."
   },
   {
+    "glob": "src/perf-active.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "The idle-only active disk and network tests: picks one due node, runs its script over node-shell, times the controller<->node transfer, appends to perf-sample-store.ts, reports through job-runner. Same shape as perf-sample.ts beside it."
+  },
+  {
     "glob": "src/job-history-ingest.ts",
     "layer": "domain",
     "domain": "observation",

@@ -178,3 +178,44 @@ export function summarizePerf(rows) {
 		.sort((a, b) => a.localeCompare(b, 'en', { numeric: true }))
 		.map((n) => summarizeNode(n, by.get(n)));
 }
+
+/**
+ * One node's ACTIVE tests over the window (`perf-active.ts`): the spread of
+ * every MEASURED result, the last one, and how many attempts found the node
+ * busy, disturbed, skipped or broken. A node with attempts and no measurement
+ * is one we could not test, said as such: `measured: 0`, never a fast disk.
+ */
+export function summarizeActive(node, rows) {
+	const measured = rows.filter((r) => r.outcome === 'measured');
+	const count = (o) => rows.filter((r) => r.outcome === o).length;
+	const last = measured.at(-1) ?? null;
+	return {
+		node,
+		attempts: rows.length,
+		measured: measured.length,
+		busy: count('busy'),
+		disturbed: count('disturbed'),
+		skipped: count('skipped'),
+		failed: count('failed'),
+		lastMeasuredAt: last?.at ?? null,
+		lastWhy: rows.at(-1)?.outcome !== 'measured' ? (rows.at(-1)?.why ?? null) : null,
+		fs: last?.disk?.fs ?? null,
+		syncWriteMs: spread(measured.map((r) => r.disk?.syncWriteMs)),
+		seqWriteMBps: spread(measured.map((r) => r.disk?.seqWriteMBps)),
+		seqReadMBps: spread(measured.map((r) => r.disk?.seqReadMBps)),
+		upMbps: spread(measured.map((r) => r.net?.upMbps)),
+		downMbps: spread(measured.map((r) => r.net?.downMbps)),
+	};
+}
+
+/** Every node with active rows, sorted by name. */
+export function summarizeActiveAll(rows) {
+	const by = new Map();
+	for (const r of rows) {
+		if (!by.has(r.node)) by.set(r.node, []);
+		by.get(r.node).push(r);
+	}
+	return [...by.keys()]
+		.sort((a, b) => a.localeCompare(b, 'en', { numeric: true }))
+		.map((n) => summarizeActive(n, by.get(n)));
+}

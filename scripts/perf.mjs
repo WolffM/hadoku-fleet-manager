@@ -14,10 +14,10 @@
  */
 import process from 'node:process';
 
-import { perfDir, readPerfRows } from '../dist/perf-sample-store.js';
+import { perfDir, readActiveRows, readPerfRows } from '../dist/perf-sample-store.js';
 import { stateDir } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
-import { summarizePerf } from './lib/perf-summary.mjs';
+import { summarizeActiveAll, summarizePerf } from './lib/perf-summary.mjs';
 
 const argv = process.argv.slice(2);
 const out = createEmitter({ json: argv.includes('--json') });
@@ -39,6 +39,8 @@ const sinceMs = NOW - hours * 3_600_000;
 
 const read = readPerfRows(perfDir(stateDir()), { sinceMs, node });
 const nodes = summarizePerf(read.rows);
+const activeRead = readActiveRows(perfDir(stateDir()), { sinceMs, node });
+const active = summarizeActiveAll(activeRead.rows);
 const ok = nodes.length > 0;
 
 const f = (v, w = 6) => String(v ?? '-').padStart(w);
@@ -55,11 +57,25 @@ for (const n of nodes) {
 			(n.unmeasured ? `  (${n.unmeasured} unmeasured${n.lastWhy ? `: ${n.lastWhy}` : ''})` : '')
 	);
 }
+out.log('');
+out.log(
+	`ACTIVE (idle-only)  ${f('ok', 3)} ${f('busy', 4)} ${f('dist', 4)} ${f('syncW', 6)} ${f('seqW', 6)} ${f('seqR', 6)} ${f('upMb', 6)} ${f('downMb', 6)}  fs`
+);
+for (const a of active) {
+	out.log(
+		`${a.node.padEnd(19)} ${f(a.measured, 3)} ${f(a.busy, 4)} ${f(a.disturbed, 4)} ${f(a.syncWriteMs.p50, 6)} ` +
+			`${f(a.seqWriteMBps.p50, 6)} ${f(a.seqReadMBps.p50, 6)} ${f(a.upMbps.p50, 6)} ${f(a.downMbps.p50, 6)}  ${a.fs ?? '-'}` +
+			(a.measured === 0 && a.lastWhy ? `  (${a.lastWhy})` : '')
+	);
+}
+if (!active.length) out.log('  no active tests in the window yet');
 if (!ok)
 	out.warn(
 		`fleet perf: no samples in the last ${hours} h${node ? ` for ${node}` : ''}; is fleet:perf-samples running?`
 	);
-if (read.badLines) out.warn(`fleet perf: ${read.badLines} unreadable line(s) skipped`);
+if (read.badLines + activeRead.badLines)
+	out.warn(`fleet perf: ${read.badLines + activeRead.badLines} unreadable line(s) skipped`);
+for (const u of activeRead.unreadable) out.warn(`fleet perf: ${u.file} unreadable: ${u.why}`);
 for (const u of read.unreadable) out.warn(`fleet perf: ${u.file} unreadable: ${u.why}`);
 
 if (out.json)
@@ -71,5 +87,6 @@ if (out.json)
 		badLines: read.badLines,
 		unreadable: read.unreadable,
 		nodes,
+		active,
 	});
 process.exit(ok ? 0 : 1);

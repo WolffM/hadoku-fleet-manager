@@ -27,9 +27,15 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from '
 import { join } from 'node:path';
 
 import { listDayFilesSince, readDayFiles } from './day-file-list.js';
-import { PERF_SCHEMA, type PerfSampleRow } from './lib/perf-row.js';
+import { PERF_SCHEMA, type ActivePerfRow, type PerfSampleRow } from './lib/perf-row.js';
 
-export { PERF_SCHEMA, type PerfSampleRow, type PingStats } from './lib/perf-row.js';
+export {
+	PERF_SCHEMA,
+	type ActiveOutcome,
+	type ActivePerfRow,
+	type PerfSampleRow,
+	type PingStats,
+} from './lib/perf-row.js';
 
 export const PERF_DIR = 'perf';
 export const PERF_RETENTION_DAYS = 30;
@@ -37,6 +43,8 @@ export const PERF_RETENTION_DAYS = 30;
 const DAY_MS = 86_400_000;
 /** `perf-<day>.jsonl`; its own source text, so the F3 one-writer guard keys it apart from the other day-file stores. */
 const DAY_FILE = /^perf-(\d{4}-\d{2}-\d{2})\.jsonl$/;
+/** `perf-active-<day>.jsonl`: the active tests (perf-active.ts), the same directory and retention. */
+const ACTIVE_DAY_FILE = /^perf-active-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 
 const utcDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
@@ -54,7 +62,7 @@ export function prunePerfDir(
 	const oldest = utcDay(nowMs - retentionDays * DAY_MS);
 	const removed: string[] = [];
 	for (const f of readdirSync(dir)) {
-		const m = DAY_FILE.exec(f);
+		const m = DAY_FILE.exec(f) ?? ACTIVE_DAY_FILE.exec(f);
 		if (!m || m[1] >= oldest) continue;
 		try {
 			unlinkSync(join(dir, f));
@@ -125,6 +133,59 @@ export function readPerfRows(
 	});
 	out.files = filesRead;
 	out.unreadable = unreadable;
+	out.rows.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+	return out;
+}
+
+/** Appends one active test's row. THROWS: the caller turns it into its verdict. */
+export function appendActiveRow(dir: string, row: ActivePerfRow, nowMs: number): void {
+	mkdirSync(dir, { recursive: true });
+	prunePerfDir(dir, nowMs);
+	const day = utcDay(Date.parse(row.at));
+	appendFileSync(join(dir, `perf-active-${day}.jsonl`), `${JSON.stringify(row)}\n`);
+}
+
+function isActiveRow(v: unknown): v is ActivePerfRow {
+	if (typeof v !== 'object' || v === null) return false;
+	const o = v as Record<string, unknown>;
+	return (
+		o.v === PERF_SCHEMA &&
+		typeof o.at === 'string' &&
+		Number.isFinite(Date.parse(o.at)) &&
+		typeof o.node === 'string' &&
+		typeof o.outcome === 'string'
+	);
+}
+
+/** Every active row at or after `sinceMs`, oldest first. A missing directory is no rows yet. */
+export function readActiveRows(
+	dir: string,
+	opts: { sinceMs?: number; node?: string } = {}
+): { rows: ActivePerfRow[]; badLines: number; unreadable: { file: string; why: string }[] } {
+	const out = {
+		rows: [] as ActivePerfRow[],
+		badLines: 0,
+		unreadable: [] as { file: string; why: string }[],
+	};
+	if (!existsSync(dir)) return out;
+	const sinceMs = opts.sinceMs ?? 0;
+	const files = listDayFilesSince(dir, ACTIVE_DAY_FILE, utcDay(sinceMs));
+	out.unreadable = readDayFiles(dir, files, (line) => {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(line);
+		} catch {
+			out.badLines++;
+			return;
+		}
+		if (!isActiveRow(parsed)) {
+			out.badLines++;
+			return;
+		}
+		if (Date.parse(parsed.at) < sinceMs) return;
+		if (opts.node !== undefined && parsed.node !== opts.node) return;
+		out.rows.push(parsed);
+	}).unreadable;
 	out.rows.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 	return out;
 }

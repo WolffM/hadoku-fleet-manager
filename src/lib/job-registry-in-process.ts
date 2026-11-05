@@ -81,6 +81,15 @@ export const jobRegistryInProcess: JobEntry[] = [
 		why: "Every node's measured performance (operator 2026-11-04: extensive data on each claw, so host bars come from measurements): the controller pings each node's LAN address, and each node runs a read-only probe (default-route link counters and radio signal, a ping to its own gateway, /proc/pressure, load, memory, /proc/diskstats for the disk under /, CPU temperature). One row per node to perf-sample-store.ts every 5 minutes, ok:false with the reason when a node cannot be measured. src/perf-sample.ts owns the clock; it spawns ssh and ping, not a `fleet` subcommand, so there is no `sub` and no mgmtApiFile.",
 	},
 	{
+		name: 'fleet:perf-active',
+		args: [],
+		kind: 'recorder',
+		detectionBudget: '45m',
+		cadence: { clockMs: 15 * 60_000 },
+		contract: 'in-process',
+		why: 'Active disk and network tests, on an IDLE node only (no CI job, I/O and CPU pressure low, CI workers counted every second during the test): 64 synced 4 KiB writes, 256 MiB written and read with the page cache bypassed, and 100 MiB each way between the controller and the node. One node per 15-minute tick, each node about every 6 hours; a busy node is retried after 30 minutes and a disturbed result is dropped. Rows to perf-sample-store.ts (perf-active-<day>.jsonl). src/perf-active.ts owns the clock; it spawns ssh, not a `fleet` subcommand.',
+	},
+	{
 		name: 'fleet:ppe-sweep',
 		args: [],
 		kind: 'converger',

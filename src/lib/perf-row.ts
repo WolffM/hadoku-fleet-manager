@@ -72,3 +72,35 @@ export interface PerfSampleRow {
 	/** Which sensor `cpuTempC` came from (`coretemp`, `k10temp`, `thermal_zone`, ...): a wrong one shows as an implausible value. */
 	cpuTempSensor?: string | null;
 }
+
+/** What became of one active test attempt. */
+export type ActiveOutcome = 'measured' | 'busy' | 'disturbed' | 'skipped' | 'failed';
+
+/**
+ * One ACTIVE test of one node (`perf-active.ts`): disk and network measured by
+ * doing work, only while the node is idle. `busy` = it was not idle, nothing
+ * ran; `disturbed` = CI work arrived mid-test, so the numbers are discarded
+ * (kept null); `skipped` = it could not be tested safely (low disk space, a
+ * maintenance or reboot drain); `failed` = the test itself broke, with `why`.
+ */
+export interface ActivePerfRow {
+	v: typeof PERF_SCHEMA;
+	at: string;
+	node: string;
+	outcome: ActiveOutcome;
+	why?: string;
+	/** The idle gate's reading before anything ran. */
+	idle?: { workers: number | null; ioSome10: number | null; cpuSome10: number | null };
+	disk?: {
+		fs: string | null;
+		/** Mean per synced 4 KiB write (O_DSYNC): what a database commit waits on. */
+		syncWriteMs: number | null;
+		/** 256 MiB, page cache bypassed, flushed. */
+		seqWriteMBps: number | null;
+		seqReadMBps: number | null;
+	} | null;
+	/** Controller <-> node over ssh, connection setup subtracted. */
+	net?: { upMbps: number | null; downMbps: number | null; bytes: number } | null;
+	/** Most CI workers seen during the test; above 0 means disturbed. */
+	maxWorkers?: number | null;
+}

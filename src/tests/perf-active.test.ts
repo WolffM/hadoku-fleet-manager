@@ -1,0 +1,224 @@
+/**
+ * The active tests: idle is proven before and during, a disturbed result is
+ * dropped, the scheduler picks one due node, and every failure is a row.
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import {
+	ACTIVE_EVERY_MS,
+	ACTIVE_RETRY_MS,
+	ACTIVE_SCRIPT,
+	NET_BYTES,
+	parseActive,
+	perfActiveTick,
+	pickNode,
+	testNode,
+	type ActiveDeps,
+} from '../perf-active.js';
+import { PERF_SCHEMA, readActiveRows, type ActivePerfRow } from '../perf-sample-store.js';
+
+const IDLE_RUN = `workersBefore=0
+ioSome10=0.89
+cpuSome10=0.00
+idle=1
+fs=ext4
+syncWriteNs=2368000000
+seqWriteNs=2590000000
+seqReadNs=2500000000
+maxWorkers=0
+end=1
+`;
+
+void test('the node script is valid bash, and its shell never uses ${...}', () => {
+	execFileSync('bash', ['-n'], { input: ACTIVE_SCRIPT });
+	assert.ok(
+		!ACTIVE_SCRIPT.includes('${'),
+		'every ${...} must have been interpolated by JavaScript'
+	);
+});
+
+void test('an idle run parses to per-op sync latency and MB/s', () => {
+	const p = parseActive(IDLE_RUN);
+	assert.equal(p.torn, false);
+	if (p.torn) return;
+	assert.equal(p.idle, true);
+	assert.deepEqual(p.disk, {
+		fs: 'ext4',
+		syncWriteMs: 37,
+		seqWriteMBps: 103.64,
+		seqReadMBps: 107.37,
+	});
+	assert.equal(p.maxWorkers, 0);
+});
+
+void test('a run without its end marker is torn', () => {
+	assert.equal(parseActive('idle=1\n').torn, true);
+});
+
+const deps = (stdout: string, over: Partial<ActiveDeps> = {}): ActiveDeps => ({
+	script: () => Promise.resolve({ code: 0, stdout, stderr: '', ms: 1, bytesOut: 0 }),
+	net: () => Promise.resolve({ upMbps: 177.6, downMbps: 114.5, bytes: NET_BYTES }),
+	workers: () => Promise.resolve(0),
+	...over,
+});
+const at = new Date().toISOString();
+
+void test('a busy node is a busy row with the gate reading, and nothing else ran', async () => {
+	let netCalled = false;
+	const r = await testNode(
+		'claw-9',
+		at,
+		deps('workersBefore=2\nioSome10=0.5\ncpuSome10=28.18\nidle=0\nend=1\n', {
+			net: () => {
+				netCalled = true;
+				return Promise.resolve({ upMbps: 1, downMbps: 1, bytes: 1 });
+			},
+		})
+	);
+	assert.equal(r.outcome, 'busy');
+	assert.match(r.why ?? '', /2 CI job\(s\)/);
+	assert.equal(r.disk, undefined);
+	assert.equal(netCalled, false);
+});
+
+void test('a CI job during the disk test drops the numbers: disturbed, no disk recorded', async () => {
+	const r = await testNode('claw-9', at, deps(IDLE_RUN.replace('maxWorkers=0', 'maxWorkers=1')));
+	assert.equal(r.outcome, 'disturbed');
+	assert.equal(r.disk, undefined);
+	assert.equal(r.maxWorkers, 1);
+});
+
+void test('an idle node is measured, disk and network both', async () => {
+	const r = await testNode('claw-9', at, deps(IDLE_RUN));
+	assert.equal(r.outcome, 'measured');
+	assert.equal(r.disk?.syncWriteMs, 37);
+	assert.deepEqual(r.net, { upMbps: 177.6, downMbps: 114.5, bytes: NET_BYTES });
+});
+
+void test('a CI job during the network test keeps the disk and drops the network', async () => {
+	const r = await testNode('claw-9', at, deps(IDLE_RUN, { workers: () => Promise.resolve(1) }));
+	assert.equal(r.outcome, 'measured');
+	assert.equal(r.net, null);
+	assert.match(r.why ?? '', /network dropped/);
+	const unknown = await testNode(
+		'claw-9',
+		at,
+		deps(IDLE_RUN, { workers: () => Promise.resolve(null) })
+	);
+	assert.equal(unknown.net, null, 'could not re-count is not zero');
+});
+
+void test('low disk space is skipped; a broken run is failed with exit and stderr', async () => {
+	const skip = await testNode(
+		'claw-9',
+		at,
+		deps(
+			'workersBefore=0\nioSome10=0\ncpuSome10=0\nidle=1\nskip=under 1 GiB free on the root disk\nend=1\n'
+		)
+	);
+	assert.equal(skip.outcome, 'skipped');
+	const torn = await testNode(
+		'claw-9',
+		at,
+		deps('', {
+			script: () =>
+				Promise.resolve({
+					code: 255,
+					stdout: 'idle=1\n',
+					stderr: 'Connection reset\n',
+					ms: 1,
+					bytesOut: 0,
+				}),
+		})
+	);
+	assert.equal(torn.outcome, 'failed');
+	assert.match(torn.why ?? '', /exit 255: Connection reset/);
+	const unreachable = await testNode(
+		'claw-9',
+		at,
+		deps('', {
+			script: () =>
+				Promise.resolve({
+					code: null,
+					stdout: '',
+					stderr: '',
+					ms: 1,
+					bytesOut: 0,
+					why: 'timed out after 120 s',
+				}),
+		})
+	);
+	assert.equal(unreachable.outcome, 'failed');
+});
+
+const row = (
+	node: string,
+	minsAgo: number,
+	outcome: ActivePerfRow['outcome'],
+	now: number
+): ActivePerfRow => ({
+	v: PERF_SCHEMA,
+	at: new Date(now - minsAgo * 60_000).toISOString(),
+	node,
+	outcome,
+});
+
+void test('pickNode: never-measured first, then oldest; recent attempts and out-of-service drains wait', () => {
+	const now = Date.now();
+	const nodes = ['claw-1', 'claw-2', 'claw-3', 'claw-4'];
+	const everyMin = ACTIVE_EVERY_MS / 60_000;
+	const retryMin = ACTIVE_RETRY_MS / 60_000;
+	const rows = [
+		row('claw-1', everyMin + 60, 'measured', now), // due, measured longest ago among measured
+		row('claw-2', 30, 'measured', now), // fresh: not due
+		row('claw-3', retryMin - 5, 'busy', now), // never measured, but tried too recently
+	];
+	// claw-4 is never measured and never tried: first
+	assert.equal(pickNode(nodes, rows, {}, now), 'claw-4');
+	assert.equal(
+		pickNode(nodes, rows, { 'claw-4': { kind: 'reboot', reason: 'x', since: '' } } as never, now),
+		'claw-1'
+	);
+	assert.equal(
+		pickNode(nodes, rows, { 'claw-4': { kind: 'lease', reason: 'x', since: '' } } as never, now),
+		'claw-4',
+		"a tenant's lease does not stop a test"
+	);
+	assert.equal(pickNode(['claw-2'], rows, {}, now), null);
+});
+
+void test('the tick tests the picked node and records its row; nothing due is a quiet ok', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'perf-active-'));
+	try {
+		const now = Date.now();
+		const r = await perfActiveTick(now, {
+			dir,
+			nodes: ['claw-1'],
+			drains: {},
+			test: (node, when) =>
+				Promise.resolve({ v: PERF_SCHEMA, at: when, node, outcome: 'busy', why: 'not idle' }),
+		});
+		assert.deepEqual([r.verdict, r.node, r.outcome], ['ok', 'claw-1', 'busy']);
+		assert.equal(readActiveRows(dir).rows.length, 1);
+		const again = await perfActiveTick(now + 60_000, { dir, nodes: ['claw-1'], drains: {} });
+		assert.deepEqual(
+			[again.verdict, again.node],
+			['ok', null],
+			'retried only after ACTIVE_RETRY_MS'
+		);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+void test('pickNode: a node that stays busy does not starve an untried one', () => {
+	const now = Date.now();
+	const retryMin = ACTIVE_RETRY_MS / 60_000;
+	const rows = [row('claw-10', retryMin + 1, 'busy', now)];
+	assert.equal(pickNode(['claw-10', 'claw-2'], rows, {}, now), 'claw-2');
+});

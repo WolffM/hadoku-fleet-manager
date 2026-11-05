@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { pct, summarizeNode, summarizePerf } from './perf-summary.mjs';
+import { pct, summarizeActive, summarizeNode, summarizePerf } from './perf-summary.mjs';
 
 const NOW = Date.now();
 const at = (minsAgo) => new Date(NOW - minsAgo * 60_000).toISOString();
@@ -119,4 +119,28 @@ void test('nodes sort naturally: claw-2 before claw-10', () => {
 		summarizePerf([mk('claw-10'), mk('claw-2'), mk('hokon')]).map((n) => n.node),
 		['claw-2', 'claw-10', 'hokon']
 	);
+});
+
+void test('active: spread over measured results only; attempts that could not test are counted, not averaged', () => {
+	const a = (outcome, extra = {}) => ({ v: 1, at: at(1), node: 'claw-1', outcome, ...extra });
+	const rows = [
+		a('busy', { why: 'not idle' }),
+		a('measured', {
+			disk: { fs: 'ext4', syncWriteMs: 37, seqWriteMBps: 100, seqReadMBps: 110 },
+			net: { upMbps: 170, downMbps: 110 },
+		}),
+		a('disturbed'),
+		a('measured', {
+			disk: { fs: 'ext4', syncWriteMs: 41, seqWriteMBps: 90, seqReadMBps: 100 },
+			net: null,
+		}),
+	];
+	const s = summarizeActive('claw-1', rows);
+	assert.deepEqual([s.attempts, s.measured, s.busy, s.disturbed], [4, 2, 1, 1]);
+	assert.equal(s.syncWriteMs.max, 41);
+	assert.equal(s.upMbps.p50, 170, 'a dropped network reading is not a zero');
+	const never = summarizeActive('claw-2', [a('busy', { why: 'not idle: 2 CI job(s)' })]);
+	assert.equal(never.measured, 0);
+	assert.equal(never.syncWriteMs.p50, null);
+	assert.match(never.lastWhy, /not idle/);
 });
