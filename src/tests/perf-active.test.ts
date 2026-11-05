@@ -1,6 +1,11 @@
 /**
  * The active tests: idle is proven before and during, a disturbed result is
  * dropped, the scheduler picks one due node, and every failure is a row.
+ *
+ * Fixture nodes are `fx-claw-N`, never a real node's name. `peerCandidates` and
+ * `testNode` ask `isLocalNode()`, which compares against this box's hostname,
+ * so a fixture named `claw-2` silently became "this node" when CI ran on
+ * claw-2, and the suite went red only on whichever claws its names matched.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -80,7 +85,7 @@ const at = new Date().toISOString();
 void test('a busy node is a busy row with the gate reading, and nothing else ran', async () => {
 	let netCalled = false;
 	const r = await testNode(
-		'claw-9',
+		'fx-claw-9',
 		at,
 		deps('workersBefore=2\nioSome10=0.5\ncpuSome10=28.18\nidle=0\nend=1\n', {
 			net: () => {
@@ -96,26 +101,26 @@ void test('a busy node is a busy row with the gate reading, and nothing else ran
 });
 
 void test('a CI job during the disk test drops the numbers: disturbed, no disk recorded', async () => {
-	const r = await testNode('claw-9', at, deps(IDLE_RUN.replace('maxWorkers=0', 'maxWorkers=1')));
+	const r = await testNode('fx-claw-9', at, deps(IDLE_RUN.replace('maxWorkers=0', 'maxWorkers=1')));
 	assert.equal(r.outcome, 'disturbed');
 	assert.equal(r.disk, undefined);
 	assert.equal(r.maxWorkers, 1);
 });
 
 void test('an idle node is measured, disk and network both', async () => {
-	const r = await testNode('claw-9', at, deps(IDLE_RUN));
+	const r = await testNode('fx-claw-9', at, deps(IDLE_RUN));
 	assert.equal(r.outcome, 'measured');
 	assert.equal(r.disk?.syncWriteMs, 37);
 	assert.deepEqual(r.net, { upMbps: 177.6, downMbps: 114.5, bytes: NET_BYTES });
 });
 
 void test('a CI job during the network test keeps the disk and drops the network', async () => {
-	const r = await testNode('claw-9', at, deps(IDLE_RUN, { workers: () => Promise.resolve(1) }));
+	const r = await testNode('fx-claw-9', at, deps(IDLE_RUN, { workers: () => Promise.resolve(1) }));
 	assert.equal(r.outcome, 'measured');
 	assert.equal(r.net, null);
 	assert.match(r.why ?? '', /network dropped/);
 	const unknown = await testNode(
-		'claw-9',
+		'fx-claw-9',
 		at,
 		deps(IDLE_RUN, { workers: () => Promise.resolve(null) })
 	);
@@ -124,7 +129,7 @@ void test('a CI job during the network test keeps the disk and drops the network
 
 void test('low disk space is skipped; a broken run is failed with exit and stderr', async () => {
 	const skip = await testNode(
-		'claw-9',
+		'fx-claw-9',
 		at,
 		deps(
 			'workersBefore=0\nioSome10=0\ncpuSome10=0\nidle=1\nskip=under 1 GiB free on the root disk\nend=1\n'
@@ -132,7 +137,7 @@ void test('low disk space is skipped; a broken run is failed with exit and stder
 	);
 	assert.equal(skip.outcome, 'skipped');
 	const torn = await testNode(
-		'claw-9',
+		'fx-claw-9',
 		at,
 		deps('', {
 			script: () =>
@@ -148,7 +153,7 @@ void test('low disk space is skipped; a broken run is failed with exit and stder
 	assert.equal(torn.outcome, 'failed');
 	assert.match(torn.why ?? '', /exit 255: Connection reset/);
 	const unreachable = await testNode(
-		'claw-9',
+		'fx-claw-9',
 		at,
 		deps('', {
 			script: () =>
@@ -179,33 +184,38 @@ const row = (
 
 void test('pickNode: never-measured first, then oldest; recent attempts and out-of-service drains wait', () => {
 	const now = Date.now();
-	const nodes = ['claw-1', 'claw-2', 'claw-3', 'claw-4'];
+	const nodes = ['fx-claw-1', 'fx-claw-2', 'fx-claw-3', 'fx-claw-4'];
 	const everyMin = ACTIVE_EVERY_MS / 60_000;
 	const retryMin = ACTIVE_RETRY_MS / 60_000;
 	const rows = [
-		row('claw-1', everyMin + 60, 'measured', now), // due, measured longest ago among measured
-		row('claw-2', 30, 'measured', now), // fresh: not due
-		row('claw-3', retryMin - 5, 'busy', now), // never measured, but tried too recently
+		row('fx-claw-1', everyMin + 60, 'measured', now), // due, measured longest ago among measured
+		row('fx-claw-2', 30, 'measured', now), // fresh: not due
+		row('fx-claw-3', retryMin - 5, 'busy', now), // never measured, but tried too recently
 	];
-	// claw-4 is never measured and never tried: first
-	assert.equal(pickNode(nodes, rows, {}, now), 'claw-4');
+	// fx-claw-4 is never measured and never tried: first
+	assert.equal(pickNode(nodes, rows, {}, now), 'fx-claw-4');
 	assert.equal(
-		pickNode(nodes, rows, { 'claw-4': { kind: 'reboot', reason: 'x', since: '' } } as never, now),
-		'claw-1'
+		pickNode(
+			nodes,
+			rows,
+			{ 'fx-claw-4': { kind: 'reboot', reason: 'x', since: '' } } as never,
+			now
+		),
+		'fx-claw-1'
 	);
 	assert.equal(
-		pickNode(nodes, rows, { 'claw-4': { kind: 'lease', reason: 'x', since: '' } } as never, now),
-		'claw-4',
+		pickNode(nodes, rows, { 'fx-claw-4': { kind: 'lease', reason: 'x', since: '' } } as never, now),
+		'fx-claw-4',
 		"a tenant's lease does not stop a test"
 	);
-	assert.equal(pickNode(['claw-2'], rows, {}, now), null);
+	assert.equal(pickNode(['fx-claw-2'], rows, {}, now), null);
 });
 
 void test('the tick tests the picked node and records its row; nothing due is a quiet ok', async () => {
 	const dir = mkdtempSync(join(tmpdir(), 'perf-active-'));
 	try {
 		const now = Date.now();
-		const nodes: ManifestNode[] = [{ node: 'claw-1', ip: '192.0.2.1', backstop: false }];
+		const nodes: ManifestNode[] = [{ node: 'fx-claw-1', ip: '192.0.2.1', backstop: false }];
 		const r = await perfActiveTick(now, {
 			dir,
 			nodes,
@@ -213,7 +223,7 @@ void test('the tick tests the picked node and records its row; nothing due is a 
 			test: (node, when) =>
 				Promise.resolve({ v: PERF_SCHEMA, at: when, node, outcome: 'busy', why: 'not idle' }),
 		});
-		assert.deepEqual([r.verdict, r.node, r.outcome], ['ok', 'claw-1', 'busy']);
+		assert.deepEqual([r.verdict, r.node, r.outcome], ['ok', 'fx-claw-1', 'busy']);
 		assert.equal(readActiveRows(dir).rows.length, 1);
 		const again = await perfActiveTick(now + 60_000, { dir, nodes, drains: {} });
 		assert.deepEqual(
@@ -229,8 +239,8 @@ void test('the tick tests the picked node and records its row; nothing due is a 
 void test('pickNode: a node that stays busy does not starve an untried one', () => {
 	const now = Date.now();
 	const retryMin = ACTIVE_RETRY_MS / 60_000;
-	const rows = [row('claw-10', retryMin + 1, 'busy', now)];
-	assert.equal(pickNode(['claw-10', 'claw-2'], rows, {}, now), 'claw-2');
+	const rows = [row('fx-claw-10', retryMin + 1, 'busy', now)];
+	assert.equal(pickNode(['fx-claw-10', 'fx-claw-2'], rows, {}, now), 'fx-claw-2');
 });
 
 const fioDoc = (side: 'read' | 'write', iops: number, p50 = 82_432, p99 = 104_960) =>
@@ -286,12 +296,12 @@ const iperfDoc = (bps: number, retransmits?: number) =>
 
 void test('iperf3: the receiver counts the rate; retransmits sum over both directions', () => {
 	const r = parsePeer(
-		'claw-6',
+		'fx-claw-6',
 		`out=${iperfDoc(93_312_345, 2)}\nin=${iperfDoc(78_800_000, 1)}\nend=1\n`
 	);
-	assert.deepEqual(r, { node: 'claw-6', outMbps: 93.3, inMbps: 78.8, retransmits: 3 });
+	assert.deepEqual(r, { node: 'fx-claw-6', outMbps: 93.3, inMbps: 78.8, retransmits: 3 });
 	const half = parsePeer(
-		'claw-6',
+		'fx-claw-6',
 		`out=${iperfDoc(93_000_000)}\nin=${JSON.stringify({ error: 'unable to connect to server' })}\nend=1\n`
 	);
 	assert.equal(half.outMbps, 93);
@@ -299,10 +309,10 @@ void test('iperf3: the receiver counts the rate; retransmits sum over both direc
 	assert.equal(half.retransmits, null);
 	assert.match(half.why ?? '', /in: iperf3: unable to connect/);
 	assert.match(
-		parsePeer('claw-6', 'why=iperf3 is not installed\nend=1\n').why ?? '',
+		parsePeer('fx-claw-6', 'why=iperf3 is not installed\nend=1\n').why ?? '',
 		/not installed/
 	);
-	assert.match(parsePeer('claw-6', 'out=').why ?? '', /did not finish/);
+	assert.match(parsePeer('fx-claw-6', 'out=').why ?? '', /did not finish/);
 	assert.deepEqual(iperfResult(''), { why: 'iperf3 printed nothing (the peer never answered)' });
 });
 
@@ -322,61 +332,65 @@ const peerRow = (node: string, peer: string, minsAgo: number, now: number): Acti
 void test('pickPeers: never paired first, then paired longest ago in either direction; drains wait', () => {
 	const now = Date.now();
 	const c = (node: string) => ({ node, ip: '192.0.2.1' });
-	const cands = [c('claw-2'), c('claw-3'), c('claw-4'), c('claw-5')];
+	const cands = [c('fx-claw-2'), c('fx-claw-3'), c('fx-claw-4'), c('fx-claw-5')];
 	const rows = [
-		peerRow('claw-1', 'claw-2', 60, now), // paired an hour ago, from claw-1
-		peerRow('claw-3', 'claw-1', 600, now), // paired ten hours ago, from claw-3
-		peerRow('claw-4', 'claw-5', 1, now), // not involving claw-1
+		peerRow('fx-claw-1', 'fx-claw-2', 60, now), // paired an hour ago, from fx-claw-1
+		peerRow('fx-claw-3', 'fx-claw-1', 600, now), // paired ten hours ago, from fx-claw-3
+		peerRow('fx-claw-4', 'fx-claw-5', 1, now), // not involving fx-claw-1
 	];
 	assert.deepEqual(
-		pickPeers('claw-1', [c('claw-1'), ...cands], rows, {}).map((p) => p.node),
-		['claw-4', 'claw-5', 'claw-3', 'claw-2']
+		pickPeers('fx-claw-1', [c('fx-claw-1'), ...cands], rows, {}).map((p) => p.node),
+		['fx-claw-4', 'fx-claw-5', 'fx-claw-3', 'fx-claw-2']
 	);
 	assert.deepEqual(
-		pickPeers('claw-1', cands, rows, {
-			'claw-4': { kind: 'reboot', reason: 'x', since: '' },
+		pickPeers('fx-claw-1', cands, rows, {
+			'fx-claw-4': { kind: 'reboot', reason: 'x', since: '' },
 		} as never).map((p) => p.node),
-		['claw-5', 'claw-3', 'claw-2']
+		['fx-claw-5', 'fx-claw-3', 'fx-claw-2']
 	);
 });
 
 void test('peerCandidates: claws with a LAN address only; the backstop is neither peer nor paired', () => {
 	const nodes: ManifestNode[] = [
-		{ node: 'claw-1', ip: '192.0.2.1', backstop: false },
-		{ node: 'claw-2', ip: '192.0.2.2', backstop: false },
-		{ node: 'claw-3', ip: null, backstop: false },
+		{ node: 'fx-claw-1', ip: '192.0.2.1', backstop: false },
+		{ node: 'fx-claw-2', ip: '192.0.2.2', backstop: false },
+		{ node: 'fx-claw-3', ip: null, backstop: false },
 		{ node: 'big', ip: '192.0.2.9', backstop: true },
 	];
-	assert.deepEqual(peerCandidates('claw-1', nodes), [{ node: 'claw-2', ip: '192.0.2.2' }]);
+	assert.deepEqual(peerCandidates('fx-claw-1', nodes), [{ node: 'fx-claw-2', ip: '192.0.2.2' }]);
 	assert.deepEqual(peerCandidates('big', nodes), []);
 });
 
-const c6 = { node: 'claw-6', ip: '192.0.2.6' };
-const c4 = { node: 'claw-4', ip: '192.0.2.4' };
+const c6 = { node: 'fx-claw-6', ip: '192.0.2.6' };
+const c4 = { node: 'fx-claw-4', ip: '192.0.2.4' };
 
 void test('the peer test runs against the first idle candidate and joins the row', async () => {
-	const counts: Record<string, number[]> = { 'claw-9': [0], 'claw-4': [1], 'claw-6': [0, 0] };
+	const counts: Record<string, number[]> = {
+		'fx-claw-9': [0],
+		'fx-claw-4': [1],
+		'fx-claw-6': [0, 0],
+	};
 	const workers = (n: string) => Promise.resolve(counts[n]?.shift() ?? 0);
-	const r = await testNode('claw-9', at, deps(IDLE_RUN, { workers }), [c4, c6]);
+	const r = await testNode('fx-claw-9', at, deps(IDLE_RUN, { workers }), [c4, c6]);
 	assert.equal(r.outcome, 'measured');
-	assert.deepEqual(r.peer, { node: 'claw-6', outMbps: 93.3, inMbps: 78.8, retransmits: 0 });
+	assert.deepEqual(r.peer, { node: 'fx-claw-6', outMbps: 93.3, inMbps: 78.8, retransmits: 0 });
 	assert.equal(r.why, undefined);
 	const none = await testNode(
-		'claw-9',
+		'fx-claw-9',
 		at,
-		deps(IDLE_RUN, { workers: (n) => Promise.resolve(n === 'claw-9' ? 0 : 2) }),
+		deps(IDLE_RUN, { workers: (n) => Promise.resolve(n === 'fx-claw-9' ? 0 : 2) }),
 		[c4, c6]
 	);
 	assert.equal(none.peer, null, 'no idle peer: not tested, not a zero');
 });
 
 void test('a CI job on the peer during its test drops the peer numbers, keeping its name', async () => {
-	const counts: Record<string, number[]> = { 'claw-6': [0, 1] };
+	const counts: Record<string, number[]> = { 'fx-claw-6': [0, 1] };
 	const workers = (n: string) => Promise.resolve(counts[n]?.shift() ?? 0);
-	const r = await testNode('claw-9', at, deps(IDLE_RUN, { workers }), [c6]);
-	assert.equal(r.peer?.node, 'claw-6');
+	const r = await testNode('fx-claw-9', at, deps(IDLE_RUN, { workers }), [c6]);
+	assert.equal(r.peer?.node, 'fx-claw-6');
 	assert.equal(r.peer?.outMbps, null);
-	assert.match(r.why ?? '', /peer claw-6: a CI job arrived on claw-6/);
+	assert.match(r.why ?? '', /peer fx-claw-6: a CI job arrived on fx-claw-6/);
 	assert.deepEqual(
 		r.net,
 		{ upMbps: 177.6, downMbps: 114.5, bytes: NET_BYTES },
@@ -385,9 +399,9 @@ void test('a CI job on the peer during its test drops the peer numbers, keeping 
 });
 
 void test('a CI job on the tested node after the network tests drops both of them', async () => {
-	const counts: Record<string, number[]> = { 'claw-9': [1] };
+	const counts: Record<string, number[]> = { 'fx-claw-9': [1] };
 	const workers = (n: string) => Promise.resolve(counts[n]?.shift() ?? 0);
-	const r = await testNode('claw-9', at, deps(IDLE_RUN, { workers }), [c6]);
+	const r = await testNode('fx-claw-9', at, deps(IDLE_RUN, { workers }), [c6]);
 	assert.equal(r.net, null);
 	assert.equal(r.peer, null);
 	assert.equal(r.disk?.syncWriteMs, 37);
