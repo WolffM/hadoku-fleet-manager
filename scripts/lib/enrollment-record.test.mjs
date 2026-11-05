@@ -319,6 +319,50 @@ test('derivedCapacity reproduces the numbers an operator set by hand', () => {
 	assert.deepEqual(derivedCapacity(32002), { minFreeMb: 4096, maxConcurrent: 4 }, 'claw-7');
 });
 
+/**
+ * The CPU term, 2026-11-05: memory alone rated claw-10 (i7-2700K, 4 physical
+ * cores) at 3 and it ran 38-42 % CPU pressure there. Physical cores measured
+ * with lscpu on every node that day, MemTotal from the manifest.
+ */
+test('derivedCapacity takes physical cores, minus two, when they were measured', () => {
+	assert.equal(
+		derivedCapacity(15360, 4).maxConcurrent,
+		2,
+		'claw-10: lowered to 2 by hand after measuring'
+	);
+	assert.equal(derivedCapacity(31744, 6).maxConcurrent, 4, 'claw-9: 6 cores, ran 4 at p90 5 %');
+	assert.equal(derivedCapacity(11885, 4).maxConcurrent, 2, 'claw-1: the hand-set 2');
+	assert.equal(derivedCapacity(15360, 8).maxConcurrent, 3, 'claw-8: memory is the binding term');
+	assert.equal(derivedCapacity(15360, 2).maxConcurrent, 1, 'a 2-core box still takes one job');
+	assert.equal(derivedCapacity(15360, 4).minFreeMb, 2048, 'cores never move the memory floor');
+});
+
+test('unmeasured physical cores leave the memory term alone', () => {
+	for (const pc of [null, undefined, 0, Number.NaN])
+		assert.deepEqual(derivedCapacity(15360, pc), { minFreeMb: 2048, maxConcurrent: 3 }, String(pc));
+});
+
+test('a record carries physicalCores, and an old one without it still parses', () => {
+	const withPc = GOOD.replace('ENROLL cores 16', 'ENROLL cores 16\nENROLL physicalCores 4');
+	assert.equal(parseEnrollmentRecord(withPc).fields.physicalCores, 4);
+	assert.equal(
+		proposedManifestEntry(parseEnrollmentRecord(withPc)).maxConcurrent,
+		2,
+		'32 GB would allow 4'
+	);
+	assert.equal(
+		proposedManifestEntry(parseEnrollmentRecord(GOOD)).maxConcurrent,
+		4,
+		'no cores measured: memory only'
+	);
+	assert.equal(parseEnrollmentRecord(GOOD).fields.physicalCores, undefined);
+	const unknown = GOOD.replace(
+		'ENROLL cores 16',
+		'ENROLL cores 16\nENROLL physicalCores unknown lscpu listed no cores'
+	);
+	assert.equal(parseEnrollmentRecord(unknown).fields.physicalCores, null);
+});
+
 test('the cap holds however large the box is', () => {
 	// "4 runners ... should be the cap" — a 1 TB node still gets 4.
 	assert.equal(derivedCapacity(1_000_000).maxConcurrent, 4);

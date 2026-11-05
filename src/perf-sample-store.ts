@@ -35,6 +35,7 @@ export {
 	type ActivePerfRow,
 	type PerfSampleRow,
 	type PingStats,
+	type PsiReading,
 } from './lib/perf-row.js';
 
 export const PERF_DIR = 'perf';

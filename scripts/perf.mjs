@@ -46,13 +46,13 @@ const ok = nodes.length > 0;
 const f = (v, w = 6) => String(v ?? '-').padStart(w);
 out.log(
 	`${'node'.padEnd(8)} ${'link'.padEnd(5)} ${f('n', 4)} ${f('lan50')} ${f('lan95')} ${f('jit95')} ${f('loss%')} ` +
-		`${f('gw95')} ${f('sig')} ${f('ioPSI95')} ${f('util95')} ${f('wMB95')} ${f('await95')} ${f('temp')}`
+		`${f('gw95')} ${f('sig')} ${f('cpu5m95', 7)} ${f('ioPSI95', 7)} ${f('util95')} ${f('wMB95')} ${f('await95')} ${f('temp')}`
 );
 for (const n of nodes) {
 	out.log(
 		`${n.node.padEnd(8)} ${String(n.link?.kind ?? '-').padEnd(5)} ${f(n.samples, 4)} ` +
 			`${f(n.lan?.rttP50Ms.p50)} ${f(n.lan?.rttP95Ms.p95)} ${f(n.lan?.jitterMs.p95)} ${f(n.lan?.lossPct)} ` +
-			`${f(n.gateway?.rttP95Ms.p95)} ${f(n.link?.wifiSignalDbm?.p50)} ${f(n.psi.ioSome.p95)} ` +
+			`${f(n.gateway?.rttP95Ms.p95)} ${f(n.link?.wifiSignalDbm?.p50)} ${f(n.cpuSome300.p95, 7)} ${f(n.psi.ioSome.p95, 7)} ` +
 			`${f(n.disk?.utilPct.p95)} ${f(n.disk?.writeMBps.p95)} ${f(n.disk?.awaitMs.p95)} ${f(n.cpuTempC.p50)}` +
 			(n.unmeasured ? `  (${n.unmeasured} unmeasured${n.lastWhy ? `: ${n.lastWhy}` : ''})` : '')
 	);

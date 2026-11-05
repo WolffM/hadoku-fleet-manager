@@ -265,6 +265,12 @@ const probed = probeNode(ctx);
 // ── 2. declared against observed ────────────────────────────────────────────
 const { notes, hardwareChanges } = compareHardware(ctx, declared, probed);
 
+// PHYSICAL CORES: a bootstrap older than 2026-11-05 never recorded them, so the
+// re-probe's own `lscpu` count fills the gap. 0 is lscpu answering nothing,
+// which is unmeasured, not a box with no cores.
+if ((declared.physicalCores ?? null) === null && Number(probed?.physicalCores) > 0)
+	declared.physicalCores = Number(probed.physicalCores);
+
 const entry = proposedManifestEntry(parsed);
 
 // diskFreeGb is REFRESHED from the probe rather than compared: it moves by
@@ -318,6 +324,7 @@ const measured = {
 		source: NODE ? `${NODE}:/var/log/node-bootstrap-*.log + ssh re-probe` : (FILE ?? 'stdin'),
 		recordedAt: declared.recordedAt,
 		memTotalMb: entry.memTotalMb,
+		physicalCores: declared.physicalCores ?? null,
 		diskFreeGb: entry.diskFreeGb,
 		diskModel: declared.diskModel,
 		osId: declared.osId,
@@ -334,7 +341,7 @@ const measured = {
 		capabilities: entry.capabilities,
 		unproven: entry.unproven,
 	},
-	$why: `Enrolled by \`fleet enroll\` from a node-bootstrap v1 record MEASURED on the box, not typed. cores and ramGb come from that measurement; ramGb is floor(MemTotal) and $measured.memTotalMb carries the unrounded figure, because the slice ceiling needs the second (claw-1 measures 11885MiB, not 11*1024). maxConcurrent and minFreeMb are DERIVED from measured MemTotal (derivedCapacity: floor = MemTotal/8 clamped [1536,8192], concurrency = min(4, floor((MemTotal-floor)/4096))) rather than left for a human, because leaving them absent meant a node could sit declared and bounded by NOTHING -- ci-throttle.sh renders a missing value as MAX_CONCURRENT=99, MIN_FREE_MB=0, and claw-7 sat in exactly that state, invisible to the deployer. Placement is derived too (2026-09-22, after the tier ladder was retired): labels is EMPTY and that is the all-JIT shape -- a JIT node mints a runner per job with its labels on the mint call, and standing eligibility is written by the fast loop once the node is safe; reconcile refuses a node with no labels array at all, which is the refusal that forced the first claw-9 hand edit. role/maxRegistrations/minFreeGb/slice are fleet constants (see derivedPlacement); minFreeGb must sit above the 16GB registration refusal or the site repo's claw-cleanup gate reddens main (#52). ephemeral is DELIBERATELY ABSENT: it is flipped by \`fleet provision\` only after bootcamp has EARNED jitconfig against a seeded payload -- setting it earlier mints runners the node cannot start. A box whose memory could not be read still gets no capacity fields: null is not zero.`,
+	$why: `Enrolled by \`fleet enroll\` from a node-bootstrap v1 record MEASURED on the box, not typed. cores and ramGb come from that measurement; ramGb is floor(MemTotal) and $measured.memTotalMb carries the unrounded figure, because the slice ceiling needs the second (claw-1 measures 11885MiB, not 11*1024). maxConcurrent and minFreeMb are DERIVED from measured MemTotal and physical cores (derivedCapacity: floor = MemTotal/8 clamped [1536,8192], concurrency = min(4, floor((MemTotal-floor)/4096), physicalCores-2), at least 1; the CPU term since 2026-11-05, when memory alone rated claw-10's 4-core i7-2700K at 3 and it ran 38-42% CPU pressure there) rather than left for a human, because leaving them absent meant a node could sit declared and bounded by NOTHING -- ci-throttle.sh renders a missing value as MAX_CONCURRENT=99, MIN_FREE_MB=0, and claw-7 sat in exactly that state, invisible to the deployer. Placement is derived too (2026-09-22, after the tier ladder was retired): labels is EMPTY and that is the all-JIT shape -- a JIT node mints a runner per job with its labels on the mint call, and standing eligibility is written by the fast loop once the node is safe; reconcile refuses a node with no labels array at all, which is the refusal that forced the first claw-9 hand edit. role/maxRegistrations/minFreeGb/slice are fleet constants (see derivedPlacement); minFreeGb must sit above the 16GB registration refusal or the site repo's claw-cleanup gate reddens main (#52). ephemeral is DELIBERATELY ABSENT: it is flipped by \`fleet provision\` only after bootcamp has EARNED jitconfig against a seeded payload -- setting it earlier mints runners the node cannot start. A box whose memory could not be read still gets no capacity fields: null is not zero.`,
 };
 
 const result = {

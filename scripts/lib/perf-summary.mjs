@@ -136,6 +136,9 @@ export function summarizeNode(node, rows) {
 			ioFull: spread(measured.map((r) => r.psi?.ioFull)),
 			memorySome: spread(measured.map((r) => r.psi?.memorySome)),
 		},
+		// avg300: each tick covers the whole 5 minutes since the last, so this is
+		// the node's CPU stall over the window, not a set of 10-second snapshots.
+		cpuSome300: spread(measured.map((r) => r.psi300?.cpuSome)),
 		loadPerCore: spread(
 			measured.map((r) => (r.load?.one != null && r.load?.cores ? r.load.one / r.load.cores : null))
 		),

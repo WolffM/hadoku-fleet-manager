@@ -20,6 +20,15 @@ export interface PingStats {
 	jitterMs: number | null;
 }
 
+/** One /proc/pressure window, percent of time stalled. `full` is absent for cpu on older kernels. */
+export interface PsiReading {
+	cpuSome: number | null;
+	ioSome: number | null;
+	ioFull: number | null;
+	memorySome: number | null;
+	memoryFull: number | null;
+}
+
 export interface PerfSampleRow {
 	v: typeof PERF_SCHEMA;
 	at: string;
@@ -46,14 +55,20 @@ export interface PerfSampleRow {
 	};
 	/** The node -> its default gateway: its OWN link, independent of the controller's. */
 	gateway?: PingStats | null;
-	/** /proc/pressure avg60, percent of time stalled. `full` is absent for cpu on older kernels. */
-	psi?: {
-		cpuSome: number | null;
-		ioSome: number | null;
-		ioFull: number | null;
-		memorySome: number | null;
-		memoryFull: number | null;
-	};
+	/**
+	 * /proc/pressure avg10: percent of time stalled over the last 10 SECONDS, a
+	 * snapshot of the moment of the tick. (Documented as avg60 until 2026-11-05;
+	 * the probe always read avg10.)
+	 */
+	psi?: PsiReading;
+	/**
+	 * /proc/pressure avg300: the last 5 minutes, i.e. the whole interval since
+	 * the previous tick, so nothing between ticks goes unseen. Absent on rows
+	 * written before 2026-11-05. Judged by doctor's `cpu-oversubscribed`.
+	 */
+	psi300?: PsiReading;
+	/** CI jobs running on the node at the tick (Runner.Worker processes). null: could not count. */
+	workers?: number | null;
 	load?: { one: number | null; five: number | null; fifteen: number | null; cores: number | null };
 	memory?: { totalMb: number | null; availableMb: number | null; swapUsedMb: number | null };
 	/** The disk under `/`, from /proc/diskstats: counters since boot. */

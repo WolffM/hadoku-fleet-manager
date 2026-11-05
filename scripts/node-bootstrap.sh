@@ -1717,6 +1717,8 @@ else
 fi
 
 CORES="$(nproc)"
+# Physical cores (SMT siblings once): `fleet enroll` derives maxConcurrent from these.
+PHYS_CORES="$(lscpu -p=Core,Socket 2>/dev/null | grep -v '^#' | sort -u | wc -l)"; [ "$PHYS_CORES" = 0 ] && PHYS_CORES=""
 
 # Find the CPU PACKAGE sensor BY TYPE. thermal_zone0 was hardcoded in the
 # bazooka and is an AMBIENT zone on every node the fleet owns — it read 27C
@@ -2609,6 +2611,7 @@ echo "ENROLL profile $PROFILE_ID"
 echo "ENROLL role $ROLE"
 echo "ENROLL chassis $CHASSIS"
 echo "ENROLL cores $(u "$CORES" 'nproc returned nothing')"
+echo "ENROLL physicalCores $(u "$PHYS_CORES" 'lscpu listed no cores')"
 echo "ENROLL memTotalKb $(u "$MEM_TOTAL_KB" '/proc/meminfo unreadable')"
 echo "ENROLL memAvailableKb $(u "$MEM_AVAIL_KB" '/proc/meminfo unreadable')"
 echo "ENROLL diskModel $(u "$DISK_MODEL" "no MODEL for /dev/${ROOT_DISK:-?}")"

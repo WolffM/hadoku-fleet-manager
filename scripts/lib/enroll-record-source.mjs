@@ -79,6 +79,9 @@ export function probeNode(ctx) {
 			NODE,
 			[
 				'echo "cores=$(nproc 2>/dev/null)"',
+				// Distinct (core, socket) pairs: SMT siblings share one. The CPU term
+				// of `derivedCapacity` counts these, never nproc's threads.
+				'echo "physicalCores=$(lscpu -p=Core,Socket 2>/dev/null | grep -v \'^#\' | sort -u | wc -l)"',
 				'echo "memTotalKb=$(awk \'/^MemTotal/{print $2}\' /proc/meminfo 2>/dev/null)"',
 				'echo "diskFreeGb=$(df -BG --output=avail / 2>/dev/null | tail -1 | tr -dc 0-9)"',
 				'echo "hostname=$(hostname 2>/dev/null)"',

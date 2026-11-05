@@ -46,6 +46,13 @@ psi.io.some=2.53
 psi.io.full=1.85
 psi.memory.some=0.00
 psi.memory.full=0.00
+psi300.cpu.some=38.42
+psi300.cpu.full=0.00
+psi300.io.some=0.40
+psi300.io.full=0.12
+psi300.memory.some=0.00
+psi300.memory.full=0.00
+workers=3
 load=4.31 2.17 1.36
 cores=8
 memTotalKb=12170508
@@ -75,6 +82,14 @@ void test('a whole Wi-Fi probe parses into every field, signal from /proc/net/wi
 		memorySome: 0,
 		memoryFull: 0,
 	});
+	assert.deepEqual(f.psi300, {
+		cpuSome: 38.42,
+		ioSome: 0.4,
+		ioFull: 0.12,
+		memorySome: 0,
+		memoryFull: 0,
+	});
+	assert.equal(f.workers, 3);
 	assert.deepEqual(f.load, { one: 4.31, five: 2.17, fifteen: 1.36, cores: 8 });
 	assert.deepEqual(f.memory, { totalMb: 11885, availableMb: 10142, swapUsedMb: 2 });
 	assert.equal(f.disk?.device, 'sda');
@@ -101,6 +116,8 @@ void test('a key the node could not read is null, not zero', () => {
 	assert.equal(r.fields.load?.one, null);
 	assert.equal(r.fields.disk?.reads, null);
 	assert.equal(r.fields.cpuTempC, null);
+	assert.equal(r.fields.workers, null, 'no pgrep is could-not-count, not zero jobs');
+	assert.equal(r.fields.psi300?.cpuSome, null);
 });
 
 void test('ping stats: percentiles, jitter, and loss as sent minus received', () => {
@@ -245,4 +262,10 @@ void test('the probe script itself runs under bash on this machine and parses wh
 	assert.ok(r.ok, out.slice(-300));
 	assert.equal(typeof r.fields.load?.cores, 'number');
 	assert.equal(typeof r.fields.memory?.totalMb, 'number');
+	assert.equal(
+		typeof r.fields.psi300?.cpuSome,
+		'number',
+		'avg300 is the 4th field of /proc/pressure'
+	);
+	assert.equal(typeof r.fields.workers, 'number');
 });

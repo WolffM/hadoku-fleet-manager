@@ -82,6 +82,9 @@ export const NUMERIC_FIELDS = Object.freeze([
 	'diskFreeGb',
 	'sshPort',
 	'memAvailableKb',
+	// NOT REQUIRED: a record from a bootstrap older than 2026-11-05 lacks it,
+	// and `fleet enroll` measures it itself over ssh (`lscpu`).
+	'physicalCores',
 ]);
 
 /**
@@ -353,6 +356,9 @@ export const RUNNER_CEILING_MB = 4096;
 /** The most runners any single node may take, whatever its size. */
 export const MAX_RUNNERS_PER_NODE = 4;
 
+/** Physical cores the CPU term of {@link derivedCapacity} keeps back from CI. */
+export const CPU_CORES_RESERVED = 2;
+
 /**
  * Capacity, DERIVED from measured memory — never assigned by hand.
  *
@@ -376,19 +382,35 @@ export const MAX_RUNNERS_PER_NODE = 4;
  * operator set them, and trims claw-1 3→2, claw-2 2→1, claw-6 2→1, where the
  * hand-set numbers exceeded what 4 GB per runner actually allows.
  *
+ * THE CPU TERM (2026-11-05). Memory alone rated claw-10 — an i7-2700K, 4
+ * physical cores, 15 GB — at 3, and at 3 it ran 38-42 % CPU pressure (avg300)
+ * against 0-20 % on every other claw, so it was lowered to 2 by hand. The rule
+ * is one job per PHYSICAL core with {@link CPU_CORES_RESERVED} held back for
+ * the OS, the agent, hosted slices and each job's own extra threads. SMT
+ * threads are not counted: a sibling thread adds a fraction of a core, and
+ * claw-10 and claw-4 (both 4c/8t) are the two claws that stalled at 3.
+ * Measured on every node that day, it reproduces claw-10 at 2, claw-9 (6c) at
+ * 4 and the hand-set 2 on claw-1 and claw-6 (4c), and leaves the
+ * memory-bound claws (claw-2, claw-5, claw-8) where memory puts them.
+ * `null` physicalCores — not measured — leaves the memory term alone, never
+ * a guess.
+ *
  * @param {number|null} memTotalMb measured MemTotal, NOT the rounded ramGb
+ * @param {number|null} [physicalCores] measured physical cores (`lscpu`), NOT `nproc`
  */
-export function derivedCapacity(memTotalMb) {
+export function derivedCapacity(memTotalMb, physicalCores = null) {
 	// null is "nobody measured", and it must not become a number. A node whose
 	// memory could not be read gets no capacity rather than a guessed one.
 	if (!memTotalMb || memTotalMb <= 0) return { minFreeMb: null, maxConcurrent: null };
 	const raw = Math.round(memTotalMb / 8 / 512) * 512;
 	const minFreeMb = Math.max(1536, Math.min(8192, raw));
 	const usable = memTotalMb - minFreeMb;
-	const maxConcurrent = Math.max(
-		1,
-		Math.min(MAX_RUNNERS_PER_NODE, Math.floor(usable / RUNNER_CEILING_MB))
-	);
+	const byMemory = Math.floor(usable / RUNNER_CEILING_MB);
+	const byCpu =
+		Number.isInteger(physicalCores) && physicalCores > 0
+			? physicalCores - CPU_CORES_RESERVED
+			: Infinity;
+	const maxConcurrent = Math.max(1, Math.min(MAX_RUNNERS_PER_NODE, byMemory, byCpu));
 	return { minFreeMb, maxConcurrent };
 }
 
@@ -501,7 +523,7 @@ export function proposedManifestEntry(parsed) {
 		diskFreeGb: f.diskFreeGb,
 		// DERIVED, so no human types a number that ci-throttle.sh will silently
 		// replace with MAX_CONCURRENT=99 if they forget one.
-		...derivedCapacity(memKb === null ? null : Math.floor(memKb / 1024)),
+		...derivedCapacity(memKb === null ? null : Math.floor(memKb / 1024), f.physicalCores ?? null),
 		// PLACEMENT, DERIVED (see derivedPlacement above). claw-9's onboarding
 		// needed four hand edits for exactly these fields, each discovered by a
 		// later command refusing; `ephemeral` is absent on purpose — it waits for

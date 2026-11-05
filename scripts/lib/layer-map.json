@@ -2104,6 +2104,13 @@
     "why": "Wave shrink-1 lane D, pure move: doctorFindings' wifi-manager/link judgement. Same bucket as doctor-findings.mjs itself."
   },
   {
+    "glob": "scripts/lib/doctor-findings-cpu.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "doctorFindings' cpu-load judgement (2026-11-05): a node's perf samples at its job limit against its maxConcurrent. Pure; doctor-run.mjs hands it the rows. Same bucket as doctor-findings-ops.mjs."
+  },
+  {
     "glob": "scripts/lib/doctor-findings-ops.mjs",
     "layer": "domain",
     "domain": "observation",

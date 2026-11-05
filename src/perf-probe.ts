@@ -4,7 +4,7 @@
  *
  * Everything here is OBSERVED on the node, never read from a record the fleet
  * wrote: the default route's interface and its kernel counters, the radio's
- * signal, /proc/pressure, /proc/loadavg, /proc/meminfo, /proc/diskstats for
+ * signal, /proc/pressure (avg10 and avg300), the CI jobs running, /proc/loadavg, /proc/meminfo, /proc/diskstats for
  * the disk under `/`, the CPU sensor, and a 20-packet ping to the node's own
  * gateway (its link, apart from the controller's). The script is read-only
  * and costs the node ~4 s of an idle ping; nothing in it loads the disk or
@@ -21,7 +21,7 @@
  * The script reaches the node on STDIN (`bash -s`), so the same text runs over
  * ssh and on the controller itself with no quoting layer between them.
  */
-import type { PerfSampleRow, PingStats } from './lib/perf-row.js';
+import type { PerfSampleRow, PingStats, PsiReading } from './lib/perf-row.js';
 
 export const PERF_PROBE_SCRIPT = String.raw`r=$(ip -o route show default 2>/dev/null | head -n1)
 i=$(printf '%s\n' "$r" | awk '{for(k=1;k<NF;k++) if($k=="dev"){print $(k+1); exit}}')
@@ -40,8 +40,9 @@ if [ -n "$i" ]; then
   awk -v i="$i:" '$1==i{gsub(/\./,"",$4); print "signalProc="$4}' /proc/net/wireless 2>/dev/null
 fi
 for p in cpu io memory; do
-  [ -r /proc/pressure/$p ] && awk -v p=$p '{split($2,a,"="); print "psi."p"."$1"="a[2]}' /proc/pressure/$p
+  [ -r /proc/pressure/$p ] && awk -v p=$p '{split($2,a,"="); split($4,b,"="); print "psi."p"."$1"="a[2]; print "psi300."p"."$1"="b[2]}' /proc/pressure/$p
 done
+command -v pgrep >/dev/null 2>&1 && echo "workers=$(pgrep -ax Runner.Worker 2>/dev/null | grep -c ' spawnclient ')"
 echo "load=$(cut -d' ' -f1-3 /proc/loadavg)"; echo "cores=$(nproc)"
 awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2} /^SwapTotal:/{st=$2} /^SwapFree:/{print "swapUsedKb="st-$2}' /proc/meminfo
 s=$(findmnt -no SOURCE / 2>/dev/null)
@@ -119,6 +120,13 @@ export function parsePerfProbe(
 		const v = num(kv.get(k));
 		return v === null ? null : Math.round(v / 1024);
 	};
+	const psiAt = (prefix: 'psi' | 'psi300'): PsiReading => ({
+		cpuSome: num(kv.get(`${prefix}.cpu.some`)),
+		ioSome: num(kv.get(`${prefix}.io.some`)),
+		ioFull: num(kv.get(`${prefix}.io.full`)),
+		memorySome: num(kv.get(`${prefix}.memory.some`)),
+		memoryFull: num(kv.get(`${prefix}.memory.full`)),
+	});
 	const temp = num(kv.get('tempMilli'));
 	const gw = kv.get('gw') || null;
 	const gwTimes = (kv.get('gwping') ?? '')
@@ -149,13 +157,9 @@ export function parsePerfProbe(
 				wifi: kind === 'wifi' ? { signalDbm: signal, txBitrateMbps: num(kv.get('txrate')) } : null,
 			},
 			gateway: gw ? pingStats(gw, gwTimes, PING_COUNT) : null,
-			psi: {
-				cpuSome: num(kv.get('psi.cpu.some')),
-				ioSome: num(kv.get('psi.io.some')),
-				ioFull: num(kv.get('psi.io.full')),
-				memorySome: num(kv.get('psi.memory.some')),
-				memoryFull: num(kv.get('psi.memory.full')),
-			},
+			psi: psiAt('psi'),
+			psi300: psiAt('psi300'),
+			workers: num(kv.get('workers')),
 			load: { one: num(one), five: num(five), fifteen: num(fifteen), cores: num(kv.get('cores')) },
 			memory: {
 				totalMb: kb('memTotalKb'),

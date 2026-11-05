@@ -91,6 +91,8 @@ import { tenantsByNode } from './tenant-declarations.mjs';
 import { heldByCycle } from './reboot-hold.mjs';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { measuredFacets, writeFacet } from '../../dist/lib/measured.js';
+import { perfDir, readPerfRows } from '../../dist/perf-sample-store.js';
+import { CPU_WINDOW_HOURS, cpuLoadFacet } from './doctor-findings-cpu.mjs';
 
 // Through the shared emitter, which every subcommand under the `--json`
 // contract uses: the document below is printed and `process.exit` runs on the
@@ -314,6 +316,35 @@ for (const [name, h] of Object.entries(health)) {
 	if (h.reboot?.required || d.status === 'held') h.reboot = { ...h.reboot, cycle: d };
 }
 
+// ── CPU load at the limit ────────────────────────────────────────────────────
+// The perf recorder's last day, joined here and never stored, so a rating the
+// node cannot carry shows up without anyone thinking to run `fleet perf`.
+const perfRead = (() => {
+	try {
+		const r = readPerfRows(perfDir(stateDir()), {
+			sinceMs: Date.now() - CPU_WINDOW_HOURS * 3_600_000,
+		});
+		// Part of a day missing is part of the evidence missing: say so rather
+		// than judge on what is left.
+		return {
+			rows: r.rows,
+			unreadable: r.unreadable.length
+				? `perf day file(s) unreadable: ${r.unreadable.map((u) => `${u.file} (${u.why})`).join(', ')}`
+				: null,
+		};
+	} catch (e) {
+		return { rows: [], unreadable: `the perf samples are unreadable: ${e.message}` };
+	}
+})();
+for (const [name, h] of Object.entries(health)) {
+	if (h.reachable === false) continue;
+	h.cpuLoad = cpuLoadFacet(
+		perfRead.rows.filter((r) => r.node === name),
+		manifest.machines?.[name]?.maxConcurrent,
+		{ unreadable: perfRead.unreadable }
+	);
+}
+
 /** The cycle's per-node decisions, or `{}` when it has never run here. */
 function readCycleDecisions() {
 	const path = join(stateDir(), 'claw-reboot.json');
@@ -410,6 +441,13 @@ for (const [name, h] of Object.entries(health).sort()) {
 	log(
 		`   reboot    ${h.reboot?.required ? `REQUIRED since ${h.reboot.stagedAt}` : 'not required'}` +
 			`   uptime ${C(h.uptimeSec && Math.round(h.uptimeSec / 3600), 'h')}`
+	);
+	const c = h.cpuLoad;
+	log(
+		c?.judged
+			? `   ci load   at its limit of ${c.maxConcurrent}: ${c.atLimitTicks} ticks, CPU stall p50 ` +
+					`${C(c.p50AtLimit, '%')} (avg300, ${CPU_WINDOW_HOURS} h)`
+			: `   ci load   not judged: ${c?.why ?? 'no perf join'}`
 	);
 }
 
