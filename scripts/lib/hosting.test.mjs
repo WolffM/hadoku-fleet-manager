@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
+import { CI_RANK_SCRIPT } from './hosting-ci-rank.mjs';
 import {
-	CI_RANK_SCRIPT,
 	coresFromCpuMax,
 	deployScript,
 	fitProblems,
@@ -662,6 +662,10 @@ test('the logrotate entry, run by the real logrotate, rotates the pm2 logs in pl
 	}
 });
 
+const LISTENER = '/home/ci/.hadoku/jit/payload/bin/Runner.Listener';
+/** What a JIT runner's listener actually runs as: the default fixture argv. */
+const RUNNING_JIT = [LISTENER, 'run', '--jitconfig', 'eyJ...'];
+
 /** Run the CI ranking loop for real over a fixture /proc, `pgrep` answering `pids`. */
 function rankOver(pids, procs) {
 	const root = mkdtempSync(join(tmpdir(), 'ci-rank-'));
@@ -669,10 +673,12 @@ function rankOver(pids, procs) {
 	mkdirSync(bin);
 	writeFileSync(join(bin, 'pgrep'), `#!/bin/sh\nprintf '%s\\n' ${pids.join(' ')}\n`);
 	chmodSync(join(bin, 'pgrep'), 0o755);
-	for (const [pid, { cgroup, oom }] of Object.entries(procs)) {
+	for (const [pid, { cgroup, oom, argv = RUNNING_JIT }] of Object.entries(procs)) {
 		mkdirSync(join(root, 'proc', pid), { recursive: true });
 		writeFileSync(join(root, 'proc', pid, 'cgroup'), `0::${cgroup}\n`);
 		writeFileSync(join(root, 'proc', pid, 'oom_score_adj'), `${oom}\n`);
+		// /proc/<pid>/cmdline: NUL-separated and NUL-terminated, like the kernel's.
+		writeFileSync(join(root, 'proc', pid, 'cmdline'), argv.map((a) => `${a}\0`).join(''));
 	}
 	const out = execFileSync('bash', ['-c', `PROC=${join(root, 'proc')}\n${CI_RANK_SCRIPT}`], {
 		env: { PATH: `${bin}:/usr/bin:/bin` },
@@ -698,6 +704,7 @@ test('a CI process that exits mid-read is gone, not an unranked one at oom 0', (
 		ciBelowOom: '0',
 		ciMinOom: '500',
 		ciGone: '1',
+		ciTooling: '0',
 	});
 	// A live process outside the slice at oom 0 is still found, beside a gone one.
 	assert.deepEqual(
@@ -711,9 +718,73 @@ test('a CI process that exits mid-read is gone, not an unranked one at oom 0', (
 			ciBelowOom: '1',
 			ciMinOom: '0',
 			ciGone: '1',
+			ciTooling: '0',
 		}
 	);
 	assert.match(observeScript(CARDTABLE, 'hadoku'), /^PROC=\/proc$/m);
+});
+
+// fleet-manager#59: the minters' own short-lived listeners, run from the ssh
+// session, read as unranked CI and reddened ci:fleet-placement for one tick.
+test("a minter's `Runner.Listener --version` in a session scope is tooling, not unranked CI", () => {
+	const ranked = {
+		cgroup: '/user.slice/user-1000.slice/user@1000.service/runners.slice/jit-1.service',
+		oom: 500,
+	};
+	const session = '/user.slice/user-1000.slice/session-60282.scope';
+	// The shape reproduced on claw-6, 2026-11-05: pid 1562671, oom 0.
+	assert.deepEqual(
+		rankOver([101, 1562671], {
+			101: ranked,
+			1562671: { cgroup: session, oom: 0, argv: [LISTENER, '--version'] },
+		}),
+		{
+			ciProcs: '1',
+			ciOutsideRunners: '0',
+			ciBelowOom: '0',
+			ciMinOom: '500',
+			ciGone: '0',
+			ciTooling: '1',
+		}
+	);
+	// Every other minter invocation, the same way.
+	for (const argv of [
+		['./bin/Runner.Listener', 'configure', '--url', 'https://github.com/o/r', '--token', 't'],
+		['./bin/Runner.Listener', 'remove', '--token', 't'],
+		[LISTENER, 'run', '--jitconfig', 'not-a-real-config'],
+	]) {
+		const r = rankOver([101, 102], { 101: ranked, 102: { cgroup: session, oom: 0, argv } });
+		assert.equal(r.ciOutsideRunners, '0', argv.join(' '));
+		assert.equal(r.ciBelowOom, '0', argv.join(' '));
+		assert.equal(r.ciTooling, '1', argv.join(' '));
+	}
+});
+
+test('a real `run` in a session scope is still unranked CI, whatever the minters run', () => {
+	// The test is argv, not the cgroup: a listener someone started by hand over
+	// ssh is exactly what the gate exists to find, and must not hide as "tooling".
+	for (const argv of [
+		RUNNING_JIT,
+		[LISTENER, 'run'],
+		['/home/ci/actions-runner/bin/Runner.Worker', 'spawnclient', '123', '456'],
+		// A word that merely CONTAINS a tooling one is not it.
+		[LISTENER, 'run', '--jitconfig', 'not-a-real-config-but-real'],
+	]) {
+		assert.deepEqual(
+			rankOver([102], {
+				102: { cgroup: '/user.slice/user-1000.slice/session-7.scope', oom: 0, argv },
+			}),
+			{
+				ciProcs: '1',
+				ciOutsideRunners: '1',
+				ciBelowOom: '1',
+				ciMinOom: '0',
+				ciGone: '0',
+				ciTooling: '0',
+			},
+			argv.join(' ')
+		);
+	}
 });
 
 // fleet-manager#32: on a node with several tenants the door refuses to guess
