@@ -1593,12 +1593,6 @@
     "part": "core"
   },
   {
-    "glob": "scripts/lib/hosting-ci-rank.mjs",
-    "layer": "domain",
-    "domain": "tenancy",
-    "part": "core"
-  },
-  {
     "glob": "scripts/lib/hosting-service-check.mjs",
     "layer": "domain",
     "domain": "tenancy",

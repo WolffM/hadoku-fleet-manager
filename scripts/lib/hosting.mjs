@@ -68,7 +68,6 @@ import {
 import { hostingSliceName } from '../../dist/lib/hosting-slice.js';
 import { ciUnitProperties } from '../../dist/runners/ci-unit-properties.js';
 import { runtimeFor } from './hosting-runtimes.mjs';
-import { CI_RANK_SCRIPT } from './hosting-ci-rank.mjs';
 import { isBackstopNode } from '../../dist/lib/node-role.js';
 
 /**
@@ -149,6 +148,34 @@ const assign = (vars) =>
 
 /** Single-quote for bash. Every value here is ours, but a quote costs nothing. */
 export const shellQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * Count the CI processes and how each is ranked: in `runners.slice`, and at
+ * CI's oom score. A process is read in ONE place, its cgroup and its score
+ * each read once; one that EXITS between `pgrep` and the read is gone, not
+ * CI, and is counted as `ciGone`. The loop used to read a vanished pid as
+ * outside the slice at oom 0, so a runner finishing at the instant of a
+ * declare refused it (claw-6, watchparty, 2026-10-29: the warm listener had
+ * restarted 5 s before). `$PROC` is /proc on a node; the test points it at a
+ * fixture tree.
+ */
+export const CI_RANK_SCRIPT = `n=0; out=0; low=0; min=; gone=0
+for q in $(pgrep -x 'Runner\\.(Listener|Worker)'); do
+	cg=$(cat "$PROC/$q/cgroup" 2>/dev/null) && a=$(cat "$PROC/$q/oom_score_adj" 2>/dev/null) && [ -n "$a" ] || {
+		gone=$((gone+1))
+		continue
+	}
+	n=$((n+1))
+	case "$cg" in */runners.slice/*) ;; *) out=$((out+1)) ;; esac
+	[ "$a" -lt ${CI_OOM_SCORE_ADJ} ] && low=$((low+1))
+	if [ -z "$min" ] || [ "$a" -lt "$min" ]; then min=$a; fi
+done
+echo "ciProcs=$n"
+echo "ciOutsideRunners=$out"
+echo "ciBelowOom=$low"
+echo "ciMinOom=$min"
+echo "ciGone=$gone"
+`;
 
 /** The home files a tenant's runtime declares (lib/hosting-runtimes.mjs), name → text. */
 const homeFilesOf = (t) => (t && t.app !== NO_TENANT.app ? (runtimeFor(t).homeFiles ?? {}) : {});
@@ -721,7 +748,6 @@ export function parseObserved(stdout) {
 		ciBelowOom: num('ciBelowOom'),
 		ciMinOom: num('ciMinOom'),
 		ciGone: num('ciGone'),
-		ciTooling: num('ciTooling'),
 		ciSliceMax: kv.ciSliceMax ?? null,
 		ciSliceHigh: kv.ciSliceHigh ?? null,
 		tailnet4: str('tailnet4'),
@@ -922,7 +948,6 @@ export function judgeHosting(
 			belowOomFloor: obs.ciBelowOom,
 			minOomScoreAdj: obs.ciMinOom,
 			gone: obs.ciGone,
-			tooling: obs.ciTooling,
 		},
 		slice: { oomKills: obs.oomKills, throttledUsec: obs.throttledUsec },
 		port: t.port,
