@@ -423,6 +423,17 @@ async function evaluateTarget(
 		if (decision.next) row = decision.next;
 		const ended = runEndedAt(run);
 		if (!Number.isNaN(ended) && ended > watermark) watermark = ended;
+		// A PAGE THAT WENT OUT IS RECORDED NOW, not at the end of the pass. The
+		// pass writes `states` once, after every repo's poll, so a process that
+		// exits mid-pass (a restart, SIGKILL, the mgmt-api pair's handover) lost
+		// the record of a page it had already sent, and the next process sent it
+		// again: "CI broken — hadoku-cardtable / forge" twice, 21 s apart, at the
+		// 2026-11-05 18:53Z handover. Written through here, an exit can lose at
+		// most a page not yet sent.
+		if ((decision.action === 'broken' || decision.action === 'recovered') && row) {
+			states[key] = { ...row, lastEndedAt: new Date(watermark).toISOString() };
+			writeStates(states);
+		}
 	}
 
 	// The watermark advances over every run this tick CONSIDERED, including the

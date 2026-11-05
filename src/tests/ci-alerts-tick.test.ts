@@ -467,3 +467,61 @@ test('#37: the listing ceiling at fleet size is at or below the per-workflow 462
 	// For the record: per-workflow at today's list would have been 732/hr.
 	assert.equal(TARGETS * ticksPerHour, 732);
 });
+
+// The 2026-11-05 18:53Z handover: instance a paged "CI broken — hadoku-cardtable
+// / forge", was stopped before its pass reached the end-of-pass state write,
+// and instance b's first pass paged it again. Pass 1 here pages, then never
+// finishes (the second repo's listing never answers: the process that died).
+// Pass 2 is the next process, reading the same state dir.
+test('a page that went out is on disk before the pass ends, so the next process does not send it again', async () => {
+	const targets = [
+		{
+			owner: 'WolffM',
+			repo: 'hadoku-cardtable',
+			workflow: 'forge.yml',
+			label: 'hadoku-cardtable / forge',
+		},
+		{ owner: 'WolffM', repo: 'quiet', workflow: 'ci.yml', label: 'quiet / ci' },
+	];
+	const posts: string[] = [];
+	const manifests = tempDir('ci-alerts-manifests-');
+	const state = tempDir('ci-alerts-state-');
+	__setHostForTesting({
+		...testHost,
+		manifestDir: manifests,
+		stateDir: state,
+		logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+		alerts: {
+			post: async (content: string) => {
+				posts.push(content);
+				return await Promise.resolve({ posted: true, sinkRecorded: true });
+			},
+			recordQuietly: () => undefined,
+		},
+	});
+	try {
+		writeFileSync(join(manifests, 'ci-watch.generated.json'), JSON.stringify({ targets }));
+		const ended = new Date(Date.now() - 60_000).toISOString();
+		const failed = ghRun(9, 'failure', ended, ended, 'forge.yml');
+		let reachedSecondRepo!: () => void;
+		const atSecondRepo = new Promise<void>((r) => (reachedSecondRepo = r));
+		const dying = async <T>(_p: string, _t: string, repo?: string): Promise<T | null> => {
+			if (repo === 'WolffM/quiet') {
+				reachedSecondRepo();
+				return await new Promise<T | null>(() => undefined);
+			}
+			return await Promise.resolve({ workflow_runs: [failed] } as T);
+		};
+		void runCiAlerts('tok', dying);
+		await atSecondRepo;
+		assert.equal(posts.length, 1);
+		assert.match(posts[0], /CI broken\*\* — hadoku-cardtable \/ forge/);
+
+		const healthy = async <T>(_p: string, _t: string, repo?: string): Promise<T | null> =>
+			await Promise.resolve({ workflow_runs: repo === 'WolffM/quiet' ? [] : [failed] } as T);
+		await runCiAlerts('tok', healthy);
+		assert.equal(posts.length, 1, 'the next process must not page the same run again');
+	} finally {
+		__setHostForTesting(testHost);
+	}
+});
