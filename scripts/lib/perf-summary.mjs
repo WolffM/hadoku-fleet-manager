@@ -206,6 +206,10 @@ export function summarizeActive(node, rows) {
 		syncWriteMs: spread(measured.map((r) => r.disk?.syncWriteMs)),
 		seqWriteMBps: spread(measured.map((r) => r.disk?.seqWriteMBps)),
 		seqReadMBps: spread(measured.map((r) => r.disk?.seqReadMBps)),
+		randReadIops: spread(measured.map((r) => r.disk?.randReadIops)),
+		randWriteIops: spread(measured.map((r) => r.disk?.randWriteIops)),
+		qd1ReadP99Us: spread(measured.map((r) => r.disk?.qd1ReadP99Us)),
+		fioWhy: last?.disk?.fioWhy ?? null,
 		upMbps: spread(measured.map((r) => r.net?.upMbps)),
 		downMbps: spread(measured.map((r) => r.net?.downMbps)),
 	};
@@ -221,4 +225,55 @@ export function summarizeActiveAll(rows) {
 	return [...by.keys()]
 		.sort((a, b) => a.localeCompare(b, 'en', { numeric: true }))
 		.map((n) => summarizeActive(n, by.get(n)));
+}
+
+/**
+ * Claw-to-claw iperf3 results, one entry per PAIR whichever end was tested:
+ * `aToB` / `bToA` are the receiver-counted Mb/s each way (a < b by name).
+ * Peer results whose numbers were dropped count in `runs` but not the spread.
+ */
+export function summarizePeers(rows) {
+	const pairs = new Map();
+	for (const r of rows) {
+		if (r.outcome !== 'measured' || !r.peer) continue;
+		const [a, b] = [r.node, r.peer.node].sort((x, y) =>
+			x.localeCompare(y, 'en', { numeric: true })
+		);
+		const key = `${a}\u0000${b}`;
+		if (!pairs.has(key))
+			pairs.set(key, {
+				a,
+				b,
+				runs: 0,
+				ab: [],
+				ba: [],
+				retransmits: [],
+				lastAt: null,
+				lastWhy: null,
+			});
+		const p = pairs.get(key);
+		const fwd = r.node === a;
+		p.runs++;
+		p.ab.push(fwd ? r.peer.outMbps : r.peer.inMbps);
+		p.ba.push(fwd ? r.peer.inMbps : r.peer.outMbps);
+		p.retransmits.push(r.peer.retransmits);
+		p.lastAt = r.at;
+		p.lastWhy = r.peer.why ?? null;
+	}
+	return [...pairs.values()]
+		.sort(
+			(x, y) =>
+				x.a.localeCompare(y.a, 'en', { numeric: true }) ||
+				x.b.localeCompare(y.b, 'en', { numeric: true })
+		)
+		.map((p) => ({
+			a: p.a,
+			b: p.b,
+			runs: p.runs,
+			aToBMbps: spread(p.ab),
+			bToAMbps: spread(p.ba),
+			retransmits: sum(p.retransmits),
+			lastAt: p.lastAt,
+			lastWhy: p.lastWhy,
+		}));
 }

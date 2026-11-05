@@ -17,7 +17,7 @@ import process from 'node:process';
 import { perfDir, readActiveRows, readPerfRows } from '../dist/perf-sample-store.js';
 import { stateDir } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
-import { summarizeActiveAll, summarizePerf } from './lib/perf-summary.mjs';
+import { summarizeActiveAll, summarizePeers, summarizePerf } from './lib/perf-summary.mjs';
 
 const argv = process.argv.slice(2);
 const out = createEmitter({ json: argv.includes('--json') });
@@ -41,6 +41,7 @@ const read = readPerfRows(perfDir(stateDir()), { sinceMs, node });
 const nodes = summarizePerf(read.rows);
 const activeRead = readActiveRows(perfDir(stateDir()), { sinceMs, node });
 const active = summarizeActiveAll(activeRead.rows);
+const peers = summarizePeers(activeRead.rows);
 const ok = nodes.length > 0;
 
 const f = (v, w = 6) => String(v ?? '-').padStart(w);
@@ -59,16 +60,29 @@ for (const n of nodes) {
 }
 out.log('');
 out.log(
-	`ACTIVE (idle-only)  ${f('ok', 3)} ${f('busy', 4)} ${f('dist', 4)} ${f('syncW', 6)} ${f('seqW', 6)} ${f('seqR', 6)} ${f('upMb', 6)} ${f('downMb', 6)}  fs`
+	`ACTIVE (idle-only)  ${f('ok', 3)} ${f('busy', 4)} ${f('dist', 4)} ${f('syncW', 6)} ${f('seqW', 6)} ${f('seqR', 6)} ` +
+		`${f('rIOPS', 7)} ${f('wIOPS', 7)} ${f('qd1p99', 7)} ${f('upMb', 6)} ${f('downMb', 6)}  fs`
 );
 for (const a of active) {
 	out.log(
 		`${a.node.padEnd(19)} ${f(a.measured, 3)} ${f(a.busy, 4)} ${f(a.disturbed, 4)} ${f(a.syncWriteMs.p50, 6)} ` +
-			`${f(a.seqWriteMBps.p50, 6)} ${f(a.seqReadMBps.p50, 6)} ${f(a.upMbps.p50, 6)} ${f(a.downMbps.p50, 6)}  ${a.fs ?? '-'}` +
-			(a.measured === 0 && a.lastWhy ? `  (${a.lastWhy})` : '')
+			`${f(a.seqWriteMBps.p50, 6)} ${f(a.seqReadMBps.p50, 6)} ${f(a.randReadIops.p50, 7)} ${f(a.randWriteIops.p50, 7)} ` +
+			`${f(a.qd1ReadP99Us.p50, 7)} ${f(a.upMbps.p50, 6)} ${f(a.downMbps.p50, 6)}  ${a.fs ?? '-'}` +
+			(a.measured === 0 && a.lastWhy ? `  (${a.lastWhy})` : a.fioWhy ? `  (fio: ${a.fioWhy})` : '')
 	);
 }
 if (!active.length) out.log('  no active tests in the window yet');
+out.log('');
+out.log(
+	`PEERS (claw <-> claw, iperf3 Mb/s p50)  ${f('runs', 4)} ${f('a->b', 7)} ${f('b->a', 7)} ${f('retx', 5)}`
+);
+for (const p of peers) {
+	out.log(
+		`${`${p.a} <-> ${p.b}`.padEnd(39)} ${f(p.runs, 4)} ${f(p.aToBMbps.p50, 7)} ${f(p.bToAMbps.p50, 7)} ${f(p.retransmits, 5)}` +
+			(p.aToBMbps.p50 === null && p.lastWhy ? `  (${p.lastWhy})` : '')
+	);
+}
+if (!peers.length) out.log('  no claw-to-claw tests in the window yet');
 if (!ok)
 	out.warn(
 		`fleet perf: no samples in the last ${hours} h${node ? ` for ${node}` : ''}; is fleet:perf-samples running?`
@@ -88,5 +102,6 @@ if (out.json)
 		unreadable: read.unreadable,
 		nodes,
 		active,
+		peers,
 	});
 process.exit(ok ? 0 : 1);

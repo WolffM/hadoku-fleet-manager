@@ -14,11 +14,18 @@ import {
 	ACTIVE_RETRY_MS,
 	ACTIVE_SCRIPT,
 	NET_BYTES,
+	fioResult,
+	iperfResult,
 	parseActive,
+	parsePeer,
+	peerCandidates,
+	peerClientScript,
 	perfActiveTick,
 	pickNode,
+	pickPeers,
 	testNode,
 	type ActiveDeps,
+	type ManifestNode,
 } from '../perf-active.js';
 import { PERF_SCHEMA, readActiveRows, type ActivePerfRow } from '../perf-sample-store.js';
 
@@ -64,6 +71,8 @@ const deps = (stdout: string, over: Partial<ActiveDeps> = {}): ActiveDeps => ({
 	script: () => Promise.resolve({ code: 0, stdout, stderr: '', ms: 1, bytesOut: 0 }),
 	net: () => Promise.resolve({ upMbps: 177.6, downMbps: 114.5, bytes: NET_BYTES }),
 	workers: () => Promise.resolve(0),
+	peer: (_node, peer) =>
+		Promise.resolve({ node: peer, outMbps: 93.3, inMbps: 78.8, retransmits: 0 }),
 	...over,
 });
 const at = new Date().toISOString();
@@ -196,16 +205,17 @@ void test('the tick tests the picked node and records its row; nothing due is a 
 	const dir = mkdtempSync(join(tmpdir(), 'perf-active-'));
 	try {
 		const now = Date.now();
+		const nodes: ManifestNode[] = [{ node: 'claw-1', ip: '192.0.2.1', backstop: false }];
 		const r = await perfActiveTick(now, {
 			dir,
-			nodes: ['claw-1'],
+			nodes,
 			drains: {},
 			test: (node, when) =>
 				Promise.resolve({ v: PERF_SCHEMA, at: when, node, outcome: 'busy', why: 'not idle' }),
 		});
 		assert.deepEqual([r.verdict, r.node, r.outcome], ['ok', 'claw-1', 'busy']);
 		assert.equal(readActiveRows(dir).rows.length, 1);
-		const again = await perfActiveTick(now + 60_000, { dir, nodes: ['claw-1'], drains: {} });
+		const again = await perfActiveTick(now + 60_000, { dir, nodes, drains: {} });
 		assert.deepEqual(
 			[again.verdict, again.node],
 			['ok', null],
@@ -221,4 +231,164 @@ void test('pickNode: a node that stays busy does not starve an untried one', () 
 	const retryMin = ACTIVE_RETRY_MS / 60_000;
 	const rows = [row('claw-10', retryMin + 1, 'busy', now)];
 	assert.equal(pickNode(['claw-10', 'claw-2'], rows, {}, now), 'claw-2');
+});
+
+const fioDoc = (side: 'read' | 'write', iops: number, p50 = 82_432, p99 = 104_960) =>
+	JSON.stringify({
+		jobs: [
+			{
+				error: 0,
+				[side]: { iops, clat_ns: { percentile: { '50.000000': p50, '99.000000': p99 } } },
+			},
+		],
+	});
+
+void test('fio: IOPS at depth 32 and depth-1 latency in microseconds join the disk reading', () => {
+	const p = parseActive(
+		IDLE_RUN.replace(
+			'maxWorkers=0',
+			`fio.randread32=${fioDoc('read', 88956.4)}\nfio.randwrite32=${fioDoc('write', 72671)}\nfio.randread1=${fioDoc('read', 10552)}\nmaxWorkers=0`
+		)
+	);
+	assert.equal(p.torn, false);
+	if (p.torn) return;
+	assert.deepEqual(
+		[p.disk?.randReadIops, p.disk?.randWriteIops, p.disk?.qd1ReadP50Us, p.disk?.qd1ReadP99Us],
+		[88956, 72671, 82.4, 105]
+	);
+	assert.equal(p.disk?.fioWhy, undefined);
+	assert.equal(p.disk?.syncWriteMs, 37, 'the dd numbers are untouched');
+});
+
+void test('fio: missing, broken or failed is null with the reason, never a zero', () => {
+	const missing = parseActive(
+		IDLE_RUN.replace('maxWorkers=0', 'fioWhy=fio is not installed\nmaxWorkers=0')
+	);
+	assert.equal(!missing.torn && missing.disk?.randReadIops, undefined);
+	assert.equal(!missing.torn && missing.disk?.fioWhy, 'fio is not installed');
+	const broken = parseActive(
+		IDLE_RUN.replace(
+			'maxWorkers=0',
+			`fio.randread32=\nfio.randwrite32=${JSON.stringify({ jobs: [{ error: 5 }] })}\nfio.randread1=${fioDoc('read', 10552)}\nmaxWorkers=0`
+		)
+	);
+	assert.equal(broken.torn, false);
+	if (broken.torn) return;
+	assert.equal(broken.disk?.randReadIops, null);
+	assert.equal(broken.disk?.randWriteIops, null);
+	assert.equal(broken.disk?.qd1ReadP50Us, 82.4);
+	assert.match(broken.disk?.fioWhy ?? '', /printed nothing.*error 5/);
+	assert.deepEqual(fioResult('{', 'read'), { why: 'fio output is not JSON: {' });
+});
+
+const iperfDoc = (bps: number, retransmits?: number) =>
+	JSON.stringify({ end: { sum_received: { bits_per_second: bps }, sum_sent: { retransmits } } });
+
+void test('iperf3: the receiver counts the rate; retransmits sum over both directions', () => {
+	const r = parsePeer(
+		'claw-6',
+		`out=${iperfDoc(93_312_345, 2)}\nin=${iperfDoc(78_800_000, 1)}\nend=1\n`
+	);
+	assert.deepEqual(r, { node: 'claw-6', outMbps: 93.3, inMbps: 78.8, retransmits: 3 });
+	const half = parsePeer(
+		'claw-6',
+		`out=${iperfDoc(93_000_000)}\nin=${JSON.stringify({ error: 'unable to connect to server' })}\nend=1\n`
+	);
+	assert.equal(half.outMbps, 93);
+	assert.equal(half.inMbps, null);
+	assert.equal(half.retransmits, null);
+	assert.match(half.why ?? '', /in: iperf3: unable to connect/);
+	assert.match(
+		parsePeer('claw-6', 'why=iperf3 is not installed\nend=1\n').why ?? '',
+		/not installed/
+	);
+	assert.match(parsePeer('claw-6', 'out=').why ?? '', /did not finish/);
+	assert.deepEqual(iperfResult(''), { why: 'iperf3 printed nothing (the peer never answered)' });
+});
+
+void test('the client script is valid bash, takes only an IPv4 address, and its shell never uses ${...}', () => {
+	const sh = peerClientScript('192.0.2.6');
+	execFileSync('bash', ['-n'], { input: sh });
+	assert.ok(!sh.includes('${'));
+	assert.ok(sh.includes('-c 192.0.2.6 -p 5201'));
+	assert.throws(() => peerClientScript('192.0.2.6; rm -rf /'), /not an IPv4/);
+});
+
+const peerRow = (node: string, peer: string, minsAgo: number, now: number): ActivePerfRow => ({
+	...row(node, minsAgo, 'measured', now),
+	peer: { node: peer, outMbps: 1, inMbps: 1, retransmits: 0 },
+});
+
+void test('pickPeers: never paired first, then paired longest ago in either direction; drains wait', () => {
+	const now = Date.now();
+	const c = (node: string) => ({ node, ip: '192.0.2.1' });
+	const cands = [c('claw-2'), c('claw-3'), c('claw-4'), c('claw-5')];
+	const rows = [
+		peerRow('claw-1', 'claw-2', 60, now), // paired an hour ago, from claw-1
+		peerRow('claw-3', 'claw-1', 600, now), // paired ten hours ago, from claw-3
+		peerRow('claw-4', 'claw-5', 1, now), // not involving claw-1
+	];
+	assert.deepEqual(
+		pickPeers('claw-1', [c('claw-1'), ...cands], rows, {}).map((p) => p.node),
+		['claw-4', 'claw-5', 'claw-3', 'claw-2']
+	);
+	assert.deepEqual(
+		pickPeers('claw-1', cands, rows, {
+			'claw-4': { kind: 'reboot', reason: 'x', since: '' },
+		} as never).map((p) => p.node),
+		['claw-5', 'claw-3', 'claw-2']
+	);
+});
+
+void test('peerCandidates: claws with a LAN address only; the backstop is neither peer nor paired', () => {
+	const nodes: ManifestNode[] = [
+		{ node: 'claw-1', ip: '192.0.2.1', backstop: false },
+		{ node: 'claw-2', ip: '192.0.2.2', backstop: false },
+		{ node: 'claw-3', ip: null, backstop: false },
+		{ node: 'big', ip: '192.0.2.9', backstop: true },
+	];
+	assert.deepEqual(peerCandidates('claw-1', nodes), [{ node: 'claw-2', ip: '192.0.2.2' }]);
+	assert.deepEqual(peerCandidates('big', nodes), []);
+});
+
+const c6 = { node: 'claw-6', ip: '192.0.2.6' };
+const c4 = { node: 'claw-4', ip: '192.0.2.4' };
+
+void test('the peer test runs against the first idle candidate and joins the row', async () => {
+	const counts: Record<string, number[]> = { 'claw-9': [0], 'claw-4': [1], 'claw-6': [0, 0] };
+	const workers = (n: string) => Promise.resolve(counts[n]?.shift() ?? 0);
+	const r = await testNode('claw-9', at, deps(IDLE_RUN, { workers }), [c4, c6]);
+	assert.equal(r.outcome, 'measured');
+	assert.deepEqual(r.peer, { node: 'claw-6', outMbps: 93.3, inMbps: 78.8, retransmits: 0 });
+	assert.equal(r.why, undefined);
+	const none = await testNode(
+		'claw-9',
+		at,
+		deps(IDLE_RUN, { workers: (n) => Promise.resolve(n === 'claw-9' ? 0 : 2) }),
+		[c4, c6]
+	);
+	assert.equal(none.peer, null, 'no idle peer: not tested, not a zero');
+});
+
+void test('a CI job on the peer during its test drops the peer numbers, keeping its name', async () => {
+	const counts: Record<string, number[]> = { 'claw-6': [0, 1] };
+	const workers = (n: string) => Promise.resolve(counts[n]?.shift() ?? 0);
+	const r = await testNode('claw-9', at, deps(IDLE_RUN, { workers }), [c6]);
+	assert.equal(r.peer?.node, 'claw-6');
+	assert.equal(r.peer?.outMbps, null);
+	assert.match(r.why ?? '', /peer claw-6: a CI job arrived on claw-6/);
+	assert.deepEqual(
+		r.net,
+		{ upMbps: 177.6, downMbps: 114.5, bytes: NET_BYTES },
+		'the controller test stands'
+	);
+});
+
+void test('a CI job on the tested node after the network tests drops both of them', async () => {
+	const counts: Record<string, number[]> = { 'claw-9': [1] };
+	const workers = (n: string) => Promise.resolve(counts[n]?.shift() ?? 0);
+	const r = await testNode('claw-9', at, deps(IDLE_RUN, { workers }), [c6]);
+	assert.equal(r.net, null);
+	assert.equal(r.peer, null);
+	assert.equal(r.disk?.syncWriteMs, 37);
 });

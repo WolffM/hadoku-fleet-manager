@@ -105,6 +105,13 @@
             "proto": "tcp",
             "from": "lan",
             "why": "Cockpit"
+          },
+          {
+            "port": 5201,
+            "proto": "tcp",
+            "from": "lan",
+            "why": "iperf3 peer test",
+            "$why": "fleet:perf-active measures claw-to-claw throughput with iperf3. Nothing listens on this port except a one-shot iperf3 -s -1 during a test; why is the ufw comment, so it stays short."
           }
         ],
         "wireless": {
@@ -381,6 +388,13 @@
             "proto": "tcp",
             "from": "lan",
             "why": "Cockpit"
+          },
+          {
+            "port": 5201,
+            "proto": "tcp",
+            "from": "lan",
+            "why": "iperf3 peer test",
+            "$why": "fleet:perf-active measures claw-to-claw throughput with iperf3. Nothing listens on this port except a one-shot iperf3 -s -1 during a test; why is the ufw comment, so it stays short."
           }
         ]
       },

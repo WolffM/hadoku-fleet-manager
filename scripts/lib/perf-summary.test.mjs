@@ -5,7 +5,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { pct, summarizeActive, summarizeNode, summarizePerf } from './perf-summary.mjs';
+import {
+	pct,
+	summarizeActive,
+	summarizeNode,
+	summarizePeers,
+	summarizePerf,
+} from './perf-summary.mjs';
 
 const NOW = Date.now();
 const at = (minsAgo) => new Date(NOW - minsAgo * 60_000).toISOString();
@@ -143,4 +149,42 @@ void test('active: spread over measured results only; attempts that could not te
 	assert.equal(never.measured, 0);
 	assert.equal(never.syncWriteMs.p50, null);
 	assert.match(never.lastWhy, /not idle/);
+});
+
+void test('active: fio spreads over measured rows; a row without fio is not a zero', () => {
+	const a = (disk) => ({ v: 1, at: at(1), node: 'claw-6', outcome: 'measured', disk });
+	const s = summarizeActive('claw-6', [
+		a({ fs: 'ext4', syncWriteMs: 1, randReadIops: 88956, randWriteIops: 72671, qd1ReadP99Us: 105 }),
+		a({ fs: 'ext4', syncWriteMs: 1 }),
+		a({ fs: 'ext4', syncWriteMs: 1, randReadIops: null, fioWhy: 'fio is not installed' }),
+	]);
+	assert.equal(s.randReadIops.p50, 88956);
+	assert.equal(s.qd1ReadP99Us.max, 105);
+	assert.equal(s.fioWhy, 'fio is not installed');
+});
+
+void test('peers: one entry per pair whichever end was tested, each direction kept apart', () => {
+	const r = (node, peer, outMbps, inMbps, extra = {}) => ({
+		v: 1,
+		at: at(1),
+		node,
+		outcome: 'measured',
+		peer: { node: peer, outMbps, inMbps, retransmits: 1, ...extra },
+	});
+	const p = summarizePeers([
+		r('claw-3', 'claw-6', 93, 79), // claw-3 -> claw-6 is 93
+		r('claw-6', 'claw-3', 81, 95), // claw-6 -> claw-3 is 81, claw-3 -> claw-6 is 95
+		r('claw-10', 'claw-2', null, null, { why: 'out: iperf3 printed nothing' }),
+		{ v: 1, at: at(1), node: 'claw-1', outcome: 'busy' },
+	]);
+	assert.deepEqual(
+		p.map((x) => [x.a, x.b, x.runs]),
+		[
+			['claw-2', 'claw-10', 1],
+			['claw-3', 'claw-6', 2],
+		]
+	);
+	assert.deepEqual([p[1].aToBMbps.max, p[1].bToAMbps.max, p[1].retransmits], [95, 81, 2]);
+	assert.equal(p[0].aToBMbps.p50, null);
+	assert.match(p[0].lastWhy, /printed nothing/);
 });

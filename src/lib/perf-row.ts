@@ -113,9 +113,34 @@ export interface ActivePerfRow {
 		/** 256 MiB, page cache bypassed, flushed. */
 		seqWriteMBps: number | null;
 		seqReadMBps: number | null;
+		/**
+		 * fio, 4 KiB random I/O with the page cache bypassed over the same 256 MiB
+		 * file: IOPS at queue depth 32 (what a busy database or cache can pull),
+		 * and completion latency at depth 1 (what one reader waits per request).
+		 * Absent on rows from before fio; null when fio could not run (`fioWhy`).
+		 */
+		randReadIops?: number | null;
+		randWriteIops?: number | null;
+		qd1ReadP50Us?: number | null;
+		qd1ReadP99Us?: number | null;
+		fioWhy?: string;
 	} | null;
 	/** Controller <-> node over ssh, connection setup subtracted. */
 	net?: { upMbps: number | null; downMbps: number | null; bytes: number } | null;
+	/**
+	 * iperf3 between this node and one other claw over the LAN, the path two
+	 * copies of a redundant tenant use. `outMbps` is this node -> peer, `inMbps`
+	 * peer -> this node, each as the receiver counted it; `retransmits` are the
+	 * sender's TCP retransmissions over both runs. A field is null when its run
+	 * failed (`why`); the whole is null when no peer was tested.
+	 */
+	peer?: {
+		node: string;
+		outMbps: number | null;
+		inMbps: number | null;
+		retransmits: number | null;
+		why?: string;
+	} | null;
 	/** Most CI workers seen during the test; above 0 means disturbed. */
 	maxWorkers?: number | null;
 }

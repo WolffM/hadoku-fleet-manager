@@ -18,10 +18,21 @@
  *          256 MiB written with the page cache bypassed and flushed, then read
  *          back the same way. On the root disk (a claw's /tmp is RAM), in the
  *          admin user's ~/.cache, removed on exit whatever happens.
+ *          Then fio, 4 KiB random I/O over that same file, page cache bypassed:
+ *          IOPS at queue depth 32 (reads, then writes) and read latency at
+ *          depth 1. dd cannot measure random I/O, and it is what a database or
+ *          a cache actually does.
  *   net    100 MiB controller -> node and node -> controller over ssh, the time
  *          of a bare `ssh true` subtracted. On this LAN the claws reach the
  *          controller through a wireless bridge, so this is the path a service
  *          on a claw actually has to the controller, not the claw's own link.
+ *   peer   iperf3 between this claw and one other idle claw, both directions:
+ *          the path two copies of a redundant tenant use. The peer is the
+ *          claw this one was paired with longest ago, so over days every pair
+ *          is covered. The peer runs a one-shot `iperf3 -s -1` per direction,
+ *          on {@link IPERF_PORT} (open from the LAN in the node profiles'
+ *          openPorts); nothing listens there between tests. A CI job on the
+ *          peer afterwards drops the peer numbers.
  *
  * A node under a maintenance, training or reboot drain is not tested.
  */
@@ -31,6 +42,7 @@ import { logger, stateDir } from './host.js';
 import { type ActivePerfRow, PERF_SCHEMA } from './lib/perf-row.js';
 import { readManifestState } from './lib/manifest.js';
 import { isLocalNode } from './lib/node-identity.js';
+import { isBackstopNode, type RoleBearingNode } from './lib/node-role.js';
 import { nodeShell } from './node-shell.js';
 import { appendActiveRow, perfDir, readActiveRows } from './perf-sample-store.js';
 import { readDrain, type DrainState } from './runners/drain.js';
@@ -54,6 +66,13 @@ export const IDLE_CPU_PCT = 25;
 export const NET_BYTES = 100 * 1024 * 1024;
 const SYNC_OPS = 64;
 const SEQ_MIB = 256;
+/** Each fio job's measured seconds, after one second of ramp. */
+const FIO_SECONDS = 5;
+export const IPERF_PORT = 5201;
+/** Each iperf3 direction's measured seconds, after one omitted second. */
+const PEER_SECONDS = 5;
+/** Candidate peers checked for idleness before giving up on a peer this tick. */
+const PEER_TRIES = 3;
 const JOB_NAME = 'fleet:perf-active';
 const OUT_OF_SERVICE = new Set(['maintenance', 'training', 'reboot']);
 
@@ -79,6 +98,10 @@ ns() { date +%s%N; }
 t0=$(ns); dd if=/dev/zero of="$D/sync" bs=4k count=${SYNC_OPS} oflag=dsync status=none && echo "syncWriteNs=$(( $(ns) - t0 ))"
 t0=$(ns); dd if=/dev/zero of="$D/seq" bs=1M count=${SEQ_MIB} oflag=direct conv=fsync status=none && echo "seqWriteNs=$(( $(ns) - t0 ))"
 t0=$(ns); dd if="$D/seq" of=/dev/null bs=1M iflag=direct status=none && echo "seqReadNs=$(( $(ns) - t0 ))"
+fj() { fio --name=t --filename="$D/seq" --size=${SEQ_MIB}M --rw=$1 --bs=4k --direct=1 --ioengine=libaio --iodepth=$2 --runtime=${FIO_SECONDS} --ramp_time=1 --time_based --output-format=json 2>/dev/null | tr -d '\n\t'; }
+if ! command -v fio >/dev/null 2>&1; then echo "fioWhy=fio is not installed"
+elif [ ! -f "$D/seq" ]; then echo "fioWhy=the sequential write did not leave a file to test"
+else echo "fio.randread32=$(fj randread 32)"; echo "fio.randwrite32=$(fj randwrite 32)"; echo "fio.randread1=$(fj randread 1)"; fi
 echo "maxWorkers=$(cat "$D/maxw")"
 echo "end=1"
 `;
@@ -89,6 +112,55 @@ const num = (v: string | undefined): number | null => {
 	return Number.isFinite(n) ? n : null;
 };
 const round = (n: number, places = 2): number => Math.round(n * 10 ** places) / 10 ** places;
+
+interface FioSide {
+	iops?: number;
+	clat_ns?: { percentile?: Record<string, number> };
+}
+interface FioJob {
+	error?: number;
+	read?: FioSide;
+	write?: FioSide;
+}
+
+/** One fio JSON document's job: IOPS and depth-1 latency percentiles, or why not. PURE. */
+export function fioResult(
+	json: string | undefined,
+	side: 'read' | 'write'
+): { iops: number; p50Us: number | null; p99Us: number | null } | { why: string } {
+	if (!json) return { why: 'fio printed nothing' };
+	let job: FioJob | undefined;
+	try {
+		job = (JSON.parse(json) as { jobs?: FioJob[] }).jobs?.[0];
+	} catch {
+		return { why: `fio output is not JSON: ${json.slice(0, 80)}` };
+	}
+	if (!job) return { why: 'fio reported no job' };
+	if (job.error) return { why: `fio job failed with error ${job.error}` };
+	const x = job[side];
+	if (typeof x?.iops !== 'number' || !(x.iops > 0)) return { why: `fio measured no ${side}s` };
+	const p = x.clat_ns?.percentile ?? {};
+	const us = (k: string) => (typeof p[k] === 'number' ? round(p[k] / 1000, 1) : null);
+	return { iops: Math.round(x.iops), p50Us: us('50.000000'), p99Us: us('99.000000') };
+}
+
+/** The fio fields of a disk row from the script's three documents. PURE. */
+function fioFields(kv: Map<string, string>): Partial<NonNullable<ActivePerfRow['disk']>> {
+	const missing = kv.get('fioWhy');
+	if (missing) return { fioWhy: missing };
+	if (!kv.has('fio.randread32')) return {};
+	const rr = fioResult(kv.get('fio.randread32'), 'read');
+	const rw = fioResult(kv.get('fio.randwrite32'), 'write');
+	const r1 = fioResult(kv.get('fio.randread1'), 'read');
+	const whys = [rr, rw, r1].flatMap((r) => ('why' in r ? [r.why] : []));
+	return {
+		randReadIops: 'why' in rr ? null : rr.iops,
+		randWriteIops: 'why' in rw ? null : rw.iops,
+		qd1ReadP50Us: 'why' in r1 ? null : r1.p50Us,
+		qd1ReadP99Us: 'why' in r1 ? null : r1.p99Us,
+		...(whys.length ? { fioWhy: [...new Set(whys)].join('; ') } : {}),
+	};
+}
 
 export type ActiveParse =
 	| { torn: true; why: string }
@@ -135,9 +207,89 @@ export function parseActive(stdout: string): ActiveParse {
 					syncWriteMs: sync === null ? null : round((sync * 1000) / SYNC_OPS),
 					seqWriteMBps: sw === null ? null : round((SEQ_MIB * 1.048576) / sw),
 					seqReadMBps: sr === null ? null : round((SEQ_MIB * 1.048576) / sr),
+					...fioFields(kv),
 				}
 			: null,
 		maxWorkers: num(kv.get('maxWorkers')),
+	};
+}
+
+type PeerResult = NonNullable<ActivePerfRow['peer']>;
+
+const IPV4 = /^(\d{1,3}\.){3}\d{1,3}$/;
+
+/**
+ * The client half, run on the tested node: one run each way, each retried
+ * while the peer's one-shot server is not listening yet. `ip` is checked to
+ * be an IPv4 address before it is written into a shell script.
+ */
+export function peerClientScript(ip: string): string {
+	if (!IPV4.test(ip)) throw new Error(`not an IPv4 address: ${ip}`);
+	return String.raw`c() { o=""; for i in 1 2 3 4 5; do o=$(iperf3 -c ${ip} -p ${IPERF_PORT} -t ${PEER_SECONDS} -O 1 -J $1 2>/dev/null | tr -d '\n\t'); case "$o" in *'"error"'*|'') sleep 1;; *) break;; esac; done; echo "$o"; }
+command -v iperf3 >/dev/null 2>&1 || { echo "why=iperf3 is not installed"; echo "end=1"; exit 0; }
+sleep 1
+echo "out=$(c)"
+echo "in=$(c -R)"
+echo "end=1"
+`;
+}
+
+/** The peer's half: one one-shot server per direction, bounded so nothing outlives the test. */
+export const PEER_SERVER_CMD = `timeout ${PEER_SECONDS * 2 + 30} sh -c 'iperf3 -s -1 -p ${IPERF_PORT} >/dev/null 2>&1; iperf3 -s -1 -p ${IPERF_PORT} >/dev/null 2>&1'`;
+
+interface IperfEnd {
+	error?: string;
+	end?: {
+		sum_received?: { bits_per_second?: number };
+		sum_sent?: { retransmits?: number };
+	};
+}
+
+/** One iperf3 JSON document: the receiver's Mb/s and the sender's retransmits, or why not. PURE. */
+export function iperfResult(
+	json: string | undefined
+): { mbps: number; retransmits: number | null } | { why: string } {
+	if (!json) return { why: 'iperf3 printed nothing (the peer never answered)' };
+	let d: IperfEnd;
+	try {
+		d = JSON.parse(json) as IperfEnd;
+	} catch {
+		return { why: `iperf3 output is not JSON: ${json.slice(0, 80)}` };
+	}
+	if (d.error) return { why: `iperf3: ${d.error}` };
+	const bps = d.end?.sum_received?.bits_per_second;
+	if (typeof bps !== 'number' || !(bps > 0)) return { why: 'iperf3 measured nothing' };
+	const rt = d.end?.sum_sent?.retransmits;
+	return { mbps: round(bps / 1e6, 1), retransmits: typeof rt === 'number' ? rt : null };
+}
+
+/** The client script's output, as a peer result. PURE. */
+export function parsePeer(peer: string, stdout: string): PeerResult {
+	const kv = new Map<string, string>();
+	for (const line of String(stdout).split('\n')) {
+		const eq = line.indexOf('=');
+		if (eq > 0) kv.set(line.slice(0, eq).trim(), line.slice(eq + 1).trim());
+	}
+	const none = { node: peer, outMbps: null, inMbps: null, retransmits: null };
+	if (kv.get('end') !== '1')
+		return { ...none, why: 'the peer test did not finish (no end marker)' };
+	const missing = kv.get('why');
+	if (missing) return { ...none, why: missing };
+	const out = iperfResult(kv.get('out'));
+	const back = iperfResult(kv.get('in'));
+	const whys = [
+		...('why' in out ? [`out: ${out.why}`] : []),
+		...('why' in back ? [`in: ${back.why}`] : []),
+	];
+	const rts = [out, back].flatMap((r) =>
+		'why' in r || r.retransmits === null ? [] : [r.retransmits]
+	);
+	return {
+		node: peer,
+		outMbps: 'why' in out ? null : out.mbps,
+		inMbps: 'why' in back ? null : back.mbps,
+		retransmits: rts.length ? rts.reduce((a, b) => a + b, 0) : null,
+		...(whys.length ? { why: whys.join('; ') } : {}),
 	};
 }
 
@@ -206,12 +358,20 @@ export interface ActiveDeps {
 	script: (node: string) => Promise<RunResult>;
 	net: (node: string) => Promise<NonNullable<ActivePerfRow['net']> | { why: string }>;
 	workers: (node: string) => Promise<number | null>;
+	/** iperf3 from `node` to `peer` at `ip` and back. Never rejects. */
+	peer: (node: string, peer: string, ip: string) => Promise<PeerResult>;
+}
+
+/** A claw another claw can be paired with. */
+export interface PeerCandidate {
+	node: string;
+	ip: string;
 }
 
 const liveDeps: ActiveDeps = {
 	script: (node) => {
 		const [bin, argv] = nodeShell(node, 'admin', 'bash -s');
-		return run(bin, argv, ACTIVE_SCRIPT, 120_000);
+		return run(bin, argv, ACTIVE_SCRIPT, 180_000);
 	},
 	net: async (node) => {
 		const shell = (cmd: string) => nodeShell(node, 'admin', cmd);
@@ -242,13 +402,106 @@ const liveDeps: ActiveDeps = {
 		const r = await run(bin, argv, null, 20_000);
 		return num(r.stdout.trim());
 	},
+	peer: async (node, peer, ip) => {
+		let script: string;
+		try {
+			script = peerClientScript(ip);
+		} catch (err) {
+			return {
+				node: peer,
+				outMbps: null,
+				inMbps: null,
+				retransmits: null,
+				why: err instanceof Error ? err.message : String(err),
+			};
+		}
+		const [sb, sa] = nodeShell(peer, 'admin', PEER_SERVER_CMD);
+		const server = run(sb, sa, null, (PEER_SECONDS * 2 + 40) * 1000);
+		const [cb, ca] = nodeShell(node, 'admin', 'bash -s');
+		const client = await run(cb, ca, script, 120_000);
+		const served = await server;
+		const r = parsePeer(peer, client.stdout);
+		// The server's exit says why a peer never answered: 127 is no iperf3 there.
+		if (r.outMbps === null && served.code === 127)
+			return { ...r, why: `iperf3 is not installed on ${peer}` };
+		if (client.why) return { ...r, why: `could not run the peer test: ${client.why}` };
+		return r;
+	},
 };
 
-/** One node, end to end. NEVER THROWS. */
+/**
+ * The peers to try for `node`, best first. PURE. Never the node itself or one
+ * under an out-of-service drain; the claw this node was paired with longest
+ * ago comes first (never paired first), in either direction, then by name.
+ */
+export function pickPeers(
+	node: string,
+	candidates: readonly PeerCandidate[],
+	rows: readonly ActivePerfRow[],
+	drains: DrainState
+): PeerCandidate[] {
+	const lastPaired = new Map<string, number>();
+	for (const r of rows) {
+		const other = r.node === node ? r.peer?.node : r.peer?.node === node ? r.node : undefined;
+		if (!other) continue;
+		lastPaired.set(other, Math.max(lastPaired.get(other) ?? 0, Date.parse(r.at)));
+	}
+	return candidates
+		.filter((c) => {
+			if (c.node === node) return false;
+			const kind = drains[c.node]?.kind ?? (drains[c.node] ? 'maintenance' : null);
+			return !(kind && OUT_OF_SERVICE.has(kind));
+		})
+		.sort(
+			(a, b) =>
+				(lastPaired.get(a.node) ?? 0) - (lastPaired.get(b.node) ?? 0) ||
+				a.node.localeCompare(b.node)
+		);
+}
+
+/**
+ * The peer test: the first of up to {@link PEER_TRIES} candidates with no CI
+ * job runs it, and is re-counted after. Null when no candidate was idle or
+ * there were none; a peer that took a job meanwhile keeps its name, with its
+ * numbers dropped.
+ */
+async function peerTest(
+	node: string,
+	peers: readonly PeerCandidate[],
+	deps: ActiveDeps
+): Promise<PeerResult | null> {
+	for (const c of peers.slice(0, PEER_TRIES)) {
+		const before = await deps.workers(c.node).catch(() => null);
+		if (before !== 0) continue;
+		const r = await deps.peer(node, c.node, c.ip).catch((err: unknown): PeerResult => ({
+			node: c.node,
+			outMbps: null,
+			inMbps: null,
+			retransmits: null,
+			why: err instanceof Error ? err.message : String(err),
+		}));
+		const after = await deps.workers(c.node).catch(() => null);
+		if (after === 0) return r;
+		return {
+			node: c.node,
+			outMbps: null,
+			inMbps: null,
+			retransmits: null,
+			why:
+				after === null
+					? `could not re-count CI workers on ${c.node}; peer numbers dropped`
+					: `a CI job arrived on ${c.node} during the peer test; peer numbers dropped`,
+		};
+	}
+	return null;
+}
+
+/** One node, end to end; `peers` best first (empty: no peer test). NEVER THROWS. */
 export async function testNode(
 	node: string,
 	at: string,
-	deps: ActiveDeps = liveDeps
+	deps: ActiveDeps = liveDeps,
+	peers: readonly PeerCandidate[] = []
 ): Promise<ActivePerfRow> {
 	const base = { v: PERF_SCHEMA, at, node } as const;
 	let res: RunResult;
@@ -299,38 +552,32 @@ export async function testNode(
 	const net = await deps
 		.net(node)
 		.catch((err: unknown) => ({ why: err instanceof Error ? err.message : String(err) }));
+	const peer = await peerTest(node, peers, deps);
+	// One re-count covers both network tests: a job that arrived during either
+	// cannot be placed in time, so both are dropped.
 	const after = await deps.workers(node).catch(() => null);
-	if (after === null)
+	const measured = { ...base, outcome: 'measured', idle: p.reading, disk: p.disk } as const;
+	if (after === null || after > 0)
 		return {
-			...base,
-			outcome: 'measured',
-			idle: p.reading,
-			disk: p.disk,
+			...measured,
 			net: null,
-			maxWorkers: 0,
-			why: 'could not re-count CI workers after the network test; network dropped',
+			peer: null,
+			maxWorkers: after ?? 0,
+			why:
+				after === null
+					? 'could not re-count CI workers after the network tests; network dropped'
+					: 'a CI job arrived during the network tests; network dropped',
 		};
-	if (after > 0)
-		return {
-			...base,
-			outcome: 'measured',
-			idle: p.reading,
-			disk: p.disk,
-			net: null,
-			maxWorkers: after,
-			why: 'a CI job arrived during the network test; network dropped',
-		};
-	if ('why' in net)
-		return {
-			...base,
-			outcome: 'measured',
-			idle: p.reading,
-			disk: p.disk,
-			net: null,
-			maxWorkers: 0,
-			why: net.why,
-		};
-	return { ...base, outcome: 'measured', idle: p.reading, disk: p.disk, net, maxWorkers: 0 };
+	const whys = ['why' in net ? net.why : null, peer?.why ? `peer ${peer.node}: ${peer.why}` : null]
+		.filter(Boolean)
+		.join('; ');
+	return {
+		...measured,
+		net: 'why' in net ? null : net,
+		peer,
+		maxWorkers: 0,
+		...(whys ? { why: whys } : {}),
+	};
 }
 
 /**
@@ -370,16 +617,52 @@ export function pickNode(
 	return due[0] ?? null;
 }
 
-function manifestNodes(): string[] {
+export interface ManifestNode {
+	node: string;
+	ip: string | null;
+	backstop: boolean;
+}
+
+function manifestNodes(): ManifestNode[] {
 	const m = readManifestState();
 	if (!m.ok) throw new Error(`cannot read the fleet manifest (${m.why})`);
-	return Object.keys(m.doc.machines ?? {});
+	const machines = (m.doc.machines ?? {}) as Record<
+		string,
+		RoleBearingNode & { lan?: { ip?: string } }
+	>;
+	return Object.entries(machines).map(([node, v]) => ({
+		node,
+		ip: v.lan?.ip ?? null,
+		backstop: isBackstopNode(v),
+	}));
+}
+
+/** How far back pair history is read: long enough for every pair to come round. */
+const PAIR_HISTORY_MS = 14 * 24 * 3_600_000;
+
+/**
+ * Who a claw may be paired with: every other claw with a LAN address. The
+ * backstop and the controller are never a peer, and a backstop is never paired.
+ */
+export function peerCandidates(node: string, nodes: readonly ManifestNode[]): PeerCandidate[] {
+	const self = nodes.find((n) => n.node === node);
+	if (!self || self.backstop) return [];
+	return nodes.flatMap((n) =>
+		n.node !== node && !n.backstop && n.ip && !isLocalNode(n.node)
+			? [{ node: n.node, ip: n.ip }]
+			: []
+	);
 }
 
 /** One tick: pick, test, record. NEVER THROWS. */
 export async function perfActiveTick(
 	nowMs: number = Date.now(),
-	deps: { nodes?: string[]; dir?: string; drains?: DrainState; test?: typeof testNode } = {}
+	deps: {
+		nodes?: ManifestNode[];
+		dir?: string;
+		drains?: DrainState;
+		test?: (node: string, at: string, peers: PeerCandidate[]) => Promise<ActivePerfRow>;
+	} = {}
 ): Promise<{
 	verdict: Verdict;
 	why?: string;
@@ -388,16 +671,26 @@ export async function perfActiveTick(
 }> {
 	const dir = deps.dir ?? perfDir(stateDir());
 	let node: string | null;
+	let peers: PeerCandidate[] = [];
 	try {
-		const rows = readActiveRows(dir, { sinceMs: nowMs - ACTIVE_EVERY_MS - ACTIVE_RETRY_MS }).rows;
-		node = pickNode(deps.nodes ?? manifestNodes(), rows, deps.drains ?? readDrain(nowMs), nowMs);
+		const rows = readActiveRows(dir, { sinceMs: nowMs - PAIR_HISTORY_MS }).rows;
+		const nodes = deps.nodes ?? manifestNodes();
+		const drains = deps.drains ?? readDrain(nowMs);
+		node = pickNode(
+			nodes.map((n) => n.node),
+			rows,
+			drains,
+			nowMs
+		);
+		if (node) peers = pickPeers(node, peerCandidates(node, nodes), rows, drains);
 	} catch (err) {
 		const why = err instanceof Error ? err.message : String(err);
 		logger.warn(`[perf-active] ${why}`);
 		return { verdict: 'unavailable', why, node: null, outcome: null };
 	}
 	if (!node) return { verdict: 'ok', node: null, outcome: null };
-	const row = await (deps.test ?? testNode)(node, new Date(nowMs).toISOString());
+	const at = new Date(nowMs).toISOString();
+	const row = await (deps.test ?? ((n, a, p) => testNode(n, a, liveDeps, p)))(node, at, peers);
 	try {
 		appendActiveRow(dir, row, nowMs);
 	} catch (err) {
