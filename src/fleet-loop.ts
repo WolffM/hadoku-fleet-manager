@@ -66,6 +66,7 @@ import {
 	type LabelConvergenceGh,
 } from './runners/node-eligibility.js';
 import { __setFleetProbeForTesting } from './fleet-probe-store.js';
+import { trackPass } from './lib/loop-lifecycle.js';
 
 /**
  * The last dispatch input a fast-loop tick built, so the dispatcher can run WITHOUT one.
@@ -573,7 +574,7 @@ export function startFastLoop(
 			// timer must not ALSO await it — doing so would make `every()`'s guard
 			// track a different thing (this timer's own call) than the one that
 			// actually matters (every caller of `dispatchBetweenTicks`).
-			void dispatchBetweenTicks(token, gh).catch((err: unknown) => {
+			void trackPass(dispatchBetweenTicks(token, gh)).catch((err: unknown) => {
 				// Belt and braces: a timer that can throw would stop dispatching forever.
 				logger.warn(
 					`[fleet-loop] dispatch timer threw: ${err instanceof Error ? err.message : String(err)}`

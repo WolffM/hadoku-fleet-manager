@@ -10,6 +10,7 @@
 import express, { type Express, type Request, type Response, type Router } from 'express';
 
 import type { RunnerHealthSnapshot } from './runner-health-snapshot.js';
+import type { StopResult } from './lib/loop-lifecycle.js';
 import { MAX_LEASE_SECONDS, activeLeases, releaseLease, takeLease } from './host-lease-record.js';
 
 /**
@@ -30,6 +31,17 @@ export interface FleetManager {
 	 * line saying so. See `FleetHost.controller` in host.ts.
 	 */
 	start(): void;
+	/**
+	 * Stop every loop `start()` started, for a process about to exit: no timer
+	 * fires again and no new pass begins, and the promise resolves once the
+	 * passes already running have finished, or after `boundMs` (default 20 s),
+	 * whichever is first. Never rejects. Safe to call when `start()` never ran.
+	 *
+	 * mgmt-api's drain awaits this before it exits, so a leader handing over to
+	 * its standby does not die mid-pass and leave the new leader to repeat what
+	 * it had done but not recorded (see lib/loop-lifecycle.ts).
+	 */
+	stop(boundMs?: number): Promise<StopResult>;
 	/**
 	 * The last runner-health tick, or `null` if none has ever completed.
 	 *

@@ -49,6 +49,7 @@
  * one whose first pass never completes.
  */
 import { noteTick, registerLoop, TOKEN_WAIT_GRACE_MS } from './liveness.js';
+import { isStopping, registerLoopTimer, trackPass } from './loop-lifecycle.js';
 import { logger, recordJobResult, stateDir } from '../host.js';
 import { appendJobRun, buildRow, jobRunDir, type JobRunVerdict } from '../job-run-store.js';
 
@@ -197,20 +198,24 @@ export function scheduleRepeating(
 	if (loopName)
 		registerLoop(loopName, intervalMs, { firstTickGraceMs: firstInMs + TOKEN_WAIT_GRACE_MS });
 	let timers: ReturnType<typeof setTimeout>[] = [];
+	// Once the loops are stopping, a pass that falls due does not start.
+	const due = (): void => {
+		if (!isStopping()) pass();
+	};
 	const first = setTimeout(() => {
-		pass();
-		const every = setInterval(pass, intervalMs);
+		due();
+		const every = setInterval(due, intervalMs);
 		every.unref?.();
 		timers.push(every);
 	}, firstInMs);
 	first.unref?.();
 	timers.push(first);
-	return {
+	return registerLoopTimer({
 		stop() {
 			for (const t of timers) clearTimeout(t);
 			timers = [];
 		},
-	};
+	});
 }
 
 /**
@@ -221,14 +226,17 @@ export function createOverlapGuard(): { run(pass: () => Promise<void>): void } {
 	let inFlight = false;
 	return {
 		run(pass) {
-			if (inFlight) return;
+			if (inFlight || isStopping()) return;
 			inFlight = true;
 			// `pass` is expected to handle its own rejections (both callers chain
 			// their own `.catch`); `void` only tells the linter this one is not
-			// awaited, not that failures are swallowed twice.
-			void pass().finally(() => {
-				inFlight = false;
-			});
+			// awaited, not that failures are swallowed twice. Tracked, so a stop
+			// waits for it (lib/loop-lifecycle.ts).
+			void trackPass(
+				pass().finally(() => {
+					inFlight = false;
+				})
+			);
 		},
 	};
 }

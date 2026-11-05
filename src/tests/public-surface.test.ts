@@ -76,6 +76,7 @@ const PUBLIC_SURFACE = [
 	'Reservation',
 	'RunnerHealthSnapshot',
 	'SaturationHostVerdict',
+	'StopResult',
 	'TelemetryKind',
 	'TelemetryTerm',
 	'TenantBackstop',

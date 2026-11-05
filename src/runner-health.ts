@@ -41,6 +41,7 @@
  * (OFFLINE_REPEAT_BACKOFF_MS) on top of the RE_ALERT_MS re-arm.
  */
 
+import { isStopping, trackPass } from './lib/loop-lifecycle.js';
 import { logger, githubToken, TOKEN_RETRY_MS, recordJobResult } from './host.js';
 import { withGhCaller } from './gh-budget.js';
 import { labelGhToken } from './gh-budget-windows.js';
@@ -366,13 +367,18 @@ function scheduleAfterBlackout(token: string): void {
 }
 
 function runTick(token: string, opts: { alerts?: boolean } = {}): Promise<void> {
+	// The loops are stopping (lib/loop-lifecycle.ts): no new tick, and no new
+	// ci-alerts pass, whichever timer asked.
+	if (isStopping()) return inFlightTick ?? Promise.resolve();
 	// CI-red alerting rides this cadence but runs INDEPENDENTLY of the tick.
 	// Two separate concerns sharing a timer: a GitHub blackout or a thrown error
 	// in either must not take the other down, and ci-alerts must not be able to
 	// delay runner mint/failover decisions by sitting in the same await chain.
 	if (opts.alerts !== false) {
-		void withGhCaller('ci-alerts', () => runCiAlerts(token, ghGet)).catch((err) =>
-			logger.warn(`[ci-alerts] pass failed: ${err instanceof Error ? err.message : String(err)}`)
+		void trackPass(
+			withGhCaller('ci-alerts', () => runCiAlerts(token, ghGet)).catch((err) =>
+				logger.warn(`[ci-alerts] pass failed: ${err instanceof Error ? err.message : String(err)}`)
+			)
 		);
 	}
 	inFlightTick = withGhCaller('runner-health', () => tick(token))
@@ -386,9 +392,9 @@ function runTick(token: string, opts: { alerts?: boolean } = {}): Promise<void> 
 		)
 		.finally(() => {
 			inFlightTick = null;
-			if (started) scheduleAfterBlackout(token);
+			if (started && !isStopping()) scheduleAfterBlackout(token);
 		});
-	return inFlightTick;
+	return trackPass(inFlightTick);
 }
 
 /** Resolves once the tick in flight (if any) has finished. Test-only seam. */

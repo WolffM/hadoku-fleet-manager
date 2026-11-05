@@ -244,6 +244,11 @@
     "why": "Wave5j lane D (plan \u00a76.2 tier 1): the one timer primitive the control loops (ci-scheduling's dispatch/fast loop, observation's runner-health) now share \u2014 domain-blind scheduling mechanics, same shape as liveness.ts beside it, which it calls into directly."
   },
   {
+    "glob": "src/lib/loop-lifecycle.ts",
+    "layer": "automation",
+    "why": "FleetManager.stop()'s machinery: every scheduler (job-runner.ts's scheduleRepeating and overlap guard, every.ts, runner-health's tick) registers its timers and passes here, so one call stops them all. Domain-blind scheduling mechanics, same shape as every.ts and liveness.ts beside it."
+  },
+  {
     "glob": "src/lib/usage-log.ts",
     "layer": "automation"
   },

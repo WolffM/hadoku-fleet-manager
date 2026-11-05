@@ -47,6 +47,7 @@
  */
 import { registerLoop, noteTick as noteLivenessTick, TOKEN_WAIT_GRACE_MS } from './liveness.js';
 import { logger } from '../host.js';
+import { isStopping, registerLoopTimer, trackPass } from './loop-lifecycle.js';
 
 export interface TokenWaitOptions {
 	/**
@@ -183,7 +184,7 @@ export function every(
 	const runOnce = (): void => {
 		// No overlap: a tick still running when the next is due is skipped,
 		// never stacked on top of it.
-		if (stopped || inFlight) return;
+		if (stopped || inFlight || isStopping()) return;
 		inFlight = true;
 		let result: void | Promise<void>;
 		try {
@@ -205,6 +206,7 @@ export function every(
 			inFlight = false;
 			return;
 		}
+		void trackPass(result);
 		result
 			// Recorded only on the success path, and only when this primitive
 			// owns the note — see `EveryOptions.noteTick` above.
@@ -266,7 +268,7 @@ export function every(
 		startSchedule();
 	}
 
-	return {
+	return registerLoopTimer({
 		stop(): void {
 			stopped = true;
 			if (firstHandle) clearTimeout(firstHandle);
@@ -276,7 +278,7 @@ export function every(
 			tokenWaitHandle = null;
 			intervalHandle = null;
 		},
-	};
+	});
 }
 
 /**

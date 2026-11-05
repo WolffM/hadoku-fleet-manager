@@ -41,6 +41,7 @@ import {
 	setHostedFallbackReset,
 } from './runner-health-ports.js';
 import { startPpeSweep, __stopPpeSweepForTesting } from './ppe-sweep.js';
+import { stopLoops, STOP_DRAIN_MS, __resetLoopLifecycleForTesting } from './lib/loop-lifecycle.js';
 
 export type { FleetHost, FleetHostLogger } from './host.js';
 export type { RunnerHealthSnapshot } from './runner-health.js';
@@ -128,6 +129,7 @@ export type { ForceRecord, ForceState } from './runners/backstop-force.js';
  */
 import type { FleetManager } from './server.js';
 export type { FleetManager } from './server.js';
+export type { StopResult } from './lib/loop-lifecycle.js';
 
 let constructed = false;
 
@@ -213,6 +215,18 @@ export function createFleetManager(host: FleetHost): FleetManager {
 			// gone quiet inside the 30-minute window, which no GitHub event signals.
 			startPpeSweep();
 		},
+		async stop(boundMs = STOP_DRAIN_MS) {
+			const r = await stopLoops(boundMs);
+			if (r.drained)
+				host.logger.info(
+					`[fleet-manager] stopped: every loop's timers cleared, passes in flight finished in ${r.waitedMs}ms`
+				);
+			else
+				host.logger.warn(
+					`[fleet-manager] stopped: timers cleared, but ${r.pending} pass(es) were still running after ${r.waitedMs}ms; exiting cuts them short`
+				);
+			return r;
+		},
 		snapshot: () => getRunnerHealthSnapshot(),
 	};
 }
@@ -239,5 +253,6 @@ export function __resetFleetManagerForTesting(): void {
 	__stopPerfSamplingForTesting();
 	__stopPerfActiveForTesting();
 	__stopPpeSweepForTesting();
+	__resetLoopLifecycleForTesting();
 	constructed = false;
 }
