@@ -24,10 +24,12 @@ import {
 	type ConvergeRunner,
 } from '../provisioning-converge.js';
 import { DAY_MS as REPAGE_MS } from '../lib/job-runner.js';
+import { jobRunDir, readJobRuns } from '../job-run-store.js';
 
 let posts: string[] = [];
 let infos: string[] = [];
 let warns: string[] = [];
+let results: { job: string; state: string; error?: string }[] = [];
 
 const STATE = join(testStateDir, 'provisioning-converge.json');
 
@@ -35,6 +37,7 @@ beforeEach(() => {
 	posts = [];
 	infos = [];
 	warns = [];
+	results = [];
 	rmSync(STATE, { force: true });
 	__setHostForTesting({
 		...testHost,
@@ -47,7 +50,11 @@ beforeEach(() => {
 			recordQuietly() {},
 		},
 		// See scheduled-converger.test.ts: every tick now reports to the job sink.
-		jobs: { recordJobResult: async () => {} },
+		jobs: {
+			recordJobResult: async (job, state, _ms, opts) => {
+				results.push({ job, state, error: opts?.error });
+			},
+		},
 	});
 });
 afterEach(() => __setHostForTesting(testHost));
@@ -198,4 +205,75 @@ void test('job-runner.ts classify: ok/findings report succeeded, unavailable/bro
 		{ jobState: 'failed', verdict: 'unavailable' },
 		{ jobState: 'failed', verdict: 'broke' },
 	]);
+});
+
+// fleet-manager#57. The 2026-11-05 17:28Z pass: the subcommand REPORTED, but
+// claw-1's apt-security read was killed at 120 s, so the verdict was
+// "could not look". It was recorded, and paged @here as `job failed`, with an
+// EMPTY error: the reason sat in the report and reached only a log line.
+void test('a pass whose read of a node timed out records a failure that names the timeout and the node', async () => {
+	const ran = Date.now();
+	await convergeProvisioningTick(
+		runner(
+			doc({
+				unreadable: [
+					{
+						node: 'claw-1',
+						facet: 'apt-security',
+						why: 'no answer within 120s (killed by timeout)',
+					},
+				],
+			})
+		),
+		ran
+	);
+	assert.equal(results.length, 1);
+	const [r] = results;
+	assert.equal(r.job, 'fleet:converge-provisioning');
+	assert.equal(r.state, 'failed');
+	assert.equal(
+		r.error,
+		'timed out waiting on claw-1 (apt-security): no answer within 120s (killed by timeout)'
+	);
+	// The local execution-log row carries the same reason, not a blank.
+	const { rows } = readJobRuns(jobRunDir(testStateDir), { job: 'fleet:converge-provisioning' });
+	const mine = rows.filter((x) => Date.parse(x.startedAt) === ran);
+	assert.equal(mine.length, 1);
+	assert.match(mine[0].why ?? '', /timed out waiting on claw-1 \(apt-security\)/);
+});
+
+void test('a pass that is not ok names every node it could not read, converge or wait on, and counts past four', async () => {
+	const ran = Date.now() + 1;
+	await convergeProvisioningTick(
+		runner(
+			doc({
+				unreadable: [
+					{ node: 'claw-2', facet: 'slice', why: 'ssh: connect to host claw-2: No route to host' },
+					{ node: 'claw-3', facet: 'throttle', why: 'ssh timed out' },
+				],
+				unconverged: [{ node: 'claw-4', facet: 'throttle', why: 'restart failed' }],
+				deferred: [
+					{ node: 'claw-5', facet: 'slice', why: 'busy: actions-runner-x.service' },
+					{ node: 'claw-6', facet: 'slice', why: 'busy: actions-runner-y.service' },
+				],
+			})
+		),
+		ran
+	);
+	// `findings` (something still needs acting on) is a SUCCEEDED job to the
+	// sink, which carries no error; the execution-log row keeps the reason.
+	assert.deepEqual(
+		results.map((r) => [r.state, r.error]),
+		[['succeeded', undefined]]
+	);
+	const { rows } = readJobRuns(jobRunDir(testStateDir), { job: 'fleet:converge-provisioning' });
+	const mine = rows.filter((x) => Date.parse(x.startedAt) === ran);
+	assert.equal(mine.length, 1);
+	assert.equal(
+		mine[0].why,
+		'could not read claw-2 (slice): ssh: connect to host claw-2: No route to host; ' +
+			'timed out waiting on claw-3 (throttle): ssh timed out; ' +
+			'claw-4 throttle did not converge: restart failed; ' +
+			'claw-5 slice deferred: busy: actions-runner-x.service; and 1 more'
+	);
 });

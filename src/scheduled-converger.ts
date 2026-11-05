@@ -140,6 +140,36 @@ interface ConvergeState {
 const SELF_KEY = 'converger';
 const key = (r: { node: string; facet: string }): string => `${r.node}|${r.facet}`;
 
+/** How many rows a pass's reason spells out before it counts the rest. */
+const WHY_ROWS = 4;
+const TIMEOUT = /timed? ?out|timeout/i;
+
+/**
+ * Why a pass that DID report still is not `ok`, in one line: every node and
+ * facet it could not read, could not converge or deferred, with the reason the
+ * subcommand gave. A wait that ran out is named as a timeout on that node.
+ *
+ * Without it a pass whose report carried an unreadable node was recorded and
+ * paged as a failure with an EMPTY error (fleet-manager#57: 2026-11-05 17:28Z,
+ * 120102 ms, claw-1's apt-security read killed at 120 s). The report had the
+ * answer, but only the log line saw it.
+ */
+export function reportWhy(doc: ConvergeDoc): string {
+	const rows = [
+		...doc.unreadable.map((r) =>
+			TIMEOUT.test(r.why)
+				? `timed out waiting on ${r.node} (${r.facet}): ${r.why}`
+				: `could not read ${r.node} (${r.facet}): ${r.why}`
+		),
+		...doc.unconverged.map(
+			(r) => `${r.node} ${r.facet} did not converge: ${r.why ?? r.before ?? ''}`
+		),
+		...doc.deferred.map((r) => `${r.node} ${r.facet} deferred: ${r.why ?? r.before ?? ''}`),
+	];
+	const more = rows.length - WHY_ROWS;
+	return rows.slice(0, WHY_ROWS).join('; ') + (more > 0 ? `; and ${more} more` : '');
+}
+
 /** A subcommand of this package, beside this module's `dist/` in the installed package. */
 export function packageScriptPath(script: string): string {
 	return resolve(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', script);
@@ -366,6 +396,7 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 			now,
 			verdict: classify(doc),
 			durationMs: Date.now() - startedAt,
+			why: reportWhy(doc) || undefined,
 		});
 		return summary;
 	}
