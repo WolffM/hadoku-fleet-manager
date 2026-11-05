@@ -45,3 +45,14 @@ void test('the base pack names a binary for every package it installs', () => {
 	assert.ok(packs.base.bins.length > 0);
 	for (const b of packs.base.bins) assert.equal(typeof b, 'string');
 });
+
+void test('the presence probe looks for every binary the packs name, from the packs', () => {
+	// It was a typed list once, and a pack added later (perf: fio, iperf3) was
+	// never probed: no line for a binary is not a MISSING line.
+	const src = readFileSync(join(ROOT, 'scripts', 'toolpack.mjs'), 'utf8');
+	assert.match(src, /for b in \$\{BINS\}; do/);
+	assert.match(
+		src,
+		/const BINS = \[\.\.\.new Set\(Object\.values\(PACKS\)\.flatMap\(\(p\) => p\.bins\)\)\]/
+	);
+});

@@ -76,6 +76,9 @@ const OFF = RESET;
 // the same commit. Resolving it through FLEET_MANIFEST_DIR would let a
 // deployment carry a pack list its own readers disagree with.
 const PACKS = JSON.parse(readFileSync(join(PKG_SCRIPTS, 'toolpacks.json'), 'utf8')).packs;
+// Every binary any pack names, read from the packs themselves: a binary the
+// probe never looked for must never read as installed.
+const BINS = [...new Set(Object.values(PACKS).flatMap((p) => p.bins))].join(' ');
 const named = parsed.positionals;
 const MANIFEST = loadManifest();
 const nodes = named.length ? named : Object.keys(MANIFEST.machines);
@@ -102,7 +105,7 @@ function shapeOf(node) {
 		[
 			'echo "wireless=$(ls -d /sys/class/net/*/wireless 2>/dev/null | wc -l)"',
 			'echo "nvme=$(ls -d /sys/block/nvme* 2>/dev/null | wc -l)"',
-			'for b in lscpu lspci curl openssl smartctl dmidecode iw ethtool pip3; do',
+			`for b in ${BINS}; do`,
 			'  p=""; for d in /usr/bin /bin /usr/sbin /sbin; do [ -x "$d/$b" ] && p="$d/$b" && break; done',
 			'  echo "bin.$b=${p:-MISSING}"; done',
 		].join('\n')
@@ -114,6 +117,9 @@ function shapeOf(node) {
 	}
 	return kv;
 }
+
+/** Installed means the probe printed a path for it; anything else is missing. */
+const located = (shape, bin) => (shape[`bin.${bin}`] ?? '').startsWith('/');
 
 const report = [];
 for (const node of nodes) {
@@ -139,8 +145,7 @@ for (const node of nodes) {
 	const packs = packsRequired(PACKS, shape, ciClaw);
 	const missing = [];
 	for (const [name, p] of packs)
-		for (const b of p.bins)
-			if (shape[`bin.${b}`] === 'MISSING') missing.push({ pack: name, bin: b });
+		for (const b of p.bins) if (!located(shape, b)) missing.push({ pack: name, bin: b });
 	const apt = [
 		...new Set(packs.filter(([n]) => missing.some((m) => m.pack === n)).flatMap(([, p]) => p.apt)),
 	];
@@ -168,8 +173,8 @@ if (CONFIRM) {
 			// binary being on the box, and the whole point of this file is that the
 			// second one is what the readers need.
 			const after = shapeOf(r.node);
-			r.installed = r.missing.filter((m) => after[`bin.${m.bin}`] !== 'MISSING').map((m) => m.bin);
-			r.missing = r.missing.filter((m) => after[`bin.${m.bin}`] === 'MISSING');
+			r.installed = r.missing.filter((m) => located(after, m.bin)).map((m) => m.bin);
+			r.missing = r.missing.filter((m) => !located(after, m.bin));
 			if (!JSON_OUT)
 				process.stderr.write(r.missing.length ? `${RED}incomplete${OFF}\n` : `${GRN}ok${OFF}\n`);
 		} catch (err) {

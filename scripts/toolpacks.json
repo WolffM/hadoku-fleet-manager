@@ -20,6 +20,12 @@
       "why": "Wave 1 P3.4/P1.6, the 'pip hole': hadoku-pygmalion's CI runs `python -m pip install`, and until this pack existed nothing had ever verified pip was actually there -- both node profiles in manifests/node-profiles.json declare `python3-pip`, but bootstrap only applies a profile at enrollment, and claw-1/claw-2 had drifted from that declaration with no reconciler behind it. `ciClaw` (never `pm2-host`) because a production host never runs a CI job that needs it. `capabilities.ts`'s `python-pip` probe (owned by workstream P) is the standing guard against this drifting back a second time.",
       "apt": ["python3-pip"],
       "bins": ["pip3"]
+    },
+    "perf": {
+      "when": "ciClaw",
+      "why": "fleet:perf-active measures what a service tenant would get from a claw (R10, the measured host bars). dd answers synced-write latency and sequential MB/s; only fio answers random 4 KiB IOPS, which is what a database or a busy cache does. Controller-to-claw throughput is measured over ssh; only iperf3 measures claw-to-claw, the path two copies of a redundant tenant use. Gated to `ciClaw` because the bars rank claws; hokon has no NOPASSWD rule and is the backstop, not a candidate. Debian's iperf3 asks whether to run a standing daemon and the noninteractive answer is no: the test starts `iperf3 -s -1` for one run and nothing listens between runs.",
+      "apt": ["fio", "iperf3"],
+      "bins": ["fio", "iperf3"]
     }
   },
   "$why-no-ethtool": "DELIBERATELY EXCLUDED. It was the obvious candidate and it turned out to add nothing: /sys/class/net/<if>/speed and /duplex already carry both numbers the readers use, on every node including the one box that has no ethtool. What ethtool adds beyond them is static capability data -- supported modes, auto-negotiation, port type -- and no capacity decision reads it. Installing a package on seven machines to duplicate a file the kernel already exports is cost with no signal.",
