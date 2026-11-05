@@ -27,6 +27,9 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  # Read this workflow's own run history: the gate's range widens to the last
+  # commit a publish run SUCCEEDED on (see the gate step).
+  actions: read
 
 jobs:
   publish:
@@ -35,7 +38,8 @@ jobs:
     steps:
       # FULL history, not `fetch-depth: 2`.
       #
-      # The gate below diffs against `github.event.before`, and a push carrying
+      # The gate below diffs against `github.event.before` (or an older
+      # last-success commit), and a push carrying
       # more than one commit puts that commit outside a depth-2 clone. On
       # 2026-08-31 a 3-commit push produced `fatal: bad object efc404f` and the
       # gate reported "nothing changed" — silently skipping the publish for
@@ -52,6 +56,8 @@ jobs:
       # publishes nothing; a change to a shipped module must publish.
       - name: Did the published surface change?
         id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # pipefail, because the `| tr` below otherwise MASKS a failing git.
           # That is precisely how this gate failed open: git wrote its error to
@@ -69,6 +75,35 @@ jobs:
             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
             CHANGED="src/forced"          # first push, dispatch, or base not in the clone
           else
+            # The push is not always everything unshipped. The concurrency
+            # group keeps ONE run waiting: a third push while one runs cancels
+            # the waiting one, and nobody ever diffs that push's range. A run
+            # that FAILS (red `check`, registry 409) strands its range the same
+            # way. Either way a shipped change could miss its publish with every
+            # later run green. So reach back to the last commit a run of this
+            # workflow SUCCEEDED on, when that is older than the push base.
+            # Queued behind the group, no other run is in flight, so that commit
+            # is exactly what was last decided. An unreadable history keeps the
+            # push base and says so (fleet-manager#56; the shape is hadoku_site's
+            # templates/ui-app/.github/workflows/publish.yml).
+            LAST=$(node -e '
+              const file = process.env.GITHUB_WORKFLOW_REF.split("@")[0].split("/").pop();
+              const url = `${process.env.GITHUB_API_URL}/repos/${process.env.GITHUB_REPOSITORY}` +
+                `/actions/workflows/${file}/runs?status=success&per_page=1` +
+                `&branch=${encodeURIComponent(process.env.GITHUB_REF_NAME)}`;
+              fetch(url, { headers: { authorization: `Bearer ${process.env.GH_TOKEN}`,
+                                      accept: "application/vnd.github+json" } })
+                .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+                .then(j => console.log(j.workflow_runs[0]?.head_sha ?? ""))
+                .catch(e => { console.error(e.message); process.exit(1); });
+            ') || { echo "::warning::could not read the last successful publish run; diffing from the push base only"; LAST=""; }
+            if [ -n "$LAST" ] && git cat-file -e "${LAST}^{commit}" 2>/dev/null \
+              && [ "$(git rev-parse "$LAST")" != "$(git rev-parse "$BASE")" ] \
+              && git merge-base --is-ancestor "$LAST" "$BASE"; then
+              echo "last successful publish run was on ${LAST}, before the push base: widening the range to it"
+              BASE="$LAST"
+            fi
+            echo "diffing ${BASE}..${{ github.sha }}"
             CHANGED=$(git diff --name-only "$BASE" "${{ github.sha }}" -- \
               package.json src scripts deploy | tr '\n' ' ')
           fi
