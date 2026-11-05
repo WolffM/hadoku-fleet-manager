@@ -229,7 +229,9 @@ export function summarizeActiveAll(rows) {
 
 /**
  * Claw-to-claw iperf3 results, one entry per PAIR whichever end was tested:
- * `aToB` / `bToA` are the receiver-counted Mb/s each way (a < b by name).
+ * `aToB` / `bToA` are the receiver-counted Mb/s each way (a < b by name), and
+ * `aToBRttMs` / `bToARttMs` the sender's mean TCP round trip while that
+ * direction ran full: latency under load, not the idle ping.
  * Peer results whose numbers were dropped count in `runs` but not the spread.
  */
 export function summarizePeers(rows) {
@@ -247,6 +249,8 @@ export function summarizePeers(rows) {
 				runs: 0,
 				ab: [],
 				ba: [],
+				abRtt: [],
+				baRtt: [],
 				retransmits: [],
 				lastAt: null,
 				lastWhy: null,
@@ -256,6 +260,8 @@ export function summarizePeers(rows) {
 		p.runs++;
 		p.ab.push(fwd ? r.peer.outMbps : r.peer.inMbps);
 		p.ba.push(fwd ? r.peer.inMbps : r.peer.outMbps);
+		p.abRtt.push(fwd ? r.peer.outRttMs : r.peer.inRttMs);
+		p.baRtt.push(fwd ? r.peer.inRttMs : r.peer.outRttMs);
 		p.retransmits.push(r.peer.retransmits);
 		p.lastAt = r.at;
 		p.lastWhy = r.peer.why ?? null;
@@ -272,6 +278,8 @@ export function summarizePeers(rows) {
 			runs: p.runs,
 			aToBMbps: spread(p.ab),
 			bToAMbps: spread(p.ba),
+			aToBRttMs: spread(p.abRtt),
+			bToARttMs: spread(p.baRtt),
 			retransmits: sum(p.retransmits),
 			lastAt: p.lastAt,
 			lastWhy: p.lastWhy,

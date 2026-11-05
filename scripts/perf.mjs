@@ -74,11 +74,12 @@ for (const a of active) {
 if (!active.length) out.log('  no active tests in the window yet');
 out.log('');
 out.log(
-	`PEERS (claw <-> claw, iperf3 Mb/s p50)  ${f('runs', 4)} ${f('a->b', 7)} ${f('b->a', 7)} ${f('retx', 5)}`
+	`PEERS (claw <-> claw, iperf3 p50)       ${f('runs', 4)} ${f('a->b', 7)} ${f('b->a', 7)} ${f('rttA>B', 7)} ${f('rttB>A', 7)} ${f('retx', 5)}`
 );
 for (const p of peers) {
 	out.log(
-		`${`${p.a} <-> ${p.b}`.padEnd(39)} ${f(p.runs, 4)} ${f(p.aToBMbps.p50, 7)} ${f(p.bToAMbps.p50, 7)} ${f(p.retransmits, 5)}` +
+		`${`${p.a} <-> ${p.b}`.padEnd(39)} ${f(p.runs, 4)} ${f(p.aToBMbps.p50, 7)} ${f(p.bToAMbps.p50, 7)} ` +
+			`${f(p.aToBRttMs.p50, 7)} ${f(p.bToARttMs.p50, 7)} ${f(p.retransmits, 5)}` +
 			(p.aToBMbps.p50 === null && p.lastWhy ? `  (${p.lastWhy})` : '')
 	);
 }

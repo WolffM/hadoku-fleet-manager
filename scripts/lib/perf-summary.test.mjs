@@ -172,8 +172,8 @@ void test('peers: one entry per pair whichever end was tested, each direction ke
 		peer: { node: peer, outMbps, inMbps, retransmits: 1, ...extra },
 	});
 	const p = summarizePeers([
-		r('claw-3', 'claw-6', 93, 79), // claw-3 -> claw-6 is 93
-		r('claw-6', 'claw-3', 81, 95), // claw-6 -> claw-3 is 81, claw-3 -> claw-6 is 95
+		r('claw-3', 'claw-6', 93, 79, { outRttMs: 150, inRttMs: 3 }), // claw-3 -> claw-6 is 93
+		r('claw-6', 'claw-3', 81, 95, { outRttMs: 4, inRttMs: 120 }), // claw-6 -> claw-3 is 81, claw-3 -> claw-6 is 95
 		r('claw-10', 'claw-2', null, null, { why: 'out: iperf3 printed nothing' }),
 		{ v: 1, at: at(1), node: 'claw-1', outcome: 'busy' },
 	]);
@@ -185,6 +185,11 @@ void test('peers: one entry per pair whichever end was tested, each direction ke
 		]
 	);
 	assert.deepEqual([p[1].aToBMbps.max, p[1].bToAMbps.max, p[1].retransmits], [95, 81, 2]);
+	assert.deepEqual(
+		[p[1].aToBRttMs.max, p[1].bToARttMs.max],
+		[150, 4],
+		'each direction keeps its own loaded round trip'
+	);
 	assert.equal(p[0].aToBMbps.p50, null);
 	assert.match(p[0].lastWhy, /printed nothing/);
 });

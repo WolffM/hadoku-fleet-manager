@@ -294,12 +294,50 @@ void test('fio: missing, broken or failed is null with the reason, never a zero'
 const iperfDoc = (bps: number, retransmits?: number) =>
 	JSON.stringify({ end: { sum_received: { bits_per_second: bps }, sum_sent: { retransmits } } });
 
+void test("iperf3: the loaded round trip is the SENDER's, from the client forward and the server in reverse", () => {
+	const fwd = iperfResult(
+		JSON.stringify({
+			end: {
+				sum_received: { bits_per_second: 115e6 },
+				sum_sent: { retransmits: 318 },
+				streams: [{ sender: { mean_rtt: 153_010, max_rtt: 239_228 } }],
+			},
+		})
+	);
+	assert.deepEqual(fwd, { mbps: 115, retransmits: 318, rttMs: 153, rttMaxMs: 239.2 });
+	// Reverse: the client received, so its own sender figures are zeros.
+	const rev = iperfResult(
+		JSON.stringify({
+			end: {
+				sum_received: { bits_per_second: 229e6 },
+				sum_sent: { retransmits: 0 },
+				streams: [{ sender: { mean_rtt: 0, max_rtt: 0 } }],
+			},
+			server_output_json: {
+				end: { streams: [{ sender: { mean_rtt: 100_350, max_rtt: 161_813 } }] },
+			},
+		})
+	);
+	assert.deepEqual(rev, { mbps: 229, retransmits: 0, rttMs: 100.4, rttMaxMs: 161.8 });
+	const none = iperfResult(iperfDoc(93e6));
+	assert.ok(!('why' in none) && none.rttMs === null, 'no round trip reported is null, not 0');
+});
+
 void test('iperf3: the receiver counts the rate; retransmits sum over both directions', () => {
 	const r = parsePeer(
 		'fx-claw-6',
 		`out=${iperfDoc(93_312_345, 2)}\nin=${iperfDoc(78_800_000, 1)}\nend=1\n`
 	);
-	assert.deepEqual(r, { node: 'fx-claw-6', outMbps: 93.3, inMbps: 78.8, retransmits: 3 });
+	assert.deepEqual(r, {
+		node: 'fx-claw-6',
+		outMbps: 93.3,
+		inMbps: 78.8,
+		retransmits: 3,
+		outRttMs: null,
+		outRttMaxMs: null,
+		inRttMs: null,
+		inRttMaxMs: null,
+	});
 	const half = parsePeer(
 		'fx-claw-6',
 		`out=${iperfDoc(93_000_000)}\nin=${JSON.stringify({ error: 'unable to connect to server' })}\nend=1\n`

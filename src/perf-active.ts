@@ -229,26 +229,44 @@ export function peerClientScript(ip: string): string {
 command -v iperf3 >/dev/null 2>&1 || { echo "why=iperf3 is not installed"; echo "end=1"; exit 0; }
 sleep 1
 echo "out=$(c)"
-echo "in=$(c -R)"
+echo "in=$(c '-R --get-server-output')"
 echo "end=1"
 `;
 }
 
 /** The peer's half: one one-shot server per direction, bounded so nothing outlives the test. */
-export const PEER_SERVER_CMD = `timeout ${PEER_SECONDS * 2 + 30} sh -c 'iperf3 -s -1 -p ${IPERF_PORT} >/dev/null 2>&1; iperf3 -s -1 -p ${IPERF_PORT} >/dev/null 2>&1'`;
+// The server reports in JSON so that `--get-server-output` hands the reverse
+// run's SENDER figures (its TCP round trip) back to the client.
+export const PEER_SERVER_CMD = `timeout ${PEER_SECONDS * 2 + 30} sh -c 'iperf3 -s -1 -J -p ${IPERF_PORT} >/dev/null 2>&1; iperf3 -s -1 -J -p ${IPERF_PORT} >/dev/null 2>&1'`;
 
+interface IperfSender {
+	mean_rtt?: number;
+	max_rtt?: number;
+}
 interface IperfEnd {
 	error?: string;
 	end?: {
 		sum_received?: { bits_per_second?: number };
 		sum_sent?: { retransmits?: number };
+		streams?: { sender?: IperfSender }[];
 	};
+	server_output_json?: { end?: { streams?: { sender?: IperfSender }[] } };
 }
 
-/** One iperf3 JSON document: the receiver's Mb/s and the sender's retransmits, or why not. PURE. */
-export function iperfResult(
-	json: string | undefined
-): { mbps: number; retransmits: number | null } | { why: string } {
+interface IperfOk {
+	mbps: number;
+	retransmits: number | null;
+	rttMs: number | null;
+	rttMaxMs: number | null;
+}
+
+/**
+ * One iperf3 JSON document: the receiver's Mb/s, the sender's retransmits and
+ * the sender's loaded TCP round trip, or why not. PURE. The client holds the
+ * round trip when it sent; in a reverse run the server sent, and its figures
+ * arrive in `server_output_json` (iperf3 reports 0 for the side that did not).
+ */
+export function iperfResult(json: string | undefined): IperfOk | { why: string } {
 	if (!json) return { why: 'iperf3 printed nothing (the peer never answered)' };
 	let d: IperfEnd;
 	try {
@@ -260,7 +278,18 @@ export function iperfResult(
 	const bps = d.end?.sum_received?.bits_per_second;
 	if (typeof bps !== 'number' || !(bps > 0)) return { why: 'iperf3 measured nothing' };
 	const rt = d.end?.sum_sent?.retransmits;
-	return { mbps: round(bps / 1e6, 1), retransmits: typeof rt === 'number' ? rt : null };
+	const sender = [
+		d.end?.streams?.[0]?.sender,
+		d.server_output_json?.end?.streams?.[0]?.sender,
+	].find((x) => typeof x?.mean_rtt === 'number' && x.mean_rtt > 0);
+	const ms = (us: number | undefined) =>
+		typeof us === 'number' && us > 0 ? round(us / 1000, 1) : null;
+	return {
+		mbps: round(bps / 1e6, 1),
+		retransmits: typeof rt === 'number' ? rt : null,
+		rttMs: ms(sender?.mean_rtt),
+		rttMaxMs: ms(sender?.max_rtt),
+	};
 }
 
 /** The client script's output, as a peer result. PURE. */
@@ -289,6 +318,10 @@ export function parsePeer(peer: string, stdout: string): PeerResult {
 		outMbps: 'why' in out ? null : out.mbps,
 		inMbps: 'why' in back ? null : back.mbps,
 		retransmits: rts.length ? rts.reduce((a, b) => a + b, 0) : null,
+		outRttMs: 'why' in out ? null : out.rttMs,
+		outRttMaxMs: 'why' in out ? null : out.rttMaxMs,
+		inRttMs: 'why' in back ? null : back.rttMs,
+		inRttMaxMs: 'why' in back ? null : back.rttMaxMs,
 		...(whys.length ? { why: whys.join('; ') } : {}),
 	};
 }

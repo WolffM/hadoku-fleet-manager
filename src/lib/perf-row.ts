@@ -131,14 +131,22 @@ export interface ActivePerfRow {
 	 * iperf3 between this node and one other claw over the LAN, the path two
 	 * copies of a redundant tenant use. `outMbps` is this node -> peer, `inMbps`
 	 * peer -> this node, each as the receiver counted it; `retransmits` are the
-	 * sender's TCP retransmissions over both runs. A field is null when its run
-	 * failed (`why`); the whole is null when no peer was tested.
+	 * sender's TCP retransmissions over both runs. `outRttMs` / `inRttMs` are
+	 * the sending side's TCP round trip WHILE the link is full (mean and max
+	 * over the run): the latency a service sees when the path is busy, which
+	 * on a queueing wireless hop is many times the idle ping. A field is null
+	 * when its run failed (`why`); the whole is null when no peer was tested.
+	 * The RTT fields are absent on rows from before they were recorded.
 	 */
 	peer?: {
 		node: string;
 		outMbps: number | null;
 		inMbps: number | null;
 		retransmits: number | null;
+		outRttMs?: number | null;
+		outRttMaxMs?: number | null;
+		inRttMs?: number | null;
+		inRttMaxMs?: number | null;
 		why?: string;
 	} | null;
 	/** Most CI workers seen during the test; above 0 means disturbed. */
