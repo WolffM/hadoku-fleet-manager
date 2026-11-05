@@ -76,6 +76,15 @@ test('memory is consumed as it is planned, not just counted', () => {
 	);
 	assert.equal(p.mint.length, 2, '9000 - 2900 - 2900 = 3200, a third would breach the floor');
 	assert.match(p.skipped[0].reason, /memory|no node/);
+	// Each node's whole refusal travels with the skip, so the starved alert can
+	// name the repo a node refused (fleet-manager#58).
+	assert.deepEqual(p.skipped[0].refusals, [
+		{
+			node: 'claw-2',
+			reason:
+				'memory: 3200MB free, this repo peaks at 2900MB, would leave 300MB against a 1536MB floor',
+		},
+	]);
 });
 
 test('a fork PR is refused and SAID to be refused', () => {

@@ -72,3 +72,60 @@ export function __setAdmissionVerdictsForTesting(
 export function __resetAdmissionVerdictsForTesting(): void {
 	admissionVerdictByNode = new Map();
 }
+
+/**
+ * WHICH QUEUED RUNS each node actually refused on memory or space
+ * (fleet-manager#58). The verdict above is the GENERIC check, made before any
+ * queued run is known, so it has no repo: the starved alert that quoted it said
+ * "this repo peaks at 4096MB (basis: default)" about no repo at all. The
+ * dispatcher knows the real ones; it records them here, per node and per repo,
+ * the latest refusal of each.
+ *
+ * Merged, not replaced wholesale like the verdicts: a run held by its probe
+ * backoff is not re-asked every pass, and its last refusal is still the truth
+ * until it ages out. In memory, like the verdicts: empty after a restart.
+ */
+export interface RefusedRun {
+	repo: string;
+	runId: number;
+	/** That node's own refusal of that run, as `admitMint` worded it. */
+	reason: string;
+	atMs: number;
+}
+
+/** A refusal older than this no longer describes the node. */
+export const REFUSED_RUN_TTL_MS = 60 * 60_000;
+/** How many refused repos a node's entry names, newest first. */
+const REFUSED_REPOS_SHOWN = 3;
+
+let refusedRunsByNode = new Map<string, Map<string, RefusedRun>>();
+
+/** Record one pass's memory/space refusals. Every other clause is not starvation and is ignored. */
+export function noteRefusedRuns(
+	refusals: readonly { node: string; repo: string; runId: number; reason: string }[],
+	nowMs: number
+): void {
+	for (const r of refusals) {
+		if (!/^(memory|space):/.test(r.reason)) continue;
+		const byRepo = refusedRunsByNode.get(r.node) ?? new Map<string, RefusedRun>();
+		byRepo.set(r.repo, { repo: r.repo, runId: r.runId, reason: r.reason, atMs: nowMs });
+		refusedRunsByNode.set(r.node, byRepo);
+	}
+	for (const [node, byRepo] of refusedRunsByNode) {
+		for (const [repo, r] of byRepo) if (nowMs - r.atMs > REFUSED_RUN_TTL_MS) byRepo.delete(repo);
+		if (!byRepo.size) refusedRunsByNode.delete(node);
+	}
+}
+
+/** The repos `node` refused on memory or space within the TTL, newest first, at most three. */
+export function refusedRunsFor(node: string, nowMs: number): RefusedRun[] {
+	return [...(refusedRunsByNode.get(node)?.values() ?? [])]
+		.filter((r) => nowMs - r.atMs <= REFUSED_RUN_TTL_MS)
+		.sort((a, b) => b.atMs - a.atMs)
+		.slice(0, REFUSED_REPOS_SHOWN);
+}
+
+/** Test seam. Not part of the supported API. */
+export function __resetRefusedRunsForTesting(): void {
+	refusedRunsByNode = new Map();
+}

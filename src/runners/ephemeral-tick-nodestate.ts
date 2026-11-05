@@ -11,7 +11,7 @@ import { mintBudget, warmListenersHeld } from './ephemeral.js';
 import { backstopUnitMemoryMaxMb } from './ephemeral-slice.js';
 import { TMP_FREE_FLOOR_MB } from '../lib/jit-naming.js';
 import { unitMemoryMaxMb, jobReserve, type RepoReserve } from '../lib/job-reserve.js';
-import { WORK_FREE_FLOOR_MB } from './ephemeral-admission.js';
+import { WORK_FREE_FLOOR_MB, type HostingHold } from './ephemeral-admission.js';
 import { isSchedulable } from './schedulable.js';
 import { offerFor, type EphemeralTickInput } from './ephemeral-shared.js';
 import type { WorkloadGateContext } from '../lib/workload-gate.js';
@@ -54,7 +54,7 @@ export function buildNodeStates(args: {
 	sliceCeilingMbByNode: ReadonlyMap<string, number>;
 	tmpFreeMbByNode: ReadonlyMap<string, number | null>;
 	workFreeMbByNode: ReadonlyMap<string, number | null>;
-	heldBackMbByNode: ReadonlyMap<string, number>;
+	heldBackByNode: ReadonlyMap<string, readonly HostingHold[]>;
 }): NodeStateBuild {
 	const {
 		minting,
@@ -71,7 +71,7 @@ export function buildNodeStates(args: {
 		sliceCeilingMbByNode,
 		tmpFreeMbByNode,
 		workFreeMbByNode,
-		heldBackMbByNode,
+		heldBackByNode,
 	} = args;
 	const nodes: NodeState[] = [];
 	const candidates: string[] = [];
@@ -124,6 +124,7 @@ export function buildNodeStates(args: {
 		// per-run `admitMint` call would have reserved against, absent a repo.
 		const genericReserve = jobReserve({ nodeJobP95Mb: m.jobP95Mb, capMb });
 		const requiredMb = genericReserve.mb;
+		const held = heldBackByNode.get(name) ?? [];
 		// THE REPO'S OWN ANSWER, BUT ONLY WHEN IT IS A PROVEN FLOOR (#76, scoped
 		// 2026-10-02). `requiredMb` above is the node-level fallback every repo
 		// has always reserved. Activating a repo's own `jobP95Mb` for EVERY
@@ -309,7 +310,9 @@ export function buildNodeStates(args: {
 			requiredMb,
 			// A shared hosting slice's unused share is held back on top of the floor,
 			// so no job is admitted into memory the tenant was promised.
-			minFreeMb: (m.minFreeMb ?? 1536) + (heldBackMbByNode.get(name) ?? 0),
+			// Kept apart as well, so a refusal can name it (fleet-manager#58).
+			minFreeMb: (m.minFreeMb ?? 1536) + held.reduce((sum, h) => sum + h.mb, 0),
+			heldForHosting: held,
 			// #76: `refusalFor` (placement.ts) looks this up by the queued job's
 			// repo and overrides `requiredMb`/`requiredIsLowerBound` with it when
 			// present. A repo not in the map (never measured) leaves `requiredMb`

@@ -8,6 +8,7 @@
  */
 import { logger } from '../host.js';
 import { recordDiskReadings } from './disk-watch.js';
+import type { HostingHold } from './ephemeral-admission.js';
 import {
 	heldBackMb,
 	sliceUsageProbe,
@@ -39,7 +40,8 @@ export interface NodeMemoryProbe {
 	tmpFreeMbByNode: Map<string, number | null>;
 	tmpSizeMbByNode: Map<string, number | null>;
 	workFreeMbByNode: Map<string, number | null>;
-	heldBackMbByNode: Map<string, number>;
+	/** Per node, each shared hosting slice's held-back share (fleet-manager#58). */
+	heldBackByNode: Map<string, HostingHold[]>;
 }
 
 /**
@@ -85,7 +87,7 @@ export async function probeNodeMemory(
 	const tmpFreeMbByNode = new Map<string, number | null>();
 	const tmpSizeMbByNode = new Map<string, number | null>();
 	const workFreeMbByNode = new Map<string, number | null>();
-	const heldBackMbByNode = new Map<string, number>();
+	const heldBackByNode = new Map<string, HostingHold[]>();
 	await Promise.all(
 		minting.map(async (name) => {
 			const hosted = sharedHosting[name] ?? [];
@@ -97,18 +99,16 @@ export async function probeNodeMemory(
 			);
 			const { rest: out, sliceCurrentMb } = takeSliceUsage(raw);
 			if (hosted.length) {
-				heldBackMbByNode.set(
+				heldBackByNode.set(
 					name,
-					hosted.reduce(
-						(sum, h) =>
-							sum +
-							heldBackMb({
-								declaredMb: h.memoryMb,
-								sliceCurrentMb: sliceCurrentMb.get(h.tenant) ?? null,
-								since: h.since,
-							}),
-						0
-					)
+					hosted.map((h) => ({
+						tenant: h.tenant,
+						mb: heldBackMb({
+							declaredMb: h.memoryMb,
+							sliceCurrentMb: sliceCurrentMb.get(h.tenant) ?? null,
+							since: h.since,
+						}),
+					}))
 				);
 			}
 			const { first, tmpFreeMb, tmpSizeMb, workFreeMb } = parseSpaceProbe(out);
@@ -160,6 +160,6 @@ export async function probeNodeMemory(
 		tmpFreeMbByNode,
 		tmpSizeMbByNode,
 		workFreeMbByNode,
-		heldBackMbByNode,
+		heldBackByNode,
 	};
 }

@@ -144,6 +144,12 @@ export interface SkipReason {
 	 * never releases a hold (see `refusalFor`), so there is no moment to name.
 	 */
 	releaseAtMs?: number;
+	/**
+	 * `unplaceable`/`held` only: each node's own refusal of this run, whole —
+	 * what `reason` above cuts to first sentences. Read by the starved alert,
+	 * which names the repo a node is refusing (fleet-manager#58).
+	 */
+	refusals?: { node: string; reason: string }[];
 }
 
 /**
@@ -372,6 +378,7 @@ export function planTick(
 				runId: run.id,
 				jobId: run.jobId,
 				repo: run.repo,
+				refusals: placed.passed.map((x) => ({ node: x.node, reason: x.reason })),
 				// WHY each node refused, not only that all did — a heavy hold, a
 				// full node and a missing label are three different waits. Each
 				// reason cut to its first sentence: an `excludeRepos` note is a

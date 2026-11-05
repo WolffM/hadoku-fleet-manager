@@ -37,6 +37,7 @@ import { reapJitRunners } from './ephemeral-exec-reap.js';
 import { REAP_INTERVAL_MS } from '../lib/jit-reap-cadence.js';
 import { JIT_PREFIX, WARM_PREFIX, parseJitName } from '../lib/jit-naming.js';
 import { recordCapacityLedger } from './capacity-ledger.js';
+import { noteRefusedRuns } from '../admission-verdict-store.js';
 import { nodeOf } from './census.js';
 import { recordDispatchDay } from './dispatch-daily.js';
 import { decisionLogEnabled } from './decision-log.js';
@@ -464,6 +465,14 @@ export async function runDispatchPass(
 	// A held run's refusal was said when it was last probed and is said again
 	// when it is next probed; repeating it every pass is what the backoff's own
 	// log line exists to replace.
+	noteRefusedRuns(
+		plan.skipped.flatMap((s) =>
+			s.kind === 'held'
+				? []
+				: (s.refusals ?? []).map((r) => ({ ...r, repo: s.repo, runId: s.runId }))
+		),
+		nowMs
+	);
 	for (const s of plan.skipped) {
 		if (s.kind === 'held') continue;
 		logger.info(`[dispatch] skipped run ${s.runId} (${s.repo}): ${s.reason}`);

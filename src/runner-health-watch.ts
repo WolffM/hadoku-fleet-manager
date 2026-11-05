@@ -8,7 +8,8 @@ import { logger, postDiscord as postDiscordSink } from './host.js';
 import { loadFleetNodeNames, loadEphemeralNodes } from './lib/manifest.js';
 import { jobRecords } from './job-history-store.js';
 import { nodeOf } from './runners/census.js';
-import { admissionVerdictsForReport } from './admission-verdict-store.js';
+import { admissionVerdictsForReport, refusedRunsFor } from './admission-verdict-store.js';
+import type { ReserveSource } from './lib/job-reserve.js';
 import { alertOnce, clearAlert } from './lib/alert-ledger.js';
 import { selfHostname } from './lib/runner-health-shared.js';
 import {
@@ -157,6 +158,17 @@ function lastStartedAtMsByNode(nodes: readonly string[]): Map<string, number> {
  * starvation actually ended rather than admission merely sitting on a
  * boundary.
  */
+/**
+ * Where the generic check's reserve came from, in words. `default` was printed
+ * bare and read as "this repo was never measured" (fleet-manager#58); it means
+ * this NODE has no measured figure and the fleet default applied.
+ */
+const BASIS_WORDS: Record<ReserveSource, string> = {
+	repo: 'basis: a measured repo figure',
+	node: "basis: this node's measured job figure",
+	default: 'basis: default, no job measured on this node',
+};
+
 export async function checkStarvation(data: TickReport): Promise<void> {
 	const nowMs = Date.now();
 	const nodeNames = loadFleetNodeNames();
@@ -232,13 +244,19 @@ export async function checkStarvation(data: TickReport): Promise<void> {
 				? verdict.unreadable
 					? `could not read free space on ${spaceFsName}`
 					: `${verdict.availableMb}MB free on ${spaceFsName}, under this check's ${verdict.needMb}MB floor`
-				: `${verdict.availableMb}MB free, this check reserves ${verdict.needMb}MB ` +
-					`(basis: ${verdict.reserveBasis})`;
+				: `${verdict.availableMb}MB free, a job of no particular repo reserves ${verdict.needMb}MB ` +
+					`(${BASIS_WORDS[verdict.reserveBasis]})`;
+		// The generic check above is made before any queued run is known, so it
+		// names no repo. The runs this node actually refused do (#58).
+		const refused = refusedRunsFor(node, nowMs);
+		const refusedLine = refused.length
+			? ` Refused here: ${refused.map((r) => `${r.repo} (${r.reason})`).join('; ')}.`
+			: '';
 		await alertOnce(
 			`starved:${node}`,
 			`🥀 **starved** (reported by \`${selfHostname()}\`): \`${node}\` has been refused by ` +
 				`${clauseWord} admission for ${idleH}h (no job started since ${lastJobAt}) while other ` +
-				`claws kept working — ${clauseDetail}: ${verdict.reason}`
+				`claws kept working — ${clauseDetail}: ${verdict.reason}.${refusedLine}`
 		);
 	}
 	data.starved = starved;

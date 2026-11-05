@@ -37,7 +37,17 @@ export interface AdmissionInput {
 	/** This repo's harvested unreclaimable peak. Count caps invitations; memory
 	 * gates admission (§7-B). */
 	requiredMb: number;
+	/** The whole floor: the node's own `minFreeMb` plus {@link heldForHosting}. */
 	minFreeMb: number;
+	/**
+	 * The part of {@link minFreeMb} held back for hosting tenants on this node:
+	 * each shared slice's promised memory it is not yet using (`heldBackMb`).
+	 * Carried so a memory refusal can say how much of its floor is the node's
+	 * own and how much is production it is protecting (fleet-manager#58: claw-8
+	 * read as broken against a 4898MB floor, 2850MB of it cardtable's and
+	 * watchparty's). Absent or empty: the floor is the node's own.
+	 */
+	heldForHosting?: readonly HostingHold[];
 	/**
 	 * Was {@link requiredMb} itself built from capped runs — OOM-killed, or
 	 * pinned at a node's own ceiling — rather than an uncapped measurement?
@@ -87,6 +97,31 @@ export interface AdmissionInput {
 	 * {@link WORK_FREE_FLOOR_MB}.
 	 */
 	workFreeMb?: number | null;
+}
+
+/** One hosting tenant's held-back share of a node's admission floor. */
+export interface HostingHold {
+	tenant: string;
+	mb: number;
+}
+
+/**
+ * The floor in a memory refusal, split when part of it is hosting hold-back:
+ * `4898MB floor (2048 node floor + 2850 held for hosting: cardtable 1314,
+ * watchparty 1536)`. When the job would have fit against the node's own floor
+ * alone, the refusal is the hosting reserve doing its job, and it says so.
+ */
+export function describeFloor(
+	i: Pick<AdmissionInput, 'minFreeMb' | 'heldForHosting'>,
+	after: number
+): string {
+	const holds = (i.heldForHosting ?? []).filter((h) => h.mb > 0);
+	const held = holds.reduce((sum, h) => sum + h.mb, 0);
+	if (held <= 0) return `${i.minFreeMb}MB floor`;
+	const own = i.minFreeMb - held;
+	const parts = holds.map((h) => `${h.tenant} ${h.mb}`).join(', ');
+	const verdict = after >= own ? ' — hosting reserve, not a fault' : '';
+	return `${i.minFreeMb}MB floor (${own} node floor + ${held} held for hosting: ${parts})${verdict}`;
 }
 
 export interface AdmissionResult {
@@ -192,7 +227,7 @@ export function admitMint(i: AdmissionInput): AdmissionResult {
 			ok: false,
 			reason:
 				`memory: ${i.freeMb}MB free, this repo peaks at ${i.requiredMb}MB, ` +
-				`would leave ${after}MB against a ${i.minFreeMb}MB floor`,
+				`would leave ${after}MB against a ${describeFloor(i, after)}`,
 		};
 	}
 	// SPACE (#101). `undefined` is "this caller never looked" (prove-job's

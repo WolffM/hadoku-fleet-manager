@@ -169,13 +169,8 @@ export async function dispatchEphemeral(
 	// megabytes and not the tier probe's free-slot count, why space rides the
 	// same ssh, and the shared-hosting held-back share).
 	const sharedHosting = effectiveSlices(readHostingDoc());
-	const {
-		freeMbByNode,
-		sliceCeilingMbByNode,
-		tmpFreeMbByNode,
-		workFreeMbByNode,
-		heldBackMbByNode,
-	} = await probeNodeMemory(minting, input, sh, isBackstop, sharedHosting);
+	const { freeMbByNode, sliceCeilingMbByNode, tmpFreeMbByNode, workFreeMbByNode, heldBackByNode } =
+		await probeNodeMemory(minting, input, sh, isBackstop, sharedHosting);
 
 	// Once per tick. A drain is operator state on disk; re-reading it per node
 	// would let a node change status halfway through one placement decision.
@@ -212,7 +207,7 @@ export async function dispatchEphemeral(
 		sliceCeilingMbByNode,
 		tmpFreeMbByNode,
 		workFreeMbByNode,
-		heldBackMbByNode,
+		heldBackByNode,
 	});
 
 	// PUBLISHED EVEN WHEN EMPTY — see `admission-verdict-store.ts`'s own note.

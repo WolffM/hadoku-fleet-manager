@@ -16,7 +16,12 @@ import { tick, __resetRunnerHealthAlertsForTesting } from '../runner-health.js';
 import { STARVED_NO_JOB_MS, __setSupervisionCheckerForTesting } from '../runner-health-watch.js';
 import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
 import { __resetAdmissionVerdictsForTesting } from '../runners/ephemeral-tick.js';
-import { __setAdmissionVerdictsForTesting } from '../admission-verdict-store.js';
+import {
+	__setAdmissionVerdictsForTesting,
+	noteRefusedRuns,
+	__resetRefusedRunsForTesting,
+} from '../admission-verdict-store.js';
+import { admitMint } from '../runners/ephemeral-admission.js';
 import { type AdmissionVerdict } from '../lib/fleet-vocabulary.js';
 import { installRunnerHealthRig, installFetch, discordPosts } from './helpers/runner-health-rig.js';
 import { hokonPromotedLabels, LIVE_LISTING } from './helpers/runner-health-fixtures.js';
@@ -159,7 +164,7 @@ test('starved: a claw refused on MEMORY for hours while another claw worked is a
 	assert.equal(starvedPings().length, 1);
 	assert.match(starvedPings()[0]!, /4813MB/);
 	assert.match(starvedPings()[0]!, /5632MB/);
-	assert.match(starvedPings()[0]!, /basis: node/);
+	assert.match(starvedPings()[0]!, /basis: this node's measured job figure/);
 
 	await tick('tok');
 	assert.equal(starvedPings().length, 1, 'not every tick — RE_ALERT_MS dedupes');
@@ -512,4 +517,73 @@ test('starved: a restart (fresh alert ledger, no verdict yet) finds it from job 
 		'found on the FIRST tick — from persisted job history, not accumulated module state'
 	);
 	assert.equal(starvedPings().length, 1);
+});
+
+// fleet-manager#58. claw-8's 16:52Z page, rebuilt from the issue's numbers: the
+// generic verdict's floor is split, its `default` basis says what it means, and
+// the repo the node actually refused is named.
+test('starved: the page splits the floor into node floor and hosting hold-back, and names the refused repo', async () => {
+	__resetRefusedRunsForTesting();
+	const generic = admitMint({
+		liveUnits: 0,
+		standingBusy: 0,
+		maxConcurrent: 3,
+		freeMb: 8914,
+		requiredMb: 4096,
+		minFreeMb: 4898,
+		heldForHosting: [
+			{ tenant: 'cardtable', mb: 1314 },
+			{ tenant: 'watchparty', mb: 1536 },
+		],
+	});
+	assert.equal(generic.ok, false);
+	writeJobRecord({ runner: 'claw-1', startedAt: new Date(Date.now() - 5 * 60_000).toISOString() });
+	writeJobRecord({
+		runner: 'claw-8',
+		startedAt: new Date(Date.now() - WELL_PAST_STARVED_MS).toISOString(),
+	});
+	__setAdmissionVerdictsForTesting(
+		new Map<string, AdmissionVerdict>([
+			[
+				'claw-8',
+				{
+					ok: false,
+					clause: 'memory',
+					availableMb: 8914,
+					needMb: 4096,
+					reserveBasis: 'default',
+					reason: generic.reason!,
+				},
+			],
+		])
+	);
+	noteRefusedRuns(
+		[
+			{
+				node: 'claw-8',
+				repo: 'WolffM/hadoku-cardtable',
+				runId: 41936107421,
+				reason:
+					'memory: 8914MB free, this repo peaks at 6313MB, would leave 2601MB against a 4898MB floor ' +
+					'(2048 node floor + 2850 held for hosting: cardtable 1314, watchparty 1536)',
+			},
+		],
+		Date.now()
+	);
+	installFetch({ runners: LIVE_LISTING });
+
+	await tick('tok');
+	const pings = discordPosts.filter((m) => m.includes('claw-8') && m.includes('MEMORY'));
+	assert.equal(pings.length, 1);
+	const [p] = pings;
+	assert.match(p!, /basis: default, no job measured on this node/);
+	assert.match(
+		p!,
+		/against a 4898MB floor \(2048 node floor \+ 2850 held for hosting: cardtable 1314, watchparty 1536\) — hosting reserve, not a fault/
+	);
+	assert.match(
+		p!,
+		/Refused here: WolffM\/hadoku-cardtable \(memory: 8914MB free, this repo peaks at 6313MB/
+	);
+	__resetRefusedRunsForTesting();
 });
