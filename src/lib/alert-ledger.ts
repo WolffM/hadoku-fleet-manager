@@ -74,12 +74,10 @@ function saveAlertLedger(): void {
  * before. A fresh pager per call, matching the old `const now = Date.now()`
  * read at call time rather than once per tick.
  *
- * The save is sequenced in a `finally` rather than before the post (the old
- * order), so it still runs if `post` rejects — `pager.counts.pages` is 1 by
- * then regardless, since `createPager` mutates before awaiting its `post` —
- * but only a process kill mid-`post` (not a rejection) could now lose a write
- * the old order would have made first; the host's `postDiscord` does not do
- * that. A SUPPRESSED call (within the window) never saves, same as before.
+ * The pager saves the ledger after the post (`persist`), whether or not the
+ * post resolved. Only a process kill mid-`post` (not a rejection) could lose
+ * that write; the host's `postDiscord` does not reject. A SUPPRESSED call
+ * (within the window) never saves, same as before.
  */
 export async function alertOnce(key: string, content: string): Promise<void> {
 	loadAlertLedger();
@@ -89,12 +87,9 @@ export async function alertOnce(key: string, content: string): Promise<void> {
 		repageMs: RE_ALERT_MS,
 		post: postDiscordSink,
 		source: 'runner-health',
+		persist: saveAlertLedger,
 	});
-	try {
-		await pager.page(key, content);
-	} finally {
-		if (pager.counts.pages > 0) saveAlertLedger();
-	}
+	await pager.page(key, content);
 }
 
 /**

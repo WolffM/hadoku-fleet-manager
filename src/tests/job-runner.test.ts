@@ -116,6 +116,7 @@ void test("repageDue: createPager's own debounce is this function — breaking t
 			posts++;
 		},
 		source: 'x',
+		persist: () => undefined,
 	});
 	await pager.page('k', 'too soon');
 	assert.equal(posts, 0);
@@ -129,16 +130,37 @@ void test('createPager: a key pages once, is silent inside repageMs, and pages a
 		posts.push({ content, source });
 	};
 
-	const p1 = createPager({ paged, now: 0, repageMs: 1000, post, source: 'x' });
+	const p1 = createPager({
+		paged,
+		now: 0,
+		repageMs: 1000,
+		post,
+		source: 'x',
+		persist: () => undefined,
+	});
 	await p1.page('k', 'first');
 	assert.equal(posts.length, 1);
 	assert.equal(p1.counts.pages, 1);
 
-	const p2 = createPager({ paged, now: 500, repageMs: 1000, post, source: 'x' });
+	const p2 = createPager({
+		paged,
+		now: 500,
+		repageMs: 1000,
+		post,
+		source: 'x',
+		persist: () => undefined,
+	});
 	await p2.page('k', 'second — too soon');
 	assert.equal(posts.length, 1, 'inside repageMs: silent');
 
-	const p3 = createPager({ paged, now: 1000, repageMs: 1000, post, source: 'x' });
+	const p3 = createPager({
+		paged,
+		now: 1000,
+		repageMs: 1000,
+		post,
+		source: 'x',
+		persist: () => undefined,
+	});
 	await p3.page('k', 'third — repageMs elapsed');
 	assert.equal(posts.length, 2);
 	assert.deepEqual(
@@ -154,17 +176,59 @@ void test('createPager: recover is a no-op without an open page, and clears one 
 		posts.push(content);
 	};
 
-	const p1 = createPager({ paged, now: 0, repageMs: 1000, post, source: 'x' });
+	const p1 = createPager({
+		paged,
+		now: 0,
+		repageMs: 1000,
+		post,
+		source: 'x',
+		persist: () => undefined,
+	});
 	await p1.recover('k', 'no-op');
 	assert.deepEqual(posts, []);
 	assert.equal(p1.counts.recoveries, 0);
 
 	await p1.page('k', 'paged');
-	const p2 = createPager({ paged, now: 100, repageMs: 1000, post, source: 'x' });
+	const p2 = createPager({
+		paged,
+		now: 100,
+		repageMs: 1000,
+		post,
+		source: 'x',
+		persist: () => undefined,
+	});
 	await p2.recover('k', 'cleared');
 	assert.deepEqual(posts, ['paged', 'cleared']);
 	assert.equal(p2.counts.recoveries, 1);
 	assert.equal(paged.k, undefined, 'the ledger entry is gone once recovered');
+});
+
+void test('createPager: every page and recovery it sends is persisted straight after the post, even a failed one', async () => {
+	const paged: Record<string, string> = {};
+	const events: string[] = [];
+	let failNext = false;
+	const post = async (content: string) => {
+		events.push(`post ${content}`);
+		if (failNext) throw new Error('sink down');
+	};
+	const persist = () => events.push(`persist ${JSON.stringify(paged)}`);
+
+	const p1 = createPager({ paged, now: 0, repageMs: 1000, post, source: 'x', persist });
+	await p1.page('k', 'paged');
+	await p1.page('k', 'suppressed');
+	const p2 = createPager({ paged, now: 100, repageMs: 1000, post, source: 'x', persist });
+	await p2.recover('k', 'cleared');
+	failNext = true;
+	await assert.rejects(p2.page('j', 'sink fails'));
+	assert.deepEqual(events, [
+		'post paged',
+		`persist {"k":"${new Date(0).toISOString()}"}`,
+		// Suppressed: nothing posted, nothing written.
+		'post cleared',
+		'persist {}',
+		'post sink fails',
+		`persist {"j":"${new Date(100).toISOString()}"}`,
+	]);
 });
 
 void test('computeFirstDelayMs: never sooner than firstPassMinMs, even with no prior run', () => {

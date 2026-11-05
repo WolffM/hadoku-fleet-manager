@@ -114,3 +114,40 @@ void test('a converger with no registry row, or a clock its row does not declare
 		/fleet:hosting-converge ticks every 60000ms, its row declares 300000ms/
 	);
 });
+
+// A page that went out is on disk before the pass ends: a process that exits
+// mid-pass (the mgmt-api pair's handover) must not leave the next process to
+// send it again. Read at the SECOND page's post, the first page's key is
+// already in the state file.
+void test('a page is written to the state file as soon as it is sent, not at the end of the pass', async () => {
+	const alpha = createConverger(config('alpha'));
+	const seen: string[][] = [];
+	__setHostForTesting({
+		...testHost,
+		logger: { info() {}, warn() {}, error() {} },
+		alerts: {
+			post: async (content: string, source?: string) => {
+				posts.push({ content, source });
+				const file = join(testStateDir, 'alpha.json');
+				seen.push(
+					existsSync(file) ? Object.keys(JSON.parse(readFileSync(file, 'utf8')).paged) : []
+				);
+				return { posted: true, sinkRecorded: true };
+			},
+			recordQuietly() {},
+		},
+		jobs: { recordJobResult: async () => {} },
+	});
+	await alpha.tick(
+		runner(
+			doc({
+				unconverged: [
+					{ node: 'claw-1', facet: 'x' },
+					{ node: 'claw-2', facet: 'x' },
+				],
+			})
+		),
+		1_000
+	);
+	assert.deepEqual(seen, [[], ['claw-1|x']]);
+});

@@ -128,12 +128,22 @@ export function repageDue(
  * write-then-rename (F3, `writeJsonAtomic`) is untouched.
  */
 export function createPager(params: {
-	/** The state slice this pager mutates in place; the caller persists it. */
+	/** The state slice this pager mutates in place. */
 	paged: Record<string, string>;
 	now: number;
 	repageMs: number;
 	post: (content: string, source: string) => Promise<unknown>;
 	source: string;
+	/**
+	 * Write `paged` (and whatever holds it) to disk. Called after EVERY page and
+	 * recovery the pager sends, whether or not the post resolved, so a process
+	 * that exits mid-pass has recorded each page it sent. Required: a pager whose
+	 * caller saved only at the end of its pass re-sent pages after every restart
+	 * that landed mid-pass. ci-alerts did exactly that at the 2026-11-05 18:53Z
+	 * mgmt-api handover ("CI broken" twice, 21 s apart); every converger and the
+	 * reboot cycle had the same shape.
+	 */
+	persist: () => void;
 }): {
 	page(key: string, content: string): Promise<void>;
 	recover(key: string, content: string): Promise<void>;
@@ -146,13 +156,21 @@ export function createPager(params: {
 			if (!repageDue(params.paged[key], params.now, params.repageMs)) return;
 			params.paged[key] = new Date(params.now).toISOString();
 			counts.pages++;
-			await params.post(content, params.source);
+			try {
+				await params.post(content, params.source);
+			} finally {
+				params.persist();
+			}
 		},
 		async recover(key, content) {
 			if (!params.paged[key]) return;
 			delete params.paged[key];
 			counts.recoveries++;
-			await params.post(content, params.source);
+			try {
+				await params.post(content, params.source);
+			} finally {
+				params.persist();
+			}
 		},
 	};
 }

@@ -188,6 +188,7 @@ export async function clawRebootTick(
 		repageMs: REPAGE_MS,
 		post: postDiscord,
 		source: 'reboot',
+		persist: () => writeState(state),
 	});
 
 	const { doc, why } = await run();

@@ -321,6 +321,7 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 			repageMs: cfg.repageMs,
 			post: postDiscord,
 			source: cfg.name,
+			persist: () => writeState(state),
 		});
 
 		const { doc, why } = await run();
