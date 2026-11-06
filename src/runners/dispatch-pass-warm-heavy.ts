@@ -13,6 +13,7 @@ import { type GhLike, type ShellLike } from '../lib/fleet-vocabulary.js';
 import { warmRunnerName } from '../lib/jit-naming.js';
 import type { NodeState } from './placement-node-state.js';
 import { heavyMarkedAtMs, heavyMarkedRecently } from './dispatch-pass-state.js';
+import { writeHeavyMarks } from './heavy-marks.js';
 
 /**
  * THE WARM HALF OF THE HEAVY HOLD (#102). The hold refuses a JIT mint beside
@@ -42,11 +43,15 @@ export async function closeWarmBesideHeavy(
 	if (!heavyModel) return;
 	const heavyNow = new Set(mintedHeavyOn);
 	for (const m of nodes) if ((m.heavyJobs ?? 0) > 0) heavyNow.add(m.name);
-	for (const m of nodes) {
-		if (!heavyNow.has(m.name)) continue;
-		const fresh = !heavyMarkedRecently(m.name, nowMs);
-		heavyMarkedAtMs.set(m.name, nowMs);
-		if (!fresh || !m.warmRepo || !heavyModel.isHeavyRepo(m.warmRepo)) continue;
+	const marked = nodes.filter((m) => heavyNow.has(m.name));
+	const fresh = new Set(
+		marked.filter((m) => !heavyMarkedRecently(m.name, nowMs)).map((m) => m.name)
+	);
+	for (const m of marked) heavyMarkedAtMs.set(m.name, nowMs);
+	if (marked.length) persistMarks();
+	for (const m of marked) {
+		if (!fresh.has(m.name)) continue;
+		if (!m.warmRepo || !heavyModel.isHeavyRepo(m.warmRepo)) continue;
 		const name = warmRunnerName(m.name, m.warmRepo);
 		const reg = await warmRegistration(m.warmRepo, name, token, gh);
 		if (!reg || reg.busy) {
@@ -60,6 +65,21 @@ export async function closeWarmBesideHeavy(
 		logger.info(
 			`[dispatch] ${m.name} is running a heavy job: ${evicted ? 'evicted' : 'could not evict'} ` +
 				`its idle warm listener for ${m.warmRepo} (#102)`
+		);
+	}
+}
+
+/**
+ * The marks, copied for `fleet warm-canary` (`heavy-marks.ts`). A failed
+ * write is said and the pass goes on: the warm tick reads the map in memory,
+ * and the canary, finding an old file, only scores more nodes.
+ */
+function persistMarks(): void {
+	try {
+		writeHeavyMarks(heavyMarkedAtMs);
+	} catch (err) {
+		logger.warn(
+			`[dispatch] could not write the heavy marks for warm-canary: ${(err as Error).message}`
 		);
 	}
 }

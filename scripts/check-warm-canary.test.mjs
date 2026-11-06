@@ -56,12 +56,13 @@ function manifestWith(machines) {
 	return JSON.stringify({ machines });
 }
 
-function run(machines, { reachable, activeRepo } = {}, extraArgv = []) {
+function run(machines, { reachable, activeRepo, heavyMarks } = {}, extraArgv = []) {
 	const dir = tempDir('warm-canary-');
 	const bin = join(dir, 'bin');
 	mkdirSync(bin);
 	sshStub(bin, { reachable: reachable ?? false, activeRepo });
 	writeFileSync(join(dir, 'fleet-runner-manifest.json'), manifestWith(machines));
+	if (heavyMarks !== undefined) writeFileSync(join(dir, 'heavy-marks.json'), heavyMarks);
 	const r = spawnSync(process.execPath, [SCRIPT, '--json', ...extraArgv], {
 		encoding: 'utf8',
 		env: {
@@ -108,6 +109,44 @@ void test('an eligible, reachable candidate holding NO warm listener: one not-wa
 	// The pre-existing legacy fields still travel, additively.
 	assert.deepEqual(r.doc.eligible, ['fx-claw-1']);
 	assert.deepEqual(r.doc.warm, []);
+});
+
+void test('a node the dispatcher marked heavy a minute ago is set aside, not paged (2026-11-05)', () => {
+	const r = run(
+		{
+			'fx-claw-1': { role: 'claw', ephemeral: true },
+			'fx-claw-4': { role: 'claw', ephemeral: true },
+		},
+		{ reachable: true, heavyMarks: JSON.stringify({ 'fx-claw-4': Date.now() - 60_000 }) }
+	);
+	assert.deepEqual(
+		r.doc.findings.map((f) => f.node),
+		['fx-claw-1'],
+		'the unmarked node is still scored'
+	);
+	assert.deepEqual(
+		r.doc.heavyMarked.map((h) => h.node),
+		['fx-claw-4']
+	);
+	assert.equal(r.doc.heavyMarksUnreadable, false);
+});
+
+void test('a lapsed mark, or marks that will not parse, set nothing aside', () => {
+	const machines = { 'fx-claw-4': { role: 'claw', ephemeral: true } };
+	const lapsed = run(machines, {
+		reachable: true,
+		heavyMarks: JSON.stringify({ 'fx-claw-4': Date.now() - 600_000 }),
+	});
+	assert.deepEqual(
+		lapsed.doc.findings.map((f) => f.node),
+		['fx-claw-4']
+	);
+	const torn = run(machines, { reachable: true, heavyMarks: '{"fx-claw-4": 1' });
+	assert.deepEqual(
+		torn.doc.findings.map((f) => f.node),
+		['fx-claw-4']
+	);
+	assert.equal(torn.doc.heavyMarksUnreadable, true);
 });
 
 void test('human output is unaffected by the migration — same prose, same exit code', () => {

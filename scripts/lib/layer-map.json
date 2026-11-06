@@ -9,6 +9,11 @@
     "layer": "state"
   },
   {
+    "glob": "src/runners/heavy-marks.ts",
+    "layer": "state",
+    "why": "One declared writer (the dispatch pass's heavy marks), read back by something else (scripts/check-warm-canary.mjs, observation): rule 3 of \u00a73.2, the same reason as drain.ts and hosting-record.ts above. HEAVY_MARK_MS moved here from dispatch-pass-state.ts so the canary and the warm tick read one window; dispatch-pass-state.ts re-exports it."
+  },
+  {
     "glob": "src/lib/hosting-slice.ts",
     "layer": "config",
     "why": "New module, wave layers-3 lane H (cut (iii) layer debt): hostingSliceName moved out of hosting-record.ts (state) — zero-import and declarative, so it sits at config, below state, where scripts/lib/tenant-registry.mjs (config) can reach it without climbing into state. hosting-record.ts re-exports it."

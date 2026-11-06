@@ -28,7 +28,9 @@
  *
  * ELIGIBLE is the dispatcher's own rule, reused rather than re-typed:
  * ephemeral, not drained, not the backstop, not running a heavy-kind job
- * (#102.4, read with the fleet's own probe), and MEASURED usable memory whose warm
+ * (#102.4, read with the fleet's own probe, or placed there within the
+ * dispatcher's heavy mark and its refill, `heavy-marks.ts`: the mark only sets
+ * a node aside, never vouches that one is warm), and MEASURED usable memory whose warm
  * half holds one busy listener (a job's worth, `jobReserve`'s node answer)
  * beside the 50% mint reserve — `warmEligibleSlots`/`warmCacheEligible`
  * are imported from the BUILT package (`dist/runners/ephemeral.js`), the same
@@ -58,7 +60,12 @@ import { loadManifest, runOnSync, selectMachines } from './lib/fleet-exec.mjs';
 import { stateDir } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
-import { warmCanaryVerdict, slowTierCandidates, heavyBusyCandidates } from './lib/warm-canary.mjs';
+import {
+	warmCanaryVerdict,
+	slowTierCandidates,
+	heavyBusyCandidates,
+	heavyMarkedCandidates,
+} from './lib/warm-canary.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 // The BUILT copy, deliberately — see the header note above and
 // scripts/lib/fleet-exec.mjs's own note on importing isLocalNode the same way.
@@ -76,6 +83,11 @@ import { readHostingDoc, sharedMbOn } from '../dist/runners/hosting-record.js';
 import { buildSpeedModel } from '../dist/runners/speed-tier.js';
 import { buildHeavyModel } from '../dist/runners/heavy-model.js';
 import { PROBE_CMD, parseProbe } from '../dist/lib/node-probe.js';
+import {
+	readHeavyMarks,
+	heavyMarkWithholds,
+	HEAVY_MARKS_FILE,
+} from '../dist/runners/heavy-marks.js';
 
 const JSON_OUT = process.argv.includes('--json');
 const out = createEmitter({ argv: process.argv });
@@ -225,7 +237,17 @@ function main() {
 	);
 	const heavyBusy = heavyBusyCandidates(probes, buildHeavyModel(history));
 	const isHeavyBusy = (name) => heavyBusy.some((h) => h.node === name);
-	const active = notDrainedOrSlow.filter(([name]) => !isHeavyBusy(name));
+	// The other half of the warm cache's heavy rule: the dispatcher's mark,
+	// which covers what the probe cannot see yet (see heavyMarkedCandidates).
+	const heavyMarks = readHeavyMarks(stateDir());
+	const heavyMarked = heavyMarkedCandidates(
+		notDrainedOrSlow.map(([name]) => name).filter((name) => !isHeavyBusy(name)),
+		heavyMarks,
+		Date.now(),
+		heavyMarkWithholds
+	);
+	const isHeavyMarked = (name) => heavyMarked.some((h) => h.node === name);
+	const active = notDrainedOrSlow.filter(([name]) => !isHeavyBusy(name) && !isHeavyMarked(name));
 
 	const measurements = active.map(([name, m]) => measure(name, m));
 	const verdict = warmCanaryVerdict(measurements, { warmEligibleSlots, warmCacheEligible });
@@ -267,6 +289,8 @@ function main() {
 			drained,
 			slowTier,
 			heavyBusy,
+			heavyMarked,
+			heavyMarksUnreadable: heavyMarks === null,
 			...buildGateDoc({
 				findings,
 				unreadable,
@@ -286,6 +310,14 @@ function main() {
 			out.log(
 				`  · ${h.node} [running heavy: ${h.repos.join(', ')}] — the warm cache withholds its listener (#102.4), not scored`
 			);
+		for (const h of heavyMarked)
+			out.log(
+				`  · ${h.node} [heavy job placed or seen ${h.markAgeSec}s ago] — the warm cache withholds its listener until the mark lapses and it refills, not scored`
+			);
+		if (heavyMarks === null)
+			out.log(
+				`  · ${HEAVY_MARKS_FILE} would not parse — every node scored as if no heavy job had been placed`
+			);
 		out.log(
 			`✓ warm cache canary: ${verdict.warm.map((w) => `${w.node} (${w.repo})`).join(', ')} ` +
 				`— ${verdict.eligible.length} eligible node(s) checked` +
@@ -303,6 +335,14 @@ function main() {
 		for (const h of heavyBusy)
 			console.error(
 				`  · ${h.node} [running heavy: ${h.repos.join(', ')}] — the warm cache withholds its listener (#102.4), not scored`
+			);
+		for (const h of heavyMarked)
+			console.error(
+				`  · ${h.node} [heavy job placed or seen ${h.markAgeSec}s ago] — the warm cache withholds its listener until the mark lapses and it refills, not scored`
+			);
+		if (heavyMarks === null)
+			console.error(
+				`  · ${HEAVY_MARKS_FILE} would not parse — every node scored as if no heavy job had been placed`
 			);
 		console.error(`✗ warm cache canary: ${verdict.reason}`);
 	}

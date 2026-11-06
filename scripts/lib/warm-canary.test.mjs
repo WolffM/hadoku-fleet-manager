@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { warmCanaryVerdict, slowTierCandidates, heavyBusyCandidates } from './warm-canary.mjs';
+import {
+	warmCanaryVerdict,
+	slowTierCandidates,
+	heavyBusyCandidates,
+	heavyMarkedCandidates,
+} from './warm-canary.mjs';
 import { warmCacheEligible, warmEligibleSlots } from '../../dist/lib/warm-eligibility.js';
 
 // The REAL threshold, from the build — a local copy of the arithmetic is a
@@ -211,4 +216,21 @@ test('an unread probe or no repo attribution keeps the node a candidate: not kno
 		['claw-6', { busyRepos: new Map([['WolffM/hadoku-cardtable', 0]]) }],
 	]);
 	assert.deepEqual(heavyBusyCandidates(probes, heavy), []);
+});
+
+// The mark half of the same rule (heavy-marks.ts). On 2026-11-05 seven reds
+// were nodes inside it: a heavy job placed but not started, or just ended.
+const within = (marks, node, nowMs) =>
+	marks[node] !== undefined && nowMs - marks[node] < 240_000 ? nowMs - marks[node] : null;
+
+test('a node the dispatcher marked heavy is set aside with the mark age', () => {
+	const marks = { 'claw-4': 1_000_000, 'claw-6': 1_000_000 - 300_000 };
+	assert.deepEqual(
+		heavyMarkedCandidates(['claw-1', 'claw-4', 'claw-6'], marks, 1_063_000, within),
+		[{ node: 'claw-4', markAgeSec: 63 }]
+	);
+});
+
+test('marks that would not parse set nothing aside: not knowing stays strict', () => {
+	assert.deepEqual(heavyMarkedCandidates(['claw-4'], null, 1_000_000, within), []);
 });

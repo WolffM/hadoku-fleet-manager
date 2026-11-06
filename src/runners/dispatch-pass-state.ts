@@ -1,6 +1,6 @@
 /**
  * THE DISPATCH PASS'S CROSS-TICK MEMORY — three independent trackers a pass
- * reads and updates on every call, none of it persisted (lost on an
+ * reads and updates on every call, none of it read back from disk (lost on an
  * mgmt-api restart, which is the SAFE direction for all three — see each
  * one's own doc below). Split out of `dispatch-pass.ts` (wave shrink-1 lane
  * B, 800-line ceiling) so the bookkeeping sits apart from the pass that
@@ -8,16 +8,13 @@
  * its original path.
  */
 import { REAP_IDLE_INTERVAL_MS } from './ephemeral-exec-reap.js';
+import { HEAVY_MARK_MS } from './heavy-marks.js';
 
-/**
- * How long a node stays "running heavy" for the WARM tick after this pass
- * placed or saw a heavy job there — two fast-loop probes, by which time the
- * probe's own repo-level attribution has caught up.
- */
-export const HEAVY_MARK_MS = 120_000;
+export { HEAVY_MARK_MS };
 
 /** node -> when this pass last placed or saw a heavy job there. Module state:
  *  lost on restart, which only reopens the ≤60 s window the probe leaves.
+ *  Copied to disk for `fleet warm-canary` (`heavy-marks.ts`); never read back.
  *  A `Map`, so `dispatch-pass-warm-heavy.ts`'s own write (`.set`) needs no
  *  wrapper — only a REASSIGNED primitive (see `affinity` below) does. */
 export const heavyMarkedAtMs = new Map<string, number>();

@@ -236,3 +236,32 @@ export function heavyBusyCandidates(probes, heavyModel) {
 	}
 	return out;
 }
+
+/**
+ * Nodes the warm cache is still withholding because of a HEAVY MARK: the
+ * dispatcher placed or saw a heavy job there within the mark plus its refill
+ * window (`heavy-marks.ts`). This is the other half of `runningHeavyNow`
+ * (`dispatch-warm-cache.ts`): the probe half above sees only a Worker
+ * already running, so a heavy job minted but not started, the gap between
+ * two heavy shards, and the two minutes after the last one ends all scored
+ * "not warm" — seven reds on 2026-11-05, every one refilled unaided.
+ *
+ * `marks` null (the file would not parse) excludes nothing: not knowing is
+ * never a reason to stop demanding a listener.
+ *
+ * @param {readonly string[]} nodes - the candidates still in play
+ * @param {Readonly<Record<string, number>> | null} marks
+ * @param {number} nowMs
+ * @param {(marks: Readonly<Record<string, number>>, node: string, nowMs: number) => number | null} withholds
+ *   `heavyMarkWithholds`, injected for the same reason `warmCanaryVerdict`'s fns are
+ * @returns {{node: string, markAgeSec: number}[]}
+ */
+export function heavyMarkedCandidates(nodes, marks, nowMs, withholds) {
+	if (!marks) return [];
+	const out = [];
+	for (const node of nodes) {
+		const age = withholds(marks, node, nowMs);
+		if (age !== null) out.push({ node, markAgeSec: Math.round(age / 1000) });
+	}
+	return out;
+}
