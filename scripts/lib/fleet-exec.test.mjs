@@ -399,14 +399,16 @@ test('remoteCommand builds the exact ssh argv the four hand-rolled copies built'
 	// Byte-for-byte the shape `drain-node.mjs`/`toolpack.mjs` built directly:
 	// BatchMode, a per-call ConnectTimeout, `-n` (no stdin), the role's
 	// user@node, and the one-liner as the remote COMMAND, not stdin.
-	const [cmd, argv] = remoteCommand('claw-9', 'admin', 'pgrep -c -f x', {
+	// The node is `claw-fixture`, a name no box carries: these tests ran as
+	// `claw-9` until CI landed on claw-9, where isLocalNode made it `bash`.
+	const [cmd, argv] = remoteCommand('claw-fixture', 'admin', 'pgrep -c -f x', {
 		connectTimeout: 6,
-		manifest: { machines: { 'claw-9': {} } },
+		manifest: { machines: { 'claw-fixture': {} } },
 	});
 	assert.equal(cmd, 'ssh');
 	assert.deepEqual(argv.slice(0, 4), ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=6']);
 	assert.ok(argv.includes('-n'), 'no caller here writes to stdin');
-	assert.match(argv.at(-2), /^[a-z_][a-z0-9_-]*@claw-9$/);
+	assert.match(argv.at(-2), /^[a-z_][a-z0-9_-]*@claw-fixture$/);
 	assert.equal(argv.at(-1), 'pgrep -c -f x');
 });
 
@@ -423,12 +425,12 @@ test('scriptExecCommand feeds the script over stdin, not as an ssh argument', ()
 	// positional args after `--`, joined into ONE command string — ssh joins
 	// its own trailing argv with spaces before sending it either way, so this
 	// is byte-identical to what the four hand-built argv elements sent.
-	const [cmd, argv] = scriptExecCommand('claw-9', 'admin', {
+	const [cmd, argv] = scriptExecCommand('claw-fixture', 'admin', {
 		connectTimeout: 8,
 		interpreter: 'sh',
 		sudo: true,
 		passthru: ['--quick'],
-		manifest: { machines: { 'claw-9': {} } },
+		manifest: { machines: { 'claw-fixture': {} } },
 	});
 	assert.equal(cmd, 'ssh');
 	assert.deepEqual(argv.slice(0, 4), ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8']);
@@ -437,11 +439,11 @@ test('scriptExecCommand feeds the script over stdin, not as an ssh argument', ()
 });
 
 test('scriptExecCommand without sudo omits it, same interpreter and args', () => {
-	const [, argv] = scriptExecCommand('claw-9', 'admin', {
+	const [, argv] = scriptExecCommand('claw-fixture', 'admin', {
 		interpreter: 'sh',
 		sudo: false,
 		passthru: ['--quick'],
-		manifest: { machines: { 'claw-9': {} } },
+		manifest: { machines: { 'claw-fixture': {} } },
 	});
 	assert.equal(argv.at(-1), 'sh -s -- --quick');
 });
