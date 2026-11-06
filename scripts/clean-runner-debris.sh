@@ -89,6 +89,7 @@ WORK_STALE_DAYS="${WORK_STALE_DAYS:-7}"
 # nobody has classified, so the margin is deliberately wide.
 UNKNOWN_KEEP_MIN="${UNKNOWN_KEEP_MIN:-1440}"
 TRUNK_KEEP_DAYS="${TRUNK_KEEP_DAYS:-30}"
+ANDROID_KEEP_DAYS="${ANDROID_KEEP_DAYS:-30}"
 # THE NODE-SIDE FLEET DIRECTORY, spelled once — same name and reason as
 # NODE_DIR in ci-throttle-install.sh: not an operator knob, just one spelling
 # per file instead of two.
@@ -126,6 +127,7 @@ case "$DIAG_KEEP_DAYS" in '' | *[!0-9]*) DIAG_KEEP_DAYS=14 ;; esac
 case "$TMP_KEEP_MIN" in '' | *[!0-9]*) TMP_KEEP_MIN=60 ;; esac
 case "$WORK_STALE_DAYS" in '' | *[!0-9]*) WORK_STALE_DAYS=7 ;; esac
 case "$TRUNK_KEEP_DAYS" in '' | *[!0-9]*) TRUNK_KEEP_DAYS=30 ;; esac
+case "$ANDROID_KEEP_DAYS" in '' | *[!0-9]*) ANDROID_KEEP_DAYS=30 ;; esac
 case "$UNKNOWN_KEEP_MIN" in '' | *[!0-9]*) UNKNOWN_KEEP_MIN=1440 ;; esac
 case "$MAX_CONCURRENT_NODE" in '' | *[!0-9]*) MAX_CONCURRENT_NODE='' ;; esac
 
@@ -138,6 +140,7 @@ kb_slot=0
 kb_work=0
 kb_venv=0
 kb_trunk=0
+kb_android=0
 kb_unclassified=0
 tmpfs_used_kb=0
 skipped_busy=0
@@ -256,6 +259,7 @@ drop() { # path kind
 	work) kb_work=$((kb_work + sz)) ;;
 	venv) kb_venv=$((kb_venv + sz)) ;;
 	trunk) kb_trunk=$((kb_trunk + sz)) ;;
+	android) kb_android=$((kb_android + sz)) ;;
 	esac
 	if [ "$APPLY" = 1 ]; then
 		rm -rf -- "$1" && removed=$((removed + 1)) && echo "REMOVED ${1#"$HOME"/}"
@@ -425,13 +429,10 @@ fi
 
 # --- declared tool caches: report SIZE, and only if actually present -------
 #
-# The auditor decides WHICH caches are abandoned (ownership, not age — see
-# tool-caches.mjs); this only answers "is it here and how big". Splitting it that
-# way is what stops the report naming a cache that was already deleted: the first
-# version reported claw-3's ~/.cache/trunk from ownership alone and kept doing it
-# after the directory was gone, with no size attached to act on. Only the
-# ABANDONED caches arrive here: sizing one the node still owns cost claw-1 66s of
-# a cold disk walk for a number nobody read (fleet-manager#65).
+# The auditor decides WHICH caches are abandoned (ownership, tool-caches.mjs);
+# this only answers "is it here and how big", so the report cannot name a cache
+# already deleted (claw-3's ~/.cache/trunk once was). Only ABANDONED caches
+# arrive: sizing one still owned cost claw-1 66s of 90 (fleet-manager#65).
 for c in ${CACHE_PATHS:-}; do
 	cp="${c#\~/}"
 	cp="$HOME/$cp"
@@ -440,33 +441,21 @@ for c in ${CACHE_PATHS:-}; do
 	echo "CACHE-PRESENT $c $csz"
 done
 
-# --- trunk's cache: BOUNDED, because nothing else bounds it (fleet-manager#65) --
-# The tool-cache rule above only names a cache whose owning repos left the node.
-# trunk's cache on a node that still serves vibecheck had no bound at all: every
-# repo vibecheck scans pins its own linter versions, and trunk never prunes. On
-# 2026-11-06 claw-1 held 15.9 GB / 403k files there (740 tool versions, per-
-# checkout state untouched since September), and walking it broke this scan.
-#
-# Age is a weak signal here and that is acceptable for THIS cache: a wrong
-# delete costs one re-download of one linter on the next run, not a rebuild.
-# `trunk cache prune` was tried first and rejected: it needs a trunk repo as its
-# cwd and prints nothing, even with -v and --dry-run, so its verdict cannot be
-# shown or checked.
-#
-# Only when no job runs anywhere on the node (a job may be inside any version),
-# never an entry with an open file, and the newest version of each tool always
-# stays. Everything else unchanged for TRUNK_KEEP_DAYS goes:
+# --- caches a node still USES, bounded by age (fleet-manager#65) ----------
+# The rule above only names a cache whose owning repos left the node; nothing
+# bounded one still in use. trunk never prunes, and vibecheck pins different
+# linters per scanned repo: claw-1 held 15.9 GB / 403k files in ~/.cache/trunk
+# on 2026-11-06, and walking it broke this scan. A wrong delete here costs one
+# re-download. `trunk cache prune` needs a trunk repo as cwd and prints nothing,
+# even with -v --dry-run, so it was rejected. No entry with an open file; the
+# newest version of each tool stays. Else, unchanged for TRUNK_KEEP_DAYS, goes:
 #   tools/<tool>/<version>   neither the version dir nor its .marker is recent
-#   repos/<hash>             trunk's per-checkout state, nothing recent at depth <=2
+#   repos/<hash>             per-checkout state, nothing recent at depth <=2
 #   repos/<hash>/results/*   the lint-result cache of a live checkout, by entry
 TRUNK_ROOT="$HOME/.cache/trunk"
 recent() { [ -n "$(find "$@" -maxdepth 0 -mtime "-$TRUNK_KEEP_DAYS" -print -quit 2>/dev/null)" ]; }
 sweep_trunk() {
 	[ -d "$TRUNK_ROOT" ] || return 0
-	if [ "$any_worker_live" != 0 ]; then
-		echo "SKIP-TRUNK a job is running on this node"
-		return 0
-	fi
 	local t v newest h sz
 	open_tops "$TRUNK_ROOT/tools"
 	for t in "$TRUNK_ROOT"/tools/*/; do
@@ -504,7 +493,49 @@ sweep_trunk() {
 		fi
 	done
 }
-sweep_trunk
+
+# The Android SDK: setup-android@v4 adds cmdline-tools/<new> each release and
+# removes nothing (v3 also left `emulator` and `tools`): claw-1 held ~1.3 GB no
+# job had read since July. sdkmanager reads every package.xml on every job, so
+# the signal is the ATIME of a package's CONTENT (relatime records a read at
+# most daily; nothing here reads content). Unread for ANDROID_KEEP_DAYS goes,
+# except the newest of each versioned family and platform-tools, which
+# setup-android installs every job; setup-android and AGP fetch what is
+# missing. A noatime mount has no signal, and the sweep says so.
+# ~/.gradle needs none of this: Gradle's own GC drops a version's caches and
+# wrapper 30 days after its last build (claws 2/3/4/6 had already lost 8.13).
+SDK="$HOME/.android/sdk"
+read_lately() { [ -n "$(find "$1" -type f ! -name package.xml ! -name source.properties -atime "-$ANDROID_KEEP_DAYS" -print -quit 2>/dev/null)" ]; }
+is_pkg() { [ -f "$1/package.xml" ] || [ -f "$1/source.properties" ]; }
+sweep_android() {
+	[ -d "$SDK" ] || return 0
+	case "$(findmnt -no OPTIONS -T "$SDK" 2>/dev/null)" in '' | *noatime*)
+		echo "SKIP-ANDROID no read times are recorded for $SDK" && return 0 ;;
+	esac
+	local p v newest
+	open_tops "$SDK"
+	for p in "$SDK"/*/; do
+		p="${p%/}"
+		[ -n "${OPEN_TOP[$(basename "$p")]:-}" ] || [ "$(basename "$p")" = platform-tools ] && continue
+		if is_pkg "$p"; then
+			read_lately "$p" || drop "$p" android
+			continue
+		fi
+		newest=$(ls -td "$p"/*/ 2>/dev/null | head -1)
+		for v in "$p"/*/; do
+			[ "$v" != "$newest" ] && is_pkg "$v" || continue
+			read_lately "$v" || drop "${v%/}" android
+		done
+	done
+}
+
+# Never while a job runs (it may be inside any of it), and SAID, so a node busy every night shows.
+if [ "$any_worker_live" != 0 ]; then
+	echo "SKIP-CACHES a job is running on this node"
+else
+	sweep_trunk
+	sweep_android
+fi
 
 # --- tmpfs /tmp: debris that costs RAM, not disk --------------------------
 # This script was written for DISK, and everything above it reclaims disk. But
@@ -766,4 +797,4 @@ else
 fi
 
 free_kb=$(df -Pk "$HOME" | tail -1 | awk '{print $4}')
-echo "SUMMARY host=$(hostname) stale_kb=$kb_stale update_kb=$kb_update orphan_kb=$kb_orphan diag_kb=$kb_diag tmpfs_kb=$kb_tmpfs tmpfs_used_kb=$tmpfs_used_kb slot_kb=$kb_slot work_kb=$kb_work venv_kb=$kb_venv trunk_kb=$kb_trunk unclassified_kb=$kb_unclassified removed=$removed busy_skipped=$skipped_busy free_kb=$free_kb"
+echo "SUMMARY host=$(hostname) stale_kb=$kb_stale update_kb=$kb_update orphan_kb=$kb_orphan diag_kb=$kb_diag tmpfs_kb=$kb_tmpfs tmpfs_used_kb=$tmpfs_used_kb slot_kb=$kb_slot work_kb=$kb_work venv_kb=$kb_venv trunk_kb=$kb_trunk android_kb=$kb_android unclassified_kb=$kb_unclassified removed=$removed busy_skipped=$skipped_busy free_kb=$free_kb"

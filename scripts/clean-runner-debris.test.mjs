@@ -88,7 +88,14 @@ function baseEnv(fixtureRoot, overrides = {}) {
  *  regardless of what is actually installed or running on the host this
  *  suite executes on (CI runs it mid-job, with a real live Worker/Listener
  *  and a real tmpfs /tmp on the node; none of that may leak in). */
-function mkStubBin({ workerPid, listenerPid, lsofHit, lsofOpen, lsofLog } = {}) {
+function mkStubBin({
+	workerPid,
+	listenerPid,
+	lsofHit,
+	lsofOpen,
+	lsofLog,
+	mountOpts = 'rw,relatime',
+} = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'crd-bin-'));
 	created.push(dir);
 	writeFileSync(
@@ -110,7 +117,9 @@ function mkStubBin({ workerPid, listenerPid, lsofHit, lsofOpen, lsofLog } = {}) 
 	const logLine = lsofLog ? `echo "$*" >> '${lsofLog}'\n` : '';
 	writeFileSync(join(dir, 'lsof'), `#!/bin/sh\n${logLine}${lsofBody}\n`);
 	writeFileSync(join(dir, 'fuser'), `#!/bin/sh\nexit 1\n`);
-	for (const f of ['pgrep', 'lsof', 'fuser']) chmodSync(join(dir, f), 0o755);
+	// The android sweep reads its mount's atime policy; never the host's.
+	writeFileSync(join(dir, 'findmnt'), `#!/bin/sh\necho '${mountOpts}'\n`);
+	for (const f of ['pgrep', 'lsof', 'fuser', 'findmnt']) chmodSync(join(dir, f), 0o755);
 	return dir;
 }
 
@@ -867,7 +876,7 @@ test('trunk: nothing is touched while a job runs anywhere on the node', () => {
 	const T = mkTrunk(env.HOME);
 	const r = run(fixtureRoot, env, { stubBin: mkStubBin({ workerPid: 4242 }) });
 	assert.equal(r.status, 0, r.stderr);
-	assert.match(r.stdout, /SKIP-TRUNK a job is running/);
+	assert.match(r.stdout, /SKIP-CACHES a job is running/);
 	assert.equal(existsSync(join(T, 'tools/eslint/9.28.0-old')), true);
 	assert.equal(existsSync(join(T, 'repos/deadhash')), true);
 	assert.match(r.stdout, /trunk_kb=0 /);
@@ -897,4 +906,81 @@ test('trunk: a dry run names what it would remove and removes nothing', () => {
 	assert.match(r.stdout, /WOULD-REMOVE \.cache\/trunk\/repos\/livehash\/results \(1 lint results/);
 	assert.equal(existsSync(join(T, 'tools/eslint/9.28.0-old')), true);
 	assert.equal(existsSync(join(T, 'repos/livehash/results/old-result')), true);
+});
+
+// ── fleet-manager#65: the Android SDK is bounded by what a build reads ──────
+// setup-android@v4 adds cmdline-tools/<new> per release and removes nothing;
+// claw-1 held ~1.3 GB of SDK no job had read since July (2026-11-06).
+
+/** An SDK whose packages were installed long ago; `readDaysAgo` is the last
+ *  read of their CONTENT. package.xml is always read today, as sdkmanager does. */
+function mkSdk(home) {
+	const S = join(home, '.android', 'sdk');
+	const pkg = (rel, { installedDaysAgo = 100, readDaysAgo, meta = 'package.xml' }) => {
+		const d = join(S, rel);
+		mkdirSync(join(d, 'lib'), { recursive: true });
+		writeFileSync(join(d, meta), '<x/>');
+		writeFileSync(join(d, 'lib', 'a.jar'), 'x');
+		const inst = (Date.now() - installedDaysAgo * 86_400_000) / 1000;
+		utimesSync(join(d, 'lib', 'a.jar'), (Date.now() - readDaysAgo * 86_400_000) / 1000, inst);
+		utimesSync(join(d, meta), Date.now() / 1000, inst);
+		utimesSync(join(d, 'lib'), inst, inst);
+		utimesSync(d, inst, inst);
+	};
+	pkg('cmdline-tools/16.0', { readDaysAgo: 100, meta: 'source.properties' });
+	pkg('cmdline-tools/22.0', { installedDaysAgo: 40, readDaysAgo: 90, meta: 'source.properties' });
+	pkg('platforms/android-34', { readDaysAgo: 60 });
+	pkg('platforms/android-35', { readDaysAgo: 2 });
+	pkg('platforms/android-36', { installedDaysAgo: 20, readDaysAgo: 2 });
+	pkg('emulator', { readDaysAgo: 100 });
+	pkg('platform-tools', { readDaysAgo: 100 });
+	mkdirSync(join(S, 'licenses'), { recursive: true });
+	writeFileSync(join(S, 'licenses', 'android-sdk-license'), 'h');
+	ageAll(join(S, 'licenses'), 100 * 1440);
+	return S;
+}
+
+test('android: unread superseded and leftover packages go; newest, read and platform-tools stay', () => {
+	const fixtureRoot = mkfixture();
+	const env = baseEnv(fixtureRoot);
+	const S = mkSdk(env.HOME);
+	const r = run(fixtureRoot, env);
+	assert.equal(r.status, 0, r.stderr);
+	const ex = (p) => existsSync(join(S, p));
+	assert.equal(ex('cmdline-tools/16.0'), false, 'superseded and unread');
+	assert.equal(ex('cmdline-tools/22.0'), true, 'the newest of a family stays, read or not');
+	assert.equal(ex('platforms/android-34'), false);
+	assert.equal(ex('platforms/android-35'), true, 'an old version a build still reads stays');
+	assert.equal(ex('emulator'), false, 'a read package.xml is not use');
+	assert.equal(ex('platform-tools'), true, 'setup-android installs it every job');
+	assert.equal(ex('licenses/android-sdk-license'), true, 'not a package');
+	assert.match(r.stdout, /SUMMARY .*android_kb=[1-9]/);
+});
+
+test('android: nothing is touched while a job runs, or where reads are not recorded', () => {
+	for (const [stub, why] of [
+		[{ workerPid: 4242 }, /SKIP-CACHES a job is running/],
+		[{ mountOpts: 'rw,noatime' }, /SKIP-ANDROID no read times/],
+		[{ mountOpts: '' }, /SKIP-ANDROID no read times/],
+	]) {
+		const fixtureRoot = mkfixture();
+		const env = baseEnv(fixtureRoot);
+		const S = mkSdk(env.HOME);
+		const r = run(fixtureRoot, env, { stubBin: mkStubBin(stub) });
+		assert.equal(r.status, 0, r.stderr);
+		assert.match(r.stdout, why);
+		assert.equal(existsSync(join(S, 'emulator')), true);
+		assert.match(r.stdout, /android_kb=0 /);
+	}
+});
+
+test('android: a package with an open file stays; a dry run removes nothing', () => {
+	const fixtureRoot = mkfixture();
+	const env = baseEnv(fixtureRoot, { APPLY: '0' });
+	const S = mkSdk(env.HOME);
+	const r = run(fixtureRoot, env, { stubBin: mkStubBin({ lsofOpen: [join(S, 'emulator', 'x')] }) });
+	assert.equal(r.status, 0, r.stderr);
+	assert.doesNotMatch(r.stdout, /WOULD-REMOVE \.android\/sdk\/emulator/);
+	assert.match(r.stdout, /WOULD-REMOVE \.android\/sdk\/cmdline-tools\/16\.0 /);
+	assert.equal(existsSync(join(S, 'cmdline-tools/16.0')), true);
 });
