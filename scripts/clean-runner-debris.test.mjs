@@ -803,3 +803,98 @@ test('venv: a dry run names the broken venv and deletes nothing', () => {
 	assert.equal(existsSync(venv), true, 'a dry run must never delete');
 	assert.match(r.stdout, /WOULD-REMOVE .*r\/r\/\.venv/);
 });
+
+// ── fleet-manager#65: trunk's cache is bounded ──────────────────────────────
+// claw-1 held 15.9 GB / 403k files in ~/.cache/trunk on 2026-11-06, because
+// vibecheck pins different linters per scanned repo and trunk never prunes.
+
+/** A trunk cache: two old eslint versions, one fresh one, a dead and a live checkout. */
+function mkTrunk(home) {
+	const T = join(home, '.cache', 'trunk');
+	const ver = (v, daysAgo) => {
+		const d = join(T, 'tools', 'eslint', v);
+		mkdirSync(d, { recursive: true });
+		writeFileSync(join(d, 'bin'), 'x');
+		writeFileSync(`${d}.marker`, '');
+		writeFileSync(`${d}.lock`, '');
+		for (const p of [join(d, 'bin'), d, `${d}.marker`, `${d}.lock`]) age(p, daysAgo * 1440);
+	};
+	ver('9.28.0-old', 60);
+	ver('10.9.1-older-but-newest-of-the-stale', 45);
+	ver('10.14.0-fresh', 2);
+	// ...and a tool whose only version is stale: the newest always stays.
+	mkdirSync(join(T, 'tools', 'ruff', '0.1.0-only'), { recursive: true });
+	ageAll(join(T, 'tools', 'ruff'), 90 * 1440);
+	// The fresh version is newer by mtime, so the 45-day one is NOT the newest.
+	age(join(T, 'tools', 'eslint', '10.14.0-fresh'), 2 * 1440);
+
+	const dead = join(T, 'repos', 'deadhash');
+	mkdirSync(join(dead, 'results', 'r1'), { recursive: true });
+	ageAll(dead, 60 * 1440);
+
+	const live = join(T, 'repos', 'livehash');
+	mkdirSync(join(live, 'results', 'old-result'), { recursive: true });
+	mkdirSync(join(live, 'results', 'new-result'), { recursive: true });
+	ageAll(live, 60 * 1440);
+	writeFileSync(join(live, 'server.pid'), '1');
+	age(join(live, 'results', 'new-result'), 60);
+	return T;
+}
+
+test('trunk: stale versions and dead checkout state go; the newest of each tool stays', () => {
+	const fixtureRoot = mkfixture();
+	const env = baseEnv(fixtureRoot);
+	const T = mkTrunk(env.HOME);
+	const r = run(fixtureRoot, env);
+	assert.equal(r.status, 0, r.stderr);
+	const ex = (p) => existsSync(join(T, p));
+	assert.equal(ex('tools/eslint/9.28.0-old'), false);
+	assert.equal(ex('tools/eslint/9.28.0-old.marker'), false, 'its marker and lock go with it');
+	assert.equal(ex('tools/eslint/9.28.0-old.lock'), false);
+	assert.equal(ex('tools/eslint/10.9.1-older-but-newest-of-the-stale'), false);
+	assert.equal(ex('tools/eslint/10.14.0-fresh'), true, 'recently installed');
+	assert.equal(ex('tools/ruff/0.1.0-only'), true, 'the newest version of a tool always stays');
+	assert.equal(ex('repos/deadhash'), false, 'checkout state with nothing recent is dead');
+	assert.equal(ex('repos/livehash/server.pid'), true, 'a live checkout stays');
+	assert.equal(ex('repos/livehash/results/old-result'), false, 'its old lint results go');
+	assert.equal(ex('repos/livehash/results/new-result'), true);
+	assert.match(r.stdout, /SUMMARY .*trunk_kb=[1-9]/);
+});
+
+test('trunk: nothing is touched while a job runs anywhere on the node', () => {
+	const fixtureRoot = mkfixture();
+	const env = baseEnv(fixtureRoot);
+	const T = mkTrunk(env.HOME);
+	const r = run(fixtureRoot, env, { stubBin: mkStubBin({ workerPid: 4242 }) });
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stdout, /SKIP-TRUNK a job is running/);
+	assert.equal(existsSync(join(T, 'tools/eslint/9.28.0-old')), true);
+	assert.equal(existsSync(join(T, 'repos/deadhash')), true);
+	assert.match(r.stdout, /trunk_kb=0 /);
+});
+
+test('trunk: a tool or checkout with an open file is skipped whole', () => {
+	const fixtureRoot = mkfixture();
+	const env = baseEnv(fixtureRoot);
+	const T = mkTrunk(env.HOME);
+	const stubBin = mkStubBin({
+		lsofOpen: [join(T, 'tools', 'eslint', 'x'), join(T, 'repos', 'deadhash', 'x')],
+	});
+	const r = run(fixtureRoot, env, { stubBin });
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(existsSync(join(T, 'tools/eslint/9.28.0-old')), true);
+	assert.equal(existsSync(join(T, 'repos/deadhash')), true);
+	assert.equal(existsSync(join(T, 'repos/livehash/results/old-result')), false, 'others still go');
+});
+
+test('trunk: a dry run names what it would remove and removes nothing', () => {
+	const fixtureRoot = mkfixture();
+	const env = baseEnv(fixtureRoot, { APPLY: '0' });
+	const T = mkTrunk(env.HOME);
+	const r = run(fixtureRoot, env);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stdout, /WOULD-REMOVE \.cache\/trunk\/tools\/eslint\/9\.28\.0-old/);
+	assert.match(r.stdout, /WOULD-REMOVE \.cache\/trunk\/repos\/livehash\/results \(1 lint results/);
+	assert.equal(existsSync(join(T, 'tools/eslint/9.28.0-old')), true);
+	assert.equal(existsSync(join(T, 'repos/livehash/results/old-result')), true);
+});

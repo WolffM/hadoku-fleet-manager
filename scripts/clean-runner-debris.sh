@@ -88,6 +88,7 @@ WORK_STALE_DAYS="${WORK_STALE_DAYS:-7}"
 # names only once it is this old. A day, not TMP_KEEP_MIN: these are files
 # nobody has classified, so the margin is deliberately wide.
 UNKNOWN_KEEP_MIN="${UNKNOWN_KEEP_MIN:-1440}"
+TRUNK_KEEP_DAYS="${TRUNK_KEEP_DAYS:-30}"
 # THE NODE-SIDE FLEET DIRECTORY, spelled once — same name and reason as
 # NODE_DIR in ci-throttle-install.sh: not an operator knob, just one spelling
 # per file instead of two.
@@ -124,6 +125,7 @@ fi
 case "$DIAG_KEEP_DAYS" in '' | *[!0-9]*) DIAG_KEEP_DAYS=14 ;; esac
 case "$TMP_KEEP_MIN" in '' | *[!0-9]*) TMP_KEEP_MIN=60 ;; esac
 case "$WORK_STALE_DAYS" in '' | *[!0-9]*) WORK_STALE_DAYS=7 ;; esac
+case "$TRUNK_KEEP_DAYS" in '' | *[!0-9]*) TRUNK_KEEP_DAYS=30 ;; esac
 case "$UNKNOWN_KEEP_MIN" in '' | *[!0-9]*) UNKNOWN_KEEP_MIN=1440 ;; esac
 case "$MAX_CONCURRENT_NODE" in '' | *[!0-9]*) MAX_CONCURRENT_NODE='' ;; esac
 
@@ -135,6 +137,7 @@ kb_tmpfs=0
 kb_slot=0
 kb_work=0
 kb_venv=0
+kb_trunk=0
 kb_unclassified=0
 tmpfs_used_kb=0
 skipped_busy=0
@@ -252,6 +255,7 @@ drop() { # path kind
 	slot) kb_slot=$((kb_slot + sz)) ;;
 	work) kb_work=$((kb_work + sz)) ;;
 	venv) kb_venv=$((kb_venv + sz)) ;;
+	trunk) kb_trunk=$((kb_trunk + sz)) ;;
 	esac
 	if [ "$APPLY" = 1 ]; then
 		rm -rf -- "$1" && removed=$((removed + 1)) && echo "REMOVED ${1#"$HOME"/}"
@@ -435,6 +439,72 @@ for c in ${CACHE_PATHS:-}; do
 	csz=$(du -sk "$cp" 2>/dev/null | cut -f1) || continue
 	echo "CACHE-PRESENT $c $csz"
 done
+
+# --- trunk's cache: BOUNDED, because nothing else bounds it (fleet-manager#65) --
+# The tool-cache rule above only names a cache whose owning repos left the node.
+# trunk's cache on a node that still serves vibecheck had no bound at all: every
+# repo vibecheck scans pins its own linter versions, and trunk never prunes. On
+# 2026-11-06 claw-1 held 15.9 GB / 403k files there (740 tool versions, per-
+# checkout state untouched since September), and walking it broke this scan.
+#
+# Age is a weak signal here and that is acceptable for THIS cache: a wrong
+# delete costs one re-download of one linter on the next run, not a rebuild.
+# `trunk cache prune` was tried first and rejected: it needs a trunk repo as its
+# cwd and prints nothing, even with -v and --dry-run, so its verdict cannot be
+# shown or checked.
+#
+# Only when no job runs anywhere on the node (a job may be inside any version),
+# never an entry with an open file, and the newest version of each tool always
+# stays. Everything else unchanged for TRUNK_KEEP_DAYS goes:
+#   tools/<tool>/<version>   neither the version dir nor its .marker is recent
+#   repos/<hash>             trunk's per-checkout state, nothing recent at depth <=2
+#   repos/<hash>/results/*   the lint-result cache of a live checkout, by entry
+TRUNK_ROOT="$HOME/.cache/trunk"
+recent() { [ -n "$(find "$@" -maxdepth 0 -mtime "-$TRUNK_KEEP_DAYS" -print -quit 2>/dev/null)" ]; }
+sweep_trunk() {
+	[ -d "$TRUNK_ROOT" ] || return 0
+	if [ "$any_worker_live" != 0 ]; then
+		echo "SKIP-TRUNK a job is running on this node"
+		return 0
+	fi
+	local t v newest h sz
+	open_tops "$TRUNK_ROOT/tools"
+	for t in "$TRUNK_ROOT"/tools/*/; do
+		t="${t%/}"
+		[ -n "${OPEN_TOP[$(basename "$t")]:-}" ] && continue
+		newest=$(ls -td "$t"/*/ 2>/dev/null | head -1)
+		newest="${newest%/}"
+		for v in "$t"/*/; do
+			v="${v%/}"
+			[ -d "$v" ] && [ "$v" != "$newest" ] || continue
+			recent "$v" "$v.marker" && continue
+			drop "$v" trunk
+			[ "$APPLY" = 1 ] && rm -f -- "$v.marker" "$v.lock"
+		done
+	done
+	open_tops "$TRUNK_ROOT/repos"
+	for h in "$TRUNK_ROOT"/repos/*/; do
+		h="${h%/}"
+		[ -n "${OPEN_TOP[$(basename "$h")]:-}" ] && continue
+		if [ -z "$(find "$h" -maxdepth 2 -mtime "-$TRUNK_KEEP_DAYS" -print -quit 2>/dev/null)" ]; then
+			drop "$h" trunk
+			continue
+		fi
+		[ -d "$h/results" ] || continue
+		local old=()
+		mapfile -t old < <(find "$h/results" -mindepth 1 -maxdepth 1 -mtime "+$TRUNK_KEEP_DAYS" 2>/dev/null)
+		[ "${#old[@]}" -gt 0 ] || continue
+		sz=$(du -sck -- "${old[@]}" 2>/dev/null | tail -1 | cut -f1)
+		kb_trunk=$((kb_trunk + ${sz:-0}))
+		if [ "$APPLY" = 1 ]; then
+			rm -rf -- "${old[@]}" && removed=$((removed + 1)) &&
+				echo "REMOVED ${h#"$HOME"/}/results (${#old[@]} lint results)"
+		else
+			echo "WOULD-REMOVE ${h#"$HOME"/}/results (${#old[@]} lint results, $((${sz:-0} / 1024))M)"
+		fi
+	done
+}
+sweep_trunk
 
 # --- tmpfs /tmp: debris that costs RAM, not disk --------------------------
 # This script was written for DISK, and everything above it reclaims disk. But
@@ -696,4 +766,4 @@ else
 fi
 
 free_kb=$(df -Pk "$HOME" | tail -1 | awk '{print $4}')
-echo "SUMMARY host=$(hostname) stale_kb=$kb_stale update_kb=$kb_update orphan_kb=$kb_orphan diag_kb=$kb_diag tmpfs_kb=$kb_tmpfs tmpfs_used_kb=$tmpfs_used_kb slot_kb=$kb_slot work_kb=$kb_work venv_kb=$kb_venv unclassified_kb=$kb_unclassified removed=$removed busy_skipped=$skipped_busy free_kb=$free_kb"
+echo "SUMMARY host=$(hostname) stale_kb=$kb_stale update_kb=$kb_update orphan_kb=$kb_orphan diag_kb=$kb_diag tmpfs_kb=$kb_tmpfs tmpfs_used_kb=$tmpfs_used_kb slot_kb=$kb_slot work_kb=$kb_work venv_kb=$kb_venv trunk_kb=$kb_trunk unclassified_kb=$kb_unclassified removed=$removed busy_skipped=$skipped_busy free_kb=$free_kb"

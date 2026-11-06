@@ -184,6 +184,7 @@ async function cleanNode(m) {
 		Number(f.diag_kb ?? 0) +
 		Number(f.tmpfs_kb ?? 0) +
 		Number(f.venv_kb ?? 0) +
+		Number(f.trunk_kb ?? 0) +
 		Number(f.unclassified_kb ?? 0);
 	// What the backstop sweep found that no rule names, by class. Printed and
 	// carried in --json so a new kind of debris is visible the first night it
@@ -216,6 +217,11 @@ async function cleanNode(m) {
 			`\n   free after: ${GB(f.free_kb ?? 0)} GB` +
 			(Number(f.tmpfs_used_kb ?? 0)
 				? `\n   tmpfs /tmp: ${GB(f.tmpfs_used_kb)} GB resident in RAM, ${GB(f.tmpfs_kb ?? 0)} GB reclaimable`
+				: '') +
+			(Number(f.trunk_kb ?? 0) ? `\n   trunk cache, aged out: ${GB(f.trunk_kb)} GB` : '') +
+			// SAID, so a node that is busy every night is seen never being pruned.
+			(r.out.includes('\nSKIP-TRUNK ') || r.out.startsWith('SKIP-TRUNK ')
+				? '\n   trunk cache: not swept, a job was running'
 				: '') +
 			// A venv whose interpreter is gone (#127): named per path, because each
 			// one is a checkout that would have failed its next job.
