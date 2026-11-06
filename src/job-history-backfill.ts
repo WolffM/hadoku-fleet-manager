@@ -4,7 +4,7 @@
  * shrink-1 lane C, pure move) to bring that file under the 600-line target.
  */
 import { logger } from './host.js';
-import { loadHistory, persistHistory, records } from './job-history-store.js';
+import { loadHistory, noteHistoryChanged, persistHistory, records } from './job-history-store.js';
 import { type GhJob, stepFailure } from './job-history-phases.js';
 
 /** What one {@link backfillFailedSteps} pass did. */
@@ -99,6 +99,7 @@ export async function backfillFailedSteps(
 			// Mutating the object the live window holds IS the mechanism. A copy
 			// would be written once and then lost to the next compaction.
 			Object.assign(rec, sf);
+			noteHistoryChanged();
 			patched++;
 		}
 	};
