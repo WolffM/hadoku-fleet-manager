@@ -77,6 +77,7 @@ import {
 	runEndedAt,
 	runsEndedSince,
 	isForeignRun,
+	isOffDefaultBranch,
 	cancelledByTimeout,
 	STALE_RUN_MS,
 	type CiRun,
@@ -156,7 +157,9 @@ const GITHUB_LISTING_CAP = 1000;
 
 /**
  * The most charged GitHub calls the listing side of ci-alerts can make in an
- * hour: one first page per repo per tick, plus the shared pool of extra pages.
+ * hour: one first page per repo per tick, plus the shared pool of extra pages,
+ * plus one default-branch read per repo (#61 — once a day when it succeeds,
+ * once an hour when it fails, so an hour's worst case is one per repo).
  * Sized as if every call were charged — a 304 on an idle repo's first page is
  * free, but a busy repo's listing changes every tick, and the budget rule is
  * never to size a cadence by its typical bill. The per-run `cancelledByTimeout`
@@ -164,7 +167,7 @@ const GITHUB_LISTING_CAP = 1000;
  * once, in both designs.
  */
 export function ciAlertsCallCeilingPerHour(repoCount: number, tickMs = TICK_INTERVAL_MS): number {
-	return Math.ceil(3_600_000 / tickMs) * (repoCount + EXTRA_PAGES_PER_TICK);
+	return Math.ceil(3_600_000 / tickMs) * (repoCount + EXTRA_PAGES_PER_TICK) + repoCount;
 }
 
 /**
@@ -282,6 +285,51 @@ export async function pollRepo(
 }
 
 /**
+ * Each repo's default branch, read at most once a day (#61). It changes only
+ * when someone renames it, and the read is a conditional GET, so the cache is
+ * about the arithmetic, not the typical bill. A FAILED read is remembered for
+ * an hour, not a day: until then that repo's targets judge every branch
+ * (`isOffDefaultBranch`), and the retry is bounded so a repo that keeps
+ * failing costs one call an hour, not one a tick — the term
+ * `ciAlertsCallCeilingPerHour` adds.
+ */
+export const DEFAULT_BRANCH_TTL_MS = 24 * 60 * 60_000;
+export const DEFAULT_BRANCH_RETRY_MS = 60 * 60_000;
+const defaultBranches = new Map<string, { branch: string | null; at: number; why?: string }>();
+
+async function defaultBranchOf(
+	repo: string,
+	token: string,
+	ghGet: GhGet
+): Promise<{ branch: string | null; why?: string }> {
+	const hit = defaultBranches.get(repo);
+	const ttl = hit?.branch ? DEFAULT_BRANCH_TTL_MS : DEFAULT_BRANCH_RETRY_MS;
+	if (hit && Date.now() - hit.at < ttl) return hit;
+	let entry: { branch: string | null; at: number; why?: string };
+	try {
+		const resp = await ghGet<{ default_branch?: string }>('', token, repo);
+		const branch =
+			typeof resp?.default_branch === 'string' && resp.default_branch ? resp.default_branch : null;
+		entry = {
+			branch,
+			at: Date.now(),
+			...(branch
+				? {}
+				: { why: resp ? 'the repo answered with no default_branch' : 'the read failed' }),
+		};
+	} catch (err) {
+		entry = { branch: null, at: Date.now(), why: err instanceof Error ? err.message : String(err) };
+	}
+	defaultBranches.set(repo, entry);
+	return entry;
+}
+
+/** Test seam: cross-tick memory this module owns. */
+export function __resetDefaultBranchesForTesting(): void {
+	defaultBranches.clear();
+}
+
+/**
  * One tick. Never throws: alerting is a side channel and must not be able to
  * take runner-health's tick down with it.
  *
@@ -334,10 +382,19 @@ export async function runCiAlerts(token: string, ghGet: GhGet): Promise<CiTickSu
 		repoStates[repo] = { floor: poll.floor };
 		reposChanged = true;
 
+		const { branch, why } = await defaultBranchOf(repo, token, ghGet);
+		if (branch === null) {
+			summary.branchUnread++;
+			logger.warn(
+				`[ci-alerts] ${repo}: could not read its default branch (${why ?? 'unstated'}) — judging every branch's runs`
+			);
+		}
+
 		for (const target of repoTargets) {
 			try {
 				changed =
-					(await evaluateTarget(target, repo, poll.runs, states, summary, token, ghGet)) || changed;
+					(await evaluateTarget(target, repo, branch, poll.runs, states, summary, token, ghGet)) ||
+					changed;
 			} catch (err) {
 				summary.errors++;
 				logger.warn(
@@ -358,6 +415,7 @@ export async function runCiAlerts(token: string, ghGet: GhGet): Promise<CiTickSu
 async function evaluateTarget(
 	target: CiTarget,
 	repo: string,
+	defaultBranch: string | null,
 	listing: CiRun[],
 	states: Record<string, CiState>,
 	summary: CiTickSummary,
@@ -366,8 +424,10 @@ async function evaluateTarget(
 ): Promise<boolean> {
 	const path = `.github/workflows/${target.workflow}`;
 	const mine = listing.filter((r) => r.path === path && r.status === 'completed');
-	const runs = mine.filter((r) => !isForeignRun(r, repo));
-	summary.foreign += mine.length - runs.length;
+	const own = mine.filter((r) => !isForeignRun(r, repo));
+	summary.foreign += mine.length - own.length;
+	const runs = own.filter((r) => !isOffDefaultBranch(r, defaultBranch));
+	summary.offBranch += own.length - runs.length;
 
 	const key = stateKey(target);
 	const fresh = runs.length ? runsEndedSince(runs, states[key] ?? null) : [];

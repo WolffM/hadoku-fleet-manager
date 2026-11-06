@@ -27,6 +27,8 @@ export interface CiRun {
 	 * is the contributor's, not this fleet's — see `isForeignRun`.
 	 */
 	head_repository?: { full_name?: string; fork?: boolean } | null;
+	/** The branch the run's code is on — see `isOffDefaultBranch`. */
+	head_branch?: string | null;
 	conclusion: CiConclusion;
 	status: string;
 	html_url: string;
@@ -157,6 +159,25 @@ export function isForeignRun(run: CiRun, repo: string): boolean {
 	if (!head) return false;
 	if (head.fork === true) return true;
 	return typeof head.full_name === 'string' && head.full_name.toLowerCase() !== repo.toLowerCase();
+}
+
+/**
+ * A run on a branch other than the repo's default one. Its outcome is someone's
+ * experiment, not the state of CI (fleet-manager#61): hadoku-cardtable runs
+ * `workflow_dispatch` on `verify/*` branches as a red/green lane, and its
+ * `verify/*-red` runs are MEANT to fail. Of the 41 "CI broken — cardtable /
+ * forge" posts in the 48h to 2026-11-06, 26 had only a `verify/*` failure
+ * behind them, and their recoveries were the next verify-green run, often in
+ * the same tick.
+ *
+ * `defaultBranch` null — the repo's default could not be read — keeps every
+ * run, as before: a target that judged nothing on a failed read would go quiet
+ * on exactly the tick it could not look. A run with no `head_branch` is kept
+ * for the same reason `isForeignRun` keeps one with no `head_repository`.
+ */
+export function isOffDefaultBranch(run: CiRun, defaultBranch: string | null): boolean {
+	if (defaultBranch === null) return false;
+	return typeof run.head_branch === 'string' && run.head_branch !== defaultBranch;
 }
 
 /**

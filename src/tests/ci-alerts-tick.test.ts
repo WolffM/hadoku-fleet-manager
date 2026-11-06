@@ -454,17 +454,29 @@ test('#37: the listing ceiling at fleet size is at or below the per-workflow 462
 			listingGh(() => runs, calls)
 		);
 	});
-	const perTick = calls.length;
+	const listing = calls.filter((c) => c.startsWith('/actions/runs'));
+	const branchReads = calls.filter((c) => c === '');
+	assert.equal(
+		calls.length,
+		listing.length + branchReads.length,
+		`unexpected call: ${calls.join(' ')}`
+	);
+	const perTick = listing.length;
 	const ticksPerHour = 3_600_000 / TICK_MS;
 	assert.equal(
 		perTick,
 		REPOS + EXTRA_PAGES_PER_TICK,
 		'one first page per repo plus the pool, no more'
 	);
-	assert.equal(perTick * ticksPerHour, ciAlertsCallCeilingPerHour(REPOS));
+	// #61: at most one default-branch read per repo (none here: a repo whose
+	// listing is unreadable is skipped before it), and the cache holds a read —
+	// even a failed one — for at least an hour, so an hour's worst case is one.
+	assert.ok(branchReads.length <= REPOS, `${branchReads.length} branch reads for ${REPOS} repos`);
+	const perHour = perTick * ticksPerHour + REPOS;
+	assert.equal(perHour, ciAlertsCallCeilingPerHour(REPOS));
 	assert.ok(
-		perTick * ticksPerHour <= 77 * ticksPerHour,
-		`${perTick * ticksPerHour}/hr must not exceed the 462/hr the 77-target per-workflow poll cost`
+		perHour <= 77 * ticksPerHour,
+		`${perHour}/hr must not exceed the 462/hr the 77-target per-workflow poll cost`
 	);
 	// For the record: per-workflow at today's list would have been 732/hr.
 	assert.equal(TARGETS * ticksPerHour, 732);

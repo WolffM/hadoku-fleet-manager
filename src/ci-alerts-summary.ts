@@ -31,6 +31,16 @@ export interface CiTickSummary {
 	 * (`isForeignRun`). Counted so a public repo's quiet is legible.
 	 */
 	foreign: number;
+	/**
+	 * Completed runs of a watched workflow skipped because they ran on a branch
+	 * other than the repo's default (`isOffDefaultBranch`).
+	 */
+	offBranch: number;
+	/**
+	 * Repos whose default branch could not be read this tick, so their targets
+	 * judged every branch's runs, as they did before #61.
+	 */
+	branchUnread: number;
 	/** Polled fine, and nothing has concluded since the last tick. */
 	nothingNew: number;
 	/** Runs actually put through the state machine. */
@@ -53,6 +63,8 @@ export function emptySummary(targets: number): CiTickSummary {
 		unreadable: 0,
 		noRuns: 0,
 		foreign: 0,
+		offBranch: 0,
+		branchUnread: 0,
 		nothingNew: 0,
 		evaluated: 0,
 		broken: 0,
@@ -81,6 +93,7 @@ export function formatCiTickSummary(s: CiTickSummary): string {
 		`announced ${s.broken + s.recovered} (broken ${s.broken}, recovered ${s.recovered}), ` +
 		`suppressed ${s.suppressed}${reasons ? ` (${reasons})` : ''}, ignored ${s.ignored}, ` +
 		`nothing-new ${s.nothingNew}, no-runs ${s.noRuns}, fork-runs ${s.foreign}, ` +
+		`off-branch-runs ${s.offBranch}, branch-unread ${s.branchUnread}, ` +
 		`unreadable ${s.unreadable}, ` +
 		`errors ${s.errors}`
 	);
@@ -88,7 +101,9 @@ export function formatCiTickSummary(s: CiTickSummary): string {
 
 /** A tick that could not look anywhere is a finding, and says so at WARN. */
 export function logCiTickSummary(s: CiTickSummary): void {
-	const blind = s.targets === 0 || s.unreadable > 0 || s.errors > 0;
+	// branch-unread is not blind (every run was still judged) but it is a
+	// degraded pass, and WARN is where a degraded pass is looked for.
+	const blind = s.targets === 0 || s.unreadable > 0 || s.errors > 0 || s.branchUnread > 0;
 	const line = formatCiTickSummary(s);
 	if (blind) logger.warn(line);
 	else logger.info(line);

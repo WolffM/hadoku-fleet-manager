@@ -9,7 +9,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tempDir } from '../tmpdir.js';
 
-import { runCiAlerts, stateKey } from '../../ci-alerts.js';
+import { __resetDefaultBranchesForTesting, runCiAlerts, stateKey } from '../../ci-alerts.js';
 import {
 	decideCiAlert,
 	runEndedAt,
@@ -157,6 +157,7 @@ export async function withTempHost<T>(
 	const manifests = tempDir('ci-alerts-manifests-');
 	const state = tempDir('ci-alerts-state-');
 	const log = { info: [] as string[], warn: [] as string[] };
+	__resetDefaultBranchesForTesting();
 	__setHostForTesting({
 		...testHost,
 		manifestDir: manifests,
@@ -284,6 +285,8 @@ export function listed(
 export function listingGh(all: () => CiRun[], calls: string[] = []) {
 	return async <T>(path: string): Promise<T | null> => {
 		calls.push(path);
+		// The repo itself: ci-alerts reads its default branch (#61).
+		if (path === '') return await Promise.resolve({ default_branch: 'main' } as T);
 		const m = /^\/actions\/runs\?per_page=(\d+)&page=(\d+)/.exec(path);
 		if (!m) throw new Error(`unexpected path ${path}`);
 		const [size, page] = [Number(m[1]), Number(m[2])];

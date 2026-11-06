@@ -179,6 +179,8 @@ test('the summary distinguishes every way of looking away, including the zeroes'
 		unreadable: 0,
 		noRuns: 0,
 		foreign: 0,
+		offBranch: 0,
+		branchUnread: 0,
 		nothingNew: 64,
 		evaluated: 3,
 		broken: 1,
@@ -196,6 +198,8 @@ test('the summary distinguishes every way of looking away, including the zeroes'
 	// one. A summary that only listed non-zero counters would restate the bug.
 	assert.match(line, /unreadable 0/);
 	assert.match(line, /no-runs 0/);
+	assert.match(line, /off-branch-runs 0/);
+	assert.match(line, /branch-unread 0/);
 	assert.match(line, /errors 0/);
 });
 
@@ -205,6 +209,8 @@ test('the summary names the reason a transition was held back', () => {
 		unreadable: 1,
 		noRuns: 0,
 		foreign: 0,
+		offBranch: 0,
+		branchUnread: 0,
 		nothingNew: 0,
 		evaluated: 2,
 		broken: 0,
