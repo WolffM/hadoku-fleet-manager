@@ -236,11 +236,12 @@ test('#37: a failing fork PR run does not page; the same failure from the repo i
 		manifestDir: manifests,
 		stateDir: state,
 		alerts: {
-			post: async (content: string) => {
-				posts.push(content);
-				return await Promise.resolve({ posted: true, sinkRecorded: true });
+			post: () => {
+				throw new Error('ci-alerts must not page Discord — CI outcomes are booked quietly');
 			},
-			recordQuietly: () => undefined,
+			recordQuietly: (content: string) => {
+				posts.push(content);
+			},
 		},
 	});
 	try {
@@ -371,11 +372,12 @@ test('#37: a run open at the last poll that fails deep in the listing still page
 		manifestDir: manifests,
 		stateDir: state,
 		alerts: {
-			post: async (content: string) => {
-				posts.push(content);
-				return await Promise.resolve({ posted: true, sinkRecorded: true });
+			post: () => {
+				throw new Error('ci-alerts must not page Discord — CI outcomes are booked quietly');
 			},
-			recordQuietly: () => undefined,
+			recordQuietly: (content: string) => {
+				posts.push(content);
+			},
 		},
 	});
 	try {
@@ -492,11 +494,12 @@ test('a page that went out is on disk before the pass ends, so the next process 
 		stateDir: state,
 		logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
 		alerts: {
-			post: async (content: string) => {
-				posts.push(content);
-				return await Promise.resolve({ posted: true, sinkRecorded: true });
+			post: () => {
+				throw new Error('ci-alerts must not page Discord — CI outcomes are booked quietly');
 			},
-			recordQuietly: () => undefined,
+			recordQuietly: (content: string) => {
+				posts.push(content);
+			},
 		},
 	});
 	try {

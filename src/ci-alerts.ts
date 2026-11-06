@@ -49,6 +49,15 @@
  * both staleness guards, because the case it must not become is the
  * double-paging the handoff boundary was built to end.
  *
+ * BOOKED, NOT PAGED (2026-11-05). A red or recovered workflow is written to
+ * the alert ledger (`alert.mgmt.ci-alerts`, via `recordAlertQuietly`) and no
+ * longer posts to the emergency Discord webhook. One flapping repo produced a
+ * broken/recovered pair every ten minutes for an evening, and a CI failure is
+ * not an emergency: it is read from the ledger by the daily CI digest and the
+ * ci-sweep, which is where the operator acts on it. The state machine, the
+ * re-page interval and the write-through below are unchanged — they now keep
+ * the ledger free of duplicates instead of the channel.
+ *
  * THIS FILE, AFTER THE SPLIT (wave 5r lane C, pure move, to reach the
  * 800-line ceiling): `ci-alerts-decide.ts` holds the run/state shapes and the
  * pure decision machine, `ci-alerts-summary.ts` the per-tick tally, and
@@ -59,7 +68,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 
-import { manifest, logger, postDiscord } from './host.js';
+import { manifest, logger, recordAlertQuietly } from './host.js';
 import { fleetOwner } from './lib/fleet-config.js';
 import { TICK_INTERVAL_MS } from './lib/runner-health-shared.js';
 
@@ -403,13 +412,16 @@ async function evaluateTarget(
 			const headline = decision.repage
 				? `🚨 **CI still broken** — ${target.label}\nA new run failed too; still red since the last alert.`
 				: `🚨 **CI broken** — ${target.label}`;
-			await postDiscord(
+			recordAlertQuietly(
 				`${headline}\nConclusion: \`${run.conclusion}\`\nRun: ${run.html_url}`,
 				'ci-alerts'
 			);
 		} else if (decision.action === 'recovered') {
 			summary.recovered++;
-			await postDiscord(`✅ **CI recovered** — ${target.label}\nRun: ${run.html_url}`, 'ci-alerts');
+			recordAlertQuietly(
+				`✅ **CI recovered** — ${target.label}\nRun: ${run.html_url}`,
+				'ci-alerts'
+			);
 		} else if (decision.action === 'suppressed') {
 			summary.suppressed++;
 			const reason = decision.reason ?? 'unstated';
