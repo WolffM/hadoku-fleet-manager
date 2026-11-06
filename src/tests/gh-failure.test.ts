@@ -37,7 +37,6 @@ function captureWarn(): string[] {
 		manifestDir: '/tmp',
 		stateDir: '/tmp',
 		storeDoctorPath: '/tmp',
-		cronProfilesPath: '/tmp',
 	} as never);
 	return lines;
 }

@@ -17,7 +17,6 @@ import { test } from 'node:test';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-	cronProfilesPath,
 	githubToken,
 	installCliHost,
 	installHost,
@@ -44,7 +43,6 @@ test('installHost accepts a host whose manifests all exist', () => {
 		installHost(
 			hostWith({
 				storeDoctorPath: resolve(REAL_MANIFESTS, 'fleet-runner-manifest.json'),
-				cronProfilesPath: resolve(REAL_MANIFESTS, 'fleet-runner-manifest.json'),
 			})
 		)
 	);
@@ -65,14 +63,12 @@ test('a missing manifest DIRECTORY throws, naming every file it could not find',
 	__setHostForTesting(testHost);
 });
 
-test('a missing store-doctor or cron-profiles path throws too', () => {
-	for (const key of ['storeDoctorPath', 'cronProfilesPath'] as const) {
-		assert.throws(
-			() => installHost(hostWith({ [key]: '/nonexistent/thing.sh' })),
-			new RegExp(key),
-			`${key} must be required, not optional`
-		);
-	}
+test('a missing store-doctor path throws too', () => {
+	assert.throws(
+		() => installHost(hostWith({ storeDoctorPath: '/nonexistent/thing.sh' })),
+		/storeDoctorPath/,
+		'storeDoctorPath must be required, not optional'
+	);
 	__setHostForTesting(testHost);
 });
 
@@ -83,7 +79,6 @@ test('an unset stateDir throws — job history would land somewhere unowned', ()
 				hostWith({
 					stateDir: '',
 					storeDoctorPath: resolve(REAL_MANIFESTS, 'fleet-runner-manifest.json'),
-					cronProfilesPath: resolve(REAL_MANIFESTS, 'fleet-runner-manifest.json'),
 				})
 			),
 		/stateDir is required/
@@ -131,7 +126,6 @@ test('a CLI host serves logging and paths, and THROWS on alerts, the job sink an
 		assert.throws(() => void postDiscord('x', 's'), /not available to a CLI host/);
 		assert.throws(() => void recordJobResult('j', 'failed', 1), /not available to a CLI host/);
 		assert.throws(() => storeDoctorPath(), /not available to a CLI host/);
-		assert.throws(() => cronProfilesPath(), /not available to a CLI host/);
 		assert.throws(() => githubToken() ?? assert.fail('no token is undefined'), /no token/);
 	} finally {
 		__setHostForTesting(testHost);

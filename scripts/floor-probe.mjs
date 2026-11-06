@@ -155,7 +155,6 @@ installHost({
 	manifestDir: manifestDir(),
 	stateDir: stateDir(),
 	storeDoctorPath: join(siteRoot(), 'scripts', 'ci', 'pnpm-store-doctor.sh'),
-	cronProfilesPath: join(siteRoot(), 'services', 'cron-worker', 'profiles.json'),
 });
 
 const argv = process.argv.slice(2);

@@ -27,37 +27,35 @@
  * `getPm2HostBusy(node)` answers for the box being placed on. runner-health is
  * still the only writer — it holds the runner listing already.
  *
- * The CRON rungs below are genuinely fleet-wide and stay that way: `inFlight`
- * counts dispatches through mgmt-api, which runs on one box, and the declared
- * window comes from one `profiles.json`. Neither has a node to key on.
+ * The CRON rung is genuinely fleet-wide and stays that way: `inFlight` counts
+ * dispatches through mgmt-api, which runs on one box, so it has no node to key
+ * on.
  *
- * WHY NOT A 12am–6am BLACKOUT
- * ---------------------------
- * A fixed window is a guess about someone else's schedule, and it goes stale
- * silently in both directions: it keeps hokon idle for six hours when the crons
- * finished in forty minutes, and it does nothing at all for a cron that moves to
- * 09:00 or one added next month. Both failures are invisible — nobody notices a
- * runner that was needlessly unavailable.
+ * NO SCHEDULE, NO WINDOW — ONLY WHAT IS RUNNING
+ * ---------------------------------------------
+ * A fixed window is a guess about someone else's schedule. It goes stale in both
+ * directions and silently: it holds hokon idle after the work is done, and does
+ * nothing for work that moved. Two signals replace it, both observed:
  *
- * So the window is DERIVED, from the two places that already know the truth:
+ *   1. LIVE — every cron dispatch in mgmt-api (scheduled, privileged, manual)
+ *      runs through one helper that counts it for its whole duration, so while
+ *      nightly work is actually running here, CI is not admitted on top of it.
+ *   2. THE HOST ITSELF — the backstop promotes a node only on its measured load
+ *      and memory (`hostMayTakeSaturation`), and a node whose load cannot be read
+ *      is refused. Work the counter cannot see (a service that answers 202 and
+ *      keeps going) still shows up there.
  *
- *   1. LIVE — cron work is dispatched through mgmt-api (`dispatchJob`), so an
- *      in-flight counter is exact. No schedule, no duration guess: while a cron
- *      job is actually running, hokon is reserved, and the moment it finishes it
- *      is not.
- *   2. DECLARED — `services/cron-worker/profiles.json` holds every schedule.
- *      Some cron work may execute entirely inside cron-worker without touching
- *      mgmt-api, so a profile's cron time opens a bounded reservation window as
- *      a backstop. Adding a cron reserves hokon automatically; nothing here
- *      needs editing.
- *
- * The live signal is the authority; the declared window only covers what it
- * cannot see, and is deliberately short so a stuck window cannot strand the
- * node for a whole night.
+ * Until 2026-11-06 each daily profile in cron-worker's `profiles.json` also
+ * opened a 90-minute "declared window". Three overlapping ones held hokon off CI
+ * from 06:00 to 09:30Z every morning, against ~27 minutes of real cron work, while
+ * cardtable's queue sat 35 minutes behind a full fleet. The window was meant as a
+ * backstop for what the counter could not see; it never was one, because with the
+ * host gate above there is no case where it adds protection — only cases where it
+ * blocks. And the counter could not see most of the nightly set, which was the
+ * real gap: it lived inside the HTTP forwarder and missed every systemd one-shot,
+ * `fleet` CLI check and privileged job. That is fixed at the dispatch boundary.
  */
 
-import { readFileSync } from 'node:fs';
-import { cronProfilesPath } from './host.js';
 // `activeLeases` is read from the ledger directly, not through `host-lease.ts`
 // (`tenancy`): a domain reading another domain's facts through that other
 // domain's own module, rather than through a state record, is the rule-5
@@ -66,14 +64,6 @@ import { cronProfilesPath } from './host.js';
 // for its own callers.
 import { activeLeases } from './host-lease-record.js';
 import { __resetPm2HostBusyForTesting } from './pm2-host-busy-store.js';
-
-/**
- * How long after a profile's cron fires we keep the declared reservation open.
- * Deliberately modest: this is a BACKSTOP for cron work the live counter cannot
- * see, not a model of how long the nightly set takes. Overshooting costs idle CI
- * capacity, and the live signal already covers the common case.
- */
-export const DECLARED_WINDOW_MINUTES = 90;
 
 let inFlight = 0;
 
@@ -92,74 +82,9 @@ export function __resetReservationForTesting(): void {
 	__resetPm2HostBusyForTesting();
 }
 
-interface Profile {
-	name?: string;
-	schedule?: { cron?: string; timezone?: string };
-	jobs?: unknown[];
-}
-
-function loadProfiles(): Profile[] {
-	// No profiles path: the host reports busy periods through leases instead.
-	const path = cronProfilesPath();
-	if (path) {
-		try {
-			const raw = JSON.parse(readFileSync(path, 'utf8')) as { profiles?: Profile[] };
-			if (Array.isArray(raw.profiles)) return raw.profiles;
-		} catch {
-			// An unreadable file reserves nothing, which is
-			// the fail-open direction — CI keeps working, it just loses the backstop.
-		}
-	}
-	return [];
-}
-
-/**
- * Minutes-of-day a 5-field cron expression fires, for the DAILY case only.
- *
- * Deliberately narrow. This exists to place a bounded window around a known
- * daily job, not to reimplement cron: an expression with a step, a list, or a
- * day-of-week constraint returns null and simply contributes no declared
- * window, leaving the live counter to cover it. A half-understood cron parser
- * that silently mis-fires a reservation would be worse than none.
- */
-export function dailyCronMinutes(expr: string | undefined): number | null {
-	if (!expr) return null;
-	const parts = expr.trim().split(/\s+/);
-	if (parts.length !== 5) return null;
-	const [min, hour, dom, mon, dow] = parts;
-	if (dom !== '*' || mon !== '*' || dow !== '*') return null;
-	if (!/^\d{1,2}$/.test(min ?? '') || !/^\d{1,2}$/.test(hour ?? '')) return null;
-	const m = Number(min);
-	const h = Number(hour);
-	if (m > 59 || h > 23) return null;
-	return h * 60 + m;
-}
-
-/**
- * Is `now` inside a declared cron window? Schedules are UTC in profiles.json
- * (`timezone: Etc/UTC`), so this compares in UTC and never touches local time —
- * hokon's RTC is local, which has already caused one class of clock confusion.
- */
-export function inDeclaredCronWindow(
-	now: Date,
-	profiles: Profile[] = loadProfiles(),
-	windowMinutes: number = DECLARED_WINDOW_MINUTES
-): string | null {
-	const nowMin = now.getUTCHours() * 60 + now.getUTCMinutes();
-	for (const p of profiles) {
-		if ((p.schedule?.timezone ?? 'Etc/UTC') !== 'Etc/UTC') continue;
-		const start = dailyCronMinutes(p.schedule?.cron);
-		if (start === null) continue;
-		// Wrap across midnight: a 23:30 cron with a 90m window covers 00:00–01:00.
-		const delta = (nowMin - start + 1440) % 1440;
-		if (delta < windowMinutes) return p.name ?? 'cron';
-	}
-	return null;
-}
-
 export interface Reservation {
 	reserved: boolean;
-	/** 'cron-running' | 'host-lease' | 'cron-window' | 'pm2-host' | null */
+	/** 'cron-running' | 'host-lease' | 'pm2-host' | null */
 	reason: string | null;
 	detail: string | null;
 }
@@ -171,17 +96,13 @@ export interface Reservation {
  * the GitHub runner listing, and a reservation check must not cost an API call
  * on every fast-loop tick.
  *
- * NODE-BLIND on purpose. It takes a clock, a rung and a schedule, and asks
+ * NODE-BLIND on purpose. It takes a clock and a rung, and asks
  * nothing about which box is being judged — so a claw that EARNS `pm2-host`
  * (probed since 2026-09-15, #6) is reserved by exactly this function and not by
  * a second copy grown beside it for the non-hokon case. The caller decides WHOSE
  * rung it is passing: `getPm2HostBusy(node)`, once per node it is placing on.
  */
-export function nodeReservation(
-	now: Date = new Date(),
-	pm2HostBusy = false,
-	profiles?: Profile[]
-): Reservation {
+export function nodeReservation(now: Date = new Date(), pm2HostBusy = false): Reservation {
 	if (inFlight > 0) {
 		return { reserved: true, reason: 'cron-running', detail: `${inFlight} cron job(s) in flight` };
 	}
@@ -197,10 +118,6 @@ export function nodeReservation(
 	}
 	if (pm2HostBusy) {
 		return { reserved: true, reason: 'pm2-host', detail: 'serving pm2-host work' };
-	}
-	const window = inDeclaredCronWindow(now, profiles);
-	if (window) {
-		return { reserved: true, reason: 'cron-window', detail: `within ${window} window` };
 	}
 	return { reserved: false, reason: null, detail: null };
 }

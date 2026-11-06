@@ -99,7 +99,6 @@ const HOST = (manifestDir: string, stateDir: string) =>
 		manifestDir,
 		stateDir,
 		storeDoctorPath: '/tmp',
-		cronProfilesPath: '/tmp',
 	}) as never;
 
 function withDirs(fn: (manifestDir: string, stateDir: string) => void): void {

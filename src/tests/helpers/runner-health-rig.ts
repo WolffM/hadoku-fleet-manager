@@ -386,9 +386,9 @@ export function installRunnerHealthRig(): void {
 		unmatchedCalls = [];
 		repoVars = new Map();
 		variableOps = [];
-		// Pin the priority ladder OPEN by default. The real reservation reads the
-		// declared cron window out of profiles.json, so without this every saturation
-		// test would silently invert for 90 minutes after each daily cron.
+		// Pin the priority ladder OPEN by default. The real reservation reads
+		// module-level live state (the cron counter, the host-lease ledger), so
+		// without this a saturation test would invert on another test's leftovers.
 		__setReservationForTesting(() => ({ reserved: false, reason: null, detail: null }));
 		// The probe is module-level state on fleet-loop. Leaving one test's fleet
 		// visible to the next makes the label floor suppress or page for reasons the

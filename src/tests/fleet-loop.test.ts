@@ -572,7 +572,6 @@ function withCapabilitiesManifest(
 		manifestDir: root,
 		stateDir: root,
 		storeDoctorPath: '/tmp',
-		cronProfilesPath: '/tmp',
 	} as never);
 	return Promise.resolve(fn()).finally(() => {
 		__setHostForTesting(testHost);

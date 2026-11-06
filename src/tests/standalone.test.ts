@@ -68,7 +68,6 @@ test('credentials and paths come from the environment the CLI also reads', () =>
 	assert.equal(host.stateDir, '/s', 'the same variable the CLI reads, so both see one state');
 	assert.equal(host.manifestDir, '/m');
 	assert.match(host.storeDoctorPath, /scripts\/pnpm-store-doctor\.sh$/);
-	assert.equal(host.cronProfilesPath, undefined, 'busy periods arrive as leases, not a schedule');
 });
 
 test('the service REFUSES to start without being told where its manifests and state are', () => {

@@ -115,7 +115,6 @@ export const testHost: FleetHost = {
 	manifestDir: MANIFESTS,
 	stateDir: testStateDir,
 	storeDoctorPath: resolve(MANIFESTS, '..', 'scripts', 'pnpm-store-doctor.sh'),
-	cronProfilesPath: resolve(MANIFESTS, '..', 'scripts', 'cron-profiles.test.json'),
 };
 
 // Bypasses requirePaths deliberately: the doctor script and cron profiles are

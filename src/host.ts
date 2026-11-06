@@ -72,12 +72,6 @@ export interface FleetHost {
 	 *  guarded install writes the sick marker, this script clears it. */
 	storeDoctorPath: string;
 	/**
-	 * DEPRECATED: the host's cron profiles, read for a declared-cron window.
-	 * Absent when the host reports its busy periods through host leases
-	 * (`host-lease.ts`), which is how the standalone service runs.
-	 */
-	cronProfilesPath?: string;
-	/**
 	 * Does this host run the fleet's in-process loops — the fast loop (probe,
 	 * repair, label writes, dispatch) and runner-health (outage detection,
 	 * the hokon backstop)?
@@ -123,9 +117,6 @@ function requirePaths(host: FleetHost): void {
 		['manifestDir/fleet-runner-manifest.json', `${host.manifestDir}/fleet-runner-manifest.json`],
 		['manifestDir/fleet-runner-coverage.json', `${host.manifestDir}/fleet-runner-coverage.json`],
 		['storeDoctorPath', host.storeDoctorPath],
-		...(host.cronProfilesPath !== undefined
-			? ([['cronProfilesPath', host.cronProfilesPath]] as [string, string][])
-			: []),
 	];
 	const missing = required.filter(([, p]) => !p || !existsSync(p)).map(([n, p]) => `${n} (${p})`);
 	if (missing.length) {
@@ -191,7 +182,7 @@ export interface CliHostOptions {
  * The host for a standalone `scripts/*.mjs` subcommand that reaches library code
  * which logs (the JIT mint, `ghWrite`) but is not mgmt-api and not the service.
  *
- * WHY NOT `installHost`: it demands `storeDoctorPath` and `cronProfilesPath`
+ * WHY NOT `installHost`: it demands `storeDoctorPath`
  * exist, which makes every CLI depend on a sibling hadoku_site checkout — the
  * coupling the service split exists to end. WHY NOT `createFleetManager`: it is
  * the singleton that builds the monitors, and a CLI must not construct the thing
@@ -235,9 +226,6 @@ export function installCliHost(opts: CliHostOptions): void {
 		stateDir: opts.stateDir,
 		get storeDoctorPath(): string {
 			return notForCli('storeDoctorPath');
-		},
-		get cronProfilesPath(): string | undefined {
-			return notForCli('cronProfilesPath');
 		},
 	};
 }
@@ -291,4 +279,3 @@ export const manifestDir = (): string => need().manifestDir;
 export const manifest = (name: string): string => join(need().manifestDir, name);
 export const stateDir = (): string => need().stateDir;
 export const storeDoctorPath = (): string => need().storeDoctorPath;
-export const cronProfilesPath = (): string | undefined => need().cronProfilesPath;

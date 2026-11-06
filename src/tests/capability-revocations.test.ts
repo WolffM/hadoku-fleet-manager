@@ -125,7 +125,6 @@ function withStateDir(fn: (dir: string) => void): void {
 		manifestDir,
 		stateDir,
 		storeDoctorPath: '/tmp',
-		cronProfilesPath: '/tmp',
 	} as never);
 	try {
 		fn(stateDir);

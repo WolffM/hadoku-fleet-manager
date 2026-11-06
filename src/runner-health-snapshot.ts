@@ -61,7 +61,7 @@ export interface RunnerHealthSnapshot {
 	 * work and no live pressure, which is two separate facts and two jobs.
 	 */
 	queue_zombies_ignored?: number;
-	/** Why hokon is being held off builder work, if it is: cron-running | cron-window | pm2-host. */
+	/** Why hokon is being held off builder work, if it is: cron-running | host-lease | pm2-host. */
 	reserved_reason?: string | null;
 	/** Why the hokon backstop is up: 'outage' | 'saturation' | 'none'. */
 	backstop_reason?: BackstopReason;

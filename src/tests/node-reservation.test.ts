@@ -10,8 +10,6 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-	dailyCronMinutes,
-	inDeclaredCronWindow,
 	nodeReservation,
 	noteCronStart,
 	noteCronEnd,
@@ -23,70 +21,18 @@ import { PM2_HOST_LABEL } from '../lib/capability-registry-ids.js';
 
 beforeEach(() => __resetReservationForTesting());
 
-const PROFILES = [
-	{ name: 'local-daily', schedule: { cron: '0 8 * * *', timezone: 'Etc/UTC' } },
-	{ name: 'mail-sync', schedule: { cron: '*/10 * * * *', timezone: 'Etc/UTC' } },
-	{ name: 'scrape-weekly', schedule: { cron: '0 6 * * SUN', timezone: 'Etc/UTC' } },
-	{ name: 'late', schedule: { cron: '30 23 * * *', timezone: 'Etc/UTC' } },
-];
-
 const at = (h: number, m = 0) => new Date(Date.UTC(2026, 7, 25, h, m));
-
-// ── cron parsing: narrow ON PURPOSE ─────────────────────────────────────────
-
-test('dailyCronMinutes: parses a plain daily expression', () => {
-	assert.equal(dailyCronMinutes('0 8 * * *'), 480);
-	assert.equal(dailyCronMinutes('30 23 * * *'), 23 * 60 + 30);
-});
-
-test('dailyCronMinutes: anything not plainly daily returns null, never a guess', () => {
-	// A half-understood cron parser that mis-fires a reservation is worse than
-	// none: it would strand the prod host off CI at a time nobody predicted.
-	// These contribute no declared window and fall through to the live counter.
-	assert.equal(dailyCronMinutes('*/10 * * * *'), null, 'step');
-	assert.equal(dailyCronMinutes('0 6 * * SUN'), null, 'day-of-week');
-	assert.equal(dailyCronMinutes('0 1,2 * * *'), null, 'list');
-	assert.equal(dailyCronMinutes('0 8 1 * *'), null, 'day-of-month');
-	assert.equal(dailyCronMinutes('bogus'), null);
-	assert.equal(dailyCronMinutes(undefined), null);
-	assert.equal(dailyCronMinutes('99 99 * * *'), null, 'out of range');
-});
-
-// ── the declared window ─────────────────────────────────────────────────────
-
-test('inDeclaredCronWindow: inside a daily profile window', () => {
-	assert.equal(inDeclaredCronWindow(at(8, 5), PROFILES, 90), 'local-daily');
-	assert.equal(inDeclaredCronWindow(at(9, 29), PROFILES, 90), 'local-daily');
-});
-
-test('inDeclaredCronWindow: outside every window', () => {
-	assert.equal(inDeclaredCronWindow(at(12, 0), PROFILES, 90), null);
-	assert.equal(inDeclaredCronWindow(at(7, 59), PROFILES, 90), null, 'before the cron fires');
-	assert.equal(inDeclaredCronWindow(at(9, 30), PROFILES, 90), null, 'window is half-open');
-});
-
-test('inDeclaredCronWindow: a window WRAPS across midnight', () => {
-	// 23:30 + 90m covers 00:00-01:00 the next day. Getting this wrong would fail
-	// open exactly during the quiet hours the ladder exists to protect.
-	assert.equal(inDeclaredCronWindow(at(0, 30), PROFILES, 90), 'late');
-	assert.equal(inDeclaredCronWindow(at(1, 30), PROFILES, 90), null);
-});
-
-test('inDeclaredCronWindow: a non-UTC profile is ignored rather than guessed', () => {
-	const local = [{ name: 'x', schedule: { cron: '0 8 * * *', timezone: 'America/Los_Angeles' } }];
-	assert.equal(inDeclaredCronWindow(at(8, 5), local, 90), null);
-});
 
 // ── the live counter ────────────────────────────────────────────────────────
 
 test('nodeReservation: an in-flight cron job reserves the node', () => {
-	assert.equal(nodeReservation(at(12), false, PROFILES).reserved, false);
+	assert.equal(nodeReservation(at(12), false).reserved, false);
 	noteCronStart();
-	const r = nodeReservation(at(12), false, PROFILES);
+	const r = nodeReservation(at(12), false);
 	assert.equal(r.reserved, true);
 	assert.equal(r.reason, 'cron-running');
 	noteCronEnd();
-	assert.equal(nodeReservation(at(12), false, PROFILES).reserved, false, 'released immediately');
+	assert.equal(nodeReservation(at(12), false).reserved, false, 'released immediately');
 });
 
 test('nodeReservation: the live counter never goes negative', () => {
@@ -97,24 +43,35 @@ test('nodeReservation: the live counter never goes negative', () => {
 	assert.equal(inFlightCronJobs(), 0);
 	noteCronStart();
 	assert.equal(inFlightCronJobs(), 1);
-	assert.equal(nodeReservation(at(12), false, PROFILES).reserved, true);
+	assert.equal(nodeReservation(at(12), false).reserved, true);
 });
 
 test('nodeReservation: pm2-host work reserves the node', () => {
-	const r = nodeReservation(at(12), true, PROFILES);
+	const r = nodeReservation(at(12), true);
 	assert.equal(r.reserved, true);
 	assert.equal(r.reason, 'pm2-host');
 });
 
-test('nodeReservation: the LIVE signal outranks the declared window', () => {
-	// Both true at once must report the one that is actually observed, so the
-	// panel says "cron running" rather than the weaker "inside a window".
+test('nodeReservation: a schedule reserves nothing — only work that is running', () => {
+	// Until 2026-11-06 each daily cron-worker profile opened a 90-minute window
+	// here. Three overlapping ones held hokon off CI from 06:00 to 09:30Z against
+	// ~27 minutes of real work. 08:05 is inside where local-daily's window was:
+	// with nothing in flight, nothing is reserved.
+	assert.deepEqual(nodeReservation(at(8, 5), false), {
+		reserved: false,
+		reason: null,
+		detail: null,
+	});
 	noteCronStart();
-	assert.equal(nodeReservation(at(8, 5), false, PROFILES).reason, 'cron-running');
+	assert.equal(
+		nodeReservation(at(8, 5), false).reason,
+		'cron-running',
+		'running work still reserves'
+	);
 });
 
-test('nodeReservation: quiet node outside any window is free', () => {
-	const r = nodeReservation(at(12), false, PROFILES);
+test('nodeReservation: a quiet node is free', () => {
+	const r = nodeReservation(at(12), false);
 	assert.equal(r.reserved, false);
 	assert.equal(r.reason, null);
 });
@@ -125,7 +82,7 @@ test('nodeReservation is NODE-BLIND, so the ladder moves with the label', () => 
 	// `pm2-host` became a probed capability on 2026-09-15 (#6), so a claw can earn
 	// it and migration one's box will. The reservation must transfer with the
 	// LABEL rather than stay attached to a hostname, and the way that is achieved
-	// here is that this function never learns one: a clock, a rung and a schedule.
+	// here is that this function never learns one: a clock and a rung.
 	//
 	// `nodeReservation` itself is checked by the compiler — it has no node
 	// parameter to pass — so what is asserted here is that the WRITER is the whole
@@ -134,18 +91,18 @@ test('nodeReservation is NODE-BLIND, so the ladder moves with the label', () => 
 	// below is unrepresentable again.
 	setPm2HostBusy(['claw-2']);
 	assert.equal(getPm2HostBusy('claw-2'), true);
-	assert.equal(nodeReservation(at(12), getPm2HostBusy('claw-2'), PROFILES).reason, 'pm2-host');
+	assert.equal(nodeReservation(at(12), getPm2HostBusy('claw-2')).reason, 'pm2-host');
 	// Identical answer for hokon if hokon is the holder — the function cannot
 	// tell them apart, which is the point.
 	setPm2HostBusy(['hokon']);
-	assert.equal(nodeReservation(at(12), getPm2HostBusy('hokon'), PROFILES).reason, 'pm2-host');
+	assert.equal(nodeReservation(at(12), getPm2HostBusy('hokon')).reason, 'pm2-host');
 });
 
 test('the reservation reason IS the registry id, so a rename cannot drift', () => {
 	// The command station renders this token beside the ladder it derives from
 	// `capabilities.ladder()`. Spelled twice, they drift; compared here, they
 	// cannot.
-	assert.equal(nodeReservation(at(12), true, PROFILES).reason, PM2_HOST_LABEL);
+	assert.equal(nodeReservation(at(12), true).reason, PM2_HOST_LABEL);
 	assert.equal(PM2_HOST_LABEL, 'pm2-host');
 });
 

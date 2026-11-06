@@ -5,7 +5,7 @@
  * ------------------------------------
  * On 2026-08-30 the example passed a `reservation: { current, pm2HostBusy,
  * setPm2HostBusy }` object that is not on the interface AT ALL, and omitted
- * `jobs`, `stateDir`, `storeDoctorPath` and `cronProfilesPath`. Three of those
+ * `jobs`, `stateDir`, `storeDoctorPath` and the since-removed `cronProfilesPath`. Three of those
  * four omissions are stat-checked by `requirePaths()`, so a new consumer
  * following the README got a construction-time throw naming files it had never
  * heard of — and the sentence above the block, "three injected dependencies and
@@ -138,7 +138,7 @@ void test("README's createFleetManager example matches the FleetHost interface",
 			`  invented: ${invented.join(', ') || '(none)'}\n\n` +
 			'Every FleetHost field is required. A missing one is a construction-time throw for ' +
 			'the next consumer — requirePaths() stats manifestDir, its three manifests, ' +
-			'storeDoctorPath and cronProfilesPath — and an invented one is worse, because a ' +
+			'storeDoctorPath — and an invented one is worse, because a ' +
 			'reader cannot tell it from a real field. Fix the README, not this test.'
 	);
 });

@@ -53,13 +53,8 @@ const REAL_MANIFESTS = resolve(HERE, '..', '..', 'manifests');
  *
  * `createFleetManager` -> `installHost` runs the REAL `requirePaths` check —
  * unlike `testHost` itself, which the preload installs via
- * `__setHostForTesting` and so never exercises it. `testHost.cronProfilesPath`
- * points at a fixture (`scripts/cron-profiles.test.json`) that does not exist
- * on disk anywhere in this checkout — a pre-existing gap outside this lane's
- * files. `host.test.ts` already works around exactly this by pointing
- * `storeDoctorPath`/`cronProfilesPath` at some real, existing file instead of
- * the one `testHost` names; this does the same rather than creating the
- * missing fixture.
+ * `__setHostForTesting` and so never exercises it, so `storeDoctorPath` is
+ * pointed at a real, existing file here, as `host.test.ts` does.
  */
 function hostWith(lines: string[], controller: boolean | undefined): FleetHost {
 	return {
@@ -67,7 +62,6 @@ function hostWith(lines: string[], controller: boolean | undefined): FleetHost {
 		controller,
 		githubToken: () => undefined,
 		storeDoctorPath: resolve(REAL_MANIFESTS, 'fleet-runner-manifest.json'),
-		cronProfilesPath: resolve(REAL_MANIFESTS, 'fleet-runner-manifest.json'),
 		logger: {
 			info: (m) => lines.push(m),
 			warn: (m) => lines.push(m),

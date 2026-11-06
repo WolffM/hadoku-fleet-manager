@@ -462,9 +462,9 @@ test('#120: releasing an on-demand promotion clears the hold and closes the 🔻
 /**
  * The REAL rung, answered per node.
  *
- * `nodeReservation` itself is not called: it consults the wall clock and the
- * declared cron window, so a suite run inside the 90 minutes after any daily
- * cron would reserve everything and read as a pass for the wrong reason. This
+ * `nodeReservation` itself is not called: it reads module-level live state
+ * (the cron counter, the host-lease ledger), so a test that left either set
+ * would reserve everything and read as a pass for the wrong reason. This
  * stands in for it with the one rung under test, and it is handed whatever busy
  * flag the tick computed — so a tick that collapses two holders into one answer
  * gets a reservation for a box that is not busy.

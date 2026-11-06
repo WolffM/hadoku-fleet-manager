@@ -55,9 +55,9 @@ const clawPm2HostLabels = () => [{ name: 'self-hosted' }, { name: 'pm2-host' }];
 /**
  * The REAL rung, answered per node.
  *
- * `nodeReservation` itself is not called: it consults the wall clock and the
- * declared cron window, so a suite run inside the 90 minutes after any daily
- * cron would reserve everything and read as a pass for the wrong reason. This
+ * `nodeReservation` itself is not called: it reads module-level live state
+ * (the cron counter, the host-lease ledger), so a test that left either set
+ * would reserve everything and read as a pass for the wrong reason. This
  * stands in for it with the one rung under test, and it is handed whatever busy
  * flag the tick computed — so a tick that collapses two holders into one answer
  * gets a reservation for a box that is not busy.
@@ -522,7 +522,7 @@ test('backstop: an already-promoted hokon comes DOWN when cron work starts', asy
 		},
 		queuedRuns: { workflow_runs: [{ created_at: minutesAgo(6) }] },
 	});
-	__setReservationForTesting(() => ({ reserved: true, reason: 'cron-window', detail: '00:00' }));
+	__setReservationForTesting(() => ({ reserved: true, reason: 'cron-running', detail: 'job' }));
 	await tick('tok');
 	assert.equal(labelOps.length, 1, 'the label is taken back, not merely withheld');
 	assert.match(labelOps[0]!, /^DELETE .*\/labels\/hadoku-builder$/);

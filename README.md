@@ -93,8 +93,7 @@ what decides whether an outage is declared and the production host promoted as a
 builder. So `requirePaths()` in `src/host.ts` **stats `manifestDir`, the manifests
 inside it and `storeDoctorPath` at construction and throws naming every one it
 could not find**; `stateDir` need not pre-exist but must be set. Loud at boot
-beats silent forever. (`cronProfilesPath` is optional and deprecated: host leases
-replace it.)
+beats silent forever.
 
 `createFleetManager` **throws on a second call**: the modules hold ~16 mutable
 singletons and two instances would silently share every one of them.

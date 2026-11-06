@@ -67,16 +67,30 @@ function fleetCronSchedules(fail) {
 	return { schedules, unreadable };
 }
 
+/** cron-worker's daily UTC profiles, in `quietWindow`'s schedule shape. */
+function cronWorkerSchedules(profiles) {
+	const out = [];
+	for (const p of profiles) {
+		if ((p.schedule?.timezone ?? 'Etc/UTC') !== 'Etc/UTC') continue;
+		const minutes = dailyCronMinutes(p.schedule?.cron);
+		if (minutes !== null)
+			out.push({ name: `cron-worker ${p.name ?? 'profile'}`, minutesOfDay: minutes });
+	}
+	return out;
+}
+
 /**
  * Is now a quiet window?
  *
- * `nodeReservation`'s LIVE half — `inFlightCronJobs()` — is module state inside
- * the long-lived mgmt-api process and is structurally invisible from a CLI, so
- * out here it always reads zero. That is a genuine "I could not look" and it is
- * named in the output rather than passed off as "not reserved": what this
- * command can see is the DECLARED window, which is 90 minutes wide around every
- * cron-worker profile and therefore strictly wider than the live signal it
- * cannot see. Refusing more often than mgmt-api would is the safe direction.
+ * mgmt-api's live cron counter (`inFlightCronJobs()`) is module state inside
+ * that long-lived process and is structurally invisible from a CLI, so out
+ * here it always reads zero. What this command CAN see is cron-worker's
+ * schedule, so each daily profile is treated exactly like a covered repo's
+ * daily cron: the probe stays out of the minutes after it fires. That is the
+ * right use of a schedule — this is a measurement looking for a quiet fleet,
+ * not CI admission (node-reservation.ts no longer keeps a declared window for
+ * that; it acts only on what is running). `nodeReservation` still answers for
+ * host leases, which are on disk and readable from here.
  */
 export function checkQuietWindow(fail, now = new Date()) {
 	const profilesPath = join(siteRoot(), 'services', 'cron-worker', 'profiles.json');
@@ -92,8 +106,10 @@ export function checkQuietWindow(fail, now = new Date()) {
 	// pm2HostBusy is `false` because it is not observable from here either: it is
 	// pushed into the library by runner-health's own tick. It reports hokon
 	// serving a DEPLOY, which is not the fan-out signal §7 is asking about.
-	const reservation = nodeReservation(now, false, profiles);
-	const { schedules, unreadable } = fleetCronSchedules(fail);
+	const reservation = nodeReservation(now, false);
+	const fleet = fleetCronSchedules(fail);
+	const { unreadable } = fleet;
+	const schedules = [...fleet.schedules, ...cronWorkerSchedules(profiles)];
 	// ANY unreadable covered repo closes the window, not just all of them.
 	// `quietWindow()` refuses an EMPTY schedule list, which catches the total
 	// failure; this catches the partial one, and the partial one is the dangerous
@@ -107,7 +123,8 @@ export function checkQuietWindow(fail, now = new Date()) {
 			detail: `${unreadable.length} covered repo(s) could not be read for daily crons`,
 			schedulesSeen: schedules.length,
 			unreadable,
-			reservationSource: 'declared-only (the live cron counter lives inside mgmt-api)',
+			reservationSource:
+				'host leases + cron-worker schedule (the live cron counter lives inside mgmt-api)',
 		};
 	}
 	const verdict = quietWindow({
@@ -120,6 +137,7 @@ export function checkQuietWindow(fail, now = new Date()) {
 		...verdict,
 		schedulesSeen: schedules.length,
 		unreadable,
-		reservationSource: 'declared-only (the live cron counter lives inside mgmt-api)',
+		reservationSource:
+			'host leases + cron-worker schedule (the live cron counter lives inside mgmt-api)',
 	};
 }
