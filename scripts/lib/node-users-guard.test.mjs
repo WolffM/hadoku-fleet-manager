@@ -63,6 +63,9 @@ const ALLOWED = {
 		'tempDir to simulate the preseed late_command writing into /target — never a real node or a ' +
 		'path this suite reads/writes outside the sandbox (wave 5s lane D test-file split of ' +
 		'make-preseed.test.mjs, which this walk never scanned — a test file by name — pure move)',
+	'literal:scripts/lib/egress-slices-fixtures.mjs':
+		'`pm_cwd` values in fake `pm2 jlist` answers, matched against the ecosystem root; no node ' +
+		'is reached (fleet-manager#64: the egress-slices test rig, moved out of a test file)',
 };
 
 /** Rule 1: the shapes a user takes in code. */
