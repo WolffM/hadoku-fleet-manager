@@ -207,11 +207,12 @@ export async function tickOnCancelled(
 		manifestDir: manifests,
 		stateDir,
 		alerts: {
-			post: async (content: string) => {
-				posts.push(content);
-				return await Promise.resolve({ posted: true, sinkRecorded: true });
+			post: () => {
+				throw new Error('ci-alerts must not page Discord — CI outcomes are booked quietly');
 			},
-			recordQuietly: () => undefined,
+			recordQuietly: (content: string) => {
+				posts.push(content);
+			},
 		},
 	});
 	try {
