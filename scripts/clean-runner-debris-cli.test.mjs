@@ -78,3 +78,73 @@ test('nodes are cleaned concurrently, each named on stderr, and one failure fail
 	assert.match(err, /clean-runner-debris: fixture-b FAILED in \d+s/);
 	assert.match(err, /clean-runner-debris: fixture-c done in \d+s/);
 });
+
+// ── fleet-manager#65: only an ABANDONED cache is sized on the node ──────────
+//
+// The node script runs `du -sk` on every path in CACHE_PATHS, and the
+// controller reads back only the sizes of caches it has judged abandoned. Every
+// declared cache used to go down, so claw-1 walked its own ~/.cache/trunk (403k
+// files, 66s cold on a spinning disk) every night for a number nobody read, and
+// on 2026-11-06 the scan crossed its 90s timeout.
+const PAYLOAD_SHIM = `#!/usr/bin/env bash
+node="\${5##*@}"
+cat > "$PAYLOAD_DIR/$node.sh"
+echo "CACHE-PRESENT ~/.gradle 2097152"
+echo "SUMMARY stale_kb=0 update_kb=0 orphan_kb=0 diag_kb=0 tmpfs_kb=0 busy_skipped=0 free_kb=1000000 tmpfs_used_kb=0"
+`;
+
+function runWithCaches(t, { coverage }) {
+	const root = mkdtempSync(join(tmpdir(), 'crd-caches-'));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	writeFileSync(
+		join(root, 'fleet-runner-manifest.json'),
+		JSON.stringify({
+			machines: { 'fixture-a': { labels: [] } },
+			// WolffM/served runs anywhere; WolffM/gone needs a label fixture-a lacks.
+			repos: { 'WolffM/gone': { needs: ['gpu'] } },
+			toolCaches: {
+				$why: 'a string, as the live manifest carries one',
+				trunk: { path: '~/.cache/trunk', repos: ['WolffM/served'] },
+				gradle: { path: '~/.gradle', repos: ['WolffM/gone'] },
+				pnpm: { path: '~/.cache/pnpm' },
+			},
+		})
+	);
+	if (coverage)
+		writeFileSync(join(root, 'fleet-runner-coverage.json'), JSON.stringify({ repos: coverage }));
+	const bin = join(root, 'bin');
+	mkdirSync(bin);
+	writeFileSync(join(bin, 'ssh'), PAYLOAD_SHIM);
+	chmodSync(join(bin, 'ssh'), 0o755);
+	const outPath = join(root, 'out.txt');
+	const r = spawnSync('sh', ['-c', `node "${SCRIPT}" > "${outPath}" 2>&1`], {
+		env: {
+			...process.env,
+			PATH: `${bin}:${process.env.PATH}`,
+			FLEET_MANIFEST_DIR: root,
+			HADOKU_STATE_DIR: root,
+			PAYLOAD_DIR: root,
+		},
+	});
+	const payload = readFileSync(join(root, 'fixture-a.sh'), 'utf8');
+	return {
+		status: r.status,
+		cachePaths: /^CACHE_PATHS='([^']*)'$/m.exec(payload)?.[1],
+		out: readFileSync(outPath, 'utf8'),
+	};
+}
+
+test('only the caches a node has abandoned go down to be sized (#65)', (t) => {
+	const r = runWithCaches(t, { coverage: ['WolffM/served', 'WolffM/gone'] });
+	assert.equal(r.status, 0, r.out);
+	// MUTATION: send every declared path again and this reads
+	// '~/.cache/trunk ~/.gradle ~/.cache/pnpm'.
+	assert.equal(r.cachePaths, '~/.gradle', 'trunk is still served and pnpm is unclaimed');
+	assert.match(r.out, /CACHE-ABANDONED ~\/\.gradle {2}2(\.0+)? GB — fixture-a serves none/);
+});
+
+test('with no coverage nothing is judged abandoned, so nothing is sized', (t) => {
+	const r = runWithCaches(t, { coverage: null });
+	assert.equal(r.cachePaths, '', 'unreadable coverage is "no verdict", not "size it all"');
+	assert.doesNotMatch(r.out, /CACHE-ABANDONED/);
+});

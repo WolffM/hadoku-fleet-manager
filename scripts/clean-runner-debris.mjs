@@ -93,7 +93,6 @@ try {
 	// tool-caches.mjs: no coverage, no verdict.
 	coveredRepos = [];
 }
-const cacheFindings = new Map();
 
 if (!nodes.length) {
 	console.error(`clean-runner-debris: no nodes${ONLY ? ` matching --machine ${ONLY}` : ''}`);
@@ -115,12 +114,25 @@ const DRAINS = readDrains();
 async function cleanNode(m) {
 	const lines = [];
 	const say = (l) => lines.push(l);
-	// Declared cache paths go DOWN so the node can answer "is it here, how big";
-	// which of them are abandoned is decided up here, from ownership.
-	const cachePaths = Object.values(FLEET.toolCaches ?? {})
-		.map((c) => c?.path)
-		.filter((x) => typeof x === 'string')
-		.join(' ');
+	// TOOL CACHES this node keeps for work it no longer does, decided up here
+	// from ownership (tool-caches.mjs), BEFORE the node is asked anything. Only
+	// THOSE paths go down to be sized: `du` over a cache the node still owns
+	// answers a question nobody asks, and on claw-1's spinning disk a cold walk
+	// of its own ~/.cache/trunk (403k files) took 66s of a 90s budget
+	// (fleet-manager#65).
+	//
+	// GATED ON HAVING COVERAGE AT ALL. With an empty repo list every node serves
+	// nothing, so every declared cache reads as abandoned and this would report
+	// the entire fleet's caches for deletion off the back of one unreadable file.
+	// "I could not look" must not render as "all of it is garbage".
+	const abandoned = coveredRepos.length
+		? reclaimableCaches({
+				node: m,
+				caches: FLEET.toolCaches ?? {},
+				reposOn: (n) => reposOnNode(n, coveredRepos, FLEET),
+			}).filter((c) => typeof c.path === 'string')
+		: [];
+	const cachePaths = abandoned.map((c) => c.path).join(' ');
 	// NODE_MAX_CONCURRENT is the only honest source for "how many JIT slots
 	// should exist here" — the node has no record of its own ceiling, only the
 	// operator manifest on THIS controller does (CLAUDE.md: a manifest is
@@ -222,19 +234,7 @@ async function cleanNode(m) {
 						.join('')
 				: '')
 	);
-	// TOOL CACHES this node keeps for work it no longer does. See
-	// tool-caches.mjs for why the question is ownership and not age.
-	//
-	// GATED ON HAVING COVERAGE AT ALL. With an empty repo list every node serves
-	// nothing, so every declared cache reads as abandoned and this would report
-	// the entire fleet's caches for deletion off the back of one unreadable file.
-	// "I could not look" must not render as "all of it is garbage".
-	if (coveredRepos.length) {
-		const abandoned = reclaimableCaches({
-			node: m,
-			caches: FLEET.toolCaches ?? {},
-			reposOn: (n) => reposOnNode(n, coveredRepos, FLEET),
-		});
+	if (abandoned.length) {
 		// PRESENT ∩ ABANDONED. Ownership says a cache is no longer earned; the node
 		// says whether it is still on disk. Reporting the intersection is what stops
 		// this naming a directory that was already removed — and it is what gives
@@ -247,11 +247,8 @@ async function cleanNode(m) {
 				.map(([, path, kb]) => [path, Number(kb) || 0])
 		);
 		const live = abandoned.filter((c) => present.has(c.path));
-		if (live.length) {
-			cacheFindings.set(m, live);
-			for (const c of live) {
-				say(`     CACHE-ABANDONED ${c.path}  ${GB(present.get(c.path))} GB — ${c.reason}`);
-			}
+		for (const c of live) {
+			say(`     CACHE-ABANDONED ${c.path}  ${GB(present.get(c.path))} GB — ${c.reason}`);
 		}
 	}
 

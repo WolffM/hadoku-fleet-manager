@@ -425,7 +425,9 @@ fi
 # tool-caches.mjs); this only answers "is it here and how big". Splitting it that
 # way is what stops the report naming a cache that was already deleted: the first
 # version reported claw-3's ~/.cache/trunk from ownership alone and kept doing it
-# after the directory was gone, with no size attached to act on.
+# after the directory was gone, with no size attached to act on. Only the
+# ABANDONED caches arrive here: sizing one the node still owns cost claw-1 66s of
+# a cold disk walk for a number nobody read (fleet-manager#65).
 for c in ${CACHE_PATHS:-}; do
 	cp="${c#\~/}"
 	cp="$HOME/$cp"
