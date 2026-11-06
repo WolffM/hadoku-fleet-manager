@@ -1850,6 +1850,13 @@
     "why": "Wave shrink-1 lane C: the failure-zone classifier split out of job-history-stats.ts (pure move) to bring that file under the 600-line target. Same layer as the file it split from."
   },
   {
+    "glob": "src/job-history-fold.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "fleet-manager#49: summarise()'s fold, memoised on the store's historyVersion(), split out of job-history-stats.ts. Same layer as the file it serves; it reads only job-history-store/-zone, job-kind and census, as job-history-stats.ts did."
+  },
+  {
     "glob": "src/run-listing-gap.ts",
     "layer": "domain",
     "domain": "observation",

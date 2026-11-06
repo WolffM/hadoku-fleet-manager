@@ -267,6 +267,19 @@ export type ProbeOrigin = 'shadow' | 'forced-rerun';
 export const records: JobRecord[] = [];
 export const seenRuns = new Set<number>();
 
+/**
+ * Bumped by every writer of {@link records}, so a reader can memoise a fold
+ * over it (`job-history-fold.ts`, #49). A writer outside this file — ingest's
+ * append, backfill's in-place edit — calls {@link noteHistoryChanged} itself.
+ */
+let version = 0;
+export function historyVersion(): number {
+	return version;
+}
+export function noteHistoryChanged(): void {
+	version++;
+}
+
 /** Overridable so tests never touch the real host file. */
 let historyPath: string | null = null;
 let loaded = false;
@@ -284,6 +297,7 @@ export function __setHistoryPathForTesting(p: string | null): void {
 
 export function __resetJobHistoryForTesting(): void {
 	records.length = 0;
+	noteHistoryChanged();
 	seenRuns.clear();
 	loaded = false;
 	diskWarned = false;
@@ -326,6 +340,7 @@ export function trimToBudget(now = Date.now()): void {
 	if (excess <= 0) return;
 	records.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 	records.splice(0, excess);
+	noteHistoryChanged();
 	const oldest = Date.parse(records[0]?.startedAt ?? '');
 	const keptDays = Number.isFinite(oldest) ? ((now - oldest) / 86_400_000).toFixed(1) : '0';
 	logger.warn(
@@ -393,6 +408,7 @@ export function loadHistory(now = Date.now()): void {
 			}
 		}
 		records.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+		noteHistoryChanged();
 		trimToBudget(now);
 		logger.info(`[job-history] loaded ${records.length} record(s) from ${historyFile()}`);
 	} catch (err) {
@@ -461,6 +477,7 @@ export function compactHistory(now = Date.now()): boolean {
 	}
 	records.length = 0;
 	records.push(...keep);
+	noteHistoryChanged();
 	return persistHistory();
 }
 
