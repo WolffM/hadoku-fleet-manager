@@ -2,7 +2,6 @@ import {
 	appendToDisk,
 	compactHistory,
 	loadHistory,
-	noteHistoryChanged,
 	records,
 	remember,
 	seenRuns,
@@ -387,7 +386,6 @@ export async function ingestRuns(
 		}
 	}
 	records.push(...fresh);
-	if (fresh.length) noteHistoryChanged();
 	// Append the new records only — the whole point of JSONL here. Rewriting the
 	// file every tick would turn a cheap append into O(window) IO on the same
 	// loop that talks to GitHub.

@@ -1,5 +1,11 @@
-import { jobRecords, loadHistory, records, type JobRecord } from './job-history-store.js';
-import { foldSummary, medianSorted, percentileSorted } from './job-history-fold.js';
+import {
+	jobRecords,
+	loadHistory,
+	records,
+	RETENTION_DAYS,
+	type JobRecord,
+} from './job-history-store.js';
+import { jobKind } from './lib/job-kind.js';
 
 /**
  * The TRAILING window the `recent*` figures on {@link NodeJobStats} are cut
@@ -95,16 +101,19 @@ export function idleSecondsFromRecords(
 }
 
 export function median(xs: number[]): number | null {
-	return medianSorted([...xs].sort((a, b) => a - b));
+	if (!xs.length) return null;
+	const s = [...xs].sort((a, b) => a - b);
+	const mid = s.length >> 1;
+	return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
 }
 
 export function percentile(xs: number[], p: number): number | null {
+	if (!xs.length) return null;
+	const s = [...xs].sort((a, b) => a - b);
 	// Nearest-rank, clamped. Exact interpolation is false precision on a sample
 	// this small, and the panel renders it as a rounded number of seconds.
-	return percentileSorted(
-		[...xs].sort((a, b) => a - b),
-		p
-	);
+	const idx = Math.min(s.length - 1, Math.max(0, Math.ceil((p / 100) * s.length) - 1));
+	return s[idx];
 }
 
 /**
@@ -115,9 +124,15 @@ export function percentile(xs: number[], p: number): number | null {
 
 import { nodeOf } from './runners/census.js';
 
-/** The zone buckets (claw-floor-design-2026-09-07.md §5.5), `job-history-zone.ts`. */
+/**
+ * The zone classifier (claw-floor-design-2026-09-07.md §5.5) — split to
+ * `job-history-zone.ts` (wave shrink-1 lane C, pure move) to bring this file
+ * under the 600-line target. Re-exported here so every existing importer of
+ * `job-history-stats.js` compiles unchanged; imported (not just re-exported)
+ * because `summarise`/`repoStats`/`dailyStats` below still call `failuresByZone`.
+ */
 
-import type { FailuresByZone } from './job-history-zone.js';
+import { failuresByZone, type FailuresByZone } from './job-history-zone.js';
 
 export interface NodeJobStats {
 	/**
@@ -151,7 +166,7 @@ export interface NodeJobStats {
 	 */
 	failuresByZone: FailuresByZone;
 	/**
-	 * THE BASELINE. Cut over the whole retained window — `RETENTION_DAYS` (job-history-store.ts)
+	 * THE BASELINE. Cut over the whole retained window — {@link RETENTION_DAYS}
 	 * days, thousands of records — which is what makes a percentile here worth
 	 * anything at all.
 	 *
@@ -225,7 +240,8 @@ export interface RepoJobStats {
 	slowest: { name: string; p95Sec: number; jobs: number }[];
 }
 
-export { SLOWEST_MIN_SAMPLES } from './job-history-fold.js';
+/** Runs a job kind needs before it may appear in {@link RepoJobStats.slowest}. */
+export const SLOWEST_MIN_SAMPLES = 3;
 
 /**
  * One UTC day of the fleet — the "better or worse" half of the panel.
@@ -328,5 +344,194 @@ export function summarise(
 	// `GET /fleet` report the hour up to the request.
 	now: number = Date.now()
 ): JobHistorySummary {
-	return foldSummary(nodes, backstopNode, history, now, RECENT_WINDOW_MS);
+	const recentFrom = now - RECENT_WINDOW_MS;
+	const byNode = new Map<string, JobRecord[]>();
+	for (const r of history) {
+		const m = nodeOf(r.runner, nodes);
+		pushTo(byNode, m, r);
+	}
+	const stats: NodeJobStats[] = [...byNode.entries()]
+		.map(([node, rs]) => {
+			const durations = rs.map((r) => r.durationSec);
+			// COMPLETION, not start — see `finishedAtMs`. A record whose start stamp
+			// will not parse yields NaN, and `NaN >= recentFrom` is false, so it is
+			// left out of the trailing window rather than placed in it by guess. It
+			// still counts in the baseline, which needs no clock.
+			const recentDurations = rs
+				.filter((r) => finishedAtMs(r) >= recentFrom)
+				.map((r) => r.durationSec);
+			return {
+				machine: node,
+				jobs: rs.length,
+				failures: rs.filter((r) => r.conclusion !== 'success').length,
+				// The SAME records the count above folds, split by zone. Computed here
+				// rather than by a consumer because §5.5's classifier needs `failedStep`
+				// and `failedPhase`, and `byMachine` is a rollup — the only place both
+				// the records and the node attribution are in hand at once.
+				failuresByZone: failuresByZone(rs),
+				medianSec: median(durations),
+				p95Sec: percentile(durations, 95),
+				repos: new Set(rs.map((r) => r.repo)).size,
+				recentJobs: recentDurations.length,
+				// `median`/`percentile` already answer `null` for an empty sample, and
+				// that is exactly the contract this field needs: no jobs in the hour is
+				// NO DATA, never a fast node. Do not `?? 0` these.
+				recentMedianSec: median(recentDurations),
+				recentP95Sec: percentile(recentDurations, 95),
+			};
+		})
+		.sort((a, b) => b.jobs - a.jobs);
+
+	const builder = history.filter((r) => !r.labels.includes('pm2-host'));
+	const backstopJobs = builder.filter((r) => nodeOf(r.runner, nodes) === backstopNode).length;
+	const byRepo = repoStats(history, nodes, recentFrom);
+	const daily = dailyStats(history, nodes, backstopNode, now);
+
+	return {
+		since: history.length
+			? history.reduce((a, r) => (r.startedAt < a ? r.startedAt : a), history[0].startedAt)
+			: null,
+		total: history.length,
+		byMachine: stats,
+		byRepo,
+		daily,
+		backstopJobs,
+		backstopShare: builder.length ? backstopJobs / builder.length : 0,
+		// `machine` attached here, from the same `nodeOf` and the same node list
+		// the rollup above folds with, so a row in `recent` and a row in
+		// `byMachine` can never disagree about which box served what.
+		recent: [...history]
+			.sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+			.slice(0, 40)
+			.map((r) => ({ ...r, machine: nodeOf(r.runner, nodes) })),
+		recentSince: new Date(recentFrom).toISOString(),
+		recentWindowSec: RECENT_WINDOW_MS / 1000,
+	};
+}
+
+/**
+ * Append to a grouped list IN PLACE. The folds below grouped by spreading a
+ * fresh copy per record, which is quadratic in a group's size — harmless at the
+ * old 20,000-row cap, seconds of CPU per `GET /fleet` at the 200,000 budget.
+ */
+function pushTo<K, V>(m: Map<K, V[]>, k: K, v: V): void {
+	const xs = m.get(k);
+	if (xs) xs.push(v);
+	else m.set(k, [v]);
+}
+
+const nums = (xs: (number | undefined)[]): number[] =>
+	xs.filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
+
+function repoStats(history: JobRecord[], nodes: string[], recentFrom: number): RepoJobStats[] {
+	const byRepo = new Map<string, JobRecord[]>();
+	for (const r of history) pushTo(byRepo, r.repo, r);
+	return [...byRepo.entries()]
+		.map(([repo, rs]) => {
+			const durations = rs.map((r) => r.durationSec);
+			const recent = rs.filter((r) => finishedAtMs(r) >= recentFrom).map((r) => r.durationSec);
+			const queue = nums(rs.map((r) => r.queueSec));
+			const machines = new Map<string, number>();
+			for (const r of rs) {
+				const m = nodeOf(r.runner, nodes);
+				machines.set(m, (machines.get(m) ?? 0) + 1);
+			}
+			const kinds = new Map<string, number[]>();
+			for (const r of rs) {
+				const k = jobKind(r.name);
+				pushTo(kinds, k, r.durationSec);
+			}
+			const slowest = [...kinds.entries()]
+				.filter(([, ds]) => ds.length >= SLOWEST_MIN_SAMPLES)
+				.map(([name, ds]) => ({ name, p95Sec: percentile(ds, 95) ?? 0, jobs: ds.length }))
+				.sort((a, b) => b.p95Sec - a.p95Sec)
+				.slice(0, 3);
+			return {
+				repo,
+				jobs: rs.length,
+				failures: rs.filter((r) => r.conclusion !== 'success').length,
+				failuresByZone: failuresByZone(rs),
+				medianSec: median(durations),
+				p95Sec: percentile(durations, 95),
+				queueP50Sec: median(queue),
+				queueP95Sec: percentile(queue, 95),
+				dispatchP50Sec: median(nums(rs.map((r) => r.dispatchSec))),
+				assignP50Sec: median(nums(rs.map((r) => r.assignSec))),
+				recentJobs: recent.length,
+				recentMedianSec: median(recent),
+				recentP95Sec: percentile(recent, 95),
+				machines: [...machines.entries()]
+					.map(([machine, jobs]) => ({ machine, jobs }))
+					.sort((a, b) => b.jobs - a.jobs),
+				slowest,
+			};
+		})
+		.sort((a, b) => b.jobs - a.jobs);
+}
+
+const DAY_MS = 86_400_000;
+const utcDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+
+function dailyStats(
+	history: JobRecord[],
+	nodes: string[],
+	backstopNode: string,
+	now: number
+): DailyJobStats[] {
+	const byDay = new Map<string, JobRecord[]>();
+	for (const r of history) {
+		const ms = Date.parse(r.startedAt);
+		if (!Number.isFinite(ms)) continue;
+		const d = utcDay(ms);
+		pushTo(byDay, d, r);
+	}
+	const firstDay = byDay.size ? [...byDay.keys()].sort()[0] : null;
+	const today = Date.parse(`${utcDay(now)}T00:00:00Z`);
+	const out: DailyJobStats[] = [];
+	for (let i = RETENTION_DAYS; i >= 0; i--) {
+		const day = utcDay(today - i * DAY_MS);
+		// Before the file's first record nothing was looking; after it, an empty
+		// day is a real zero.
+		if (firstDay === null || day < firstDay) {
+			out.push({
+				day,
+				jobs: null,
+				failuresByZone: null,
+				runMedianSec: null,
+				runP95Sec: null,
+				queueMedianSec: null,
+				queueP95Sec: null,
+				backstopJobs: null,
+				byMachine: [],
+			});
+			continue;
+		}
+		const rs = byDay.get(day) ?? [];
+		const durations = rs.map((r) => r.durationSec);
+		const queue = nums(rs.map((r) => r.queueSec));
+		const machines = new Map<string, { jobs: number; busySec: number }>();
+		for (const r of rs) {
+			const m = nodeOf(r.runner, nodes);
+			const e = machines.get(m) ?? { jobs: 0, busySec: 0 };
+			e.jobs++;
+			e.busySec += r.durationSec;
+			machines.set(m, e);
+		}
+		out.push({
+			day,
+			jobs: rs.length,
+			failuresByZone: failuresByZone(rs),
+			runMedianSec: median(durations),
+			runP95Sec: percentile(durations, 95),
+			queueMedianSec: median(queue),
+			queueP95Sec: percentile(queue, 95),
+			backstopJobs: rs.filter(
+				(r) => !r.labels.includes('pm2-host') && nodeOf(r.runner, nodes) === backstopNode
+			).length,
+			byMachine: [...machines.entries()]
+				.map(([machine, e]) => ({ machine, ...e }))
+				.sort((a, b) => b.jobs - a.jobs),
+		});
+	}
+	return out;
 }
