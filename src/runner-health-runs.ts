@@ -11,7 +11,7 @@ import { ingestRuns, FetchBudget, MAX_FETCH_PER_TICK } from './job-history-inges
 import { closeListingGap, LISTING_PAGE } from './run-listing-gap.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from './lib/concurrency.js';
 import { fleetOwner } from './lib/fleet-config.js';
-import { alertOnce } from './lib/alert-ledger.js';
+import { ADVISORY_REPAGE_MS, alertOnce } from './lib/alert-ledger.js';
 import { selfHostname } from './lib/runner-health-shared.js';
 import { getFleetProbeSnapshot } from './fleet-probe-store.js';
 import type { TickReport } from './runner-health-snapshot.js';
@@ -284,7 +284,7 @@ export async function checkRunsAndFailover(
 					`QUEUED ${Math.round(ageMin)}m (>${QUEUED_WARN_MINUTES}m) — ${verdict.reason}` +
 					`\n${run.html_url}`;
 				if (verdict.covered) quietRecorder(line, 'runner-health');
-				else await alertOnce(`queued:${run.html_url}`, line);
+				else await alertOnce(`queued:${run.html_url}`, line, ADVISORY_REPAGE_MS);
 				continue;
 			}
 			if (run.status === 'in_progress' && ageMin > INPROGRESS_WARN_MINUTES) {
@@ -425,7 +425,8 @@ export async function checkRunsAndFailover(
 						`⏱ **runners** on \`${selfHostname()}\`: \`${short}\` — \`${title}\` has been WAITING FOR A ` +
 							`RUNNER ${Math.round(ageMin)}m (>${QUEUED_WARN_MINUTES}m): ${cause}. ` +
 							`A COVERAGE gap, not a hung job — check \`pnpm run fleet:reconcile\`.` +
-							`\n${run.html_url}`
+							`\n${run.html_url}`,
+						ADVISORY_REPAGE_MS
 					);
 				}
 				// Could not identify a single job — either the listing was

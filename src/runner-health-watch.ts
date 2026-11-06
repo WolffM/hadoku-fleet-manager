@@ -10,7 +10,7 @@ import { jobRecords } from './job-history-store.js';
 import { nodeOf } from './runners/census.js';
 import { admissionVerdictsForReport, refusedRunsFor } from './admission-verdict-store.js';
 import type { ReserveSource } from './lib/job-reserve.js';
-import { alertOnce, clearAlert } from './lib/alert-ledger.js';
+import { ADVISORY_REPAGE_MS, alertOnce, clearAlert } from './lib/alert-ledger.js';
 import { selfHostname } from './lib/runner-health-shared.js';
 import {
 	diskReadingsForReport,
@@ -148,9 +148,9 @@ function lastStartedAtMsByNode(nodes: readonly string[]): Map<string, number> {
  * claw-6 measured 2026-10-06 04:00Z sits AT the admission line — 6,370 MB
  * available against a 5,632 MB reserve — and flips between admitted and
  * memory-refused from one tick to the next with no job ever landing. Clearing
- * on every `ok` tick re-armed `RE_ALERT_MS`'s dedupe on each flip, so a node
+ * on every `ok` tick re-armed the alert's dedupe on each flip, so a node
  * that is still, in every sense that matters, starved would re-page every
- * ~10 minutes instead of at most hourly. `starved[node]` still flips to
+ * ~10 minutes instead of at most daily (`ADVISORY_REPAGE_MS`, #61). `starved[node]` still flips to
  * `false` the instant the clause stops being `memory` — the PANEL must not
  * keep showing a stale finding — but the LEDGER (`clearAlert`) is only
  * touched when {@link lastStartedAtMsByNode} shows a job genuinely started
@@ -256,7 +256,8 @@ export async function checkStarvation(data: TickReport): Promise<void> {
 			`starved:${node}`,
 			`🥀 **starved** (reported by \`${selfHostname()}\`): \`${node}\` has been refused by ` +
 				`${clauseWord} admission for ${idleH}h (no job started since ${lastJobAt}) while other ` +
-				`claws kept working — ${clauseDetail}: ${verdict.reason}.${refusedLine}`
+				`claws kept working — ${clauseDetail}: ${verdict.reason}.${refusedLine}`,
+			ADVISORY_REPAGE_MS
 		);
 	}
 	data.starved = starved;
@@ -285,8 +286,9 @@ export async function checkStarvation(data: TickReport): Promise<void> {
  * ALERTING: `'page'` and `'advisory'` each page through `alertOnce` on their
  * OWN key, so a node already paging at `'page'` still gets a fresh notice the
  * moment it recovers to `'advisory'` (a transition, not a re-statement of the
- * same finding) — and `alertOnce`'s own RE_ALERT_MS window is what keeps
- * either from re-firing every ~10-minute tick while the level does not change.
+ * same finding) — and `alertOnce`'s window is what keeps either from re-firing
+ * every ~10-minute tick while the level does not change: an hour for `'page'`,
+ * a day for `'advisory'` and `'unreadable'` (`ADVISORY_REPAGE_MS`, #61).
  * `'unreadable'` is its OWN finding (CLAUDE.md: "could not look" must never
  * render as "nothing is wrong"), on its own key, so a node that stops
  * reporting free space at all is never silently read as whatever level it last
@@ -374,7 +376,8 @@ export async function checkDiskWatch(data: TickReport): Promise<void> {
 						: ' or a job that is not (`fleet throttle --check --machine ' +
 							node +
 							'`, JOBTMP-BAD)') +
-					'. `find /tmp -maxdepth 1 -mmin +60` names the leftovers.'
+					'. `find /tmp -maxdepth 1 -mmin +60` names the leftovers.',
+				ADVISORY_REPAGE_MS
 			);
 		} else if (tmp.level === 'page') {
 			const cost = onDemand.includes(node)
@@ -396,7 +399,8 @@ export async function checkDiskWatch(data: TickReport): Promise<void> {
 			await alertOnce(
 				`diskwatch:unreadable:${node}`,
 				`🥀 **disk** (reported by \`${selfHostname()}\`): \`${node}\`'s _work filesystem free ` +
-					`space could not be read this tick — "I could not look" is not "fine".`
+					`space could not be read this tick — "I could not look" is not "fine".`,
+				ADVISORY_REPAGE_MS
 			);
 			continue;
 		}
@@ -411,7 +415,8 @@ export async function checkDiskWatch(data: TickReport): Promise<void> {
 				`diskwatch:advisory:${node}`,
 				`⚠️ **disk** (reported by \`${selfHostname()}\`): \`${node}\`'s _work filesystem has ` +
 					`${verdict.freeGb}GB free — under the ${DISK_WATCH_ADVISORY_FREE_GB}GB advisory line. ` +
-					`Not urgent; plan a cleanup before it crosses the ${DISK_WATCH_PAGE_FREE_GB}GB page line.`
+					`Not urgent; plan a cleanup before it crosses the ${DISK_WATCH_PAGE_FREE_GB}GB page line.`,
+				ADVISORY_REPAGE_MS
 			);
 			continue;
 		}
@@ -445,7 +450,7 @@ export async function checkDiskWatch(data: TickReport): Promise<void> {
  *
  * PAGES ONCE, same mechanism as `checkStarvation`/`checkDiskWatch`:
  * `alertOnce` keyed per `node`+`capability`, which re-arms only after
- * `RE_ALERT_MS` or a genuine crossing. A node/kind pair that no longer meets
+ * `ADVISORY_REPAGE_MS` (a day, #61) or a genuine crossing. A node/kind pair that no longer meets
  * the threshold has its key cleared so the NEXT crossing — in either
  * direction — alerts immediately rather than sitting inside the previous
  * dedupe window. That "no longer meets the threshold" case covers two
@@ -485,7 +490,8 @@ export async function checkNodeRegression(): Promise<void> {
 			`regression:${a.node}:${a.capability}`,
 			`🥀 **regression** (reported by \`${selfHostname()}\`): \`${a.node}\` failed ` +
 				`${a.divergenceCount} \`${a.capability}\` run(s) that passed on another claw at the ` +
-				`same commit within the hour — ${staleNote}. Runs: ${a.runIds.join(', ')}.`
+				`same commit within the hour — ${staleNote}. Runs: ${a.runIds.join(', ')}.`,
+			ADVISORY_REPAGE_MS
 		);
 	}
 }
@@ -513,12 +519,14 @@ export async function checkHostSupervision(data: TickReport): Promise<void> {
 			if (sup.unreachable.length) data.supervision_unreachable = sup.unreachable;
 			logReport(sup);
 			for (const p of sup.problems) {
-				// Keyed by node+dir+kind so each broken runner pings on its own
-				// hourly schedule — a whole claw going wrong must not collapse into
-				// one alert that looks like a single runner.
+				// Keyed by node+dir+kind so each broken runner posts on its own —
+				// a whole claw going wrong must not collapse into one alert that
+				// looks like a single runner. Daily, not hourly (#61): claw-10's one
+				// inactive unit posted four times in a day, each saying nothing new.
 				await alertOnce(
 					`supervision:${p.node}:${p.dir}:${p.kind}`,
-					`🩺 **runner supervision** on \`${selfHostname()}\`: ${describeProblem(p)}`
+					`🩺 **runner supervision** on \`${selfHostname()}\`: ${describeProblem(p)}`,
+					ADVISORY_REPAGE_MS
 				);
 			}
 		}

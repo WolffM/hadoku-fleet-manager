@@ -10,11 +10,18 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { stateDir } from '../host.js';
-import { alertOnce, clearAlert, __resetAlertLedgerForTesting } from '../lib/alert-ledger.js';
+import { __setHostForTesting, stateDir } from '../host.js';
+import {
+	ADVISORY_REPAGE_MS,
+	alertOnce,
+	clearAlert,
+	__reloadAlertLedgerForTesting,
+	__resetAlertLedgerForTesting,
+} from '../lib/alert-ledger.js';
+import { testHost } from './install-test-host.js';
 
 const LEDGER_PATH = () => join(stateDir(), 'runner-health-alerts.json');
 
@@ -64,4 +71,54 @@ test('a write failure is logged and ignored, never thrown — fail-soft in both 
 		rmSync(LEDGER_PATH(), { recursive: true, force: true });
 		__resetAlertLedgerForTesting();
 	}
+});
+
+/*
+ * fleet-manager#61 — an ADVISORY re-posts at most daily, a PAGE hourly. Driven
+ * through the persisted ledger, because the window has to hold across the
+ * restarts mgmt-api's pair makes several times a day: a ledger that dropped
+ * entries past an hour on load would turn the daily window back into an hourly
+ * one at every restart.
+ */
+async function postsFor(agoMs: number, repageMs?: number): Promise<string[]> {
+	const posts: string[] = [];
+	const prev = { ...testHost };
+	__setHostForTesting({
+		...testHost,
+		alerts: {
+			...testHost.alerts,
+			post: async (content: string) => {
+				posts.push(content);
+				return await Promise.resolve({ posted: true, sinkRecorded: false });
+			},
+		},
+	});
+	try {
+		writeFileSync(
+			LEDGER_PATH(),
+			JSON.stringify({ 'advisory-key': new Date(Date.now() - agoMs).toISOString() })
+		);
+		__reloadAlertLedgerForTesting();
+		await alertOnce('advisory-key', 'still queued', repageMs);
+		return posts;
+	} finally {
+		__setHostForTesting(prev);
+		rmSync(LEDGER_PATH(), { force: true });
+		__resetAlertLedgerForTesting();
+	}
+}
+
+const HOUR = 3_600_000;
+
+test('#61: an advisory posted two hours ago stays quiet, across a restart', async () => {
+	assert.deepEqual(await postsFor(2 * HOUR, ADVISORY_REPAGE_MS), []);
+});
+
+test('#61: an advisory posts again once a day has passed', async () => {
+	assert.equal((await postsFor(25 * HOUR, ADVISORY_REPAGE_MS)).length, 1);
+});
+
+test('#61: a page keeps its hourly reminder', async () => {
+	assert.equal((await postsFor(2 * HOUR)).length, 1);
+	assert.deepEqual(await postsFor(30 * 60_000), []);
 });

@@ -3,7 +3,26 @@ import { join } from 'node:path';
 
 import { logger, stateDir, postDiscord as postDiscordSink } from '../host.js';
 import { writeJsonAtomic } from './atomic-json.js';
-import { createPager, HOUR_MS as RE_ALERT_MS } from './job-runner.js';
+import { createPager, DAY_MS, HOUR_MS as RE_ALERT_MS } from './job-runner.js';
+
+/**
+ * How often an ADVISORY re-posts while its condition holds (fleet-manager#61).
+ *
+ * `RE_ALERT_MS` (an hour) is right for a PAGE — a hung job, a label nothing
+ * serves, a disk under the page line — where the hour is the operator's
+ * reminder that it is still burning. For an advisory it was the bulk of the
+ * channel: one queued job in hadoku-whattocook posted 22 times, hourly, and
+ * hadoku-filetransfer's 17; 39 of runner-health's 57 posts in the 48h to
+ * 2026-11-06 said nothing the first one had not. The first post is the
+ * actionable one. A day later it is a reminder; between, it is noise.
+ *
+ * A DIFFERENT subject (another run, another node, another runner directory) is
+ * a different key and posts at once — every call site keys by its subject.
+ */
+export const ADVISORY_REPAGE_MS = DAY_MS;
+
+/** The ledger keeps an entry as long as the longest window that reads it. */
+const LEDGER_RETENTION_MS = Math.max(RE_ALERT_MS, ADVISORY_REPAGE_MS);
 
 // key → last alert time, ISO. A key absent (or older than RE_ALERT_MS) re-fires.
 // createPager's own shape (F12, plan §4.1) — see `alertOnce`/`clearAlert` below.
@@ -40,7 +59,7 @@ function loadAlertLedger(): void {
 	ledgerLoaded = true;
 	try {
 		const raw = JSON.parse(readFileSync(ALERT_LEDGER(), 'utf8')) as Record<string, unknown>;
-		const cutoff = Date.now() - RE_ALERT_MS;
+		const cutoff = Date.now() - LEDGER_RETENTION_MS;
 		for (const [k, v] of Object.entries(raw)) {
 			// Accepts both shapes: a number is the ledger's pre-F12 format (epoch
 			// ms), a string is an ISO stamp written by this code or by claw-reboot/
@@ -56,7 +75,7 @@ function loadAlertLedger(): void {
 
 function saveAlertLedger(): void {
 	try {
-		const cutoff = Date.now() - RE_ALERT_MS;
+		const cutoff = Date.now() - LEDGER_RETENTION_MS;
 		const out: Record<string, string> = {};
 		for (const [k, v] of Object.entries(pagedAlerts)) if (Date.parse(v) > cutoff) out[k] = v;
 		writeJsonAtomic(ALERT_LEDGER(), out);
@@ -68,7 +87,8 @@ function saveAlertLedger(): void {
 }
 
 /**
- * Fire at most once per RE_ALERT_MS per condition key — a thin wrapper over
+ * Fire at most once per `repageMs` (default RE_ALERT_MS, an hour; an advisory
+ * passes {@link ADVISORY_REPAGE_MS}) per condition key — a thin wrapper over
  * `createPager` (F12, plan §4.1): the debounce and the post are
  * `job-runner.ts`'s, this file owns only the ledger's persistence, exactly as
  * before. A fresh pager per call, matching the old `const now = Date.now()`
@@ -79,12 +99,16 @@ function saveAlertLedger(): void {
  * that write; the host's `postDiscord` does not reject. A SUPPRESSED call
  * (within the window) never saves, same as before.
  */
-export async function alertOnce(key: string, content: string): Promise<void> {
+export async function alertOnce(
+	key: string,
+	content: string,
+	repageMs: number = RE_ALERT_MS
+): Promise<void> {
 	loadAlertLedger();
 	const pager = createPager({
 		paged: pagedAlerts,
 		now: Date.now(),
-		repageMs: RE_ALERT_MS,
+		repageMs,
 		post: postDiscordSink,
 		source: 'runner-health',
 		persist: saveAlertLedger,
