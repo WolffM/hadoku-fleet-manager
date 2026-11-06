@@ -26,12 +26,15 @@ import {
 import { DAY_MS as REPAGE_MS } from '../lib/job-runner.js';
 
 let posts: string[] = [];
+/** What went to the quiet ledger: verified maintenance and recoveries (#61). */
+let quiet: string[] = [];
 let infos: string[] = [];
 let warns: string[] = [];
 const STATE = join(testStateDir, 'claw-reboot-controller.json');
 
 beforeEach(() => {
 	posts = [];
+	quiet = [];
 	infos = [];
 	warns = [];
 	rmSync(STATE, { force: true });
@@ -43,7 +46,9 @@ beforeEach(() => {
 				posts.push(content);
 				return { posted: true, sinkRecorded: true };
 			},
-			recordQuietly() {},
+			recordQuietly(content: string) {
+				quiet.push(content);
+			},
 		},
 		// Every tick now reports to the job sink (job-runner.ts's `finishTick`,
 		// ported in with the rest of the runner). Stubbed for the same reason
@@ -68,7 +73,7 @@ const runner =
 	() =>
 		Promise.resolve({ doc: d, why });
 
-void test('a clean reboot is posted once as a note naming the kernels, and is not a page', async () => {
+void test('a clean reboot is booked once, quietly, naming the kernels — never posted (#61)', async () => {
 	const s = await clawRebootTick(
 		runner(
 			doc({
@@ -86,8 +91,9 @@ void test('a clean reboot is posted once as a note naming the kernels, and is no
 		T0
 	);
 	assert.deepEqual(s, { ran: true, rebooted: 1, pages: 0, recoveries: 0 });
-	assert.equal(posts.length, 1);
-	assert.match(posts[0], /^🔄 claw-3 rebooted .*6\.12\.94\+deb13-amd64 → 6\.12\.113\+deb13-amd64/);
+	assert.deepEqual(posts, [], 'maintenance that verified itself needs nobody');
+	assert.equal(quiet.length, 1);
+	assert.match(quiet[0], /^🔄 claw-3 rebooted .*6\.12\.94\+deb13-amd64 → 6\.12\.113\+deb13-amd64/);
 });
 
 void test('a held node pages once, again only after REPAGE_MS, and recovers when it is back', async () => {
@@ -117,8 +123,9 @@ void test('a held node pages once, again only after REPAGE_MS, and recovers when
 		runner(doc({ nodes: [{ node: 'claw-5', status: 'current' }] })),
 		T0 + REPAGE_MS + 2 * HOUR
 	);
-	assert.equal(posts.length, 3);
-	assert.match(posts[2], /^✅ claw-5: back in service/);
+	assert.equal(posts.length, 2, 'the recovery is not posted (#61)');
+	assert.equal(quiet.length, 1);
+	assert.match(quiet[0], /^✅ claw-5: back in service/);
 });
 
 void test('deferrals, an idle wait that timed out and an unreadable claw are logged, never paged', async () => {
@@ -150,7 +157,8 @@ void test('a cycle with no report pages only after FAIL_PAGE_MS, then recovers',
 	assert.match(posts[0], /has not produced a report for 6h/);
 	assert.ok(existsSync(STATE));
 	await clawRebootTick(runner(doc()), T0 + FAIL_PAGE_MS + HOUR);
-	assert.match(posts[1], /reporting again/);
+	assert.equal(posts.length, 1, 'the recovery is not posted (#61)');
+	assert.match(quiet[0], /reporting again/);
 });
 
 void test('the real runner refuses under node --test, and points at the packaged script', async () => {

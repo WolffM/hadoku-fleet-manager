@@ -17,8 +17,11 @@ import { verifyHostingTick } from '../hosting-verify.js';
 import type { ConvergeDoc } from '../scheduled-converger.js';
 
 let posts: { content: string; source?: string }[] = [];
+/** Recoveries go to the quiet ledger since #61. */
+let quiet: { content: string; source?: string }[] = [];
 beforeEach(() => {
 	posts = [];
+	quiet = [];
 	rmSync(join(testStateDir, 'hosting-verify.json'), { force: true });
 	rmSync(join(testStateDir, 'backstop-tools.json'), { force: true });
 	__setHostForTesting({
@@ -29,7 +32,9 @@ beforeEach(() => {
 				posts.push({ content, source });
 				return { posted: true, sinkRecorded: true };
 			},
-			recordQuietly() {},
+			recordQuietly(content: string, source?: string) {
+				quiet.push({ content, source });
+			},
 		},
 		jobs: { recordJobResult: async () => {} },
 	});
@@ -66,8 +71,9 @@ void test('#31: a slice a re-assert did not fix pages once, naming the check; a 
 	]);
 	posts = [];
 	await verifyHostingTick(run(doc({ ok: true })), 1_000 + 2 * 60 * 60_000);
+	assert.deepEqual(posts, [], 'a recovery is not posted (#61)');
 	assert.deepEqual(
-		posts.map((p) => p.content),
+		quiet.map((p) => p.content),
 		['✅ claw-4: hosting:archivebot is guaranteed again.']
 	);
 	posts = [];
@@ -111,5 +117,6 @@ void test('#34: a stale tool posts once, not again inside 30 days, and again aft
 		run(doc({ ok: true })),
 		1_000 + inProcessClock('fleet:backstop-tools').repageMs + 2 * day
 	);
-	assert.equal(posts.at(-1)?.content, '✅ backstop-1: yt-dlp is current.');
+	assert.equal(posts.length, 2, 'the recovery is not posted (#61)');
+	assert.equal(quiet.at(-1)?.content, '✅ backstop-1: yt-dlp is current.');
 });

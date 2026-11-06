@@ -133,6 +133,13 @@ export function createPager(params: {
 	now: number;
 	repageMs: number;
 	post: (content: string, source: string) => Promise<unknown>;
+	/**
+	 * Where a RECOVERY goes. Defaults to `post`. A pager whose recoveries say
+	 * only that something fixed itself passes the host's quiet ledger here
+	 * (fleet-manager#61): the operator's channel is for what needs them, the
+	 * ledger and the digest for what already resolved.
+	 */
+	recoverPost?: (content: string, source: string) => unknown;
 	source: string;
 	/**
 	 * Write `paged` (and whatever holds it) to disk. Called after EVERY page and
@@ -167,7 +174,7 @@ export function createPager(params: {
 			delete params.paged[key];
 			counts.recoveries++;
 			try {
-				await params.post(content, params.source);
+				await (params.recoverPost ?? params.post)(content, params.source);
 			} finally {
 				params.persist();
 			}

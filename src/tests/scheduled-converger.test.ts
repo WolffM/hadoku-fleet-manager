@@ -13,6 +13,8 @@ import { testHost, testStateDir } from './install-test-host.js';
 import { createConverger, type ConvergeDoc, type ConvergeRunner } from '../scheduled-converger.js';
 
 let posts: { content: string; source?: string }[] = [];
+/** What went to the quiet ledger: a recovery, since #61. */
+let quiet: { content: string; source?: string }[] = [];
 let recorded: string[] = [];
 
 // Two real in-process registry rows: createConverger refuses any other name.
@@ -39,6 +41,7 @@ const config = (name: keyof typeof JOBS) => ({
 
 beforeEach(() => {
 	posts = [];
+	quiet = [];
 	recorded = [];
 	for (const n of ['alpha', 'beta']) rmSync(join(testStateDir, `${n}.json`), { force: true });
 	__setHostForTesting({
@@ -49,7 +52,9 @@ beforeEach(() => {
 				posts.push({ content, source });
 				return { posted: true, sinkRecorded: true };
 			},
-			recordQuietly() {},
+			recordQuietly(content: string, source?: string) {
+				quiet.push({ content, source });
+			},
 		},
 		// Every tick now reports to the job sink (job-runner.ts's `finishTick`).
 		// The real `recordJobResult` fetches a live URL; stubbed here so this
@@ -94,7 +99,10 @@ void test('each converger pages under its own name, into its own state file', as
 	await beta.tick(runner(doc()), 2_000);
 	assert.equal(posts.length, 1);
 	await alpha.tick(runner(doc()), 2_000);
-	assert.deepEqual(posts.at(-1), { content: 'alpha ok claw-1 x', source: 'alpha' });
+	// The recovery is booked under alpha's name, quietly (#61): it says a thing
+	// fixed itself, which is the ledger's and the digest's, not the channel's.
+	assert.equal(posts.length, 1, 'a recovery is never posted to the channel');
+	assert.deepEqual(quiet, [{ content: 'alpha ok claw-1 x', source: 'alpha' }]);
 	assert.ok(existsSync(join(testStateDir, 'beta.json')));
 });
 

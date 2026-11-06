@@ -27,6 +27,8 @@ import { DAY_MS as REPAGE_MS } from '../lib/job-runner.js';
 import { jobRunDir, readJobRuns } from '../job-run-store.js';
 
 let posts: string[] = [];
+/** Recoveries go to the quiet ledger since #61. */
+let quiet: string[] = [];
 let infos: string[] = [];
 let warns: string[] = [];
 let results: { job: string; state: string; error?: string }[] = [];
@@ -35,6 +37,7 @@ const STATE = join(testStateDir, 'provisioning-converge.json');
 
 beforeEach(() => {
 	posts = [];
+	quiet = [];
 	infos = [];
 	warns = [];
 	results = [];
@@ -47,7 +50,9 @@ beforeEach(() => {
 				posts.push(content);
 				return { posted: true, sinkRecorded: true };
 			},
-			recordQuietly() {},
+			recordQuietly(content: string) {
+				quiet.push(content);
+			},
 		},
 		// See scheduled-converger.test.ts: every tick now reports to the job sink.
 		jobs: {
@@ -118,8 +123,8 @@ void test('a deferral pages only after DEFER_PAGE_MS, once, and recovers when th
 	assert.equal(posts.length, 1, 'no second page inside REPAGE_MS');
 
 	await convergeProvisioningTick(runner(doc()), T0 + DEFER_PAGE_MS + 2 * HOUR);
-	assert.equal(posts.length, 2);
-	assert.match(posts[1], /claw-6: standing-runner slice provisioning converged/);
+	assert.equal(posts.length, 1, 'the recovery is not posted (#61)');
+	assert.match(quiet[0], /claw-6: standing-runner slice provisioning converged/);
 });
 
 void test('the deferral clock survives a restart: it is read from disk, not module state', async () => {
@@ -163,8 +168,8 @@ void test('a converger that produces no report pages only after DEFER_PAGE_MS, t
 	assert.equal(posts.length, 1);
 	assert.match(posts[0], /has not produced a report for 6h/);
 	await convergeProvisioningTick(runner(doc()), T0 + DEFER_PAGE_MS + HOUR);
-	assert.equal(posts.length, 2);
-	assert.match(posts[1], /reporting again/);
+	assert.equal(posts.length, 1, 'the recovery is not posted (#61)');
+	assert.match(quiet[0], /reporting again/);
 });
 
 void test('the real runner refuses under node --test, and names the packaged script', async () => {

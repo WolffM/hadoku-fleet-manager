@@ -38,7 +38,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { logger, postDiscord, stateDir } from './host.js';
+import { logger, postDiscord, recordAlertQuietly, stateDir } from './host.js';
 import { writeJsonAtomic } from './lib/atomic-json.js';
 import {
 	classifyMissingDoc,
@@ -187,6 +187,8 @@ export async function clawRebootTick(
 		now,
 		repageMs: REPAGE_MS,
 		post: postDiscord,
+		// A node back in service, or the cycle reporting again, needs nobody (#61).
+		recoverPost: recordAlertQuietly,
 		source: 'reboot',
 		persist: () => writeState(state),
 	});
@@ -225,7 +227,10 @@ export async function clawRebootTick(
 			summary.rebooted++;
 			const k = n.kernel ? `${n.kernel.from} → ${n.kernel.to}` : '';
 			logger.info(`[reboot] ${n.node} rebooted ${k} (${n.reason ?? ''})`);
-			await postDiscord(
+			// Maintenance that VERIFIED itself is a record, not a page (#61): the
+			// ledger and the digest carry it; the channel hears only a node the
+			// cycle could not return (the 🔴 page below).
+			recordAlertQuietly(
 				`🔄 ${n.node} rebooted by the fleet's reboot cycle (${n.reason ?? 'staged update'}): ` +
 					`${k}, runners and services verified back, undrained.`,
 				'reboot'

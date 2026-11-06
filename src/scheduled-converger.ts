@@ -36,7 +36,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { logger, manifestDir, postDiscord, stateDir } from './host.js';
+import { logger, manifestDir, postDiscord, recordAlertQuietly, stateDir } from './host.js';
 import { writeJsonAtomic } from './lib/atomic-json.js';
 import {
 	classifyMissingDoc,
@@ -320,6 +320,9 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 			now,
 			repageMs: cfg.repageMs,
 			post: postDiscord,
+			// A recovery says the converger fixed it, or it fixed itself: the ledger
+			// and the digest, not the channel (#61). The failure half still pages.
+			recoverPost: recordAlertQuietly,
 			source: cfg.name,
 			persist: () => writeState(state),
 		});
