@@ -2141,6 +2141,13 @@
     "why": "Wave shrink-1 lane D, pure move: doctorFindings' reboot/runner-units/failed-units/pm2-claims/bootcamp-pointer judgement. Same bucket as doctor-findings.mjs itself."
   },
   {
+    "glob": "scripts/lib/egress-slices-fixtures.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "fleet-manager#64: the shared rig for the egress-slices suites (stub pm2, fixture apps and taxonomies), split out of egress-slices-guard.test.mjs so the on-demand cases get their own file. Same bucket as doctor-fixtures.mjs; the gate it spawns, scripts/check-*.mjs, is observation."
+  },
+  {
     "glob": "scripts/lib/doctor-fixtures.mjs",
     "layer": "domain",
     "domain": "observation",
