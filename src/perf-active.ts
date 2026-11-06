@@ -654,6 +654,8 @@ export interface ManifestNode {
 	node: string;
 	ip: string | null;
 	backstop: boolean;
+	/** False when the manifest says `peerTest: false`: never paired either way. */
+	peerTest: boolean;
 }
 
 function manifestNodes(): ManifestNode[] {
@@ -661,12 +663,13 @@ function manifestNodes(): ManifestNode[] {
 	if (!m.ok) throw new Error(`cannot read the fleet manifest (${m.why})`);
 	const machines = (m.doc.machines ?? {}) as Record<
 		string,
-		RoleBearingNode & { lan?: { ip?: string } }
+		RoleBearingNode & { lan?: { ip?: string }; peerTest?: boolean }
 	>;
 	return Object.entries(machines).map(([node, v]) => ({
 		node,
 		ip: v.lan?.ip ?? null,
 		backstop: isBackstopNode(v),
+		peerTest: v.peerTest !== false,
 	}));
 }
 
@@ -676,12 +679,15 @@ const PAIR_HISTORY_MS = 14 * 24 * 3_600_000;
 /**
  * Who a claw may be paired with: every other claw with a LAN address. The
  * backstop and the controller are never a peer, and a backstop is never paired.
+ * Nor is a claw whose manifest entry says `peerTest: false` (claw-1..3: CI only,
+ * never a host, operator 2026-11-05), so the pairs measure the claws that may host.
+ * Its disk and controller tests still run.
  */
 export function peerCandidates(node: string, nodes: readonly ManifestNode[]): PeerCandidate[] {
 	const self = nodes.find((n) => n.node === node);
-	if (!self || self.backstop) return [];
+	if (!self || self.backstop || !self.peerTest) return [];
 	return nodes.flatMap((n) =>
-		n.node !== node && !n.backstop && n.ip && !isLocalNode(n.node)
+		n.node !== node && !n.backstop && n.peerTest && n.ip && !isLocalNode(n.node)
 			? [{ node: n.node, ip: n.ip }]
 			: []
 	);

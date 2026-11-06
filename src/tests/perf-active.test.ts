@@ -215,7 +215,9 @@ void test('the tick tests the picked node and records its row; nothing due is a 
 	const dir = mkdtempSync(join(tmpdir(), 'perf-active-'));
 	try {
 		const now = Date.now();
-		const nodes: ManifestNode[] = [{ node: 'fx-claw-1', ip: '192.0.2.1', backstop: false }];
+		const nodes: ManifestNode[] = [
+			{ node: 'fx-claw-1', ip: '192.0.2.1', backstop: false, peerTest: true },
+		];
 		const r = await perfActiveTick(now, {
 			dir,
 			nodes,
@@ -390,13 +392,23 @@ void test('pickPeers: never paired first, then paired longest ago in either dire
 
 void test('peerCandidates: claws with a LAN address only; the backstop is neither peer nor paired', () => {
 	const nodes: ManifestNode[] = [
-		{ node: 'fx-claw-1', ip: '192.0.2.1', backstop: false },
-		{ node: 'fx-claw-2', ip: '192.0.2.2', backstop: false },
-		{ node: 'fx-claw-3', ip: null, backstop: false },
-		{ node: 'big', ip: '192.0.2.9', backstop: true },
+		{ node: 'fx-claw-1', ip: '192.0.2.1', backstop: false, peerTest: true },
+		{ node: 'fx-claw-2', ip: '192.0.2.2', backstop: false, peerTest: true },
+		{ node: 'fx-claw-3', ip: null, backstop: false, peerTest: true },
+		{ node: 'big', ip: '192.0.2.9', backstop: true, peerTest: true },
 	];
 	assert.deepEqual(peerCandidates('fx-claw-1', nodes), [{ node: 'fx-claw-2', ip: '192.0.2.2' }]);
 	assert.deepEqual(peerCandidates('big', nodes), []);
+});
+
+void test('peerCandidates: a claw marked peerTest: false is neither peer nor paired', () => {
+	const nodes: ManifestNode[] = [
+		{ node: 'fx-claw-1', ip: '192.0.2.1', backstop: false, peerTest: false },
+		{ node: 'fx-claw-4', ip: '192.0.2.4', backstop: false, peerTest: true },
+		{ node: 'fx-claw-5', ip: '192.0.2.5', backstop: false, peerTest: true },
+	];
+	assert.deepEqual(peerCandidates('fx-claw-4', nodes), [{ node: 'fx-claw-5', ip: '192.0.2.5' }]);
+	assert.deepEqual(peerCandidates('fx-claw-1', nodes), []);
 });
 
 const c6 = { node: 'fx-claw-6', ip: '192.0.2.6' };
