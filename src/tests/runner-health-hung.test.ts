@@ -17,6 +17,7 @@ import {
 	quietRecords,
 } from './helpers/runner-health-rig.js';
 import { hokonPromotedLabels } from './helpers/runner-health-fixtures.js';
+import { records } from '../job-history-store.js';
 
 installRunnerHealthRig();
 
@@ -330,4 +331,83 @@ test('hung: a job stuck on the SAME step across ticks pages, and names the step'
 	assert.equal(pings.length, 1, 'a job that has not finished a step in 30m is stuck');
 	assert.match(pings[0]!, /has not finished a step/);
 	assert.match(pings[0]!, /stuck on `Test`/, 'names the step, so the finding is actionable');
+});
+
+/**
+ * A job that is ONE long step is judged against its own green runs.
+ *
+ * hadoku-cardtable's forge-e2e shards run their whole suite as one step; green
+ * ones take up to 75 min. On 2026-11-06 a shard 30 min into that step paged
+ * "stuck … likely pinning a runner" while it was still passing tests.
+ */
+test('hung: a job inside its own green runtime is not stuck; past it, it is', async () => {
+	const started = new Date(Date.now() - 5 * 60_000).toISOString();
+	for (let i = 0; i < 6; i++) {
+		records.push({
+			repo: 'WolffM/hadoku_site',
+			runId: 1000 + i,
+			jobId: 2000 + i,
+			name: `e2e (${i + 1})`,
+			runner: 'claw-1',
+			labels: [],
+			startedAt: started,
+			durationSec: (i === 0 ? 75 : 50) * 60,
+			conclusion: 'success',
+		});
+	}
+	installFetch({
+		runners: {
+			runners: [{ name: 'claw-1', status: 'online', busy: false, labels: hokonPromotedLabels() }],
+		},
+		runs: {
+			workflow_runs: [
+				{
+					id: 904,
+					status: 'in_progress',
+					conclusion: null,
+					created_at: new Date(Date.now() - 40 * 60_000).toISOString(),
+					html_url: 'https://gh/run/904',
+					display_title: 'Forge',
+				},
+			],
+		},
+		jobs: {
+			jobs: [
+				{
+					id: 57,
+					name: 'e2e (5)',
+					status: 'in_progress',
+					started_at: new Date(Date.now() - 35 * 60_000).toISOString(),
+					steps: [
+						{ number: 1, name: 'Set up job', conclusion: 'success' },
+						{ number: 2, name: 'E2E', conclusion: null },
+					],
+				},
+			],
+		},
+	});
+	const at = async (min: number): Promise<void> => {
+		const real = Date.now;
+		Date.now = () => real() + min * 60_000;
+		try {
+			await tick('tok');
+		} finally {
+			Date.now = real;
+		}
+	};
+	const pings = (): string[] => discordPosts.filter((m) => m.includes('has not finished a step'));
+
+	await at(0); // starts the clock
+	await at(40);
+	assert.equal(pings().length, 0, '40m on one step is shorter than a green run of this job');
+	const slow = quietRecords.filter((r) => /Slow, not hung/.test(r));
+	assert.ok(
+		slow.length >= 1,
+		'still a ledger row: past the runtime ceiling, inside its own allowance'
+	);
+
+	await at(80);
+	assert.equal(pings().length, 1, '80m on one step is past the longest green run (75m)');
+	assert.match(pings()[0]!, /the longest of this job's 6 green runs was 75m/);
+	assert.match(pings()[0]!, /stuck on `E2E`/);
 });

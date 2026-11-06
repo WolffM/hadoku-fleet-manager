@@ -7,6 +7,8 @@ import { nodeOf } from './runners/census.js';
 export interface GhJob {
 	/** Also the CHECK-RUN id, which is how the annotations endpoint is addressed. */
 	id?: number;
+	/** The job's name, matrix suffix included (`forge-e2e (5)`). */
+	name?: string;
 	status?: string;
 	conclusion?: string | null;
 	runner_name?: string | null;

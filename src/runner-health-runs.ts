@@ -15,6 +15,7 @@ import { ADVISORY_REPAGE_MS, alertOnce } from './lib/alert-ledger.js';
 import { selfHostname } from './lib/runner-health-shared.js';
 import { getFleetProbeSnapshot } from './fleet-probe-store.js';
 import type { TickReport } from './runner-health-snapshot.js';
+import { stepAllowance } from './runner-health-step-allowance.js';
 
 /**
  * Minutes a job may sit queued before it counts toward `queuedStale`.
@@ -74,8 +75,9 @@ const jobProgress = new Map<number, { done: number; since: number }>();
  *
  * A threshold on TOTAL runtime has to be re-tuned every time the workload mix
  * changes, and is wrong for the fleet's slowest node by construction. Progress
- * does not: a job that has not finished a step in this long is stuck no matter
- * how fast or slow the box is.
+ * does not. This is the FLOOR, though, not the whole rule: a job that is one
+ * long step (a test suite) cannot show progress inside it, so a job whose green
+ * runs take longer than this is allowed that long (runner-health-step-allowance.ts).
  */
 const STUCK_MINUTES = 25;
 
@@ -326,8 +328,18 @@ export async function checkRunsAndFailover(
 					// whether it was progressing" must never render as "it is fine";
 					// that is the same silence the 854-minute games-host outage taught
 					// this check to refuse, one question deeper.
-					let worst: { min: number; stuckMin: number; step: string; readable: boolean } | null =
-						null;
+					// `allowMin` is how long THIS job may sit on one step (see
+					// runner-health-step-allowance.ts); `worst` is the job furthest past
+					// its own allowance. An unreadable job's allowance is 0, so it is
+					// ranked by its whole runtime, as before.
+					let worst: {
+						min: number;
+						stuckMin: number;
+						allowMin: number;
+						samples: number;
+						step: string;
+						readable: boolean;
+					} | null = null;
 					// The LONGEST-RUNNING readable job, for the slow-not-hung ledger
 					// row below. Not `worst`: that is picked by time without progress,
 					// so it can be a job that started a minute ago (#131).
@@ -342,7 +354,14 @@ export async function checkRunsAndFailover(
 							// that can hide a real stall — and among unreadable ones, the
 							// longest-running is the one worth naming.
 							if (!worst || worst.readable || min > worst.min) {
-								worst = { min, stuckMin: min, step: '(steps unreadable)', readable: false };
+								worst = {
+									min,
+									stuckMin: min,
+									allowMin: 0,
+									samples: 0,
+									step: '(steps unreadable)',
+									readable: false,
+								};
 							}
 							continue;
 						}
@@ -355,8 +374,21 @@ export async function checkRunsAndFailover(
 						// "hung" sends the operator to open the run every time.
 						const cur = steps.find((st) => !st.conclusion)?.name ?? '(no step reported)';
 						if (!slowest || min > slowest.min) slowest = { min, step: cur };
-						if (!worst || stuckMin > worst.stuckMin) {
-							worst = { min, stuckMin, step: cur, readable: true };
+						// The history scan only for a job already past the floor: most
+						// ticks have none, and the scan reads every kept record.
+						const allow =
+							stuckMin > STUCK_MINUTES
+								? stepAllowance(repo, j.name ?? '', STUCK_MINUTES)
+								: { minutes: STUCK_MINUTES, samples: 0 };
+						if (!worst || stuckMin - allow.minutes > worst.stuckMin - worst.allowMin) {
+							worst = {
+								min,
+								stuckMin,
+								allowMin: allow.minutes,
+								samples: allow.samples,
+								step: cur,
+								readable: true,
+							};
 						}
 					}
 
@@ -371,13 +403,16 @@ export async function checkRunsAndFailover(
 								`job pinning a runner. (GitHub reported no steps, so progress could not be ` +
 								`checked and this is unconfirmed.)\n${run.html_url}`
 						);
-					} else if (worst && worst.readable && worst.stuckMin > STUCK_MINUTES) {
+					} else if (worst && worst.readable && worst.stuckMin > worst.allowMin) {
 						inProgressStale++;
+						const allowed = worst.samples
+							? `the longest of this job's ${worst.samples} green runs was ${Math.round(worst.allowMin)}m`
+							: `>${STUCK_MINUTES}m`;
 						await alertOnce(
 							`hung:${run.html_url}`,
 							`🚨 **runners** on \`${selfHostname()}\`: \`${short}\` — \`${title}\` has been ` +
 								`EXECUTING ${Math.round(worst.min)}m and has not finished a step in ` +
-								`${Math.round(worst.stuckMin)}m (>${STUCK_MINUTES}m) — stuck on ` +
+								`${Math.round(worst.stuckMin)}m (${allowed}) — stuck on ` +
 								`\`${worst.step}\`, likely pinning a runner.\n${run.html_url}`
 						);
 					} else if (slowest && slowest.min > INPROGRESS_WARN_MINUTES) {
