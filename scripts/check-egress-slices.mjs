@@ -689,31 +689,6 @@ function main() {
 				});
 				continue;
 			}
-			// AN ON-DEMAND ECOSYSTEM SERVICE AT REST (fleet-manager#64): `invoke` is
-			// `autostart: false`, read from PM2's own record. Only the state a stop or
-			// a final exit 0 leaves: `errored`, a flap or a non-zero exit still fail.
-			// PM2 writes `exit_code` as the STRING "0" (hokon, 2026-11-06).
-			const exit = app.pm2_env?.exit_code;
-			if (
-				declared === 'ecosystem' &&
-				app.pm2_env?.autostart === false &&
-				firstStatus === 'stopped' &&
-				unstable === 0 &&
-				(exit === undefined || exit === null || String(exit) === '0')
-			) {
-				dormant.push({
-					name,
-					class: declared,
-					cwd,
-					pm2Status: firstStatus,
-					onDemand: true,
-					why:
-						'PM2 registered it `autostart: false`: an on-demand service, started only when ' +
-						'asked, so stopped with a clean exit is its resting state. Its egress is ' +
-						'cross-checked whenever it runs; a crash loop or a non-zero exit is still a finding.',
-				});
-				continue;
-			}
 			if (!TRANSIENT_STATES.has(firstStatus)) {
 				findings.push({
 					name,
@@ -976,7 +951,7 @@ function main() {
 				'cgroup was compared against a declared class. A rolling deploy moves apps one at a ' +
 				'time and cannot produce this; a scan that cannot read /proc can, and so would a ' +
 				'deploy marker naming the whole box, or a PM2 list holding nothing but stopped ' +
-				`${DORMANT_EXEMPT_CLASS} or on-demand apps — a box that has lost the ecosystem. ` +
+				`${DORMANT_EXEMPT_CLASS} apps — which is a box that has lost the ecosystem. ` +
 				'Treat it as an unreadable box, not a clean one.',
 		});
 	}
@@ -1025,8 +1000,11 @@ function main() {
 			findings,
 			acceptedLeaks: leaks,
 			deferred,
-			// ADDITIVE, as `markerFile` is: the only place a stopped register entry or
-			// a resting on-demand service is visible.
+			// ADDITIVE, exactly as `markerFile` is. `ci:egress-slices` reads
+			// `findings`, `deferred` and `acceptedLeaks` and ignores the rest, so this
+			// key costs the consumer nothing and needs no cross-repo change — but it
+			// is the only place the register's dormant half is visible, and without it
+			// `acceptedLeaks` dropping from five to three reads as two leaks closed.
 			dormant,
 			ok,
 			markerFile: markers.report(),
@@ -1063,12 +1041,12 @@ function main() {
 		// still on the register and currently not. Silence here is the register
 		// quietly shrinking.
 		if (dormant.length) {
-			log(`\n  ${dormant.length} dormant — not running, and not this gate's subject while down:`);
+			log(
+				`\n  ${dormant.length} dormant — on the accepted-leak register, not running, and not ` +
+					`this gate's subject while down:`
+			);
 			for (const d of dormant)
-				log(
-					`    ${d.name} (${d.onDemand ? 'on-demand ' : ''}${d.class}) — PM2 reports ` +
-						`"${d.pm2Status}". ${d.registeredWhy ?? ''}`
-				);
+				log(`    ${d.name} (${d.class}) — PM2 reports "${d.pm2Status}". ${d.registeredWhy ?? ''}`);
 		}
 		// Only once something asked. A box with nothing moving never opens the file,
 		// and printing "unread" on every clean run would be noise that trains the
@@ -1100,7 +1078,7 @@ function main() {
 							// egress. Said plainly rather than either hidden or dressed up as
 							// a deferral.
 							`\nEvery PM2 app is classified, and every direct-egress cgroup is populated. ` +
-							`${dormant.length} app(s) are dormant: hokon-local or on-demand, not ` +
+							`${dormant.length} app(s) are dormant: on the accepted-leak register, not ` +
 							'running, and cross-checked again whenever the operator starts them.'
 						: '\nEvery PM2 app is classified, and every direct-egress cgroup is populated.'
 			);

@@ -302,6 +302,11 @@ const DECLARED = new Map([
 			'drain `since` string, so both sides move together or neither does.',
 	],
 	[
+		'scripts/lib/egress-slices-guard.test.mjs',
+		'`pm_uptime` is mapped straight to `uptimeMs` and reported. Nothing subtracts it ' +
+			'from now, so it is a value being carried, not an age.',
+	],
+	[
 		'scripts/lib/enroll-node.test.mjs',
 		'`recordedAt` is carried through the enrollment record and asserted verbatim.',
 	],

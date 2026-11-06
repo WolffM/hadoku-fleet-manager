@@ -1,11 +1,12 @@
 {
   "scripts/capability-probe.sh": 1037,
-  "scripts/check-egress-slices.mjs": 1111,
+  "scripts/check-egress-slices.mjs": 1089,
   "scripts/check-fleet-toolchain.mjs": 1174,
   "scripts/check-fleet-toolchain.test.mjs": 1466,
   "scripts/ci-throttle.sh": 1036,
   "scripts/deploy-runners-slice.mjs": 1112,
   "scripts/hosting.mjs": 883,
+  "scripts/lib/egress-slices-guard.test.mjs": 1007,
   "scripts/lib/hosting.mjs": 1133,
   "scripts/lib/slice-placement-guard.test.mjs": 2214,
   "scripts/lib/toolchain-floor.mjs": 911,
