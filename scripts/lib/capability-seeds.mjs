@@ -420,7 +420,9 @@ async function seedNodeFor(name, node, manifest, id, spec, deps) {
 		};
 	}
 
-	const busy = await deps.ssh(name, BUSY_CHECK_SCRIPT, { timeoutMs: 30_000 });
+	// As ci, whose processes the jobs are: admin cannot see them on a hidepid
+	// node and would always read IDLE there (fleet-manager#68).
+	const busy = await deps.ssh(name, BUSY_CHECK_SCRIPT, { as: 'ci', timeoutMs: 30_000 });
 	if (!busy.ok) {
 		return {
 			id,

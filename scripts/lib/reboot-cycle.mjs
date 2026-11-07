@@ -89,7 +89,6 @@ ready() { for f in /lib/modules/$(uname -r)/updates/dkms/*.ko*; do [ -e "$f" ] |
 echo "DKMS-READY $(ready)"
 if [ -f /var/run/reboot-required ]; then echo "FLAG REQUIRED"; else echo "FLAG CLEAN"; fi
 echo "PKGS $(cat /var/run/reboot-required.pkgs 2>/dev/null | tr '\\n' ' ')"
-echo "BUSY $(pgrep -c -f '[R]unner\\.Worker' || true)"
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 en=$(systemctl --user list-unit-files 'actions-runner-*.service' --state=enabled --no-legend 2>/dev/null | awk '{print $1}' | sort)
 act=$(systemctl --user list-units 'actions-runner-*.service' --state=active --no-legend --plain 2>/dev/null | awk '{print $1}' | sort)
@@ -134,7 +133,6 @@ export function parseRebootProbe(text) {
 		newest: get('NEWEST') || null,
 		flag: get('FLAG') === 'REQUIRED',
 		packages: words(get('PKGS')),
-		busy: /^\d+$/.test(get('BUSY') ?? '') ? Number(get('BUSY')) : null,
 		unitsEnabled: words(get('UNITS-ENABLED')),
 		unitsActive: words(get('UNITS-ACTIVE')),
 		// DKMS: module FILES built per kernel (Debian renames them, so files and
@@ -250,6 +248,15 @@ async function attempt(fn) {
 	} catch (e) {
 		return { ok: false, reason: errText(e) };
 	}
+}
+
+/**
+ * The reboot's journal message: who sent it, from where, and why. Restricted to
+ * characters that survive both the single and the double quotes around it.
+ */
+export function rebootMessage(why, host, pid) {
+	const text = `fleet reboot-claws from ${host} pid ${pid}: ${why}; drained, 0 CI jobs counted as ci`;
+	return text.replace(/[^\w .,:;()/+=@-]/g, '_').slice(0, 200);
 }
 
 /** The `fleet drain` arguments for this cycle's drain: kind `reboot`, with an end. */
@@ -565,7 +572,7 @@ export async function runRebootCycle({
 	state.inFlight = { ...state.inFlight, phase: 'rebooting', before, rebootAt };
 	save();
 	log(`── ${pick.name}  [rebooting] ${pick.why}`);
-	const r = await attempt(() => deps.reboot(pick.name));
+	const r = await attempt(() => deps.reboot(pick.name, pick.why));
 	if (!r.ok || r.value?.ok === false) {
 		// Not conclusive: an ssh cut by the reboot itself looks like this. The
 		// boot id decides.

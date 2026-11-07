@@ -16,6 +16,7 @@ import {
 	dkmsGap,
 	judgeReprove,
 	rebootDrainArgs,
+	rebootMessage,
 	rebootReason,
 	runRebootCycle,
 	verifyAfter,
@@ -167,7 +168,6 @@ test('parseRebootProbe: claw-4 live, and an answer cut off is could-not-look', (
 			`NEWEST ${NEW}`,
 			'FLAG REQUIRED',
 			'PKGS linux-image-6.12.113+deb13-amd64 libc6 ',
-			'BUSY 6',
 			`UNITS-ENABLED ${UNIT}`,
 			`UNITS-ACTIVE ${UNIT}`,
 			'PM2 pygmalion',
@@ -175,7 +175,8 @@ test('parseRebootProbe: claw-4 live, and an answer cut off is could-not-look', (
 		].join('\n')
 	);
 	assert.equal(p.ok, true);
-	assert.deepEqual([p.busy, p.pm2, p.packages.length], [6, ['pygmalion'], 2]);
+	// The job count is not the probe's: reboot-claws reads it as ci (fleet-manager#68).
+	assert.deepEqual([p.busy, p.pm2, p.packages.length], [undefined, ['pygmalion'], 2]);
 	assert.equal(
 		rebootReason(p),
 		`running ${OLD}, newest installed ${NEW}; /var/run/reboot-required (linux-image-6.12.113+deb13-amd64, libc6)`
@@ -821,4 +822,14 @@ test('cycleRebooting: only a `rebooting` node, still under the cycle’s drain, 
 	none(rebooting, {
 		nodes: { 'claw-8': { kind: 'maintenance', reason: `${HELD_PREFIX}: not back on a new boot` } },
 	});
+});
+
+test('#68: the reboot names its sender and reason in the node journal, in quote-safe characters', () => {
+	const m = rebootMessage(`running 6.12.111, newest 6.12.113; it's "needed" $(x)`, 'hokon', 4242);
+	assert.match(
+		m,
+		/^fleet reboot-claws from hokon pid 4242: running 6\.12\.111, newest 6\.12\.113;/
+	);
+	assert.match(m, /drained, 0 CI jobs counted as ci$/);
+	assert.doesNotMatch(m, /['"$`]/);
 });

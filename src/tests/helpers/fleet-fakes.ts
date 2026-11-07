@@ -118,6 +118,8 @@ export interface ShellFakeOptions {
 	/** Live `jit-*` units, as `systemctl --user list-units --no-legend` prints them. */
 	units?: string[];
 	unreachable?: boolean;
+	/** fleet-manager#68: a Runner.Worker is live under the warm slot. */
+	warmWorkerLive?: boolean;
 }
 
 export type ShellFake = (node: string, cmd: string) => Promise<string | null>;
@@ -128,6 +130,7 @@ export function fakeShell(o: ShellFakeOptions = {}): ShellFake {
 		if (cmd.includes('echo REACHABLE')) return 'REACHABLE';
 		// The config-staging step, which must succeed before the unit starts.
 		if (cmd.includes('CFG-OK')) return 'CFG-OK';
+		if (cmd.includes('WARM-IDLE')) return o.warmWorkerLive ? 'WARM-BUSY' : 'WARM-IDLE';
 		if (cmd.includes('pgrep')) return '';
 		if (cmd.includes('list-units'))
 			return (o.units ?? []).map((u) => `${u}.service loaded active running x`).join('\n');

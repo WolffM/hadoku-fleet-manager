@@ -23,6 +23,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -44,6 +45,7 @@ import {
 	parseRebootProbe,
 	judgeReprove,
 	rebootDrainArgs,
+	rebootMessage,
 	rebootNoticeArgs,
 	runRebootCycle,
 } from './lib/reboot-cycle.mjs';
@@ -89,7 +91,11 @@ const deps = {
 			connectTimeout: 6,
 		});
 		if (!res.ok) return { ok: false, reason: res.error || 'unreachable' };
-		return parseRebootProbe(res.stdout);
+		const p = parseRebootProbe(res.stdout);
+		// The job count is a SEPARATE read, as ci: admin cannot see ci's
+		// processes on a hidepid node and counted 0 there with jobs live
+		// (fleet-manager#68). null (could not look) never reboots.
+		return p.ok ? { ...p, busy: busyCount(node) } : p;
 	},
 	expectedDown: (node) => deferralFor(node, readDrains()).deferred,
 	drainDoc: () => readDrainDoc(),
@@ -112,10 +118,16 @@ const deps = {
 	waitDrained: (node) => waitUntilDrained({ node, busy: busyCount, clock }),
 	queuePressure: () => liveQueuePressure(),
 	// Detached on the node, so the ssh returns before the box goes down.
-	reboot: (node) => {
+	// THE SENDER IS IN THE NODE'S JOURNAL. `--message` is logged with systemd's
+	// own shutdown line, so a reboot read off `journalctl -b -1` names who sent
+	// it and why. On 10-30/31 seven jobs died to reboots and unit stops that left
+	// no such trace, and finding their senders took a fleet-wide journal crawl
+	// (fleet-manager#68).
+	reboot: (node, why = 'reboot required') => {
+		const msg = rebootMessage(why, hostname(), process.pid);
 		const res = runOnSync(
 			node,
-			'nohup sh -c "sleep 2; sudo -n systemctl reboot" >/dev/null 2>&1 &\necho SCHEDULED\n',
+			`nohup sh -c "sleep 2; sudo -n systemctl reboot --message='${msg}'" >/dev/null 2>&1 &\necho SCHEDULED\n`,
 			{ as: 'admin', timeoutMs: 20_000, connectTimeout: 6 }
 		);
 		return res.ok && res.stdout.includes('SCHEDULED')

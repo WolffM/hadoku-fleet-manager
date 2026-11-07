@@ -156,6 +156,8 @@ export interface NodeSim {
 	 *  not a bare integer) instead of a number — same effect as a `df` that
 	 *  fails or prints an error on a live node. */
 	dfUnreadable?: 'tmp' | 'work' | 'both';
+	/** fleet-manager#68: a Runner.Worker is live under the warm slot, whatever GitHub's busy flag says. */
+	warmWorkerLive?: boolean;
 }
 
 export const DEFAULT_INSTALLED_MB = 16_000;
@@ -164,6 +166,8 @@ export const DEFAULT_SPACE_FREE_MB = 8_000;
 export function simShell(sims: Record<string, NodeSim>) {
 	return async (node: string, cmd: string): Promise<string | null> => {
 		const s = (sims[node] ??= { marker: null, activeUnits: new Set() });
+		// evictWarmListener's process-tree check, before any delete.
+		if (cmd.includes('WARM-IDLE')) return s.warmWorkerLive ? 'WARM-BUSY' : 'WARM-IDLE';
 		// TWO COLUMNS for the dispatch tick (`$7, $2` — available AND installed),
 		// one for the warm tick (`$2` alone). Both halves of the warm placement
 		// decision are measured off this same line, which is the point: the tick

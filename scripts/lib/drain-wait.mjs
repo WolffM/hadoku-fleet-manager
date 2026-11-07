@@ -49,8 +49,12 @@ export const SETTLE_MS = 90_000;
  * `createLiveDeps()` already wired into `waitUntilDrained` below.
  */
 export function busyCount(node) {
+	// AS THE CI ROLE: the jobs are ci's processes. claw-1, claw-2 and claw-3
+	// mount /proc `hidepid=invisible`, so admin's pgrep there counts 0 with jobs
+	// running (measured 11-06: claw-1 admin 0, ci 3; claw-3 admin 0, ci 1), and
+	// a reboot on 10-31 passed this check with two jobs live (fleet-manager#68).
 	const res = runOnSync(node, 'pgrep -c -f "[R]unner\\.Worker" || true', {
-		as: 'admin',
+		as: 'ci',
 		timeoutMs: 20_000,
 		connectTimeout: 6,
 	});

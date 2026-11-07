@@ -175,7 +175,11 @@ export async function mintWarmListener(
 	});
 	const spawned = await sh(req.node, plan.argv.map(shellQuote).join(' '));
 	if (spawned === null) {
-		await evictWarmListener(req.node, req.repo, req.runnerName, token, gh, sh);
+		// Not evictWarmListener: a listener whose spawn failed never ran, so no job
+		// is on it, and its process-tree check would read this same unreachable
+		// node as "could not look" and leave the fresh registration behind.
+		await deleteRunnerAndStopUnit(req.node, req.repo, req.runnerName, token, gh, sh);
+		await sh(req.node, REMOVE_WARM_MARKER);
 		return { ok: false, reason: 'spawn failed; registration removed' };
 	}
 	logger.info(`[warm-cache] minted ${req.runnerName} on ${req.node} for ${req.repo}`);
@@ -234,6 +238,9 @@ export async function withholdWarmListener(
 	return 'withheld';
 }
 
+/** The warm slot's repo marker, removed whenever its registration is. */
+const REMOVE_WARM_MARKER = 'rm -f "$HOME/.hadoku/warm/repo" 2>/dev/null || true';
+
 export async function evictWarmListener(
 	node: string,
 	repo: string,
@@ -242,13 +249,29 @@ export async function evictWarmListener(
 	gh: GhLike & { get?: (path: string, token: string, repo?: string) => Promise<unknown> },
 	sh: ShellLike
 ): Promise<boolean> {
+	// THE PROCESS TREE FIRST, as ci (`sh` is ci's shell). GitHub's refusal to
+	// delete a busy runner is the guard below, and on 2026-11-01 it lost:
+	// claw-1's warm listener was evicted at 17:58:38Z, 53s into cardtable's
+	// `static` job (run 41334107613), and the job died on a shutdown signal
+	// (fleet-manager#68). A live Runner.Worker under the warm slot is a job
+	// whatever GitHub's busy flag says; so is not being able to look.
+	const worker = await sh(
+		node,
+		"pgrep -f '/warm/listener/bin/Runner[.]Worker' >/dev/null 2>&1 && echo WARM-BUSY || echo WARM-IDLE"
+	);
+	if (!worker?.includes('WARM-IDLE')) {
+		logger.info(
+			`[warm-cache] ${node}: not evicting ${runnerName} — ${worker?.includes('WARM-BUSY') ? 'a Runner.Worker is live under it' : 'could not read its process tree'}`
+		);
+		return false;
+	}
 	const removed = await deleteRunnerAndStopUnit(node, repo, runnerName, token, gh, sh);
 	if (!removed) return false;
 	// Best-effort. A stale marker naming a repo nothing is registered for would
 	// make the NEXT tick believe a slot exists when it does not, and lock it
 	// against eviction for no reason (planWarmCache reads "no slot" from its
 	// absence). Not fatal if this fails — the next successful mint overwrites it.
-	await sh(node, 'rm -f "$HOME/.hadoku/warm/repo" 2>/dev/null || true');
+	await sh(node, REMOVE_WARM_MARKER);
 	return true;
 }
 

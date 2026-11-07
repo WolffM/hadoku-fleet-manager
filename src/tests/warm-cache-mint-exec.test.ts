@@ -159,6 +159,10 @@ test('mintWarmListener never puts the registration token or repo url unescaped w
 test('evictWarmListener deletes the registration BEFORE stopping the unit', async () => {
 	const order: string[] = [];
 	const sh = async (_n: string, cmd: string) => {
+		if (cmd.includes('WARM-IDLE')) {
+			order.push('look');
+			return 'WARM-IDLE';
+		}
 		if (cmd.includes('systemctl --user stop')) order.push('stop');
 		return '';
 	};
@@ -170,12 +174,33 @@ test('evictWarmListener deletes the registration BEFORE stopping the unit', asyn
 	};
 	const ok = await evictWarmListener('claw-1', WARM_REQ.repo, WARM_REQ.runnerName, 'tok', gh, sh);
 	assert.equal(ok, true);
-	assert.deepEqual(order, ['delete', 'stop']);
+	assert.deepEqual(order, ['look', 'delete', 'stop']);
+});
+
+test('#68: evictWarmListener deletes and stops NOTHING while a Runner.Worker is live under the slot, or when it cannot look', async () => {
+	for (const answer of ['WARM-BUSY', null]) {
+		const cmds: string[] = [];
+		const sh = async (_n: string, cmd: string) => {
+			cmds.push(cmd);
+			return answer;
+		};
+		const gh = fakeGh({ runners: [{ id: 7, name: WARM_REQ.runnerName }] });
+		let deletes = 0;
+		gh.write = async () => {
+			deletes++;
+			return { ok: true, status: 204 };
+		};
+		const ok = await evictWarmListener('claw-1', WARM_REQ.repo, WARM_REQ.runnerName, 'tok', gh, sh);
+		assert.equal(ok, false, String(answer));
+		assert.equal(deletes, 0, 'GitHub was never asked to delete a runner with a job on it');
+		assert.equal(cmds.length, 1, 'only the look: no stop, no marker removal');
+	}
 });
 
 test('evictWarmListener stops NOTHING when GitHub refuses the delete — the listener won the race to a job (CI run 37859515259)', async () => {
 	const cmds: string[] = [];
 	const sh = async (_n: string, cmd: string) => {
+		if (cmd.includes('WARM-IDLE')) return 'WARM-IDLE';
 		cmds.push(cmd);
 		return '';
 	};
