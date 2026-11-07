@@ -115,35 +115,26 @@ jobs:
             echo "changed: $CHANGED"
           fi
 
-      - uses: actions/setup-node@v6
+      # Node, corepack pnpm, ONE pnpm store pinned for the whole job, and the
+      # registry token read from the vault (fleet-manager#67). The store pin is
+      # the point: next-version below rewrites package.json, and a later
+      # `pnpm run` that re-links against a different store fetches with
+      # setup-node's placeholder token and 401s (hadoku-actions#5). The token
+      # is never a repo secret, and this repo holds no token that can write
+      # anywhere: hadoku_site is told through mgmt-api with the service key
+      # (below). The service key is the only secret this public repo holds,
+      # and mgmt-api rotates it daily.
+      - uses: WolffM/hadoku-actions/setup-pnpm@v1
+        id: pnpm
         if: steps.gate.outputs.ships == 'true'
         with:
           node-version: '24'
-          registry-url: https://npm.pkg.github.com
-          scope: '@wolffm'
-
-      - name: Enable pnpm
-        if: steps.gate.outputs.ships == 'true'
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.5.0 --activate
-
-      # The registry token comes from the vault, never a repo secret, and this
-      # repo holds no token that can write anywhere: hadoku_site is told through
-      # mgmt-api with the service key (below). The service key is the only
-      # secret this public repo holds, and mgmt-api rotates it daily.
-      - name: Registry token from the vault
-        uses: WolffM/hadoku-actions/vault-fetch@v1
-        if: steps.gate.outputs.ships == 'true'
-        with:
-          keys: HADOKU_NPM_READ_TOKEN
-        env:
-          HADOKU_VAULT_KEY: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
+          vault-key: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
 
       - name: Install
         if: steps.gate.outputs.ships == 'true'
         env:
-          NODE_AUTH_TOKEN: ${{ env.HADOKU_NPM_READ_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ steps.pnpm.outputs.npm-token }}
         run: pnpm install --frozen-lockfile
 
       # THE SAME GATE AS CI, IN THIS JOB, ON THIS SHA.
@@ -182,7 +173,7 @@ jobs:
         if: steps.gate.outputs.ships == 'true'
         uses: WolffM/hadoku-actions/next-version@v1
         env:
-          NODE_AUTH_TOKEN: ${{ env.HADOKU_NPM_READ_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ steps.pnpm.outputs.npm-token }}
 
       # GITHUB_TOKEN, not the PAT. The PAT is read-only for packages by design.
       #

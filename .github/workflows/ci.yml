@@ -68,30 +68,19 @@ jobs:
           tar xzf "$tarball" gitleaks
           ./gitleaks dir "$GITHUB_WORKSPACE" --redact --no-banner
 
-      - uses: actions/setup-node@v6
+      # Node, corepack pnpm (pinned by `packageManager`), one pnpm store for
+      # the whole job, and the registry token from the vault: the shared action
+      # (fleet-manager#67), so this job cannot hold the placeholder-token shape
+      # hadoku-actions#5 401'd seven repos with.
+      - uses: WolffM/hadoku-actions/setup-pnpm@v1
+        id: pnpm
         with:
           node-version: '24'
-          registry-url: https://npm.pkg.github.com
-          scope: '@wolffm'
-
-      # pnpm via corepack, pinned by `packageManager`. Replaces pnpm/action-setup,
-      # whose self-installer shares one directory across every runner instance on
-      # the host and dies with `ENOENT ... uv_cwd` when concurrent jobs race it.
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.5.0 --activate
-
-      - name: Registry token from the vault
-        uses: WolffM/hadoku-actions/vault-fetch@v1
-        with:
-          keys: HADOKU_NPM_READ_TOKEN
-        env:
-          HADOKU_VAULT_KEY: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
+          vault-key: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
 
       - name: Install
         env:
-          NODE_AUTH_TOKEN: ${{ env.HADOKU_NPM_READ_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ steps.pnpm.outputs.npm-token }}
         run: pnpm install --frozen-lockfile
 
       - name: Check
