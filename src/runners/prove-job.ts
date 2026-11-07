@@ -165,6 +165,19 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 	};
 	const find = (rule: string, message: string): void => void r.findings.push({ rule, message });
 	const owned: Owned[] = [];
+	/**
+	 * What the proof runner registers with and, aimed, what the canary's
+	 * `runs-on` asks for. Unaimed it is the job's own label set (`r.labels`).
+	 * AIMED it is `self-hosted` and the proof label ONLY: a runner that also
+	 * carried the workload's labels was free game for any older queued job
+	 * asking for them, and GitHub hands a new runner the longest-waiting job.
+	 * On 2026-11-07 every jdk21 proof had expired, cardtable's forge backlog
+	 * asked for exactly `self-hosted,hadoku-builder,jdk21`, and each of claw-8's
+	 * proof runners ran a backlog job while the canary timed out and was
+	 * cancelled. A runner with nothing but its proof label can take only the
+	 * canary. `r.labels` still reports the workload's labels.
+	 */
+	let runnerLabels: string[] = [];
 	const dispatched = new Set<number>();
 	let scratch: string | null = null;
 	const why = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -247,7 +260,7 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 				repo: spec.repo,
 				runnerName: name,
 				// THE SEAM: per-call, this runner only. Not `nodeOffer`, not the manifest.
-				labels: r.labels,
+				labels: runnerLabels,
 				slotIndex,
 				homeDir: home,
 				memoryMaxMb: mintsOnDemand(d.node)
@@ -340,12 +353,17 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 			r.labelSource = 'override';
 			// Aimed: one label nothing else in the fleet carries, sent as the job's
 			// `runs-on` — the canary cannot be taken by another listener.
-			if (spec.runsOnInput) r.labels.push(proofLabel(d.now()));
+			if (spec.runsOnInput) {
+				const proof = proofLabel(d.now());
+				r.labels.push(proof);
+				runnerLabels = ['self-hosted', proof];
+			} else runnerLabels = r.labels;
 		} else {
 			const ro = runsOnForJob(workflowText, spec.job);
 			if (!ro.ok) return finalise(refuse('runs-on', ro.reason));
 			r.labels = ro.labels;
 			r.labelSource = 'runs-on';
+			runnerLabels = r.labels;
 		}
 
 		// --- the node: reachable, not drained, room for one more ---------------------
@@ -432,7 +450,7 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 				'POST',
 				`/actions/workflows/${encodeURIComponent(spec.workflow)}/dispatches`,
 				NO_TOKEN,
-				dispatchBody(on, r.labels),
+				dispatchBody(on, runnerLabels),
 				spec.repo
 			);
 			if (!disp.ok) {

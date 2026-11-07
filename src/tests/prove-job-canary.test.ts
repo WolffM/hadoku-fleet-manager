@@ -56,9 +56,31 @@ test('an aimed canary mints a unique label and sends it in its runs-on input', a
 	const body = w.log.dispatchBodies[0] as { inputs: Record<string, string> };
 	assert.equal(body.inputs.only, 'e2e', 'the other inputs still go');
 	const runsOn: string[] = JSON.parse(body.inputs.runs_on);
-	assert.deepEqual(runsOn, r.labels, 'the input is the label set the proof asked for');
-	assert.ok(runsOn.includes(unique[0]), 'and it names the proof label');
+	assert.deepEqual(
+		runsOn,
+		['self-hosted', unique[0]],
+		'aimed: self-hosted and the proof label only'
+	);
 	for (const l of runsOn) assert.ok(minted.includes(l), `the proof runner carries ${l}`);
+	assert.ok(r.labels.includes('jdk21'), 'the report still names the workload labels');
+});
+
+// 2026-11-07: every jdk21 proof had expired and cardtable's forge backlog asked
+// for self-hosted,hadoku-builder,jdk21. A proof runner carrying those labels
+// was handed the oldest backlog job, every attempt, and the canary timed out.
+test("an aimed proof runner carries none of the workload's labels, so no queued job can take it", async () => {
+	const w = world();
+	await proveJob(
+		{
+			...SPEC,
+			labelsOverride: ['self-hosted', 'hadoku-builder', 'jdk21'],
+			runsOnInput: 'runs_on',
+		},
+		w.deps(node())
+	);
+	const minted = w.log.mintBodies[0].labels;
+	for (const l of ['hadoku-builder', 'jdk21'])
+		assert.ok(!minted.includes(l), `the proof runner does not carry ${l}: ${minted.join(',')}`);
 });
 
 // 2026-10-08, claw-4's first aimed canary: forge.yml's `changes` job runs on
