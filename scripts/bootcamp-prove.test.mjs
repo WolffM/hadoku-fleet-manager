@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 import { writeProof } from '../dist/lib/measured-proof.js';
+import { printProveResults } from './lib/bootcamp-canary.mjs';
 
 import {
 	CLAW,
@@ -41,7 +42,7 @@ import {
 // `toolchain-floor.mjs`). A low-RAM fixture node never triggers that install
 // attempt; the JDK itself applies to every claw and the shim answers its
 // detect as present, so the probe is the only thing these two tests are about.
-function proveFixture({ cores = 8 } = {}) {
+function proveFixture({ cores = 8, excludeRepos } = {}) {
 	const root = mkdtempSync(join(tmpdir(), 'fleet-bootcamp-prove-'));
 	const manifestDir = join(root, 'manifests');
 	const stateDir = join(root, 'state');
@@ -61,6 +62,7 @@ function proveFixture({ cores = 8 } = {}) {
 						minFreeMb: 1024,
 						cores,
 						ramGb: 8, // below JDK21_MIN_INSTALLED_MB (12 GiB) — no install attempt
+						...(excludeRepos ? { excludeRepos } : {}),
 					},
 				},
 			},
@@ -169,6 +171,76 @@ test('--prove --due <n> skips a node with an existing FRESH pass — "not due ye
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
+});
+
+test('--prove waits out --due after a FAIL too, so a failing node is not drained every night', () => {
+	const f = proveFixture({ cores: 8 });
+	try {
+		writeProof(
+			{
+				node: CLAW,
+				capability: 'jdk21',
+				runId: 1,
+				runner: 'jit-fixture-claw-1-proof-hadoku-cardtable-j0-r0-1',
+				conclusion: 'failure',
+				durationSec: 300,
+				evidenceMatched: false,
+				budgetSec: null,
+				verdict: 'fail',
+				why: 'the job failed',
+				at: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+			},
+			{ dir: f.stateDir }
+		);
+		const r = run(['--machine', CLAW, '--no-push', '--prove', '--due', '25', '--json'], f.env);
+		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
+		const doc = JSON.parse(r.out);
+		assert.equal(doc.prove[0].status, 'not-due');
+		assert.match(doc.prove[0].reason, /last fail .* \(3\.0\/25d\)/);
+		assert.deepEqual(f.calls(), ['PROBE']);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test("--prove skips a node that excludes the canary's repo — never drained for a proof it cannot use", () => {
+	const f = proveFixture({
+		cores: 8,
+		excludeRepos: { 'WolffM/hadoku-cardtable': 'fixture: declines cardtable' },
+	});
+	try {
+		const r = run(['--machine', CLAW, '--no-push', '--prove', '--json'], f.env);
+		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
+		const doc = JSON.parse(r.out);
+		assert.deepEqual(doc.prove, [
+			{
+				node: CLAW,
+				capability: 'jdk21',
+				status: 'skipped',
+				reason: 'WolffM/hadoku-cardtable is excluded on this node',
+			},
+		]);
+		assert.deepEqual(f.calls(), ['PROBE']);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('a DUE canary that could not run (never went quiet, drain refused) is a finding; a not-due or excluded one is not', () => {
+	const lines = [];
+	const ctx = { findings: 0, log: (m) => lines.push(m) };
+	printProveResults(ctx, [
+		{
+			node: 'claw-8',
+			capability: 'jdk21',
+			status: 'deferred',
+			reason: 'never went quiet: timed out',
+		},
+		{ node: 'claw-9', capability: 'jdk21', status: 'not-due', reason: 'last pass … (1.0/25d)' },
+		{ node: 'claw-1', capability: 'jdk21', status: 'skipped', reason: 'excluded' },
+	]);
+	assert.equal(ctx.findings, 1);
+	assert.ok(lines.some((l) => /DEFERRED: jdk21@claw-8 — never went quiet/.test(l)));
 });
 
 // ── the canary's capture is file-based, not a pipe (F6, #33) ───────────────

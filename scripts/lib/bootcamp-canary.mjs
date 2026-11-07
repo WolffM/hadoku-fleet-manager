@@ -9,6 +9,7 @@ import { canaryPlan, OWN_DRAIN_REASON_PREFIX } from './proof-drain.mjs';
 import { busyCount, waitUntilDrained } from './drain-wait.mjs';
 import { createLiveDeps } from './refresh-cycle-live.mjs';
 import { spawnJsonToFile } from './spawn-json.mjs';
+import { capability } from '../../dist/lib/capability-registry.js';
 import { workloadGatedCapabilities } from '../../dist/lib/workload-gate.js';
 import { readProof } from '../../dist/lib/measured-proof.js';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
@@ -52,13 +53,13 @@ async function runCanary(ctx, name, id) {
 			reason: `${OWN_DRAIN_REASON_PREFIX} ${id} workload canary`,
 		});
 	} catch (e) {
-		return { node: name, capability: id, status: 'skipped', reason: `drain failed: ${e.message}` };
+		return { node: name, capability: id, status: 'deferred', reason: `drain failed: ${e.message}` };
 	}
 	if (drained?.ok === false) {
 		return {
 			node: name,
 			capability: id,
-			status: 'skipped',
+			status: 'deferred',
 			reason: `drain refused: ${drained.reason}`,
 		};
 	}
@@ -72,7 +73,7 @@ async function runCanary(ctx, name, id) {
 			return {
 				node: name,
 				capability: id,
-				status: 'skipped',
+				status: 'deferred',
 				reason: `never went quiet: ${wait.reason ?? 'timed out'}`,
 			};
 		}
@@ -143,6 +144,19 @@ export async function proveWorkloads(ctx) {
 		if (!r) continue; // this run could not reach it at all
 		for (const id of workloadGatedCapabilities()) {
 			if (!r.earned.includes(id)) continue; // tool not earned here, this run
+			// A node that declines the canary's own repo (`excludeRepos`) would
+			// never be routed the workload, so a proof there means nothing, and the
+			// canary would drain it for nothing. claw-1/3/5 decline cardtable.
+			const canaryRepo = capability(id)?.jobProof?.repo;
+			if (canaryRepo && canaryRepo in (m.excludeRepos ?? {})) {
+				outcomes.push({
+					node: name,
+					capability: id,
+					status: 'skipped',
+					reason: `${canaryRepo} is excluded on this node`,
+				});
+				continue;
+			}
 			if (!qualifiesForCanary(id, m)) {
 				outcomes.push({
 					node: name,
@@ -152,15 +166,18 @@ export async function proveWorkloads(ctx) {
 				});
 				continue;
 			}
+			// Any recorded verdict, not only a pass, waits out `--due`: a FAIL is
+			// retried on the same cadence a pass is re-proved, so a scheduled
+			// `--prove` does not drain a failing node every night.
 			const existing = readProof(name, id, { dir: stateDir() });
-			if (existing?.verdict === 'pass') {
+			if (existing) {
 				const ageDays = (Date.now() - Date.parse(existing.at)) / 86_400_000;
 				if (Number.isFinite(ageDays) && ageDays <= DUE_DAYS) {
 					outcomes.push({
 						node: name,
 						capability: id,
 						status: 'not-due',
-						reason: `last pass ${existing.at} (${ageDays.toFixed(1)}/${DUE_DAYS}d)`,
+						reason: `last ${existing.verdict} ${existing.at} (${ageDays.toFixed(1)}/${DUE_DAYS}d)`,
 					});
 					continue;
 				}
@@ -184,6 +201,14 @@ export function printProveResults(ctx, proveResults) {
 		} else if (p.status === 'error') {
 			ctx.findings++;
 			log(`   ERROR: ${p.capability}@${p.node} — ${p.reason}`);
+		} else if (p.status === 'deferred') {
+			// DUE and not run: the node could not be drained or never went quiet.
+			// A finding, because the label expires 30 days after its last pass
+			// whether or not anyone got round to re-proving it.
+			ctx.findings++;
+			log(
+				`   DEFERRED: ${p.capability}@${p.node} — ${p.reason}; the proof is due and was not re-run`
+			);
 		} else if (p.status === 'inconclusive') {
 			// Nothing recorded, and nothing proven: a finding, never a quiet pass.
 			ctx.findings++;
