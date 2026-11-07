@@ -3,7 +3,7 @@
 // tsc against a fixture package; nothing here reads a consumer's repo.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -178,4 +178,11 @@ test('the mgmt-api surface: its bindings come back keyed like a local read; anyt
 	);
 	await assert.rejects(surfaceFromUrl('u', 'k', fake(502, '<html>bad gateway')), /not JSON/);
 	await assert.rejects(surfaceFromUrl('u', 'k', fake(200, { success: true })), /HTTP 200/);
+});
+
+test('consumer-imports.d.mts declares exactly what the module exports (mgmt-api type-checks against it)', async () => {
+	const mod = await import('./lib/consumer-imports.mjs');
+	const dts = readFileSync(new URL('./lib/consumer-imports.d.mts', import.meta.url), 'utf8');
+	const declared = [...dts.matchAll(/^export declare (?:const|function) (\w+)/gm)].map((m) => m[1]);
+	assert.deepEqual(declared.sort(), Object.keys(mod).sort());
 });
