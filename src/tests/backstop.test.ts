@@ -546,3 +546,14 @@ test('isHostIdle: quiet on load AND memory; null (could not read) is never idle'
 	assert.equal(isHostIdle({ load1: 1, cores: 12, memAvailableMb: 4_000 }), false, 'memory');
 	assert.equal(isHostIdle(null), false);
 });
+
+// 2026-11-07: hokon's on-demand JIT runners carry hadoku-builder from their
+// mint, and GitHub refuses to edit a JIT runner's labels (422 "Cannot remove
+// read-only label"). The demote failed every tick and re-swept the fleet.
+test('a JIT registration is never relabelled: its labels are fixed at mint', () => {
+	for (const hasBuilder of [true, false])
+		for (const online of [true, false])
+			for (const wanted of [true, false])
+				assert.equal(backstopLabelWrite({ hasBuilder, online, jit: true }, wanted), null);
+	assert.equal(backstopLabelWrite({ hasBuilder: true, online: true, jit: false }, false), 'demote');
+});

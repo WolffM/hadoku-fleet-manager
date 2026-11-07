@@ -9,6 +9,7 @@
  */
 import { logger } from '../host.js';
 import { ghWrite, type GhRunner } from '../lib/github-client.js';
+import { JIT_PREFIX } from '../lib/jit-naming.js';
 import { backstopLabelWrite } from './backstop.js';
 import { nodeOf } from './census.js';
 import { BUILDER_LABEL } from '../lib/capability-registry-ids.js';
@@ -57,7 +58,11 @@ export async function applyBackstopLabels(args: {
 		// ONE PREDICATE, shared with the fan-out — see `backstopLabelWrite`.
 		// Spelled out twice, the two came to disagree about offline runners.
 		const write = backstopLabelWrite(
-			{ hasBuilder: has(runner, BUILDER_LABEL), online: runner.status === 'online' },
+			{
+				hasBuilder: has(runner, BUILDER_LABEL),
+				online: runner.status === 'online',
+				jit: runner.name.startsWith(JIT_PREFIX),
+			},
 			nodeWanted
 		);
 		const missing = [BUILDER_LABEL];

@@ -8,6 +8,7 @@
 import { ghWrite, readRunnerListingShared, SELF_REPO } from '../lib/github-client.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
 import { BACKSTOP_LABEL, BUILDER_LABEL, PM2_HOST_LABEL } from '../lib/capability-registry-ids.js';
+import { JIT_PREFIX } from '../lib/jit-naming.js';
 import { backstopLabelWrite } from './backstop.js';
 
 /**
@@ -80,6 +81,7 @@ export async function syncBackstopAcrossFleet(
 				{
 					hasBuilder: labels.some((l) => l.name === BUILDER_LABEL),
 					online: r.status === 'online',
+					jit: r.name.startsWith(JIT_PREFIX),
 				},
 				on && !unsafe(r.name)
 			);

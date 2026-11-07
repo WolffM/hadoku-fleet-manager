@@ -398,14 +398,23 @@ export type BackstopLabelWrite = 'promote' | 'demote' | null;
  *     took seven `hadoku-builder` jobs on that one repo before an unrelated
  *     restart forced a fresh converge at 21:47Z.
  *
+ * A JIT registration is never written. Its labels are fixed when it is minted
+ * (GitHub answers 422 "Cannot remove read-only label"), it serves one job and
+ * is gone, and the mint already decided what it carries. The fan-out used to
+ * try anyway: from 2026-11-07 18:35Z every tick logged "demote FAILED … those
+ * repos queue until this succeeds" about hokon's on-demand cardtable runners,
+ * and a failure there leaves the fleet state unrecorded, so the next tick
+ * re-read every repo's listing to fail the same way.
+ *
  * Pure and in this file so the rule is under test on its own terms, rather than
  * only reachable by driving a whole tick against a mocked `fetch` — the same
  * reason `decideBackstop` was extracted here in the first place.
  */
 export function backstopLabelWrite(
-	reg: { hasBuilder: boolean; online: boolean },
+	reg: { hasBuilder: boolean; online: boolean; jit?: boolean },
 	wanted: boolean
 ): BackstopLabelWrite {
+	if (reg.jit) return null; // labels fixed at mint; see above
 	if (wanted === reg.hasBuilder) return null; // already in the desired state
 	if (wanted) return reg.online ? 'promote' : null;
 	return 'demote';
