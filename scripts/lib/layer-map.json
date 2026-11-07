@@ -2341,6 +2341,13 @@
     "section": "Split #8 (wave 5k lane A, pure move): check-identity-model.mjs's G1..G8 rules, repo/file discovery and scanRepo orchestration, plus the generic text-parsing primitives they read through. Same bucket as the CLI they were cut from \u2014 \"observation: check-*\" \u2014 since cut (iii) treats observation as one flat layer and core/run does not gate it there."
   },
   {
+    "glob": "scripts/lib/identity-stages.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "fleet-manager#67: which identity-model rules are advisory and which enforce — the gate's own rule table, beside the rules it stages."
+  },
+  {
     "glob": "scripts/lib/identity-source-parse.mjs",
     "layer": "domain",
     "domain": "observation",

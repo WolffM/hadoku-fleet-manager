@@ -67,6 +67,7 @@ import { allRepos } from './lib/fleet-roster.mjs';
 import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import { REPO_ROOT, scanRepo } from './lib/identity-rules.mjs';
+import { overdueAdvisories, splitByStage } from './lib/identity-stages.mjs';
 import { OWNER_MODULE, OWNER_IMPORT, EDGE_INDEX } from './lib/identity-constants.mjs';
 import { checkoutFreshness, siblingRepos } from './lib/identity-scan.mjs';
 
@@ -214,6 +215,16 @@ for (const [entry, absorbed] of hitEntries) {
 	}
 }
 
+// STAGED RULES (lib/identity-stages.mjs, fleet-manager#67). A rule's first
+// release reports without failing; only an ENFORCED rule's findings reach the
+// exit code. Split after the allowlist and its counts, so an exemption absorbs
+// an advisory finding exactly as it would an enforced one.
+const staged = splitByStage(violations);
+const advisories = staged.advisory;
+violations.length = 0;
+violations.push(...staged.enforced);
+const overdue = overdueAdvisories();
+
 // A stale exemption is a rule nobody is reading. Only enforced on a COMPLETE
 // scan — and complete means every roster repo was actually opened, not merely
 // that --fleet was passed. Run from a worktree before 2026-08-28 this scanned
@@ -245,6 +256,9 @@ if (JSON_OUT) {
 		fleet: FLEET,
 		scanned,
 		violations,
+		// Additive to the contract: never part of the exit code.
+		advisories,
+		overdueAdvisories: overdue,
 		staleExemptions: stale.map(describeStale),
 		missingCheckouts,
 		staleCheckouts,
@@ -260,6 +274,15 @@ if (JSON_OUT) {
 	reportWallClock();
 	process.exit(violations.length || stale.length || missingCheckouts.length || rosterError ? 1 : 0);
 }
+
+if (advisories.length) {
+	console.error(
+		`\n⚠ ${advisories.length} finding(s) from ADVISORY rule(s) — reported, not failing; they enforce next release:\n`
+	);
+	for (const v of advisories) console.error(`  ${v.check} ${v.file}:${v.line}  ${v.message}`);
+	console.error('');
+}
+for (const o of overdue) console.error(`⚠ OVERDUE: ${o}`);
 
 if (rosterError) console.error(`\n✗ ${rosterError}\n`);
 
