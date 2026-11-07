@@ -160,6 +160,26 @@ test('a scratch-branch canary is dispatched and listed on canary/<node>-*, never
 	assert.deepEqual([...w.branches.keys()], ['main'], 'the scratch branch is gone');
 });
 
+// 2026-11-07: forge.yml ran nothing for claw-9's canary because claw-8's had
+// just gone green on the same sha with the same inputs.
+test("a scratch-branch canary runs on a commit of its own, so a workflow's sha dedupe cannot skip it", async () => {
+	const w = world();
+	const r = await proveJob(SCRATCH, w.deps(node()));
+	assert.equal(r.verdict, 'pass', JSON.stringify(r.findings));
+	const mainSha = w.branches.get('main');
+	assert.equal(w.log.commits.length, 1);
+	assert.deepEqual(w.log.commits[0], {
+		message: 'fleet proof canary: claw-8',
+		tree: `tree-of-${mainSha}`,
+		parents: [mainSha],
+	});
+	const refWrite = w.log.writes.indexOf('POST /git/refs');
+	assert.ok(
+		w.log.writes.indexOf('POST /git/commits') < refWrite,
+		'the commit is made before the branch'
+	);
+});
+
 test('the scratch branch is deleted on a fail, a lost race and an abort too', async () => {
 	for (const [label, sc] of [
 		['fail', { conclusion: 'failure' }],

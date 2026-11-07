@@ -242,9 +242,15 @@ export type DispatchRefOutcome =
 
 /**
  * The branch the run is actually dispatched on: `spec.ref` itself, or a
- * fresh scratch branch made from its head sha when `spec.scratchBranch`
- * asks for one — so a canary job can carry a label nothing else answers
- * without a real branch push.
+ * fresh scratch branch when `spec.scratchBranch` asks for one — so a canary
+ * job can carry a label nothing else answers without a real branch push.
+ *
+ * The scratch branch points at a COMMIT OF ITS OWN: the ref's tree, with its
+ * head as the only parent. Not at the head itself. A workflow may dedupe a
+ * dispatch by sha and inputs, and a per-node canary differs only in
+ * `runs_on`: on 2026-11-07 cardtable's forge.yml ran nothing for claw-9's
+ * jdk21 canary because claw-8's had just gone green on the same sha with the
+ * same inputs. A unique sha is a proof nothing can mistake for another node's.
  */
 export async function resolveDispatchRef(
 	spec: ProveSpec,
@@ -269,12 +275,39 @@ export async function resolveDispatchRef(
 		return { ok: false, scratch: null };
 	}
 	const name = scratchBranchName(spec.node, d.now());
+	let tree: string | undefined;
+	try {
+		const head = (await read(`commit ${sha}`, () =>
+			d.gh.get(`/git/commits/${sha}`, NO_TOKEN, spec.repo)
+		)) as { tree?: { sha?: string } } | null;
+		tree = head?.tree?.sha;
+	} catch (e) {
+		find('scratch-commit', e instanceof Error ? e.message : String(e));
+		return { ok: false, scratch: null };
+	}
+	const commit = tree
+		? await d.gh.write(
+				'POST',
+				'/git/commits',
+				NO_TOKEN,
+				{ message: `fleet proof canary: ${spec.node}`, tree, parents: [sha] },
+				spec.repo
+			)
+		: null;
+	const own = (commit?.body as { sha?: string } | undefined)?.sha;
+	if (!commit?.ok || !own) {
+		find(
+			'scratch-commit',
+			`could not make ${name}'s own commit on ${spec.ref}: ${tree ? `HTTP ${commit?.status}` : 'no tree sha'}`
+		);
+		return { ok: false, scratch: null };
+	}
 	// Before the write, so a half-made branch is still torn down.
 	const made = await d.gh.write(
 		'POST',
 		'/git/refs',
 		NO_TOKEN,
-		{ ref: `refs/heads/${name}`, sha },
+		{ ref: `refs/heads/${name}`, sha: own },
 		spec.repo
 	);
 	if (!made.ok) {

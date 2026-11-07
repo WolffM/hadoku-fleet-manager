@@ -449,6 +449,8 @@ case "$*" in
     echo '{"encoded_jit_config":"${jitConfig}"}' ;;
   *dispatches*) cat >/dev/null; touch ${JSON.stringify(dispatched)}; exit 0 ;;
   *git/ref/heads/main*) echo '{"object":{"sha":"ddda60a"}}' ;;
+  *git/commits/*) echo '{"sha":"ddda60a","tree":{"sha":"7ree000"}}' ;;
+  *git/commits*) cat >/dev/null; echo '{"sha":"c0ffee1"}' ;;
   *git/refs/heads/canary/*) exit 0 ;;
   *git/refs*) cat >/dev/null; echo '{}' ;;
   *-X\\ DELETE*)

@@ -130,6 +130,7 @@ export function world(sc: Scenario = {}) {
 		dispatches: 0,
 		dispatchBodies: [] as unknown[],
 		mintBodies: [] as { labels: string[] }[],
+		commits: [] as { message?: string; tree: string; parents: string[] }[],
 		/** The last COMPLETED job object the jobs API handed out. */
 		completedJob: null as null | Record<string, unknown>,
 		sh: [] as string[],
@@ -213,6 +214,8 @@ export function world(sc: Scenario = {}) {
 						labels: x.labels.map((name) => ({ name })),
 					})),
 				};
+			const commit = /^\/git\/commits\/(\w+)$/.exec(path);
+			if (commit) return { sha: commit[1], tree: { sha: `tree-of-${commit[1]}` } };
 			if (path.startsWith('/git/ref/heads/')) {
 				const sha = branches.get(decodeURIComponent(path.slice('/git/ref/heads/'.length)));
 				if (!sha) throw new Error(`GET ${path}: HTTP 404`);
@@ -267,6 +270,15 @@ export function world(sc: Scenario = {}) {
 					done: false,
 				});
 				return { ok: true, status: 204 };
+			}
+			if (method === 'POST' && path === '/git/commits') {
+				const b = body as { message?: string; tree: string; parents: string[] };
+				log.commits.push(b);
+				return {
+					ok: true,
+					status: 201,
+					body: { sha: `own-${log.commits.length}-${b.parents[0]}` },
+				};
 			}
 			if (method === 'POST' && path === '/git/refs') {
 				if (sc.branchCreateStatus) return { ok: false, status: sc.branchCreateStatus };
