@@ -73,6 +73,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
+import { cpus, loadavg } from 'node:os';
 
 import { blankComments } from './blank-comments.mjs';
 
@@ -138,6 +139,92 @@ function childEnv(days) {
 /** The compiled suite, which `pnpm test` rebuilds with `tsc` before this runs. */
 const COMPILED = join(ROOT, 'dist', 'tests');
 
+/**
+ * One run of the compiled suite with `Date` moved `days` ahead (0 = today's
+ * clock, the shim still loaded so the two runs differ only in the shift).
+ * `names`, when given, narrows it to those tests.
+ */
+function runSuite(days, names) {
+	const r = spawnSync(
+		process.execPath,
+		[
+			'--disable-warning=ExperimentalWarning',
+			// ASK FOR THE REPORTER. Do not inherit it.
+			//
+			// `node --test` picks its default from the environment, and the default
+			// CHANGED between majors: Node 22 emits TAP when stdout is not a TTY,
+			// Node 24 emits `spec` regardless. This guard is always spawned onto a
+			// pipe, so it read `spec` on the two Node 24 workstations it was written
+			// and reviewed on, and TAP in CI, which then pinned `node-version: '22'`. The
+			// `ℹ pass N` line it looks for below does not exist in TAP — that is
+			// `# pass N` — so the non-vacuity assertion fired on a child that had
+			// run the whole suite perfectly, and reddened main for the entire wave.
+			//
+			// Verified on both: with this flag, v22.23.1 and v24.18.0 emit the same
+			// `ℹ pass N` summary and the same `✖ <name>` failure lines.
+			//
+			// `spec` rather than `tap` because the failure message below is only as
+			// good as the names it can extract, and TAP collapses a failing FILE to
+			// one `not ok <path>` with the case names dropped. The destination is
+			// spelled out for the same reason as the reporter: today it defaults to
+			// stdout, and "today's default" is precisely what broke this.
+			'--test-reporter=spec',
+			'--test-reporter-destination=stdout',
+			'--import',
+			SHIM_URL,
+			'--import',
+			'./dist/tests/install-test-host.js',
+			...namePatterns(names),
+			'--test',
+			'dist/tests/**/*.test.js',
+		],
+		{ cwd: ROOT, encoding: 'utf8', env: childEnv(days) }
+	);
+	const out = `${r.stdout ?? ''}`;
+	return { r, out, passed: /^ℹ pass (\d+)$/m.exec(out), failed: failedNames(out) };
+}
+
+/** Each failing test's name, read off the `spec` reporter the child is pinned to. */
+function failedNames(out) {
+	return [
+		...new Set(
+			out
+				.split('\n')
+				.filter((l) => l.includes('✖'))
+				.map((l) =>
+					l
+						.replace('✖', '')
+						.replace(/\s*\([0-9.]+ms\)\s*$/, '')
+						.trim()
+				)
+				.filter((l) => l && l !== 'failing tests:')
+		),
+	];
+}
+
+/** `--test-name-pattern` for each exact name; none = the whole suite. */
+function namePatterns(names) {
+	return (names ?? []).map(
+		(n) => `--test-name-pattern=^${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`
+	);
+}
+
+/**
+ * The box's load, read when a run fails: a timing test that loses its race
+ * under load is the commonest wrong reason for a red here (5b02cdc, 11-02,
+ * claw-1: the +30-day run took 146s).
+ */
+function measuredLoad() {
+	const [one] = loadavg();
+	let psi;
+	try {
+		psi = /some avg10=([0-9.]+)/.exec(readFileSync('/proc/pressure/cpu', 'utf8'))?.[1] ?? 'absent';
+	} catch (err) {
+		psi = `unreadable (${err.code ?? err.message})`;
+	}
+	return `load1 ${one.toFixed(2)} on ${cpus().length} cpus, cpu PSI some avg10 ${psi}, HOST_PACE ${process.env.HOST_PACE ?? 'unset'}`;
+}
+
 for (const days of SHIFTS) {
 	test(`src/tests passes with the clock ${days} days ahead`, () => {
 		// A missing build is "I could not look", and that fails. `pnpm test` runs
@@ -151,41 +238,6 @@ for (const days of SHIFTS) {
 				`cannot report a pass it did not observe.`
 		);
 
-		const r = spawnSync(
-			process.execPath,
-			[
-				'--disable-warning=ExperimentalWarning',
-				// ASK FOR THE REPORTER. Do not inherit it.
-				//
-				// `node --test` picks its default from the environment, and the default
-				// CHANGED between majors: Node 22 emits TAP when stdout is not a TTY,
-				// Node 24 emits `spec` regardless. This guard is always spawned onto a
-				// pipe, so it read `spec` on the two Node 24 workstations it was written
-				// and reviewed on, and TAP in CI, which then pinned `node-version: '22'`. The
-				// `ℹ pass N` line it looks for below does not exist in TAP — that is
-				// `# pass N` — so the non-vacuity assertion fired on a child that had
-				// run the whole suite perfectly, and reddened main for the entire wave.
-				//
-				// Verified on both: with this flag, v22.23.1 and v24.18.0 emit the same
-				// `ℹ pass N` summary and the same `✖ <name>` failure lines.
-				//
-				// `spec` rather than `tap` because the failure message below is only as
-				// good as the names it can extract, and TAP collapses a failing FILE to
-				// one `not ok <path>` with the case names dropped. The destination is
-				// spelled out for the same reason as the reporter: today it defaults to
-				// stdout, and "today's default" is precisely what broke this.
-				'--test-reporter=spec',
-				'--test-reporter-destination=stdout',
-				'--import',
-				SHIM_URL,
-				'--import',
-				'./dist/tests/install-test-host.js',
-				'--test',
-				'dist/tests/**/*.test.js',
-			],
-			{ cwd: ROOT, encoding: 'utf8', env: childEnv(days) }
-		);
-
 		// EXIT 0 IS NOT ENOUGH, and this is not a hypothetical. The first draft
 		// passed `process.env` straight through, which carries the OUTER runner's
 		// `NODE_TEST_CONTEXT=child-v8`. A `node --test` that inherits it reports
@@ -193,8 +245,7 @@ for (const days of SHIFTS) {
 		// shifts went green in 26ms — a whole suite takes about a second — so the
 		// guard was reporting a pass for a run that never happened, which is the
 		// exact shape of failure it exists to catch. Read the count, not the code.
-		const out = `${r.stdout ?? ''}`;
-		const passed = /^ℹ pass (\d+)$/m.exec(out);
+		const { r, out, passed, failed } = runSuite(days);
 
 		// "The child ran nothing" and "the child answered in a format this cannot
 		// read" are two different jobs, and saying so is the difference between a
@@ -217,39 +268,55 @@ for (const days of SHIFTS) {
 		);
 
 		if (r.status !== 0) {
+			// A file that fails to LOAD prints its reason on stderr and nowhere the
+			// reporter can see it. Dropping stderr would turn a syntax error into
+			// "a fixture has an expiry date", which is a wrong diagnosis rather
+			// than a missing one.
+			const stderrTail = r.stderr ? `\n--- child stderr ---\n${`${r.stderr}`.slice(-2000)}` : '';
+			if (!failed.length)
+				assert.fail(
+					`The shifted run at +${days} days exited ${r.status} and the reporter named nothing.${stderrTail}`
+				);
+
+			// A DATE BOMB IS DETERMINISTIC; A RACE IS NOT. On 11-02 this guard
+			// reverted 5b02cdc for "a fixture pinned to an absolute date" when the
+			// one failing test was a timer race that lost under load on claw-1 and
+			// has no date in it (fleet-manager#68). So a name only counts when it
+			// fails AGAIN on the shifted clock and PASSES on today's. Each re-run is
+			// only the failing names, so it costs seconds, not the suite.
+			const load = measuredLoad();
+			const again = runSuite(days, failed);
+			const persistent = failed.filter((n) => again.failed.includes(n));
+			if (
+				!persistent.length &&
+				again.r.status === 0 &&
+				Number(again.passed?.[1]) >= failed.length
+			) {
+				console.log(
+					`clock guard: ${failed.length} test(s) failed once at +${days} days and passed on re-run, ` +
+						`so they are timing, not a date (${load}):\n  ${failed.join('\n  ')}`
+				);
+				return;
+			}
+			const suspects = persistent.length ? persistent : failed;
+			const today = runSuite(0, suspects);
+			const bombs = suspects.filter((n) => !today.failed.includes(n));
+			if (!bombs.length)
+				assert.fail(
+					`These tests fail at +${days} days AND on today's clock, so the clock is not ` +
+						`what breaks them; the main suite run says why (${load}):\n` +
+						suspects.join('\n') +
+						stderrTail
+				);
 			// Name the tests. A bare exit code here reproduces the thing that made
-			// #27 expensive: a gate that says something is wrong without saying what,
-			// so the finding has to be re-derived by hand. This reads the `spec`
-			// reporter the child was pinned to above; when a file fails to LOAD no
-			// reporter can name the cases inside it, so the stderr tail below is
-			// appended rather than assumed redundant.
-			const failed = [
-				...new Set(
-					out
-						.split('\n')
-						.filter((l) => l.includes('✖'))
-						.map((l) =>
-							l
-								.replace('✖', '')
-								.replace(/\s*\([0-9.]+ms\)\s*$/, '')
-								.trim()
-						)
-						.filter((l) => l && l !== 'failing tests:')
-				),
-			];
+			// #27 expensive: a gate that says something is wrong without saying what.
 			assert.fail(
-				`The suite passes today and fails with the clock ${days} days ahead, which ` +
+				`The suite passes today and fails with the clock ${days} days ahead, twice, which ` +
 					`means a fixture is pinned to an absolute date that the retention cutoff ` +
 					`will reach on its own. Anchor it to \`Date.now()\` the way 473dfdb did ` +
 					`(see the header of src/tests/warm-cache.test.ts).\n` +
-					(failed.length
-						? failed.join('\n')
-						: `exit ${r.status}, and the reporter named nothing.`) +
-					// A file that fails to LOAD prints its reason here and nowhere the
-					// reporter can see it. Dropping stderr would turn a syntax error into
-					// "a fixture has an expiry date", which is a wrong diagnosis rather
-					// than a missing one.
-					(r.stderr ? `\n--- child stderr ---\n${`${r.stderr}`.slice(-2000)}` : '')
+					bombs.join('\n') +
+					stderrTail
 			);
 		}
 	});

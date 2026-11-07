@@ -44,6 +44,7 @@ import {
 	runnerListings,
 } from './helpers/runner-health-rig.js';
 import { minutesAgo, FLEET_ALL_UP } from './helpers/runner-health-fixtures.js';
+import { scaledMs } from './helpers/host-pace.js';
 
 installRunnerHealthRig();
 
@@ -247,7 +248,14 @@ test('start: a tick that falls in a spent budget is re-run just past the reset, 
 		assert.notEqual(getRunnerHealthSnapshot()?.runnersChecked, true, 'the blind tick read nothing');
 		spent = false;
 		const blindReads = reads;
-		await new Promise((r) => setTimeout(r, resetAtSec * 1000 - Date.now() + 200));
+		// Wait for the re-tick itself, not a fixed 200ms past the reset: on 11-02
+		// claw-1 under load had not started it yet, and the push was reverted
+		// (fleet-manager#68). The bound is seconds; the next interval tick is
+		// minutes away, so "just past the reset" is still what this proves.
+		const deadline = resetAtSec * 1000 + scaledMs(3000);
+		while (reads <= blindReads && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 25));
+		}
 		await __awaitInFlightTickForTesting();
 		assert.ok(reads > blindReads, 'a tick went out once the budget reset');
 		assert.equal(getRunnerHealthSnapshot()?.runnersChecked, true, 'and it read the fleet');
