@@ -44,6 +44,7 @@ import { readManifestState } from './lib/manifest.js';
 import { isLocalNode } from './lib/node-identity.js';
 import { isBackstopNode, type RoleBearingNode } from './lib/node-role.js';
 import { nodeShell } from './node-shell.js';
+import { CI_WORKERS_FN } from './perf-probe.js';
 import { appendActiveRow, perfDir, readActiveRows } from './perf-sample-store.js';
 import { readDrain, type DrainState } from './runners/drain.js';
 import {
@@ -80,9 +81,9 @@ const OUT_OF_SERVICE = new Set(['maintenance', 'training', 'reboot']);
  * The node-side half. Every `${...}` here is a JavaScript constant interpolated
  * on purpose; the shell parts must never use `${...}` (it would be read as JS).
  */
-export const ACTIVE_SCRIPT = String.raw`w() { pgrep -ax Runner.Worker 2>/dev/null | grep -c " spawnclient "; }
+export const ACTIVE_SCRIPT = String.raw`${CI_WORKERS_FN}
 psi() { awk '{split($2,a,"="); print a[2]; exit}' /proc/pressure/$1 2>/dev/null; }
-wb=$(w); iob=$(psi io); cpb=$(psi cpu)
+wb=$(ciw); iob=$(psi io); cpb=$(psi cpu)
 [ -z "$iob" ] && iob=100; [ -z "$cpb" ] && cpb=100
 echo "workersBefore=$wb"; echo "ioSome10=$iob"; echo "cpuSome10=$cpb"
 if [ "$wb" != 0 ] || ! awk -v i="$iob" -v c="$cpb" -v mi=${IDLE_IO_PCT} -v mc=${IDLE_CPU_PCT} 'BEGIN{exit !(i<mi && c<mc)}'; then echo "idle=0"; echo "end=1"; exit 0; fi
@@ -90,7 +91,7 @@ echo "idle=1"
 D="$HOME/.cache/fleet-perf-active"; rm -rf "$D"; mkdir -p "$D" || { echo "why=cannot create $D"; echo "end=1"; exit 0; }
 mon=""; trap 'rm -rf "$D"; [ -n "$mon" ] && kill "$mon" 2>/dev/null' EXIT
 echo 0 > "$D/maxw"
-( m=0; while :; do c=$(w); if [ "$c" -gt "$m" ]; then m=$c; echo "$m" > "$D/maxw"; fi; sleep 1; done ) & mon=$!
+( m=0; while :; do c=$(ciw); if [ "$c" -gt "$m" ]; then m=$c; echo "$m" > "$D/maxw"; fi; sleep 1; done ) & mon=$!
 avail=$(df --output=avail -k "$D" | tail -n1 | tr -dc 0-9); [ -z "$avail" ] && avail=0
 if [ "$avail" -lt 1048576 ]; then echo "skip=under 1 GiB free on the root disk"; echo "end=1"; exit 0; fi
 echo "fs=$(df --output=fstype "$D" | tail -n1)"
@@ -427,11 +428,7 @@ const liveDeps: ActiveDeps = {
 		};
 	},
 	workers: async (node) => {
-		const [bin, argv] = nodeShell(
-			node,
-			'admin',
-			'pgrep -ax Runner.Worker 2>/dev/null | grep -c " spawnclient "'
-		);
+		const [bin, argv] = nodeShell(node, 'admin', `${CI_WORKERS_FN}; ciw`);
 		const r = await run(bin, argv, null, 20_000);
 		return num(r.stdout.trim());
 	},

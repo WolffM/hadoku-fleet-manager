@@ -8,9 +8,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 import {
+	CI_WORKERS_FN,
 	parsePerfProbe,
 	PERF_PROBE_SCRIPT,
 	pingStats,
@@ -267,5 +268,52 @@ void test('the probe script itself runs under bash on this machine and parses wh
 		'number',
 		'avg300 is the 4th field of /proc/pressure'
 	);
-	assert.equal(typeof r.fields.workers, 'number');
+	// A number where this machine allows `sudo -n`, unknown where it does not
+	// (a CI runner's user): never a 0 it could not see (fleet-manager#69).
+	const canSudo = spawnSync('sudo', ['-n', 'true']).status === 0;
+	assert.equal(typeof r.fields.workers, canSudo ? 'number' : 'object');
+	if (!canSudo) assert.equal(r.fields.workers, null);
+});
+
+/** Run `ciw` with a fake `sudo` (allowing or refusing) and a `pgrep` that sees jobs only through it. */
+function ciwWith(sudo: 'works' | 'refused'): string {
+	const root = mkdtempSync(join(tmpdir(), 'ciw-'));
+	try {
+		const bin = join(root, 'bin');
+		mkdirSync(bin);
+		writeFileSync(
+			join(bin, 'sudo'),
+			sudo === 'works'
+				? '#!/bin/sh\n[ "$1" = -n ] && shift\nSUDO=1 exec "$@"\n'
+				: '#!/bin/sh\nexit 1\n',
+			{ mode: 0o755 }
+		);
+		writeFileSync(
+			join(bin, 'pgrep'),
+			[
+				'#!/bin/sh',
+				'[ -n "$SUDO" ] || exit 1',
+				'echo "11 /x/bin/Runner.Worker spawnclient 101 102"',
+				'echo "12 /x/bin/Runner.Worker spawnclient 103 104"',
+				'echo "13 /x/bin/Runner.Worker --version"',
+			].join('\n') + '\n',
+			{ mode: 0o755 }
+		);
+		return execFileSync('bash', ['-c', `${CI_WORKERS_FN}\nprintf '%s' "$(ciw)"`], {
+			env: { PATH: `${bin}:/usr/bin:/bin` },
+		}).toString();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}
+
+// fleet-manager#69: claw-1/2/3 mount /proc hidepid=invisible, so the admin
+// probe's own pgrep counted 0 jobs there with jobs live.
+test('CI jobs are counted through sudo, and a refused sudo is unknown, never 0', () => {
+	assert.equal(ciwWith('works'), '2');
+	assert.equal(ciwWith('refused'), '');
+	const parsed = parsePerfProbe('workers=\nend=1\n');
+	assert.ok(parsed.ok);
+	assert.equal(parsed.fields.workers, null);
+	assert.match(PERF_PROBE_SCRIPT, /^echo "workers=\$\(ciw\)"$/m);
 });

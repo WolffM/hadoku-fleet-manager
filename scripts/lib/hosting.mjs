@@ -68,7 +68,7 @@ import {
 import { hostingSliceName } from '../../dist/lib/hosting-slice.js';
 import { ciUnitProperties } from '../../dist/runners/ci-unit-properties.js';
 import { runtimeFor } from './hosting-runtimes.mjs';
-import { CI_RANK_SCRIPT } from './hosting-ci-rank.mjs';
+import { CI_OBSERVE_SCRIPT } from './hosting-ci-rank.mjs';
 import { isBackstopNode } from '../../dist/lib/node-role.js';
 
 /**
@@ -609,12 +609,6 @@ echo "memTotalMb=$(awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo)"
 echo "nproc=$(nproc 2>/dev/null)"
 echo "uptimeSec=$(cut -d. -f1 /proc/uptime)"
 echo "bootId=$(r /proc/sys/kernel/random/boot_id)"
-# By PROCESS NAME (-x), never the command line (-f): mgmt-api's own probes run
-# here as \`bash -c '... pgrep -ax Runner.Worker ...'\`, in the ssh session's
-# scope at oom 0, and a command-line match counted them as unranked CI
-# (claw-9, 2026-10-27 06:57Z, during cardtable's A6).
-echo "ciWorkers=$(pgrep -cx 'Runner\\.Worker' || true)"
-echo "ciListeners=$(pgrep -cx 'Runner\\.Listener' || true)"
 c=/sys/fs/cgroup$SLICE_CG
 p=/sys/fs/cgroup$PARENT_CG
 if [ -d "$c" ]; then
@@ -654,12 +648,11 @@ pid=$(sudo -n ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | he
 echo "listenerPid=$pid"
 echo "listenerAddrs=$(ss -ltnH "sport = :$PORT" 2>/dev/null | awk '{print $4}' | tr '\n' ' ')"
 if [ -n "$pid" ]; then
-	echo "listenerCgroup=$(cut -d: -f3 "/proc/$pid/cgroup" 2>/dev/null)"
-	echo "listenerUid=$(awk '/^Uid:/{print $2}' "/proc/$pid/status" 2>/dev/null)"
+	echo "listenerCgroup=$(sudo -n cat "/proc/$pid/cgroup" 2>/dev/null | cut -d: -f3)"
+	echo "listenerUid=$(sudo -n cat "/proc/$pid/status" 2>/dev/null | awk '/^Uid:/{print $2}')"
 	echo "listenerOom=$(sudo -n cat "/proc/$pid/oom_score_adj" 2>/dev/null)"
 fi
-PROC=/proc
-${CI_RANK_SCRIPT}${CI_SLICE_CG}
+${CI_OBSERVE_SCRIPT}${CI_SLICE_CG}
 if [ -n "$CI_CG" ]; then
 	echo "ciSliceMax=$(r "$CI_CG/memory.max")"
 	echo "ciSliceHigh=$(r "$CI_CG/memory.high")"

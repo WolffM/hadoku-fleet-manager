@@ -25,11 +25,17 @@ import { CI_OOM_SCORE_ADJ } from '../../dist/runners/hosting-record.js';
  * went red on claw-4/6/8 for one tick each. The test is the process's own
  * argv, not where it runs: a listener started by hand with a real `run` in a
  * session scope is CI outside the slice, and must still be found.
+ *
+ * Every read goes through `$SEE`: `sudo -n` on a node, empty in the test.
+ * claw-1/2/3 mount /proc `hidepid=invisible`, so admin's own `pgrep` and
+ * `cat /proc/<pid>/…` cannot see ci's processes there and the loop counted
+ * none with jobs live (fleet-manager#69). The caller checks `$SEE` works
+ * first and emits nothing otherwise, so a node it cannot look at reads null.
  */
 export const CI_RANK_SCRIPT = `n=0; out=0; low=0; min=; gone=0; tool=0
-for q in $(pgrep -x 'Runner\\.(Listener|Worker)'); do
-	cg=$(cat "$PROC/$q/cgroup" 2>/dev/null) && a=$(cat "$PROC/$q/oom_score_adj" 2>/dev/null) && [ -n "$a" ] &&
-		argv=$(tr '\\0' ' ' < "$PROC/$q/cmdline" 2>/dev/null) || {
+for q in $($SEE pgrep -x 'Runner\\.(Listener|Worker)'); do
+	cg=$($SEE cat "$PROC/$q/cgroup" 2>/dev/null) && a=$($SEE cat "$PROC/$q/oom_score_adj" 2>/dev/null) && [ -n "$a" ] &&
+		argv=$($SEE cat "$PROC/$q/cmdline" 2>/dev/null | tr '\\0' ' ') && [ -n "$argv" ] || {
 		gone=$((gone+1))
 		continue
 	}
@@ -51,4 +57,21 @@ echo "ciBelowOom=$low"
 echo "ciMinOom=$min"
 echo "ciGone=$gone"
 echo "ciTooling=$tool"
+`;
+
+/**
+ * The observe script's whole CI section: the two counts and the rank loop.
+ * By PROCESS NAME (-x), never the command line (-f): mgmt-api's own probes run
+ * as `bash -c '... pgrep -ax Runner.Worker ...'`, in the ssh session's scope at
+ * oom 0, and a command-line match counted them as unranked CI (claw-9,
+ * 2026-10-27 06:57Z, during cardtable's A6). Through `sudo -n`, for hidepid
+ * (above); without it nothing is printed, so every count reads null ("could
+ * not count"), never 0.
+ */
+export const CI_OBSERVE_SCRIPT = `SEE='sudo -n'
+if $SEE true 2>/dev/null; then
+echo "ciWorkers=$($SEE pgrep -cx 'Runner\\.Worker' || true)"
+echo "ciListeners=$($SEE pgrep -cx 'Runner\\.Listener' || true)"
+PROC=/proc
+${CI_RANK_SCRIPT}fi
 `;

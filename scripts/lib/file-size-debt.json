@@ -6,7 +6,7 @@
   "scripts/ci-throttle.sh": 1036,
   "scripts/deploy-runners-slice.mjs": 1112,
   "scripts/hosting.mjs": 883,
-  "scripts/lib/hosting.mjs": 1133,
+  "scripts/lib/hosting.mjs": 1126,
   "scripts/lib/slice-placement-guard.test.mjs": 2214,
   "scripts/lib/toolchain-floor.mjs": 911,
   "scripts/lib/toolchain-floor.test.mjs": 1439,

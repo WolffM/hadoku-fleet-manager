@@ -23,7 +23,17 @@
  */
 import type { PerfSampleRow, PingStats, PsiReading } from './lib/perf-row.js';
 
-export const PERF_PROBE_SCRIPT = String.raw`r=$(ip -o route show default 2>/dev/null | head -n1)
+/**
+ * `ciw` prints how many CI jobs are running on the node, or NOTHING when it
+ * cannot look. Through `sudo -n`: claw-1/2/3 mount /proc `hidepid=invisible`,
+ * and the admin user these scripts run as cannot see ci's processes there, so
+ * a plain `pgrep` counted 0 with jobs live (fleet-manager#69). Without sudo,
+ * or without pgrep, it prints nothing, which parses to null: unknown, not 0.
+ */
+export const CI_WORKERS_FN = String.raw`ciw() { command -v pgrep >/dev/null 2>&1 && sudo -n true 2>/dev/null || return 0; sudo -n pgrep -ax Runner.Worker 2>/dev/null | grep -c " spawnclient "; }`;
+
+export const PERF_PROBE_SCRIPT = String.raw`${CI_WORKERS_FN}
+r=$(ip -o route show default 2>/dev/null | head -n1)
 i=$(printf '%s\n' "$r" | awk '{for(k=1;k<NF;k++) if($k=="dev"){print $(k+1); exit}}')
 g=$(printf '%s\n' "$r" | awk '{for(k=1;k<NF;k++) if($k=="via"){print $(k+1); exit}}')
 echo "iface=$i"; echo "gw=$g"
@@ -42,7 +52,7 @@ fi
 for p in cpu io memory; do
   [ -r /proc/pressure/$p ] && awk -v p=$p '{split($2,a,"="); split($4,b,"="); print "psi."p"."$1"="a[2]; print "psi300."p"."$1"="b[2]}' /proc/pressure/$p
 done
-command -v pgrep >/dev/null 2>&1 && echo "workers=$(pgrep -ax Runner.Worker 2>/dev/null | grep -c ' spawnclient ')"
+echo "workers=$(ciw)"
 echo "load=$(cut -d' ' -f1-3 /proc/loadavg)"; echo "cores=$(nproc)"
 awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2} /^SwapTotal:/{st=$2} /^SwapFree:/{print "swapUsedKb="st-$2}' /proc/meminfo
 s=$(findmnt -no SOURCE / 2>/dev/null)

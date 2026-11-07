@@ -19,12 +19,14 @@ import { parseCliCommands, TENANT_CONTRACT } from './json-contract.mjs';
 import { NO_TENANT, judgeHosting, parseObserved } from './hosting.mjs';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-/** Source with comments, quoted strings AND template literals blanked: a log line saying "risk:" builds nothing. */
-const read = (rel) =>
-	blankComments(readFileSync(join(ROOT, rel), 'utf8')).replace(
-		/'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/g,
-		"''"
-	);
+/**
+ * Source with comments, quoted strings AND template literals blanked: a log
+ * line saying "risk:" builds nothing. Interpolated code inside a template
+ * stays code. A regex here paired backticks naively, so a nested template
+ * (`${`/${x}`}`) shifted the pairing and one unrelated edit to hosting.mjs's
+ * observe script hid every key below it (fleet-manager#69).
+ */
+const read = (rel) => blankComments(readFileSync(join(ROOT, rel), 'utf8'), { strings: true });
 
 /** Where each subcommand's document is assembled. */
 const PRODUCERS = {

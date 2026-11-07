@@ -939,3 +939,49 @@ test('teardown deletes a CACHE home and the read-back calls a surviving one resi
 		/HOME_IS_CACHE='?0'?/
 	);
 });
+
+/**
+ * Run the whole observe script with a fake `sudo` and `pgrep` first on PATH.
+ * `pgrep` answers like a hidepid node's: Runner processes only through sudo.
+ */
+function observeWithSudo(sudoWorks) {
+	const root = mkdtempSync(join(tmpdir(), 'observe-sudo-'));
+	try {
+		const bin = join(root, 'bin');
+		mkdirSync(bin);
+		writeFileSync(
+			join(bin, 'sudo'),
+			sudoWorks ? '#!/bin/sh\n[ "$1" = -n ] && shift\nSUDO=1 exec "$@"\n' : '#!/bin/sh\nexit 1\n'
+		);
+		writeFileSync(
+			join(bin, 'pgrep'),
+			'#!/bin/sh\n[ -n "$SUDO" ] || { [ "$1" = -cx ] && echo 0; exit 1; }\ncase "$1" in -cx) echo 2;; *) exit 1;; esac\n'
+		);
+		for (const f of ['sudo', 'pgrep']) chmodSync(join(bin, f), 0o755);
+		const out = execFileSync('bash', ['-s'], {
+			input: observeScript(CARDTABLE, 'hadoku'),
+			env: { PATH: `${bin}:/usr/bin:/bin`, HOME: root },
+			timeout: 30_000,
+		}).toString();
+		return parseObserved(out);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}
+
+// fleet-manager#69: claw-1/2/3 mount /proc hidepid=invisible, and the admin
+// observe counted 0 Runner.Worker there with jobs live.
+test('CI is counted through sudo, and a node it cannot sudo on reads unknown, never 0', () => {
+	const seen = observeWithSudo(true);
+	assert.equal(seen.ciWorkers, 2);
+	assert.equal(seen.ciListeners, 2);
+	assert.equal(seen.ciProcs, 0, 'the rank loop ran: no pids listed, so none ranked');
+	const blind = observeWithSudo(false);
+	assert.equal(blind.ciWorkers, null);
+	assert.equal(blind.ciListeners, null);
+	assert.equal(blind.ciProcs, null);
+	const ci = judgeHosting(DECLARED, blind, 'whole', REACH, CARDTABLE).findings.filter(
+		(f) => f.category === 'hosting-ci'
+	);
+	assert.match(JSON.stringify(ci), /could not count CI processes/);
+});
