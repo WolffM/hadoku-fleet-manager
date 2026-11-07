@@ -166,11 +166,14 @@ export async function proveWorkloads(ctx) {
 				});
 				continue;
 			}
-			// Any recorded verdict, not only a pass, waits out `--due`: a FAIL is
-			// retried on the same cadence a pass is re-proved, so a scheduled
-			// `--prove` does not drain a failing node every night.
+			// A VERDICT ABOUT THE NODE waits out `--due`: a pass is re-proved and a
+			// FAIL retried on the same cadence, so a scheduled `--prove` does not
+			// drain a failing node every night. Anything else (error, lost-race,
+			// timeout, refused, teardown-failed) says nothing about the node and is
+			// retried at once: claw-9's canary was skipped by the workflow on
+			// 2026-11-07, recorded `error`, and must not then wait 25 days.
 			const existing = readProof(name, id, { dir: stateDir() });
-			if (existing) {
+			if (existing && (existing.verdict === 'pass' || existing.verdict === 'fail')) {
 				const ageDays = (Date.now() - Date.parse(existing.at)) / 86_400_000;
 				if (Number.isFinite(ageDays) && ageDays <= DUE_DAYS) {
 					outcomes.push({

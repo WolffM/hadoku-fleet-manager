@@ -203,6 +203,33 @@ test('--prove waits out --due after a FAIL too, so a failing node is not drained
 	}
 });
 
+test('--prove retries at once after an ERROR: it says nothing about the node, so it never waits out --due', () => {
+	const f = proveFixture({ cores: 8 });
+	try {
+		writeProof(
+			{
+				node: CLAW,
+				capability: 'jdk21',
+				runId: 1,
+				runner: null,
+				conclusion: null,
+				durationSec: null,
+				evidenceMatched: false,
+				budgetSec: null,
+				verdict: 'error',
+				why: 'the workflow skipped the job',
+				at: new Date(Date.now() - 1 * 86_400_000).toISOString(),
+			},
+			{ dir: f.stateDir }
+		);
+		const r = run(['--machine', CLAW, '--no-push', '--prove', '--due', '25', '--json'], f.env);
+		const doc = JSON.parse(r.out);
+		assert.notEqual(doc.prove[0].status, 'not-due', JSON.stringify(doc.prove));
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
 test("--prove skips a node that excludes the canary's repo — never drained for a proof it cannot use", () => {
 	const f = proveFixture({
 		cores: 8,
