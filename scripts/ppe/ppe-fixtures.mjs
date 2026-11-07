@@ -53,12 +53,23 @@ export const readFile = (bare, rev, path) => git(bare, 'show', `${rev}:${path}`)
 /**
  * A stand-in for api.github.com. `state.checks[sha]` is a conclusion
  * ('success'|'failure'|'cancelled'|'in_progress'); `state.fail` makes every
- * path matching it answer 500.
+ * path matching it answer 500. Each check is an Actions job unless
+ * `state.notActions` is set: `state.attempts[sha]` is its run attempt (default
+ * 1), and `state.history[sha]` lists every attempt's conclusion, oldest first.
+ * A re-run request is recorded in `state.reruns`, a ledger comment in
+ * `state.comments`.
  */
 export async function fakeApi(state) {
 	state.issues ??= [];
 	state.calls = [];
 	state.required ??= ['check'];
+	state.attempts ??= {};
+	state.history ??= {};
+	state.reruns = [];
+	state.comments ??= [];
+	const shas = Object.keys(state.checks ?? {});
+	const jobId = (sha) => 1000 + shas.indexOf(sha);
+	const shaOfRun = (runId) => shas[Number(runId) - 5000];
 	const server = createServer((req, res) => {
 		let body = '';
 		req.on('data', (d) => (body += d));
@@ -94,10 +105,40 @@ export async function fakeApi(state) {
 					? []
 					: [
 							c === 'in_progress'
-								? { name: 'check', status: 'in_progress', conclusion: null }
-								: { name: 'check', status: 'completed', conclusion: c },
+								? { id: jobId(m[1]), name: 'check', status: 'in_progress', conclusion: null }
+								: { id: jobId(m[1]), name: 'check', status: 'completed', conclusion: c },
 						];
 				return send(200, { total_count: runs.length, check_runs: runs });
+			}
+			if ((m = path.match(/\/actions\/jobs\/(\d+)$/))) {
+				const sha = shas[Number(m[1]) - 1000];
+				if (state.notActions || !sha) return send(404, { message: 'Not Found' });
+				return send(200, {
+					run_id: 5000 + shas.indexOf(sha),
+					run_attempt: state.attempts[sha] ?? 1,
+					runner_name: `jit-claw-${state.attempts[sha] ?? 1}-fixture`,
+				});
+			}
+			if ((m = path.match(/\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs$/))) {
+				const sha = shaOfRun(m[1]);
+				const conclusion = (state.history[sha] ?? [])[Number(m[2]) - 1] ?? null;
+				return send(200, {
+					jobs: [{ name: 'check', runner_name: `jit-claw-${m[2]}-fixture`, conclusion }],
+				});
+			}
+			if ((m = path.match(/\/actions\/runs\/(\d+)\/rerun-failed-jobs$/)) && req.method === 'POST') {
+				state.reruns.push(shaOfRun(m[1]));
+				return send(201, {});
+			}
+			if ((m = path.match(/\/issues\/(\d+)\/comments$/))) {
+				if (req.method === 'POST') {
+					state.comments.push({ issue: Number(m[1]), ...JSON.parse(body) });
+					return send(201, {});
+				}
+				return send(
+					200,
+					state.comments.filter((c) => c.issue === Number(m[1]))
+				);
 			}
 			if (path.match(/\/commits\/[0-9a-f]+\/status$/))
 				return send(200, { state: 'pending', statuses: [] });

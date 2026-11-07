@@ -73,11 +73,17 @@ test('a red push is reverted on ppe, attributed, and the green below it still pr
 	const u = commit(repo.work, 'b.txt', 'half\n', 'half of the bad push\n\nSession: lane-bad');
 	const r = commit(repo.work, 'c.txt', 'bad\n', 'the bad push\n\nSession: lane-bad');
 	git(repo.work, 'push', '-q', 'origin', 'HEAD:refs/heads/ppe');
-	const state = { checks: { [g]: 'success', [r]: 'failure' }, activity: idle };
+	const state = {
+		checks: { [g]: 'success', [r]: 'failure' },
+		attempts: { [r]: 2 },
+		history: { [r]: ['failure', 'failure'] },
+		activity: idle,
+	};
 
 	const { code, out } = await run(repo, state);
 	assert.equal(code, 0);
 	assert.equal(out.action, 'promoted+reverted');
+	assert.deepEqual(state.reruns, [], 'a second red is not re-run again');
 	assert.equal(remoteSha(repo.bare, 'main'), g);
 
 	const ppe = remoteSha(repo.bare, 'ppe');
@@ -106,7 +112,11 @@ test('the run after a revert does not revert the same push again', async () => {
 	const g = commit(repo.work, 'a.txt', 'good\n', 'good');
 	const r = commit(repo.work, 'c.txt', 'bad\n', 'bad');
 	git(repo.work, 'push', '-q', 'origin', 'HEAD:refs/heads/ppe');
-	const state = { checks: { [g]: 'success', [r]: 'failure' }, activity: idle };
+	const state = {
+		checks: { [g]: 'success', [r]: 'failure' },
+		attempts: { [r]: 2 },
+		activity: idle,
+	};
 	await run(repo, state);
 	const afterFirst = remoteSha(repo.bare, 'ppe');
 
@@ -171,7 +181,11 @@ test('a revert that conflicts goes to a human: ppe untouched, issue filed, job r
 	// Pushed later, on top of the red one, rewriting the same line.
 	const later = commit(repo.work, 'c.txt', 'built on bad\n', 'later');
 	git(repo.work, 'push', '-q', 'origin', 'HEAD:refs/heads/ppe');
-	const state = { checks: { [g]: 'success', [r]: 'failure', [later]: 'failure' }, activity: idle };
+	const state = {
+		checks: { [g]: 'success', [r]: 'failure', [later]: 'failure' },
+		attempts: { [r]: 2, [later]: 2 },
+		activity: idle,
+	};
 
 	const { code } = await run(repo, state);
 	assert.equal(code, 1);
@@ -195,4 +209,85 @@ test('main moved by a bot and not yet synced: no fast-forward attempted', async 
 	assert.equal(code, 0);
 	assert.equal(out.action, 'none');
 	assert.equal(remoteSha(repo.bare, 'main'), bot);
+});
+
+test('#68: a FIRST red is re-run on a fresh runner, not reverted', async () => {
+	const repo = makeRepo();
+	const g = commit(repo.work, 'a.txt', 'good\n', 'good');
+	const r = commit(repo.work, 'c.txt', 'flaky\n', 'flaky push\n\nSession: lane-flaky');
+	git(repo.work, 'push', '-q', 'origin', 'HEAD:refs/heads/ppe');
+	const state = { checks: { [g]: 'success', [r]: 'failure' }, activity: idle };
+
+	const { code, out } = await run(repo, state);
+	assert.equal(code, 0);
+	assert.equal(out.action, 'promoted+rerun');
+	assert.deepEqual(state.reruns, [r], 'the failed jobs of the red run are re-run');
+	assert.equal(remoteSha(repo.bare, 'ppe'), r, 'nothing reverted on one red');
+	assert.equal(remoteSha(repo.bare, 'main'), g, 'the green below still promotes');
+	assert.deepEqual(state.issues, []);
+});
+
+test('#68: red on the re-run too reverts, and the report names both attempts', async () => {
+	const repo = makeRepo();
+	const r = commit(repo.work, 'c.txt', 'bad\n', 'bad push\n\nSession: lane-bad');
+	git(repo.work, 'push', '-q', 'origin', 'HEAD:refs/heads/ppe');
+	const state = { checks: { [r]: 'failure' }, attempts: { [r]: 2 }, activity: idle };
+
+	const { out } = await run(repo, state);
+	assert.equal(out.action, 'reverted');
+	assert.match(state.issues[0].body, /red on 2 attempt\(s\), the last on `jit-claw-2-fixture`/);
+	const msg = git(repo.bare, 'log', '-1', '--format=%B', remoteSha(repo.bare, 'ppe'));
+	assert.match(msg, /red on ppe on 2 attempt\(s\)/);
+});
+
+test('#68: a red that is not an Actions job cannot be re-run, so it reverts at once', async () => {
+	const repo = makeRepo();
+	const r = commit(repo.work, 'c.txt', 'bad\n', 'bad');
+	git(repo.work, 'push', '-q', 'origin', 'HEAD:refs/heads/ppe');
+	const state = { checks: { [r]: 'failure' }, notActions: true, activity: idle };
+
+	const { out } = await run(repo, state);
+	assert.equal(out.action, 'reverted');
+	assert.deepEqual(state.reruns, []);
+});
+
+test('#68: green after a red re-run is recorded "flaked, then passed" in the ledger, once', async () => {
+	const repo = makeRepo();
+	const r = commit(repo.work, 'c.txt', 'flaky\n', 'flaky push\n\nSession: lane-flaky');
+	git(repo.work, 'push', '-q', 'origin', 'HEAD:refs/heads/ppe');
+	const state = {
+		checks: { [r]: 'success' },
+		attempts: { [r]: 2 },
+		history: { [r]: ['failure', 'success'] },
+		activity: idle,
+	};
+
+	const first = await run(repo, state);
+	assert.equal(first.code, 0);
+	assert.equal(first.out.action, 'promoted');
+	assert.equal(state.issues.length, 1);
+	assert.equal(state.issues[0].title, 'ppe: flake ledger');
+	assert.equal(state.comments.length, 1);
+	assert.match(state.comments[0].body, /flaked, then passed/);
+	assert.match(state.comments[0].body, new RegExp(r));
+	assert.match(state.comments[0].body, /attempt 1: failure on `jit-claw-1-fixture`/);
+	assert.match(state.comments[0].body, /attempt 2: success on `jit-claw-2-fixture`/);
+
+	await run(repo, state);
+	assert.equal(state.comments.length, 1, 'the same push is never recorded twice');
+});
+
+test('#68: a green attempt 2 that was never red (a manual re-run) is not a flake', async () => {
+	const repo = makeRepo();
+	const g = commit(repo.work, 'a.txt', 'good\n', 'good');
+	git(repo.work, 'push', '-q', 'origin', 'HEAD:refs/heads/ppe');
+	const state = {
+		checks: { [g]: 'success' },
+		attempts: { [g]: 2 },
+		history: { [g]: ['success', 'success'] },
+		activity: idle,
+	};
+	await run(repo, state);
+	assert.deepEqual(state.issues, []);
+	assert.deepEqual(state.comments, []);
 });

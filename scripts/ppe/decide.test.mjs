@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+	MAX_ATTEMPTS,
 	QUIET_MS,
 	WINDOW_MS,
 	checkState,
@@ -229,4 +230,23 @@ test('revertMessage names every commit and its session, and carries the trailer'
 	assert.equal(trailer(msg, 'Reverts-Push'), r.sha);
 	assert.equal(trailer(msg, 'Session'), 'ppe-promoter');
 	assert.deepEqual(sessions({ commits: [r, u] }), [`s${n - 1}`]);
+});
+
+test('#68: a red Actions run below MAX_ATTEMPTS is re-run; at MAX_ATTEMPTS it reverts', () => {
+	const run1 = { id: 7, attempt: 1, runner: 'jit-claw-1-x' };
+	const first = c('red', { failing: ['check'], run: run1 });
+	const d1 = decide(facts([first, c('green')]));
+	assert.equal(d1.revert, null);
+	assert.equal(d1.rerun.sha, first.sha);
+	assert.deepEqual(d1.rerun.run, run1);
+	assert.ok(d1.promote, 'a re-run never holds the green below it');
+
+	const again = c('red', { failing: ['check'], run: { ...run1, attempt: MAX_ATTEMPTS } });
+	const d2 = decide(facts([again, c('green')]));
+	assert.equal(d2.rerun, null);
+	assert.equal(d2.revert.culprit, again.sha);
+	assert.match(revertMessage(d2.revert), new RegExp(`on ${MAX_ATTEMPTS} attempt\\(s\\)`));
+
+	const status = c('red', { failing: ['check'], run: null });
+	assert.equal(decide(facts([status])).revert.culprit, status.sha, 'not an Actions run: revert');
 });

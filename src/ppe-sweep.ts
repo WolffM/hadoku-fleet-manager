@@ -54,6 +54,14 @@ const PROMOTE_WORKFLOW = 'ppe-promote.yml';
 const GRAPHQL_URL = 'https://api.github.com/graphql';
 /** Rollups worth a wake-up. null (nothing reported) is too: the promoter decides what an untested tip means. */
 const SETTLED_GREEN = new Set(['SUCCESS']);
+/**
+ * A settled red is woken ONCE per tip. The promoter re-runs a first red
+ * (fleet-manager#68) with the job's GITHUB_TOKEN, and GitHub does not promise
+ * a workflow_run event for a run that token re-ran, so the re-run's red may
+ * reach no promoter at all. One wake hands it to the promoter, which reverts
+ * it; a red handed to a human is not woken again.
+ */
+const SETTLED_RED = new Set(['FAILURE', 'ERROR']);
 
 export interface PpeState {
 	repo: string;
@@ -125,9 +133,8 @@ export function parseSweep(
 /**
  * Which repos to wake. Skipped: not adopted, nothing to promote, `main` ahead
  * (no fast-forward exists until the sync merges it), checks still running (the
- * CI completion will wake the promoter itself), a red tip (its CI completion
- * already ran the promoter, whose revert is not cadence-gated; what is left is
- * a red it handed to a human, and waking it again only repeats that), a tip
+ * CI completion will wake the promoter itself), a red tip already woken once
+ * (see {@link SETTLED_RED}; waking it again only repeats a hand-off), a tip
  * younger than the quiet threshold, and a tip already woken within
  * {@link REDISPATCH_MS}.
  */
@@ -138,9 +145,11 @@ export function dueForPromotion(
 ): PpeState[] {
 	return states.filter((s) => {
 		if (!s.ppeSha || s.ppeAhead === 0 || s.mainAhead > 0) return false;
-		if (s.rollup !== null && !SETTLED_GREEN.has(s.rollup)) return false;
+		const red = s.rollup !== null && SETTLED_RED.has(s.rollup);
+		if (s.rollup !== null && !SETTLED_GREEN.has(s.rollup) && !red) return false;
 		if (s.tipAtMs === null || nowMs - s.tipAtMs < PPE_QUIET_MS) return false;
 		const last = woken.get(s.repo);
+		if (red) return last?.sha !== s.ppeSha;
 		return !(last && last.sha === s.ppeSha && nowMs - last.atMs < REDISPATCH_MS);
 	});
 }

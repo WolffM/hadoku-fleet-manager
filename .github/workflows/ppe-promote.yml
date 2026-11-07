@@ -32,6 +32,8 @@ permissions:
   checks: read
   statuses: read
   issues: write
+  # rerun-failed-jobs: a first red is re-run before it is reverted (fleet-manager#68).
+  actions: write
 
 jobs:
   promote:

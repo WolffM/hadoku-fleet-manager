@@ -12,7 +12,15 @@
 // 1 with the reason and changes nothing.
 import { pathToFileURL } from 'node:url';
 
-import { commitVerdict, checkState, decide, revertMessage, sessions, subject } from './decide.mjs';
+import {
+	commitVerdict,
+	checkState,
+	decide,
+	revertMessage,
+	sessions,
+	subject,
+	trailer,
+} from './decide.mjs';
 import {
 	CouldNotLook,
 	fail,
@@ -45,13 +53,21 @@ export async function requiredChecks(api, mainBranch) {
 	);
 }
 
-/** Each required context's state on one commit. */
-export async function contextStates(api, sha, required) {
+/**
+ * Each required context's state on one commit. `ids`, when passed, is filled
+ * with each context's check-run id: for an Actions check that is the job id,
+ * which is how the run and its attempt are found.
+ */
+export async function contextStates(api, sha, required, ids = {}) {
 	const states = {};
+	// GitHub's default `filter=latest`: a re-run's check run replaces the
+	// attempt before it, so a red that passed on re-run reads green.
 	const runs = await api.get(`/{repo}/commits/${sha}/check-runs?per_page=100`);
 	for (const name of required) {
-		const mine = (runs.check_runs ?? []).filter((r) => r.name === name).map(checkState);
+		const all = (runs.check_runs ?? []).filter((r) => r.name === name);
+		const mine = all.map(checkState);
 		if (!mine.length) continue;
+		if (all.length === 1 && all[0].id) ids[name] = all[0].id;
 		states[name] = mine.includes('pending')
 			? 'pending'
 			: mine.includes('failure')
@@ -67,6 +83,71 @@ export async function contextStates(api, sha, required) {
 		}
 	}
 	return states;
+}
+
+/**
+ * The Actions run behind a check run, and which attempt it is. null when the
+ * check is not an Actions job (GitHub answers 404): such a red cannot be
+ * re-run, so it reverts as it always did. Any other failure is CouldNotLook.
+ */
+export async function runOfCheck(api, checkRunId) {
+	let job;
+	try {
+		job = await api.get(`/{repo}/actions/jobs/${checkRunId}`);
+	} catch (err) {
+		if (err instanceof CouldNotLook && /HTTP 404/.test(err.message)) return null;
+		throw err;
+	}
+	return { id: job.run_id, attempt: job.run_attempt ?? 1, runner: job.runner_name || null };
+}
+
+/** The runner each attempt of a run's `job` ran on, oldest first, with its conclusion. */
+async function attemptHistory(api, run, jobName) {
+	const out = [];
+	for (let a = 1; a <= run.attempt; a++) {
+		const jobs = await api.get(`/{repo}/actions/runs/${run.id}/attempts/${a}/jobs?per_page=100`);
+		const j = (jobs.jobs ?? []).find((x) => x.name === jobName);
+		out.push({ attempt: a, runner: j?.runner_name || null, conclusion: j?.conclusion ?? null });
+	}
+	return out;
+}
+
+export const LEDGER_TITLE = 'ppe: flake ledger';
+
+/**
+ * Record a push that went red and then green on a re-run. One open issue is
+ * the ledger, one comment per push; a push already in it is not recorded
+ * twice (the promoter runs on every CI completion and sees it again).
+ */
+async function recordFlake(api, result, entry, required) {
+	const history = await attemptHistory(api, entry.run, required[0]);
+	if (!history.slice(0, -1).some((h) => h.conclusion === 'failure')) return; // re-run by hand, never red
+	const issue = await reportIssue(
+		api,
+		LEDGER_TITLE,
+		[
+			'Every ppe push that went red, was re-run by the promoter on a fresh runner, and passed. One comment per push.',
+			'',
+			'A push here was NOT reverted. A test that appears more than once is a flake to fix, not to re-run (fleet-manager#68).',
+		].join('\n')
+	);
+	const number = issue.url.split('/').pop();
+	const since = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
+	const comments = await api.get(`/{repo}/issues/${number}/comments?per_page=100&since=${since}`);
+	if (comments.some((c) => c.body?.includes(entry.sha))) return;
+	await api.post(`/{repo}/issues/${number}/comments`, {
+		body: [
+			`**flaked, then passed**: \`${entry.sha}\` ${subject(entry.message)} (Session: ${trailer(entry.message, 'Session') ?? 'none'})`,
+			'',
+			...history.map(
+				(h) =>
+					`- attempt ${h.attempt}: ${h.conclusion ?? 'unknown'} on \`${h.runner ?? 'unknown runner'}\``
+			),
+			'',
+			`Run: ${process.env.GITHUB_SERVER_URL || 'https://github.com'}/${process.env.GITHUB_REPOSITORY}/actions/runs/${entry.run.id}`,
+		].join('\n'),
+	});
+	result.flaked = { sha: entry.sha, history, ledger: issue.url };
 }
 
 async function lastPushMs(api, branch) {
@@ -134,9 +215,15 @@ export async function promoteOnce(o) {
 			throw new CouldNotLook(
 				`more than ${MAX_WALK} first-parent commits on ${ppeBranch} above its newest green; refusing to judge a range that long`
 			);
-		const states = await contextStates(api, c.sha, required);
+		const ids = {};
+		const states = await contextStates(api, c.sha, required, ids);
 		const verdict = commitVerdict(states, required);
-		chain.push({ ...c, verdict, failing: required.filter((r) => states[r] === 'failure') });
+		const failing = required.filter((r) => states[r] === 'failure');
+		// The run behind the verdict: the failing context's for a red, the first
+		// required context's for a green (a green on attempt 2 is a flake to record).
+		const ctx = verdict === 'red' ? failing[0] : verdict === 'green' ? required[0] : null;
+		const run = ctx && ids[ctx] ? await runOfCheck(api, ids[ctx]) : null;
+		chain.push({ ...c, verdict, failing, run });
 		log(`  ${c.sha.slice(0, 7)} ${verdict.padEnd(8)} ${subject(c.message)}`);
 		if (verdict === 'green') break;
 	}
@@ -155,6 +242,18 @@ export async function promoteOnce(o) {
 		mainSha,
 	};
 
+	const newestGreen = chain.find((e) => e.verdict === 'green');
+	if (newestGreen?.run && newestGreen.run.attempt > 1) {
+		try {
+			await recordFlake(api, result, newestGreen, required);
+		} catch (err) {
+			if (!(err instanceof CouldNotLook)) throw err;
+			result.reportErrors.push(
+				`could not record ${newestGreen.sha.slice(0, 7)} in the flake ledger: ${err.message}`
+			);
+		}
+	}
+
 	if (d.promote) {
 		// A plain push of an existing commit: git refuses it unless it is a
 		// fast-forward, which is the only promotion there is. Never --force.
@@ -171,6 +270,18 @@ export async function promoteOnce(o) {
 			);
 			result.notes.push(`fast-forward of ${mainBranch} refused: it moved`);
 		}
+	}
+
+	if (d.rerun) {
+		// Only the failed jobs, on whatever runner is minted next: every CI runner
+		// is ephemeral (JIT), so this is a fresh one. A refusal is CouldNotLook:
+		// nothing reverts on a red we could not give its second attempt.
+		await api.post(`/{repo}/actions/runs/${d.rerun.run.id}/rerun-failed-jobs`, {});
+		result.rerun = d.rerun;
+		result.action = result.action === 'promoted' ? 'promoted+rerun' : 'rerun';
+		log(
+			`re-running the failed jobs of run ${d.rerun.run.id} (${d.rerun.sha.slice(0, 7)}, attempt ${d.rerun.run.attempt} on ${d.rerun.run.runner ?? 'an unnamed runner'})`
+		);
 	}
 
 	if (d.revert) {
@@ -206,7 +317,7 @@ export async function promoteOnce(o) {
 				result,
 				title,
 				[
-					`The promoter reverted push \`${d.revert.culprit}\` on \`${ppeBranch}\`: ${d.revert.failing.join(', ') || 'required checks'} red.`,
+					`The promoter reverted push \`${d.revert.culprit}\` on \`${ppeBranch}\`: ${d.revert.failing.join(', ') || 'required checks'} red${d.revert.run ? ` on ${d.revert.run.attempt} attempt(s), the last on \`${d.revert.run.runner ?? 'an unnamed runner'}\`` : ''}.`,
 					'',
 					`Session(s): ${who.length ? who.map((s) => `\`${s}\``).join(', ') : 'none named (the commits carry no `Session:` trailer)'}`,
 					'',
@@ -284,6 +395,14 @@ export async function main(env = process.env) {
 				? [
 						`- reverted push \`${result.reverted.culprit}\` as \`${result.reverted.revertSha}\` (${result.issue})`,
 					]
+				: []),
+			...(result.rerun
+				? [
+						`- re-running the failed jobs of \`${result.rerun.sha}\` (attempt ${result.rerun.run.attempt} was red on ${result.rerun.run.runner ?? 'an unnamed runner'}); it reverts only if the re-run is red too`,
+					]
+				: []),
+			...(result.flaked
+				? [`- \`${result.flaked.sha}\` flaked, then passed: recorded in ${result.flaked.ledger}`]
 				: []),
 			...(result.human ? [`- needs a human: ${result.human.reason} (${result.human.issue})`] : []),
 			...result.notes.map((n) => `- ${n}`),

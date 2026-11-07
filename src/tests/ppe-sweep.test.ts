@@ -46,11 +46,22 @@ void test('each reason not to wake, one at a time', () => {
 		['nothing to promote', { ppeAhead: 0 }],
 		['main ahead: no fast-forward until the sync merges it', { mainAhead: 1 }],
 		['checks still running: the CI completion wakes it', { rollup: 'PENDING' }],
-		['red: its CI completion already ran the promoter', { rollup: 'FAILURE' }],
 		['not quiet yet', { tipAtMs: NOW - PPE_QUIET_MS + 1 }],
 	];
 	for (const [why, over] of cases)
 		assert.deepEqual(dueForPromotion([state(over)], NOW, none), [], why);
+});
+
+void test('#68: a settled red tip is woken once, so a re-run red the event missed still reverts', () => {
+	assert.equal(dueForPromotion([state({ rollup: 'FAILURE' })], NOW, none).length, 1);
+	assert.equal(dueForPromotion([state({ rollup: 'ERROR' })], NOW, none).length, 1);
+	// Woken once at any time: never again, however long it stays red.
+	const woken = new Map([['WolffM/a', { sha: 'aaa', atMs: NOW - 10 * REDISPATCH_MS }]]);
+	assert.deepEqual(dueForPromotion([state({ rollup: 'FAILURE' })], NOW, woken), []);
+	assert.equal(
+		dueForPromotion([state({ rollup: 'FAILURE', ppeSha: 'bbb' })], NOW, woken).length,
+		1
+	);
 });
 
 void test('the same tip is not woken again inside REDISPATCH_MS; a new tip is', () => {

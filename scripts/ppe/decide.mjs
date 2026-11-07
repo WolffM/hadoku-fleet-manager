@@ -10,6 +10,13 @@ export const QUIET_MS = 10 * 60_000;
 /** Trailer a promoter revert carries, naming the red push tip it reverted. */
 export const REVERTS_TRAILER = 'Reverts-Push';
 export const PROMOTER_SESSION = 'ppe-promoter';
+/**
+ * Attempts a red push gets before it is reverted. One red is not a verdict: on
+ * 11-02 5b02cdc was reverted over a timing test that failed under load on
+ * claw-1 and passed everywhere else (fleet-manager#68). A red attempt below
+ * this is re-run on a fresh (ephemeral) runner instead; a red at it reverts.
+ */
+export const MAX_ATTEMPTS = 2;
 
 const SUCCESS = new Set(['success', 'neutral', 'skipped']);
 const FAILURE = new Set(['failure', 'timed_out', 'action_required', 'startup_failure', 'error']);
@@ -64,7 +71,10 @@ export const subject = (message) => message.split('\n', 1)[0].trim();
 const short = (sha) => sha.slice(0, 7);
 
 /**
- * @typedef {{ sha: string, parents: string[], message: string, verdict: string, failing?: string[] }} Entry
+ * @typedef {{
+ *   sha: string, parents: string[], message: string, verdict: string, failing?: string[],
+ *   run?: { id: number, attempt: number, runner: string | null } | null,  // the Actions run behind the failing (or green) required check; null = not an Actions check
+ * }} Entry
  * @typedef {{
  *   chain: Entry[],          // ppe's first-parent commits not on main, NEWEST first, down to and including the newest green (or all of them)
  *   mainAhead: number,       // commits on main that ppe lacks (a bot push not yet synced)
@@ -81,7 +91,8 @@ const short = (sha) => sha.slice(0, 7);
  * @param {Facts} f
  * @returns {{
  *   promote: { sha: string, reason: string } | null,
- *   revert: { culprit: string, commits: Entry[], failing: string[] } | null,
+ *   revert: { culprit: string, commits: Entry[], failing: string[], run: Entry['run'] } | null,
+ *   rerun: { sha: string, run: { id: number, attempt: number, runner: string | null }, failing: string[] } | null,
  *   human: { sha: string, reason: string } | null,
  *   notes: string[],
  * }}
@@ -90,7 +101,7 @@ export function decide(f) {
 	const windowMs = f.windowMs ?? WINDOW_MS;
 	const quietMs = f.quietMs ?? QUIET_MS;
 	const notes = [];
-	const out = { promote: null, revert: null, human: null, notes };
+	const out = { promote: null, revert: null, rerun: null, human: null, notes };
 
 	const gIdx = f.chain.findIndex((e) => e.verdict === 'green');
 	const green = gIdx === -1 ? null : f.chain[gIdx];
@@ -164,7 +175,16 @@ function scanForRed(above, out) {
 			};
 			return;
 		}
-		out.revert = { culprit: r.sha, commits, failing: r.failing ?? [] };
+		// A first red is re-run, not reverted. Only an Actions run can be re-run;
+		// a red from anything else (a commit status, an app) reverts as before.
+		if (r.run && r.run.attempt < MAX_ATTEMPTS) {
+			out.rerun = { sha: r.sha, run: r.run, failing: r.failing ?? [] };
+			out.notes.push(
+				`${short(r.sha)} is red on attempt ${r.run.attempt}${r.run.runner ? ` (${r.run.runner})` : ''}: re-running its failed jobs before any revert`
+			);
+			return;
+		}
+		out.revert = { culprit: r.sha, commits, failing: r.failing ?? [], run: r.run ?? null };
 		return;
 	}
 }
@@ -175,7 +195,9 @@ export function revertMessage(revert) {
 	const lines = [
 		`Revert ppe push ${short(revert.culprit)}: ${revert.failing.length ? revert.failing.join(', ') : 'required checks'} red`,
 		'',
-		`The promoter found this push red on ppe and reverted its ${n} commit(s), newest first:`,
+		revert.run
+			? `The promoter found this push red on ppe on ${revert.run.attempt} attempt(s), the last on ${revert.run.runner ?? 'an unnamed runner'}, and reverted its ${n} commit(s), newest first:`
+			: `The promoter found this push red on ppe and reverted its ${n} commit(s), newest first:`,
 		'',
 		...revert.commits.map(
 			(e) =>
