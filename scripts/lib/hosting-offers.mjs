@@ -71,10 +71,13 @@ echo "wireless=$([ -n "$dev" ] && [ -d "/sys/class/net/$dev/wireless" ] && echo 
 ${EFFECTIVE_MEMORY_MAX_SH}
 for u in $(systemctl list-units --no-legend --plain 'pm2-*.service' 2>/dev/null | awk '{print $1}'); do
 	cg=$(systemctl show "$u" -p ControlGroup --value 2>/dev/null)
-	echo "pm2=$u $(effmax "$cg" ?) $(cat /sys/fs/cgroup$cg/memory.current 2>/dev/null || echo ?)"
+	echo "pm2=$u $(effmax "$cg" ?) $(cat /sys/fs/cgroup$cg/memory.current 2>/dev/null || echo ?) \${cg:-?}"
 done
 echo OFFER-END
 `;
+
+/** A tenant manager's ControlGroup, `/hosting.slice/hosting-<app>.slice/<unit>`; `$1` is the app. */
+const TENANT_SLICE = /^\/hosting\.slice\/hosting-([^/]+)\.slice\/[^/]+$/;
 
 /** Parse {@link OFFER_PROBE}; null when the end marker never arrived. */
 export function parseOfferProbe(stdout) {
@@ -91,7 +94,7 @@ export function parseOfferProbe(stdout) {
 		const k = line.slice(0, i).trim();
 		const v = line.slice(i + 1).trim();
 		if (k === 'pm2') {
-			const [unit, max, cur] = v.split(/\s+/);
+			const [unit, max, cur, cg] = v.split(/\s+/);
 			const mib = (x) => (/^\d+$/.test(x ?? '') ? Math.round(Number(x) / 1048576) : null);
 			pm2.push({
 				unit,
@@ -99,6 +102,9 @@ export function parseOfferProbe(stdout) {
 				bounded: mib(max) !== null,
 				maxMb: mib(max),
 				currentMb: mib(cur),
+				// The app whose hosting slice holds this manager; null: none (or an
+				// older probe that printed no ControlGroup).
+				tenant: TENANT_SLICE.exec(cg ?? '')?.[1] ?? null,
 			});
 		} else if (k === 'tool') {
 			const [name, verdict] = v.split(/\s+/);
@@ -156,9 +162,18 @@ export function offerFor({
 	const minFreeMb = machine?.minFreeMb ?? 1024;
 	const tenantMb = tenants.reduce((s, t) => s + t.memoryMb, 0);
 	const tenantCores = tenants.reduce((s, t) => s + t.cores, 0);
-	const unbounded = facts.pm2.filter((p) => !p.bounded);
+	// A tenant's own manager, in the slice of a tenant declared HERE, is already
+	// in `tenantMb`: its slice ceiling IS that declaration. Charging it again
+	// counted every hosted service twice and shrank the node's offer by its
+	// whole footprint (5b02cdc's half that 3ebf625 did not carry,
+	// fleet-manager#46/#68). A tenant manager whose tenant is NOT declared here
+	// is a stray, and is still charged as a neighbour.
+	const declared = new Set(tenants.map((t) => t.tenant));
+	const byTenant = (p) => p.tenant != null && declared.has(p.tenant);
+	const neighbours = facts.pm2.filter((p) => !byTenant(p));
+	const unbounded = neighbours.filter((p) => !p.bounded);
 	const unboundedMb = unbounded.reduce((s, p) => s + (p.currentMb ?? 0), 0);
-	const boundedMb = facts.pm2.filter((p) => p.bounded).reduce((s, p) => s + p.maxMb, 0);
+	const boundedMb = neighbours.filter((p) => p.bounded).reduce((s, p) => s + p.maxMb, 0);
 	const ciReserveMb = ciJobMb === null ? null : ciJobMb * CI_KEEP_JOBS;
 	const memoryMb =
 		facts.memTotalMb === null || ciReserveMb === null
@@ -188,6 +203,7 @@ export function offerFor({
 			unbounded: unbounded.map((p) => p.unit),
 			unboundedMb,
 			boundedMb,
+			tenantCharged: facts.pm2.filter(byTenant).map((p) => p.unit),
 		},
 		pm2Peer,
 		drain: drain ? { kind: drain.kind ?? 'maintenance', until: drain.until ?? null } : null,

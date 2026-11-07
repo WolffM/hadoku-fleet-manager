@@ -149,3 +149,49 @@ test('the runtime half: node from its own --version, tools by exit status, an un
 	assert.match(script, /env -i PATH=\/usr\/local\/bin:\/usr\/bin:\/bin ffmpeg --version/);
 	assert.match(script, /\|\| env -i PATH=\S+ ffmpeg -version/);
 });
+
+test('a tenant manager bounded by its slice is charged once, through its declaration (claw-4, fleet-manager#46/#68)', () => {
+	// The probe's lines as 3ebf625's walk prints them: the effective ceiling,
+	// then current, then the ControlGroup. Each tenant's ceiling is its slice's.
+	const facts = parseOfferProbe(
+		probe(
+			[
+				`pm2=pm2-archivebot-svc.service ${1024 * MIB} ${368 * MIB} /hosting.slice/hosting-archivebot.slice/pm2-archivebot-svc.service`,
+				`pm2=pm2-hadoku.service ${512 * MIB} ${37 * MIB} /system.slice/pm2-hadoku.service`,
+				`pm2=pm2-pygmalion-svc.service ${512 * MIB} ${186 * MIB} /hosting.slice/hosting-pygmalion.slice/pm2-pygmalion-svc.service`,
+			].join('\n')
+		)
+	);
+	assert.deepEqual(
+		facts.pm2.map((p) => p.tenant),
+		['archivebot', null, 'pygmalion']
+	);
+	const tenants = [
+		{ tenant: 'archivebot', memoryMb: 1024, cores: 1, mode: 'shared' },
+		{ tenant: 'pygmalion', memoryMb: 512, cores: 1, mode: 'shared' },
+	];
+	const at = (ts) =>
+		offerFor({ node: 'claw-4', machine: MACHINE, facts, tenants: ts, pm2Peer: true, labels: [] });
+	const o = at(tenants);
+	assert.deepEqual(o.pm2.tenantCharged, [
+		'pm2-archivebot-svc.service',
+		'pm2-pygmalion-svc.service',
+	]);
+	assert.equal(o.pm2.boundedMb, 512, 'only the admin manager, at its own ceiling');
+	assert.deepEqual(o.pm2.unbounded, []);
+
+	// A tenant manager where its tenant is NOT declared is a stray: still charged.
+	const stray = at([tenants[1]]);
+	assert.deepEqual(stray.pm2.tenantCharged, ['pm2-pygmalion-svc.service']);
+	assert.equal(stray.pm2.boundedMb, 1024 + 512);
+	assert.equal(
+		stray.hostable.memoryMb,
+		o.hostable.memoryMb,
+		'declaring archivebot moves its 1024 from the neighbour charge to the tenant charge, never both'
+	);
+});
+
+test('an older probe line with no ControlGroup attributes no tenant, so nothing is dropped', () => {
+	const [p] = parseOfferProbe(probe(`pm2=pm2-x-svc.service ${512 * MIB} ${10 * MIB}`)).pm2;
+	assert.equal(p.tenant, null);
+});
