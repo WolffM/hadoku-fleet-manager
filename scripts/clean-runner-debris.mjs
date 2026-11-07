@@ -37,6 +37,8 @@ import { reposOnNode } from './lib/placement-rules.mjs';
 import { reclaimableCaches } from './lib/tool-caches.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { overdueFindings, recordSweeps } from './lib/cache-sweep-log.mjs';
+import { errText } from './lib/term.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPT_SRC = resolve(__dirname, 'clean-runner-debris.sh');
@@ -263,7 +265,14 @@ async function cleanNode(m) {
 		}
 	}
 
-	return { lines, kb, result: { machine: m, ok: true, ...f, reclaimKb: kb, unclassified } };
+	// FALSE when a running job held the bounded caches back: lib/cache-sweep-log.mjs
+	// counts those nights, and the refresh cycle drains a node that piles them up.
+	const cachesSwept = !/^SKIP-CACHES /m.test(r.out);
+	return {
+		lines,
+		kb,
+		result: { machine: m, ok: true, ...f, reclaimKb: kb, unclassified, cachesSwept },
+	};
 }
 
 // CONCURRENTLY, each node on its own clock (#50). One after another, every
@@ -290,8 +299,20 @@ for (const run of runs) {
 	totalKb += run.kb;
 }
 
+// The sweep record, and what it says about nodes no night has reached. Only an
+// APPLY run writes it or judges it: a dry run is someone looking, not the cron.
+let findings = [];
+if (CONFIRM) {
+	try {
+		const swept = recordSweeps(results, { confirm: CONFIRM });
+		findings = overdueFindings(swept, nodes, Date.now());
+	} catch (e) {
+		findings = [{ machine: null, kind: 'sweep-log-unwritable', reason: errText(e) }];
+	}
+}
+
 if (JSON_OUT) {
-	emitter.emit({ confirm: CONFIRM, totalReclaimGb: Number(GB(totalKb)), results });
+	emitter.emit({ confirm: CONFIRM, totalReclaimGb: Number(GB(totalKb)), results, findings });
 } else {
 	log(
 		`\n${CONFIRM ? 'Reclaimed' : 'Reclaimable'}: ${GB(totalKb)} GB across ${results.filter((r) => r.ok).length} node(s)`
@@ -300,6 +321,7 @@ if (JSON_OUT) {
 	const busy = results.reduce((n, r) => n + Number(r.busy_skipped ?? 0), 0);
 	if (busy)
 		log(`${busy} runner(s) were mid-job and were skipped — they are picked up on the next run.`);
+	for (const f of findings) log(`✗ ${f.kind}: ${f.reason}`);
 }
 
-process.exit(results.some((r) => !r.ok) ? 1 : 0);
+process.exit(results.some((r) => !r.ok) || findings.length ? 1 : 0);

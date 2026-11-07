@@ -2,6 +2,7 @@
   "$comment": "F3 one-writer guard (plan §3.2 rule 3, §4.1 F3 step 4). `files` keys a basename literal the detector found reaching a write call's PATH argument; the array is every file detected writing it TODAY — one entry is a declared sole writer, more than one is accepted multi-writer debt until the owning lane de-dups it. `patterns` is the same idea for a state file whose name is built per-period (decision-log's `${day}.jsonl`, usage-store's `usage-${year}-${month}.jsonl`): keyed by the exact regex SOURCE text the file uses to recognise its own filenames, detected by that substring plus an append-family write call co-occurring in the same file. See f3-one-writer.test.mjs for the detector; a NEW entry here must come from re-running it, never hand-typed.",
   "files": {
     "artifact.json": ["scripts/lib/hosting-artifacts.mjs"],
+    "cache-sweep-log.json": ["scripts/lib/cache-sweep-log.mjs"],
     "capability-revocations.json": ["src/capability-revocations.ts"],
     "ci-alert-repos.json": ["src/ci-alerts-state.ts"],
     "ci-alert-state.json": ["src/ci-alerts-state.ts"],

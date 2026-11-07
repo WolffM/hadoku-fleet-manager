@@ -148,3 +148,75 @@ test('with no coverage nothing is judged abandoned, so nothing is sized', (t) =>
 	assert.equal(r.cachePaths, '', 'unreadable coverage is "no verdict", not "size it all"');
 	assert.doesNotMatch(r.out, /CACHE-ABANDONED/);
 });
+
+// ── fleet-manager#65: the sweep record ──────────────────────────────────────
+// `fixture-busy` answers SKIP-CACHES, the line the node script prints when a
+// job held the bounded caches back. Only the other one counts as swept.
+const SWEEP_SHIM = `#!/usr/bin/env bash
+cat > /dev/null
+node="\${5##*@}"
+[ "$node" = fixture-busy ] && echo "SKIP-CACHES a job is running on this node"
+echo "SUMMARY stale_kb=0 update_kb=0 orphan_kb=0 diag_kb=0 tmpfs_kb=0 busy_skipped=0 free_kb=1000000 tmpfs_used_kb=0"
+`;
+
+function runSweep(t, args, log) {
+	const root = mkdtempSync(join(tmpdir(), 'crd-sweep-'));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	writeFileSync(
+		join(root, 'fleet-runner-manifest.json'),
+		JSON.stringify({ machines: { 'fixture-idle': {}, 'fixture-busy': {} } })
+	);
+	if (log) writeFileSync(join(root, 'cache-sweep-log.json'), JSON.stringify(log));
+	const bin = join(root, 'bin');
+	mkdirSync(bin);
+	writeFileSync(join(bin, 'ssh'), SWEEP_SHIM);
+	chmodSync(join(bin, 'ssh'), 0o755);
+	const outPath = join(root, 'out.json');
+	const r = spawnSync('sh', ['-c', `node "${SCRIPT}" ${args} --json > "${outPath}" 2>/dev/null`], {
+		env: {
+			...process.env,
+			PATH: `${bin}:${process.env.PATH}`,
+			FLEET_MANIFEST_DIR: root,
+			HADOKU_STATE_DIR: root,
+		},
+	});
+	let saved = null;
+	try {
+		saved = JSON.parse(readFileSync(join(root, 'cache-sweep-log.json'), 'utf8'));
+	} catch {
+		saved = null;
+	}
+	return { status: r.status, doc: JSON.parse(readFileSync(outPath, 'utf8')), saved };
+}
+
+test('--confirm records a sweep only where no job held the caches back', (t) => {
+	const r = runSweep(t, '--confirm');
+	assert.equal(r.status, 0);
+	assert.deepEqual(
+		r.doc.results.map((x) => [x.machine, x.cachesSwept]),
+		[
+			['fixture-idle', true],
+			['fixture-busy', false],
+		]
+	);
+	assert.equal(typeof r.saved['fixture-idle'].sweptAt, 'number');
+	assert.equal(r.saved['fixture-busy'].sweptAt, undefined, 'a held-back night is not a sweep');
+	assert.equal(typeof r.saved['fixture-busy'].seenAt, 'number', 'but its clock has started');
+	assert.deepEqual(r.doc.findings, []);
+});
+
+test('a node no night has swept in a fortnight is a FINDING; a dry run neither records nor judges', (t) => {
+	const old = Date.now() - 15 * 86_400_000;
+	const log = { 'fixture-busy': { seenAt: old }, 'fixture-idle': { seenAt: old } };
+	const r = runSweep(t, '--confirm', log);
+	assert.equal(r.status, 1, 'overdue fails the run');
+	assert.deepEqual(
+		r.doc.findings.map((f) => [f.machine, f.kind]),
+		[['fixture-busy', 'caches-unswept']],
+		'the idle node was just swept, so only the busy one is overdue'
+	);
+	const dry = runSweep(t, '', log);
+	assert.equal(dry.status, 0);
+	assert.deepEqual(dry.doc.findings, []);
+	assert.deepEqual(dry.saved, log, 'a dry run writes nothing');
+});

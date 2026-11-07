@@ -1070,6 +1070,20 @@
     "why": "Wave 5s lane D split of refresh-cycle.mjs (800-line ceiling): every live dependency that touches a real node, ssh, or this package's own CLIs (judgePressure, liveQueuePressure, createLiveDeps), a pure move. busyCount/drainCli moved on again, to drain-wait.mjs (wave clean-2 lane C, cut (iii) layer debt). part: run rather than refresh-cycle.mjs's core, since this half is exactly the I/O the plan's core/run split is for; refresh-cycle.mjs re-exports every name here."
   },
   {
+    "glob": "scripts/lib/cache-sweep-log.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "fleet-manager#65: when each node's bounded caches were last fully swept. Written by clean-runner-debris.mjs (lifecycle) and read by refresh-cycle-live.mjs (lifecycle) to give a node every night skipped a drained sweep turn. part: run because it reads and writes the state dir."
+  },
+  {
+    "glob": "scripts/lib/refresh-cycle-fixtures.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core",
+    "why": "The refresh cycle's test rig (fixture nodes, probe world, recording harness), moved out of refresh-cycle.test.mjs so the cache-sweep turn's suite shares it rather than copying it. Same bucket as refresh-cycle.mjs, the module it drives."
+  },
+  {
     "glob": "scripts/lib/drain-wait.mjs",
     "layer": "domain",
     "domain": "observation",

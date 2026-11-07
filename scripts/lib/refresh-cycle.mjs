@@ -194,7 +194,9 @@ function settle(id, res) {
  * @param {object} p
  * @param {Array<[string, object]>} p.machines  manifest `[name, entry]` pairs
  * @param {object} p.deps  detect, latest, isDrained, drain, undrain, waitDrained,
- *                         update, reprobe, queuePressure
+ *                         update, reprobe, queuePressure; optionally rebootcamp,
+ *                         and sweepDue(name, nowMs) -> { due, days } with
+ *                         sweepCaches(name) -> { ok, swept, reclaimGb?, reason? }
  * @param {boolean} [p.plan]  detect and report only; drain nothing
  * @param {(line:string)=>void} [p.log]
  * @param {(name:string, entry:object)=>boolean} [p.sudo]  may this run use sudo
@@ -306,6 +308,49 @@ export async function runRefreshCycle({
 		}
 	}
 
+	// THE CACHE SWEEP (fleet-manager#65). clean-runner-debris never touches the
+	// caches a node still uses while a job runs there, so a node busy at every
+	// nightly pass is never swept. `deps.sweepDue` says how long that has gone
+	// on (lib/cache-sweep-log.mjs). A node that already has a turn and is due is
+	// swept inside it, for free. Otherwise ONE more turn per run, the longest
+	// unswept: the same drain, wait and undrain as any other turn, with the
+	// sweep as its only work. Absent `deps.sweepCaches`: no sweeping at all.
+	if (deps.sweepCaches) {
+		const dueOf = (name) => {
+			try {
+				return deps.sweepDue(name, now()) ?? { due: false };
+			} catch {
+				return { due: false };
+			}
+		};
+		for (const t of todo) t.sweep = dueOf(t.name).due;
+		// A node with a turn already has no `nodes` record, so this is "no turn yet".
+		const due = machines
+			.filter(([name]) => {
+				const rec = nodes.find((n) => n.node === name);
+				return rec?.status === 'current' || rec?.status === 'advisory';
+			})
+			.map(([name]) => ({ name, ...dueOf(name) }))
+			.filter((n) => n.due)
+			.sort((a, b) => b.days - a.days);
+		if (due.length) {
+			const { name, days } = due[0];
+			nodes.splice(
+				nodes.findIndex((n) => n.node === name),
+				1
+			);
+			log(`── ${name}  [sweep: caches unswept ${days} days, a job was running every night]`);
+			todo.push({
+				name,
+				tools: toolsByNode.get(name),
+				work: [],
+				toolFindings: [],
+				sweep: true,
+				sweepOnly: true,
+			});
+		}
+	}
+
 	if (plan) {
 		for (const t of todo) {
 			nodes.push({
@@ -313,6 +358,7 @@ export async function runRefreshCycle({
 				status: 'planned',
 				work: t.work,
 				findings: t.toolFindings,
+				...(t.sweep ? { sweep: true } : {}),
 			});
 		}
 		return finish({ nodes, findings, advisories, latestById, plan });
@@ -379,7 +425,9 @@ export async function runRefreshCycle({
 		let d = await attempt(() =>
 			deps.drain(name, {
 				kind: 'training',
-				reason: 'toolchain refresh (automated); returns after re-probe',
+				reason: t.sweepOnly
+					? 'cache sweep (automated); a job was running at every nightly pass; returns after the sweep'
+					: 'toolchain refresh (automated); returns after re-probe',
 			})
 		);
 		if (d.ok && d.value?.ok === false) d = { ok: false, reason: d.value.reason ?? 'drain refused' };
@@ -409,8 +457,17 @@ export async function runRefreshCycle({
 			continue;
 		}
 
+		if (t.sweepOnly) {
+			await sweepCaches(name, rec, deps, finding, log);
+			rec.status = rec.sweep === 'ok' ? 'swept' : 'finding';
+			await putBack(name, rec, deps, finding, log, state);
+			if (rec.status === 'swept') log(`── ${name}  [swept]`);
+			continue;
+		}
+
 		if (t.recheck) {
 			await rebootcamp(name, rec, deps, finding, log);
+			if (t.sweep) await sweepCaches(name, rec, deps, finding, log);
 			rec.status = rec.status ?? 'rechecked';
 			await putBack(name, rec, deps, finding, log, state);
 			if (rec.status === 'rechecked') log(`── ${name}  [rechecked]`);
@@ -470,6 +527,7 @@ export async function runRefreshCycle({
 		// The node is drained and its tools just moved: the moment to re-record
 		// what it can do, so the record follows the toolchain instead of lagging it.
 		if (deps.rebootcamp) await rebootcamp(name, rec, deps, finding, log);
+		if (t.sweep) await sweepCaches(name, rec, deps, finding, log);
 		await putBack(name, rec, deps, finding, log, state);
 		if (rec.status === 'updated') log(`── ${name}  [updated]`);
 	}
@@ -490,6 +548,30 @@ async function rebootcamp(name, rec, deps, finding, log) {
 	if (!ok) {
 		finding(name, 'rebootcamp-failed', `bootcamp did not re-record this node: ${rec.rebootcamp}`);
 		log(`── ${name}  [FINDING] re-bootcamp failed: ${rec.rebootcamp}`);
+	}
+}
+
+/**
+ * Sweep a node's bounded caches while the cycle holds it drained. A failure is
+ * a finding, never a hold: an unswept cache costs disk, not correctness. A
+ * sweep that still reports a running job is a failure too: the drain was
+ * supposed to make that impossible.
+ */
+async function sweepCaches(name, rec, deps, finding, log) {
+	const s = await attempt(() => deps.sweepCaches(name));
+	const v = s.ok ? s.value : null;
+	const why = !s.ok
+		? s.reason
+		: v?.ok === false
+			? (v.reason ?? 'sweep failed')
+			: v?.swept === false
+				? 'the sweep still saw a running job on a drained node'
+				: null;
+	rec.sweep = why ?? 'ok';
+	if (v?.reclaimGb !== undefined) rec.reclaimGb = v.reclaimGb;
+	if (why) {
+		finding(name, 'cache-sweep-failed', `caches not swept: ${why}`);
+		log(`── ${name}  [FINDING] cache sweep failed: ${why}`);
 	}
 }
 

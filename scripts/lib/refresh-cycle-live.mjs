@@ -28,6 +28,7 @@ import { byRole } from './toolchain-floor.mjs';
 import { createReleaseLookup, resolveInstallTarget } from './tool-release.mjs';
 import { SITE_WRITER_ENV, siteWriterDir } from './manifest-target.mjs';
 import { errText } from './term.mjs';
+import { daysUnswept, readSweepLog, sweepDue } from './cache-sweep-log.mjs';
 import { PRESSURE_OLDEST_SECONDS, runWorkItem } from './refresh-cycle.mjs';
 // busyCount/drainCli/isDrained/drain/undrain/waitUntilDrained moved to
 // drain-wait.mjs (wave clean-2 lane C, cut (iii) layer debt): classified
@@ -144,6 +145,11 @@ export function createLiveDeps() {
 				)
 			),
 		queuePressure: liveQueuePressure,
+		sweepDue: (node, nowMs) => {
+			const rec = readSweepLog()[node];
+			return { due: sweepDue(rec, nowMs), days: daysUnswept(rec, nowMs) ?? 0 };
+		},
+		sweepCaches: liveSweepCaches,
 		lastChecked: (node) => readRecheckLog()[node] ?? 0,
 		markChecked: (node) => {
 			const log = readRecheckLog();
@@ -190,6 +196,44 @@ export function createLiveDeps() {
 		},
 	};
 }
+
+/**
+ * The nightly cleaner, run for ONE node the cycle holds drained. The same CLI as
+ * ci:claw-cleanup, so the sweep follows the same rules and the cleaner records
+ * it (lib/cache-sweep-log.mjs has one writer). Its exit is 1 on any finding, so
+ * the node's own result decides, never the exit code.
+ */
+export function liveSweepCaches(node) {
+	const r = spawnSync(
+		process.execPath,
+		[join(SCRIPTS, 'clean-runner-debris.mjs'), '--machine', node, '--confirm', '--json'],
+		{ encoding: 'utf8', timeout: SWEEP_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }
+	);
+	return judgeSweep(node, r.stdout, r.error ? errText(r.error) : `exit ${r.status}`);
+}
+
+/** One node's verdict from clean-runner-debris --json stdout. Pure. */
+export function judgeSweep(node, stdout, failure) {
+	let doc = null;
+	try {
+		doc = JSON.parse(String(stdout ?? '').trim());
+	} catch {
+		doc = null;
+	}
+	const res = doc?.results?.find?.((x) => x.machine === node);
+	if (!res)
+		return { ok: false, reason: `clean-runner-debris gave no result for ${node} (${failure})` };
+	if (!res.ok)
+		return { ok: false, reason: String(res.error ?? res.skipped ?? 'not cleaned').slice(0, 300) };
+	return {
+		ok: true,
+		swept: res.cachesSwept === true,
+		reclaimGb: Number(((res.reclaimKb ?? 0) / 1048576).toFixed(2)),
+	};
+}
+
+/** A cleaner node run is bounded at 90 s inside; this leaves room to start and report. */
+const SWEEP_TIMEOUT_MS = 180_000;
 
 /** Bootcamp probes every capability, cargo-bevy's build included. */
 const REBOOTCAMP_TIMEOUT_MS = 30 * 60_000;
