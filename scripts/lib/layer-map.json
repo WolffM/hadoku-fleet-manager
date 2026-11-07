@@ -276,6 +276,11 @@
     "layer": "automation"
   },
   {
+    "glob": "scripts/fleet-gates.mjs",
+    "layer": "automation",
+    "why": "fleet-manager#67: prints the door's own command table (FLEET_DOOR_TABLE) as data, the same door-table reader as `fleet-usage.mjs` right above it, so hadoku_site's check-gate-coverage stops parsing dist/cli.js."
+  },
+  {
     "glob": "scripts/file-size-debt.mjs",
     "layer": "automation",
     "why": "Wave 5n lane D: the file-size ceiling guard's regenerator CLI \u2014 a generic, domain-blind maintenance tool over `file-size-guard.mjs` below, same bucket as `fleet-usage.mjs` right above it."

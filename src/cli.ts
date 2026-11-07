@@ -86,6 +86,16 @@ const COMMANDS: Record<string, Command> = {
 		summary:
 			'who ran which subcommand and route, from the invocation log — and which nobody did (--since 120d)',
 	},
+	// The table itself, as data (fleet-manager#67): hadoku_site's
+	// check-gate-coverage scraped dist/cli.js for `name: { script: ... }` and
+	// went red for ~6.4h when the table split into cli-commands-*.js.
+	gates: {
+		script: 'fleet-gates.mjs',
+		kind: 'operator',
+		help: true,
+		doorTable: true,
+		summary: "this CLI's own command table — every subcommand, its script and kind (--json)",
+	},
 };
 
 // DOMAIN + FLAGS, BOTH READ RATHER THAN RE-DECLARED (plan §3.4, F8 step 2).
@@ -346,7 +356,22 @@ const runner = target.endsWith('.py')
 const child = spawn(runner.cmd, [...runner.argv, ...(cmd.args ?? []), ...rest], {
 	stdio: 'inherit',
 	...(cmd.doorTable
-		? { env: { ...process.env, FLEET_DOOR_COMMANDS: Object.keys(COMMANDS).join(',') } }
+		? {
+				env: {
+					...process.env,
+					FLEET_DOOR_COMMANDS: Object.keys(COMMANDS).join(','),
+					// The whole table, for `fleet gates`: read from COMMANDS, never re-declared.
+					// No domain: resolving one stays out of the dispatch path (cli-help.test).
+					FLEET_DOOR_TABLE: JSON.stringify(
+						Object.entries(COMMANDS).map(([sub, c]) => ({
+							name: sub,
+							script: c.script,
+							kind: c.kind,
+							summary: c.summary,
+						}))
+					),
+				},
+			}
 		: {}),
 });
 child.on('error', (err) => {
