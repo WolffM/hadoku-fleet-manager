@@ -90,6 +90,12 @@ export interface Scenario {
 	 * run (forge.yml's `changes`), run it, and exit, before the target is queued.
 	 */
 	prereqTakes?: number;
+	/**
+	 * The jobs listing omits the target for this many looks per run: it is not
+	 * listed until its `needs:` prerequisite finishes (forge.yml's `changes`
+	 * waiting for a pool runner, 2026-11-07).
+	 */
+	unlistedLooks?: number;
 }
 
 export function world(sc: Scenario = {}) {
@@ -120,6 +126,7 @@ export function world(sc: Scenario = {}) {
 		who: Who;
 		runner: string | null;
 		polls: number;
+		looks?: number;
 		cancelled: boolean;
 		done: boolean;
 		startedAtMs?: number;
@@ -227,6 +234,8 @@ export function world(sc: Scenario = {}) {
 			const jobs = /\/actions\/runs\/(\d+)\/jobs/.exec(path);
 			if (jobs) {
 				const r = runs.find((x) => x.id === Number(jobs[1]))!;
+				r.looks = (r.looks ?? 0) + 1;
+				if (r.looks <= (sc.unlistedLooks ?? 0)) return { jobs: [] };
 				return { jobs: [job(r)] };
 			}
 			const one = /\/actions\/runs\/(\d+)$/.exec(path);

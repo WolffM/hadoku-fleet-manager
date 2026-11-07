@@ -122,6 +122,9 @@ import { awaitLandedVerdict } from './prove-job-verdict.js';
 /** GitHub calls here go through the operator's own `gh` auth, never a token we hold. */
 const NO_TOKEN = '';
 
+/** A job GitHub has listed but not yet queued for a runner: it waits on `needs:` or an approval. */
+const PENDING_JOB = new Set(['waiting', 'pending', 'requested']);
+
 // --- orchestration ----------------------------------------------------------
 
 export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResult> {
@@ -498,11 +501,19 @@ export async function proveJob(spec: ProveSpec, d: ProveDeps): Promise<ProofResu
 			// runs on the plain pool labels the proof runner also carries. Cancelling
 			// would only repeat that on every attempt (claw-4, 2026-10-08): mint another
 			// in place and restart the assignment clock, up to the attempt ceiling.
+			// AIMED, the assignment clock also starts only once the target job is
+			// listed and past its `needs:`. Until then it is waiting on the run's
+			// prerequisites, which queue on the plain pool like any job: on
+			// 2026-11-07 forge.yml's `changes` waited over two minutes for a pool
+			// runner behind cardtable's own backlog, and claw-9's canary was cancelled
+			// before its target job existed. Nothing but the proof runner can take an
+			// aimed job, so waiting is safe; the run's overall deadline still bounds it.
 			let job: JobRow | null = null;
 			let reminted = 0;
-			for (let t = d.now(); d.now() - t < assignMs;) {
+			for (let t = d.now(); d.now() - t < assignMs && d.now() < deadline;) {
 				job = await pick();
 				if (job && (job.runner_name || job.status === 'completed')) break;
+				if (spec.runsOnInput && (!job || PENDING_JOB.has(job.status ?? ''))) t = d.now();
 				if (
 					spec.runsOnInput &&
 					reminted < MAX_ATTEMPTS_CEILING &&

@@ -106,6 +106,38 @@ test('an aimed canary whose runner a prerequisite took mints another and lands i
 	assert.deepEqual(w.leaked(), { units: [], registered: [], staged: [] });
 });
 
+// 2026-11-07: forge.yml's `changes` waited over two minutes for a pool runner
+// behind cardtable's backlog, and claw-9's aimed canary was cancelled before
+// its target job was even listed.
+test("an aimed canary's assignment clock starts once its target job is listed, not at dispatch", async () => {
+	const w = world({ unlistedLooks: 20 });
+	const r = await proveJob(
+		{
+			...SPEC,
+			labelsOverride: ['self-hosted', 'hadoku-builder', 'jdk21'],
+			runsOnInput: 'runs_on',
+			assignTimeoutMs: 8_000,
+		},
+		w.deps(node())
+	);
+	assert.equal(r.verdict, 'pass', JSON.stringify(r.findings));
+	assert.equal(w.log.dispatches, 1, 'never cancelled and re-dispatched');
+});
+
+test('an UNAIMED canary still counts from dispatch: another listener could have the job', async () => {
+	const w = world({ unlistedLooks: 20 });
+	const r = await proveJob(
+		{
+			...SPEC,
+			labelsOverride: ['self-hosted', 'hadoku-builder'],
+			assignTimeoutMs: 8_000,
+			maxAttempts: 1,
+		},
+		w.deps(node())
+	);
+	assert.notEqual(r.verdict, 'pass');
+});
+
 test('re-minting is bounded by the attempt ceiling', async () => {
 	const w = world({ prereqTakes: 99 });
 	const r = await proveJob(
