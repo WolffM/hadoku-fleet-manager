@@ -11,11 +11,24 @@
 /**
  * The tiers a KEY may hold, LOW to HIGH. `public` is excluded: it is the
  * absence of a credential, so a list of ASSIGNABLE tiers legitimately omits it.
+ * `member`, a self-signed-up account, is the bottom rung. It was missing here
+ * for weeks after it joined the platform ladder, so no list that left it out
+ * was ever flagged, and a floor set to `member` in such a copy ranked as public.
  */
-const ASSIGNABLE_TIERS = ['friend', 'service', 'wife', 'admin'];
+const ASSIGNABLE_TIERS = ['member', 'friend', 'service', 'wife', 'admin'];
 
 /** The top of the ladder. Nothing outranks it — see `findNonTopTierEquality`. */
 const TOP_TIER = 'admin';
+
+/**
+ * The bottom of the ladder. An exact match against it asks "a self-signed-up
+ * account and nothing more", as the fleet's verified-member checks do
+ * (`userType === 'member' && verified`), so it excludes every tier above it ON
+ * PURPOSE. It is exempt from `findNonTopTierEquality` for the mirror of the
+ * reason `admin` is: an exact match at either end of the ladder is a question
+ * about that end, not an allowlist that forgot the tiers beside it.
+ */
+const BOTTOM_TIER = 'member';
 
 /**
  * A tier name as a STRING LITERAL or an object key — `'admin'`, `"wife"`,
@@ -169,7 +182,7 @@ export function findStaleVocabularies(text) {
  * Returns `[{ line, text }]`.
  */
 export function findNonTopTierEquality(text) {
-	const nonTop = ASSIGNABLE_TIERS.filter((t) => t !== TOP_TIER).join('|');
+	const nonTop = ASSIGNABLE_TIERS.filter((t) => t !== TOP_TIER && t !== BOTTOM_TIER).join('|');
 	// The operand must NAME a caller's tier. Without this the rule fires on
 	// `requires == "friend"` (dataplatform compares a route's REQUIRED tier —
 	// correct code) and on coincidental string equality inside minified vendor
@@ -182,7 +195,7 @@ export function findNonTopTierEquality(text) {
 	const re = new RegExp(
 		`(?:\\b${SUBJ}\\s*[=!]==?\\s*['"\`](${nonTop})['"\`])` +
 			`|(?:['"\`](${nonTop})['"\`]\\s*[=!]==?\\s*\\b${SUBJ})` +
-			`|(?:\\b${SUBJ}\\s+(?:not\\s+)?in\\s*[([{]\\s*['"\`](?:${nonTop}|${TOP_TIER})['"\`])`,
+			`|(?:\\b${SUBJ}\\s+(?:not\\s+)?in\\s*[([{]\\s*['"\`](?:${nonTop}|${TOP_TIER}|${BOTTOM_TIER})['"\`])`,
 		'g'
 	);
 	// The JS spelling of the same allowlist: `['service', 'admin'].includes(
@@ -214,9 +227,14 @@ function tiersNamed(src) {
 	return new Set([...src.matchAll(re)].map((m) => m[1]));
 }
 
-/** Names a non-top tier, and leaves at least one assignable tier out. */
+/**
+ * Names a tier, is not an exact match at either end of the ladder (`admin`
+ * alone, `member` alone), and leaves at least one assignable tier out.
+ */
 function isPartialTierList(found) {
-	return [...found].some((t) => t !== TOP_TIER) && ASSIGNABLE_TIERS.some((t) => !found.has(t));
+	if (found.size === 0) return false;
+	if (found.size === 1 && (found.has(TOP_TIER) || found.has(BOTTOM_TIER))) return false;
+	return ASSIGNABLE_TIERS.some((t) => !found.has(t));
 }
 
 /**

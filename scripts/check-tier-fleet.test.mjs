@@ -30,7 +30,7 @@ const NO_GIT_ENV = Object.fromEntries(
 	Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))
 );
 
-const CLEAN = 'export const rank = { friend: 1, service: 2, wife: 3, admin: 4 };\n';
+const CLEAN = 'export const rank = { member: 1, friend: 2, service: 3, wife: 4, admin: 5 };\n';
 const DRIFT = "if (auth.userType === 'service') allow();\n";
 
 /**

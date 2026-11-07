@@ -54,7 +54,17 @@ be exactly the class of bug these rules exist to catch.
   gets the whole check ignored). This is the two-tier-allowlist shape the
   vocabulary rule cannot see by construction — it caught watchparty's
   browser-side `isPrivileged` (`=== 'service' || === 'admin'`) after the
-  server-side twin had already been fixed.
+  server-side twin had already been fixed. An exact match against `member`
+  ALONE is exempt for the mirror of the reason `admin` is: it asks "a
+  self-signed-up account and nothing more", as the fleet's verified-member
+  checks do (`userType === 'member' && verified`). `member` beside any other
+  tier is still a partial allowlist.
+
+The vocabulary is `member < friend < service < wife < admin` (`public` is the
+absence of a key, never listed). `member` joined it on 2026-11-06, weeks after
+it joined the platform ladder; until then a list that left it out read as
+complete, so nothing flagged a ladder in which a `member` floor ranked as
+public.
 
 Tests are scanned for stale vocabularies but _not_ for equality comparisons: a
 test asserting `userType === 'service'` behaves correctly is the point of the
