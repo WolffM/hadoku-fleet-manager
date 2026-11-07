@@ -426,6 +426,11 @@
     "layer": "access"
   },
   {
+    "glob": "scripts/lib/consumer-imports.mjs",
+    "layer": "automation",
+    "why": "fleet-manager#67: a published subpath export (`@wolffm/fleet-manager/consumer-imports`), pure text in and bindings out, read by mgmt-api's /api/repo/consumer-imports and the pre-publish check. A domain-blind text utility over blank-comments.mjs, filed beside it in automation; it reads no file, repo or network itself."
+  },
+  {
     "glob": "scripts/lib/fake-node.mjs",
     "layer": "access"
   },

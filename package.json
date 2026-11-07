@@ -23,6 +23,7 @@
       "default": "./dist/index.js"
     },
     "./fleet-exec": "./scripts/lib/fleet-exec.mjs",
+    "./consumer-imports": "./scripts/lib/consumer-imports.mjs",
     "./fleet-source": "./scripts/lib/fleet-source.mjs",
     "./fleet-source-fixture": "./scripts/lib/fleet-source-fixture.mjs",
     "./sibling-repos": "./scripts/lib/sibling-repos.mjs",
@@ -40,7 +41,8 @@
     "test": "rm -rf dist/tests && tsc && node --disable-warning=ExperimentalWarning --import ./dist/tests/install-test-host.js --test 'dist/tests/**/*.test.js' && node --disable-warning=ExperimentalWarning --test 'scripts/**/*.test.mjs'",
     "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run check:exports && pnpm run test",
     "check:exports": "node scripts/check-exports.mjs",
-    "prepare": "git config core.hooksPath .husky 2>/dev/null || true"
+    "prepare": "git config core.hooksPath .husky 2>/dev/null || true",
+    "check:consumers": "node scripts/check-consumer-imports.mjs --repo WolffM/hadoku_site"
   },
   "peerDependencies": {
     "express": ">=5.1.0"
