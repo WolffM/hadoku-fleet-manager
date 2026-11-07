@@ -165,6 +165,20 @@ jobs:
           PUBLISH_DENYLIST: ${{ secrets.PUBLISH_DENYLIST }}
         run: pnpm run check
 
+      # THE CONSUMERS' VIEW OF THIS BUILD (fleet-manager#67). `check` proves the
+      # package agrees with itself; this proves it still provides everything a
+      # consumer imports. 0.34.324 dropped BackstopReason and ClawState while
+      # hadoku_site imported both, and the site's Typecheck was red 17 times.
+      # The import list comes from mgmt-api, built from the deployed site with
+      # this package's own extractor: binding names only, so this public repo
+      # reads no consumer source and holds no access to a private repo. Could
+      # not look (route down, no bindings) refuses the publish, like a removal.
+      - name: Consumer imports resolve against this build
+        if: steps.gate.outputs.ships == 'true'
+        env:
+          FLEET_SERVICE_KEY: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
+        run: node scripts/check-consumer-imports.mjs --surface-url https://hadoku.me/mgmt/api/repo/consumer-imports
+
       # One patch above the newest on the registry, written to package.json
       # in this workspace only and never committed. It reads with the vault's
       # read token; a registry it cannot read FAILS here rather than guess.

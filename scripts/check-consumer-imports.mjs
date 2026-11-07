@@ -18,7 +18,12 @@
  *
  * WHERE THE IMPORT LIST COMES FROM. Two sources, one extractor:
  *   --surface-url URL  mgmt-api's `GET /api/repo/consumer-imports`, with
- *                      FLEET_SERVICE_KEY. What the publish job uses: it reads
+ *                      FLEET_SERVICE_KEY. publish.yml's "Consumer imports
+ *                      resolve against this build" step, after `check` and
+ *                      before the version is chosen: a refusal publishes
+ *                      nothing. The route builds the list with the extractor
+ *                      mgmt-api has INSTALLED, so a change to that extractor
+ *                      must ship and deploy before a publish relies on it. It reads
  *                      NO consumer source and needs no access to a private repo,
  *                      only the list of this package's own export names that the
  *                      consumer uses (operator, 2026-11-06).
