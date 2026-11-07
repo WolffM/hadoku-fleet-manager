@@ -33,7 +33,12 @@ const SPEC = `['"](${PKG.replace('/', '\\/')}(?:\\/[\\w./-]+)?)['"]`;
  *   the subpath to resolve.
  */
 export function extractImports(source, { js = false } = {}) {
-	const src = blankComments(source);
+	// Strings blanked too, keeping only a quoted package specifier: a fixture
+	// import inside a test's template literal is text, not an import.
+	const src = blankComments(source, {
+		strings: true,
+		keepString: (c) => c === PKG || c.startsWith(`${PKG}/`),
+	});
 	const out = [];
 	const named = (list, spec, typeOnly) => {
 		for (const raw of list.split(',')) {

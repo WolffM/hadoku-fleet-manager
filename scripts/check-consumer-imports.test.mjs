@@ -186,3 +186,21 @@ test('consumer-imports.d.mts declares exactly what the module exports (mgmt-api 
 	const declared = [...dts.matchAll(/^export declare (?:const|function) (\w+)/gm)].map((m) => m[1]);
 	assert.deepEqual(declared.sort(), Object.keys(mod).sort());
 });
+
+test('an import written INSIDE a string is text, not an import (hadoku_site consumer-imports.test.ts, 11-07)', () => {
+	const src = [
+		`import { realOne } from '${P}';`,
+		'const fixture = `',
+		`import { One, Two } from '${P}';`,
+		`export { Gone } from '${P}/fleet-source';`,
+		'`;',
+		`const quoted = "import { Prose } from '${P}'";`,
+		`const nested = \`\${[1].map((n) => \`import { Edited } from '${P}'\`)}\`;`,
+		`const { dyn } = await import('${P}/fleet-exec');`,
+	].join('\n');
+	assert.deepEqual(names(src).sort(), [
+		`module:null@${P}/fleet-exec`,
+		`value:dyn@${P}/fleet-exec`,
+		`value:realOne@${P}`,
+	]);
+});

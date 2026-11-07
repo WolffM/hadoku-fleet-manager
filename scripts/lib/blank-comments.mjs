@@ -175,7 +175,23 @@ function opensRegex(state) {
 	return true;
 }
 
-export function blankComments(src) {
+/**
+ * `opts.strings`: blank string and template CONTENTS too, delimiters and
+ * newlines kept, so prose or a fixture inside a string can no longer read as
+ * code. A quoted ('/") string whose whole content passes `opts.keepString` is
+ * kept verbatim, which is how a caller keeps the one string it means to read:
+ * lib/consumer-imports.mjs keeps package specifiers, so a fixture like
+ * `import { One } from '<pkg>'` inside a test's template literal is not an
+ * import (hadoku_site's consumer-imports.test.ts, 2026-11-07). Template
+ * interpolations (`${…}`) are code and stay visible. Off by default: every
+ * other caller keeps strings on purpose (see the header).
+ *
+ * @param {string} src
+ * @param {{ strings?: boolean, keepString?: (content: string) => boolean }} [opts]
+ */
+export function blankComments(src, opts = {}) {
+	const blankStrings = Boolean(opts.strings);
+	const keepString = opts.keepString ?? (() => false);
 	let out = '';
 	let i = 0;
 	let mode = 'code';
@@ -226,6 +242,14 @@ export function blankComments(src) {
 				depth -= 1;
 			}
 			if (ch === '"' || ch === "'" || ch === '`') {
+				if (blankStrings && ch !== '`') {
+					const end = closingQuote(src, i);
+					if (end !== -1 && keepString(src.slice(i + 1, end))) {
+						out = emit(out, state, src.slice(i, end + 1));
+						i = end + 1;
+						continue;
+					}
+				}
 				mode = 'string';
 				quote = ch;
 				out = emit(out, state, ch);
@@ -287,7 +311,8 @@ export function blankComments(src) {
 		}
 		// string
 		if (ch === '\\') {
-			out = emit(out, state, src.slice(i, i + 2));
+			const esc = src.slice(i, i + 2);
+			out = emit(out, state, blankStrings ? esc.replace(/[^\n]/g, ' ') : esc);
 			i += 2;
 			continue;
 		}
@@ -299,8 +324,19 @@ export function blankComments(src) {
 			continue;
 		}
 		if (ch === quote) mode = 'code';
-		out = emit(out, state, ch);
+		out = emit(out, state, blankStrings && ch !== quote && ch !== '\n' ? ' ' : ch);
 		i += 1;
 	}
 	return out;
+}
+
+/** Index of the quote closing the '/" string opening at `start`, on its own line; -1 if none. */
+function closingQuote(src, start) {
+	const q = src[start];
+	for (let k = start + 1; k < src.length; k += 1) {
+		if (src[k] === '\\') k += 1;
+		else if (src[k] === q) return k;
+		else if (src[k] === '\n') return -1;
+	}
+	return -1;
 }
