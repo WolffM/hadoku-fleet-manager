@@ -5,6 +5,7 @@
  * every caller and test agrees on sits apart from the pass itself;
  * `dispatch-pass.ts` re-exports both types under their original path.
  */
+import type { HostPace } from './speed-tier.js';
 import type { PendingRun, SkipReason } from './dispatcher.js';
 import type { NodeState } from './placement-node-state.js';
 
@@ -34,6 +35,8 @@ export interface DispatchPassInput {
 	 * every unit goes to the default slice.
 	 */
 	sliceNameFor?: (node: string) => string | null | undefined;
+	/** The node's measured speed, written into the minted slot's `.env` as HOST_PACE (fleet-manager#68). */
+	hostPaceFor?: (node: string) => HostPace | null;
 	ttlSeconds: number;
 	/** Repos to sweep for orphaned JIT registrations. */
 	repos?: string[];

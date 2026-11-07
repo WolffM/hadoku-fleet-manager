@@ -15,6 +15,7 @@ import { slotDir } from './ephemeral.js';
 import { buildSpawnPlan, labelsFromUnitDescription } from './ephemeral-mint.js';
 import { nodeScriptCommand } from './node-script.js';
 import { type GhLike, type ShellLike } from '../lib/fleet-vocabulary.js';
+import { hostPaceAssignments, type HostPace } from './speed-tier.js';
 
 export interface MintRequest {
 	node: string;
@@ -39,6 +40,8 @@ export interface MintRequest {
 	 * here degrades to exactly the old behaviour (SLOT-FAIL with a reason).
 	 */
 	tarballUrl?: string | null;
+	/** The node's measured speed, written to the slot's `.env` (fleet-manager#68). Absent: none written. */
+	hostPace?: HostPace | null;
 }
 
 export interface MintOutcome {
@@ -145,7 +148,10 @@ export async function mintEphemeralRunner(
 	const tarball = req.tarballUrl ? ` RUNNER_TARBALL_URL='${shellSingleQuote(req.tarballUrl)}'` : '';
 	let provision: string;
 	try {
-		provision = nodeScriptCommand('jit-provision.sh', `SLOT=${req.slotIndex} RESET=1${tarball}`);
+		provision = nodeScriptCommand(
+			'jit-provision.sh',
+			`SLOT=${req.slotIndex} RESET=1${tarball}${hostPaceAssignments(req.hostPace)}`
+		);
 	} catch (err) {
 		return { ok: false, reason: `could not read jit-provision.sh: ${(err as Error).message}` };
 	}

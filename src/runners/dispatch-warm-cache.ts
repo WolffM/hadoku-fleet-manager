@@ -16,6 +16,7 @@ import { logger } from '../host.js';
 import { withoutBackstops, shellOnNode, type EphemeralTickInput } from './ephemeral-shared.js';
 import { loadWorkloadGateContext } from '../workload-gate-store.js';
 import { getSpeedModel, getHeavyModel } from './speed-heavy-cache.js';
+import { hostPaceOf } from './speed-tier.js';
 import { WARM_CACHE_INTERVAL_MS, warmBackoffActive } from './warm-backoff.js';
 import {
 	fleetServedJobs,
@@ -411,6 +412,7 @@ export async function dispatchWarmCache(
 				gh,
 				sh,
 				tarballUrl,
+				hostPaceFor: (node) => hostPaceOf(speedModel, node),
 				nowMs,
 				result,
 			})

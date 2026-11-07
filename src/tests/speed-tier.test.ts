@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 
 import {
 	buildSpeedModel,
+	hostPaceAssignments,
+	hostPaceOf,
 	MIN_KIND_SAMPLES,
 	MIN_KINDS,
 	MIN_OTHER_NODES,
@@ -15,6 +17,7 @@ import {
 	SLOW_P25,
 	TRIVIAL_SEC,
 	WINDOW_DAYS,
+	type SpeedModel,
 } from '../runners/speed-tier.js';
 import { RETENTION_DAYS, type JobRecord, type ProbeOrigin } from '../job-history-store.js';
 
@@ -674,4 +677,28 @@ test('#8: a node with enough successes is read from them — long failures of a 
 	const k = model.kindSlowness?.('claw-1', E2E_REPO, 'e2e');
 	assert.equal(k?.lowerBounds, 0);
 	assert.equal(k?.ratio, 1600 / 1500);
+});
+
+void test('#68: hostPaceOf is the measured factor, and thin history is NEUTRAL, never fast', () => {
+	const model = (factor: number | null, tier: 'normal' | 'slow' | 'unknown') =>
+		({
+			tierOf: () => tier,
+			expectedExtraSec: () => null,
+			describe: () => ({}),
+			factorOf: () => factor,
+		}) as unknown as SpeedModel;
+	assert.deepEqual(hostPaceOf(model(1.4237, 'slow'), 'claw-3'), { pace: 1.42, class: 'slow' });
+	assert.deepEqual(hostPaceOf(model(0.6, 'normal'), 'claw-8'), { pace: 0.6, class: 'normal' });
+	assert.deepEqual(hostPaceOf(model(null, 'unknown'), 'claw-10'), { pace: 1, class: 'unknown' });
+	assert.deepEqual(hostPaceOf(model(Number.NaN, 'normal'), 'x'), { pace: 1, class: 'normal' });
+});
+
+void test('#68: hostPaceAssignments sends only a number and a tier word to the remote shell', () => {
+	assert.equal(
+		hostPaceAssignments({ pace: 1.4, class: 'slow' }),
+		' HOST_PACE=1.40 HOST_PACE_CLASS=slow'
+	);
+	assert.equal(hostPaceAssignments(null), '');
+	assert.equal(hostPaceAssignments({ pace: Number.NaN, class: 'slow' }), '');
+	assert.equal(hostPaceAssignments({ pace: 1, class: 'x; rm -rf /' as unknown as 'slow' }), '');
 });

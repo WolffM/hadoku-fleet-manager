@@ -36,6 +36,7 @@ import {
 import { loadWorkloadGateContext } from '../workload-gate-store.js';
 import { dispatchWarmCache } from './dispatch-warm-cache.js';
 import { getSpeedModel, getHeavyModel } from './speed-heavy-cache.js';
+import { hostPaceOf } from './speed-tier.js';
 import { onDemandBackstops, recentJobsPerDay } from './ephemeral-tick-verdict.js';
 
 import { probeNodeMemory, __resetSpaceProbeLogForTesting } from './ephemeral-tick-probe.js';
@@ -318,6 +319,7 @@ export async function dispatchEphemeral(
 			// The node's own slice, now that the mint path carries it (#120). Only
 			// the backstop declares one today; every claw resolves to the default.
 			sliceNameFor: (node) => input.nodes[node]?.slice?.name,
+			hostPaceFor: (node) => hostPaceOf(speedModel, node),
 			homeDirFor: (node) => nodeHome(input.nodes[node], 'ci'),
 			// NOT an orphan timeout. It was 3600 until 2026-09-14 and read as one,
 			// and systemd stopped the unit at the hour whether it held an idle

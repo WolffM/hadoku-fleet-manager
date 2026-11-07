@@ -5,6 +5,7 @@
  * `dispatch-tick.ts` (wave shrink-1 lane B, 800-line ceiling);
  * `dispatch-tick.ts` re-exports every name here under its original path.
  */
+import type { HostPace } from './speed-tier.js';
 import { __resetSubCadenceKeyForTesting } from '../lib/every.js';
 import type { NodeState } from './placement-node-state.js';
 import type { QueuedRun, QueuedJob } from './queue-discovery.js';
@@ -119,6 +120,8 @@ export interface DispatchTickInput {
 	memoryMaxMbFor: (repo: string, node: string) => number;
 	/** See `DispatchPassInput.sliceNameFor`. */
 	sliceNameFor?: (node: string) => string | null | undefined;
+	/** See `DispatchPassInput.hostPaceFor`. */
+	hostPaceFor?: (node: string) => HostPace | null;
 	/** See `DispatchPassInput.homeDirFor`. */
 	homeDirFor: (node: string) => string;
 	ttlSeconds: number;

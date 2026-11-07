@@ -26,6 +26,7 @@ import { warmRunnerName } from '../lib/jit-naming.js';
 import { warmSlotDir } from './ephemeral.js';
 import { buildWarmSpawnPlan } from './ephemeral-mint.js';
 import { nodeScriptCommand } from './node-script.js';
+import { hostPaceAssignments, type HostPace } from './speed-tier.js';
 import {
 	mintLabels,
 	describeGhError,
@@ -101,6 +102,8 @@ export interface WarmMintRequest {
 	homeDir: string;
 	memoryMaxMb: number;
 	tarballUrl?: string | null;
+	/** See `MintRequest.hostPace`. A warm listener's pace is the one measured when it was minted. */
+	hostPace?: HostPace | null;
 }
 
 /**
@@ -151,7 +154,8 @@ export async function mintWarmListener(
 			'warm-provision.sh',
 			`RESET=1 URL='${shellSingleQuote(url)}' REPO='${shellSingleQuote(req.repo)}' ` +
 				`REG_TOKEN='${shellSingleQuote(regToken)}' NAME='${shellSingleQuote(req.runnerName)}' ` +
-				`LABELS='${shellSingleQuote(warmLabels(req.labels).join(','))}'${tarball}`
+				`LABELS='${shellSingleQuote(warmLabels(req.labels).join(','))}'${tarball}` +
+				hostPaceAssignments(req.hostPace)
 		);
 	} catch (err) {
 		return { ok: false, reason: `could not read warm-provision.sh: ${(err as Error).message}` };

@@ -134,6 +134,26 @@ else
 	echo "SLOT-WARN no ~/.hadoku/runner.env — this slot has no RUNNER_TOOL_CACHE, so setup-python will fail on it. Re-run: fleet throttle --confirm --machine \$(hostname -s)"
 fi
 
+# HOST_PACE (fleet-manager#68). The node's measured speed, from the
+# dispatcher's speed model at mint time: `factorOf`, 1.0 typical, higher
+# slower, and the tier (normal|slow|unknown). A job reads them from its env to
+# scale a fixed time budget, by max(1, HOST_PACE). Written only when the mint
+# carried one, and only in a form the dispatcher could have sent; anything else
+# leaves the slot without a pace rather than handing a job a string.
+if [ -n "${HOST_PACE:-}" ]; then
+	[[ "$HOST_PACE" =~ ^[0-9]{1,2}\.[0-9]{2}$ ]] || HOST_PACE=
+	case "${HOST_PACE_CLASS:-}" in
+	normal | slow | unknown) ;;
+	*) HOST_PACE= ;;
+	esac
+fi
+if [ -n "${HOST_PACE:-}" ]; then
+	touch "$DIR/.env"
+	grep -v -e '^HOST_PACE=' -e '^HOST_PACE_CLASS=' "$DIR/.env" >"$DIR/.env.tmp" 2>/dev/null || : >"$DIR/.env.tmp"
+	mv "$DIR/.env.tmp" "$DIR/.env"
+	printf 'HOST_PACE=%s\nHOST_PACE_CLASS=%s\n' "$HOST_PACE" "$HOST_PACE_CLASS" >>"$DIR/.env"
+fi
+
 # Assert the slot is genuinely hardlinked rather than deep-copied — the failure
 # is silent and only visible as disk that quietly grows per mint.
 pi=$(stat -c %i "$PAYLOAD/bin/Runner.Listener" 2>/dev/null)

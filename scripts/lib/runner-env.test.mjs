@@ -363,6 +363,55 @@ void test('jit-provision.sh merges TMPDIR/NODE_COMPILE_CACHE into a slot .env ex
 	assert.equal(existsSync(join(home, 'runner-tmp')), true);
 });
 
+void test('#68: jit-provision.sh writes HOST_PACE/HOST_PACE_CLASS once, the newest mint wins, and a malformed pace writes nothing', () => {
+	const home = take(mkdtempSync(join(tmpdir(), 'runner-env-')));
+	mkdirSync(join(home, '.hadoku'), { recursive: true });
+	writeFileSync(join(home, '.hadoku', 'runner.env'), `TMPDIR=${home}/runner-tmp\n`);
+	const FAKE_LISTENER =
+		'#!/usr/bin/env bash\nif [ "${1:-}" = "--version" ]; then echo "2.336.0"; exit 0; fi\nexit 0\n';
+	const payload = join(home, '.hadoku', 'jit', 'payload');
+	mkdirSync(join(payload, 'bin'), { recursive: true });
+	mkdirSync(join(payload, 'externals'), { recursive: true });
+	writeFileSync(join(payload, 'bin', 'Runner.Listener'), FAKE_LISTENER, { mode: 0o755 });
+	writeFileSync(join(payload, 'externals', 'node20'), 'x');
+	const dir = join(home, '.hadoku', 'jit', 'slot1');
+	mkdirSync(join(dir, 'bin'), { recursive: true });
+	writeFileSync(join(dir, 'bin', 'Runner.Listener'), FAKE_LISTENER, { mode: 0o755 });
+	const pace = () =>
+		readFileSync(join(dir, '.env'), 'utf8')
+			.split('\n')
+			.filter((l) => l.startsWith('HOST_PACE'));
+
+	runHermetic(JIT_ARGV, home, {
+		SLOT: '1',
+		RESET: '0',
+		HOST_PACE: '1.42',
+		HOST_PACE_CLASS: 'slow',
+	});
+	runHermetic(JIT_ARGV, home, {
+		SLOT: '1',
+		RESET: '0',
+		HOST_PACE: '1.12',
+		HOST_PACE_CLASS: 'normal',
+	});
+	assert.deepEqual(pace(), ['HOST_PACE=1.12', 'HOST_PACE_CLASS=normal']);
+
+	// Not a number the dispatcher could have sent: the previous pace stays, nothing is appended.
+	runHermetic(JIT_ARGV, home, {
+		SLOT: '1',
+		RESET: '0',
+		HOST_PACE: '1;x',
+		HOST_PACE_CLASS: 'normal',
+	});
+	runHermetic(JIT_ARGV, home, {
+		SLOT: '1',
+		RESET: '0',
+		HOST_PACE: '2.00',
+		HOST_PACE_CLASS: 'fast',
+	});
+	assert.deepEqual(pace(), ['HOST_PACE=1.12', 'HOST_PACE_CLASS=normal']);
+});
+
 void test('the installer WALKER merges TMPDIR/NODE_COMPILE_CACHE into a standing runner dir it finds by glob, keeping unrelated keys', () => {
 	const home = take(mkdtempSync(join(tmpdir(), 'runner-env-')));
 	// A standing runner directory the glob in runner_dirs() must find: a

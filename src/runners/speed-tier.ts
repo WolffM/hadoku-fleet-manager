@@ -592,3 +592,37 @@ export function buildSpeedModel(
 
 	return { tierOf, expectedExtraSec, factorOf, kindSlowness, kindsOn, describe };
 }
+
+/**
+ * HOST_PACE (fleet-manager#68): how fast the node a job runs on is, handed to
+ * the job as `HOST_PACE` / `HOST_PACE_CLASS` in its runner's `.env`, so a test
+ * with a fixed time budget can scale it instead of failing on a slow claw.
+ *
+ * `pace` is `factorOf(node)`: the median of the node's per-kind runtime ratios
+ * against the fleet, 1.0 typical, higher slower (claw-3 ~1.4, claw-8 ~0.6 in
+ * October). Thin history reads NEUTRAL, 1.0 with class `unknown`, never fast.
+ * A consumer scales a budget by `max(1, HOST_PACE)`: a fast node must not
+ * TIGHTEN a budget that was set on a typical one.
+ */
+export interface HostPace {
+	pace: number;
+	class: SpeedTier;
+}
+
+export function hostPaceOf(model: SpeedModel, node: string): HostPace {
+	const f = model.factorOf?.(node) ?? null;
+	return {
+		pace: f === null || !Number.isFinite(f) || f <= 0 ? 1 : Math.round(f * 100) / 100,
+		class: model.tierOf(node),
+	};
+}
+
+/**
+ * The provision scripts' leading assignments for a pace. Both values are
+ * re-validated here so nothing but a plain number and a tier word ever reaches
+ * the remote shell.
+ */
+export function hostPaceAssignments(p: HostPace | null | undefined): string {
+	if (!p || !Number.isFinite(p.pace) || !/^(normal|slow|unknown)$/.test(p.class)) return '';
+	return ` HOST_PACE=${p.pace.toFixed(2)} HOST_PACE_CLASS=${p.class}`;
+}

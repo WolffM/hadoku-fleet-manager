@@ -18,6 +18,7 @@ import type { WorkloadGateContext } from '../lib/workload-gate.js';
 import { warmBackoffActive, recordWarmFailure, clearWarmFailures } from './warm-backoff.js';
 import { checkMintSlice } from './dispatch-warm-cache-state.js';
 import type { WarmCacheDecision } from './ephemeral-warm.js';
+import type { HostPace } from './speed-tier.js';
 import type { ObservedWarmNode, WarmCacheResult } from './dispatch-warm-cache-state.js';
 
 /**
@@ -39,6 +40,7 @@ export async function actOnWarmNode(args: {
 	gh: GhLike & { get: (path: string, token: string, repo?: string) => Promise<unknown> };
 	sh: typeof shellOnNode;
 	tarballUrl: () => Promise<string | null>;
+	hostPaceFor?: (node: string) => HostPace | null;
 	nowMs: number;
 	result: WarmCacheResult;
 }): Promise<void> {
@@ -53,6 +55,7 @@ export async function actOnWarmNode(args: {
 		gh,
 		sh,
 		tarballUrl,
+		hostPaceFor,
 		nowMs,
 		result,
 	} = args;
@@ -118,6 +121,7 @@ export async function actOnWarmNode(args: {
 					homeDir: nodeHome(input.nodes[node], 'ci'),
 					memoryMaxMb,
 					tarballUrl: await tarballUrl(),
+					hostPace: hostPaceFor?.(node) ?? null,
 				},
 				token,
 				gh,

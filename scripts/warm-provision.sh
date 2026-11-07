@@ -266,6 +266,26 @@ cat "$ENV_SRC" >>"$DIR/.env"
 t=$(sed -n 's/^TMPDIR=//p' "$DIR/.env" | tail -1)
 [ -n "$t" ] && mkdir -p "$t"
 
+# HOST_PACE (fleet-manager#68). The node's measured speed, from the
+# dispatcher's speed model at mint time: `factorOf`, 1.0 typical, higher
+# slower, and the tier (normal|slow|unknown). A job reads them from its env to
+# scale a fixed time budget, by max(1, HOST_PACE). Written only when the mint
+# carried one, and only in a form the dispatcher could have sent; anything else
+# leaves the slot without a pace rather than handing a job a string.
+if [ -n "${HOST_PACE:-}" ]; then
+	[[ "$HOST_PACE" =~ ^[0-9]{1,2}\.[0-9]{2}$ ]] || HOST_PACE=
+	case "${HOST_PACE_CLASS:-}" in
+	normal | slow | unknown) ;;
+	*) HOST_PACE= ;;
+	esac
+fi
+if [ -n "${HOST_PACE:-}" ]; then
+	touch "$DIR/.env"
+	grep -v -e '^HOST_PACE=' -e '^HOST_PACE_CLASS=' "$DIR/.env" >"$DIR/.env.tmp" 2>/dev/null || : >"$DIR/.env.tmp"
+	mv "$DIR/.env.tmp" "$DIR/.env"
+	printf 'HOST_PACE=%s\nHOST_PACE_CLASS=%s\n' "$HOST_PACE" "$HOST_PACE_CLASS" >>"$DIR/.env"
+fi
+
 pi=$(stat -c %i "$PAYLOAD/bin/Runner.Listener" 2>/dev/null)
 si=$(stat -c %i "$DIR/bin/Runner.Listener" 2>/dev/null)
 if [ -n "$pi" ] && [ "$pi" != "$si" ]; then

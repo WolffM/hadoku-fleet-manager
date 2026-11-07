@@ -435,6 +435,7 @@ export async function runDispatchPass(
 					tarballUrl: input.tarballUrl ?? null,
 					memoryMaxMb: input.memoryMaxMbFor(action.repo, action.node),
 					sliceName: input.sliceNameFor?.(action.node) ?? null,
+					hostPace: input.hostPaceFor?.(action.node) ?? null,
 					ttlSeconds: input.ttlSeconds,
 				},
 				token,

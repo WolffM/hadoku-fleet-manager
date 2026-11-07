@@ -454,6 +454,7 @@ export async function runDispatchTick(
 			homeDirFor: input.homeDirFor,
 			memoryMaxMbFor: input.memoryMaxMbFor,
 			sliceNameFor: input.sliceNameFor,
+			hostPaceFor: input.hostPaceFor,
 			ttlSeconds: input.ttlSeconds,
 			// ONE clock for the tick. `reposDue` above already gates on this
 			// `nowMs`; letting the reap gate read `Date.now()` separately would put
