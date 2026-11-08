@@ -113,3 +113,16 @@ test('a warm listener never carries a mint-only label', () => {
 	assert.ok(warm.includes('hadoku-builder'), 'but it still takes general CI');
 	assert.ok(warm.includes('self-hosted'), 'and keeps the implicit labels GitHub needs');
 });
+
+test('lane labels: lane-<name> only, case-insensitive, de-duplicated in order', async () => {
+	const { isLaneLabel, laneLabelsOf } = await import('../lib/capability-labels.js');
+	assert.ok(isLaneLabel('lane-ci'));
+	assert.ok(isLaneLabel('Lane-Forge-2'));
+	for (const l of ['lane-', 'lane', 'xlane-ci', 'lane_ci', 'hadoku-builder', 'proof-abc']) {
+		assert.ok(!isLaneLabel(l), l);
+	}
+	assert.deepEqual(laneLabelsOf(['self-hosted', 'lane-ci', 'jdk21', 'LANE-CI', 'lane-x']), [
+		'lane-ci',
+		'lane-x',
+	]);
+});

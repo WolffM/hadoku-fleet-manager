@@ -148,10 +148,14 @@ function spaceOkShell(): ShellFake {
 	};
 }
 
-async function dispatchOnce(nodes: EphemeralTickInput['nodes'], gh: GhFake) {
+async function dispatchOnce(
+	nodes: EphemeralTickInput['nodes'],
+	gh: GhFake,
+	pending: typeof PENDING = PENDING
+) {
 	const sh = spaceOkShell();
 	return await dispatchEphemeral(tickInput(nodes), 'tok', gh, sh, async (inp, token, g, s) =>
-		runDispatchPass({ ...inp, pending: PENDING, tarballUrl: null }, token, g, s)
+		runDispatchPass({ ...inp, pending, tarballUrl: null }, token, g, s)
 	);
 }
 
@@ -285,4 +289,43 @@ test('#19: an unreadable scratch manifest is "could not look", never a mint with
 	const res = await dispatchOnce(machinesFromManifest(), gh);
 	assert.equal(res, null, 'null is COULD NOT LOOK, distinct from a zeroed result');
 	assert.deepEqual(gh.mintedLabels, []);
+});
+
+// ---------------------------------------------------------------------------
+// Lanes (2026-11-08): a job's lane label travels onto ITS mint, and only its
+// ---------------------------------------------------------------------------
+
+test('a job asking for a lane label is placed on a node that never declared it, and its mint carries the lane', async () => {
+	writeManifest(true, [...PREREQS.map((p) => p.id), 'jitconfig']);
+	const gh = fakeGh({});
+	const res = await dispatchOnce(machinesFromManifest(), gh, [
+		{ ...PENDING[0], labels: [...FLEET_LABELS, 'lane-ci'] },
+	]);
+
+	assert.equal(
+		res?.minted,
+		1,
+		'a lane is satisfiable on every node; nothing may be skipped for it'
+	);
+	assert.equal(res?.skipped, 0);
+	assert.ok(gh.mintedLabels.includes('lane-ci'), `mint carried ${gh.mintedLabels.join(',')}`);
+	assert.ok(satisfiesLabels(gh.mintedLabels, [...FLEET_LABELS, 'lane-ci']));
+});
+
+test('a job with no lane mints no lane label, so a laned job elsewhere in the repo cannot take its runner', async () => {
+	writeManifest(true, [...PREREQS.map((p) => p.id), 'jitconfig']);
+	const gh = fakeGh({});
+	const res = await dispatchOnce(machinesFromManifest(), gh);
+
+	assert.equal(res?.minted, 1);
+	assert.ok(
+		!gh.mintedLabels.some((l) => l.startsWith('lane-')),
+		`mint carried ${gh.mintedLabels.join(',')}`
+	);
+	// GitHub's own rule: a runner serves a job only if it carries every label the
+	// job asks for. The runner minted above lacks lane-forge, so a forge job does
+	// not fit it. Checked by set inclusion, not `satisfiesLabels`, which treats a
+	// lane as placeable anywhere.
+	const has = new Set(gh.mintedLabels.map((l) => l.toLowerCase()));
+	assert.ok(![...FLEET_LABELS, 'lane-forge'].every((l) => has.has(l)));
 });

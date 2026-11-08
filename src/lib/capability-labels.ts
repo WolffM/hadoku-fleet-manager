@@ -42,6 +42,36 @@ export function ladder(): string[] {
 export const IMPLICIT_LABELS: readonly string[] = ['self-hosted', 'Linux', 'X64'];
 
 /**
+ * A LANE label: `lane-<name>`, asked for by a workflow so that ONLY runners
+ * minted for that workflow's jobs can take them.
+ *
+ * GitHub gives a runner to ANY queued job of the repo whose labels are a
+ * subset of the runner's. A JIT mint carries its node's whole label set, so
+ * the runner the dispatcher minted for one job is routinely taken by another:
+ * on 2026-11-08 03:40:54Z a claw-6 runner minted for cardtable's main-push CI
+ * `static` was taken 9 s later by a verify-branch Forge dispatch's `changes`,
+ * and `static` was re-placed three more times while the deploy gate waited.
+ * The dispatcher's priority order cannot fix that; GitHub picks the job.
+ *
+ * A lane is satisfiable on EVERY node (no node has to earn it) and is added to
+ * a mint only when the job it was minted for asked for it. Two workflows that
+ * each ask for their own lane cannot take each other's runners.
+ */
+export const LANE_LABEL_RE = /^lane-[a-z0-9][a-z0-9-]*$/i;
+
+export function isLaneLabel(label: string): boolean {
+	return LANE_LABEL_RE.test(label);
+}
+
+/** The lane labels in `labels`, in order, de-duplicated case-insensitively. */
+export function laneLabelsOf(labels: readonly string[]): string[] {
+	const seen = new Set<string>();
+	return labels.filter(
+		(l) => isLaneLabel(l) && !seen.has(l.toLowerCase()) && seen.add(l.toLowerCase())
+	);
+}
+
+/**
  * Labels a STANDING listener must never carry, derived from the registry.
  *
  * A capability whose `requires.facts` include the ephemeral fact is one only a

@@ -429,7 +429,7 @@ export async function runDispatchPass(
 					node: action.node,
 					repo: action.repo,
 					runnerName: action.runnerName,
-					labels: input.labelsFor(action.node),
+					labels: [...input.labelsFor(action.node), ...(action.lanes ?? [])],
 					slotIndex,
 					homeDir: input.homeDirFor(action.node),
 					tarballUrl: input.tarballUrl ?? null,

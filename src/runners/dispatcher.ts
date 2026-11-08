@@ -11,6 +11,7 @@ import { choosePlacement, busyOf, type Placement } from './placement.js';
 import { isForkSafe, type RunIdentity } from './placement-fork-safety.js';
 import { satisfiesLabels, type NodeState } from './placement-node-state.js';
 import { jitRunnerName } from '../lib/jit-naming.js';
+import { laneLabelsOf } from '../lib/capability-labels.js';
 import { observedQueuedSinceMs } from './queue-discovery.js';
 
 export interface PendingRun extends RunIdentity {
@@ -124,6 +125,11 @@ export interface MintAction {
 	 * post-tick snapshot, which would already include this job's own mint.
 	 */
 	busyAtChoice: number;
+	/**
+	 * The job's own `lane-*` labels, added to the mint beside the node's labels
+	 * so that only this lane's jobs can take the runner (`isLaneLabel`).
+	 */
+	lanes?: readonly string[];
 }
 
 export interface SkipReason {
@@ -449,6 +455,7 @@ export function planTick(
 			affinityMoved,
 			heavy: placed.heavy,
 			busyAtChoice,
+			lanes: laneLabelsOf(run.labels ?? []),
 		});
 	}
 	return { mint, skipped, reserved };

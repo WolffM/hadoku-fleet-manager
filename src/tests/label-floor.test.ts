@@ -203,6 +203,8 @@ test('demand excludes implicit labels (any case) and hosted images, and nothing 
 		'ubuntu-24.04',
 		'macos-14',
 		'windows-2022',
+		'lane-ci',
+		'lane-forge',
 	]) {
 		assert.equal(isFloorDemandLabel(l), false, l);
 	}

@@ -8,7 +8,10 @@
  * Every name here is re-exported from `placement.ts` so its existing
  * importers compile unchanged.
  */
-import { IMPLICIT_LABELS as REGISTRY_IMPLICIT_LABELS } from '../lib/capability-labels.js';
+import {
+	IMPLICIT_LABELS as REGISTRY_IMPLICIT_LABELS,
+	isLaneLabel,
+} from '../lib/capability-labels.js';
 import type { AdmissionInput } from './ephemeral-admission.js';
 import type { SpeedModel } from './speed-tier.js';
 import type { HeavyModel } from './heavy-model.js';
@@ -22,10 +25,15 @@ import type { HeavyModel } from './heavy-model.js';
  */
 export const IMPLICIT_LABELS = new Set(REGISTRY_IMPLICIT_LABELS.map((l) => l.toLowerCase()));
 
-/** Can this node serve a job asking for `wanted`? */
+/**
+ * Can this node serve a job asking for `wanted`? A lane label (`isLaneLabel`)
+ * is met by every node: the mint adds it for the job that asked.
+ */
 export function satisfiesLabels(nodeLabels: readonly string[], wanted: readonly string[]): boolean {
 	const have = new Set(nodeLabels.map((l) => l.toLowerCase()));
-	return wanted.every((w) => IMPLICIT_LABELS.has(w.toLowerCase()) || have.has(w.toLowerCase()));
+	return wanted.every(
+		(w) => IMPLICIT_LABELS.has(w.toLowerCase()) || isLaneLabel(w) || have.has(w.toLowerCase())
+	);
 }
 
 export interface NodeState extends AdmissionInput {

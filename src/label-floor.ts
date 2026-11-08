@@ -57,7 +57,7 @@
  * Pure. No fs, no network: runner-health and the gate do the reading.
  */
 
-import { IMPLICIT_LABELS } from './lib/capability-labels.js';
+import { IMPLICIT_LABELS, isLaneLabel } from './lib/capability-labels.js';
 import { nodeOffer } from './lib/capability-offer.js';
 import { revokedFor, type WorkloadGateContext } from './lib/workload-gate.js';
 import type { ManifestNode } from './lib/capability-registry.js';
@@ -118,7 +118,8 @@ export function isFloorDemandLabel(label: string): boolean {
 		label.length > 0 &&
 		!IMPLICIT.has(label.toLowerCase()) &&
 		!isHostedLabel(label) &&
-		!PROOF_LABEL_RE.test(label)
+		!PROOF_LABEL_RE.test(label) &&
+		!isLaneLabel(label)
 	);
 }
 
@@ -230,7 +231,10 @@ export function judgeLabelFloor(
  */
 export function judgeJobMint(labels: readonly string[], mint: MintView): LabelFloorVerdict {
 	const implicit = new Set(IMPLICIT_LABELS.map((l) => l.toLowerCase()));
-	const wanted = labels.map((l) => l.toLowerCase()).filter((l) => !implicit.has(l));
+	const wanted = labels
+		.filter((l) => !isLaneLabel(l))
+		.map((l) => l.toLowerCase())
+		.filter((l) => !implicit.has(l));
 	return judgeOfferers(
 		mint.nodes.filter((n) => {
 			const has = new Set(n.offers.map((o) => o.toLowerCase()));
