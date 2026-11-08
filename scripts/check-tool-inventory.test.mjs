@@ -266,6 +266,46 @@ test('a general-pool node with no bootcamp record is reported, never silently pr
 	}
 });
 
+test('wave gates1 §A: a node already paged down by runner-health is skipped, gate exits 0', () => {
+	const fx = fixture();
+	try {
+		writeFileSync(
+			join(fx.stateDir, 'runner-down-page.json'),
+			JSON.stringify({
+				[UNPROBED_NODE]: {
+					since: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+					lastPage: new Date(Date.now() - 60_000).toISOString(),
+				},
+			})
+		);
+		const { code, stdout, stderr } = run(fx);
+		assert.equal(
+			code,
+			0,
+			`UNPROBED_NODE is the only unreachable node and is already paged down:\n${stdout}\n${stderr}`
+		);
+		assert.doesNotMatch(stderr, /unreachable, tools unread/);
+		assert.match(
+			stdout,
+			new RegExp(`skipped ${UNPROBED_NODE}: down since .* paged by runner-health`)
+		);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('wave gates1 §A: the same node unreachable but NOT known down still fails (control)', () => {
+	const fx = fixture();
+	try {
+		// No runner-down-page.json written — the safe-direction empty set.
+		const { code, stderr } = run(fx);
+		assert.equal(code, 1);
+		assert.match(stderr, /unreachable, tools unread: claw-fixture-unprobed/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
 test('a job that only MENTIONS "javascript" contributes no jdk21 demand anywhere in the report', () => {
 	const fx = fixture();
 	try {

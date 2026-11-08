@@ -63,6 +63,7 @@
 import { execFileSync } from 'node:child_process';
 import { loadManifest, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 import { READ_ATTEMPTS, describeReadFailure } from './lib/read-retry-policy.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
@@ -311,6 +312,11 @@ const machines = selectMachines(loadManifest(), {
 // expires after DEFER_DAYS. See lib/expected-down.mjs.
 const DRAINS = readDrains();
 const expectedDown = [];
+// Already paged as down by runner-health's own offline alert (observed, never
+// a declaration — see lib/known-down.mjs). Checked only for a node that is
+// not already drained, so the two never double-count one machine.
+const _knownDown = knownDownNodes();
+const knownDown = [];
 for (const [name] of machines) {
 	// `free -m` feeds MachineState.freeMb. It was once handed FREE SLOTS instead,
 	// and admission computed `3 - 4096` and refused every mint on every machine,
@@ -323,6 +329,11 @@ for (const [name] of machines) {
 		const defer = deferralFor(name, DRAINS);
 		if (defer.deferred) {
 			expectedDown.push(name);
+			continue;
+		}
+		const down = _knownDown.get(name);
+		if (down) {
+			knownDown.push(down);
 			continue;
 		}
 		bad(`${name} free -m`, 'unreachable', { node: name, unreadable: true });
@@ -413,6 +424,10 @@ if (out.json) {
 		checked: checked.length,
 		machines: machines.length,
 		expectedDown,
+		// ADDITIVE (wave gates1 lane A): already paged down by runner-health's
+		// own per-node offline alert, not a fresh finding here — see
+		// lib/known-down.mjs.
+		knownDown,
 		...buildGateDoc({ findings: gateFindings, unreadable: gateUnreadable }),
 	});
 	process.exit(failures.length ? 1 : 0);
@@ -421,6 +436,7 @@ if (out.json) {
 for (const name of expectedDown) {
 	out.log(`  · ${deferralNote(name, deferralFor(name, DRAINS))} — not probed`);
 }
+for (const d of knownDown) out.log(`  · ${knownDownNote(d)} — not probed`);
 
 if (failures.length) {
 	console.error(`\n✗ ${failures.length} boundary contract(s) broken:\n`);

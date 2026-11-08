@@ -664,6 +664,62 @@ test('GateDoc: an unreachable node is unreadable, not a finding', () => {
 	}
 });
 
+test('wave gates1 §A: a node already paged down by runner-health is skipped, not a fresh finding', () => {
+	const f = fixture();
+	try {
+		// Both fixture nodes resolve nowhere (see the module header), so both
+		// land in `unreachable` exactly as the control test above shows. Here
+		// runner-health's own per-node offline alert has ALREADY paged both —
+		// observed state, read from lib/known-down.mjs, never a declaration —
+		// so neither should be a fresh finding.
+		writeFileSync(
+			join(f.env.HADOKU_STATE_DIR, 'runner-down-page.json'),
+			JSON.stringify({
+				[CLAW]: {
+					since: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+					lastPage: new Date(Date.now() - 60_000).toISOString(),
+				},
+				[BACKSTOP]: {
+					since: new Date(Date.now() - 4 * 60 * 60_000).toISOString(),
+					lastPage: new Date(Date.now() - 2 * 60_000).toISOString(),
+				},
+			})
+		);
+		const r = run(['--json'], f.env);
+		const report = json(r);
+		assert.equal(r.code, 0, 'both unreachable nodes are already paged down by runner-health');
+		assert.equal(report.ok, true);
+		assert.deepEqual(report.unreachable, []);
+		assert.deepEqual(report.findings, []);
+		assert.deepEqual(report.unreadable, []);
+		assert.deepEqual(report.knownDown.map((k) => k.node).sort(), [BACKSTOP, CLAW].sort());
+		for (const k of report.knownDown) {
+			assert.match(k.pagedBy, /runner-health/);
+			assert.ok(k.since);
+		}
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('wave gates1 §A: the same node unreachable but NOT known down still fails (control)', () => {
+	// No runner-down-page.json at all: lib/known-down.mjs reads an empty
+	// set, so this must behave EXACTLY as the pre-existing
+	// "GateDoc: an unreachable node is unreadable, not a finding" test above —
+	// the safe direction a missing/unreadable ledger must take.
+	const f = fixture();
+	try {
+		const r = run(['--json'], f.env);
+		const report = json(r);
+		assert.equal(r.code, 1);
+		assert.equal(report.ok, false);
+		assert.deepEqual(report.knownDown, []);
+		assert.deepEqual(report.unreachable.sort(), [BACKSTOP, CLAW].sort());
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
 test('GateDoc: an EARNED label the probe can no longer execute is a structured finding', () => {
 	const f = reachableFixture({
 		machine: earnedClaw(['jdk21']),

@@ -79,6 +79,77 @@ test('nodes are cleaned concurrently, each named on stderr, and one failure fail
 	assert.match(err, /clean-runner-debris: fixture-c done in \d+s/);
 });
 
+// ── wave gates1 §A: a node already paged down by runner-health ─────────────
+
+test('wave gates1 §A: a node already paged down by runner-health is skipped, not a fresh failure', (t) => {
+	const root = mkdtempSync(join(tmpdir(), 'crd-cli-'));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	writeFileSync(
+		join(root, 'fleet-runner-manifest.json'),
+		JSON.stringify({ machines: Object.fromEntries(NODES.map((n) => [n, {}])) })
+	);
+	const bin = join(root, 'bin');
+	mkdirSync(bin);
+	writeFileSync(join(bin, 'ssh'), SSH_SHIM);
+	chmodSync(join(bin, 'ssh'), 0o755);
+	writeFileSync(
+		join(root, 'runner-down-page.json'),
+		JSON.stringify({
+			'fixture-b': {
+				since: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+				lastPage: new Date(Date.now() - 60_000).toISOString(),
+			},
+		})
+	);
+
+	const outPath = join(root, 'out.json');
+	const r = spawnSync('sh', ['-c', `node "${SCRIPT}" --json > "${outPath}" 2>/dev/null`], {
+		env: {
+			...process.env,
+			PATH: `${bin}:${process.env.PATH}`,
+			FLEET_MANIFEST_DIR: root,
+			HADOKU_STATE_DIR: root,
+		},
+	});
+	const doc = JSON.parse(readFileSync(outPath, 'utf8'));
+	assert.equal(r.status, 0, `fixture-b is the only unreachable node and is already paged down`);
+	const b = doc.results.find((x) => x.machine === 'fixture-b');
+	assert.equal(b.ok, true);
+	assert.equal(b.skipped, 'known down');
+	assert.equal(doc.knownDown.length, 1);
+	assert.equal(doc.knownDown[0].node, 'fixture-b');
+	assert.match(doc.knownDown[0].pagedBy, /runner-health/);
+});
+
+test('wave gates1 §A: the same unreachable node, NOT known down, still fails (control)', (t) => {
+	const root = mkdtempSync(join(tmpdir(), 'crd-cli-'));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	writeFileSync(
+		join(root, 'fleet-runner-manifest.json'),
+		JSON.stringify({ machines: Object.fromEntries(NODES.map((n) => [n, {}])) })
+	);
+	const bin = join(root, 'bin');
+	mkdirSync(bin);
+	writeFileSync(join(bin, 'ssh'), SSH_SHIM);
+	chmodSync(join(bin, 'ssh'), 0o755);
+	// No runner-down-page.json at all — the safe-direction empty set.
+
+	const outPath = join(root, 'out.json');
+	const r = spawnSync('sh', ['-c', `node "${SCRIPT}" --json > "${outPath}" 2>/dev/null`], {
+		env: {
+			...process.env,
+			PATH: `${bin}:${process.env.PATH}`,
+			FLEET_MANIFEST_DIR: root,
+			HADOKU_STATE_DIR: root,
+		},
+	});
+	const doc = JSON.parse(readFileSync(outPath, 'utf8'));
+	assert.equal(r.status, 1);
+	const b = doc.results.find((x) => x.machine === 'fixture-b');
+	assert.equal(b.ok, false);
+	assert.deepEqual(doc.knownDown, []);
+});
+
 // ── fleet-manager#65: only an ABANDONED cache is sized on the node ──────────
 //
 // The node script runs `du -sk` on every path in CACHE_PATHS, and the

@@ -322,6 +322,49 @@ test('deployer: the backstop is deployed to like a claw, by --machine and fleet-
 	}
 });
 
+test('wave gates1 §A: a node already paged down by runner-health is skipped, not a fresh failure', () => {
+	const f = manifestFixture({ 'claw-a.invalid': CLAW_NODE });
+	try {
+		writeFileSync(
+			join(f.env.HADOKU_STATE_DIR, 'runner-down-page.json'),
+			JSON.stringify({
+				'claw-a.invalid': {
+					since: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+					lastPage: new Date(Date.now() - 60_000).toISOString(),
+				},
+			})
+		);
+		const r = deploy(['--check', '--json'], f.env);
+		const doc = json(r);
+		assert.equal(
+			r.code,
+			0,
+			`claw-a.invalid is the only unreachable node and is already paged down`
+		);
+		assert.equal(doc.results[0].ok, true);
+		assert.equal(doc.results[0].skipped, 'known down');
+		assert.equal(doc.knownDown.length, 1);
+		assert.equal(doc.knownDown[0].node, 'claw-a.invalid');
+		assert.match(doc.knownDown[0].pagedBy, /runner-health/);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('wave gates1 §A: the same unreachable node, NOT known down, still fails (control)', () => {
+	const f = manifestFixture({ 'claw-a.invalid': CLAW_NODE });
+	try {
+		// No runner-down-page.json at all — the safe-direction empty set.
+		const r = deploy(['--check', '--json'], f.env);
+		const doc = json(r);
+		assert.equal(r.code, 1);
+		assert.equal(doc.results[0].ok, false);
+		assert.deepEqual(doc.knownDown, []);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
 test('#120: fleet throttle asks the MINT predicate, never `ephemeral` — or an on-demand backstop gets no slot env', () => {
 	// Shipped 0.34.0 with one call site still reading `m.ephemeral === true`:
 	// the dry run reported "hokon has no jit-provision.sh", --confirm wrote

@@ -67,6 +67,7 @@ import {
 	heavyMarkedCandidates,
 } from './lib/warm-canary.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 // The BUILT copy, deliberately — see the header note above and
 // scripts/lib/fleet-exec.mjs's own note on importing isLocalNode the same way.
 // unitMemoryMaxMb/jobReserve from lib/job-reserve.js, warmCacheEligible/
@@ -215,6 +216,17 @@ function main() {
 	const drains = readDrains();
 	const hasDrainRow = (name) => Boolean(drains?.[name]);
 	const drainedCandidates = selected.filter(([name]) => hasDrainRow(name));
+	// Already paged as down by runner-health's own offline alert (observed,
+	// never a declaration — see lib/known-down.mjs). Checked only for a
+	// candidate that is not already drained, so the two never double-count one
+	// machine. Excluded from candidacy the same way a drained or slow-tier
+	// node is: there is no point ssh'ing a box runner-health has already
+	// announced offline.
+	const _knownDown = knownDownNodes();
+	const knownDownCandidates = selected.filter(
+		([name]) => !hasDrainRow(name) && _knownDown.has(name)
+	);
+	const isKnownDown = (name) => _knownDown.has(name);
 	// The slow tier never holds a warm listener (#83); see slowTierCandidates.
 	const history = readJobHistory();
 	const slowTier = slowTierCandidates(
@@ -224,7 +236,9 @@ function main() {
 		Date.now()
 	);
 	const isSlow = (name) => slowTier.some((s) => s.node === name);
-	const notDrainedOrSlow = selected.filter(([name]) => !hasDrainRow(name) && !isSlow(name));
+	const notDrainedOrSlow = selected.filter(
+		([name]) => !hasDrainRow(name) && !isSlow(name) && !isKnownDown(name)
+	);
 	// A node RUNNING a heavy-kind job holds no listener by design (#102.4): the
 	// warm cache evicts it and withholds the refill. Read with the fleet's own
 	// probe, as `ci` like the fast loop, so this judges the observation the warm
@@ -287,6 +301,10 @@ function main() {
 			...verdict,
 			skippedByRole,
 			drained,
+			// ADDITIVE (wave gates1 lane A): already paged down by runner-health's
+			// own per-node offline alert, not a candidate here at all — see
+			// lib/known-down.mjs.
+			knownDown: knownDownCandidates.map(([name]) => _knownDown.get(name)),
 			slowTier,
 			heavyBusy,
 			heavyMarked,
@@ -302,6 +320,8 @@ function main() {
 		for (const s of skippedByRole) out.log(`  · ${s.node} [skipped: backstop] — ${s.why}`);
 		for (const [name] of drainedCandidates)
 			out.log(`  · ${deferralNote(name, deferralFor(name, drains))} — not probed`);
+		for (const [name] of knownDownCandidates)
+			out.log(`  · ${knownDownNote(_knownDown.get(name))} — not probed`);
 		for (const s of slowTier)
 			out.log(
 				`  · ${s.node} [slow tier, p25 ${s.p25}] — never holds a warm listener (#83), not probed`
@@ -328,6 +348,8 @@ function main() {
 		for (const s of skippedByRole) console.error(`  · ${s.node} [skipped: backstop] — ${s.why}`);
 		for (const [name] of drainedCandidates)
 			console.error(`  · ${deferralNote(name, deferralFor(name, drains))} — not probed`);
+		for (const [name] of knownDownCandidates)
+			console.error(`  · ${knownDownNote(_knownDown.get(name))} — not probed`);
 		for (const s of slowTier)
 			console.error(
 				`  · ${s.node} [slow tier, p25 ${s.p25}] — never holds a warm listener (#83), not probed`

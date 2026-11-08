@@ -351,6 +351,60 @@ test('a token-expiry read that never recovers fails the gate after READ_ATTEMPTS
 
 // ── the --json contract: shape must not change, only the finding TEXT may ───
 
+test('wave gates1 §A: a node already paged down by runner-health is skipped, not a pile of fresh findings', () => {
+	const fx = fixture();
+	try {
+		// Break every ssh probe for the fixture node — the exact "one unreachable
+		// node, several separate findings" shape the wave's evidence names (11-12
+		// pages for one fact: reboot, payload, security, LAN reservation).
+		writeFileSync(join(fx.bin, 'ssh'), '#!/bin/sh\ncat >/dev/null\nexit 1\n');
+		chmodSync(join(fx.bin, 'ssh'), 0o755);
+		writeFileSync(
+			join(fx.root, 'runner-down-page.json'),
+			JSON.stringify({
+				[NODE]: {
+					since: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+					lastPage: new Date(Date.now() - 60_000).toISOString(),
+				},
+			})
+		);
+		const r = run(fx, { argv: ['--json'] });
+		assert.equal(
+			r.code,
+			0,
+			`the only unreachable node is already paged down by runner-health:\n${r.out}`
+		);
+		const doc = JSON.parse(r.out);
+		assert.equal(doc.ok, true);
+		assert.deepEqual(doc.findings, []);
+		assert.ok(doc.knownDown.length >= 1, JSON.stringify(doc.knownDown));
+		assert.ok(doc.knownDown.every((d) => d.node === NODE));
+		assert.match(doc.knownDown[0].pagedBy, /runner-health/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('wave gates1 §A: the same unreachable node, NOT known down, still fails on every signal (control)', () => {
+	const fx = fixture();
+	try {
+		writeFileSync(join(fx.bin, 'ssh'), '#!/bin/sh\ncat >/dev/null\nexit 1\n');
+		chmodSync(join(fx.bin, 'ssh'), 0o755);
+		// No runner-down-page.json at all — the safe-direction empty set.
+		const r = run(fx, { argv: ['--json'] });
+		assert.equal(r.code, 1);
+		const doc = JSON.parse(r.out);
+		assert.equal(doc.ok, false);
+		assert.deepEqual(doc.knownDown, []);
+		assert.ok(
+			doc.findings.filter((f) => f.node === NODE).length > 1,
+			`expected several separate findings for ${NODE}, one per failed probe: ${JSON.stringify(doc.findings)}`
+		);
+	} finally {
+		cleanup(fx);
+	}
+});
+
 test('--json keeps its exact top-level shape on a clean run', () => {
 	const fx = fixture();
 	try {
@@ -359,8 +413,9 @@ test('--json keeps its exact top-level shape on a clean run', () => {
 		const doc = JSON.parse(r.out);
 		assert.deepEqual(
 			Object.keys(doc).sort(),
-			['advisory', 'deferred', 'findings', 'nodesChecked', 'ok'].sort(),
-			'the --json contract is five keys, exactly — see scripts/lib/json-contract.mjs'
+			['advisory', 'deferred', 'findings', 'knownDown', 'nodesChecked', 'ok'].sort(),
+			'the --json contract is six keys, exactly — see scripts/lib/json-contract.mjs ' +
+				'(knownDown added wave gates1 lane A, additive)'
 		);
 		assert.equal(doc.ok, true);
 		assert.deepEqual(doc.findings, []);
@@ -377,7 +432,7 @@ test('--json keeps its exact shape on a could-not-look finding — only the find
 		const doc = JSON.parse(r.out);
 		assert.deepEqual(
 			Object.keys(doc).sort(),
-			['advisory', 'deferred', 'findings', 'nodesChecked', 'ok'].sort()
+			['advisory', 'deferred', 'findings', 'knownDown', 'nodesChecked', 'ok'].sort()
 		);
 		assert.equal(doc.ok, false);
 		assert.equal(doc.findings.length, 1);

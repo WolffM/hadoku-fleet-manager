@@ -108,6 +108,7 @@ import { runnerEnvDrift, throttleSummaryDrift } from './lib/runner-env-drift.mjs
 import { packageVersion } from '../dist/lib/provenance.js';
 import { mintsJitRunners } from '../dist/lib/node-role.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 import { createEmitter, keepStdoutWhole } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
 import { classifyDrift } from './lib/throttle-drift-doc.mjs';
@@ -158,6 +159,9 @@ const CONFIRM = args.includes('--confirm');
 // rather than assumed. It needs ssh, so it belongs in `check:live`, never in the
 // offline `check` aggregate.
 const DRAINS = readDrains();
+// Already paged as down by runner-health's own offline alert (observed,
+// never a declaration — see lib/known-down.mjs).
+const KNOWN_DOWN = knownDownNodes();
 const CHECK = args.includes('--check');
 const NO_RESTART = args.includes('--no-restart');
 const ONLY = machineArg(args);
@@ -394,6 +398,12 @@ for (const [name, m] of nodes) {
 			results.push({ machine: name, ok: true, expectedDown: true, skipped: 'expected down' });
 			continue;
 		}
+		const down = KNOWN_DOWN.get(name);
+		if (down) {
+			log(`   · ${knownDownNote(down)} — not audited`);
+			results.push({ machine: name, ok: true, knownDown: down, skipped: 'known down' });
+			continue;
+		}
 		log(`   ✗ unreachable or failed: ${why}`);
 		// "I could not look" must never render as "nothing is wrong". The exit
 		// code below was already 1 for this, but the audit still printed
@@ -520,6 +530,10 @@ if (JSON_OUT) {
 		results,
 		confirmRemaining,
 		sudoAdvisories,
+		// ADDITIVE (wave gates1 lane A): already paged down by runner-health's
+		// own per-node offline alert, not a fresh finding here — see
+		// lib/known-down.mjs.
+		knownDown: results.filter((r) => r.knownDown).map((r) => ({ node: r.machine, ...r.knownDown })),
 	};
 	// GateDoc (wave 5i lane B), `--check` ONLY — the `--confirm` (deploy) half
 	// of this document is untouched by this block, exactly as it was before

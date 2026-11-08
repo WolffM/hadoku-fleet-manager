@@ -3,10 +3,84 @@
  * of `checkLabelFloor`, independent of the per-label floor alerting in
  * `runner-health-label-floor-alerts.ts`. Split out of
  * `runner-health-label-floor.ts` (wave shrink-1 lane C).
+ *
+ * TWO SEPARATE LADDERS LIVE HERE (wave gates1 lane A2). The ORIGINAL one (the
+ * `offlineTicks`/`offlineRepeats` maps, the 1h/4h/12h/24h backoff, the
+ * `runner-offline:<node>` ledger key) is unchanged: a dead-but-redundant box
+ * is still a QUIET ledger row, not a page — see the header below this one.
+ *
+ * THE NEW ONE is a REAL, loud Discord page (`@here`), gated on the node
+ * having been offline for `OFFLINE_PAGE_MS` (2h) CONTINUOUSLY. It exists so
+ * `scripts/lib/known-down.mjs` has something genuine to skip ssh-sweep gates
+ * on: until this landed, the only per-node signal was the quiet ledger row
+ * above, which is a `logger.warn` nobody reads, not an alert — so "known
+ * down" would have meant "declared down by a helper nobody can see act",
+ * which is exactly the silencer AGENTS.md forbids. See
+ * `scripts/lib/known-down.mjs`'s own header for the read side.
+ *
+ * WHY A SEPARATE, DISK-BACKED RECORD (`runner-down-page.json`) RATHER THAN A
+ * KEY IN THE EXISTING ALERT LEDGER. `src/lib/alert-ledger.ts`'s
+ * `runner-health-alerts.json` is a `Record<string, ISO-time>` whose load AND
+ * save both PRUNE any entry older than `LEDGER_RETENTION_MS` (24h) — right
+ * for a "last time this fired" marker that keeps getting refreshed, wrong for
+ * a "first time this started" marker that must NOT change while the outage
+ * continues: a node down for 3 days would have its `since` pruned on the
+ * first save past 24h, silently losing the duration this whole mechanism
+ * exists to measure. This module's own file keeps `since` (first continuous
+ * offline tick, set once) and `lastPage` (last loud page, refreshed at most
+ * every `OFFLINE_REPAGE_MS`) in ONE record per node, with no generic decay —
+ * only this module writes it, and it is cleared outright on recovery.
+ *
+ * DURATION SURVIVES A RESTART. `offlineTicks`'s in-memory count does not — a
+ * controller bounced mid-outage would otherwise either never reach 2h (if the
+ * count resets to 0) or page immediately on every restart (if it did not).
+ * `since` is read from disk before being trusted, so the 2h clock is anchored
+ * to the first tick that ever observed the node down, not to how long THIS
+ * process has been running.
+ *
+ * `floorAlreadyBreached` does NOT gate the loud page — only the original
+ * quiet ladder. That suppression exists because the backstop PROMOTES hokon
+ * in a full outage, which is a CAPACITY story; this page is about WHICH node
+ * is down, a different question the tracker's decision says must still be
+ * answered even while the floor is breached.
+ *
+ * A DRAINED NODE (any `kind`, `reboot` included — see `src/runners/drain.ts`)
+ * DOES NOT PAGE: somebody already has hands on it. An unreadable drain record
+ * fails the OTHER way from a drained one — AGENTS.md's "I could not look must
+ * never render as nothing is wrong" — so a throw from `readDrain()` is read
+ * as "nothing is draining" (page), never as "everything is" (suppress).
+ *
+ * `lastPage` IS WRITTEN ONLY AFTER A CONFIRMED POST (manager fix #1, wave
+ * gates1 lane A2 review). `postDiscord` can resolve `{ posted: false }`
+ * (sink refused it, no webhook configured) or reject outright — and writing
+ * `lastPage` regardless, before the post even settles, would let
+ * `known-down.mjs` skip a node that nobody was actually paged about: the
+ * exact silent-page shape the settled rule forbids. So `postLoudPage` fires
+ * the post, and only its OWN `.then` — on `result.posted === true` — writes
+ * `lastPage` and saves. `postPending` (node names with a post in flight)
+ * stops the NEXT tick from firing a second real Discord post for the same
+ * node while the first is still unresolved; if the process dies mid-flight,
+ * the next tick may re-post, which is the acceptable failure mode (a stray
+ * extra page beats a silently-skipped gate).
+ *
+ * RECOVERY IS TWO DIFFERENT FACTS, NOT ONE (manager fix #2). A node this tick
+ * observed ONLINE is genuinely back — that is what "back online" means. A
+ * node that simply VANISHED from tracking (no longer in the runner listing,
+ * no longer an ephemeral node with known state) was never observed to
+ * recover; it was just not reported on. Posting "back online" for the second
+ * case says something nobody observed. `recoverDownPageOnline` is the first
+ * case; `recoverDownPageVanished` is the second and, if a page had fired,
+ * posts a neutral "cleared, not resolved" line instead.
  */
-import { recordAlertQuietly } from './host.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { logger, postDiscord, recordAlertQuietly, stateDir } from './host.js';
+import { writeJsonAtomic } from './lib/atomic-json.js';
 import { nodeOf } from './runners/census.js';
+import { isDraining, readDrain, type DrainState } from './runners/drain.js';
 import { clearAlert, pagedAlerts } from './lib/alert-ledger.js';
+import { DAY_MS, hours, repageDue } from './lib/job-runner.js';
 import { TICK_INTERVAL_MS, OFFLINE_TICKS_BEFORE_ALERT } from './lib/runner-health-shared.js';
 import { selfHostname } from './lib/runner-health-shared.js';
 import type { GhRunner } from './lib/github-client.js';
@@ -39,6 +113,167 @@ const OFFLINE_REPEAT_BACKOFF_MS = [
 	24 * 60 * 60 * 1000,
 ];
 
+/** How long a node must be offline, CONTINUOUSLY, before the loud page fires. */
+export const OFFLINE_PAGE_MS = 2 * 60 * 60 * 1000;
+
+/** At most once per this long while the loud page's condition still holds. */
+export const OFFLINE_REPAGE_MS = DAY_MS;
+
+/** This module's own state file — one writer, never read through the generic alert ledger. */
+const DOWN_PAGE_FILE = 'runner-down-page.json';
+const downPagePath = (): string => join(stateDir(), DOWN_PAGE_FILE);
+
+interface DownPageRecord {
+	/** First tick this node was observed continuously offline. Never overwritten while down. */
+	since: string;
+	/** Last time the loud page actually fired. Absent: it has not paged yet. */
+	lastPage?: string;
+}
+
+/** NODE name → its offline-page record. Persisted; see the module header. */
+let downPage: Record<string, DownPageRecord> = {};
+let downPageLoaded = false;
+
+function loadDownPage(): void {
+	if (downPageLoaded) return;
+	downPageLoaded = true;
+	try {
+		const raw = JSON.parse(readFileSync(downPagePath(), 'utf8')) as Record<string, unknown>;
+		for (const [node, value] of Object.entries(raw)) {
+			if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
+			const rec = value as { since?: unknown; lastPage?: unknown };
+			if (typeof rec.since !== 'string') continue;
+			downPage[node] =
+				typeof rec.lastPage === 'string'
+					? { since: rec.since, lastPage: rec.lastPage }
+					: { since: rec.since };
+		}
+	} catch {
+		// Missing file (nothing has ever been tracked), or unreadable/corrupt.
+		// Starting empty under-counts an outage already in progress — the next
+		// observed tick re-anchors `since` to NOW, which only ever delays a page,
+		// never fires one early or stays silent forever (the file is rewritten
+		// on the very next tick that sees the node down).
+	}
+}
+
+function saveDownPage(): void {
+	try {
+		writeJsonAtomic(downPagePath(), downPage);
+	} catch (err) {
+		logger.warn(
+			`[runner-health] could not persist ${DOWN_PAGE_FILE}: ${err instanceof Error ? err.message : String(err)}`
+		);
+	}
+}
+
+/** Fire-and-log: a RECOVERY note is informational, never a fact a gate reads back. */
+function post(content: string): void {
+	void postDiscord(content, 'runner-health').catch((err: unknown) => {
+		logger.warn(
+			`[runner-health] offline-page post failed: ${err instanceof Error ? err.message : String(err)}`
+		);
+	});
+}
+
+/** NODE names with a loud page currently in flight — see the module header. */
+const postPending = new Set<string>();
+
+/**
+ * Fire the loud page, and record `lastPage` ONLY once `postDiscord` confirms
+ * delivery (`posted: true`). A rejected post, or one that resolves
+ * `posted: false`, leaves the node's record exactly as it was — still
+ * `since`-only, so `known-down.mjs` keeps treating it as a live finding
+ * rather than skipping it on a page nobody received (manager fix #1).
+ */
+function postLoudPage(node: string, content: string): void {
+	if (postPending.has(node)) return; // one in flight for this node already
+	postPending.add(node);
+	void postDiscord(content, 'runner-health')
+		.then((result) => {
+			if (!result.posted) {
+				logger.warn(
+					`[runner-health] offline page for ${node} was not delivered (${result.lastError ?? 'no reason given'}) — not recorded as paged`
+				);
+				return;
+			}
+			// The node may have recovered while this post was in flight — do not
+			// resurrect a cleared record.
+			const rec = downPage[node];
+			if (rec === undefined) return;
+			downPage[node] = { ...rec, lastPage: new Date().toISOString() };
+			saveDownPage();
+		})
+		.catch((err: unknown) => {
+			logger.warn(
+				`[runner-health] offline page for ${node} failed: ${err instanceof Error ? err.message : String(err)}`
+			);
+		})
+		.finally(() => {
+			postPending.delete(node);
+		});
+}
+
+/** Is `node` already somebody's business — drained (any kind, `reboot` included)? */
+function isHandled(node: string, drain: DrainState): boolean {
+	return isDraining(node, drain);
+}
+
+/**
+ * The loud half: page once `node` has been offline OFFLINE_PAGE_MS straight,
+ * at most once per OFFLINE_REPAGE_MS after that, never while it is drained or
+ * mid-reboot, and NEVER gated on `floorAlreadyBreached` — see the module
+ * header for why that suppression does not apply here.
+ */
+function maybePageLoudly(node: string, names: string[], drain: DrainState): void {
+	const rec = downPage[node];
+	if (!rec) return;
+	const sinceMs = Date.parse(rec.since);
+	if (!Number.isFinite(sinceMs)) return; // unparseable: wait for a fresh `since` next tick
+	const downForMs = Date.now() - sinceMs;
+	if (downForMs < OFFLINE_PAGE_MS) return;
+	if (isHandled(node, drain)) return;
+	if (rec.lastPage && !repageDue(rec.lastPage, Date.now(), OFFLINE_REPAGE_MS)) return;
+
+	const instances = names.length > 1 ? ` (${names.join(', ')})` : '';
+	postLoudPage(
+		node,
+		`🔴 @here **runners** on \`${selfHostname()}\`: \`${node}\`${instances} has been OFFLINE for ` +
+			`${hours(downForMs)} straight — this needs hands, not just capacity.`
+	);
+}
+
+/** Node observed ONLINE this tick: it is genuinely back. One recovery post if a page had fired. */
+function recoverDownPageOnline(node: string): void {
+	const rec = downPage[node];
+	if (rec === undefined) return;
+	if (rec.lastPage) {
+		const sinceMs = Date.parse(rec.since);
+		const downFor = Number.isFinite(sinceMs) ? hours(Date.now() - sinceMs) : 'a while';
+		post(`✅ \`${selfHostname()}\`: \`${node}\` is back online after ${downFor} offline.`);
+	}
+	delete downPage[node];
+	saveDownPage();
+}
+
+/**
+ * Node VANISHED from tracking (not reported up or down this tick) — this is
+ * NOT an observation that it recovered, so it must never say "back online".
+ * If a page had fired, say plainly that the record is being cleared, not
+ * resolved (manager fix #2).
+ */
+function recoverDownPageVanished(node: string): void {
+	const rec = downPage[node];
+	if (rec === undefined) return;
+	if (rec.lastPage) {
+		post(
+			`\`${node}\` is no longer reported by runner-health — its down page is cleared, not resolved.`
+		);
+	}
+	delete downPage[node];
+	saveDownPage();
+}
+
 /**
  * Indirection purely so tests can SEE the ledger-only path.
  *
@@ -66,15 +301,10 @@ export function __setQuietRecorderForTesting(
  * the one worth hearing about; by the time the floor breaks, CI is already
  * stopped.
  *
- * Suppressed to hourly by alertOnce while it stays down, cleared the moment
- * it returns, and skipped entirely during a FULL outage — that pages twice
- * already (backstop promote + label floor), and a third message per dead
- * node for one root cause is noise the operator learns to skip.
- *
- * `floorAlreadyBreached` is checked separately from the floor because the
- * backstop PROMOTES hokon to hadoku-builder in that case, which repairs the
- * floor in this same tick — so the floor alone reads healthy during exactly
- * the outage this needs to stay quiet for.
+ * The ORIGINAL ladder below (quiet, hourly-backed-off, floor-breach-aware) is
+ * unchanged. The LOUD page (`maybePageLoudly`/`recoverDownPageOnline`/
+ * `recoverDownPageVanished` above) is a second, independent mechanism added
+ * for wave gates1 lane A2 — see the module header.
  */
 export function runOfflineNodeAlerts(
 	runners: readonly GhRunner[],
@@ -116,14 +346,41 @@ export function runOfflineNodeAlerts(
 		if (st === undefined) continue;
 		byNode.set(m, { names: [], allOffline: st === 'unreachable' });
 	}
+
+	loadDownPage();
+
+	// Still being watched this tick, either in the listing or as an ephemeral
+	// node with a known (not yet probed) state. Anything else was not seen
+	// down OR up — it simply was not reported on — and both ladders reset,
+	// same rule `offlineTicks` always used.
+	const stillTracked = (m: string): boolean =>
+		byNode.has(m) || (ephemeral.has(m) && clawState[m] === undefined);
+
 	// CONSECUTIVE ticks, or it is not "for 20 min". A node that is in no
 	// listing this tick was not seen down, so its count starts over — the
 	// count is what the message multiplies into a duration.
 	for (const m of offlineTicks.keys()) {
-		if (byNode.has(m) || (ephemeral.has(m) && clawState[m] === undefined)) continue;
+		if (stillTracked(m)) continue;
 		offlineTicks.delete(m);
 		offlineRepeats.delete(m);
 		clearAlert(`runner-offline:${m}`);
+	}
+	for (const m of Object.keys(downPage)) {
+		if (stillTracked(m)) continue;
+		recoverDownPageVanished(m);
+	}
+
+	// Read the drain record ONCE per tick, not once per node. An unreadable
+	// record (readDrain() throws on a corrupt file) must not silence a page —
+	// AGENTS.md — so it is read as "nothing is draining", never the reverse.
+	let drain: DrainState = {};
+	try {
+		drain = readDrain();
+	} catch (err) {
+		logger.warn(
+			`[runner-health] drain record unreadable, treating as nothing drained (page, do not silence): ` +
+				(err instanceof Error ? err.message : String(err))
+		);
 	}
 
 	for (const [node, e] of byNode) {
@@ -135,8 +392,18 @@ export function runOfflineNodeAlerts(
 			offlineTicks.delete(node);
 			offlineRepeats.delete(node);
 			clearAlert(key);
+			recoverDownPageOnline(node);
 			continue;
 		}
+
+		// First tick ever observed continuously down: anchor `since` now, so a
+		// restart mid-outage never loses it (read back from disk above).
+		if (downPage[node] === undefined) {
+			downPage[node] = { since: new Date().toISOString() };
+			saveDownPage();
+		}
+		maybePageLoudly(node, e.names, drain);
+
 		const seen = (offlineTicks.get(node) ?? 0) + 1;
 		offlineTicks.set(node, seen);
 		if (floorAlreadyBreached || seen < OFFLINE_TICKS_BEFORE_ALERT) continue;
@@ -162,7 +429,9 @@ export function runOfflineNodeAlerts(
 		// box down for a week does not write one every ten minutes.
 		//
 		// The floor breach and the all-claws-down backstop still PING — this is
-		// only the case where redundancy did its job.
+		// only the case where redundancy did its job. The LOUD page above (2h+,
+		// drain-aware, floor-breach-independent) is the separate mechanism that
+		// actually pings for "which node", added wave gates1 lane A2.
 		quietRecorder(
 			`⚠️ **runners** on \`${selfHostname()}\`: \`${node}\`${instances} OFFLINE for ${downFor}. ` +
 				`CI has capacity (online: ${onlineNames}) and nothing is queuing — the box needs power/network.`,
@@ -176,4 +445,24 @@ export function __resetOfflineNodeAlertsForTesting(): void {
 	offlineTicks.clear();
 	offlineRepeats.clear();
 	quietRecorder = recordAlertQuietly;
+	// Same "mark as loaded, wipe in-memory" shape as alert-ledger.ts's own
+	// test reset: a previous test's writes to the shared test state dir must
+	// never leak into the next test's read.
+	downPageLoaded = true;
+	downPage = {};
+	// A pending post from a killed-off previous test must never block the next
+	// test's own attempt at the same node name.
+	postPending.clear();
+}
+
+/**
+ * Re-read `runner-down-page.json` from disk, as a fresh process would. Test
+ * seam, for proving the 2h clock survives a restart: a test seeds the file
+ * directly, calls this to force the reload `__resetOfflineNodeAlertsForTesting`
+ * deliberately skips, then ticks and checks the page fires (or doesn't)
+ * based on what was ALREADY on disk, not on this process's own history.
+ */
+export function __reloadDownPageForTesting(): void {
+	downPageLoaded = false;
+	loadDownPage();
 }

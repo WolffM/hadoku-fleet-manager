@@ -118,6 +118,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 // The queue-health precedent, imported rather than re-derived. READ_ATTEMPTS is
 // a measured property of `gh api` from this box (0.13% transient, 2026-09-07),
@@ -217,6 +218,16 @@ try {
 } catch (e) {
 	drainUnreadable = e instanceof Error ? e.message : String(e);
 }
+
+/**
+ * Already paged as down by runner-health's own offline alert (observed,
+ * never a declaration — see lib/known-down.mjs). A missing or unreadable
+ * ledger is an EMPTY set, same safe direction as `drains` above — but unlike
+ * the drain record, an unreadable known-down ledger is NOT itself a finding:
+ * the safe direction is to skip nothing, which is exactly what an empty set
+ * does on its own.
+ */
+const KNOWN_DOWN = knownDownNodes();
 
 const coverage = JSON.parse(readFileSync(COVERAGE, 'utf8'));
 const probe = readFileSync(PROBE_SRC, 'utf8');
@@ -321,11 +332,13 @@ for (const m of nodes) {
 		// the same question `check-fleet-toolchain` asks, answered by the same
 		// helper. It stays in the report either way, and the deferral expires.
 		const defer = deferralFor(m, drains);
+		const down = defer.deferred ? null : KNOWN_DOWN.get(m);
 		unreachable.push({
 			machine: m,
 			error: r.error,
 			expectedDown: defer.deferred,
-			why: defer.deferred ? deferralNote(m, defer) : defer.why,
+			knownDown: down ?? null,
+			why: defer.deferred ? deferralNote(m, defer) : down ? knownDownNote(down) : defer.why,
 		});
 		continue;
 	}
@@ -411,8 +424,9 @@ const { warmOrphans, warmRechecked } = await recheckWarmSuspects({
  * see is indistinguishable from a clean fleet, which is the failure the whole
  * `expected-down` mechanism sits one step away from.
  */
-const unexpectedlyDark = unreachable.filter((u) => !u.expectedDown);
+const unexpectedlyDark = unreachable.filter((u) => !u.expectedDown && !u.knownDown);
 const expectedDark = unreachable.filter((u) => u.expectedDown);
+const knownDownDark = unreachable.filter((u) => u.knownDown);
 
 const summary = {
 	ghosts,
@@ -427,6 +441,9 @@ const summary = {
 	unconfigured,
 	unreachable,
 	unreadableRepos,
+	// ADDITIVE (wave gates1 lane A): already paged down by runner-health's own
+	// per-node offline alert, not a fresh finding here — see lib/known-down.mjs.
+	knownDown: knownDownDark.map((u) => ({ node: u.machine, ...u.knownDown })),
 };
 
 // GateDoc (wave 5j lane B) assembly, moved to
@@ -468,6 +485,8 @@ if (!JSON_OUT) {
 		GRACE_MS,
 		log,
 	});
+	for (const u of knownDownDark)
+		log(`  · ${knownDownNote(u.knownDown)} — registrations unread\n    probe said: ${u.error}`);
 }
 
 // ---- reap ----------------------------------------------------------------

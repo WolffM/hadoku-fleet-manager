@@ -31,6 +31,7 @@
     "recheck-log.json": ["scripts/lib/refresh-cycle-live.mjs"],
     "retired-facets.json": ["scripts/retire-node.mjs"],
     "run-listing-marks.json": ["src/run-listing-gap.ts"],
+    "runner-down-page.json": ["src/runner-health-label-floor-nodes.ts"],
     "runner-health-alerts.json": ["src/lib/alert-ledger.ts"],
     "runner-health-snapshot.json": ["src/runner-health-snapshot.ts"],
     "security-pending.json": ["scripts/check-fleet-preflight.mjs"],

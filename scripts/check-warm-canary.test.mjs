@@ -56,13 +56,33 @@ function manifestWith(machines) {
 	return JSON.stringify({ machines });
 }
 
-function run(machines, { reachable, activeRepo, heavyMarks } = {}, extraArgv = []) {
+function run(machines, { reachable, activeRepo, heavyMarks, knownDown } = {}, extraArgv = []) {
 	const dir = tempDir('warm-canary-');
 	const bin = join(dir, 'bin');
 	mkdirSync(bin);
 	sshStub(bin, { reachable: reachable ?? false, activeRepo });
 	writeFileSync(join(dir, 'fleet-runner-manifest.json'), manifestWith(machines));
 	if (heavyMarks !== undefined) writeFileSync(join(dir, 'heavy-marks.json'), heavyMarks);
+	// `knownDown`: node names runner-health's own per-node offline alert has
+	// ALREADY paged, LOUDLY — see lib/known-down.mjs. Written straight into
+	// the fixture's state dir, the real `runner-down-page.json` shape
+	// (`since`: first-offline, `lastPage`: present only once the page fired).
+	if (knownDown !== undefined) {
+		writeFileSync(
+			join(dir, 'runner-down-page.json'),
+			JSON.stringify(
+				Object.fromEntries(
+					knownDown.map((n) => [
+						n,
+						{
+							since: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+							lastPage: new Date(Date.now() - 60_000).toISOString(),
+						},
+					])
+				)
+			)
+		);
+	}
 	const r = spawnSync(process.execPath, [SCRIPT, '--json', ...extraArgv], {
 		encoding: 'utf8',
 		env: {
@@ -147,6 +167,37 @@ void test('a lapsed mark, or marks that will not parse, set nothing aside', () =
 		['fx-claw-4']
 	);
 	assert.equal(torn.doc.heavyMarksUnreadable, true);
+});
+
+void test('wave gates1 §A: a node already paged down by runner-health is not a candidate at all', () => {
+	// The shared ssh stub answers identically for every node, so fx-claw-1
+	// (known down) would read exactly like fx-claw-2 if it were ever probed —
+	// the point of this test is that it is NOT: it is excluded from candidacy
+	// before any ssh happens, the same way a drained node already is.
+	const r = run(
+		{
+			'fx-claw-1': { role: 'claw', ephemeral: true },
+			'fx-claw-2': { role: 'claw', ephemeral: true },
+		},
+		{ reachable: true, activeRepo: 'WolffM/some-repo', knownDown: ['fx-claw-1'] }
+	);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(r.doc.ok, true);
+	assert.deepEqual(r.doc.unreadable, []);
+	assert.deepEqual(r.doc.findings, []);
+	assert.deepEqual(r.doc.eligible, ['fx-claw-2']);
+	assert.equal(r.doc.knownDown.length, 1);
+	assert.equal(r.doc.knownDown[0].node, 'fx-claw-1');
+	assert.match(r.doc.knownDown[0].pagedBy, /runner-health/);
+});
+
+void test('wave gates1 §A: the same unreachable node, NOT known down, still fails (control)', () => {
+	const r = run({ 'fx-claw-1': { role: 'claw', ephemeral: true } }, { reachable: false });
+	assert.equal(r.status, 1, r.stderr);
+	assert.equal(r.doc.ok, false);
+	assert.deepEqual(r.doc.knownDown, []);
+	assert.equal(r.doc.unreadable.length, 1);
+	assert.equal(r.doc.unreadable[0].node, 'fx-claw-1');
 });
 
 void test('human output is unaffected by the migration — same prose, same exit code', () => {

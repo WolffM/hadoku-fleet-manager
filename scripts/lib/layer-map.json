@@ -2201,6 +2201,13 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/known-down.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave gates1 lane A: reads runner-health's down-node page from the alert state (observed, never declared) so the ssh-sweep gates can name a node another job already pages instead of paging it again. Same stratum as expected-down.mjs, its sibling answer to 'which node is expected not to answer'."
+  },
+  {
     "glob": "scripts/lib/job-metrics.mjs",
     "layer": "domain",
     "domain": "observation",

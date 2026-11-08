@@ -51,6 +51,7 @@ import {
 	separateCiUser,
 } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import {
 	REPAIRS,
@@ -440,6 +441,9 @@ async function main() {
 
 	const { common, divergent, profileIds } = declaredPackages(profilesPath());
 	const drains = readDrains();
+	// Already paged as down by runner-health's own offline alert (observed,
+	// never a declaration — see lib/known-down.mjs).
+	const knownDownNow = knownDownNodes();
 	log(
 		`Toolchain floor: ${common.length} packages common to ${profileIds.length} profile(s) ` +
 			`(${profileIds.join(', ')})${divergent.length ? `; ${divergent.length} chassis-specific, not converged here` : ''}`
@@ -473,6 +477,13 @@ async function main() {
 				log(`── ${node}  [expected down]`);
 				log(`   ${deferralNote(node, defer)}`);
 				results.push({ node, status: 'expected-down', reason: state.reason });
+				continue;
+			}
+			const down = knownDownNow.get(node);
+			if (down) {
+				log(`── ${node}  [known down]`);
+				log(`   ${knownDownNote(down)}`);
+				results.push({ node, status: 'known-down', reason: state.reason, knownDown: down });
 				continue;
 			}
 			unreadable++;
@@ -560,16 +571,25 @@ async function main() {
 
 	log('');
 	const bad = drifted + unreadable;
+	const knownDownNodesSeen = results.filter((r) => r.status === 'known-down');
 	log(
 		bad === 0
-			? `Every node carries the declared toolchain. (${results.filter((r) => r.status === 'expected-down').length} expected down)`
+			? `Every node carries the declared toolchain. (${results.filter((r) => r.status === 'expected-down').length} expected down${knownDownNodesSeen.length ? `, ${knownDownNodesSeen.length} known down` : ''})`
 			: `${drifted} node(s) drifted, ${unreadable} unreadable.`
 	);
 	// Only in --json mode: `emit` is the single stdout write and its payload is a
 	// machine's document. Emitting it unasked would put a JSON blob under the
 	// human report, which is the same unparseable stream one layer down.
 	if (JSON_OUT) {
-		emitter.emit({ ok: bad === 0, write: WRITE, nodes: results });
+		emitter.emit({
+			ok: bad === 0,
+			write: WRITE,
+			nodes: results,
+			// ADDITIVE (wave gates1 lane A): already paged down by runner-health's
+			// own per-node offline alert, not a fresh finding here — see
+			// lib/known-down.mjs.
+			knownDown: knownDownNodesSeen.map((r) => ({ node: r.node, ...r.knownDown })),
+		});
 	}
 	process.exit(bad === 0 ? 0 : 1);
 }

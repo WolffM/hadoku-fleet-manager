@@ -565,6 +565,42 @@ test('GateDoc: an unreachable node is unreadable, carrying its name', () => {
 	});
 });
 
+test('wave gates1 §A: a node already paged down by runner-health is skipped, not a finding', () => {
+	withFixture({}, (fx) => {
+		writeFileSync(join(fx.bin, 'ssh'), '#!/bin/sh\ncat >/dev/null\nexit 1\n');
+		chmodSync(join(fx.bin, 'ssh'), 0o755);
+		writeFileSync(
+			join(fx.root, 'runner-down-page.json'),
+			JSON.stringify({
+				[NODE]: {
+					since: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+					lastPage: new Date(Date.now() - 60_000).toISOString(),
+				},
+			})
+		);
+		const { code, report } = runJson(fx);
+		assert.equal(code, 0, 'the only unreachable node is already paged down by runner-health');
+		assert.equal(report.ok, true);
+		assert.deepEqual(report.findings, []);
+		assert.deepEqual(report.unreadable, []);
+		assert.equal(report.knownDown.length, 1, JSON.stringify(report.knownDown));
+		assert.equal(report.knownDown[0].node, NODE);
+		assert.match(report.knownDown[0].pagedBy, /runner-health/);
+	});
+});
+
+test('wave gates1 §A: the same unreachable node, NOT known down, still fails (control)', () => {
+	withFixture({}, (fx) => {
+		writeFileSync(join(fx.bin, 'ssh'), '#!/bin/sh\ncat >/dev/null\nexit 1\n');
+		chmodSync(join(fx.bin, 'ssh'), 0o755);
+		// No runner-down-page.json at all — the safe-direction empty set.
+		const { code, report } = runJson(fx);
+		assert.equal(code, 1);
+		assert.deepEqual(report.knownDown, []);
+		assert.equal(report.unreadable.filter((u) => u.node === NODE).length, 1);
+	});
+});
+
 test('GateDoc: a malformed label is a structured, node-less finding', () => {
 	const runners = JSON.stringify({
 		runners: [runner(), runner({ id: 2, name: 'odd', labels: [{ id: 7 }] })],

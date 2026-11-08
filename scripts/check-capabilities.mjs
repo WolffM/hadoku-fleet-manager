@@ -47,6 +47,7 @@ import { proofFileStatus, readProofsForCapability } from '../dist/lib/measured-p
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 import { parseLoad } from './lib/probe-readers.mjs';
 import { dataEndpointUrl, probeScript, serviceStateRoot, unprobed } from './lib/probe-script.mjs';
 
@@ -447,7 +448,15 @@ unreachable.sort();
 // dated, written, and expires; see lib/expected-down.mjs.
 const _drains = readDrains();
 const expectedDown = unreachable.filter((n) => deferralFor(n, _drains).deferred);
-const trulyUnreachable = unreachable.filter((n) => !deferralFor(n, _drains).deferred);
+// Already paged as down by runner-health's own offline alert (observed, never
+// a declaration — see lib/known-down.mjs) is the SECOND reason an unreachable
+// node is not a fresh finding here. Checked only for a node that is not also
+// drained, so the two never double-count one machine.
+const _knownDown = knownDownNodes();
+const knownDown = unreachable.filter((n) => !deferralFor(n, _drains).deferred && _knownDown.has(n));
+const trulyUnreachable = unreachable.filter(
+	(n) => !deferralFor(n, _drains).deferred && !_knownDown.has(n)
+);
 const ordered = nodes.map(([name]) => [name, results[name]]).filter(([, caps]) => caps);
 
 if (JSON_OUT) {
@@ -461,6 +470,10 @@ if (JSON_OUT) {
 		legacyFindings: findings,
 		unreachable: trulyUnreachable,
 		expectedDown,
+		// ADDITIVE (wave gates1 lane A): already paged down by runner-health's
+		// own per-node offline alert, not a fresh finding here — see
+		// lib/known-down.mjs. Not in scripts/lib/json-contract.mjs either.
+		knownDown: knownDown.map((n) => _knownDown.get(n)),
 		// ADDITIVE (wave 4e follow-up, #102): not in scripts/lib/json-contract.mjs,
 		// so no cron parses this today, but a new key breaks nothing that does
 		// read the ones above it.
@@ -520,6 +533,7 @@ if (JSON_OUT) {
 	for (const u of trulyUnreachable) console.error(`  ! unreachable: ${u}`);
 	for (const u of expectedDown)
 		out.log(`  · ${deferralNote(u, deferralFor(u, _drains))} — not probed`);
+	for (const u of knownDown) out.log(`  · ${knownDownNote(_knownDown.get(u))} — not probed`);
 	if (findings.length) {
 		console.error(`\n✗ capability drift (${findings.length}):`);
 		for (const f of findings) console.error(`  ${f}`);

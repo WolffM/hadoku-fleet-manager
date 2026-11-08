@@ -63,6 +63,7 @@ import { stateDir } from '../dist/lib/fleet-paths.js';
 import { INTERFACE_PROBE, parseInterfaces, proposeLanRecord } from './lib/node-interfaces.mjs';
 import { backstopNodeNames } from '../dist/lib/node-role.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 import { createEmitter } from './lib/emit.mjs';
 
 const JSON_OUT = process.argv.includes('--json');
@@ -465,17 +466,33 @@ async function main() {
 	// never the evidence: nothing here is hidden, and lib/expected-down bounds it
 	// to DEFER_DAYS so a forgotten drain resurfaces on its own.
 	const drains = readDrains();
+	const _knownDown = knownDownNodes();
 	const deferrals = new Map();
 	const deferred = [];
 	const live = [];
+	// Already paged as down by runner-health's own offline alert (observed,
+	// never a declaration — see lib/known-down.mjs). Checked only for a node
+	// that is not already drained, so the two never double-count one machine.
+	const knownDownFindings = [];
 	for (const f of findings) {
 		if (!f.node) {
 			live.push(f);
 			continue;
 		}
 		if (!deferrals.has(f.node)) deferrals.set(f.node, deferralFor(f.node, drains));
-		(deferrals.get(f.node).deferred ? deferred : live).push(f);
+		if (deferrals.get(f.node).deferred) {
+			deferred.push(f);
+			continue;
+		}
+		if (_knownDown.has(f.node)) {
+			knownDownFindings.push(f);
+			continue;
+		}
+		live.push(f);
 	}
+	const knownDown = [...new Set(knownDownFindings.map((f) => f.node))].map((node) =>
+		_knownDown.get(node)
+	);
 
 	// ADVISORY FINDINGS LEAVE `findings` — AND THAT IS THE WHOLE FIX (#14).
 	//
@@ -515,6 +532,7 @@ async function main() {
 		log(
 			`  · [${f.category}] ${f.why}  (deferred — ${deferralNote(f.node, deferrals.get(f.node))})`
 		);
+	for (const d of knownDown) log(`  · ${knownDownNote(d)}`);
 
 	if (JSON_OUT) {
 		emitter.emit({
@@ -522,6 +540,10 @@ async function main() {
 			findings: blocking,
 			advisory,
 			deferred,
+			// ADDITIVE (wave gates1 lane A): already paged down by runner-health's
+			// own per-node offline alert, not a fresh finding here — see
+			// lib/known-down.mjs.
+			knownDown,
 			nodesChecked: fleetNodes.length,
 		});
 	} else if (blocking.length) {

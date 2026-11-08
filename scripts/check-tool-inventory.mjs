@@ -43,6 +43,7 @@ import { manifest as manifestFile, stateDir } from '../dist/lib/fleet-paths.js';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { hubRepoFull } from '../dist/lib/fleet-config.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 import {
 	splitJobs,
 	deriveCapabilities,
@@ -176,7 +177,14 @@ await Promise.all(
 // evidence, and expires after DEFER_DAYS. See lib/expected-down.mjs.
 const _drains = readDrains();
 const expectedDown = unreachable.filter((n) => deferralFor(n, _drains).deferred);
-const trulyUnreachable = unreachable.filter((n) => !deferralFor(n, _drains).deferred);
+// Already paged as down by runner-health's own offline alert (observed, never
+// a declaration — see lib/known-down.mjs). Checked only for a node that is
+// not already drained, so the two never double-count one machine.
+const _knownDown = knownDownNodes();
+const knownDown = unreachable.filter((n) => !deferralFor(n, _drains).deferred && _knownDown.has(n));
+const trulyUnreachable = unreachable.filter(
+	(n) => !deferralFor(n, _drains).deferred && !_knownDown.has(n)
+);
 
 // Every node a `hadoku-builder` job can land on.
 //
@@ -452,6 +460,7 @@ for (const u of trulyUnreachable)
 	);
 for (const u of expectedDown)
 	console.log(`  · ${deferralNote(u, deferralFor(u, _drains))} — tools unread`);
+for (const u of knownDown) console.log(`  · ${knownDownNote(_knownDown.get(u))} — tools unread`);
 // ZERO INSPECTED IS A FAILURE, NOT A PASS. This gate reported clean for months
 // while matching a literal `self-hosted` that the fleet form never contains; the
 // count is what makes the verdict readable as evidence rather than as silence.

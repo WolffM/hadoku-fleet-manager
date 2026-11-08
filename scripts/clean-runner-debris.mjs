@@ -37,6 +37,7 @@ import { reposOnNode } from './lib/placement-rules.mjs';
 import { reclaimableCaches } from './lib/tool-caches.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 import { overdueFindings, recordSweeps } from './lib/cache-sweep-log.mjs';
 import { errText } from './lib/term.mjs';
 
@@ -112,6 +113,9 @@ let totalKb = 0;
 // not cleaned — the deferral suppresses the failure, never the evidence, and
 // expires after DEFER_DAYS. See lib/expected-down.mjs.
 const DRAINS = readDrains();
+// Already paged as down by runner-health's own offline alert (observed,
+// never a declaration — see lib/known-down.mjs).
+const KNOWN_DOWN = knownDownNodes();
 
 async function cleanNode(m) {
 	const lines = [];
@@ -164,6 +168,15 @@ async function cleanNode(m) {
 				lines,
 				kb: 0,
 				result: { machine: m, ok: true, expectedDown: true, skipped: 'expected down' },
+			};
+		}
+		const down = KNOWN_DOWN.get(m);
+		if (down) {
+			say(`── ${m}\n   · ${knownDownNote(down)} — not cleaned`);
+			return {
+				lines,
+				kb: 0,
+				result: { machine: m, ok: true, knownDown: down, skipped: 'known down' },
 			};
 		}
 		say(`── ${m}\n   ✗ unreachable: ${r.out.trim().slice(0, 160)}`);
@@ -312,7 +325,16 @@ if (CONFIRM) {
 }
 
 if (JSON_OUT) {
-	emitter.emit({ confirm: CONFIRM, totalReclaimGb: Number(GB(totalKb)), results, findings });
+	emitter.emit({
+		confirm: CONFIRM,
+		totalReclaimGb: Number(GB(totalKb)),
+		results,
+		findings,
+		// ADDITIVE (wave gates1 lane A): already paged down by runner-health's
+		// own per-node offline alert, not a fresh finding here — see
+		// lib/known-down.mjs.
+		knownDown: results.filter((r) => r.knownDown).map((r) => ({ node: r.machine, ...r.knownDown })),
+	});
 } else {
 	log(
 		`\n${CONFIRM ? 'Reclaimed' : 'Reclaimable'}: ${GB(totalKb)} GB across ${results.filter((r) => r.ok).length} node(s)`

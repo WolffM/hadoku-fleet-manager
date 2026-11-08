@@ -290,6 +290,68 @@ test('a drain past the deferral window stops deferring — time makes this gate 
 	}
 });
 
+// ── wave gates1 §A: a node already paged down by runner-health ─────────────
+
+test('a node already paged down by runner-health is skipped, not a fresh failure', () => {
+	const fx = fixture();
+	try {
+		writeFileSync(
+			join(fx.root, 'runner-down-page.json'),
+			JSON.stringify({
+				[NODE]: {
+					since: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+					lastPage: new Date(Date.now() - 60_000).toISOString(),
+				},
+			})
+		);
+		const r = run(fx, { failNode: NODE });
+		assert.equal(
+			r.code,
+			0,
+			`the only unreachable node is already paged down, got ${r.code}:\n${r.out}`
+		);
+		assert.match(r.out, /skipped .*down since .* paged by runner-health/);
+		assert.match(r.out, /No route to host/, 'a known-down node still reports what the probe saw');
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('the known-down node still reaches --json, with the pager named', () => {
+	const fx = fixture();
+	try {
+		writeFileSync(
+			join(fx.root, 'runner-down-page.json'),
+			JSON.stringify({
+				[NODE]: {
+					since: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+					lastPage: new Date(Date.now() - 60_000).toISOString(),
+				},
+			})
+		);
+		const r = run(fx, { failNode: NODE, argv: ['--json'] });
+		assert.equal(r.code, 0);
+		const summary = JSON.parse(r.out.slice(r.out.indexOf('{')));
+		assert.equal(summary.knownDown.length, 1);
+		assert.equal(summary.knownDown[0].node, NODE);
+		assert.match(summary.knownDown[0].pagedBy, /runner-health/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('the same unreachable node, NOT known down, still fails (control)', () => {
+	const fx = fixture();
+	try {
+		// No runner-down-page.json at all — the safe-direction empty set.
+		const r = run(fx, { failNode: NODE });
+		assert.equal(r.code, 1);
+		assert.doesNotMatch(r.out, /skipped .*paged by runner-health/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
 test('a drain record that cannot be parsed is its own finding, not "nothing is drained"', () => {
 	const fx = fixture();
 	try {
