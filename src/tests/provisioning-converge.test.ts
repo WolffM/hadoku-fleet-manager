@@ -180,7 +180,7 @@ void test('the real runner refuses under node --test, and names the packaged scr
 	assert.ok(existsSync(convergeScriptPath()), 'the path resolves to the shipped script');
 });
 
-void test('job-runner.ts classify: ok/findings report succeeded, unavailable/broke report failed', async () => {
+void test('job-runner.ts classify: ok/findings report succeeded, a first unavailable is held as skipped, broke reports failed', async () => {
 	const sink: { jobState: string; verdict: unknown }[] = [];
 	__setHostForTesting({
 		...testHost,
@@ -207,7 +207,7 @@ void test('job-runner.ts classify: ok/findings report succeeded, unavailable/bro
 	assert.deepEqual(sink, [
 		{ jobState: 'succeeded', verdict: 'ok' },
 		{ jobState: 'succeeded', verdict: 'findings' },
-		{ jobState: 'failed', verdict: 'unavailable' },
+		{ jobState: 'skipped', verdict: 'unavailable' },
 		{ jobState: 'failed', verdict: 'broke' },
 	]);
 });
@@ -216,29 +216,38 @@ void test('job-runner.ts classify: ok/findings report succeeded, unavailable/bro
 // claw-1's apt-security read was killed at 120 s, so the verdict was
 // "could not look". It was recorded, and paged @here as `job failed`, with an
 // EMPTY error: the reason sat in the report and reached only a log line.
+// Since fleet-manager#71 one such pass is held; the second in a row pages.
 void test('a pass whose read of a node timed out records a failure that names the timeout and the node', async () => {
-	const ran = Date.now();
-	await convergeProvisioningTick(
-		runner(
-			doc({
-				unreadable: [
-					{
-						node: 'claw-1',
-						facet: 'apt-security',
-						why: 'no answer within 120s (killed by timeout)',
-					},
-				],
-			})
-		),
-		ran
+	const timedOut = runner(
+		doc({
+			unreadable: [
+				{
+					node: 'claw-1',
+					facet: 'apt-security',
+					why: 'no answer within 120s (killed by timeout)',
+				},
+			],
+		})
 	);
-	assert.equal(results.length, 1);
-	const [r] = results;
-	assert.equal(r.job, 'fleet:converge-provisioning');
-	assert.equal(r.state, 'failed');
-	assert.equal(
-		r.error,
-		'timed out waiting on claw-1 (apt-security): no answer within 120s (killed by timeout)'
+	const ran = Date.now();
+	await convergeProvisioningTick(runner(doc()), ran - 2); // the streak starts from a pass that ran
+	results.length = 0;
+	await convergeProvisioningTick(timedOut, ran - 1);
+	await convergeProvisioningTick(timedOut, ran);
+	assert.deepEqual(
+		results.map((r) => [r.job, r.state, r.error]),
+		[
+			[
+				'fleet:converge-provisioning',
+				'skipped',
+				'timed out waiting on claw-1 (apt-security): no answer within 120s (killed by timeout) — held (1/2 in a row before this pages)',
+			],
+			[
+				'fleet:converge-provisioning',
+				'failed',
+				'timed out waiting on claw-1 (apt-security): no answer within 120s (killed by timeout) — could not look 2 passes in a row',
+			],
+		]
 	);
 	// The local execution-log row carries the same reason, not a blank.
 	const { rows } = readJobRuns(jobRunDir(testStateDir), { job: 'fleet:converge-provisioning' });

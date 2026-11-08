@@ -173,14 +173,20 @@ void test('a tick reads every repo in ONE query and dispatches only the due one,
 
 void test('could not look: a failed query wakes nothing', async () => {
 	installFetch({ errors: [{ message: 'Something went wrong' }] });
-	assert.equal(await ppeSweepTick(NOW, 'tok', ['WolffM/a'], 0), null);
+	assert.deepEqual(await ppeSweepTick(NOW, 'tok', ['WolffM/a'], 0), {
+		couldNotLook:
+			`could not read ppe state in ${READ_ATTEMPTS} attempts: ` +
+			Array(READ_ATTEMPTS).fill('GraphQL: Something went wrong').join(' | '),
+	});
 	assert.equal(
 		calls.filter((c) => c.url.endsWith('/graphql')).length,
 		READ_ATTEMPTS,
 		'a query that fails every attempt is still could-not-look'
 	);
 	assert.equal(calls.filter((c) => c.url.includes('/dispatches')).length, 0);
-	assert.equal(await ppeSweepTick(NOW, undefined, ['WolffM/a'], 0), null);
+	assert.deepEqual(await ppeSweepTick(NOW, undefined, ['WolffM/a'], 0), {
+		couldNotLook: 'no GitHub token yet',
+	});
 });
 
 void test('a refused dispatch (a ppe branch with no promoter yet) is reported, and not retried every pass', async () => {

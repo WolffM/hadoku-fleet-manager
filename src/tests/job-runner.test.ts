@@ -9,7 +9,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { __setHostForTesting } from '../host.js';
@@ -29,6 +29,7 @@ import {
 	reportJobResult,
 	scheduleRepeating,
 } from '../lib/job-runner.js';
+import { STREAK_FILE, __resetUnavailableStreaksForTesting } from '../lib/unavailable-streak.js';
 
 let jobResults: {
 	jobName: string;
@@ -53,6 +54,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	__setHostForTesting(testHost);
+	__resetUnavailableStreaksForTesting();
 	cleanupTempDirs();
 });
 
@@ -290,7 +292,7 @@ void test('createOverlapGuard: a second run() while the first is in flight is a 
 	assert.equal(starts, 2, 'once the first pass finished, a new one is allowed');
 });
 
-void test('finishTick/reportJobResult: ok and findings report succeeded; unavailable and broke report failed', async () => {
+void test('finishTick/reportJobResult: ok and findings report succeeded; a first unavailable is held as skipped; broke reports failed', async () => {
 	await finishTick({ jobName: 'x', intervalMs: 60_000, now: 0, verdict: 'ok', durationMs: 5 });
 	await finishTick({
 		jobName: 'x',
@@ -318,9 +320,9 @@ void test('finishTick/reportJobResult: ok and findings report succeeded; unavail
 
 	assert.deepEqual(
 		jobResults.map((r) => r.jobState),
-		['succeeded', 'succeeded', 'failed', 'failed']
+		['succeeded', 'succeeded', 'skipped', 'failed']
 	);
-	assert.equal(jobResults[2].opts?.error, 'ssh timeout');
+	assert.equal(jobResults[2].opts?.error, 'ssh timeout — held (1/2 in a row before this pages)');
 	assert.equal(jobResults[3].opts?.error, 'exit 1, no report');
 	// A succeeded tick carries no `error`, even though the verdict still
 	// travels in `data` so a reader can tell `ok` apart from `findings`.
@@ -339,6 +341,131 @@ void test('reportJobResult: a sink failure is logged and never thrown', async ()
 	});
 	await assert.doesNotReject(() => reportJobResult('x', 'ok', 0));
 	assert.ok(warns.some((w) => w.includes('sink is down')));
+});
+
+const blind = (jobName: string, why = 'GraphQL: aborted') =>
+	finishTick({
+		jobName,
+		intervalMs: 60_000,
+		now: Date.now(),
+		verdict: 'unavailable',
+		durationMs: 1,
+		why,
+	});
+
+void test('unavailable streak: one could-not-look is held, the second in a row pages with the count and the reason (fleet-manager#71)', async () => {
+	await blind('streak-a');
+	await blind('streak-a', 'HTTP 502: bad gateway');
+	await blind('streak-a', 'HTTP 502: bad gateway');
+	assert.deepEqual(
+		jobResults.map((r) => [
+			r.jobState,
+			r.opts?.error,
+			(r.opts?.data as { consecutive?: number }).consecutive,
+		]),
+		[
+			['skipped', 'GraphQL: aborted — held (1/2 in a row before this pages)', 1],
+			['failed', 'HTTP 502: bad gateway — could not look 2 passes in a row', 2],
+			// A read that stays broken keeps paging; the hold never swallows it.
+			['failed', 'HTTP 502: bad gateway — could not look 3 passes in a row', 3],
+		]
+	);
+});
+
+void test('unavailable streak: a pass that ran clears it, so blips spread apart never page', async () => {
+	for (const verdict of ['ok', 'findings'] as const) {
+		await blind(`streak-${verdict}`);
+		await finishTick({
+			jobName: `streak-${verdict}`,
+			intervalMs: 60_000,
+			now: 0,
+			verdict,
+			durationMs: 1,
+		});
+		await blind(`streak-${verdict}`);
+	}
+	assert.deepEqual(
+		jobResults.map((r) => r.jobState),
+		['skipped', 'succeeded', 'skipped', 'skipped', 'succeeded', 'skipped']
+	);
+});
+
+void test('unavailable streak: broke is never held, and resets the streak like any pass that ran', async () => {
+	await blind('streak-broke');
+	await finishTick({
+		jobName: 'streak-broke',
+		intervalMs: 60_000,
+		now: 0,
+		verdict: 'broke',
+		durationMs: 1,
+		why: 'exit 1, no report',
+	});
+	await blind('streak-broke');
+	assert.deepEqual(
+		jobResults.map((r) => r.jobState),
+		['skipped', 'failed', 'skipped']
+	);
+});
+
+void test('unavailable streak: counted per job, and survives a restart because it lives in stateDir', async () => {
+	const dir = tempDir('streak-');
+	__setHostForTesting({
+		...testHost,
+		stateDir: dir,
+		logger: { info() {}, warn: (m) => warns.push(m), error() {} },
+		jobs: {
+			async recordJobResult(jobName, jobState, durationMs, opts) {
+				jobResults.push({ jobName, jobState, durationMs, opts });
+			},
+		},
+	});
+	await blind('streak-x');
+	await blind('streak-y');
+	assert.deepEqual(JSON.parse(readFileSync(join(dir, STREAK_FILE), 'utf8')), {
+		'streak-x': 1,
+		'streak-y': 1,
+	});
+	__resetUnavailableStreaksForTesting(); // the process restarted; only the file remains
+	await blind('streak-x');
+	assert.deepEqual(
+		jobResults.map((r) => `${r.jobName}:${r.jobState}`),
+		['streak-x:skipped', 'streak-y:skipped', 'streak-x:failed']
+	);
+	// The local ledger says could-not-look every time, held or not.
+	const { rows } = readJobRuns(jobRunDir(dir));
+	assert.deepEqual(
+		rows.map((r) => r.verdict),
+		['could-not-look', 'could-not-look', 'could-not-look']
+	);
+	// What happened, not the paging decision: the hold is the remote sink's alone.
+	assert.deepEqual(
+		rows.map((r) => r.why),
+		['GraphQL: aborted', 'GraphQL: aborted', 'GraphQL: aborted']
+	);
+	assert.deepEqual(warns, []);
+});
+
+void test('unavailable streak: a store it cannot write still counts, in memory, and says so', async () => {
+	const dir = tempDir('streak-ro-');
+	writeFileSync(join(dir, 'blocker'), '');
+	__setHostForTesting({
+		...testHost,
+		// A FILE where the state directory should be: every write under it fails.
+		stateDir: join(dir, 'blocker'),
+		logger: { info() {}, warn: (m) => warns.push(m), error() {} },
+		jobs: {
+			async recordJobResult(jobName, jobState, durationMs, opts) {
+				jobResults.push({ jobName, jobState, durationMs, opts });
+			},
+		},
+	});
+	await blind('streak-ro');
+	await blind('streak-ro');
+	assert.deepEqual(
+		jobResults.map((r) => r.jobState),
+		['skipped', 'failed']
+	);
+	assert.ok(warns.some((w) => w.includes('counting in memory only')));
 });
 
 void test('liveness: a scheduled job is registered at once, and a finished tick marks it ok', async () => {

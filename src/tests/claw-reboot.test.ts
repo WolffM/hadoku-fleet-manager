@@ -168,7 +168,7 @@ void test('the real runner refuses under node --test, and points at the packaged
 	assert.match(r.why, /refused under node --test/);
 });
 
-void test('job-runner.ts classify: ok/findings report succeeded, unavailable/broke report failed', async () => {
+void test('job-runner.ts classify: ok/findings report succeeded, a first unavailable is held as skipped, broke reports failed', async () => {
 	const sink: { jobName: string; jobState: string; verdict: unknown }[] = [];
 	__setHostForTesting({
 		...testHost,
@@ -211,7 +211,7 @@ void test('job-runner.ts classify: ok/findings report succeeded, unavailable/bro
 	assert.deepEqual(sink, [
 		{ jobName: 'fleet:reboot-claws', jobState: 'succeeded', verdict: 'ok' },
 		{ jobName: 'fleet:reboot-claws', jobState: 'succeeded', verdict: 'findings' },
-		{ jobName: 'fleet:reboot-claws', jobState: 'failed', verdict: 'unavailable' },
+		{ jobName: 'fleet:reboot-claws', jobState: 'skipped', verdict: 'unavailable' },
 		{ jobName: 'fleet:reboot-claws', jobState: 'failed', verdict: 'broke' },
 	]);
 });

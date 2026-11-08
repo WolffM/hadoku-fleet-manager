@@ -99,6 +99,11 @@
     "why": "Wave 5n lane C (plan \u00a76.2/\u00a77.3 T7): the job sink \u2014 one declared writer (job-run-store.ts itself, the only file that calls appendFileSync on its own day files), read back by job-runner.ts and emit.mjs through its exported functions, same \"state\" shape as its neighbours above."
   },
   {
+    "glob": "src/lib/unavailable-streak.ts",
+    "layer": "state",
+    "why": "fleet-manager#71: each in-process job's consecutive could-not-look count, one file under stateDir with this module its only reader and writer. Called by job-runner.ts (automation) above it; same one-file-behind-one-module shape as job-run-store.ts beside it."
+  },
+  {
     "glob": "src/day-file-list.ts",
     "layer": "state",
     "why": "Wave shrink-1 lane B: the day-file walk shared by job-run-store.ts and decision-log-storage.ts's readers (dedup fix). No src/*.ts catch-all exists, and both callers are state, so this needs its own entry."

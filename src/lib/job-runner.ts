@@ -33,7 +33,9 @@
  *      already used by `runner-health.ts`'s own tick — a REMOTE sink, posted
  *      to monitoring-api) once per pass, mapping `ok`/`findings` to
  *      `succeeded` and `unavailable`/`broke` to `failed` — a gate that found
- *      real problems still RAN; a gate that could not look did not. It ALSO
+ *      real problems still RAN; a gate that could not look did not. A lone
+ *      `unavailable` is HELD as `skipped` until it repeats
+ *      (`./unavailable-streak.ts`, fleet-manager#71). It ALSO
  *      appends one row to `../job-run-store.js` (T7, plan §7.3) — a LOCAL,
  *      durable ledger of every registry job's runs that answers the
  *      staleness gate and "did the nightly gates run last month" without a
@@ -52,6 +54,7 @@ import { noteTick, registerLoop, TOKEN_WAIT_GRACE_MS } from './liveness.js';
 import { isStopping, registerLoopTimer, trackPass } from './loop-lifecycle.js';
 import { logger, recordJobResult, stateDir } from '../host.js';
 import { appendJobRun, buildRow, jobRunDir, type JobRunVerdict } from '../job-run-store.js';
+import { clearUnavailable, holdUnavailable } from './unavailable-streak.js';
 
 /** A job registry entry's kind (plan §6.2): what reading its doc MEANS. */
 export type JobKind = 'converger' | 'gate' | 'recorder';
@@ -278,13 +281,13 @@ export async function reportJobResult(
 	jobName: string,
 	verdict: Verdict,
 	durationMs: number,
-	opts: { why?: string; data?: Record<string, unknown> } = {}
+	opts: { why?: string; data?: Record<string, unknown>; held?: boolean } = {}
 ): Promise<void> {
-	const jobState: 'succeeded' | 'failed' =
-		verdict === 'ok' || verdict === 'findings' ? 'succeeded' : 'failed';
+	const jobState: 'succeeded' | 'failed' | 'skipped' =
+		verdict === 'ok' || verdict === 'findings' ? 'succeeded' : opts.held ? 'skipped' : 'failed';
 	try {
 		await recordJobResult(jobName, jobState, durationMs, {
-			error: jobState === 'failed' ? opts.why : undefined,
+			error: jobState === 'succeeded' ? undefined : opts.why,
 			data: { verdict, ...opts.data },
 		});
 	} catch (err) {
@@ -345,13 +348,36 @@ function toJobRunVerdict(v: Verdict): JobRunVerdict {
  * tick for the off-box heartbeat (liveness.ts), reports to the remote job
  * sink, and appends one row to the local job-run-store (T7). A pass that
  * could not look still COMPLETED: the loop is alive, and both sinks record
- * the run as failed/could-not-look rather than going silent.
+ * it rather than going silent — the remote sink as `skipped` while the
+ * unavailable streak is under its threshold and `failed` from then on, the
+ * local store as `could-not-look`, with the job's own reason, every time.
  */
 export async function finishTick(params: FinishTickParams): Promise<void> {
 	noteTick(params.jobName, params.intervalMs);
+	let why = params.why;
+	let held = false;
+	let consecutive: number | undefined;
+	try {
+		if (params.verdict === 'unavailable') {
+			const hold = holdUnavailable(params.jobName, why ?? 'could not look', stateDir());
+			why = hold.why;
+			held = hold.state === 'skipped';
+			consecutive = hold.count;
+		} else {
+			clearUnavailable(params.jobName, stateDir());
+		}
+	} catch (err) {
+		// No state dir to count in: report what happened, unheld — a hold that
+		// cannot count must page, not stay quiet forever.
+		logger.warn(
+			`[job-runner] ${params.jobName}: unavailable streak not counted: ` +
+				(err instanceof Error ? err.message : String(err))
+		);
+	}
 	await reportJobResult(params.jobName, params.verdict, params.durationMs, {
-		why: params.why,
-		data: params.data,
+		why,
+		held,
+		data: consecutive === undefined ? params.data : { ...params.data, consecutive },
 	});
 	// Never lets a job-run-store outage reach the loop this tick belongs to —
 	// `appendJobRun` itself never throws, but the directory resolution
@@ -364,6 +390,7 @@ export async function finishTick(params: FinishTickParams): Promise<void> {
 			durationMs: params.durationMs,
 			kind: params.kind ?? 'converger',
 			verdict: toJobRunVerdict(params.verdict),
+			// What happened, not the paging decision: the hold is the remote sink's.
 			why: params.why,
 		});
 		const res = appendJobRun(row, jobRunDir(stateDir()));

@@ -196,16 +196,21 @@ async function readStates(
 	return parseSweep(repos, body.data);
 }
 
-/** One pass. Never throws: a wake-up that fails costs one cadence, not the process. */
+/**
+ * One pass. Never throws: a wake-up that fails costs one cadence, not the
+ * process. Could not look returns WHY, every attempt's reason, because the
+ * page is the only place an operator reads it (fleet-manager#71: the
+ * 2026-11-08 04:06Z page said only "could not read ppe state").
+ */
 export async function ppeSweepTick(
 	nowMs: number = Date.now(),
 	token: string | undefined = githubToken(),
 	repos: string[] = coveredRepos(),
 	retryDelayMs: number = RETRY_DELAY_MS
-): Promise<{ woke: string[]; failed: string[] } | null> {
+): Promise<{ woke: string[]; failed: string[] } | { couldNotLook: string }> {
 	if (!token) {
 		logger.warn('[ppe-sweep] no GitHub token yet: could not look, woke nothing');
-		return null;
+		return { couldNotLook: 'no GitHub token yet' };
 	}
 	const reasons: string[] = [];
 	let read: Awaited<ReturnType<typeof readStates>> = '';
@@ -216,10 +221,9 @@ export async function ppeSweepTick(
 		reasons.push(read);
 	}
 	if (typeof read === 'string') {
-		logger.warn(
-			`[ppe-sweep] could not read ppe state in ${READ_ATTEMPTS} attempts (${reasons.join(' | ')}); woke nothing`
-		);
-		return null;
+		const couldNotLook = `could not read ppe state in ${READ_ATTEMPTS} attempts: ${reasons.join(' | ')}`;
+		logger.warn(`[ppe-sweep] ${couldNotLook}; woke nothing`);
+		return { couldNotLook };
 	}
 	if (reasons.length) logger.info(`[ppe-sweep] read ppe state on retry after: ${reasons[0]}`);
 	if (read.unreadable.length)
@@ -264,19 +268,21 @@ export async function ppeSweepTick(
  * reads as `stale` on GET /mgmt/api/status from ~5 minutes after every boot
  * and pages as a critical outage (2026-11-02, both this loop and
  * capacity-sample, since they shipped). Could not look is still a COMPLETED
- * pass: the loop is alive, and the run row says it could not look.
+ * pass: the loop is alive, and the run row says it could not look, and why.
+ * One such pass is held as `skipped`; the second in a row pages (finishTick).
  */
 export async function ppeSweepPass(nowMs: number = Date.now()): Promise<void> {
 	const r = await ppeSweepTick(nowMs);
-	const verdict: Verdict = r === null ? 'unavailable' : r.failed.length ? 'findings' : 'ok';
+	const blind = 'couldNotLook' in r;
+	const verdict: Verdict = blind ? 'unavailable' : r.failed.length ? 'findings' : 'ok';
 	await finishTick({
 		jobName: JOB_NAME,
 		intervalMs: PPE_SWEEP_MS,
 		now: nowMs,
 		verdict,
 		durationMs: Date.now() - nowMs,
-		why: r === null ? 'could not read ppe state' : undefined,
-		data: r ? { woke: r.woke, failed: r.failed } : undefined,
+		why: blind ? r.couldNotLook : undefined,
+		data: blind ? undefined : { woke: r.woke, failed: r.failed },
 	});
 }
 

@@ -46,12 +46,12 @@ function tickOf(name: string) {
 	return getFleetLiveness().loops.find((l) => l.name === name);
 }
 
-void test('a ppe-sweep pass that could not look still notes its tick, and records could-not-look', async () => {
+void test('a ppe-sweep pass that could not look still notes its tick, and records it (held, as its first in a row)', async () => {
 	await ppeSweepPass();
 	const loop = tickOf('fleet:ppe-sweep');
 	assert.ok(loop?.lastTickAt, 'ppe-sweep noted no tick');
 	assert.equal(loop.status, 'ok');
-	assert.deepEqual(jobs, [{ job: 'fleet:ppe-sweep', state: 'failed' }]);
+	assert.deepEqual(jobs, [{ job: 'fleet:ppe-sweep', state: 'skipped' }]);
 });
 
 void test('a capacity-samples pass notes its tick even when sampling faults', async () => {

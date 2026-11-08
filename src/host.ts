@@ -57,7 +57,13 @@ export interface FleetHost {
 	jobs: {
 		recordJobResult(
 			jobName: string,
-			jobState: 'succeeded' | 'failed',
+			/**
+			 * `skipped` is a could-not-look pass held under its streak threshold
+			 * (`lib/unavailable-streak.ts`): monitoring-api records it and job-alerts
+			 * ignores it. A host whose sink takes only the first two still compiles
+			 * (method parameters are bivariant); mgmt-api forwards it as-is.
+			 */
+			jobState: 'succeeded' | 'failed' | 'skipped',
 			durationMs: number,
 			opts?: { cron?: string; data?: Record<string, unknown>; error?: string }
 		): Promise<void>;
