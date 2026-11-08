@@ -57,6 +57,57 @@ export function readQueuedWithRetry(
 }
 
 /**
+ * Is a read failure GitHub's PRIMARY rate limit — the hourly budget spent —
+ * rather than a SECONDARY (burst) limit, a blip, a timeout, or an auth problem?
+ *
+ * NARROWED TO THE PRIMARY WORDING ON PURPOSE. `gh api` prints the literal
+ * prefix `"gh: API rate limit exceeded ..."` only for the primary (hourly)
+ * limit; a burst trips GitHub's SECONDARY limit instead, worded "You have
+ * exceeded a secondary rate limit ...". The two need different handling — a
+ * secondary limit clears in seconds and narrower concurrency fixes it
+ * (`src/lib/github-client-blackout.ts` keeps them apart for exactly this
+ * reason); only the primary one justifies this file's "stop asking for the
+ * rest of the sweep" response below. A broader `/rate limit/i` would also
+ * suppress every read on a mere burst, which is the wrong response to a
+ * problem that resolves on its own in seconds.
+ *
+ * `describeReadFailure` keeps up to 200 chars of stderr, comfortably enough
+ * for the primary phrase to survive truncation.
+ *
+ * WHAT THIS ACTUALLY FIXES (checked against the logs, wave gates1,
+ * 2026-11-08). The PRIMARY run/pending LISTING path
+ * (`readRunsOnce`/`runsIn` in `check-queue-health.mjs`) already went through
+ * `readQueuedWithRetry` and `unreadable`, and every one of the 11
+ * rate-limited listing reads in `~/.pm2/logs/mgmt-api-error__2026-11-0*.log`
+ * was ALREADY reported correctly: `"could not read the queue for 33
+ * repo(s): WolffM/ArchiveBot — exit 1: gh: API rate limit exceeded ...
+ * (attempt 2/2)"` is could-not-look, with the reason, exactly as intended —
+ * that path was not broken. This classifier fixes two things instead:
+ *
+ *   (a) EFFICIENCY/BUDGET. Once one repo's listing confirms the primary
+ *       budget is spent, the other ~32 repos' listings (and any jobs/runners
+ *       reads for old runs) would otherwise still retry into the same spent
+ *       budget, 2 attempts each — calls that cannot come out differently
+ *       before the reset, spent on a window that is already decided. See
+ *       `budgetSpentReason`/`guardedRead` in `check-queue-health.mjs`.
+ *   (b) A LATENT GAP, not an observed one: `readJobs`/`repoRunners` (the
+ *       secondary, per-run/per-repo reads) caught a failure but logged only
+ *       `err.message.split('\n')[0]`, which for `execFileSync` is the literal
+ *       string `"Command failed: gh api ..."` — the actual reason
+ *       (`err.stderr`, where "rate limit" would appear) is the NEXT line of
+ *       `message`, discarded before anything could read it. Nothing in the
+ *       logs shows this path was ever actually hit by a rate limit — the 11
+ *       observed failures are all on the listing path above — but had it
+ *       been, the run would have silently defaulted into "counted as fleet
+ *       work" and risked an ordinary `stranded` finding standing in for
+ *       "could not look". Closed alongside (a) rather than left for the day
+ *       it fires.
+ */
+export function isRateLimitFailure(reason) {
+	return /API rate limit exceeded/i.test(String(reason ?? ''));
+}
+
+/**
  * How old a stuck run must be before it stops counting as a fresh casualty.
  *
  * THE EXCLUSION HAD AN INVERSION IN IT. Excluding stuck runs from the p95 is

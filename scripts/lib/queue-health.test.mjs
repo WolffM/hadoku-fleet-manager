@@ -7,9 +7,10 @@ import {
 	queueFindings,
 	isSaturated,
 	readQueuedWithRetry,
+	isRateLimitFailure,
 	FAIL_SECONDS,
 } from './queue-health.mjs';
-import { describeReadFailure } from './read-retry-policy.mjs';
+import { describeReadFailure, READ_ATTEMPTS } from './read-retry-policy.mjs';
 // The BUILT copy: the backstop's backlog threshold must be THIS gate's fail
 // floor, so the line that pages and the line that promotes hokon never drift.
 import { BACKLOG_QUEUE_SECONDS } from '../../dist/runners/backstop.js';
@@ -520,4 +521,151 @@ test('#6: a pending run whose jobs could not be read is INVISIBLE — the strict
 	});
 	assert.equal(p.invisible.length, 1);
 	assert.equal(p.held.length, 0);
+});
+
+// Wave gates1 (2026-11-08), item 2. The PRIMARY run/pending listing path
+// (`readRunsOnce`/`runsIn`) was already reporting a spent budget correctly:
+// all 11 real `gh: API rate limit exceeded` failures in
+// `~/.pm2/logs/mgmt-api-error__2026-11-0*.log` read "could not read the queue
+// for 33 repo(s): ... exit 1: gh: API rate limit exceeded ... (attempt 2/2)"
+// — could-not-look, with the reason, exactly as intended. `isRateLimitFailure`
+// (and the sweep-wide `budgetSpentReason` guard it feeds in
+// check-queue-health.mjs) fixes two different things instead: (a) stops the
+// REST of that sweep's repos from retrying 2x each into a budget already
+// known spent, and (b) closes a LATENT gap in `readJobs`/`repoRunners` (the
+// secondary, per-run/per-repo reads), which caught a failure but logged only
+// `err.message.split('\n')[0]` — for `execFileSync` literally
+// `"Command failed: gh api ..."` — discarding the real reason
+// (`err.stderr`, the NEXT line of `message`) before anything could classify
+// it. Nothing in the logs shows (b) was ever actually hit; it is closed
+// before the day it is. This fixture exercises the classifier and the fixed
+// path end to end through `readQueuedWithRetry` and `queueFindings`, with no
+// GitHub token or fleet.
+
+test("isRateLimitFailure recognises gh's own PRIMARY wording, and nothing else", () => {
+	assert.equal(
+		isRateLimitFailure('exit 1: gh: API rate limit exceeded for user ID 8714327. (attempt 2/2)'),
+		true
+	);
+	assert.equal(isRateLimitFailure('exit 1: gh: Not Found (HTTP 404) (attempt 2/2)'), false);
+	assert.equal(isRateLimitFailure('timed out after 20s (SIGTERM) (attempt 2/2)'), false);
+	assert.equal(isRateLimitFailure(undefined), false, 'must not throw on a missing reason');
+	assert.equal(isRateLimitFailure(''), false);
+});
+
+test('isRateLimitFailure does NOT classify a SECONDARY (burst) limit as the primary one', () => {
+	// GitHub's secondary limiter uses different wording and clears in seconds —
+	// narrower concurrency fixes it, not a sweep-wide stop. Classifying it as
+	// primary would suppress every other read for the rest of the sweep over a
+	// burst that had already passed (see isRateLimitFailure's doc).
+	assert.equal(
+		isRateLimitFailure(
+			'exit 1: gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403) (attempt 2/2)'
+		),
+		false
+	);
+});
+
+test('a rate-limited read becomes could-not-look, carrying the reason, after READ_ATTEMPTS', () => {
+	// The exact shape `execFileSync` throws for a spent budget — see the real
+	// stderr quoted in github-client-blackout.ts and reproduced in
+	// 'the reason distinguishes a timeout from an API error' above.
+	let calls = 0;
+	const readOnce = () => {
+		calls++;
+		throw Object.assign(new Error('Command failed: gh api ...'), {
+			status: 1,
+			stderr: 'gh: API rate limit exceeded for user ID 8714327. (HTTP 403)',
+		});
+	};
+	const read = readQueuedWithRetry('WolffM/x', readOnce, { sleep: () => {} });
+
+	assert.equal(calls, READ_ATTEMPTS, 'a spent budget still gets looked at twice, not tolerated');
+	assert.equal(read.ok, false);
+	assert.ok(
+		isRateLimitFailure(read.reason),
+		`the reason must be classifiable as a rate limit, got: ${read.reason}`
+	);
+
+	// Wired exactly as check-queue-health.mjs's readJobs/repoRunners now do:
+	// a rate-limited secondary read goes to `unreadable`, not a silent default.
+	const findings = queueFindings(summariseQueue([], { stuckMs: 3_600_000, nowMs: SWEEP }), [
+		{ repo: 'WolffM/x', reason: `jobs for run 123: ${read.reason}` },
+	]);
+	assert.equal(findings.length, 1);
+	assert.match(findings[0], /could not read the queue/);
+	assert.match(
+		findings[0],
+		/rate limit/i,
+		'the operator-facing finding must carry WHY, not just that a repo failed'
+	);
+});
+
+// Wave gates1, item 1: 16 "N run(s) created ahead of this box's clock by up
+// to ~3,400-3,567s" fired 2026-11-01 08:10Z..10:10Z — the US DST fallback
+// (2am PDT -> 1am PST, the 08:00-10:00Z window) — and never recurred
+// (2026-11-02..11-08: zero). Investigated and NOT fixed here — the cause is
+// not a local-time parse and not in this file:
+//
+//   - This box's own clock was independently correct throughout the window:
+//     mgmt-api's own `[gh-budget]` log line (its ISO timestamp, from
+//     `Date.now()`) landed within a second of GitHub's OWN
+//     `x-ratelimit-reset` epoch at 07:10Z, 08:10Z, 09:10Z (straddling the
+//     09:00Z fallback instant) and 10:10Z — i.e. this box agreed with
+//     GitHub's rate-limit clock on both sides of the fold.
+//   - `gh api` returns standard RFC3339 "Z" timestamps (confirmed live), and
+//     both this file and check-queue-health.mjs only ever call `Date.parse`
+//     on such strings, or `Date.now()` — both epoch-based and immune to a
+//     local TZ fold; confirmed directly: `TZ=America/Los_Angeles node -e
+//     'Date.parse("2026-11-01T08:50:46Z")'` and the 09:10:46Z/09:45:00Z
+//     neighbours straddling the fold all come back correct and monotonic.
+//   - The incident's own shape rules out a steadily-drifting clock too: the
+//     COUNT of skewed runs climbed 1->20 while the MAX "ahead" amount held
+//     near 3,300-3,570s (not shrinking) through the 08:10-09:10Z half, then
+//     the count fell while the max shrank 2,500->1,265s through 09:10-10:10Z
+//     — new GitHub-reported runs kept appearing roughly "an hour ahead"
+//     during the repeated local hour, then stopped, and the existing ones
+//     aged out as real time caught up to their stated `created_at`.
+//   - GitHub's API still serves the bad data today, so this is not a
+//     transient read either: hadoku_site run 41291060343 carries
+//     created_at 2026-11-01T09:58:28Z and updated_at 09:00:45Z — UPDATED
+//     before CREATED, which a correctly-stamped run cannot do. Run ids
+//     around 41290xxx (created BEFORE the fold) carry created_at 09:44-09:58Z,
+//     while the HIGHER ids around 41294xxx (created shortly after) carry the
+//     LOWER created_at 09:41-09:54Z — ids and timestamps run in opposite
+//     order across the fold. GitHub stamped created_at +1h on runs created in
+//     the hour before the 09:00Z PDT->PST fold, and the stored records still
+//     carry it. The gate's finding was a true observation of GitHub's own
+//     (bad) data, not this box's clock or this file's arithmetic.
+//
+// This fixture pins the already-correct behaviour (a real skew, however it
+// arose, must still fail the gate — AGENTS.md's rule, and "do not widen the
+// tolerance to hide it") using the REAL incident's own numbers, so a future
+// change that quietly widens CLOCK_SKEW_TOLERANCE_SEC or clamps skew away
+// reddens this test. It does not flip red-to-green on its own: nothing in
+// this file caused the incident, so nothing here was changed to fix it.
+test('DST 2026-11-01: a run genuinely ahead by ~1h still fails, and age is never negative', () => {
+	const now = Date.parse('2026-11-01T08:10:08Z');
+	const runs = [
+		// The real numbers from that morning's findings (cron-worker-error log).
+		{ repo: 'WolffM/hadoku-cardtable', createdAt: new Date(now + 3567_000).toISOString() },
+		{ repo: 'WolffM/hadoku-tenhands', createdAt: new Date(now + 3408_000).toISOString() },
+	];
+	const q = summariseQueue(runs, { stuckMs: 3_600_000, nowMs: now });
+
+	assert.equal(q.skewed.length, 2);
+	assert.ok(
+		q.skewed.some((s) => s.aheadSec === 3567),
+		'the real ~59m-ahead figure must survive unchanged, not be clamped'
+	);
+	assert.ok(
+		q.waiting.every((w) => w.ageSec >= 0),
+		'a run genuinely ahead of now must never report a negative age'
+	);
+
+	const findings = queueFindings(q, []);
+	assert.ok(
+		findings.some((f) => /ahead of this box's clock/.test(f) && /3567s/.test(f)),
+		`a ~1h skew must still fail the gate with the real figure, got: ${JSON.stringify(findings)}`
+	);
 });

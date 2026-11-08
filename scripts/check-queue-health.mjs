@@ -62,6 +62,7 @@ import {
 	queueFindings,
 	readQueuedWithRetry,
 	isSaturated,
+	isRateLimitFailure,
 	FAIL_SECONDS,
 } from './lib/queue-health.mjs';
 import { MAX_QUEUED_MS } from '../dist/lib/queue-thresholds.js';
@@ -84,6 +85,49 @@ const RETRY_DELAY_MS = 1_000;
 /** Synchronous sleep. The sweep is serial and sync; a promise cannot help here. */
 function sleepSync(ms) {
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Once ANY read this sweep is confirmed to be GitHub's PRIMARY rate limit,
+ * every further read is skipped rather than retried or re-attempted.
+ *
+ * The PRIMARY run/pending listing path was already reporting this correctly
+ * as could-not-look, with the reason (see `isRateLimitFailure`'s doc for the
+ * 11 real 2026-11-01..11-08 examples) — this is an EFFICIENCY fix, not a
+ * correctness one for that path. A spent hourly budget is one fact about the
+ * TOKEN, not a fault in the next repo or run — `src/lib/github-client-blackout.ts`
+ * already suppresses runner-health's fetch-based calls on exactly this basis.
+ * This sweep shells out to `gh` directly and does not share that module's
+ * in-memory state (it is a fresh process every run), so it keeps its own
+ * sweep-scoped flag: cheap, and it only needs to last one sweep. Without it,
+ * every OTHER repo's listings this sweep, plus one jobs/runners read per old
+ * run, would retry into the same wall for the rest of the sweep — burning
+ * wall clock and the budget's own recovery window on calls that cannot come
+ * out differently before the reset. The 2026-11-01 incident alone would have
+ * cost up to 33 repos x 2 attempts of wasted retries past the first.
+ */
+let budgetSpentReason = null;
+
+/**
+ * Run one retried read, honouring (and arming) the sweep-wide budget guard
+ * above. `label` names what was skipped, so a repo or run that never got a
+ * real attempt still says why in its own reason text.
+ */
+function guardedRead(repo, label, readOnce) {
+	if (budgetSpentReason) {
+		return {
+			ok: false,
+			reason:
+				`GitHub's primary rate limit was already spent this sweep (${budgetSpentReason}) — ` +
+				`${label} not attempted`,
+		};
+	}
+	const read = readQueuedWithRetry(repo, readOnce, {
+		sleep: () => sleepSync(RETRY_DELAY_MS),
+		timeoutMs: READ_TIMEOUT_MS,
+	});
+	if (!read.ok && isRateLimitFailure(read.reason)) budgetSpentReason = read.reason;
+	return read;
 }
 
 /** One read, unretried. The retry and the diagnosis live in lib/queue-health. */
@@ -110,10 +154,7 @@ function readRunsOnce(repo, status) {
  * `{ ok: false, reason }` = COULD NOT LOOK, which is never a pass.
  */
 function runsIn(repo, status) {
-	return readQueuedWithRetry(repo, (r) => readRunsOnce(r, status), {
-		sleep: () => sleepSync(RETRY_DELAY_MS),
-		timeoutMs: READ_TIMEOUT_MS,
-	});
+	return guardedRead(repo, `${status} listing`, (r) => readRunsOnce(r, status));
 }
 
 let roster = [];
@@ -136,6 +177,46 @@ if (!roster.length) {
 }
 
 /**
+ * One jobs read, unretried — `readJobs` below is the retried, classified
+ * caller. Throws on any `gh`/parse failure; `guardedRead` turns that into a
+ * reason via the same `describeReadFailure` every other read in this gate
+ * uses, rather than the bare `err.message.split('\n')[0]` this used to log,
+ * which for `execFileSync` is literally the string `"Command failed: gh api
+ * ..."` — the actual reason (`err.stderr`) is the NEXT line of `message`, and
+ * that single `.split('\n')[0]` threw it away before anything could ever see
+ * "rate limit" in it. LATENT, not observed: nothing in the logs shows this
+ * read ever actually hit a rate limit (see `isRateLimitFailure`'s doc) — this
+ * closes the gap before the day it does (wave gates1, 2026-11-08).
+ */
+function readJobsOnce(repo, id) {
+	const out = execFileSync(
+		'gh',
+		[
+			'api',
+			`repos/${repo}/actions/runs/${id}/jobs?per_page=100`,
+			'-q',
+			'{total: .total_count, ' +
+				'queued: [.jobs[] | select(.status == "queued") | {labels, created_at}], ' +
+				'running: ([.jobs[] | select(.status == "in_progress" or .status == "completed")] | length)}',
+		],
+		{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
+	);
+	const doc = JSON.parse(out);
+	const n = Number(doc.total);
+	const queued = Array.isArray(doc.queued) ? doc.queued : undefined;
+	const firstQueued = (queued ?? [])
+		.map((j) => j.created_at)
+		.filter((at) => Number.isFinite(Date.parse(at)))
+		.sort()[0];
+	return {
+		jobless: Number.isFinite(n) ? n === 0 : undefined,
+		queuedJobs: queued,
+		started: queued !== undefined && queued.length === 0 && Number(doc.running) > 0,
+		queuedSince: firstQueued,
+	};
+}
+
+/**
  * One jobs read per old run, for both questions asked of it: did GitHub ever
  * expand it into jobs (`jobless` — `true` only when the endpoint ANSWERED zero,
  * see summariseQueue's `unscheduled`), and what do its QUEUED jobs want
@@ -143,64 +224,59 @@ if (!roster.length) {
  * and both callers treat that in the strict direction — fleet work, not
  * saturated. The same read answers `started` (no job queued, one past it) and
  * `queuedSince` (the earliest queued job's creation) — see summariseQueue.
+ *
+ * A RATE-LIMITED READ IS COULD-NOT-LOOK, not that strict default. Without this
+ * run's jobs we do not know whether it is stuck, already started, or never
+ * scheduled — defaulting it into `stranded` would state a certainty ("the
+ * fleet stopped serving work") the read never earned. Any OTHER failure (a
+ * blip, a one-off timeout) keeps the original soft default: it is low-risk for
+ * a single run and does not warrant failing the whole sweep over it.
  */
 function readJobs(repo, id) {
-	try {
-		const out = execFileSync(
-			'gh',
-			[
-				'api',
-				`repos/${repo}/actions/runs/${id}/jobs?per_page=100`,
-				'-q',
-				'{total: .total_count, ' +
-					'queued: [.jobs[] | select(.status == "queued") | {labels, created_at}], ' +
-					'running: ([.jobs[] | select(.status == "in_progress" or .status == "completed")] | length)}',
-			],
-			{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
-		);
-		const doc = JSON.parse(out);
-		const n = Number(doc.total);
-		const queued = Array.isArray(doc.queued) ? doc.queued : undefined;
-		const firstQueued = (queued ?? [])
-			.map((j) => j.created_at)
-			.filter((at) => Number.isFinite(Date.parse(at)))
-			.sort()[0];
-		return {
-			jobless: Number.isFinite(n) ? n === 0 : undefined,
-			queuedJobs: queued,
-			started: queued !== undefined && queued.length === 0 && Number(doc.running) > 0,
-			queuedSince: firstQueued,
-		};
-	} catch (err) {
-		log(
-			`  could not read jobs for ${repo} run ${id}: ${err.message.split('\n')[0]} — counted as fleet work`
-		);
-		return { jobless: undefined, queuedJobs: undefined, started: false, queuedSince: undefined };
+	const read = guardedRead(repo, `jobs for run ${id}`, () => readJobsOnce(repo, id));
+	if (read.ok) return read.created;
+	if (isRateLimitFailure(read.reason)) {
+		unreadable.push({ repo, reason: `jobs for run ${id}: ${read.reason}` });
+	} else {
+		log(`  could not read jobs for ${repo} run ${id}: ${read.reason} — counted as fleet work`);
 	}
+	return { jobless: undefined, queuedJobs: undefined, started: false, queuedSince: undefined };
+}
+
+/** One runners read, unretried — see readJobsOnce for why this is split out
+ *  (the same `describeReadFailure` reason quality, via `guardedRead`). */
+function readRunnersOnce(repo) {
+	const out = execFileSync(
+		'gh',
+		[
+			'api',
+			`repos/${repo}/actions/runners?per_page=100`,
+			'-q',
+			'[.runners[] | {name, status, busy, labels: [.labels[].name]}]',
+		],
+		{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
+	);
+	return JSON.parse(out);
 }
 
 /** The repo's runner listing as GitHub reports it, once per repo per sweep;
- *  `undefined` when unreadable, which isSaturated reads as "not saturated". */
+ *  `undefined` when unreadable, which isSaturated reads as "not saturated".
+ *  A RATE-LIMITED read is could-not-look instead (see readJobs) — isSaturated
+ *  only ever EXCLUDES a run from the percentile, so "not saturated" by itself
+ *  is harmless, but it is the same strict-direction question as readJobs and
+ *  gets the same answer for the same reason. */
 const runnersByRepo = new Map();
 function repoRunners(repo) {
 	if (runnersByRepo.has(repo)) return runnersByRepo.get(repo);
+	const read = guardedRead(repo, 'runners listing', () => readRunnersOnce(repo));
 	let runners;
-	try {
-		const out = execFileSync(
-			'gh',
-			[
-				'api',
-				`repos/${repo}/actions/runners?per_page=100`,
-				'-q',
-				'[.runners[] | {name, status, busy, labels: [.labels[].name]}]',
-			],
-			{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
-		);
-		runners = JSON.parse(out);
-	} catch (err) {
-		log(
-			`  could not read runners for ${repo}: ${err.message.split('\n')[0]} — not called saturated`
-		);
+	if (read.ok) {
+		runners = read.created;
+	} else if (isRateLimitFailure(read.reason)) {
+		unreadable.push({ repo, reason: `runners: ${read.reason}` });
+		runners = undefined;
+	} else {
+		log(`  could not read runners for ${repo}: ${read.reason} — not called saturated`);
 		runners = undefined;
 	}
 	runnersByRepo.set(repo, runners);
