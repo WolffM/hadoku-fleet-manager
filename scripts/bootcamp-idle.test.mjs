@@ -38,6 +38,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const CLAW2 = 'fixture-claw-2.invalid';
+const CLAW3 = 'fixture-claw-3.invalid';
 const ALL_ANSWER = (bevy, load) =>
 	[
 		'CAP ffmpeg ok 7.1.5',
@@ -62,6 +63,8 @@ function idleFixture({
 	soleClaw = false,
 	drains = null,
 	labels = [],
+	extraClaw = false,
+	shimPre = () => [],
 } = {}) {
 	const root = mkdtempSync(join(tmpdir(), 'fleet-bootcamp-idle-'));
 	const manifestDir = join(root, 'manifests');
@@ -89,6 +92,9 @@ function idleFixture({
 		...(soleClaw
 			? {}
 			: { [CLAW2]: { role: 'claw', labels: [], maxConcurrent: 2, minFreeMb: 1024 } }),
+		...(extraClaw
+			? { [CLAW3]: { role: 'claw', labels: [], maxConcurrent: 2, minFreeMb: 1024 } }
+			: {}),
 		[BACKSTOP]: { role: 'backstop', labels: [], minFreeMb: 8192, ...rec(BACKSTOP) },
 	};
 	const manifestPath = join(manifestDir, 'fleet-runner-manifest.json');
@@ -115,8 +121,10 @@ function idleFixture({
 		join(bin, 'ssh'),
 		[
 			'#!/bin/sh',
+			...shimPre({ root, drainFile, q }),
 			// drain-node's own busy count passes its command as an ARGUMENT (ssh -n).
-			`case "$*" in *pgrep*) cat ${q(files.busy)}; exit 0 ;; esac`,
+			// A `shimPre` may set BUSY_NOW (this host's job count) or ALL_FILE.
+			`case "$*" in *pgrep*) [ -n "$BUSY_NOW" ] && echo "$BUSY_NOW" || cat ${q(files.busy)}; exit 0 ;; esac`,
 			'script="$(cat)"',
 			'case "$script" in',
 			JDK_PRESENT_CASE,
@@ -130,10 +138,10 @@ function idleFixture({
 			`    cat ${q(files.measured)}; grep -q PROBE-END ${q(files.measured)} || exit 255; exit 0 ;;`,
 			'  *"capability-probe — EXECUTE"*)',
 			`    echo PROBE >>${q(files.calls)}`,
-			`    exec cat ${q(files.all)} ;;`,
+			`    exec cat "\${ALL_FILE:-${files.all}}" ;;`,
 			'  *"[R]unner"*)',
 			`    echo BUSY >>${q(files.calls)}`,
-			`    exec cat ${q(files.busy)} ;;`,
+			`    [ -n "$BUSY_NOW" ] && echo "$BUSY_NOW" || cat ${q(files.busy)}; exit 0 ;;`,
 			'esac',
 			'',
 		].join('\n')
@@ -298,6 +306,46 @@ test('an unjudged measurement never makes a DECLARED label UNEARNED — it is no
 		const report = JSON.parse(r.out).report[CLAW];
 		assert.deepEqual(report.unearned, []);
 		assert.equal(report.inconclusive[0].id, 'cargo-bevy');
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('a second busy node is held BESIDE the first, so its quiet window is not spent waiting (fleet-manager#70)', () => {
+	// 2026-11-07: claw-10 sat idle 12:15–12:32 while bootcamp waited out claw-9,
+	// then took a 45-minute job a minute before its own drain. Replayed: CLAW
+	// never goes quiet; CLAW2 is quiet until CLAW's hold has come and gone, then
+	// picks up a job. Held one at a time, CLAW2 is drained too late; held
+	// together, it is measured while CLAW is still waiting. CLAW3 and the
+	// backstop are quiet in the first pass, so neither is held.
+	const f = idleFixture({
+		extraClaw: true,
+		prevEarned: { [CLAW]: ['cargo-bevy', 'ffmpeg'] },
+		shimPre: ({ root, drainFile, q }) => {
+			const mark = q(join(root, 'claw-1-was-held'));
+			const quiet = join(root, 'all-quiet.txt');
+			writeFileSync(quiet, ALL_ANSWER('ok 2281', 0));
+			const held1 = `grep -q '"${CLAW}"' ${q(drainFile)} 2>/dev/null`;
+			return [
+				'case "$*" in',
+				`  *${CLAW}*) ${held1} && touch ${mark}; BUSY_NOW=1 ;;`,
+				`  *${CLAW2}*) if [ -e ${mark} ] && ! ${held1}; then BUSY_NOW=1; else BUSY_NOW=0; fi ;;`,
+				`  *${CLAW3}*|*${BACKSTOP}*) ALL_FILE=${q(quiet)}; BUSY_NOW=0 ;;`,
+				'esac',
+			];
+		},
+	});
+	try {
+		const r = run(['--write', '--no-push', '--json'], f.env);
+		const report = JSON.parse(r.out).report;
+		assert.equal(report[CLAW2].idleHold?.status, 'measured', `${r.out}\n${r.err}`);
+		assert.ok(f.record(CLAW2).earned.includes('cargo-bevy'));
+		assert.equal(report[CLAW].idleHold?.status, 'inconclusive');
+		assert.match(report[CLAW].idleHold.reason, /never went quiet/);
+		assert.equal(report[CLAW3].idleHold, undefined);
+		assert.equal(report[BACKSTOP].idleHold, undefined);
+		assert.deepEqual(f.drains(), {}, 'bootcamp left a drain behind');
+		assert.equal(r.code, 1, 'CLAW is still INCONCLUSIVE, and that is still a finding');
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
