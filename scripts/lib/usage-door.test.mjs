@@ -49,13 +49,16 @@ function door(args, usageDir, extraEnv = {}) {
 
 function records(dir) {
 	if (!existsSync(dir)) return [];
-	return readdirSync(dir).flatMap((f) =>
-		readFileSync(join(dir, f), 'utf8')
-			.trim()
-			.split('\n')
-			.filter(Boolean)
-			.map((l) => JSON.parse(l))
-	);
+	// Month files only: `tally/` holds repeats of a shape within an hour.
+	return readdirSync(dir)
+		.filter((f) => f.endsWith('.jsonl'))
+		.flatMap((f) =>
+			readFileSync(join(dir, f), 'utf8')
+				.trim()
+				.split('\n')
+				.filter(Boolean)
+				.map((l) => JSON.parse(l))
+		);
 }
 
 test('the CLI is built, so the runs below are not vacuous', () => {
@@ -102,8 +105,10 @@ test('each record carries the exit code the caller got, and how the door dispose
 test('a flag VALUE never reaches the log, in either spelling', () => {
 	const dir = join(tempDir('usage-log-'), 'log');
 	door(['capability-schema', `--token=${SECRET}`, '--machine', SECRET, SECRET], dir);
-	const raw = readdirSync(dir)
-		.map((f) => readFileSync(join(dir, f), 'utf8'))
+	// Every file under the log, tallies included.
+	const raw = readdirSync(dir, { recursive: true, withFileTypes: true })
+		.filter((e) => e.isFile())
+		.map((e) => readFileSync(join(e.parentPath, e.name), 'utf8'))
 		.join('');
 	assert.ok(raw.length > 0, 'nothing was logged, so nothing was proved');
 	assert.ok(!raw.includes(SECRET), `the log holds a value: ${raw}`);

@@ -28,7 +28,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { appendUsage } from './usage-store.js';
+import { appendCliCall, appendUsage } from './usage-store.js';
 
 /** Bumped when a field changes meaning. Readers skip versions they do not know. */
 export const USAGE_SCHEMA = 1;
@@ -196,6 +196,21 @@ export interface CliRecord {
 	hints: CallerHints;
 }
 
+/**
+ * Every repeat of one `CliRecord` shape in one hour after its first, rolled
+ * into a row by `usage-store.ts`: the shape's fields, plus the span and count.
+ */
+export interface CliTallyRecord extends Omit<CliRecord, 'kind' | 'ms'> {
+	kind: 'cli-tally';
+	/** The last repeat. */
+	at: string;
+	/** The first repeat. */
+	from: string;
+	count: number;
+	msTotal: number;
+	msMax: number;
+}
+
 export interface RouteRecord {
 	v: number;
 	kind: 'route';
@@ -249,7 +264,7 @@ export function cliRecorder(opts: {
 				caller: callerOf(hints),
 				hints,
 			};
-			appendUsage(dir, record);
+			appendCliCall(dir, { ...record });
 		} catch (err) {
 			if (process.env.FLEET_NO_BANNER !== '1') {
 				process.stderr.write(
@@ -420,7 +435,8 @@ export function summariseUsage(
 		const at = typeof r.at === 'string' ? Date.parse(r.at) : NaN;
 		if (!Number.isFinite(at) || at < opts.sinceMs) continue;
 		counted++;
-		if (r.kind === 'cli') {
+		if (r.kind === 'cli' || r.kind === 'cli-tally') {
+			const n = r.kind === 'cli-tally' && typeof r.count === 'number' ? r.count : 1;
 			const sub = typeof r.sub === 'string' ? r.sub : '(none)';
 			let u = bySub.get(sub);
 			if (!u) {
@@ -436,21 +452,22 @@ export function summariseUsage(
 				};
 				bySub.set(sub, u);
 			}
-			u.count++;
+			u.count += n;
 			if (!u.lastAt || (r.at as string) > u.lastAt) u.lastAt = r.at as string;
-			bump(u.callers, typeof r.caller === 'string' ? r.caller : 'other');
+			bump(u.callers, typeof r.caller === 'string' ? r.caller : 'other', n);
 			bump(
 				u.exits,
 				typeof r.signal === 'string'
 					? r.signal
 					: typeof r.exit === 'number'
 						? String(r.exit)
-						: 'null'
+						: 'null',
+				n
 			);
-			bump(u.outcomes, typeof r.outcome === 'string' ? r.outcome : 'unknown');
+			bump(u.outcomes, typeof r.outcome === 'string' ? r.outcome : 'unknown', n);
 			if (typeof r.host === 'string' && !u.hosts.includes(r.host)) u.hosts.push(r.host);
 			if (Array.isArray(r.flags))
-				for (const f of r.flags) if (typeof f === 'string') bump(u.flags, f);
+				for (const f of r.flags) if (typeof f === 'string') bump(u.flags, f, n);
 		} else if (r.kind === 'route') {
 			const route = `${String(r.method)} ${String(r.route)}`;
 			let u = byRoute.get(route);
