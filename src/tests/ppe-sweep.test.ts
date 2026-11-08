@@ -11,6 +11,7 @@ import {
 	dueForPromotion,
 	parseSweep,
 	ppeSweepTick,
+	READ_ATTEMPTS,
 	sweepQuery,
 	__stopPpeSweepForTesting,
 	type PpeState,
@@ -172,9 +173,14 @@ void test('a tick reads every repo in ONE query and dispatches only the due one,
 
 void test('could not look: a failed query wakes nothing', async () => {
 	installFetch({ errors: [{ message: 'Something went wrong' }] });
-	assert.equal(await ppeSweepTick(NOW, 'tok', ['WolffM/a']), null);
+	assert.equal(await ppeSweepTick(NOW, 'tok', ['WolffM/a'], 0), null);
+	assert.equal(
+		calls.filter((c) => c.url.endsWith('/graphql')).length,
+		READ_ATTEMPTS,
+		'a query that fails every attempt is still could-not-look'
+	);
 	assert.equal(calls.filter((c) => c.url.includes('/dispatches')).length, 0);
-	assert.equal(await ppeSweepTick(NOW, undefined, ['WolffM/a']), null);
+	assert.equal(await ppeSweepTick(NOW, undefined, ['WolffM/a'], 0), null);
 });
 
 void test('a refused dispatch (a ppe branch with no promoter yet) is reported, and not retried every pass', async () => {
@@ -187,4 +193,21 @@ void test('a refused dispatch (a ppe branch with no promoter yet) is reported, a
 		woke: [],
 		failed: [],
 	});
+});
+
+void test('one aborted read is retried, and the pass goes on to wake the due repo (2026-11-08 04:06Z page)', async () => {
+	installFetch({ data: { r0: quietGreen } });
+	const answer = globalThis.fetch;
+	let graphql = 0;
+	globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+		if (String(input).endsWith('/graphql') && graphql++ === 0) {
+			throw new DOMException('This operation was aborted', 'AbortError');
+		}
+		return answer(input, init);
+	}) as typeof globalThis.fetch;
+	assert.deepEqual(await ppeSweepTick(NOW, 'tok', ['WolffM/a'], 0), {
+		woke: ['WolffM/a'],
+		failed: [],
+	});
+	assert.equal(graphql, 2);
 });

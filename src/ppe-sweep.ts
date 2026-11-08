@@ -52,6 +52,15 @@ const FIRST_PASS_MIN_MS = 5 * 60_000;
 const JOB_NAME = 'fleet:ppe-sweep';
 const PROMOTE_WORKFLOW = 'ppe-promote.yml';
 const GRAPHQL_URL = 'https://api.github.com/graphql';
+
+/**
+ * Reads of the ppe state per pass. One GraphQL call that times out
+ * (`network: This operation was aborted`, 2026-11-04 14:29Z and 2026-11-08
+ * 04:06Z) paged `@here` on its own. Retrying is not tolerating: a pass that
+ * fails every attempt still reports could-not-look, with each reason.
+ */
+export const READ_ATTEMPTS = 2;
+const RETRY_DELAY_MS = 2_000;
 /** Rollups worth a wake-up. null (nothing reported) is too: the promoter decides what an untested tip means. */
 const SETTLED_GREEN = new Set(['SUCCESS']);
 /**
@@ -191,17 +200,28 @@ async function readStates(
 export async function ppeSweepTick(
 	nowMs: number = Date.now(),
 	token: string | undefined = githubToken(),
-	repos: string[] = coveredRepos()
+	repos: string[] = coveredRepos(),
+	retryDelayMs: number = RETRY_DELAY_MS
 ): Promise<{ woke: string[]; failed: string[] } | null> {
 	if (!token) {
 		logger.warn('[ppe-sweep] no GitHub token yet: could not look, woke nothing');
 		return null;
 	}
-	const read = await withGhCaller('ppe-sweep', () => readStates(token, repos));
+	const reasons: string[] = [];
+	let read: Awaited<ReturnType<typeof readStates>> = '';
+	for (let i = 0; i < READ_ATTEMPTS; i++) {
+		if (i) await new Promise((r) => setTimeout(r, retryDelayMs));
+		read = await withGhCaller('ppe-sweep', () => readStates(token, repos));
+		if (typeof read !== 'string') break;
+		reasons.push(read);
+	}
 	if (typeof read === 'string') {
-		logger.warn(`[ppe-sweep] could not read ppe state (${read}); woke nothing`);
+		logger.warn(
+			`[ppe-sweep] could not read ppe state in ${READ_ATTEMPTS} attempts (${reasons.join(' | ')}); woke nothing`
+		);
 		return null;
 	}
+	if (reasons.length) logger.info(`[ppe-sweep] read ppe state on retry after: ${reasons[0]}`);
 	if (read.unreadable.length)
 		logger.warn(`[ppe-sweep] could not read ${read.unreadable.join(', ')}; skipped`);
 	const woke: string[] = [];
