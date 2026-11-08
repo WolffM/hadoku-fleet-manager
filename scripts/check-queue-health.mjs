@@ -62,6 +62,7 @@ import {
 	queueFindings,
 	readQueuedWithRetry,
 	isSaturated,
+	wedgedClaws,
 	isRateLimitFailure,
 	FAIL_SECONDS,
 } from './lib/queue-health.mjs';
@@ -283,6 +284,65 @@ function repoRunners(repo) {
 	return runners;
 }
 
+/** The repo's in-progress runs, ids only, unretried. */
+function readRunningJobsOnce(repo) {
+	const runs = execFileSync(
+		'gh',
+		[
+			'api',
+			`repos/${repo}/actions/runs?status=in_progress&per_page=30`,
+			'-q',
+			'.workflow_runs[].id',
+		],
+		{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
+	)
+		.split('\n')
+		.map((x) => x.trim())
+		.filter(Boolean);
+	const jobs = [];
+	for (const id of runs) {
+		const out = execFileSync(
+			'gh',
+			[
+				'api',
+				`repos/${repo}/actions/runs/${id}/jobs?per_page=100`,
+				'-q',
+				'[.jobs[] | select(.status == "in_progress") | ' +
+					'{runner: .runner_name, name, startedAt: .started_at}]',
+			],
+			{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
+		);
+		jobs.push(...JSON.parse(out));
+	}
+	return jobs;
+}
+
+/**
+ * The repo's in-progress jobs and the runner each is on, once per repo per
+ * sweep and only for a repo with a SATURATED run past the stuck ceiling — the
+ * one case where it decides between capacity and a wedged pool (wedgedClaws).
+ * `undefined` when unreadable, which wedgedClaws reads as wedged: the run
+ * stays `stranded`, the strict direction.
+ */
+const runningByRepo = new Map();
+function repoRunningJobs(repo) {
+	if (runningByRepo.has(repo)) return runningByRepo.get(repo);
+	const read = guardedRead(repo, 'in-progress jobs', () => readRunningJobsOnce(repo));
+	let jobs;
+	if (read.ok) {
+		jobs = read.created;
+	} else {
+		if (isRateLimitFailure(read.reason)) {
+			unreadable.push({ repo, reason: `in-progress jobs: ${read.reason}` });
+		} else {
+			log(`  could not read in-progress jobs for ${repo}: ${read.reason} — counted as wedged`);
+		}
+		jobs = undefined;
+	}
+	runningByRepo.set(repo, jobs);
+	return jobs;
+}
+
 /**
  * Which registrations belong to a BACKSTOP node — see isSaturated for why an
  * idle one does not break saturation. Read from the manifest's roles, the one
@@ -335,6 +395,14 @@ for (const r of runs) {
 		r.started = jobs.started;
 		r.queuedSince = jobs.queuedSince;
 		r.saturated = isSaturated(jobs.queuedJobs, repoRunners(r.repo), { isBackstop });
+		// Past the stuck ceiling, busy is capacity only if the pool is turning
+		// over (fleet-manager#75); that costs one more read per such repo.
+		if (r.saturated && !r.started && ageSec * 1000 > MAX_QUEUED_MS) {
+			r.wedged = wedgedClaws(jobs.queuedJobs, repoRunners(r.repo), repoRunningJobs(r.repo), {
+				isBackstop,
+				nowMs: sweptAt,
+			});
+		}
 	}
 }
 // The same floor for pending runs: a run held by its concurrency group is
@@ -371,7 +439,7 @@ const now = Date.now();
 // The verdict is lib/queue-health.mjs's, so the rule that decides an outage is
 // the one the tests beside it exercise — not a second copy living here.
 const q = summariseQueue(runs, { stuckMs: MAX_QUEUED_MS, nowMs: now });
-const { waiting, stuck, stranded, zombie, unscheduled, saturated, started } = q;
+const { waiting, stuck, stranded, zombie, unscheduled, saturated, started, busyPool } = q;
 const { held, invisible } = summarisePending(pendingRuns, { nowMs: now });
 const summary = {
 	queued: q.queued,
@@ -386,6 +454,7 @@ const summary = {
 	zombie: zombie.length,
 	unscheduled: unscheduled.length,
 	saturated: saturated.length,
+	busyPool: busyPool.length,
 	started: started.length,
 	held: held.length,
 	invisible: invisible.length,
@@ -404,8 +473,18 @@ if (stranded.length) {
 			`the fleet stopped serving)`
 	);
 	for (const s of stranded.slice(0, 5)) {
-		log(`    ${s.repo}  ${Math.round(s.ageSec / 60)}m`);
+		log(
+			`    ${s.repo}  ${Math.round(s.ageSec / 60)}m` +
+				(s.wedged?.length ? `  wedged: ${s.wedged.join('; ')}` : '')
+		);
 	}
+}
+if (busyPool.length) {
+	log(
+		`  busyPool=${busyPool.length} (past the stuck ceiling, but every claw they wait on is busy ` +
+			'running a job younger than its timeout — capacity, not an outage; not a finding)'
+	);
+	for (const s of busyPool.slice(0, 5)) log(`    ${s.repo}  ${Math.round(s.ageSec / 60)}m`);
 }
 if (zombie.length) {
 	log(`  zombie=${zombie.length} (queued over a day — cannot be cancelled, cleared by hand)`);
@@ -441,7 +520,7 @@ if (started.length) {
 if (saturated.length) {
 	log(
 		`  saturated=${saturated.length} (every runner that could take them is busy — capacity, ` +
-			`not a stall; out of the p95, and stranded like any other run past the stuck ceiling)`
+			`not a stall; out of the p95, and busyPool past the stuck ceiling unless a claw is wedged)`
 	);
 	for (const s of saturated.slice(0, 5)) log(`    ${s.repo}  ${s.ageSec}s`);
 }
@@ -474,7 +553,13 @@ if (JSON_OUT) {
 		// pointer to a field that did not exist would be the same defect one
 		// level down. Additive, so every existing consumer of this contract is
 		// unaffected.
-		stuckRuns: stuck.map((r) => ({ repo: r.repo, ageSec: r.ageSec })),
+		// `saturated` (#75): the run waits behind claws all busy running live jobs.
+		stuckRuns: stuck.map((r) => ({
+			repo: r.repo,
+			ageSec: r.ageSec,
+			saturated: busyPool.includes(r),
+		})),
+		busyPoolRuns: busyPool,
 		// Additive: runs GitHub never expanded into jobs. Reported, never a finding.
 		unscheduledRuns: unscheduled,
 		saturatedRuns: saturated,

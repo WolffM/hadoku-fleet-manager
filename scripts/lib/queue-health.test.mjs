@@ -385,7 +385,7 @@ test('a saturated run leaves the p95 — the 21:10Z page (1609 s) does not fire'
 	assert.equal(s.queued, 1);
 });
 
-test('a saturated run past the stuck ceiling is STRANDED and fails — busy runners wedged on hung jobs still page', () => {
+test('a saturated run past the stuck ceiling with its pool UNCHECKED is STRANDED and fails — the strict direction', () => {
 	const s = sum([{ ...run('WolffM/hadoku-cardtable', STUCK_MS / 1000 + 60), saturated: true }]);
 	assert.equal(s.saturated.length, 0);
 	assert.equal(s.stranded.length, 1);

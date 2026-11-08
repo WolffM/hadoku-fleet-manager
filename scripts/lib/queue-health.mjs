@@ -153,8 +153,10 @@ export const ZOMBIE_SECONDS = 24 * 60 * 60;
  * runner and every matching one busy, for EVERY queued job of the run.
  *
  * NOT A WAY OUT OF THE GATE: a saturated run leaves the p95 only. Past the
- * stuck ceiling it is `stranded` like any other and fails — so busy runners
- * wedged on hung jobs still page, at an hour instead of five minutes.
+ * stuck ceiling it is `busyPool` (capacity, reported) only while the claws it
+ * waits on are turning over — see wedgedClaws — and `stranded` otherwise, so
+ * busy runners wedged on hung jobs still page, at an hour instead of five
+ * minutes.
  *
  * AN IDLE BACKSTOP IS A PROMOTION IN FLIGHT, NOT A BLACK HOLE (#115). When the
  * claws are saturated, runner-health promotes the backstop by WRITING the
@@ -192,6 +194,63 @@ export function isSaturated(queuedJobs, runners, { isBackstop = () => false } = 
 }
 
 /**
+ * How long a job may hold a claw before the claw counts as WEDGED rather than
+ * busy: GitHub's default `timeout-minutes`, 360. A job's own timeout is not in
+ * the jobs API (and is often an expression, e.g. cardtable's `45 || 75`), so
+ * this is the ceiling every job without a longer one runs under. No claw job
+ * in the fleet declares longer: cardtable's longest is 90, and the one job
+ * that does (watchparty ingest, 490) runs on the backstop, which saturation
+ * already leaves out.
+ */
+export const WEDGED_JOB_SECONDS = 360 * 60;
+
+/**
+ * Why a SATURATED run past the stuck ceiling may still be an outage: the busy
+ * claws its queued jobs wait on are not turning over (fleet-manager#75).
+ *
+ * The stuck ceiling exists to catch busy runners wedged on hung jobs. A pool
+ * that is busy RUNNING work is capacity: cardtable's Forge runs went red three
+ * times in two weeks (41, 111, 21 min) while runner-health said every label
+ * was online and the pool busy. So for each queued job, each busy matching
+ * claw must have a visible current job (`runningJobs`, by `runner_name`) that
+ * started under `wedgedSeconds` ago. Returns the reasons it is NOT simply
+ * busy — `[]` means capacity — or `null` when `runningJobs` could not be read,
+ * which the caller must treat as wedged: the strict direction.
+ *
+ * A busy claw with NO visible job is wedged too: JIT registrations are per
+ * repo, so its job is in this repo's in-progress runs or GitHub's `busy` is
+ * stale, and neither is a pool doing work.
+ *
+ * `runningJobs`: `[{runner, name, startedAt}]`, the repo's in-progress jobs.
+ */
+export function wedgedClaws(
+	queuedJobs,
+	runners,
+	runningJobs,
+	{ isBackstop = () => false, nowMs = Date.now(), wedgedSeconds = WEDGED_JOB_SECONDS } = {}
+) {
+	if (!Array.isArray(runningJobs) || !Array.isArray(queuedJobs) || !Array.isArray(runners))
+		return null;
+	const lower = (xs) => (xs ?? []).map((x) => String(x).toLowerCase());
+	const byRunner = new Map(runningJobs.map((j) => [j.runner, j]));
+	const reasons = new Set();
+	for (const j of queuedJobs) {
+		const want = lower(j.labels);
+		for (const r of runners) {
+			if (r.status !== 'online' || r.busy !== true || isBackstop(r.name)) continue;
+			const has = new Set(lower(r.labels));
+			if (!want.every((l) => has.has(l))) continue;
+			const job = byRunner.get(r.name);
+			const ageSec = job ? Math.round((nowMs - Date.parse(job.startedAt)) / 1000) : NaN;
+			if (!job) reasons.add(`${r.name} is busy with no in-progress job visible`);
+			else if (!Number.isFinite(ageSec) || ageSec > wedgedSeconds)
+				reasons.add(`${r.name} has run ${job.name} for ${Math.round(ageSec / 60)}m`);
+		}
+	}
+	return [...reasons];
+}
+
+/**
  * How far into the future a `createdAt` may sit before it means the CLOCK is
  * wrong rather than the caller merely being slow.
  *
@@ -217,7 +276,11 @@ export const CLOCK_SKEW_TOLERANCE_SEC = 60;
  * alongside into `stranded` (crossed the line recently: a finding) and `zombie`
  * (days old: reported, not failed). See ZOMBIE_SECONDS. A run flagged
  * `saturated` and still under the stuck ceiling goes to `saturated`, out of
- * the percentile — see isSaturated.
+ * the percentile — see isSaturated. Past the ceiling, a saturated run whose
+ * `wedged` reasons were read and are EMPTY goes to `busyPool` instead of
+ * `stranded`: every claw it waits on is running a job younger than its
+ * timeout, which is capacity, not the fleet stopping (fleet-manager#75). An
+ * unread `wedged` (undefined or null) stays `stranded`.
  *
  * TWO READS OF THE RUN'S JOBS CORRECT WHAT THE RUN LISTING SAYS, both measured
  * on 2026-10-11 against cardtable's Forge runs, and both only in the direction
@@ -252,6 +315,8 @@ export function summariseQueue(
 	const saturated = [];
 	/** Listed queued, but every job is past queued and one has started. */
 	const started = [];
+	/** Past the stuck ceiling behind claws all busy running live jobs — see wedgedClaws. */
+	const busyPool = [];
 	for (const r of runs) {
 		const since = Number.isFinite(Date.parse(r.queuedSince)) ? r.queuedSince : r.createdAt;
 		const rawAgeSec = Math.round((nowMs - Date.parse(since)) / 1000);
@@ -284,7 +349,13 @@ export function summariseQueue(
 		if (ageSec * 1000 > stuckMs) {
 			const entry = { repo: r.repo, ageSec };
 			stuck.push(entry);
-			(ageSec > zombieSec ? zombie : stranded).push(entry);
+			if (ageSec > zombieSec) zombie.push(entry);
+			else if (r.saturated === true && Array.isArray(r.wedged) && r.wedged.length === 0)
+				busyPool.push(entry);
+			else
+				stranded.push(
+					r.saturated === true && Array.isArray(r.wedged) ? { ...entry, wedged: r.wedged } : entry
+				);
 		} else if (r.saturated === true) {
 			saturated.push({ repo: r.repo, ageSec });
 		} else {
@@ -297,6 +368,7 @@ export function summariseQueue(
 	unscheduled.sort((a, b) => b.ageSec - a.ageSec);
 	saturated.sort((a, b) => b.ageSec - a.ageSec);
 	started.sort((a, b) => b.ageSec - a.ageSec);
+	busyPool.sort((a, b) => b.ageSec - a.ageSec);
 	const ages = waiting.map((w) => w.ageSec).sort((a, b) => a - b);
 	const pct = (q) =>
 		ages.length ? ages[Math.min(ages.length - 1, Math.floor(ages.length * q))] : 0;
@@ -309,6 +381,7 @@ export function summariseQueue(
 		unscheduled,
 		saturated,
 		started,
+		busyPool,
 		queued: waiting.length,
 		p50: pct(0.5),
 		p95: pct(0.95),
@@ -389,7 +462,9 @@ export function queueFindings(summary, unreadable = [], failSeconds = FAIL_SECON
 				`the fleet stopped serving and these are the casualties: ` +
 				stranded
 					.slice(0, 5)
-					.map((s) => `${s.repo} ${s.ageSec}s`)
+					.map(
+						(s) => `${s.repo} ${s.ageSec}s` + (s.wedged?.length ? ` (${s.wedged.join('; ')})` : '')
+					)
 					.join(', ')
 		);
 	}
