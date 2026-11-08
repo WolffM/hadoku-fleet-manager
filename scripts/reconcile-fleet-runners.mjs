@@ -121,7 +121,7 @@ import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { checkGhReserve } from './lib/gh-reserve.mjs';
 import { useAppPool } from './lib/gh-app.mjs';
-import { listRunners } from './lib/reconcile-apply.mjs';
+import { listRunners, ciRunnerVarCheck } from './lib/reconcile-apply.mjs';
 import { resolveDesired } from './lib/reconcile-resolve.mjs';
 import {
 	buildCoverageDoc,
@@ -329,9 +329,13 @@ async function main() {
 		/* no committed baseline yet — reported as none, never as clean */
 	}
 	const committedRoster = onDiskCoverage?.repos ?? [];
-	const { desired, retired, ignored, departed } = resolveDesired(manifest, committedRoster, {
-		fail: failEarly,
-	});
+	const { desired, retired, ignored, departed, allRepos } = resolveDesired(
+		manifest,
+		committedRoster,
+		{
+			fail: failEarly,
+		}
+	);
 
 	// --- coverage file -----------------------------------------------------
 	// Derived purely from desired state, so it is correct on a dry run too — but
@@ -361,6 +365,24 @@ async function main() {
 	if (WRITE_COVERAGE) {
 		writeCoverageOrRefuse({ committedRoster, coverage, ALLOW_SHRINK, fail: failEarly, log });
 	}
+
+	// --- runnerVar ----------------------------------------------------------
+	// `ci:runner-var`'s unique catch, merged into this `--json` (wave gates2
+	// lane F1b): a repo, covered or not, whose shipped workflows read the bare
+	// `fromJSON(vars.CI_RUNNER)` form while the variable is unset or
+	// unreadable. The population is the union of the committed roster and
+	// every repo `resolveDesired` already listed under the owner — the SAME
+	// `gh repo list` call check-runner-var.mjs makes for itself, reused here
+	// rather than spent twice. Computed unconditionally (not gated on
+	// `JSON_OUT`/`CONFIRM`): the contract names an exact shape callers can
+	// depend on, and `ci:runner-var` already runs appended right after
+	// `ci:fleet-coverage` today, so this adds no new `gh` spend to the cadence
+	// — it folds two already-adjacent processes into one.
+	const runnerVarPopulation = [...allRepos].filter(([, r]) => !r.isFork).map(([name]) => name);
+	for (const name of committedRoster) {
+		if (!runnerVarPopulation.includes(name)) runnerVarPopulation.push(name);
+	}
+	const runnerVar = ciRunnerVarCheck(runnerVarPopulation);
 
 	const repos = [...desired.keys()].filter((r) => !ONLY_REPO || r === ONLY_REPO);
 	const retiredScoped = retired.filter((r) => !ONLY_REPO || r.repo === ONLY_REPO);
@@ -440,6 +462,7 @@ async function main() {
 		unreadable,
 		ignored,
 		departed,
+		runnerVar,
 	};
 
 	if (!JSON_OUT) {
@@ -455,6 +478,7 @@ async function main() {
 			unreadable,
 			departed,
 			ignored,
+			runnerVar,
 			expectedDownNotes,
 			CONFIRM,
 			REMOVE_ORPHANS,

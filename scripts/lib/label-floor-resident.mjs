@@ -22,6 +22,14 @@
  * offline, unlabelled (born that way, awaiting the fast loop's next promote),
  * or drained. So this reads GitHub directly, same as everything else in this
  * gate reads live state rather than a declaration.
+ *
+ * `resident-drained`/`resident-understaffed` are DEMOTED to notes (wave
+ * gates2 lane F1b, operator-approved): queue-health already measures the
+ * outcome an understaffed or drained backstop would cause (jobs queueing),
+ * so this gate reports the condition without failing on it or counting it as
+ * a finding. Every OTHER resident-floor conclusion — above all a `gh` read
+ * that exhausted its retries, which is "I could not look", never a note —
+ * still fails the gate exactly as before.
  */
 
 import { BUILDER_LABEL } from '../../dist/lib/capability-registry-ids.js';
@@ -33,8 +41,9 @@ import { drainedNodeNames } from './label-floor-check.mjs';
  * @param {object} manifest
  * @param {object[]} gateFindings mutated: resident failures are pushed here
  * @param {object[]} gateUnreadable mutated: unreadable resident repos are pushed here
+ * @param {object[]} gateNotes mutated: demoted resident conclusions (drained/understaffed) are pushed here
  */
-export async function checkResidentFloor(manifest, gateFindings, gateUnreadable) {
+export async function checkResidentFloor(manifest, gateFindings, gateUnreadable, gateNotes) {
 	const residentHolders = new Map();
 	for (const [name, m] of Object.entries(manifest.machines ?? {})) {
 		for (const repo of m.residentRepos ?? []) {
@@ -44,6 +53,7 @@ export async function checkResidentFloor(manifest, gateFindings, gateUnreadable)
 	}
 
 	const residentFailures = [];
+	const residentNotes = [];
 	if (residentHolders.size) {
 		const drained = drainedNodeNames();
 		for (const [repo, holders] of residentHolders) {
@@ -79,24 +89,28 @@ export async function checkResidentFloor(manifest, gateFindings, gateUnreadable)
 				)
 			);
 			if (drainedHolders.length) {
+				// DEMOTED (wave gates2 lane F1b): a note, not a finding — pushed to
+				// `residentNotes`/`gateNotes` ONLY, never `residentFailures`/
+				// `gateFindings`, so it is reported but never fails the gate.
 				const reason =
 					`"${repo}" — resident holder(s) ${drainedHolders.join(', ')} are DRAINED. ` +
 					`The rule is at least two holders and never a drained one: drain a ` +
 					`replacement holder in first, then drain this one.`;
-				residentFailures.push(reason);
-				gateFindings.push({ node: null, kind: 'resident-drained', reason });
+				residentNotes.push(reason);
+				gateNotes.push({ node: null, kind: 'resident-drained', reason });
 			}
 			if (online.length < 2) {
+				// DEMOTED (wave gates2 lane F1b): same as above.
 				const reason =
 					`"${repo}" — only ${online.length} of its declared resident holder(s) ` +
 					`(${holders.join(', ')}) are online carrying ${BUILDER_LABEL}. Need at ` +
 					`least 2: this is the fleet's ONE backstop repo and a single holder is the ` +
 					`single point of failure the 2026-09-07 move off claw-1 exists to remove.`;
-				residentFailures.push(reason);
-				gateFindings.push({ node: null, kind: 'resident-understaffed', reason });
+				residentNotes.push(reason);
+				gateNotes.push({ node: null, kind: 'resident-understaffed', reason });
 			}
 		}
 	}
 
-	return { residentHolders, residentFailures };
+	return { residentHolders, residentFailures, residentNotes };
 }

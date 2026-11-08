@@ -149,6 +149,14 @@ const day = (ms) => new Date(ms).toISOString().slice(0, 10);
  *                  package held back (a conffile prompt, a dependency the
  *                  security archive does not carry) behind a node that is
  *                  otherwise patching.
+ *
+ * `check-fleet-preflight.mjs` applies a FURTHER demotion of its own on top of
+ * this (wave gates2 lane F1b, operator-approved): every `security-updates`
+ * finding from that gate's cron EXCEPT `unreachable` becomes advisory there,
+ * because `fleet apt-security` owns acting on it. Not done here, in the
+ * shared classifier, so a future second consumer of this pure function is not
+ * handed somebody else's severity decision — see `rebootFinding`'s own note
+ * in `preflight.mjs` for why that same shape applies to pending-reboot.
  */
 export function securityUpdateFinding(
 	probe,

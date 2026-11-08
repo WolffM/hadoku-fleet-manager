@@ -51,6 +51,7 @@ import {
 	advisoryFindings,
 	backstopAdvisory,
 	BLOCKING,
+	ADVISORY,
 } from './lib/preflight.mjs';
 import { lanReservationFindings } from './lib/preflight-lan.mjs';
 import {
@@ -327,6 +328,43 @@ function sshResolves(node) {
 	}
 }
 
+/**
+ * The categories this gate's own cron demotes to advisory (wave gates2 lane
+ * F1b, operator-approved) — `reboot-claws` and `fleet apt-security` own
+ * acting on both, so THIS sweep's job for them is now visibility, not
+ * failing a nightly cron over a maintenance item a converger is already
+ * working.
+ */
+const OWNED_ELSEWHERE = new Set(['pending-reboot', 'security-updates']);
+
+/**
+ * Demote `pending-reboot`/`security-updates` findings to advisory, except
+ * `unreachable` — applied HERE, at this gate's own call site, not inside
+ * `lib/preflight.mjs`'s shared `rebootFinding`/`securityUpdateFinding`.
+ * `fleet doctor` (`lib/doctor-findings.mjs`) reuses those exact pure
+ * classifiers for its OWN policy, which still escalates a stale staged
+ * reboot to BLOCKING (`lib/doctor-findings-classification.test.mjs`); that
+ * policy is not this wave's to change, so the demotion lives one layer up
+ * instead of inside the function `fleet doctor` also calls.
+ *
+ * "I COULD NOT LOOK" IS NEVER DEMOTED: `unreachable` is the one status in
+ * each category that still blocks, same as every other could-not-look
+ * finding in this sweep.
+ *
+ * THE FINDING IS NOT DROPPED, same discipline as `backstopAdvisory` right
+ * next to this in the pipeline: it keeps its `why`, gains `wasBlocking` when
+ * demotion actually changed something, and still prints, still rides in
+ * `--json`, still reaches the digest.
+ */
+function demoteOwnedElsewhere(all) {
+	return all.map((f) => {
+		if (!OWNED_ELSEWHERE.has(f.category) || f.status === 'unreachable' || f.class === ADVISORY) {
+			return f;
+		}
+		return { ...f, class: ADVISORY, wasBlocking: true };
+	});
+}
+
 async function main() {
 	const manifest = loadManifest();
 	const fleetNodes = Object.keys(manifest.machines ?? {});
@@ -338,7 +376,7 @@ async function main() {
 		process.exit(1);
 	}
 
-	const findings = [];
+	let findings = [];
 	const errors = [];
 
 	// --- node-key expiry ----------------------------------------------------
@@ -454,6 +492,11 @@ async function main() {
 	// the one class of finding that must never be downgraded, because the thing
 	// it hides is unknown by definition.
 	for (const e of errors) findings.push({ category: 'could-not-look', class: BLOCKING, why: e });
+
+	// DEMOTE pending-reboot/security-updates (wave gates2 lane F1b) — see
+	// `demoteOwnedElsewhere`'s own doc for why this runs here and not inside
+	// `lib/preflight.mjs`'s shared classifiers.
+	findings = demoteOwnedElsewhere(findings);
 
 	// A NODE A HUMAN DELIBERATELY TOOK OUT OF SERVICE IS NOT A FINDING.
 	//

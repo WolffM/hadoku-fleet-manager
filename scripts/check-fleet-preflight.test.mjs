@@ -106,11 +106,13 @@ printf '{"Self":{"HostName":"%s"},"Peer":{}}' "$TS_HOSTNAME"
 `;
 
 /**
- * Answers the four things the gate asks ssh: \`ssh -G\` (where the node
+ * Answers the five things the gate asks ssh: \`ssh -G\` (where the node
  * resolves), the interface probe (the LAN-reservation check), the JIT payload
- * probe — no payload yet, so nothing stale — the security probe — lists fresh,
- * nothing pending — and the reboot probe — CLEAN, no reboot staged. The interface it reports is the one the
- * fixture manifest records, so a clean fixture is clean on every signal.
+ * probe — no payload yet, so nothing stale — the security probe — lists
+ * fresh, nothing pending unless \`FORCE_SECURITY_PENDING\` names packages — and
+ * the reboot probe — CLEAN unless \`FORCE_REBOOT_STAGED_DAYS\` ages it. The
+ * interface it reports is the one the fixture manifest records, so a clean
+ * fixture is clean on every signal by default.
  */
 const SSH_SHIM = `#!/usr/bin/env bash
 if [ "$1" = "-G" ]; then echo "hostname ${FIXTURE_IP}"; exit 0; fi
@@ -119,7 +121,22 @@ case "$script" in
 	*/sys/class/net*)
 		printf 'ADDR 2: eth0    inet ${FIXTURE_IP}/24 brd x\\nIF eth0 no ${FIXTURE_MAC}\\n' ;;
 	*jit/payload*) echo "PAYLOAD ABSENT" ;;
-	*"END security-probe"*) printf 'LISTS %s\nLAST NONE\nEND security-probe\n' "$(date +%s)" ;;
+	*"reboot-required"*)
+		if [ -n "\${FORCE_REBOOT_STAGED_DAYS:-}" ]; then
+			echo REQUIRED
+			echo $(( $(date +%s) - FORCE_REBOOT_STAGED_DAYS * 86400 ))
+			echo "linux-image-amd64"
+		else
+			echo CLEAN
+		fi ;;
+	*"END security-probe"*)
+		if [ -n "\${FORCE_SECURITY_PENDING:-}" ]; then
+			printf 'LISTS %s\\nLAST NONE\\n' "$(date +%s)"
+			IFS=','; for p in \${FORCE_SECURITY_PENDING}; do printf 'PKG %s\\n' "$p"; done
+			printf 'END security-probe\\n'
+		else
+			printf 'LISTS %s\\nLAST NONE\\nEND security-probe\\n' "$(date +%s)"
+		fi ;;
 	*) echo CLEAN ;;
 esac
 `;
@@ -155,7 +172,10 @@ function cleanup(fx) {
 }
 
 /** One gate run. Returns the exit code and stdout+stderr combined — never throws. */
-function run(fx, { failWhat = '', failTimes = '', argv = [] } = {}) {
+function run(
+	fx,
+	{ failWhat = '', failTimes = '', argv = [], rebootStagedDays = '', securityPending = '' } = {}
+) {
 	const env = {
 		...process.env,
 		PATH: `${fx.bin}:${process.env.PATH}`,
@@ -167,6 +187,8 @@ function run(fx, { failWhat = '', failTimes = '', argv = [] } = {}) {
 		GH_COUNT_DIR: fx.counts,
 		GH_FAIL_WHAT: failWhat,
 		GH_FAIL_TIMES: String(failTimes),
+		FORCE_REBOOT_STAGED_DAYS: String(rebootStagedDays),
+		FORCE_SECURITY_PENDING: String(securityPending),
 	};
 	try {
 		const out = execFileSync('node', [GATE, ...argv], {
@@ -439,6 +461,93 @@ test('--json keeps its exact shape on a could-not-look finding — only the find
 		assert.equal(doc.findings[0].category, 'could-not-look');
 		assert.match(doc.findings[0].why, /attempt 2\/2/);
 		assert.match(doc.findings[0].why, /ETIMEDOUT/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+// ── wave gates2 lane F1b: pending-reboot/security-updates demoted to notes ──
+//
+// `reboot-claws` and `fleet apt-security` own acting on both; this gate's job
+// for them is now visibility, not a daily page over a maintenance item a
+// converger is already working. Demoted at THIS gate's own call site
+// (`demoteOwnedElsewhere` in check-fleet-preflight.mjs), not inside
+// lib/preflight.mjs's shared classifiers — `fleet doctor` reuses those same
+// pure functions for its own policy, unaffected by this gate's demotion.
+
+test('wave gates2 F1b: a staged reboot past REBOOT_ESCALATE_DAYS is a NOTE, not a finding — exit 0', () => {
+	const fx = fixture();
+	try {
+		// 45 days staged: lib/preflight.mjs's OWN rule would make this BLOCKING
+		// (past the 30-day escalation) — proving the demotion actually overrides
+		// that, rather than merely observing a case that was already advisory.
+		const r = run(fx, { argv: ['--json'], rebootStagedDays: 45 });
+		assert.equal(r.code, 0, `demoted: must not fail the run:\n${r.out}`);
+		const doc = JSON.parse(r.out);
+		assert.equal(doc.ok, true);
+		assert.equal(
+			doc.findings.find((f) => f.category === 'pending-reboot'),
+			undefined,
+			JSON.stringify(doc.findings)
+		);
+		const note = doc.advisory.find((f) => f.category === 'pending-reboot');
+		assert.ok(note, JSON.stringify(doc.advisory));
+		assert.equal(note.status, 'reboot-required');
+		assert.equal(note.wasBlocking, true, 'it WAS blocking before this demotion, and says so');
+		assert.match(note.why, /45 days/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('wave gates2 F1b: pending security updates with none installed are a NOTE, not a finding — exit 0', () => {
+	const fx = fixture();
+	try {
+		// LAST NONE (never installed) would make lib/preflight.mjs's OWN rule
+		// 'not-installing', BLOCKING — the demotion must override that too.
+		const r = run(fx, { argv: ['--json'], securityPending: 'curl=1,jq=2' });
+		assert.equal(r.code, 0, `demoted: must not fail the run:\n${r.out}`);
+		const doc = JSON.parse(r.out);
+		assert.equal(doc.ok, true);
+		assert.equal(
+			doc.findings.find((f) => f.category === 'security-updates'),
+			undefined,
+			JSON.stringify(doc.findings)
+		);
+		const note = doc.advisory.find((f) => f.category === 'security-updates');
+		assert.ok(note, JSON.stringify(doc.advisory));
+		assert.equal(note.status, 'not-installing');
+		assert.equal(note.wasBlocking, true);
+		assert.match(note.why, /curl=1/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('wave gates2 F1b: an UNREACHABLE node still FAILS on pending-reboot and security-updates, demoted or not', () => {
+	const fx = fixture();
+	try {
+		writeFileSync(join(fx.bin, 'ssh'), '#!/bin/sh\ncat >/dev/null\nexit 1\n');
+		chmodSync(join(fx.bin, 'ssh'), 0o755);
+		const r = run(fx, { argv: ['--json'] });
+		assert.equal(r.code, 1, r.out);
+		const doc = JSON.parse(r.out);
+		assert.equal(doc.ok, false);
+		const reboot = doc.findings.find((f) => f.category === 'pending-reboot');
+		const security = doc.findings.find((f) => f.category === 'security-updates');
+		assert.ok(reboot, JSON.stringify(doc.findings));
+		assert.ok(security, JSON.stringify(doc.findings));
+		assert.equal(reboot.status, 'unreachable');
+		assert.equal(security.status, 'unreachable');
+		// Never re-classed: "I could not look" is not "nothing is wrong", in a
+		// note no less than a finding.
+		assert.equal(
+			doc.advisory.find(
+				(f) => f.category === 'pending-reboot' || f.category === 'security-updates'
+			),
+			undefined,
+			JSON.stringify(doc.advisory)
+		);
 	} finally {
 		cleanup(fx);
 	}

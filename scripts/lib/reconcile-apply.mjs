@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stripYamlComments } from './yaml-comments.mjs';
-import { runnerVarForm } from './runner-var.mjs';
+import { runnerVarForm, readRunnerVar, repoVerdict } from './runner-var.mjs';
 import { runFleetScript } from './run-fleet-script.mjs';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { readChildApps } from './site-docs.mjs';
@@ -291,6 +291,126 @@ export function targetsSelfHostedFleet(repo) {
 		if (runnerVarForm(body) !== null) return true;
 	}
 	return false;
+}
+
+// ---------------------------------------------------------------------------
+// runnerVar — ci:runner-var's unique catch, folded into reconcile's --json
+// (wave gates2 lane F1b).
+// ---------------------------------------------------------------------------
+
+/**
+ * One `gh api` JSON read where an HTTP 404 is a DISTINCT, never-retried
+ * answer ("this path genuinely is not there" — no `.github/workflows`
+ * directory, or a workflow file that raced a delete since the directory was
+ * listed), separate from any other failure, which IS retried `READ_ATTEMPTS`
+ * times before being reported unreadable. The same split `readRunnerVar`
+ * (`./runner-var.mjs`) already makes for the CI_RUNNER variable itself, and
+ * the same policy `check-runner-var.mjs` applies to both reads.
+ *
+ * NOT `quiet`: this file's `gh()` helper discards stderr under `quiet:true`,
+ * which would blind both the 404 test and the reason this surfaces on a real
+ * failure — the same gap `ghWrite`'s own doc names for writes.
+ */
+function ghJsonOr404(ghArgs) {
+	let reason = 'no attempt was made';
+	for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
+		try {
+			return { ok: true, data: JSON.parse(gh(ghArgs, { timeout: READ_TIMEOUT_MS })) };
+		} catch (err) {
+			const msg = String(err.stderr ?? err.message ?? '');
+			if (/HTTP 404|Not Found/i.test(msg)) return { ok: true, notFound: true };
+			reason = `${describeReadFailure(err, READ_TIMEOUT_MS)} (attempt ${attempt}/${READ_ATTEMPTS})`;
+			if (attempt < READ_ATTEMPTS) sleepSync(RETRY_DELAY_MS);
+		}
+	}
+	return { ok: false, reason };
+}
+
+/**
+ * Every workflow in `repo` that references `vars.CI_RUNNER`, with its form —
+ * or `{ uses: null, reason }` when the listing or a file could not be read.
+ *
+ * UNREADABLE MUST NEVER COLLAPSE INTO "NO WORKFLOWS" here, unlike
+ * `listWorkflowFiles` above: that function's silent swallow-to-`[]` is
+ * correct for `targetsSelfHostedFleet`'s soft autoInclude proxy, where a read
+ * failure costs nothing worse than one repo staying off the roster an extra
+ * cycle, and wrong for this check, whose entire point is that an unreadable
+ * repo is not a healthy one ("I could not look" must never render as
+ * "nothing is wrong").
+ */
+function ciRunnerVarUses(repo) {
+	const listing = ghJsonOr404(['api', `repos/${repo}/contents/.github/workflows`]);
+	if (!listing.ok)
+		return { uses: null, reason: `could not list .github/workflows: ${listing.reason}` };
+	if (listing.notFound) return { uses: [] };
+	const files = listing.data.filter((e) => /\.ya?ml$/.test(e.name)).map((e) => e.name);
+	const uses = [];
+	for (const file of files) {
+		const r = ghJsonOr404(['api', `repos/${repo}/contents/.github/workflows/${file}`]);
+		if (!r.ok)
+			return { uses: null, reason: `could not read .github/workflows/${file}: ${r.reason}` };
+		if (r.notFound) continue; // raced a delete between the listing and this read
+		const body = Buffer.from(r.data.content ?? '', 'base64').toString('utf8');
+		const form = runnerVarForm(body);
+		if (form) uses.push({ file, form });
+	}
+	return { uses };
+}
+
+/** One `CI_RUNNER` variable read — the same shape `readRunnerVar` expects of `readOnce`. */
+function readCiRunnerVarOnce(repo) {
+	return gh(['api', `repos/${repo}/actions/variables/CI_RUNNER`, '-q', '.value'], {
+		timeout: READ_TIMEOUT_MS,
+	}).trim();
+}
+
+/**
+ * `runnerVar` — the piece of `ci:runner-var` that becomes a `ci:fleet-coverage`
+ * finding: a repo, covered or not, whose shipped workflows read the BARE
+ * `fromJSON(vars.CI_RUNNER)` form while the variable is unset or unreadable
+ * (wave gates2 lane F1b; `ci:runner-var`'s own cron already ran appended
+ * right after `ci:fleet-coverage`, so this folds two already-adjacent
+ * processes into one rather than adding a new one).
+ *
+ * `check-runner-var.mjs` keeps its OWN scan and its OWN `--json` document —
+ * it reads shipped workflows through `lib/fleet-source.mjs`'s git mirror,
+ * never `gh api`, and is `domain/observation` to this file's
+ * `domain/lifecycle` (a domain may not import another domain;
+ * `layer-guard.test.mjs` refuses it). This function shares the PURE verdict
+ * logic instead — `runnerVarForm`/`readRunnerVar`/`repoVerdict`, all `config`
+ * layer and legal for both — and reads through this file's own `gh()`
+ * transport, the one every other read here and the existing reconcile test
+ * fixtures already use.
+ *
+ * `repos` is the population to examine. The caller passes the union of the
+ * committed coverage roster and every repo `resolveDesired` already listed
+ * under the owner (`allRepos`) — the SAME `gh repo list` call
+ * check-runner-var.mjs makes for itself, so this spends it once rather than
+ * twice. An empty population is reported, never read as a clean fleet.
+ */
+export function ciRunnerVarCheck(repos) {
+	if (!repos.length) {
+		return { ok: false, findings: [], error: 'runnerVar: no repos to examine (empty population)' };
+	}
+	const findings = [];
+	for (const repo of repos) {
+		const { uses, reason } = ciRunnerVarUses(repo);
+		if (uses === null) {
+			findings.push({ repo, reason });
+			continue;
+		}
+		if (!uses.length) continue; // does not reference it — nothing to check
+		const read = readRunnerVar(repo, readCiRunnerVarOnce, {
+			attempts: READ_ATTEMPTS,
+			sleep: () => sleepSync(RETRY_DELAY_MS),
+			timeoutMs: READ_TIMEOUT_MS,
+		});
+		const verdict = repoVerdict(repo, uses, read.value, read.reason);
+		if (verdict && verdict.status !== 'ok' && verdict.status !== 'unset-but-safe') {
+			findings.push({ repo, reason: verdict.why });
+		}
+	}
+	return { ok: findings.length === 0, findings };
 }
 
 // ---------------------------------------------------------------------------

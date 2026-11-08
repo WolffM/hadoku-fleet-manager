@@ -417,8 +417,12 @@ test('the same label still fails while a shipped workflow asks for it', () => {
 // `gh` read) must land in `unreadable`, never folded into `findings` — the
 // same rule every other migrated gate's GateDoc tests pin. Everything this
 // gate actually CONCLUDED from data it read — an unoffered/unwatched label,
-// an understaffed or drained resident holder, an empty required set, a
-// required-capability gap, a derivation disagreement — is a finding.
+// an empty required set, a required-capability gap, a derivation
+// disagreement — is a finding. An understaffed or drained resident holder is
+// the one exception, DEMOTED to a `notes` entry (wave gates2 lane F1b,
+// operator-approved): it neither fails the gate nor counts as a finding,
+// because queue-health already measures the outcome a degraded backstop
+// would cause.
 
 test('GateDoc: a clean fleet is ok, with no findings and nothing unreadable', () => {
 	const fx = fixture();
@@ -449,12 +453,13 @@ test('GateDoc: an exhausted resident gh read is unreadable, never a finding', ()
 	}
 });
 
-test('GateDoc: an understaffed resident backstop is a finding, not unreadable', () => {
+test('GateDoc: an understaffed resident backstop is a NOTE, not a finding — exit 0 (wave gates2 F1b)', () => {
 	const fx = fixture();
 	try {
 		// Only ONE online holder, carrying the floor label — the floor is read,
 		// successfully, and found short of two; this is a conclusion the gate
-		// reached, not a read it could not make.
+		// reached, not a read it could not make. Demoted: queue-health measures
+		// the outcome, so this must not fail the gate or count as a finding.
 		writeFileSync(
 			fx.runners,
 			JSON.stringify({
@@ -470,12 +475,50 @@ test('GateDoc: an understaffed resident backstop is a finding, not unreadable', 
 			})
 		);
 		const { code, report } = run(fx);
-		assert.equal(code, 1);
-		assert.equal(report.ok, false);
+		assert.equal(code, 0, JSON.stringify(report));
+		assert.equal(report.ok, true);
 		assert.deepEqual(report.unreadable, [], JSON.stringify(report.unreadable));
-		const finding = report.findings.find((f) => f.kind === 'resident-understaffed');
-		assert.ok(finding, JSON.stringify(report.findings));
-		assert.match(finding.reason, /only 1 of its declared resident holder/);
+		assert.equal(
+			report.findings.find((f) => f.kind === 'resident-understaffed'),
+			undefined,
+			JSON.stringify(report.findings)
+		);
+		const note = report.notes.find((n) => n.kind === 'resident-understaffed');
+		assert.ok(note, JSON.stringify(report.notes));
+		assert.match(note.reason, /only 1 of its declared resident holder/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('GateDoc: a drained resident holder is a NOTE, not a finding — exit 0 (wave gates2 F1b)', () => {
+	const fx = fixture();
+	try {
+		// Both holders online and carrying the floor label (the understaffed
+		// case above is NOT in play), but HOLDER_A is drained — the OTHER
+		// demoted conclusion this file's resident-floor section reaches.
+		writeFileSync(
+			join(fx.stateDir, 'fleet-drain.json'),
+			JSON.stringify({
+				nodes: {
+					[HOLDER_A]: { since: new Date().toISOString(), reason: 'fixture', by: 'test' },
+				},
+				planned: [],
+			})
+		);
+		const { code, report } = run(fx);
+		assert.equal(code, 0, JSON.stringify(report));
+		assert.equal(report.ok, true);
+		assert.deepEqual(report.unreadable, [], JSON.stringify(report.unreadable));
+		assert.equal(
+			report.findings.find((f) => f.kind === 'resident-drained'),
+			undefined,
+			JSON.stringify(report.findings)
+		);
+		const note = report.notes.find((n) => n.kind === 'resident-drained');
+		assert.ok(note, JSON.stringify(report.notes));
+		assert.match(note.reason, new RegExp(HOLDER_A));
+		assert.match(note.reason, /DRAINED/);
 	} finally {
 		cleanup(fx);
 	}

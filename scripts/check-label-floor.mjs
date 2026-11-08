@@ -70,6 +70,7 @@ import {
 	reportHistorical,
 	checkUnoffered,
 	checkMissing,
+	reportResidentNotes,
 	checkResidentFailures,
 	checkLedgerError,
 	checkLedgerMissing,
@@ -111,6 +112,14 @@ const log = emitter.log;
  */
 const gateFindings = [];
 const gateUnreadable = [];
+/**
+ * A conclusion this gate reached but does not fail on or count as a finding
+ * (wave gates2 lane F1b, operator-approved): `resident-drained` and
+ * `resident-understaffed` today — queue-health already measures the outcome
+ * a degraded backstop would cause. Reported in `--json` as `notes`, never
+ * folded into `findings`.
+ */
+const gateNotes = [];
 
 const COVERAGE = manifestFile('fleet-runner-coverage.json');
 
@@ -238,10 +247,11 @@ const {
  * and the "at least two holders, never a drained one" rule (WS-R,
  * 2026-09-07).
  */
-const { residentHolders, residentFailures } = await checkResidentFloor(
+const { residentHolders, residentFailures, residentNotes } = await checkResidentFloor(
 	manifest,
 	gateFindings,
-	gateUnreadable
+	gateUnreadable,
+	gateNotes
 );
 
 /**
@@ -268,6 +278,7 @@ const ctx = {
 	log,
 	gateFindings,
 	gateUnreadable,
+	gateNotes,
 	COVERAGE,
 	manifest,
 	holdings,
@@ -296,6 +307,7 @@ const ctx = {
 	missing,
 	residentHolders,
 	residentFailures,
+	residentNotes,
 	ledgerRecords,
 	ledgerError,
 	requiredSet,
@@ -324,6 +336,7 @@ checkObservedError(ctx);
 reportHistorical(ctx);
 checkUnoffered(ctx);
 checkMissing(ctx);
+reportResidentNotes(ctx);
 checkResidentFailures(ctx);
 checkLedgerError(ctx);
 checkLedgerMissing(ctx);

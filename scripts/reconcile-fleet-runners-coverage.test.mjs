@@ -48,6 +48,13 @@ case "$argv" in
   *"-X POST"*"remove-token"*) echo "fixture-token" ;;
   *"-X POST"*"/labels") echo '{}' ;;
   *"releases/latest"*) echo 'v2.337.0' ;;
+  *"contents/.github/workflows")
+    # runnerVar (wave gates2 lane F1b): none of these fixture repos carry a
+    # workflow that asks for CI_RUNNER, so an empty listing is enough —
+    # distinct from the generic api repos/ catch-all below, which answers a
+    # bare object (not a valid directory listing) and would otherwise crash
+    # ciRunnerVarUses's .filter on it.
+    echo '[]' ;;
   *"trees/HEAD"*)
     # #84 part 2 send-back: a tree read that fails every READ_ATTEMPTS,
     # toggled per-test, so a refusal can be proven without touching the

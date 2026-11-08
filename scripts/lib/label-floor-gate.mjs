@@ -197,6 +197,10 @@ export function buildJsonDoc(ctx, verdict, extra = {}) {
 		disqualified: ctx.disqualifiedNodes,
 		unverified: ctx.unverifiedNodes,
 		held: ctx.emitter.held(),
+		// Demoted conclusions (wave gates2 lane F1b): reported, never a
+		// finding and never a reason the gate fails — see
+		// lib/label-floor-resident.mjs.
+		notes: ctx.gateNotes,
 		...extra,
 		// GateDoc (wave 5i lane B). `ok` is pinned to `verdict` explicitly —
 		// the SAME source of truth every branch below already used for its
@@ -375,6 +379,20 @@ export function checkMissing(ctx) {
 				reason: `"${l}" is requested and offered but the runtime label floor will not see it`,
 			});
 		ctx.finish('missing');
+	}
+}
+
+// A demoted conclusion (wave gates2 lane F1b) still needs to be VISIBLE —
+// "reported in the JSON" is half the ask, and a note nobody can see on the
+// human run is not reported at all. Printed with `ctx.log` (not
+// `console.error`): it is not a problem this run failed on.
+export function reportResidentNotes(ctx) {
+	if (ctx.residentNotes?.length) {
+		ctx.log(
+			`resident backstop: ${ctx.residentNotes.length} note(s) — demoted, not a finding ` +
+				`(queue-health measures the outcome):`
+		);
+		for (const n of ctx.residentNotes) ctx.log(`  ${n}`);
 	}
 }
 

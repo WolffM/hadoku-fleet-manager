@@ -96,6 +96,15 @@
  * weaken property (3), because it is not a function of how bad the reading is —
  * and it does not weaken property (2) either, because
  * {@link BACKSTOP_BLOCKING_CATEGORIES} keeps "could not look at it" blocking.
+ *
+ * A FURTHER, NARROWER DEMOTION LIVES ONE LAYER UP, in
+ * `check-fleet-preflight.mjs` (wave gates2 lane F1b, operator-approved):
+ * `pending-reboot` and `security-updates` findings from THAT gate's cron, not
+ * from this shared classifier, are additionally forced advisory (except
+ * `unreachable`) because `reboot-claws` and the apt-security converger own
+ * acting on them. It is applied at that call site and not here so that `fleet
+ * doctor`'s reuse of these same pure functions keeps its own policy, which
+ * still escalates a stale staged reboot to BLOCKING.
  */
 import { JIT_PREFIX, WARM_PREFIX } from '../../dist/lib/jit-naming.js';
 
@@ -463,6 +472,15 @@ export function jitPayloadFindings(probes, latestVersion, opts = {}) {
  *     direction `expected-down` takes for a drain with no parseable `since`.
  *   - Past the escalation window it is BLOCKING, and the `why` says how long,
  *     so the page that returns carries the reason it returned.
+ *
+ * `check-fleet-preflight.mjs` applies a FURTHER demotion of its own on top of
+ * this (wave gates2 lane F1b, operator-approved): every `pending-reboot`
+ * finding this gate's cron reports, blocking or not, becomes advisory there,
+ * because `reboot-claws` owns acting on it. That demotion is NOT made here,
+ * in the shared classifier — `fleet doctor` (`lib/doctor-findings.mjs`) reuses
+ * this exact function for its OWN policy, which still escalates a stale
+ * staged reboot to BLOCKING (`lib/doctor-findings-classification.test.mjs`),
+ * and is not this wave's to change.
  */
 export function rebootFinding(
 	probe,

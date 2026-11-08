@@ -26,6 +26,7 @@
  * @param {Array} ctx.unreadable
  * @param {Array} ctx.departed
  * @param {Array} ctx.ignored
+ * @param {{ok: boolean, findings: {repo: string, reason: string}[], error?: string}} ctx.runnerVar
  * @param {Map<string, string>} ctx.expectedDownNotes
  * @param {boolean} ctx.CONFIRM
  * @param {boolean} ctx.REMOVE_ORPHANS
@@ -45,6 +46,7 @@ export function printReport(ctx) {
 		unreadable,
 		departed,
 		ignored,
+		runnerVar,
 		expectedDownNotes,
 		CONFIRM,
 		REMOVE_ORPHANS,
@@ -158,5 +160,20 @@ export function printReport(ctx) {
 	// it should be visible without ever reading as something to act on.
 	if (ignored.length) {
 		log(`Ignored by manifest: ${ignored.map((i) => i.repo).join(', ')}\n`);
+	}
+
+	// ci:runner-var's unique catch, merged in (wave gates2 lane F1b): a repo
+	// whose shipped workflows read the bare `fromJSON(vars.CI_RUNNER)` form
+	// while the variable is unset or unreadable.
+	if (runnerVar?.error) {
+		log(`CI_RUNNER CHECK: could not look — ${runnerVar.error}\n`);
+	} else if (runnerVar?.findings?.length) {
+		log(
+			`CI_RUNNER CHECK (${runnerVar.findings.length}) — vars.CI_RUNNER unreliable for these repos:`
+		);
+		for (const f of runnerVar.findings) log(`  ${f.repo}  ${f.reason}`);
+		log('');
+	} else if (runnerVar) {
+		log('CI_RUNNER CHECK: every repo that asks for vars.CI_RUNNER can rely on it.\n');
 	}
 }
