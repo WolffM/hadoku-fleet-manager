@@ -1,7 +1,18 @@
 #!/usr/bin/env node
 /**
- * check-runner-units — every standing runner installed on a node must name a
- * repo that still exists, is not archived, and is on the roster.
+ * fleet runner-units — audit the standing runner installs on every node.
+ *
+ * RENAMED from `check-runner-units.mjs` (wave gates2 lane F1a). The node probe
+ * text and the GitHub repo lookup (with its retry) moved to
+ * `scripts/lib/runner-units-probe.mjs`, which `fleet identity`
+ * (`scripts/reconcile-runner-identity.mjs`) now ALSO calls, so the SAME
+ * registration-vs-box audit runs from both directions in one subcommand —
+ * the evidence table's "MERGE ci:runner-units -> check:runner-identity: the
+ * same registration-vs-box question, two directions." THIS FILE IS KEPT, not
+ * deleted, because mgmt-api's `ci:runner-units` cron still calls
+ * `fleet runner-units --json` and parses this exact document
+ * (`services/mgmt-api/src/routes/jobs/runner-units-check.ts`) until the site
+ * lane retires that cron.
  *
  * WHY THIS READS THE NODE AND NOT GITHUB
  * -------------------------------------
@@ -77,15 +88,15 @@
  *
  * UNREACHABLE IS A FAILURE, UNLESS IT IS EXPECTED
  * ------------------------------------------------
- * A node that cannot be probed is reported and fails the run. "I could not look"
- * must never render as "nothing is wrong" — and this gate found that failure in
- * ITSELF on its first run: it called `runOn`, which returns a PROMISE, so every
- * node yielded the string "[object Promise]", which parsed to zero installs and
- * reported the whole fleet clean. Hence every probe result is AWAITED before
- * it is read, and a probe that fails loudly rather than returning nothing.
- * The nodes are probed CONCURRENTLY since it went on a cron (2026-10-28): one
- * by one, a fleet with every node down took 9 x 90 s to say so, which is most
- * of the nightly window it now has to share.
+ * A node that cannot be probed is reported and fails the run. "I could not
+ * look" must never render as "nothing is wrong" — and this gate found that
+ * failure in ITSELF on its first run: it called `runOn`, which returns a
+ * PROMISE, so every node yielded the string "[object Promise]", which parsed
+ * to zero installs and reported the whole fleet clean. Hence every probe
+ * result is AWAITED before it is read, and a probe that fails loudly rather
+ * than returning nothing. The nodes are probed CONCURRENTLY since it went on a
+ * cron (2026-10-28): one by one, a fleet with every node down took 9 x 90 s to
+ * say so, which is most of the nightly window it now has to share.
  *
  * ZERO NODES IS NOT A PASS EITHER. `--machine <typo>` used to select nothing,
  * probe nothing and print the clean line with exit 0; a manifest that could not
@@ -98,20 +109,20 @@
  * `deferralNote`, it just does not page. Everything else still fails exactly as
  * before. See lib/expected-down.mjs.
  */
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
 
 import { loadManifest, runOn, selectMachines, machineArg } from './lib/fleet-exec.mjs';
 import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
+import { classifyInstall, classifyUnit, repoFromUrl } from './lib/runner-unit-audit.mjs';
 import {
-	repoFromUrl,
-	classifyInstall,
-	classifyUnit,
-	lookupOutcome,
-} from './lib/runner-unit-audit.mjs';
+	createRepoLookup,
+	parseRunnerUnitsProbe,
+	RUNNER_UNITS_PROBE,
+} from './lib/runner-units-probe.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
+import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 
 const out = createEmitter();
 
@@ -128,75 +139,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 	process.exit(0);
 }
 
-/**
- * Enumerate what is ACTUALLY on the box, in one round trip.
- *
- * Two record kinds, because the two failure shapes are different: an INSTALL
- * exists and may name the wrong repo, while a UNIT may exist with nothing behind
- * it at all. Reading only one of them misses half the ways this drifts.
- */
-const PROBE = String.raw`set -u
-H="$HOME"
-# INSTALLS — identity from .runner's gitHubUrl, which is what registration wrote.
-for d in "$H"/runners/actions-runner-*/ "$H"/actions-runner-*/; do
-  [ -d "$d" ] || continue
-  n=$(basename "$d")
-  url=""
-  if [ -f "$d/.runner" ]; then
-    url=$(tr -d '\000\357\273\277' < "$d/.runner" | grep -o '"gitHubUrl"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
-  fi
-  sz=$(du -sm "$d" 2>/dev/null | cut -f1)
-  [ -n "$sz" ] || sz=0
-  printf 'INSTALL\t%s\t%s\t%s\n' "$n" "$url" "$sz"
-done
-# UNITS — both schemes. A unit with no install behind it is the stray case.
-systemctl list-units 'actions.runner.*' --all --no-legend --plain 2>/dev/null | awk '{print $1}' | while read -r u; do
-  [ -n "$u" ] || continue
-  a=$(systemctl show -p ActiveState --value "$u" 2>/dev/null)
-  s=$(systemctl show -p SubState --value "$u" 2>/dev/null)
-  r=$(systemctl show -p NRestarts --value "$u" 2>/dev/null)
-  w=$(systemctl show -p WorkingDirectory --value "$u" 2>/dev/null)
-  [ -n "$r" ] || r=0
-  printf 'UNIT\tsystem\t%s\t%s\t%s\t%s\t%s\n' "$u" "$a" "$s" "$r" "$w"
-done
-systemctl --user list-units 'actions-runner-*' --all --no-legend --plain 2>/dev/null | awk '{print $1}' | while read -r u; do
-  [ -n "$u" ] || continue
-  a=$(systemctl --user show -p ActiveState --value "$u" 2>/dev/null)
-  s=$(systemctl --user show -p SubState --value "$u" 2>/dev/null)
-  r=$(systemctl --user show -p NRestarts --value "$u" 2>/dev/null)
-  w=$(systemctl --user show -p WorkingDirectory --value "$u" 2>/dev/null)
-  [ -n "$r" ] || r=0
-  printf 'UNIT\tuser\t%s\t%s\t%s\t%s\t%s\n' "$u" "$a" "$s" "$r" "$w"
-done`;
-
-/**
- * Two attempts per repo, the same `READ_ATTEMPTS` queue-health uses against its
- * measured 0.13% transient rate. Retrying is not tolerating: a repo that fails
- * both is still unread and still fails the run, with its reason.
- */
-const LOOKUP_ATTEMPTS = 2;
-
-/** One `gh api` lookup per repo, memoised — the roster alone is 26 of them. */
-const repoCache = new Map();
-function lookupRepo(path) {
-	if (repoCache.has(path)) return repoCache.get(path);
-	let outcome = null;
-	for (let attempt = 1; attempt <= LOOKUP_ATTEMPTS; attempt++) {
-		const r = spawnSync('gh', ['api', `repos/${path}`], {
-			encoding: 'utf8',
-			maxBuffer: 8 << 20,
-			timeout: 30_000,
-		});
-		outcome = lookupOutcome({
-			ok: r.status === 0 && !r.error,
-			stdout: r.stdout ?? '',
-			stderr: r.error ? String(r.error.message) : (r.stderr ?? ''),
-		});
-		if (outcome.status !== 'error') break;
-	}
-	repoCache.set(path, outcome);
-	return outcome;
-}
+const lookupRepo = createRepoLookup();
 
 /**
  * Anything that stops the audit before a node is probed. The document still
@@ -263,6 +206,11 @@ const lookupFailed = [];
 // evidence, and expires after DEFER_DAYS. See lib/expected-down.mjs.
 const drains = readDrains();
 const expectedDown = [];
+// Already paged as down by runner-health's own offline alert (observed, never
+// a declaration — see lib/known-down.mjs). Checked only for a node that is
+// not already drained, so the two never double-count one machine.
+const _knownDown = knownDownNodes();
+const knownDown = [];
 let installCount = 0;
 let unitCount = 0;
 
@@ -270,34 +218,26 @@ let unitCount = 0;
 // returns a promise, and reading one unawaited is how this gate once parsed
 // "[object Promise]" into zero installs and a clean fleet.
 const probes = await Promise.all(
-	machines.map(([node]) => runOn(node, PROBE, { as: 'ci', timeoutMs: 90_000 }))
+	machines.map(([node]) => runOn(node, RUNNER_UNITS_PROBE, { as: 'ci', timeoutMs: 90_000 }))
 );
 
 for (const [i, [node]] of machines.entries()) {
 	const res = probes[i];
 	if (!res.ok) {
-		if (deferralFor(node, drains).deferred) {
+		const defer = deferralFor(node, drains);
+		if (defer.deferred) {
 			expectedDown.push(node);
+			continue;
+		}
+		const down = _knownDown.get(node);
+		if (down) {
+			knownDown.push(down);
 			continue;
 		}
 		unreachable.push({ node, why: res.error ? String(res.error) : 'probe failed' });
 		continue;
 	}
-	const installs = [];
-	const units = [];
-	for (const line of String(res.out).split('\n')) {
-		const f = line.split('\t');
-		if (f[0] === 'INSTALL') installs.push({ dir: f[1], url: f[2], sizeMb: Number(f[3]) || 0 });
-		else if (f[0] === 'UNIT')
-			units.push({
-				scope: f[1],
-				unit: f[2],
-				active: f[3],
-				sub: f[4],
-				restarts: Number(f[5]) || 0,
-				wd: f[6] ?? '',
-			});
-	}
+	const { installs, units } = parseRunnerUnitsProbe(res.out);
 	installCount += installs.length;
 	unitCount += units.length;
 
@@ -385,6 +325,7 @@ if (unreachable.length) {
 }
 for (const n of expectedDown)
 	out.log(`  · ${deferralNote(n, deferralFor(n, drains))} — installs unread`);
+for (const d of knownDown) out.log(`  · ${knownDownNote(d)} — installs unread`);
 for (const f of findings) {
 	out.warn(`${f.kind.padEnd(10)} ${f.node.padEnd(8)} ${f.dir ?? f.unit}`);
 	out.warn(`           ${f.why}`);
@@ -413,6 +354,10 @@ if (out.json) {
 		notes,
 		unreachable,
 		expectedDown,
+		// ADDITIVE (wave gates2 lane F1a): already paged down by runner-health's
+		// own per-node offline alert, not a fresh finding here — see
+		// lib/known-down.mjs.
+		knownDown,
 		rosterUnresolved,
 		lookupFailed,
 		lines: out.held(),

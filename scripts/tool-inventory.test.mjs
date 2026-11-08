@@ -1,5 +1,6 @@
 /**
- * check-tool-inventory — §B (wave 3y): the demand ledger sees Java and
+ * tool-inventory (formerly check-tool-inventory.mjs; wave gates2 lane F1a
+ * renamed it) — §B (wave 3y): the demand ledger sees Java and
  * indirect `*.jar` use, and pinned/hosted demand is REPORTED, never added to
  * the floor.
  *
@@ -44,7 +45,7 @@ import { requiredIdentitySet } from '../dist/lib/bootcamp-proof.js';
 import { fixtureRemotes, poisonedClone } from './lib/fleet-source-fixture.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const GATE = join(HERE, 'check-tool-inventory.mjs');
+const GATE = join(HERE, 'tool-inventory.mjs');
 
 const HUB = 'WolffM/hadoku_site';
 const CARDTABLE = 'WolffM/hadoku-cardtable';

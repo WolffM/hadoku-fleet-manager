@@ -221,10 +221,10 @@ echo "300"
 	rmSync(root, { recursive: true, force: true });
 });
 
-// ── check-tool-inventory.mjs ────────────────────────────────────────────────
+// ── tool-inventory.mjs ────────────────────────────────────────────────
 
-void test('check-tool-inventory: expected-down deferral, expiry, and training never defers', () => {
-	const SCRIPT = join(SCRIPTS, 'check-tool-inventory.mjs');
+void test('tool-inventory: expected-down deferral, expiry, and training never defers', () => {
+	const SCRIPT = join(SCRIPTS, 'tool-inventory.mjs');
 	const NODE = 'fixture-claw';
 	const SSH_SHIM = `#!/usr/bin/env bash
 cat > /dev/null
@@ -578,10 +578,10 @@ echo "PROBE-END \${5##*@} 0 0"
 	rmSync(fx.root, { recursive: true, force: true });
 });
 
-// ── check-runner-units.mjs (#74) ────────────────────────────────────────────
+// ── runner-units.mjs (#74) ────────────────────────────────────────────
 
-void test('check-runner-units: expected-down deferral, expiry, and a reachable drained node', () => {
-	const SCRIPT = join(SCRIPTS, 'check-runner-units.mjs');
+void test('runner-units: expected-down deferral, expiry, and a reachable drained node', () => {
+	const SCRIPT = join(SCRIPTS, 'runner-units.mjs');
 	const NODE = 'fixture-claw';
 	const SSH_SHIM = `#!/usr/bin/env bash
 cat > /dev/null

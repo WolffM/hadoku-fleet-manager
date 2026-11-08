@@ -28,13 +28,15 @@ import {
 	computeDrift,
 	judgeTool,
 	runDoctor,
-} from './check-fleet-toolchain.mjs';
-import { isLocalNode } from '../dist/lib/node-identity.js';
-import { createReleaseLookup } from './lib/tool-release.mjs';
-import { REPAIRS, toolAppliesTo } from './lib/toolchain-floor.mjs';
-import { parseJsonStdout, spawnCapture } from './lib/spawn-json.mjs';
+} from './toolchain-doctor.mjs';
+import { isLocalNode } from '../../dist/lib/node-identity.js';
+import { createReleaseLookup } from './tool-release.mjs';
+import { REPAIRS, toolAppliesTo } from './toolchain-floor.mjs';
+import { parseJsonStdout, spawnCapture } from './spawn-json.mjs';
 
-const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'check-fleet-toolchain.mjs');
+// `scripts/lib/` -> `scripts/`: the CLI entry moved to `scripts/toolchain.mjs`
+// (wave gates2 lane F1a) while every pure function it calls moved HERE.
+const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'toolchain.mjs');
 const STOCK_PATH = '/usr/bin:/bin';
 const MIN_AGE = 10080;
 
@@ -1140,7 +1142,7 @@ test('an unreachable node stays unreachable (shape unchanged)', async () => {
 // ADDITIVITY — `--json` is a contract. `ci:fleet-toolchain` parses it.
 //
 // The key lists below were CAPTURED from the script before lane C changed it
-// (scripts/check-fleet-toolchain.mjs @ d2b80f8, `--json` against the real
+// (scripts/toolchain.mjs, formerly check-fleet-toolchain.mjs @ d2b80f8, `--json` against the real
 // manifests). A field may be ADDED; one of these disappearing or changing type
 // breaks the cron. MUTATION: rename or drop any of them in the script.
 // ---------------------------------------------------------------------------

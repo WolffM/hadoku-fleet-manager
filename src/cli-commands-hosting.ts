@@ -98,7 +98,13 @@ export const commandsHosting: Record<string, Command> = {
 		summary: 'every --json contract entry names a consumer that exists',
 	},
 	'runner-units': {
-		script: 'check-runner-units.mjs',
+		// RENAMED wave gates2 lane F1a (from check-runner-units.mjs). The same
+		// registration-vs-box audit now ALSO runs, in the other direction, from
+		// `fleet identity` (reconcile-runner-identity.mjs) — see that file's
+		// header. Kept as a real, working subcommand because mgmt-api's
+		// `ci:runner-units` cron still parses this exact document until lane S1
+		// retires it.
+		script: 'runner-units.mjs',
 		kind: 'gate',
 		help: true,
 		summary: 'standing runner units that name a renamed, archived or off-roster repo',

@@ -67,6 +67,7 @@ import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 import { READ_ATTEMPTS, describeReadFailure } from './lib/read-retry-policy.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
+import { JIT_PAYLOAD_DIR } from './lib/preflight.mjs';
 
 const out = createEmitter();
 
@@ -402,6 +403,71 @@ for (const [name] of machines) {
 				kind: 'node-contract',
 			});
 		else if (!dropped.length) ok(`${name} jit units parse (${parsed.length})`);
+	}
+
+	// --- 5. the ephemeral dispatcher's own --jitconfig dependency ------------
+	// MOVED HERE (wave gates2 lane F1a) from the now-deleted `check-capabilities.mjs`
+	// (operator-approved: redundant with bootcamp's probe registry + revocation
+	// for every OTHER capability it probed — this was the one exception, since
+	// nothing else proves `--jitconfig` is still accepted).
+	//
+	// `--jitconfig` appears in NO `Runner.Listener --help` output on 2.336.0. The
+	// whole ephemeral dispatcher depends on it, and a runner self-update could
+	// remove it silently, so the fleet should find out from a probe rather than
+	// from a dispatcher that has quietly stopped working.
+	//
+	// Probed WITHOUT minting: an invalid config must be REJECTED for parsing,
+	// which proves the flag is understood. A flag that does not exist produces a
+	// different failure ("Unrecognized command-line input"), and that
+	// difference is the test. THE JIT PAYLOAD IS SEARCHED FIRST, and on an
+	// ephemeral node it is the only binary that exists — a node whose standing
+	// installs were removed (pure-JIT) must not read as "no runner binary" when
+	// it is, at that moment, successfully minting.
+	const jit = await runOn(
+		name,
+		`bin=""
+for d in "$HOME"/${JIT_PAYLOAD_DIR}/ "$HOME"/runners/actions-runner*/ "$HOME"/actions-runner*/ "$HOME"/repos/*/actions-runner*/; do
+  d=\${d%/}
+  [ -x "$d/bin/Runner.Listener" ] && bin="$d/bin/Runner.Listener" && break
+done
+if [ -n "$bin" ]; then
+  out=$("$bin" run --jitconfig not-a-real-config 2>&1 | head -5)
+  case "$out" in
+  *"Unrecognized"* | *"unknown option"*) printf 'JITCONFIG\tno\tflag-not-recognised\n' ;;
+  *) printf 'JITCONFIG\tok\tflag-accepted\n' ;;
+  esac
+else
+  printf 'JITCONFIG\tno\tno-runner-binary\n'
+fi`,
+		{ as: 'ci', timeoutMs: 20_000 }
+	);
+	if (!jit.ok) {
+		bad(`${name} jitconfig`, 'could not probe the runner payload', {
+			node: name,
+			unreadable: true,
+		});
+	} else {
+		const m = /^JITCONFIG\t(\S+)\t(.*)$/m.exec(jit.stdout);
+		if (!m) {
+			bad(
+				`${name} jitconfig`,
+				`the probe produced no JITCONFIG line: ${JSON.stringify(jit.stdout.trim().slice(0, 200))}`,
+				{
+					node: name,
+					unreadable: true,
+				}
+			);
+		} else if (m[1] !== 'ok') {
+			bad(
+				`${name} jitconfig`,
+				`Runner.Listener does not accept --jitconfig (${m[2]}) — the ephemeral ` +
+					`dispatcher cannot mint here. It is an UNDOCUMENTED flag, so a runner ` +
+					`self-update is the expected way to lose it.`,
+				{ node: name, kind: 'jitconfig-unsupported' }
+			);
+		} else {
+			ok(`${name} jitconfig accepted`);
+		}
 	}
 }
 

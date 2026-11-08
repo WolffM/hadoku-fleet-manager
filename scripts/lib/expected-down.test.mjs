@@ -101,13 +101,21 @@ import { blankComments } from './blank-comments.mjs';
 
 const SCRIPTS = _res(_dir(_f2u(import.meta.url)), '..');
 
+// RENAMED/RETIRED, wave gates2 lane F1a:
+//   - `check-fleet-toolchain.mjs` -> `toolchain.mjs`, a thin CLI whose own
+//     `deferralFor` wiring moved WITH the probe into `lib/toolchain-doctor.mjs`
+//     (which this file's pattern cannot see — it only scans `scripts/*.mjs`
+//     for `./lib/expected-down.mjs`). `toolchain-doctor.test.mjs` (moved from
+//     `check-fleet-toolchain.test.mjs`) still exercises the deferral directly.
+//   - `check-capabilities.mjs` deleted outright (operator-approved: redundant
+//     with bootcamp's probe registry + revocation); its thin alias
+//     (`capabilities.mjs`) does no real ssh probing, so there is nothing for
+//     `deferralFor` to narrow there any more.
 for (const f of [
-	'check-fleet-toolchain.mjs',
 	'check-fleet-preflight.mjs',
 	'deploy-ci-throttle.mjs',
 	'deploy-runners-slice.mjs',
 	'bootcamp.mjs',
-	'check-capabilities.mjs',
 	'reconcile-runner-identity.mjs',
 ]) {
 	test(`${f} consults the drain record before failing on an unreachable node`, () => {

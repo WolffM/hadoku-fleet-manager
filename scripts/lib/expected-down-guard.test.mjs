@@ -250,10 +250,13 @@ void test('the seven gates fixed for #71/#74 each hold the full pattern: import,
 	for (const f of [
 		'clean-runner-debris.mjs',
 		'reconcile-fleet-runners.mjs',
-		'check-tool-inventory.mjs',
+		// RENAMED wave gates2 lane F1a: check-tool-inventory.mjs -> tool-inventory.mjs,
+		// check-runner-units.mjs -> runner-units.mjs. Both still carry the full
+		// pattern directly, unchanged in substance.
+		'tool-inventory.mjs',
 		'check-boundary-contracts.mjs',
 		'check-warm-canary.mjs',
-		'check-runner-units.mjs',
+		'runner-units.mjs',
 		'collect-job-metrics.mjs',
 	]) {
 		const blanked = blankComments(readFileSync(join(SCRIPTS_DIR, f), 'utf8'));

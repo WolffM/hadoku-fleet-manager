@@ -210,7 +210,7 @@ test('every machine-scoped subcommand routes through machineArg', () => {
 		'provision-fleet.mjs',
 		'deploy-runners-slice.mjs',
 		'deploy-ci-throttle.mjs',
-		'check-fleet-toolchain.mjs',
+		'toolchain.mjs',
 		'clean-runner-debris.mjs',
 		'reconcile-runner-identity.mjs',
 	];

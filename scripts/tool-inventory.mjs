@@ -1,7 +1,23 @@
 #!/usr/bin/env node
 /**
- * check-tool-inventory — a workflow may not invoke a tool the nodes it can
+ * fleet tool-inventory — a workflow may not invoke a tool the nodes it can
  * land on do not have, unless it provides that tool itself.
+ *
+ * RENAMED from `check-tool-inventory.mjs` (wave gates2 lane F1a). The missing-
+ * tool scan itself (`TOOLS`, `invokes`, `providesTool`, `probeToolPresence`,
+ * `scanWorkflows`) moved to `scripts/lib/tool-inventory-scan.mjs`, which
+ * `fleet converge-toolchain --refresh` now ALSO calls, so the same finding
+ * ("a workflow invokes a tool the node lacks") lands in the nightly toolchain
+ * cadence instead of waiting for this separate gate to re-read the fleet.
+ *
+ * THIS FILE IS KEPT, NOT DELETED, because it is the ONLY writer of
+ * `demand-ledger.jsonl` (`--write`, below) — read by `check-label-floor`,
+ * `src/runners/node-eligibility.ts` and `src/lib/bootcamp-proof.ts` to decide
+ * what the general pool must prove and which labels a job demands. Deleting
+ * this subcommand outright would silently stop that ledger from ever being
+ * regenerated again. It also carries the capability-retirement comparison
+ * (P3.4) and the pinned/hosted demand report (§B), neither of which the
+ * toolchain-refresh finding replaces.
  *
  * Workstream C4. The plan's premise was that the fleet's real tool inventory is
  * invisible because `command -v` guards barely exist — three across every
@@ -15,12 +31,6 @@
  * failure it prevents is silent and node-dependent: a job that passes on
  * whichever runner happens to have the binary and dies on the others, which
  * reads as flakiness rather than as a missing dependency (P4).
- *
- * WHAT COUNTS AS PROVIDING A TOOL
- *   - present on every node the workflow's `runs-on` can select, or
- *   - a `command -v` / `which` guard anywhere in the same workflow, or
- *   - an install of it in the same workflow (rustup brings cargo, etc.), or
- *   - the workflow runs hosted, where the image supplies it.
  *
  * P2.2 — THE DEMAND LEDGER (`--write [path]`)
  * ---------------------------------------------
@@ -38,12 +48,13 @@
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { loadManifest, runOn, selectMachines } from './lib/fleet-exec.mjs';
+import { loadManifest, selectMachines } from './lib/fleet-exec.mjs';
 import { manifest as manifestFile, stateDir } from '../dist/lib/fleet-paths.js';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { hubRepoFull } from '../dist/lib/fleet-config.js';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
+import { TOOLS, probeToolPresence, scanWorkflows } from './lib/tool-inventory-scan.mjs';
 import {
 	splitJobs,
 	deriveCapabilities,
@@ -57,102 +68,11 @@ import { CI_DEMAND_CLASS, provenCapabilities } from '../dist/lib/bootcamp-proof.
 
 const COVERAGE = manifestFile('fleet-runner-coverage.json');
 
-/**
- * Tools worth checking. Deliberately a list rather than "every first token":
- * a naive scan of `run:` blocks returns `echo`, `if`, `exit`, `const` and `let`
- * — shell keywords and JavaScript — and drowns the signal completely.
- */
-const TOOLS = [
-	'pnpm',
-	'node',
-	'corepack',
-	'git',
-	'curl',
-	'gh',
-	'python3',
-	'jq',
-	'bash',
-	'cargo',
-	'ffmpeg',
-	'mpv',
-	'docker',
-	'unzip',
-	'trunk',
-	'rustup',
-	'pm2',
-	'rsync',
-	'tar',
-	'sqlite3',
-	'uv',
-	// P3.4/P1.6: hadoku-pygmalion's CI installs via `python -m pip install`, and
-	// nothing anywhere probed for it — both node profiles in
-	// manifests/node-profiles.json already DECLARE `python3-pip`, but bootstrap
-	// only ever runs at enrollment, so claw-1 and claw-2 drifted from that
-	// declaration and had no pip on PATH regardless. `capabilities.ts`'s
-	// `python-pip` probe (§P) is the thing that will catch this drifting back;
-	// this entry is what makes the drift visible in the meantime.
-	'pip',
-];
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/**
- * Does this job's text RUN `t` as a command? Word-delimited on both sides.
- *
- * A quoted `echo`/`printf` argument is PROSE printed to the log, not a command:
- * hadoku-watchparty's deploy job prints "Recovery: pm2 reset watchparty" for
- * the operator, and once the scan went per job (#98) that line was read as a
- * `pm2` invocation on a claw. The quoted argument is dropped; anything after
- * it on the line (`echo "x" && pm2 ...`) is still scanned.
- */
-function invokes(jobText, t) {
-	const text = jobText.replace(/\b(echo|printf)\s+(["'])(?:(?!\2)[^\n])*\2/g, '$1');
-	return new RegExp(`(^|[\\s;&|("'\`])${escapeRe(t)}[\\s]`, 'm').test(text);
-}
-
-/**
- * Does this job provide `t` itself — a guard, its own install, or a release
- * download OF THAT TOOL? Read off ONE job's text (#98).
- *
- * Each pattern names the tool as a WHOLE WORD. `install .*${t}` used to match
- * `install -g pnpm` for `pnpm`, but also `install` anywhere before `gh` inside
- * `highlight`, and an unescaped `${t}.rs` read `.` as any character. A
- * `releases/download` URL counts only when the URL names the tool: a job that
- * downloads `trunk` has not thereby provided `jq`.
- */
-function providesTool(jobText, t) {
-	const w = `\\b${escapeRe(t)}\\b`;
-	if (new RegExp(`(command -v|which)\\s+${w}`).test(jobText)) return true;
-	if (new RegExp(`\\binstall\\b[^\\n]*${w}`).test(jobText)) return true;
-	if (new RegExp(`${w}(\\.rs|-rs)\\b`).test(jobText)) return true;
-	for (const url of jobText.match(/\S*releases\/download\S*/g) ?? []) {
-		if (new RegExp(w).test(url)) return true;
-	}
-	// rustup installs cargo.
-	return t === 'cargo' && /command -v rustup|rustup\.rs/.test(jobText);
-}
-
 const WRITE_LEDGER = process.argv.includes('--write');
 function writeFlagValue() {
 	const i = process.argv.indexOf('--write');
 	const next = i >= 0 ? process.argv[i + 1] : undefined;
 	return next && !next.startsWith('--') ? next : join(stateDir(), 'demand-ledger.jsonl');
-}
-
-async function probe(node, tools) {
-	const script = tools
-		.map(
-			(t) =>
-				`printf '%s\\t%s\\n' "${t}" "$(command -v ${t} >/dev/null 2>&1 && echo yes || echo no)"`
-		)
-		.join('\n');
-	const r = await runOn(node, script, { as: 'ci', timeoutMs: 60_000 });
-	if (!r.ok && !r.stdout) return null;
-	const have = new Set();
-	for (const l of r.stdout.split('\n')) {
-		const [t, ok] = l.trim().split('\t');
-		if (ok === 'yes') have.add(t);
-	}
-	return have;
 }
 
 /**
@@ -162,15 +82,7 @@ async function probe(node, tools) {
 const manifest = loadManifest();
 const selectedNodes = selectMachines(manifest);
 const nodes = selectedNodes.map(([name]) => name);
-const present = {};
-const unreachable = [];
-await Promise.all(
-	nodes.map(async (m) => {
-		const have = await probe(m, TOOLS);
-		if (have === null) unreachable.push(m);
-		else present[m] = have;
-	})
-);
+const { present, unreachable } = await probeToolPresence(nodes, TOOLS);
 
 // A node a human powered off is EXPECTED down. It is still PRINTED, and its
 // tools are still unread — the deferral suppresses the failure, never the
@@ -223,21 +135,6 @@ for (const [name, node] of selectedNodes) {
 	}
 }
 
-/**
- * Only nodes we actually READ inform this answer.
- *
- * `clawSet.every((m) => present[m]?.has(t))` treated an unreachable node as
- * one MISSING EVERY TOOL: `present[m]` is undefined, `?.has()` is undefined, and
- * `every` goes false. With claw-1 down on 2026-08-29 that produced **340
- * findings**, every one false, and they buried the single real one.
- *
- * "I could not look" is not "it is not there" — the same trap check-identity-model
- * names for missing checkouts. The unreachable node is still reported, and
- * still fails the run, on its own terms below.
- */
-const readable = clawSet.filter((m) => present[m]);
-const onAllClaws = (t) => readable.length > 0 && readable.every((m) => present[m].has(t));
-
 const coverage = JSON.parse(readFileSync(COVERAGE, 'utf8'));
 // THE SHIPPED WORKFLOWS, through fleet-source: each repo's default branch,
 // fetched by the reader itself — never a sibling working tree under REPOS_DIR,
@@ -249,12 +146,15 @@ const coverage = JSON.parse(readFileSync(COVERAGE, 'utf8'));
 // `--write` carried a duplicate ledger row per job. One reader, one slug, one
 // read.
 const repos = [...new Set([hubRepoFull(), ...(coverage.repos ?? [])])];
-/** Workflows this gate actually INSPECTED. A pass with a low count is a pass
- * over nothing — the shape that hid `gh` for three days. */
-let examined = 0;
-/** Jobs inside those workflows that target a self-hosted node. */
-let examinedJobs = 0;
-const findings = [];
+
+// THE MISSING-TOOL SCAN (now shared with `fleet converge-toolchain --refresh`;
+// see lib/tool-inventory-scan.mjs). Run FIRST and independently of the
+// demand-ledger loop below: it needs only `present`, never the per-job
+// derivation the ledger does.
+const scan = scanWorkflows({ repos, clawSet, present });
+const findings = [...scan.findings];
+const { examined, examinedJobs, noCheckoutCount: scanNoCheckoutCount } = scan;
+
 // AN EMPTY ROSTER SCANS ONLY THE SITE (#98), and a site with one self-hosted
 // workflow is enough to clear the zero-inspected check below. The coverage
 // file is generated; a roster of zero is a failed generation, not a fleet.
@@ -267,10 +167,8 @@ if (!(coverage.repos ?? []).length) {
 /** P2.2: one (repo, job) demand record, collected only when --write is passed. */
 const demandLedger = [];
 let demandFiles = 0;
-/** How many covered repos this run could not even look at (P3.4 item 3). Read
- * further down, where it gates whether the capability-retirement comparison
- * runs at all. */
-let noCheckoutCount = 0;
+/** How many covered repos this run could not even look at (P3.4 item 3). */
+let noCheckoutCount = scanNoCheckoutCount;
 /** capability -> the repos this run found actually asking for it, on the
  * claw fleet (never a pm2-host — see the `fleetDemand` gate below). Built
  * unconditionally, not just under `--write`, because P3.4's retirement check
@@ -286,49 +184,25 @@ const pinnedDemand = [];
 for (const slug of repos) {
 	// A covered repo whose shipped workflows could not be read was not inspected
 	// AT ALL — that is "I could not look", never "nothing to invoke here". A repo
-	// that READ and ships no workflows genuinely needs no tools; the two used to
-	// be one `if (!existsSync(wf)) continue` that could not tell them apart
-	// (docs/planning/tier-assignment-2026-09-03.md §8, wave1-2026-09-08.md §T 3).
+	// that READ and ships no workflows genuinely needs no tools; the scan above
+	// already counted this once (`noCheckoutCount`), so this loop only needs to
+	// SKIP it the same way, never double-count the finding.
 	const source = tryShipped(slug);
-	if ('unreadable' in source) {
-		noCheckoutCount++;
-		findings.push(
-			`${slug}: shipped workflows unreadable (${source.unreadable}) — its workflows could not ` +
-				`be inspected for tool or capability use here. Unreadable is not clean.`
-		);
-		continue;
-	}
+	if ('unreadable' in source) continue;
 	const name = slug.split('/').pop();
 	for (const { file, text: raw } of source.workflows()) {
 		// STRIP COMMENTS BEFORE MATCHING. A tool name in prose is not an
-		// invocation, and this fleet's workflows are heavily commented: the first
-		// run of this gate reported six pm2 "invocations" that were all sentences
-		// like "the pm2 redeploy happens only after..." and "tenhands is two pm2
-		// services". §10 of the plan already records this exact trap from a
-		// `which [a-z]+` scan that matched "which is the...".
+		// invocation, and this fleet's workflows are heavily commented.
 		const text = raw
 			.split('\n')
-			// Comments are prose, and so are step names. Both mention tools
-			// constantly in this fleet and neither is ever executed. Dropping only
-			// comments still left `- name: Trigger hadoku_site to redeploy both pm2
-			// services` reading as a pm2 invocation.
 			.filter((l) => !/^\s*#/.test(l) && !/^\s*-?\s*(name|description):/.test(l))
 			.join('\n');
 		const rel = `${name}/.github/workflows/${file}`;
 
 		// P2.2's job split, and the capability-retirement tracker built on top of
-		// it (P3.4), now run on EVERY file — not just under `--write`. The
-		// demand-ledger RECORD is still only appended under `--write` (below); the
-		// per-job split itself is cheap, and retirement needs the same per-JOB
-		// view the ledger does (deriveCapabilities on a whole file over-counts a
-		// hosted-and-self-hosted mix as one bag).
+		// it (P3.4), now run on EVERY file — not just under `--write`.
 		const jobs = splitJobs(text);
 		// A SECOND SPLIT, off text that still has its `name:` lines.
-		// `text` above drops every `name:` on purpose — a step called "Trigger
-		// hadoku_site to redeploy both pm2 services" is not a pm2 invocation — and
-		// the job's DISPLAYED name is the demand ledger's join key (settled
-		// 2026-09-10). So the tool scan keeps the stripped text and the key is read
-		// off a text that only lost its comments.
 		const namedJobs = new Map(
 			splitJobs(
 				raw
@@ -340,10 +214,6 @@ for (const slug of repos) {
 		if (WRITE_LEDGER) {
 			demandFiles++;
 			if (!jobs.length) {
-				// Every real workflow has a `jobs:` key with at least one job. Zero
-				// back is the SAME "examined 10 of 111" failure mode this file is
-				// named for elsewhere — a parsing assumption silently not holding —
-				// so it is a finding, not a skip.
 				findings.push(
 					`${rel}: the demand ledger found ZERO jobs in it — the 2-space job-` +
 						`indent assumption (P2.2) does not hold for this file, so it is ` +
@@ -355,35 +225,16 @@ for (const slug of repos) {
 		for (const j of jobs) {
 			const { runsOn: jobRunsOn, fleetForm, selfHosted, hosted, explicit } = deriveLabels(j.text);
 			const capabilities = deriveCapabilities(j.text);
-			// Retirement means something only for demand ON THE CLAW FLEET — a hosted
-			// job's ffmpeg use says nothing about whether a claw still needs to prove
-			// it, and a pm2-host job runs on production, never a claw bootcamp would
-			// probe.
 			if ((fleetForm || selfHosted) && !explicit.includes('pm2-host')) {
 				for (const c of capabilities) {
 					if (!capabilityRepos.has(c)) capabilityRepos.set(c, new Set());
 					capabilityRepos.get(c).add(repoName);
 				}
 			}
-			// `job` stays the job ID for compatibility — `floor-probe.mjs`'s
-			// `demandFor(repo, job)` keys on it — and `jobName` is the join key
-			// job history actually carries. Both, never one: the ID is what the
-			// workflow author edits and the NAME is what GitHub reports, and the
-			// ledger is the only place the two are written down together.
-			//
-			// Computed UNCONDITIONALLY (not just under --write): the pinned-demand
-			// report below wants the same join key the ledger does, on every run.
 			const { jobName, jobNameSource, unjoinable } = deriveJobName(
 				j.id,
 				namedJobs.get(j.id) ?? j.text
 			);
-			// §B: a job pinned to one machine, or hosted entirely, is excluded from
-			// `requiredIdentitySet` on purpose — raising the fleet-wide floor with a
-			// job no claw will ever receive is wrong. But its demand is real, and
-			// today nothing records it. Collected unconditionally — same reasoning
-			// `capabilityRepos` above already follows for the retirement check —
-			// and printed below, EVERY capability marked against what the pool has
-			// actually EARNED (`poolProvenBy`), never filtered out of the report.
 			if ((hosted || (selfHosted && !fleetForm)) && capabilities.length) {
 				pinnedDemand.push({
 					repo: repoName,
@@ -412,45 +263,6 @@ for (const slug of repos) {
 				setupActions: deriveSetupActions(j.text),
 			});
 		}
-
-		// PER JOB, NOT PER FILE (#98). This decided once for the whole workflow:
-		// ONE `pm2-host` job anywhere exempted every claw job beside it, a guard
-		// or install in one job covered every other job (each job is a fresh
-		// runner — a tool installed in `deploy` is not on the box `test` lands
-		// on), and a `releases/download` URL for ANY tool exempted EVERY tool.
-		//
-		// THE FLEET FORM IS NOT THE LITERAL STRING. `runs-on` on a covered repo is
-		// bare `${{ fromJSON(vars.CI_RUNNER) }}`, which RESOLVES to
-		// ["self-hosted","hadoku-builder"] at run time and contains the word
-		// "self-hosted" nowhere in the file. Matching the literal therefore skipped
-		// every workflow this gate exists for: measured 2026-09-07, 10 of 111
-		// self-hosted workflows were examined and 101 were invisible, so it printed
-		// a clean bill over 9% of the fleet. That is not hypothetical either: `gh`
-		// was absent from claw-4/5/6 from their 2026-09-02 enrolment until
-		// 2026-09-05, and four repos failed a fan-out on `gh: command not found`.
-		// `deriveLabels` holds that rule now, fork-PR guard form included — it
-		// names both, and lands on a claw for nearly every push.
-		let fileInspected = false;
-		for (const j of jobs) {
-			const { runsOn, selfHosted, hosted } = deriveLabels(j.text);
-			// Hosted images carry the toolchain; only self-hosted targets are at risk.
-			if (hosted || !selfHosted) continue;
-			fileInspected = true;
-			examinedJobs++;
-			// A job pinned to pm2-host lands on the production host only.
-			if (/pm2-host/.test(runsOn)) continue;
-			for (const t of TOOLS) {
-				if (onAllClaws(t)) continue;
-				if (!invokes(j.text, t)) continue;
-				if (providesTool(j.text, t)) continue;
-				findings.push(
-					`${rel}:${j.id}: invokes "${t}", which is missing on ${clawSet.filter((m) => !present[m]?.has(t)).join(', ')} — ` +
-						`and the job neither guards nor installs it. The job will pass on whichever runner ` +
-						`happens to have it and die on the others, which reads as flakiness (P4).`
-				);
-			}
-		}
-		if (fileInspected) examined++;
 	}
 }
 
@@ -589,18 +401,10 @@ if (checkoutsComplete) {
 // server they start spawns it from `CARDTABLE_FORGE_JAR`, a `.jar` path).
 //
 // EVERY capability a pinned/hosted job uses is printed, marked against
-// `poolProvenBy` — NEVER filtered down to an "unproven" subset. Filtering
-// first is what hid the actual finding: a capability only reads as "already
-// covered" once a real node has EARNED it, and this section exists
-// specifically to show the gap when none has (cardtable's `jdk21`, today).
+// `poolProvenBy` — NEVER filtered down to an "unproven" subset.
 //
 // OPERATOR-ONLY, ADVISORY: this never adds to `findings` and never affects
 // the exit code.
-//
-// ADDITIVE if `--json` is ever added to this subcommand: `tool-inventory` has
-// no `--json` mode today (absent from `scripts/lib/json-contract.mjs`'s
-// JSON_CONTRACT — no cron parses this subcommand's stdout), so this is prose
-// only. A future `--json` must carry this as a NEW key, never replace one.
 const pinnedLines = [];
 for (const p of pinnedDemand) {
 	const marked = p.capabilities.map((c) => {

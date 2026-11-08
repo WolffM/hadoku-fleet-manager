@@ -321,6 +321,58 @@ test('COULD-NOT-LOOK IS NOT CURRENT: an unreadable node is a finding with the re
 	assert.equal(down.ok, true);
 });
 
+test('KNOWN DOWN: an unreachable node already paged by runner-health is named, not re-paged as a finding (gates1 leftover, wave gates2 lane F1a)', async () => {
+	const world = { 'claw-a': seenFor(CLAW), 'claw-b': seenFor(CLAW) };
+	const down = {
+		node: 'claw-a',
+		since: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+		pagedBy: 'runner-health',
+	};
+	const lines = [];
+	const h = harness(
+		[
+			['claw-a', CLAW],
+			['claw-b', CLAW],
+		],
+		world,
+		{ detectFails: new Set(['claw-a']) }
+	);
+	const r = await h.run({ knownDown: new Map([['claw-a', down]]), log: (l) => lines.push(l) });
+
+	// REVERTED (no knownDown map, or the real default of an empty one): this is
+	// exactly the earlier test above — a finding, not a pass.
+	assert.equal(r.nodes[0].status, 'known-down');
+	assert.deepEqual(r.nodes[0].knownDown, down);
+	assert.equal(
+		r.findings.some((f) => f.node === 'claw-a'),
+		false,
+		'a known-down node must not also be a fresh finding'
+	);
+	assert.equal(r.ok, true, 'the cycle is otherwise clean');
+	assert.deepEqual(r.knownDown, [{ node: 'claw-a', ...down }]);
+	// STILL NAMED — "could not look" must never render as silence, even when it
+	// is not a fresh finding.
+	assert.ok(
+		lines.some((l) => l.includes('claw-a') && l.includes('known down')),
+		`claw-a's known-down status was not logged: ${lines.join('\n')}`
+	);
+
+	// RESTORED (the mutation this test guards against): with NO knownDown map
+	// at all, the same unreachable node is a loud finding again.
+	const h2 = harness(
+		[
+			['claw-a', CLAW],
+			['claw-b', CLAW],
+		],
+		world,
+		{ detectFails: new Set(['claw-a']) }
+	);
+	const r2 = await h2.run({ knownDown: new Map() });
+	assert.equal(r2.nodes[0].status, 'unreadable');
+	assert.equal(r2.findings[0].kind, 'unreadable');
+	assert.equal(r2.ok, false);
+});
+
 test('`when` FILTER: claude is not probed, not installed, and not a finding on a node without taskauto', async () => {
 	const world = { 'claw-a': seenFor(CLAW), 'claw-b': seenFor(TASKAUTO, { claude: '2.1.285' }) };
 	const h = harness(

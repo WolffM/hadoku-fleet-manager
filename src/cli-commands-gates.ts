@@ -25,7 +25,12 @@ export const commandsGates: Record<string, Command> = {
 		summary: 'the manifest may only claim registered capabilities (offline)',
 	},
 	toolchain: {
-		script: 'check-fleet-toolchain.mjs',
+		// RENAMED wave gates2 lane F1a (from check-fleet-toolchain.mjs); the probe
+		// itself lives in scripts/lib/toolchain-doctor.mjs, which
+		// `converge-toolchain --refresh` also calls. Kept as a real, working
+		// subcommand (not a bare alias) because mgmt-api's `ci:fleet-toolchain`
+		// cron still parses this exact document until lane S1 retires it.
+		script: 'toolchain.mjs',
 		kind: 'gate',
 		summary: 'can each node build what its neighbours can',
 	},
@@ -39,9 +44,15 @@ export const commandsGates: Record<string, Command> = {
 		summary: 'run ONE real workflow job on a named node and read back where it ran',
 	},
 	'tool-inventory': {
-		script: 'check-tool-inventory.mjs',
+		// RENAMED wave gates2 lane F1a (from check-tool-inventory.mjs). The
+		// missing-tool scan moved to scripts/lib/tool-inventory-scan.mjs, which
+		// `converge-toolchain --refresh` also calls; this subcommand is kept,
+		// not deleted, because it is the ONLY writer of demand-ledger.jsonl
+		// (`--write`), read by check-label-floor, node-eligibility.ts and
+		// bootcamp-proof.ts.
+		script: 'tool-inventory.mjs',
 		kind: 'gate',
-		summary: 'tools a workflow invokes but a node lacks',
+		summary: 'tools a workflow invokes but a node lacks; --write regenerates the demand ledger',
 	},
 	'floor-probe': {
 		script: 'floor-probe.mjs',

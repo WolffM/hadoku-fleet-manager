@@ -33,7 +33,16 @@ import { warmOrphanUnreadable } from './warm-orphan-doc.mjs';
  * @param {{ghosts: object[], unreaped: object[], warmOrphans: object[],
  *   noInstall: object[], unconfigured: object[], clobbered: object[],
  *   drainUnreadable: string|null, unexpectedlyDark: object[],
- *   unreadableRepos: object[]}} args
+ *   unreadableRepos: object[], runnerUnitsFindings?: object[],
+ *   runnerUnitsUnreachable?: object[], runnerUnitsLookupFailed?: object[],
+ *   runnerUnitsRosterUnresolved?: object[]}} args
+ *
+ * The `runnerUnits*` arrays are ADDITIVE (wave gates2 lane F1a, item 4: MERGE
+ * ci:runner-units -> check:runner-identity) — the SAME registration-vs-box
+ * audit `scripts/runner-units.mjs` runs standalone, folded in here so `fleet
+ * identity` reports it too. Every one of them defaults to `[]`, so a caller
+ * (a future test, or this file's own fixtures) that has not been updated to
+ * pass them keeps behaving exactly as before.
  */
 export function buildIdentityGateDoc({
 	ghosts,
@@ -45,6 +54,10 @@ export function buildIdentityGateDoc({
 	drainUnreadable,
 	unexpectedlyDark,
 	unreadableRepos,
+	runnerUnitsFindings = [],
+	runnerUnitsUnreachable = [],
+	runnerUnitsLookupFailed = [],
+	runnerUnitsRosterUnresolved = [],
 }) {
 	const gateFindings = [
 		...ghosts.map((g) => ({
@@ -83,6 +96,14 @@ export function buildIdentityGateDoc({
 			kind: 'stolen-identity',
 			reason: `${c.machine} ${c.dir} now claims "${c.name}" (${c.repo})`,
 		})),
+		// runner-units: an install or unit naming a renamed, archived, or
+		// off-roster repo, or a stray/sick unit — `f.kind` is already one of
+		// RENAMED/GONE/ARCHIVED/OFF-ROSTER/STRAY/SICK (runner-unit-audit.mjs).
+		...runnerUnitsFindings.map((f) => ({
+			node: f.node,
+			kind: `runner-units-${f.kind.toLowerCase()}`,
+			reason: `${f.dir ?? f.unit}: ${f.why}`,
+		})),
 	];
 	const gateUnreadable = [
 		...(drainUnreadable
@@ -93,6 +114,16 @@ export function buildIdentityGateDoc({
 			.map((w) => ({ node: w.node ?? null, why: `${w.repo} ${w.name}: ${w.why}` })),
 		...unexpectedlyDark.map((u) => ({ node: u.machine, why: u.error })),
 		...unreadableRepos.map((r) => ({ node: null, why: `${r.repo}: ${r.reason}`, repo: r.repo })),
+		// runner-units' own "I could not look" paths: a node this sweep could
+		// not probe (and that was not already counted as expected-down or
+		// known-down above), a repo lookup that failed every attempt, and a
+		// roster entry GitHub could not resolve.
+		...runnerUnitsUnreachable.map((u) => ({ node: u.node, why: u.why })),
+		...runnerUnitsLookupFailed.map((l) => ({
+			node: l.node,
+			why: `${l.dir} (${l.repo}): ${l.why}`,
+		})),
+		...runnerUnitsRosterUnresolved.map((r) => ({ node: null, why: `${r.repo}: ${r.why}` })),
 	];
 	// The SAME booleans the exit code also keys on — computed once, so the
 	// GateDoc's `ok` and the real exit code can never read differently from
@@ -107,7 +138,11 @@ export function buildIdentityGateDoc({
 		clobbered.length ||
 		drainUnreadable ||
 		unexpectedlyDark.length ||
-		unreadableRepos.length
+		unreadableRepos.length ||
+		runnerUnitsFindings.length ||
+		runnerUnitsUnreachable.length ||
+		runnerUnitsLookupFailed.length ||
+		runnerUnitsRosterUnresolved.length
 	);
 	return { gateFindings, gateUnreadable, FAILS };
 }

@@ -41,9 +41,10 @@
  *   - Unknown upstream, unreadable node, unreadable queue: findings with the
  *     reason carried, non-zero exit. Never "current".
  */
-import { judgeTool } from '../check-fleet-toolchain.mjs';
+import { judgeTool } from './toolchain-doctor.mjs';
 import { fleetHasSudo } from '../../dist/lib/node-role.js';
 import { rootAdvisory } from './operator-sudo.mjs';
+import { knownDownNodes, knownDownNote } from './known-down.mjs';
 import {
 	applicableRepairs,
 	installScript,
@@ -201,6 +202,10 @@ function settle(id, res) {
  * @param {(line:string)=>void} [p.log]
  * @param {(name:string, entry:object)=>boolean} [p.sudo]  may this run use sudo
  *        on the node; `--operator-sudo` widens it for the operator's hand-run
+ * @param {Map} [p.knownDown]  nodes runner-health's own per-node offline alert
+ *        has ALREADY paged, loudly, as down (`lib/known-down.mjs`) — see the
+ *        PASS 1 loop below: gates1 wired this into the nine ssh-sweep gates,
+ *        and this is the leftover tenth (wave gates2 lane F1a).
  */
 export async function runRefreshCycle({
 	machines,
@@ -215,10 +220,12 @@ export async function runRefreshCycle({
 	deadline = null,
 	now = () => Date.now(),
 	sudo = (_name, entry) => fleetHasSudo(entry),
+	knownDown = knownDownNodes(),
 }) {
 	const nodes = [];
 	const findings = [];
 	const advisories = [];
+	const knownDownSeen = [];
 	const finding = (node, kind, reason) => findings.push({ node, kind, reason });
 
 	// Upstream ONCE PER TOOL PER RUN, for tools some node carries.
@@ -247,9 +254,21 @@ export async function runRefreshCycle({
 				log(`── ${name}  [expected down]  ${probe.reason}`);
 				nodes.push({ node: name, status: 'expected-down', reason: probe.reason });
 			} else {
-				log(`── ${name}  [UNREADABLE]  ${probe.reason}`);
-				nodes.push({ node: name, status: 'unreadable', reason: probe.reason });
-				finding(name, 'unreadable', probe.reason);
+				// Already paged as down by runner-health's own offline alert
+				// (observed, never a declaration — see lib/known-down.mjs). This is
+				// the gates1 leftover (wave gates2 lane F1a): the nine ssh-sweep
+				// gates carry `knownDown` and name the node instead of re-paging it;
+				// this cycle's own detect pass did not, until now.
+				const down = knownDown.get(name);
+				if (down) {
+					log(`── ${name}  [known down]  ${knownDownNote(down)}`);
+					nodes.push({ node: name, status: 'known-down', reason: probe.reason, knownDown: down });
+					knownDownSeen.push({ node: name, ...down });
+				} else {
+					log(`── ${name}  [UNREADABLE]  ${probe.reason}`);
+					nodes.push({ node: name, status: 'unreadable', reason: probe.reason });
+					finding(name, 'unreadable', probe.reason);
+				}
 			}
 			continue;
 		}
@@ -361,7 +380,7 @@ export async function runRefreshCycle({
 				...(t.sweep ? { sweep: true } : {}),
 			});
 		}
-		return finish({ nodes, findings, advisories, latestById, plan });
+		return finish({ nodes, findings, advisories, latestById, plan, knownDown: knownDownSeen });
 	}
 
 	// PASS 2 — ONE node at a time.
@@ -532,7 +551,7 @@ export async function runRefreshCycle({
 		if (rec.status === 'updated') log(`── ${name}  [updated]`);
 	}
 
-	return finish({ nodes, findings, advisories, latestById, plan });
+	return finish({ nodes, findings, advisories, latestById, plan, knownDown: knownDownSeen });
 }
 
 /**
@@ -609,7 +628,7 @@ async function putBack(name, rec, deps, finding, log, state) {
 	}
 }
 
-function finish({ nodes, findings, advisories, latestById, plan }) {
+function finish({ nodes, findings, advisories, latestById, plan, knownDown = [] }) {
 	if (nodes.length === 0) {
 		findings.push({
 			node: null,
@@ -625,6 +644,10 @@ function finish({ nodes, findings, advisories, latestById, plan }) {
 		advisories,
 		deferred: nodes.filter((n) => n.status === 'deferred').length,
 		toolLatest: latestById,
+		// ADDITIVE (wave gates2 lane F1a, gates1 leftover): already paged down by
+		// runner-health's own per-node offline alert, not a fresh finding here —
+		// see lib/known-down.mjs.
+		knownDown,
 	};
 }
 

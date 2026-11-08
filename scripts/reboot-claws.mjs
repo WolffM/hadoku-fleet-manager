@@ -136,11 +136,20 @@ const deps = {
 	},
 	// The capability check, EXECUTING each declared capability on the node,
 	// against this node only. Before undrain; see the cycle's re-prove step.
+	//
+	// RENAMED wave gates2 lane F1a: `check-capabilities.mjs` is deleted
+	// (operator-approved, redundant with bootcamp's probe registry +
+	// revocation for mgmt-api's fleet-wide nightly case). `capabilities.mjs`
+	// is kept as a real re-prove for exactly THIS caller — `--machine <node>`
+	// spawns `fleet bootcamp --check-only --machine <node> --json` and
+	// reshapes its document back to the `{results, unreachable, findings}`
+	// contract `judgeReprove` (lib/reboot-cycle.mjs) already reads. See that
+	// file's own header.
 	reprove: (node) => {
 		const r = spawnSync(
 			process.execPath,
 			[
-				join(dirname(fileURLToPath(import.meta.url)), 'check-capabilities.mjs'),
+				join(dirname(fileURLToPath(import.meta.url)), 'capabilities.mjs'),
 				'--machine',
 				node,
 				'--json',

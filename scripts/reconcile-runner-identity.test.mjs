@@ -73,7 +73,31 @@ if [ -n "\${GH_RUNNERS_PATH:-}" ] && [ "$path" = "\${GH_RUNNERS_PATH}" ]; then
 	fi
 	exit 0
 fi
-echo '{"total_count":0,"runners":[]}'
+# A bare \`repos/<owner>/<repo>\` lookup — runner-units' repo resolution (wave
+# gates2 lane F1a item 4), which reconcile-runner-identity.mjs now ALSO makes
+# for every coverage repo on every run. Defaults to a clean, resolved repo
+# matching the requested name, so every test that does not care about
+# runner-units stays clean; override with GH_REPO_404_PATH (gone) or
+# GH_REPO_FAIL_PATH (could not ask) for the ones that do.
+case "$path" in
+*/actions/runners) echo '{"total_count":0,"runners":[]}' ;;
+repos/*)
+	if [ -n "\${GH_REPO_404_PATH:-}" ] && [ "$path" = "\${GH_REPO_404_PATH}" ]; then
+		echo "gh: Not Found (HTTP 404)" >&2
+		exit 1
+	fi
+	if [ -n "\${GH_REPO_FAIL_PATH:-}" ] && [ "$path" = "\${GH_REPO_FAIL_PATH}" ]; then
+		echo "gh: HTTP 502: Bad gateway (https://api.github.com/$path)" >&2
+		exit 1
+	fi
+	full="\${GH_REPO_FULLNAME:-\${path#repos/}}"
+	archived=false
+	[ "$path" = "\${GH_REPO_ARCHIVED_PATH:-}" ] && archived=true
+	id=$(printf '%s' "$path" | cksum | cut -d' ' -f1)
+	printf '{"id":%s,"full_name":"%s","archived":%s}\n' "$id" "$full" "$archived"
+	;;
+*) echo '{"total_count":0,"runners":[]}' ;;
+esac
 `;
 
 /**
@@ -129,7 +153,21 @@ function fixture({
 /** One gate run. Returns the exit code and the combined output — never throws. */
 function run(
 	fx,
-	{ failPath = '', failNode = '', argv = [], runners = null, probe = '', probeAgain = null } = {}
+	{
+		failPath = '',
+		failNode = '',
+		argv = [],
+		runners = null,
+		probe = '',
+		probeAgain = null,
+		// runner-units merge (wave gates2 lane F1a item 4): a repo lookup that
+		// 404s, fails, or answers archived, for `fleet identity`'s OWN
+		// repos/<owner>/<repo> resolution — distinct from `GH_FAIL_PATH`, which
+		// is the registration-side .../actions/runners listing.
+		repo404Path = '',
+		repoFailPath = '',
+		repoArchivedPath = '',
+	} = {}
 ) {
 	const env = {
 		...process.env,
@@ -147,6 +185,9 @@ function run(
 		GH_RUNNERS_JSON: runners ? JSON.stringify({ runners: runners.list }) : '',
 		GH_RUNNERS_JSON_AGAIN: runners?.again ? JSON.stringify({ runners: runners.again }) : '',
 		SSH_PROBE_EXTRA: probe,
+		GH_REPO_404_PATH: repo404Path,
+		GH_REPO_FAIL_PATH: repoFailPath,
+		GH_REPO_ARCHIVED_PATH: repoArchivedPath,
 	};
 	if (probeAgain !== null) env.SSH_PROBE_AGAIN = probeAgain;
 	try {
@@ -187,7 +228,9 @@ test('a reachable node and readable repos exit 0 — without this every case bel
 		// One attempt each, because nothing failed: the retry must cost nothing on
 		// the success path.
 		assert.equal(attempts(fx.ghLog, runnersPath(OK_REPO)), 1);
-		assert.equal(attempts(fx.sshLog, NODE), 1);
+		// 1 for the identity probe, 1 for the runner-units merge (wave gates2
+		// lane F1a item 4), which reuses the SAME node list.
+		assert.equal(attempts(fx.sshLog, NODE), 2);
 	} finally {
 		cleanup(fx);
 	}
@@ -243,8 +286,9 @@ test('an unreachable node fails the gate after two attempts, and names the node 
 		assert.equal(r.code, 1, `an unreachable node must fail the gate, got ${r.code}:\n${r.out}`);
 		assert.equal(
 			attempts(fx.sshLog, NODE),
-			READ_ATTEMPTS,
-			`the probe must be tried ${READ_ATTEMPTS} times before the node is called unreachable`
+			READ_ATTEMPTS + 1,
+			`the identity probe must be tried ${READ_ATTEMPTS} times, plus 1 for the runner-units ` +
+				'merge (wave gates2 lane F1a item 4), before the node is called unreachable'
 		);
 		assert.match(r.out, new RegExp(NODE), 'the finding must name the node');
 		assert.match(r.out, /No route to host/, "the finding must carry the node's own reason");
@@ -455,8 +499,10 @@ test('a live warm listener is NOT "registered, no install" — its unit backs it
 		const r = run(fx, { runners: { repo: OK_REPO, list: [WARM] }, probe: warmUnit() });
 		assert.equal(r.code, 0, `a live warm listener must pass, got ${r.code}:\n${r.out}`);
 		assert.doesNotMatch(r.out, /REGISTERED, NO INSTALL|WARM ORPHANS/);
-		// Backed on the first look, so no second probe is spent on it.
-		assert.equal(attempts(fx.sshLog, NODE), 1);
+		// Backed on the first look, so no second WARM-RECHECK probe is spent on
+		// it; +1 beyond that is the runner-units merge's own single probe (wave
+		// gates2 lane F1a item 4).
+		assert.equal(attempts(fx.sshLog, NODE), 2);
 	} finally {
 		cleanup(fx);
 	}
@@ -472,7 +518,9 @@ test('a warm listener minted AFTER its node was probed passes on the second look
 		});
 		assert.equal(r.code, 0, `a mid-sweep rotation must not fail, got ${r.code}:\n${r.out}`);
 		assert.match(r.out, /RESOLVED ON A SECOND LOOK \(1\)/, 'the rotation is still reported');
-		assert.equal(attempts(fx.sshLog, NODE), 2, 'the named node is probed a second time');
+		// 2 for the identity probe + its warm re-check, +1 for the runner-units
+		// merge's own single probe (wave gates2 lane F1a item 4).
+		assert.equal(attempts(fx.sshLog, NODE), 3, 'the named node is probed a second time');
 	} finally {
 		cleanup(fx);
 	}
@@ -660,6 +708,54 @@ test('GateDoc: a registered-no-install repo is a finding, node: null', () => {
 		assert.ok(finding, JSON.stringify(doc.findings));
 		assert.equal(finding.node, null);
 		assert.match(finding.reason, /persistent-ghost/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+// ── runner-units merge (wave gates2 lane F1a, item 4) ───────────────────────
+// "MERGE ci:runner-units -> check:runner-identity: the same registration-vs-
+// box question, two directions." `fleet identity` now ALSO probes install
+// directories and supervising units on each node (lib/runner-units-probe.mjs
+// + lib/runner-unit-audit.mjs's classification), resolving each install's
+// repo BACK to GitHub the way `scripts/runner-units.mjs` still does standalone.
+
+test('runner-units merge: an install naming a repo GitHub 404s is a finding, through fleet identity', () => {
+	const fx = fixture();
+	try {
+		const install = `INSTALL\tactions-runner-fixture-gone\thttps://github.com/WolffM/fixture-gone\t42`;
+		const { code, doc } = runJson(fx, { probe: install, repo404Path: 'repos/WolffM/fixture-gone' });
+		assert.equal(code, 1, JSON.stringify(doc));
+		const finding = doc.findings.find((f) => f.kind === 'runner-units-gone');
+		assert.ok(finding, JSON.stringify(doc.findings));
+		assert.equal(finding.node, NODE);
+		assert.match(finding.reason, /fixture-gone/);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('MUTATION: the SAME install, resolving cleanly and on the roster, is NOT a finding', () => {
+	const fx = fixture();
+	try {
+		const install = `INSTALL\tactions-runner-fixture-alpha\thttps://github.com/${OK_REPO}\t42`;
+		const { code, doc } = runJson(fx, { probe: install });
+		assert.equal(code, 0, JSON.stringify(doc));
+		assert.deepEqual(doc.findings, []);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('runner-units merge: a STRAY unit (no install dir behind it) is a finding, through fleet identity', () => {
+	const fx = fixture();
+	try {
+		const unit = `UNIT\tuser\tactions-runner-ghost.service\tactive\trunning\t3\t/home/ci/actions-runner-ghost`;
+		const { code, doc } = runJson(fx, { probe: unit });
+		assert.equal(code, 1, JSON.stringify(doc));
+		const finding = doc.findings.find((f) => f.kind === 'runner-units-stray');
+		assert.ok(finding, JSON.stringify(doc.findings));
+		assert.match(finding.reason, /actions-runner-ghost\.service/);
 	} finally {
 		cleanup(fx);
 	}

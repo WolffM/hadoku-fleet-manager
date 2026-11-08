@@ -136,6 +136,12 @@ import { printIdentityReport } from './lib/runner-identity-report.mjs';
 import { diffGithubBelief } from './lib/runner-identity-diff.mjs';
 import { recheckWarmSuspects } from './lib/runner-identity-warm-recheck.mjs';
 import { buildIdentityGateDoc } from './lib/runner-identity-gatedoc.mjs';
+import { classifyInstall, classifyUnit, repoFromUrl } from './lib/runner-unit-audit.mjs';
+import {
+	createRepoLookup,
+	parseRunnerUnitsProbe,
+	RUNNER_UNITS_PROBE,
+} from './lib/runner-units-probe.mjs';
 // The dispatcher's own reap sweep — its grace and its cadence — so an orphan it
 // has not REACHED yet is told apart from one it has FAILED to clear by the
 // numbers that sweep actually runs on, never by a copy of them.
@@ -231,7 +237,8 @@ const KNOWN_DOWN = knownDownNodes();
 
 const coverage = JSON.parse(readFileSync(COVERAGE, 'utf8'));
 const probe = readFileSync(PROBE_SRC, 'utf8');
-const nodes = selectMachines(loadManifest(), { only: ONLY }).map(([name]) => name);
+const manifest = loadManifest();
+const nodes = selectMachines(manifest, { only: ONLY }).map(([name]) => name);
 
 // A SWEEP SET THAT WENT TO ZERO IS "I COULD NOT LOOK" (#98). Both loops below
 // iterate a parsed list, and an empty list made each one a clean pass over
@@ -366,6 +373,116 @@ for (const m of nodes) {
 	}
 }
 
+// ---- runner-units: the SAME registration-vs-box question, the other
+// direction (wave gates2 lane F1a, item 4: "MERGE ci:runner-units ->
+// check:runner-identity"). The loop above starts from GitHub's registrations
+// and asks which node is listening; this starts from what is ACTUALLY ON
+// each box — install directories AND both supervision schemes' units — and
+// resolves each install's repo BACK by numeric id, because GitHub redirects
+// a renamed repo silently, with a 200. `scripts/runner-units.mjs` runs the
+// identical audit standalone until mgmt-api's `ci:runner-units` cron is
+// retired; both share the probe text and the repo lookup
+// (`lib/runner-units-probe.mjs`), never the classification rules, which stay
+// in `lib/runner-unit-audit.mjs` either way.
+const runnerUnitsLookup = createRepoLookup();
+const runnerUnitsRosterIds = new Set();
+const runnerUnitsRosterUnresolved = [];
+for (const name of repos) {
+	const r = runnerUnitsLookup(name);
+	if (r.status === 'found') runnerUnitsRosterIds.add(r.repo.id);
+	else
+		runnerUnitsRosterUnresolved.push({
+			repo: name,
+			why: r.status === 'gone' ? 'GitHub answers 404' : r.why,
+		});
+}
+const runnerUnitsFindings = [];
+const runnerUnitsNotes = [];
+const runnerUnitsLookupFailed = [];
+const runnerUnitsUnreachable = [];
+let runnerUnitsInstallCount = 0;
+let runnerUnitsUnitCount = 0;
+const runnerUnitsProbes = await Promise.all(
+	nodes.map((m) => runOn(m, RUNNER_UNITS_PROBE, { as: 'ci', timeoutMs: 90_000 }))
+);
+for (const [i, m] of nodes.entries()) {
+	const res = runnerUnitsProbes[i];
+	if (!res.ok) {
+		// A node whose MAIN identity probe (above) already failed is already
+		// counted there — as expected-down, known-down, or `unexpectedlyDark`
+		// (the exact shape of "I could not look" this node is). A second
+		// finding about the SAME unreachability would not be a second fact,
+		// whichever of the three it was. Only a node whose main probe
+		// SUCCEEDED but THIS probe transiently failed is new information, and
+		// lands in `runnerUnitsUnreachable` below.
+		if (unreachable.some((u) => u.machine === m)) continue;
+		const defer = deferralFor(m, drains);
+		if (defer.deferred) continue;
+		if (KNOWN_DOWN.get(m)) continue;
+		runnerUnitsUnreachable.push({ node: m, why: res.error ? String(res.error) : 'probe failed' });
+		continue;
+	}
+	const { installs: ruInstalls, units: ruUnits } = parseRunnerUnitsProbe(res.out);
+	runnerUnitsInstallCount += ruInstalls.length;
+	runnerUnitsUnitCount += ruUnits.length;
+	const runningDirs = new Set(
+		ruUnits
+			.filter((u) => u.active === 'active' && u.sub === 'running' && u.wd)
+			.map((u) => u.wd.replace(/\/+$/, '').split('/').pop())
+	);
+	for (const inst of ruInstalls) {
+		const requested = repoFromUrl(inst.url);
+		const lookup = requested ? runnerUnitsLookup(requested) : null;
+		if (lookup?.status === 'error') {
+			runnerUnitsLookupFailed.push({ node: m, dir: inst.dir, repo: requested, why: lookup.why });
+			continue;
+		}
+		const resolved = lookup?.status === 'found' ? lookup.repo : null;
+		const entry = manifest.repos?.[resolved?.fullName ?? requested ?? ''];
+		const verdict = classifyInstall({
+			requested,
+			resolved,
+			rosterIds: runnerUnitsRosterIds,
+			ignored: Boolean(entry?.ignore),
+			running: runningDirs.has(inst.dir),
+		});
+		if (!verdict) continue;
+		const rec = {
+			node: m,
+			dir: inst.dir,
+			sizeMb: inst.sizeMb,
+			url: inst.url,
+			repo: requested,
+			resolved: resolved?.fullName ?? null,
+			id: resolved?.id ?? null,
+			kind: verdict.kind,
+			why: verdict.kind === 'ARCHIVED' ? `${verdict.why} (${inst.sizeMb} MB on disk)` : verdict.why,
+		};
+		if (verdict.note)
+			runnerUnitsNotes.push({ ...rec, why: entry?.ignore ? `${rec.why} — ignore: true` : rec.why });
+		else runnerUnitsFindings.push(rec);
+	}
+	const installDirs = new Set(ruInstalls.map((i) => i.dir));
+	for (const u of ruUnits) {
+		const verdict = classifyUnit({
+			unit: u.unit,
+			active: u.active,
+			sub: u.sub,
+			restarts: u.restarts,
+			workingDir: u.wd,
+			installDirs,
+		});
+		if (verdict)
+			runnerUnitsFindings.push({
+				node: m,
+				unit: u.unit,
+				scope: u.scope,
+				restarts: u.restarts,
+				...verdict,
+			});
+	}
+}
+
 // Canonicalise every install's repo BEFORE diffing, so a rename is not mistaken
 // for a stolen identity.
 for (const list of installs.values()) {
@@ -444,11 +561,23 @@ const summary = {
 	// ADDITIVE (wave gates1 lane A): already paged down by runner-health's own
 	// per-node offline alert, not a fresh finding here — see lib/known-down.mjs.
 	knownDown: knownDownDark.map((u) => ({ node: u.machine, ...u.knownDown })),
+	// ADDITIVE (wave gates2 lane F1a, item 4): the same audit
+	// `scripts/runner-units.mjs` runs standalone, folded in here too.
+	runnerUnits: {
+		findings: runnerUnitsFindings,
+		notes: runnerUnitsNotes,
+		unreachable: runnerUnitsUnreachable,
+		lookupFailed: runnerUnitsLookupFailed,
+		rosterUnresolved: runnerUnitsRosterUnresolved,
+		installs: runnerUnitsInstallCount,
+		units: runnerUnitsUnitCount,
+	},
 };
 
 // GateDoc (wave 5j lane B) assembly, moved to
 // `lib/runner-identity-gatedoc.mjs` (wave shrink-1 lane D, pure move); see
 // that file for which arrays land in `findings` vs `unreadable` vs neither.
+// The `runnerUnits*` arrays are the item-4 merge, additive to the same call.
 const { gateFindings, gateUnreadable, FAILS } = buildIdentityGateDoc({
 	ghosts,
 	unreaped,
@@ -459,6 +588,10 @@ const { gateFindings, gateUnreadable, FAILS } = buildIdentityGateDoc({
 	drainUnreadable,
 	unexpectedlyDark,
 	unreadableRepos,
+	runnerUnitsFindings,
+	runnerUnitsUnreachable,
+	runnerUnitsLookupFailed,
+	runnerUnitsRosterUnresolved,
 });
 
 if (!JSON_OUT) {
@@ -487,6 +620,33 @@ if (!JSON_OUT) {
 	});
 	for (const u of knownDownDark)
 		log(`  · ${knownDownNote(u.knownDown)} — registrations unread\n    probe said: ${u.error}`);
+
+	// runner-units (wave gates2 lane F1a, item 4): the install/unit audit,
+	// folded into this same report.
+	if (
+		runnerUnitsFindings.length ||
+		runnerUnitsNotes.length ||
+		runnerUnitsUnreachable.length ||
+		runnerUnitsLookupFailed.length ||
+		runnerUnitsRosterUnresolved.length
+	) {
+		log(
+			`\nrunner-units: ${runnerUnitsInstallCount} install(s), ${runnerUnitsUnitCount} unit(s) ` +
+				`across ${nodes.length} node(s)`
+		);
+		if (runnerUnitsRosterUnresolved.length) {
+			log(
+				`  ROSTER UNRESOLVED (${runnerUnitsRosterUnresolved.length}): ` +
+					runnerUnitsRosterUnresolved.map((r) => `${r.repo} (${r.why})`).join(', ')
+			);
+		}
+		for (const l of runnerUnitsLookupFailed)
+			log(`  · unjudged: ${l.node} ${l.dir} ${l.repo}: ${l.why}`);
+		for (const u of runnerUnitsUnreachable) log(`  · unreachable: ${u.node}: ${u.why}`);
+		for (const f of runnerUnitsFindings)
+			log(`  · ${f.kind.padEnd(10)} ${f.node.padEnd(8)} ${f.dir ?? f.unit} — ${f.why}`);
+		for (const n of runnerUnitsNotes) log(`  note: ${n.kind} ${n.node} ${n.dir} — ${n.why}`);
+	}
 }
 
 // ---- reap ----------------------------------------------------------------

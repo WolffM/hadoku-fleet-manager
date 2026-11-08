@@ -42,7 +42,7 @@
  * operator's hand-run, and never fails the run (lib/operator-sudo.mjs).
  */
 
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import {
 	loadManifest,
 	machineArg,
@@ -52,6 +52,17 @@ import {
 } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
+import { runDoctor } from './lib/toolchain-doctor.mjs';
+import { probeToolPresence, scanWorkflows } from './lib/tool-inventory-scan.mjs';
+import {
+	deferralStreakFindings,
+	deferralStreakPath,
+	nextDeferralStreaks,
+	readDeferralStreaks,
+	writeDeferralStreaks,
+} from './lib/toolchain-deferral-streak.mjs';
+import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
+import { hubRepoFull } from '../dist/lib/fleet-config.js';
 import { createEmitter } from './lib/emit.mjs';
 import {
 	REPAIRS,
@@ -278,6 +289,91 @@ async function refresh() {
 		deadline: Date.now() + BUDGET_MIN * 60_000,
 		sudo: (_name, entry) => maySudo(entry),
 	});
+
+	// THE TOOL-CACHE DRIFT `ci:fleet-toolchain` USED TO RE-READ AN HOUR LATER
+	// (wave gates2 lane F1a, item 1): hostedtoolcache python/node versions,
+	// `ensurepip`, and pnpm's store agreement. The REPAIRS-tool half of what
+	// that doctor checked (behind/absent/unknown) is NOT re-added here — the
+	// cycle's own PASS 1 above (`planNode`/`judgeTool`) already judges every
+	// REPAIRS tool, and re-adding `toolFindings` would double-report the same
+	// drift as two findings. Reachability is not re-added either: the cycle's
+	// own detect pass above already decided expected-down/known-down/
+	// unreadable for every node; a second, independent ssh here would either
+	// agree (redundant) or disagree (a flake neither side can resolve), and
+	// either way paging on it a second time is not more informative.
+	try {
+		const doctor = await runDoctor({ manifest, only: ONLY, drains: readDrains() });
+		for (const m of doctor.report) {
+			if (m.unreachable) continue;
+			const bits = [];
+			if (m.missingCache?.length) bits.push(`missing tool cache: ${m.missingCache.join(', ')}`);
+			if (m.ensurepip === false) bits.push('cannot build a venv (python3-venv)');
+			if (m.pnpmStoreAgrees === false) bits.push("pnpm's store path does not exist");
+			if (bits.length) {
+				report.findings.push({
+					node: m.machine,
+					kind: 'tool-cache-drift',
+					reason: bits.join('; '),
+				});
+			}
+		}
+	} catch (err) {
+		report.findings.push({
+			node: null,
+			kind: 'tool-cache-probe-failed',
+			reason: `the tool-cache doctor could not run: ${err instanceof Error ? err.message : String(err)}`,
+		});
+	}
+	report.ok = report.findings.length === 0;
+
+	// THE WORKFLOW/TOOL MISMATCH `check-tool-inventory` (now `fleet
+	// tool-inventory`) USED TO CHECK SEPARATELY (wave gates2 lane F1a, item 1):
+	// a workflow invoking a tool its runs-on nodes lack, neither guarded nor
+	// installed. `node: null` because the finding is about a WORKFLOW, never
+	// one machine's health.
+	try {
+		const nodeNames = machines.map(([name]) => name);
+		const { present } = await probeToolPresence(nodeNames);
+		const coverage = JSON.parse(readFileSync(manifestFile('fleet-runner-coverage.json'), 'utf8'));
+		const repos = [...new Set([hubRepoFull(), ...(coverage.repos ?? [])])];
+		const scan = scanWorkflows({ repos, clawSet: nodeNames, present });
+		for (const reason of scan.findings) {
+			report.findings.push({ node: null, kind: 'workflow-tool-missing', reason });
+		}
+		if (!scan.examined) {
+			report.findings.push({
+				node: null,
+				kind: 'workflow-tool-missing',
+				reason:
+					'no self-hosted workflow was inspected at all — the roster, the checkouts or the ' +
+					'`runs-on` match is broken. A gate that looked at nothing cannot report nothing wrong.',
+			});
+		}
+	} catch (err) {
+		report.findings.push({
+			node: null,
+			kind: 'tool-inventory-scan-failed',
+			reason: `the workflow/tool scan could not run: ${err instanceof Error ? err.message : String(err)}`,
+		});
+	}
+	report.ok = report.findings.length === 0;
+
+	// A NODE DEFERRED MORE THAN 3 NIGHTS IN A ROW PAGES (wave gates2 lane F1a,
+	// item 1): the cadence never reaching a node is a real fact on its own,
+	// ahead of whatever eventually makes its toolchain drift far enough for
+	// `TOLERANCE_MINUTES` to catch it. Persisted so the streak survives this
+	// process exiting between nightly runs; skipped (read-only) under `--plan`,
+	// matching the "nothing is drained OR WRITTEN" rule the flag's own doc
+	// gives every other write below it.
+	const streakPath = deferralStreakPath();
+	const previousStreaks = readDeferralStreaks(streakPath);
+	const nextStreaks = nextDeferralStreaks(
+		previousStreaks,
+		report.nodes.map((n) => ({ node: n.node, status: n.status }))
+	);
+	if (!PLAN) writeDeferralStreaks(nextStreaks, streakPath);
+	report.findings.push(...deferralStreakFindings(nextStreaks));
+	report.ok = report.findings.length === 0;
 
 	// EARNED CAPABILITIES COME WITH THEIR ARTIFACTS (#102, wave 4c lane E), run
 	// on the SAME nightly cadence this subcommand already carries

@@ -9,8 +9,8 @@
     "src/runners/hosting-record.ts:tmp#1"
   ],
   "F3-non-atomic": [
-    "scripts/check-tool-inventory.mjs:merged#1",
-    "scripts/check-tool-inventory.mjs:snapshot#2",
+    "scripts/tool-inventory.mjs:merged#1",
+    "scripts/tool-inventory.mjs:snapshot#2",
     "scripts/converge-toolchain.mjs:tunnelRun#1",
     "scripts/lib/slice-inventory-run.mjs:m#1",
     "scripts/node-status.mjs:document#3",

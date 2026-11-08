@@ -144,6 +144,13 @@ case "$script" in
 					esac ;;
 			esac
 		done < "$SSH_UNITS_FILE" ;;
+	*"JITCONFIG"*)
+		case "\${JIT_PROBE_MODE:-}" in
+			not-recognised) printf 'JITCONFIG\\tno\\tflag-not-recognised\\n' ;;
+			no-binary) printf 'JITCONFIG\\tno\\tno-runner-binary\\n' ;;
+			garbage) printf 'not a jitconfig line at all\\n' ;;
+			*) printf 'JITCONFIG\\tok\\tflag-accepted\\n' ;;
+		esac ;;
 	*) exit 1 ;;
 esac
 `;
@@ -188,6 +195,11 @@ function envFor(
 		runners = RUNNERS_JSON,
 		noJobsIds = '',
 		units = null,
+		// The jitconfig probe (section 5, wave gates2 lane F1a: moved here from
+		// the now-deleted check-capabilities.mjs). '' (the shim's default) is
+		// "flag-accepted" — a clean pass, so every PRE-EXISTING test in this file
+		// stays clean without having to know this section exists.
+		jitProbeMode = '',
 	} = {}
 ) {
 	if (units !== null) writeFileSync(fx.unitsFile, units);
@@ -209,6 +221,7 @@ function envFor(
 		GH_NOJOBS_IDS: noJobsIds,
 		SSH_LOG: fx.sshLog,
 		SSH_UNITS_FILE: fx.unitsFile,
+		JIT_PROBE_MODE: jitProbeMode,
 	};
 }
 
@@ -461,7 +474,11 @@ test('a FAILED jit unit is parsed, because the listing is asked for --plain', ()
 				'jit-claw-2-hadoku_site-r2-1787797200.service loaded failed failed b\n',
 		});
 		assert.equal(r.code, 0, r.out);
-		assert.equal(attempts(fx.sshLog, NODE), 2, 'free -m and list-units both reached the node');
+		assert.equal(
+			attempts(fx.sshLog, NODE),
+			3,
+			'free -m, list-units and the jitconfig probe all reached the node'
+		);
 	});
 });
 
@@ -505,7 +522,66 @@ test('the backstop is probed like a claw', () => {
 	withFixture({ machines: { [NODE]: { role: 'backstop' } } }, (fx) => {
 		const r = run(fx);
 		assert.equal(r.code, 0, r.out);
-		assert.equal(attempts(fx.sshLog, NODE), 2, 'free -m and list-units both reached the node');
+		assert.equal(
+			attempts(fx.sshLog, NODE),
+			3,
+			'free -m, list-units and the jitconfig probe all reached the node'
+		);
+	});
+});
+
+// ── (f) the --jitconfig probe, moved here from the now-deleted
+//        check-capabilities.mjs (wave gates2 lane F1a) ──────────────────────
+
+test('--jitconfig accepted is a clean pass (the control for the mutations below)', () => {
+	withFixture({}, (fx) => {
+		const r = run(fx, { jitProbeMode: '' });
+		assert.equal(r.code, 0, r.out);
+	});
+});
+
+test('MUTATION: Runner.Listener no longer recognising --jitconfig is a finding, named', () => {
+	withFixture({}, (fx) => {
+		assert.equal(
+			missedFinding(
+				run(fx, { jitProbeMode: 'not-recognised' }),
+				/does not accept --jitconfig \(flag-not-recognised\)/
+			),
+			null
+		);
+	});
+});
+
+test('MUTATION: no runner binary at all on the node is ALSO a finding, not a silent skip', () => {
+	withFixture({}, (fx) => {
+		assert.equal(
+			missedFinding(
+				run(fx, { jitProbeMode: 'no-binary' }),
+				/does not accept --jitconfig \(no-runner-binary\)/
+			),
+			null
+		);
+	});
+});
+
+test('a probe that answers with no JITCONFIG line at all is unreadable, not a silent pass', () => {
+	withFixture({}, (fx) => {
+		const r = run(fx, { jitProbeMode: 'garbage' });
+		assert.equal(r.code, 1, 'a probe with no parseable JITCONFIG line must not read as clean');
+		assert.match(r.out, /the probe produced no JITCONFIG line/);
+	});
+});
+
+test('GateDoc: a jitconfig mutation lands in findings (reachable, shape violated), never unreadable', () => {
+	withFixture({}, (fx) => {
+		const { code, report } = runJson(fx, { jitProbeMode: 'not-recognised' });
+		assert.equal(code, 1);
+		assert.equal(report.ok, false);
+		assert.equal(report.unreadable.length, 0, 'the node answered; this is a real finding');
+		assert.ok(
+			report.findings.some((f) => /does not accept --jitconfig/.test(f.reason)),
+			JSON.stringify(report.findings)
+		);
 	});
 });
 

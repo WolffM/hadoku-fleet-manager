@@ -689,12 +689,15 @@ test('the wired port is chosen by CARRIER, not alphabetically', () => {
 });
 
 test('the CAP reader keeps the whole detail, not its first word', () => {
-	// `check-capabilities` destructured a full split(/\s+/), which keeps the
-	// fourth field and drops the rest — so every multi-word detail the probe
-	// emits was truncated to one word. The fleet table showed `nvdec=cuda` and
-	// `cuda=no` on five claws from details reading "cuda hwaccel decode failed"
-	// and "no CUDA device". The probe was right; the reader threw the answer away.
-	const src = readFileSync(resolve(ROOT, 'scripts', 'check-capabilities.mjs'), 'utf8');
+	// `check-capabilities` (deleted, wave gates2 lane F1a — its probe registry
+	// re-check now lives in `fleet bootcamp`, the ONLY remaining in-package
+	// reader of a `CAP <id> <ok|no> <detail>` line) once destructured a full
+	// split(/\s+/), which keeps the fourth field and drops the rest — so every
+	// multi-word detail the probe emits was truncated to one word. The fleet
+	// table showed `nvdec=cuda` and `cuda=no` on five claws from details
+	// reading "cuda hwaccel decode failed" and "no CUDA device". The probe was
+	// right; the reader threw the answer away.
+	const src = readFileSync(resolve(ROOT, 'scripts', 'bootcamp.mjs'), 'utf8');
 	assert.ok(
 		!/\[tag, cap, ok, detail\] = .*split\(/.test(src),
 		'destructuring a full split drops everything after the fourth field'

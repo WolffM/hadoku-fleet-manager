@@ -773,7 +773,7 @@ test('a version-managed tool with no version still refuses (#70 bypass, now cove
 
 /**
  * THE PRODUCTION PATH, END TO END. Every real caller — `refresh-cycle.mjs`
- * (the nightly cadence), `bootcamp.mjs`, `check-fleet-toolchain.mjs` (the
+ * (the nightly cadence), `bootcamp.mjs`, `toolchain-doctor.mjs` (the
  * doctor) — gets its `lookup` from `createReleaseLookup()`, never from a
  * fixture it injects by hand. A test that only ever hands `resolveInstallTarget`
  * a custom `lookup` function proves the PLUMBING accepts one; it proves
@@ -839,7 +839,7 @@ test('resolveInstallTarget(REPAIRS.jdk21, { lookup: createReleaseLookup(...) }) 
 });
 
 /**
- * THE DOCTOR PATH. `check-fleet-toolchain.mjs`'s `runDoctor` calls
+ * THE DOCTOR PATH. `toolchain-doctor.mjs`'s `runDoctor` calls
  * `lookup(t.latest.source, { minAge })` DIRECTLY — it never goes through
  * `resolveInstallTarget` at all — so the dispatch has to live in
  * `createReleaseLookup` itself, not merely in `resolveInstallTarget`'s
@@ -848,11 +848,11 @@ test('resolveInstallTarget(REPAIRS.jdk21, { lookup: createReleaseLookup(...) }) 
  * resolves a KNOWN latest — never `unknown`, which is what every real node
  * got before this fix, however much RAM it had.
  *
- * `runDoctor` is imported read-only from `check-fleet-toolchain.mjs`; nothing
+ * `runDoctor` is imported read-only from `toolchain-doctor.mjs`; nothing
  * here edits that file or its own test file.
  */
-test('check-fleet-toolchain doctor path: jdk21 resolves to a KNOWN latest, on a 15 GB node missing java', async () => {
-	const { runDoctor } = await import('../check-fleet-toolchain.mjs');
+test('toolchain-doctor path: jdk21 resolves to a KNOWN latest, on a 15 GB node missing java', async () => {
+	const { runDoctor } = await import('./toolchain-doctor.mjs');
 	const home = tmp();
 	const blockDir = tmp();
 	// Hides this dev box's own real java/javac/mvn — the same technique the
@@ -1252,7 +1252,7 @@ test('maven detect: an mvn that is present but prints no version banner reports 
 });
 
 /**
- * THE BUG THIS GUARDS AGAINST (found while confirming `check-fleet-toolchain.mjs`
+ * THE BUG THIS GUARDS AGAINST (found while confirming `toolchain-doctor.mjs`
  * still works with the new entry). Temurin's
  * own banner carries a FOURTH component (`"21.0.12.1"` — the currently
  * shipping GA build, measured live on 2026-10-05), and the shared

@@ -16,7 +16,7 @@
   {
     "glob": "src/lib/hosting-slice.ts",
     "layer": "config",
-    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): hostingSliceName moved out of hosting-record.ts (state) — zero-import and declarative, so it sits at config, below state, where scripts/lib/tenant-registry.mjs (config) can reach it without climbing into state. hosting-record.ts re-exports it."
+    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): hostingSliceName moved out of hosting-record.ts (state) \u2014 zero-import and declarative, so it sits at config, below state, where scripts/lib/tenant-registry.mjs (config) can reach it without climbing into state. hosting-record.ts re-exports it."
   },
   {
     "glob": "src/runners/backstop-force.ts",
@@ -483,12 +483,12 @@
   {
     "glob": "scripts/node-users.mjs",
     "layer": "surfaces",
-    "why": "Reclassified wave layers-3 lane H (cut (iii) layer debt): a CLI entry with no logic of its own, same shape as scripts/node-profiles.mjs (also surfaces) — every judgement it reports (judgeNodeUsers, judgeNodeAccounts) is delegated to node-users-facet.mjs, and its own body only assembles the probe script, concatenates the facet's findings, and derives an exit code from counts the facet already classified. Filing it under access made its own imports (emit.mjs, expected-down.mjs, node-users-cutover.mjs) look like access reaching into automation/observation/lifecycle, which they are not: this file makes no access-layer decision of its own."
+    "why": "Reclassified wave layers-3 lane H (cut (iii) layer debt): a CLI entry with no logic of its own, same shape as scripts/node-profiles.mjs (also surfaces) \u2014 every judgement it reports (judgeNodeUsers, judgeNodeAccounts) is delegated to node-users-facet.mjs, and its own body only assembles the probe script, concatenates the facet's findings, and derives an exit code from counts the facet already classified. Filing it under access made its own imports (emit.mjs, expected-down.mjs, node-users-cutover.mjs) look like access reaching into automation/observation/lifecycle, which they are not: this file makes no access-layer decision of its own."
   },
   {
     "glob": "scripts/lib/pm2-app-layer.mjs",
     "layer": "access",
-    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): pm2Peers moved out of collect-offers.mjs (tenancy/run) — it reads hadoku_site's own pm2-hosts.json as-is, another system's data (§3.2's access rule), not tenancy content. doctor-run.mjs (observation) reaches it without climbing into collect-offers' tenancy table. collect-offers.mjs re-exports it."
+    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): pm2Peers moved out of collect-offers.mjs (tenancy/run) \u2014 it reads hadoku_site's own pm2-hosts.json as-is, another system's data (\u00a73.2's access rule), not tenancy content. doctor-run.mjs (observation) reaches it without climbing into collect-offers' tenancy table. collect-offers.mjs re-exports it."
   },
   {
     "glob": "scripts/lib/manifest-target.mjs",
@@ -647,12 +647,12 @@
   {
     "glob": "scripts/lib/tenant-runtime-names.mjs",
     "layer": "config",
-    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): runtimeOf and each runtime's names() moved out of hosting-runtimes.mjs (tenancy/core) — both zero-import and pure, declarative over `app`/`request` alone, where the rest of that file's RUNTIMES table reaches into state (AGENT_OOM_SCORE_ADJ) to render unit text, so only this half could move below domain. scripts/lib/tenant-registry.mjs (config) reaches it without climbing into tenancy. hosting-runtimes.mjs re-exports runtimeOf and assembles RUNTIMES[*].names from it."
+    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): runtimeOf and each runtime's names() moved out of hosting-runtimes.mjs (tenancy/core) \u2014 both zero-import and pure, declarative over `app`/`request` alone, where the rest of that file's RUNTIMES table reaches into state (AGENT_OOM_SCORE_ADJ) to render unit text, so only this half could move below domain. scripts/lib/tenant-registry.mjs (config) reaches it without climbing into tenancy. hosting-runtimes.mjs re-exports runtimeOf and assembles RUNTIMES[*].names from it."
   },
   {
     "glob": "scripts/lib/tenant-declarations.mjs",
     "layer": "state",
-    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): tenantsByNode moved out of collect-offers.mjs (tenancy/run) — zero-import, a pure merge of two already-read hosting records into one map, the same \"runtime record, regardless of which domain it's about\" shape state already holds (rule 3, §3.2). doctor-run.mjs (observation) and slice-inventory-run.mjs (tenancy) each reach it without climbing into collect-offers' tenancy table. collect-offers.mjs re-exports it."
+    "why": "New module, wave layers-3 lane H (cut (iii) layer debt): tenantsByNode moved out of collect-offers.mjs (tenancy/run) \u2014 zero-import, a pure merge of two already-read hosting records into one map, the same \"runtime record, regardless of which domain it's about\" shape state already holds (rule 3, \u00a73.2). doctor-run.mjs (observation) and slice-inventory-run.mjs (tenancy) each reach it without climbing into collect-offers' tenancy table. collect-offers.mjs re-exports it."
   },
   {
     "glob": "scripts/lib/toolchain-floor.mjs",
@@ -778,7 +778,7 @@
     "layer": "domain",
     "domain": "lifecycle",
     "part": "run",
-    "why": "Cut (iii) layer debt, wave layers-3 lane T, new module: the real {ssh, gh} pair (ghOnce/ghWithRetry/defaultSeedDeps) capability-seeds.mjs (config) used to wire up for its two callers, bootcamp.mjs and converge-toolchain.mjs, both lifecycle/run — moved out since it needs fleet-exec.mjs's runOn (access), which config may not import. Same shape as refresh-cycle-live.mjs's split off refresh-cycle.mjs."
+    "why": "Cut (iii) layer debt, wave layers-3 lane T, new module: the real {ssh, gh} pair (ghOnce/ghWithRetry/defaultSeedDeps) capability-seeds.mjs (config) used to wire up for its two callers, bootcamp.mjs and converge-toolchain.mjs, both lifecycle/run \u2014 moved out since it needs fleet-exec.mjs's runOn (access), which config may not import. Same shape as refresh-cycle-live.mjs's split off refresh-cycle.mjs."
   },
   {
     "glob": "scripts/provision-fleet.mjs",
@@ -1116,7 +1116,7 @@
     "layer": "domain",
     "domain": "tenancy",
     "part": "run",
-    "why": "Reclassified wave layers-3 lane H (cut (iii) layer debt), from lifecycle to tenancy: `fleet service-inventory --slices` measures DECLARED HOSTING SLICES, the same tenancy-domain fact `collect-offers.mjs` and `hosting.mjs` read, not a lifecycle (toolchain/node-bootstrap) concern — its own header calls it \"every DECLARED hosting slice\". Its only importer is service-inventory.mjs (tenancy/run, dynamic import), so reclassifying costs nothing: the lifecycle label was the misplacement, not service-inventory's tenancy one."
+    "why": "Reclassified wave layers-3 lane H (cut (iii) layer debt), from lifecycle to tenancy: `fleet service-inventory --slices` measures DECLARED HOSTING SLICES, the same tenancy-domain fact `collect-offers.mjs` and `hosting.mjs` read, not a lifecycle (toolchain/node-bootstrap) concern \u2014 its own header calls it \"every DECLARED hosting slice\". Its only importer is service-inventory.mjs (tenancy/run, dynamic import), so reclassifying costs nothing: the lifecycle label was the misplacement, not service-inventory's tenancy one."
   },
   {
     "glob": "scripts/lib/slice-split.mjs",
@@ -1139,12 +1139,12 @@
   {
     "glob": "scripts/lib/version-algebra.mjs",
     "layer": "config",
-    "why": "Cut (iii) layer debt, wave layers-3 lane T, new module: the zero-import pure half of tool-release.mjs (parse/compare/range-check a tool version, pick the newest cleared release out of a registry's time map) — no network call, no node read, so it is declarative version algebra and sits in config, the one layer every domain already imports legally. toolchain-floor.mjs (config) and refresh-cycle.mjs/refresh-cycle-live.mjs/hosting-offers.mjs/hosting-plan.mjs/hosting-request.mjs/backstop-tools.mjs (all lifecycle or tenancy) read these names from here or through tool-release.mjs's unchanged re-export."
+    "why": "Cut (iii) layer debt, wave layers-3 lane T, new module: the zero-import pure half of tool-release.mjs (parse/compare/range-check a tool version, pick the newest cleared release out of a registry's time map) \u2014 no network call, no node read, so it is declarative version algebra and sits in config, the one layer every domain already imports legally. toolchain-floor.mjs (config) and refresh-cycle.mjs/refresh-cycle-live.mjs/hosting-offers.mjs/hosting-plan.mjs/hosting-request.mjs/backstop-tools.mjs (all lifecycle or tenancy) read these names from here or through tool-release.mjs's unchanged re-export."
   },
   {
     "glob": "scripts/lib/tool-release.mjs",
     "layer": "access",
-    "why": "Cut (iii) layer debt, wave layers-3 lane T: its pure version algebra (parseVersion, compareVersions, parseRange, satisfies, parseInstalledVersion, newestCleared, DEFAULT_MIN_AGE_MINUTES) moved out to the new zero-import version-algebra.mjs (config), re-exported here unchanged. What is left — lookupLatest/lookupAdoptiumLatest/lookupMavenLatest/lookupGithubRelease/fetchGithubReleaseTimes/dispatchLookup/createReleaseLookup, plus assess and the resolver resolveInstallTarget moved in from toolchain-floor.mjs — is real I/O against npm, Adoptium, Maven Central and GitHub's release lists: 'another system's data' (refactor plan §3.2 rule 2), not a lifecycle decision. `domain`/`lifecycle` made hosting-offers/hosting-plan/hosting-request (tenancy) and check-fleet-toolchain.mjs (observation) each a cross-domain or upward edge for reading the SAME shared answer the file's own header describes sharing by design (issue #69: 'they share this file so they cannot disagree'); `access` is the one layer every domain and observation already import legally, which is the actual shape of what this file does."
+    "why": "Cut (iii) layer debt, wave layers-3 lane T: its pure version algebra (parseVersion, compareVersions, parseRange, satisfies, parseInstalledVersion, newestCleared, DEFAULT_MIN_AGE_MINUTES) moved out to the new zero-import version-algebra.mjs (config), re-exported here unchanged. What is left \u2014 lookupLatest/lookupAdoptiumLatest/lookupMavenLatest/lookupGithubRelease/fetchGithubReleaseTimes/dispatchLookup/createReleaseLookup, plus assess and the resolver resolveInstallTarget moved in from toolchain-floor.mjs \u2014 is real I/O against npm, Adoptium, Maven Central and GitHub's release lists: 'another system's data' (refactor plan \u00a73.2 rule 2), not a lifecycle decision. `domain`/`lifecycle` made hosting-offers/hosting-plan/hosting-request (tenancy) and check-fleet-toolchain.mjs (observation) each a cross-domain or upward edge for reading the SAME shared answer the file's own header describes sharing by design (issue #69: 'they share this file so they cannot disagree'); `access` is the one layer every domain and observation already import legally, which is the actual shape of what this file does."
   },
   {
     "glob": "src/fleet-loop.ts",
@@ -1295,7 +1295,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core",
-    "why": "Split out of traffic.ts (ci-scheduling) on 2026-11-02 so scripts/check-warm-canary.mjs (observation) can ask the warm cache's own #102.4 question — is this node running a heavy-kind job — without reaching up into a ci-scheduling file. Same shape and reason as speed-tier.ts: a pure model built from observed job history, no fs, no network, no clock; ci-scheduling reading it is legal under cut (iii)."
+    "why": "Split out of traffic.ts (ci-scheduling) on 2026-11-02 so scripts/check-warm-canary.mjs (observation) can ask the warm cache's own #102.4 question \u2014 is this node running a heavy-kind job \u2014 without reaching up into a ci-scheduling file. Same shape and reason as speed-tier.ts: a pure model built from observed job history, no fs, no network, no clock; ci-scheduling reading it is legal under cut (iii)."
   },
   {
     "glob": "src/runners/traffic.ts",
@@ -1721,7 +1721,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core",
-    "why": "Reclassified wave layers-3 lane H (cut (iii) layer debt), from tenancy to observation: claimPm2Units judges what doctor-run (observation/run) finds on a node against already-lowered facts (tenant specs, a declared-here set, an app-layer boolean) — it is `fleet doctor`'s own pm2-claims judgement, the same bucket doctor-findings-ops.mjs's pm2-claims findings already sit in, not a tenancy-domain decision about placement or request validity (those stay in hosting-placement.mjs / hosting-request.mjs). Zero-import and its only production importer is doctor-run.mjs, so reclassifying costs nothing."
+    "why": "Reclassified wave layers-3 lane H (cut (iii) layer debt), from tenancy to observation: claimPm2Units judges what doctor-run (observation/run) finds on a node against already-lowered facts (tenant specs, a declared-here set, an app-layer boolean) \u2014 it is `fleet doctor`'s own pm2-claims judgement, the same bucket doctor-findings-ops.mjs's pm2-claims findings already sit in, not a tenancy-domain decision about placement or request validity (those stay in hosting-placement.mjs / hosting-request.mjs). Zero-import and its only production importer is doctor-run.mjs, so reclassifying costs nothing."
   },
   {
     "glob": "scripts/lib/hosting-placement.mjs",
@@ -1756,7 +1756,7 @@
   {
     "glob": "scripts/lib/service-peers.mjs",
     "layer": "access",
-    "why": "Cut (iii) layer debt, wave layers-3 lane T: closing a hot standby's peer port is reading and writing a NODE's own iptables/systemd state (refactor plan §3.2 rule 2, 'anything another system owns'), the same work its paired half for the same cadence, service-tunnels.mjs, already does as `access`. converge-toolchain.mjs (lifecycle, run) calls both from the same `serviceTunnels()` step; classifying this one `domain`/`tenancy` made it the one domain-to-domain edge of the pair, even though peerPorts()'s own decision (which apps need a protected peer port) is read straight off childApps/hostsDoc, the same declarative tenancy data service-tunnels.mjs also reads without being tenancy-domain itself."
+    "why": "Cut (iii) layer debt, wave layers-3 lane T: closing a hot standby's peer port is reading and writing a NODE's own iptables/systemd state (refactor plan \u00a73.2 rule 2, 'anything another system owns'), the same work its paired half for the same cadence, service-tunnels.mjs, already does as `access`. converge-toolchain.mjs (lifecycle, run) calls both from the same `serviceTunnels()` step; classifying this one `domain`/`tenancy` made it the one domain-to-domain edge of the pair, even though peerPorts()'s own decision (which apps need a protected peer port) is read straight off childApps/hostsDoc, the same declarative tenancy data service-tunnels.mjs also reads without being tenancy-domain itself."
   },
   {
     "glob": "src/runners/census.ts",
@@ -2367,7 +2367,7 @@
     "layer": "domain",
     "domain": "observation",
     "part": "core",
-    "why": "fleet-manager#67: which identity-model rules are advisory and which enforce — the gate's own rule table, beside the rules it stages."
+    "why": "fleet-manager#67: which identity-model rules are advisory and which enforce \u2014 the gate's own rule table, beside the rules it stages."
   },
   {
     "glob": "scripts/lib/identity-source-parse.mjs",
@@ -2539,5 +2539,68 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run"
+  },
+  {
+    "glob": "scripts/toolchain.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave gates2 lane F1a: renamed from check-fleet-toolchain.mjs, which this glob's retired `scripts/check-*.mjs` catch-all covered at domain:observation/run. The probe itself moved to scripts/lib/toolchain-doctor.mjs; this file is the thin CLI entry, kept real (not a bare alias) so mgmt-api's ci:fleet-toolchain cron keeps parsing its document until lane S1 retires that cron."
+  },
+  {
+    "glob": "scripts/tool-inventory.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave gates2 lane F1a: renamed from check-tool-inventory.mjs (same domain:observation/run the retired `scripts/check-*.mjs` catch-all gave it). The missing-tool scan moved to scripts/lib/tool-inventory-scan.mjs; this file is kept as the demand-ledger's one writer (--write), read by check-label-floor, node-eligibility.ts and bootcamp-proof.ts."
+  },
+  {
+    "glob": "scripts/capabilities.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave gates2 lane F1a: check-capabilities.mjs DELETED (operator-approved, redundant with bootcamp's probe registry + revocation); this is a thin real no-op alias kept only so mgmt-api's check:capabilities audit-gates row still gets a judgeable document until lane S1 removes it. Same domain:observation/run the retired check-*.mjs catch-all gave the file it replaces."
+  },
+  {
+    "glob": "scripts/runner-units.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave gates2 lane F1a: renamed from check-runner-units.mjs (same domain:observation/run the retired `scripts/check-*.mjs` catch-all gave it). The node probe + GitHub repo lookup moved to scripts/lib/runner-units-probe.mjs, shared with reconcile-runner-identity.mjs, which now folds the same audit into `fleet identity`."
+  },
+  {
+    "glob": "scripts/lib/toolchain-doctor.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave gates2 lane F1a: the pure-ish probe/judge functions (judgeTool, runDoctor, buildBackstop, computeDrift, toolProbeScript/parseToolProbe) moved here out of check-fleet-toolchain.mjs, whose own domain:observation/run it keeps, at the `core` sibling grade demand-derive.mjs/expected-down.mjs/known-down.mjs already hold for shared logic within a domain. Imported laterally by scripts/toolchain.mjs (observation/run) and downward by scripts/converge-toolchain.mjs (lifecycle/run) and scripts/lib/refresh-cycle.mjs/refresh-cycle-live.mjs (lifecycle/core and /run) \u2014 every edge domain->observation or same-domain, never upward."
+  },
+  {
+    "glob": "scripts/lib/tool-inventory-scan.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave gates2 lane F1a: the missing-tool scan (TOOLS, invokes, providesTool, probeToolPresence, scanWorkflows) moved here out of check-tool-inventory.mjs so scripts/converge-toolchain.mjs's --refresh (lifecycle/run) can fold the same finding into its own report, alongside scripts/tool-inventory.mjs (observation/run) which still calls it for the same scan."
+  },
+  {
+    "glob": "scripts/lib/toolchain-deferral-streak.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave gates2 lane F1a item 1: the persisted per-node deferral-streak counter (a node deferred >3 nights running pages) that converge-toolchain.mjs's --refresh reads and writes. Same grade as known-down.mjs/expected-down.mjs, which it mirrors in shape (a small, one-writer, fail-safe-empty state file)."
+  },
+  {
+    "glob": "scripts/lib/runner-units-probe.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave gates2 lane F1a item 4: the node probe text and the memoised, retried GitHub repo lookup moved here out of check-runner-units.mjs so reconcile-runner-identity.mjs (observation/run) can run the SAME audit the other direction, alongside scripts/runner-units.mjs (observation/run) which still calls it for the node-first half."
+  },
+  {
+    "glob": "scripts/lib/toolchain-backstop.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave gates2 lane F1a, pure move: the backstop-only advisory readiness block (buildBackstop, backstopProbeScript, fleetDropinPattern, the HARVESTER_*/WORK_ADVISORY_* constants) split out of toolchain-doctor.mjs for the 800-line ceiling \u2014 toolchain-doctor.mjs grew to 975 lines moving the whole former check-fleet-toolchain.mjs doctor in; this is the standalone-advisory third of it. Same domain:observation/core as toolchain-doctor.mjs, which still re-exports WORK_ADVISORY_MIN_MB/WORK_ADVISORY_FREE_SHARE unchanged for its own test file."
   }
 ]

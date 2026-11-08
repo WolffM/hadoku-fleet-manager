@@ -127,9 +127,16 @@ export const commandsFleetOps: Record<string, Command> = {
 		summary: 'semi-annual wear check: RAM, CPU/thermal, SMART (runs ON the node)',
 	},
 	capabilities: {
-		script: 'check-capabilities.mjs',
+		// DELETED wave gates2 lane F1a (operator-approved): redundant with
+		// bootcamp's probe registry + revocation. This is now a thin, real
+		// no-op alias (scripts/capabilities.mjs) kept only so mgmt-api's
+		// `check:capabilities` audit-gates row still gets a document it can
+		// judge as a pass, until lane S1 removes that row. The one thing this
+		// subcommand uniquely checked, the ephemeral dispatcher's --jitconfig
+		// dependency, moved to `fleet boundary-contracts`.
+		script: 'capabilities.mjs',
 		kind: 'gate',
-		summary: 'probe each node BY EXECUTING the capability',
+		summary: 'RETIRED alias — see fleet bootcamp and fleet boundary-contracts',
 	},
 	'job-metrics': {
 		script: 'collect-job-metrics.mjs',
