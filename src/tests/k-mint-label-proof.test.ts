@@ -31,6 +31,7 @@ import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
 import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
 import { runDispatchPass, __resetReapClockForTesting } from '../runners/dispatch-pass.js';
 import { choosePlacement } from '../runners/placement.js';
+import { lanesFor, __resetRepoLanesForTesting } from '../runners/repo-lanes.js';
 import { satisfiesLabels, type NodeState } from '../runners/placement-node-state.js';
 import { nodeOffer } from '../lib/capability-offer.js';
 import { manifest as manifestPath } from '../lib/fleet-paths.js';
@@ -310,6 +311,8 @@ test('a job asking for a lane label is placed on a node that never declared it, 
 	assert.equal(res?.skipped, 0);
 	assert.ok(gh.mintedLabels.includes('lane-ci'), `mint carried ${gh.mintedLabels.join(',')}`);
 	assert.ok(satisfiesLabels(gh.mintedLabels, [...FLEET_LABELS, 'lane-ci']));
+	assert.deepEqual(lanesFor(REPO), ['lane-ci'], 'the pass learns the lane for warm listeners');
+	__resetRepoLanesForTesting();
 });
 
 test('a job with no lane mints no lane label, so a laned job elsewhere in the repo cannot take its runner', async () => {

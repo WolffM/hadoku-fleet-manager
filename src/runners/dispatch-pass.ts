@@ -54,6 +54,7 @@ import {
 	recordAffinityPass,
 } from './dispatch-pass-state.js';
 import { byPriority } from './dispatch-pass-order.js';
+import { observeLanes } from './repo-lanes.js';
 import { closeWarmBesideHeavy } from './dispatch-pass-warm-heavy.js';
 
 /**
@@ -126,6 +127,7 @@ export async function runDispatchPass(
 	// for the measurement. The dispatcher may look for work as fast as it likes;
 	// the reap must not ride along.
 	const nowMs = input.nowMs ?? Date.now();
+	for (const p of input.pending) observeLanes(p.repo, p.labels);
 	const fresh = input.pending.filter((p) => !p.held);
 	// `null`, not 0. A pass that did not sweep has NOT observed zero orphans, and
 	// collapsing the two would let a sweep that stopped running read for as long

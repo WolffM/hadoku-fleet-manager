@@ -17,6 +17,7 @@ import { workloadGatedCapabilities } from '../lib/workload-gate.js';
 import type { WorkloadGateContext } from '../lib/workload-gate.js';
 import { warmBackoffActive, recordWarmFailure, clearWarmFailures } from './warm-backoff.js';
 import { checkMintSlice } from './dispatch-warm-cache-state.js';
+import { lanesFor, missingLane } from './repo-lanes.js';
 import type { WarmCacheDecision } from './ephemeral-warm.js';
 import type { HostPace } from './speed-tier.js';
 import type { ObservedWarmNode, WarmCacheResult } from './dispatch-warm-cache-state.js';
@@ -117,7 +118,9 @@ export async function actOnWarmNode(args: {
 					// DERIVED, not declared — see `offerFor`. `warmLabels` subtracts
 					// the ephemeral-only ones on top of this, because a warm listener
 					// is STANDING and must never be able to answer the canary.
-					labels: offerFor(input.nodes, node, workloadGate),
+					// Plus every lane the repo's jobs ask for (`repo-lanes.ts`): a
+					// warm listener is promised to no one job, so any lane may take it.
+					labels: [...offerFor(input.nodes, node, workloadGate), ...lanesFor(repo)],
 					homeDir: nodeHome(input.nodes[node], 'ci'),
 					memoryMaxMb,
 					tarballUrl: await tarballUrl(),
@@ -149,13 +152,17 @@ export async function actOnWarmNode(args: {
 				// `busy` would be `null`) — "could not look" must not churn a
 				// slot on a guess, so it is treated exactly like "nothing stale
 				// found": kept, not rotated.
-				const stale = current?.labels
+				const staleGated = current?.labels
 					? workloadGatedCapabilities().find(
 							(id) =>
 								current.labels!.includes(id) &&
 								!offerFor(input.nodes, node, workloadGate).includes(id)
 						)
 					: undefined;
+				// A lane the repo's jobs ask for and this registration lacks: until
+				// it is re-minted, every laned job of the repo passes it by.
+				const lane = current?.labels ? missingLane(current.repo, current.labels) : undefined;
+				const stale = staleGated ?? lane;
 				// BUSY IS NEVER ROTATED (same rule `locked`/the eviction passes
 				// above already enforce): a listener running a job is not killed
 				// mid-job. `current.busy` already fails toward `true` ("could not
@@ -171,9 +178,12 @@ export async function actOnWarmNode(args: {
 					return;
 				}
 				logger.info(
-					`[warm-cache] ${node}: rotating ${current.repo} — workload-gate: ` +
-						`offerFor no longer offers "${stale}" for this node, which the ` +
-						`existing registration still advertises to GitHub`
+					staleGated
+						? `[warm-cache] ${node}: rotating ${current.repo} — workload-gate: ` +
+								`offerFor no longer offers "${staleGated}" for this node, which the ` +
+								`existing registration still advertises to GitHub`
+						: `[warm-cache] ${node}: rotating ${current.repo} — lane: its jobs ask ` +
+								`for "${lane}", which this registration does not carry`
 				);
 				const evicted = await evictWarmListener(
 					node,
@@ -186,7 +196,7 @@ export async function actOnWarmNode(args: {
 				if (!evicted) {
 					result.failed++;
 					logger.warn(
-						`[warm-cache] could not evict ${current.repo} warm slot on ${node} for a workload-gate relabel`
+						`[warm-cache] could not evict ${current.repo} warm slot on ${node} for a relabel`
 					);
 					return;
 				}
@@ -199,7 +209,7 @@ export async function actOnWarmNode(args: {
 					recordWarmFailure(node, nowMs);
 					result.failed++;
 					logger.warn(
-						`[warm-cache] workload-gate rotate failed on ${node} for ${current.repo}: ${outcome.reason}`
+						`[warm-cache] relabel rotate failed on ${node} for ${current.repo}: ${outcome.reason}`
 					);
 				}
 				return;

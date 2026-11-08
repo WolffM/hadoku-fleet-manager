@@ -19,6 +19,7 @@ import { WARM_ASSIGN_WINDOW_MS } from '../runners/ephemeral-warm.js';
 import { __setWorkloadGateContextForTesting } from '../workload-gate-store.js';
 import { workloadGateContext } from '../lib/workload-gate.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
+import { observeLanes, __resetRepoLanesForTesting } from '../runners/repo-lanes.js';
 import {
 	INELIGIBLE_INSTALLED_MB,
 	NODE_ELIGIBLE,
@@ -296,4 +297,62 @@ test('dispatchWarmCache: rotates once the lock clears and traffic has moved on',
 	assert.equal(res.rotated, 1);
 	assert.equal(sims['claw-1'].marker, 'WolffM/hadoku-rally 1000');
 	assert.ok(!sims['claw-1'].activeUnits.has(oldUnit));
+});
+
+// ---------------------------------------------------------------------------
+// LANES (2026-11-08): a warm listener carries every lane its repo's jobs ask
+// for, and an idle one minted before a lane was seen is rotated to gain it.
+// ---------------------------------------------------------------------------
+
+test('dispatchWarmCache: an IDLE listener lacking a lane its repo asks for is ROTATED, and the re-mint carries the lane', async () => {
+	__resetRepoLanesForTesting();
+	observeLanes('WolffM/hadoku_site', ['self-hosted', 'hadoku-builder', 'lane-ci']);
+	writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku_site', startedAt: histAt(0) });
+	const unit = warmRunnerName('claw-1', 'WolffM/hadoku_site');
+	const sims: Record<string, NodeSim> = {
+		'claw-1': { marker: 'WolffM/hadoku_site 1000', activeUnits: new Set([unit]) },
+	};
+	const inner = simShell(sims);
+	const seen: string[] = [];
+	const sh = async (n: string, cmd: string) => {
+		seen.push(cmd);
+		return inner(n, cmd);
+	};
+	const gh = fakeGh({
+		runners: [{ id: 1, name: unit, busy: false, labels: ['self-hosted', 'hadoku-builder'] }],
+	});
+	try {
+		const res = await dispatchWarmCache(baseInput(), 'tok', gh, sh, T0);
+		assert.equal(res.evicted, 1, JSON.stringify(res));
+		assert.equal(res.rotated, 1, JSON.stringify(res));
+		const labels =
+			/LABELS='([^']*)'/.exec(seen.find((c) => c.includes('warm-provision.sh')) ?? '')?.[1] ?? '';
+		assert.ok(labels.split(',').includes('lane-ci'), `re-mint must carry lane-ci: ${labels}`);
+	} finally {
+		__resetRepoLanesForTesting();
+	}
+});
+
+test('dispatchWarmCache: a listener already carrying every lane of its repo is kept, and a BUSY one lacking it is not killed', async () => {
+	__resetRepoLanesForTesting();
+	observeLanes('WolffM/hadoku_site', ['lane-ci']);
+	try {
+		for (const [busy, labels] of [
+			[false, ['self-hosted', 'hadoku-builder', 'lane-ci']],
+			[true, ['self-hosted', 'hadoku-builder']],
+		] as const) {
+			writeRecord({ runner: 'claw-1', repo: 'WolffM/hadoku_site', startedAt: histAt(0) });
+			const unit = warmRunnerName('claw-1', 'WolffM/hadoku_site');
+			const sh = simShell({
+				'claw-1': { marker: 'WolffM/hadoku_site 1000', activeUnits: new Set([unit]) },
+			});
+			const gh = fakeGh({ runners: [{ id: 1, name: unit, busy, labels: [...labels] }] });
+			const res = await dispatchWarmCache(baseInput(), 'tok', gh, sh, T0);
+			assert.equal(res.kept, 1, `busy=${busy} ${JSON.stringify(res)}`);
+			assert.equal(gh.writes.length, 0, `busy=${busy}: nothing minted or deleted`);
+			__resetWarmCacheClockForTesting();
+		}
+	} finally {
+		__resetRepoLanesForTesting();
+	}
 });
