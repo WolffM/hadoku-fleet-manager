@@ -44,6 +44,7 @@ export const USAGE_SCHEMA = 1;
 export const FLEET_ROUTES: readonly string[] = [
 	'GET /fleet',
 	'GET /fleet/ci-state',
+	'GET /fleet/performance',
 	'POST /fleet/job-history/backfill',
 ];
 

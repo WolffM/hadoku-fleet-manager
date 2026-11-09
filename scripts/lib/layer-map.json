@@ -1817,6 +1817,13 @@
     "part": "run"
   },
   {
+    "glob": "src/job-rollups-fleet.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "Wave fleettab lane A: the fleet-wide half of a day's rollup (jobs/queue/failures/nodes/waits/availability), split out of job-rollups.ts so the second, differently-keyed shape did not push that file toward the 800-line ceiling. Same layer/domain/part as job-rollups.ts, which is its only caller."
+  },
+  {
     "glob": "src/failure-rates.ts",
     "layer": "domain",
     "domain": "observation",

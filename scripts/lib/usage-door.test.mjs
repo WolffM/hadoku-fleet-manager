@@ -164,7 +164,7 @@ test('`fleet usage` reads it back: counts, exit mix, and the doors nobody opened
 	assert.deepEqual(cs.exits, { 0: 1, 1: 1 });
 	assert.ok(doc.unusedCommands.includes('register'));
 	assert.ok(!doc.unusedCommands.includes('capability-schema'));
-	assert.deepEqual(doc.unusedRoutes.length, 3);
+	assert.deepEqual(doc.unusedRoutes.length, 4);
 });
 
 test('`fleet usage` with no log FAILS — "I could not look" is not "nobody ran anything"', () => {

@@ -51,13 +51,35 @@ import {
 	ROLLUP_FILE,
 	jsonlRollupStore,
 	type RollupStore as RollupStoreOf,
+	type RollupRead,
 	type RollupDay,
 } from './job-rollup-store.js';
 import { jobKind } from './lib/job-kind.js';
 import { JIT_PREFIX, WARM_PREFIX } from './lib/jit-naming.js';
+import {
+	readDecisions,
+	decisionLogDir,
+	DECISION_RETENTION_DAYS,
+} from './runners/decision-log-storage.js';
+import type { DecisionRecord } from './runners/decision-log-types.js';
+import {
+	capacitySampleStore,
+	CAPACITY_SAMPLE_FILE,
+	type CapacitySampleRow,
+} from './capacity-sample-store.js';
+import { buildFleetDayAggregate, type FleetDayAggregate } from './job-rollups-fleet.js';
 
-/** Bumped when a row's meaning changes, so a reader can refuse a mix. */
-export const ROLLUP_SCHEMA = 1;
+/**
+ * Bumped when a row's meaning changes, so a reader can refuse a mix.
+ *
+ * 2 (wave fleettab §A): added the `fleet` envelope field (jobs/queue/
+ * failures/nodes/waits/availability for the whole day) alongside `rows`. A
+ * day written under schema 1 simply has no `fleet` key — see
+ * `job-rollup-store.ts`'s own header on why that is a generic, optional
+ * field rather than a reason to refuse the mix the way a `rows` shape change
+ * would.
+ */
+export const ROLLUP_SCHEMA = 2;
 /** The `node` value of a row that folds every node. */
 export const FLEET_NODE = '*';
 /** A day is closed this long after it ends. See the module header. */
@@ -106,15 +128,16 @@ export interface RollupRow {
 }
 
 /**
- * One whole day's rollup. `RollupDay<Row>` (job-rollup-store.ts, state) is
- * the generic envelope — schema/day/writtenAt/completeSince/records/
- * probesExcluded — that module's own storage format; `RollupRow` below is
- * what this domain puts in it.
+ * One whole day's rollup. `RollupDay<Row, Fleet>` (job-rollup-store.ts,
+ * state) is the generic envelope — schema/day/writtenAt/completeSince/
+ * records/probesExcluded/fleet — that module's own storage format;
+ * `RollupRow` (one row per node/repo/kind) and `FleetDayAggregate`
+ * (one value for the whole day) are what this domain puts in it.
  */
-export type DayRollup = RollupDay<RollupRow>;
+export type DayRollup = RollupDay<RollupRow, FleetDayAggregate>;
 
-/** This module's own `RollupStore`/`jsonlRollupStore`, fixed to `RollupRow`. */
-type RollupStore = RollupStoreOf<RollupRow>;
+/** This module's own `RollupStore`/`jsonlRollupStore`, fixed to this domain's two shapes. */
+type RollupStore = RollupStoreOf<RollupRow, FleetDayAggregate>;
 
 export function utcDay(ms: number): string {
 	return new Date(ms).toISOString().slice(0, 10);
@@ -175,12 +198,22 @@ function foldRow(
 /**
  * Fold one day's records. PURE: the caller has already chosen the records
  * (every one must have started on `day`) and decided the day is whole.
+ *
+ * `fleetInputs` carries the decision-log and capacity-sample rows for this
+ * SAME day, already fetched by the caller — never read here, so this stays
+ * pure. Omitted (the default) means "the caller did not look", which is
+ * exactly the `null` {@link FleetDayAggregate.waits}/`availability` case:
+ * see `job-rollups-fleet.ts`'s own header.
  */
 export function rollupDay(
 	day: string,
 	dayRecords: readonly JobRecord[],
 	nodes: readonly string[],
-	meta: { completeSinceMs: number; nowMs: number }
+	meta: { completeSinceMs: number; nowMs: number },
+	fleetInputs: {
+		decisions?: readonly DecisionRecord[] | null;
+		capacitySamples?: readonly CapacitySampleRow[] | null;
+	} = {}
 ): DayRollup {
 	const organic = dayRecords.filter((r) => !r.probe);
 	const groups = new Map<string, JobRecord[]>();
@@ -211,6 +244,7 @@ export function rollupDay(
 		records: organic.length,
 		probesExcluded: dayRecords.length - organic.length,
 		rows,
+		fleet: buildFleetDayAggregate(organic, nodes, fleetInputs),
 	};
 }
 
@@ -236,10 +270,15 @@ let defaultStorePath: string | null = null;
 function storeAtStateDir(): RollupStore {
 	const path = rollupFile();
 	if (!defaultStore || defaultStorePath !== path) {
-		defaultStore = jsonlRollupStore<RollupRow>(path);
+		defaultStore = jsonlRollupStore<RollupRow, FleetDayAggregate>(path);
 		defaultStorePath = path;
 	}
 	return defaultStore;
+}
+
+/** The store `/fleet/performance` (`routes/fleet-performance.ts`) reads. */
+export function readRollupStore(): RollupRead<RollupRow, FleetDayAggregate> {
+	return storeAtStateDir().read();
 }
 
 export interface WriteRollupsResult {
@@ -247,6 +286,95 @@ export interface WriteRollupsResult {
 	written: string[];
 	/** Why nothing could be written, when that is a finding rather than "nothing due". */
 	refused?: string;
+}
+
+/**
+ * Every due day's dispatch-decision rows, grouped by UTC day, plus whether a
+ * day the log no longer retains should read as a genuine zero (within
+ * retention, no rows — a quiet day) or as `null`, "could not look" (past
+ * retention, or the log itself could not be read at all).
+ *
+ * WHY THE DISTINCTION. An empty `waits` bucket is a real, good finding — the
+ * fleet placed every job without a hold — and collapsing it into the same
+ * `null` a retention gap gets would be exactly the trap AGENTS.md names for
+ * `queue-health`: a day the log cannot see rendering identically to a day
+ * that genuinely had nothing to report.
+ */
+function groupByDay<T extends { at: string }>(rows: readonly T[]): Map<string, T[]> {
+	const byDay = new Map<string, T[]>();
+	for (const r of rows) {
+		const ms = Date.parse(r.at);
+		if (!Number.isFinite(ms)) continue;
+		const d = utcDay(ms);
+		const xs = byDay.get(d);
+		if (xs) xs.push(r);
+		else byDay.set(d, [r]);
+	}
+	return byDay;
+}
+
+/**
+ * `rowsOverride`, when given, is EVERY row the caller already has in hand
+ * (any day) — the test seam `writeClosedDays`'s own `decisions` option
+ * passes through, mirroring how `records` already overrides `jobRecords()`
+ * a few lines up. No real read happens, so there is nothing to catch.
+ */
+function decisionsForDueDays(
+	due: readonly string[],
+	nowMs: number,
+	rowsOverride?: readonly DecisionRecord[]
+): Map<string, readonly DecisionRecord[] | null> {
+	const out = new Map<string, readonly DecisionRecord[] | null>();
+	if (!due.length) return out;
+	const horizon = utcDay(nowMs - DECISION_RETENTION_DAYS * DAY_MS);
+	const byDay = (): Map<string, DecisionRecord[]> => {
+		if (rowsOverride) return groupByDay(rowsOverride);
+		const sinceMs = Date.parse(`${due[0]}T00:00:00.000Z`);
+		const untilMs = Date.parse(`${due[due.length - 1]}T00:00:00.000Z`) + DAY_MS;
+		return groupByDay(readDecisions(decisionLogDir(), { sinceMs, untilMs }).records);
+	};
+	try {
+		const grouped = byDay();
+		for (const d of due) out.set(d, d >= horizon ? (grouped.get(d) ?? []) : null);
+	} catch (err) {
+		logger.warn(
+			`[job-rollups] could not read the dispatch-decision log: ` +
+				`${err instanceof Error ? err.message : String(err)} — waits left null for this write`
+		);
+		for (const d of due) out.set(d, null);
+	}
+	return out;
+}
+
+/**
+ * Every due day's capacity-sample rows, grouped by UTC day. Unlike
+ * {@link decisionsForDueDays}, an empty bucket is ALWAYS `null` here,
+ * regardless of retention: the sampler ticks every five minutes, so a day
+ * with zero rows never means "zero available claws were measured" — it
+ * means nothing was recorded, which is "could not look", not a zero.
+ *
+ * `rowsOverride` is the same test seam as above, for `writeClosedDays`'s
+ * `capacitySamples` option.
+ */
+function capacitySamplesForDueDays(
+	due: readonly string[],
+	rowsOverride?: readonly CapacitySampleRow[]
+): Map<string, readonly CapacitySampleRow[] | null> {
+	const out = new Map<string, readonly CapacitySampleRow[] | null>();
+	if (!due.length) return out;
+	try {
+		const rows =
+			rowsOverride ?? capacitySampleStore(join(stateDir(), CAPACITY_SAMPLE_FILE)).read().rows;
+		const byDay = groupByDay(rows);
+		for (const d of due) out.set(d, byDay.get(d) ?? null);
+	} catch (err) {
+		logger.warn(
+			`[job-rollups] could not read capacity samples: ` +
+				`${err instanceof Error ? err.message : String(err)} — availability left null for this write`
+		);
+		for (const d of due) out.set(d, null);
+	}
+	return out;
 }
 
 /**
@@ -262,6 +390,10 @@ export function writeClosedDays(opts: {
 	records?: readonly JobRecord[];
 	completeSinceMs?: number | null;
 	store?: RollupStore;
+	/** Test seam, mirrors `records`: every dispatch-decision row in hand, any day. Defaults to a real read of the decision log. */
+	decisions?: readonly DecisionRecord[];
+	/** Test seam, mirrors `records`: every capacity-sample row in hand, any day. Defaults to a real read of the capacity-sample store. */
+	capacitySamples?: readonly CapacitySampleRow[];
 }): WriteRollupsResult {
 	const now = opts.nowMs ?? Date.now();
 	try {
@@ -291,8 +423,19 @@ export function writeClosedDays(opts: {
 			if (xs) xs.push(r);
 			else byDay.set(d, [r]);
 		}
+		const decisionsByDue = decisionsForDueDays(due, now, opts.decisions);
+		const samplesByDue = capacitySamplesForDueDays(due, opts.capacitySamples);
 		const rollups = due.map((d) =>
-			rollupDay(d, byDay.get(d) ?? [], opts.nodes, { completeSinceMs: since, nowMs: now })
+			rollupDay(
+				d,
+				byDay.get(d) ?? [],
+				opts.nodes,
+				{ completeSinceMs: since, nowMs: now },
+				{
+					decisions: decisionsByDue.get(d) ?? null,
+					capacitySamples: samplesByDue.get(d) ?? null,
+				}
+			)
 		);
 		store.put(rollups, utcDay(now - ROLLUP_RETENTION_DAYS * DAY_MS));
 		logger.info(

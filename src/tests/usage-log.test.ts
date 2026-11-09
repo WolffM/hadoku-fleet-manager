@@ -208,7 +208,11 @@ void test('summary: counts, last run, exit mix, unused doors and unknown names',
 			msMax: 12,
 		},
 	]);
-	assert.deepEqual(s.unusedRoutes, ['GET /fleet/ci-state', 'POST /fleet/job-history/backfill']);
+	assert.deepEqual(s.unusedRoutes, [
+		'GET /fleet/ci-state',
+		'GET /fleet/performance',
+		'POST /fleet/job-history/backfill',
+	]);
 	assert.equal(s.records, 5, 'the out-of-window and unknown-schema records are not counted');
 });
 

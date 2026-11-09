@@ -33,6 +33,16 @@
  * `Row` is generic and this module imports no domain type at all.
  * `job-rollups.ts`'s `DayRollup` is `RollupDay<RollupRow>`, a type alias, not
  * a second definition.
+ *
+ * `Fleet` (wave fleettab §A) IS THE SAME TREATMENT, A SECOND TIME, for the
+ * one extra per-day value `job-rollups.ts` started attaching alongside
+ * `rows` — the whole fleet's jobs/queue/failures/nodes/waits/availability for
+ * the day, keyed differently from `rows` (one value per DAY, not one per
+ * node/repo/kind) and so a sibling field rather than another row shape.
+ * Optional and generic for the identical reason `Row` is: this module still
+ * imports no domain type, and a day written before this field existed simply
+ * omits the key, which `isRollupDay` already tolerates (it checks `rows`
+ * alone).
  */
 import { readFileSync } from 'node:fs';
 
@@ -42,7 +52,7 @@ import { writeFileAtomic } from './lib/atomic-json.js';
 export const ROLLUP_FILE = 'job-rollups.jsonl';
 
 /** One whole day, framed in this module's own envelope. See the module header. */
-export interface RollupDay<Row = unknown> {
+export interface RollupDay<Row = unknown, Fleet = unknown> {
 	schema: number;
 	/** `YYYY-MM-DD`, UTC, by `startedAt`. */
 	day: string;
@@ -53,12 +63,18 @@ export interface RollupDay<Row = unknown> {
 	records: number;
 	probesExcluded: number;
 	rows: Row[];
+	/**
+	 * The day's fleet-wide aggregate (jobs/queue/failures/nodes/waits/
+	 * availability), when the writer supplied one. Absent on a day written
+	 * before this field existed — never a fabricated value standing in for it.
+	 */
+	fleet?: Fleet;
 }
 
 /** What a read found. */
-export interface RollupRead<Row = unknown> {
+export interface RollupRead<Row = unknown, Fleet = unknown> {
 	/** Oldest first, one per day. */
-	days: RollupDay<Row>[];
+	days: RollupDay<Row, Fleet>[];
 	/**
 	 * Lines that did not parse as a day. Not fatal and not silent: a reader
 	 * reports the count, and the writer treats those days as unwritten.
@@ -68,9 +84,9 @@ export interface RollupRead<Row = unknown> {
 	exists: boolean;
 }
 
-export interface RollupStore<Row = unknown> {
+export interface RollupStore<Row = unknown, Fleet = unknown> {
 	/** Every day held, oldest first. Throws only on an unreadable FILE (not ENOENT). */
-	read(): RollupRead<Row>;
+	read(): RollupRead<Row, Fleet>;
 	/** The set of days already written. Cached for the life of the store. */
 	writtenDays(): ReadonlySet<string>;
 	/**
@@ -78,22 +94,24 @@ export interface RollupStore<Row = unknown> {
 	 * older than `keepFromDay`, in one atomic write. Throws on a failed write,
 	 * leaving the previous file intact.
 	 */
-	put(days: readonly RollupDay<Row>[], keepFromDay: string): void;
+	put(days: readonly RollupDay<Row, Fleet>[], keepFromDay: string): void;
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-function isRollupDay<Row>(v: unknown): v is RollupDay<Row> {
+function isRollupDay<Row, Fleet>(v: unknown): v is RollupDay<Row, Fleet> {
 	if (typeof v !== 'object' || v === null) return false;
 	const o = v as Record<string, unknown>;
 	return typeof o.day === 'string' && DAY_RE.test(o.day) && Array.isArray(o.rows);
 }
 
 /** The JSONL store at `path`. */
-export function jsonlRollupStore<Row = unknown>(path: string): RollupStore<Row> {
+export function jsonlRollupStore<Row = unknown, Fleet = unknown>(
+	path: string
+): RollupStore<Row, Fleet> {
 	let cachedDays: Set<string> | null = null;
 
-	const read = (): RollupRead<Row> => {
+	const read = (): RollupRead<Row, Fleet> => {
 		let raw: string;
 		try {
 			raw = readFileSync(path, 'utf8');
@@ -103,7 +121,7 @@ export function jsonlRollupStore<Row = unknown>(path: string): RollupStore<Row> 
 			}
 			throw err;
 		}
-		const byDay = new Map<string, RollupDay<Row>>();
+		const byDay = new Map<string, RollupDay<Row, Fleet>>();
 		let unreadableLines = 0;
 		for (const line of raw.split('\n')) {
 			if (!line.trim()) continue;
@@ -114,7 +132,7 @@ export function jsonlRollupStore<Row = unknown>(path: string): RollupStore<Row> 
 				unreadableLines++;
 				continue;
 			}
-			if (!isRollupDay<Row>(parsed)) {
+			if (!isRollupDay<Row, Fleet>(parsed)) {
 				unreadableLines++;
 				continue;
 			}

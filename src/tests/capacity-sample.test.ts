@@ -149,6 +149,90 @@ void test('an admitted verdict (key present, value null) carries no refusal reas
 	assert.equal(rows[0].refusalReason, null);
 });
 
+// ── admissionFree matches the dispatcher's own ledger, not the probe ──────
+
+void test('admissionFree reproduces the 2026-11-08 03:41Z fix: a jdk21 claw charged 1/1 reads admissionFree 0, not the probe-derived 1', () => {
+	const report = reportOf([
+		machine({
+			name: 'claw-10',
+			maxConcurrent: 1,
+			admissionCapacity: 1,
+			// The buggy probe-derived figure this node actually sampled that
+			// night: looked free while the dispatcher refused every mint.
+			admissionFree: 1,
+			admissionBasis: 'dispatcher',
+			state: 'busy',
+			dispatchLedger: {
+				at: new Date(NOW).toISOString(),
+				liveUnits: 1,
+				probeWorkers: 1,
+				standingBusy: 0,
+				warmHeld: 0,
+				budget: 1,
+				inFlight: 1,
+				ok: true,
+				why: null,
+			},
+		}),
+	]);
+	const rows = sampleCapacityNow(NOW, report, {});
+	assert.equal(rows[0].admissionFree, 0);
+});
+
+void test('admissionFree from the ledger when there is room: budget 2, inFlight 1 reads free 1', () => {
+	const report = reportOf([
+		machine({
+			name: 'claw-4',
+			maxConcurrent: 2,
+			admissionFree: 2,
+			dispatchLedger: {
+				at: new Date(NOW).toISOString(),
+				liveUnits: 1,
+				probeWorkers: 1,
+				standingBusy: 0,
+				warmHeld: 0,
+				budget: 2,
+				inFlight: 1,
+				ok: true,
+				why: null,
+			},
+		}),
+	]);
+	const rows = sampleCapacityNow(NOW, report, {});
+	assert.equal(rows[0].admissionFree, 1);
+});
+
+void test('a stale ledger (older than LEDGER_FRESH_MS) is ignored — falls back to the report figure', () => {
+	const report = reportOf([
+		machine({
+			name: 'claw-10',
+			maxConcurrent: 1,
+			admissionFree: 1,
+			dispatchLedger: {
+				at: new Date(NOW - 10 * 60_000).toISOString(),
+				liveUnits: 1,
+				probeWorkers: 1,
+				standingBusy: 0,
+				warmHeld: 0,
+				budget: 1,
+				inFlight: 1,
+				ok: true,
+				why: null,
+			},
+		}),
+	]);
+	const rows = sampleCapacityNow(NOW, report, {});
+	assert.equal(rows[0].admissionFree, 1);
+});
+
+void test('a standing node (no dispatch-ledger entry — admitMint never runs for one) keeps the report figure', () => {
+	const report = reportOf([
+		machine({ name: 'claw-3', admissionFree: 2, admissionBasis: 'standing', dispatchLedger: null }),
+	]);
+	const rows = sampleCapacityNow(NOW, report, {});
+	assert.equal(rows[0].admissionFree, 2);
+});
+
 void test('multiple nodes in one tick get the SAME `at`', () => {
 	const report = reportOf([machine({ name: 'claw-1' }), machine({ name: 'claw-2' })]);
 	const rows = sampleCapacityNow(NOW, report, {});

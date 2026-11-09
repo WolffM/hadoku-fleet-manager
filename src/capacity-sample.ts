@@ -26,6 +26,7 @@ import { join } from 'node:path';
 import { logger, stateDir } from './host.js';
 import { buildFleetReport } from './routes/fleet-report.js';
 import { isDraining, readDrain, type DrainState } from './runners/drain.js';
+import { LEDGER_FRESH_MS } from './runners/capacity-ledger.js';
 import {
 	capacitySampleStore,
 	CAPACITY_SAMPLE_FILE,
@@ -51,6 +52,41 @@ function samplePath(): string {
 }
 
 /**
+ * `admissionFree` THE WAY THE DISPATCHER WOULD ANSWER, NOT THE DISPLAY PATH'S
+ * OWN GUESS. `routes/fleet-admission.ts`'s `admission()` — what every other
+ * reader of `m.admissionFree` still gets — derives it from the raw probe
+ * (`mintBudget(m).slots - p.workers`), which is exactly the double-count
+ * `capacity-ledger.ts` was built to fix on the DISPATCH path and, per that
+ * file's own header, "never [fixed] in the display path": measured
+ * 2026-11-08 03:41Z, every jdk21 claw sampled `admissionFree: 1` while the
+ * dispatcher's own charge for the same node, the same instant, was `at
+ * capacity: 1/1` — `p.workers` read 0 (the warm listener holding the slot
+ * was not yet counted as a running worker) while `liveUnits + standingBusy`
+ * correctly read 1.
+ *
+ * `m.dispatchLedger` (`capacity-ledger.ts`'s own per-pass charge) is the
+ * authoritative figure: `budget` is already `maxConcurrent` less the
+ * warm-held slots, `inFlight` is the corrected `liveUnits + standingBusy`.
+ * Used only while fresh (`LEDGER_FRESH_MS`, the same bar
+ * `chargedLikeDispatch` holds it to) — a stale ledger describes a pass this
+ * process no longer trusts, and the probe-derived figure is the better guess
+ * then. `null` when the ledger carries no entry at all, which is every
+ * standing node (`admitMint` never runs for one) and every ephemeral node
+ * before this process's first dispatch pass: both fall back to the report's
+ * own figure unchanged.
+ */
+function ledgerAdmissionFree(
+	m: ReturnType<typeof buildFleetReport>['machines'][number],
+	nowMs: number
+): number | null {
+	const ledger = m.dispatchLedger;
+	if (!ledger) return m.admissionFree;
+	const at = Date.parse(ledger.at);
+	if (!Number.isFinite(at) || nowMs - at > LEDGER_FRESH_MS) return m.admissionFree;
+	return Math.max(0, ledger.budget - ledger.inFlight);
+}
+
+/**
  * One row per node, for the current in-memory fleet state.
  *
  * `report`/`drain` default to the REAL reads (`buildFleetReport()`,
@@ -72,7 +108,7 @@ export function sampleCapacityNow(
 		node: m.name,
 		maxConcurrent: m.maxConcurrent,
 		admissionCapacity: m.admissionCapacity,
-		admissionFree: m.admissionFree,
+		admissionFree: ledgerAdmissionFree(m, nowMs),
 		admissionBasis: m.admissionBasis,
 		state: m.state,
 		drained: isDraining(m.name, drain),

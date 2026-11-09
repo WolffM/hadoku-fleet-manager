@@ -35,6 +35,7 @@ import { userAgent } from '../lib/fleet-config.js';
 import { loadTargets, stateKey } from '../ci-alerts.js';
 import { readStates } from '../ci-alerts-state.js';
 import { ManifestUnreadableError } from './fleet-manifest.js';
+import { performanceHandler } from './fleet-performance.js';
 
 import { buildFleetReport } from './fleet-report.js';
 
@@ -133,6 +134,12 @@ router.get('/fleet/ci-state', countHit, (_req: Request, res: Response) => {
 		res.status(500).json({ success: false, error: msg });
 	}
 });
+
+/**
+ * GET /api/fleet/performance?days=<1..120> — the Command Station's Fleet ›
+ * Performance view. See `fleet-performance.ts` for the whole join.
+ */
+router.get('/fleet/performance', countHit, performanceHandler);
 
 /**
  * One job read for {@link backfillFailedSteps} below. Deliberately NOT

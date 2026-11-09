@@ -18,6 +18,7 @@ import { jsonlRollupStore } from '../job-rollup-store.js';
 import {
 	FLEET_NODE,
 	ROLLUP_RETENTION_DAYS,
+	ROLLUP_SCHEMA,
 	SETTLE_HOURS,
 	closableDays,
 	rollupDay,
@@ -27,6 +28,10 @@ import {
 	type DayRollup,
 	type RollupRow,
 } from '../job-rollups.js';
+import type { FleetDayAggregate } from '../job-rollups-fleet.js';
+import { DECISION_RETENTION_DAYS } from '../runners/decision-log-storage.js';
+import type { DecisionRecord } from '../runners/decision-log-types.js';
+import type { CapacitySampleRow } from '../capacity-sample-store.js';
 import { testHost } from './install-test-host.js';
 
 const NODES = ['claw-1', 'claw-5', 'claw-8', 'hokon'];
@@ -250,7 +255,7 @@ test('a day later in the week is added without rewriting the days already held',
 	const file = join(tmp, 'job-rollups.jsonl');
 	const records = eightDays();
 	const since = Date.parse(records[0].startedAt);
-	const store = jsonlRollupStore<RollupRow>(file);
+	const store = jsonlRollupStore<RollupRow, FleetDayAggregate>(file);
 	writeClosedDays({ nodes: NODES, nowMs: NOW - DAY, records, completeSinceMs: since, store });
 	const before = store.read().days;
 	const r = writeClosedDays({ nodes: NODES, nowMs: NOW, records, completeSinceMs: since, store });
@@ -378,4 +383,159 @@ test('store: days older than ROLLUP_RETENTION_DAYS are dropped on the next write
 test('store: no file is exists:false, not an empty history', () => {
 	const read = jsonlRollupStore(join(tmp, 'nope.jsonl')).read();
 	assert.deepEqual(read, { days: [], unreadableLines: 0, exists: false });
+});
+
+// ── the fleet aggregate: schema bump, and the writer's own wiring ─────────
+//
+// `job-rollups-fleet.test.ts` covers the pure builder (`buildFleetDayAggregate`,
+// `classifyJob`, `waitBucket`) in isolation. These exercise the WIRING
+// `writeClosedDays` added: grouping decision-log/capacity-sample rows by day
+// and the could-not-read / outside-retention paths that must read as `null`,
+// never an empty success. `decisions`/`capacitySamples` are passed straight
+// through the same test seam `records` already is — never a real file under
+// `stateDir()`, which in this suite is the one process-wide directory every
+// test file shares (`install-test-host.ts`), not the per-test `tmp` the rest
+// of this file's fixtures use for their own, explicitly-injected `store`.
+
+function decisionFixture(o: Partial<DecisionRecord> = {}): DecisionRecord {
+	return {
+		v: 1,
+		at: '',
+		path: 'jit',
+		kind: 'unplaceable',
+		repo: 'WolffM/hadoku-cardtable',
+		runId: 1,
+		jobId: 1,
+		jobName: 'forge-jvm',
+		labels: [],
+		event: null,
+		queuedSec: null,
+		heavy: null,
+		order: [],
+		candidates: [],
+		refused: [{ node: 'claw-1', reason: 'at capacity: 1/1 in flight' }],
+		winner: null,
+		rule: null,
+		outcome: null,
+		runner: null,
+		error: null,
+		reason: null,
+		action: null,
+		capacity: [],
+		fingerprint: null,
+		...o,
+	};
+}
+
+function sampleFixture(
+	o: Partial<CapacitySampleRow> & { node: string; at: string }
+): CapacitySampleRow {
+	return {
+		maxConcurrent: 1,
+		admissionCapacity: 1,
+		admissionFree: 0,
+		admissionBasis: 'dispatcher',
+		state: 'busy',
+		drained: false,
+		refusalReason: null,
+		unmeasured: false,
+		...o,
+	};
+}
+
+test('ROLLUP_SCHEMA is 2: the envelope now carries a fleet aggregate', () => {
+	assert.equal(ROLLUP_SCHEMA, 2);
+	const r = rollupDay(utcDay(midnight(5)), [rec({ at: midnight(5) })], NODES, meta);
+	assert.equal(r.schema, 2);
+	assert.ok(r.fleet);
+	assert.equal(r.fleet.jobs, 1);
+});
+
+test('writeClosedDays folds the injected decision and capacity-sample rows into the closed day', () => {
+	const day = utcDay(midnight(5));
+	const dayStartMs = Date.parse(`${day}T00:00:00.000Z`);
+	const decisions = [
+		decisionFixture({ at: new Date(dayStartMs + 3600_000).toISOString() }),
+		decisionFixture({
+			at: new Date(dayStartMs + 3_700_000).toISOString(),
+			refused: [{ node: 'claw-5', reason: 'does not carry hadoku-builder' }],
+		}),
+	];
+	const capacitySamples = [
+		sampleFixture({ node: 'claw-1', at: new Date(dayStartMs + 3600_000).toISOString() }),
+		sampleFixture({
+			node: 'claw-5',
+			at: new Date(dayStartMs + 3600_000).toISOString(),
+			state: 'offline',
+		}),
+	];
+	const records = [rec({ at: midnight(5), runner: 'claw-1' })];
+	const file = join(tmp, 'job-rollups.jsonl');
+	const r = writeClosedDays({
+		nodes: NODES,
+		nowMs: NOW,
+		records,
+		completeSinceMs: midnight(10),
+		store: jsonlRollupStore<RollupRow, FleetDayAggregate>(file),
+		decisions,
+		capacitySamples,
+	});
+	assert.ok(r.written.includes(day));
+	const written = jsonlRollupStore<RollupRow, FleetDayAggregate>(file)
+		.read()
+		.days.find((d) => d.day === day);
+	assert.ok(written?.fleet);
+	assert.deepEqual(written.fleet.waits, { capacity: 1, constraints: 1, held: 0, other: 0 });
+	assert.ok(written.fleet.availability);
+	// 1 of 2 samples available (claw-1 busy, claw-5 offline) -> share 0.5.
+	assert.equal(written.fleet.availability!.claws, 0.5);
+});
+
+test('a closed day with decisions in hand but none for it: a real zero inside retention, null outside it', () => {
+	const recentDay = utcDay(NOW - (DECISION_RETENTION_DAYS - 2) * DAY);
+	const oldDay = utcDay(NOW - (DECISION_RETENTION_DAYS + 5) * DAY);
+	const completeSinceMs = Date.parse(`${oldDay}T00:00:00.000Z`);
+	const file = join(tmp, 'job-rollups.jsonl');
+	// A row for a day OUTSIDE this due range keeps `decisions` non-empty
+	// without landing on either day under test.
+	const decisions = [decisionFixture({ at: new Date(NOW + 10 * DAY).toISOString() })];
+	const r = writeClosedDays({
+		nodes: NODES,
+		nowMs: NOW,
+		records: [],
+		completeSinceMs,
+		store: jsonlRollupStore<RollupRow, FleetDayAggregate>(file),
+		decisions,
+		capacitySamples: [],
+	});
+	assert.ok(r.written.includes(recentDay));
+	assert.ok(r.written.includes(oldDay));
+	const days = jsonlRollupStore<RollupRow, FleetDayAggregate>(file).read().days;
+	const recent = days.find((d) => d.day === recentDay);
+	const old = days.find((d) => d.day === oldDay);
+	assert.deepEqual(recent?.fleet?.waits, { capacity: 0, constraints: 0, held: 0, other: 0 });
+	assert.equal(old?.fleet?.waits, null);
+});
+
+test('the decision log unreadable: every due day gets waits null, warned, rows still written', () => {
+	// No `decisions` override and no real decision-log directory for this
+	// test's `stateDir()` to find: `readDecisions` throws for real here.
+	const day = utcDay(midnight(5));
+	const records = [rec({ at: midnight(5) })];
+	const file = join(tmp, 'job-rollups.jsonl');
+	const r = writeClosedDays({
+		nodes: NODES,
+		nowMs: NOW,
+		records,
+		completeSinceMs: midnight(10),
+		store: jsonlRollupStore<RollupRow, FleetDayAggregate>(file),
+		capacitySamples: [],
+	});
+	assert.ok(r.written.includes(day));
+	assert.ok(warns.some((w) => w.includes('could not read the dispatch-decision log')));
+	const written = jsonlRollupStore<RollupRow, FleetDayAggregate>(file)
+		.read()
+		.days.find((d) => d.day === day);
+	assert.equal(written?.records, 1, 'the row data is unaffected by the decision-log failure');
+	assert.equal(written?.fleet?.waits, null);
 });
