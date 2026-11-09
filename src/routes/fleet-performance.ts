@@ -150,6 +150,7 @@ export interface PerformanceResponse {
 	contract: 1;
 	generatedAt: string;
 	days: number;
+	/** `YYYY-MM-DD`, UTC: the window's first day. The window is `days` days ending today. */
 	since: string;
 	daily: DailyEntry[];
 	nodes: NodeEntry[];
@@ -238,12 +239,18 @@ function liveDay(
 	});
 }
 
-/** Every UTC day from `since` through `nowMs`'s day, oldest first. */
-function windowDays(sinceMs: number, nowMs: number): string[] {
-	const out: string[] = [];
-	for (let t = Date.parse(`${utcDay(sinceMs)}T00:00:00.000Z`); t <= nowMs; t += DAY_MS)
-		out.push(utcDay(t));
-	return out;
+/**
+ * The window: exactly `days` UTC days ending with `nowMs`'s own day, oldest
+ * first. `windowDays(...)[0]` is the response's `since`, so `since` is a
+ * `YYYY-MM-DD` day the client can count `days` forward from and land on today.
+ * It was the timestamp `now - days` until 2026-11-09, which spans `days + 1`
+ * calendar days and is not a day at all: the dashboard appended `T00:00:00Z`
+ * to it and threw `RangeError: invalid date` on every render.
+ */
+function windowDays(days: number, nowMs: number): string[] {
+	const todayStartMs = Date.parse(`${utcDay(nowMs)}T00:00:00.000Z`);
+	const n = Math.max(1, days);
+	return Array.from({ length: n }, (_, i) => utcDay(todayStartMs - (n - 1 - i) * DAY_MS));
 }
 
 /**
@@ -323,7 +330,7 @@ export function buildPerformanceReportWith(
 	days: number,
 	deps: PerformanceDeps = {}
 ): PerformanceResponse {
-	const sinceMs = nowMs - days * DAY_MS;
+	const window = windowDays(days, nowMs);
 	const nodes = deps.nodes ?? loadFleetNodeNames();
 	const store = (deps.readRollups ?? readRollupStore)();
 	const byDay = new Map<string, DayRollup>(store.days.map((d) => [d.day, d]));
@@ -341,7 +348,7 @@ export function buildPerformanceReportWith(
 	const availability: AvailabilityEntry[] = [];
 	const gapDays: { day: string; what: string }[] = [];
 
-	for (const day of windowDays(sinceMs, nowMs)) {
+	for (const day of window) {
 		const row = byDay.get(day);
 		// TODAY never reads the rollup store at all — it cannot hold a day
 		// that has not closed, and the one exception a stray/bogus row for
@@ -422,7 +429,7 @@ export function buildPerformanceReportWith(
 		contract: CONTRACT,
 		generatedAt: new Date(nowMs).toISOString(),
 		days,
-		since: new Date(sinceMs).toISOString(),
+		since: window[0],
 		daily,
 		nodes: nodeRows,
 		waits,

@@ -97,7 +97,7 @@ void test('the contract shape: contract 1, generatedAt/days/since, every array p
 	assert.equal(r.contract, 1);
 	assert.equal(r.days, 3);
 	assert.equal(r.generatedAt, new Date(NOW).toISOString());
-	assert.equal(r.since, new Date(NOW - 3 * DAY).toISOString());
+	assert.equal(r.since, dayAt(2), "since is the window's first UTC day, YYYY-MM-DD");
 	assert.ok(Array.isArray(r.daily));
 	assert.ok(Array.isArray(r.nodes));
 	assert.ok(Array.isArray(r.waits));
@@ -134,6 +134,27 @@ void test('today is ALWAYS computed live, never from a rollup entry even if one 
 	assert.equal(today.provisional, true, 'today is computed live, so it is provisional too');
 });
 
+void test('the window is exactly `days` UTC days ending today, and `since` is its first day — the dashboard counts `days` forward from it', () => {
+	// The dashboard builds its x-axis as `dayRange(since, days)`, i.e.
+	// `new Date(`${since}T00:00:00Z`)` plus 0..days-1. Until 2026-11-09 `since`
+	// was the ISO timestamp `now - days`, which made that `Invalid Date` and
+	// threw `RangeError: invalid date` on every render of Fleet › Performance.
+	for (const days of [1, 7, 30, 90]) {
+		const r = buildPerformanceReportWith(NOW, days, { ...NO_LIVE, readRollups: storeOf([]) });
+		assert.match(r.since, /^\d{4}-\d{2}-\d{2}$/);
+		const seen = [...r.daily.map((d) => d.day), ...r.gaps.flatMap((g) => [g.from, g.to])].sort();
+		assert.equal(seen[0], r.since, `days=${days}: the oldest day reported is since`);
+		assert.equal(seen[seen.length - 1], TODAY, `days=${days}: the window ends today`);
+		const counted = new Date(`${r.since}T00:00:00Z`);
+		counted.setUTCDate(counted.getUTCDate() + days - 1);
+		assert.equal(
+			counted.toISOString().slice(0, 10),
+			TODAY,
+			`days=${days}: since + days-1 is today`
+		);
+	}
+});
+
 void test('a day with no rollup and outside job-history completeness (completeSinceMs null): a gap, "no rollup recorded"', () => {
 	const r = buildPerformanceReportWith(NOW, 5, { ...NO_LIVE, readRollups: storeOf([]) });
 	const day = dayAt(4);
@@ -163,7 +184,7 @@ void test('operator fix-up (wave fleettab): days without a settled rollup but WI
 		queueSec: 5,
 		conclusion: 'success',
 	});
-	const r = buildPerformanceReportWith(NOW, 3, {
+	const r = buildPerformanceReportWith(NOW, 4, {
 		nodes: ['claw-1'],
 		readRollups: storeOf([settled]),
 		// job-history can vouch for D-3 onward: D-2/D-1/today are all within it.
@@ -255,12 +276,12 @@ void test('operator addition: a schema-1 row OUTSIDE job-history completeness is
 
 void test('consecutive gap days (no rollup row at all) coalesce into one {from,to,what} range', () => {
 	const r = buildPerformanceReportWith(NOW, 10, { ...NO_LIVE, readRollups: storeOf([]) });
-	// A `days=10` window is 11 UTC days (dayAt(10)..dayAt(0) inclusive).
-	// dayAt(1..10) (not today) all fail the completeness gate under NO_LIVE,
+	// A `days=10` window is 10 UTC days (dayAt(9)..dayAt(0) inclusive).
+	// dayAt(1..9) (not today) all fail the completeness gate under NO_LIVE,
 	// so every one of them is a gap; today alone is live and not a gap.
 	assert.equal(r.gaps.length, 1, `expected one coalesced range, got: ${JSON.stringify(r.gaps)}`);
 	assert.equal(r.gaps[0].what, 'no rollup recorded for this day');
-	assert.equal(r.gaps[0].from, dayAt(10));
+	assert.equal(r.gaps[0].from, dayAt(9));
 	assert.equal(r.gaps[0].to, dayAt(1));
 });
 
