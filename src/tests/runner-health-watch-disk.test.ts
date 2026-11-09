@@ -10,13 +10,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, truncateSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { historyFile } from '../job-history-store.js';
 
 import { tick, __resetRunnerHealthAlertsForTesting } from '../runner-health.js';
 import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
 import { HOUR_MS as RE_ALERT_MS } from '../lib/job-runner.js';
 import { __setBackstopMachinesForTesting } from '../runners/backstop-machines.js';
+import { __setTmpConsumerProbeForTesting } from '../runner-health-watch.js';
+import { runTmpConsumerProbe, tmpConsumersCmd } from '../runners/tmp-consumers.js';
+import { tempDir } from './tmpdir.js';
 import { __reloadAlertLedgerForTesting } from '../lib/alert-ledger.js';
 import {
 	__resetDiskReadingsForTesting,
@@ -126,6 +130,84 @@ test('disk-watch #132: a small, nearly empty /tmp is not a repeating advisory �
 	assert.equal(diskPings('page').length, 1);
 	assert.match(diskPings('page')[0]!, /\/tmp has 2\.2GB free/);
 	assert.equal(capacity().length, 1);
+});
+
+// ── /tmp consumers named in the alert (2026-11-08) ───────────────────────────
+//
+// hokon's /tmp went advisory on four fresh 2.4GB sqlite copies in a live
+// Claude session's scratchpad; the hint said "something that ignores TMPDIR"
+// and pointed at `-mmin +60` leftovers. The probe here is the real script,
+// run by bash against a fixture directory standing in for the node's /tmp.
+
+function claudeScratchFixture(): string {
+	const root = tempDir('rh-tmp-consumers-');
+	const scratch = join(root, 'claude-4242', '-home-op-repos', 'sess-a', 'scratchpad');
+	mkdirSync(scratch, { recursive: true });
+	const copy = join(scratch, 'copy-1.sqlite');
+	writeFileSync(copy, '');
+	truncateSync(copy, Math.round(2.4 * 1024 ** 3));
+	return root;
+}
+
+test('disk-watch 2026-11-08: a /tmp advisory names the largest recent consumers the node reports', async () => {
+	const root = claudeScratchFixture();
+	const probed: string[] = [];
+	__setTmpConsumerProbeForTesting((node) => {
+		probed.push(node);
+		return runTmpConsumerProbe('bash', ['-c', tmpConsumersCmd(root)]);
+	});
+	__setDiskReadingsForTesting(new Map([['claw-6', { tmpFreeMb: 3800, workFreeMb: 189 * 1024 }]]));
+	installFetch({ runners: LIVE_LISTING });
+	try {
+		await tick('tok');
+		const adv = diskPings('advisory');
+		assert.equal(adv.length, 1);
+		assert.match(adv[0]!, /\/tmp has 3\.7GB free/);
+		assert.ok(
+			adv[0]!.includes(
+				`\`${join(root, 'claude-4242', '-home-op-repos', 'sess-a', 'scratchpad', 'copy-1.sqlite')}\` 2.4GB, last written`
+			),
+			adv[0]
+		);
+		assert.match(adv[0]!, /\/tmp\/claude-<uid>\//, 'names Claude scratchpads as a known consumer');
+		assert.match(adv[0]!, /-mmin -180/, 'a command for what is filling it NOW');
+		assert.doesNotMatch(adv[0]!, /so this is something that ignores TMPDIR/, 'no asserted cause');
+		assert.deepEqual(probed, ['claw-6']);
+
+		await tick('tok');
+		assert.equal(diskPings('advisory').length, 1);
+		assert.deepEqual(probed, ['claw-6'], 'a suppressed tick does not run the probe');
+	} finally {
+		__setTmpConsumerProbeForTesting(null);
+	}
+});
+
+test('disk-watch 2026-11-08: a probe that fails or throws never suppresses the alert, and says why', async () => {
+	__setTmpConsumerProbeForTesting(() =>
+		runTmpConsumerProbe('bash', [
+			'-c',
+			'echo "ssh: connect to host claw-6: timed out" >&2; exit 255',
+		])
+	);
+	__setDiskReadingsForTesting(new Map([['claw-6', { tmpFreeMb: 1718, workFreeMb: 370 * 1024 }]]));
+	installFetch({ runners: LIVE_LISTING });
+	try {
+		await tick('tok');
+		const page = diskPings('page');
+		assert.equal(page.length, 1);
+		assert.match(page[0]!, /2048MB mint floor/);
+		assert.match(page[0]!, /consumer probe on `claw-6` failed \(.*timed out\)/);
+		assert.match(page[0]!, /du -xsh \/tmp\/claude-\*/, 'still says where to look by hand');
+
+		__setTmpConsumerProbeForTesting(() => Promise.reject(new Error('manifest unreadable')));
+		__setDiskReadingsForTesting(new Map([['claw-6', { tmpFreeMb: 3800, workFreeMb: 370 * 1024 }]]));
+		await tick('tok');
+		const adv = diskPings('advisory');
+		assert.equal(adv.length, 1);
+		assert.match(adv[0]!, /consumer probe on `claw-6` failed \(manifest unreadable\)/);
+	} finally {
+		__setTmpConsumerProbeForTesting(null);
+	}
 });
 
 test('disk-watch 2026-10-21: an on-demand backstop is watched too, and its page says deploys stop', async () => {

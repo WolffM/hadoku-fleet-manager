@@ -186,9 +186,10 @@ export function tmpIsSmall(tmpSizeMb: number | null = null): boolean {
  * The pure judgement for /tmp. Same levels as {@link judgeWorkDisk}.
  *
  * Unchanged by CI jobs' temp moving to disk (#100/#101, observed per job since
- * 2026-10-24): what still writes /tmp ignores TMPDIR, tmpfs is still RAM, and
- * admission still refuses under the floor. `runner-health.ts`'s
- * `checkDiskWatch` says why at the point the advisory is worded.
+ * 2026-10-24): /tmp still has writers outside any job's TMPDIR (Claude Code
+ * scratchpads under `/tmp/claude-<uid>`, tool temp copies), tmpfs is still
+ * RAM, and admission still refuses under the floor. `runner-health-watch.ts`'s
+ * `checkDiskWatch` asks the node who, via `tmp-consumers.ts`, when it alerts.
  */
 export function judgeTmpDisk(
 	tmpFreeMb: number | null,

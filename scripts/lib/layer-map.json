@@ -1904,6 +1904,13 @@
     "part": "run"
   },
   {
+    "glob": "src/runners/tmp-consumers.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "The /tmp consumer probe disk-watch's /tmp alert carries (2026-11-08): runs one bounded find/du script on the node over node-shell and formats what it saw. Observation, beside disk-watch.ts, whose alert it explains."
+  },
+  {
     "glob": "src/runners/failover.ts",
     "layer": "domain",
     "domain": "observation",

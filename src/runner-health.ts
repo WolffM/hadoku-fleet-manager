@@ -79,6 +79,7 @@ import {
 	checkNodeRegression,
 	checkHostSupervision,
 	installDefaultSupervisionCheck,
+	installDefaultTmpConsumerProbe,
 } from './runner-health-watch.js';
 import {
 	captureSnapshot,
@@ -526,6 +527,7 @@ function startWithToken(token: string): void {
 	// Only the real process SSHes the claws — see `supervisionCheck`. A test that
 	// starts the monitor installs its double first, and this keeps it.
 	installDefaultSupervisionCheck();
+	installDefaultTmpConsumerProbe();
 
 	// The first tick goes out NOW, on this turn. It waited 30s here until
 	// 2026-09-01, commented "let the server settle" — but nothing in a tick

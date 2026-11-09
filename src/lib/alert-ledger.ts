@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { logger, stateDir, postDiscord as postDiscordSink } from '../host.js';
 import { writeJsonAtomic } from './atomic-json.js';
-import { createPager, DAY_MS, HOUR_MS as RE_ALERT_MS } from './job-runner.js';
+import { createPager, DAY_MS, HOUR_MS as RE_ALERT_MS, repageDue } from './job-runner.js';
 
 /**
  * How often an ADVISORY re-posts while its condition holds (fleet-manager#61).
@@ -114,6 +114,16 @@ export async function alertOnce(
 		persist: saveAlertLedger,
 	});
 	await pager.page(key, content);
+}
+
+/**
+ * Would {@link alertOnce} post for `key` right now? For a caller whose
+ * message costs something to compose (a probe on the node) and should pay
+ * that only when the post is actually going out, not on every suppressed tick.
+ */
+export function alertDue(key: string, repageMs: number = RE_ALERT_MS): boolean {
+	loadAlertLedger();
+	return repageDue(pagedAlerts[key], Date.now(), repageMs);
 }
 
 /**

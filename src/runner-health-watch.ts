@@ -10,7 +10,7 @@ import { jobRecords } from './job-history-store.js';
 import { nodeOf } from './runners/census.js';
 import { admissionVerdictsForReport, refusedRunsFor } from './admission-verdict-store.js';
 import type { ReserveSource } from './lib/job-reserve.js';
-import { ADVISORY_REPAGE_MS, alertOnce, clearAlert } from './lib/alert-ledger.js';
+import { ADVISORY_REPAGE_MS, alertDue, alertOnce, clearAlert } from './lib/alert-ledger.js';
 import { selfHostname } from './lib/runner-health-shared.js';
 import {
 	diskReadingsForReport,
@@ -24,6 +24,13 @@ import {
 	TMP_WATCH_PAGE_MARGIN_MB,
 	type DiskWatchLevel,
 } from './runners/disk-watch.js';
+import {
+	formatTmpConsumers,
+	probeTmpConsumers,
+	TMP_CONSUMER_MIN_FILE_MB,
+	TMP_CONSUMER_RECENT_MIN,
+	type TmpConsumerProbe,
+} from './runners/tmp-consumers.js';
 import { backstopMachinesReader } from './runners/backstop-machines.js';
 import { mintsOnDemand, type MintBearingNode } from './lib/node-role.js';
 import { TMP_FREE_FLOOR_MB } from './lib/jit-naming.js';
@@ -59,6 +66,59 @@ export function __setSupervisionCheckerForTesting(
  */
 export function installDefaultSupervisionCheck(): void {
 	supervisionCheck ??= checkSupervision;
+}
+
+/**
+ * The /tmp consumer probe (`runners/tmp-consumers.ts`), or null to skip it.
+ * Null by default for the same reason as {@link supervisionCheck}: it runs a
+ * command on the node. The real process installs it beside the supervision
+ * probe; tests opt in with one aimed at a fixture directory.
+ */
+let tmpConsumerProbe: TmpConsumerProbe | null = null;
+
+export function __setTmpConsumerProbeForTesting(fn: TmpConsumerProbe | null): void {
+	tmpConsumerProbe = fn;
+}
+
+/** {@link installDefaultSupervisionCheck}'s twin for the /tmp consumer probe. */
+export function installDefaultTmpConsumerProbe(): void {
+	tmpConsumerProbe ??= probeTmpConsumers;
+}
+
+/** Where to look by hand, said in every /tmp alert whatever the probe found. */
+const TMP_LOOK_HINT =
+	'Known consumers: Claude Code scratchpads under `/tmp/claude-<uid>/` (always on /tmp, ' +
+	"whatever TMPDIR says), tool temp copies (`tempfile.mkdtemp`, a JVM's java.io.tmpdir, a " +
+	'stripped-env subprocess). Filling it now: `du -xsh /tmp/claude-*/*/* | sort -h | tail -5` and ' +
+	'`find /tmp -xdev -type f -size +100M -mmin -180 -exec ls -lh {} +`; old leftovers: ' +
+	'`find /tmp -maxdepth 1 -mmin +60`.';
+
+/**
+ * The evidence block for a /tmp alert about to post under `key`: what the
+ * probe saw on `node`, or why it could not look. Empty when no probe is
+ * installed, and NOT RUN when `alertOnce` would suppress the post anyway — a
+ * suppressed tick must not pay an ssh and a `du` for a message nobody sees.
+ * Never throws: the alert goes out whatever happens here.
+ */
+async function tmpEvidence(node: string, key: string, repageMs?: number): Promise<string> {
+	if (tmpConsumerProbe === null || !alertDue(key, repageMs)) return '';
+	let result: Awaited<ReturnType<TmpConsumerProbe>>;
+	try {
+		result = await tmpConsumerProbe(node);
+	} catch (err) {
+		result = { ok: false, why: err instanceof Error ? err.message : String(err) };
+	}
+	if (!result.ok) {
+		return `\nThe consumer probe on \`${node}\` failed (${result.why}), so nothing is named here.`;
+	}
+	const rows = formatTmpConsumers(result.consumers);
+	if (rows.length === 0) {
+		return (
+			`\nOn \`${node}\` now: no file over ${TMP_CONSUMER_MIN_FILE_MB}MB written in the last ` +
+			`${TMP_CONSUMER_RECENT_MIN} min and no large Claude session dir — many small or older files.`
+		);
+	}
+	return `\nLargest on \`${node}\` now:\n${rows.join('\n')}`;
 }
 
 /**
@@ -339,9 +399,14 @@ export async function checkDiskWatch(data: TickReport): Promise<void> {
 		// node-compile-cache and 580 leaked `tmp.*` dirs on claw-6), and ssh probes
 		// carry none. tmpfs pages are RAM either way, and the dispatcher still
 		// refuses a mint under the floor. So the floor and both lines stay as
-		// they are; what changed is what a crossing MEANS — not "a job leaked",
-		// but "something that ignores TMPDIR is filling RAM" — and the messages
-		// say so.
+		// they are; what changed is what a crossing MEANS — not "a job leaked".
+		//
+		// AND NOT A GUESS AT WHO (2026-11-08). The advisory used to assert
+		// "something that ignores TMPDIR" and point at `-mmin +60` leftovers;
+		// that day it was a live Claude session's scratchpad holding four
+		// fresh 2.4 GB sqlite copies, and the hint sent the search to old
+		// files. A /tmp alert now carries what `runners/tmp-consumers.ts` saw
+		// on the node, or why it could not look.
 		const tmpSizeMb = reading.tmpSizeMb ?? null;
 		if (tmpSizeMb !== null && tmpIsSmall(tmpSizeMb)) {
 			tmpSmall[node] = tmpSizeMb;
@@ -364,30 +429,36 @@ export async function checkDiskWatch(data: TickReport): Promise<void> {
 		if (tmp.level !== 'page') clearAlert(`diskwatch:tmp:page:${node}`);
 		if (tmp.level !== 'advisory') clearAlert(`diskwatch:tmp:advisory:${node}`);
 		if (tmp.level === 'advisory') {
+			const key = `diskwatch:tmp:advisory:${node}`;
+			const evidence = await tmpEvidence(node, key, ADVISORY_REPAGE_MS);
 			await alertOnce(
-				`diskwatch:tmp:advisory:${node}`,
+				key,
 				`⚠️ **disk** (reported by \`${selfHostname()}\`): \`${node}\`'s /tmp has ${tmp.freeGb}GB free — ` +
 					`within ${tmpAdvisoryLineMb(tmpSizeMb) - TMP_FREE_FLOOR_MB}MB of the ` +
-					`${TMP_FREE_FLOOR_MB}MB floor under which the dispatcher refuses to mint there. ` +
-					"A job's own TMPDIR is on disk, so this is something that ignores TMPDIR (a JVM's " +
-					'java.io.tmpdir, a stripped-env subprocess, an ssh probe)' +
+					`${TMP_FREE_FLOOR_MB}MB floor under which the dispatcher refuses to mint there.` +
+					evidence +
+					'\n' +
+					TMP_LOOK_HINT +
 					(onDemand.includes(node)
 						? ''
-						: ' or a job that is not (`fleet throttle --check --machine ' +
-							node +
-							'`, JOBTMP-BAD)') +
-					'. `find /tmp -maxdepth 1 -mmin +60` names the leftovers.',
+						: ` A CI job's own TMPDIR is on disk unless it is JOBTMP-BAD ` +
+							`(\`fleet throttle --check --machine ${node}\`).`),
 				ADVISORY_REPAGE_MS
 			);
 		} else if (tmp.level === 'page') {
 			const cost = onDemand.includes(node)
 				? ' On this node that includes the pm2-host deploys nothing else can run.'
 				: '';
+			const key = `diskwatch:tmp:page:${node}`;
+			const evidence = await tmpEvidence(node, key);
 			await alertOnce(
-				`diskwatch:tmp:page:${node}`,
+				key,
 				`🔥 **disk** (reported by \`${selfHostname()}\`): \`${node}\`'s /tmp has ${tmp.freeGb}GB free — ` +
 					`${TMP_WATCH_PAGE_MARGIN_MB}MB from the ${TMP_FREE_FLOOR_MB}MB mint floor, under which the ` +
-					`dispatcher refuses EVERY mint there, forced or not.${cost} Free /tmp now.`
+					`dispatcher refuses EVERY mint there, forced or not.${cost} Free /tmp now.` +
+					evidence +
+					'\n' +
+					TMP_LOOK_HINT
 			);
 		}
 
