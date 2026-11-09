@@ -142,6 +142,18 @@ function git(dir, args, opts = {}) {
 	if (opts.network && /^https:/.test(remoteUrl('x/y'))) {
 		pre.push('-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential');
 	}
+	// A file:// remote is a CI job's own checkout (lint.yml), which carries no
+	// uploadpack.* config. Its upload-pack would then ignore --filter and send
+	// every historical blob, and a checkout that is itself a blobless partial
+	// clone never had them: pack-objects dies (fleet-manager#78, claw-1's warm
+	// work tree, 2026-11-09). `-c` does not reach a local upload-pack, so the
+	// settings go on the command that starts it.
+	if (opts.network && /^file:/.test(remoteUrl('x/y'))) {
+		pre.push(
+			'-c',
+			'remote.origin.uploadpack=git -c uploadpack.allowFilter=true -c uploadpack.allowAnySHA1InWant=true upload-pack'
+		);
+	}
 	const out = execFileSync('git', [...pre, ...args], {
 		env: opts.network ? GIT_ENV : { ...GIT_ENV, GIT_NO_LAZY_FETCH: '1' },
 		input: opts.input,

@@ -278,3 +278,33 @@ test('under node --test, a reader with no FLEET_SOURCE_URL refuses instead of re
 		if (saved !== undefined) process.env.FLEET_SOURCE_URL = saved;
 	}
 });
+
+test('a CI workspace that is itself a partial clone is readable over file:// (fleet-manager#78)', () => {
+	// lint.yml points FLEET_SOURCE_URL at the job's own checkout. That checkout
+	// carries no uploadpack.* config, so a file:// upload-pack ignores the
+	// blobless filter and tries to send EVERY historical blob. A warm listener's
+	// persistent work tree on claw-1 was a blobless partial clone: the blobs of
+	// old commits were never there, and every fetch died in pack-objects.
+	withRemotes((fx) => {
+		fx.push('WolffM/hub', { 'old.txt': 'gone soon\n', 'keep.txt': '1\n' });
+		const sha = fx.push('WolffM/hub', { 'old.txt': null, 'keep.txt': '2\n' });
+		const workspace = join(fx.root, 'workspace');
+		execFileSync(
+			'git',
+			[
+				'clone',
+				'-q',
+				'--no-local',
+				'--filter=blob:none',
+				`file://${fx.remote('WolffM/hub')}`,
+				workspace,
+			],
+			{ env: NO_GIT_ENV, stdio: 'pipe' }
+		);
+		process.env.FLEET_SOURCE_URL = `file://${workspace}/.git`;
+		forgetHandles();
+		const h = shipped('WolffM/hub');
+		assert.equal(h.sha, sha);
+		assert.equal(h.read('keep.txt'), '2\n');
+	});
+});
