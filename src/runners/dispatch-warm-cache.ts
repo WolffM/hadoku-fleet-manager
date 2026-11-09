@@ -9,7 +9,7 @@ import { type GhLike } from '../lib/fleet-vocabulary.js';
 import { runnerTarballUrl } from './ephemeral-exec-jit.js';
 import { observeWarmNode } from './dispatch-warm-cache-observe.js';
 import { actOnWarmNode } from './dispatch-warm-cache-act.js';
-import { warmYieldStep } from './warm-yield.js';
+import { holdWarmChangesForQueue, warmYieldStep } from './warm-yield.js';
 import { heavyMarkedRecently } from './dispatch-pass-state.js';
 import { slowReposOn } from './placement-slow.js';
 import { recordWarmListenerDecisions, type WarmListenerDecision } from './decision-log-record.js';
@@ -397,6 +397,13 @@ export async function dispatchWarmCache(
 		served: fleetServedJobs(),
 		nowMs,
 	});
+	// A node a job is waiting for keeps its slot free for JIT: no fill, no
+	// rotate onto it (warm-nofill; `holdWarmChangesForQueue`).
+	holdWarmChangesForQueue(
+		decisions,
+		planNodes.map((n) => n.node),
+		nowMs
+	);
 	// THE DECISION LOG (T1): each node's slot decision, as the act loop below
 	// will read it — the warm path's placement, which `planTick` never sees.
 	// Written only when a node's decision changes; never throws.

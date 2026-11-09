@@ -126,6 +126,8 @@ export interface WarmYieldEntry {
 export type WarmYieldDoc = Readonly<Record<string, WarmYieldEntry>>;
 
 let requests = new Map<string, WarmYieldRequest>();
+/** node -> the oldest job the last pass saw waiting for it (see {@link setWarmYieldWaiting}). */
+let waiting = new Map<string, { job: WarmYieldJob; atMs: number }>();
 let entries: Map<string, WarmYieldEntry> | null = null;
 let fileDir: string | null = null;
 
@@ -196,6 +198,24 @@ export function warmYieldRequestFor(node: string, nowMs: number): WarmYieldReque
 	return r && nowMs - r.atMs <= WARM_YIELD_REQUEST_TTL_MS ? r : undefined;
 }
 
+/**
+ * The pass's WAITING set, replacing the last pass's wholesale: every node a
+ * job has waited {@link WARM_YIELD_AFTER_MS} for, refused there only on
+ * capacity, and that node would admit with its warm slot given back — the
+ * same test a request is made from, for every such node, not only the one a
+ * request names. The warm planner may not fill or rotate these
+ * (warm-nofill, 2026-11-09).
+ */
+export function setWarmYieldWaiting(next: ReadonlyMap<string, WarmYieldJob>, nowMs: number): void {
+	waiting = new Map([...next].map(([node, job]) => [node, { job, atMs: nowMs }]));
+}
+
+/** The job waiting for `node`, if the last pass saw one recently enough. */
+export function warmYieldWaitingFor(node: string, nowMs: number): WarmYieldJob | undefined {
+	const w = waiting.get(node);
+	return w && nowMs - w.atMs <= WARM_YIELD_REQUEST_TTL_MS ? w.job : undefined;
+}
+
 /** A job waited for each of these nodes on capacity this pass. */
 export function noteWarmYieldDemand(nodes: Iterable<string>, nowMs: number): void {
 	const b = book();
@@ -262,6 +282,7 @@ export function pruneWarmYields(nowMs: number): void {
 /** Test seam: an empty book, read from and written to `dir` (null = stateDir). */
 export function __resetWarmYieldsForTesting(dir: string | null = null): void {
 	requests = new Map();
+	waiting = new Map();
 	entries = null;
 	fileDir = dir;
 }

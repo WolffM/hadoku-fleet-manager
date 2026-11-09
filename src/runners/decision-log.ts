@@ -230,6 +230,14 @@ export function emitDecisions(
 	}
 }
 
+/**
+ * Forget the last row written for one node's warm `kind`, so the next one is
+ * written even if it repeats it: a new episode of the same decision.
+ */
+export function forgetWarmDecision(kind: DecisionRecord['kind'], node: string): void {
+	lastWritten.delete(`${kind}:${node}`);
+}
+
 function forgetStale(nowMs: number): void {
 	if (nowMs - lastForgetMs < 10 * 60_000) return;
 	lastForgetMs = nowMs;

@@ -265,13 +265,22 @@ export function recordWarmListenerDecisions(
 /** One warm-yield decision on one node (warm-yield.ts). */
 export interface WarmYieldDecision {
 	node: string;
-	action: 'yield' | 'yield-refused' | 'refill-suppressed' | 'refill';
+	action:
+		| 'yield'
+		| 'yield-refused'
+		| 'refill-suppressed'
+		| 'refill'
+		| 'fill-suppressed'
+		| 'rotate-suppressed';
 	/** The repo the yielded (or kept) listener holds; `null` for an empty slot. */
 	warmRepo: string | null;
 	/** The waiting job the slot is for. */
 	job: { repo: string; runId: number; jobId: number; jobName?: string; queuedSec: number };
-	/** Other claws that could mint `warmRepo`'s job when the pass asked. */
-	spare: number;
+	/**
+	 * Other claws that could mint `warmRepo`'s job when the pass asked; `null`
+	 * where no slot is given up, so there is nothing to cover.
+	 */
+	spare: number | null;
 	reason: string;
 }
 
@@ -303,7 +312,9 @@ export function recordWarmYieldDecision(d: WarmYieldDecision, nowMs: number): nu
 			r.jobName = d.job.jobName ?? null;
 			r.queuedSec = d.job.queuedSec;
 		}
-		r.reason = `${d.reason} [for ${d.job.repo} job ${d.job.jobId}; spare=${d.spare}]`;
+		r.reason =
+			`${d.reason} [for ${d.job.repo} job ${d.job.jobId}` +
+			(d.spare === null ? ']' : `; spare=${d.spare}]`);
 		return emitDecisions([r], nowMs);
 	} catch (err) {
 		warn('could not record a warm-yield decision', err, nowMs);

@@ -43,6 +43,8 @@ import { evictWarmListener } from './ephemeral-exec.js';
 import { warmBackoffActive } from './warm-backoff.js';
 import { recordWarmYieldDecision } from './decision-log-record.js';
 import type { ObservedWarmNode } from './dispatch-warm-cache-state.js';
+import type { WarmCacheDecision } from './ephemeral-warm.js';
+import { forgetWarmDecision } from './decision-log.js';
 import type { shellOnNode } from './ephemeral-shared.js';
 import {
 	WARM_YIELD_AFTER_MS,
@@ -54,9 +56,11 @@ import {
 	pruneWarmYields,
 	recordWarmYield,
 	setWarmYieldRequests,
+	setWarmYieldWaiting,
 	warmSlotYielded,
 	warmYieldEntry,
 	warmYieldRequestFor,
+	warmYieldWaitingFor,
 	type WarmYieldJob,
 	type WarmYieldRequest,
 } from './warm-yields.js';
@@ -158,13 +162,25 @@ export class WarmYieldPass {
 	 * first (planTick's own order). A node whose listener's repo would be left
 	 * uncovered is declined, not requested.
 	 */
-	finish(): { requests: WarmYieldRequest[]; declined: WarmYieldDecline[] } {
+	finish(): {
+		requests: WarmYieldRequest[];
+		declined: WarmYieldDecline[];
+		waiting: Map<string, WarmYieldJob>;
+	} {
 		const requests: WarmYieldRequest[] = [];
 		const declined: WarmYieldDecline[] = [];
+		const waiting = new Map<string, WarmYieldJob>();
 		const taken = new Set<string>();
 		const byName = new Map(this.finalNodes.map((m) => [m.name, m]));
+		const empty = (node: string): boolean => (byName.get(node)?.warmRepo ?? null) === null;
 		for (const c of this.candidates) {
-			for (const node of c.nodes) {
+			for (const node of c.nodes) if (!waiting.has(node)) waiting.set(node, c.job);
+			// An EMPTY slot first: it gives nothing up, and a request spent on a
+			// node whose listener turns out busy leaves the job waiting while an
+			// empty slot beside it stays reserved (claw-4 and claw-10, 09:14Z
+			// 2026-11-09). Otherwise walk order.
+			const order = [...c.nodes.filter(empty), ...c.nodes.filter((n) => !empty(n))];
+			for (const node of order) {
 				if (taken.has(node)) continue;
 				const warmRepo = byName.get(node)?.warmRepo ?? null;
 				const cover = warmRepoCover(this.finalNodes, node, warmRepo, taken);
@@ -178,7 +194,7 @@ export class WarmYieldPass {
 				break;
 			}
 		}
-		return { requests, declined };
+		return { requests, declined, waiting };
 	}
 }
 
@@ -214,8 +230,9 @@ const suppressLogged = new Map<string, string>();
 
 /** Publish one pass's answer: the requests, the demand, and a line per new decline. */
 export function publishWarmYieldPass(pass: WarmYieldPass, nowMs: number): WarmYieldRequest[] {
-	const { requests, declined } = pass.finish();
+	const { requests, declined, waiting } = pass.finish();
 	setWarmYieldRequests(requests);
+	setWarmYieldWaiting(waiting, nowMs);
 	noteWarmYieldDemand(pass.demand, nowMs);
 	for (const r of requests) {
 		logger.info(
@@ -412,8 +429,67 @@ function yielded(
 	return { hold: true, reason: `yielded to the queue: ${reason}`, evicted };
 }
 
+/** node -> the suppression episode in progress: the action its one row recorded. */
+const noFillEpisodes = new Map<string, string>();
+
+/**
+ * NO FILL, NO ROTATE ONTO A WAITED-FOR NODE (warm-nofill, 2026-11-09). Turns
+ * the planner's `fill` or `rotate` on a node a job is waiting for (the pass's
+ * WAITING set: refused there only on capacity, and admitted with the warm
+ * slot given back — the yield's own test) into `locked`, so the slot is not
+ * handed to a fresh listener GitHub may give any job of that repo. Live:
+ * claw-10 filled at 09:15:34Z while a cardtable job waited 246 s refused
+ * "at capacity: 1/1" there; claw-4 rotated to a fresh bomberman listener at
+ * 09:16:34Z.
+ *
+ * `keep` and the rest pass through untouched: a busy listener is never
+ * touched here, and an idle one is the yield's to take, under its cover rule.
+ * One `warm-refill` row per episode, an episode ending on the first tick the
+ * node is not waited for. Mutates `decisions`.
+ */
+export function holdWarmChangesForQueue(
+	decisions: Map<string, WarmCacheDecision>,
+	nodes: readonly string[],
+	nowMs: number
+): void {
+	for (const node of nodes) {
+		const job = warmYieldWaitingFor(node, nowMs);
+		if (!job) {
+			noFillEpisodes.delete(node);
+			continue;
+		}
+		const d = decisions.get(node);
+		if (!d || (d.action !== 'fill' && d.action !== 'rotate')) continue;
+		decisions.set(node, { action: 'locked' });
+		const action = d.action === 'fill' ? 'fill-suppressed' : 'rotate-suppressed';
+		if (noFillEpisodes.get(node) === action) continue;
+		noFillEpisodes.set(node, action);
+		const change = d.action === 'fill' ? `fill with ${d.repo}` : `rotate ${d.from} -> ${d.to}`;
+		const reason =
+			`not ${d.action === 'fill' ? 'filling' : 'rotating'} its warm slot (${change}): ` +
+			`${job.repo} job ${job.jobId} has waited ${job.queuedSec}s for it, refused only on ` +
+			'capacity — the slot stays free for JIT';
+		// An earlier episode may have written this very row; the log keeps a
+		// row only when it differs from the last, which would hide this one.
+		forgetWarmDecision('warm-refill', node);
+		recordWarmYieldDecision(
+			{
+				node,
+				action,
+				warmRepo: d.action === 'fill' ? null : d.from,
+				job,
+				spare: null,
+				reason,
+			},
+			nowMs
+		);
+		logger.info(`[warm-yield] ${node}: ${reason}`);
+	}
+}
+
 /** Test seam. */
 export function __resetWarmYieldLogForTesting(): void {
 	declinedLogged.clear();
 	suppressLogged.clear();
+	noFillEpisodes.clear();
 }

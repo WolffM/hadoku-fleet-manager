@@ -24,7 +24,10 @@ export type DecisionKind =
 	| 'warm-yield'
 	/** A yield the warm tick would not carry out (listener busy or unconfirmed). */
 	| 'warm-yield-refused'
-	/** A yielded slot kept empty (refill-suppressed) or handed back (refill). */
+	/**
+	 * A yielded slot kept empty (refill-suppressed) or handed back (refill); a
+	 * fill or rotate held off a node a job waits for (fill-/rotate-suppressed).
+	 */
 	| 'warm-refill';
 
 /** What one node looked like to the walk at the moment of the decision. */
@@ -98,7 +101,7 @@ export interface DecisionRecord {
 	/**
 	 * `warm-listener`: fill, keep, rotate, idle, locked, withheld, never-warm.
 	 * `warm-yield`: yield. `warm-yield-refused`: yield-refused.
-	 * `warm-refill`: refill-suppressed, refill.
+	 * `warm-refill`: refill-suppressed, refill, fill-suppressed, rotate-suppressed.
 	 */
 	action: string | null;
 	capacity: NodeFigures[];

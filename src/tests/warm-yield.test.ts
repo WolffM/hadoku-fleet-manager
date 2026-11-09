@@ -438,3 +438,147 @@ test('one yield is ONE warm-yield row; the suppressed refill after it is its own
 	assert.equal(refills[0].queuedSec, null);
 	assert.match(refills[0].reason ?? '', /job 700/);
 });
+
+// WARM-NOFILL (2026-11-09): the planner may not fill or rotate a slot on a
+// node a job is waiting for. Live: claw-10 filled at 09:15:34Z while a
+// cardtable job waited 246 s refused there "at capacity: 1/1"; claw-4 rotated
+// to a fresh bomberman listener at 09:16:34Z.
+
+const BOMB = 'WolffM/hadoku-bomberman';
+const OTHER = 'claw-fixture';
+const EMPTY_SIM = () => ({ marker: null, activeUnits: new Set<string>() });
+const nofillRows = (action: string) =>
+	rows.filter((r) => r.kind === 'warm-refill' && r.action === action);
+
+/** claw-10 empty, and another empty node ahead of it that takes the job's one request. */
+async function waitOnEmptyClaw10(nowMs: number, sec = 90) {
+	return pass(
+		[claw10({ name: OTHER, warmRepo: undefined }), claw10({ warmRepo: undefined }), free('claw-1')],
+		[jdkJob(nowMs, sec)],
+		nowMs
+	);
+}
+
+test('nofill: no fill on a node a jdk21 job waits for at capacity; filled once the job is placed', async () => {
+	writeRecord({ runner: 'claw-10', repo: SITE, startedAt: new Date().toISOString() });
+	const now = Date.now();
+	await waitOnEmptyClaw10(now);
+	assert.equal(
+		warmYieldRequestFor(OTHER, now)?.job.jobId,
+		700,
+		'the request went to the other node'
+	);
+	assert.equal(warmYieldRequestFor('claw-10', now), undefined);
+
+	const held = await warmTick(now + 5_000, { sim: EMPTY_SIM() });
+	assert.equal(held.res.filled, 0, 'the slot stays free for JIT');
+	assert.equal(held.res.locked, 1);
+	const s = nofillRows('fill-suppressed');
+	assert.equal(s.length, 1);
+	assert.equal(s[0].winner, 'claw-10');
+	assert.equal(s[0].jobId, null, 'the job is named in reason only');
+	assert.match(s[0].reason ?? '', /hadoku-cardtable job 700 has waited 90s/);
+	assert.match(s[0].reason ?? '', /fill with WolffM\/hadoku_site/);
+	assert.doesNotMatch(s[0].reason ?? '', /spare=/);
+	const listener = rows.filter((r) => r.kind === 'warm-listener' && r.winner === 'claw-10');
+	assert.equal(listener.at(-1)?.action, 'locked');
+
+	// Placed: the next pass sees nothing waiting.
+	await pass([claw10({ warmRepo: undefined }), free('claw-1')], [], now + 15_000);
+	const after = await warmTick(now + 65_000, { sim: EMPTY_SIM() });
+	assert.equal(after.res.filled, 1, 'filled once nothing waits for claw-10');
+});
+
+test('nofill: a waiting set older than one pass TTL no longer holds the fill', async () => {
+	writeRecord({ runner: 'claw-10', repo: SITE, startedAt: new Date().toISOString() });
+	const now = Date.now();
+	await waitOnEmptyClaw10(now);
+	const later = await warmTick(now + 60_000, { sim: EMPTY_SIM() });
+	assert.equal(later.res.filled, 1, 'a stale pass is not a waiting job');
+	assert.equal(nofillRows('fill-suppressed').length, 0);
+});
+
+test('nofill: a job queued under a minute holds nothing (the yield signal, not a second one)', async () => {
+	writeRecord({ runner: 'claw-10', repo: SITE, startedAt: new Date().toISOString() });
+	const now = Date.now();
+	await waitOnEmptyClaw10(now, 30);
+	const t = await warmTick(now + 5_000, { sim: EMPTY_SIM() });
+	assert.equal(t.res.filled, 1);
+});
+
+test('nofill: no rotate onto a node a job waits for; the idle listener it holds stays', async () => {
+	// The planner wants bomberman on claw-10; no spare claw covers hadoku_site,
+	// so the yield declines and only the rotate is in question.
+	for (let i = 0; i < 6; i++)
+		writeRecord({ runner: 'claw-10', repo: BOMB, startedAt: new Date().toISOString() });
+	const now = Date.now();
+	await pass([claw10()], [jdkJob(now, 90)], now);
+	assert.equal(warmYieldRequestFor('claw-10', now), undefined, 'declined: not covered');
+	const { res, sim, gh } = await warmTick(now + 5_000);
+	assert.equal(res.rotated, 0);
+	assert.equal(res.evicted, 0);
+	assert.equal(res.locked, 1);
+	assert.ok(sim.activeUnits.has(UNIT), 'the hadoku_site listener stays');
+	assert.equal(gh.writes.length, 0);
+	const s = nofillRows('rotate-suppressed');
+	assert.equal(s.length, 1);
+	assert.equal(s[0].repo, SITE);
+	assert.match(s[0].reason ?? '', /rotate WolffM\/hadoku_site -> WolffM\/hadoku-bomberman/);
+});
+
+test('nofill: control — the same rotate with nothing waiting goes ahead', async () => {
+	for (let i = 0; i < 6; i++)
+		writeRecord({ runner: 'claw-10', repo: BOMB, startedAt: new Date().toISOString() });
+	const now = Date.now();
+	await pass([claw10()], [], now);
+	const { res } = await warmTick(now + 5_000);
+	assert.equal(res.rotated, 1);
+	assert.equal(nofillRows('rotate-suppressed').length, 0);
+});
+
+test('nofill: a busy listener the planner keeps is kept, waiting job or not', async () => {
+	writeRecord({ runner: 'claw-10', repo: SITE, startedAt: new Date().toISOString() });
+	const now = Date.now();
+	await pass([claw10()], [jdkJob(now, 90)], now);
+	const { res, sim } = await warmTick(now + 5_000, { busy: true });
+	assert.equal(res.kept, 1);
+	assert.equal(res.locked, 0);
+	assert.ok(sim.activeUnits.has(UNIT));
+	assert.equal(nofillRows('fill-suppressed').length + nofillRows('rotate-suppressed').length, 0);
+});
+
+test('nofill: one row per episode, and a new episode writes a new one', async () => {
+	writeRecord({ runner: 'claw-10', repo: SITE, startedAt: new Date().toISOString() });
+	const now = Date.now();
+	for (let i = 0; i < 3; i++) {
+		const t = now + i * 60_000;
+		await waitOnEmptyClaw10(t, 90 + i * 60);
+		const r = await warmTick(t + 5_000, { sim: EMPTY_SIM() });
+		assert.equal(r.res.filled, 0);
+	}
+	assert.equal(nofillRows('fill-suppressed').length, 1, 'three suppressed ticks, one row');
+
+	// The job is placed: the episode ends and the slot fills.
+	const t3 = now + 3 * 60_000;
+	await pass([claw10({ warmRepo: undefined }), free('claw-1')], [], t3);
+	assert.equal((await warmTick(t3 + 5_000, { sim: EMPTY_SIM() })).res.filled, 1);
+
+	// The listener is gone again and another job waits: a second episode.
+	const t4 = now + 4 * 60_000;
+	await waitOnEmptyClaw10(t4);
+	assert.equal((await warmTick(t4 + 5_000, { sim: EMPTY_SIM() })).res.filled, 0);
+	assert.equal(nofillRows('fill-suppressed').length, 2, 'the second episode is recorded');
+});
+
+test('an empty slot is asked to yield ahead of a busy listener beside it', async () => {
+	// 09:14Z 2026-11-09: cardtable job 129073898756's one request went to
+	// claw-4's busy listener while claw-10's slot sat empty and reserved.
+	const now = Date.now();
+	await pass(
+		[claw10({ name: OTHER }), claw10({ warmRepo: undefined }), free('claw-1'), free('claw-3')],
+		[jdkJob(now, 90)],
+		now
+	);
+	assert.equal(warmYieldRequestFor('claw-10', now)?.warmRepo, null);
+	assert.equal(warmYieldRequestFor(OTHER, now), undefined);
+});
