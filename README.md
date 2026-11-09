@@ -187,51 +187,48 @@ mgmt-api cron jobs run this CLI and parse its **stdout as JSON, before looking
 at the exit code** — these gates exit non-zero ON FINDINGS, so reading the exit
 code first would turn every real finding into "the checker broke".
 
-| command                                                      | cron job                |
-| ------------------------------------------------------------ | ----------------------- |
-| `fleet drain-check --json`                                   | `ci:drain-enforced`     |
-| `fleet benchmark --due 30 --cadence --json`                  | `ci:fleet-benchmark`    |
-| `fleet reconcile --json`                                     | `ci:fleet-coverage`     |
-| `fleet toolchain --json`                                     | `ci:fleet-toolchain`    |
-| `fleet converge-toolchain --refresh --json`                  | `ci:toolchain-refresh`  |
-| `fleet bootcamp --write --site-writer --idle-wait 20 --json` | `ci:bootcamp`           |
-| `fleet header-audit --json`                                  | `ci:header-fleet`       |
-| `fleet identity-model --fleet --json`                        | `ci:identity-model`     |
-| `fleet cleanup --json --confirm`                             | `ci:claw-cleanup`       |
-| `fleet check-runner-var --json`                              | `ci:runner-var`         |
-| `fleet check-site-token --json`                              | `ci:site-token`         |
-| `fleet egress-slices --json`                                 | `ci:egress-slices`      |
-| `fleet queue-health --json`                                  | `ci:queue-health`       |
-| `fleet reap-trend --json`                                    | `ci:reap-timeout-trend` |
-| `fleet preflight --json`                                     | `ci:fleet-preflight`    |
-| `fleet srv-drift --json`                                     | `ci:srv-drift`          |
-| `fleet hosting-placement --json`                             | `ci:fleet-placement`    |
-| `fleet inventory --check --json`                             | `ci:fleet-inventory`    |
-| `fleet doctor --cadence --write --json`                      | `ci:health-refresh`     |
-| `fleet service-inventory --slices --write --json`            | `ci:slice-inventory`    |
-| `fleet health-freshness --json`                              | `ci:health-freshness`   |
-| `fleet node-users --json`                                    | `ci:node-users`         |
-| `fleet runner-units --json`                                  | `ci:runner-units`       |
-| `fleet fleet-kills --days 2 --json`                          | `ci:fleet-kills`        |
-| `fleet check-schedule --json`                                | `ci:schedule`           |
-| `fleet warm-canary --json`                                   | `ci:warm-canary`        |
-| `fleet history-coverage --json`                              | `ci:audit-gates`        |
-| `fleet contract-consumers --json`                            | `ci:audit-gates`        |
-| `fleet tier-fleet --json`                                    | `ci:audit-gates`        |
-| `fleet capabilities --json`                                  | `ci:audit-gates`        |
-| `fleet boundary-contracts --json`                            | `ci:audit-gates`        |
-| `fleet label-floor --json`                                   | `ci:label-floor`        |
-| `fleet throttle --check --json`                              | `ci:audit-gates`        |
-| `fleet mf-externals --json`                                  | `ci:audit-gates`        |
-| `fleet identity --json`                                      | `ci:audit-gates`        |
+| command                                                                       | cron job               |
+| ----------------------------------------------------------------------------- | ---------------------- |
+| `fleet benchmark --due 30 --cadence --json`                                   | `ci:fleet-benchmark`   |
+| `fleet reconcile --json`                                                      | `ci:fleet-coverage`    |
+| `fleet converge-toolchain --refresh --json`                                   | `ci:toolchain-refresh` |
+| `fleet bootcamp --write --site-writer --idle-wait 20 --prove --due 25 --json` | `ci:bootcamp`          |
+| `fleet header-audit --json`                                                   | `ci:header-fleet`      |
+| `fleet identity-model --fleet --json`                                         | `ci:identity-model`    |
+| `fleet cleanup --json --confirm`                                              | `ci:claw-cleanup`      |
+| `fleet check-site-token --json`                                               | `ci:vault-audit`       |
+| `fleet egress-slices --json`                                                  | `ci:egress-slices`     |
+| `fleet queue-health --json`                                                   | `ci:queue-health`      |
+| `fleet preflight --json`                                                      | `ci:fleet-preflight`   |
+| `fleet hosting-placement --json`                                              | `ci:fleet-placement`   |
+| `fleet doctor --cadence --write --json`                                       | `ci:health-refresh`    |
+| `fleet service-inventory --slices --write --json`                             | `ci:slice-inventory`   |
+| `fleet fleet-kills --days 2 --json`                                           | `ci:fleet-kills`       |
+| `fleet warm-canary --json`                                                    | `ci:warm-canary`       |
+| `fleet history-coverage --json`                                               | `ci:audit-gates`       |
+| `fleet tier-fleet --json`                                                     | `ci:audit-gates`       |
+| `fleet boundary-contracts --json`                                             | `ci:audit-gates`       |
+| `fleet label-floor --json`                                                    | `ci:label-floor`       |
+| `fleet mf-externals --json`                                                   | `ci:audit-gates`       |
+| `fleet identity --json`                                                       | `ci:audit-gates`       |
 
-That table listed SIX of these ten until 2026-09-07 — `drain-check`,
-`benchmark`, `egress-slices` and `queue-health` were under contract and
-undocumented here — which is the third time a hand-kept copy of this list has
-been wrong. It is now GATED: `json-contract-declaration.test.mjs` parses this table out of
-this file and fails the build if it does not match `JSON_CONTRACT` exactly, in
-both directions. Do not edit it by hand without editing the declaration; the
-declaration is the source and this table is a rendering of it.
+Ten entries lost their mgmt-api cron in wave gates2 (2026-11-08) and were not
+replaced one-for-one — a paging unit retired outright, a tandem of a
+GitHub Actions workflow in hadoku_site, or absorbed into another job's own
+page. Each still answers as a real, working subcommand; `MANUAL` in
+`src/lib/job-registry.ts` says, by name, where each one's clock (if any)
+actually is now, and `docs/planning/wave-gates2-2026-11-08.md` has the
+evidence per change. `check-site-token` is the one exception that gained a
+NEW row here instead of losing one: it absorbed into `ci:vault-audit` rather
+than disappearing.
+
+That table listed six of its (then) ten entries until 2026-09-07 — four were
+under contract and undocumented here — which is the third time a hand-kept
+copy of this list has been wrong. It is now GATED: `json-contract-declaration.test.mjs`
+parses this table out of this file and fails the build if it does not match
+`JSON_CONTRACT` exactly, in both directions. Do not edit it by hand without
+editing the declaration; the declaration is the source and this table is a
+rendering of it.
 
 That table is DECLARED in [`scripts/lib/json-contract.mjs`](scripts/lib/json-contract.mjs),
 with the consuming file for each, and gated by the test beside it: renaming one
@@ -239,26 +236,30 @@ of these subcommands, or dropping its `--json` handling, fails `pnpm run check`
 here rather than a cron in hadoku_site at 03:00. Renaming one is a cross-repo
 change — the failure message names the mgmt-api file to fix in the same pass.
 
-`ci:audit-gates` runs three more fleet subcommands (wave 5f, 5h, 5i and 5j lane
-B moved ten of fourteen to the table above one at a time, hence the ten
-`ci:audit-gates` rows above; wave 5j lane B's `mf-externals` and `identity`
-were the last two NON-d3 prose gates), but reads the remaining three's output
-as prose against an `evidence` regex rather than as JSON, so those are
-deliberately not in the table above. Only `slice`/`tool-inventory` (d3's own
-lane) and `ci-watch` are left. It is declared separately, as `PROSE_CONTRACT`
-in the same file, because reading output as prose has its own failure mode:
-that job merges **stdout and stderr** into one value and judges every prose
-gate by a regex over it, so anything this CLI's WRAPPER writes becomes part of
-its verdict.
+`ci:audit-gates` runs five more fleet subcommands under one umbrella job
+(`tier-fleet`, `mf-externals`, `identity`, `history-coverage`,
+`boundary-contracts` — the `ci:audit-gates` rows above), judged by `GateDoc`
+JSON rather than prose: waves 5f, 5h and 5j lane B migrated the last of
+fourteen off prose one at a time, and wave gates2 (2026-11-08) retired the
+other nine outright instead of migrating them (`capabilities`,
+`tool-inventory`, `throttle`, `slice`, `ci-watch`, `contract-consumers` either
+moved to a different clock or became a facet of another registered job —
+see `MANUAL` in `src/lib/job-registry.ts`). `PROSE_CONTRACT` (declared
+separately, in the same file) still pins the ONE umbrella row itself
+(`ci:audit-gates`), because its mgmt-api consumer merges **stdout and
+stderr** into one value for every covered sub, so anything this CLI's
+WRAPPER writes becomes part of its verdict regardless of whether any
+individual sub reads as JSON.
 
 That is not hypothetical — it is what the provenance banner did on 2026-09-07,
 when all fourteen `ci:audit-gates` subcommands were still prose. It made
 `spawnError` ("it never started") unreachable for all of them, and its
 operator-controlled paths could satisfy a gate's `evidence` on their own: with
-the site root under `~/repos`, the substring `repos` matched `check:ci-watch`,
-so a gate that exited 0 having printed nothing reported a pass. `audit-gates.ts`
-now runs its gates with `FLEET_NO_BANNER=1` and reports provenance once for the
-job; `fleet contract-consumers` fails if it stops.
+the site root under `~/repos`, the substring `repos` matched `check:ci-watch`
+(retired wave gates2), so a gate that exited 0 having printed nothing
+reported a pass. `audit-gates.ts` now runs its gates with
+`FLEET_NO_BANNER=1` and reports provenance once for the job; `fleet
+contract-consumers` fails if it stops.
 
 ### The invocation log — which doors anybody opens
 

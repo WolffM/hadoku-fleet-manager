@@ -9,10 +9,10 @@
  * registration-vs-box audit runs from both directions in one subcommand —
  * the evidence table's "MERGE ci:runner-units -> check:runner-identity: the
  * same registration-vs-box question, two directions." THIS FILE IS KEPT, not
- * deleted, because mgmt-api's `ci:runner-units` cron still calls
- * `fleet runner-units --json` and parses this exact document
- * (`services/mgmt-api/src/routes/jobs/runner-units-check.ts`) until the site
- * lane retires that cron.
+ * deleted, as a real, operator-run subcommand for hand-running the
+ * install/unit half alone — its own standing cron (which used to parse this
+ * exact document) is retired, wave gates2 lane F2; see
+ * `MANUAL['runner-units']` in `src/lib/job-registry.ts`.
  *
  * WHY THIS READS THE NODE AND NOT GITHUB
  * -------------------------------------

@@ -364,11 +364,6 @@ const DECLARED = new Map([
 			'with an absolute date.)',
 	],
 	[
-		'scripts/lib/drain-enforcement.test.mjs',
-		'`drainViolations` has no clock at all. It compares a job `startedAt` string to a ' +
-			'drain `since` string, so both sides move together or neither does.',
-	],
-	[
 		'scripts/lib/enroll-node.test.mjs',
 		'`recordedAt` is carried through the enrollment record and asserted verbatim.',
 	],

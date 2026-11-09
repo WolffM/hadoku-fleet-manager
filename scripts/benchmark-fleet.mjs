@@ -282,7 +282,7 @@ async function runCadenceCli({ dueDays, jsonOut, passthru, force, refuseIf, log,
  * the file), so that `runCadence`, `cadenceBands` and the other pure functions
  * above can be imported by a test without that import ALSO parsing argv,
  * ssh-ing to a node, or writing a state file — the same reason
- * `check-health-freshness.mjs` is shaped this way. `benchmark-fleet.test.mjs`
+ * `check-public-history.mjs` is shaped this way. `benchmark-fleet.test.mjs`
  * still drives the real CLI as a subprocess for everything that is cheapest
  * to prove end-to-end (the table, `--from`,
  * `--write`); the cadence's drain/undrain/busy dependencies are the part no
@@ -704,7 +704,7 @@ async function main() {
 	);
 }
 
-// RUN ONLY AS THE CLI ENTRY POINT — the same guard `check-health-freshness.mjs`
+// RUN ONLY AS THE CLI ENTRY POINT — the same guard `check-public-history.mjs`
 // uses, and the reason `runCadence`, `cadenceBands` and the other pure
 // functions above can be imported by a test without that import also parsing
 // argv, ssh-ing to a node, or writing a state file.

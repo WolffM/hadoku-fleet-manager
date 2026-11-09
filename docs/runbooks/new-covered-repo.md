@@ -141,10 +141,14 @@ repos/<owner>/<repo>/actions/runners` lists the new registrations ONLINE.
   exists in the door's table.
 - `scripts/lib/publish-safety-guard.test.mjs` — this file names no address,
   MAC, tailnet name, or other site fact.
-- `fleet reconcile --check-coverage` (nightly `ci:fleet-coverage`) — catches
-  a repo whose coverage has drifted since step 3.
-- `fleet check-runner-var` (nightly `ci:runner-var`) — catches a repo that
-  asks for `vars.CI_RUNNER` without having it, which step 4 depends on being
+- `fleet reconcile --check-coverage` (hand-run) — catches a repo whose
+  coverage has drifted since step 3; the nightly `ci:fleet-coverage` cron
+  runs the same `reconcile` subcommand with `--json` instead, for a
+  different question (does every repo have a runner).
+- `fleet check-runner-var` (hand-run; its own `ci:runner-var` cron retired
+  wave gates2, 2026-11-08 — the SAME check now runs nightly as the
+  `runnerVar` finding inside `ci:fleet-coverage`) — catches a repo that asks
+  for `vars.CI_RUNNER` without having it, which step 4 depends on being
   clean.
 - `hadoku_site`'s `template-runner-form.test.mjs` — keeps a template's hosted
   fallback in place so a not-yet-covered scaffold never queues silently.

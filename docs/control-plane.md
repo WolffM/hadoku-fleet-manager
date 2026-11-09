@@ -161,21 +161,27 @@ Reverting either branch of the switch fails its test.
 `hostBound: true | false`. `true` means the subcommand reads something that
 belongs to THIS box specifically, not the fleet:
 
-| sub                 | reads                                                                                                                     | evidence                                     |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `egress-slices`     | this host's `pm2 jlist` and `/proc/<pid>/cgroup`                                                                          | `scripts/check-egress-slices.mjs:39-40`      |
-| `reap-trend`        | this host's own mgmt-api pm2 log file                                                                                     | `scripts/check-reap-timeout-trend.mjs:46-48` |
-| `srv-drift`         | the `~/srv/hadoku_site` checkout ON this box                                                                              | `scripts/check-srv-drift.mjs:8`              |
-| `hosting-placement` | the controller's placement record (`fleet-hosting.json`, the tenant registry, the converger's last pass) in its state dir | `scripts/hosting-placement.mjs`              |
+| sub                 | reads                                                                                                                     | evidence                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `egress-slices`     | this host's `pm2 jlist` and `/proc/<pid>/cgroup`                                                                          | `scripts/check-egress-slices.mjs:39-40` |
+| `history-coverage`  | `job-history.jsonl` under `HADOKU_STATE_DIR` — THIS process's own recorded ingest                                         | `scripts/check-history-coverage.mjs`    |
+| `hosting-placement` | the controller's placement record (`fleet-hosting.json`, the tenant registry, the converger's last pass) in its state dir | `scripts/hosting-placement.mjs`         |
+| `label-floor`       | `job-history.jsonl` AND `demand-ledger.jsonl` under `HADOKU_STATE_DIR` — same class as `history-coverage`                 | `scripts/check-label-floor.mjs`         |
 
-There were eight. `header-audit`, `identity-model`, `inventory`,
-`check-runner-var` and `check-site-token` read the operator's sibling
-checkouts under `REPOS_DIR`, which only hokon holds. Since fleet-manager#7
-they read each repo's default branch through `scripts/lib/fleet-source.mjs`
-(the `@wolffm/fleet-manager/fleet-source` export), a blobless mirror the
-reader fetches itself, so any host gives the same answer and they carry
-`hostBound: false`. `REPOS_DIR` is now read only under an explicit
-`--worktree` flag.
+Two host-bound gates (`reap-trend`, `srv-drift`) and one coversSub
+(`contract-consumers`) retired outright in wave gates2 (2026-11-08) rather
+than being un-host-bound — each lost its only automated caller to a tandem,
+a merge, or a move off this registry's clock entirely; see `MANUAL` in
+`src/lib/job-registry.ts`.
+
+There were eight read-sibling-checkout entries at one point. `header-audit`,
+`identity-model`, `inventory`, `check-runner-var` and `check-site-token` read
+the operator's sibling checkouts under `REPOS_DIR`, which only hokon holds.
+Since fleet-manager#7 they read each repo's default branch through
+`scripts/lib/fleet-source.mjs` (the `@wolffm/fleet-manager/fleet-source`
+export), a blobless mirror the reader fetches itself, so any host gives the
+same answer and they carry `hostBound: false`. `REPOS_DIR` is now read only
+under an explicit `--worktree` flag.
 
 The other entries read the fleet — GitHub's API, the manifest, or a node
 reached by the `isLocalNode`-or-`ssh` branch from §1 — and give the same
@@ -192,7 +198,7 @@ box is currently driving the fleet's loops.
 
 `scripts/lib/json-contract-declaration.test.mjs` requires every entry to declare
 `hostBound` as a literal boolean (present on a hypothetical new entry too,
-not just the current ones) and separately pins the three above by name, so
+not just the current ones) and separately pins the four above by name, so
 flipping any one of them — or quietly dropping the field from a new entry —
 fails the gate rather than drifting unnoticed the way the `--json` consumer
 count itself did twice before (`scripts/lib/json-contract.mjs`'s own header

@@ -80,8 +80,8 @@
  * WHY NOT DEFER THE EXIT INSTEAD. The obvious shape — take over `process.exit`,
  * remember the code, perform it from the write callback — makes the caller's
  * `process.exit(n)` RETURN. Nine of these scripts spend their exits inside a
- * `fail()` helper (`check-srv-drift`, `check-reap-timeout-trend`,
- * `check-queue-health`, …), whose callers are written as `if (bad) fail(...)`
+ * `fail()` helper (`check-history-coverage.mjs`, `service-inventory.mjs`,
+ * `hosting-plan.mjs`, …), whose callers are written as `if (bad) fail(...)`
  * with the rest of the script below. An exit that returns runs that rest, which
  * reaches a second `emit()` and throws "emit() called twice" — trading a
  * truncated document for a crash. Setting `process.exitCode` and letting the

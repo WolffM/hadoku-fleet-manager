@@ -53,8 +53,9 @@
  *
  * `--cadence` IS THE SCHEDULED RUN, and it exists because `$health` had no
  * scheduled writer at all: one hand run on 2026-09-26 wrote every record, and on
- * 2026-10-11 `ci:health-freshness` found all nine 15.3 days old. Two rules make
- * a hand run unfit to schedule, and `--cadence` changes exactly those two:
+ * 2026-10-11 the (since-retired) staleness gate found all nine 15.3 days old.
+ * Two rules make a hand run unfit to schedule, and `--cadence` changes exactly
+ * those two:
  *
  *   - A BUSY NODE IS DEFERRED, NOT FAILED. Doctor skips the load phase while CI
  *     builds on a box, and the missing reading is a BLOCKING `no-load-reading`.
@@ -64,8 +65,8 @@
  *     rewritten: a fresh record with no under-load reading would replace the
  *     last real one and leave a blocking finding in the stored record, and
  *     provisioning refuses a node on exactly that. The node keeps its older,
- *     dated record, so a box that stays busy every night still goes red at
- *     `fleet health-freshness`'s 14 days, with the reason.
+ *     dated record, so a box that stays busy every night still ages past
+ *     the 14-day staleness threshold, with the reason.
  *   - A `--cadence` run NEVER LOADS THE BACKSTOP. See `BACKSTOP_CADENCE_NO_LOAD_WHY`
  *     in doctor-probe.mjs.
  */

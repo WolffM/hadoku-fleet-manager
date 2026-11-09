@@ -380,10 +380,10 @@ for (const m of nodes) {
 // each box — install directories AND both supervision schemes' units — and
 // resolves each install's repo BACK by numeric id, because GitHub redirects
 // a renamed repo silently, with a 200. `scripts/runner-units.mjs` runs the
-// identical audit standalone until mgmt-api's `ci:runner-units` cron is
-// retired; both share the probe text and the repo lookup
-// (`lib/runner-units-probe.mjs`), never the classification rules, which stay
-// in `lib/runner-unit-audit.mjs` either way.
+// identical audit standalone too, for hand-running alone (its own standing
+// cron is retired, wave gates2 lane F2); both share the probe text and the
+// repo lookup (`lib/runner-units-probe.mjs`), never the classification
+// rules, which stay in `lib/runner-unit-audit.mjs` either way.
 const runnerUnitsLookup = createRepoLookup();
 const runnerUnitsRosterIds = new Set();
 const runnerUnitsRosterUnresolved = [];

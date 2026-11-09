@@ -246,8 +246,10 @@ up` invocation it chose (tags come from the node's profile) at the end of
   re-read, and the `node-users` step is never spawned — only printed.
 - `fleet preflight` (nightly) — pages if the LAN reservation (step 6) is
   skipped and the node is later admitted anyway.
-- `fleet drain-check` — catches a node this runbook's rollback drained but
-  whose drain was never actually enforced.
+- `fleet drain --status` — check by hand whether a node this runbook's
+  rollback drained is actually idle; its automated nightly re-check retired
+  wave gates2 (2026-11-08, no catch in 1,140/1,140 runs, and blind to a node
+  the drain file believed idle while it kept serving jobs).
 
 ## Memory lessons this runbook holds
 

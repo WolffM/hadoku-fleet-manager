@@ -335,8 +335,9 @@ export function parseCronRuns(text, jobByRouteKey = new Map()) {
 
 	// LIFO, NOT FIFO — a completion belongs to the MOST RECENT dispatch.
 	//
-	// Measured 2026-09-10: two `ci:drain-enforced` dispatches on 09-07 and 09-08
-	// never logged a completion (per-file counts: starts 6/144/144/144/61, ends
+	// Measured 2026-09-10: two dispatches of a (now-retired) ten-minute cron on
+	// 09-07 and 09-08 never logged a completion (per-file counts: starts
+	// 6/144/144/144/61, ends
 	// 5/143/144/144/61). A FIFO queue therefore handed every later completion a
 	// start two ten-minute cycles too old, and the job reported a p50 of 1,199 s
 	// against a 60 s timeout — for 497 runs, every single one of them wrong. It

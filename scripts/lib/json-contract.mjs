@@ -310,7 +310,7 @@ export function parseCliCommandKinds(blankedSource) {
  * `createEmitter({ argv: process.argv })`. It is the bare call with the argv
  * named rather than defaulted — `lib/emit.mjs` still answers the flag question
  * (`opts.json ?? argv.includes('--json')`), and the argument says WHICH argv, so
- * the flag provably comes from this process's command line. `health-freshness`
+ * the flag provably comes from this process's command line. `node-users.mjs`
  * uses it and holds `out.json` as its only record of the mode, so there is no
  * `JSON_OUT` for the first rule to find.
  *

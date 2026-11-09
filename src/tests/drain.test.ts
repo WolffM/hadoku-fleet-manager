@@ -200,7 +200,11 @@ test('a planned drain is not in force before `from`, and is from then, measured 
 	};
 	assert.equal(isDraining('claw-3', effectiveDrains(doc, T0)), false);
 	const live = effectiveDrains(doc, T0 + 25 * 60_000);
-	assert.equal(live['claw-3'].since, at(20), 'drain-check must measure from when it took effect');
+	assert.equal(
+		live['claw-3'].since,
+		at(20),
+		'a reader must measure from when the drain took effect'
+	);
 	assert.equal(isDraining('claw-3', effectiveDrains(doc, T0 + 41 * 60_000)), false);
 });
 

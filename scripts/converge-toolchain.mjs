@@ -53,6 +53,10 @@ import {
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 import { runDoctor } from './lib/toolchain-doctor.mjs';
+import {
+	refreshBackstopDoctorFailed,
+	refreshBackstopRecord,
+} from './lib/toolchain-refresh-backstop.mjs';
 import { probeToolPresence, scanWorkflows } from './lib/tool-inventory-scan.mjs';
 import {
 	deferralStreakFindings,
@@ -317,12 +321,17 @@ async function refresh() {
 				});
 			}
 		}
+		// BACKSTOP READINESS (hadoku_site#527): advisory, never a finding — see
+		// lib/toolchain-refresh-backstop.mjs's own doc for why this is the only
+		// reader left once lane S1 retires ci:fleet-toolchain.
+		report.backstop = refreshBackstopRecord(doctor.report, manifest);
 	} catch (err) {
 		report.findings.push({
 			node: null,
 			kind: 'tool-cache-probe-failed',
 			reason: `the tool-cache doctor could not run: ${err instanceof Error ? err.message : String(err)}`,
 		});
+		report.backstop = refreshBackstopDoctorFailed(err);
 	}
 	report.ok = report.findings.length === 0;
 

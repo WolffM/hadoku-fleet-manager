@@ -54,8 +54,8 @@
  *   dirty           the target file already carries uncommitted changes. Fix:
  *                   commit or discard them — landing on top would fold
  *                   somebody else's edit into this writer's commit, under this
- *                   writer's subject, and `check-srv-drift` would then report
- *                   it clean.
+ *                   writer's subject, which would then read back as a clean
+ *                   deploy tree even though it is not.
  *
  * ORDER MATTERS AND IT IS NOT THE OBVIOUS ONE. `~/srv/hadoku_site` IS a git
  * checkout and is normally CLEAN, so it passes both of the other two tests.
@@ -144,8 +144,8 @@ export function runGit(args, cwd, env = process.env) {
 
 /**
  * The DEPLOYED hadoku_site checkout: one answer to "where is the deploy tree",
- * defined in src/lib/fleet-paths.ts and re-exported here. `check-srv-drift`
- * reads this tree, the manifest writers refuse it, and (since 2026-11-04)
+ * defined in src/lib/fleet-paths.ts and re-exported here. The manifest writers
+ * refuse it, and (since 2026-11-04)
  * `siteRoot()` falls back to it for READS, so a hand run reads what production
  * reads. Until then the readers never asked it.
  */
@@ -267,8 +267,8 @@ export function writeTarget(files, { env = process.env, git = runGit } = {}) {
 	}
 
 	// 3. NOT ALREADY DIRTY ON THESE PATHS. Landing on top of somebody else's
-	//    uncommitted edit files it under this writer's subject and makes
-	//    `check-srv-drift` report the result clean.
+	//    uncommitted edit files it under this writer's subject, which would
+	//    then read back as a clean deploy tree even though it is not.
 	const st = git(['status', '--porcelain', '--', ...abs], repo, env);
 	if (st.status !== 0) {
 		return refuse(

@@ -26,7 +26,7 @@ export const jobRegistryBenchmark: JobEntry[] = [
 		hostBound: false,
 		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/health-refresh.ts',
 		contract: 'json',
-		why: 'The WRITER of $health, which ci:health-freshness only judges. --cadence defers a busy node (advisory) rather than blocking on it.',
+		why: "The WRITER of $health. --cadence defers a busy node (advisory) rather than blocking on it. The standalone staleness re-check this writer's record used to feed is retired wave gates2 (2026-11-08) — a missing cron now pages through the staleness watcher directly.",
 	},
 	{
 		name: 'ci:slice-inventory',
@@ -58,7 +58,12 @@ export const jobRegistryBenchmark: JobEntry[] = [
 	{
 		name: 'ci:bootcamp',
 		sub: 'bootcamp',
-		args: ['--write', '--site-writer', '--idle-wait', '20', '--json'],
+		// FIXED wave gates2 lane F2: the registry omitted `--prove --due 25`,
+		// which mgmt-api's `bootcamp.ts` has actually passed since 2026-11-07
+		// (its own header: re-run the workload canary for any node whose last
+		// proof is over 25 days old) — `fleet check-schedule` never caught the
+		// mismatch because it compares cron/budget, not argv.
+		args: ['--write', '--site-writer', '--idle-wait', '20', '--prove', '--due', '25', '--json'],
 		kind: 'converger',
 		detectionBudget: '48h',
 		cadence: { cron: '0 12 * * *' },
@@ -67,6 +72,6 @@ export const jobRegistryBenchmark: JobEntry[] = [
 		hostBound: false,
 		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/bootcamp.ts',
 		contract: 'json',
-		why: "Re-measures every node's EARNED labels and records them (`$capabilities`) through the fleet's writer tree, after ci:toolchain-refresh in the same window. Placement reads the earned record, and until 2026-11-04 nothing scheduled bootcamp: claw-8 probed service-host=ok for hours while its record lacked it and placement refused it. Idle-only measurements wait up to 20 min for quiet.",
+		why: "Re-measures every node's EARNED labels and records them (`$capabilities`) through the fleet's writer tree, after ci:toolchain-refresh in the same window. Placement reads the earned record, and until 2026-11-04 nothing scheduled bootcamp: claw-8 probed service-host=ok for hours while its record lacked it and placement refused it. Idle-only measurements wait up to 20 min for quiet. `--prove --due 25` re-runs the workload canary for a node whose proof is over 25 days old (fleet-manager, 2026-11-07): on 2026-11-07 the 10-08 proofs on claw-8/9/4 expired within 25 minutes of each other and cardtable's forge jobs sat unplaceable for 100+ minutes.",
 	},
 ];

@@ -52,8 +52,8 @@ Every `fleet …` command below is checked against `src/cli.ts`'s door table by
    drained it yet — but it then REFUSES to go any further that run, because a
    drain is a soft close and finishing work takes its own time. Re-run
    `fleet retire <node> --confirm` once the node is quiet.
-   Verify: `fleet drain --status` shows `<node>` drained; `fleet drain-check`
-   does not flag it as drained-but-unenforced.
+   Verify: `fleet drain --status` shows `<node>` drained, and job history
+   carries no run on it since.
 
 2. **Confirm it has actually stopped taking work.** Where: from the control
    host. As: read-only.
@@ -166,9 +166,7 @@ retire` prints this as a remaining step; it cannot do it for you.
   exists in the door's table.
 - `scripts/lib/publish-safety-guard.test.mjs` — this file names no address,
   MAC, tailnet name, or other site fact; it never will, because it is public.
-- `fleet drain-check` (nightly) — catches a drain from step 1 that was never
-  actually enforced.
-- `fleet reconcile --check-coverage` (nightly) — catches a manifest edit
+- `fleet reconcile --check-coverage` (hand-run) — catches a manifest edit
   from step 4 that coverage was never regenerated against.
 - `fleet enroll`'s refusal of any name on the manifest's `retired` array —
   catches a replacement accidentally declared under the old name (R2's Gap).

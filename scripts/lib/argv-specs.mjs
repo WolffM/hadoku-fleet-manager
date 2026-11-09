@@ -58,7 +58,6 @@ export const ARGV_SPECS = {
 			'  --in / --at         schedule it instead of starting it now. A HOSTING node',
 			'                      (fleet hosting) is owed 15 min notice; --force skips it.',
 			'fleet drain --status                what is held, and has it gone quiet',
-			'fleet drain-check [--json]          is each drain actually being ENFORCED',
 			'',
 			'',
 			'Running jobs are never killed. New assignment stops; current work finishes.',

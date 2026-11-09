@@ -236,7 +236,6 @@ N=claw-3                                    # then repeat the whole block for cl
 
 fleet drain "$N" --reason "nm-convert to NetworkManager (issue #8)"
 fleet drain --status                        # wait until "$N" has gone quiet
-fleet drain-check                           # expect exit 0
 
 ssh "$N" sudo sh -s -- --check         < scripts/fixes/nm-convert.sh  # expect 1, "on IFUPDOWN"
 ssh "$N" sudo sh -s -- --convert --yes < scripts/fixes/nm-convert.sh
@@ -245,7 +244,6 @@ ssh "$N" sudo sh -s -- --convert --yes < scripts/fixes/nm-convert.sh
 ssh "$N" sudo sh -s -- --check  < scripts/fixes/nm-convert.sh  # expect 0, "converged"
 ssh "$N" sudo sh -s -- --commit < scripts/fixes/nm-convert.sh  # disarm the watchdog
 
-fleet drain-check                           # expect exit 0
 fleet throttle --check                      # expect exit 0
 fleet drain "$N" --undo
 ```

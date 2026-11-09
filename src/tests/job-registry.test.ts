@@ -60,7 +60,7 @@ void test('cadencePeriodMs: an unsupported cron shape throws rather than guessin
 void test('registeredSubs covers every direct sub and every covered sub', () => {
 	const subs = registeredSubs();
 	assert.ok(subs.has('queue-health'));
-	assert.ok(subs.has('drain-check'));
+	assert.ok(subs.has('hosting-placement'));
 	// Their own rows since fleet-manager#38.
 	assert.ok(subs.has('warm-canary'));
 	assert.ok(subs.has('label-floor'));
@@ -80,6 +80,19 @@ void test('MANUAL names exactly the subcommands that are automated but carry no 
 		'hosting-request',
 		'capability-schema',
 		'hosting-demand',
+		// wave gates2 lane F2, 2026-11-08: each lost its own mgmt-api cron (or
+		// coversSubs row) this wave without going silent — see MANUAL's own
+		// comment in job-registry.ts for where each one's real clock now is.
+		'capabilities',
+		'tool-inventory',
+		'ci-watch',
+		'inventory',
+		'check-schedule',
+		'contract-consumers',
+		'toolchain',
+		'runner-units',
+		'node-users',
+		'check-runner-var',
 	];
 	assert.deepEqual(Object.keys(MANUAL).sort(), expected.sort());
 	for (const [sub, why] of Object.entries(MANUAL)) {

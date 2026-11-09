@@ -12,7 +12,7 @@
  * (issue #22).
  *
  * That failure is invisible to every other gate in this package. `queue-health`,
- * `drain-check`, `label-floor` and the canaries were all green through
+ * `label-floor` and the canaries were all green through
  * brave-quartet's `check` on 2026-09-10 — none of them moves a byte for an hour,
  * so none of them can be killed at one. The only place the evidence survives is
  * job history, and there it is unmistakable once you know the shape:

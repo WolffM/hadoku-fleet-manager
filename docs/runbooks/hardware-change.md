@@ -34,8 +34,8 @@ Every `fleet …` command below is checked against `src/cli.ts`'s door table by
    fleet drain <node> --kind maintenance --reason "hardware change: <what> — see docs/runbooks/hardware-change.md"
    ```
 
-   Verify: `fleet drain --status` shows `<node>` drained; `fleet drain-check`
-   does not flag it as drained-but-unenforced.
+   Verify: `fleet drain --status` shows `<node>` drained, and job history
+   carries no run on it since.
 
 2. **Confirm it is actually idle before opening the case.** Drain blocks NEW
    admission; it does not abort work already in flight. Where: control host.
@@ -215,8 +215,6 @@ min(4, floor((MemTotal-floor)/4096))`) is a reasonable starting point
   exists in the door's table.
 - `scripts/lib/publish-safety-guard.test.mjs` — this file names no address,
   MAC, tailnet name, serial or other site fact.
-- `fleet drain-check` (nightly) — catches a drain from step 1 that was never
-  actually enforced.
 - `fleet reconcile --check-coverage` (nightly) and `fleet toolchain` — catch
   drift left behind by an incomplete root-disk reimage.
 - **Nothing** catches a `maxConcurrent` left stale after a hardware change —

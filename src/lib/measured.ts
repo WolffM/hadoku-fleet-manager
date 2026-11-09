@@ -23,8 +23,8 @@
  * `{ "nodes": { "<node>": { at, by, … } } }` — the same provenanced block the
  * manifest carried, minus the `$`. The `$` marks a provenanced block INSIDE
  * config; in a file that is nothing but provenanced blocks it is noise, and
- * keeping it would let a `$`-prefix scanner such as `srv-drift` match the
- * wrong tree. Every write also appends one JSON line per node to
+ * keeping it would let a `$`-prefix scanner match the wrong tree. Every
+ * write also appends one JSON line per node to
  * `<stateDir>/<facet>.log`, because git history went when the data left the
  * repo and "when did this change, and to what" must still have an answer.
  *
@@ -32,7 +32,8 @@
  * logs" — `health.log` measured 501KB and climbing on 2026-11-01, with no
  * reader anywhere in `src/` or `scripts/` other than this file's own writer).
  * {@link FACET_LOG_RETENTION_DAYS} = 30: at least 2x `$health`'s own
- * staleness gate (`HEALTH_STALE_DAYS` = 14d, `check-health-freshness.mjs`)
+ * staleness threshold (`HEALTH_STALE_DAYS` = 14d; the standalone gate that
+ * once judged it against this threshold is retired wave gates2, 2026-11-08)
  * and more than two full fleet rotations (`ci:fleet-benchmark` measures one
  * node per run, "about as many days as there are claws"), so a question
  * about "what changed, and to what" over any window anyone has actually

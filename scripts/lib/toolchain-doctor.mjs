@@ -12,10 +12,10 @@
  * agreement) and the backstop's advisory readiness block. `converge-toolchain
  * --refresh` now calls {@link runDoctor} itself and folds `missingCache`/
  * `ensurepip`/`pnpmDrift` into its OWN findings, so nothing has to re-read the
- * fleet an hour later to learn it. `fleet toolchain` (now `scripts/toolchain.mjs`)
- * keeps calling {@link runDoctor} too, unchanged, because mgmt-api's
- * `ci:fleet-toolchain` cron still parses its `{machines:[...]}` shape until the
- * site lane retires that cron (lane S1) — see that file's header.
+ * fleet an hour later to learn it (the standalone cron that used to is
+ * retired, wave gates2 lane F2). `fleet toolchain` (now `scripts/toolchain.mjs`)
+ * keeps calling {@link runDoctor} too, unchanged, as a real, operator-run
+ * per-node diagnostic — see that file's header.
  *
  * `judgeTool` is the one other load-bearing export: `scripts/lib/refresh-cycle.mjs`
  * imports it directly (the cadence and the doctor must never judge a tool
@@ -603,8 +603,8 @@ export async function runDoctor({
 			pnpmDrift: facts.pnpmStoreAgrees === false,
 			// ADDITIVE (#69). `tools` is every tool this node carries and how it
 			// judged; `toolFindings` is the failing subset, which is also folded into
-			// `drift` so the existing consumer (`ci:fleet-toolchain`, which reads
-			// `drift`) fails the node without being changed.
+			// `drift` so every consumer that reads `drift` (`fleet toolchain`,
+			// `converge-toolchain --refresh`) fails the node without being changed.
 			tools: toolReports,
 			toolFindings,
 			// `tools.length` guards the bug this doctor shipped once: a node

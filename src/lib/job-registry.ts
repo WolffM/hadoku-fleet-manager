@@ -57,8 +57,14 @@
  * wave 5f lane B; `tier-fleet`, `capabilities` and `boundary-contracts`
  * migrated in wave 5h lane B; `label-floor` and `throttle` migrated in wave
  * 5i lane B; `mf-externals` and `identity` migrated in wave 5j lane B — the
- * last two non-d3 prose gates. Only `slice`/`tool-inventory` (d3's lane) and
- * `ci-watch` carry no `contract` field at all now.
+ * last two non-d3 prose gates. `slice`/`tool-inventory` (d3's lane) and
+ * `ci-watch` never did: wave gates2 (2026-11-08) retired their coversSubs
+ * rows outright instead (the evidence table in
+ * `docs/planning/wave-gates2-2026-11-08.md`: converge-provisioning already
+ * repairs-and-rechecks slice/throttle, and ci-watch/tool-inventory/
+ * capabilities/contract-consumers each either moved to a different clock
+ * entirely or became a facet of another registered job — see `MANUAL`'s own
+ * comment below for which).
  *
  * `kindDrift` exists for the case `src/cli.ts`'s `COMMANDS` table disagrees
  * with the three kinds this registry ever puts a clock on (`gate` |
@@ -89,14 +95,14 @@ import { jobRegistryInProcess } from './job-registry-in-process.js';
 
 /**
  * THE DIRECTLY REGISTERED `JSON_CONTRACT` JOBS (22 at wave 5e lane A's
- * landing, lane D's own `ci:schedule`, then `ci:warm-canary` and
- * `ci:label-floor` out of the umbrella — fleet-manager#38), read from
- * hadoku_site `origin/main` 2026-10-31:
+ * landing, lane D's own schedule-drift gate (since retired to repo CI, wave
+ * gates2), then `ci:warm-canary` and `ci:label-floor` out of the umbrella —
+ * fleet-manager#38), read from hadoku_site `origin/main` 2026-10-31:
  * `services/cron-worker/profiles.json` for the cadence and `timeout_s`,
  * `scripts/lib/json-contract.mjs`'s existing `JSON_CONTRACT` for
  * `argv`/`hostBound`/the consumer file. Every `detectionBudget` below is 2x
  * the job's own cadence period UNLESS the entry's `why` says a different
- * number is the actually-justified one (health-freshness, fleet-kills).
+ * number is the actually-justified one (`ci:fleet-kills`'s own scan window).
  *
  * PLUS the one prose umbrella (`ci:audit-gates`) and the three in-process
  * convergers — see the module header for both.
@@ -128,6 +134,31 @@ export const MANUAL: Record<string, string> = {
 		'Build-time-only (offline: no network, no ssh) — AGENTS.md\'s own "known gaps" names this exact file as the one whose header claims a cron that does not exist. Not scheduled; recorded here rather than silently assumed covered.',
 	'hosting-demand':
 		"Restated by hadoku-cardtable's own coordinator on ITS poll cadence (TENANT_CONTRACT), not by fleet-manager or mgmt-api. There is no fleet-owned clock to validate a budget against.",
+	// WAVE GATES2 LANE F2, 2026-11-08. Each of these lost its OWN mgmt-api
+	// cron (or, for capabilities, its ci:audit-gates coversSubs row) this
+	// wave; none of them went silent. They either moved to a clock this
+	// registry cannot model, or became a facet another registered job
+	// drives by script path, or stayed purely an operator's own tool.
+	capabilities:
+		"Driven as a facet inside fleet:reboot-claws' own re-prove step (scripts/reboot-claws.mjs spawns scripts/capabilities.mjs directly by script path, with --machine, after a reboot and before undraining) — not through the `fleet` CLI door, so fleet:reboot-claws (job-registry-in-process.ts) is the real clock, same shape as apt-security above. The mgmt-api fleet-wide, no-`--machine` case (the old check:capabilities row) was already a true no-op kept only until lane S1 removed that row — see scripts/capabilities.mjs's own header.",
+	'tool-inventory':
+		'An operator tool and the ONLY writer of demand-ledger.jsonl (`--write`), read by check-label-floor, node-eligibility.ts and bootcamp-proof.ts. Its nightly re-check (the old check:tool-inventory audit-gates row) is retired — the SAME scan now runs as a finding inside `fleet converge-toolchain --refresh` (lib/tool-inventory-scan.mjs, fleet:toolchain-refresh above) — but the standalone subcommand is kept for its writer role and for hand-running.',
+	'ci-watch':
+		"Run on the site's own GitHub Actions schedule, not this registry's: `.github/workflows/reconcile-fleet-coverage.yml` (12:30 UTC) calls `fleet ci-watch --write` directly and self-reports as `site:reconcile-coverage`. The old check:ci-watch audit-gates row (`--check`, a read-only re-check of the SAME regeneration) was a pure tandem of that workflow and is retired; `fleet ci-watch --check` remains for hand-running.",
+	inventory:
+		'Same shape as ci-watch immediately above and the SAME workflow: `fleet inventory --write` is called directly by `.github/workflows/reconcile-fleet-coverage.yml`, not by an mgmt-api cron this registry tracks. The old ci:fleet-inventory row (`--check`) was a pure tandem of that workflow and is retired.',
+	'check-schedule':
+		"MOVED OFF a cron entirely (wave gates2): it reads committed code only (this registry against the site's own services/cron-worker/profiles.json and routes/jobs/*.ts), so that same checkout's lint.yml now runs it on every PR that touches either, with FLEET_SOURCE_URL pointed at the checkout under review — a commit-triggered check, not a nightly one. The retired ci:schedule cron ran the identical command nightly.",
+	'contract-consumers':
+		'Same move as check-schedule immediately above, same commit (both read committed code, both landed in lint.yml together): `fleet contract-consumers --json` with HADOKU_SITE_ROOT pinned at the PR checkout. The retired ci:audit-gates coversSubs row ran the identical command nightly.',
+	toolchain:
+		"UNSCHEDULED since the old ci:fleet-toolchain cron (its only caller) was retired — `fleet converge-toolchain --refresh` now folds the same doctor's cache-drift findings into its own nightly report (scripts/lib/toolchain-refresh-backstop.mjs carries the backstop block through the same way, hadoku_site#527). Kept as a real, working subcommand: a read-only per-node diagnostic (`--machine <n> --json`) that touches nothing, unlike --refresh's drain cycle.",
+	'runner-units':
+		'UNSCHEDULED since the old ci:runner-units cron (its only caller) was retired — `fleet identity` (scripts/reconcile-runner-identity.mjs) now runs the SAME registration-vs-box audit from the other direction, sharing scripts/lib/runner-units-probe.mjs. Kept as a real, working subcommand for hand-running the install/unit half alone.',
+	'node-users':
+		'A gate AND a writer in one file (scripts/node-users.mjs): `--cutover` creates and moves a ci user (docs/planning/node-users-2026-10-27.md P3) and is deliberately never spawned by provision (onboarding-automation.test.mjs: "the cutover stays manual"). The old ci:node-users cron ran the bare gate mode nightly; that mode is now operator-run only, same file, same flag set.',
+	'check-runner-var':
+		'UNSCHEDULED since the old ci:runner-var cron (its only caller) was retired — `fleet reconcile`\'s own runnerVar finding (reconcile-apply.mjs, built from the shared lib/runner-var.mjs) now carries the SAME check nightly as part of ci:fleet-coverage. Kept as a real, working subcommand: the site\'s own fleet-coverage-check.ts names it in its own finding message ("Detail: fleet check-runner-var") as the hand-run tool for more detail than the folded finding carries.',
 };
 
 export interface ValidationIssue {

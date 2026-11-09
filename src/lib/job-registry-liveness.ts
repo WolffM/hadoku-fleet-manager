@@ -19,7 +19,7 @@ export const jobRegistryLiveness: JobEntry[] = [
 		timeoutS: 180,
 		// ssh to the CANDIDATE nodes, never this box's own state — the same
 		// class as every other ssh-based fleet gate (node-users, runner-units),
-		// not reap-trend/egress-slices/srv-drift's own log/cgroup/deploy-clone.
+		// not egress-slices/history-coverage's own log/cgroup/deploy-clone.
 		hostBound: false,
 		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/warm-canary-check.ts',
 		contract: 'json',

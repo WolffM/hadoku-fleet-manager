@@ -41,58 +41,16 @@ export const jobRegistryAuditGates: JobEntry[] = [
 				why: 'A micro-frontend that inlines a mapped singleton breaks only in the browser, invisible to typecheck/lint/build/tests. Migrated to GateDoc, wave 5j lane B.',
 			},
 			{
-				sub: 'throttle',
-				args: ['--check', '--json'],
-				contract: 'json',
-				// ssh to the candidate nodes, never this box's own state — the
-				// same class as warm-canary/capabilities, not reap-trend/
-				// egress-slices/srv-drift. RESERVE_FILE is resolved locally but
-				// only ever written into the LOCAL node's own rendered conf,
-				// never read back as a fact about the fleet.
-				hostBound: false,
-				detectionBudget: '48h',
-				why: "The runner job-started hook, read-only: is the fleet's only real concurrency limit actually wired. Migrated to GateDoc, wave 5i lane B.",
-			},
-			{
-				sub: 'slice',
-				args: ['--check'],
-				detectionBudget: '48h',
-				why: 'The memory half of the same idea, read-only: is the cgroup memory ceiling actually applied.',
-			},
-			{
 				sub: 'identity',
 				args: ['--json'],
 				contract: 'json',
 				// `gh api` reads of the fleet's registrations plus ssh to the
 				// candidate nodes — the fleet's own identity, never this box's own
-				// state. Same class as boundary-contracts/capabilities, not
-				// reap-trend/egress-slices/srv-drift.
+				// state. Same class as boundary-contracts, not egress-slices/
+				// history-coverage's own cgroup/deploy-clone.
 				hostBound: false,
 				detectionBudget: '48h',
 				why: 'A listener that escaped its systemd unit reports ONLINE to GitHub and is never restarted; every other runner check asks GitHub, which cannot see this class. Migrated to GateDoc, wave 5j lane B.',
-			},
-			{
-				sub: 'capabilities',
-				args: ['--json'],
-				contract: 'json',
-				// ssh to the candidate nodes, never this box's own state — the
-				// same class as warm-canary/boundary-contracts, not reap-trend/
-				// egress-slices/srv-drift.
-				hostBound: false,
-				detectionBudget: '48h',
-				why: 'Capabilities are probed by EXECUTING them, not by trusting a declaration. Migrated to GateDoc, wave 5h lane B.',
-			},
-			{
-				sub: 'tool-inventory',
-				args: [],
-				detectionBudget: '48h',
-				why: 'A workflow may invoke a tool its assigned machines lack — invisible as anything but flaky CI.',
-			},
-			{
-				sub: 'ci-watch',
-				args: ['--check'],
-				detectionBudget: '48h',
-				why: 'The CI-alert watch list is DERIVED from the fleet roster; read-only check that the derivation is current.',
 			},
 			{
 				sub: 'history-coverage',
@@ -102,23 +60,10 @@ export const jobRegistryAuditGates: JobEntry[] = [
 				// own recorded ingest, "safe to hand from one controller to the
 				// next but not safe for two to read/write with different beliefs"
 				// (docs/control-plane.md §2) — a different answer on a passive
-				// replica than on the active controller, same class as reap-trend.
+				// replica than on the active controller, same class as egress-slices.
 				hostBound: true,
 				detectionBudget: '48h',
 				why: 'Every speed/placement statistic the fleet reports is over job-history.jsonl; this is whether that file is actually recording. Migrated to GateDoc, wave 5f lane B.',
-			},
-			{
-				sub: 'contract-consumers',
-				args: ['--json'],
-				contract: 'json',
-				// Reads a real `hadoku_site` checkout off local disk (`siteRoot()`,
-				// which falls back to `reposDir()`) rather than through
-				// `lib/fleet-source.mjs` — the pre-#7 class of host-bound gate: a
-				// passive replica with no sibling checkout on disk gets a
-				// different (worse) answer than the active controller.
-				hostBound: true,
-				detectionBudget: '48h',
-				why: 'The other half of the --json contract: that every JSON_CONTRACT/PROSE_CONTRACT consumer file actually exists in hadoku_site. Migrated to GateDoc, wave 5f lane B.',
 			},
 			{
 				sub: 'boundary-contracts',
@@ -131,5 +76,28 @@ export const jobRegistryAuditGates: JobEntry[] = [
 				why: "The real shape of every boundary this package's own tests mock (network + ssh), checked from fleet-manager's own install so it resolves the real fleet-exec. Migrated to GateDoc, wave 5h lane B.",
 			},
 		],
+	},
+	// ---- ci:vault-audit (0 13 * * *, fleet-audits; the vault-privileged half
+	// runs in-process in mgmt-api, but one of its three gates — merged in
+	// wave gates2 lane S2 from the retired standalone `ci:site-token` cron —
+	// still spawns this CLI directly (vault-audit.ts's `runSiteTokenGate`),
+	// so `fleet check-schedule`'s rule (c) (an mgmt-api route that imports
+	// `fleetCli` with no row here) needs a row even though the job's OWN
+	// name was never `ci:check-site-token`. ----
+	{
+		name: 'ci:vault-audit',
+		sub: 'check-site-token',
+		args: ['--json'],
+		kind: 'gate',
+		detectionBudget: '48h',
+		cadence: { cron: '0 13 * * *' },
+		// vault-audit.ts's own SITE_TOKEN_TIMEOUT_MS = 240_000 — the real spawn
+		// timeout, read from the route file rather than copied from the
+		// retired ci:site-token row (which carried 300, unverified against it).
+		timeoutS: 240,
+		hostBound: false,
+		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/vault-audit.ts',
+		contract: 'json',
+		why: "Is HADOKU_SITE_TOKEN held only by the hub and the declared siteTokenHolders — the same question the retired `ci:site-token` cron asked, now one of three gates `ci:vault-audit` runs under one page instead of four. The other two gates (check:key-sync, check:credential-coverage) spawn the site's own admin scripts directly, never this CLI, so they carry no row here.",
 	},
 ];

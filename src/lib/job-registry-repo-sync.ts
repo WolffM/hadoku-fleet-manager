@@ -16,19 +16,6 @@ export const jobRegistryRepoSync: JobEntry[] = [
 		why: "Does every covered repo have a runner; also run a second time as --json --confirm to apply. Daily is this job's own cadence; nothing here argues for tighter.",
 	},
 	{
-		name: 'ci:fleet-toolchain',
-		sub: 'toolchain',
-		args: ['--json'],
-		kind: 'gate',
-		detectionBudget: '48h',
-		cadence: { cron: '0 13 * * *' },
-		timeoutS: 120,
-		hostBound: false,
-		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/fleet-toolchain-check.ts',
-		contract: 'json',
-		why: 'Can each node build what its neighbours can. Detection only, never --confirm.',
-	},
-	{
 		name: 'ci:header-fleet',
 		sub: 'header-audit',
 		args: ['--json'],
@@ -68,32 +55,6 @@ export const jobRegistryRepoSync: JobEntry[] = [
 		why: 'Reclaims what runner self-update strands. The only JSON_CONTRACT entry that mutates the fleet by default.',
 	},
 	{
-		name: 'ci:runner-var',
-		sub: 'check-runner-var',
-		args: ['--json'],
-		kind: 'gate',
-		detectionBudget: '48h',
-		cadence: { cron: '0 13 * * *' },
-		timeoutS: 300,
-		hostBound: false,
-		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/runner-var-check.ts',
-		contract: 'json',
-		why: 'Does every repo that asks for vars.CI_RUNNER actually have it set. Wider than the coverage roster on purpose.',
-	},
-	{
-		name: 'ci:site-token',
-		sub: 'check-site-token',
-		args: ['--json'],
-		kind: 'gate',
-		detectionBudget: '48h',
-		cadence: { cron: '0 13 * * *' },
-		timeoutS: 300,
-		hostBound: false,
-		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/site-token-check.ts',
-		contract: 'json',
-		why: 'Is HADOKU_SITE_TOKEN held only by the hub and the declared siteTokenHolders.',
-	},
-	{
 		name: 'ci:egress-slices',
 		sub: 'egress-slices',
 		args: ['--json'],
@@ -105,45 +66,6 @@ export const jobRegistryRepoSync: JobEntry[] = [
 		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/egress-slices-check.ts',
 		contract: 'json',
 		why: "Fleet-manager's half of the cgroup split-tunnel agreement with local-hawk; reads THIS box's own cgroups (hostBound) because the claws carry no VPN to audit.",
-	},
-	{
-		name: 'ci:fleet-inventory',
-		sub: 'inventory',
-		args: ['--check', '--json'],
-		kind: 'gate',
-		detectionBudget: '48h',
-		cadence: { cron: '0 13 * * *' },
-		timeoutS: 120,
-		hostBound: false,
-		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/fleet-inventory-check.ts',
-		contract: 'json',
-		why: "Is the hub's generated blast-radius doc still the fleet. Detection only; nothing here writes.",
-	},
-	{
-		name: 'ci:node-users',
-		sub: 'node-users',
-		args: ['--json'],
-		kind: 'gate',
-		detectionBudget: '48h',
-		cadence: { cron: '0 13 * * *' },
-		timeoutS: 120,
-		hostBound: false,
-		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/node-users-check.ts',
-		contract: 'json',
-		why: 'Who runs CI on each claw (the ci role), read from the node. A node still running CI as admin is advisory (not-cut-over); a drifted cut-over node or an unreachable one fails.',
-	},
-	{
-		name: 'ci:runner-units',
-		sub: 'runner-units',
-		args: ['--json'],
-		kind: 'gate',
-		detectionBudget: '48h',
-		cadence: { cron: '0 13 * * *' },
-		timeoutS: 300,
-		hostBound: false,
-		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/runner-units-check.ts',
-		contract: 'json',
-		why: 'Does every standing runner install name a live, on-roster, unarchived repo — reads the box, not GitHub.',
 	},
 	{
 		name: 'ci:fleet-kills',
@@ -170,45 +92,5 @@ export const jobRegistryRepoSync: JobEntry[] = [
 		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/fleet-preflight-check.ts',
 		contract: 'json',
 		why: 'The nightly slow-motion sweep: node-key expiry, HADOKU_SITE_TOKEN expiry, runner-version drift, pending reboots. Named "nightly" by its own job; daily cadence is the design, not a shortfall.',
-	},
-	{
-		name: 'ci:health-freshness',
-		sub: 'health-freshness',
-		args: ['--json'],
-		kind: 'gate',
-		detectionBudget: '48h',
-		cadence: { cron: '0 13 * * *' },
-		timeoutS: 60,
-		hostBound: false,
-		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/health-freshness-check.ts',
-		contract: 'json',
-		why: "How old the $health record every placement rule reads is allowed to get is this gate's OWN separate threshold (HEALTH_STALE_DAYS = 14d, scripts/check-health-freshness.mjs) — a fact about the RECORD, not about this cron's own run cadence, which is why this entry's detectionBudget is the generic 2x and not 14d.",
-	},
-	{
-		// Wave 5e lane D: the schedule cannot drift from this registry's own
-		// declaration, or stop silently, without a gate noticing. `fleet
-		// check-schedule --json` reads hadoku_site's
-		// `services/cron-worker/profiles.json` through `lib/fleet-source.mjs`
-		// (never a sibling checkout) and fails on: (a) a registered `cron`-clock
-		// job missing from every profile, (b) a profile cron whose own period
-		// cannot meet the job's `detectionBudget` — using `cadencePeriodMs` and
-		// `parseDurationMs` from THIS file, never a second arithmetic, (c) a
-		// `ci:*` job in profiles.json that actually spawns the `fleet` CLI
-		// (imports `fleetCli()` from mgmt-api's `routes/jobs/lib/site-paths.ts`)
-		// but has no row here. LAST in repo-sync: it is a fact about every OTHER
-		// job in this file, so it has to run after the night's schedule is
-		// settled, same reasoning as ci:fleet-preflight/ci:health-freshness
-		// above it.
-		name: 'ci:schedule',
-		sub: 'check-schedule',
-		args: ['--json'],
-		kind: 'gate',
-		detectionBudget: '48h',
-		cadence: { cron: '0 13 * * *' },
-		timeoutS: 120,
-		hostBound: false,
-		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/schedule-check.ts',
-		contract: 'json',
-		why: 'Is the cron schedule this file declares still what the cron worker actually runs, and still able to meet the budget every OTHER entry here promises. A declaration nothing checks is exactly the shape AGENTS.md warns against for the credential probe and the dead-man gate both.',
 	},
 ];

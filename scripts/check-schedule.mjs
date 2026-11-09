@@ -55,6 +55,9 @@
  * NO CHECKOUT, NO FILE, NO JOBS, OR NOTHING PARSEABLE ARE EACH A FINDING, not
  * a silent clean report — "I could not look" must never render as "nothing is
  * wrong" (CLAUDE.md). `--json` is one document; findings explain WHY.
+ *
+ * @guards services/cron-worker/profiles.json
+ * @guards services/mgmt-api/src/routes/jobs/**
  */
 import process from 'node:process';
 

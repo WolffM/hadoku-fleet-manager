@@ -2196,12 +2196,6 @@
     "part": "run"
   },
   {
-    "glob": "scripts/lib/drain-enforcement.mjs",
-    "layer": "domain",
-    "domain": "observation",
-    "part": "core"
-  },
-  {
     "glob": "scripts/lib/expected-down.mjs",
     "layer": "domain",
     "domain": "observation",
@@ -2295,12 +2289,6 @@
     "part": "core"
   },
   {
-    "glob": "scripts/lib/reap-trend.mjs",
-    "layer": "domain",
-    "domain": "observation",
-    "part": "core"
-  },
-  {
     "glob": "scripts/lib/runner-env-drift.mjs",
     "layer": "domain",
     "domain": "observation",
@@ -2330,12 +2318,6 @@
     "layer": "domain",
     "domain": "observation",
     "part": "run"
-  },
-  {
-    "glob": "scripts/lib/srv-drift.mjs",
-    "layer": "domain",
-    "domain": "observation",
-    "part": "core"
   },
   {
     "glob": "scripts/lib/throttle-drift-doc.mjs",
@@ -2609,5 +2591,12 @@
     "domain": "observation",
     "part": "core",
     "why": "Wave gates2 lane F1a, pure move: the backstop-only advisory readiness block (buildBackstop, backstopProbeScript, fleetDropinPattern, the HARVESTER_*/WORK_ADVISORY_* constants) split out of toolchain-doctor.mjs for the 800-line ceiling \u2014 toolchain-doctor.mjs grew to 975 lines moving the whole former check-fleet-toolchain.mjs doctor in; this is the standalone-advisory third of it. Same domain:observation/core as toolchain-doctor.mjs, which still re-exports WORK_ADVISORY_MIN_MB/WORK_ADVISORY_FREE_SHARE unchanged for its own test file."
+  },
+  {
+    "glob": "scripts/lib/toolchain-refresh-backstop.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core",
+    "why": "Wave gates2 lane F2 (hadoku_site#527): a pure decision (refreshBackstopRecord/refreshBackstopDoctorFailed) with no ssh and no fs I/O of its own, imported only by scripts/converge-toolchain.mjs (lifecycle/run) to carry the doctor's backstop-readiness block through --refresh's own JSON report. Not domain:observation like toolchain-doctor.mjs/toolchain-backstop.mjs beside it above \u2014 it reads THOSE modules' output as data, it does not itself probe anything, and its one real caller is a lifecycle-domain script."
   }
 ]

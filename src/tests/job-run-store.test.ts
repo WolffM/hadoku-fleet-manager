@@ -183,7 +183,7 @@ void test('readJobRuns: newest first, across several rows and filtered by job', 
 		host: 'h',
 	});
 	const b = buildRow({
-		job: 'ci:srv-drift',
+		job: 'ci:fleet-kills',
 		startedAtMs: base + 1000,
 		durationMs: 1,
 		kind: 'gate',

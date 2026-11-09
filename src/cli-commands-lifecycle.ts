@@ -64,26 +64,20 @@ export const commandsLifecycle: Record<string, Command> = {
 		kind: 'recorder',
 		summary: 'one-shot health triage on a claw',
 	},
-	// The READER for the facet `doctor --write` writes, and deliberately not a
-	// step inside it: a facet whose only reader is its own writer has no age, so
-	// six nodes carried a 15.7-day-old $health record through a fleet that
-	// replaced two of its machines and rewrote its thermal rule, with nothing
-	// anywhere failing. Probes nothing, writes nothing, asks one question.
+	// DELETED wave gates2 lane F2 (operator-approved, "DELETE ci:health-freshness"):
+	// it only reddened after health-refresh (the writer, immediately above)
+	// had already paged, or when the refresh cron itself stopped running —
+	// which the staleness watcher pages on directly. One catch ever, a
+	// missing cron. docs/planning/wave-gates2-2026-11-08.md.
 	//
-	// UNDER THE --json CONTRACT since wave 3p: `ci:health-freshness` parses this
-	// stdout daily in repo-sync. Renaming it is therefore a cross-repo change —
-	// scripts/lib/json-contract.mjs names the mgmt-api file to fix in the same
-	// pass, and the gate beside it fails the build if this key moves.
-	'health-freshness': {
-		script: 'check-health-freshness.mjs',
-		kind: 'gate',
-		help: true,
-		summary: 'how old is the $health record every placement rule reads',
-	},
-	// UNDER THE --json CONTRACT since wave 5e lane D: `ci:schedule` parses this
-	// stdout daily in repo-sync, LAST, after every other registered job in
-	// src/lib/job-registry.ts — it is a fact about all of THEM, so it has to
-	// run once the night's schedule has settled.
+	// MOVED OFF ITS CRON wave gates2 lane F2: `ci:schedule` (its only
+	// automated caller) is retired; hadoku_site's lint.yml now runs
+	// `fleet check-schedule --json` on every PR touching
+	// services/cron-worker/profiles.json or services/mgmt-api/src/routes/jobs/**
+	// (MANUAL['check-schedule'] in src/lib/job-registry.ts), with
+	// FLEET_SOURCE_URL pointed at that PR's own checkout. Still parses this
+	// stdout LAST, after every other registered job in
+	// src/lib/job-registry.ts — it is a fact about all of THEM.
 	'check-schedule': {
 		script: 'check-schedule.mjs',
 		kind: 'gate',

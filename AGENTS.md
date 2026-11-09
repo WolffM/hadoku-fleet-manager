@@ -239,10 +239,12 @@ different things. Read it before naming anything new.
   counts is a `number`, which satisfies `number | null` perfectly well. The guard
   is held by a tick-level test in `src/tests/hosted-fallback.test.ts`, not by the compiler.
 
-  **Detection is guarded. WRITING still is not.** `fleet check-runner-var`
-  (`scripts/check-runner-var.mjs`) and the `ci:runner-var` cron that consumes it
-  catch a repo whose workflows read `CI_RUNNER` without it being set — the case
-  `ci-runner-fallback.ts` named for a year before either existed. Neither WRITES
+  **Detection is guarded. WRITING still is not.** `fleet reconcile`'s own
+  `runnerVar` finding (wave gates2, 2026-11-08; built from the shared
+  `scripts/lib/runner-var.mjs`, the same classifiers `fleet check-runner-var`
+  still exposes standalone for hand-running) catches a repo whose workflows
+  read `CI_RUNNER` without it being set — the case `ci-runner-fallback.ts`
+  named for a year before either existed. Neither WRITES
   the variable: `syncHostedFallback` is still the only writer anywhere, and it
   still iterates `coveredRepos()`, so it structurally cannot reach a repo that is
   not in the roster yet. A NEW repo therefore has no `CI_RUNNER` until the

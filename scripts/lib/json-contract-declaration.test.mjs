@@ -165,18 +165,25 @@ void test('the contract itself is well-formed', () => {
  * and capabilities (its one locally-resolved value, RESERVE_FILE, is never
  * read back as a fact about the fleet — see `src/lib/job-registry.ts`'s
  * entry for the detail).
+ *
+ * WAVE GATES2 LANE F2 (2026-11-08) retired three of the seven outright
+ * rather than un-host-binding them: two host-bound gates whose only
+ * automated callers (their own retired crons) read THIS box's own pm2
+ * log/deploy clone, so nothing replaced that reading; and one more whose
+ * coversSubs row is gone and is unscheduled now, run from hadoku_site's
+ * lint.yml instead — see `MANUAL` in src/lib/job-registry.ts — and
+ * `check-schedule.mjs` only walks `JSON_CONTRACT`, which an unregistered sub
+ * is no longer part of. The evidence table in
+ * docs/planning/wave-gates2-2026-11-08.md names all three by name.
  */
 const HOST_BOUND_SUBS = [
-	'contract-consumers',
 	'egress-slices',
 	'history-coverage',
 	'hosting-placement',
 	'label-floor',
-	'reap-trend',
-	'srv-drift',
 ].sort();
 
-void test('the host-bound declaration matches the evidenced three, exactly', () => {
+void test('the host-bound declaration matches the evidenced four, exactly', () => {
 	const actual = JSON_CONTRACT.filter((e) => e.hostBound === true)
 		.map((e) => e.sub)
 		.sort();
@@ -266,10 +273,10 @@ void test('prose about --json can neither satisfy nor trip the rule', () => {
 		false,
 		'the { json: JSON_OUT } form is only sound when JSON_OUT is bound where the rule can see it'
 	);
-	// The THIRD spelling, added for `health-freshness`: the bare call with the
-	// argv NAMED rather than defaulted. `lib/emit.mjs` still reads `--json` out
-	// of it, and naming `process.argv` is what says the flag came from this
-	// process's command line.
+	// The THIRD spelling: the bare call with the argv NAMED rather than
+	// defaulted (`node-users.mjs` and several others use it). `lib/emit.mjs`
+	// still reads `--json` out of it, and naming `process.argv` is what says
+	// the flag came from this process's command line.
 	const named = [
 		'const out = createEmitter({ argv: process.argv });',
 		'if (out.json) out.emit({});',
@@ -408,9 +415,9 @@ void test('the prose contract is well-formed and names a distinct consumer', () 
  * CLAUDE.md's rule is "the LIST is the declaration", written after this file
  * carried a bare count and was wrong twice. The README then repeated the
  * mistake in the other direction: it rendered the list properly, and by
- * 2026-09-07 it showed six of the ten actually under contract — `drain-check`,
- * `benchmark`, `egress-slices` and `queue-health` were all missing. Nothing
- * caught it, because nothing read that table.
+ * 2026-09-07 it showed six of the ten entries actually under contract at the
+ * time — four were missing. Nothing caught it, because nothing read that
+ * table.
  *
  * This reads it. Both directions matter: a row for a subcommand that is NOT
  * under contract is as wrong as a missing one, because someone will avoid
@@ -458,16 +465,25 @@ void test('the README --json table matches JSON_CONTRACT exactly', () => {
  * plan §6.2 item 4 / blast-radius row 1): `JSON_CONTRACT` and
  * `PROSE_CONTRACT` are now DERIVED from `src/lib/job-registry.ts`'s
  * `JOB_REGISTRY`, not hand-written. This pins the derived list against
- * today's truth — the same 22 JSON jobs and 1 prose job that were here
- * before the derivation landed, by name, subcommand and consumer file — so a
- * registry edit that silently drops, renames or re-points one of them still
- * fails the build exactly the way an edit to the old hand list used to.
+ * today's truth, by name, subcommand and consumer file — so a registry edit
+ * that silently drops, renames or re-points one of them still fails the
+ * build exactly the way an edit to the old hand list used to.
+ *
+ * WAVE GATES2 LANE F2 (2026-11-08) retired ten of these rows outright —
+ * `toolchain`, `check-runner-var`, `inventory`, `node-users`,
+ * `runner-units` and `check-schedule` lost their only automated caller to a
+ * tandem/merge or moved to a clock this registry cannot model and stay real
+ * subcommands (see `MANUAL` in `src/lib/job-registry.ts`); four more had no
+ * remaining caller at all and were deleted outright — and three more off
+ * the `ci:audit-gates` umbrella (`capabilities`, `throttle`,
+ * `contract-consumers`, same reasons as the first group), while adding one
+ * NEW row: `check-site-token` absorbed into `ci:vault-audit` rather than
+ * disappearing (its old standalone cron is one of the ten retired).
+ * docs/planning/wave-gates2-2026-11-08.md has the evidence per change.
  */
 const TODAYS_JSON_CONTRACT = [
-	['drain-check', 'ci:drain-enforced', 'services/mgmt-api/src/routes/jobs/drain-enforced-check.ts'],
 	['benchmark', 'ci:fleet-benchmark', 'services/mgmt-api/src/routes/jobs/fleet-benchmark-check.ts'],
 	['reconcile', 'ci:fleet-coverage', 'services/mgmt-api/src/routes/jobs/fleet-coverage-check.ts'],
-	['toolchain', 'ci:fleet-toolchain', 'services/mgmt-api/src/routes/jobs/fleet-toolchain-check.ts'],
 	[
 		'converge-toolchain',
 		'ci:toolchain-refresh',
@@ -481,58 +497,33 @@ const TODAYS_JSON_CONTRACT = [
 		'services/mgmt-api/src/routes/jobs/identity-model-check.ts',
 	],
 	['cleanup', 'ci:claw-cleanup', 'services/mgmt-api/src/routes/jobs/claw-cleanup.ts'],
-	['check-runner-var', 'ci:runner-var', 'services/mgmt-api/src/routes/jobs/runner-var-check.ts'],
-	['check-site-token', 'ci:site-token', 'services/mgmt-api/src/routes/jobs/site-token-check.ts'],
 	['egress-slices', 'ci:egress-slices', 'services/mgmt-api/src/routes/jobs/egress-slices-check.ts'],
 	['queue-health', 'ci:queue-health', 'services/mgmt-api/src/routes/jobs/queue-health-check.ts'],
-	[
-		'reap-trend',
-		'ci:reap-timeout-trend',
-		'services/mgmt-api/src/routes/jobs/reap-timeout-trend-check.ts',
-	],
 	['preflight', 'ci:fleet-preflight', 'services/mgmt-api/src/routes/jobs/fleet-preflight-check.ts'],
-	['srv-drift', 'ci:srv-drift', 'services/mgmt-api/src/routes/jobs/srv-drift-check.ts'],
 	[
 		'hosting-placement',
 		'ci:fleet-placement',
 		'services/mgmt-api/src/routes/jobs/fleet-placement-check.ts',
 	],
-	['inventory', 'ci:fleet-inventory', 'services/mgmt-api/src/routes/jobs/fleet-inventory-check.ts'],
 	[
 		'service-inventory',
 		'ci:slice-inventory',
 		'services/mgmt-api/src/routes/jobs/slice-inventory.ts',
 	],
 	['doctor', 'ci:health-refresh', 'services/mgmt-api/src/routes/jobs/health-refresh.ts'],
-	[
-		'health-freshness',
-		'ci:health-freshness',
-		'services/mgmt-api/src/routes/jobs/health-freshness-check.ts',
-	],
-	['node-users', 'ci:node-users', 'services/mgmt-api/src/routes/jobs/node-users-check.ts'],
-	['runner-units', 'ci:runner-units', 'services/mgmt-api/src/routes/jobs/runner-units-check.ts'],
 	['fleet-kills', 'ci:fleet-kills', 'services/mgmt-api/src/routes/jobs/fleet-kills-check.ts'],
-	// Added 2026-10-31 (wave 5e lane D): the schedule drift gate.
-	['check-schedule', 'ci:schedule', 'services/mgmt-api/src/routes/jobs/schedule-check.ts'],
-	// Added wave 5f lane B: three `ci:audit-gates` covered subs migrated off
+	// Added wave 5f lane B: two `ci:audit-gates` covered subs migrated off
 	// PROSE_CONTRACT onto their own `contract: 'json'` — same umbrella job,
 	// same consumer file, no second cron.
 	['history-coverage', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
-	['contract-consumers', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
-	// Added wave 5h lane B: three more `ci:audit-gates` covered subs migrated
+	// Added wave 5h lane B: two more `ci:audit-gates` covered subs migrated
 	// off PROSE_CONTRACT the same way — same umbrella job, same consumer
 	// file, no second cron.
 	['tier-fleet', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
-	['capabilities', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	['boundary-contracts', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
-	// Added wave 5i lane B: two more `ci:audit-gates` covered subs migrated off
-	// PROSE_CONTRACT the same way — same umbrella job, same consumer file, no
-	// second cron.
-	['throttle', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	// Added wave 5j lane B: the last two NON-d3 `ci:audit-gates` covered subs
 	// migrated off PROSE_CONTRACT the same way — same umbrella job, same
-	// consumer file, no second cron. Only `slice`/`tool-inventory` (d3's lane)
-	// and `ci-watch` stay prose.
+	// consumer file, no second cron.
 	['mf-externals', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	['identity', 'ci:audit-gates', 'services/mgmt-api/src/routes/jobs/audit-gates.ts'],
 	// fleet-manager#38: warm-canary and label-floor (migrated in 5f/5i above)
@@ -540,9 +531,12 @@ const TODAYS_JSON_CONTRACT = [
 	// their 1h liveness budget without running every audit gate that often.
 	['warm-canary', 'ci:warm-canary', 'services/mgmt-api/src/routes/jobs/warm-canary-check.ts'],
 	['label-floor', 'ci:label-floor', 'services/mgmt-api/src/routes/jobs/label-floor-check.ts'],
+	// Added wave gates2 lane F2 (2026-11-08): the one NEW row this wave
+	// added rather than retired — see the module doc above.
+	['check-site-token', 'ci:vault-audit', 'services/mgmt-api/src/routes/jobs/vault-audit.ts'],
 ].map(([sub, job, consumer]) => `${sub} -> ${job} -> ${consumer}`);
 
-void test("the derived JSON_CONTRACT equals today's 35 entries exactly — name, sub and consumer", () => {
+void test("the derived JSON_CONTRACT equals today's entries exactly — name, sub and consumer", () => {
 	const derived = JSON_CONTRACT.map((e) => `${e.sub} -> ${e.job} -> ${e.consumer}`);
 	assert.deepEqual(derived.slice().sort(), TODAYS_JSON_CONTRACT.slice().sort());
 });
@@ -569,16 +563,16 @@ void test('parseCliCommandKinds reads a fixture table without bleeding across en
 		"\t\tkind: 'converger',",
 		"\t\tsummary: 'converge runner coverage',",
 		'\t},',
-		"\t'drain-check': {",
-		"\t\tscript: 'check-drain-enforced.mjs',",
+		"\t'fx-example-gate': {",
+		"\t\tscript: 'fx-example-gate.mjs',",
 		"\t\tkind: 'gate',",
-		"\t\tsummary: 'is every drain actually being enforced',",
+		"\t\tsummary: 'a fixture gate, not a real subcommand',",
 		'\t},',
 		'};',
 	].join('\n');
 	const kinds = parseCliCommandKinds(blankComments(fixture));
 	assert.equal(kinds.get('reconcile'), 'converger');
-	assert.equal(kinds.get('drain-check'), 'gate');
+	assert.equal(kinds.get('fx-example-gate'), 'gate');
 	assert.equal(kinds.size, 2);
 });
 

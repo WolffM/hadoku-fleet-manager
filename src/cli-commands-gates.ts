@@ -27,9 +27,14 @@ export const commandsGates: Record<string, Command> = {
 	toolchain: {
 		// RENAMED wave gates2 lane F1a (from check-fleet-toolchain.mjs); the probe
 		// itself lives in scripts/lib/toolchain-doctor.mjs, which
-		// `converge-toolchain --refresh` also calls. Kept as a real, working
-		// subcommand (not a bare alias) because mgmt-api's `ci:fleet-toolchain`
-		// cron still parses this exact document until lane S1 retires it.
+		// `converge-toolchain --refresh` also calls. UNSCHEDULED wave gates2
+		// lane F2: mgmt-api's `ci:fleet-toolchain` cron (its only automated
+		// caller) is retired — the same doctor's cache-drift findings (and its
+		// backstop-readiness block, hadoku_site#527) are now folded into
+		// `converge-toolchain --refresh`'s own nightly report
+		// (MANUAL['toolchain'] in src/lib/job-registry.ts). Kept as a real,
+		// working subcommand: a read-only per-node diagnostic that touches
+		// nothing, unlike --refresh's drain cycle.
 		script: 'toolchain.mjs',
 		kind: 'gate',
 		summary: 'can each node build what its neighbours can',
@@ -46,10 +51,12 @@ export const commandsGates: Record<string, Command> = {
 	'tool-inventory': {
 		// RENAMED wave gates2 lane F1a (from check-tool-inventory.mjs). The
 		// missing-tool scan moved to scripts/lib/tool-inventory-scan.mjs, which
-		// `converge-toolchain --refresh` also calls; this subcommand is kept,
-		// not deleted, because it is the ONLY writer of demand-ledger.jsonl
-		// (`--write`), read by check-label-floor, node-eligibility.ts and
-		// bootcamp-proof.ts.
+		// `converge-toolchain --refresh` also calls — its own nightly run of
+		// that SAME scan is what retired this subcommand's cron (`ci:audit-gates`'s
+		// check:tool-inventory row, wave gates2 lane F2; MANUAL['tool-inventory']
+		// in src/lib/job-registry.ts). Kept, not deleted, because it is the
+		// ONLY writer of demand-ledger.jsonl (`--write`), read by
+		// check-label-floor, node-eligibility.ts and bootcamp-proof.ts.
 		script: 'tool-inventory.mjs',
 		kind: 'gate',
 		summary: 'tools a workflow invokes but a node lacks; --write regenerates the demand ledger',
@@ -143,29 +150,28 @@ export const commandsGates: Record<string, Command> = {
 		kind: 'gate',
 		summary: 'module-federation externals alignment',
 	},
-	'reap-trend': {
-		script: 'check-reap-timeout-trend.mjs',
-		kind: 'gate',
-		summary: "is the reap's GET-runners timeout rate CLIMBING (not just what it is today)",
-	},
 	preflight: {
 		script: 'check-fleet-preflight.mjs',
 		kind: 'gate',
 		summary:
 			'nightly: node-key expiry, HADOKU_SITE_TOKEN expiry, runner version drift, reboots, LAN reservations',
 	},
-	'srv-drift': {
-		script: 'check-srv-drift.mjs',
-		kind: 'gate',
-		help: true,
-		summary: 'the DEPLOYED manifest against the commit it came from, and against main',
-	},
 	'ci-watch': {
+		// `--write` is called directly by hadoku_site's
+		// `.github/workflows/reconcile-fleet-coverage.yml` (12:30 UTC), not by
+		// an mgmt-api cron this registry tracks. The old `check:ci-watch`
+		// audit-gates row (`--check`, a nightly re-check of the SAME
+		// regeneration) retired wave gates2 lane F2 — MANUAL['ci-watch'] in
+		// src/lib/job-registry.ts.
 		script: 'ci-watch.mjs',
 		kind: 'gate',
 		summary: 'derive the CI alert watch list from the roster (--write|--check)',
 	},
 	inventory: {
+		// Same shape as ci-watch immediately above, same workflow: `--write`
+		// is called directly by reconcile-fleet-coverage.yml. The old
+		// `ci:fleet-inventory` cron (`--check`) retired wave gates2 lane F2 —
+		// MANUAL['inventory'] in src/lib/job-registry.ts.
 		script: 'fleet-inventory.mjs',
 		kind: 'gate',
 		summary: "derive the hub's workflow -> runner blast-radius table (--write|--check)",

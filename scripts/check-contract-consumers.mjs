@@ -46,6 +46,8 @@
  * missing site checkout is reported as such and exits non-zero, rather than
  * quietly finding zero problems in zero files. That is the same rule
  * `check-identity-model` and `check-header-fleet` follow for the same reason.
+ *
+ * @guards services/mgmt-api/src/routes/jobs/**
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

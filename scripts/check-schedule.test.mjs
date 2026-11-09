@@ -135,12 +135,14 @@ test('MISSING-FROM-SCHEDULE: a registered cron job absent from every profile', (
 });
 
 test('CRON-CANNOT-MEET-BUDGET: a real job moved onto a cron slower than its own budget', () => {
-	// ci:drain-enforced: 20m budget, declared */10 * * * *. Slow it to daily.
-	const fx = fleet(baselineFiles({ cronOverride: { 'ci:drain-enforced': '0 13 * * *' } }));
+	// ci:fleet-placement: 20m budget, declared */10 * * * *. Slow it to daily.
+	// (wave gates2 lane F2: this used to be a different fleet-pulse job, now retired —
+	// see docs/planning/wave-gates2-2026-11-08.md.)
+	const fx = fleet(baselineFiles({ cronOverride: { 'ci:fleet-placement': '0 13 * * *' } }));
 	try {
 		const r = run(fx.env);
 		assert.equal(r.status, 1);
-		const f = r.out.findings.find((x) => x.job === 'ci:drain-enforced');
+		const f = r.out.findings.find((x) => x.job === 'ci:fleet-placement');
 		assert.ok(f, JSON.stringify(r.out.findings));
 		assert.equal(f.kind, 'CRON-CANNOT-MEET-BUDGET');
 		assert.equal(f.cron, '0 13 * * *');
@@ -319,12 +321,12 @@ test('NO-CHECKOUT: the remote was never pushed at all — "I could not look" is 
 });
 
 test('UNPARSEABLE-CRON: a scheduled job sits on a cron shape this registry does not understand', () => {
-	const files = baselineFiles({ skip: ['ci:drain-enforced'] });
+	const files = baselineFiles({ skip: ['ci:fleet-placement'] });
 	const parsed = JSON.parse(files[PROFILES_PATH]);
 	parsed.profiles.push({
 		name: 'weird',
 		schedule: { cron: '0 0 * * SUN', timezone: 'Etc/UTC' },
-		jobs: [{ name: 'ci:drain-enforced' }],
+		jobs: [{ name: 'ci:fleet-placement' }],
 	});
 	files[PROFILES_PATH] = JSON.stringify(parsed);
 	const fx = fleet(files);
@@ -332,7 +334,7 @@ test('UNPARSEABLE-CRON: a scheduled job sits on a cron shape this registry does 
 		const r = run(fx.env);
 		assert.equal(r.status, 1);
 		assert.ok(
-			r.out.findings.some((f) => f.kind === 'UNPARSEABLE-CRON' && f.job === 'ci:drain-enforced'),
+			r.out.findings.some((f) => f.kind === 'UNPARSEABLE-CRON' && f.job === 'ci:fleet-placement'),
 			JSON.stringify(r.out.findings)
 		);
 	} finally {

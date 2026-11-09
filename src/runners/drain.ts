@@ -163,7 +163,7 @@ export function parseDrainDoc(raw: string): DrainDoc {
  * `from` until its own `until`, and while it does it wins over the current one:
  * it is the newer intention, and both hold CI off equally. A planned record
  * shows `since: from`, so a reader asking "did work start after the drain"
- * (`drain-check`) measures from when it actually took effect.
+ * measures from when it actually took effect.
  */
 export function effectiveDrains(doc: DrainDoc, nowMs: number = Date.now()): DrainState {
 	const out: DrainState = {};

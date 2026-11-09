@@ -128,12 +128,17 @@ export const commandsFleetOps: Record<string, Command> = {
 	},
 	capabilities: {
 		// DELETED wave gates2 lane F1a (operator-approved): redundant with
-		// bootcamp's probe registry + revocation. This is now a thin, real
-		// no-op alias (scripts/capabilities.mjs) kept only so mgmt-api's
-		// `check:capabilities` audit-gates row still gets a document it can
-		// judge as a pass, until lane S1 removes that row. The one thing this
+		// bootcamp's probe registry + revocation. The one thing this
 		// subcommand uniquely checked, the ephemeral dispatcher's --jitconfig
-		// dependency, moved to `fleet boundary-contracts`.
+		// dependency, moved to `fleet boundary-contracts`. The mgmt-api
+		// `check:capabilities` audit-gates row that used to call this bare
+		// retired wave gates2 lane F2. This thin, real alias
+		// (scripts/capabilities.mjs) stays: bare, a no-op (mgmt-api's old
+		// fleet-wide case needed nothing more); with `--machine`, it is a REAL
+		// re-probe — `fleet:reboot-claws`'s own re-prove step
+		// (scripts/reboot-claws.mjs) spawns it directly by script path after a
+		// reboot, before undraining (MANUAL['capabilities'] in
+		// src/lib/job-registry.ts).
 		script: 'capabilities.mjs',
 		kind: 'gate',
 		summary: 'RETIRED alias — see fleet bootcamp and fleet boundary-contracts',

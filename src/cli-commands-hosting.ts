@@ -69,12 +69,12 @@ export const commandsHosting: Record<string, Command> = {
 	},
 	'node-users': {
 		script: 'node-users.mjs',
-		// A gate: its consumer (ci:node-users) fails the run on any blocking
-		// finding and treats `ok:false` as a real failure rather than advisory
-		// reading — that is a gate's contract, not an operator report's.
-		// Corrected 2026-10-31 (wave 5e lane D); job-registry.ts's
-		// `ci:node-users` entry used to carry a `kindDrift` recording this
-		// exact disagreement.
+		// A gate AND a writer in one file: bare, it fails on any blocking
+		// finding, same as a gate's contract; `--cutover` creates/moves the ci
+		// user (docs/planning/node-users-2026-10-27.md P3). ci:node-users (the
+		// bare mode's only automated caller) is RETIRED wave gates2 lane F2 —
+		// see MANUAL['node-users'] in src/lib/job-registry.ts. Both modes stay
+		// real, operator-run subcommands.
 		kind: 'gate',
 		summary:
 			'per node: who runs CI (the ci role), read from the node — sudo, groups, keys, every runner uid',
@@ -85,14 +85,14 @@ export const commandsHosting: Record<string, Command> = {
 		help: true,
 		summary: 'per node: reachable, health, drains and their notice, hosting — for a tenant to read',
 	},
-	'drain-check': {
-		script: 'check-drain-enforced.mjs',
-		kind: 'gate',
-		help: true,
-		summary: 'is every drain actually being enforced',
-	},
 	'contract-consumers': {
 		script: 'check-contract-consumers.mjs',
+		// MOVED OFF ITS CRON wave gates2 lane F2: the old ci:audit-gates
+		// coversSubs row is retired; hadoku_site's lint.yml now runs
+		// `fleet contract-consumers --json` on every PR touching
+		// services/mgmt-api/src/routes/jobs/**, HADOKU_SITE_ROOT pinned at
+		// that checkout (MANUAL['contract-consumers'] in
+		// src/lib/job-registry.ts).
 		kind: 'gate',
 		help: true,
 		summary: 'every --json contract entry names a consumer that exists',
@@ -101,15 +101,24 @@ export const commandsHosting: Record<string, Command> = {
 		// RENAMED wave gates2 lane F1a (from check-runner-units.mjs). The same
 		// registration-vs-box audit now ALSO runs, in the other direction, from
 		// `fleet identity` (reconcile-runner-identity.mjs) — see that file's
-		// header. Kept as a real, working subcommand because mgmt-api's
-		// `ci:runner-units` cron still parses this exact document until lane S1
-		// retires it.
+		// header. UNSCHEDULED wave gates2 lane F2: mgmt-api's `ci:runner-units`
+		// cron (its only automated caller) is retired
+		// (MANUAL['runner-units'] in src/lib/job-registry.ts). Kept as a real,
+		// working subcommand for hand-running the install/unit half alone.
 		script: 'runner-units.mjs',
 		kind: 'gate',
 		help: true,
 		summary: 'standing runner units that name a renamed, archived or off-roster repo',
 	},
 	'check-runner-var': {
+		// UNSCHEDULED wave gates2 lane F2: mgmt-api's `ci:runner-var` cron
+		// (its only automated caller) is retired — `fleet reconcile`'s own
+		// runnerVar finding (lib/runner-var.mjs, shared) now carries the SAME
+		// check nightly as part of ci:fleet-coverage
+		// (MANUAL['check-runner-var'] in src/lib/job-registry.ts). Kept as a
+		// real, working subcommand: hadoku_site's fleet-coverage-check.ts
+		// names it in its own finding message as the hand-run tool for more
+		// detail.
 		script: 'check-runner-var.mjs',
 		kind: 'gate',
 		summary: 'every repo asking for vars.CI_RUNNER actually has it',

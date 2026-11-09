@@ -7,16 +7,16 @@
  * `scripts/lib/toolchain-doctor.mjs`, which `fleet converge-toolchain --refresh`
  * now ALSO calls directly, so the nightly cadence folds in the tool-CACHE
  * drift (hostedtoolcache, `ensurepip`, pnpm's store) this subcommand used to
- * re-read an hour later as its own cron (`ci:fleet-toolchain`, 13:00). THIS
- * FILE IS KEPT, UNCHANGED IN SHAPE, because mgmt-api's `ci:fleet-toolchain`
- * cron still calls `fleet toolchain --json` and parses its `{machines:[...]}`
- * document (`services/mgmt-api/src/routes/jobs/fleet-toolchain-check.ts`)
- * until the site lane retires that cron — see
- * `docs/planning/wave-gates2-2026-11-08.md` lane S1. Deleting this file
- * outright, before that cron is gone, would turn "the checker broke" into
- * every night's verdict.
+ * re-read an hour later on its own cron (retired wave gates2 lane F2, with
+ * its backstop-readiness block carried through to `--refresh` too,
+ * hadoku_site#527 — see `MANUAL['toolchain']` in `src/lib/job-registry.ts`).
+ * THIS FILE IS KEPT, UNCHANGED IN SHAPE, as a real, working subcommand: a
+ * read-only per-node diagnostic (`--machine <n> --json`) that touches
+ * nothing, unlike `--refresh`'s drain cycle — useful on its own even with no
+ * cron behind it.
  *
- * Read-only. Exit 1 on drift, so a cron can page on it.
+ * Read-only. Exit 1 on drift, so a human (or `fleet converge-toolchain
+ * --refresh`'s own nightly pass) can act on it.
  */
 
 import { realpathSync } from 'node:fs';

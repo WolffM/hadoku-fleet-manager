@@ -264,7 +264,7 @@ const cronLog = [
 	'2026-09-10 09:30:08,500 INFO httpx HTTP Request: POST http://127.0.0.1:4000/api/cron/run/ci:queue-health "HTTP/1.1 200 OK"',
 	"2026-09-10 09:40:00,000 INFO temporalio.activity execute_job ci:queue-health (http) ({'attempt': 1})",
 	'2026-09-10 09:40:02,000 INFO httpx HTTP Request: POST http://127.0.0.1:4000/api/cron/run/ci:queue-health "HTTP/1.1 500 Internal Server Error"',
-	"2026-09-10 09:50:00,000 INFO temporalio.activity execute_job ci:drain-enforced (http) ({'attempt': 1})",
+	"2026-09-10 09:50:00,000 INFO temporalio.activity execute_job ci:fleet-placement (http) ({'attempt': 1})",
 ].join('\n');
 
 void test("a cron job's duration is MEASURED from the worker log, not declared", () => {
@@ -278,9 +278,9 @@ void test("a cron job's duration is MEASURED from the worker log, not declared",
 
 void test('a dispatch with no completion is an OPEN run, never a zero-duration success', () => {
 	const { runs, openDispatches } = parseCronRuns(cronLog);
-	assert.equal(runs.has('ci:drain-enforced'), false);
-	assert.equal(openDispatches.get('ci:drain-enforced'), 1);
-	assert.equal(durationStats(runs.get('ci:drain-enforced')), null);
+	assert.equal(runs.has('ci:fleet-placement'), false);
+	assert.equal(openDispatches.get('ci:fleet-placement'), 1);
+	assert.equal(durationStats(runs.get('ci:fleet-placement')), null);
 });
 
 const START = (t, name) =>
@@ -289,21 +289,21 @@ const END = (t, name, code = '200 OK') =>
 	`${t} INFO httpx HTTP Request: POST http://127.0.0.1:4000/api/cron/run/${name} "HTTP/1.1 ${code}"`;
 
 void test('ONE unlogged dispatch costs one run, not every run after it', () => {
-	// THE MEASURED BUG. Two `ci:drain-enforced` dispatches (09-07, 09-08) never
-	// logged a completion. A FIFO queue then handed every later completion a
-	// start two ten-minute cycles too old, and the job reported p50 1,199 s
-	// against a 60 s timeout across 497 runs. Every one of them was wrong, and it
-	// read as a plausible overrun.
+	// THE MEASURED BUG (a now-retired ten-minute cron, 09-07/09-08): two
+	// dispatches never logged a completion. A FIFO queue then handed every
+	// later completion a start two ten-minute cycles too old, and the job
+	// reported p50 1,199 s against a 60 s timeout across 497 runs. Every one
+	// of them was wrong, and it read as a plausible overrun.
 	const log = [
-		START('2026-09-10 10:00:00,000', 'ci:drain-enforced'), // never completes
-		START('2026-09-10 10:10:00,000', 'ci:drain-enforced'),
-		END('2026-09-10 10:10:00,100', 'ci:drain-enforced'),
-		START('2026-09-10 10:20:00,000', 'ci:drain-enforced'),
-		END('2026-09-10 10:20:00,090', 'ci:drain-enforced'),
+		START('2026-09-10 10:00:00,000', 'ci:fleet-placement'), // never completes
+		START('2026-09-10 10:10:00,000', 'ci:fleet-placement'),
+		END('2026-09-10 10:10:00,100', 'ci:fleet-placement'),
+		START('2026-09-10 10:20:00,000', 'ci:fleet-placement'),
+		END('2026-09-10 10:20:00,090', 'ci:fleet-placement'),
 	].join('\n');
 
 	const { runs, abandonedDispatches, openDispatches } = parseCronRuns(log);
-	const stats = durationStats(runs.get('ci:drain-enforced'));
+	const stats = durationStats(runs.get('ci:fleet-placement'));
 	assert.equal(stats.runs, 2);
 	assert.equal(
 		stats.maxSec,
@@ -311,11 +311,11 @@ void test('ONE unlogged dispatch costs one run, not every run after it', () => {
 		'a completion belongs to the MOST RECENT dispatch, not the oldest'
 	);
 	assert.equal(
-		abandonedDispatches.get('ci:drain-enforced'),
+		abandonedDispatches.get('ci:fleet-placement'),
 		1,
 		'the unlogged dispatch is reported, not recycled'
 	);
-	assert.equal(openDispatches.get('ci:drain-enforced'), undefined);
+	assert.equal(openDispatches.get('ci:fleet-placement'), undefined);
 });
 
 void test('a run split across a log ROTATION survives files read out of chronological order', () => {
