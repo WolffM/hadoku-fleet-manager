@@ -22,8 +22,8 @@
  * ELIGIBLE is the same rule the dispatcher enforces: ephemeral, not drained,
  * not the backstop, and MEASURED usable memory (`installed − minFreeMb`) whose warm
  * half holds one busy listener — a job's worth — while the other half stays
- * reserved for cold mints — see `warmEligibleSlots`/`warmCacheEligible` in
- * src/runners/ephemeral.ts, imported here rather than re-typed so there is
+ * reserved for cold mints, AND a concurrency cap with a whole JIT slot beside
+ * it — see `warmListenerSlots`/`warmCacheEligible` in src/lib/warm-eligibility.ts, imported here rather than re-typed so there is
  * exactly one implementation of the threshold to drift from.
  *
  * THE DENOMINATOR IS EVERY ELIGIBLE NODE, whatever that rule admits. If it
@@ -63,7 +63,7 @@
  * @param {WarmCanaryMeasurement[]} measurements - one entry per candidate node
  *   (ephemeral, not drained) — see check-warm-canary.mjs for how the
  *   candidate set itself is derived.
- * @param {{ warmEligibleSlots: (i: { installedMb: number, minFreeMb: number, jobMb: number, role?: unknown }) => number,
+ * @param {{ warmListenerSlots: (i: { usableMb: number, jobMb: number, role?: unknown, maxConcurrent?: number | null }) => number,
  *           warmCacheEligible: (slots: number) => boolean }} fns
  *   the library functions this reuses — injected so this module never
  *   imports `dist/` directly, which would make it untestable against a
@@ -71,7 +71,7 @@
  * @returns {WarmCanaryVerdict}
  */
 export function warmCanaryVerdict(measurements, fns) {
-	const { warmEligibleSlots, warmCacheEligible } = fns;
+	const { warmListenerSlots, warmCacheEligible } = fns;
 
 	if (!measurements.length) {
 		return {
@@ -105,11 +105,14 @@ export function warmCanaryVerdict(measurements, fns) {
 		(m) =>
 			m.totalMb !== null &&
 			warmCacheEligible(
-				warmEligibleSlots({
-					installedMb: m.totalMb,
-					minFreeMb: m.minFreeMb,
+				// BOTH halves, the rule the warm tick places by. Memory alone scored
+				// claw-1 and claw-3 not-warm on every run after their caps went to 1
+				// (fleet-manager#79): the tick may never place a listener there.
+				warmListenerSlots({
+					usableMb: m.totalMb - m.minFreeMb,
 					jobMb: m.jobMb,
 					role: m.role,
+					maxConcurrent: m.maxConcurrent,
 				})
 			)
 	);

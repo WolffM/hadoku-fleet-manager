@@ -32,8 +32,9 @@
  * dispatcher's heavy mark and its refill, `heavy-marks.ts`: the mark only sets
  * a node aside, never vouches that one is warm), and MEASURED usable memory whose warm
  * half holds one busy listener (a job's worth, `jobReserve`'s node answer)
- * beside the 50% mint reserve — `warmEligibleSlots`/`warmCacheEligible`
- * are imported from the BUILT package (`dist/runners/ephemeral.js`), the same
+ * beside the 50% mint reserve, and a concurrency cap with a whole JIT slot
+ * left beside it — `warmListenerSlots`/`warmCacheEligible`, the rule the warm
+ * tick places by, are imported from the BUILT package (`dist/lib/warm-eligibility.js`), the same
  * pattern `fleet-exec.mjs` already uses for `isLocalNode`, so there is exactly
  * one implementation of the threshold to drift from.
  *
@@ -71,14 +72,14 @@ import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
 // The BUILT copy, deliberately — see the header note above and
 // scripts/lib/fleet-exec.mjs's own note on importing isLocalNode the same way.
 // unitMemoryMaxMb/jobReserve from lib/job-reserve.js, warmCacheEligible/
-// warmEligibleSlots from lib/warm-eligibility.js, and warmRunnerName from
+// warmListenerSlots from lib/warm-eligibility.js, and warmRunnerName from
 // lib/jit-naming.js — not runners/ephemeral.js (wave clean-2 lane C, cut
 // (iii) layer debt): this file is observation, ephemeral.ts is
 // ci-scheduling, and observation may not import a ci-scheduling file
 // directly. All three source modules are config, the stratum below every
 // domain; ephemeral.ts re-exports the exact same names unchanged.
 import { unitMemoryMaxMb, jobReserve } from '../dist/lib/job-reserve.js';
-import { warmCacheEligible, warmEligibleSlots } from '../dist/lib/warm-eligibility.js';
+import { warmCacheEligible, warmListenerSlots } from '../dist/lib/warm-eligibility.js';
 import { warmRunnerName } from '../dist/lib/jit-naming.js';
 import { readHostingDoc, sharedMbOn } from '../dist/runners/hosting-record.js';
 import { buildSpeedModel } from '../dist/runners/speed-tier.js';
@@ -140,7 +141,15 @@ function measure(node, m) {
 	// The verdict's floor carries the slice, as the warm tick's `usableMb`
 	// does; the per-unit cap below does not, as the minter's does not.
 	const minFreeMb = floorMb + sharedMbOn(HOSTING_DOC, node);
-	const unmeasured = { node, reachable: false, totalMb: null, minFreeMb, jobMb: 0, role: m.role };
+	const unmeasured = {
+		node,
+		reachable: false,
+		totalMb: null,
+		minFreeMb,
+		jobMb: 0,
+		role: m.role,
+		maxConcurrent: m.maxConcurrent,
+	};
 	const mem = runOnSync(node, "free -m | awk '/^Mem:/{print $2}'", { as: 'admin' });
 	if (!mem.ok) return { ...unmeasured, activeRepo: null };
 	const totalMb = Number(mem.stdout.trim());
@@ -173,7 +182,16 @@ function measure(node, m) {
 		// listener — same rule currentWarmSlot() applies in-process.
 		if (active.ok && active.stdout.trim().startsWith('active')) activeRepo = repo;
 	}
-	return { node, reachable: true, totalMb, minFreeMb, jobMb, role: m.role, activeRepo };
+	return {
+		node,
+		reachable: true,
+		totalMb,
+		minFreeMb,
+		jobMb,
+		role: m.role,
+		maxConcurrent: m.maxConcurrent,
+		activeRepo,
+	};
 }
 
 function main() {
@@ -284,7 +302,7 @@ function main() {
 	);
 
 	const measurements = active.map(([name, m]) => measure(name, m));
-	const verdict = warmCanaryVerdict(measurements, { warmEligibleSlots, warmCacheEligible });
+	const verdict = warmCanaryVerdict(measurements, { warmListenerSlots, warmCacheEligible });
 	const drained = drainedCandidates.map(([name]) => name);
 
 	if (JSON_OUT) {

@@ -52,8 +52,17 @@ function sshStub(bin, { reachable, activeRepo }) {
 	chmodSync(path, 0o755);
 }
 
+/**
+ * Every fixture node declares a cap of 3 unless it says otherwise: the canary
+ * judges eligibility by the warm tick's rule, under which an UNDECLARED cap
+ * holds no listener at all (fleet-manager#79).
+ */
 function manifestWith(machines) {
-	return JSON.stringify({ machines });
+	return JSON.stringify({
+		machines: Object.fromEntries(
+			Object.entries(machines).map(([n, m]) => [n, { maxConcurrent: 3, ...m }])
+		),
+	});
 }
 
 function run(

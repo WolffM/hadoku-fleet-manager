@@ -430,7 +430,12 @@ fi
 	const root = mkdtempSync(join(tmpdir(), 'guard-warmcanary-regress-'));
 	writeFileSync(
 		join(root, 'fleet-runner-manifest.json'),
-		JSON.stringify({ machines: { [WARM]: { ephemeral: true }, [TRAIN]: { ephemeral: true } } })
+		JSON.stringify({
+			machines: {
+				[WARM]: { ephemeral: true, maxConcurrent: 3 },
+				[TRAIN]: { ephemeral: true, maxConcurrent: 3 },
+			},
+		})
 	);
 	writeFileSync(
 		join(root, 'fleet-drain.json'),

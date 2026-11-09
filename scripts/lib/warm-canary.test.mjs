@@ -7,12 +7,12 @@ import {
 	heavyBusyCandidates,
 	heavyMarkedCandidates,
 } from './warm-canary.mjs';
-import { warmCacheEligible, warmEligibleSlots } from '../../dist/lib/warm-eligibility.js';
+import { warmCacheEligible, warmListenerSlots } from '../../dist/lib/warm-eligibility.js';
 
 // The REAL threshold, from the build — a local copy of the arithmetic is a
 // second implementation that the predicate can change under without this file
 // noticing, which is the drift the injection exists to prevent.
-const fns = { warmEligibleSlots, warmCacheEligible };
+const fns = { warmListenerSlots, warmCacheEligible };
 
 // claw-3's measured shape: 15918 MB, minFree 2048, jobP95Mb 3400.
 const eligible = (node, activeRepo = null) => ({
@@ -22,6 +22,7 @@ const eligible = (node, activeRepo = null) => ({
 	minFreeMb: 2048,
 	jobMb: 3400,
 	role: 'claw',
+	maxConcurrent: 3,
 	activeRepo,
 });
 
@@ -34,6 +35,7 @@ const ineligible = (node) => ({
 	minFreeMb: 1536,
 	jobMb: 3400,
 	role: 'claw',
+	maxConcurrent: 2,
 	activeRepo: null,
 });
 
@@ -233,4 +235,13 @@ test('a node the dispatcher marked heavy is set aside with the mark age', () => 
 
 test('marks that would not parse set nothing aside: not knowing stays strict', () => {
 	assert.deepEqual(heavyMarkedCandidates(['claw-4'], null, 1_000_000, within), []);
+});
+
+test('a node whose cap leaves no JIT slot beside a listener is not eligible, whatever its memory (fleet-manager#79)', () => {
+	// claw-1 and claw-3 after their caps went to 1 on 11-09: memory admits a
+	// listener, the cap does not, and the warm tick never places one there.
+	const capped = { ...eligible('claw-1'), maxConcurrent: 1 };
+	const v = warmCanaryVerdict([capped, eligible('claw-4', 'WolffM/hadoku_site')], fns);
+	assert.equal(v.ok, true, JSON.stringify(v));
+	assert.deepEqual(v.eligible, ['claw-4']);
 });
