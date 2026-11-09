@@ -231,6 +231,11 @@ export function warmSlotYielded(node: string): boolean {
 	return e !== undefined && e.liftedAtMs === null;
 }
 
+/** Every node whose slot is given to the queue right now. */
+export function yieldedNodes(): string[] {
+	return [...book()].filter(([, e]) => e.liftedAtMs === null).map(([node]) => node);
+}
+
 export function warmYieldEntry(node: string): WarmYieldEntry | undefined {
 	return book().get(node);
 }

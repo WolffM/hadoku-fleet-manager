@@ -124,6 +124,10 @@ async function warmTick(
 		sim?: Partial<NodeSim>;
 		/** The marker read prints nothing: the node could not be read. */
 		markerUnreadable?: boolean;
+		/** claw-10's declared cap this tick (default 2). */
+		maxConcurrent?: number;
+		/** The fleet probe could not reach claw-10 this tick. */
+		unreachable?: boolean;
 	} = {}
 ) {
 	__resetWarmCacheClockForTesting();
@@ -150,10 +154,10 @@ async function warmTick(
 			: listed;
 	const input: EphemeralTickInput = {
 		fleetProbe: new Map([
-			['claw-10', { reachable: true, busyRepos: null, workers: o.workers ?? 1 }],
+			['claw-10', { reachable: !o.unreachable, busyRepos: null, workers: o.workers ?? 1 }],
 		]),
 		ephemeral: new Set(['claw-10']),
-		nodes: { 'claw-10': { ...NODE_ELIGIBLE, maxConcurrent: 2 } },
+		nodes: { 'claw-10': { ...NODE_ELIGIBLE, maxConcurrent: o.maxConcurrent ?? 2 } },
 		isSick: () => false,
 		repos: [SITE],
 	};
@@ -581,4 +585,34 @@ test('an empty slot is asked to yield ahead of a busy listener beside it', async
 	);
 	assert.equal(warmYieldRequestFor('claw-10', now)?.warmRepo, null);
 	assert.equal(warmYieldRequestFor(OTHER, now), undefined);
+});
+
+test('a yielded node whose cap no longer admits a listener has its yield lifted, not frozen (fleet-manager#79)', async () => {
+	writeRecord({ runner: 'claw-10', repo: SITE, startedAt: histAt(0) });
+	const now = Date.now();
+	await pass([claw10(), free('claw-1'), free('claw-3')], [jdkJob(now, 90)], now);
+	await warmTick(now + 5_000);
+	assert.equal(warmSlotYielded('claw-10'), true, 'claw-10 yielded');
+
+	// Unreadable this tick: not proof of anything, so the yield stands.
+	await warmTick(now + 65_000, {
+		unreachable: true,
+		sim: { marker: null, activeUnits: new Set() },
+	});
+	assert.equal(warmSlotYielded('claw-10'), true, 'a node that could not be read keeps its yield');
+
+	// The operator cuts claw-10 to one slot: it may hold no listener at all.
+	rows = [];
+	await warmTick(now + 125_000, {
+		maxConcurrent: 1,
+		sim: { marker: null, activeUnits: new Set() },
+	});
+	assert.equal(warmSlotYielded('claw-10'), false, 'the yield is lifted');
+	assert.ok(
+		readWarmYields(tmp)?.['claw-10']?.liftedAtMs,
+		'lifted on disk, where the canary reads it'
+	);
+	const lifted = yieldRows('refill');
+	assert.equal(lifted.length, 1);
+	assert.match(lifted[0].reason ?? '', /can no longer hold a warm listener/);
 });

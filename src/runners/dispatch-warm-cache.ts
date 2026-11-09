@@ -9,7 +9,7 @@ import { type GhLike } from '../lib/fleet-vocabulary.js';
 import { runnerTarballUrl } from './ephemeral-exec-jit.js';
 import { observeWarmNode } from './dispatch-warm-cache-observe.js';
 import { actOnWarmNode } from './dispatch-warm-cache-act.js';
-import { holdWarmChangesForQueue, warmYieldStep } from './warm-yield.js';
+import { holdWarmChangesForQueue, liftYieldsOfIneligible, warmYieldStep } from './warm-yield.js';
 import { heavyMarkedRecently } from './dispatch-pass-state.js';
 import { slowReposOn } from './placement-slow.js';
 import { recordWarmListenerDecisions, type WarmListenerDecision } from './decision-log-record.js';
@@ -119,13 +119,28 @@ export async function dispatchWarmCache(
 	// `dispatch-warm-cache-observe.ts`'s own doc for the full reasoning
 	// (issues #7, #101, #61, #17). `observedWarm` is set by a node whose
 	// slot is confirmed ONLINE, for the affinity map published below.
+	const ineligible = new Set<string>();
 	const observed = (
 		await Promise.all(
 			[...input.ephemeral].map((node) =>
-				observeWarmNode(node, input, hostingDoc, token, gh, sh, nowMs, result, observedWarm)
+				observeWarmNode(
+					node,
+					input,
+					hostingDoc,
+					token,
+					gh,
+					sh,
+					nowMs,
+					result,
+					observedWarm,
+					ineligible
+				)
 			)
 		)
 	).filter((o): o is ObservedWarmNode => o !== null);
+	// A yielded node that can no longer hold a listener at all never reaches
+	// warmYieldStep again, so its yield would never lift (fleet-manager#79).
+	liftYieldsOfIneligible(ineligible, nowMs);
 
 	// WAVE 3W (#82, #83): THE WARM PATH IS A SECOND ASSIGNMENT PATH.
 	// A warm listener is a STANDING registration GitHub hands work to

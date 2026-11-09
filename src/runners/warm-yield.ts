@@ -61,6 +61,7 @@ import {
 	warmYieldEntry,
 	warmYieldRequestFor,
 	warmYieldWaitingFor,
+	yieldedNodes,
 	type WarmYieldJob,
 	type WarmYieldRequest,
 } from './warm-yields.js';
@@ -427,6 +428,30 @@ function yielded(
 	);
 	logger.info(`[warm-yield] ${node}: ${reason}`);
 	return { hold: true, reason: `yielded to the queue: ${reason}`, evicted };
+}
+
+/**
+ * Lifts the yield of every node the warm tick READ as unable to hold a
+ * listener at all. Such a node is never observed, so `warmYieldStep` never
+ * runs for it and nothing else would ever lift its yield. Live
+ * (fleet-manager#79): claw-1 yielded at 15:24:41Z 11-09, its maxConcurrent
+ * went 2 → 1 at 15:30, and the entry stayed unlifted, its `lastDemandMs`
+ * still advancing hours later. A node that could not be read is not in
+ * `ineligible` and keeps its yield.
+ */
+export function liftYieldsOfIneligible(ineligible: ReadonlySet<string>, nowMs: number): void {
+	for (const node of yieldedNodes()) {
+		if (!ineligible.has(node)) continue;
+		const e = warmYieldEntry(node)!;
+		liftWarmYield(node, nowMs);
+		suppressLogged.delete(node);
+		const reason = 'the node can no longer hold a warm listener, so there is no slot to give back';
+		logger.warn(`[warm-yield] ${node}: ${reason} — yield lifted`);
+		recordWarmYieldDecision(
+			{ node, action: 'refill', warmRepo: e.warmRepo, job: e.job, spare: e.spare, reason },
+			nowMs
+		);
+	}
 }
 
 /** node -> the suppression episode in progress: the action its one row recorded. */

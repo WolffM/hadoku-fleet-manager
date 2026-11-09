@@ -44,7 +44,10 @@ export async function observeWarmNode(
 	nowMs: number,
 	result: WarmCacheResult,
 	/** Set for a node whose slot is confirmed ONLINE — see the comment below. */
-	observedWarm: Map<string, string>
+	observedWarm: Map<string, string>,
+	/** Gets a node READ as unable to hold a listener (allowance 0), never one
+	 * that could not be read: the yield book lifts only on this positive answer. */
+	ineligible?: Set<string>
 ): Promise<ObservedWarmNode | null> {
 	try {
 		const m = input.nodes[node];
@@ -99,7 +102,10 @@ export async function observeWarmNode(
 				}),
 			}).mb,
 		});
-		if (!warmCacheEligible(slots)) return null;
+		if (!warmCacheEligible(slots)) {
+			ineligible?.add(node);
+			return null;
+		}
 
 		const markerState = await readWarmMarkerState(node, sh);
 		const marker = markerState.kind === 'marker' ? markerState.marker : null;
