@@ -100,7 +100,11 @@ test('a directory that is not a site checkout does not masquerade as one', () =>
 	const prevCwd = process.cwd();
 	const prevEnv = process.env.HADOKU_SITE_ROOT;
 	const prevDeploy = process.env.FLEET_DEPLOY_SITE_ROOT;
+	const prevRepos = process.env.REPOS_DIR;
 	delete process.env.HADOKU_SITE_ROOT;
+	// An explicit REPOS_DIR (the blinded gate sets one) outranks the deployed
+	// fallback this test exercises; it must come from the cwd here.
+	delete process.env.REPOS_DIR;
 	try {
 		process.chdir(dir);
 		// The deployed-tree fallback (2026-11-04) points at a tree that does not
@@ -119,6 +123,7 @@ test('a directory that is not a site checkout does not masquerade as one', () =>
 	} finally {
 		process.chdir(prevCwd);
 		if (prevEnv !== undefined) process.env.HADOKU_SITE_ROOT = prevEnv;
+		if (prevRepos !== undefined) process.env.REPOS_DIR = prevRepos;
 		if (prevDeploy === undefined) delete process.env.FLEET_DEPLOY_SITE_ROOT;
 		else process.env.FLEET_DEPLOY_SITE_ROOT = prevDeploy;
 		rmSync(dir, { recursive: true, force: true });
