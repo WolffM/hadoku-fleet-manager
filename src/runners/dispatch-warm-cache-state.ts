@@ -280,6 +280,14 @@ export interface ObservedWarmNode {
 	m: EphemeralTickInput['nodes'][string];
 	installedMb: number;
 	current: ObservedWarmSlot | null;
+	/**
+	 * The node POSITIVELY holds no listener: it reported no marker, or systemd
+	 * reported the marker's unit inactive. `false` also when it could not be
+	 * read. Only the warm yield reads it, to release an empty slot's
+	 * reservation; optional so a hand-built observation predating it reads
+	 * `undefined`, i.e. not known empty.
+	 */
+	slotEmpty?: boolean;
 	/** #101: this pass's OWN measurement, not borrowed from the dispatch
 	 *  tick's verdict — see the probe below and `spaceRefusal`. */
 	tmpFreeMb: number | null;

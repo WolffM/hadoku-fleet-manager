@@ -11,7 +11,7 @@ import { sharedMbOn, type HostingDoc } from './hosting-record.js';
 import { warmListenerSlots } from './ephemeral.js';
 import { unitMemoryMaxMb, jobReserve } from '../lib/job-reserve.js';
 import { warmCacheEligible } from '../lib/warm-eligibility.js';
-import { readWarmMarker, refreshWarmMarker, warmRegistration } from './ephemeral-exec.js';
+import { readWarmMarkerState, refreshWarmMarker, warmRegistration } from './ephemeral-exec.js';
 import { type GhLike } from '../lib/fleet-vocabulary.js';
 import { reapDeadWarmListener } from './dispatch-warm-cache-state.js';
 import {
@@ -101,7 +101,11 @@ export async function observeWarmNode(
 		});
 		if (!warmCacheEligible(slots)) return null;
 
-		const marker = await readWarmMarker(node, sh);
+		const markerState = await readWarmMarkerState(node, sh);
+		const marker = markerState.kind === 'marker' ? markerState.marker : null;
+		// POSITIVELY no listener: the node said there is no marker, or systemd
+		// said the marker's unit is not active. An unreadable answer is neither.
+		const slotEmpty = markerState.kind === 'none' || (marker !== null && marker.active === false);
 		// #61. A marker whose unit systemd positively reports dead is a
 		// registration this tick is about to walk away from: the planner
 		// below sees `current: null` and FILLS, and the fill's `RESET=1`
@@ -150,7 +154,7 @@ export async function observeWarmNode(
 			};
 		}
 
-		return { node, m, installedMb, current, tmpFreeMb, workFreeMb };
+		return { node, m, installedMb, current, slotEmpty, tmpFreeMb, workFreeMb };
 	} catch (err) {
 		result.failed++;
 		logger.warn(`[warm-cache] ${node}: ${err instanceof Error ? err.message : String(err)}`);

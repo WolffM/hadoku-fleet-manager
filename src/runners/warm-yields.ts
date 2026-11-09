@@ -92,8 +92,14 @@ export interface WarmYieldJob {
 /** The dispatch pass asking `node` to give its warm slot to `job`. */
 export interface WarmYieldRequest {
 	node: string;
-	/** The repo the node's verified-live listener holds. */
-	warmRepo: string;
+	/**
+	 * The repo the node's verified-live listener holds, or `null` when the pass
+	 * saw no live listener in the slot it reserves: a node the warm cache is
+	 * keeping empty (a heavy job, say) still holds the slot back from the mint
+	 * budget. The warm tick releases such a slot only on the node's own word
+	 * that no listener is there.
+	 */
+	warmRepo: string | null;
 	job: WarmYieldJob;
 	/** Other claws that could mint `warmRepo`'s job right now. */
 	spare: number;
@@ -104,7 +110,8 @@ export interface WarmYieldRequest {
 
 /** A node whose listener was evicted for the queue. */
 export interface WarmYieldEntry {
-	warmRepo: string;
+	/** `null`: the slot held no listener when it yielded. */
+	warmRepo: string | null;
 	job: WarmYieldJob;
 	spare: number;
 	yieldedAtMs: number;
@@ -150,7 +157,7 @@ export function readWarmYields(dir = fileDir ?? stateDir()): WarmYieldDoc | null
 			const v = e as Partial<WarmYieldEntry> | null;
 			if (
 				v &&
-				typeof v.warmRepo === 'string' &&
+				(typeof v.warmRepo === 'string' || v.warmRepo === null) &&
 				Number.isFinite(v.yieldedAtMs) &&
 				Number.isFinite(v.lastDemandMs) &&
 				Number.isFinite(v.confirmedAtMs)

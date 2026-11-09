@@ -226,6 +226,33 @@ export async function dispatchWarmCache(
 		// exactly like the act loop already treats a per-node failure: count
 		// it, say why with the node and the real error, move on.
 		try {
+			// WARM YIELD (`warm-yield.ts`): a slot the dispatcher asked to give to
+			// a long-waiting job, or one already given and not yet due back. Held
+			// out of the joint allocation, so nothing refills it. FIRST, ahead of
+			// the never-warm branch: a node running a heavy job holds its slot
+			// empty, and that empty slot is exactly what a waiting job can use.
+			const y = await warmYieldStep({
+				o,
+				nowMs,
+				token,
+				gh,
+				sh,
+				freeSlotFor: (node) => {
+					const workers = input.fleetProbe.get(node)?.workers;
+					return workers === undefined ? null : workers < (input.nodes[node]?.maxConcurrent ?? 1);
+				},
+				stillWarm: (node, repo) => observedWarm.get(node) === repo && !yieldedThisTick.has(node),
+			});
+			if (y.hold) {
+				neverWarm.set(o.node, y.reason);
+				if (y.evicted) {
+					result.evicted++;
+					yieldedThisTick.add(o.node);
+					observedWarm.delete(o.node);
+				}
+				continue;
+			}
+			if (y.failed) result.failed++;
 			if (tier === 'slow' || drained || spaceRefused || runningHeavyNow) {
 				neverWarm.set(
 					o.node,
@@ -299,31 +326,6 @@ export async function dispatchWarmCache(
 				// `planNodes` to be offered a slot in the first place.
 				continue;
 			}
-			// WARM YIELD (`warm-yield.ts`): a slot the dispatcher asked to give to
-			// a long-waiting job, or one already given and not yet due back. Held
-			// out of the joint allocation, so nothing refills it.
-			const y = await warmYieldStep({
-				o,
-				nowMs,
-				token,
-				gh,
-				sh,
-				freeSlotFor: (node) => {
-					const workers = input.fleetProbe.get(node)?.workers;
-					return workers === undefined ? null : workers < (input.nodes[node]?.maxConcurrent ?? 1);
-				},
-				stillWarm: (node, repo) => observedWarm.get(node) === repo && !yieldedThisTick.has(node),
-			});
-			if (y.hold) {
-				neverWarm.set(o.node, y.reason);
-				if (y.evicted) {
-					result.evicted++;
-					yieldedThisTick.add(o.node);
-					observedWarm.delete(o.node);
-				}
-				continue;
-			}
-			if (y.failed) result.failed++;
 			// #82: THE CURRENT repo is one THIS node refuses. Evict it (respecting
 			// the same busy/assign-window lock `planWarmFleet`'s own `rotate`
 			// decision already respects, and the same backoff every other eviction

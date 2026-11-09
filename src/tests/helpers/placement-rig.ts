@@ -112,7 +112,8 @@ export function simShell(sims: Record<string, NodeSim>) {
 				? `${freeLine}\n${SPACE_FREE_MB}\n${SPACE_FREE_MB}\n`
 				: freeLine;
 		}
-		if (cmd.includes('warm/repo')) return s.marker ?? '';
+		if (cmd.includes('warm/repo'))
+			return s.marker ?? (cmd.includes('NO-WARM-MARKER') ? 'NO-WARM-MARKER' : '');
 		if (cmd.includes('is-active')) {
 			const unit = /is-active\s+(\S+)/.exec(cmd)?.[1];
 			return unit && s.active.has(unit) ? 'active' : 'inactive';

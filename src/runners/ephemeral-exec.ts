@@ -357,22 +357,37 @@ export async function warmRegistration(
  * without a webhook, and precise enough given the warm-cache tick's own
  * interval is wider than the assign window it is protecting.
  */
-export async function readWarmMarker(
-	node: string,
-	sh: ShellLike
-): Promise<{ repo: string; unit: string; markerAtMs: number; active: boolean | null } | null> {
+/** What `readWarmMarker` saw, with "no marker" kept apart from "could not read". */
+export type WarmMarkerState =
+	| { kind: 'none' }
+	| { kind: 'unreadable' }
+	| {
+			kind: 'marker';
+			marker: { repo: string; unit: string; markerAtMs: number; active: boolean | null };
+	  };
+
+/** Printed by the node when there is no marker file at all. */
+const NO_WARM_MARKER = 'NO-WARM-MARKER';
+
+/**
+ * The warm marker and its unit's state, keeping the node's own "there is no
+ * marker" (a positive answer) apart from an ssh that failed or printed nothing
+ * (no answer). The warm yield releases a slot's reservation only on the first.
+ */
+export async function readWarmMarkerState(node: string, sh: ShellLike): Promise<WarmMarkerState> {
 	const out = await sh(
 		node,
 		'f="$HOME/.hadoku/warm/repo"; ' +
-			'[ -f "$f" ] && printf "%s %s" "$(cat "$f")" "$(stat -c %Y "$f" 2>/dev/null || echo 0)" || true'
+			`[ -f "$f" ] && printf "%s %s" "$(cat "$f")" "$(stat -c %Y "$f" 2>/dev/null || echo 0)" || echo ${NO_WARM_MARKER}`
 	);
 	const trimmed = out?.trim();
-	if (!trimmed) return null;
+	if (trimmed === NO_WARM_MARKER) return { kind: 'none' };
+	if (!trimmed) return { kind: 'unreadable' };
 	const sp = trimmed.lastIndexOf(' ');
-	if (sp < 0) return null;
+	if (sp < 0) return { kind: 'unreadable' };
 	const repo = trimmed.slice(0, sp);
 	const markerAtMs = Number(trimmed.slice(sp + 1)) * 1000;
-	if (!repo || !Number.isFinite(markerAtMs)) return null;
+	if (!repo || !Number.isFinite(markerAtMs)) return { kind: 'unreadable' };
 	const unit = warmRunnerName(node, repo);
 	const out2 = await sh(
 		node,
@@ -383,7 +398,16 @@ export async function readWarmMarker(
 	// `is-active` always prints a word when it ran at all. Both are `null`.
 	const answer = out2?.trim();
 	const active = answer ? answer.startsWith('active') : null;
-	return { repo, unit, markerAtMs, active };
+	return { kind: 'marker', marker: { repo, unit, markerAtMs, active } };
+}
+
+/** The marker, or `null` for no marker AND for one that could not be read. */
+export async function readWarmMarker(
+	node: string,
+	sh: ShellLike
+): Promise<{ repo: string; unit: string; markerAtMs: number; active: boolean | null } | null> {
+	const st = await readWarmMarkerState(node, sh);
+	return st.kind === 'marker' ? st.marker : null;
 }
 
 /**

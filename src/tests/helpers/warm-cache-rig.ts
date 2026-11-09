@@ -224,7 +224,8 @@ export function simShell(sims: Record<string, NodeSim>) {
 			const unit = /is-active\s+(\S+)/.exec(cmd)?.[1];
 			return unit && s.activeUnits.has(unit) ? 'active' : 'inactive';
 		}
-		if (cmd.includes('warm/repo')) return s.marker ?? '';
+		if (cmd.includes('warm/repo'))
+			return s.marker ?? (cmd.includes('NO-WARM-MARKER') ? 'NO-WARM-MARKER' : '');
 		return '';
 	};
 }

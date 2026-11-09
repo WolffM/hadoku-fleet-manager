@@ -266,8 +266,8 @@ export function recordWarmListenerDecisions(
 export interface WarmYieldDecision {
 	node: string;
 	action: 'yield' | 'yield-refused' | 'refill-suppressed' | 'refill';
-	/** The repo the yielded (or kept) listener holds. */
-	warmRepo: string;
+	/** The repo the yielded (or kept) listener holds; `null` for an empty slot. */
+	warmRepo: string | null;
 	/** The waiting job the slot is for. */
 	job: { repo: string; runId: number; jobId: number; jobName?: string; queuedSec: number };
 	/** Other claws that could mint `warmRepo`'s job when the pass asked. */
@@ -282,7 +282,7 @@ export interface WarmYieldDecision {
 export function recordWarmYieldDecision(d: WarmYieldDecision, nowMs: number): number {
 	if (!decisionLogEnabled()) return 0;
 	try {
-		const r = blank(new Date(nowMs).toISOString(), 'warm', 'warm-yield', d.warmRepo);
+		const r = blank(new Date(nowMs).toISOString(), 'warm', 'warm-yield', d.warmRepo ?? '');
 		r.winner = d.node;
 		r.candidates = [d.node];
 		r.action = d.action;

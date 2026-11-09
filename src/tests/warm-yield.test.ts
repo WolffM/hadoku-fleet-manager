@@ -23,6 +23,10 @@ import {
 } from '../runners/warm-yields.js';
 import { __resetWarmYieldLogForTesting } from '../runners/warm-yield.js';
 import {
+	__markHeavyForTesting,
+	__resetHeavyMarksForTesting,
+} from '../runners/dispatch-pass-state.js';
+import {
 	__resetDecisionLogForTesting,
 	__restoreDecisionSinkForTesting,
 	__setDecisionSinkForTesting,
@@ -59,6 +63,7 @@ beforeEach(() => {
 	__setDecisionSinkForTesting((r) => void rows.push(...r));
 });
 afterEach(() => {
+	__resetHeavyMarksForTesting();
 	__restoreDecisionSinkForTesting();
 	__resetDecisionLogForTesting();
 	__resetWarmYieldsForTesting(null);
@@ -111,7 +116,14 @@ async function pass(nodes: NodeState[], pending: PendingRun[], nowMs: number) {
 /** The warm tick on claw-10 alone, holding `SITE` unless the sim says otherwise. */
 async function warmTick(
 	nowMs: number,
-	o: { busy?: boolean; listed?: boolean; workers?: number; sim?: Partial<NodeSim> } = {}
+	o: {
+		busy?: boolean;
+		listed?: boolean;
+		workers?: number;
+		sim?: Partial<NodeSim>;
+		/** The marker read prints nothing: the node could not be read. */
+		markerUnreadable?: boolean;
+	} = {}
 ) {
 	__resetWarmCacheClockForTesting();
 	const sims: Record<string, NodeSim> = {
@@ -144,7 +156,10 @@ async function warmTick(
 		isSick: () => false,
 		repos: [SITE],
 	};
-	const res = await dispatchWarmCache(input, 'tok', gh, simShell(sims), nowMs);
+	const inner = simShell(sims);
+	const sh = async (n: string, cmd: string) =>
+		o.markerUnreadable && cmd.includes('warm/repo') ? '' : inner(n, cmd);
+	const res = await dispatchWarmCache(input, 'tok', gh, sh, nowMs);
 	return { res, sim: sims['claw-10'], gh, input, sims };
 }
 
@@ -337,4 +352,63 @@ test('no churn: a pass with no waiting job, then a warm tick, changes nothing', 
 	assert.equal(res.kept, 1, 'the listener is kept, exactly as before');
 	assert.ok(sim.activeUnits.has(UNIT));
 	assert.equal(yieldRows().length, 0);
+});
+
+test('an EMPTY reserved slot (no live listener) yields with nothing evicted, spare or not', async () => {
+	// The live shape on 2026-11-09 07:46Z: claw-4, -9 and -10 each held a slot
+	// for a listener the warm cache keeps away while they run a heavy job.
+	const now = Date.now();
+	await pass([claw10({ warmRepo: undefined })], [jdkJob(now, 90)], now);
+	const req = warmYieldRequestFor('claw-10', now);
+	assert.ok(req, 'an empty slot gives nothing up, so no spare is needed');
+	assert.equal(req.warmRepo, null);
+	__markHeavyForTesting('claw-10', now);
+	const { res, gh } = await warmTick(now + 5_000, {
+		sim: { marker: null, activeUnits: new Set() },
+	});
+	assert.equal(res.evicted, 0, 'nothing to evict');
+	assert.equal(res.filled, 0);
+	assert.equal(gh.writes.length, 0, 'no GitHub write');
+	assert.equal(warmSlotYielded('claw-10'), true, 'the reservation is released');
+	assert.equal(yieldRows('yield').length, 1);
+});
+
+test('an empty slot is NOT released when the node could not be read', async () => {
+	const now = Date.now();
+	await pass([claw10({ warmRepo: undefined })], [jdkJob(now, 90)], now);
+	assert.ok(warmYieldRequestFor('claw-10', now));
+	await warmTick(now + 5_000, { markerUnreadable: true });
+	assert.equal(warmSlotYielded('claw-10'), false);
+	assert.equal(yieldRows().length, 0);
+});
+
+test('a pass that saw no listener does not release a slot the node shows a listener in', async () => {
+	// Right after a restart the affinity map is empty for a minute while the
+	// listener is alive: the node's own marker wins.
+	const now = Date.now();
+	await pass([claw10({ warmRepo: undefined })], [jdkJob(now, 90)], now);
+	const { res, sim } = await warmTick(now + 5_000);
+	assert.equal(res.evicted, 0);
+	assert.ok(sim.activeUnits.has(UNIT));
+	assert.equal(warmSlotYielded('claw-10'), false);
+});
+
+test('a node running a heavy job yields its idle listener before the heavy branch sees it', async () => {
+	const now = Date.now();
+	await pass([claw10(), free('claw-1'), free('claw-3')], [jdkJob(now, 90)], now);
+	__markHeavyForTesting('claw-10', now);
+	const { res, sim } = await warmTick(now + 5_000);
+	assert.equal(res.evicted, 1);
+	assert.ok(!sim.activeUnits.has(UNIT));
+	assert.equal(warmSlotYielded('claw-10'), true);
+	assert.equal(yieldRows('yield').length, 1);
+});
+
+test('a listener found on a yielded slot ends the yield at once', async () => {
+	const now = Date.now();
+	await pass([claw10({ warmRepo: undefined })], [jdkJob(now, 90)], now);
+	await warmTick(now + 5_000, { sim: { marker: null, activeUnits: new Set() } });
+	assert.equal(warmSlotYielded('claw-10'), true);
+	await warmTick(now + 65_000);
+	assert.equal(warmSlotYielded('claw-10'), false, 'its slot is counted again');
 });

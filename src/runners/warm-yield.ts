@@ -90,6 +90,8 @@ export interface WarmYieldDecline {
 	spare: number;
 }
 
+const held = (repo: string | null): string => (repo === null ? 'empty' : `idle ${repo}`);
+
 /**
  * One dispatch pass's view of the yield question. Hand {@link observe} to
  * planTick (it reads, it keeps only names and numbers), then call
@@ -128,7 +130,7 @@ export class WarmYieldPass {
 		const nodes: string[] = [];
 		for (const name of full) {
 			const m = o.candidates.find((c) => c.name === name);
-			if (!m || !(m.warmHeld && m.warmHeld > 0) || !m.warmRepo) continue;
+			if (!m || !(m.warmHeld && m.warmHeld > 0)) continue;
 			const r = refusalFor(
 				withSlotReleased(m),
 				o.run.labels ?? [],
@@ -164,10 +166,10 @@ export class WarmYieldPass {
 		for (const c of this.candidates) {
 			for (const node of c.nodes) {
 				if (taken.has(node)) continue;
-				const warmRepo = byName.get(node)?.warmRepo;
-				if (!warmRepo) continue;
+				const warmRepo = byName.get(node)?.warmRepo ?? null;
 				const cover = warmRepoCover(this.finalNodes, node, warmRepo, taken);
-				if (cover.otherWarm.length === 0 && cover.spare < WARM_YIELD_SPARE) {
+				// A slot with no live listener gives nothing up: nothing to cover.
+				if (warmRepo !== null && cover.otherWarm.length === 0 && cover.spare < WARM_YIELD_SPARE) {
 					declined.push({ node, warmRepo, job: c.job, spare: cover.spare });
 					continue;
 				}
@@ -185,22 +187,23 @@ export class WarmYieldPass {
  * and the claws (never a backstop, never one GitHub cannot place on, never one
  * already yielding) that would mint its ordinary job right now — asked through
  * `refusalFor` itself, so a full, unmeasured, drained, excluded or slow node is
- * not spare.
+ * not spare. `null` (an empty slot) counts the claws free for any ordinary job,
+ * for the record only.
  */
 export function warmRepoCover(
 	nodes: readonly NodeState[],
 	node: string,
-	repo: string,
+	repo: string | null,
 	yielding: ReadonlySet<string> = new Set()
 ): { spare: number; otherWarm: string[] } {
 	const others = nodes.filter((m) => m.name !== node && !yielding.has(m.name));
 	return {
-		otherWarm: others.filter((m) => m.warmRepo === repo).map((m) => m.name),
+		otherWarm: repo === null ? [] : others.filter((m) => m.warmRepo === repo).map((m) => m.name),
 		spare: others.filter(
 			(m) =>
 				!m.onDemandBackstop &&
 				m.schedulable !== false &&
-				refusalFor(m, NORMAL_CI_LABELS, repo).reason === null
+				refusalFor(m, NORMAL_CI_LABELS, repo ?? undefined).reason === null
 		).length,
 	};
 }
@@ -216,9 +219,9 @@ export function publishWarmYieldPass(pass: WarmYieldPass, nowMs: number): WarmYi
 	noteWarmYieldDemand(pass.demand, nowMs);
 	for (const r of requests) {
 		logger.info(
-			`[warm-yield] ${r.node}: asking its idle ${r.warmRepo} listener to yield to ` +
+			`[warm-yield] ${r.node}: asking its ${held(r.warmRepo)} warm slot to yield to ` +
 				`${r.job.repo} job ${r.job.jobId} (queued ${r.job.queuedSec}s, refused only on capacity); ` +
-				`${r.warmRepo} covered by spare=${r.spare}` +
+				`spare=${r.spare}` +
 				(r.otherWarm.length ? ` warm=${r.otherWarm.join(',')}` : '')
 		);
 	}
@@ -262,6 +265,29 @@ export async function warmYieldStep(a: {
 }): Promise<WarmYieldStep> {
 	const { o, nowMs } = a;
 	pruneWarmYields(nowMs);
+	if (warmSlotYielded(o.node) && o.current) {
+		// A listener is there again, so its slot must be counted again: the
+		// yield is over, whatever the queue is doing.
+		const e = warmYieldEntry(o.node)!;
+		liftWarmYield(o.node, nowMs);
+		suppressLogged.delete(o.node);
+		logger.warn(
+			`[warm-yield] ${o.node}: a ${o.current.repo} listener is present on a yielded slot — ` +
+				'counting its slot again'
+		);
+		recordWarmYieldDecision(
+			{
+				node: o.node,
+				action: 'refill',
+				warmRepo: e.warmRepo,
+				job: e.job,
+				spare: e.spare,
+				reason: 'a listener is present again',
+			},
+			nowMs
+		);
+		return { hold: false, failed: false };
+	}
 	if (warmSlotYielded(o.node)) {
 		const e = warmYieldEntry(o.node)!;
 		const sinceDemand = nowMs - e.lastDemandMs;
@@ -293,7 +319,7 @@ export async function warmYieldStep(a: {
 			if (suppressLogged.get(o.node) !== sig) {
 				suppressLogged.set(o.node, sig);
 				logger.info(
-					`[warm-yield] ${o.node}: not refilling its warm slot (${e.warmRepo} yielded to ${e.job.repo} ` +
+					`[warm-yield] ${o.node}: not refilling its warm slot (${held(e.warmRepo)} slot yielded to ${e.job.repo} ` +
 						`job ${e.job.jobId}, spare=${e.spare}) — ${why}`
 				);
 			}
@@ -320,8 +346,18 @@ export async function warmYieldStep(a: {
 	}
 
 	const r = warmYieldRequestFor(o.node, nowMs);
+	if (!r) return { hold: false, failed: false };
 	const cur = o.current;
-	if (!r || !cur || cur.repo !== r.warmRepo) return { hold: false, failed: false };
+	if (!cur) {
+		// AN EMPTY SLOT: released only on the node's own word that no listener
+		// is there. A listener the pass named may have gone since (evicted for
+		// a heavy job, say); that is still an empty slot.
+		if (o.slotEmpty !== true) return { hold: false, failed: false };
+		const empty: WarmYieldRequest = { ...r, warmRepo: null, otherWarm: [] };
+		recordWarmYield(empty, nowMs);
+		return yielded(o.node, empty, nowMs, false);
+	}
+	if (r.warmRepo === null || cur.repo !== r.warmRepo) return { hold: false, failed: false };
 	if (
 		warmSlotLocked({ busy: cur.busy, mintedOrRefreshedAtMs: cur.mintedOrRefreshedAtMs, nowMs }) ||
 		warmBackoffActive(o.node, nowMs)
@@ -339,8 +375,8 @@ export async function warmYieldStep(a: {
 		);
 		return { hold: false, failed: false };
 	}
-	const covered =
-		r.otherWarm.some((n) => a.stillWarm(n, r.warmRepo)) || r.spare >= WARM_YIELD_SPARE;
+	const repo = r.warmRepo;
+	const covered = r.otherWarm.some((n) => a.stillWarm(n, repo)) || r.spare >= WARM_YIELD_SPARE;
 	if (!covered) return { hold: false, failed: false };
 	const evicted = await evictWarmListener(
 		o.node,
@@ -355,16 +391,25 @@ export async function warmYieldStep(a: {
 		return { hold: false, failed: true };
 	}
 	recordWarmYield(r, nowMs);
+	return yielded(o.node, r, nowMs, true);
+}
+
+function yielded(
+	node: string,
+	r: WarmYieldRequest,
+	nowMs: number,
+	evicted: boolean
+): WarmYieldStep {
 	const reason =
-		`yielded ${r.warmRepo} to ${r.job.repo} job ${r.job.jobId} (queued ${r.job.queuedSec}s); ` +
-		`spare=${r.spare}` +
+		`yielded its ${held(r.warmRepo)} slot to ${r.job.repo} job ${r.job.jobId} ` +
+		`(queued ${r.job.queuedSec}s); spare=${r.spare}` +
 		(r.otherWarm.length ? ` warm=${r.otherWarm.join(',')}` : '');
 	recordWarmYieldDecision(
-		{ node: o.node, action: 'yield', warmRepo: r.warmRepo, job: r.job, spare: r.spare, reason },
+		{ node, action: 'yield', warmRepo: r.warmRepo, job: r.job, spare: r.spare, reason },
 		nowMs
 	);
-	logger.info(`[warm-yield] ${o.node}: ${reason}`);
-	return { hold: true, reason: `yielded to the queue: ${reason}`, evicted: true };
+	logger.info(`[warm-yield] ${node}: ${reason}`);
+	return { hold: true, reason: `yielded to the queue: ${reason}`, evicted };
 }
 
 /** Test seam. */
