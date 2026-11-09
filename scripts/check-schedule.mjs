@@ -228,7 +228,12 @@ function checkBudget(label, profile, cron, periodMs, budget) {
 const registryByName = new Map(JOB_REGISTRY.map((e) => [e.name, e]));
 
 // (a) + (b): every { cron }-clock registry entry, plus its coversSubs.
-for (const entry of JOB_REGISTRY) {
+// Only against a schedule that was actually read. An unreadable checkout, a
+// missing or unparseable profiles.json, or one naming zero jobs has already
+// failed above; comparing the registry to that nothing reported every ci:* job
+// as MISSING-FROM-SCHEDULE (fleet-manager#78: 18 invented findings behind one
+// NO-CHECKOUT on a runner whose own checkout could not be fetched).
+for (const entry of scheduled.size ? JOB_REGISTRY : []) {
 	if (!('cron' in entry.cadence)) continue; // in-process convergers run on THIS package's clock, not profiles.json's
 	const found = scheduled.get(entry.name);
 	if (!found) {

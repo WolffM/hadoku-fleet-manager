@@ -275,6 +275,10 @@ test('EMPTY-SCHEDULE: profiles.json parses but names zero jobs', () => {
 		const r = run(fx.env);
 		assert.equal(r.status, 1);
 		assert.ok(r.out.findings.some((f) => f.kind === 'EMPTY-SCHEDULE'));
+		assert.ok(
+			!r.out.findings.some((f) => f.kind === 'MISSING-FROM-SCHEDULE'),
+			JSON.stringify(r.out.findings)
+		);
 	} finally {
 		fx.cleanup();
 	}
@@ -300,6 +304,10 @@ test('UNPARSEABLE: profiles.json is not valid JSON', () => {
 		const r = run(fx.env);
 		assert.equal(r.status, 1);
 		assert.ok(r.out.findings.some((f) => f.kind === 'UNPARSEABLE'));
+		assert.ok(
+			!r.out.findings.some((f) => f.kind === 'MISSING-FROM-SCHEDULE'),
+			JSON.stringify(r.out.findings)
+		);
 	} finally {
 		fx.cleanup();
 	}
@@ -314,6 +322,13 @@ test('NO-CHECKOUT: the remote was never pushed at all — "I could not look" is 
 		assert.ok(
 			r.out.findings.some((f) => f.kind === 'NO-CHECKOUT'),
 			JSON.stringify(r.out?.findings)
+		);
+		// fleet-manager#78: the unread schedule is not an EMPTY one. Every finding
+		// is the could-not-look one, never a MISSING-FROM-SCHEDULE per registry job.
+		assert.deepEqual(
+			[...new Set(r.out.findings.map((f) => f.kind))],
+			['NO-CHECKOUT'],
+			JSON.stringify(r.out.findings)
 		);
 	} finally {
 		remotes.cleanup();
