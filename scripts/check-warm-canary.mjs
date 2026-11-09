@@ -89,6 +89,11 @@ import {
 	heavyMarkWithholds,
 	HEAVY_MARKS_FILE,
 } from '../dist/runners/heavy-marks.js';
+import {
+	readWarmYields,
+	warmYieldWithholds,
+	WARM_YIELDS_FILE,
+} from '../dist/runners/warm-yields.js';
 
 const JSON_OUT = process.argv.includes('--json');
 const out = createEmitter({ argv: process.argv });
@@ -261,7 +266,22 @@ function main() {
 		heavyMarkWithholds
 	);
 	const isHeavyMarked = (name) => heavyMarked.some((h) => h.node === name);
-	const active = notDrainedOrSlow.filter(([name]) => !isHeavyBusy(name) && !isHeavyMarked(name));
+	// A node whose listener YIELDED its slot to the queue (warm-yield) holds none
+	// by design until the queue for it drains, plus its refill window. The same
+	// shape as the heavy mark: the dispatcher's own record, on disk.
+	const warmYields = readWarmYields(stateDir());
+	const yielded = heavyMarkedCandidates(
+		notDrainedOrSlow
+			.map(([name]) => name)
+			.filter((name) => !isHeavyBusy(name) && !isHeavyMarked(name)),
+		warmYields,
+		Date.now(),
+		warmYieldWithholds
+	).map((h) => ({ node: h.node, yieldedAgoSec: h.markAgeSec }));
+	const isYielded = (name) => yielded.some((h) => h.node === name);
+	const active = notDrainedOrSlow.filter(
+		([name]) => !isHeavyBusy(name) && !isHeavyMarked(name) && !isYielded(name)
+	);
 
 	const measurements = active.map(([name, m]) => measure(name, m));
 	const verdict = warmCanaryVerdict(measurements, { warmEligibleSlots, warmCacheEligible });
@@ -309,6 +329,8 @@ function main() {
 			heavyBusy,
 			heavyMarked,
 			heavyMarksUnreadable: heavyMarks === null,
+			yielded,
+			warmYieldsUnreadable: warmYields === null,
 			...buildGateDoc({
 				findings,
 				unreadable,
@@ -334,6 +356,12 @@ function main() {
 			out.log(
 				`  · ${h.node} [heavy job placed or seen ${h.markAgeSec}s ago] — the warm cache withholds its listener until the mark lapses and it refills, not scored`
 			);
+		for (const y of yielded)
+			out.log(
+				`  · ${y.node} [yielded its warm slot to the queue ${y.yieldedAgoSec}s ago] — refilled once the queue for it drains, not scored`
+			);
+		if (warmYields === null)
+			out.log(`  · ${WARM_YIELDS_FILE} would not parse — every node scored as if none had yielded`);
 		if (heavyMarks === null)
 			out.log(
 				`  · ${HEAVY_MARKS_FILE} would not parse — every node scored as if no heavy job had been placed`
@@ -361,6 +389,14 @@ function main() {
 		for (const h of heavyMarked)
 			console.error(
 				`  · ${h.node} [heavy job placed or seen ${h.markAgeSec}s ago] — the warm cache withholds its listener until the mark lapses and it refills, not scored`
+			);
+		for (const y of yielded)
+			console.error(
+				`  · ${y.node} [yielded its warm slot to the queue ${y.yieldedAgoSec}s ago] — refilled once the queue for it drains, not scored`
+			);
+		if (warmYields === null)
+			console.error(
+				`  · ${WARM_YIELDS_FILE} would not parse — every node scored as if none had yielded`
 			);
 		if (heavyMarks === null)
 			console.error(

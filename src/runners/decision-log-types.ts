@@ -19,7 +19,8 @@ export type DecisionKind =
 	| 'in-flight'
 	| 'fork'
 	| 'warm-assigned'
-	| 'warm-listener';
+	| 'warm-listener'
+	| 'warm-yield';
 
 /** What one node looked like to the walk at the moment of the decision. */
 export interface NodeFigures {
@@ -89,7 +90,10 @@ export interface DecisionRecord {
 	error: string | null;
 	/** A skip's reason, or a warm-listener decision's. */
 	reason: string | null;
-	/** `warm-listener` only: fill, keep, rotate, idle, locked, withheld, never-warm. */
+	/**
+	 * `warm-listener`: fill, keep, rotate, idle, locked, withheld, never-warm.
+	 * `warm-yield`: yield, yield-refused, refill-suppressed, refill.
+	 */
 	action: string | null;
 	capacity: NodeFigures[];
 	/**

@@ -16,6 +16,7 @@ import { isSchedulable } from './schedulable.js';
 import { offerFor, type EphemeralTickInput } from './ephemeral-shared.js';
 import type { WorkloadGateContext } from '../lib/workload-gate.js';
 import { warmRepoByNode } from './dispatch-warm-cache-state.js';
+import { warmSlotYielded } from './warm-yields.js';
 import { chargedLikeDispatch, getCapacityLedger } from './capacity-ledger.js';
 import type { NodeState } from './placement-node-state.js';
 import type { SpeedModel } from './speed-tier.js';
@@ -170,12 +171,17 @@ export function buildNodeStates(args: {
 		// held on an eligible node whose listener is MISSING — and a cache that is
 		// not filling is a fault `fleet check-warm-canary` already fails on, not a
 		// state to size the thermal cap around.
-		const warmListeners = warmListenersHeld({
-			usableMb: sliceCeilingMb!,
-			jobMb: requiredMb,
-			role: m.role,
-			maxConcurrent: m.maxConcurrent,
-		});
+		// A node whose listener YIELDED its slot to the queue (`warm-yield.ts`)
+		// holds none back: its listener is gone and the warm planner may not
+		// refill it until the queue for it drains.
+		const warmListeners = warmSlotYielded(name)
+			? 0
+			: warmListenersHeld({
+					usableMb: sliceCeilingMb!,
+					jobMb: requiredMb,
+					role: m.role,
+					maxConcurrent: m.maxConcurrent,
+				});
 		const ns: NodeState = {
 			name,
 			healthy: !input.isSick(name),

@@ -108,9 +108,9 @@ let lastForgetMs = 0;
 const blankDigits = (s: string | null): string => (s ?? '').replace(/\d+(\.\d+)?/g, '#');
 
 function keyOf(r: DecisionRecord): string {
-	return r.kind === 'warm-listener'
-		? `warm-listener:${r.winner ?? r.candidates[0] ?? ''}`
-		: `${r.kind === 'warm-assigned' ? 'warm' : 'jit'}:${r.repo}#${r.jobId ?? r.runId}`;
+	if (r.kind === 'warm-listener' || r.kind === 'warm-yield')
+		return `${r.kind}:${r.winner ?? r.candidates[0] ?? ''}`;
+	return `${r.kind === 'warm-assigned' ? 'warm' : 'jit'}:${r.repo}#${r.jobId ?? r.runId}`;
 }
 
 /**

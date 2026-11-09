@@ -9,6 +9,7 @@ import { type GhLike } from '../lib/fleet-vocabulary.js';
 import { runnerTarballUrl } from './ephemeral-exec-jit.js';
 import { observeWarmNode } from './dispatch-warm-cache-observe.js';
 import { actOnWarmNode } from './dispatch-warm-cache-act.js';
+import { warmYieldStep } from './warm-yield.js';
 import { heavyMarkedRecently } from './dispatch-pass-state.js';
 import { slowReposOn } from './placement-slow.js';
 import { recordWarmListenerDecisions, type WarmListenerDecision } from './decision-log-record.js';
@@ -148,6 +149,8 @@ export async function dispatchWarmCache(
 	// to say about it, and reading that absence as `idle` would count a
 	// deliberate, permanent hold-back as an ordinary quiet tick.
 	const neverWarm = new Map<string, string>();
+	/** Nodes whose listener yielded to the queue this tick — no longer cover for anyone. */
+	const yieldedThisTick = new Set<string>();
 	const planNodes: WarmFleetNode[] = [];
 	// The repos a node must not hold a listener for: the manifest's
 	// `excludeRepos` (#82), then any repo with a kind this node runs slowly
@@ -296,6 +299,31 @@ export async function dispatchWarmCache(
 				// `planNodes` to be offered a slot in the first place.
 				continue;
 			}
+			// WARM YIELD (`warm-yield.ts`): a slot the dispatcher asked to give to
+			// a long-waiting job, or one already given and not yet due back. Held
+			// out of the joint allocation, so nothing refills it.
+			const y = await warmYieldStep({
+				o,
+				nowMs,
+				token,
+				gh,
+				sh,
+				freeSlotFor: (node) => {
+					const workers = input.fleetProbe.get(node)?.workers;
+					return workers === undefined ? null : workers < (input.nodes[node]?.maxConcurrent ?? 1);
+				},
+				stillWarm: (node, repo) => observedWarm.get(node) === repo && !yieldedThisTick.has(node),
+			});
+			if (y.hold) {
+				neverWarm.set(o.node, y.reason);
+				if (y.evicted) {
+					result.evicted++;
+					yieldedThisTick.add(o.node);
+					observedWarm.delete(o.node);
+				}
+				continue;
+			}
+			if (y.failed) result.failed++;
 			// #82: THE CURRENT repo is one THIS node refuses. Evict it (respecting
 			// the same busy/assign-window lock `planWarmFleet`'s own `rotate`
 			// decision already respects, and the same backoff every other eviction

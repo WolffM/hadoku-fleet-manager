@@ -56,6 +56,7 @@ import {
 import { byPriority } from './dispatch-pass-order.js';
 import { observeLanes } from './repo-lanes.js';
 import { closeWarmBesideHeavy } from './dispatch-pass-warm-heavy.js';
+import { WarmYieldPass, publishWarmYieldPass } from './warm-yield.js';
 
 /**
  * When the reap last swept, epoch ms. "Not yet this process" until the first
@@ -382,6 +383,9 @@ export async function runDispatchPass(
 	const book = decisionLogEnabled()
 		? new JitDecisionBook(nowMs, input.order, input.fingerprintFor)
 		: null;
+	// WARM YIELD: which full nodes would take a long-waiting job if their idle
+	// warm listener gave its slot back (`warm-yield.ts`). It only reads.
+	const yieldPass = new WarmYieldPass(nowMs);
 	const plan = planTick(
 		byPriority(input.pending),
 		nodes,
@@ -391,8 +395,12 @@ export async function runDispatchPass(
 		// `Date.now()` here let a test on a fixed clock read every run as queued
 		// for weeks, which clears the slow-tier spill threshold trivially.
 		nowMs,
-		book ? (o) => book.observe(toJitObservation(o)) : undefined
+		(o) => {
+			book?.observe(toJitObservation(o));
+			yieldPass.observe(o);
+		}
 	);
+	publishWarmYieldPass(yieldPass, nowMs);
 	let minted = 0;
 	let failed = 0;
 	// Counted on SUCCESS only, like `minted`: a mint that failed put no runner on

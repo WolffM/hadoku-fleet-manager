@@ -261,3 +261,39 @@ export function recordWarmListenerDecisions(
 		return 0;
 	}
 }
+
+/** One warm-yield decision on one node (warm-yield.ts). */
+export interface WarmYieldDecision {
+	node: string;
+	action: 'yield' | 'yield-refused' | 'refill-suppressed' | 'refill';
+	/** The repo the yielded (or kept) listener holds. */
+	warmRepo: string;
+	/** The waiting job the slot is for. */
+	job: { repo: string; runId: number; jobId: number; jobName?: string; queuedSec: number };
+	/** Other claws that could mint `warmRepo`'s job when the pass asked. */
+	spare: number;
+	reason: string;
+}
+
+/**
+ * A warm-yield row, written when the node's yield decision changes. Returns
+ * how many rows were written (0 or 1), so the caller logs on the same change.
+ */
+export function recordWarmYieldDecision(d: WarmYieldDecision, nowMs: number): number {
+	if (!decisionLogEnabled()) return 0;
+	try {
+		const r = blank(new Date(nowMs).toISOString(), 'warm', 'warm-yield', d.warmRepo);
+		r.winner = d.node;
+		r.candidates = [d.node];
+		r.action = d.action;
+		r.runId = d.job.runId;
+		r.jobId = d.job.jobId;
+		r.jobName = d.job.jobName ?? null;
+		r.queuedSec = d.job.queuedSec;
+		r.reason = `${d.reason} [for ${d.job.repo} job ${d.job.jobId}; spare=${d.spare}]`;
+		return emitDecisions([r], nowMs);
+	} catch (err) {
+		warn('could not record a warm-yield decision', err, nowMs);
+		return 0;
+	}
+}

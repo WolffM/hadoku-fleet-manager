@@ -56,13 +56,18 @@ function manifestWith(machines) {
 	return JSON.stringify({ machines });
 }
 
-function run(machines, { reachable, activeRepo, heavyMarks, knownDown } = {}, extraArgv = []) {
+function run(
+	machines,
+	{ reachable, activeRepo, heavyMarks, warmYields, knownDown } = {},
+	extraArgv = []
+) {
 	const dir = tempDir('warm-canary-');
 	const bin = join(dir, 'bin');
 	mkdirSync(bin);
 	sshStub(bin, { reachable: reachable ?? false, activeRepo });
 	writeFileSync(join(dir, 'fleet-runner-manifest.json'), manifestWith(machines));
 	if (heavyMarks !== undefined) writeFileSync(join(dir, 'heavy-marks.json'), heavyMarks);
+	if (warmYields !== undefined) writeFileSync(join(dir, 'warm-yields.json'), warmYields);
 	// `knownDown`: node names runner-health's own per-node offline alert has
 	// ALREADY paged, LOUDLY — see lib/known-down.mjs. Written straight into
 	// the fixture's state dir, the real `runner-down-page.json` shape
@@ -167,6 +172,53 @@ void test('a lapsed mark, or marks that will not parse, set nothing aside', () =
 		['fx-claw-4']
 	);
 	assert.equal(torn.doc.heavyMarksUnreadable, true);
+});
+
+void test('warm-yield: a node whose slot yielded to the queue is set aside until it lapses', () => {
+	const now = Date.now();
+	const entry = (over) =>
+		JSON.stringify({
+			'fx-claw-4': {
+				warmRepo: 'WolffM/hadoku_site',
+				job: { repo: 'WolffM/hadoku-cardtable', runId: 1, jobId: 2, queuedSec: 90 },
+				spare: 2,
+				yieldedAtMs: now - 120_000,
+				lastDemandMs: now - 60_000,
+				confirmedAtMs: now - 30_000,
+				liftedAtMs: null,
+				...over,
+			},
+		});
+	const machines = {
+		'fx-claw-1': { role: 'claw', ephemeral: true },
+		'fx-claw-4': { role: 'claw', ephemeral: true },
+	};
+	const held = run(machines, { reachable: true, warmYields: entry({}) });
+	assert.deepEqual(
+		held.doc.findings.map((f) => f.node),
+		['fx-claw-1'],
+		'the node that did not yield is still scored'
+	);
+	assert.deepEqual(
+		held.doc.yielded.map((y) => y.node),
+		['fx-claw-4']
+	);
+	assert.equal(held.doc.warmYieldsUnreadable, false);
+	// The writer stopped confirming it: scored again (the strict direction).
+	const stale = run(machines, {
+		reachable: true,
+		warmYields: entry({ confirmedAtMs: now - 10 * 60_000 }),
+	});
+	assert.deepEqual(stale.doc.findings.map((f) => f.node).sort(), ['fx-claw-1', 'fx-claw-4']);
+	// Lifted long enough ago to have refilled: scored again.
+	const lifted = run(machines, {
+		reachable: true,
+		warmYields: entry({ liftedAtMs: now - 5 * 60_000 }),
+	});
+	assert.deepEqual(lifted.doc.findings.map((f) => f.node).sort(), ['fx-claw-1', 'fx-claw-4']);
+	const torn = run(machines, { reachable: true, warmYields: '{"fx-claw-4": ' });
+	assert.equal(torn.doc.warmYieldsUnreadable, true);
+	assert.deepEqual(torn.doc.findings.map((f) => f.node).sort(), ['fx-claw-1', 'fx-claw-4']);
 });
 
 void test('wave gates1 §A: a node already paged down by runner-health is not a candidate at all', () => {
