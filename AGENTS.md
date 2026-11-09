@@ -61,6 +61,49 @@ is set by `publish.yml` at publish time (registry newest + 1 patch) and is
 never committed; a committed version moves only for a deliberate minor or
 major bump.
 
+**Every commit message also carries `Trigger:` and `Evidence:` trailers**,
+beside `Session:`. `Trigger:` is one of `plan` (a wave or planning doc),
+`self` (this session found it), `alert` (a gate or page fired), `operator`,
+or `peer:<repo>` (another project's session asked, by issue or message).
+`Evidence:` is the measurement the change rests on: a log line, a gate's
+output, a query, a reproduction. Write `Evidence: none` rather than leave it
+out; that is a fact worth recording. The 10-26 to 11-09 audit had to infer
+both from commit bodies, and only 126 of 371 commits even carried `Session:`.
+
+## Before you work an item
+
+From that audit (797 commits across this repo and hadoku_site's fleet paths;
+private record `docs/planning/commit-audit-2026-11-09.md`). One commit in
+five fixed an earlier commit from the same two weeks. These three rules
+address where those fixes came from.
+
+- **A request from another session is a hypothesis, not a diagnosis.** It
+  arrives as an issue another repo's session filed, an alert text pasted into
+  an issue, or a cross-session message. Before the first fix commit, reproduce
+  it or measure it, and record what you measured in the issue. If the request
+  names a mechanism, verify the mechanism separately: it is usually what is
+  wrong. 30 of 38 peer-requested commits acted with no measurement and 21% of
+  them needed a correction, against 5% for work an alert triggered. One was
+  redone 56 minutes later because the mechanism the requester proposed did not
+  work, which one probe would have shown. A request you cannot reproduce goes back to the requester with what you
+  checked; it is not worked on spec.
+- **A new gate starts quiet.** A new cron gate goes into `ADVISORY_JOBS`
+  (hadoku_site `workers/monitoring-api/src/services/job-alerts.ts`) for at
+  least 7 days, and is promoted to paging only once someone has read every
+  failure in that window. The commit that promotes it states the count of real
+  catches and false positives. A new push-time gate must exit 0 on current
+  main, and on every repo it reads, before it blocks anything. identity-model
+  G9 turned site main red on 17 tables the day it shipped. fleet-placement and
+  cron-budget each went from new to downgraded within a week. Gate loosenings
+  went from 2 in the first week to 17 in the second.
+- **A large rollout dry-runs first and lists its readers.** A change that
+  moves every node, every repo or every credential (node users, ppe, standby
+  HA, key rotation) needs two things before it writes anything. First, a
+  dry-run or shadow mode that reports what it would change. Second, a
+  grep-built list of every reader of what it changes. The node-users cutover
+  (`1a1bb8a`) needed 7 follow-up fixes, each of which was a reader nobody had
+  listed.
+
 **Live since 2026-08-30.** mgmt-api consumes it in production and the CLI runs
 every fleet gate. Migration record:
 `docs/planning/fleet-manager-extraction-2026-08-29.md` — read §3 (the client
