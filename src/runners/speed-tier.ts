@@ -454,7 +454,8 @@ export function buildSpeedModel(
 		// ONE queued job does not need MIN_SAMPLES/TRIVIAL_SEC confidence; it needs
 		// to exist.
 		if (jobName !== undefined) {
-			const nodeMap = byKindNode.get(kindKey(repo, jobName));
+			const kk = kindKey(repo, jobName);
+			const nodeMap = byKindNode.get(kk);
 			if (nodeMap) {
 				const nodeSamples = nodeMap.get(node);
 				const othersSamples = othersFor(nodeMap, clawNodes, node);
@@ -462,6 +463,27 @@ export function buildSpeedModel(
 					const nodeMed = median(nodeSamples);
 					const othersMed = median(othersSamples);
 					if (nodeMed !== null && othersMed !== null) return nodeMed - othersMed;
+				}
+				// 1b. The other claws run THIS job, and it has never succeeded here.
+				// Level 2's per-kind deltas are SECONDS from this repo's OTHER jobs,
+				// and a delta measured on a one-minute lint says nothing about a
+				// fourteen-minute suite: hadoku-dataplatform's pytest on claw-5
+				// (2.48x overall) read +62 s from typecheck/lint, spilled after 100 s
+				// five times, and never finished inside its 25-minute cap
+				// (fleet-manager#77). So scale THIS job's own baseline by the node's
+				// overall ratio, and never answer less than the node's own unfinished
+				// runs already prove.
+				if (!nodeSamples?.length && othersSamples.length) {
+					const othersMed = median(othersSamples);
+					if (othersMed !== null) {
+						const ratios = ratiosByNode.get(node) ?? [];
+						const ratio = ratios.length ? percentile(ratios, 50) : null;
+						const scaled = ratio !== null ? (ratio - 1) * othersMed : null;
+						const unfinished = lowerByKindNode.get(kk)?.get(node) ?? [];
+						const proven = unfinished.length ? Math.max(...unfinished) - othersMed : null;
+						const known = [scaled, proven].filter((x): x is number => x !== null);
+						if (known.length) return Math.max(...known);
+					}
 				}
 			}
 		}

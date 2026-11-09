@@ -245,7 +245,41 @@ test('(e2) falls back to (repo) when the exact job is missing on the node — PE
 	const model = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
 	// Only 'build' qualifies on both sides: delta = 300 - 100 = 200. The old
 	// pooled answer would have been 300 - median([100x5,50x5]) = 300 - 75 = 225.
-	assert.equal(model.expectedExtraSec('claw-5', repo, 'check'), 200);
+	// Asked with no job name: a NAMED job the other claws run is answered from
+	// its own baseline instead (level 1b, the next test).
+	assert.equal(model.expectedExtraSec('claw-5', repo, undefined), 200);
+});
+
+test("(e1b) a job the others run but this node never finished scales ITS baseline, not the repo's short jobs (fleet-manager#77)", () => {
+	// hadoku-dataplatform on claw-5, 11-09: typecheck/lint ran there at about
+	// +60 s, pytest (~840 s elsewhere) never finished inside its cap, and the
+	// repo-level +62 s let it spill after 100 s every time.
+	const repo = 'WolffM/dataplatform';
+	const kinds = ['typecheck', 'lint', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9', 'k10'];
+	const records: JobRecord[] = [
+		// claw-5 runs every short kind at 2.5x.
+		...kinds.flatMap((k) => [
+			...kindSamples(repo, k, 'claw-5', 100),
+			...kindSamples(repo, k, 'claw-1', 40),
+		]),
+		...kindSamples(repo, 'pytest', 'claw-1', 840),
+		...kindSamples(repo, 'pytest', 'claw-2', 840),
+	];
+	const model = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
+	assert.equal(model.describe('claw-5').tier, 'slow');
+	assert.equal(model.expectedExtraSec('claw-5', repo, undefined), 60, 'the repo level');
+	// (2.5 - 1) x 840 = 1260, not the repo's +60.
+	assert.equal(model.expectedExtraSec('claw-5', repo, 'pytest'), 1260);
+
+	// Its own unfinished runs are a floor: two runs cut off at 2400 s prove
+	// at least 2400 - 840 = 1560 s extra, more than the scaled guess.
+	const withCutoffs = [
+		...records,
+		rec({ repo, name: 'pytest', runner: 'claw-5', runSec: 2400, conclusion: 'cancelled' }),
+		rec({ repo, name: 'pytest', runner: 'claw-5', runSec: 2400, conclusion: 'cancelled' }),
+	];
+	const m2 = buildSpeedModel(withCutoffs, { nowMs: NOW, nodes: FLEET_NODES });
+	assert.equal(m2.expectedExtraSec('claw-5', repo, 'pytest'), 1560);
 });
 
 test('(e2b) the repo-level fallback compares like with like — a uniformly SLOW node must never read as faster', () => {
