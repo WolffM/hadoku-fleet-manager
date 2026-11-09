@@ -378,8 +378,19 @@ function capacitySamplesForDueDays(
 }
 
 /**
- * Write every closed day the store does not hold yet. Idempotent: a second
- * call with the same inputs writes nothing.
+ * Write every closed day that does not YET carry the fleet aggregate.
+ * Idempotent: a second call with the same inputs writes nothing.
+ *
+ * "DOES NOT HOLD YET" MEANS "HAS NO `fleet` FIELD", NOT "HAS NO ROW AT ALL"
+ * (wave fleettab fix-up). A day written before the fleet aggregate existed
+ * (schema 1) is otherwise indistinguishable from a day this writer already
+ * finished — `store.writtenDays()` would skip it forever. Checking
+ * `fleet !== undefined` per held day instead means a schema-1 day inside
+ * job-history's current window gets UPGRADED (`store.put` already replaces
+ * any day sharing a key) the very next time this runs, without a second
+ * code path: `rollupDay` always attaches the current schema's `fleet`.
+ * A day job-history no longer holds raw data for cannot be upgraded this
+ * way — see `routes/fleet-performance.ts`'s own `partial` fallback for that.
  *
  * NEVER THROWS. It runs on the runner-health tick, which must not die for a
  * telemetry write; every failure is logged with its reason and returned.
@@ -402,8 +413,13 @@ export function writeClosedDays(opts: {
 			opts.completeSinceMs !== undefined ? opts.completeSinceMs : historyCompleteSinceMs(now);
 		// An empty ledger proves nothing about any day.
 		if (since === null) return { written: [] };
-		const held = store.writtenDays();
-		const due = closableDays(now, since).filter((d) => !held.has(d));
+		const upToDate = new Set(
+			store
+				.read()
+				.days.filter((d) => d.fleet !== undefined)
+				.map((d) => d.day)
+		);
+		const due = closableDays(now, since).filter((d) => !upToDate.has(d));
 		if (!due.length) return { written: [] };
 		// Without the node list `nodeOf` answers the raw runner name, and that
 		// would be written durably as a node called `jit-claw-8-hadoku-…`.

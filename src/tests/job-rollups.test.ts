@@ -265,6 +265,48 @@ test('a day later in the week is added without rewriting the days already held',
 	assert.deepEqual(after.slice(0, before.length), before, 'held days are byte-for-byte the same');
 });
 
+test('BACKFILL: a schema-1 day still inside job-history is UPGRADED in place to carry the fleet aggregate (wave fleettab fix-up)', () => {
+	const file = join(tmp, 'job-rollups.jsonl');
+	const store = jsonlRollupStore<RollupRow, FleetDayAggregate>(file);
+	const day = utcDay(midnight(5));
+	const schemaOne: DayRollup = {
+		schema: 1,
+		day,
+		writtenAt: new Date(midnight(4)).toISOString(),
+		completeSince: new Date(midnight(20)).toISOString(),
+		records: 1,
+		probesExcluded: 0,
+		rows: [],
+		// No `fleet` key at all — exactly what a pre-wave row looks like.
+	};
+	store.put([schemaOne], utcDay(NOW - ROLLUP_RETENTION_DAYS * DAY));
+	assert.equal(store.read().days[0]?.fleet, undefined, 'seeded as schema 1, no fleet field');
+
+	const records = [rec({ at: midnight(5) + 3600_000, runner: 'claw-1' })];
+	const r = writeClosedDays({
+		nodes: NODES,
+		nowMs: NOW,
+		records,
+		completeSinceMs: midnight(10),
+		store,
+	});
+	assert.ok(r.written.includes(day), 'the schema-1 day is treated as due, not already held');
+	const upgraded = store.read().days.find((d) => d.day === day);
+	assert.equal(upgraded?.schema, ROLLUP_SCHEMA);
+	assert.ok(upgraded?.fleet, 'now carries the fleet aggregate');
+	assert.equal(upgraded.fleet.jobs, 1, 'rebuilt from the live job-history record, not the old row');
+
+	// Idempotent once upgraded: a second call finds nothing due for that day.
+	const r2 = writeClosedDays({
+		nodes: NODES,
+		nowMs: NOW,
+		records,
+		completeSinceMs: midnight(10),
+		store,
+	});
+	assert.ok(!r2.written.includes(day));
+});
+
 test('no node list: refuses loudly rather than writing raw runner names as nodes', () => {
 	const file = join(tmp, 'job-rollups.jsonl');
 	const records = eightDays();
