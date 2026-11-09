@@ -121,7 +121,7 @@ export interface SupervisionReport {
  * entirely, this check correctly reports nothing and is no longer load-bearing.
  * Reviewed and decided 2026-08-30; see the fleet worklist §8e.
  */
-const PROBE = `
+export const SUPERVISION_PROBE = `
 ps -eo pid=,args= | while read -r pid rest; do
   # ANCHORED at "/": a listener's argv[0] is an absolute path, while this
   # probe's own \`bash -c <script>\` process has argv starting with "bash" — and
@@ -129,8 +129,15 @@ ps -eo pid=,args= | while read -r pid rest; do
   # therefore matches the probe itself on every node, yielding a phantom
   # listener whose directory is the literal glob \`actions-runner*\` and a bogus
   # "2 listeners" duplicate. Same self-match trap as \`pgrep -f\`, one layer down.
+  #
+  # And ANCHORED at the runner user's own $HOME: every standing runner lives
+  # there (~/actions-runner*, ~/runners/…, ~/repos/<r>/…), while this package's
+  # own test suite, running as a CI job on the node, starts fake
+  # Runner.Listener processes under /tmp/…/actions-runner-x. On 2026-11-09
+  # 09:34Z two of them on claw-4 paged "2 listeners on one directory"
+  # (fleet-manager#79); runner-identity-probe.sh had the same leak on 10-08.
   case "$rest" in
-    /*/actions-runner*/bin/Runner.Listener*) ;;
+    "$HOME"/actions-runner*/bin/Runner.Listener*|"$HOME"/*/actions-runner*/bin/Runner.Listener*) ;;
     *) continue ;;
   esac
   bin=\${rest%%/bin/Runner.Listener*}
@@ -290,7 +297,7 @@ export async function probeSupervision(
 	let args: string[];
 	try {
 		// As ci: the listeners are CI's units, in its own manager.
-		[cmd, args] = nodeShell(node, 'ci', PROBE);
+		[cmd, args] = nodeShell(node, 'ci', SUPERVISION_PROBE);
 	} catch (err) {
 		logger.warn(
 			`[supervision] cannot reach ${node} as ci: ${err instanceof Error ? err.message : String(err)}`

@@ -22,6 +22,7 @@ import {
 	parseListeners,
 	describeProblem,
 	probeSupervision,
+	SUPERVISION_PROBE,
 	type ListenerRow,
 } from '../runner-supervision.js';
 import { hostname } from 'node:os';
@@ -297,4 +298,33 @@ test('no readable backstops means every node is probed — the strict direction'
 	});
 	assert.deepEqual(probed, ['claw-2', 'hokon']);
 	assert.deepEqual(report?.skippedByRole, []);
+});
+
+test("the probe counts listeners under the runner user's HOME only, never a test fixture under /tmp (fleet-manager#79)", () => {
+	// The REAL script, with `ps` and `systemctl` stubbed as shell functions: on
+	// 2026-11-09 this package's own suite, running as a CI job on claw-4, started
+	// two fake Runner.Listener processes on one /tmp/…/actions-runner-x and the
+	// probe paged "2 listeners on one directory".
+	const home = '/home/fixture-ci';
+	const ps = [
+		`101 ${home}/runners/actions-runner-hadoku-site/bin/Runner.Listener run`,
+		`102 ${home}/actions-runner-tenhands/bin/Runner.Listener run`,
+		`103 ${home}/repos/app/actions-runner-app/bin/Runner.Listener run`,
+		'201 /tmp/runner-env-drift-AbC/actions-runner-x/bin/Runner.Listener run',
+		'202 /tmp/runner-env-drift-AbC/actions-runner-x/bin/Runner.Listener run',
+		`301 ${home}/.hadoku/jit/slot0/bin/Runner.Listener run`,
+	]
+		.map((l) => `'${l}'`)
+		.join(' ');
+	const stubs = `ps() { printf '%s\\n' ${ps}; }\nsystemctl() { :; }\n`;
+	const out = execFileSync('bash', ['-c', stubs + SUPERVISION_PROBE], {
+		encoding: 'utf8',
+		env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home },
+	});
+	assert.deepEqual(
+		parseListeners(out)
+			.map((r) => r.dir)
+			.sort(),
+		['actions-runner-app', 'actions-runner-hadoku-site', 'actions-runner-tenhands']
+	);
 });
