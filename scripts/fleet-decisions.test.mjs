@@ -136,7 +136,27 @@ const warmListener = row({
 	capacity: [],
 	fingerprint: null,
 });
+const warmYield = row({
+	...warmListener,
+	at: iso(80),
+	kind: 'warm-yield',
+	runId: 41009,
+	jobId: 9009,
+	jobName: 'static',
+	queuedSec: 157,
+	action: 'yield',
+	reason: 'yielded its idle WolffM/hadoku_site slot to WolffM/hadoku-cardtable job 9009',
+});
 const lastWeek = row({ at: iso(7 * 86_400), jobId: 7001, runId: 40001 });
+
+test('a warm-yield row prints its node, action and reason, like a warm-listener row', () => {
+	const r = fleet(stateWith({ [`${day(120)}.jsonl`]: [warmYield] }));
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(
+		r.stdout,
+		/warm\/warm-yield WolffM\/hadoku_site run 41009 job 9009 \(static\) claw-4: yield — yielded its idle/
+	);
+});
 
 test('the default window is the last hour, and every row in it is printed with its refusals', () => {
 	const state = stateWith({

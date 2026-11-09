@@ -20,7 +20,12 @@ export type DecisionKind =
 	| 'fork'
 	| 'warm-assigned'
 	| 'warm-listener'
-	| 'warm-yield';
+	/** A slot actually given to the queue: one row per yield, and only that. */
+	| 'warm-yield'
+	/** A yield the warm tick would not carry out (listener busy or unconfirmed). */
+	| 'warm-yield-refused'
+	/** A yielded slot kept empty (refill-suppressed) or handed back (refill). */
+	| 'warm-refill';
 
 /** What one node looked like to the walk at the moment of the decision. */
 export interface NodeFigures {
@@ -92,7 +97,8 @@ export interface DecisionRecord {
 	reason: string | null;
 	/**
 	 * `warm-listener`: fill, keep, rotate, idle, locked, withheld, never-warm.
-	 * `warm-yield`: yield, yield-refused, refill-suppressed, refill.
+	 * `warm-yield`: yield. `warm-yield-refused`: yield-refused.
+	 * `warm-refill`: refill-suppressed, refill.
 	 */
 	action: string | null;
 	capacity: NodeFigures[];

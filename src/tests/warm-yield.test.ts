@@ -69,8 +69,9 @@ afterEach(() => {
 	__resetWarmYieldsForTesting(null);
 });
 
+const YIELD_KINDS = new Set(['warm-yield', 'warm-yield-refused', 'warm-refill']);
 const yieldRows = (action?: string) =>
-	rows.filter((r) => r.kind === 'warm-yield' && (action === undefined || r.action === action));
+	rows.filter((r) => YIELD_KINDS.has(r.kind) && (action === undefined || r.action === action));
 
 /** The jdk21 job, queued `sec` seconds before `nowMs`. */
 const jdkJob = (nowMs: number, sec: number): PendingRun => ({
@@ -411,4 +412,29 @@ test('a listener found on a yielded slot ends the yield at once', async () => {
 	assert.equal(warmSlotYielded('claw-10'), true);
 	await warmTick(now + 65_000);
 	assert.equal(warmSlotYielded('claw-10'), false, 'its slot is counted again');
+});
+
+test('one yield is ONE warm-yield row; the suppressed refill after it is its own kind, with no job id', async () => {
+	// 2026-11-09 08:26:59/08:27:59Z: claw-1's yield and the next tick's
+	// suppressed refill both read kind warm-yield with job 129054789513.
+	const now = Date.now();
+	await pass([claw10(), free('claw-1'), free('claw-3')], [jdkJob(now, 90)], now);
+	await warmTick(now + 5_000);
+	await pass(
+		[claw10({ maxConcurrent: 2, liveUnits: 2, warmHeld: 0, warmRepo: undefined }), free('claw-1')],
+		[{ ...jdkJob(now + 60_000, 20), id: 8, jobId: 800 }],
+		now + 60_000
+	);
+	const empty = { marker: null, activeUnits: new Set<string>() };
+	await warmTick(now + 65_000, { sim: empty });
+	await warmTick(now + 125_000, { sim: empty });
+	const yields = rows.filter((r) => r.kind === 'warm-yield');
+	assert.equal(yields.length, 1, 'exactly one yield row');
+	assert.equal(yields[0].jobId, 700);
+	const refills = rows.filter((r) => r.kind === 'warm-refill');
+	assert.equal(refills.length, 1, 'the suppressed refill is written once, on change');
+	assert.equal(refills[0].action, 'refill-suppressed');
+	assert.equal(refills[0].jobId, null);
+	assert.equal(refills[0].queuedSec, null);
+	assert.match(refills[0].reason ?? '', /job 700/);
 });

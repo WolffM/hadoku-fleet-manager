@@ -165,7 +165,8 @@ function printRow(r) {
 			? ` run ${r.runId ?? '?'} job ${r.jobId}${r.jobName ? ` (${r.jobName})` : ''}`
 			: '';
 	let head = `${r.at} ${r.path}/${r.kind} ${r.repo || '-'}${ids}`;
-	if (r.kind === 'warm-listener') {
+	// Rows about a node's warm slot rather than a placement: `node: action — reason`.
+	if (['warm-listener', 'warm-yield', 'warm-yield-refused', 'warm-refill'].includes(r.kind)) {
 		head += ` ${r.winner}: ${r.action}${r.reason ? ` — ${r.reason}` : ''}`;
 	} else if (r.winner) {
 		const over = r.rule?.rankedOver

@@ -282,14 +282,27 @@ export interface WarmYieldDecision {
 export function recordWarmYieldDecision(d: WarmYieldDecision, nowMs: number): number {
 	if (!decisionLogEnabled()) return 0;
 	try {
-		const r = blank(new Date(nowMs).toISOString(), 'warm', 'warm-yield', d.warmRepo ?? '');
+		// ONE `warm-yield` row per yield, so counting that kind counts yields. The
+		// rows that follow a yield (its slot kept empty, then handed back) and a
+		// refused yield are other kinds, and carry the job only in `reason`: its
+		// id is job-history's join key, and on those rows it would read as the
+		// job being decided again.
+		const kind =
+			d.action === 'yield'
+				? 'warm-yield'
+				: d.action === 'yield-refused'
+					? 'warm-yield-refused'
+					: 'warm-refill';
+		const r = blank(new Date(nowMs).toISOString(), 'warm', kind, d.warmRepo ?? '');
 		r.winner = d.node;
 		r.candidates = [d.node];
 		r.action = d.action;
-		r.runId = d.job.runId;
-		r.jobId = d.job.jobId;
-		r.jobName = d.job.jobName ?? null;
-		r.queuedSec = d.job.queuedSec;
+		if (kind === 'warm-yield') {
+			r.runId = d.job.runId;
+			r.jobId = d.job.jobId;
+			r.jobName = d.job.jobName ?? null;
+			r.queuedSec = d.job.queuedSec;
+		}
 		r.reason = `${d.reason} [for ${d.job.repo} job ${d.job.jobId}; spare=${d.spare}]`;
 		return emitDecisions([r], nowMs);
 	} catch (err) {
