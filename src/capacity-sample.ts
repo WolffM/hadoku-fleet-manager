@@ -83,7 +83,16 @@ function ledgerAdmissionFree(
 	if (!ledger) return m.admissionFree;
 	const at = Date.parse(ledger.at);
 	if (!Number.isFinite(at) || nowMs - at > LEDGER_FRESH_MS) return m.admissionFree;
-	return Math.max(0, ledger.budget - ledger.inFlight);
+	// A fresh ledger can still predate a maxConcurrent cut: at 2026-11-09
+	// 15:31:25Z claw-1 sampled free 2 against capacity 1 — the operator had
+	// just cut it 2→1, the report had re-read the manifest, and the last pass
+	// had not (budget 2, inFlight 0). Free can never exceed what the node may
+	// run NOW, so the ledger's budget is capped by the report's capacity and
+	// the result clamped to [0, capacity].
+	const cap = m.admissionCapacity;
+	const budget = cap === null ? ledger.budget : Math.min(ledger.budget, cap);
+	const free = Math.max(0, budget - ledger.inFlight);
+	return cap === null ? free : Math.min(free, cap);
 }
 
 /**

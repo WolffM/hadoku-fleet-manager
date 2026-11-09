@@ -202,6 +202,51 @@ void test('admissionFree from the ledger when there is room: budget 2, inFlight 
 	assert.equal(rows[0].admissionFree, 1);
 });
 
+function ledgerAt(budget: number, inFlight: number, warmHeld: number) {
+	return {
+		at: new Date(NOW).toISOString(),
+		liveUnits: inFlight,
+		probeWorkers: inFlight,
+		standingBusy: 0,
+		warmHeld,
+		budget,
+		inFlight,
+		ok: true,
+		why: null,
+	};
+}
+
+void test('admissionFree never exceeds capacity: the 2026-11-09 15:31:25Z claw-1 row (cut 2→1, ledger still budget 2) reads free 1, not 2', () => {
+	const report = reportOf([
+		machine({
+			name: 'claw-1',
+			maxConcurrent: 1,
+			admissionCapacity: 1,
+			admissionFree: 1,
+			admissionBasis: 'dispatcher',
+			dispatchLedger: ledgerAt(2, 0, 0),
+		}),
+	]);
+	const rows = sampleCapacityNow(NOW, report, {});
+	assert.equal(rows[0].admissionFree, 1);
+	assert.ok(rows[0].admissionFree! <= rows[0].admissionCapacity!);
+});
+
+void test('maxConcurrent 1 with its one slot held by a warm listener reads free 0', () => {
+	const report = reportOf([
+		machine({
+			name: 'claw-1',
+			maxConcurrent: 1,
+			admissionCapacity: 1,
+			admissionFree: 1,
+			admissionBasis: 'dispatcher',
+			dispatchLedger: ledgerAt(0, 0, 1),
+		}),
+	]);
+	const rows = sampleCapacityNow(NOW, report, {});
+	assert.equal(rows[0].admissionFree, 0);
+});
+
 void test('a stale ledger (older than LEDGER_FRESH_MS) is ignored — falls back to the report figure', () => {
 	const report = reportOf([
 		machine({
