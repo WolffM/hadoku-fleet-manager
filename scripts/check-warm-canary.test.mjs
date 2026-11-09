@@ -67,7 +67,7 @@ function manifestWith(machines) {
 
 function run(
 	machines,
-	{ reachable, activeRepo, heavyMarks, warmYields, knownDown } = {},
+	{ reachable, activeRepo, heavyMarks, warmYields, warmHolds, knownDown } = {},
 	extraArgv = []
 ) {
 	const dir = tempDir('warm-canary-');
@@ -77,6 +77,7 @@ function run(
 	writeFileSync(join(dir, 'fleet-runner-manifest.json'), manifestWith(machines));
 	if (heavyMarks !== undefined) writeFileSync(join(dir, 'heavy-marks.json'), heavyMarks);
 	if (warmYields !== undefined) writeFileSync(join(dir, 'warm-yields.json'), warmYields);
+	if (warmHolds !== undefined) writeFileSync(join(dir, 'warm-holds.json'), warmHolds);
 	// `knownDown`: node names runner-health's own per-node offline alert has
 	// ALREADY paged, LOUDLY — see lib/known-down.mjs. Written straight into
 	// the fixture's state dir, the real `runner-down-page.json` shape
@@ -284,4 +285,33 @@ void test('human output is unaffected by the migration — same prose, same exit
 	assert.equal(human.status, asJson.status, 'exit code must match between the two modes');
 	assert.ok(!human.stdout.trim().startsWith('{'), 'human mode must not print JSON');
 	assert.match(human.stderr, /✗ warm cache canary:/);
+});
+
+void test('warm-holds: a node the warm tick held empty is set aside for its refill window, then scored (fleet-manager#79)', () => {
+	const machines = {
+		'fx-claw-1': { role: 'claw', ephemeral: true },
+		'fx-claw-6': { role: 'claw', ephemeral: true },
+	};
+	const holds = (agoMs) =>
+		JSON.stringify({ 'fx-claw-6': { atMs: Date.now() - agoMs, reason: 'heavy' } });
+	// The tick held claw-6 for a heavy job 60 s ago; at :00 the job has ended
+	// and the probe sees nothing heavy, but the tick has not refilled yet.
+	const fresh = run(machines, { reachable: true, warmHolds: holds(60_000) });
+	assert.deepEqual(
+		fresh.doc.findings.map((f) => f.node),
+		['fx-claw-1'],
+		'the node the tick did not hold is still scored'
+	);
+	assert.deepEqual(
+		fresh.doc.heldByTick.map((h) => [h.node, h.reason]),
+		[['fx-claw-6', 'heavy']]
+	);
+	assert.equal(fresh.doc.warmHoldsUnreadable, false);
+	// Past the window: the tick should have refilled it by now, so it is scored.
+	const stale = run(machines, { reachable: true, warmHolds: holds(10 * 60_000) });
+	assert.deepEqual(stale.doc.findings.map((f) => f.node).sort(), ['fx-claw-1', 'fx-claw-6']);
+	// Unparseable: says so, and scores every node.
+	const torn = run(machines, { reachable: true, warmHolds: '{"fx-claw-6": ' });
+	assert.equal(torn.doc.warmHoldsUnreadable, true);
+	assert.deepEqual(torn.doc.findings.map((f) => f.node).sort(), ['fx-claw-1', 'fx-claw-6']);
 });

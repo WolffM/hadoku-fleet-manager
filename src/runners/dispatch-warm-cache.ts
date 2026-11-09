@@ -11,6 +11,7 @@ import { observeWarmNode } from './dispatch-warm-cache-observe.js';
 import { actOnWarmNode } from './dispatch-warm-cache-act.js';
 import { holdWarmChangesForQueue, liftYieldsOfIneligible, warmYieldStep } from './warm-yield.js';
 import { heavyMarkedRecently } from './dispatch-pass-state.js';
+import { flushWarmHolds, noteWarmHold } from './warm-holds.js';
 import { slowReposOn } from './placement-slow.js';
 import { recordWarmListenerDecisions, type WarmListenerDecision } from './decision-log-record.js';
 import { logger } from '../host.js';
@@ -269,6 +270,10 @@ export async function dispatchWarmCache(
 			}
 			if (y.failed) result.failed++;
 			if (tier === 'slow' || drained || spaceRefused || runningHeavyNow) {
+				// Said out loud for the canary, which runs on its own clock and
+				// cannot see this decision (`warm-holds.ts`, fleet-manager#79).
+				if (tier !== 'slow' && (drained || runningHeavyNow))
+					noteWarmHold(o.node, drained ? 'drained' : 'heavy', nowMs);
 				neverWarm.set(
 					o.node,
 					tier === 'slow'
@@ -399,6 +404,7 @@ export async function dispatchWarmCache(
 				planNodes.push({ node: o.node, current: o.current, excluded: excludedRepos(o.node, o.m) });
 		}
 	}
+	flushWarmHolds(nowMs);
 
 	// THE JOINT ALLOCATION (wave 3k §B). Every eligible node's slot is decided
 	// at once, over the fleet's history, so the Nth node takes the Nth most

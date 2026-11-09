@@ -95,6 +95,7 @@ import {
 	warmYieldWithholds,
 	WARM_YIELDS_FILE,
 } from '../dist/runners/warm-yields.js';
+import { readWarmHolds, warmHoldWithholds, WARM_HOLDS_FILE } from '../dist/runners/warm-holds.js';
 
 const JSON_OUT = process.argv.includes('--json');
 const out = createEmitter({ argv: process.argv });
@@ -297,8 +298,23 @@ function main() {
 		warmYieldWithholds
 	).map((h) => ({ node: h.node, yieldedAgoSec: h.markAgeSec }));
 	const isYielded = (name) => yielded.some((h) => h.node === name);
+	// A node the warm tick ITSELF held empty for a heavy job or a drain, within
+	// its refill window (`warm-holds.ts`, fleet-manager#79): this process sees
+	// the job already ended or the drain already lifted at :00, while the tick
+	// has not yet come round to refill. The tick's own word, on disk.
+	const warmHolds = readWarmHolds(stateDir());
+	const heldByTick = heavyMarkedCandidates(
+		notDrainedOrSlow
+			.map(([name]) => name)
+			.filter((name) => !isHeavyBusy(name) && !isHeavyMarked(name) && !isYielded(name)),
+		warmHolds,
+		Date.now(),
+		warmHoldWithholds
+	).map((h) => ({ node: h.node, reason: warmHolds?.[h.node]?.reason, heldAgoSec: h.markAgeSec }));
+	const isHeldByTick = (name) => heldByTick.some((h) => h.node === name);
 	const active = notDrainedOrSlow.filter(
-		([name]) => !isHeavyBusy(name) && !isHeavyMarked(name) && !isYielded(name)
+		([name]) =>
+			!isHeavyBusy(name) && !isHeavyMarked(name) && !isYielded(name) && !isHeldByTick(name)
 	);
 
 	const measurements = active.map(([name, m]) => measure(name, m));
@@ -349,6 +365,8 @@ function main() {
 			heavyMarksUnreadable: heavyMarks === null,
 			yielded,
 			warmYieldsUnreadable: warmYields === null,
+			heldByTick,
+			warmHoldsUnreadable: warmHolds === null,
 			...buildGateDoc({
 				findings,
 				unreadable,
@@ -377,6 +395,14 @@ function main() {
 		for (const y of yielded)
 			out.log(
 				`  · ${y.node} [yielded its warm slot to the queue ${y.yieldedAgoSec}s ago] — refilled once the queue for it drains, not scored`
+			);
+		for (const h of heldByTick)
+			out.log(
+				`  · ${h.node} [warm tick held it empty (${h.reason}) ${h.heldAgoSec}s ago] — not yet due a refill, not scored`
+			);
+		if (warmHolds === null)
+			out.log(
+				`  · ${WARM_HOLDS_FILE} would not parse — every node scored as if the tick held none`
 			);
 		if (warmYields === null)
 			out.log(`  · ${WARM_YIELDS_FILE} would not parse — every node scored as if none had yielded`);
@@ -411,6 +437,14 @@ function main() {
 		for (const y of yielded)
 			console.error(
 				`  · ${y.node} [yielded its warm slot to the queue ${y.yieldedAgoSec}s ago] — refilled once the queue for it drains, not scored`
+			);
+		for (const h of heldByTick)
+			console.error(
+				`  · ${h.node} [warm tick held it empty (${h.reason}) ${h.heldAgoSec}s ago] — not yet due a refill, not scored`
+			);
+		if (warmHolds === null)
+			console.error(
+				`  · ${WARM_HOLDS_FILE} would not parse — every node scored as if the tick held none`
 			);
 		if (warmYields === null)
 			console.error(

@@ -39,6 +39,7 @@
     "tool-inventory-capabilities.json": ["scripts/tool-inventory.mjs"],
     "toolchain-deferral-streak.json": ["scripts/lib/toolchain-deferral-streak.mjs"],
     "warm-backoff.json": ["src/runners/warm-backoff.ts"],
+    "warm-holds.json": ["src/runners/warm-holds.ts"],
     "warm-yields.json": ["src/runners/warm-yields.ts"]
   },
   "patterns": {
