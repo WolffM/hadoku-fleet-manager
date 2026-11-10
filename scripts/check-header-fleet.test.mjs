@@ -27,9 +27,8 @@
  * empty in every fixture here, so the only things that can ever produce a
  * finding are the two cross-cutting rules at the bottom of the script: "is the
  * FLEET list complete" (`not-in-fleet` / `new-repo-grace`) and the templates
- * sweep. The six template directories are created (empty, non-git-ignored) so
- * the templates sweep finds real directories and reports nothing, isolating
- * the thing under test.
+ * sweep. One empty template directory is created so the templates sweep finds
+ * a real directory and reports nothing, isolating the thing under test.
  *
  * Every git fixture uses `cleanGitEnv` (never `git config user.*` — see
  * `scripts/lib/test-git-identity.mjs` and `hook-safe-tests.test.mjs`), and
@@ -55,14 +54,9 @@ const NO_GIT_ENV = Object.fromEntries(
 	Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))
 );
 
-const TEMPLATES = [
-	'templates/ui-app',
-	'templates/tunnel-contained',
-	'templates/tunnel',
-	'templates/tunnel-proxy',
-	'templates/tunnel-python',
-	'templates/worker',
-];
+/** The sweep reads `templates/*` from disk; one empty directory is enough to
+ *  be a site whose scaffolding it could find. */
+const TEMPLATES = ['templates/ui-app'];
 
 /** `git -C dir <args>`, with a clean env and an explicit `cwd` — belt and
  *  braces against `GIT_DIR` overriding `-C` from an inherited hook env. */
@@ -94,11 +88,11 @@ case "$1 $2" in
 esac
 `;
 
-/** A throwaway manifest dir, site root (with the six real template dirs, so
- *  the templates sweep finds something real and reports nothing), an EMPTY
+/** A throwaway manifest dir, site root (with one template dir, so the
+ *  templates sweep finds something real and reports nothing), an EMPTY
  *  repos dir, and fixture remotes, with an empty `uiApp`/`wolffmConsumer`
  *  roster. */
-function fixture({ repos = [], facets = {} } = {}) {
+function fixture({ repos = [], facets = {}, templates = TEMPLATES } = {}) {
 	const remotes = fixtureRemotes('header-fleet-grace-');
 	const root = remotes.root;
 	const manifestDir = join(root, 'manifest');
@@ -110,7 +104,8 @@ function fixture({ repos = [], facets = {} } = {}) {
 	mkdirSync(bin, { recursive: true });
 	writeFileSync(join(bin, 'gh'), GH_SHIM);
 	chmodSync(join(bin, 'gh'), 0o755);
-	for (const t of TEMPLATES) mkdirSync(join(siteRoot, t), { recursive: true });
+	mkdirSync(siteRoot, { recursive: true });
+	for (const t of templates) mkdirSync(join(siteRoot, t), { recursive: true });
 	gitIn(siteRoot, ['init', '-q']);
 
 	writeFileSync(join(manifestDir, 'fleet-runner-coverage.json'), JSON.stringify({ repos, facets }));
@@ -253,6 +248,41 @@ test('a clean fleet (nothing out of roster) is still exit 0 with no advisories',
 		assert.deepEqual(doc.findings, []);
 		assert.deepEqual(doc.advisory, []);
 		assert.equal(code, 0);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('templates are read from disk: one no list names is audited, and a retired one is not missed', () => {
+	// hadoku_site retired templates/tunnel on 2026-11-10 while a typed list
+	// still named it (a false `no-checkout`) and never named templates/game or
+	// templates/tunnel-loopback-ui (never audited).
+	const fx = fixture({ templates: ['templates/brand-new'] });
+	try {
+		makeHub(fx);
+		const pkg = join(fx.siteRoot, 'templates/brand-new/package.json');
+		writeFileSync(
+			pkg,
+			JSON.stringify({ name: 'x', peerDependencies: { '@wolffm/themes': '^5.0.0' } })
+		);
+		gitIn(fx.siteRoot, ['add', 'templates/brand-new/package.json']);
+		const { code, out } = run(fx);
+		const rules = findingsFor(JSON.parse(out), 'templates').map((f) => f.rule);
+		assert.deepEqual(rules, ['stale-peer']);
+		assert.equal(code, 1);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('a site with no templates directory is a `no-checkout` finding, never a clean sweep', () => {
+	const fx = fixture({ templates: [] });
+	try {
+		makeHub(fx);
+		const { code, out } = run(fx);
+		const rules = findingsFor(JSON.parse(out), 'templates').map((f) => f.rule);
+		assert.deepEqual(rules, ['no-checkout']);
+		assert.equal(code, 1);
 	} finally {
 		cleanup(fx);
 	}

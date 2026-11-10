@@ -19,37 +19,45 @@
  * cleanup 2cb45404 did for templates/dataplatform-tunnel, and the one
  * CHECKLIST_conjure.md's own Cleanup section asked for). If a future app leaves
  * a `templates/<app>-tunnel` behind, delete it — do not add it here.
- * Every real source template, not just the two that happened to be listed.
+ * Every real source template, not just the ones that happened to be listed.
  * `templates/worker` carried a caret `@wolffm/worker-utils` peer that this gate
  * could not see, so the fleet-wide floor sweep of 2026-08-18 had to find it by
  * hand — the same "the list itself is the blind spot" lesson as
  * `not-in-fleet`. Only the peer-floor rule runs over templates, so widening the
  * list cannot false-positive a non-UI template.
+ *
+ * So the list is READ from `templates/*`, not typed. It was typed until
+ * 2026-11-10, when hadoku_site retired `templates/tunnel` (25086b44c): the gate
+ * reported a missing checkout, and `templates/game` and
+ * `templates/tunnel-loopback-ui` had never been audited at all. A site with no
+ * template directory is still a finding — "I could not look" is not "clean".
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { blankComments } from './blank-comments.mjs';
 import { report, wolffmPeers, peerRangeIsSound } from './header-rules.mjs';
 import { LOCAL_THEME_MODULE, RAW_PICKER_IMPORT, THEME_PICKER_PROP } from './header-fleet-audit.mjs';
 
-export const TEMPLATES = [
-	'templates/ui-app',
-	'templates/tunnel-contained',
-	'templates/tunnel',
-	'templates/tunnel-proxy',
-	'templates/tunnel-python',
-	'templates/worker',
-];
+/** Every directory under `templates/`, as a repo-relative path, sorted.
+ *  @param {string} repoRoot @returns {string[]} */
+export function listTemplates(repoRoot) {
+	const dir = resolve(repoRoot, 'templates');
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir, { withFileTypes: true })
+		.filter((e) => e.isDirectory())
+		.map((e) => `templates/${e.name}`)
+		.sort();
+}
 
 /** @param {string} repoRoot @param {(dir: string, argv: string[]) => string} git */
 export function auditTemplates(repoRoot, git) {
-	for (const tpl of TEMPLATES) {
-		const dir = resolve(repoRoot, tpl);
-		if (!existsSync(dir)) {
-			report('templates', 'no-checkout', `${tpl} is missing — has the scaffolding moved?`);
-			continue;
-		}
+	const templates = listTemplates(repoRoot);
+	if (templates.length === 0) {
+		report('templates', 'no-checkout', 'templates/ holds no template — has the scaffolding moved?');
+		return;
+	}
+	for (const tpl of templates) {
 		let files;
 		try {
 			files = git(repoRoot, ['ls-files', tpl]).split('\n').filter(Boolean);
