@@ -37,6 +37,24 @@
       "why": "Game servers are hokon-local, not fleet work, and egress direct for the same kind of reason as vpnbypass: the tunnel only hurts them. Through nordlynx, Steam registered the server under the NordVPN exit address and every Steam-relay player's traffic took an extra consumer-VPN hop. Named decision 2026-10-25: the real WAN address appears in the Steam server listing."
     }
   ],
+  "$comment_tunnelOnly": [
+    "THE OPPOSITE PROMISE (fleet-manager#85, 2026-11-11). Traffic from these cgroups may",
+    "leave hokon ONLY through the VPN, and is dropped when the VPN is down: fail-closed.",
+    "hokon's own kill switch stays off, so this class is the kill switch for these",
+    "processes alone. Same prefix match as directEgress; local-hawk enforces it.",
+    "",
+    "Each entry names its `apps`: a PM2 app found in the cgroup that its entry does not",
+    "name FAILS the gate, and a named app still running elsewhere is reported as pending,",
+    "not failed, until its wrapper moves it. A path may not overlap a directEgress one."
+  ],
+  "tunnelOnly": [
+    {
+      "cgroup": "/user.slice/user-1000.slice/user@1000.service/crossposter.slice",
+      "apps": ["crossposter"],
+      "holds": "hadoku-crossposter: control service, later its hokon browser workers and the claw proxy",
+      "why": "Operator decision 3 (crossposter plan §2): a social platform never sees the home address; hokon's kill switch stays off, so this class is the kill switch for these processes only."
+    }
+  ],
   "$comment_ecosystemRoot": [
     "A PM2 app is ecosystem when its pm_cwd is this path OR A DIRECTORY UNDER IT.",
     "PREFIX, not equality: mgmt-api runs from srv/hadoku_site/services/mgmt-api, so an",

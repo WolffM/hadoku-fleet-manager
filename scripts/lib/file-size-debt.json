@@ -1,6 +1,6 @@
 {
   "scripts/capability-probe.sh": 1037,
-  "scripts/check-egress-slices.mjs": 1111,
+  "scripts/check-egress-slices.mjs": 1063,
   "scripts/ci-throttle.sh": 1036,
   "scripts/deploy-runners-slice.mjs": 1112,
   "scripts/hosting.mjs": 883,

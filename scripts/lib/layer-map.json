@@ -2229,6 +2229,20 @@
     "why": "fleet-manager#64: the shared rig for the egress-slices suites (stub pm2, fixture apps and taxonomies), split out of egress-slices-guard.test.mjs so the on-demand cases get their own file. Same bucket as doctor-fixtures.mjs; the gate it spawns, scripts/check-*.mjs, is observation."
   },
   {
+    "glob": "scripts/lib/egress-tunnel-only.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "fleet-manager#85: the tunnel-only class of the egress taxonomy (validation and placement), zero imports, read by the egress-slices gate (observation/run) and its tests."
+  },
+  {
+    "glob": "scripts/lib/egress-slices-report.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "fleet-manager#85: the egress-slices gate's text report, moved out of scripts/check-egress-slices.mjs unchanged so the gate fits its file-size ceiling. Presentation only; the gate decides."
+  },
+  {
     "glob": "scripts/lib/doctor-fixtures.mjs",
     "layer": "domain",
     "domain": "observation",

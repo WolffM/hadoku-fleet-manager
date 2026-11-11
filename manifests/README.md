@@ -62,6 +62,11 @@ declares WHICH cgroups carry fleet work and must egress direct, and names every
 PM2 app that is not an ecosystem service. `fleet egress-slices` audits the live
 box against it; local-hawk owns the routing policy that acts on it.
 
+Its `tunnelOnly` class is the opposite promise (fleet-manager#85): those cgroups
+may leave hokon only through the VPN and are dropped when it is down. Each entry
+names its `apps`; the gate fails any other PM2 app found in one, and reports a
+named app that has not moved there yet as `tunnelOnlyPending`, not as a finding.
+
 Copy it to the manifest directory alongside the others, exactly like
 `node-profiles.json`:
 
