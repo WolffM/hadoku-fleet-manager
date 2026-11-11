@@ -94,6 +94,8 @@ import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { measuredFacets, writeFacet } from '../../dist/lib/measured.js';
 import { perfDir, readPerfRows } from '../../dist/perf-sample-store.js';
 import { CPU_WINDOW_HOURS, cpuLoadFacet } from './doctor-findings-cpu.mjs';
+import { PRODUCTION_DAYS, qualifiedCapacity, rampEntry } from './doctor-findings-qualify.mjs';
+import { readQualifyResults } from './qualify-results.mjs';
 
 // Through the shared emitter, which every subcommand under the `--json`
 // contract uses: the document below is printed and `process.exit` runs on the
@@ -346,6 +348,43 @@ for (const [name, h] of Object.entries(health)) {
 	);
 }
 
+// ── what qualification would set maxConcurrent to (SHADOW, wave bootcamp2 Q6) ─
+// Joined here from the qualification ledger and a WEEK of perf samples, never
+// stored. An unreadable ledger or perf week is said on every node, not skipped.
+const qualifyRead = readQualifyResults(stateDir());
+const perfWeek = (() => {
+	try {
+		const r = readPerfRows(perfDir(stateDir()), {
+			sinceMs: Date.now() - PRODUCTION_DAYS * 86_400_000,
+		});
+		return {
+			rows: r.rows,
+			unreadable: r.unreadable.length ? r.unreadable.map((u) => u.file).join(', ') : null,
+		};
+	} catch (e) {
+		return { rows: [], unreadable: e.message };
+	}
+})();
+for (const [name, h] of Object.entries(health)) {
+	if (h.reachable === false) continue;
+	h.qualifiedCapacity = !qualifyRead.ok
+		? {
+				state: 'could-not-look',
+				why: `the qualification ledger is unreadable: ${qualifyRead.reason}`,
+			}
+		: perfWeek.unreadable
+			? {
+					state: 'could-not-look',
+					why: `the week of perf samples is unreadable: ${perfWeek.unreadable}`,
+				}
+			: qualifiedCapacity({
+					machine: manifest.machines?.[name],
+					entry: rampEntry(qualifyRead.results, name),
+					perfRows: perfWeek.rows.filter((r) => r.node === name),
+					nowMs: Date.now(),
+				});
+}
+
 /** The cycle's per-node decisions, or `{}` when it has never run here. */
 function readCycleDecisions() {
 	const path = join(stateDir(), 'claw-reboot.json');
@@ -450,6 +489,11 @@ for (const [name, h] of Object.entries(health).sort()) {
 					`${C(c.p50AtLimit, '%')} (avg300, ${CPU_WINDOW_HOURS} h)`
 			: `   ci load   not judged: ${c?.why ?? 'no perf join'}`
 	);
+	const qc = h.qualifiedCapacity;
+	if (qc)
+		log(
+			`   qualified ${qc.state}${qc.proposal ? `: would set ${qc.proposal} (live ${qc.live})` : ''} — ${qc.why}`
+		);
 }
 
 if (findings.length) {

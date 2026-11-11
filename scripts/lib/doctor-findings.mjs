@@ -76,6 +76,7 @@ import { storageFindings } from './doctor-findings-storage.mjs';
 import { networkFindings } from './doctor-findings-network.mjs';
 import { opsFindings } from './doctor-findings-ops.mjs';
 import { cpuFindings } from './doctor-findings-cpu.mjs';
+import { qualifyFindings } from './doctor-findings-qualify.mjs';
 
 /**
  * The BACKSTOP's findings are advisory, and the rule lives in `preflight.mjs` so
@@ -147,5 +148,6 @@ export function doctorFindings(health, { nowMs = Date.now(), machine } = {}) {
 		...networkFindings(health),
 		...opsFindings(health, { nowMs }),
 		...cpuFindings(health),
+		...qualifyFindings(health),
 	];
 }

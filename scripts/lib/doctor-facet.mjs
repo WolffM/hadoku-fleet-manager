@@ -48,7 +48,9 @@ export function bootcampPointer(capabilities) {
  */
 export function healthRecord(health) {
 	return Object.fromEntries(
-		Object.entries(health).filter(([k]) => k !== 'bootcamp' && k !== 'pm2Claims' && k !== 'cpuLoad')
+		Object.entries(health).filter(
+			([k]) => k !== 'bootcamp' && k !== 'pm2Claims' && k !== 'cpuLoad' && k !== 'qualifiedCapacity'
+		)
 	);
 }
 

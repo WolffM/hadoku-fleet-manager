@@ -2116,6 +2116,16 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/qualify-bars.mjs",
+    "layer": "config",
+    "why": "Wave bootcamp2 Q6: the operator's qualification bars and TTL, pure constants. Config so doctor (observation) and the qualification tests (lifecycle) read one set of numbers; moved down out of qualify-registry.mjs, which re-exports them for the tests."
+  },
+  {
+    "glob": "scripts/lib/qualify-results.mjs",
+    "layer": "state",
+    "why": "Wave bootcamp2 Q6: qualify-results.json's one writer and its reader, a one-writer record like job-proof-record.mjs. State, so doctor (observation) can read a node's qualification without importing lifecycle."
+  },
+  {
     "glob": "scripts/lib/qualify-*.mjs",
     "layer": "domain",
     "domain": "lifecycle",
@@ -2211,6 +2221,13 @@
     "domain": "observation",
     "part": "core",
     "why": "Wave shrink-1 lane D, pure move: doctorFindings' wifi-manager/link judgement. Same bucket as doctor-findings.mjs itself."
+  },
+  {
+    "glob": "scripts/lib/doctor-findings-qualify.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Wave bootcamp2 Q6: doctorFindings' qualified-capacity judgement, the SHADOW verdict of what maxConcurrent a node's qualification proposes beside the live value. Pure; doctor-run.mjs hands it the ledger entry and 7 days of perf rows. Same bucket as doctor-findings-cpu.mjs."
   },
   {
     "glob": "scripts/lib/doctor-findings-cpu.mjs",
