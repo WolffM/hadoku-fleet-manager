@@ -36,6 +36,7 @@
  * `GIT_DIR` would point it at the hook's repository (lib/hook-safe-tests.test.mjs).
  */
 import { execFileSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import {
 	existsSync,
 	mkdirSync,
@@ -43,6 +44,7 @@ import {
 	renameSync,
 	rmSync,
 	statSync,
+	utimesSync,
 	writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -471,19 +473,36 @@ export function shipped(repo, { fetch = true, fresh = false } = {}) {
 		 * A clean copy of the shipped tree on disk, for a scanner whose logic is
 		 * shaped around the filesystem. Text files are written normalised; binary
 		 * files as they are. `include` narrows which paths are written (and so
-		 * which blobs are fetched). Rewritten on every call: it is a view of the
-		 * mirror, not a checkout anybody edits.
+		 * which blobs are fetched). It is a view of the mirror, not a checkout
+		 * anybody edits.
+		 *
+		 * IMMUTABLE once written (fleet-manager#84). The directory is named by the
+		 * shipped sha AND the path set, so its content is fixed by its name: it is
+		 * written once (tmp + rename), reused by every later call, and never
+		 * deleted while a reader may hold it. The old single `trees/<repo>` was
+		 * rebuilt with rm-then-rename on every call, and a second process's
+		 * rebuild pulled the files out from under a concurrent identity-scan walk.
 		 *
 		 * @param {{ include?: (path: string) => boolean }} [opts]
 		 */
 		materialize({ include = () => true } = {}) {
-			const root = join(cacheDir(), 'trees', ...repo.split('/'));
 			const paths = [...tree.entries()]
 				.filter(([p, e]) => e.mode !== '120000' && include(p))
-				.map(([p]) => p);
+				.map(([p]) => p)
+				.sort();
+			const [owner, name] = repo.split('/');
+			const parent = join(cacheDir(), 'trees', owner);
+			const pathSet = createHash('sha256').update(paths.join('\n')).digest('hex').slice(0, 12);
+			const root = join(parent, `${name}@${sha}-${pathSet}`);
+			sweepTrees(parent, root);
+			if (existsSync(root)) {
+				// Reuse keeps it young, so the sweep never takes a tree in use.
+				const now = new Date();
+				utimesSync(root, now, now);
+				return root;
+			}
 			load(paths);
-			const tmp = `${root}.tmp-${process.pid}`;
-			rmSync(tmp, { recursive: true, force: true });
+			const tmp = `${root}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
 			mkdirSync(tmp, { recursive: true });
 			for (const p of paths) {
 				const buf = bytes.get(tree.get(p).oid);
@@ -491,8 +510,14 @@ export function shipped(repo, { fetch = true, fresh = false } = {}) {
 				mkdirSync(dirname(abs), { recursive: true });
 				writeFileSync(abs, isBinary(buf) ? buf : normalizeEol(buf.toString('utf8')));
 			}
-			rmSync(root, { recursive: true, force: true });
-			renameSync(tmp, root);
+			try {
+				renameSync(tmp, root);
+			} catch (err) {
+				// Another process wrote the same tree first. Same name, same content:
+				// keep theirs. Any other failure is real.
+				if (!['ENOTEMPTY', 'EEXIST'].includes(err.code) || !existsSync(root)) throw err;
+				rmSync(tmp, { recursive: true, force: true });
+			}
 			return root;
 		},
 	};
@@ -539,6 +564,35 @@ export function shippedMany(repos, opts) {
 		else out.repos.set(repo, h);
 	}
 	return out;
+}
+
+/**
+ * A materialized tree, or a tmp dir a crashed writer left, that nobody has
+ * touched for this long is removed. `materialize` touches a tree on every
+ * reuse and a scan takes seconds, so a tree in use is minutes old at most.
+ */
+export const TREE_TTL_MS = 24 * 3600 * 1000;
+
+/**
+ * Remove `parent`'s entries older than TREE_TTL_MS, except `keep`. That covers
+ * the pre-#84 mutable `trees/<owner>/<repo>` directories too, which no current
+ * version writes. Best effort per entry: a racing sweeper may delete one first,
+ * and ENOENT means it is gone, which is the goal. Anything else throws.
+ *
+ * @param {string} parent @param {string} keep
+ */
+function sweepTrees(parent, keep) {
+	if (!existsSync(parent)) return;
+	const cutoff = Date.now() - TREE_TTL_MS;
+	for (const entry of readdirSync(parent)) {
+		const abs = join(parent, entry);
+		if (abs === keep) continue;
+		try {
+			if (statSync(abs).mtimeMs < cutoff) rmSync(abs, { recursive: true, force: true });
+		} catch (err) {
+			if (err.code !== 'ENOENT') throw err;
+		}
+	}
 }
 
 /** Test seam: forget per-process handles (a fixture remote moved). */

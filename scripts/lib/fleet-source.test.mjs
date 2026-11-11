@@ -6,8 +6,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, utimesSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import { fixtureRemotes } from './fleet-source-fixture.mjs';
 import { fixtureIdentityEnv } from './test-git-identity.mjs';
@@ -15,6 +15,7 @@ import {
 	forgetHandles,
 	shipped,
 	shippedMany,
+	TREE_TTL_MS,
 	tryShipped,
 	UnreadableRepo,
 } from './fleet-source.mjs';
@@ -265,6 +266,100 @@ test('four processes reading one mirror at once all succeed (ci:audit-gates besi
 	} finally {
 		fx.cleanup();
 	}
+});
+
+test('a materialized tree survives another process materializing the same repo (fleet-manager#84)', async () => {
+	// identity-scan materializes every repo and then WALKS the tree. Two
+	// identity-model runs on one box share the cache, and the rebuild used to
+	// rm the root a concurrent walker was inside: ENOENT mid-scan.
+	const fx = fixtureRemotes();
+	try {
+		const files = {};
+		for (let i = 0; i < 300; i++) files[`src/d${i % 10}/f${i}.ts`] = `export const n = ${i};\n`;
+		fx.push('WolffM/walked', files);
+		const reader = new URL('./fleet-source.mjs', import.meta.url).href;
+		const code =
+			`import { readdirSync, readFileSync, statSync } from 'node:fs';` +
+			`import { join } from 'node:path';` +
+			`const m = await import(${JSON.stringify(reader)});` +
+			`const h = m.shipped('WolffM/walked', { fetch: false });` +
+			`const walk = (d) => { let n = 0; for (const e of readdirSync(d)) {` +
+			` const p = join(d, e); if (statSync(p).isDirectory()) n += walk(p); else { readFileSync(p); n++; } } return n; };` +
+			`for (let i = 0; i < 25; i++) { const root = h.materialize();` +
+			` const n = walk(root); if (n !== 300) throw new Error('walked ' + n); }` +
+			`console.log('ok');`;
+		// Warm the mirror once so the racers do not also race the fetch.
+		const env = { ...NO_GIT_ENV, ...fx.env };
+		execFileSync(
+			process.execPath,
+			[
+				'--input-type=module',
+				'-e',
+				code.replace('i < 25', 'i < 1').replace('{ fetch: false }', '{}'),
+			],
+			{
+				env,
+				stdio: 'pipe',
+			}
+		);
+		const { spawn } = await import('node:child_process');
+		const runs = Array.from(
+			{ length: 4 },
+			() =>
+				new Promise((done) => {
+					const child = spawn(process.execPath, ['--input-type=module', '-e', code], { env });
+					let out = '';
+					let err = '';
+					child.stdout.on('data', (d) => (out += d));
+					child.stderr.on('data', (d) => (err += d));
+					child.on('close', (status) => done({ status, out: out.trim(), err }));
+				})
+		);
+		for (const r of await Promise.all(runs)) {
+			assert.equal(r.status, 0, r.err);
+			assert.equal(r.out, 'ok');
+		}
+	} finally {
+		fx.cleanup();
+	}
+});
+
+test('materialize reuses a tree by sha and path set, and sweeps only stale ones', () => {
+	withRemotes((fx) => {
+		fx.push('WolffM/kept', { 'a.ts': 'a\n', 'b.md': 'b\n' });
+		const h = shipped('WolffM/kept');
+		const all = h.materialize();
+		const parent = dirname(all);
+		const legacy = join(parent, 'kept');
+		const crashed = join(parent, 'kept@dead-000000000000.tmp-1-ffffffff');
+		const fresh = join(parent, 'kept@other-111111111111');
+		for (const d of [legacy, crashed, fresh]) mkdirSync(d);
+		const old = new Date(Date.now() - TREE_TTL_MS - 60_000);
+		utimesSync(legacy, old, old);
+		utimesSync(crashed, old, old);
+		utimesSync(all, old, old);
+
+		assert.equal(h.materialize(), all, 'same sha, same paths: the same directory');
+		assert.ok(statSync(all).mtimeMs > old.getTime(), 'reuse touches the tree');
+		const tsOnly = h.materialize({ include: (p) => p.endsWith('.ts') });
+		assert.notEqual(tsOnly, all, 'a different path set is a different tree');
+		assert.equal(existsSync(join(tsOnly, 'b.md')), false);
+		assert.equal(existsSync(legacy), false, 'the pre-#84 mutable tree is swept');
+		assert.equal(existsSync(crashed), false, "a crashed writer's tmp is swept");
+		assert.ok(existsSync(fresh), 'a young tree is never swept');
+		assert.ok(existsSync(all), 'a tree just reused is never swept');
+
+		const sha2 = fx.push('WolffM/kept', { 'a.ts': 'a2\n' });
+		forgetHandles();
+		const next = shipped('WolffM/kept').materialize();
+		assert.match(next, new RegExp(`@${sha2}-`));
+		assert.equal(readFileSync(join(next, 'a.ts'), 'utf8'), 'a2\n');
+		assert.equal(
+			readFileSync(join(all, 'a.ts'), 'utf8'),
+			'a\n',
+			'the old tree is left for its reader'
+		);
+	});
 });
 
 test('under node --test, a reader with no FLEET_SOURCE_URL refuses instead of reading GitHub', () => {
