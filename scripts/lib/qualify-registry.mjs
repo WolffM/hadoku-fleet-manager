@@ -42,7 +42,11 @@ export { QUALIFY_BARS, QUALIFY_TTL_DAYS } from './qualify-bars.mjs';
  * runner refuses to start a test whose `minutes` would overrun it, and says so;
  * a window that ends early is a could-not-look for every test it did not reach.
  */
-export const QUALIFY_WINDOW_MINUTES = 150;
+// 180: the playlist's budgets total 178 min (busy-counters 6, floor 15+15,
+// network 12, tmpfs 10, disk 20, ramp 75, reboot 25). ci:qualify starts at
+// 08:00 UTC with a 45-min wait for quiet ahead of this and must end before
+// fleet-benchmark's 12:00 bootcamp (its timeout, 13800 s, ends it by 11:50).
+export const QUALIFY_WINDOW_MINUTES = 180;
 
 const TRACKS = new Set(['presence', 'qualify']);
 const ROLES = new Set(['ci', 'admin']);
