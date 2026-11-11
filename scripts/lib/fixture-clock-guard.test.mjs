@@ -337,6 +337,19 @@ for (const days of SHIFTS) {
  */
 const DECLARED = new Map([
 	[
+		'scripts/lib/qualify-concurrency.test.mjs',
+		'`jobProfile` and the ramp take `nowMs` (the fixture passes its own NOW, and the fake ' +
+			"ctx carries it); job `ts` values are compared with that, never with the clock. The one in a fake job-metrics read's stdout is only checked for its sentinel.",
+	],
+	[
+		'scripts/lib/doctor-findings-qualify.test.mjs',
+		'`qualifiedCapacity` takes `nowMs`; the fixture pins NOW and builds every ledger `at` as an offset from it.',
+	],
+	[
+		'scripts/lib/qualify-runner.test.mjs',
+		'`nextNode` takes `nowMs`; the fixture pins NOW_N and builds every ledger `at` as an offset from it.',
+	],
+	[
 		'scripts/lib/bootcamp-schedule.test.mjs',
 		'`benchmarkPlan` takes `nowMs` as a parameter and the test passes its own WED; the ' +
 			'weekday and next date are computed from that, never from the clock.',
