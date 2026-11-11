@@ -179,7 +179,12 @@ import { DRAIN_TIMEOUT_MS, POLL_MS, SETTLE_MS } from './lib/drain-wait.mjs';
 import { parseLoad } from './lib/probe-readers.mjs';
 
 import { runPass1 } from './lib/bootcamp-probe.mjs';
-import { benchmarkPlan } from './lib/bootcamp-schedule.mjs';
+import {
+	benchmarkPlan,
+	lastMeasuredMs,
+	readBenchmarkLedger,
+	recordBenchmarks,
+} from './lib/bootcamp-schedule.mjs';
 import { runIdlePass2 } from './lib/bootcamp-idle.mjs';
 import { runPass3 } from './lib/bootcamp-judge.mjs';
 import { computeRevocationChanges } from './lib/bootcamp-revoke.mjs';
@@ -464,6 +469,9 @@ const proofLedger = readProofs(stateDir());
  */
 const IDLE_ONLY = [...probeableIds()].filter((id) => measuredIdleOnly(capability(id)));
 
+/** When each node was last measured idle (lib/bootcamp-schedule.mjs). Unreadable is SAID. */
+const benchLedger = readBenchmarkLedger(stateDir());
+
 /** node -> this run's benchmark plan: measured tonight, or deferred to its weekday. */
 const benchPlans = Object.fromEntries(
 	nodes.map(([name, m]) => [
@@ -474,6 +482,7 @@ const benchPlans = Object.fromEntries(
 			fleet: Object.keys(manifest.machines ?? {}),
 			idleOnly: IDLE_ONLY,
 			nowMs: NOW_MS,
+			measuredMs: benchLedger.ok ? lastMeasuredMs(benchLedger.ledger, name, IDLE_ONLY) : null,
 			force: MEASURE,
 		}),
 	])
@@ -531,6 +540,24 @@ await runIdlePass2(ctx);
 // PASS 3 — judge, and seed what was earned.
 await runPass3(ctx);
 
+// WHEN EACH NODE WAS LAST MEASURED IDLE, so a missed slot is retried the next
+// night. Only under --write: a read-only run records nothing.
+const benchRecord =
+	WRITE && benchLedger.ok
+		? recordBenchmarks(
+				stateDir(),
+				Object.fromEntries(
+					Object.entries(report).map(([n, r]) => [n, Object.keys(r.measuredIdle ?? {})])
+				),
+				NOW_MS
+			)
+		: null;
+const benchLedgerError = !benchLedger.ok
+	? benchLedger.reason
+	: benchRecord && !benchRecord.ok
+		? benchRecord.reason
+		: null;
+
 const revocationChanges = computeRevocationChanges(ctx);
 
 const proveResults = await proveWorkloads(ctx);
@@ -549,6 +576,11 @@ printReport(ctx);
 // `expected-down-guard.test.mjs` scans top-level `scripts/*.mjs` files for —
 // `probe`/`ensureTools` above call `runOn`, and this is where that same file
 // asks `deferralFor`.
+if (benchLedgerError) {
+	// Uncounted, like the proof ledger: no node is at fault. Each missed slot then
+	// waits for its weekday instead of retrying, and the run says so.
+	log(`\n· benchmark ledger unusable — missed slots wait a week: ${benchLedgerError}`);
+}
 if (!proofLedger.ok) {
 	// Uncounted: the node is not at fault. But "no proof line" would read as "nothing to say".
 	log(`\n· job-proof ledger unreadable — proofs not reported: ${proofLedger.reason}`);
@@ -600,6 +632,7 @@ if (emitter.json)
 		revocations: revocationChanges,
 		written,
 		...(proofLedger.ok ? {} : { jobProofLedgerError: proofLedger.reason }),
+		...(benchLedgerError ? { benchmarkLedgerError: benchLedgerError } : {}),
 		...(PROVE ? { prove: proveResults } : {}),
 	});
 else if (!ctx.findings) log(`\n✓ every declared label is backed by a passing probe`);

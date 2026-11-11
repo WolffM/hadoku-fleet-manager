@@ -616,3 +616,54 @@ test('a clean run emits empty lists, and the store reads it as ok', () => {
 		rmSync(f.root, { recursive: true, force: true });
 	}
 });
+
+test('a slot lost to a busy node is retried the next night, and recorded once it lands', () => {
+	// CLAW's weekday is Monday. Week 1 measures it; week 2's Monday it never goes
+	// quiet; Tuesday retries and lands; Wednesday waits for the next Monday.
+	const f = idleFixture({ all: ALL_ANSWER('ok 2281', 0) });
+	const ledgerPath = join(f.root, 'state', 'benchmark-measured.json');
+	const ledgerAt = () => JSON.parse(readFileSync(ledgerPath, 'utf8'))[CLAW]['cargo-bevy'].at;
+	const night = (iso) => {
+		const before = f.calls().length;
+		const r = run(writeArgs, { ...f.env, FLEET_TEST_NOW: iso });
+		return {
+			r,
+			doc: JSON.parse(r.out),
+			calls: f
+				.calls()
+				.slice(before)
+				.filter((c) => c !== 'BUSY'),
+		};
+	};
+	try {
+		assert.equal(night('2026-11-09T12:00:00Z').r.code, 0);
+		assert.equal(ledgerAt(), '2026-11-09T12:00:00.000Z');
+
+		f.answer('all', ALL_ANSWER('ok 1024', 1));
+		f.answer('busy', '1\n');
+		const mon = night('2026-11-16T12:00:00Z');
+		assert.equal(mon.r.code, 1, 'the slot night that never went quiet is a finding');
+		assert.equal(mon.doc.findings[0].kind, 'inconclusive');
+		assert.equal(
+			ledgerAt(),
+			'2026-11-09T12:00:00.000Z',
+			'an INCONCLUSIVE night was recorded as measured'
+		);
+
+		f.answer('all', ALL_ANSWER('ok 2281', 0));
+		f.answer('busy', '0\n');
+		const tue = night('2026-11-17T12:00:00Z');
+		assert.equal(tue.r.code, 0, `${tue.r.out}\n${tue.r.err}`);
+		assert.deepEqual(tue.calls, ['PROBE'], 'the missed slot was not retried');
+		assert.equal(ledgerAt(), '2026-11-17T12:00:00.000Z');
+
+		const wed = night('2026-11-18T12:00:00Z');
+		assert.deepEqual(wed.calls, ['PRESENCE'], 'a landed retry kept benchmarking');
+		assert.deepEqual(
+			wed.doc.report[CLAW].deferred.map((d) => d.nextOn),
+			['2026-11-23']
+		);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
