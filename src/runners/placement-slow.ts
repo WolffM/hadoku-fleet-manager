@@ -40,9 +40,13 @@ export const HEAVY_HOLD_SEC = 3600;
  * one heavy job (2026-11-11). A third shard still waits {@link HEAVY_HOLD_SEC}.
  *
  * The single 3600 s hold rested on "a node frees as soon as one shard finishes
- * (~10 min), so waiting is never slower than doubling". Shards stopped being
- * ~10 min on 2026-10-29: forge-e2e (2)-(5) ran a median 510 s on 10-28 and
- * 1,900-2,900 s on every day since. Measured over job-history 10-29..11-11, a
+ * (~10 min), so waiting is never slower than doubling". That is a PUSH
+ * selection's shard. A full Forge set (schedule or dispatch) runs 35-75 min a
+ * shard: run 40725936936 (10-28) took 3,462-3,799 s per shard, while push run
+ * 40737267729 the same day took 190-473 s. Since cardtable 9d73808e3 (10-28)
+ * the two-hourly cron re-runs a red sha, so full sets became most multi-shard
+ * runs, and a held shard now waits behind one. Measured over job-history
+ * 10-29..11-11 (shards 2-5, mostly full sets), a
  * shard overlapping another heavy job for over half its run, against one
  * running alone: claw-8 1,864 -> 2,129 s, claw-9 2,412 -> 3,160, claw-4
  * 2,707 -> 3,358, hokon 2,216 -> 3,387 (1.14-1.53x); failures 14% solo, 15%
