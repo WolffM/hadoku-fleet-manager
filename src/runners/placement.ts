@@ -92,7 +92,8 @@ export interface Placement {
  * (see {@link choosePlacement}). `baseline-order` is the tick's own
  * `orderCandidates` position — speed, idle time, schedulability, name.
  */
-export type WalkKey = 'heavy-jobs' | 'busy' | 'running-heavy' | 'warm-affinity' | 'baseline-order';
+export type WalkKey =
+	'heavy-jobs' | 'narrower-demand' | 'busy' | 'running-heavy' | 'warm-affinity' | 'baseline-order';
 
 /** This node's running jobs — standing registrations GitHub assigned directly,
  *  plus live (minted, not yet finished) units — see `traffic.ts`'s
@@ -130,6 +131,11 @@ export function busyOf(m: NodeState): number {
  *      ({@link NodeState.heavyJobs}) — and a node with any is refused
  *      outright until {@link HEAVY_DOUBLE_HOLD_SEC} (one there) or
  *      {@link HEAVY_HOLD_SEC} (two or more);
+ *   0b. a node that NARROWER queued work needs (`reservedForNarrower`,
+ *      built by the dispatcher from the queue and the nodes' labels) sorts
+ *      after one no narrower run needs: a plain job leaves the jdk21 claws
+ *      to a waiting Forge shard while another claw has room, and takes
+ *      one only when nothing else will;
  *   1. busy — THIS node's running jobs plus live units ({@link busyOf}),
  *      read off the SAME `NodeState` objects `planTick` mutates between
  *      placements (#102.2), so a burst of jobs in one tick sees each other's
@@ -211,7 +217,14 @@ export function choosePlacement(
 	 * classifier's exact-match key (#102) — the same field `expectedExtraSec`
 	 * already reads, not a second one.
 	 */
-	spill?: SpillContext
+	spill?: SpillContext,
+	/**
+	 * Nodes a still-waiting run with STRICTLY fewer homes than this one needs
+	 * — `narrowerDemand` in dispatcher.ts. Ranked after every other node,
+	 * never refused. Omitted, or empty when nothing narrower waits, it ranks
+	 * nothing and the walk is unchanged.
+	 */
+	reservedForNarrower?: ReadonlySet<string>
 ): Placement {
 	const byName = new Map(nodes.map((m) => [m.name, m]));
 
@@ -256,6 +269,11 @@ export function choosePlacement(
 			const xh = x.heavyJobs ?? 0;
 			const yh = y.heavyJobs ?? 0;
 			if (xh !== yh) return { key: 'heavy-jobs', diff: xh - yh };
+		}
+		if (reservedForNarrower?.size) {
+			const xr = reservedForNarrower.has(x.name) ? 1 : 0;
+			const yr = reservedForNarrower.has(y.name) ? 1 : 0;
+			if (xr !== yr) return { key: 'narrower-demand', diff: xr - yr };
 		}
 		const xb = busyOf(x);
 		const yb = busyOf(y);

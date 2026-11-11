@@ -74,7 +74,7 @@ export interface JitPlacementObservation {
 		event?: string;
 		repo: string;
 	};
-	/** Where this job stood in the pass's placement order (singleNodeFirst). */
+	/** Where this job stood in the pass's placement order (narrowestFirst). */
 	passIndex: number;
 	outcome: 'in-flight' | 'fork' | 'unplaceable' | 'held' | 'placed' | 'reserved';
 	/** The eligible nodes the walk was offered, already as this file's own flat shape. */

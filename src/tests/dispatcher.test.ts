@@ -1,12 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-	firstSentence,
-	planTick,
-	singleNodeFirst,
-	type PendingRun,
-} from '../runners/dispatcher.js';
+import { firstSentence, planTick, narrowestFirst, type PendingRun } from '../runners/dispatcher.js';
 import { HEAVY_HOLD_SEC } from '../runners/placement-slow.js';
 import { type NodeState } from '../runners/placement-node-state.js';
 import type { HeavyModel } from '../runners/heavy-model.js';
@@ -549,7 +544,7 @@ test('#131: single-node runs keep their own priority order, and so do the rest',
 		node('claw-1', { labels: CLAW_LABELS }),
 		node('claw-2', { labels: CLAW_LABELS }),
 	];
-	const order = singleNodeFirst(
+	const order = narrowestFirst(
 		[forgeShard(1), taskauto(2), forgeShard(3), taskauto(4, { event: 'workflow_dispatch' })],
 		nodes
 	).map((r) => r.id);
@@ -565,7 +560,7 @@ test('#131: "single-node" is decided by labels, not by who is full this tick', (
 		node('claw-9', { labels: [...HOKON_LABELS], eligible: false }),
 	];
 	assert.deepEqual(
-		singleNodeFirst([forgeShard(1), taskauto(2)], nodes).map((r) => r.id),
+		narrowestFirst([forgeShard(1), taskauto(2)], nodes).map((r) => r.id),
 		[2, 1]
 	);
 	const p = planTick([forgeShard(1), taskauto(2)], nodes, ['hokon', 'claw-1'], NONE, NOW);
