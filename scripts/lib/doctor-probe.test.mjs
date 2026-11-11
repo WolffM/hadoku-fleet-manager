@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { doctorProbe, BACKSTOP_CADENCE_NO_LOAD_WHY } from './doctor-probe.mjs';
+import { doctorProbe, BACKSTOP_CADENCE_NO_LOAD_WHY, PM2_UNITS_PROBE } from './doctor-probe.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // THE PROBE
@@ -76,4 +80,89 @@ test('a --cadence backstop probe never loads the box, and says why in the record
 	assert.ok(!probe.includes('sha512sum'), 'no load generator may reach the backstop');
 	assert.ok(probe.includes(BACKSTOP_CADENCE_NO_LOAD_WHY));
 	assert.throws(() => doctorProbe({ loadSeconds: 0, noLoadWhy: 'x"; rm -rf ~; "' }), /unsafe/);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PM2_UNITS_PROBE — EXECUTED against stub systemctl/ps, not pattern-matched
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Run the pm2 stanza with `systemctl` and `ps` answering from `units`. */
+function runPm2Probe(units) {
+	const dir = mkdtempSync(join(tmpdir(), 'pm2-probe-'));
+	try {
+		const list = units.map((u) => `${u.unit} loaded active running x`).join('\n');
+		const pid = (u) => u.pid ?? 0;
+		writeFileSync(
+			join(dir, 'systemctl'),
+			[
+				'#!/bin/bash',
+				`[ "$1" = list-units ] && { printf '%s\\n' '${list}'; exit 0; }`,
+				...units.map(
+					(u) =>
+						`[ "$3" = MainPID ] && [ "$4" = ${u.unit} ] && { echo ${pid(u)}; exit 0; }\n` +
+						`[ "$3" = ControlGroup ] && [ "$4" = ${u.unit} ] && { echo /system.slice/${u.unit}; exit 0; }`
+				),
+				'exit 1',
+			].join('\n')
+		);
+		writeFileSync(
+			join(dir, 'ps'),
+			[
+				'#!/bin/bash',
+				...units
+					.filter((u) => u.pid)
+					.map(
+						(u) =>
+							`[ "$1 $2 $3" = "-o args= -p" ] && [ "$4" = ${u.pid} ] && { ${u.args === undefined ? 'exit 1' : `echo '${u.args}'`}; exit 0; }\n` +
+							`[ "$1" = --ppid ] && [ "$2" = ${u.pid} ] && { for i in $(seq 1 ${u.children ?? 0}); do echo child; done; exit 0; }`
+					),
+				'exit 1',
+			].join('\n')
+		);
+		chmodSync(join(dir, 'systemctl'), 0o755);
+		chmodSync(join(dir, 'ps'), 0o755);
+		const script = [
+			'say() { if [ -n "${2:-}" ]; then printf "D %s %s\\n" "$1" "$2"; else printf "U %s\\n" "$1"; fi; }',
+			'unk() { printf "U %s %s\\n" "$1" "$2"; }',
+			'effmax() { echo max; }',
+			PM2_UNITS_PROBE,
+		].join('\n');
+		return execFileSync('bash', ['-c', script], {
+			env: { PATH: `${dir}:/usr/bin:/bin` },
+			encoding: 'utf8',
+		})
+			.trim()
+			.split('\n');
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+void test('a pm2-* unit whose live process is not the God Daemon is not a pm2 manager', () => {
+	// hokon, 2026-11-11: pm2-oom-guard.service runs `bash /usr/local/sbin/pm2-oom-guard`
+	// and doctor reported it as an unclaimed pm2 manager every night.
+	const out = runPm2Probe([
+		{
+			unit: 'pm2-hadoku.service',
+			pid: 1989,
+			args: 'PM2 v7.0.1: God Daemon (/home/hadoku/.pm2)',
+			children: 3,
+		},
+		{ unit: 'pm2-oom-guard.service', pid: 2605471, args: 'bash /usr/local/sbin/pm2-oom-guard' },
+	]);
+	assert.deepEqual(out.sort(), ['D pm2Unit.pm2-hadoku.service max 3', 'D pm2Units.count 1']);
+});
+
+void test('a pm2-* unit with no process to read is KEPT, with its app count unknown', () => {
+	// A failed manager (MainPID 0) and one that exited between the two reads
+	// have nothing to identify them by; dropping them would hide a dead manager.
+	const out = runPm2Probe([
+		{ unit: 'pm2-dead.service', pid: 0 },
+		{ unit: 'pm2-raced.service', pid: 4242, args: undefined },
+	]);
+	assert.deepEqual(out.sort(), [
+		'D pm2Unit.pm2-dead.service max U',
+		'D pm2Unit.pm2-raced.service max U',
+		'D pm2Units.count 2',
+	]);
 });

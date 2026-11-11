@@ -33,6 +33,46 @@ export const BACKSTOP_CADENCE_NO_LOAD_WHY =
 	'a scheduled (--cadence) run never loads the backstop, which is the production host; run fleet doctor by hand for its under-load temperature';
 
 /**
+ * Every pm2 manager on the node, its ceiling and how many apps it runs.
+ *
+ * Claimed against the tenant registry and the app layer's host list by
+ * doctor-run (lib/hosting-claims.mjs); the node only measures. The app count
+ * is the daemon's direct children, from the kernel: pm2's own list also
+ * carries stopped apps, and an "idle" manager is one RUNNING none. The
+ * ceiling is the EFFECTIVE one (lib/cgroup-ceiling.mjs): a tenant's pm2 is
+ * bounded by its hosting slice, not by its own unit file. Needs `effmax`,
+ * `say` and `unk` defined ahead of it.
+ *
+ * A manager is known by the process it RUNS, not by its unit's name.
+ * `pm2-*.service` also matches hokon's pm2-oom-guard.service, a bash loop
+ * that ranks OOM victims inside pm2-hadoku, and doctor reported it as an
+ * unclaimed pm2 manager every night. A unit whose main process is alive
+ * counts only when that process is pm2's God Daemon (`PM2 vX.Y.Z: God
+ * Daemon (...)`). A unit with no main process, or one that exited between
+ * the two reads, is KEPT: there is nothing to read, and dropping it would
+ * hide a dead manager.
+ */
+export const PM2_UNITS_PROBE = [
+	"if PU=$(systemctl list-units --no-legend --plain 'pm2-*.service' 2>/dev/null); then",
+	'  n=0',
+	'  for u in $(printf "%s\\n" "$PU" | awk "NF{print \\$1}"); do',
+	'    m=$(systemctl show -P MainPID "$u" 2>/dev/null)',
+	'    if [ "${m:-0}" -gt 0 ] 2>/dev/null; then',
+	'      case "$(ps -o args= -p "$m" 2>/dev/null)" in',
+	'        "PM2 v"*) a=$(ps --ppid "$m" --no-headers 2>/dev/null | wc -l) ;;',
+	'        "") a=U ;;',
+	'        *) continue ;;',
+	'      esac',
+	'    else a=U; fi',
+	'    cg=$(systemctl show -P ControlGroup "$u" 2>/dev/null)',
+	'    say "pm2Unit.$u" "$(effmax "$cg" U) $a"',
+	'    n=$((n+1))',
+	'  done',
+	'  say pm2Units.count "$n"',
+	'else unk pm2Units "systemctl could not list this node\'s pm2 units"; fi',
+].join('\n');
+
+/**
  * The shell the node runs. Emits a line protocol and decides nothing.
  *
  *   `DOCTOR-BEGIN v1` … `DOCTOR-END <host>`   sentinels
@@ -271,23 +311,8 @@ export function doctorProbe({
 		'    say nic.linkDowns "$(printf "%s\\n" "$KL" | grep -c "$NIC.*Link is Down")"',
 		'  else unk nic.linkDowns "this boot\'s kernel journal could not be read"; fi',
 		'else unk nic "no default route"; fi',
-		// ── every pm2 manager, its ceiling and how many apps it runs ─────────────
-		//
-		// Claimed against the tenant registry and the app layer's host list by
-		// doctor-run (lib/hosting-claims.mjs); the node only measures. The app
-		// count is the daemon's direct children, from the kernel: pm2's own list
-		// also carries stopped apps, and an "idle" manager is one RUNNING none.
-		// The ceiling is the EFFECTIVE one (lib/cgroup-ceiling.mjs): a tenant's
-		// pm2 is bounded by its hosting slice, not by its own unit file.
 		EFFECTIVE_MEMORY_MAX_SH,
-		"if PU=$(systemctl list-units --no-legend --plain 'pm2-*.service' 2>/dev/null); then",
-		'  say pm2Units.count "$(printf "%s\\n" "$PU" | grep -c .)"',
-		'  for u in $(printf "%s\\n" "$PU" | awk "NF{print \\$1}"); do',
-		'    cg=$(systemctl show -P ControlGroup "$u" 2>/dev/null); m=$(systemctl show -P MainPID "$u" 2>/dev/null)',
-		'    if [ "${m:-0}" -gt 0 ] 2>/dev/null; then a=$(ps --ppid "$m" --no-headers 2>/dev/null | wc -l); else a=U; fi',
-		'    say "pm2Unit.$u" "$(effmax "$cg" U) $a"',
-		'  done',
-		'else unk pm2Units "systemctl could not list this node\'s pm2 units"; fi',
+		PM2_UNITS_PROBE,
 		'if E=$(journalctl -b 0 -p err --no-pager 2>/dev/null); then say errorsThisBoot "$(printf "%s\\n" "$E" | grep -vcE "ACPI|Bluetooth")"; else unk errorsThisBoot "the journal could not be read by this user"; fi',
 		// ── which stack owns the radio. node-interfaces.mjs owns the question. ─
 		//
