@@ -337,6 +337,17 @@ for (const days of SHIFTS) {
  */
 const DECLARED = new Map([
 	[
+		'scripts/lib/bootcamp-schedule.test.mjs',
+		'`benchmarkPlan` takes `nowMs` as a parameter and the test passes its own WED; the ' +
+			'weekday and next date are computed from that, never from the clock.',
+	],
+	[
+		'scripts/bootcamp-idle.test.mjs',
+		'MON/TUE feed only `FLEET_TEST_NOW`, the clock bootcamp hands `benchmarkPlan` ' +
+			'(lib/bootcamp-schedule.mjs), which compares a weekday with that and never with the ' +
+			'real one. RECORDED.at is carried into `measurements` verbatim; nothing ages it.',
+	],
+	[
 		'scripts/lib/backstop-tools.test.mjs',
 		'release dates only: `judgeTool` measures a release against the NEWEST release, never ' +
 			'against the clock, so nothing ages these out (fleet-manager#34).',

@@ -76,6 +76,9 @@ export function printReport(ctx) {
 			);
 			log(`              the node is out of service until \`fleet drain ${name} --undo\`.`);
 		}
+		for (const d of r.deferred ?? []) {
+			log(`   benchmark not due: ${d.id} — next ${d.nextOn}; previous record kept (${d.kept})`);
+		}
 		for (const i of r.inconclusive) {
 			// LOUD, and never a verdict: the record on disk stands for this capability.
 			const kept = `previous record kept (${i.kept})`;

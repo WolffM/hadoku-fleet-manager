@@ -47,6 +47,7 @@ const ALL_ANSWER = (bevy, load) =>
 		'PROBE-END',
 		'',
 	].join('\n');
+const PRESENCE_ANSWER = ['CAP ffmpeg ok 7.1.5', 'PROBE-END', ''].join('\n');
 const MEASURED_ANSWER = (bevy, load) =>
 	[`CAP cargo-bevy ${bevy}`, `LOAD cargo-bevy ${load}`, 'PROBE-END', ''].join('\n');
 
@@ -60,6 +61,7 @@ function idleFixture({
 	measured = MEASURED_ANSWER('ok 2281', 0),
 	busy = 0,
 	prevEarned = {},
+	prevMeasured = null,
 	soleClaw = false,
 	drains = null,
 	labels = [],
@@ -84,6 +86,7 @@ function idleFixture({
 						blocked: [],
 						prereqs: [{ id: 'ffmpeg', detail: '7.1.5' }],
 						unprobed: [],
+						...(prevMeasured ? { measurements: prevMeasured } : {}),
 					},
 				}
 			: {};
@@ -107,12 +110,14 @@ function idleFixture({
 	}
 	const files = {
 		all: join(root, 'all.txt'),
+		presence: join(root, 'presence.txt'),
 		measured: join(root, 'measured.txt'),
 		busy: join(root, 'busy.txt'),
 		calls: join(root, 'calls.log'),
 		drainAtMeasure: join(root, 'drain-at-measure.json'),
 	};
 	writeFileSync(files.all, all);
+	writeFileSync(files.presence, PRESENCE_ANSWER);
 	writeFileSync(files.measured, measured);
 	writeFileSync(files.busy, `${busy}\n`);
 	const drainFile = join(stateDir, 'fleet-drain.json');
@@ -136,6 +141,9 @@ function idleFixture({
 			`    cat ${q(drainFile)} >${q(files.drainAtMeasure)} 2>/dev/null`,
 			// A node that drops off mid-run: no PROBE-END, and ssh's own exit 255.
 			`    cat ${q(files.measured)}; grep -q PROBE-END ${q(files.measured)} || exit 255; exit 0 ;;`,
+			'  *"export CAP_PROBE_PHASE=presence"*)',
+			`    echo PRESENCE >>${q(files.calls)}`,
+			`    exec cat ${q(files.presence)} ;;`,
 			'  *"capability-probe — EXECUTE"*)',
 			`    echo PROBE >>${q(files.calls)}`,
 			`    exec cat "\${ALL_FILE:-${files.all}}" ;;`,
@@ -456,16 +464,114 @@ test('the idle measurement entry moves only with the VERDICT: a second idle run 
 		assert.equal(f.commits(), base + 1);
 		const first = f.record();
 		f.answer('all', ALL_ANSWER('ok 2310', 0)); // same verdict, fresh figure
-		const second = run(writeArgs, f.env);
+		// Recorded now, so off its weekday the benchmark would be deferred.
+		const second = run([...writeArgs, '--measure'], f.env);
 		assert.equal(second.code, 0, `${second.out}\n${second.err}`);
 		assert.equal(f.commits(), base + 1, 'a re-measure that changed no verdict redeployed mgmt-api');
 		assert.deepEqual(f.record(), first);
 		// A verdict that DOES move rewrites the entry, with the deciding number.
 		f.answer('all', ALL_ANSWER('ok 1100', 0));
-		assert.equal(run(writeArgs, f.env).code, 0);
+		assert.equal(run([...writeArgs, '--measure'], f.env).code, 0);
 		assert.equal(f.commits(), base + 2);
 		assert.equal(f.record().measurements['cargo-bevy'].value, 1100);
 		assert.equal(f.record().measurements['cargo-bevy'].earned, false);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+// ---------------------------------------------------------------------------
+// ONCE A WEEK PER NODE (operator, 2026-11-11; lib/bootcamp-schedule.mjs).
+//
+// Off its weekday a node that already has a measurement runs only the presence
+// half of the probe: no benchmark, no drain, no commit, and its earned
+// benchmark label stays. The fixture fleet sorts to [backstop, claw, claw-2],
+// so CLAW (fixture-claw.invalid) is index 1 → Monday.
+// ---------------------------------------------------------------------------
+
+const MON = '2026-11-09T12:00:00Z';
+const TUE = '2026-11-10T12:00:00Z';
+const RECORDED = {
+	'cargo-bevy': { value: 2281, idle: true, earned: true, at: '2026-10-11T02:06:26.294Z' },
+};
+
+test('off its weekday: presence only, nothing drained or written, the earned benchmark label kept', () => {
+	// Monday writes the record the way bootcamp writes it (idle, earned);
+	// Tuesday must leave it exactly as it is.
+	const f = idleFixture({ all: ALL_ANSWER('ok 2281', 0) });
+	try {
+		assert.equal(run(writeArgs, { ...f.env, FLEET_TEST_NOW: MON }).code, 0);
+		assert.ok(f.record().earned.includes('cargo-bevy'));
+		f.answer('all', ALL_ANSWER('ok 900', 0)); // would STRIP, if it ran
+		const base = f.commits();
+		const before = f.record();
+		const callsBefore = f.calls().length;
+		const r = run(writeArgs, { ...f.env, FLEET_TEST_NOW: TUE });
+		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
+		assert.deepEqual(
+			f
+				.calls()
+				.slice(callsBefore)
+				.filter((c) => c !== 'BUSY'),
+			['PRESENCE'],
+			'the benchmark ran off its weekday'
+		);
+		const doc = JSON.parse(r.out);
+		assert.deepEqual(doc.report[CLAW].deferred, [
+			{ id: 'cargo-bevy', nextOn: '2026-11-16', kept: 'earned' },
+		]);
+		assert.deepEqual(doc.report[CLAW].inconclusive, [], 'a schedule is not a finding');
+		assert.equal(doc.revocations?.revoked?.length ?? 0, 0);
+		assert.deepEqual(f.drains(), {});
+		assert.equal(f.commits(), base, 'a deferred benchmark changed the record');
+		assert.deepEqual(f.record(), before);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('…and a deferred benchmark the node had NOT earned is not earned by skipping it', () => {
+	const f = idleFixture({
+		prevEarned: { [CLAW]: ['ffmpeg'] },
+		prevMeasured: { 'cargo-bevy': { ...RECORDED['cargo-bevy'], value: 900, earned: false } },
+	});
+	try {
+		const r = run(writeArgs, { ...f.env, FLEET_TEST_NOW: TUE });
+		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
+		assert.equal(JSON.parse(r.out).report[CLAW].deferred[0].kept, 'not earned');
+		assert.ok(!f.record().earned.includes('cargo-bevy'));
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('on its weekday the benchmark runs, drains when busy, and judges as before', () => {
+	const f = idleFixture({
+		prevEarned: { [CLAW]: ['cargo-bevy', 'ffmpeg'] },
+		prevMeasured: RECORDED,
+	});
+	try {
+		const r = run(writeArgs, { ...f.env, FLEET_TEST_NOW: MON });
+		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
+		assert.deepEqual(
+			f.calls().filter((c) => c !== 'BUSY'),
+			['PROBE', 'MEASURED']
+		);
+		assert.deepEqual(JSON.parse(r.out).report[CLAW].deferred, []);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('--measure runs the benchmark off the weekday', () => {
+	const f = idleFixture({
+		prevEarned: { [CLAW]: ['cargo-bevy', 'ffmpeg'] },
+		prevMeasured: RECORDED,
+	});
+	try {
+		const r = run([...writeArgs, '--measure'], { ...f.env, FLEET_TEST_NOW: TUE });
+		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
+		assert.ok(f.calls().includes('PROBE'), 'the full probe did not run');
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

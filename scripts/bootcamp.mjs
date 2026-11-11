@@ -179,6 +179,7 @@ import { DRAIN_TIMEOUT_MS, POLL_MS, SETTLE_MS } from './lib/drain-wait.mjs';
 import { parseLoad } from './lib/probe-readers.mjs';
 
 import { runPass1 } from './lib/bootcamp-probe.mjs';
+import { benchmarkPlan } from './lib/bootcamp-schedule.mjs';
 import { runIdlePass2 } from './lib/bootcamp-idle.mjs';
 import { runPass3 } from './lib/bootcamp-judge.mjs';
 import { computeRevocationChanges } from './lib/bootcamp-revoke.mjs';
@@ -265,6 +266,14 @@ const PROVE = process.argv.includes('--prove');
  * point of a verify pass.
  */
 const CHECK_ONLY = process.argv.includes('--check-only');
+/**
+ * `--measure`: run the idle-only benchmarks on every node in scope tonight,
+ * whatever its weekday (lib/bootcamp-schedule.mjs). Without it each node is
+ * benchmarked once a week, and on its first bootcamp.
+ */
+const MEASURE = process.argv.includes('--measure');
+/** TEST SEAM: the clock the benchmark schedule reads. Unset in every real invocation. */
+const NOW_MS = process.env.FLEET_TEST_NOW ? Date.parse(process.env.FLEET_TEST_NOW) : Date.now();
 const dueFlagAt = process.argv.indexOf('--due');
 const DUE_DAYS =
 	dueFlagAt > -1 && Number.isFinite(Number(process.argv[dueFlagAt + 1]))
@@ -440,6 +449,21 @@ const proofLedger = readProofs(stateDir());
  */
 const IDLE_ONLY = [...probeableIds()].filter((id) => measuredIdleOnly(capability(id)));
 
+/** node -> this run's benchmark plan: measured tonight, or deferred to its weekday. */
+const benchPlans = Object.fromEntries(
+	nodes.map(([name, m]) => [
+		name,
+		benchmarkPlan({
+			node: name,
+			machine: m,
+			fleet: Object.keys(manifest.machines ?? {}),
+			idleOnly: IDLE_ONLY,
+			nowMs: NOW_MS,
+			force: MEASURE,
+		}),
+	])
+);
+
 /** node -> { caps, load } — what the probe answered, merged across both passes. */
 const probed = {};
 /** node -> the idle hold's outcome, for every node `--write` tried to hold. */
@@ -471,6 +495,7 @@ const ctx = {
 	seedResultsByNode,
 	probed,
 	idleHolds,
+	benchPlans,
 	proofLedger,
 	seedDeps,
 	probe,

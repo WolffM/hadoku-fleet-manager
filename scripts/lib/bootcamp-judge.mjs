@@ -94,6 +94,15 @@ export async function runPass3(ctx) {
 				}
 				if (verdict.proven) proven.add(id);
 			}
+			// NOT DUE TONIGHT (lib/bootcamp-schedule.mjs): an idle-only benchmark this
+			// node runs on another weekday. Its previous verdict stands, exactly as an
+			// inconclusive one's does, but it is a schedule, not a finding.
+			const deferred = [];
+			for (const d of ctx.benchPlans?.[name]?.deferred ?? []) {
+				if (caps[d.id]) continue;
+				deferred.push({ ...d, kept: prevEarned.has(d.id) ? 'earned' : 'not earned' });
+				if (prevEarned.has(d.id)) proven.add(d.id);
+			}
 			// A capability this controller could not enable was never probed: the
 			// record on disk stands, and it is said.
 			for (const [id, reason] of Object.entries(UNPROBED)) {
@@ -117,7 +126,7 @@ export async function runPass3(ctx) {
 			// `capability-schema`'s probe-drift rule owns; recording it here as earned
 			// would make a typo in the probe script read as a capability.
 			const earned = [...proven].filter((id) => capability(id)).sort();
-			const unjudged = new Set(inconclusive.map((i) => i.id));
+			const unjudged = new Set([...inconclusive, ...deferred].map((i) => i.id));
 
 			const unearned = [];
 			const unclaimed = [];
@@ -227,6 +236,7 @@ export async function runPass3(ctx) {
 				unprobed,
 				notEarned,
 				inconclusive,
+				deferred,
 				measuredIdle: judgedIdle,
 				...(idleHolds[name] ? { idleHold: idleHolds[name] } : {}),
 				declared: [...declared],

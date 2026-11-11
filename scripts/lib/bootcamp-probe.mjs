@@ -18,7 +18,17 @@
  * except under --check-only, where nothing is installed.
  */
 export async function runPass1(ctx) {
-	const { nodes, CHECK_ONLY, toolResults, probed, unreachable, log, ensureTools, probe } = ctx;
+	const {
+		nodes,
+		CHECK_ONLY,
+		toolResults,
+		probed,
+		unreachable,
+		log,
+		ensureTools,
+		probe,
+		benchPlans,
+	} = ctx;
 	await Promise.all(
 		nodes.map(async ([name, m]) => {
 			// BEFORE THE PROBE, so what the probe executes is what the node now has —
@@ -29,7 +39,11 @@ export async function runPass1(ctx) {
 			} else {
 				toolResults[name] = await ensureTools(name, m);
 			}
-			const got = await probe(name);
+			// The idle-only benchmarks run once a week per node (lib/bootcamp-schedule.mjs);
+			// on any other night only the presence half of the probe runs.
+			const plan = benchPlans?.[name];
+			if (plan && !plan.measure) log(`── ${name}  benchmark not due: ${plan.why}`);
+			const got = await probe(name, plan && !plan.measure ? 'presence' : 'all');
 			if (got === null) {
 				unreachable.push(name);
 				return;
