@@ -128,7 +128,7 @@ export const COUNTERS = Object.freeze([
 		id: 'drain-status',
 		file: 'scripts/drain-node.mjs',
 		use: '`fleet drain --status`: whether a drained node has gone quiet',
-		role: 'admin',
+		role: 'ci',
 		script: () => PLAIN_PGREP,
 		parse: firstInt,
 	},
@@ -136,7 +136,7 @@ export const COUNTERS = Object.freeze([
 		id: 'retire-busy',
 		file: 'scripts/retire-node.mjs',
 		use: '`fleet retire`: running jobs before a node is retired',
-		role: 'admin',
+		role: 'ci',
 		script: () => PLAIN_PGREP,
 		parse: firstInt,
 	},
@@ -144,7 +144,7 @@ export const COUNTERS = Object.freeze([
 		id: 'traffic-status',
 		file: 'scripts/traffic-status.mjs',
 		use: '`fleet traffic`: jobs running per node',
-		role: 'admin',
+		role: 'ci',
 		script: () => PLAIN_PGREP,
 		parse: firstInt,
 	},
@@ -198,11 +198,14 @@ export const COUNTERS = Object.freeze([
 		use: "doctor's `runners.busy`, which gates the 60 s all-core load",
 		role: 'admin',
 		script: () => {
-			const busy = doctorProbe({ loadSeconds: 0 })
-				.split('\n')
-				.filter((l) => l.startsWith('BUSY='));
-			if (!busy.length) throw new Error('doctor-probe.mjs: no BUSY= line in doctorProbe()');
-			return `${busy.join('\n')}\necho "$BUSY"`;
+			// The probe's count is a block: sudo where admin has it, plain where
+			// /proc is not hidepid, otherwise U. Run that block, as doctor does.
+			const lines = doctorProbe({ loadSeconds: 0 }).split('\n');
+			const from = lines.findIndex((l) => l.startsWith('if sudo -n true 2>/dev/null; then BUSY='));
+			const to = lines.findIndex((l) => l.startsWith('case "$BUSY" in'));
+			if (from < 0 || to < from)
+				throw new Error('doctor-probe.mjs: no BUSY block in doctorProbe()');
+			return `${lines.slice(from, to + 1).join('\n')}\necho "$BUSY"`;
 		},
 		parse: bareCount,
 	},

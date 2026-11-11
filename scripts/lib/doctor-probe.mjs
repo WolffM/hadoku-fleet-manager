@@ -288,9 +288,16 @@ export function doctorProbe({
 		// ── CI registrations, and whether this box is working right now ───────
 		'say runners.registered "$(systemctl list-units "actions.runner.*" --no-pager --plain 2>/dev/null | grep -c running)"',
 		'say runners.failed "$(systemctl list-units "actions.runner.*" --state=failed --no-pager --plain 2>/dev/null | grep -c failed)"',
-		'BUSY=$(pgrep -c -f "[R]unner\\.Worker" 2>/dev/null | head -1)',
-		'BUSY=${BUSY:-0}',
-		'say runners.busy "$BUSY"',
+		// Doctor runs as admin, and claw-1/2/3 mount /proc hidepid=invisible: a
+		// plain pgrep there counted 0 with jobs live, and the load phase below
+		// loaded the box beside them (wave bootcamp2 Q5, claw-2 2026-11-11).
+		// Through `sudo -n` where admin has it (every claw); plainly only where
+		// /proc is not hidepid; otherwise UNKNOWN, never 0.
+		'if sudo -n true 2>/dev/null; then BUSY=$(sudo -n pgrep -c -f "[R]unner\\.Worker" 2>/dev/null | head -1)',
+		'elif awk \'$2=="/proc" && /hidepid=(1|2|invisible|noaccess)/\' /proc/mounts 2>/dev/null | grep -q .; then BUSY=U',
+		'else BUSY=$(pgrep -c -f "[R]unner\\.Worker" 2>/dev/null | head -1); fi',
+		'case "$BUSY" in ""|*[!0-9]*) BUSY=U ;; esac',
+		'if [ "$BUSY" = U ]; then unk runners.busy "CI jobs could not be counted: /proc hides them from this user and sudo -n was refused"; else say runners.busy "$BUSY"; fi',
 		// ── every failed system unit, and since when ──────────────────────────
 		//
 		// Not just `actions.runner.*`. claw-5 and claw-6 failed
@@ -354,7 +361,11 @@ export function doctorProbe({
 			? [
 					`LOADSECS=${secs}`,
 					`FORCE=${force ? 1 : 0}`,
-					'if [ "$BUSY" -gt 0 ] && [ "$FORCE" != 1 ]; then',
+					// UNKNOWN IS NOT IDLE: a count that could not be taken refuses the
+					// load exactly as a busy one does.
+					'if [ "$BUSY" = U ] && [ "$FORCE" != 1 ]; then',
+					'  unk load "could not count CI jobs here, so the node may be building — loading it would slow a consumer\'s job and skew the reading. Re-run with --force once it is known idle."',
+					'elif [ "$BUSY" != U ] && [ "$BUSY" -gt 0 ] && [ "$FORCE" != 1 ]; then',
 					'  unk load "CI was building here ($BUSY worker(s)) — loading the box would slow a consumer\'s job and skew the reading. Re-run with --force, or when the node is idle."',
 					'else',
 					'  say load.seconds "$LOADSECS"',

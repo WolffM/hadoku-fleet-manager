@@ -166,3 +166,44 @@ void test('a pm2-* unit with no process to read is KEPT, with its app count unkn
 		'D pm2Units.count 2',
 	]);
 });
+
+// ── an UNKNOWN job count refuses the load exactly as a busy one does ─────────
+// claw-1/2/3 mount /proc hidepid=invisible: doctor (as admin) counted 0 with
+// jobs live and loaded the box beside them (wave bootcamp2 Q5, 2026-11-11).
+
+/** Run the probe's load gate in bash with BUSY and FORCE set, stubbing the rest. */
+function gate(busy, force = 0) {
+	const p = doctorProbe({ loadSeconds: 1, force: force === 1 });
+	const lines = p.split('\n');
+	const from = lines.findIndex((l) => l.startsWith('if [ "$BUSY" = U ] && '));
+	assert.ok(from > 0, 'the load gate is missing');
+	const script = [
+		'say() { echo "SAY $1"; }',
+		'unk() { echo "UNK $1 $2"; }',
+		`BUSY=${busy}`,
+		`FORCE=${force}`,
+		lines[from],
+		lines[from + 1],
+		lines[from + 2],
+		lines[from + 3],
+		'else echo LOADS; fi',
+	].join('\n');
+	return execFileSync('bash', ['-c', script], { encoding: 'utf8' }).trim();
+}
+
+void test('the load gate: unknown and busy refuse, idle loads, --force loads anything', () => {
+	assert.match(gate('U'), /^UNK load could not count CI jobs here/);
+	assert.match(gate(2), /^UNK load CI was building here \(2 worker\(s\)\)/);
+	assert.equal(gate(0), 'LOADS');
+	assert.equal(gate('U', 1), 'LOADS');
+});
+
+void test('the job count goes through sudo where it can, and is never defaulted to 0', () => {
+	const p = doctorProbe({ loadSeconds: 0 });
+	assert.match(
+		p,
+		/if sudo -n true 2>\/dev\/null; then BUSY=\$\(sudo -n pgrep -c -f "\[R\]unner\\\.Worker"/
+	);
+	assert.doesNotMatch(p, /BUSY=\$\{BUSY:-0\}/);
+	assert.match(p, /unk runners\.busy "CI jobs could not be counted/);
+});

@@ -190,7 +190,8 @@ async function scanNodeRunners(node) {
 function busyOn(node) {
 	const PROBE = 'pgrep -c -f "[R]unner\\.Worker" || true';
 	try {
-		const [cmd, cmdArgv] = remoteCommand(node, 'admin', PROBE, { connectTimeout: 6 });
+		// AS CI: claw-1/2/3 mount /proc hidepid=invisible, so the admin role counted 0 with jobs live (wave bootcamp2 Q5, busy-counters, claw-2 2026-11-11). The jobs are ci's processes, so count as ci, as busyCount does.
+		const [cmd, cmdArgv] = remoteCommand(node, 'ci', PROBE, { connectTimeout: 6 });
 		const out = execFileSync(cmd, cmdArgv, { encoding: 'utf8', timeout: 20000 });
 		const n = parseInt(String(out).trim().split('\n')[0], 10);
 		return Number.isFinite(n) ? n : null;

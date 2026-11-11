@@ -150,8 +150,10 @@ function busyOf(node) {
 	//
 	// The `[R]unner` bracket is not a typo: it stops the pattern matching the
 	// pgrep process's own command line, which reported 1 busy on an idle node.
+	//
+	// AS CI: claw-1/2/3 mount /proc hidepid=invisible, so the admin role counted 0 with jobs live (wave bootcamp2 Q5, busy-counters, claw-2 2026-11-11). The jobs are ci's processes, so count as ci, as busyCount does.
 	const res = runOnSync(node, 'pgrep -c -f "[R]unner\\.Worker" || true', {
-		as: 'admin',
+		as: 'ci',
 		timeoutMs: 15_000,
 		connectTimeout: 6,
 	});

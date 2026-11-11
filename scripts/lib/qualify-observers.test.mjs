@@ -97,11 +97,11 @@ const ROLE_SITES = {
 		'scripts/lib/drain-wait.mjs',
 		new RegExp(`${esc(spelled(PLAIN_PGREP))}', \\{\\s*as: 'ci'`),
 	],
-	'drain-status': ['scripts/drain-node.mjs', /remoteCommand\(node, 'admin', PROBE/],
-	'retire-busy': ['scripts/retire-node.mjs', /remoteCommand\(node, 'admin', PROBE/],
+	'drain-status': ['scripts/drain-node.mjs', /remoteCommand\(node, 'ci', PROBE/],
+	'retire-busy': ['scripts/retire-node.mjs', /remoteCommand\(node, 'ci', PROBE/],
 	'traffic-status': [
 		'scripts/traffic-status.mjs',
-		new RegExp(`${esc(spelled(PLAIN_PGREP))}', \\{\\s*as: 'admin'`),
+		new RegExp(`${esc(spelled(PLAIN_PGREP))}', \\{\\s*as: 'ci'`),
 	],
 	'fast-loop-probe': ['src/lib/node-probe.ts', /nodeShell\(node, 'ci', PROBE_CMD\)/],
 	'perf-workers': ['src/perf-sample.ts', /nodeShell\(node, 'admin', 'bash -s'\)/],
@@ -416,7 +416,8 @@ void test('REAL SHELL: the decoy starts, every no-sudo reader counts it, and it 
 		'bootcamp-live-workers',
 		'seed-busy',
 		'doctor-busy',
-		'cutover-busy',
+		// cutover-busy counts through `sudo -n` since the hidepid fix, which a
+		// local run has no right to; the fake hidepid node covers it.
 	]);
 	const built = COUNTERS.filter((c) => local.has(c.id)).map((c) => ({
 		...c,

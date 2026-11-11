@@ -103,7 +103,7 @@ ci_has() { sudo -n test -e "$1" || sudo -n test -L "$1"; }
 # The users sshd lets in, from its EFFECTIVE config; empty means no allow-list.
 allowed() { sudo -n sshd -T 2>/dev/null | awk 'tolower($1)=="allowusers"{for(i=2;i<=NF;i++) print $i}'; }
 allow_conf() { sudo -n grep -lsE '^[[:space:]]*[Aa]llow[Uu]sers[[:space:]]' /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config | head -1; }
-busy=$(pgrep -xc 'Runner\\.Worker' 2>/dev/null || true)
+busy=$(sudo -n pgrep -xc 'Runner\\.Worker' 2>/dev/null || true)
 `;
 }
 
