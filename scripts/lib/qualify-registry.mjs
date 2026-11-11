@@ -30,8 +30,9 @@
  * non-empty `reason`; the runner turns a result without one into
  * could-not-look rather than invent one.
  *
- * Lanes Q1–Q5 add their test module to QUALIFY_TESTS with one import line
- * each. Nothing else in this file is theirs to change.
+ * The playlist itself is `qualify-playlist.mjs`, not this file: every test
+ * module imports the bars from here, so a registry that imported the tests
+ * would be an import cycle that reads the bars before they exist.
  */
 
 /**
@@ -72,12 +73,6 @@ export const QUALIFY_TTL_DAYS = 21;
  * a window that ends early is a could-not-look for every test it did not reach.
  */
 export const QUALIFY_WINDOW_MINUTES = 150;
-
-/**
- * Every qualification test, in the order a window runs them. EMPTY until lanes
- * Q1–Q5 land; a run with nothing to run is a could-not-look, never a pass.
- */
-export const QUALIFY_TESTS = Object.freeze([]);
 
 const TRACKS = new Set(['presence', 'qualify']);
 const ROLES = new Set(['ci', 'admin']);

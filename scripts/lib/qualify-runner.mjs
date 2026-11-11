@@ -55,7 +55,7 @@ export function refusal({ node, machine, drains }) {
  * @param {string} a.node
  * @param {object} a.machine the node's manifest entry
  * @param {object} a.manifest
- * @param {object[]} a.tests the playlist (QUALIFY_TESTS, or a test's own)
+ * @param {object[]} a.tests the playlist (qualify-playlist.mjs QUALIFY_TESTS, or a test's own)
  * @param {number} a.windowMinutes
  * @param {boolean} [a.dryRun] report what would run; drain nothing, run nothing
  * @param {(m: string) => void} a.log

@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { QUALIFY_BARS, QUALIFY_TESTS, normalizeResult, validateTest } from './qualify-registry.mjs';
+import { QUALIFY_TESTS } from './qualify-playlist.mjs';
+import { QUALIFY_BARS, normalizeResult, validateTest } from './qualify-registry.mjs';
 import {
 	QUALIFY_RESULTS_FILE,
 	mergeQualifyResults,
@@ -191,12 +192,20 @@ void test('fleet qualify on the backstop is refused, exit 2, nothing drained', (
 	assert.deepEqual(JSON.parse(r.drain), { nodes: {} });
 });
 
-void test('an empty playlist is could-not-look in the shape the job-run store reads, exit 1', () => {
-	if (QUALIFY_TESTS.length) return; // only meaningful until a lane registers a test
-	const r = cli(['--machine', 'claw-fixture', '--json'], { 'claw-fixture': { role: 'claw' } });
-	assert.equal(r.code, 1, r.err);
-	assert.equal(r.doc.ok, false);
-	assert.match(r.doc.unreadable[0].reason, /no qualification tests are registered/);
+void test('--dry-run lists the real playlist with budgets, exit 0, and drains nothing', () => {
+	// The empty-playlist case is the runner's (qualify-runner.test.mjs).
+	const r = cli(['--machine', 'claw-fixture', '--dry-run', '--json'], {
+		'claw-fixture': { role: 'claw' },
+	});
+	assert.equal(r.code, 0, r.err);
+	assert.equal(r.doc.status, 'dry-run');
+	assert.deepEqual(
+		r.doc.results.map((x) => x.id),
+		QUALIFY_TESTS.map((t) => t.id)
+	);
+	assert.ok(QUALIFY_TESTS.length > 0);
+	for (const x of r.doc.results)
+		assert.match(x.reason, /^dry run: would run as (ci|admin), up to \d+ min$/);
 	assert.deepEqual(JSON.parse(r.drain), { nodes: {} });
 });
 
