@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import {
 	BOOT_ID_SCRIPT,
 	TENANT_SCRIPT,
-	BOOT_SECONDS_BAR,
 	afterBootScript,
 	judgeAfterBoot,
 	makeRebootTest,
@@ -260,16 +259,17 @@ void test('a failed system unit after the reboot fails, naming the unit and the 
 	assert.match(r.reason, /1 failed system unit\(s\).*smartmontools\.service.*bar 0/);
 });
 
-void test('a boot over the bar fails, naming the seconds and the bar (claw-5, 11-11)', async () => {
+void test('a slow boot passes and is recorded, not judged (claw-5 129 s, operator 11-11)', async () => {
 	const { r } = await run({
 		afters: [{ qr: afterOut({ startup: SLOW }), rp: probeOut({ bootId: NEW }) }],
 	});
-	assert.equal(r.status, 'fail');
-	assert.match(r.reason, new RegExp(`128\\.8 s.*${BOOT_SECONDS_BAR} s bar`));
-	assert.match(r.reason, /NetworkManager-wait-online/);
+	assert.equal(r.status, 'pass');
+	assert.match(r.reason, /booted in 128\.8 s/);
+	assert.equal(r.metrics.bootSeconds, 128.807);
+	assert.ok(r.metrics.slowest.some((u) => /NetworkManager-wait-online/.test(u)));
 });
 
-void test('a boot that never finished is a fail against the boot bar, not an unknown', async () => {
+void test('a boot that never finished is a fail (a hang), not an unknown', async () => {
 	const { r } = await run({
 		afters: [{ qr: afterOut({ state: 'starting', startup: null }), rp: probeOut({ bootId: NEW }) }],
 	});

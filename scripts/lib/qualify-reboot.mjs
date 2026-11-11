@@ -27,7 +27,8 @@
  * wait for systemd to finish starting and judge:
  *
  *   - zero failed system units                       (FAILED_UNITS_BAR)
- *   - kernel-to-default-target time under the bar    (BOOT_SECONDS_BAR)
+ *   - systemd finished starting (a boot still `starting` after SETTLE_SEC is
+ *     a hang); the boot TIME is recorded, never judged (operator 11-11)
  *   - an NVIDIA GPU whose driver the node carries or whose capability it earns
  *     has the nvidia module loaded, or DKMS-ready, for the RUNNING kernel
  *   - the ci user's systemd --user manager is running, and its PATH runs
@@ -52,18 +53,13 @@ import {
 } from './reboot-cycle.mjs';
 import { QUALIFY_TTL_DAYS } from './qualify-registry.mjs';
 
-/**
- * Seconds from kernel start to the default target (kernel + initrd +
- * userspace; firmware and loader are the board's POST, not the OS). Measured
- * 2026-11-11: healthy claws boot in 6–19 s (claw-2 6.0, claw-3 6.9, claw-4
- * 9.6, claw-8 15.5, claw-9 19.2). The incident shape, a unit waiting out a
- * two-minute timeout, adds ~120 s: claw-10 133 s (smartd on its dead disk),
- * claw-5 129 s and claw-6 94 s (network.target held ~80 s past
- * networking.service). claw-1's 71 s is a worn disk slowing docker and the
- * journal flush, which the disk lane judges. 90 s sits in the gap: above every
- * healthy boot by 4x, below a two-minute wait.
+/*
+ * Boot TIME is a metric, not a bar (operator, 2026-11-11: claw-5's 129 s and
+ * claw-6's 94 s are firmware/network waits they do not want to chase). Healthy
+ * claws boot in 6–19 s, so `metrics.bootSeconds` and the slowest units are
+ * still recorded; what a slow boot used to catch that matters (claw-10's
+ * smartd on a dead disk) also leaves a failed unit, which FAILED_UNITS_BAR fails.
  */
-export const BOOT_SECONDS_BAR = 90;
 
 /** Failed system units allowed after a reboot. claw-5/claw-6 carried one for ~8 weeks. */
 export const FAILED_UNITS_BAR = 0;
@@ -258,19 +254,10 @@ export function judgeAfterBoot({ qr, rp, before, machine }) {
 	if (!qr.complete) unknown.push('the after-boot read ended before its end marker');
 
 	const startup = parseStartup(qr.startupLine);
-	if (startup) {
-		if (startup.seconds > BOOT_SECONDS_BAR) {
-			const slow = qr.blame.length ? ` (slowest: ${qr.blame.join(', ')})` : '';
-			fails.push(
-				`boot took ${round1(startup.seconds)} s from kernel to default target, over the ${BOOT_SECONDS_BAR} s bar${slow}`
-			);
-		}
-	} else if (qr.state === 'starting' || /not yet finished/i.test(qr.startupErr ?? '')) {
+	if (!startup && (qr.state === 'starting' || /not yet finished/i.test(qr.startupErr ?? '')))
 		fails.push(
-			`boot had not finished ${SETTLE_SEC} s after ssh answered (state ${qr.state ?? 'unknown'}), over the ${BOOT_SECONDS_BAR} s bar`
+			`boot had not finished ${SETTLE_SEC} s after ssh answered (state ${qr.state ?? 'unknown'})`
 		);
-	} else
-		unknown.push(`boot time unreadable: ${qr.startupErr ?? 'systemd-analyze printed nothing'}`);
 
 	if (qr.failedCount === null) unknown.push(qr.failedErr ?? 'failed units unreadable');
 	else if (qr.failedCount > FAILED_UNITS_BAR)
@@ -319,6 +306,7 @@ export function judgeAfterBoot({ qr, rp, before, machine }) {
 		nvidia,
 		metrics: {
 			bootSeconds: startup?.seconds ?? null,
+			slowest: qr.blame,
 			startup: startup?.parts ?? null,
 			failedUnits: qr.failedCount,
 			failed: qr.failed,
@@ -436,7 +424,7 @@ export function makeRebootTest({
 				status: 'pass',
 				reason:
 					`rebooted ${before.running} -> ${j.metrics.kernel.to}, back in ${downSec} s; ` +
-					`booted in ${round1(j.metrics.bootSeconds)} s (bar ${BOOT_SECONDS_BAR} s), 0 failed units, ` +
+					`booted in ${j.metrics.bootSeconds === null ? 'unknown' : `${round1(j.metrics.bootSeconds)} s`}, 0 failed units, ` +
 					`${j.nvidia}; the runner PATH runs ${RUNNER_PATH_TOOLS.join(', ')} as ci`,
 				metrics,
 			};
