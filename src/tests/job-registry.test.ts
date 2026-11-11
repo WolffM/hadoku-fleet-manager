@@ -93,6 +93,8 @@ void test('MANUAL names exactly the subcommands that are automated but carry no 
 		'runner-units',
 		'node-users',
 		'check-runner-var',
+		// wave bootcamp2 Q0, 2026-11-11: operator-run until lane Q7 schedules ci:qualify.
+		'qualify',
 	];
 	assert.deepEqual(Object.keys(MANUAL).sort(), expected.sort());
 	for (const [sub, why] of Object.entries(MANUAL)) {

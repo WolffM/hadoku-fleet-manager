@@ -2111,6 +2111,20 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/qualify-*.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave bootcamp2 lane Q0: `fleet qualify`'s registry, runner, sampler and results ledger. Same domain as bootcamp (lifecycle): a qualification decides what a node may carry, as bootcamp does."
+  },
+  {
+    "glob": "scripts/qualify-node.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Wave bootcamp2 lane Q0: the `fleet qualify` CLI. Beside scripts/bootcamp.mjs."
+  },
+  {
     "glob": "scripts/lib/bootcamp-*.mjs",
     "layer": "domain",
     "domain": "lifecycle",

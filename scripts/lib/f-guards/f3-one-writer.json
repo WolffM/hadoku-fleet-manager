@@ -29,6 +29,7 @@
     "node-status-boots.json": ["scripts/node-status.mjs"],
     "node-status-last.json": ["scripts/node-status.mjs"],
     "node-status-seen.json": ["scripts/node-status.mjs"],
+    "qualify-results.json": ["scripts/lib/qualify-results.mjs"],
     "recheck-log.json": ["scripts/lib/refresh-cycle-live.mjs"],
     "retired-facets.json": ["scripts/retire-node.mjs"],
     "run-listing-marks.json": ["src/run-listing-gap.ts"],

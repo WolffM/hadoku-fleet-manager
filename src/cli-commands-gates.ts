@@ -20,6 +20,13 @@ export const commandsGates: Record<string, Command> = {
 		summary:
 			'a node EARNS its labels — INSTALLS missing tools and seeds artifacts, then probes (--check-only: install nothing)',
 	},
+	qualify: {
+		script: 'qualify-node.mjs',
+		kind: 'converger',
+		flags: ['--json', '--dry-run', '--machine='],
+		summary:
+			'hold ONE node out of service and run the qualification playlist against it (--dry-run: drain nothing)',
+	},
 	'capability-schema': {
 		script: 'check-capability-schema.mjs',
 		kind: 'gate',

@@ -26,6 +26,15 @@
 export const OWN_DRAIN_REASON_PREFIX = 'fleet bootcamp --prove:';
 
 /**
+ * The reason prefix `fleet qualify` writes on its qualification drain
+ * (wave bootcamp2, 2026-11-11). Like {@link OWN_DRAIN_REASON_PREFIX} it is a
+ * claim `prove-job --under-own-drain` honours: a qualification mints real jobs
+ * onto the node it holds. Kept separate so `fleet drain --status` and every
+ * reader can tell a qualification window from a canary.
+ */
+export const QUALIFY_DRAIN_REASON_PREFIX = 'fleet qualify:';
+
+/**
  * What `--prove` does with one node before a canary.
  *
  * @param {{ alreadyDrained: boolean|null, busy: number|null }} s
@@ -62,7 +71,8 @@ export function proofDrainState(row, underOwnDrain) {
 	const own =
 		row.kind === 'training' &&
 		typeof row.reason === 'string' &&
-		row.reason.startsWith(OWN_DRAIN_REASON_PREFIX);
+		(row.reason.startsWith(OWN_DRAIN_REASON_PREFIX) ||
+			row.reason.startsWith(QUALIFY_DRAIN_REASON_PREFIX));
 	if (!own) {
 		return {
 			error:
@@ -122,12 +132,15 @@ const reasonOf = (e) => (e instanceof Error ? e.message : String(e));
  * }} deps
  * @param {() => Promise<unknown>} measure
  * @param {{ held?: string | null }} [state]
+ * @param {{ reason?: string }} [opts] the drain row's reason; defaults to the
+ *   idle-measurement one. `fleet qualify` passes its own
+ *   ({@link QUALIFY_DRAIN_REASON_PREFIX}).
  * @returns {Promise<
  *   | { status: 'measured', result: unknown, heldBy: 'bootcamp' | 'someone-else', undrainFailed?: string }
  *   | { status: 'inconclusive', reason: string, undrainFailed?: string }
  * >}
  */
-export async function underIdleHold(node, ids, deps, measure, state = {}) {
+export async function underIdleHold(node, ids, deps, measure, state = {}, opts = {}) {
 	let already;
 	try {
 		already = await deps.isDrained(node);
@@ -149,7 +162,8 @@ export async function underIdleHold(node, ids, deps, measure, state = {}) {
 	try {
 		const d = await deps.drain(node, {
 			kind: 'training',
-			reason: `${MEASURE_DRAIN_REASON_PREFIX} ${ids.join(', ')} (returns when measured)`,
+			reason:
+				opts.reason ?? `${MEASURE_DRAIN_REASON_PREFIX} ${ids.join(', ')} (returns when measured)`,
 		});
 		if (d && typeof d === 'object' && 'ok' in d && d.ok === false) {
 			refused = `drain refused: ${d.reason ?? 'no reason given'}`;

@@ -124,6 +124,8 @@ export const JOB_REGISTRY: JobEntry[] = [
  * `manual: '<why>'` field (plan §6.2 item 4 / wave 5e lane A task 3).
  */
 export const MANUAL: Record<string, string> = {
+	qualify:
+		"Operator-run until wave bootcamp2 lane Q7 schedules ci:qualify in the site repo (advisory first). A qualification drains one node for up to QUALIFY_WINDOW_MINUTES, so it is never run on a fixed clock for every node: Q7's job picks the one node whose qualification is oldest.",
 	'apt-security':
 		"Driven as a facet inside ci:converge-provisioning's own 30-minute pass (scripts/converge-provisioning.mjs's DRIVER map resolves apt-security.mjs by its own script path, not through the `fleet` door). `fleet apt-security` as a standalone subcommand is operator-only; its registered automation is the converge-provisioning row above.",
 	toolpack:

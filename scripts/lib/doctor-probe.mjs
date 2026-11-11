@@ -73,6 +73,46 @@ export const PM2_UNITS_PROBE = [
 ].join('\n');
 
 /**
+ * Every temperature sensor on the node, one `<key> <millidegrees>` line each
+ * (`sensors`), and the summed core throttle count (`throttles`). Shared with
+ * `fleet qualify`'s sampler (lib/qualify-sampler.mjs) so both read the same
+ * sensors under the same keys; `cpuSensor` (doctor-parse.mjs) picks the die.
+ */
+export const SENSORS_SH = [
+	'sensors() {',
+	'  i=0',
+	'  for z in /sys/class/thermal/thermal_zone*/; do',
+	'    [ -r "$z/temp" ] || continue',
+	'    printf "zone.%s.%s %s\\n" "$i" "$(cat "$z/type" 2>/dev/null)" "$(cat "$z/temp" 2>/dev/null)"',
+	'    i=$((i+1))',
+	'  done',
+	'  i=0',
+	// ITERATE `temp*_input`, NOT `temp*_label`. A label is optional and the
+	// sensor that matters most here does not have one: claw-5 is an FX-8350
+	// whose `k10temp` exposes `temp1_input` with NO `temp1_label`, so a
+	// label-driven loop found zero sensors on it and `fleet doctor` reported
+	// "no readable sensor under /sys/class/thermal or /sys/class/hwmon" on a
+	// box whose die temperature was sitting there in sysfs. The reading is the
+	// thing that exists; the label is how it is spelled.
+	'  for h in /sys/class/hwmon/hwmon*; do',
+	'    n=$(cat "$h/name" 2>/dev/null || echo unnamed)',
+	'    for f in "$h"/temp*_input; do',
+	'      [ -r "$f" ] || continue',
+	'      v=$(cat "$f" 2>/dev/null) || continue',
+	'      [ -n "$v" ] || continue',
+	'      b=$(basename "$f" _input)',
+	'      if [ -r "${f%_input}_label" ]; then l=$(tr " " "_" < "${f%_input}_label"); else l="$b"; fi',
+	'      printf "hwmon.%s.%s.%s %s\\n" "$i" "$n" "${l:-$b}" "$v"',
+	'    done',
+	'    i=$((i+1))',
+	'  done',
+	'}',
+].join('\n');
+
+export const THROTTLES_SH =
+	'throttles() { t=0; for c in /sys/devices/system/cpu/cpu*/thermal_throttle/core_throttle_count; do [ -r "$c" ] || continue; t=$((t + $(cat "$c" 2>/dev/null || echo 0))); done; echo "$t"; }';
+
+/**
  * The shell the node runs. Emits a line protocol and decides nothing.
  *
  *   `DOCTOR-BEGIN v1` … `DOCTOR-END <host>`   sentinels
@@ -133,35 +173,8 @@ export function doctorProbe({
 		'say load1 "$(cut -d" " -f1 /proc/loadavg)"',
 		'say rootElevation "$ROOTOK"',
 		// ── every temperature sensor, named, emitted by ONE function ──────────
-		'sensors() {',
-		'  i=0',
-		'  for z in /sys/class/thermal/thermal_zone*/; do',
-		'    [ -r "$z/temp" ] || continue',
-		'    printf "zone.%s.%s %s\\n" "$i" "$(cat "$z/type" 2>/dev/null)" "$(cat "$z/temp" 2>/dev/null)"',
-		'    i=$((i+1))',
-		'  done',
-		'  i=0',
-		// ITERATE `temp*_input`, NOT `temp*_label`. A label is optional and the
-		// sensor that matters most here does not have one: claw-5 is an FX-8350
-		// whose `k10temp` exposes `temp1_input` with NO `temp1_label`, so a
-		// label-driven loop found zero sensors on it and `fleet doctor` reported
-		// "no readable sensor under /sys/class/thermal or /sys/class/hwmon" on a
-		// box whose die temperature was sitting there in sysfs. The reading is the
-		// thing that exists; the label is how it is spelled.
-		'  for h in /sys/class/hwmon/hwmon*; do',
-		'    n=$(cat "$h/name" 2>/dev/null || echo unnamed)',
-		'    for f in "$h"/temp*_input; do',
-		'      [ -r "$f" ] || continue',
-		'      v=$(cat "$f" 2>/dev/null) || continue',
-		'      [ -n "$v" ] || continue',
-		'      b=$(basename "$f" _input)',
-		'      if [ -r "${f%_input}_label" ]; then l=$(tr " " "_" < "${f%_input}_label"); else l="$b"; fi',
-		'      printf "hwmon.%s.%s.%s %s\\n" "$i" "$n" "${l:-$b}" "$v"',
-		'    done',
-		'    i=$((i+1))',
-		'  done',
-		'}',
-		'throttles() { t=0; for c in /sys/devices/system/cpu/cpu*/thermal_throttle/core_throttle_count; do [ -r "$c" ] || continue; t=$((t + $(cat "$c" 2>/dev/null || echo 0))); done; echo "$t"; }',
+		SENSORS_SH,
+		THROTTLES_SH,
 		'SENSED=0',
 		'while read -r k v; do printf "D idle.%s %s\\n" "$k" "$v"; SENSED=$((SENSED+1)); done < <(sensors)',
 		'[ "$SENSED" -gt 0 ] || unk idle.sensors "no readable sensor under /sys/class/thermal or /sys/class/hwmon"',
