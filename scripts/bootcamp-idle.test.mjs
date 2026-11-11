@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 
+import { classifyEmittedDoc } from '../dist/job-run-store.js';
 import { cleanGitEnv, FIXTURE_IDENTITY } from './lib/test-git-identity.mjs';
 
 import {
@@ -572,6 +573,45 @@ test('--measure runs the benchmark off the weekday', () => {
 		const r = run([...writeArgs, '--measure'], { ...f.env, FLEET_TEST_NOW: TUE });
 		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
 		assert.ok(f.calls().includes('PROBE'), 'the full probe did not run');
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('the --json document says WHY it failed, in the shape the job-run store reads', () => {
+	// 2026-11-06/07/10: three nights of exactly this (claw-1, claw-10, claw-4 never
+	// went quiet) were recorded as "ok:false with no findings/unreadable/error",
+	// because the document carried a count and no list.
+	const f = idleFixture({ busy: 1, prevEarned: { [CLAW]: ['cargo-bevy', 'ffmpeg'] } });
+	try {
+		const r = run(writeArgs, f.env);
+		assert.equal(r.code, 1);
+		const doc = JSON.parse(r.out);
+		assert.deepEqual(doc.unreadable, []);
+		assert.equal(doc.findings.length, 1);
+		assert.equal(doc.findings[0].node, CLAW);
+		assert.equal(doc.findings[0].kind, 'inconclusive');
+		assert.match(
+			doc.findings[0].reason,
+			/^cargo-bevy: .*never went quiet.*previous record kept \(earned\)/
+		);
+		const c = classifyEmittedDoc(doc);
+		assert.equal(c.verdict, 'findings');
+		assert.equal(c.findings, 1);
+		assert.equal(c.why, doc.findings[0].reason);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('a clean run emits empty lists, and the store reads it as ok', () => {
+	const f = idleFixture({ all: ALL_ANSWER('ok 2281', 0) });
+	try {
+		const r = run(writeArgs, f.env);
+		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
+		const doc = JSON.parse(r.out);
+		assert.deepEqual([doc.findings, doc.unreadable], [[], []]);
+		assert.equal(classifyEmittedDoc(doc).verdict, 'ok');
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

@@ -255,7 +255,15 @@ test("--prove skips a node that excludes the canary's repo — never drained for
 
 test('a DUE canary that could not run (never went quiet, drain refused) is a finding; a not-due or excluded one is not', () => {
 	const lines = [];
-	const ctx = { findings: 0, log: (m) => lines.push(m) };
+	const recorded = [];
+	const ctx = {
+		findings: 0,
+		log: (m) => lines.push(m),
+		finding(node, kind, reason) {
+			ctx.findings++;
+			recorded.push({ node, kind, reason });
+		},
+	};
 	printProveResults(ctx, [
 		{
 			node: 'claw-8',
@@ -268,6 +276,14 @@ test('a DUE canary that could not run (never went quiet, drain refused) is a fin
 	]);
 	assert.equal(ctx.findings, 1);
 	assert.ok(lines.some((l) => /DEFERRED: jdk21@claw-8 — never went quiet/.test(l)));
+	// …and the finding carries its reason into the --json document.
+	assert.deepEqual(recorded, [
+		{
+			node: 'claw-8',
+			kind: 'canary-deferred',
+			reason: 'jdk21: never went quiet: timed out; the proof is due and was not re-run',
+		},
+	]);
 });
 
 // ── the canary's capture is file-based, not a pipe (F6, #33) ───────────────

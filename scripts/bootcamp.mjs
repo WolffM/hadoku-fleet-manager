@@ -336,7 +336,12 @@ async function probe(node, phase = 'all') {
 			timeoutMs: 180_000,
 		}
 	);
-	if (!r.ok && !r.stdout.includes('PROBE-END')) return null;
+	if (!r.ok && !r.stdout.includes('PROBE-END')) {
+		// SAID, not just counted: a timeout, a refused key and a dead box are
+		// three different jobs, and the finding below carries which one this was.
+		probeFailures[node] = reasonOf(r);
+		return null;
+	}
 	const caps = {};
 	for (const line of r.stdout.split('\n')) {
 		const [tag, cap, ok, ...rest] = line.trim().split(/\s+/);
@@ -360,6 +365,16 @@ const report = {};
 /** Judged executions of routing labels, applied once after every node answers. */
 const revocationVerdicts = [];
 const unreachable = [];
+/** node -> why its probe produced nothing (`probe`, above), for the unreachable finding. */
+const probeFailures = {};
+/**
+ * EVERY FINDING, WITH ITS REASON. `findings` was a bare count until 2026-11-11,
+ * so the job-run record for three INCONCLUSIVE nights (11-06/07/10) read
+ * "ok:false with no findings/unreadable/error": the reason reached mgmt-api's
+ * page only because that route re-derives it from `report`. Every site that
+ * counts a finding records it here; `--json` emits the list as `findings`.
+ */
+const findingList = [];
 /** node -> [{id, action: 'present' | 'installed' | 'failed', detail}] */
 const toolResults = {};
 /** node -> [{id, status, ...}] — see `capability-seeds.mjs`'s `seedNode`. */
@@ -501,6 +516,10 @@ const ctx = {
 	probe,
 	ensureTools,
 	findings: 0,
+	finding(node, kind, reason) {
+		ctx.findings++;
+		findingList.push({ node, kind, reason });
+	},
 };
 
 // PASS 1 — every node at once: install, then probe.
@@ -542,11 +561,15 @@ if (_deferred.length) {
 	for (const n of _deferred) log(`\n· ${deferralNote(n, deferralFor(n, _drains))} — not probed`);
 }
 if (_reallyUnreachable.length) {
-	ctx.findings += _reallyUnreachable.length;
 	log(`\n✗ could not probe: ${_reallyUnreachable.join(', ')}`);
 	for (const n of _reallyUnreachable) {
+		ctx.finding(
+			n,
+			'unreachable',
+			`could not probe ${n}: ${probeFailures[n] ?? 'no reason captured'}`
+		);
 		for (const t of (toolResults[n] ?? []).filter((x) => x.action !== 'present')) {
-			if (t.action === 'failed') ctx.findings++;
+			if (t.action === 'failed') ctx.finding(n, 'tool-failed', `${t.id}: ${t.detail}`);
 			log(`  ${n}: ${t.action} ${t.id} — ${t.detail}`);
 		}
 	}
@@ -561,6 +584,15 @@ printProveResults(ctx, proveResults);
 if (emitter.json)
 	emitter.emit({
 		ok: ctx.findings === 0,
+		// The shape the job-run store classifies (src/job-run-store.ts
+		// `classifyEmittedDoc`): `unreadable` is "could not look", `findings` the
+		// rest, each with its `reason`. `unreachable` stays for mgmt-api's route,
+		// and also lists nodes a human drained, which are neither.
+		findings: findingList,
+		unreadable: _reallyUnreachable.map((node) => ({
+			node,
+			reason: `could not probe ${node}: ${probeFailures[node] ?? 'no reason captured'}`,
+		})),
 		report,
 		unreachable,
 		tools: toolResults,

@@ -199,22 +199,30 @@ export function printProveResults(ctx, proveResults) {
 	for (const p of proveResults) {
 		if (p.status === 'pass') log(`   PASS: ${p.capability}@${p.node} — ${p.why ?? ''}`);
 		else if (p.status === 'fail') {
-			ctx.findings++;
+			ctx.finding(p.node, 'canary-fail', `${p.capability}: ${p.why ?? 'no reason given'}`);
 			log(`   FAIL: ${p.capability}@${p.node} — ${p.why ?? 'no reason given'}`);
 		} else if (p.status === 'error') {
-			ctx.findings++;
+			ctx.finding(p.node, 'canary-error', `${p.capability}: ${p.reason}`);
 			log(`   ERROR: ${p.capability}@${p.node} — ${p.reason}`);
 		} else if (p.status === 'deferred') {
 			// DUE and not run: the node could not be drained or never went quiet.
 			// A finding, because the label expires 30 days after its last pass
 			// whether or not anyone got round to re-proving it.
-			ctx.findings++;
+			ctx.finding(
+				p.node,
+				'canary-deferred',
+				`${p.capability}: ${p.reason}; the proof is due and was not re-run`
+			);
 			log(
 				`   DEFERRED: ${p.capability}@${p.node} — ${p.reason}; the proof is due and was not re-run`
 			);
 		} else if (p.status === 'inconclusive') {
 			// Nothing recorded, and nothing proven: a finding, never a quiet pass.
-			ctx.findings++;
+			ctx.finding(
+				p.node,
+				'canary-inconclusive',
+				`${p.capability}: ${p.reason} (no $proof written)`
+			);
 			log(`   INCONCLUSIVE: ${p.capability}@${p.node} — ${p.reason} (no $proof written)`);
 		} else log(`   ${p.status}: ${p.capability}@${p.node} — ${p.reason ?? p.why ?? ''}`);
 	}

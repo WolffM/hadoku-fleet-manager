@@ -26,7 +26,7 @@ export function printReport(ctx) {
 		log(`\n── ${name}  ${verdict}`);
 		for (const t of toolResults[name] ?? []) {
 			if (t.action === 'failed') {
-				ctx.findings++;
+				ctx.finding(name, 'tool-failed', `${t.id}: ${t.detail}`);
 				log(`   TOOL FAILED: ${t.id} — ${t.detail}`);
 			} else if (t.action === 'installed') log(`   installed: ${t.id} — ${t.detail}`);
 			else if (t.action === 'advisory') log(`   advisory: ${t.detail}\n     ${t.fix}`);
@@ -35,7 +35,7 @@ export function printReport(ctx) {
 			if (s.status === 'seeded') {
 				log(`   seeded:    ${s.id} — ${s.proof} (pin ${s.pin}, ${s.freeMb} MiB free)`);
 			} else if (isSeedFinding(s.status)) {
-				ctx.findings++;
+				ctx.finding(name, 'seed-failed', `${s.id}: ${s.reason}`);
 				log(`   SEED FAILED: ${s.id} — ${s.reason}`);
 			} else if (s.status === 'busy') {
 				log(`   seed skipped: ${s.id} — a Runner.Worker is live`);
@@ -47,12 +47,16 @@ export function printReport(ctx) {
 		if (r.earned.length) log(`   earned:    ${r.earned.join(', ')}`);
 		for (const p of r.jobProofs) log(`   ${p.line}`);
 		for (const u of r.unearned) {
-			ctx.findings++;
+			ctx.finding(name, 'unearned', `${u.id}: declared here but the probe says: ${u.detail}`);
 			log(`   UNEARNED:  ${u.id} — declared here but the probe says: ${u.detail}`);
 			log(`              work routes here on that label and fails on arrival.`);
 		}
 		for (const b of r.blocked) {
-			ctx.findings++;
+			ctx.finding(
+				name,
+				'blocked',
+				`${b.id}: a toolchain prerequisite this node fails: ${b.detail}`
+			);
 			log(`   BLOCKED:   ${b.id} — a toolchain prerequisite this node fails: ${b.detail}`);
 			log(`              it should not be carrying general CI until this passes.`);
 		}
@@ -70,7 +74,11 @@ export function printReport(ctx) {
 			);
 		}
 		if (r.idleHold?.undrainFailed) {
-			ctx.findings++;
+			ctx.finding(
+				name,
+				'still-drained',
+				`bootcamp could not lift its own idle-measurement drain: ${r.idleHold.undrainFailed}`
+			);
 			log(
 				`   STILL DRAINED: bootcamp could not lift its own idle-measurement drain: ${r.idleHold.undrainFailed}`
 			);
@@ -83,7 +91,7 @@ export function printReport(ctx) {
 			// LOUD, and never a verdict: the record on disk stands for this capability.
 			const kept = `previous record kept (${i.kept})`;
 			if (WRITE) {
-				ctx.findings++;
+				ctx.finding(name, 'inconclusive', `${i.id}: ${i.reason}; ${kept}`);
 				log(`   INCONCLUSIVE: ${i.id} — ${i.reason}; ${kept}`);
 				log(
 					`              nothing new was written for it: a busy measurement neither earns nor strips.`
@@ -105,13 +113,13 @@ export function printReport(ctx) {
 			);
 		}
 		for (const id of r.unprobed) {
-			ctx.findings++;
+			ctx.finding(name, 'unprobed', `${id}: required of every node, and the probe never answered`);
 			log(`   UNPROBED:  ${id} — required of every node, and the probe never answered.`);
 			log(`              The manifest and capability-probe.sh disagree about what exists.`);
 		}
 		if (!r.prereqs.length && !r.earned.length && !r.unearned.length && !r.blocked.length) {
 			// Nothing proven AND nothing failed means the probe told us nothing at all.
-			ctx.findings++;
+			ctx.finding(name, 'no-evidence', 'the probe returned no verdict for any declared capability');
 			log(`   NO EVIDENCE: the probe returned no verdict for any declared capability.`);
 		}
 	}

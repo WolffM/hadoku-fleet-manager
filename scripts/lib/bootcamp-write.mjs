@@ -126,8 +126,12 @@ export async function writeManifestFacet(ctx) {
 	let written;
 	if ('ok' in result && result.ok === false) {
 		log(result.why);
-		ctx.findings++;
 		written = { ok: false, reason: `${result.reason}: ${result.why}` };
+		ctx.finding(
+			null,
+			'write-failed',
+			`the $capabilities record was not written: ${written.reason}`
+		);
 	} else if (!result.changed) {
 		if (recorded) {
 			written = { ok: true, reason: 'unchanged' };
@@ -168,10 +172,11 @@ export async function writeManifestFacet(ctx) {
 		// 2026-09-14 had already done everything else right).
 		const landed = result.landed;
 		log(landingLine(landed, { writer: 'bootcamp' }));
-		if (!landed.ok) ctx.findings++;
 		written = landed.ok
 			? { ok: true, reason: landed.reason ?? 'landed' }
 			: { ok: false, reason: `${landed.reason}: ${landed.why ?? ''}`.trim() };
+		if (!landed.ok)
+			ctx.finding(null, 'not-landed', `the $capabilities commit did not land: ${written.reason}`);
 	}
 	return written;
 }
