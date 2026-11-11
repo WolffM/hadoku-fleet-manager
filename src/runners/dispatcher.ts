@@ -200,7 +200,7 @@ export interface TickPlan {
  */
 export interface PlanObservation {
 	run: PendingRun;
-	/** Where this job stood in the pass's placement order (narrowestFirst). */
+	/** Where this job stood in the pass's placement order (singleNodeFirst). */
 	passIndex: number;
 	outcome: 'in-flight' | 'fork' | 'unplaceable' | 'held' | 'placed' | 'reserved';
 	/** The eligible nodes the walk was offered. Empty for in-flight and fork. */
@@ -250,75 +250,34 @@ export function firstSentence(reason: string): string {
 	return cut.length > 120 ? `${cut.slice(0, 119)}…` : cut;
 }
 
-/** The eligible nodes whose LABELS can serve `run`, capacity aside. */
-export function homesOf(run: PendingRun, eligible: readonly NodeState[]): Set<string> {
-	const wanted = run.labels ?? [];
-	return new Set(
-		eligible
-			.filter((m) => !wanted.length || satisfiesLabels(m.labels ?? [], wanted))
-			.map((m) => m.name)
-	);
-}
-
 /**
- * Runs fewer eligible nodes can serve by labels go first; ties keep the order
- * they arrived in.
+ * Runs only ONE eligible node can serve by labels go first; everything else
+ * keeps the order it arrived in.
  *
  * #131. Placement puts the fewest-busy node first, so an idle hokon outranks
  * every busy claw, and a Forge shard (hadoku-builder + jdk21, which six claws
  * carry) that is earlier in priority order takes hokon's free slot. A
  * tenhands `pm2-host, taskauto` or dataplatform `av1-nvenc` job later in the
- * same pass then finds hokon full and has nowhere else to go. That was fixed
- * for ONE home (single-home runs first) until 2026-11-11; the same shape held
- * one step out, with plain jobs filling the jdk21 claws in the pass before a
- * Forge shard was walked. So the order is by the NUMBER of homes: a run with
- * two goes before one with eight, and a run any claw can take goes last,
- * after every narrower run has claimed what it can. The flexible run still
- * gets a node; it is walked last, not refused.
+ * same pass then finds hokon full and has nowhere else to go. Placing the
+ * single-node runs first lets each claim its node before a run with
+ * alternatives is walked; the flexible run still gets a claw.
  *
- * Only LABELS decide homes, never current capacity: a node full this tick is
- * still that job's home, and the job must be first in line for it. Stable, so
- * `byPriority`'s age-with-head-start order holds among runs with as many
- * homes. A run no node can serve has zero homes and is skipped as before.
+ * Only LABELS decide "single-node", never current capacity: a node full this
+ * tick is still that job's only home, and the job must be first in line for
+ * it. Stable, so `byPriority`'s age-with-head-start order holds within both
+ * groups. A run no node can serve stays where it was and is skipped as before.
  */
-export function narrowestFirst(
+export function singleNodeFirst(
 	pending: readonly PendingRun[],
 	nodes: readonly NodeState[]
 ): PendingRun[] {
 	const eligible = nodes.filter((m) => m.eligible);
-	const homes = new Map(pending.map((r) => [r, homesOf(r, eligible).size]));
-	return [...pending].sort((a, b) => homes.get(a)! - homes.get(b)!);
-}
-
-/**
- * The nodes NARROWER queued work needs: every home of a still-waiting run
- * whose homes are a strict subset of `run`'s own (2026-11-11).
- *
- * Built from the queue and the nodes' labels alone, so no label is named:
- * while a Forge shard (jdk21) waits, the jdk21 claws are its homes and a
- * subset of a plain job's, so a plain job ranks them last; with no shard
- * queued the set is empty and nothing changes. Measured 11-09 16Z..11-11 16Z:
- * in 52% of the minutes a jdk21 job waited, plain jobs held slots on jdk21
- * claws while claws without jdk21 had free ones.
- *
- * A strict subset only. A run with the same homes is a peer, not narrower,
- * and one whose homes merely overlap (a pm2-host job's hokon beside a plain
- * job's claws) has places the other cannot go, so neither yields to it.
- */
-export function narrowerDemand(
-	run: PendingRun,
-	waiting: readonly PendingRun[],
-	homes: ReadonlyMap<PendingRun, ReadonlySet<string>>
-): Set<string> {
-	const mine = homes.get(run)!;
-	const out = new Set<string>();
-	for (const other of waiting) {
-		if (other === run) continue;
-		const theirs = homes.get(other)!;
-		if (theirs.size === 0 || theirs.size >= mine.size) continue;
-		if ([...theirs].every((n) => mine.has(n))) for (const n of theirs) out.add(n);
-	}
-	return out;
+	const homes = (run: PendingRun): number => {
+		const wanted = run.labels ?? [];
+		return eligible.filter((m) => !wanted.length || satisfiesLabels(m.labels ?? [], wanted)).length;
+	};
+	const single = pending.filter((r) => homes(r) === 1);
+	return [...single, ...pending.filter((r) => !single.includes(r))];
 }
 
 export function planTick(
@@ -340,17 +299,8 @@ export function planTick(
 	// A working copy: assignments below consume capacity from it.
 	const state = new Map(nodes.map((m) => [m.name, { ...m }]));
 
-	// Homes are fixed for the pass: labels, not capacity. `waiting` loses a run
-	// once it is minted or found in flight, so a narrower run only keeps its
-	// homes reserved while it still needs them.
-	const startEligible = nodes.filter((m) => m.eligible);
-	const homes = new Map(pending.map((r) => [r, homesOf(r, startEligible)]));
-	const waiting = new Set(
-		pending.filter((r) => !inFlight.jobIds.has(r.jobId) && !inFlight.runIds.has(r.id))
-	);
-
 	let passIndex = -1;
-	for (const run of narrowestFirst(pending, nodes)) {
+	for (const run of singleNodeFirst(pending, nodes)) {
 		passIndex++;
 		if (inFlight.jobIds.has(run.jobId) || inFlight.runIds.has(run.id)) {
 			observe?.({
@@ -387,7 +337,6 @@ export function planTick(
 				reason: `fork safety: ${fork.reason}`,
 				kind: 'fork',
 			});
-			waiting.delete(run);
 			continue;
 		}
 		const eligible = [...state.values()].filter((m) => m.eligible);
@@ -413,15 +362,7 @@ export function planTick(
 		// this with three). `run.repo` is the mint's own request — already in hand,
 		// already what `jitRunnerName` below is keyed on — so there is nothing to
 		// source and nothing that can disagree with it.
-		const reservedForNarrower = narrowerDemand(run, [...waiting], homes);
-		const placed = choosePlacement(
-			order,
-			eligible,
-			run.labels ?? [],
-			run.repo,
-			spill,
-			reservedForNarrower
-		);
+		const placed = choosePlacement(order, eligible, run.labels ?? [], run.repo, spill);
 		if (!placed.node) {
 			const holds = placed.passed.flatMap((x) => (x.holdSec === undefined ? [] : [x.holdSec]));
 			const releaseAtMs =
@@ -463,10 +404,8 @@ export function planTick(
 		// affinity term alone rather than also varying the spill gate's answer.
 		const affinityMoved =
 			placed.viaAffinity &&
-			choosePlacement(order, eligible, run.labels ?? [], undefined, spill, reservedForNarrower)
-				.node !== placed.node;
+			choosePlacement(order, eligible, run.labels ?? [], undefined, spill).node !== placed.node;
 		const chosen = state.get(placed.node)!;
-		waiting.delete(run);
 		// READ BEFORE THIS JOB'S OWN INCREMENT — the dispatch log's `placed=`
 		// report (#102.4) is "what the rule did", i.e. the load the walk
 		// actually chose THIS node at, not the load it leaves behind.

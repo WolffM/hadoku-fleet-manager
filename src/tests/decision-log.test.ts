@@ -282,13 +282,8 @@ test('a placed job: candidates, every refusal ahead of the winner, the rule, the
 	assert.match(forge1.runner ?? '', /^jit-claw-9-/);
 	assert.equal(forge1.heavy, true);
 	assert.deepEqual(forge1.order, ORDER);
-	// Walked FIRST in the pass (narrowestFirst: two homes before four), so
-	// claw-3 is still idle and ranks ahead of claw-9, refused for the repo.
-	assert.equal(forge1.rule?.passIndex, 0);
-	assert.equal(forge1.rule?.position, 1);
-	assert.deepEqual(forge1.refused, [
-		{ node: 'claw-3', reason: 'repo excluded here: Forge OOMs on 8 GB' },
-	]);
+	assert.equal(forge1.rule?.position, 0);
+	assert.deepEqual(forge1.refused, []);
 	assert.deepEqual(forge1.rule?.rankedOver, { node: 'claw-4', key: 'busy' });
 	assert.equal(forge1.capacity.length, 4, 'every eligible node, as the walk saw it');
 	const c9 = forge1.capacity.find((c) => c.node === 'claw-9')!;
