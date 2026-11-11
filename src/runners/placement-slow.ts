@@ -28,12 +28,38 @@ import { SLOW_P25, type KindSlowness, type SpeedModel } from './speed-tier.js';
  * 3600 s, raised from 900 on 2026-10-09: under a real backlog the clock, not a
  * freed node, was how holds ended. Eleven verify dispatches queued in ten
  * minutes, every job passed 900 s, and claw-4 took two Forge shards at load 13
- * on 8 cores — the doubling the hold exists to stop, at the moment it costs
- * most. A node frees as soon as one shard finishes (~10 min), so waiting is
- * never slower than doubling; the clock stays only so a heavy job never queues
+ * on 8 cores. Since 2026-11-11 this is the hold off a node already running
+ * TWO or more heavy jobs; one running exactly one holds for
+ * {@link HEAVY_DOUBLE_HOLD_SEC}. The clock stays so a heavy job never queues
  * forever (#102.4), matching the stuck-run ceiling.
  */
 export const HEAVY_HOLD_SEC = 3600;
+
+/**
+ * How long a heavy job holds out before DOUBLING onto a node running exactly
+ * one heavy job (2026-11-11). A third shard still waits {@link HEAVY_HOLD_SEC}.
+ *
+ * The single 3600 s hold rested on "a node frees as soon as one shard finishes
+ * (~10 min), so waiting is never slower than doubling". Shards stopped being
+ * ~10 min on 2026-10-29: forge-e2e (2)-(5) ran a median 510 s on 10-28 and
+ * 1,900-2,900 s on every day since. Measured over job-history 10-29..11-11, a
+ * shard overlapping another heavy job for over half its run, against one
+ * running alone: claw-8 1,864 -> 2,129 s, claw-9 2,412 -> 3,160, claw-4
+ * 2,707 -> 3,358, hokon 2,216 -> 3,387 (1.14-1.53x); failures 14% solo, 15%
+ * doubled, pooled over 331 and 261 runs. Two doubled shards finish in ~1.3x
+ * one; back to back they take 2x. Meanwhile jdk21 jobs were 38% of all queue
+ * time (32 h from 11-09 16Z to 11-11 16Z, 542 s average), and in 627 of 824
+ * unplaceable jdk21 decisions some node had the slot and the memory and
+ * refused ONLY on this hold, which is checked after both.
+ *
+ * 600 s is about what doubling costs a ~2,400 s shard (0.25 x 2,400): past
+ * it, waiting for a heavy-free node is the slower choice. The 2026-10-30
+ * claw-8 double (load 52 on 8 cores) was harmed by the watchdog's load
+ * trigger rebooting the node, removed the same day (8bf9b59); claw-8 ran 168
+ * doubled Forge jobs after it at the same failure rate. The evidence covers
+ * two heavy jobs on a node, not three, which is why the tiers stop at two.
+ */
+export const HEAVY_DOUBLE_HOLD_SEC = 600;
 
 /**
  * The floor a slow-tier node must clear before it takes a job, when

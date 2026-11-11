@@ -476,7 +476,7 @@ test('#102 heavy hold: four Forge jobs over three jdk21 nodes place one apiece a
 	assert.equal(p.skipped[0].runId, 4);
 	assert.match(
 		p.skipped[0].reason,
-		/claw-8: heavy hold: already running 1 heavy job\(s\) \(queued 10s < 3600s\)/
+		/claw-8: heavy hold: already running 1 heavy job\(s\) \(queued 10s < 600s\)/
 	);
 	// REVERTED (no hold): busy alone sends forge-jvm to a node already
 	// running a shard — the doubling that turned shards 2 and 3 red.

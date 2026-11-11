@@ -15,7 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { choosePlacement } from '../runners/placement.js';
-import { HEAVY_HOLD_SEC } from '../runners/placement-slow.js';
+import { HEAVY_DOUBLE_HOLD_SEC, HEAVY_HOLD_SEC } from '../runners/placement-slow.js';
 import type { HeavyModel } from '../runners/heavy-model.js';
 import type { PendingRun } from '../runners/dispatcher.js';
 import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
@@ -128,9 +128,9 @@ test('#102 heavy hold: a heavy job refuses a node running a heavy job inside the
 	assert.deepEqual(p.passed, [
 		{
 			node: 'claw-4',
-			reason: `heavy hold: already running 1 heavy job(s) (queued 30s < ${HEAVY_HOLD_SEC}s)`,
+			reason: `heavy hold: already running 1 heavy job(s) (queued 30s < ${HEAVY_DOUBLE_HOLD_SEC}s)`,
 			// A clock lifts this one, so it says when (#117's probe backoff reads it).
-			holdSec: HEAVY_HOLD_SEC,
+			holdSec: HEAVY_DOUBLE_HOLD_SEC,
 		},
 	]);
 });
@@ -149,18 +149,34 @@ test('#102 heavy hold: an unknown queue age holds — it is never "waited long e
 	assert.match(p.passed[0].reason, /queued unknown/);
 });
 
-test('#102 heavy hold: past HEAVY_HOLD_SEC the job places doubled rather than queue forever', () => {
-	const p = choosePlacement(
+const holdOn = (heavyJobs: number, queuedSec: number) =>
+	choosePlacement(
 		['claw-4'],
-		[m('claw-4', { heavyJobs: 1, heavyModel: FORGE })],
+		[m('claw-4', { heavyJobs, maxConcurrent: 4, heavyModel: FORGE })],
 		[],
 		HEAVY_REPO,
-		{
-			jobName: 'forge-e2e',
-			queuedSec: HEAVY_HOLD_SEC,
-		}
+		{ jobName: 'forge-e2e', queuedSec }
 	);
-	assert.equal(p.node, 'claw-4');
+
+test('#102 heavy hold: past HEAVY_DOUBLE_HOLD_SEC the job doubles onto a one-heavy node rather than wait', () => {
+	assert.equal(holdOn(1, HEAVY_DOUBLE_HOLD_SEC - 1).node, undefined, 'held one second short');
+	assert.equal(holdOn(1, HEAVY_DOUBLE_HOLD_SEC).node, 'claw-4');
+	// REVERTED (one 3600 s hold for every count): held until an hour, the
+	// 2026-11-11 measurement's 38% of fleet queue time.
+	assert.ok(HEAVY_DOUBLE_HOLD_SEC < HEAVY_HOLD_SEC);
+});
+
+test('#102 heavy hold: a THIRD heavy job still waits HEAVY_HOLD_SEC — the doubling evidence covers two', () => {
+	const held = holdOn(2, HEAVY_DOUBLE_HOLD_SEC);
+	assert.equal(held.node, undefined);
+	assert.deepEqual(held.passed[0], {
+		node: 'claw-4',
+		reason: `heavy hold: already running 2 heavy job(s) (queued ${HEAVY_DOUBLE_HOLD_SEC}s < ${HEAVY_HOLD_SEC}s)`,
+		holdSec: HEAVY_HOLD_SEC,
+	});
+	assert.equal(holdOn(2, HEAVY_HOLD_SEC - 1).node, undefined);
+	assert.equal(holdOn(2, HEAVY_HOLD_SEC).node, 'claw-4', 'and never queues forever');
+	// REVERTED (the double tier applied to every count): placed at 600 s.
 });
 
 test('#102 heavy hold: a LIGHT job is never held by heavyJobs — only ranked by runningHeavy', () => {

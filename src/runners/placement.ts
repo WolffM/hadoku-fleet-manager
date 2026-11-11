@@ -128,7 +128,8 @@ export function busyOf(m: NodeState): number {
  *
  *   0. for a job that IS heavy: fewest heavy jobs already running
  *      ({@link NodeState.heavyJobs}) — and a node with any is refused
- *      outright until {@link HEAVY_HOLD_SEC};
+ *      outright until {@link HEAVY_DOUBLE_HOLD_SEC} (one there) or
+ *      {@link HEAVY_HOLD_SEC} (two or more);
  *   1. busy — THIS node's running jobs plus live units ({@link busyOf}),
  *      read off the SAME `NodeState` objects `planTick` mutates between
  *      placements (#102.2), so a burst of jobs in one tick sees each other's
@@ -249,7 +250,7 @@ export function choosePlacement(
 		//    count, and it is read fresh here, after whatever `planTick` has
 		//    already mutated onto these SAME objects this tick (#102.2).
 		// 0. A heavy job takes the node running the FEWEST heavy jobs first
-		//    (#102): once HEAVY_HOLD_SEC expires and every node has one, two
+		//    (#102): once the hold expires and every node has one, two
 		//    light jobs are still a better neighbour than one Forge shard.
 		if (heavy) {
 			const xh = x.heavyJobs ?? 0;

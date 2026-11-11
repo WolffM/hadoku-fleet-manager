@@ -14,6 +14,7 @@ import type { NodeState } from './placement-node-state.js';
 import { satisfiesLabels } from './placement-node-state.js';
 import {
 	BACKSTOP_SOLE_CARRIER_SLOTS,
+	HEAVY_DOUBLE_HOLD_SEC,
 	HEAVY_HOLD_SEC,
 	SPILL_FLOOR_SEC,
 	describeKind,
@@ -131,19 +132,21 @@ export function refusalFor(
 		}
 	}
 
-	// THE HEAVY HOLD (#102) — see HEAVY_HOLD_SEC. Exact counts only
+	// THE HEAVY HOLD (#102) — see HEAVY_DOUBLE_HOLD_SEC (a node running one
+	// heavy job) and HEAVY_HOLD_SEC (two or more). Exact counts only
 	// (`heavyJobs`, never the repo-level `runningHeavy`), and an unknown queue
 	// age holds, the same rule the spill gate below states for itself.
 	const heavyHere = m.heavyJobs ?? 0;
 	if (heavy && heavyHere > 0) {
+		const holdSec = heavyHere === 1 ? HEAVY_DOUBLE_HOLD_SEC : HEAVY_HOLD_SEC;
 		const queuedSec = spill?.queuedSec;
-		if (queuedSec === undefined || queuedSec < HEAVY_HOLD_SEC) {
+		if (queuedSec === undefined || queuedSec < holdSec) {
 			const waited = queuedSec === undefined ? 'unknown' : `${Math.round(queuedSec)}s`;
 			return {
 				reason:
 					`heavy hold: already running ${heavyHere} heavy job(s) ` +
-					`(queued ${waited} < ${HEAVY_HOLD_SEC}s)`,
-				holdSec: HEAVY_HOLD_SEC,
+					`(queued ${waited} < ${holdSec}s)`,
+				holdSec,
 			};
 		}
 	}

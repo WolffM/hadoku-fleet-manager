@@ -180,6 +180,13 @@ test('#102 REPLAY 2026-10-30 20:40:52Z: a heavy mint no listing shows yet still 
 	// was already running forge-e2e (1) — but no job listing said so yet. The
 	// tick read claw-8 `heavyJobs: 0` and doubled forge-e2e (4) onto it; the
 	// node then sat at load 52 on 8 cores until the watchdog rebooted it.
+	//
+	// The real tick was 998 s into the wait. Since 2026-11-11 a job past
+	// HEAVY_DOUBLE_HOLD_SEC (600 s) may double onto a node running ONE heavy
+	// job, so at 998 s both nodes now take it on purpose (placement-slow.ts
+	// has the measurement). What this replay guards is the COUNT, so it runs
+	// the same state 300 s in, where an uncounted unit reads claw-8 as
+	// heavy-free and places beside the shard.
 	const infos = recordInfos();
 	const CT = 'WolffM/hadoku-cardtable';
 	const UNIT = 'jit-claw-8-hadoku-cardtabl-j124293716878-r41122643757-1793392837';
@@ -221,13 +228,13 @@ test('#102 REPLAY 2026-10-30 20:40:52Z: a heavy mint no listing shows yet still 
 					jobName: 'forge-jvm (3)',
 				},
 			],
-			nowMs: Date.parse('2026-10-30T20:40:52Z'),
+			nowMs: Date.parse('2026-10-30T20:29:14Z'),
 		}),
 		'tok',
 		gh,
 		sh
 	);
-	assert.equal(r.minted, 0, 'both nodes run a heavy job, and the hold has 3600 s to run');
+	assert.equal(r.minted, 0, 'both nodes run a heavy job, and the hold has not run out');
 	assert.equal(
 		infos.find((i) => i.startsWith('[dispatch] minted=')),
 		undefined

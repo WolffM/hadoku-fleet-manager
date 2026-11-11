@@ -28,6 +28,7 @@ import {
 import { recordWarmListenerDecisions } from '../runners/decision-log-record.js';
 import { type DecisionRecord } from '../runners/decision-log-types.js';
 import { runDispatchPass, __resetReapClockForTesting } from '../runners/dispatch-pass.js';
+import { HEAVY_DOUBLE_HOLD_SEC } from '../runners/placement-slow.js';
 import {
 	__resetAffinityCountersForTesting,
 	__resetHeavyMarksForTesting,
@@ -308,7 +309,7 @@ test('a placed job: candidates, every refusal ahead of the winner, the rule, the
 	assert.match(why['claw-4'], /does not carry/);
 	assert.match(why['claw-8'], /heavy hold/);
 	assert.match(why['claw-9'], /at capacity: 1\/1/);
-	assert.equal(forge2.refused.find((x) => x.node === 'claw-8')?.holdSec, 3600);
+	assert.equal(forge2.refused.find((x) => x.node === 'claw-8')?.holdSec, HEAVY_DOUBLE_HOLD_SEC);
 	assert.equal(forge2.queuedSec, 30);
 
 	// The site job: claw-4 is warm for it, but its listener is RUNNING a job
