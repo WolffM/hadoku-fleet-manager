@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
 	BOOT_ID_SCRIPT,
+	TENANT_SCRIPT,
 	BOOT_SECONDS_BAR,
 	afterBootScript,
 	judgeAfterBoot,
@@ -90,6 +91,7 @@ function fakeNode({
 	boots = [NEW],
 	afters = [{ qr: afterOut(), rp: probeOut({ bootId: NEW }) }],
 	machine = MACHINE,
+	tenants = 'QR-TENANTS-END',
 } = {}) {
 	let clock = Date.parse('2026-11-11T18:00:00Z');
 	const sent = [];
@@ -103,6 +105,10 @@ function fakeNode({
 		log: () => {},
 		async exec(script, o = {}) {
 			sent.push({ script, timeoutMs: o.timeoutMs });
+			if (script === TENANT_SCRIPT)
+				return tenants === null
+					? { ok: false, stdout: '', stderr: '', error: 'ssh: Connection timed out' }
+					: { ok: true, stdout: `${tenants}\n`, stderr: '' };
 			if (script === BOOT_ID_SCRIPT) {
 				const b = boots[Math.min(bootI++, boots.length - 1)];
 				return b === null
@@ -361,4 +367,34 @@ void test('a pm2 app slow to come back is waited for; one that never does fails'
 	});
 	assert.equal(never.r.status, 'fail');
 	assert.match(never.r.reason, /svc-b/);
+});
+
+// ── tenant hosts belong to the reboot cycle ─────────────────────────────────
+
+void test('a node hosting pm2 service tenants is never rebooted: could-not-look naming the units', async () => {
+	const { r, sent } = await run({
+		tenants:
+			'QR-TENANT pm2-archivebot-svc.service\nQR-TENANT pm2-pygmalion-svc.service\nQR-TENANTS-END',
+	});
+	assert.equal(r.status, 'could-not-look');
+	assert.match(r.reason, /pm2-archivebot-svc\.service, pm2-pygmalion-svc\.service/);
+	assert.match(r.reason, /reboot-claws/);
+	assert.equal(sent.filter((s) => s.script.includes('systemctl reboot')).length, 0);
+});
+
+void test('an unreadable unit listing is could-not-look, never "no tenants", and reboots nothing', async () => {
+	for (const tenants of [
+		null,
+		'QR-TENANTS-ERR systemctl could not list units',
+		'QR-TENANT pm2-x-svc.service',
+	]) {
+		const { r, sent } = await run({ tenants });
+		assert.equal(r.status, 'could-not-look', String(tenants));
+		assert.equal(sent.filter((s) => s.script.includes('systemctl reboot')).length, 0);
+	}
+});
+
+void test('the tenant listing matches only pm2-*-svc units, so the admin pm2 unit is not a tenant', () => {
+	assert.match(TENANT_SCRIPT, /'pm2-\*-svc\.service'/);
+	assert.match(TENANT_SCRIPT, /--state=active/);
 });

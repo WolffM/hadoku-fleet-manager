@@ -16,6 +16,9 @@
  *     PATH is the ci user's systemd --user manager environment at unit start,
  *     not a login shell's, so only reading THAT environment sees it.
  *
+ * NEVER A TENANT HOST. A node with an active `pm2-*-svc.service` is
+ * could-not-look before anything is rebooted; `fleet reboot-claws` owns those.
+ *
  * SHAPE. Read the node (`REBOOT_PROBE`, the same read `fleet reboot-claws`
  * takes, so the before/after comparison is `verifyAfter`'s and not a second
  * copy). Schedule `sudo -n systemctl reboot` detached, so the ssh returns
@@ -70,6 +73,28 @@ export const RUNNER_PATH_TOOLS = Object.freeze(['gh', 'node', 'pnpm', 'python3']
 
 /** Earned capabilities that need the nvidia driver (bootcamp's probe ids). */
 export const NVIDIA_CAPABILITY = /^(nvenc|nvdec|cuda)/;
+
+/**
+ * Active fleet-hosted pm2 tenant units (`pm2-<app>-svc.service`, system units),
+ * read on the node itself. A node carrying one is never rebooted here: the
+ * reboot cycle (`fleet reboot-claws`) owns rebooting tenant hosts, with its
+ * notice and lease handling. Admin's own `pm2-<user>.service` is not a tenant
+ * and does not match. A listing that cannot be read prints no end marker.
+ */
+export const TENANT_SCRIPT = String.raw`if L=$(systemctl list-units 'pm2-*-svc.service' --state=active --no-legend --no-pager --plain 2>/dev/null); then
+  printf '%s\n' "$L" | awk 'NF{print "QR-TENANT " $1}'
+  echo QR-TENANTS-END
+else echo "QR-TENANTS-ERR systemctl could not list this node's pm2 service units"; fi
+`;
+
+/** PURE. The tenant units, or null when the listing could not be read. */
+export function parseTenants(text) {
+	const lines = String(text ?? '')
+		.split('\n')
+		.map((l) => l.trim());
+	if (!lines.includes('QR-TENANTS-END')) return null;
+	return lines.filter((l) => l.startsWith('QR-TENANT ')).map((l) => l.slice('QR-TENANT '.length));
+}
 
 /** The one thing polled while the node is down. */
 export const BOOT_ID_SCRIPT = 'cat /proc/sys/kernel/random/boot_id\n';
@@ -325,6 +350,20 @@ export function makeRebootTest({
 		minutes: Math.ceil((BOOT_TIMEOUT_MS + SERVICES_TIMEOUT_MS) / 60_000) + 7,
 		async run(ctx) {
 			const cnl = (reason, metrics = {}) => ({ status: 'could-not-look', reason, metrics });
+			// TENANT HOSTS FIRST, before anything is rebooted (coordinator, 2026-11-11).
+			const ten = await ctx.exec(TENANT_SCRIPT, { timeoutMs: 60_000 });
+			const tenants = parseTenants(ten.stdout);
+			if (tenants === null)
+				return cnl(
+					`could not list ${ctx.node}'s pm2 service units, so it was not rebooted: ` +
+						(/^QR-TENANTS-ERR (.*)$/m.exec(ten.stdout ?? '')?.[1] ?? errOf(ten))
+				);
+			if (tenants.length)
+				return cnl(
+					`${ctx.node} hosts pm2 service tenant(s) ${tenants.join(', ')}, so it was not rebooted: ` +
+						'the reboot cycle (fleet reboot-claws) owns rebooting tenant hosts',
+					{ tenants }
+				);
 			const pre = await ctx.exec(REBOOT_PROBE, { timeoutMs: 60_000 });
 			const before = pre.ok ? parseRebootProbe(pre.stdout) : { ok: false, reason: errOf(pre) };
 			if (!before.ok)
