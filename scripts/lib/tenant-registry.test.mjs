@@ -19,6 +19,7 @@ import {
 	registerTenant,
 	tenantSpec,
 	tenantSpecFrom,
+	withSteadyMb,
 } from './tenant-registry.mjs';
 
 const request = (name) =>
@@ -167,4 +168,15 @@ test('the registry round-trips, and a corrupt entry THROWS rather than reading a
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+// fleet-manager#83: the declaration carries the idle footprint heldBackMb reads.
+test('withSteadyMb stamps a registered steadyMb that fits the slice, and nothing else', () => {
+	const size = { memoryMb: 1024, cores: 1 };
+	assert.deepEqual(withSteadyMb(size, request('archivebot')), { ...size, steadyMb: 180 });
+	assert.deepEqual(withSteadyMb(size, request('cardtable')), size);
+	assert.deepEqual(withSteadyMb({ memoryMb: 128, cores: 1 }, request('archivebot')), {
+		memoryMb: 128,
+		cores: 1,
+	});
 });

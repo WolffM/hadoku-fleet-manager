@@ -91,6 +91,14 @@ export interface HostingResources {
 	 * epochs were kept, which reads as epoch 0. Never on a standby.
 	 */
 	epoch?: number;
+	/**
+	 * The tenant's idle footprint, from its registered `slices.unit.steadyMb`,
+	 * stamped by `fleet hosting` at declare. Below `AGENT_UP_MIN_MB` it
+	 * is the usage at which the agent counts as up (`heldBackMb`), so an
+	 * idle agent smaller than that is not held back as though it had not
+	 * started (fleet-manager#83). Absent: the tenant declares none.
+	 */
+	steadyMb?: number;
 }
 
 /** One node's drain record. Reasons are required; a drain nobody can explain gets undone. */

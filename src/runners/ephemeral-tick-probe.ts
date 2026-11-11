@@ -107,6 +107,7 @@ export async function probeNodeMemory(
 							declaredMb: h.memoryMb,
 							sliceCurrentMb: sliceCurrentMb.get(h.tenant) ?? null,
 							since: h.since,
+							...(h.steadyMb !== undefined ? { steadyMb: h.steadyMb } : {}),
 						}),
 					}))
 				);

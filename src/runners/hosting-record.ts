@@ -187,6 +187,12 @@ export function parseHostingDoc(raw: string): HostingDoc {
 			) {
 				throw new Error(`${FILE}: a record for ${node} has no tenant, memoryMb or cores`);
 			}
+			const steady = rec.steadyMb;
+			if (
+				steady !== undefined &&
+				!(Number.isFinite(steady) && steady > 0 && steady <= rec.memoryMb)
+			)
+				throw new Error(`${FILE}: ${node}'s ${rec.tenant} steadyMb is not 1..memoryMb MiB`);
 			const to = rec.shrinkTo;
 			if (to !== undefined && !(Number.isFinite(to?.memoryMb) && Number.isFinite(to?.cores)))
 				throw new Error(`${FILE}: ${node}'s ${rec.tenant} shrinkTo has no memoryMb or cores`);
@@ -412,21 +418,28 @@ export const AGENT_UP_MIN_MB = 256;
  *   - when usage is unreadable (we could not look, so assume the tenant needs
  *     everything it was promised);
  *   - for {@link HOLD_FULL_MS} after the declaration;
- *   - while the slice holds less than {@link AGENT_UP_MIN_MB}.
+ *   - while the slice holds less than the agent's up mark: {@link AGENT_UP_MIN_MB},
+ *     or the tenant's own `steadyMb` when it declares a smaller one.
  * The last two are cardtable's ask: a CI job admitted before the agent's JVMs
- * start would otherwise be killed a minute later when they do.
+ * start would otherwise be killed a minute later when they do. The steady
+ * mark is fleet-manager#83: an idle agent that never reaches 256 MiB (archivebot
+ * at 164 on claw-4, 2026-11-11) read as not started forever, and its usage
+ * was held back twice.
  */
 export function heldBackMb(o: {
 	declaredMb: number;
 	sliceCurrentMb: number | null;
 	since: string;
+	steadyMb?: number;
 	nowMs?: number;
 }): number {
-	const { declaredMb, sliceCurrentMb } = o;
+	const { declaredMb, sliceCurrentMb, steadyMb } = o;
 	const since = Date.parse(o.since);
 	const young = !Number.isFinite(since) || (o.nowMs ?? Date.now()) - since < HOLD_FULL_MS;
 	if (sliceCurrentMb === null || !Number.isFinite(sliceCurrentMb) || young) return declaredMb;
-	if (sliceCurrentMb < AGENT_UP_MIN_MB) return declaredMb;
+	const upMark =
+		steadyMb !== undefined && steadyMb > 0 ? Math.min(steadyMb, AGENT_UP_MIN_MB) : AGENT_UP_MIN_MB;
+	if (sliceCurrentMb < upMark) return declaredMb;
 	return Math.max(0, Math.round(declaredMb - sliceCurrentMb));
 }
 

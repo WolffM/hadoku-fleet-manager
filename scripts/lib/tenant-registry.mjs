@@ -67,6 +67,17 @@ export function tenantSpecFrom(request) {
 	};
 }
 
+/**
+ * `resources` with the tenant's registered idle footprint (`slices.unit.steadyMb`)
+ * beside them, when it fits the slice: what `fleet hosting` stamps on a
+ * declaration so `heldBackMb` knows where the agent counts as up
+ * (fleet-manager#83). A tenant that declares none gets `resources` unchanged.
+ */
+export function withSteadyMb(resources, request) {
+	const steadyMb = request?.slices?.unit?.steadyMb;
+	return steadyMb && steadyMb <= resources.memoryMb ? { ...resources, steadyMb } : resources;
+}
+
 const path = (dir) => join(dir, FILE);
 
 /**

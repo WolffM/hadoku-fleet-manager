@@ -57,6 +57,18 @@ test('an unreadable record THROWS: what a tenant was promised is never read as n
 	assert.throws(() => parseHostingDoc('{ not json'));
 	assert.throws(() => parseHostingDoc('{"nodes":{"claw-9":{"tenant":"cardtable"}}}'), /claw-9/);
 	assert.throws(() => parseHostingDoc('{"nodes":{"claw-9":[{"tenant":"cardtable"}]}}'), /claw-9/);
+	// fleet-manager#83: a steady mark past the slice, or not a size, is not one.
+	for (const steadyMb of [0, 5000, 'x'])
+		assert.throws(
+			() =>
+				parseHostingDoc(JSON.stringify({ nodes: { 'claw-9': [slice({ steadyMb } as never)] } })),
+			/steadyMb/
+		);
+	const steady = slice({ steadyMb: 180 });
+	assert.deepEqual(
+		parseHostingDoc(JSON.stringify({ nodes: { 'claw-9': [steady] } })),
+		shared(steady)
+	);
 });
 
 // fleet-manager#32: the file held one record per node before 2026-10-31.
@@ -205,6 +217,24 @@ test('hold-back: the unused share once the agent is up, everything before it', (
 	assert.equal(heldBackMb({ ...settled, since: 'garbage', sliceCurrentMb: 3000 }), 4096);
 });
 
+// fleet-manager#83: archivebot idles at 164 MiB on claw-4 (measured 2026-11-11)
+// and declares steadyMb 180. Under 256 it read as "not started" forever.
+test('hold-back: a declared steadyMb below 256 is where the agent counts as up', () => {
+	const settled = { declaredMb: 1024, since: ago(HOLD_FULL_MS + 1), nowMs: NOW };
+	// Up at its steady mark: only the unused share is held.
+	assert.equal(heldBackMb({ ...settled, steadyMb: 128, sliceCurrentMb: 164 }), 860);
+	// Below its own steady mark it has not started: everything.
+	assert.equal(heldBackMb({ ...settled, steadyMb: 180, sliceCurrentMb: 164 }), 1024);
+	// A steady mark above 256 never raises the bar past it.
+	assert.equal(heldBackMb({ ...settled, steadyMb: 600, sliceCurrentMb: 300 }), 724);
+	// The grace window and could-not-look still hold everything.
+	assert.equal(
+		heldBackMb({ ...settled, steadyMb: 128, sliceCurrentMb: 164, since: ago(60_000) }),
+		1024
+	);
+	assert.equal(heldBackMb({ ...settled, steadyMb: 128, sliceCurrentMb: null }), 1024);
+});
+
 test("each slice's usage rides another probe's ssh and comes off it cleanly", () => {
 	const probe = sliceUsageProbe(['cardtable', 'archivebot']);
 	assert.match(probe, /hosting\.slice\/hosting-cardtable\.slice\/memory\.current/);
@@ -346,6 +376,17 @@ test('two slices on one node: the dispatcher holds back the unused share of each
 	assert.ok(cmds.some((c) => c.includes('hosting-archivebot.slice/memory.current')));
 	// archivebot at 300 MiB is past AGENT_UP_MIN_MB, so only its unused 724 is held.
 	assert.equal(floor, 1536 + (4096 - 1200) + (1024 - 300));
+	// fleet-manager#83: idle at 164 MiB with steadyMb 128 is up, so only 860 is held.
+	const steady = { ...archivebot, steadyMb: 128 };
+	assert.equal(
+		(await tickFloor(1200, settled, { rec: steady, mb: 164 })).floor,
+		1536 + (4096 - 1200) + (1024 - 164)
+	);
+	// Without a steady mark, 164 is under 256: all of it is held.
+	assert.equal(
+		(await tickFloor(1200, settled, { rec: archivebot, mb: 164 })).floor,
+		1536 + (4096 - 1200) + 1024
+	);
 	// Its slice unreadable: all of it is held, and cardtable's figure is unchanged.
 	assert.equal(
 		(await tickFloor(1200, settled, { rec: archivebot, mb: null })).floor,

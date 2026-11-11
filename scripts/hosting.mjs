@@ -60,7 +60,7 @@ import {
 	writeHostingDoc,
 } from '../dist/runners/hosting-record.js';
 import { stateDir } from '../dist/lib/fleet-paths.js';
-import { readTenantRegistry, tenantSpec } from './lib/tenant-registry.mjs';
+import { readTenantRegistry, tenantSpec, withSteadyMb } from './lib/tenant-registry.mjs';
 import { isBackstopNode } from '../dist/lib/node-role.js';
 import { nodeUser } from '../dist/lib/node-users.js';
 import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
@@ -797,7 +797,7 @@ if (role !== 'standby') {
 }
 const declared = {
 	tenant,
-	...resources,
+	...withSteadyMb(resources, registry.tenants[tenant].request),
 	port: spec.port,
 	...(role ? { role } : {}),
 	...(epoch !== null ? { epoch } : {}),
