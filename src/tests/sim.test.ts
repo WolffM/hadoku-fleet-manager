@@ -466,6 +466,7 @@ test('reservation (reserve=0): narrow jobs are planned first, so plain jobs list
 		nodes,
 		order: ['claw-9', 'claw-8', 'claw-1'],
 		pending: [pr(1, PLAIN), pr(2, PLAIN), pr(3, JDK)],
+		estimate: () => null,
 	};
 	assert.deepEqual(placed(reservationPolicy({ reserve: 0 }).plan(tick)), {
 		1: 'claw-8',
@@ -484,6 +485,7 @@ const memoryTick = (nowSec: number, pending: PendingRun[]) => ({
 	],
 	order: ['claw-9', 'claw-1'],
 	pending,
+	estimate: () => null,
 });
 const jdkJob = pr(2, JDK, {
 	repo: CT,

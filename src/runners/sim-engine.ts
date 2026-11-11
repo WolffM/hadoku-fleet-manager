@@ -91,6 +91,14 @@ export interface SimTick {
 	pending: PendingRun[];
 	nodes: NodeState[];
 	order: string[];
+	/**
+	 * Expected seconds a queued job holds a slot on `node` (default: the node
+	 * that really ran it): its setup and solo run scaled by the same per-kind
+	 * medians the engine moves jobs with, plus cleanup. Null for a job id the
+	 * engine does not know. What a smarter policy may know; never what
+	 * actually happens, which contention and pickup change.
+	 */
+	estimate(jobId: number, node?: string): number | null;
 }
 
 export interface SimPolicy {
@@ -199,6 +207,12 @@ export function simulate(
 		contention
 	);
 	const ratioOf = kindRatio(inWindow, solo, factor);
+	const estimate = (jobId: number, node?: string): number | null => {
+		const job = byJobId.get(jobId);
+		if (!job) return null;
+		const r = ratioOf(job, node ?? job.histNode);
+		return (job.setupSec + (solo.get(job.key) ?? job.runSec)) * r + job.cleanupSec;
+	};
 	const requiredMbByRepo = new Map(
 		[...models.reserves].filter(([, r]) => r.lowerBound).map(([repo, r]) => [repo, r])
 	);
@@ -395,6 +409,7 @@ export function simulate(
 				pending: byPriority(eligible.map(asRun)),
 				nodes,
 				order,
+				estimate,
 			});
 			for (const m of plan.mint) {
 				const job = byJobId.get(m.jobId);

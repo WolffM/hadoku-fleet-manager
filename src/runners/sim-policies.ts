@@ -13,7 +13,7 @@ import type { HeavyModel } from './heavy-model.js';
 import { choosePlacement } from './placement.js';
 import { IMPLICIT_LABELS, type NodeState } from './placement-node-state.js';
 import { HEAVY_HOLD_SEC } from './placement-slow.js';
-import { baselinePolicy, type SimPolicy, type SimTick } from './sim-engine.js';
+import type { SimPolicy, SimTick } from './sim-engine.js';
 
 const NONE = { jobIds: new Set<number>(), runIds: new Set<number>() };
 
@@ -259,7 +259,7 @@ export function reservationPolicy(over: Partial<ReservationParams> = {}): SimPol
 }
 
 /** `nodes` after `plan`'s mints, the way planTick's own working copy counts them. */
-function consume(
+export function consume(
 	nodes: readonly NodeState[],
 	plan: TickPlan,
 	heavyModel: HeavyModel | undefined,
@@ -273,19 +273,8 @@ function consume(
 		n.liveUnits += 1;
 		n.freeMb -= n.requiredMb;
 		const r = byJob.get(m.jobId);
-		if (r && heavyModel?.isHeavy(r.repo, r.jobName)) {
-			n.heavyJobs = (n.heavyJobs ?? 0) + 1;
-			n.runningHeavy = true;
-		}
+		if (r && heavyModel?.isHeavy(r.repo, r.jobName)) n.heavyJobs = (n.heavyJobs ?? 0) + 1;
+		if (r && heavyModel?.isHeavyRepo(r.repo)) n.runningHeavy = true;
 	}
 	return [...out.values()];
 }
-
-/** Every policy by name, for the CLI. A policy with parameters takes them from `--set key=value`. */
-export const POLICIES: Readonly<
-	Record<string, (params?: Readonly<Record<string, number>>) => SimPolicy>
-> = {
-	baseline: () => baselinePolicy(),
-	'legacy-hold': () => legacyHoldPolicy(),
-	reservation: (params) => reservationPolicy(params as Partial<ReservationParams> | undefined),
-};

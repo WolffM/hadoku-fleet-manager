@@ -10,7 +10,7 @@
  * baseline policy lands near history: that is the model's validation.
  *
  * USAGE
- *   fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation] [--set key=value]
+ *   fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--without node,…] [--clone node=new] [--drop key=v,…]
  *                  [--tick 15] [--contention 0.3] [--min-queued 0] [--json]
  *
  * READS (never writes): <state>/job-history.jsonl, <state>/dispatch-decisions/*.jsonl,
@@ -27,7 +27,8 @@ import { buildHeavyModel } from '../dist/runners/heavy-model.js';
 import { buildCorpus } from '../dist/runners/sim-corpus.js';
 import { buildFleet } from '../dist/runners/sim-fleet.js';
 import { simulate } from '../dist/runners/sim-engine.js';
-import { POLICIES } from '../dist/runners/sim-policies.js';
+import { POLICIES } from '../dist/runners/sim-registry.js';
+import { applyWhatIfs } from '../dist/runners/sim-whatif.js';
 import { historicalOutcomes, measure } from '../dist/runners/sim-metrics.js';
 import { createEmitter } from './lib/emit.mjs';
 import { loadManifest } from './lib/fleet-exec.mjs';
@@ -36,7 +37,7 @@ const argv = process.argv.slice(2);
 const out = createEmitter({ json: argv.includes('--json') });
 if (argv.includes('--help') || argv.includes('-h')) {
 	out.log(
-		'fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation] [--set key=value] [--tick 15]\n' +
+		'fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--without node,…] [--clone node=new] [--drop key=v,…] [--tick 15]\n' +
 			'               [--contention 0.3] [--min-queued 0] [--json]\n' +
 			'  replays job history through the real dispatcher, no claws touched; prints each\n' +
 			'  objective simulated beside history over the same window'
@@ -178,8 +179,29 @@ const models = {
 	reserves,
 };
 
+// WHAT-IFS: a different fleet or workload for the SIMULATED run only.
+const listArg = (name) =>
+	argv.flatMap((a, i) => (a === name ? [String(argv[i + 1] ?? '')] : [])).filter(Boolean);
+let simCorpus;
+let simFleet;
+let whatIf;
+try {
+	({
+		corpus: simCorpus,
+		fleet: simFleet,
+		notes: whatIf,
+	} = applyWhatIfs(corpus, fleet, {
+		without: listArg('--without'),
+		clone: listArg('--clone'),
+		drop: listArg('--drop'),
+	}));
+} catch (err) {
+	out.warn(`fleet simulate: ${err.message}`);
+	process.exit(2);
+}
+
 const started = Date.now();
-const result = simulate(corpus, fleet, models, POLICIES[policyName](params), opts);
+const result = simulate(simCorpus, simFleet, models, POLICIES[policyName](params), opts);
 const elapsedSec = (Date.now() - started) / 1000;
 
 const jobs = new Map(corpus.jobs.map((j) => [j.key, j]));
@@ -189,7 +211,7 @@ const window = {
 	toMs: Math.min(opts.toMs ?? Infinity, corpus.lastArrivalMs),
 };
 const hist = measure(historicalOutcomes(corpus, opts.fromMs, opts.toMs), jobs, fleet, window);
-const sim = measure(result.outcomes, jobs, fleet, window);
+const sim = measure(result.outcomes, jobs, simFleet, window);
 
 const NOT_MODELLED = [
 	'runner steals; warm slots are REPLAYED from the dispatch log, not decided',
@@ -202,6 +224,8 @@ if (out.json) {
 	out.emit({
 		ok: true,
 		policy: result.policy,
+		params,
+		whatIf,
 		corpus: {
 			jobs: corpus.jobs.length,
 			hosted: corpus.hosted,
@@ -245,6 +269,7 @@ out.log(
 		`(${corpus.hosted} hosted, ${corpus.jobs.filter((j) => j.dependsOn).length} with an inferred dependency), ` +
 		`${span(window.fromMs)} -> ${span(window.toMs)}Z, ${result.ticks} ticks in ${elapsedSec.toFixed(1)} s`
 );
+if (whatIf.length) out.log(`what-if (simulated column only): ${whatIf.join('; ')}`);
 out.log('');
 out.log(`${''.padEnd(34)}${'history'.padStart(9)}${'simulated'.padStart(9)}`);
 out.log('1. OLDEST JOB IN QUEUE (s)');
