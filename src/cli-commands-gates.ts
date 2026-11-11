@@ -107,6 +107,13 @@ export const commandsGates: Record<string, Command> = {
 		summary:
 			"per-node CI failure rate standardized against the fleet's own rate for the same repo+kind (T3, read-only)",
 	},
+	simulate: {
+		script: 'simulate.mjs',
+		kind: 'operator',
+		help: true,
+		summary:
+			'replay the whole job history through the real dispatcher in virtual time, no claw touched: oldest-in-queue, work/slot ratio and free capacity, each beside history (--policy, --json)',
+	},
 	perf: {
 		script: 'perf.mjs',
 		kind: 'operator',

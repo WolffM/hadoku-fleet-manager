@@ -1314,6 +1314,13 @@
     "part": "core"
   },
   {
+    "glob": "src/runners/sim-*.ts",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "core",
+    "why": "The traffic simulator (operator, 2026-11-11): the real planTick/choosePlacement driven over job history in virtual time, plus the policies it scores. PURE: scripts/simulate.mjs does the reading. speed-tier and heavy-model (observation) are below it, as for ephemeral-tick."
+  },
+  {
     "glob": "src/runners/speed-heavy-cache.ts",
     "layer": "domain",
     "domain": "ci-scheduling",
@@ -1355,6 +1362,13 @@
     "layer": "domain",
     "domain": "ci-scheduling",
     "part": "run"
+  },
+  {
+    "glob": "scripts/simulate.mjs",
+    "layer": "domain",
+    "domain": "ci-scheduling",
+    "part": "run",
+    "why": "`fleet simulate` (operator, 2026-11-11): reads job history, the dispatch log and the manifests, and runs the pure simulator in src/runners/sim-*.ts over them. Read-only; the I/O half of the simulator."
   },
   {
     "glob": "scripts/lib/fleet-inventory.mjs",
