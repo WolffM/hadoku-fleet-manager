@@ -321,3 +321,45 @@ export function recordWarmYieldDecision(d: WarmYieldDecision, nowMs: number): nu
 		return 0;
 	}
 }
+
+/** A waiting job of a run the `?status=` listing omitted (`unfiltered-queue.ts`). */
+export interface ListingGapJob {
+	repo: string;
+	runId: number;
+	jobId: number;
+	jobName?: string;
+	labels: readonly string[];
+	/** The status the unfiltered listing gave the run, and the filter left out. */
+	status: 'queued' | 'pending';
+	queuedSec?: number;
+	/** How old the unfiltered read that named the run was. */
+	readAgoSec: number;
+}
+
+/**
+ * One `listing-gap` row per such job. Deduplicated like every row, so a job
+ * that stays hidden from the filter writes once, not once per tick.
+ */
+export function recordListingGap(jobs: readonly ListingGapJob[], nowMs: number): number {
+	if (!decisionLogEnabled() || !jobs.length) return 0;
+	try {
+		const at = new Date(nowMs).toISOString();
+		const rows = jobs.map((j) => {
+			const r = blank(at, 'jit', 'listing-gap', j.repo);
+			r.runId = j.runId;
+			r.jobId = j.jobId;
+			r.jobName = j.jobName ?? null;
+			r.labels = [...j.labels];
+			r.queuedSec = roundSec(j.queuedSec);
+			r.reason =
+				`GitHub's ?status=${j.status} listing omitted this run; the unfiltered runs listing ` +
+				`(runner-health, read ${Math.round(j.readAgoSec)}s earlier) shows it ${j.status}, so it ` +
+				'is dispatched from there';
+			return r;
+		});
+		return emitDecisions(rows, nowMs);
+	} catch (err) {
+		warn('could not record listing-gap decisions', err, nowMs);
+		return 0;
+	}
+}

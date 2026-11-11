@@ -115,6 +115,9 @@ function keyOf(r: DecisionRecord): string {
 		r.kind === 'warm-refill'
 	)
 		return `${r.kind}:${r.winner ?? r.candidates[0] ?? ''}`;
+	// Its own key, not the job's: the placement row that follows it in the same
+	// pass would otherwise alternate with it and rewrite both every tick.
+	if (r.kind === 'listing-gap') return `listing-gap:${r.repo}#${r.jobId ?? r.runId}`;
 	return `${r.kind === 'warm-assigned' ? 'warm' : 'jit'}:${r.repo}#${r.jobId ?? r.runId}`;
 }
 

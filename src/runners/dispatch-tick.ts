@@ -43,6 +43,8 @@ import {
 } from './queue-discovery.js';
 import type { QueuedJob, QueuedRun } from './queue-discovery.js';
 import { runnerTarballUrl } from './ephemeral-exec-jit.js';
+import { omittedByFilter, forgetUnfiltered, announcedOmitted } from './unfiltered-queue.js';
+import { recordListingGap, type ListingGapJob } from './decision-log-record.js';
 import type { GhLike, ShellLike } from '../lib/fleet-vocabulary.js';
 import {
 	etagByRepo,
@@ -167,6 +169,23 @@ export async function runDispatchTick(
 	const candidateKeys = new Set<string>();
 	/** Candidates not probed this tick because no node could take them (#117). */
 	const backedOff: string[] = [];
+	/**
+	 * `repo#runId` of the runs a `?status=` listing left out and runner-health's
+	 * unfiltered listing showed waiting, with the status and the read's age.
+	 * See `unfiltered-queue.ts` for the three runs that waited 4-11 h for it.
+	 */
+	const omittedRuns = new Map<string, { status: 'queued' | 'pending'; readAgoMs: number }>();
+	const gapJobs: ListingGapJob[] = [];
+	/** The filtered listing, plus what the filter left out of it. */
+	const withOmitted = (
+		repo: string,
+		status: 'queued' | 'pending',
+		listed: QueuedRun[]
+	): QueuedRun[] => {
+		const { runs, readAgoMs } = omittedByFilter(repo, status, listed, nowMs);
+		for (const r of runs) omittedRuns.set(`${repo}#${r.id}`, { status, readAgoMs });
+		return runs.length ? [...listed, ...runs] : listed;
+	};
 	type RunsResponse = { workflow_runs?: QueuedRun[] };
 	/**
 	 * One runs listing for one repo, CONDITIONAL when the caller can be: the
@@ -223,8 +242,9 @@ export async function runDispatchTick(
 		);
 		if (!runs) return [];
 		polledOk.add(repo);
-		lastReadByRepo.set(repo, { atMs: nowMs, runs });
-		const { mintable, stuck, stranded } = mintableRuns(runs, {
+		const all = withOmitted(repo, 'queued', runs);
+		lastReadByRepo.set(repo, { atMs: nowMs, runs: all });
+		const { mintable, stuck, stranded } = mintableRuns(all, {
 			nowMs,
 			minQueuedMs: input.minQueuedMs,
 		});
@@ -262,7 +282,11 @@ export async function runDispatchTick(
 		);
 		// Unread keeps the last keys, so their caches are not pruned on a blip.
 		if (!runs) return [];
-		const listed = runs.filter((r) => r.status === 'pending');
+		const listed = withOmitted(
+			repo,
+			'pending',
+			runs.filter((r) => r.status === 'pending')
+		);
 		pendingKeysByRepo.set(repo, new Set(listed.map((r) => `${repo}#${r.id}`)));
 		const take = Math.max(0, Math.min(listed.length, MAX_PENDING_PROBES - pendingProbes));
 		pendingProbes += take;
@@ -392,10 +416,15 @@ export async function runDispatchTick(
 					}
 				}
 				const waiting = waitingJobs(r, jobs.jobs, isPending);
+				const omitted = omittedRuns.get(key);
 				if (!waiting.length) {
+					// An omitted run's unfiltered read is up to a runner-health tick old;
+					// nothing waiting means it moved on since. Forget it rather than
+					// re-probe it every tick or call it blocked.
+					if (omitted) forgetUnfiltered(repo, r.id);
 					// A pending run with nothing waiting is held by its own group or
 					// not old enough yet. Neither is news; queue-health reports both.
-					if (!isPending) blockedRuns.push(`${repo}#${r.id}`);
+					else if (!isPending) blockedRuns.push(`${repo}#${r.id}`);
 					return;
 				}
 				// One mint serves one job. Labels come from the job that is waiting,
@@ -429,10 +458,47 @@ export async function runDispatchTick(
 						continue;
 					}
 					pending.push(entryFor(r, repo, j));
+					if (omitted) {
+						const since = observedQueuedSinceMs(r, nowMs, j.created_at);
+						gapJobs.push({
+							repo,
+							runId: r.id,
+							jobId: j.id,
+							jobName: j.name,
+							labels: j.labels ?? [],
+							status: omitted.status,
+							queuedSec: since === undefined ? undefined : (nowMs - since) / 1000,
+							readAgoSec: omitted.readAgoMs / 1000,
+						});
+					}
 				}
 			})
 		);
 	});
+
+	// Forget announcements for runs no longer omitted, read this tick, so the
+	// set does not grow for ever; a run hidden again is said again.
+	for (const k of announcedOmitted) {
+		if (polledOk.has(k.slice(0, k.lastIndexOf('#'))) && !omittedRuns.has(k)) {
+			announcedOmitted.delete(k);
+		}
+	}
+	if (gapJobs.length) {
+		recordListingGap(gapJobs, nowMs);
+		// ONCE PER RUN, like the stuck book: the run stays hidden from the filter
+		// for as long as it waits, and a line every tick would bury the first.
+		const fresh = [...new Set(gapJobs.map((j) => `${j.repo}#${j.runId}`))].filter(
+			(k) => !announcedOmitted.has(k)
+		);
+		for (const k of fresh) announcedOmitted.add(k);
+		if (fresh.length) {
+			logger.warn(
+				`[dispatch-tick] ${fresh.length} waiting run(s) GitHub's ?status= listing omitted, found in ` +
+					`runner-health's unfiltered listing and dispatched from there: ${fresh.slice(0, 5).join(', ')}` +
+					(fresh.length > 5 ? ` (+${fresh.length - 5} more)` : '')
+			);
+		}
+	}
 
 	// Resolved ONCE per tick, memoised for a day inside runnerTarballUrl, and
 	// only ever read by a node that has no JIT payload yet. Null is fine: it

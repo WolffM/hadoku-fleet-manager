@@ -68,6 +68,11 @@
     "why": "Wave 5g lane B split of ephemeral-tick.ts (plan \u00a74.3 #3): the persisted warm-fill backoff streak, same \"one declared writer, read back by something else\" shape as its neighbours above."
   },
   {
+    "glob": "src/runners/unfiltered-queue.ts",
+    "layer": "state",
+    "why": "One writer (runner-health's unfiltered runs listing), read back by the dispatcher: the waiting runs GitHub's ?status= filter omits. In memory, the same one-writer-one-reader shape as stuck-runs.ts."
+  },
+  {
     "glob": "src/runners/stuck-runs.ts",
     "layer": "state",
     "why": "Wave 5i lane C split of dispatch-tick.ts (plan \u00a74.3 #16): the announced-stuck book persisted to dispatch-stuck-announced.json \u2014 same \"one declared writer, read back by something else\" shape."

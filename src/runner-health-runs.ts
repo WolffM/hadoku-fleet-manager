@@ -9,6 +9,7 @@ import { quietRecorder } from './runner-health-label-floor-nodes.js';
 import { attemptFailoverRerun } from './runners/failover.js';
 import { ingestRuns, FetchBudget, MAX_FETCH_PER_TICK } from './job-history-ingest.js';
 import { closeListingGap, LISTING_PAGE } from './run-listing-gap.js';
+import { noteUnfilteredListing } from './runners/unfiltered-queue.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from './lib/concurrency.js';
 import { fleetOwner } from './lib/fleet-config.js';
 import { ADVISORY_REPAGE_MS, alertOnce } from './lib/alert-ledger.js';
@@ -215,6 +216,10 @@ export async function checkRunsAndFailover(
 		);
 		if (!runsResp || !Array.isArray(runsResp.workflow_runs)) return;
 		reposRead++;
+		// The one UNFILTERED runs listing anything reads. The dispatcher's
+		// `?status=queued` listing has left a queued run out for 11 hours; it
+		// serves what this read shows waiting and that one omits.
+		noteUnfilteredListing(repo, runsResp.workflow_runs, now);
 		const ownerPrefix = `${fleetOwner()}/`;
 		const short = repo.startsWith(ownerPrefix) ? repo.slice(ownerPrefix.length) : repo;
 

@@ -28,7 +28,13 @@ export type DecisionKind =
 	 * A yielded slot kept empty (refill-suppressed) or handed back (refill); a
 	 * fill or rotate held off a node a job waits for (fill-/rotate-suppressed).
 	 */
-	| 'warm-refill';
+	| 'warm-refill'
+	/**
+	 * A waiting job of a run GitHub's `?status=` listing omitted, found in the
+	 * unfiltered listing instead (`unfiltered-queue.ts`). One row per job when
+	 * it is found; the placement that follows is its own row.
+	 */
+	| 'listing-gap';
 
 /** What one node looked like to the walk at the moment of the decision. */
 export interface NodeFigures {

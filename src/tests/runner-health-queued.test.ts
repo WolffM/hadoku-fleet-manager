@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 
 import { tick, __setFleetReposForTesting } from '../runner-health.js';
 import { __setFleetProbeForTesting } from '../fleet-probe-store.js';
+import { omittedByFilter, __resetUnfilteredQueueForTesting } from '../runners/unfiltered-queue.js';
 import {
 	installRunnerHealthRig,
 	installFetch,
@@ -646,4 +647,37 @@ test('queued: a jobs listing that 500s pings, and says it could not look', async
 		'silence on an unreadable answer is the outage this check exists to catch'
 	);
 	assert.match(pings[0]!, /unreadable/);
+});
+
+test('queued: the sweep hands its unfiltered listing to the dispatcher', async () => {
+	// GitHub's `?status=queued` filter left hadoku-tenhands 42971351168 out for
+	// 11 hours while this listing called it QUEUED; the dispatcher serves what
+	// this read shows waiting (unfiltered-queue.ts).
+	__resetUnfilteredQueueForTesting();
+	__setFleetReposForTesting(['WolffM/hadoku_site', 'WolffM/hadoku-tenhands']);
+	installFetch({
+		runners: FLEET_CLAW2_DOWN,
+		runs: (repo) =>
+			repo === 'WolffM/hadoku-tenhands'
+				? {
+						workflow_runs: [
+							{ id: 5, created_at: minutesAgo(3), status: 'queued', html_url: 'https://gh/run/5' },
+							{
+								id: 6,
+								created_at: minutesAgo(3),
+								status: 'completed',
+								html_url: 'https://gh/run/6',
+							},
+						],
+					}
+				: { workflow_runs: [] },
+	});
+	await tick('tok');
+	const omitted = omittedByFilter('WolffM/hadoku-tenhands', 'queued', [], Date.now());
+	assert.deepEqual(
+		omitted.runs.map((r) => r.id),
+		[5],
+		'the waiting run, and only it'
+	);
+	__resetUnfilteredQueueForTesting();
 });
