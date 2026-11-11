@@ -459,3 +459,29 @@ test('#15: a claw is never reserved, and a single-slot backstop keeps nothing ba
 	const one = backstop({ maxConcurrent: 1 });
 	assert.equal(choosePlacement(['hokon'], [other, one], ['hadoku-builder']).node, 'hokon');
 });
+
+test('tuning (simulator only): spillFloorSec replaces the slow-tier floor; unset, the constant holds', () => {
+	const speedModel = fakeSpeedModel({
+		tierFor: (n) => (SLOW(n) ? 'slow' : 'normal'),
+		extraSecFor: () => null,
+		p50For: () => 1,
+	});
+	const full = m('claw-1', { speedModel, liveUnits: 3 });
+	const at = (queuedSec: number, spillFloorSec?: number) =>
+		choosePlacement(
+			['claw-1', 'claw-5'],
+			[
+				full,
+				m('claw-5', {
+					speedModel,
+					...(spillFloorSec === undefined ? {} : { tuning: { spillFloorSec } }),
+				}),
+			],
+			[],
+			'WolffM/hadoku-cardtable',
+			{ queuedSec }
+		).node;
+	assert.equal(at(SPILL_FLOOR_SEC - 1), undefined, 'constant: held one second short');
+	assert.equal(at(30, 20), 'claw-5', 'a 20 s floor spills at 30 s');
+	assert.equal(at(30, 60), undefined);
+});

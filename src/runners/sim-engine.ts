@@ -46,7 +46,7 @@ import { planTick, type PendingRun, type TickPlan } from './dispatcher.js';
 import { byPriority } from './dispatch-pass-order.js';
 import { orderCandidates, type TrafficNode } from './traffic.js';
 import { choosePlacement } from './placement.js';
-import { satisfiesLabels, type NodeState } from './placement-node-state.js';
+import { satisfiesLabels, type NodeState, type PlacementTuning } from './placement-node-state.js';
 import type { SpeedModel } from './speed-tier.js';
 import type { HeavyModel } from './heavy-model.js';
 import { SATURATION_QUEUE_SECONDS } from './backstop.js';
@@ -69,6 +69,8 @@ export interface SimOptions {
 	starveSec?: number;
 	/** The backstop calms after this long with no saturated job. */
 	backstopCalmSec?: number;
+	/** Placement constants overridden on every node (`--tune`); see NodeState.tuning. */
+	tuning?: PlacementTuning;
 	/** Only jobs arriving in [fromMs, toMs). Dependants of an excluded job arrive as recorded. */
 	fromMs?: number;
 	toMs?: number;
@@ -282,6 +284,7 @@ export function simulate(
 				heavyModel: models.heavy,
 				heavyJobs: list.filter((r) => r.heavy).length,
 				runningHeavy: list.some((r) => r.heavyRepo),
+				...(opts.tuning ? { tuning: opts.tuning } : {}),
 			};
 		});
 

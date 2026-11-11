@@ -222,4 +222,23 @@ export interface NodeState extends AdmissionInput {
 	 * in no listing this tick reads.
 	 */
 	warmBusy?: number;
+	/**
+	 * Placement constants overridden for THIS node, by the traffic simulator
+	 * only (`fleet simulate --tune`). The live node-state builder never sets
+	 * it, so dispatch always runs the constants in placement-slow.ts; a field
+	 * left out falls back to its constant, which is today's walk exactly.
+	 */
+	tuning?: PlacementTuning;
+}
+
+/** See {@link NodeState.tuning}. */
+export interface PlacementTuning {
+	/** Heavy jobs a node takes before any hold applies. Constant: 1. */
+	heavyFree?: number;
+	/** The hold before one more heavy job past `heavyFree`. Constant: HEAVY_DOUBLE_HOLD_SEC. */
+	doubleHoldSec?: number;
+	/** The hold past that. Constant: HEAVY_HOLD_SEC. */
+	holdSec?: number;
+	/** The slow-tier spill floor. Constant: SPILL_FLOOR_SEC. */
+	spillFloorSec?: number;
 }

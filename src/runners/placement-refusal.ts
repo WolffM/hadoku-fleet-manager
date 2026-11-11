@@ -136,9 +136,15 @@ export function refusalFor(
 	// heavy job) and HEAVY_HOLD_SEC (two or more). Exact counts only
 	// (`heavyJobs`, never the repo-level `runningHeavy`), and an unknown queue
 	// age holds, the same rule the spill gate below states for itself.
+	// `m.tuning` is the simulator's override (NodeState.tuning); live dispatch
+	// never sets it, so these are the constants.
 	const heavyHere = m.heavyJobs ?? 0;
-	if (heavy && heavyHere > 0) {
-		const holdSec = heavyHere === 1 ? HEAVY_DOUBLE_HOLD_SEC : HEAVY_HOLD_SEC;
+	const heavyFree = m.tuning?.heavyFree ?? 1;
+	if (heavy && heavyHere >= heavyFree) {
+		const holdSec =
+			heavyHere === heavyFree
+				? (m.tuning?.doubleHoldSec ?? HEAVY_DOUBLE_HOLD_SEC)
+				: (m.tuning?.holdSec ?? HEAVY_HOLD_SEC);
 		const queuedSec = spill?.queuedSec;
 		if (queuedSec === undefined || queuedSec < holdSec) {
 			const waited = queuedSec === undefined ? 'unknown' : `${Math.round(queuedSec)}s`;
@@ -174,8 +180,8 @@ export function refusalFor(
 		// everything. `p50 ?? 1` is the "nothing to scale by either" case —
 		// `tierOf` returning 'slow' already implies MIN_KINDS qualifying ratios
 		// exist (speed-tier.ts), so this is defensive, not an expected path.
-		const thresholdSec =
-			extraSec !== null ? Math.max(SPILL_FLOOR_SEC, extraSec) : SPILL_FLOOR_SEC * (p50 ?? 1);
+		const floorSec = m.tuning?.spillFloorSec ?? SPILL_FLOOR_SEC;
+		const thresholdSec = extraSec !== null ? Math.max(floorSec, extraSec) : floorSec * (p50 ?? 1);
 		const queuedSec = spill?.queuedSec;
 		// `undefined` is NEVER "waited long enough" — a run whose queue age
 		// could not be established must never spill, which is why this is a

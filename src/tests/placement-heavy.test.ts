@@ -292,3 +292,44 @@ test('#102.1 PRODUCTION SHAPE: `dispatchEphemeral`’s OWN probe-to-NodeState se
 		'claw-9 (really 1 worker) is chosen over claw-1 (really 3) — busy is jobs, not repos'
 	);
 });
+
+test('tuning (simulator only): heavyFree lets a node take that many heavy jobs before any hold', () => {
+	const on = (heavyJobs: number, queuedSec: number, tuning?: Record<string, number>) =>
+		choosePlacement(
+			['claw-4'],
+			[
+				m('claw-4', {
+					heavyJobs,
+					maxConcurrent: 4,
+					heavyModel: FORGE,
+					...(tuning ? { tuning } : {}),
+				}),
+			],
+			[],
+			HEAVY_REPO,
+			{ jobName: 'forge-e2e', queuedSec }
+		).node;
+	assert.equal(on(1, 0), undefined, 'constant: one heavy job, then the hold');
+	assert.equal(on(1, 0, { heavyFree: 2 }), 'claw-4', 'two free: the second places at once');
+	assert.equal(on(2, 0, { heavyFree: 2 }), undefined, 'the third is held');
+	assert.equal(
+		on(2, HEAVY_DOUBLE_HOLD_SEC, { heavyFree: 2 }),
+		'claw-4',
+		'…for the double hold, not the hour'
+	);
+});
+
+test('tuning (simulator only): doubleHoldSec and holdSec replace the two hold tiers', () => {
+	const on = (heavyJobs: number, queuedSec: number, tuning: Record<string, number>) =>
+		choosePlacement(
+			['claw-4'],
+			[m('claw-4', { heavyJobs, maxConcurrent: 4, heavyModel: FORGE, tuning })],
+			[],
+			HEAVY_REPO,
+			{ jobName: 'forge-e2e', queuedSec }
+		).node;
+	assert.equal(on(1, 120, { doubleHoldSec: 100 }), 'claw-4');
+	assert.equal(on(1, 120, { doubleHoldSec: 300 }), undefined);
+	assert.equal(on(2, 120, { holdSec: 100 }), 'claw-4');
+	assert.equal(on(2, 120, {}), undefined, 'an empty tuning is the constants');
+});

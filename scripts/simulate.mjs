@@ -10,7 +10,7 @@
  * baseline policy lands near history: that is the model's validation.
  *
  * USAGE
- *   fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--without node,…] [--clone node=new] [--drop key=v,…]
+ *   fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--tune key=value] [--without node,…] [--clone node=new] [--drop key=v,…]
  *                  [--tick 15] [--contention 0.3] [--min-queued 0] [--json]
  *
  * READS (never writes): <state>/job-history.jsonl, <state>/dispatch-decisions/*.jsonl,
@@ -86,7 +86,23 @@ argv.forEach((a, i) => {
 	}
 	params[k] = Number(v);
 });
+// --tune key=value (repeatable): placement constants overridden on every
+// node, for this simulated run only (NodeState.tuning).
+const TUNE_KEYS = ['heavyFree', 'doubleHoldSec', 'holdSec', 'spillFloorSec'];
+const tuning = {};
+argv.forEach((a, i) => {
+	if (a !== '--tune') return;
+	const [k, v] = String(argv[i + 1] ?? '').split('=');
+	if (!TUNE_KEYS.includes(k) || v === undefined || !Number.isFinite(Number(v)) || Number(v) < 0) {
+		out.warn(
+			`fleet simulate: --tune takes one of ${TUNE_KEYS.join(', ')}=number, got ${argv[i + 1]}`
+		);
+		process.exit(2);
+	}
+	tuning[k] = Number(v);
+});
 const opts = {
+	...(Object.keys(tuning).length ? { tuning } : {}),
 	tickSec: num('--tick', 15),
 	contention: num('--contention', 0.3),
 	minQueuedSec: num('--min-queued', 0),
@@ -225,6 +241,7 @@ if (out.json) {
 		ok: true,
 		policy: result.policy,
 		params,
+		tuning,
 		whatIf,
 		corpus: {
 			jobs: corpus.jobs.length,
@@ -270,6 +287,7 @@ out.log(
 		`${span(window.fromMs)} -> ${span(window.toMs)}Z, ${result.ticks} ticks in ${elapsedSec.toFixed(1)} s`
 );
 if (whatIf.length) out.log(`what-if (simulated column only): ${whatIf.join('; ')}`);
+if (Object.keys(tuning).length) out.log(`tuned constants: ${JSON.stringify(tuning)}`);
 out.log('');
 out.log(`${''.padEnd(34)}${'history'.padStart(9)}${'simulated'.padStart(9)}`);
 out.log('1. OLDEST JOB IN QUEUE (s)');
