@@ -5,8 +5,9 @@
  *
  *   fleet qualify --machine claw-5 --dry-run   what would run; drains nothing
  *   fleet qualify --machine claw-5 --json      run the window, record the results
+ *   fleet qualify --next --json                the scheduled form: the most overdue node, or none
  *
- * `--machine` is REQUIRED. A qualification drains a node for up to
+ * `--machine` (or `--next`) is REQUIRED. A qualification drains a node for up to
  * QUALIFY_WINDOW_MINUTES; there is no fleet-wide form, by design (one node at a
  * time, and never the backstop — lib/qualify-runner.mjs `refusal`).
  *
@@ -32,8 +33,8 @@ import { busyCount, drain, isDrained, undrain, waitUntilDrained } from './lib/dr
 import { loadManifest, machineArg, runOn } from './lib/fleet-exec.mjs';
 import { QUALIFY_TESTS } from './lib/qualify-playlist.mjs';
 import { QUALIFY_WINDOW_MINUTES } from './lib/qualify-registry.mjs';
-import { recordQualifyResults } from './lib/qualify-results.mjs';
-import { runQualification } from './lib/qualify-runner.mjs';
+import { readQualifyResults, recordQualifyResults } from './lib/qualify-results.mjs';
+import { nextNode, runQualification } from './lib/qualify-runner.mjs';
 import { spawnJsonToFile } from './lib/spawn-json.mjs';
 
 const emitter = createEmitter({ argv: process.argv });
@@ -41,17 +42,65 @@ const log = (m) => emitter.log(m);
 const DRY_RUN = process.argv.includes('--dry-run');
 const PROVE_JOB = join(dirname(fileURLToPath(import.meta.url)), 'prove-job.mjs');
 
-const node = machineArg(process.argv.slice(2));
 const finish = (doc, code) => {
 	if (emitter.json) emitter.emit(doc);
 	process.exit(code);
 };
+const manifest = loadManifest();
+const NEXT = process.argv.includes('--next');
+let node = machineArg(process.argv.slice(2));
+if (NEXT && node) {
+	log('fleet qualify: --next and --machine are exclusive; --next picks the node');
+	finish({ ok: false, error: '--next and --machine are exclusive' }, 2);
+}
+if (NEXT) {
+	// The scheduled form (ci:qualify): the one node most overdue, or none.
+	const read = readQualifyResults(stateDir());
+	if (!read.ok) {
+		log(`fleet qualify --next: the qualification ledger is unreadable: ${read.reason}`);
+		finish(
+			{
+				ok: false,
+				status: 'could-not-look',
+				reason: read.reason,
+				findings: [],
+				unreadable: [{ reason: `the qualification ledger is unreadable: ${read.reason}` }],
+			},
+			1
+		);
+	}
+	const pick = nextNode({
+		manifest,
+		results: read.results,
+		drains: readDrains(),
+		tests: [...QUALIFY_TESTS],
+		nowMs: Date.now(),
+	});
+	if (!pick.node) {
+		log(`fleet qualify --next: nothing to do — ${pick.why}`);
+		finish(
+			{
+				ok: true,
+				status: 'none-due',
+				node: null,
+				reason: pick.why,
+				results: [],
+				findings: [],
+				unreadable: [],
+			},
+			0
+		);
+	}
+	log(`fleet qualify --next: ${pick.node} (${pick.why}; due: ${pick.due.join(', ')})`);
+	node = pick.node;
+}
 if (!node) {
-	log('fleet qualify: --machine <node> is required; a qualification holds ONE node out of service');
+	log(
+		'fleet qualify: --machine <node> (or --next) is required; a qualification holds ONE node out of service'
+	);
 	finish({ ok: false, error: '--machine is required' }, 2);
 }
 
-const manifest = loadManifest();
 const machine = manifest.machines?.[node];
 if (!machine) {
 	log(`fleet qualify: ${node} is not in the manifest`);
@@ -110,8 +159,12 @@ if (out.status === 'refused') {
 }
 
 const at = new Date().toISOString();
+// A window that never opened is recorded too: it is a fact about the node, and
+// `--next` reads `last.at` to put a node that was too busy behind the others.
 const recorded =
-	out.status === 'ran' ? recordQualifyResults(stateDir(), node, out.results, at) : { ok: true };
+	out.status === 'ran' || out.status === 'could-not-look'
+		? recordQualifyResults(stateDir(), node, out.results, at)
+		: { ok: true };
 if (!recorded.ok) log(`✗ results not recorded: ${recorded.reason}`);
 
 const findings = out.results

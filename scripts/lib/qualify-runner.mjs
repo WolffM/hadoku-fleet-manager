@@ -49,6 +49,55 @@ export function refusal({ node, machine, drains }) {
 }
 
 /**
+ * PURE. Which node `fleet qualify --next` takes tonight, or null with why.
+ *
+ * A node is DUE when any playlist test has never passed on it or last passed
+ * longer ago than that test's `ttlDays`. Never the backstop; never a node
+ * someone holds (any drain); never anything while another qualification
+ * runs. Among the due nodes the one whose LAST ATTEMPT is oldest goes first,
+ * a never-attempted node before any attempted one, so a node that was too
+ * busy to open its window last night waits behind the rest instead of
+ * taking every night.
+ *
+ * @param {{ manifest: object, results: Record<string, any>, drains: Record<string, any>,
+ *   tests: {id: string, ttlDays: number}[], nowMs: number }} a
+ * @returns {{ node: string|null, why: string, due: string[] }}
+ */
+export function nextNode({ manifest, results, drains, tests, nowMs }) {
+	const machines = Object.entries(manifest?.machines ?? {});
+	const busy = Object.entries(drains ?? {}).find(
+		([, row]) =>
+			typeof row?.reason === 'string' && row.reason.startsWith(QUALIFY_DRAIN_REASON_PREFIX)
+	);
+	if (busy) return { node: null, why: `${busy[0]} is being qualified now`, due: [] };
+	const due = [];
+	for (const [name, m] of machines) {
+		if (m?.role === 'backstop' || drains?.[name]) continue;
+		let lastAttempt = null;
+		let isDue = false;
+		for (const t of tests) {
+			const e = results?.[`${name}::${t.id}`];
+			const tried = Date.parse(e?.last?.at ?? '');
+			if (Number.isFinite(tried)) lastAttempt = Math.max(lastAttempt ?? 0, tried);
+			const passed = Date.parse(e?.lastPass?.at ?? '');
+			if (!Number.isFinite(passed) || nowMs - passed > t.ttlDays * 86_400_000) isDue = true;
+		}
+		if (isDue) due.push({ name, lastAttempt });
+	}
+	if (!due.length) return { node: null, why: 'no node is due', due: [] };
+	due.sort((a, b) => (a.lastAttempt ?? -1) - (b.lastAttempt ?? -1) || a.name.localeCompare(b.name));
+	const pick = due[0];
+	return {
+		node: pick.name,
+		why:
+			pick.lastAttempt === null
+				? 'never attempted'
+				: `last attempted ${new Date(pick.lastAttempt).toISOString()}`,
+		due: due.map((d) => d.name),
+	};
+}
+
+/**
  * Run one qualification window.
  *
  * @param {object} a

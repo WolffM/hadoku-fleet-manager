@@ -490,6 +490,7 @@ const TODAYS_JSON_CONTRACT = [
 		'services/mgmt-api/src/routes/jobs/toolchain-refresh.ts',
 	],
 	['bootcamp', 'ci:bootcamp', 'services/mgmt-api/src/routes/jobs/bootcamp.ts'],
+	['qualify', 'ci:qualify', 'services/mgmt-api/src/routes/jobs/qualify.ts'],
 	['header-audit', 'ci:header-fleet', 'services/mgmt-api/src/routes/jobs/header-fleet-check.ts'],
 	[
 		'identity-model',

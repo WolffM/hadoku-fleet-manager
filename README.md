@@ -193,6 +193,7 @@ code first would turn every real finding into "the checker broke".
 | `fleet reconcile --json`                                                      | `ci:fleet-coverage`    |
 | `fleet converge-toolchain --refresh --json`                                   | `ci:toolchain-refresh` |
 | `fleet bootcamp --write --site-writer --idle-wait 20 --prove --due 25 --json` | `ci:bootcamp`          |
+| `fleet qualify --next --json`                                                 | `ci:qualify`           |
 | `fleet header-audit --json`                                                   | `ci:header-fleet`      |
 | `fleet identity-model --fleet --json`                                         | `ci:identity-model`    |
 | `fleet cleanup --json --confirm`                                              | `ci:claw-cleanup`      |

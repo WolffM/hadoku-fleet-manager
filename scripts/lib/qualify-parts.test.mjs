@@ -236,3 +236,18 @@ void test('a node with NO live job still reports every field: pgrep -c prints 0 
 		rmSync(bin, { recursive: true, force: true });
 	}
 });
+
+void test('--next with only a backstop: none due, exit 0, nothing drained', () => {
+	const r = cli(['--next', '--json'], { 'fixture-backstop': { role: 'backstop' } });
+	assert.equal(r.code, 0, r.err);
+	assert.deepEqual([r.doc.status, r.doc.node, r.doc.ok], ['none-due', null, true]);
+	assert.deepEqual(JSON.parse(r.drain), { nodes: {} });
+});
+
+void test('--next and --machine together are refused, exit 2', () => {
+	const r = cli(['--next', '--machine', 'claw-fixture', '--json'], {
+		'claw-fixture': { role: 'claw' },
+	});
+	assert.equal(r.code, 2);
+	assert.match(r.doc.error, /exclusive/);
+});

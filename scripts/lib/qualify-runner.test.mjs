@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { QUALIFY_DRAIN_REASON_PREFIX, proofDrainState } from './proof-drain.mjs';
-import { refusal, runQualification } from './qualify-runner.mjs';
+import { nextNode, refusal, runQualification } from './qualify-runner.mjs';
 
 const NODE = 'claw-fixture';
 const CLAW = { role: 'claw', maxConcurrent: 2 };
@@ -297,4 +297,73 @@ void test('--dry-run drains nothing, runs nothing, and says what would not fit',
 	assert.equal(out.status, 'dry-run');
 	assert.match(out.results[1].reason, /would NOT start \(70 min > the 60-min window\)/);
 	assert.deepEqual(r.calls, []);
+});
+
+// ── fleet qualify --next: which node tonight ───────────────────────────────
+
+const NOW_N = Date.parse('2026-11-20T09:00:00Z');
+const day = (n) => new Date(NOW_N - n * 86_400_000).toISOString();
+const RAMP = [{ id: 'concurrency-ramp', ttlDays: 21 }];
+const FLEET_N = {
+	machines: { 'claw-a': { role: 'claw' }, 'claw-b': { role: 'claw' }, hokon: { role: 'backstop' } },
+};
+const entry = ({ last, pass }) => ({
+	last: last ? { at: day(last) } : null,
+	lastPass: pass ? { at: day(pass) } : null,
+});
+
+void test('--next: never the backstop; a never-attempted node first', () => {
+	const r = nextNode({
+		manifest: FLEET_N,
+		results: { 'claw-a::concurrency-ramp': entry({ last: 30, pass: 30 }) },
+		drains: {},
+		tests: RAMP,
+		nowMs: NOW_N,
+	});
+	assert.equal(r.node, 'claw-b');
+	assert.equal(r.why, 'never attempted');
+	assert.deepEqual(r.due.sort(), ['claw-a', 'claw-b']);
+});
+
+void test('--next: a node inside its 21 days is not due; none due is said', () => {
+	const results = {
+		'claw-a::concurrency-ramp': entry({ last: 3, pass: 3 }),
+		'claw-b::concurrency-ramp': entry({ last: 20, pass: 20 }),
+	};
+	assert.deepEqual(
+		nextNode({ manifest: FLEET_N, results, drains: {}, tests: RAMP, nowMs: NOW_N }),
+		{ node: null, why: 'no node is due', due: [] }
+	);
+});
+
+void test('--next: a node too busy last night goes behind one attempted longer ago', () => {
+	const results = {
+		'claw-a::concurrency-ramp': entry({ last: 1, pass: 40 }), // tried last night, window never opened
+		'claw-b::concurrency-ramp': entry({ last: 25, pass: 25 }),
+	};
+	assert.equal(
+		nextNode({ manifest: FLEET_N, results, drains: {}, tests: RAMP, nowMs: NOW_N }).node,
+		'claw-b'
+	);
+});
+
+void test('--next: a drained node is skipped, and nothing runs while another qualification does', () => {
+	assert.equal(
+		nextNode({
+			manifest: FLEET_N,
+			results: {},
+			drains: { 'claw-a': { kind: 'maintenance' } },
+			tests: RAMP,
+			nowMs: NOW_N,
+		}).node,
+		'claw-b'
+	);
+	const r = nextNode({
+		manifest: FLEET_N,
+		results: {},
+		drains: { 'claw-a': { kind: 'training', reason: `${QUALIFY_DRAIN_REASON_PREFIX} x` } },
+		tests: RAMP,
+		nowMs: NOW_N,
+	});
+	assert.deepEqual([r.node, r.why], [null, 'claw-a is being qualified now']);
 });

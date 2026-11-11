@@ -74,4 +74,18 @@ export const jobRegistryBenchmark: JobEntry[] = [
 		contract: 'json',
 		why: "Re-measures every node's EARNED labels and records them (`$capabilities`) through the fleet's writer tree, after ci:toolchain-refresh in the same window. Placement reads the earned record, and until 2026-11-04 nothing scheduled bootcamp: claw-8 probed service-host=ok for hours while its record lacked it and placement refused it. Idle-only measurements wait up to 20 min for quiet. `--prove --due 25` re-runs the workload canary for a node whose proof is over 25 days old (fleet-manager, 2026-11-07): on 2026-11-07 the 10-08 proofs on claw-8/9/4 expired within 25 minutes of each other and cardtable's forge jobs sat unplaceable for 100+ minutes.",
 	},
+	{
+		name: 'ci:qualify',
+		sub: 'qualify',
+		args: ['--next', '--json'],
+		kind: 'converger',
+		detectionBudget: '48h',
+		cadence: { cron: '30 8 * * *' },
+		timeoutS: 12000,
+		deployHold: true,
+		hostBound: false,
+		mgmtApiFile: 'services/mgmt-api/src/routes/jobs/qualify.ts',
+		contract: 'json',
+		why: "Wave bootcamp2: qualifies the ONE most overdue node a night (never the backstop, never a drained node, a node too busy last night behind the rest), drained for up to a 45-min quiet wait plus the 150-min window. 08:30 UTC with a 12000 s timeout so it ends by 11:50, before fleet-benchmark's 12:00 bootcamp, whose idle re-measure would otherwise run its benchmark UNDER the qualification drain and corrupt both readings. ADVISORY for its first 7 days (job-alerts ADVISORY_JOBS); maxConcurrent stays SHADOW (doctor qualified-capacity) until promoted.",
+	},
 ];
