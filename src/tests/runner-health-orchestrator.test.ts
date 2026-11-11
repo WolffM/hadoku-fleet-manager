@@ -213,6 +213,69 @@ test('start: an UNMEASURED first tick is followed by a re-tick once the probe la
 	}
 });
 
+/**
+ * Boot on `bootToken`, switch the host to `laterToken` before the unmeasured
+ * boot tick's re-tick fires, and return the bearer of every GitHub call each
+ * of the two ticks made.
+ */
+async function bearersAcrossARetick(
+	bootToken: string,
+	laterToken: string
+): Promise<{ boot: string[]; later: string[] }> {
+	installFetch({ runners: FLEET_ALL_UP });
+	__setSupervisionCheckerForTesting(() => Promise.resolve(null));
+	let hostToken = bootToken;
+	__setHostForTesting({ ...testHost, githubToken: () => hostToken });
+	const bearers: string[] = [];
+	const inner = globalThis.fetch;
+	globalThis.fetch = ((input: string | URL, init?: RequestInit) => {
+		if (String(input).includes('api.github.com')) {
+			bearers.push(new Headers(init?.headers).get('authorization') ?? '(none)');
+		}
+		return inner(input, init);
+	}) as typeof globalThis.fetch;
+	__setFleetProbeForTesting(null);
+	__setRemeasureDelayForTesting(25);
+	try {
+		startRunnerHealthMonitor();
+		await __awaitInFlightTickForTesting();
+		const bootCalls = bearers.length;
+		hostToken = laterToken;
+		__setFleetProbeForTesting({ at: new Date().toISOString(), nodes: {} });
+		await new Promise((r) => setTimeout(r, 80));
+		await __awaitInFlightTickForTesting();
+		return { boot: bearers.slice(0, bootCalls), later: bearers.slice(bootCalls) };
+	} finally {
+		__stopRunnerHealthMonitorForTesting();
+		__setRemeasureDelayForTesting(null);
+		__setHostForTesting(testHost);
+	}
+}
+
+test('start: a later tick uses the token the host holds NOW, not the one it held at boot', async () => {
+	// 2026-11-11: mgmt-api hands out the PAT until its App installation token
+	// lands ~30 s after boot. start() kept the boot token for the life of the
+	// process, so runner-health, ci-alerts, the backstop and the CI_RUNNER sync
+	// spent the 5,000/h user pool that agent sessions drain, beside an unused
+	// App pool. A captured App token would also expire within the hour.
+	const { boot, later } = await bearersAcrossARetick('ghp_boot-pat', 'ghs_app-installation');
+	assert.ok(boot.length > 0 && later.length > 0, 'both ticks read GitHub');
+	assert.deepEqual([...new Set(boot)], ['Bearer ghp_boot-pat']);
+	assert.deepEqual(
+		[...new Set(later)],
+		['Bearer ghs_app-installation'],
+		'every call of the later tick carries the current token'
+	);
+	// REVERTED (token captured in start): every later call is the boot PAT.
+});
+
+test('start: a host that has no token for a tick (vault resealed) keeps the last one', async () => {
+	const { later } = await bearersAcrossARetick('ghs_app-installation', '');
+	assert.ok(later.length > 0, 'the tick still ran');
+	assert.deepEqual([...new Set(later)], ['Bearer ghs_app-installation']);
+	// REVERTED (empty read used as is): no Authorization, every read a 401.
+});
+
 test('start: a tick that falls in a spent budget is re-run just past the reset, not at the next interval', async () => {
 	// 2026-10-25: budget spent 05:30:36 -> 05:59:00Z; the backstop's next look
 	// was the 06:03 interval tick while the oldest queued run was 42 minutes old.

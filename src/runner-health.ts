@@ -293,7 +293,7 @@ export function __setRemeasureDelayForTesting(ms: number | null): void {
 	remeasureDelayMs = ms ?? REMEASURE_DELAY_MS;
 }
 
-function scheduleRemeasure(token: string, attempt = 1): void {
+function scheduleRemeasure(attempt = 1): void {
 	if (remeasureHandle) return;
 	remeasureHandle = setTimeout(() => {
 		remeasureHandle = null;
@@ -302,7 +302,7 @@ function scheduleRemeasure(token: string, attempt = 1): void {
 			// A tick is still running; its answer decides whether to go again.
 			void inFlightTick.finally(() => {
 				if (lastTickEphemeralUnknown === true && attempt < REMEASURE_MAX_ATTEMPTS) {
-					scheduleRemeasure(token, attempt + 1);
+					scheduleRemeasure(attempt + 1);
 				}
 			});
 			return;
@@ -315,9 +315,9 @@ function scheduleRemeasure(token: string, attempt = 1): void {
 		// Without ci-alerts: this re-tick exists for the backstop's measurement,
 		// and ci-alerts has nothing waiting on the fleet probe. It ran a second
 		// full pass ~90s after every boot until 2026-10-25.
-		void runTick(token, { alerts: false }).finally(() => {
+		void runTick({ alerts: false }).finally(() => {
 			if (lastTickEphemeralUnknown === true && attempt < REMEASURE_MAX_ATTEMPTS) {
-				scheduleRemeasure(token, attempt + 1);
+				scheduleRemeasure(attempt + 1);
 			}
 		});
 	}, remeasureDelayMs);
@@ -350,7 +350,7 @@ export function __setPostBlackoutSlackForTesting(ms: number | null): void {
 	postBlackoutSlackMs = ms ?? POST_BLACKOUT_SLACK_MS;
 }
 
-function scheduleAfterBlackout(token: string): void {
+function scheduleAfterBlackout(): void {
 	if (postBlackoutHandle) return;
 	const remainingMs = ghBlackoutRemainingMs();
 	if (remainingMs <= 0) return;
@@ -360,17 +360,54 @@ function scheduleAfterBlackout(token: string): void {
 			'[runner-health] re-tick: the last tick fell inside a spent GitHub budget and decided ' +
 				'nothing — the budget has reset, deciding now rather than at the next interval'
 		);
-		const run = (): void => void runTick(token, { alerts: false });
+		const run = (): void => void runTick({ alerts: false });
 		if (inFlightTick) void inFlightTick.finally(run);
 		else run();
 	}, remainingMs + postBlackoutSlackMs);
 	postBlackoutHandle.unref?.();
 }
 
-function runTick(token: string, opts: { alerts?: boolean } = {}): Promise<void> {
+/**
+ * THE HOST'S TOKEN, READ PER TICK (2026-11-11). Captured once at start until
+ * then, and mgmt-api's host mints its GitHub App installation token in the
+ * background after boot: `githubTokenFor` hands out the PAT until the App
+ * token lands, ~30 s later (mgmt-api-b booted 16:10:43Z, App granted
+ * 16:11:12Z). So every boot pinned runner-health, ci-alerts, the backstop
+ * sweep and the CI_RUNNER sync to the operator's 5,000/h user pool for the
+ * life of the process (gh-budget 11-11 15-16Z: 731 of their calls on it,
+ * which agent sessions spent to 0), while dispatch, which reads the token
+ * per pass, ran on the App's 10,300. A captured App token would also expire
+ * within the hour. An empty read keeps the last token: a resealed vault
+ * leaves the old one valid, and a tick with no token decides nothing.
+ */
+let lastToken = '';
+function currentToken(): string {
+	const token = (githubToken() ?? '').trim();
+	if (token && token !== lastToken) {
+		labelHostToken(token);
+		lastToken = token;
+	}
+	return lastToken;
+}
+
+/**
+ * Name a host token for the low-budget page and the hourly budget line.
+ * GitHub's documented prefixes tell an App installation token (`ghs_`) from a
+ * personal one; the host's personal token is HADOKU_SITE_TOKEN (AGENTS.md
+ * "Secrets").
+ */
+function labelHostToken(token: string): void {
+	labelGhToken(
+		token,
+		token.startsWith('ghs_') ? 'GitHub App installation token' : 'HADOKU_SITE_TOKEN'
+	);
+}
+
+function runTick(opts: { alerts?: boolean } = {}): Promise<void> {
 	// The loops are stopping (lib/loop-lifecycle.ts): no new tick, and no new
 	// ci-alerts pass, whichever timer asked.
 	if (isStopping()) return inFlightTick ?? Promise.resolve();
+	const token = currentToken();
 	// CI-red alerting rides this cadence but runs INDEPENDENTLY of the tick.
 	// Two separate concerns sharing a timer: a GitHub blackout or a thrown error
 	// in either must not take the other down, and ci-alerts must not be able to
@@ -393,7 +430,7 @@ function runTick(token: string, opts: { alerts?: boolean } = {}): Promise<void> 
 		)
 		.finally(() => {
 			inFlightTick = null;
-			if (started && !isStopping()) scheduleAfterBlackout(token);
+			if (started && !isStopping()) scheduleAfterBlackout();
 		});
 	return trackPass(inFlightTick);
 }
@@ -415,6 +452,7 @@ export function __stopRunnerHealthMonitorForTesting(): void {
 	postBlackoutHandle = null;
 	__clearLastTickEphemeralUnknownForTesting();
 	started = false;
+	lastToken = '';
 }
 
 /**
@@ -520,9 +558,9 @@ export function startRunnerHealthMonitor(): void {
 }
 
 function startWithToken(token: string): void {
-	// The host's token is HADOKU_SITE_TOKEN (see AGENTS.md "Secrets"); naming it
-	// is what lets a low-budget page say which credential it is about.
-	labelGhToken(token, 'HADOKU_SITE_TOKEN');
+	// Every later tick re-reads the host (`currentToken`); this seeds it.
+	labelHostToken(token);
+	lastToken = token;
 
 	// Only the real process SSHes the claws — see `supervisionCheck`. A test that
 	// starts the monitor installs its double first, and this keeps it.
@@ -547,10 +585,10 @@ function startWithToken(token: string): void {
 				'ago (before this restart); the next one runs on the interval tick'
 		);
 	}
-	const firstTick = runTick(token, { alerts }).finally(() => {
-		if (lastTickEphemeralUnknown === true) scheduleRemeasure(token);
+	const firstTick = runTick({ alerts }).finally(() => {
+		if (lastTickEphemeralUnknown === true) scheduleRemeasure();
 	});
-	runnerHealthHandle = every('runner-health', TICK_INTERVAL_MS, () => runTick(token), {
+	runnerHealthHandle = every('runner-health', TICK_INTERVAL_MS, () => runTick(), {
 		registerLiveness: false,
 		noteTick: false,
 		// This first tick runs OUTSIDE every()'s own schedule (it carries its
