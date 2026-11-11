@@ -93,7 +93,8 @@ function fakeNode({
 	machine = MACHINE,
 	tenants = 'QR-TENANTS-END',
 } = {}) {
-	let clock = Date.parse('2026-11-11T18:00:00Z');
+	const startedAt = Date.now();
+	let clock = startedAt;
 	const sent = [];
 	let bootI = 0;
 	let afterI = 0;
@@ -139,7 +140,7 @@ function fakeNode({
 			clock += ms;
 		},
 	};
-	return { ctx, deps, sent, clockAt: () => clock };
+	return { ctx, deps, sent, clockAt: () => clock, startedAt };
 }
 
 const run = async (o) => {
@@ -220,13 +221,13 @@ void test('a node that reboots and comes back whole passes, and the reboot is se
 });
 
 void test('a node that never answers again is could-not-look, bounded, and says LOUDLY it may be down', async () => {
-	const { r, clockAt, sent } = await run({ boots: [null] });
+	const { r, clockAt, sent, startedAt } = await run({ boots: [null] });
 	assert.equal(r.status, 'could-not-look');
 	assert.match(r.reason, /MAY BE DOWN/);
 	assert.match(r.reason, /No route to host/);
 	const polls = sent.filter((s) => s.script === BOOT_ID_SCRIPT).length;
 	assert.ok(polls > 5 && polls < 100, `${polls} polls`);
-	assert.ok(clockAt() - Date.parse('2026-11-11T18:00:00Z') <= BOOT_TIMEOUT_MS + 60_000);
+	assert.ok(clockAt() - startedAt <= BOOT_TIMEOUT_MS + 60_000);
 });
 
 void test('a node that keeps its boot id never rebooted: could-not-look, and says so', async () => {

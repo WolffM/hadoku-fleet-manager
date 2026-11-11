@@ -180,7 +180,7 @@ function fakeCtx(answers, machine = MACHINE) {
 			node: 'claw-fixture',
 			machine,
 			manifest: { machines: { 'claw-fixture': machine } },
-			nowMs: Date.parse('2026-11-11T18:00:00Z'),
+			nowMs: Date.now(),
 			log: () => {},
 			async exec(script, o = {}) {
 				sent.push({ script, timeoutMs: o.timeoutMs });
