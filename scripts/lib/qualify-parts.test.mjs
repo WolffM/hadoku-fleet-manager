@@ -126,7 +126,16 @@ void test('the sampler runs for real here: starts detached, samples, stops on th
 	});
 	const dir = out.match(/^SAMPLER (\S+)$/m)?.[1];
 	assert.ok(dir, out);
-	await new Promise((r) => setTimeout(r, 1500));
+	// WAIT FOR ONE WHOLE TICK, not a fixed 1.5 s. parseSamples rightly drops a
+	// tick cut short (no `E`), and on a loaded box (cpu10=72, 2026-11-12) the
+	// first tick's sensors read outran 1.5 s, so the stop landed mid-tick and the
+	// test saw zero rows. Bounded well inside maxMinutes.
+	const samples = join(dir, 'samples');
+	const deadline = Date.now() + 20_000;
+	while (!(existsSync(samples) && /^E$/m.test(readFileSync(samples, 'utf8')))) {
+		assert.ok(Date.now() < deadline, 'the sampler finished no tick within 20 s');
+		await new Promise((r) => setTimeout(r, 100));
+	}
 	const text = execFileSync('bash', ['-s'], { input: stopSamplerScript(dir), encoding: 'utf8' });
 	assert.match(text, /SAMPLER-END/);
 	const rows = parseSamples(text);
