@@ -18,6 +18,7 @@ import {
 	HEAVY_HOLD_SEC,
 	SPILL_FLOOR_SEC,
 	describeKind,
+	heavyFreeOf,
 	slowKind,
 } from './placement-slow.js';
 
@@ -132,17 +133,18 @@ export function refusalFor(
 		}
 	}
 
-	// THE HEAVY HOLD (#102) — see HEAVY_DOUBLE_HOLD_SEC (a node running one
-	// heavy job) and HEAVY_HOLD_SEC (two or more). Exact counts only
-	// (`heavyJobs`, never the repo-level `runningHeavy`), and an unknown queue
-	// age holds, the same rule the spill gate below states for itself.
+	// THE HEAVY HOLD (#102) — see HEAVY_PAIR_MIN_SLOTS (how many heavy jobs a
+	// node takes with no hold), HEAVY_DOUBLE_HOLD_SEC (the second, where the
+	// node does not pair) and HEAVY_HOLD_SEC (a third or more). Exact counts
+	// only (`heavyJobs`, never the repo-level `runningHeavy`), and an unknown
+	// queue age holds, the same rule the spill gate below states for itself.
 	// `m.tuning` is the simulator's override (NodeState.tuning); live dispatch
-	// never sets it, so these are the constants.
+	// never sets it.
 	const heavyHere = m.heavyJobs ?? 0;
-	const heavyFree = m.tuning?.heavyFree ?? 1;
+	const heavyFree = m.tuning?.heavyFree ?? heavyFreeOf(m);
 	if (heavy && heavyHere >= heavyFree) {
 		const holdSec =
-			heavyHere === heavyFree
+			heavyHere === 1
 				? (m.tuning?.doubleHoldSec ?? HEAVY_DOUBLE_HOLD_SEC)
 				: (m.tuning?.holdSec ?? HEAVY_HOLD_SEC);
 		const queuedSec = spill?.queuedSec;

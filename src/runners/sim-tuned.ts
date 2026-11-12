@@ -12,17 +12,23 @@
  *
  * - `order`: 0 the dispatcher's `byPriority` (age, push ahead by a head
  *   start); 1 strict oldest-first; 2 shortest expected slot time first.
- * - `narrowFirst` 1: jobs with a scarce label (one not every claw carries,
- *   read from this tick's claws) go before the rest, in their own order.
+ * - `narrowFirst` 1: the dispatcher's `placementOrder` (scarce-label jobs
+ *   first, live since 2026-11-11); 0 only its single-node step.
  * - `kindPlacement` 1: each job tries claws fastest-first FOR ITS KIND (the
  *   engine's estimate), taking the first the real admission accepts, instead
  *   of the least busy.
  * - `warm` 0: replayed warm slots take nothing; every job is minted.
  */
-import { planTick, singleNodeFirst, type PendingRun, type TickPlan } from './dispatcher.js';
+import {
+	planTick,
+	placementOrder,
+	singleNodeFirst,
+	type PendingRun,
+	type TickPlan,
+} from './dispatcher.js';
 import type { NodeState } from './placement-node-state.js';
 import type { SimPolicy, SimTick } from './sim-engine.js';
-import { consume, scarceLabelsOf, universalLabels } from './sim-policies.js';
+import { consume } from './sim-policies.js';
 
 export interface TunedParams {
 	order: number;
@@ -53,17 +59,9 @@ export function tunedPolicy(over: Partial<TunedParams> = {}): SimPolicy {
 				const est = (r: PendingRun): number => t.estimate(r.jobId) ?? Infinity;
 				jobs.sort((a, b) => est(a) - est(b));
 			}
-			// planTick's own first step (#131): a job one node alone can serve
-			// goes ahead of the rest. Planning one job at a time skips it unless
-			// it is applied here.
-			jobs = singleNodeFirst(jobs, t.nodes);
-			if (p.narrowFirst) {
-				const claws = t.nodes.filter((n) => !n.onDemandBackstop && n.eligible && n.healthy);
-				const universal = universalLabels(claws);
-				const narrow = (r: PendingRun): boolean =>
-					scarceLabelsOf(r.labels ?? [], universal).length > 0;
-				jobs = [...jobs.filter(narrow), ...jobs.filter((r) => !narrow(r))];
-			}
+			// planTick's own ordering. Planning one job at a time skips it unless
+			// it is applied here; `narrowFirst` 0 keeps only #131's step.
+			jobs = p.narrowFirst ? placementOrder(jobs, t.nodes) : singleNodeFirst(jobs, t.nodes);
 
 			let nodes: NodeState[] = t.nodes;
 			const out: TickPlan = { mint: [], skipped: [], reserved: [] };

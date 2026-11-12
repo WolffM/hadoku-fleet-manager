@@ -15,7 +15,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { choosePlacement } from '../runners/placement.js';
-import { HEAVY_DOUBLE_HOLD_SEC, HEAVY_HOLD_SEC } from '../runners/placement-slow.js';
+import {
+	HEAVY_DOUBLE_HOLD_SEC,
+	HEAVY_HOLD_SEC,
+	HEAVY_PAIR_MIN_SLOTS,
+	heavyFreeOf,
+} from '../runners/placement-slow.js';
 import type { HeavyModel } from '../runners/heavy-model.js';
 import type { PendingRun } from '../runners/dispatcher.js';
 import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
@@ -113,10 +118,12 @@ const FORGE = fakeHeavyModel(
 	new Set([HEAVY_REPO])
 );
 
+// The hold tests below use a TWO-slot node: a node of HEAVY_PAIR_MIN_SLOTS
+// or more takes a second heavy job with no hold (tested after them).
 test('#102 heavy hold: a heavy job refuses a node running a heavy job inside the hold, and says why', () => {
 	const p = choosePlacement(
 		['claw-4'],
-		[m('claw-4', { heavyJobs: 1, heavyModel: FORGE })],
+		[m('claw-4', { heavyJobs: 1, maxConcurrent: 2, heavyModel: FORGE })],
 		[],
 		HEAVY_REPO,
 		{
@@ -138,7 +145,7 @@ test('#102 heavy hold: a heavy job refuses a node running a heavy job inside the
 test('#102 heavy hold: an unknown queue age holds — it is never "waited long enough"', () => {
 	const p = choosePlacement(
 		['claw-4'],
-		[m('claw-4', { heavyJobs: 1, heavyModel: FORGE })],
+		[m('claw-4', { heavyJobs: 1, maxConcurrent: 2, heavyModel: FORGE })],
 		[],
 		HEAVY_REPO,
 		{
@@ -149,10 +156,15 @@ test('#102 heavy hold: an unknown queue age holds — it is never "waited long e
 	assert.match(p.passed[0].reason, /queued unknown/);
 });
 
-const holdOn = (heavyJobs: number, queuedSec: number) =>
+const holdOn = (
+	heavyJobs: number,
+	queuedSec: number,
+	maxConcurrent = 2,
+	onDemandBackstop = false
+) =>
 	choosePlacement(
 		['claw-4'],
-		[m('claw-4', { heavyJobs, maxConcurrent: 4, heavyModel: FORGE })],
+		[m('claw-4', { heavyJobs, maxConcurrent, onDemandBackstop, heavyModel: FORGE })],
 		[],
 		HEAVY_REPO,
 		{ jobName: 'forge-e2e', queuedSec }
@@ -167,16 +179,37 @@ test('#102 heavy hold: past HEAVY_DOUBLE_HOLD_SEC the job doubles onto a one-hea
 });
 
 test('#102 heavy hold: a THIRD heavy job still waits HEAVY_HOLD_SEC — the doubling evidence covers two', () => {
-	const held = holdOn(2, HEAVY_DOUBLE_HOLD_SEC);
+	const held = holdOn(2, HEAVY_DOUBLE_HOLD_SEC, 4);
 	assert.equal(held.node, undefined);
 	assert.deepEqual(held.passed[0], {
 		node: 'claw-4',
 		reason: `heavy hold: already running 2 heavy job(s) (queued ${HEAVY_DOUBLE_HOLD_SEC}s < ${HEAVY_HOLD_SEC}s)`,
 		holdSec: HEAVY_HOLD_SEC,
 	});
-	assert.equal(holdOn(2, HEAVY_HOLD_SEC - 1).node, undefined);
-	assert.equal(holdOn(2, HEAVY_HOLD_SEC).node, 'claw-4', 'and never queues forever');
+	assert.equal(holdOn(2, HEAVY_HOLD_SEC - 1, 4).node, undefined);
+	assert.equal(holdOn(2, HEAVY_HOLD_SEC, 4).node, 'claw-4', 'and never queues forever');
 	// REVERTED (the double tier applied to every count): placed at 600 s.
+});
+
+test('heavy pairing: a claw of HEAVY_PAIR_MIN_SLOTS slots takes a SECOND heavy job with no hold', () => {
+	assert.equal(HEAVY_PAIR_MIN_SLOTS, 3);
+	assert.equal(holdOn(1, 0, HEAVY_PAIR_MIN_SLOTS).node, 'claw-4');
+	assert.equal(holdOn(1, 0, 4).node, 'claw-4');
+	// REVERTED (pairing off): held until HEAVY_DOUBLE_HOLD_SEC.
+	assert.equal(holdOn(1, 0, HEAVY_PAIR_MIN_SLOTS - 1).node, undefined, 'one slot short: the hold');
+});
+
+test('heavy pairing: on a pairing claw the THIRD waits HEAVY_HOLD_SEC, never the shorter double tier', () => {
+	const held = holdOn(2, HEAVY_DOUBLE_HOLD_SEC, HEAVY_PAIR_MIN_SLOTS);
+	assert.equal(held.node, undefined);
+	assert.equal(held.passed[0].holdSec, HEAVY_HOLD_SEC);
+});
+
+test('heavy pairing: the on-demand backstop never pairs, however many slots it has', () => {
+	assert.equal(holdOn(1, 0, 4, true).node, undefined);
+	assert.equal(holdOn(1, 0, 4, true).passed[0].holdSec, HEAVY_DOUBLE_HOLD_SEC);
+	assert.equal(heavyFreeOf({ maxConcurrent: 4, onDemandBackstop: true }), 1);
+	assert.equal(heavyFreeOf({ maxConcurrent: 4 }), 2);
 });
 
 test('#102 heavy hold: a LIGHT job is never held by heavyJobs — only ranked by runningHeavy', () => {
@@ -309,21 +342,18 @@ test('tuning (simulator only): heavyFree lets a node take that many heavy jobs b
 			HEAVY_REPO,
 			{ jobName: 'forge-e2e', queuedSec }
 		).node;
-	assert.equal(on(1, 0), undefined, 'constant: one heavy job, then the hold');
-	assert.equal(on(1, 0, { heavyFree: 2 }), 'claw-4', 'two free: the second places at once');
-	assert.equal(on(2, 0, { heavyFree: 2 }), undefined, 'the third is held');
-	assert.equal(
-		on(2, HEAVY_DOUBLE_HOLD_SEC, { heavyFree: 2 }),
-		'claw-4',
-		'…for the double hold, not the hour'
-	);
+	assert.equal(on(1, 0), 'claw-4', 'live: a four-slot claw pairs');
+	assert.equal(on(1, 0, { heavyFree: 1 }), undefined, 'one free: the second is held');
+	assert.equal(on(2, 0, { heavyFree: 3 }), 'claw-4', 'three free: the third places at once');
+	assert.equal(on(2, HEAVY_DOUBLE_HOLD_SEC, { heavyFree: 2 }), undefined, 'the third waits…');
+	assert.equal(on(2, HEAVY_HOLD_SEC, { heavyFree: 2 }), 'claw-4', '…the hour, not the double hold');
 });
 
 test('tuning (simulator only): doubleHoldSec and holdSec replace the two hold tiers', () => {
 	const on = (heavyJobs: number, queuedSec: number, tuning: Record<string, number>) =>
 		choosePlacement(
 			['claw-4'],
-			[m('claw-4', { heavyJobs, maxConcurrent: 4, heavyModel: FORGE, tuning })],
+			[m('claw-4', { heavyJobs, maxConcurrent: 2, heavyModel: FORGE, tuning })],
 			[],
 			HEAVY_REPO,
 			{ jobName: 'forge-e2e', queuedSec }

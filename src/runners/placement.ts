@@ -16,6 +16,7 @@
 import type { NodeState } from './placement-node-state.js';
 import { satisfiesLabels } from './placement-node-state.js';
 import { refusalFor, type SpillContext } from './placement-refusal.js';
+import { PACE_BAND_SEC } from './placement-slow.js';
 
 export interface Placement {
 	node?: string;
@@ -92,7 +93,8 @@ export interface Placement {
  * (see {@link choosePlacement}). `baseline-order` is the tick's own
  * `orderCandidates` position — speed, idle time, schedulability, name.
  */
-export type WalkKey = 'heavy-jobs' | 'busy' | 'running-heavy' | 'warm-affinity' | 'baseline-order';
+export type WalkKey =
+	'heavy-jobs' | 'pace' | 'busy' | 'running-heavy' | 'warm-affinity' | 'baseline-order';
 
 /** This node's running jobs — standing registrations GitHub assigned directly,
  *  plus live (minted, not yet finished) units — see `traffic.ts`'s
@@ -244,6 +246,11 @@ export function choosePlacement(
 	// read ONE ranking function: the sort takes `diff`, the log takes `key` — the
 	// first term that told two nodes apart. Same terms, same order, same signs
 	// as the inline comparator this replaced.
+	const paceOf = (n: NodeState): number => {
+		const band = n.tuning?.paceBandSec ?? PACE_BAND_SEC;
+		if (!band || repo === undefined) return 0;
+		return Math.round((n.speedModel?.expectedExtraSec(n.name, repo, spill?.jobName) ?? 0) / band);
+	};
 	const compareWalk = (x: NodeState, y: NodeState): { key: WalkKey; diff: number } => {
 		// 1. Fewest jobs in flight — THIS is the fix for "busy counted distinct
 		//    repos, not jobs" (#102.1): `busyOf` reads the actual running+live
@@ -257,6 +264,12 @@ export function choosePlacement(
 			const yh = y.heavyJobs ?? 0;
 			if (xh !== yh) return { key: 'heavy-jobs', diff: xh - yh };
 		}
+		// 0b. Pace FOR THIS JOB'S KIND (2026-11-11): the node the speed model
+		//    expects to run this (repo, job) fastest, in PACE_BAND_SEC bands so
+		//    a few seconds of noise never outvotes load. See PACE_BAND_SEC.
+		const xp = paceOf(x);
+		const yp = paceOf(y);
+		if (xp !== yp) return { key: 'pace', diff: xp - yp };
 		const xb = busyOf(x);
 		const yb = busyOf(y);
 		if (xb !== yb) return { key: 'busy', diff: xb - yb };

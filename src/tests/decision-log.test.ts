@@ -274,7 +274,9 @@ test('a placed job: candidates, every refusal ahead of the winner, the rule, the
 	const forge2 = rows.find((r) => r.jobId === 9003)!;
 	assert.ok(forge1 && forge2, 'both Forge shards recorded');
 
-	// The heavy shard: claw-9 is the empty jdk21 node and is first in the walk.
+	// The heavy shard: claw-9 is the empty jdk21 node. jdk21 is scarce, so the
+	// shards are planned before the site job (placementOrder) and idle claw-3
+	// is still ahead of claw-9 in the walk, refusing on its exclusion.
 	assert.equal(forge1.path, 'jit');
 	assert.equal(forge1.kind, 'placed');
 	assert.equal(forge1.winner, 'claw-9');
@@ -282,8 +284,11 @@ test('a placed job: candidates, every refusal ahead of the winner, the rule, the
 	assert.match(forge1.runner ?? '', /^jit-claw-9-/);
 	assert.equal(forge1.heavy, true);
 	assert.deepEqual(forge1.order, ORDER);
-	assert.equal(forge1.rule?.position, 0);
-	assert.deepEqual(forge1.refused, []);
+	assert.equal(forge1.rule?.position, 1);
+	assert.deepEqual(
+		forge1.refused.map((x) => x.node),
+		['claw-3']
+	);
 	assert.deepEqual(forge1.rule?.rankedOver, { node: 'claw-4', key: 'busy' });
 	assert.equal(forge1.capacity.length, 4, 'every eligible node, as the walk saw it');
 	const c9 = forge1.capacity.find((c) => c.node === 'claw-9')!;

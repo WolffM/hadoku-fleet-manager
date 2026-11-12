@@ -9,9 +9,9 @@
  */
 import { choosePlacement, busyOf, type Placement } from './placement.js';
 import { isForkSafe, type RunIdentity } from './placement-fork-safety.js';
-import { satisfiesLabels, type NodeState } from './placement-node-state.js';
+import { IMPLICIT_LABELS, satisfiesLabels, type NodeState } from './placement-node-state.js';
 import { jitRunnerName } from '../lib/jit-naming.js';
-import { laneLabelsOf } from '../lib/capability-labels.js';
+import { isLaneLabel, laneLabelsOf } from '../lib/capability-labels.js';
 import { observedQueuedSinceMs } from './queue-discovery.js';
 
 export interface PendingRun extends RunIdentity {
@@ -271,13 +271,70 @@ export function singleNodeFirst(
 	pending: readonly PendingRun[],
 	nodes: readonly NodeState[]
 ): PendingRun[] {
-	const eligible = nodes.filter((m) => m.eligible);
-	const homes = (run: PendingRun): number => {
-		const wanted = run.labels ?? [];
-		return eligible.filter((m) => !wanted.length || satisfiesLabels(m.labels ?? [], wanted)).length;
-	};
-	const single = pending.filter((r) => homes(r) === 1);
+	const single = pending.filter(singleNode(nodes));
 	return [...single, ...pending.filter((r) => !single.includes(r))];
+}
+
+/** Does exactly one eligible node carry this run's labels? See {@link singleNodeFirst}. */
+function singleNode(nodes: readonly NodeState[]): (run: PendingRun) => boolean {
+	const eligible = nodes.filter((m) => m.eligible);
+	return (run) => {
+		const wanted = run.labels ?? [];
+		return (
+			eligible.filter((m) => !wanted.length || satisfiesLabels(m.labels ?? [], wanted)).length === 1
+		);
+	};
+}
+
+/** Labels every node in `claws` carries, lower-cased. */
+export function universalLabels(claws: readonly NodeState[]): Set<string> {
+	const sets = claws.map((n) => new Set((n.labels ?? []).map((l) => l.toLowerCase())));
+	if (!sets.length) return new Set();
+	return new Set([...sets[0]].filter((l) => sets.every((s) => s.has(l))));
+}
+
+/** A job's scarce labels: those not in `universal`, lanes and implicit labels aside. */
+export function scarceLabelsOf(
+	labels: readonly string[],
+	universal: ReadonlySet<string>
+): string[] {
+	return labels
+		.map((l) => l.toLowerCase())
+		.filter((l) => !IMPLICIT_LABELS.has(l) && !isLaneLabel(l) && !universal.has(l))
+		.sort();
+}
+
+/**
+ * The pass's placement order: {@link singleNodeFirst}, then every QUEUED job
+ * that asks for a label not every serving claw carries (jdk21 today), then
+ * the rest. Stable within each group, so `byPriority` holds inside them.
+ *
+ * Read from this tick's queue and this tick's claws (healthy, eligible, not
+ * drained, not the backstop), never from a standing label count: the operator
+ * (2026-11-11) wants capable claws to serve the scarce work that is waiting
+ * NOW, and a label a claw stops carrying stops being scarce on the next tick.
+ * Nothing is held back or reserved: a general job still takes any slot left
+ * after the scarce jobs had first pick, so no claw is drained for them.
+ *
+ * Scored before it landed by `fleet simulate` over the whole job history
+ * (29,225 jobs, 10-28..11-11): jdk21 queue p50 82 -> 32 s and oldest-in-queue
+ * p95 down with kind-aware placement, general CI q95 unchanged; the claw
+ * reservation alternative gained nothing over this and churned ~120 drains a
+ * day.
+ */
+export function placementOrder(
+	pending: readonly PendingRun[],
+	nodes: readonly NodeState[]
+): PendingRun[] {
+	const single = singleNode(nodes);
+	const claws = nodes.filter((n) => !n.onDemandBackstop && n.eligible && n.healthy && !n.drained);
+	const universal = universalLabels(claws);
+	const scarce = (r: PendingRun): boolean => scarceLabelsOf(r.labels ?? [], universal).length > 0;
+	const rank = (r: PendingRun): number => (single(r) ? 0 : scarce(r) ? 1 : 2);
+	return pending
+		.map((r, i) => ({ r, i, k: rank(r) }))
+		.sort((a, b) => a.k - b.k || a.i - b.i)
+		.map(({ r }) => r);
 }
 
 export function planTick(
@@ -300,7 +357,7 @@ export function planTick(
 	const state = new Map(nodes.map((m) => [m.name, { ...m }]));
 
 	let passIndex = -1;
-	for (const run of singleNodeFirst(pending, nodes)) {
+	for (const run of placementOrder(pending, nodes)) {
 		passIndex++;
 		if (inFlight.jobIds.has(run.jobId) || inFlight.runIds.has(run.id)) {
 			observe?.({

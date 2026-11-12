@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { choosePlacement } from '../runners/placement.js';
 import {
 	BACKSTOP_SOLE_CARRIER_SLOTS,
+	PACE_BAND_SEC,
 	slowKind,
 	slowReposOn,
 	SPILL_FLOOR_SEC,
@@ -272,11 +273,20 @@ test('#8: a normal-tier node holds the ONE kind it runs slowly, for as long as i
 	assert.notEqual(speedModel.tierOf('claw-1'), 'slow', 'the tier gate is not what holds it');
 	const claw1 = m('claw-1', { speedModel });
 	const claw2 = m('claw-2', { speedModel });
-	const p = choosePlacement(['claw-1', 'claw-2'], [claw1, claw2], [], KIND_REPO, {
+	// With a faster node free, the pace term ranks it first and claw-1 is
+	// never asked; the hold is what claw-1 says when it IS asked.
+	const ranked = choosePlacement(['claw-1', 'claw-2'], [claw1, claw2], [], KIND_REPO, {
 		queuedSec: 30,
 		jobName: 'e2e',
 	});
-	assert.equal(p.node, 'claw-2');
+	assert.equal(ranked.node, 'claw-2');
+	assert.deepEqual(ranked.passed, []);
+	assert.equal(ranked.rankedOver?.key, 'pace');
+	const p = choosePlacement(['claw-1'], [claw1], [], KIND_REPO, {
+		queuedSec: 30,
+		jobName: 'e2e',
+	});
+	assert.equal(p.node, undefined);
 	assert.match(
 		p.passed[0].reason,
 		/slow kind: holding for a faster node \(queued 30s < 2760s; e2e runs 2\.84x here \(\+2760s, 2 run\(s\), 2 unfinished\)\)/
@@ -484,4 +494,50 @@ test('tuning (simulator only): spillFloorSec replaces the slow-tier floor; unset
 	assert.equal(at(SPILL_FLOOR_SEC - 1), undefined, 'constant: held one second short');
 	assert.equal(at(30, 20), 'claw-5', 'a 20 s floor spills at 30 s');
 	assert.equal(at(30, 60), undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Pace: the node that runs THIS kind fastest, ahead of load (2026-11-11)
+// ---------------------------------------------------------------------------
+
+test('pace: a node faster at this kind by a band or more ranks ahead of a less busy one', () => {
+	const speedModel = fakeSpeedModel({ extraSecFor: (n) => (n === 'claw-2' ? 200 : -100) });
+	const p = choosePlacement(
+		['claw-2', 'claw-8'],
+		[m('claw-2', { speedModel }), m('claw-8', { speedModel, liveUnits: 2, maxConcurrent: 3 })],
+		[],
+		'WolffM/x',
+		{ queuedSec: 0, jobName: 'e2e' }
+	);
+	assert.equal(p.node, 'claw-8');
+	assert.deepEqual(p.rankedOver, { node: 'claw-2', key: 'pace' });
+	// REVERTED (no pace term): busy alone picks idle claw-2.
+});
+
+test('pace: inside one PACE_BAND_SEC band, load decides', () => {
+	const speedModel = fakeSpeedModel({
+		extraSecFor: (n) => (n === 'claw-2' ? PACE_BAND_SEC / 2 - 1 : 0),
+	});
+	const p = choosePlacement(
+		['claw-8', 'claw-2'],
+		[m('claw-2', { speedModel }), m('claw-8', { speedModel, liveUnits: 1, maxConcurrent: 3 })],
+		[],
+		'WolffM/x',
+		{ queuedSec: 0, jobName: 'e2e' }
+	);
+	assert.equal(p.node, 'claw-2');
+	assert.equal(p.rankedOver?.key, 'busy');
+});
+
+test('pace: no estimate is neutral, and a refusal still beats pace', () => {
+	const speedModel = fakeSpeedModel({ extraSecFor: (n) => (n === 'claw-8' ? -500 : null) });
+	const full = choosePlacement(
+		['claw-2', 'claw-8'],
+		[m('claw-2', { speedModel }), m('claw-8', { speedModel, liveUnits: 3, maxConcurrent: 3 })],
+		[],
+		'WolffM/x',
+		{ queuedSec: 0, jobName: 'e2e' }
+	);
+	assert.equal(full.node, 'claw-2', 'the fastest node is full: refused, not ranked into');
+	assert.match(full.passed[0].reason, /at capacity/);
 });

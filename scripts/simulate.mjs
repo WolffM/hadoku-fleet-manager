@@ -10,7 +10,7 @@
  * baseline policy lands near history: that is the model's validation.
  *
  * USAGE
- *   fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--tune key=value] [--without node,…] [--clone node=new] [--drop key=v,…]
+ *   fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--tune key=value] [--tune-node node:key=value] [--without node,…] [--clone node=new] [--drop key=v,…]
  *                  [--tick 15] [--contention 0.3] [--min-queued 0] [--json]
  *
  * READS (never writes): <state>/job-history.jsonl, <state>/dispatch-decisions/*.jsonl,
@@ -37,7 +37,7 @@ const argv = process.argv.slice(2);
 const out = createEmitter({ json: argv.includes('--json') });
 if (argv.includes('--help') || argv.includes('-h')) {
 	out.log(
-		'fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--without node,…] [--clone node=new] [--drop key=v,…] [--tick 15]\n' +
+		'fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--tune key=value] [--tune-node node:key=value] [--without node,…] [--clone node=new] [--drop key=v,…] [--tick 15]\n' +
 			'               [--contention 0.3] [--min-queued 0] [--json]\n' +
 			'  replays job history through the real dispatcher, no claws touched; prints each\n' +
 			'  objective simulated beside history over the same window'
@@ -88,7 +88,7 @@ argv.forEach((a, i) => {
 });
 // --tune key=value (repeatable): placement constants overridden on every
 // node, for this simulated run only (NodeState.tuning).
-const TUNE_KEYS = ['heavyFree', 'doubleHoldSec', 'holdSec', 'spillFloorSec'];
+const TUNE_KEYS = ['heavyFree', 'doubleHoldSec', 'holdSec', 'spillFloorSec', 'paceBandSec'];
 const tuning = {};
 argv.forEach((a, i) => {
 	if (a !== '--tune') return;
@@ -101,8 +101,22 @@ argv.forEach((a, i) => {
 	}
 	tuning[k] = Number(v);
 });
+// --tune-node node:key=value (repeatable): the same constants on ONE node.
+const tuningByNode = {};
+argv.forEach((a, i) => {
+	if (a !== '--tune-node') return;
+	const m = /^([^:]+):([^=]+)=(.*)$/.exec(String(argv[i + 1] ?? ''));
+	if (!m || !TUNE_KEYS.includes(m[2]) || !Number.isFinite(Number(m[3])) || Number(m[3]) < 0) {
+		out.warn(
+			`fleet simulate: --tune-node takes node:key=number with key one of ${TUNE_KEYS.join(', ')}, got ${argv[i + 1]}`
+		);
+		process.exit(2);
+	}
+	(tuningByNode[m[1]] ??= {})[m[2]] = Number(m[3]);
+});
 const opts = {
 	...(Object.keys(tuning).length ? { tuning } : {}),
+	...(Object.keys(tuningByNode).length ? { tuningByNode } : {}),
 	tickSec: num('--tick', 15),
 	contention: num('--contention', 0.3),
 	minQueuedSec: num('--min-queued', 0),
@@ -242,6 +256,7 @@ if (out.json) {
 		policy: result.policy,
 		params,
 		tuning,
+		tuningByNode,
 		whatIf,
 		corpus: {
 			jobs: corpus.jobs.length,
@@ -288,6 +303,7 @@ out.log(
 );
 if (whatIf.length) out.log(`what-if (simulated column only): ${whatIf.join('; ')}`);
 if (Object.keys(tuning).length) out.log(`tuned constants: ${JSON.stringify(tuning)}`);
+if (Object.keys(tuningByNode).length) out.log(`tuned per node: ${JSON.stringify(tuningByNode)}`);
 out.log('');
 out.log(`${''.padEnd(34)}${'history'.padStart(9)}${'simulated'.padStart(9)}`);
 out.log('1. OLDEST JOB IN QUEUE (s)');

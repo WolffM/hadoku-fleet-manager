@@ -233,12 +233,14 @@ export interface NodeState extends AdmissionInput {
 
 /** See {@link NodeState.tuning}. */
 export interface PlacementTuning {
-	/** Heavy jobs a node takes before any hold applies. Constant: 1. */
+	/** Heavy jobs a node takes before any hold applies. Live: heavyFreeOf (HEAVY_PAIR_MIN_SLOTS). */
 	heavyFree?: number;
-	/** The hold before one more heavy job past `heavyFree`. Constant: HEAVY_DOUBLE_HOLD_SEC. */
+	/** The hold before a SECOND heavy job, on a node that does not pair. Constant: HEAVY_DOUBLE_HOLD_SEC. */
 	doubleHoldSec?: number;
-	/** The hold past that. Constant: HEAVY_HOLD_SEC. */
+	/** The hold before a third or more. Constant: HEAVY_HOLD_SEC. */
 	holdSec?: number;
 	/** The slow-tier spill floor. Constant: SPILL_FLOOR_SEC. */
 	spillFloorSec?: number;
+	/** The pace term's band; 0 turns the term off. Constant: PACE_BAND_SEC. */
+	paceBandSec?: number;
 }

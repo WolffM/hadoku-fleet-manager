@@ -71,6 +71,8 @@ export interface SimOptions {
 	backstopCalmSec?: number;
 	/** Placement constants overridden on every node (`--tune`); see NodeState.tuning. */
 	tuning?: PlacementTuning;
+	/** Per-node overrides on top of `tuning` (`--tune-node node:key=value`). */
+	tuningByNode?: Readonly<Record<string, PlacementTuning>>;
 	/** Only jobs arriving in [fromMs, toMs). Dependants of an excluded job arrive as recorded. */
 	fromMs?: number;
 	toMs?: number;
@@ -258,6 +260,11 @@ export function simulate(
 		}
 	};
 
+	const tuningFor = (node: string): { tuning?: PlacementTuning } => {
+		const merged = { ...opts.tuning, ...opts.tuningByNode?.[node] };
+		return Object.keys(merged).length ? { tuning: merged } : {};
+	};
+
 	const nodeStates = (now: number): NodeState[] =>
 		fleet.map((s) => {
 			const cap = capacityAt(s, now);
@@ -284,7 +291,7 @@ export function simulate(
 				heavyModel: models.heavy,
 				heavyJobs: list.filter((r) => r.heavy).length,
 				runningHeavy: list.some((r) => r.heavyRepo),
-				...(opts.tuning ? { tuning: opts.tuning } : {}),
+				...tuningFor(s.name),
 			};
 		});
 

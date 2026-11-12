@@ -19,14 +19,9 @@ import {
 	type SimPolicy,
 } from '../runners/sim-engine.js';
 import { historicalOutcomes, measure } from '../runners/sim-metrics.js';
-import {
-	legacyHoldPolicy,
-	reservationPolicy,
-	scarceLabelsOf,
-	universalLabels,
-} from '../runners/sim-policies.js';
+import { legacyHoldPolicy, reservationPolicy } from '../runners/sim-policies.js';
 import type { NodeState } from '../runners/placement-node-state.js';
-import type { PendingRun } from '../runners/dispatcher.js';
+import { scarceLabelsOf, universalLabels, type PendingRun } from '../runners/dispatcher.js';
 import { HEAVY_DOUBLE_HOLD_SEC, HEAVY_HOLD_SEC } from '../runners/placement-slow.js';
 
 const T0 = Date.parse('2026-11-01T00:00:00Z');
@@ -300,7 +295,8 @@ test('kindRatio: a kind’s own medians decide a move; a thin kind falls back to
 });
 
 test('legacy-hold: a heavy job does not double before HEAVY_HOLD_SEC; today’s baseline doubles after HEAVY_DOUBLE_HOLD_SEC', () => {
-	const fleet = [node('claw-9', JDK, {}, 4)];
+	// Two slots: below HEAVY_PAIR_MIN_SLOTS, so today's baseline holds the double.
+	const fleet = [node('claw-9', JDK, {}, 2)];
 	const jobs = [shard(1, 0), shard(2, 0)];
 	const legacy = run(jobs, fleet, legacyHoldPolicy(), FORGE);
 	const today = run(jobs, fleet, baselinePolicy(), FORGE);
@@ -308,6 +304,9 @@ test('legacy-hold: a heavy job does not double before HEAVY_HOLD_SEC; today’s 
 		Math.max(outcomeOf(r, 1).placedMs!, outcomeOf(r, 2).placedMs!) - T0;
 	assert.ok(second(today) >= HEAVY_DOUBLE_HOLD_SEC * 1000 && second(today) < HEAVY_HOLD_SEC * 1000);
 	assert.ok(second(legacy) >= 769_000, 'legacy waits for the first shard to finish (solo 769 s)');
+	// Four slots: today's baseline pairs the two shards with no hold.
+	const paired = run(jobs, [node('claw-9', JDK, {}, 4)], baselinePolicy(), FORGE);
+	assert.ok(second(paired) < HEAVY_DOUBLE_HOLD_SEC * 1000, 'a 4-slot claw pairs');
 });
 
 test('starvation: a policy that leaves an admissible job queued past starveSec is counted', () => {
@@ -453,7 +452,7 @@ test('scarce labels: a label not every claw carries; one they all carry is not',
 	);
 });
 
-test('reservation (reserve=0): narrow jobs are planned first, so plain jobs listed ahead do not fill both jdk21 claws', () => {
+test('scarce-label first (reservation reserve=0, and live since 11-11): plain jobs listed ahead do not fill both jdk21 claws', () => {
 	// One jdk21 home would already go first today (#131's single-node rule);
 	// with TWO, plain jobs walked first fill both and the jdk21 job waits.
 	const nodes = [
@@ -473,7 +472,13 @@ test('reservation (reserve=0): narrow jobs are planned first, so plain jobs list
 		2: 'claw-1',
 		3: 'claw-9',
 	});
-	assert.deepEqual(placed(baselinePolicy().plan(tick)), { 1: 'claw-9', 2: 'claw-8' }, 'today');
+	// The live dispatcher's placementOrder does the same. REVERTED (no
+	// scarce-label step): { 1: 'claw-9', 2: 'claw-8' } and the jdk21 job waits.
+	assert.deepEqual(
+		placed(baselinePolicy().plan(tick)),
+		{ 1: 'claw-8', 2: 'claw-1', 3: 'claw-9' },
+		'today'
+	);
 });
 
 /** claw-9 runs two general jobs and has 5,000 MB: the 4,000 MB jdk21 job is refused on memory; draining frees 1,800. */

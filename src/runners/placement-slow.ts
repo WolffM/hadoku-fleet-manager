@@ -66,6 +66,47 @@ export const HEAVY_HOLD_SEC = 3600;
 export const HEAVY_DOUBLE_HOLD_SEC = 600;
 
 /**
+ * The width of the placement walk's PACE term, in seconds (2026-11-11): two
+ * nodes whose expected extra time for this (repo, job)
+ * (`SpeedModel.expectedExtraSec`) rounds to the same band are equal on pace
+ * and fall through to load. Wider bands let load decide more often.
+ */
+export const PACE_BAND_SEC = 30;
+
+/**
+ * A claw whose mint budget is at least this many slots takes a SECOND heavy
+ * job with no hold (2026-11-11); a third still waits {@link HEAVY_HOLD_SEC}.
+ * Below it, and on the on-demand backstop, the second waits
+ * {@link HEAVY_DOUBLE_HOLD_SEC} as before.
+ *
+ * Read from the node's own `maxConcurrent` as this tick's admission sees it
+ * (warm listeners already taken out), not from a list of claw names: a claw
+ * that is re-qualified up or down, or holds a warm listener, moves across the
+ * line by itself. Three slots means two heavy jobs still leave one for light
+ * work, and `maxConcurrent` is already each node's safety ceiling
+ * (physical cores - 2 since 11-05), so pairing never runs more jobs than the
+ * node admits. Memory is checked before this hold, so a second heavy job
+ * that does not fit is refused there.
+ *
+ * Measured doubling cost, 10-29..11-11 (see {@link HEAVY_DOUBLE_HOLD_SEC}):
+ * claw-8 1.14x, claw-9 1.31x per shard, no change in failure rate; two
+ * doubled shards finish in ~1.3x one where back to back takes 2x. Scored
+ * with `fleet simulate` over the whole job history (29,225 jobs,
+ * 10-28..11-11) with scarce-label-first ordering: oldest job in queue p95
+ * 1,784 -> 1,408 s, jdk21 queue p50 82 -> 27 s, general CI q95 109 -> 120 s
+ * and its worst wait 1,571 -> 1,706 s, runner-hours +3%. Pairing on every
+ * jdk21 node instead (claw-4/10, two slots) added nothing (1,425 s). The
+ * backstop pairing as well reached 1,165 s but is hokon, a guest; that is
+ * the operator's call, not this rule's.
+ */
+export const HEAVY_PAIR_MIN_SLOTS = 3;
+
+/** Heavy jobs this node takes before any heavy hold applies. See {@link HEAVY_PAIR_MIN_SLOTS}. */
+export function heavyFreeOf(m: { maxConcurrent: number; onDemandBackstop?: boolean }): number {
+	return !m.onDemandBackstop && m.maxConcurrent >= HEAVY_PAIR_MIN_SLOTS ? 2 : 1;
+}
+
+/**
  * The floor a slow-tier node must clear before it takes a job, when
  * {@link SpeedModel.expectedExtraSec} has nothing to estimate from (#83).
  *

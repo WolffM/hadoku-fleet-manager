@@ -145,7 +145,9 @@ test("#102 REPLAY 2026-10-08 22:08:09Z: a warm listener's running shard counts a
 	// The probe's view: claw-4 idle (stale — its warm listener took forge-e2e (3)
 	// at 22:07:58), claw-8 running cardtable `check` (light), claw-9 idle.
 	const nodes = [
-		node('claw-4', { maxConcurrent: 4, warmRepo: CT, heavyModel }),
+		// Two slots, as claw-4 has today: below HEAVY_PAIR_MIN_SLOTS, so it
+		// does not pair. claw-8/claw-9 do, which is why all three now place.
+		node('claw-4', { maxConcurrent: 2, warmRepo: CT, heavyModel }),
 		node('claw-8', {
 			maxConcurrent: 4,
 			standingBusy: 1,
@@ -167,11 +169,15 @@ test("#102 REPLAY 2026-10-08 22:08:09Z: a warm listener's running shard counts a
 		h.gh,
 		h.sh
 	);
-	assert.equal(r.minted, 2, 'two shards place; the third holds for a node with no Forge job');
+	assert.equal(
+		r.minted,
+		3,
+		'two shards take the heavy-free nodes; the third pairs on a 4-slot claw'
+	);
 	const line = infos.find((i) => i.startsWith('[dispatch] minted='));
 	assert.ok(line, `no dispatch line among:\n  ${infos.join('\n  ')}`);
 	assert.doesNotMatch(line!, /claw-4@/, 'nothing lands beside the running shard');
-	assert.match(line!, /placed=claw-9@0,claw-8@1$/);
+	assert.match(line!, /placed=claw-9@0,claw-8@1,claw-9@1$/);
 	// REVERTED (no runningJobs): placed=claw-4@0,claw-4@1,claw-9@... — the incident.
 });
 
@@ -217,7 +223,9 @@ test('#102 REPLAY 2026-10-30 20:40:52Z: a heavy mint no listing shows yet still 
 			order: ['claw-8', 'claw-9'],
 			nodes: [
 				node('claw-8', { maxConcurrent: 2, heavyModel }),
-				node('claw-9', { maxConcurrent: 3, heavyModel }),
+				// Two slots so claw-9 does not pair (HEAVY_PAIR_MIN_SLOTS) and the
+				// replay isolates claw-8's count.
+				node('claw-9', { maxConcurrent: 2, heavyModel }),
 			],
 			pending: [job(124293716878, 'forge-jvm (1)'), job(124293716912, 'forge-e2e (4)')],
 			// claw-9 is visibly running a shard of its own, as it was.

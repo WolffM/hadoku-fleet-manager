@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
 	firstSentence,
+	placementOrder,
 	planTick,
 	singleNodeFirst,
 	type PendingRun,
@@ -456,8 +457,10 @@ const forge = (id: number, jobName: string, queuedSec: number): PendingRun =>
 	});
 
 test('#102 heavy hold: four Forge jobs over three jdk21 nodes place one apiece and HOLD the fourth (run 37851403985)', () => {
+	// claw-4 doubled two shards here on 10-08 and both went red. Two-slot nodes
+	// (claw-4 today) still hold the fourth; see the pairing test below.
 	const nodes = ['claw-8', 'claw-9', 'claw-4'].map((n) =>
-		node(n, { maxConcurrent: 4, heavyModel: FORGE })
+		node(n, { maxConcurrent: 2, heavyModel: FORGE })
 	);
 	const p = planTick(
 		[
@@ -480,6 +483,29 @@ test('#102 heavy hold: four Forge jobs over three jdk21 nodes place one apiece a
 	);
 	// REVERTED (no hold): busy alone sends forge-jvm to a node already
 	// running a shard — the doubling that turned shards 2 and 3 red.
+});
+
+test('heavy pairing: the same four jobs at today’s ceilings — the fourth pairs on a 3+ slot claw, never on two-slot claw-4', () => {
+	const slots: Record<string, number> = { 'claw-8': 3, 'claw-9': 4, 'claw-4': 2 };
+	const nodes = Object.entries(slots).map(([n, maxConcurrent]) =>
+		node(n, { maxConcurrent, heavyModel: FORGE })
+	);
+	const p = planTick(
+		[
+			forge(1, 'forge-e2e (1)', 10),
+			forge(2, 'forge-e2e (2)', 10),
+			forge(3, 'forge-e2e (3)', 10),
+			forge(4, 'forge-jvm', 10),
+		],
+		nodes,
+		['claw-4', 'claw-8', 'claw-9'],
+		NONE,
+		NOW
+	);
+	const placed = p.mint.map((m) => m.node);
+	assert.equal(placed.length, 4, 'nothing held');
+	assert.equal(placed.filter((n) => n === 'claw-4').length, 1, 'claw-4 never doubles');
+	assert.equal(placed.length, new Set(placed).size + 1, 'exactly one node pairs');
 });
 
 test('#102 heavy hold: the held job places once it has waited HEAVY_HOLD_SEC', () => {
@@ -574,4 +600,88 @@ test('#131: "single-node" is decided by labels, not by who is full this tick', (
 		[[1, 'claw-1']]
 	);
 	assert.equal(p.skipped[0].runId, 2);
+});
+
+// --- placementOrder: scarce-label jobs first, read from the queue and the claws ---
+
+const JDK_LABELS = ['self-hosted', 'hadoku-builder', 'jdk21'];
+const PLAIN_LABELS = ['self-hosted', 'hadoku-builder'];
+
+test('placementOrder: a queued job asking a label not every serving claw carries goes ahead of plain jobs, stable within groups', () => {
+	const nodes = [
+		node('claw-1', { labels: PLAIN_LABELS }),
+		node('claw-8', { labels: JDK_LABELS }),
+		node('claw-9', { labels: JDK_LABELS }),
+	];
+	const pending = [
+		run(1, { labels: PLAIN_LABELS }),
+		run(2, { labels: JDK_LABELS }),
+		run(3, { labels: PLAIN_LABELS }),
+		run(4, { labels: JDK_LABELS }),
+	];
+	assert.deepEqual(
+		placementOrder(pending, nodes).map((r) => r.id),
+		[2, 4, 1, 3]
+	);
+});
+
+test('placementOrder: a label every serving claw carries is not scarce, and the backstop and drained claws are not counted', () => {
+	const pending = [run(1, { labels: PLAIN_LABELS }), run(2, { labels: JDK_LABELS })];
+	const allJdk = [node('claw-8', { labels: JDK_LABELS }), node('claw-9', { labels: JDK_LABELS })];
+	assert.deepEqual(
+		placementOrder(pending, [
+			...allJdk,
+			node('hokon', { labels: ['self-hosted', 'pm2-host'], onDemandBackstop: true }),
+			node('claw-1', { labels: PLAIN_LABELS, drained: true }),
+		]).map((r) => r.id),
+		[1, 2],
+		'every claw serving now carries jdk21: arrival order holds'
+	);
+	assert.deepEqual(
+		placementOrder(pending, [...allJdk, node('claw-1', { labels: PLAIN_LABELS })]).map((r) => r.id),
+		[2, 1],
+		'claw-1 back in service: jdk21 is scarce again'
+	);
+});
+
+test('placementOrder: a single-node job still goes ahead of a scarce one (#131)', () => {
+	const nodes = [
+		node('claw-1', { labels: PLAIN_LABELS }),
+		node('claw-8', { labels: JDK_LABELS }),
+		node('claw-9', { labels: JDK_LABELS }),
+		node('hokon', { labels: ['self-hosted', 'pm2-host'], onDemandBackstop: true }),
+	];
+	const pending = [
+		run(1, { labels: PLAIN_LABELS }),
+		run(2, { labels: JDK_LABELS }),
+		run(3, { labels: ['self-hosted', 'pm2-host'] }),
+	];
+	assert.deepEqual(
+		placementOrder(pending, nodes).map((r) => r.id),
+		[3, 2, 1]
+	);
+});
+
+test('planTick walks placementOrder: two plain jobs listed first do not take the only jdk21 slot', () => {
+	const nodes = [
+		node('claw-1', { labels: PLAIN_LABELS, maxConcurrent: 1 }),
+		node('claw-8', { labels: JDK_LABELS, maxConcurrent: 1 }),
+		node('claw-9', { labels: JDK_LABELS, maxConcurrent: 1 }),
+	];
+	const p = planTick(
+		[
+			run(1, { labels: PLAIN_LABELS }),
+			run(2, { labels: PLAIN_LABELS }),
+			run(3, { labels: JDK_LABELS }),
+			run(4, { labels: JDK_LABELS }),
+		],
+		nodes,
+		['claw-8', 'claw-9', 'claw-1'],
+		NONE,
+		NOW
+	);
+	const at = Object.fromEntries(p.mint.map((m) => [m.runId, m.node]));
+	assert.ok(at[3] && at[4], 'both jdk21 jobs place');
+	assert.equal(Object.keys(at).length, 3);
+	// REVERTED (singleNodeFirst alone): runs 1 and 2 take claw-8 and claw-9.
 });

@@ -6,12 +6,17 @@
  * candidate or a reconstruction, and lives HERE, not in the dispatcher, until
  * the simulator has scored it against the baseline over the whole corpus.
  */
-import { isLaneLabel } from '../lib/capability-labels.js';
 import { SATURATION_QUEUE_SECONDS } from './backstop.js';
-import { planTick, type PendingRun, type TickPlan } from './dispatcher.js';
+import {
+	planTick,
+	scarceLabelsOf,
+	universalLabels,
+	type PendingRun,
+	type TickPlan,
+} from './dispatcher.js';
 import type { HeavyModel } from './heavy-model.js';
 import { choosePlacement } from './placement.js';
-import { IMPLICIT_LABELS, type NodeState } from './placement-node-state.js';
+import type { NodeState } from './placement-node-state.js';
 import { HEAVY_HOLD_SEC } from './placement-slow.js';
 import type { SimPolicy, SimTick } from './sim-engine.js';
 
@@ -110,24 +115,6 @@ export const RESERVATION_DEFAULTS: ReservationParams = {
 interface Reservation {
 	forClass: string;
 	lastNeededMs: number;
-}
-
-/** A job's scarce labels: those not every schedulable claw carries, lanes and implicit labels aside. */
-export function scarceLabelsOf(
-	labels: readonly string[],
-	universal: ReadonlySet<string>
-): string[] {
-	return labels
-		.map((l) => l.toLowerCase())
-		.filter((l) => !IMPLICIT_LABELS.has(l) && !isLaneLabel(l) && !universal.has(l))
-		.sort();
-}
-
-/** Labels every claw in `claws` carries. */
-export function universalLabels(claws: readonly NodeState[]): Set<string> {
-	const sets = claws.map((n) => new Set((n.labels ?? []).map((l) => l.toLowerCase())));
-	if (!sets.length) return new Set();
-	return new Set([...sets[0]].filter((l) => sets.every((s) => s.has(l))));
 }
 
 export function reservationPolicy(over: Partial<ReservationParams> = {}): SimPolicy {
