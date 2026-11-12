@@ -45,6 +45,13 @@
  * A sibling repo's file is named WITH its repo prefix (`hadoku-task:src/x.ts`);
  * a bare path only ever means hadoku_site's own file.
  *
+ * INLINE WAIVERS come first (fleet-manager#82, lib/gate-waivers.mjs): a repo
+ * exempts its own code with `identity-model-disable-next-line <check>: <why>`
+ * on the line above, in the repo the code ships in. The central list keeps
+ * the site's own files and `nonWaivable`, the checks no repo may waive for
+ * itself. `--print-waivers` turns each central entry that names a sibling
+ * repo into the waiver to add there, so the central rows can be deleted.
+ *
  * An entry WITHOUT `count` exempts every finding of its check in its file, so
  * a new violation landing in that file is invisible — prefer adding
  * `"count": N` (the number of findings it exists for). More than N then
@@ -68,7 +75,14 @@ import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
 import { REPO_ROOT, scanRepo } from './lib/identity-rules.mjs';
 import { overdueAdvisories, splitByStage } from './lib/identity-stages.mjs';
-import { OWNER_MODULE, OWNER_IMPORT, EDGE_INDEX } from './lib/identity-constants.mjs';
+import {
+	OWNER_MODULE,
+	OWNER_IMPORT,
+	EDGE_INDEX,
+	IDENTITY_CHECKS,
+	IDENTITY_WAIVER_GATE,
+} from './lib/identity-constants.mjs';
+import { waiverText } from './lib/gate-waivers.mjs';
 import { checkoutFreshness, siblingRepos } from './lib/identity-scan.mjs';
 
 /** When this run started. Every exit path reports against this. */
@@ -110,6 +124,7 @@ function reportWallClock() {
 const ALLOWLIST_JSON = manifestFile('identity-model-allowlist.json');
 
 const FLEET = process.argv.includes('--fleet');
+const PRINT_WAIVERS = process.argv.includes('--print-waivers');
 const JSON_OUT = process.argv.includes('--json');
 // One stdout discipline, shared — see lib/emit.mjs. `emit` is the only write
 // to stdout; every human line goes through `log` and is held in --json mode.
@@ -133,7 +148,7 @@ function loadAllowlist() {
 	try {
 		obj = JSON.parse(readFileSync(ALLOWLIST_JSON, 'utf8'));
 	} catch (err) {
-		if (err.code === 'ENOENT') return { map: new Map(), entries: [] };
+		if (err.code === 'ENOENT') return { map: new Map(), entries: [], nonWaivable: [] };
 		allowlistError(`allowlist ${ALLOWLIST_JSON} is unreadable: ${err.message}`);
 	}
 	const map = new Map();
@@ -148,14 +163,28 @@ function loadAllowlist() {
 		}
 		map.set(`${entry.check}::${entry.file}`, entry);
 	}
-	return { map, entries: obj.allowed || [] };
+	const nonWaivable = obj.nonWaivable ?? [];
+	const unknown = Array.isArray(nonWaivable)
+		? nonWaivable.filter((c) => !IDENTITY_CHECKS.includes(c))
+		: [nonWaivable];
+	if (unknown.length) {
+		allowlistError(
+			`allowlist "nonWaivable" must list check ids (${IDENTITY_CHECKS.join(' ')}); not: ${JSON.stringify(unknown)}`
+		);
+	}
+	return { map, entries: obj.allowed || [], nonWaivable };
 }
 
-const { map: allow, entries } = loadAllowlist();
+const { map: allow, entries, nonWaivable } = loadAllowlist();
 const violations = [];
 /** allowlist entry -> the violations it absorbed, across every repo scanned. */
 const hitEntries = new Map();
-scanRepo(REPO_ROOT, null, allow, violations, hitEntries);
+/** central entries an inline waiver made redundant: reported, never fatal. */
+const superseded = new Set();
+let waived = scanRepo(REPO_ROOT, null, allow, violations, hitEntries, undefined, {
+	nonWaivable,
+	superseded,
+}).waived;
 
 /**
  * Repos whose files are OLDER than origin — see checkoutFreshness. Only the
@@ -189,7 +218,10 @@ if (FLEET) {
 	missingCheckouts = missing;
 	missingWhy = why;
 	for (const { root, label, tracked } of trees) {
-		scanRepo(root, label, allow, violations, hitEntries, tracked);
+		waived += scanRepo(root, label, allow, violations, hitEntries, tracked, {
+			nonWaivable,
+			superseded,
+		}).waived;
 	}
 	scanned += trees.length;
 	if (!trees.length) {
@@ -237,16 +269,78 @@ const overdue = overdueAdvisories();
 // A `count` ABOVE what was found is stale the same way: the headroom is room
 // for a new violation to land unseen, so it must be lowered as fixes land.
 const completeScan = FLEET && missingCheckouts.length === 0 && !rosterError;
+//
+// A SUPERSEDED entry is never stale: the repo it names waives the finding
+// inline now, and the row waits for the site to delete it. Reported, so it
+// does not wait forever.
 const stale = completeScan
 	? entries.filter(
 			(e) =>
-				!hitEntries.has(e) || (typeof e.count === 'number' && hitEntries.get(e).length < e.count)
+				!superseded.has(e) &&
+				(!hitEntries.has(e) || (typeof e.count === 'number' && hitEntries.get(e).length < e.count))
 		)
 	: [];
+const supersededExemptions = entries
+	.filter((e) => superseded.has(e))
+	.map((e) => `${e.check} ${e.file}`);
 const describeStale = (e) =>
 	hitEntries.has(e)
 		? `${e.check} ${e.file} — count is ${e.count} but only ${hitEntries.get(e).length} found; lower it`
 		: `${e.check} ${e.file}`;
+
+// THE MIGRATION (fleet-manager#82): every central entry that names a sibling
+// repo, as the inline waiver that replaces it. Read from what this run's scan
+// actually matched, so each waiver lands on a line that holds its finding
+// today. Lines are listed bottom-up per file: inserting a waiver shifts every
+// line below it, so working top-down would aim each later one wrong.
+if (PRINT_WAIVERS) {
+	if (!FLEET) {
+		allowlistError('--print-waivers needs --fleet: the entries it moves name sibling repos');
+	}
+	const waivers = [];
+	const keep = [];
+	for (const e of entries) {
+		const sep = e.file.indexOf(':');
+		if (sep < 0) continue; // the site's own file: it stays central
+		const [repo, file] = [e.file.slice(0, sep), e.file.slice(sep + 1)];
+		if (nonWaivable.includes(e.check)) {
+			keep.push({ check: e.check, file: e.file, reason: 'non-waivable: stays central' });
+			continue;
+		}
+		const hit = hitEntries.get(e);
+		if (!hit) {
+			const reason = superseded.has(e)
+				? 'already waived in its repo: delete it'
+				: 'matches nothing: delete it';
+			keep.push({ check: e.check, file: e.file, reason });
+			continue;
+		}
+		const lines = [...new Set(hit.map((v) => v.line))].sort((a, b) => b - a);
+		const top = lines.at(-1);
+		for (const line of lines) {
+			// The full reason once, on the topmost; the rest point up at it.
+			const why = line === top ? e.why : 'same reason as the waiver above';
+			waivers.push({
+				repo,
+				file,
+				line,
+				check: e.check,
+				insert: waiverText(IDENTITY_WAIVER_GATE, e.check, why, file),
+			});
+		}
+	}
+	if (JSON_OUT) emitter.emit({ complete: completeScan, waivers, keep, missingCheckouts });
+	else {
+		for (const w of waivers) {
+			log(`${w.repo}:${w.file}  above line ${w.line}`);
+			for (const l of w.insert) log(`    ${l}`);
+		}
+		for (const k of keep) log(`(not moved) ${k.check} ${k.file} — ${k.reason}`);
+		if (!completeScan) log(`✗ incomplete scan: ${missingCheckouts.join(', ') || rosterError}`);
+	}
+	reportWallClock();
+	process.exit(completeScan ? 0 : 1);
+}
 
 // The machine-readable form, for ci:identity-model. Printed on EVERY path,
 // clean or not, so the caller parses one shape rather than branching on the
@@ -260,6 +354,8 @@ if (JSON_OUT) {
 		advisories,
 		overdueAdvisories: overdue,
 		staleExemptions: stale.map(describeStale),
+		waived,
+		supersededExemptions,
 		missingCheckouts,
 		staleCheckouts,
 		rosterError,
@@ -283,6 +379,9 @@ if (advisories.length) {
 	console.error('');
 }
 for (const o of overdue) console.error(`⚠ OVERDUE: ${o}`);
+for (const e of supersededExemptions) {
+	console.error(`⚠ ${e}: waived inline in its repo now; delete the central allowlist row`);
+}
 
 if (rosterError) console.error(`\n✗ ${rosterError}\n`);
 
@@ -369,6 +468,10 @@ const FIXES = {
        [[services]] service = "edge-router"        — resolveGranteeVia(), which
          answers one name and discloses nothing else. Right for everything
          else, and for anything new.`,
+	waiver: `Fix the waiver (lib/gate-waivers.mjs): give it a reason after the
+     colon, delete it once the code it covered no longer trips the check, or,
+     for a non-waivable check, fix the code, since only the site's central
+     list can exempt it.`,
 	G5: `Only edge-router establishes identity (R1). A script acting for someone
      authenticates with ITS OWN credential and names the target as a parameter
      the app authorizes by tier (R11) — it never asserts the target's headers.`,

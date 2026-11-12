@@ -20,7 +20,14 @@ import { resolve, relative, sep, basename } from 'node:path';
 
 import { blankComments } from './blank-comments.mjs';
 import { siteRoot } from '../../dist/lib/fleet-paths.js';
-import { IDENTITY_BOUNDARY, SELF, isSelfFixture } from './identity-constants.mjs';
+import {
+	IDENTITY_BOUNDARY,
+	IDENTITY_CHECKS,
+	IDENTITY_WAIVER_GATE,
+	SELF,
+	isSelfFixture,
+} from './identity-constants.mjs';
+import { createWaiverLedger } from './gate-waivers.mjs';
 import {
 	CODE_EXT,
 	SQL_EXT,
@@ -64,10 +71,31 @@ function erasable() {
 
 /**
  * Scan one repo root. `label` prefixes findings from a sibling checkout.
+ *
+ * A finding is offered first to the repo's own INLINE waivers
+ * (lib/gate-waivers.mjs, fleet-manager#82), then to the central allowlist.
  * Allowlisted findings go into `hits` (entry -> the violations it absorbed),
  * shared across every repo so the count and stale checks see the whole run.
+ * A waiver's own problems (no reason, unused, on a `nonWaivable` check) land in
+ * `violations` as check `waiver`, in THIS repo, at the marker's line. A
+ * central entry whose finding a waiver absorbed goes into `superseded`.
+ *
+ * @returns {{ waived: number }} findings an inline waiver absorbed
  */
-export function scanRepo(root, label, allow, violations, hits, tracked = trackedFiles(root)) {
+export function scanRepo(
+	root,
+	label,
+	allow,
+	violations,
+	hits,
+	tracked = trackedFiles(root),
+	{ nonWaivable = [], superseded = new Set() } = {}
+) {
+	const waivers = createWaiverLedger({
+		gate: IDENTITY_WAIVER_GATE,
+		rules: IDENTITY_CHECKS,
+		nonWaivable,
+	});
 	const sqlByDir = new Map();
 	/** worker -> first `workers/<w>/src` file reading X-User-Id. G6's input. */
 	const userIdReaders = new Map();
@@ -76,6 +104,14 @@ export function scanRepo(root, label, allow, violations, hits, tracked = tracked
 	const add = (check, file, line, message) => {
 		const rel = label ? `${label}:${file}` : file;
 		const violation = { check, file: rel, line, message };
+		if (waivers.absorbs(file, check, line)) {
+			// A central entry for a finding the repo now waives itself is
+			// SUPERSEDED, not stale: the child's waiver lands before the site
+			// deletes the row, and that gap must not turn the gate red.
+			const central = allow.get(`${check}::${rel}`);
+			if (central) superseded.add(central);
+			return;
+		}
 		// The LABELLED path only. An unprefixed lookup also ran for siblings, so a
 		// site entry for `src/x.ts` exempted `src/x.ts` in every sibling repo too —
 		// and counted as a hit there, so the stale check could not see the site
@@ -110,6 +146,7 @@ export function scanRepo(root, label, allow, violations, hits, tracked = tracked
 		for (const full of files) {
 			const rel = relative(root, full).split(sep).join('/');
 			if (basename(rel) === SELF || isSelfFixture(basename(rel))) continue;
+			waivers.addFile(rel, readFileSync(full, 'utf8'));
 			// `e2e/` is a test tree too: cardtable's `e2e/edge.ts` and bomberman's
 			// `e2e/edge-stub.mjs` stand in for edge-router under playwright, so
 			// stamping identity headers is their whole job (G5 fired on both,
@@ -179,4 +216,13 @@ export function scanRepo(root, label, allow, violations, hits, tracked = tracked
 		checkG2Dir(files, add);
 		checkG9Schemas(files, label, add, erasable());
 	}
+	for (const p of waivers.problems()) {
+		violations.push({
+			check: 'waiver',
+			file: label ? `${label}:${p.file}` : p.file,
+			line: p.line,
+			message: p.message,
+		});
+	}
+	return { waived: waivers.absorbed };
 }

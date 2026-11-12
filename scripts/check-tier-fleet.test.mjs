@@ -50,7 +50,9 @@ function fixture(repos, allowed, mode) {
 		JSON.stringify({ repos: Object.keys(repos).map((r) => `WolffM/${r}`), facets: {} })
 	);
 	if (allowed) {
-		writeFileSync(join(manifestDir, 'tier-fleet-allowlist.json'), JSON.stringify({ allowed }));
+		// An array is the `allowed` list; an object is the whole document.
+		const doc = Array.isArray(allowed) ? { allowed } : allowed;
+		writeFileSync(join(manifestDir, 'tier-fleet-allowlist.json'), JSON.stringify(doc));
 	}
 	for (const [repo, files] of Object.entries(repos)) {
 		if (mode !== 'worktree') {
@@ -169,6 +171,8 @@ for (const ext of ['.cjs', '.cts', '.mts', '.vue', '.svelte']) {
 	});
 }
 
+// tier-fleet-disable-next-line vocabulary: the deliberate inverse list (admin left out) that the
+// allowlist and waiver tests below feed the checker; completing it would destroy their input.
 const INVERSE = "export const REFUSED = ['friend', 'service', 'wife'];\n";
 
 test('a whole-file entry (no `lines`/`count`) still exempts the file, as before', () => {
@@ -356,5 +360,66 @@ test('human output is unaffected by the migration — same prose, same exit code
 		assert.equal(human.code, code, `${mode}: exit code must match between the two modes`);
 		assert.match(human.all, /fleet tier model clean/);
 		assert.ok(!human.all.trim().startsWith('{'), 'human mode must not print JSON');
+	});
+});
+
+// ── inline waivers (fleet-manager#82) ──
+// The marker is assembled at runtime so no test input below is read as a
+// waiver of THIS file by the fleet's own scan of this repo.
+const MARK = ['tier-fleet', 'disable-next-line'].join('-');
+const waivedInverse = (reason) => `// ${MARK} vocabulary${reason}\n${INVERSE}`;
+
+test('a waiver with a reason absorbs the finding below it, in both modes', () => {
+	withFixture(
+		{ 'tier-a': { 'src/inverse.ts': waivedInverse(': inverse list') } },
+		null,
+		(r, mode) => assert.equal(r.code, 0, `${mode}: ${r.all}`)
+	);
+});
+
+test('a waiver with no reason is a finding, and the finding stays live', () => {
+	withFixture({ 'tier-a': { 'src/inverse.ts': waivedInverse('') } }, null, (r, mode, fx) => {
+		assert.equal(r.code, 1, `${mode}: ${r.all}`);
+		const kinds = runJson(fx).report.findings.map((f) => `${f.kind}:${f.line}`);
+		assert.deepEqual(kinds.sort(), ['incomplete tier vocabulary:2', 'waiver:1']);
+	});
+});
+
+test('a waiver on a NON-WAIVABLE rule absorbs nothing', () => {
+	const doc = { allowed: [], nonWaivable: ['vocabulary'] };
+	withFixture({ 'tier-a': { 'src/inverse.ts': waivedInverse(': please') } }, doc, (r, mode, fx) => {
+		assert.equal(r.code, 1, `${mode}: ${r.all}`);
+		const waiver = runJson(fx).report.findings.find((f) => f.kind === 'waiver');
+		assert.match(waiver.reason, /non-waivable/);
+	});
+});
+
+test('an inline waiver SUPERSEDES a central row: reported, never stale', () => {
+	const allowed = [{ file: 'tier-a:src/inverse.ts', lines: [1], why: 'inverse list' }];
+	const repos = { 'tier-a': { 'src/inverse.ts': waivedInverse(': inverse list') } };
+	withFixture(repos, allowed, (r, mode, fx) => {
+		assert.equal(r.code, 0, `${mode}: ${r.all}`);
+		assert.deepEqual(runJson(fx).report.superseded, ['tier-a:src/inverse.ts']);
+	});
+});
+
+test('--print-waivers turns a central row into the waiver, and the result is clean', () => {
+	const body = `export const a = 1;\n${INVERSE}`;
+	const allowed = [{ file: 'tier-a:src/inverse.ts', why: 'inverse list, admin omitted' }];
+	withFixture({ 'tier-a': { 'src/inverse.ts': body } }, allowed, (r, mode, fx) => {
+		const { code, report } = runJson(fx, ['--print-waivers']);
+		assert.equal(code, 0, `${mode}: ${JSON.stringify(report)}`);
+		assert.deepEqual(
+			report.waivers.map((w) => [w.repo, w.file, w.line, w.rule]),
+			[['tier-a', 'src/inverse.ts', 2, 'vocabulary']]
+		);
+		const lines = body.split('\n');
+		lines.splice(1, 0, ...report.waivers[0].insert);
+		const after = fixture({ 'tier-a': { 'src/inverse.ts': lines.join('\n') } }, null, mode);
+		try {
+			assert.equal(run(after).code, 0, run(after).all);
+		} finally {
+			rmSync(after.root, { recursive: true, force: true });
+		}
 	});
 });

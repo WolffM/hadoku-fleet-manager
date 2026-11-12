@@ -37,6 +37,27 @@ export const IDENTITY_BOUNDARY = 'workers/edge-router/src/';
  * reads as coverage, so this is a basename now and pinned by a test.
  */
 export const SELF = 'check-identity-model.mjs';
+
+/**
+ * Every check id a finding can carry, and so every rule an inline waiver may
+ * name (lib/gate-waivers.mjs). G9 reports as its three clauses.
+ */
+export const IDENTITY_CHECKS = [
+	'G1',
+	'G2',
+	'G3',
+	'G4',
+	'G5',
+	'G6',
+	'G7',
+	'G8',
+	'G9a',
+	'G9b',
+	'G9c',
+];
+
+/** The marker's gate name: `identity-model-disable-next-line <check>: <why>`. */
+export const IDENTITY_WAIVER_GATE = 'identity-model';
 /**
  * This gate's own REGRESSION TESTS and their fixtures (`isSelfFixture`),
  * excluded for the same reason as SELF and more so: they are built out of

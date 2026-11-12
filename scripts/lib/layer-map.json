@@ -328,6 +328,11 @@
     "layer": "automation"
   },
   {
+    "glob": "scripts/lib/gate-waivers.mjs",
+    "layer": "config",
+    "why": "fleet-manager#82: inline gate waivers, the parser and ledger check-identity-model and check-tier-fleet share. Zero imports and pure text functions, the same floor yaml-comments.mjs sits on below."
+  },
+  {
     "glob": "scripts/lib/yaml-comments.mjs",
     "layer": "config",
     "why": "Wave clean-1 lane D reclassify: zero imports, two pure text functions with no job-runner/scheduler/pager-ledger/report-shape content \u2014 automation's own definition. This file was one of layer-map.mjs's own named 'domain-blind utility, judgment call' bucket filed under automation only for lack of a better flat layer; config is the true floor and nothing beneath it to violate, so filing it there removes the judgment call rather than reinterpreting it. Legalises fleet-source.mjs (access) and site-token.mjs (config) reading it, with no new edge (the file has no outgoing imports to turn upward)."

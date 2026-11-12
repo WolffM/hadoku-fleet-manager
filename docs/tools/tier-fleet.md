@@ -90,17 +90,36 @@ than a facet-filtered subset: tier vocabulary can appear anywhere auth is
 enforced, and the detectors are pattern-based, so a repo with no JS/TS/Python
 auth code simply yields nothing (`scripts/check-tier-fleet.mjs:85-95`).
 
-Exemptions live in `tier-fleet-allowlist.json` (`repo:path`, `why` required); a
-stale entry — one that no longer matches a scanned file — is itself reported as
-a finding, because an exemption must not outlive its reason.
+Exemptions come in two layers (fleet-manager#82, `scripts/lib/gate-waivers.mjs`):
+
+- **Inline, in the repo the code ships in.** A comment on the line above the
+  finding: `tier-fleet-disable-next-line <rule>: <why>`, where `<rule>` is
+  `vocabulary` or `non-top-equality`. Any comment syntax works (`//`, `#`), and
+  comment lines between the marker and the code are skipped, so a long reason
+  can wrap. A waiver with no reason, one covering no finding, and one on a rule
+  in the central `nonWaivable` list are each a finding in that repo, and none of
+  them suppresses anything. `fleet identity-model` takes the same marker as
+  `identity-model-disable-next-line <check>: <why>`.
+- **Central, in `tier-fleet-allowlist.json`** (`repo:path`, `why` required): the
+  whole-repo `repo:*` entries, plus `nonWaivable`, the rules no repo may waive
+  for itself. A stale entry, one that no longer matches a scanned file, is
+  itself a finding, because an exemption must not outlive its reason. An entry
+  whose finding the repo now waives inline is SUPERSEDED: reported, never
+  fatal, so the child's waiver can land before the central row is deleted.
+
+`--print-waivers` prints each central entry as the inline waiver that replaces
+it, at the line its finding sits on today (bottom-up per file, because each
+insert shifts the lines below). `--json` gives the same as `{complete, waivers,
+keep, unreadable}`.
 
 ## Usage
 
 ```
-fleet tier-fleet             # audit origin/main, exit 1 on drift
-fleet tier-fleet --worktree  # audit working copies
-fleet tier-fleet --warn      # report, always exit 0
-fleet tier-fleet --no-fetch  # skip the fetch (offline)
+fleet tier-fleet                  # audit origin/main, exit 1 on drift
+fleet tier-fleet --worktree       # audit working copies
+fleet tier-fleet --warn           # report, always exit 0
+fleet tier-fleet --no-fetch       # skip the fetch (offline)
+fleet tier-fleet --print-waivers  # the central rows, as inline waivers to add
 ```
 
 ## Verified against this worktree (2026-10-07)

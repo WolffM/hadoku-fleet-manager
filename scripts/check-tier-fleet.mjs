@@ -42,6 +42,7 @@
  *   fleet tier-fleet --warn      # report, always exit 0
  *   fleet tier-fleet --no-fetch  # read the reader's mirror as it stands (offline)
  *   fleet tier-fleet --json      # a GateDoc instead of prose
+ *   fleet tier-fleet --print-waivers  # each central entry as the inline waiver to add
  *   REPOS_DIR=/path fleet tier-fleet --worktree
  *
  * MIGRATED (wave 5h lane B): `ci:audit-gates` now runs this one with `--json`
@@ -66,13 +67,27 @@ import { fleetOwner } from '../dist/lib/fleet-config.js';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
+import { createWaiverLedger, waiverText } from './lib/gate-waivers.mjs';
 
 const out = createEmitter();
 
 const ALLOWLIST_JSON = manifestFile('tier-fleet-allowlist.json');
 
 /**
- * Exemptions, keyed `repo:path`. Every entry needs a `why`, and an entry that
+ * INLINE WAIVERS come first (fleet-manager#82, lib/gate-waivers.mjs): a repo
+ * exempts its own code with `tier-fleet-disable-next-line <rule>: <why>` on the
+ * line above it. The rule is the finding's kind, by its short name below. A
+ * waiver with no reason, one that covers no finding, and one on a rule the
+ * central list's `nonWaivable` names are findings in that repo.
+ */
+const WAIVER_GATE = 'tier-fleet';
+const RULE_OF_KIND = {
+	'incomplete tier vocabulary': 'vocabulary',
+	'equality against a non-top tier': 'non-top-equality',
+};
+
+/**
+ * Central exemptions, keyed `repo:path`. Every entry needs a `why`, and an entry that
  * stops matching FAILS — an exemption must not outlive its reason. Mirrors
  * `tier-gating-allowlist.json`.
  *
@@ -95,8 +110,16 @@ function loadAllowlist() {
 	try {
 		obj = JSON.parse(readFileSync(ALLOWLIST_JSON, 'utf8'));
 	} catch (err) {
-		if (err.code === 'ENOENT') return new Map();
+		if (err.code === 'ENOENT') return { map: new Map(), nonWaivable: [] };
 		throw err;
+	}
+	const rules = Object.values(RULE_OF_KIND);
+	const nonWaivable = obj.nonWaivable ?? [];
+	if (!Array.isArray(nonWaivable) || nonWaivable.some((r) => !rules.includes(r))) {
+		console.error(
+			`✗ allowlist "nonWaivable" must list rules (${rules.join(' ')}): ${JSON.stringify(nonWaivable)}`
+		);
+		process.exit(1);
 	}
 	const map = new Map();
 	for (const entry of obj.allowed || []) {
@@ -114,10 +137,23 @@ function loadAllowlist() {
 		}
 		map.set(entry.file, entry);
 	}
-	return map;
+	return { map, nonWaivable };
 }
-const allowlist = loadAllowlist();
+const { map: allowlist, nonWaivable } = loadAllowlist();
 const usedAllowlist = new Set();
+/** central key -> the findings its entry shielded, for --print-waivers. */
+const shieldedBy = new Map();
+/**
+ * Central keys whose file the repo now waives inline. SUPERSEDED, never stale:
+ * the child's waiver lands before the site deletes the row, and that gap
+ * must not turn the gate red. Reported, so the row does not wait forever.
+ */
+const supersededKeys = new Set();
+const waivers = createWaiverLedger({
+	gate: WAIVER_GATE,
+	rules: Object.values(RULE_OF_KIND),
+	nonWaivable,
+});
 
 /**
  * Every covered child repo. Tier vocabulary can appear anywhere auth is
@@ -202,6 +238,7 @@ function* walk(dir) {
 }
 
 const warnOnly = process.argv.includes('--warn');
+const printWaivers = process.argv.includes('--print-waivers');
 const useWorktree = process.argv.includes('--worktree');
 const noFetch = process.argv.includes('--no-fetch');
 const ROOT = reposDir();
@@ -235,7 +272,11 @@ function scanText(repo, rel, raw) {
 			});
 		}
 	}
-	findings.push(...applyExemption(`${repo}:${rel}`, found));
+	const key = `${repo}:${rel}`;
+	waivers.addFile(key, raw);
+	const live = found.filter((f) => !waivers.absorbs(key, RULE_OF_KIND[f.kind], f.line));
+	if (live.length < found.length && allowlist.has(key)) supersededKeys.add(key);
+	findings.push(...applyExemption(key, live));
 }
 
 /** The findings an allowlist entry for `key` does NOT cover, plus any staleness
@@ -248,15 +289,19 @@ function applyExemption(key, found) {
 	const file = rest.join(':');
 	const stale = (detail) => ({ repo, kind: 'stale allowlist entry', file, line: 0, detail });
 	const out = [];
+	// Superseded (see supersededKeys): its lines and count stop describing the
+	// file once part of it is waived inline, so neither is judged stale.
+	const lenient = supersededKeys.has(key);
 	let shielded = found;
 	if (entry.lines) {
 		out.push(...found.filter((f) => !entry.lines.includes(f.line)));
 		shielded = found.filter((f) => entry.lines.includes(f.line));
 		const gone = entry.lines.filter((n) => !found.some((f) => f.line === n));
-		if (gone.length) {
+		if (gone.length && !lenient) {
 			out.push(stale(`lines ${gone.join(', ')} no longer hold a finding — update "lines"`));
 		}
 	}
+	shieldedBy.set(key, shielded);
 	if (entry.count !== undefined && shielded.length !== entry.count) {
 		if (shielded.length > entry.count) {
 			return [
@@ -267,9 +312,11 @@ function applyExemption(key, found) {
 				})),
 			];
 		}
-		out.push(
-			stale(`reviewed ${entry.count} finding(s), ${shielded.length} remain — lower "count"`)
-		);
+		if (!lenient) {
+			out.push(
+				stale(`reviewed ${entry.count} finding(s), ${shielded.length} remain — lower "count"`)
+			);
+		}
 	}
 	return out;
 }
@@ -384,9 +431,17 @@ if (FLEET.length === 0 || scannedFiles === 0) {
 	});
 }
 
+// A waiver's own problems, in the repo it lives in, at the marker's line.
+for (const p of waivers.problems()) {
+	const [repo, ...rest] = p.file.split(':');
+	findings.push({ repo, kind: 'waiver', file: rest.join(':'), line: p.line, detail: p.message });
+}
+
 // A stale entry shields nothing and hides that the code was cleaned up.
 for (const f of allowlist.keys()) {
-	if (!usedAllowlist.has(f)) {
+	if (supersededKeys.has(f)) {
+		out.log(`⚠ ${f}: waived inline in its repo now; delete the central allowlist row`);
+	} else if (!usedAllowlist.has(f)) {
 		findings.push({
 			repo: f.split(':')[0],
 			kind: 'stale allowlist entry',
@@ -417,11 +472,66 @@ const gateFindings = findings
 		...(f.file !== '-' ? { file: f.file, line: f.line } : {}),
 	}));
 
+// THE MIGRATION (fleet-manager#82): each central entry as the inline waivers
+// that replace it, aimed at the lines its findings sit on today. Bottom-up per
+// file, because each insert shifts the lines below it.
+if (printWaivers) {
+	const moved = [];
+	const keep = [];
+	for (const [key, entry] of allowlist) {
+		const [repo, ...rest] = key.split(':');
+		const file = rest.join(':');
+		const shielded = shieldedBy.get(key);
+		if (file === '*' || !shielded) {
+			const reason =
+				file === '*'
+					? 'a whole-repo entry: stays central'
+					: supersededKeys.has(key)
+						? 'already waived in its repo: delete it'
+						: 'matches nothing: delete it';
+			keep.push({ file: key, reason });
+			continue;
+		}
+		const byLine = new Map(shielded.map((f) => [`${f.line}:${RULE_OF_KIND[f.kind]}`, f]));
+		const sorted = [...byLine.values()].sort((a, b) => b.line - a.line);
+		const lockedHere = sorted.filter((f) => nonWaivable.includes(RULE_OF_KIND[f.kind]));
+		if (lockedHere.length) {
+			keep.push({ file: key, reason: 'a non-waivable rule: stays central' });
+			continue;
+		}
+		const top = sorted.at(-1);
+		for (const f of sorted) {
+			const why = f === top ? entry.why : 'same reason as the waiver above';
+			const rule = RULE_OF_KIND[f.kind];
+			moved.push({
+				repo,
+				file,
+				line: f.line,
+				rule,
+				insert: waiverText(WAIVER_GATE, rule, why, file),
+			});
+		}
+	}
+	const unreadable = findings.filter((f) => UNREADABLE_KINDS.has(f.kind)).map((f) => f.repo);
+	const complete = unreadable.length === 0 && scannedFiles > 0;
+	if (out.json) out.emit({ complete, waivers: moved, keep, unreadable });
+	else {
+		for (const w of moved) {
+			out.log(`${w.repo}:${w.file}  above line ${w.line}`);
+			for (const l of w.insert) out.log(`    ${l}`);
+		}
+		for (const k of keep) out.log(`(not moved) ${k.file} — ${k.reason}`);
+		if (!complete) out.log(`✗ incomplete scan: ${unreadable.join(', ') || 'nothing scanned'}`);
+	}
+	process.exit(complete ? 0 : 1);
+}
+
 if (out.json) {
 	out.emit({
 		scannedFiles,
 		scannedRepos,
 		fleetSize: FLEET.length,
+		superseded: [...supersededKeys],
 		...buildGateDoc({ findings: gateFindings, unreadable: gateUnreadable }),
 	});
 	process.exit(warnOnly ? 0 : findings.length ? 1 : 0);

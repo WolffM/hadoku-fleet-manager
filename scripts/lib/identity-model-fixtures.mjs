@@ -181,17 +181,20 @@ export function advanceRemote(remote) {
 }
 
 /** A bare site holding `files` ({relPath: content}), run once. */
-export function runFiles(files, { extra = [], allow = null, coverage = null, REPOS_DIR } = {}) {
+export function runFiles(
+	files,
+	{ extra = [], allow = null, nonWaivable = null, coverage = null, REPOS_DIR } = {}
+) {
 	const root = bareSite();
 	try {
 		for (const [rel, body] of Object.entries(files)) {
 			mkdirSync(join(root, dirname(rel)), { recursive: true });
 			writeFileSync(join(root, rel), body);
 		}
-		if (allow) {
+		if (allow || nonWaivable) {
 			writeFileSync(
 				join(root, 'scripts', 'admin', 'identity-model-allowlist.json'),
-				JSON.stringify({ allowed: allow })
+				JSON.stringify({ allowed: allow ?? [], ...(nonWaivable ? { nonWaivable } : {}) })
 			);
 		}
 		if (coverage) {
