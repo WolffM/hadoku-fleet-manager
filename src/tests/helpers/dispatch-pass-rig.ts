@@ -26,6 +26,7 @@ import {
 	__resetHeavyMarksForTesting,
 	__resetAffinityCountersForTesting,
 } from '../../runners/dispatch-pass-state.js';
+import { __resetHeavyUnitsForTesting } from '../../runners/heavy-units.js';
 import { type DispatchPassInput } from '../../runners/dispatch-pass-types.js';
 import { __setHostForTesting } from '../../host.js';
 import { testHost } from '../install-test-host.js';
@@ -102,6 +103,7 @@ export function installDispatchPassRig(): void {
 	beforeEach(() => {
 		__resetReapClockForTesting();
 		__resetHeavyMarksForTesting();
+		__resetHeavyUnitsForTesting();
 		__resetAffinityCountersForTesting();
 	});
 	// A test below swaps in a recording logger; put the silent one back.

@@ -111,6 +111,20 @@ export interface ManifestNode extends RegistryNode {
 	 */
 	jobP95Mb?: number;
 	/**
+	 * Seconds a heavy job (`heavy-model.ts`) waits before it may become the
+	 * THIRD heavy job on this node. Absent, it waits `HEAVY_HOLD_SEC` (3600),
+	 * the fleet default; a fourth always does. Read live by the dispatcher's
+	 * heavy hold (`placement-refusal.ts`).
+	 *
+	 * A TRIAL setting (operator, 2026-11-11): `fleet simulate` scored a 600 s
+	 * third-job hold as the largest remaining cut to the oldest job in queue
+	 * (p95 1,784 -> 1,308 s with no pairing), but the only live evidence for
+	 * three heavy jobs on one node is claw-4 on 2026-10-08 (4 cores, 15 GB),
+	 * where both extra shards starved and 8 specs failed. claw-9 (6 cores,
+	 * 31 GB) carries it first; remove the field to end the trial.
+	 */
+	heavyThirdHoldSec?: number;
+	/**
 	 * Repos that keep a STANDING runner here even when the node mints.
 	 * Justified by availability, never by speed — see runners/residency.ts. An
 	 * empty list is a real answer, and is claw-3's: a standing registration is

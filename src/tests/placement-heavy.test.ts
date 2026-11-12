@@ -205,6 +205,40 @@ test('heavy pairing: on a pairing claw the THIRD waits HEAVY_HOLD_SEC, never the
 	assert.equal(held.passed[0].holdSec, HEAVY_HOLD_SEC);
 });
 
+test('heavyThirdHoldSec (manifest trial): a node carrying it takes a THIRD heavy job after that hold', () => {
+	const third = (queuedSec: number, heavyThirdHoldSec?: number) =>
+		choosePlacement(
+			['claw-9'],
+			[m('claw-9', { heavyJobs: 2, maxConcurrent: 4, heavyThirdHoldSec, heavyModel: FORGE })],
+			[],
+			HEAVY_REPO,
+			{ jobName: 'forge-e2e', queuedSec }
+		);
+	assert.equal(third(599, 600).node, undefined, 'held one second short');
+	assert.equal(
+		third(599, 600).passed[0].holdSec,
+		600,
+		'and the probe backoff is told when it lifts'
+	);
+	assert.equal(third(600, 600).node, 'claw-9');
+	// REVERTED (field ignored): held until HEAVY_HOLD_SEC.
+	assert.equal(third(600).node, undefined, 'a node without the field: the fleet default');
+	assert.equal(third(600).passed[0].holdSec, HEAVY_HOLD_SEC);
+});
+
+test('heavyThirdHoldSec (manifest trial): a FOURTH heavy job still waits HEAVY_HOLD_SEC', () => {
+	const fourth = choosePlacement(
+		['claw-9'],
+		[m('claw-9', { heavyJobs: 3, maxConcurrent: 4, heavyThirdHoldSec: 600, heavyModel: FORGE })],
+		[],
+		HEAVY_REPO,
+		{ jobName: 'forge-e2e', queuedSec: 600 }
+	);
+	assert.equal(fourth.node, undefined);
+	assert.equal(fourth.passed[0].holdSec, HEAVY_HOLD_SEC);
+	// REVERTED (the trial hold applied to every count past two): placed at 600 s.
+});
+
 test('heavy pairing: the on-demand backstop never pairs, however many slots it has', () => {
 	assert.equal(holdOn(1, 0, 4, true).node, undefined);
 	assert.equal(holdOn(1, 0, 4, true).passed[0].holdSec, HEAVY_DOUBLE_HOLD_SEC);
@@ -324,6 +358,30 @@ test('#102.1 PRODUCTION SHAPE: `dispatchEphemeral`’s OWN probe-to-NodeState se
 		['claw-9'],
 		'claw-9 (really 1 worker) is chosen over claw-1 (really 3) — busy is jobs, not repos'
 	);
+});
+
+test('heavyThirdHoldSec PRODUCTION SHAPE: the manifest field reaches the NodeState dispatch places with', async () => {
+	// The refusal tests above hand-build NodeState; this goes through the real
+	// `dispatchEphemeral` -> `buildNodeStates` seam, so a builder that drops
+	// the field fails here while every choosePlacement test stays green.
+	const input: EphemeralTickInput = {
+		fleetProbe: new Map([
+			['claw-1', { reachable: true, workers: 0, busyRepos: new Map() }],
+			['claw-9', { reachable: true, workers: 0, busyRepos: new Map() }],
+		]),
+		ephemeral: new Set(['claw-1', 'claw-9']),
+		nodes: { 'claw-1': WIRE_NODE, 'claw-9': { ...WIRE_NODE, heavyThirdHoldSec: 600 } },
+		isSick: () => false,
+		repos: ['WolffM/hadoku_site'],
+		standingEligible: new Set(),
+	};
+	let seen: Record<string, number | undefined> = {};
+	await dispatchEphemeral(input, 'tok', fakeGh({}), simShell({}), async (inp, token, g, s) => {
+		seen = Object.fromEntries(inp.nodes.map((n) => [n.name, n.heavyThirdHoldSec]));
+		return runDispatchPass({ ...inp, pending: [], tarballUrl: null }, token, g, s);
+	});
+	// REVERTED (builder drops the field): claw-9 reads undefined.
+	assert.deepEqual(seen, { 'claw-1': undefined, 'claw-9': 600 });
 });
 
 test('tuning (simulator only): heavyFree lets a node take that many heavy jobs before any hold', () => {

@@ -20,6 +20,7 @@
     "fleet-runner-manifest.json": ["scripts/node-users-cutover.mjs"],
     "gh-budget.json": ["src/gh-budget-windows.ts"],
     "heavy-marks.json": ["src/runners/heavy-marks.ts"],
+    "heavy-units.json": ["src/runners/heavy-units.ts"],
     "hosting-converge-last.json": ["scripts/hosting-converge.mjs"],
     "hosting-demand.json": ["scripts/lib/hosting-demand.mjs"],
     "hosting-tenants.json": ["scripts/lib/tenant-registry.mjs"],

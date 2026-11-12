@@ -53,6 +53,8 @@ export interface EphemeralTickInput {
 			 * the queued run's repo figure. See {@link jobReserve}.
 			 */
 			jobP95Mb?: number;
+			/** See `ManifestNode.heavyThirdHoldSec`. */
+			heavyThirdHoldSec?: number;
 			/** `"claw"` | `"backstop"`. Read through `isBackstopNode`, never directly. */
 			role?: string;
 			/**

@@ -223,6 +223,13 @@ export interface NodeState extends AdmissionInput {
 	 */
 	warmBusy?: number;
 	/**
+	 * The manifest's `heavyThirdHoldSec` for this node: how long a heavy job
+	 * holds out before becoming the THIRD heavy job here. Absent, a third
+	 * waits {@link HEAVY_HOLD_SEC} like a fourth. A per-node trial setting
+	 * (operator, 2026-11-11, claw-9 first); see `ManifestNode.heavyThirdHoldSec`.
+	 */
+	heavyThirdHoldSec?: number;
+	/**
 	 * Placement constants overridden for THIS node, by the traffic simulator
 	 * only (`fleet simulate --tune`). The live node-state builder never sets
 	 * it, so dispatch always runs the constants in placement-slow.ts; a field
@@ -239,6 +246,8 @@ export interface PlacementTuning {
 	doubleHoldSec?: number;
 	/** The hold before a third or more. Constant: HEAVY_HOLD_SEC. */
 	holdSec?: number;
+	/** The hold before the THIRD only, as the manifest's `heavyThirdHoldSec`; wins over it and over holdSec. */
+	thirdHoldSec?: number;
 	/** The slow-tier spill floor. Constant: SPILL_FLOOR_SEC. */
 	spillFloorSec?: number;
 	/** The pace term's band; 0 turns the term off. Constant: PACE_BAND_SEC. */

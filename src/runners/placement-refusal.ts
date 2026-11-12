@@ -143,10 +143,14 @@ export function refusalFor(
 	const heavyHere = m.heavyJobs ?? 0;
 	const heavyFree = m.tuning?.heavyFree ?? heavyFreeOf(m);
 	if (heavy && heavyHere >= heavyFree) {
+		// A node's manifest `heavyThirdHoldSec` shortens the wait for the THIRD
+		// heavy job only; a fourth or more still waits HEAVY_HOLD_SEC.
 		const holdSec =
 			heavyHere === 1
 				? (m.tuning?.doubleHoldSec ?? HEAVY_DOUBLE_HOLD_SEC)
-				: (m.tuning?.holdSec ?? HEAVY_HOLD_SEC);
+				: ((heavyHere === 2 ? (m.tuning?.thirdHoldSec ?? m.heavyThirdHoldSec) : undefined) ??
+					m.tuning?.holdSec ??
+					HEAVY_HOLD_SEC);
 		const queuedSec = spill?.queuedSec;
 		if (queuedSec === undefined || queuedSec < holdSec) {
 			const waited = queuedSec === undefined ? 'unknown' : `${Math.round(queuedSec)}s`;

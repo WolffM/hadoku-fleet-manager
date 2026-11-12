@@ -291,6 +291,7 @@ export function simulate(
 				heavyModel: models.heavy,
 				heavyJobs: list.filter((r) => r.heavy).length,
 				runningHeavy: list.some((r) => r.heavyRepo),
+				heavyThirdHoldSec: s.heavyThirdHoldSec,
 				...tuningFor(s.name),
 			};
 		});

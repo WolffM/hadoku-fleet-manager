@@ -56,6 +56,7 @@ import {
 import { byPriority } from './dispatch-pass-order.js';
 import { observeLanes } from './repo-lanes.js';
 import { closeWarmBesideHeavy } from './dispatch-pass-warm-heavy.js';
+import { isHeavyUnit, recordHeavyUnits } from './heavy-units.js';
 import { WarmYieldPass, publishWarmYieldPass } from './warm-yield.js';
 
 /**
@@ -312,13 +313,17 @@ export async function runDispatchPass(
 	// cores until the watchdog rebooted the node, failing both and the Forge
 	// slice it hosted. Such a unit counts as the heavy job it was minted for. A
 	// unit seen busy is already counted above by the job it actually runs.
+	//
+	// AND ONE NO LISTING SHOWS AT ALL: a unit whose job is no longer queued and
+	// whose run has nothing left queued is in no listing this pass reads, so
+	// the mint-time record (`heavy-units.ts`) says what it was minted for.
 	if (heavyModel) {
 		for (const [node, units] of unitRecordsByNode) {
 			for (const { name } of units) {
 				if (busyRunners.has(name)) continue;
 				const jobId = parseJitName(name)?.jobId;
 				const job = jobId == null ? undefined : queuedJobs.get(jobId);
-				if (!job || !heavyModel.isHeavy(job.repo, job.jobName)) continue;
+				if (!(job ? heavyModel.isHeavy(job.repo, job.jobName) : isHeavyUnit(name))) continue;
 				const c = siblings.get(node) ?? { standing: 0, warm: 0, heavy: 0 };
 				c.heavy++;
 				siblings.set(node, c);
@@ -423,6 +428,7 @@ export async function runDispatchPass(
 	const placedEntries: string[] = [];
 	/** Nodes a heavy job was SUCCESSFULLY minted on this pass. */
 	const mintedHeavyOn: string[] = [];
+	const mintedHeavyUnits: string[] = [];
 
 	// Serial, deliberately. Each mint consumes capacity that the next one's
 	// admission check has to see, and the plan above already allocated against a
@@ -460,6 +466,7 @@ export async function runDispatchPass(
 			if (action.affinityMoved) mintedAffinityMoved++;
 			if (action.heavy) {
 				mintedHeavyOn.push(action.node);
+				mintedHeavyUnits.push(action.runnerName);
 				mintedHeavy++;
 				if (action.busyAtChoice > 0) mintedHeavyOnBusy++;
 			}
@@ -472,6 +479,7 @@ export async function runDispatchPass(
 		}
 	}
 	book?.flush();
+	recordHeavyUnits(mintedHeavyUnits, nowMs);
 	await closeWarmBesideHeavy(nodes, mintedHeavyOn, heavyModel, nowMs, token, gh, sh);
 	// A held run's refusal was said when it was last probed and is said again
 	// when it is next probed; repeating it every pass is what the backoff's own

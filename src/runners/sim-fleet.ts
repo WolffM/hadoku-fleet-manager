@@ -63,6 +63,8 @@ export interface SimNodeSpec {
 	labels: readonly string[];
 	backstop: boolean;
 	excludeRepos: ReadonlyMap<string, string>;
+	/** The manifest's `heavyThirdHoldSec`, carried as the live dispatcher reads it. */
+	heavyThirdHoldSec?: number;
 	idleFreeMb: number;
 	/** Observed MB one running job takes here: `light` (median) and `heavy` (p75). */
 	mbPerJob: { light: number; heavy: number };
@@ -97,6 +99,7 @@ export interface ManifestMachine {
 	minFreeMb?: number;
 	role?: string;
 	excludeRepos?: Record<string, string>;
+	heavyThirdHoldSec?: number;
 	$measured?: { memTotalMb?: number };
 }
 
@@ -220,6 +223,7 @@ export function buildFleet(args: {
 			labels: offered.sort(),
 			backstop,
 			excludeRepos: new Map(Object.entries(m.excludeRepos ?? {})),
+			heavyThirdHoldSec: m.heavyThirdHoldSec,
 			idleFreeMb: idleMedian.get(name) ?? (memTotal ? Math.round(memTotal * 0.8) : 8000),
 			mbPerJob: mbPerJob.get(name) ?? { ...DEFAULT_MB_PER_JOB },
 			timeline,

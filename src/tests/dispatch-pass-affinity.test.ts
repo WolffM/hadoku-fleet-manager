@@ -9,6 +9,15 @@ import { getCapacityLedger } from '../runners/capacity-ledger.js';
 import type { HeavyModel } from '../runners/heavy-model.js';
 import type { PendingRun } from '../runners/dispatcher.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { stateDir } from '../host.js';
+import {
+	HEAVY_UNITS_FILE,
+	__resetHeavyUnitsForTesting,
+	isHeavyUnit,
+	recordHeavyUnits,
+} from '../runners/heavy-units.js';
 import {
 	node,
 	run,
@@ -248,6 +257,67 @@ test('#102 REPLAY 2026-10-30 20:40:52Z: a heavy mint no listing shows yet still 
 		undefined
 	);
 	// REVERTED (no unseen-unit count): minted=1 ... placed=claw-8@1 — the incident.
+});
+
+test('heavy units: a shard from a FULLY PLACED run, in no listing, still counts toward the heavy hold', async () => {
+	// The 11-05..11-12 shape: claw-9 ran two Forge shards of a run with nothing
+	// left queued, so no listing named them, and a new run's shard read claw-9
+	// as heavy-free and became its third (273 of 413 claw-9 heavy placements
+	// undercounted; heavy-units.ts has the measurement).
+	const CT = 'WolffM/hadoku-cardtable';
+	const heavyModel: HeavyModel = {
+		isHeavy: (repo, jobName) => repo === CT && /^forge-(jvm|e2e)/.test(jobName ?? ''),
+		isHeavyRepo: (repo) => repo === CT,
+	};
+	const OLD = [
+		'jit-claw-9-hadoku-cardtabl-j200000000001-r50000000001-1794400000',
+		'jit-claw-9-hadoku-cardtabl-j200000000002-r50000000001-1794400001',
+	];
+	const base0 = fakeShell();
+	const sh = async (n: string, cmd: string) =>
+		cmd.includes('list-units')
+			? n === 'claw-9'
+				? OLD.map((u) => `${u}.service loaded active running x`).join('\n')
+				: ''
+			: base0(n, cmd);
+	const pass = () =>
+		runDispatchPass(
+			base({
+				order: ['claw-9'],
+				nodes: [node('claw-9', { maxConcurrent: 4, heavyModel })],
+				pending: [
+					{
+						id: 50000000002,
+						jobId: 200000000003,
+						repo: CT,
+						jobName: 'forge-e2e (1)',
+						jobCreatedAt: '2026-11-11T10:00:00Z',
+						repository: { full_name: CT },
+						head_repository: { full_name: CT, fork: false },
+						event: 'push',
+					},
+				],
+				runningJobs: [],
+				nowMs: Date.parse('2026-11-11T10:05:00Z'),
+			}),
+			'tok',
+			fakeGh(),
+			sh
+		);
+	recordHeavyUnits(OLD, Date.parse('2026-11-11T09:30:00Z'));
+	assert.equal((await pass()).minted, 0, 'two heavy jobs on claw-9: the third is held');
+	// REVERTED (no mint-time record): minted=1, the third shard beside two.
+	__resetHeavyUnitsForTesting(undefined, true);
+	assert.equal((await pass()).minted, 0, 'and after a restart, from the file');
+	__resetHeavyUnitsForTesting();
+	assert.equal((await pass()).minted, 1, 'with no record the units read light, as before');
+	const recorded = Object.keys(
+		JSON.parse(readFileSync(join(stateDir(), HEAVY_UNITS_FILE), 'utf8')) as object
+	);
+	assert.equal(recorded.length, 1, 'the heavy mint is recorded for the passes after it');
+	assert.match(recorded[0], /^jit-claw-9-hadoku-cardtabl-j200000000003-/);
+	assert.ok(isHeavyUnit(recorded[0]));
+	// REVERTED (mint path writes nothing): no file.
 });
 
 test('#102: a JIT sibling is in liveUnits already, so it raises heavyJobs but not standingBusy', async () => {

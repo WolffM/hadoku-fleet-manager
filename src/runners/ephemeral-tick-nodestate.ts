@@ -319,6 +319,7 @@ export function buildNodeStates(args: {
 			// Kept apart as well, so a refusal can name it (fleet-manager#58).
 			minFreeMb: (m.minFreeMb ?? 1536) + held.reduce((sum, h) => sum + h.mb, 0),
 			heldForHosting: held,
+			heavyThirdHoldSec: m.heavyThirdHoldSec,
 			// #76: `refusalFor` (placement.ts) looks this up by the queued job's
 			// repo and overrides `requiredMb`/`requiredIsLowerBound` with it when
 			// present. A repo not in the map (never measured) leaves `requiredMb`

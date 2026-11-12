@@ -88,7 +88,14 @@ argv.forEach((a, i) => {
 });
 // --tune key=value (repeatable): placement constants overridden on every
 // node, for this simulated run only (NodeState.tuning).
-const TUNE_KEYS = ['heavyFree', 'doubleHoldSec', 'holdSec', 'spillFloorSec', 'paceBandSec'];
+const TUNE_KEYS = [
+	'heavyFree',
+	'doubleHoldSec',
+	'holdSec',
+	'thirdHoldSec',
+	'spillFloorSec',
+	'paceBandSec',
+];
 const tuning = {};
 argv.forEach((a, i) => {
 	if (a !== '--tune') return;
