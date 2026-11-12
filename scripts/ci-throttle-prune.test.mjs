@@ -29,7 +29,7 @@ import {
 	writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 
 import {
 	FIXTURE_PREFIX,
@@ -423,7 +423,28 @@ test('static: no /tmp literal in non-comment lines of the prune block, other tha
 	);
 });
 
-test('REAL-ROOT TRIPWIRE: the suite must never prune the real host /tmp', () => {
+/**
+ * Did a PRODUCTION prune remove anything at or after `sinceIso`, per this
+ * host's real ~/.hadoku/throttle/prune.log (`THROTTLE_DIR` in ci-throttle.sh)?
+ * Read-only. By timestamp, not by count: the log keeps its last 200 lines, so a
+ * count can stand still while a removal lands. No file — every box that runs no
+ * CI — is "no".
+ */
+function realPruneRemovedSince(sinceIso) {
+	let text;
+	try {
+		text = readFileSync(join(homedir(), '.hadoku', 'throttle', 'prune.log'), 'utf8');
+	} catch (err) {
+		if (err.code === 'ENOENT') return false;
+		throw err;
+	}
+	return text
+		.split('\n')
+		.some((l) => l.slice(0, 20) >= sinceIso && /removed [1-9]\d* candidate/.test(l));
+}
+
+/** One pass of the tripwire: plant, run every spawn path, report what survived. */
+function tripwirePass() {
 	// A canary under the REAL os.tmpdir(), aged 3h so it would be a candidate
 	// if maybe_prune_tmp ever saw it, run through both the oldest spawn
 	// helper (`run()`, the one that leaked) and the fixture-based path
@@ -437,15 +458,17 @@ test('REAL-ROOT TRIPWIRE: the suite must never prune the real host /tmp', () => 
 	const threeHoursAgo = (Date.now() - 3 * 60 * 60 * 1000) / 1000;
 	utimesSync(tripwire, threeHoursAgo, threeHoursAgo);
 	utimesSync(marker, threeHoursAgo, threeHoursAgo);
+	// Whole seconds, the log's own resolution.
+	const since = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString().replace('.000Z', 'Z');
 	try {
 		const r1 = run({ conf: { MAX_CONCURRENT: 3, MIN_FREE_MB: 0, MAX_WAIT_S: 5 }, others: 1 });
 		assert.equal(r1.code, 0);
-		assert.ok(existsSync(tripwire), 'run(): real host /tmp tripwire must survive');
+		if (!existsSync(tripwire)) return { lost: 'run()', since };
 
 		const fx = nodeFixture({ maxConcurrent: 3, maxWaitS: 5 });
 		const r2 = runHook(fx);
 		assert.equal(r2.code, 0);
-		assert.ok(existsSync(tripwire), 'runHook()/nodeFixture: real host /tmp tripwire must survive');
+		if (!existsSync(tripwire)) return { lost: 'runHook()/nodeFixture', since };
 
 		// Same again, but with the prune actually ARMED — a real GITHUB_RUN_ID
 		// and an above-threshold fixture df — so the tripwire also proves the
@@ -456,13 +479,35 @@ test('REAL-ROOT TRIPWIRE: the suite must never prune the real host /tmp', () => 
 		withPruneDf(fx2, { totalMb: 8000, usedMb: 5000, availMb: 2000 });
 		const r3 = runHook(fx2);
 		assert.equal(r3.code, 0);
-		assert.ok(
-			existsSync(tripwire),
-			'runHook()/nodeFixture with GITHUB_RUN_ID set and the prune armed: real host /tmp tripwire must survive'
-		);
+		if (!existsSync(tripwire)) {
+			return { lost: 'runHook()/nodeFixture with GITHUB_RUN_ID set and the prune armed', since };
+		}
+		return { lost: null, since };
 	} finally {
 		rmSync(tripwire, { recursive: true, force: true });
 	}
+}
+
+test('REAL-ROOT TRIPWIRE: the suite must never prune the real host /tmp', () => {
+	// A HOST THAT ALSO RUNS CI PRUNES THE SAME /tmp FOR REAL. hokon is the CI
+	// backstop: every job it admits runs this very maybe_prune_tmp against /tmp,
+	// and a 3h-old game-bundle-* is exactly what that prune exists to delete.
+	// On 2026-11-12 06:00:27Z a hadoku_site Redeploy job's prune removed one
+	// ~4KB candidate mid-suite — this tripwire — and the test blamed the suite.
+	// So a lost tripwire is excused ONLY when this host's own prune.log shows a
+	// production removal inside the pass, and then the pass is re-run. A real
+	// leak eats the tripwire on every pass and still fails here.
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		const { lost, since } = tripwirePass();
+		if (!lost) return;
+		assert.ok(
+			realPruneRemovedSince(since),
+			`${lost}: real host /tmp tripwire must survive (no production prune ran in the window)`
+		);
+	}
+	assert.fail(
+		'the tripwire was lost to a production prune on 3 passes running — inconclusive, rerun'
+	);
 });
 
 test('pin: the hook and the cleaner share the same stale-debris pattern list', () => {
