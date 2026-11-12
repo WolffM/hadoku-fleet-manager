@@ -48,6 +48,14 @@
  * See summarisePending for how a run held by its concurrency group is told
  * apart.
  *
+ * IT ALSO READS THE UNFILTERED LISTING, BECAUSE THE FILTERS CAN LIE
+ * -----------------------------------------------------------------
+ * GitHub's `?status=` listings have left a genuinely queued run out for hours
+ * (hadoku-tenhands 42971351168, 11.3 h on 2026-11-11, while this gate said
+ * `waiting=0`). One more call per repo reads `/actions/runs` unfiltered and
+ * reports what the filters missed as `unlisted` — see summariseUnlisted. It is
+ * read LAST, so a rate limit it hits cannot cost the verdict any read.
+ *
  * `--json` for the cron; stdout stays parseable and the exit code carries the
  * finding, per scripts/lib/json-contract.mjs.
  */
@@ -59,6 +67,7 @@ import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import {
 	summariseQueue,
 	summarisePending,
+	summariseUnlisted,
 	queueFindings,
 	readQueuedWithRetry,
 	isSaturated,
@@ -147,6 +156,28 @@ function readRunsOnce(repo, status) {
 		.split('\n')
 		.map((s) => s.trim())
 		.filter(Boolean);
+}
+
+/** The repo's newest runs, UNFILTERED, unretried — `id status created_at`. */
+function readUnfilteredOnce(repo) {
+	const out = execFileSync(
+		'gh',
+		[
+			'api',
+			`repos/${repo}/actions/runs?per_page=30`,
+			'-q',
+			'.workflow_runs[] | "\\(.id) \\(.status) \\(.created_at)"',
+		],
+		{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
+	);
+	return out
+		.split('\n')
+		.map((s) => s.trim())
+		.filter(Boolean)
+		.map((line) => {
+			const [id, status, createdAt] = line.split(' ');
+			return { repo, id, status, createdAt };
+		});
 }
 
 /**
@@ -416,6 +447,19 @@ for (const r of pendingRuns) {
 	}
 }
 
+// THE UNFILTERED READ, LAST (see the header). A repo it cannot read is logged,
+// never `unreadable`: while `unlisted` is advisory, its own read failing must
+// not move the verdict either.
+const unfiltered = [];
+for (const repo of roster) {
+	const read = guardedRead(repo, 'unfiltered listing', () => readUnfilteredOnce(repo));
+	if (read.ok) unfiltered.push(...read.created);
+	else
+		log(
+			`  could not read the unfiltered listing for ${repo}: ${read.reason} — unlisted not checked`
+		);
+}
+
 // STAMPED AFTER THE SWEEP, not before it.
 //
 // The loop above is serial over the whole roster and each iteration shells out
@@ -441,6 +485,11 @@ const now = Date.now();
 const q = summariseQueue(runs, { stuckMs: MAX_QUEUED_MS, nowMs: now });
 const { waiting, stuck, stranded, zombie, unscheduled, saturated, started, busyPool } = q;
 const { held, invisible } = summarisePending(pendingRuns, { nowMs: now });
+const unlisted = summariseUnlisted(
+	unfiltered,
+	[...runs, ...pendingRuns].map((r) => r.id),
+	{ nowMs: now }
+);
 const summary = {
 	queued: q.queued,
 	p50: q.p50,
@@ -458,6 +507,7 @@ const summary = {
 	started: started.length,
 	held: held.length,
 	invisible: invisible.length,
+	unlisted: unlisted.length,
 	unreadable: unreadable.length,
 	failSeconds: FAIL_SECONDS,
 };
@@ -532,6 +582,14 @@ if (invisible.length) {
 	);
 	for (const s of invisible.slice(0, 5)) log(`    ${s.repo}  run ${s.id}  ${s.ageSec}s`);
 }
+if (unlisted.length) {
+	log(
+		`  unlisted=${unlisted.length} (queued or pending in the unfiltered listing, missing from ` +
+			"GitHub's ?status= listings — advisory until its false-positive rate is known)"
+	);
+	for (const s of unlisted.slice(0, 5))
+		log(`    ${s.repo}  run ${s.id}  ${s.status}  ${s.ageSec}s`);
+}
 if (held.length) {
 	log(
 		`  held=${held.length} (pending with no jobs — waiting on their own concurrency group, ` +
@@ -567,6 +625,8 @@ if (JSON_OUT) {
 		// Additive (#6): pending runs past the floor, split by whether they have jobs.
 		invisibleRuns: invisible,
 		heldRuns: held,
+		// Additive: runs the ?status= filters missed. Advisory — never a finding yet.
+		unlistedRuns: unlisted,
 		// NAMES ONLY, exactly as before. This field has been a string[] for every
 		// consumer that has ever parsed it, and widening it to objects under the
 		// --json contract would be a cross-repo change for a diagnostic. The

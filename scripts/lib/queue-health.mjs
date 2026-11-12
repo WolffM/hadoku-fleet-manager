@@ -437,6 +437,44 @@ export function summarisePending(runs, { nowMs = Date.now(), failSeconds = FAIL_
 }
 
 /**
+ * Runs GitHub's FILTERED listings left out: the repo's unfiltered
+ * `/actions/runs` shows them `queued` or `pending`, yet neither
+ * `?status=queued` nor `?status=pending` returned them.
+ *
+ * Measured, not hypothetical. hadoku-tenhands run 42971351168 sat `queued` for
+ * 11.3 h on 2026-11-11 while runner-health (which reads the unfiltered listing)
+ * called it QUEUED and this gate reported `waiting=0` on every tick from 06:20
+ * to 17:31. The same shape hit hadoku-rally (2026-11-02, 8.8 h) and hadoku-task
+ * (2026-11-03, ~4.5 h). The dispatcher closes the serving side of it
+ * (`src/runners/unfiltered-queue.ts`); this is the watching side.
+ *
+ * REPORTED, NEVER A FINDING — yet. A new signal starts quiet until its
+ * false-positive rate is known (earliest promotion 2026-11-18, after reading
+ * every hit in the window). Only runs past the fail floor are kept, so a run
+ * that changed status between the two reads (always seconds old) cannot count.
+ *
+ * `unfiltered`: `[{repo, id, status, createdAt}]`; `listedIds`: every run id
+ * either filtered listing returned this sweep.
+ */
+export function summariseUnlisted(
+	unfiltered,
+	listedIds,
+	{ nowMs = Date.now(), failSeconds = FAIL_SECONDS } = {}
+) {
+	const listed = new Set([...listedIds].map(String));
+	const unlisted = [];
+	for (const r of unfiltered) {
+		if (r.status !== 'queued' && r.status !== 'pending') continue;
+		if (listed.has(String(r.id))) continue;
+		const ageSec = Math.max(0, Math.round((nowMs - Date.parse(r.createdAt)) / 1000));
+		if (!Number.isFinite(ageSec) || ageSec <= failSeconds) continue;
+		unlisted.push({ repo: r.repo, id: String(r.id), status: r.status, ageSec });
+	}
+	unlisted.sort((a, b) => b.ageSec - a.ageSec);
+	return unlisted;
+}
+
+/**
  * The findings, from a summary and whatever could not be read.
  *
  * An unreadable repo is a FINDING, never an omission: a token that expired

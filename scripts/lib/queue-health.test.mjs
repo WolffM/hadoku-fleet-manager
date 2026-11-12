@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
 	summariseQueue,
 	summarisePending,
+	summariseUnlisted,
 	queueFindings,
 	isSaturated,
 	readQueuedWithRetry,
@@ -668,4 +669,56 @@ test('DST 2026-11-01: a run genuinely ahead by ~1h still fails, and age is never
 		findings.some((f) => /ahead of this box's clock/.test(f) && /3567s/.test(f)),
 		`a ~1h skew must still fail the gate with the real figure, got: ${JSON.stringify(findings)}`
 	);
+});
+
+test('summariseUnlisted: the 2026-11-11 tenhands run — queued unfiltered, absent from both filters', () => {
+	const nowMs = Date.parse('2026-11-11T17:31:00Z');
+	const unfiltered = [
+		// The incident: queued 11h, never in ?status=queued or ?status=pending.
+		{
+			repo: 'WolffM/hadoku-tenhands',
+			id: '42971351168',
+			status: 'queued',
+			createdAt: '2026-11-11T06:17:07Z',
+		},
+		// Listed by a filter: already counted by the main sweep, not unlisted.
+		{ repo: 'WolffM/hadoku-task', id: '1', status: 'queued', createdAt: '2026-11-11T17:00:00Z' },
+		// Changed status between the two reads: seconds old, under the floor.
+		{ repo: 'WolffM/hadoku-task', id: '2', status: 'pending', createdAt: '2026-11-11T17:30:30Z' },
+		// Not waiting at all.
+		{ repo: 'WolffM/hadoku-task', id: '3', status: 'completed', createdAt: '2026-11-11T06:00:00Z' },
+		{
+			repo: 'WolffM/hadoku-rally',
+			id: '4',
+			status: 'in_progress',
+			createdAt: '2026-11-11T06:00:00Z',
+		},
+		// A pending run the filters missed counts the same way.
+		{ repo: 'WolffM/hadoku-rally', id: '5', status: 'pending', createdAt: '2026-11-11T17:00:00Z' },
+	];
+	const unlisted = summariseUnlisted(unfiltered, ['1'], { nowMs });
+	assert.deepEqual(
+		unlisted.map((u) => [u.repo, u.id, u.status]),
+		[
+			['WolffM/hadoku-tenhands', '42971351168', 'queued'],
+			['WolffM/hadoku-rally', '5', 'pending'],
+		]
+	);
+	assert.equal(unlisted[0].ageSec, 40433);
+});
+
+test('summariseUnlisted: ids compare as strings, whichever side parsed them as numbers', () => {
+	const nowMs = Date.parse('2026-11-11T12:00:00Z');
+	const unfiltered = [{ repo: 'r', id: 42, status: 'queued', createdAt: '2026-11-11T11:00:00Z' }];
+	assert.deepEqual(summariseUnlisted(unfiltered, ['42'], { nowMs }), []);
+});
+
+test('unlisted runs are ADVISORY: they never become a finding while the signal is quiet', () => {
+	const unlisted = [{ repo: 'r', id: '1', status: 'queued', ageSec: 40000 }];
+	const findings = queueFindings(
+		{ p95: 0, stranded: [], invisible: [], skewed: [], unlisted },
+		[],
+		FAIL_SECONDS
+	);
+	assert.deepEqual(findings, []);
 });
