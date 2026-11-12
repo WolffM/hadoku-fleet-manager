@@ -23,7 +23,7 @@ import { __resetJobHistoryForTesting } from '../job-history-store.js';
 import { __setHistoryPathForTesting } from '../job-history-store.js';
 import { RETENTION_DAYS } from '../job-history-store.js';
 import { historyFile } from '../job-history-store.js';
-import { compactHistory } from '../job-history-store.js';
+import { compactHistory, COMPACT_STALE_FRACTION } from '../job-history-store.js';
 import { loadHistory } from '../job-history-store.js';
 import { jobRecords } from '../job-history-store.js';
 import { ingestRuns } from '../job-history-ingest.js';
@@ -218,4 +218,53 @@ test('persistence: compaction rewrites the file without losing live records', as
 	compactHistory();
 	restart();
 	assert.equal(jobRecords().length, 2, 'compaction must not drop live records');
+});
+
+test('compaction: records over 400 bytes no longer rewrite the file on every call (fleet-manager#86)', () => {
+	// The old test was `size >= records * 400 + 64 KiB`. Live records averaged
+	// 414 bytes on 2026-11-12, so it was true on every `ingestRuns` call and the
+	// whole 12 MB file was rewritten once per repo per sweep. Records this size,
+	// enough of them to pass 64 KiB, none stale: nothing to rewrite.
+	const now = Date.now();
+	const pad = 'x'.repeat(600);
+	for (let i = 0; i < 200; i++) {
+		const line = JSON.parse(diskRecord(1000 + i, new Date(now - D_MS).toISOString()));
+		appendFileSync(historyFile(), JSON.stringify({ ...line, failedStep: pad }) + '\n');
+	}
+	loadHistory(now);
+	assert.equal(compactHistory(now), false, 'a file of live records is not stale');
+	assert.equal(compactHistory(now + 60_000), false, 'nor a minute later');
+});
+
+test('compaction: rewrites only once the aged-out lines reach the stale fraction', () => {
+	const now = Date.now();
+	const live = 20;
+	const due = Math.ceil(live * COMPACT_STALE_FRACTION);
+	for (let i = 0; i < live; i++)
+		appendFileSync(historyFile(), diskRecord(2000 + i, new Date(now - D_MS).toISOString()));
+	// One at a time, each just inside the window now and past it a day later.
+	for (let i = 0; i < due; i++)
+		appendFileSync(
+			historyFile(),
+			diskRecord(3000 + i, new Date(now - (RETENTION_DAYS - 0.5) * D_MS + i).toISOString())
+		);
+	loadHistory(now);
+	assert.equal(jobRecords().length, live + due);
+	const later = now + D_MS;
+	assert.equal(compactHistory(later), true, `${due} stale of ${live} live is due`);
+	const lines = readFileSync(historyFile(), 'utf8').trim().split('\n');
+	assert.equal(lines.length, live);
+	assert.equal(compactHistory(later + 60_000), false, 'and a fresh file is not rewritten again');
+});
+
+test('compaction: lines already stale on disk at load count toward the next rewrite', () => {
+	const now = Date.now();
+	for (let i = 0; i < 9; i++)
+		appendFileSync(historyFile(), diskRecord(4000 + i, new Date(now - D_MS).toISOString()));
+	appendFileSync(historyFile(), diskRecord(4100, new Date(now - 30 * D_MS).toISOString()));
+	appendFileSync(historyFile(), '{"truncated');
+	loadHistory(now);
+	assert.equal(jobRecords().length, 9);
+	assert.equal(compactHistory(now), true, '2 stale lines against 9 live is past 10%');
+	assert.equal(readFileSync(historyFile(), 'utf8').trim().split('\n').length, 9);
 });

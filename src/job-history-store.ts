@@ -56,7 +56,7 @@
  * and the in-memory window carries on.
  */
 
-import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { logger } from './host.js';
@@ -285,6 +285,13 @@ let historyPath: string | null = null;
 let loaded = false;
 let diskWarned = false;
 let recordBudget = MAX_RECORDS;
+/**
+ * Lines on disk that are no longer in {@link records}: aged past retention,
+ * trimmed to the budget, or unreadable at load. Counted exactly, so
+ * {@link compactHistory} rewrites when the file is measurably stale rather than
+ * by guessing from its size (fleet-manager#86).
+ */
+let staleOnDisk = 0;
 
 export function historyFile(): string {
 	return historyPath ?? join(stateDir(), 'job-history.jsonl');
@@ -301,6 +308,7 @@ export function __resetJobHistoryForTesting(): void {
 	seenRuns.clear();
 	loaded = false;
 	diskWarned = false;
+	staleOnDisk = 0;
 	__resetProbeLedgerForTesting();
 	recordBudget = MAX_RECORDS;
 }
@@ -340,6 +348,7 @@ export function trimToBudget(now = Date.now()): void {
 	if (excess <= 0) return;
 	records.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 	records.splice(0, excess);
+	staleOnDisk += excess;
 	noteHistoryChanged();
 	const oldest = Date.parse(records[0]?.startedAt ?? '');
 	const keptDays = Number.isFinite(oldest) ? ((now - oldest) / 86_400_000).toFixed(1) : '0';
@@ -397,10 +406,14 @@ export function loadHistory(now = Date.now()): void {
 		const raw = readFileSync(historyFile(), 'utf8');
 		for (const line of raw.split('\n')) {
 			if (!line.trim()) continue;
+			// Every line counts as stale until it is kept: an aged-out or unreadable
+			// line is still on disk, and only a rewrite removes it.
+			staleOnDisk++;
 			try {
 				const r = JSON.parse(line) as JobRecord;
 				if (typeof r.jobId !== 'number' || typeof r.startedAt !== 'string') continue;
 				if (r.startedAt < cutoff) continue;
+				staleOnDisk--;
 				records.push(r);
 				seenRuns.add(r.runId);
 			} catch {
@@ -450,6 +463,7 @@ export function persistHistory(): boolean {
 			historyFile(),
 			records.map((r) => JSON.stringify(r)).join('\n') + (records.length ? '\n' : '')
 		);
+		staleOnDisk = 0;
 		return true;
 	} catch (err) {
 		warnOnce('could not write history', err);
@@ -458,26 +472,40 @@ export function persistHistory(): boolean {
 }
 
 /**
- * Rewrite the file from the in-memory window, dropping what retention has aged
- * out. Append-only would otherwise grow forever; this runs only when the file
- * has meaningfully outgrown the window it represents, so the common tick pays
- * one append and nothing else.
+ * The file is rewritten once the lines on it that have left the window reach
+ * this fraction of the window. Append-only would otherwise grow forever.
+ */
+export const COMPACT_STALE_FRACTION = 0.1;
+
+/**
+ * Drop what retention has aged out of the in-memory window, and rewrite the
+ * file only once {@link COMPACT_STALE_FRACTION} of it is stale.
+ *
+ * WHY A COUNT, NOT THE FILE SIZE (fleet-manager#86). This used to rewrite
+ * whenever the file exceeded 400 bytes per live record. Records grew past that
+ * (414 bytes each on 2026-11-12, 12.4 MB for 29,914 records), so the test was
+ * true on EVERY call. `ingestRuns` calls this once per repo per sweep, so each
+ * runner-health sweep serialised, wrote and fsync'd the whole 12 MB file
+ * dozens of times on mgmt-api's event loop: 46 stalls of 100 ms or more in a
+ * 180 s profile, most of them here. A rolling window also ages a record out
+ * nearly every minute, so "anything aged out" would be the same mistake. At
+ * ~2,100 records a day against a 14-day window, 10% is one rewrite every day
+ * or two.
+ *
+ * Synchronous on purpose. An async rewrite would race {@link appendToDisk}'s
+ * synchronous appends: a line appended between the snapshot and the rename is
+ * silently lost.
  */
 export function compactHistory(now = Date.now()): boolean {
 	const cutoff = cutoffIso(now);
 	const keep = records.filter((r) => r.startedAt >= cutoff);
-	if (keep.length === records.length) {
-		try {
-			const size = statSync(historyFile()).size;
-			// Rewrite only when the file is far larger than the live window implies.
-			if (size < keep.length * 400 + 65_536) return false;
-		} catch {
-			return false;
-		}
+	if (keep.length !== records.length) {
+		staleOnDisk += records.length - keep.length;
+		records.length = 0;
+		records.push(...keep);
+		noteHistoryChanged();
 	}
-	records.length = 0;
-	records.push(...keep);
-	noteHistoryChanged();
+	if (staleOnDisk === 0 || staleOnDisk < records.length * COMPACT_STALE_FRACTION) return false;
 	return persistHistory();
 }
 
