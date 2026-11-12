@@ -351,6 +351,14 @@ test('A4: the dispatcher holds back the unused share, read on the same ssh as fr
 	const { floor, cmds } = await tickFloor(1200, settled);
 	assert.ok(cmds.some((c) => c.includes('hosting-cardtable.slice/memory.current')));
 	assert.equal(floor, 1536 + 4096 - 1200);
+	// The same reading is recorded for the learned hold-back's shadow (hosting-usage.ts).
+	const { readHostingUsage } = await import('../runners/hosting-usage.js');
+	const { stateDir } = await import('../host.js');
+	const hours = Object.values(readHostingUsage(stateDir())?.slices['claw-3/cardtable'] ?? {});
+	assert.ok(
+		hours.some((b) => b[3] === 1200),
+		'the tick recorded the slice reading'
+	);
 	// Empty: the agent's JVMs are not up, so all of it is held.
 	assert.equal((await tickFloor(0, settled)).floor, 1536 + 4096);
 	// Half full.

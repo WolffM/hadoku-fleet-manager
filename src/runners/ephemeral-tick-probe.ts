@@ -15,6 +15,7 @@ import {
 	takeSliceUsage,
 	type SharedHosting,
 } from './hosting-record.js';
+import { hourKey, learnedHold, observeSliceUsage, sliceKey } from './hosting-usage.js';
 import {
 	SPACE_PROBE_DF_CMD,
 	parseSpaceProbe,
@@ -29,9 +30,60 @@ import {
  * everything else in-memory here. */
 const loggedSpaceProbeOnce = new Set<string>();
 
+/** Which hour each slice's shadow line was last logged for: one line per slice per hour. */
+const shadowLoggedHour = new Map<string, string>();
+
 /** Test seam. Not part of the supported API. */
 export function __resetSpaceProbeLogForTesting(): void {
 	loggedSpaceProbeOnce.clear();
+	shadowLoggedHour.clear();
+}
+
+/**
+ * Record each slice's reading and, once an hour, log the hold-back admission
+ * would use if it learned from history beside the one it uses
+ * (`hosting-usage.ts`, shadow only). grep: "[hosting-usage] shadow".
+ */
+function shadowLearnedHold(
+	node: string,
+	hosted: readonly SharedHosting[],
+	holds: readonly HostingHold[],
+	sliceCurrentMb: ReadonlyMap<string, number | null>,
+	nowMs = Date.now()
+): void {
+	const stats = observeSliceUsage(
+		hosted.map((h) => ({ node, tenant: h.tenant, mb: sliceCurrentMb.get(h.tenant) ?? null })),
+		{
+			nowMs,
+			onUnreadable: (path) =>
+				logger.warn(`[hosting-usage] ${path} does not parse; starting a fresh record`),
+		}
+	);
+	for (const h of hosted) {
+		const key = sliceKey(node, h.tenant);
+		if (shadowLoggedHour.get(key) === hourKey(nowMs)) continue;
+		shadowLoggedHour.set(key, hourKey(nowMs));
+		const s = stats.get(key) ?? null;
+		const currentMb = sliceCurrentMb.get(h.tenant) ?? null;
+		const live = holds.find((x) => x.tenant === h.tenant)?.mb;
+		const learned = learnedHold({
+			declaredMb: h.memoryMb,
+			currentMb,
+			since: h.since,
+			stats: s,
+			nowMs,
+		});
+		logger.info(
+			`[hosting-usage] shadow ${key}: live hold ${live}MB, ` +
+				(learned
+					? `learned ${learned.holdMb}MB (envelope ${learned.envelopeMb}, up mark ${learned.upMarkMb}, `
+					: `learning (`) +
+				`current ${currentMb ?? 'unread'}, declared ${h.memoryMb}` +
+				(s
+					? `, mean ${s.meanMb} sd ${s.sdMb} peak ${s.peakMb} idle ${s.idleMb} over ${s.hours}h)`
+					: ', no readings)')
+		);
+	}
 }
 
 export interface NodeMemoryProbe {
@@ -99,18 +151,17 @@ export async function probeNodeMemory(
 			);
 			const { rest: out, sliceCurrentMb } = takeSliceUsage(raw);
 			if (hosted.length) {
-				heldBackByNode.set(
-					name,
-					hosted.map((h) => ({
-						tenant: h.tenant,
-						mb: heldBackMb({
-							declaredMb: h.memoryMb,
-							sliceCurrentMb: sliceCurrentMb.get(h.tenant) ?? null,
-							since: h.since,
-							...(h.steadyMb !== undefined ? { steadyMb: h.steadyMb } : {}),
-						}),
-					}))
-				);
+				const holds = hosted.map((h) => ({
+					tenant: h.tenant,
+					mb: heldBackMb({
+						declaredMb: h.memoryMb,
+						sliceCurrentMb: sliceCurrentMb.get(h.tenant) ?? null,
+						since: h.since,
+						...(h.steadyMb !== undefined ? { steadyMb: h.steadyMb } : {}),
+					}),
+				}));
+				heldBackByNode.set(name, holds);
+				shadowLearnedHold(name, hosted, holds, sliceCurrentMb);
 			}
 			const { first, tmpFreeMb, tmpSizeMb, workFreeMb } = parseSpaceProbe(out);
 			const [free, total] = first.split(/\s+/).map(Number);

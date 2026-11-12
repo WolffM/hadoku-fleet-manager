@@ -14,6 +14,11 @@
     "why": "One declared writer (the dispatch pass's heavy marks), read back by something else (scripts/check-warm-canary.mjs, observation): rule 3 of \u00a73.2, the same reason as drain.ts and hosting-record.ts above. HEAVY_MARK_MS moved here from dispatch-pass-state.ts so the canary and the warm tick read one window; dispatch-pass-state.ts re-exports it."
   },
   {
+    "glob": "src/runners/hosting-usage.ts",
+    "layer": "state",
+    "why": "One declared writer (the dispatcher tick's per-slice hourly usage, fed from the same memory.current read heldBackMb uses), read back by the learned hold-back shadow and, once promoted, by admission: rule 3 of \u00a73.2, the same shape as hosting-record.ts and heavy-marks.ts above."
+  },
+  {
     "glob": "src/runners/warm-holds.ts",
     "layer": "state",
     "why": "One declared writer (the warm tick's heavy/drain holds), read back by something else (scripts/check-warm-canary.mjs, observation, which must not score a node the tick is holding empty or has not yet come round to refill, fleet-manager#79): rule 3 of \u00a73.2, the same shape as heavy-marks.ts and warm-yields.ts."
