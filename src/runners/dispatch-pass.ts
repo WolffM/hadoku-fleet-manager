@@ -28,8 +28,7 @@ import { planTick } from './dispatcher.js';
 import { type GhLike, type ShellLike } from '../lib/fleet-vocabulary.js';
 import {
 	mintEphemeralRunner,
-	liveJitUnitRecords,
-	liveJitSlots,
+	liveJitState,
 	retireStrandedJit,
 	type LiveJitUnit,
 } from './ephemeral-exec-jit.js';
@@ -180,7 +179,7 @@ export async function runDispatchPass(
 	const usedSlots = new Map<string, Set<number>>();
 	await Promise.all(
 		input.order.map(async (m) => {
-			const [units, slots] = await Promise.all([liveJitUnitRecords(m, sh), liveJitSlots(m, sh)]);
+			const { units, slots } = await liveJitState(m, sh);
 			unitRecordsByNode.set(m, units);
 			unitsByNode.set(
 				m,

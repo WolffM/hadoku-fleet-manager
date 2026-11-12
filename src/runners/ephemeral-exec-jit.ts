@@ -292,6 +292,19 @@ export async function deleteRunnerByName(
 	return res.ok;
 }
 
+const LIVE_JIT_SLOTS_CMD = "pgrep -af 'jit/slot[0-9]+/bin/Runner\\.Listener' 2>/dev/null || true";
+const LIVE_JIT_UNITS_CMD =
+	"XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user list-units 'jit-*' --no-legend --plain";
+
+function parseJitSlots(out: string | null): Set<number> {
+	const slots = new Set<number>();
+	for (const line of (out ?? '').split('\n')) {
+		const m = /jit\/slot(\d+)\//.exec(line);
+		if (m) slots.add(Number(m[1]));
+	}
+	return slots;
+}
+
 /**
  * Slot indices currently occupied by a live JIT listener on this node.
  *
@@ -306,16 +319,7 @@ export async function deleteRunnerByName(
  * a loop counter that restarted at 0 on every pass.
  */
 export async function liveJitSlots(node: string, sh: ShellLike): Promise<Set<number>> {
-	const out = await sh(
-		node,
-		"pgrep -af 'jit/slot[0-9]+/bin/Runner\\.Listener' 2>/dev/null || true"
-	);
-	const slots = new Set<number>();
-	for (const line of (out ?? '').split('\n')) {
-		const m = /jit\/slot(\d+)\//.exec(line);
-		if (m) slots.add(Number(m[1]));
-	}
-	return slots;
+	return parseJitSlots(await sh(node, LIVE_JIT_SLOTS_CMD));
 }
 
 /**
@@ -343,10 +347,10 @@ export interface LiveJitUnit {
 
 /** {@link liveJitUnits}, with each unit's stamped labels off the same one listing. */
 export async function liveJitUnitRecords(node: string, sh: ShellLike): Promise<LiveJitUnit[]> {
-	const out = await sh(
-		node,
-		"XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user list-units 'jit-*' --no-legend --plain"
-	);
+	return parseJitUnits(await sh(node, LIVE_JIT_UNITS_CMD));
+}
+
+function parseJitUnits(out: string | null): LiveJitUnit[] {
 	if (!out) return [];
 	return out
 		.split('\n')
@@ -356,6 +360,35 @@ export async function liveJitUnitRecords(node: string, sh: ShellLike): Promise<L
 			name: u.replace(/\.service$/, ''),
 			labels: labelsFromUnitDescription(description.join(' ')),
 		}));
+}
+
+const LIVE_JIT_SEPARATOR = '--- jit-slots ---';
+
+/**
+ * {@link liveJitUnitRecords} and {@link liveJitSlots} in ONE ssh. The dispatch
+ * pass needs both for every node, every 15 s while work is queued, and each
+ * spawn costs mgmt-api's event loop ~16 ms: two per node were most of the ~1.9
+ * spawns a second one profile measured (fleet-manager#86).
+ *
+ * Same answers as the two calls. The command ends in `pgrep … || true`, so a
+ * failed `systemctl` prints nothing before the separator (units `[]`, as its
+ * own `null` gave) and an unreachable node returns `null` (both empty, as
+ * before).
+ */
+export async function liveJitState(
+	node: string,
+	sh: ShellLike
+): Promise<{ units: LiveJitUnit[]; slots: Set<number> }> {
+	const out = await sh(
+		node,
+		`${LIVE_JIT_UNITS_CMD}; echo '${LIVE_JIT_SEPARATOR}'; ${LIVE_JIT_SLOTS_CMD}`
+	);
+	const at = out?.indexOf(LIVE_JIT_SEPARATOR) ?? -1;
+	if (out === null || at < 0) return { units: [], slots: new Set() };
+	return {
+		units: parseJitUnits(out.slice(0, at)),
+		slots: parseJitSlots(out.slice(at + LIVE_JIT_SEPARATOR.length)),
+	};
 }
 
 /**

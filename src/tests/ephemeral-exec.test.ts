@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import {
 	__resetTarballCacheForTesting,
+	liveJitSlots,
+	liveJitState,
 	liveJitUnitRecords,
 	liveJitUnits,
 	mintEphemeralRunner,
@@ -10,6 +12,10 @@ import {
 	runnerTarballUrl,
 } from '../runners/ephemeral-exec-jit.js';
 import { jitUnitDescription, labelsFromUnitDescription } from '../runners/ephemeral-mint.js';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { GOOD_JITCONFIG, fakeGh, jitConfig } from './helpers/fleet-fakes.js';
 
 const REQ = {
@@ -204,6 +210,57 @@ test('a label that would not survive the round trip leaves the unit UNSTAMPED, n
 
 test('an unreachable node reports no units rather than throwing', async () => {
 	assert.deepEqual(await liveJitUnits('hokon', async () => null), []);
+});
+
+/**
+ * fleet-manager#86: the dispatch pass reads units and slots in ONE ssh. Run
+ * that command through a REAL bash, with `systemctl` and `pgrep` stubbed on
+ * PATH, and require the same answers the two separate calls give — including
+ * when `systemctl` fails, which the joined command must not let swallow the
+ * slots.
+ */
+function realShellWith(systemctl: string, pgrep: string) {
+	const bin = mkdtempSync(join(tmpdir(), 'jit-state-'));
+	writeFileSync(join(bin, 'systemctl'), `#!/bin/sh\n${systemctl}\n`, { mode: 0o755 });
+	writeFileSync(join(bin, 'pgrep'), `#!/bin/sh\n${pgrep}\n`, { mode: 0o755 });
+	return async (_node: string, cmd: string): Promise<string | null> => {
+		const r = spawnSync('bash', ['-c', cmd], {
+			encoding: 'utf8',
+			env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` },
+		});
+		return r.status === 0 ? r.stdout : null;
+	};
+}
+
+test('liveJitState: one command, the same units and slots the two calls read', async () => {
+	const sh = realShellWith(
+		"printf 'jit-a.service loaded active running jit labels=self-hosted,x\\njit-b.service loaded failed failed y\\n'",
+		"echo '4242 /home/ci/.hadoku/jit/slot3/bin/Runner.Listener run'"
+	);
+	let calls = 0;
+	const counted = async (n: string, c: string) => {
+		calls++;
+		return sh(n, c);
+	};
+	const state = await liveJitState('claw-1', counted);
+	assert.equal(calls, 1, 'one ssh, not two');
+	assert.deepEqual(state.units, await liveJitUnitRecords('claw-1', sh));
+	assert.deepEqual(state.units, [{ name: 'jit-a', labels: ['self-hosted', 'x'] }]);
+	assert.deepEqual([...state.slots], [...(await liveJitSlots('claw-1', sh))]);
+	assert.deepEqual([...state.slots], [3]);
+});
+
+test('liveJitState: a failed systemctl still reads the slots; an unreachable node reads nothing', async () => {
+	const sh = realShellWith(
+		'echo boom >&2; exit 1',
+		"echo '7 /home/ci/.hadoku/jit/slot0/bin/Runner.Listener run'"
+	);
+	const state = await liveJitState('claw-1', sh);
+	assert.deepEqual(state.units, []);
+	assert.deepEqual([...state.slots], [0], 'a broken unit listing must not hide a busy slot');
+	const none = await liveJitState('claw-1', async () => null);
+	assert.deepEqual(none.units, []);
+	assert.equal(none.slots.size, 0);
 });
 
 test('a 2xx with no usable config is cleaned up, not left registered', async () => {

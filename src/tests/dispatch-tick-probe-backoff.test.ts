@@ -9,7 +9,7 @@ import {
 import { PROBE_BACKOFF_MS } from '../runners/probe-backoff.js';
 import type { NodeState } from '../runners/placement-node-state.js';
 import { jitRunnerName } from '../lib/jit-naming.js';
-import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
+import { answeringJitState, fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import {
 	node,
 	base,
@@ -324,10 +324,11 @@ test("2026-10-25: a slot that frees inside an older run's backoff is held for it
 	// unit listing sees it end, the fast loop's probe (`input.nodes`) does not.
 	let units = [jitRunnerName('claw-3', 'WolffM/other', NOW - 60_000, 555, 999)];
 	const plain = fakeShell();
-	const sh = async (n: string, cmd: string) =>
+	const sh = answeringJitState(async (n: string, cmd: string) =>
 		cmd.includes('list-units')
 			? units.map((u) => `${u}.service loaded active running x`).join('\n')
-			: plain(n, cmd);
+			: plain(n, cmd)
+	);
 	const input = base({
 		order: ['claw-3'],
 		nodes: [builder('claw-3', { maxConcurrent: 1 })],

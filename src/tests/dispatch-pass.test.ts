@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { runDispatchPass } from '../runners/dispatch-pass.js';
 import { REAP_IDLE_INTERVAL_MS } from '../runners/ephemeral-exec-reap.js';
 import { REAP_INTERVAL_MS, JIT_REAP_GRACE_MS } from '../lib/jit-reap-cadence.js';
-import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
+import { answeringJitState, fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import { node, run, base, harness, installDispatchPassRig } from './helpers/dispatch-pass-rig.js';
 
 installDispatchPassRig();
@@ -67,13 +67,13 @@ test('one failing node does not stop the pass', async () => {
 	// failing node must not be tried twice in the same tick just because it
 	// came first, any more than a busy-but-healthy one should.
 	const h = harness();
-	const sh = async (node: string, cmd: string) => {
+	const sh = answeringJitState(async (node: string, cmd: string) => {
 		if (cmd.includes('CFG-OK')) return 'CFG-OK';
 		if (cmd.includes('list-units')) return '';
 		if (node === 'claw-2' && cmd.includes('jit-provision')) return 'SLOT-FAIL broken';
 		if (cmd.includes('jit-provision')) return 'SLOT-READY /home/hadoku/.hadoku/jit/slot0 2.336.0';
 		return 'Running as unit: x.service';
-	};
+	});
 	const r = await runDispatchPass(
 		base({
 			order: ['claw-2', 'claw-1'],
@@ -115,7 +115,7 @@ test('a run already served by a LIVE unit is not minted for again', async () => 
 
 test('a mint never reuses a slot that is serving a job — RESET=1 would wipe it', async () => {
 	const slotsUsed: number[] = [];
-	const sh = async (_h: string, cmd: string) => {
+	const sh = answeringJitState(async (_h: string, cmd: string) => {
 		if (cmd.includes('CFG-OK')) return 'CFG-OK';
 		// A live listener occupying slot 0, read from the process tree.
 		if (cmd.includes('pgrep'))
@@ -127,7 +127,7 @@ test('a mint never reuses a slot that is serving a job — RESET=1 would wipe it
 			return 'SLOT-READY /home/hadoku/.hadoku/jit/slot' + m[1] + ' 2.336.0';
 		}
 		return 'Running as unit: x.service';
-	};
+	});
 	const h = harness();
 	await runDispatchPass(base({ pending: [run(1)] }), 'tok', h.gh, sh);
 	assert.ok(slotsUsed.length > 0, 'the mint must have provisioned a slot');
@@ -136,7 +136,7 @@ test('a mint never reuses a slot that is serving a job — RESET=1 would wipe it
 
 test('two mints in one pass take different slots', async () => {
 	const slotsUsed: number[] = [];
-	const sh = async (_h: string, cmd: string) => {
+	const sh = answeringJitState(async (_h: string, cmd: string) => {
 		if (cmd.includes('CFG-OK')) return 'CFG-OK';
 		if (cmd.includes('pgrep')) return '';
 		if (cmd.includes('list-units')) return '';
@@ -146,7 +146,7 @@ test('two mints in one pass take different slots', async () => {
 			return 'SLOT-READY /home/hadoku/.hadoku/jit/slot' + m[1] + ' 2.336.0';
 		}
 		return 'Running as unit: x.service';
-	};
+	});
 	const h = harness();
 	await runDispatchPass(base({ pending: [run(1), run(2)] }), 'tok', h.gh, sh);
 	assert.equal(
@@ -158,12 +158,12 @@ test('two mints in one pass take different slots', async () => {
 
 test('a quiet fleet still sweeps — orphans accumulate precisely when nothing is queued', async () => {
 	const swept: string[] = [];
-	const sh = async (_m: string, cmd: string) => {
+	const sh = answeringJitState(async (_m: string, cmd: string) => {
 		if (cmd.includes('CFG-OK')) return 'CFG-OK';
 		if (cmd.includes('echo REACHABLE')) return 'REACHABLE';
 		if (cmd.includes('list-units')) return '';
 		return '';
-	};
+	});
 	const gh = {
 		get: async () => ({ runners: [{ id: 5, name: 'jit-claw-2-hadoku-rally-r9-1000000000' }] }),
 		write: async (_m: 'POST' | 'DELETE', p: string) => {

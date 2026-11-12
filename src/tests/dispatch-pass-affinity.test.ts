@@ -8,7 +8,7 @@ import { buildFleetReport } from '../routes/fleet-report.js';
 import { getCapacityLedger } from '../runners/capacity-ledger.js';
 import type { HeavyModel } from '../runners/heavy-model.js';
 import type { PendingRun } from '../runners/dispatcher.js';
-import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
+import { answeringJitState, fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateDir } from '../host.js';
@@ -210,12 +210,13 @@ test('#102 REPLAY 2026-10-30 20:40:52Z: a heavy mint no listing shows yet still 
 		isHeavyRepo: (repo) => repo === CT,
 	};
 	const base0 = fakeShell();
-	const sh = async (n: string, cmd: string) =>
+	const sh = answeringJitState(async (n: string, cmd: string) =>
 		cmd.includes('list-units')
 			? n === 'claw-8'
 				? `${UNIT}.service loaded active running x`
 				: ''
-			: base0(n, cmd);
+			: base0(n, cmd)
+	);
 	const gh = fakeGh();
 	const job = (jobId: number, jobName: string): PendingRun => ({
 		id: 41122643757,
@@ -274,12 +275,13 @@ test('heavy units: a shard from a FULLY PLACED run, in no listing, still counts 
 		'jit-claw-9-hadoku-cardtabl-j200000000002-r50000000001-1794400001',
 	];
 	const base0 = fakeShell();
-	const sh = async (n: string, cmd: string) =>
+	const sh = answeringJitState(async (n: string, cmd: string) =>
 		cmd.includes('list-units')
 			? n === 'claw-9'
 				? OLD.map((u) => `${u}.service loaded active running x`).join('\n')
 				: ''
-			: base0(n, cmd);
+			: base0(n, cmd)
+	);
 	const pass = () =>
 		runDispatchPass(
 			base({
@@ -502,13 +504,13 @@ test('a FAILED mint on the warm node credits the term with nothing', async () =>
 	// The tier above served that job, not the warm listener.
 	const infos = recordInfos();
 	const h = harness();
-	const sh = async (n: string, cmd: string) => {
+	const sh = answeringJitState(async (n: string, cmd: string) => {
 		if (cmd.includes('CFG-OK')) return 'CFG-OK';
 		if (cmd.includes('list-units')) return '';
 		if (n === 'claw-1' && cmd.includes('jit-provision')) return 'SLOT-FAIL broken';
 		if (cmd.includes('jit-provision')) return 'SLOT-READY /home/hadoku/.hadoku/jit/slot0 2.336.0';
 		return 'Running as unit: x.service';
-	};
+	});
 	const r = await runDispatchPass(base(warmSecond()), 'tok', h.gh, sh);
 	assert.equal(r.failed, 2);
 	assert.equal(r.minted, 1);

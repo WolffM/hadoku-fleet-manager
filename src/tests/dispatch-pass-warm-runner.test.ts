@@ -7,7 +7,7 @@ import { heavyMarkedRecently, HEAVY_MARK_MS } from '../runners/dispatch-pass-sta
 import { readHeavyMarks } from '../runners/heavy-marks.js';
 import type { HeavyModel } from '../runners/heavy-model.js';
 import type { PendingRun } from '../runners/dispatcher.js';
-import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
+import { answeringJitState, fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import {
 	node,
 	run,
@@ -191,12 +191,12 @@ test('a runner minted for a queued job that is NOT busy yet is still in flight â
 /** A shell whose one live unit is MINTED_FOR_100, described as `description`. */
 function strandedShell(description: string, seen: string[]) {
 	const base = fakeShell();
-	return async (n: string, cmd: string) => {
+	return answeringJitState(async (n: string, cmd: string) => {
 		seen.push(cmd);
 		if (cmd.includes('list-units'))
 			return `${MINTED_FOR_100}.service loaded active running ${description}`;
 		return base(n, cmd);
-	};
+	});
 }
 const BUILDER_JOB = { ...run(1), labels: ['self-hosted', 'hadoku-builder'] };
 const builderNode = () => node('claw-2', { maxConcurrent: 3, labels: ['hadoku-builder'] });

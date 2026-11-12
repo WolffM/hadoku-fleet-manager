@@ -124,8 +124,29 @@ export interface ShellFakeOptions {
 
 export type ShellFake = (node: string, cmd: string) => Promise<string | null>;
 
+/**
+ * The dispatch pass reads a node's units and slots in ONE ssh
+ * (`liveJitState`, fleet-manager#86): the two listings joined by this. A fake
+ * that routes on `includes('list-units')` or `includes('pgrep')` cannot answer
+ * both halves of that one command, so this splits it, asks `sh` each half the
+ * way the old two calls did, and joins the answers the way the real shell
+ * prints them.
+ */
+const JIT_STATE_JOIN = "; echo '--- jit-slots ---'; ";
+
+export function answeringJitState(sh: ShellFake): ShellFake {
+	return async (node, cmd) => {
+		const at = cmd.indexOf(JIT_STATE_JOIN);
+		if (at < 0) return sh(node, cmd);
+		const units = await sh(node, cmd.slice(0, at));
+		const slots = await sh(node, cmd.slice(at + JIT_STATE_JOIN.length));
+		if (units === null && slots === null) return null;
+		return `${units ?? ''}\n--- jit-slots ---\n${slots ?? ''}`;
+	};
+}
+
 export function fakeShell(o: ShellFakeOptions = {}): ShellFake {
-	return async (_node: string, cmd: string): Promise<string | null> => {
+	return answeringJitState(async (_node: string, cmd: string): Promise<string | null> => {
 		if (o.unreachable) return null;
 		if (cmd.includes('echo REACHABLE')) return 'REACHABLE';
 		// The config-staging step, which must succeed before the unit starts.
@@ -145,5 +166,5 @@ export function fakeShell(o: ShellFakeOptions = {}): ShellFake {
 		const m = /SLOT=(\d+)/.exec(cmd);
 		if (m) return `SLOT-READY /home/hadoku/.hadoku/jit/slot${m[1]} 2.336.0`;
 		return 'Running as unit: x.service';
-	};
+	});
 }
