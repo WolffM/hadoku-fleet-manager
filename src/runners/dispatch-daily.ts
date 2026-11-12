@@ -68,9 +68,15 @@ export function recordDispatchDay(nowMs: number, pass: DispatchDay): void {
 	const oldest = utcDay(nowMs - RETENTION_DAYS * 86_400_000);
 	for (const d of Object.keys(doc.days)) if (d < oldest) delete doc.days[d];
 	try {
-		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`). Only reached on a
-		// pass that minted or failed, not every tick, so this is not a hot path.
-		writeJsonAtomic(path(), doc);
+		// Write-then-rename WITHOUT fsync, a recorded divergence (F3,
+		// `lib/atomic-json.ts`). A pass that mints writes this, every 15 s while
+		// work is queued, and a synchronous fsync on mgmt-api's event loop waits
+		// for the whole disk queue: 720 ms and 583 ms in one profile
+		// (fleet-manager#86). A power cut can lose the last pass's counts, or
+		// leave a file that does not parse; `readDispatchDaily` then answers
+		// `null` and counting restarts with a new `since`, so earlier days read as
+		// unmeasured, never as zero.
+		writeJsonAtomic(path(), doc, { fsync: false });
 	} catch (err) {
 		logger.warn(`[dispatch-daily] could not write ${path()}: ${(err as Error).message}`);
 	}
