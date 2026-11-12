@@ -402,6 +402,46 @@ test('two slices on one node: the dispatcher holds back the unused share of each
 	);
 });
 
+// fleet-manager#83 follow-up (operator, 2026-11-12): once a slice has history,
+// the dispatcher holds back what its LEARNED envelope leaves, with a learned up
+// mark, and no hand-typed steadyMb is needed.
+test('a slice with history: the tick holds back its learned envelope minus current, not the declaration', async () => {
+	const { stateDir } = await import('../host.js');
+	const usage = await import('../runners/hosting-usage.js');
+	const file = join(stateDir(), usage.HOSTING_USAGE_FILE);
+	const doc: import('../runners/hosting-usage.js').UsageDoc = { version: 1, slices: {} };
+	const now = Date.now();
+	// 24 h of an idle archivebot at 150-170 MiB: mean 160, sd 7, so envelope 181, up mark 120.
+	for (let h = 24; h >= 1; h--)
+		for (const [i, mb] of [150, 160, 170, 160].entries())
+			usage.addReading(doc, 'claw-3/archivebot', mb, now - h * 3_600_000 + i * 60_000);
+	writeFileSync(file, JSON.stringify(doc));
+	usage.__resetHostingUsageForTesting();
+	try {
+		const settled = HOLD_FULL_MS + 60_000;
+		const archivebot = slice({
+			tenant: 'archivebot',
+			memoryMb: 1024,
+			since: new Date(now - settled).toISOString(),
+		});
+		// 164 MiB is under the declared rule's 256 mark (it would hold all 1024);
+		// the learned mark counts it up and holds only 181 - 164.
+		assert.equal(
+			(await tickFloor(1200, settled, { rec: archivebot, mb: 164 })).floor,
+			1536 + (4096 - 1200) + (181 - 164)
+		);
+		// Below the learned up mark the agent is down: all of it is held.
+		assert.equal(
+			(await tickFloor(1200, settled, { rec: archivebot, mb: 100 })).floor,
+			1536 + (4096 - 1200) + 1024
+		);
+		// cardtable has no history here, so the declared rule still decides for it.
+	} finally {
+		rmSync(file, { force: true });
+		usage.__resetHostingUsageForTesting();
+	}
+});
+
 // cardtable's lane D drains its matches off a node from `notices` (asks a and b,
 // 2026-10-27): every scheduled drain, whatever its kind, is visible from the
 // moment it is scheduled, and so is its end.

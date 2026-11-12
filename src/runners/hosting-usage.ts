@@ -9,15 +9,18 @@
  * already reads every slice's `memory.current`, and folds each reading into
  * an hourly bucket here.
  *
- * SHADOW ONLY. {@link learnedHold} is logged beside the live value once an
- * hour per slice (`ephemeral-tick-probe.ts`, grep "[hosting-usage] shadow");
- * admission still uses `heldBackMb`. The learned value changes only what the
- * dispatcher holds back from CI, never the kernel's MemoryMin, which stays the
- * declared size (operator, 2026-11-11).
+ * ADMISSION USES IT. Once a slice has {@link LEARN_MIN_HOURS} hours of
+ * readings, {@link learnedHold} is what the dispatcher holds back for it
+ * (operator, 2026-11-12: "it can decide now"); before that, `heldBackMb`'s
+ * rule stands. `ephemeral-tick-probe.ts` logs both, and which one decided,
+ * once an hour per slice (grep "[hosting-usage] hold"). The learned value
+ * changes only what the dispatcher holds back from CI, never the kernel's
+ * MemoryMin, which stays the declared size (operator, 2026-11-11), so a hold
+ * learned too small squeezes a CI job, never the tenant.
  *
- * Losing this file loses history, not safety: with fewer than
- * {@link LEARN_MIN_HOURS} hours a slice has no learned value and the live rule
- * stands. One writer: {@link observeSliceUsage}, from the tick.
+ * Losing this file loses history, not safety: every slice falls back to the
+ * declared rule until it has learned again. One writer:
+ * {@link observeSliceUsage}, from the tick.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -30,8 +33,13 @@ export const HOSTING_USAGE_FILE = 'hosting-usage.json';
 /** 14 days of hourly buckets. */
 export const USAGE_KEEP_HOURS = 14 * 24;
 
-/** A slice needs this many hours of readings before it has a learned value. */
-export const LEARN_MIN_HOURS = 24;
+/**
+ * A slice needs this many hours of readings before its learned value decides.
+ * Six hours is ~1,400 readings, enough for a stable mean and spread; the first
+ * hours of a NEW slice include its start-up, and the peak keeps that for the
+ * whole window anyway. Set at the switch (2026-11-12), with 22 h in hand.
+ */
+export const LEARN_MIN_HOURS = 6;
 
 /** The learned up mark never leaves this band (MiB): above it a real agent reads as down, below it noise reads as up. */
 export const UP_MARK_FLOOR_MB = 64;

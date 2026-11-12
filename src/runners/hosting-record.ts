@@ -408,7 +408,11 @@ export const HOLD_FULL_MS = 10 * 60_000;
 export const AGENT_UP_MIN_MB = 256;
 
 /**
- * How much memory admission holds back for a shared slice.
+ * How much memory admission holds back for a shared slice that has no
+ * learned value yet: a new slice, or one whose history was lost. Once it has
+ * `LEARN_MIN_HOURS` of readings, `hosting-usage.ts#learnedHold` decides
+ * instead (`ephemeral-tick-probe.ts#sliceHolds`), with the same shape and
+ * both marks learned from the slice's own usage.
  *
  * Normally the part of the declaration the tenant is not using yet. What it
  * already uses is gone from the node's available memory, so counting it again

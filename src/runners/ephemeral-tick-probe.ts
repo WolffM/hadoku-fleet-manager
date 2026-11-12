@@ -15,7 +15,13 @@ import {
 	takeSliceUsage,
 	type SharedHosting,
 } from './hosting-record.js';
-import { hourKey, learnedHold, observeSliceUsage, sliceKey } from './hosting-usage.js';
+import {
+	LEARN_MIN_HOURS,
+	hourKey,
+	learnedHold,
+	observeSliceUsage,
+	sliceKey,
+} from './hosting-usage.js';
 import {
 	SPACE_PROBE_DF_CMD,
 	parseSpaceProbe,
@@ -30,27 +36,28 @@ import {
  * everything else in-memory here. */
 const loggedSpaceProbeOnce = new Set<string>();
 
-/** Which hour each slice's shadow line was last logged for: one line per slice per hour. */
-const shadowLoggedHour = new Map<string, string>();
+/** Which hour each slice's hold line was last logged for: one line per slice per hour. */
+const holdLoggedHour = new Map<string, string>();
 
 /** Test seam. Not part of the supported API. */
 export function __resetSpaceProbeLogForTesting(): void {
 	loggedSpaceProbeOnce.clear();
-	shadowLoggedHour.clear();
+	holdLoggedHour.clear();
 }
 
 /**
- * Record each slice's reading and, once an hour, log the hold-back admission
- * would use if it learned from history beside the one it uses
- * (`hosting-usage.ts`, shadow only). grep: "[hosting-usage] shadow".
+ * Each shared slice's hold-back, learned from its own history when it has
+ * enough (`hosting-usage.ts`), the declared rule (`heldBackMb`) until then.
+ * This tick's readings are recorded first, so the learned value already
+ * includes them. Logged once an hour per slice with both figures and which
+ * decided. grep: "[hosting-usage] hold".
  */
-function shadowLearnedHold(
+function sliceHolds(
 	node: string,
 	hosted: readonly SharedHosting[],
-	holds: readonly HostingHold[],
 	sliceCurrentMb: ReadonlyMap<string, number | null>,
 	nowMs = Date.now()
-): void {
+): HostingHold[] {
 	const stats = observeSliceUsage(
 		hosted.map((h) => ({ node, tenant: h.tenant, mb: sliceCurrentMb.get(h.tenant) ?? null })),
 		{
@@ -59,13 +66,17 @@ function shadowLearnedHold(
 				logger.warn(`[hosting-usage] ${path} does not parse; starting a fresh record`),
 		}
 	);
-	for (const h of hosted) {
+	return hosted.map((h) => {
 		const key = sliceKey(node, h.tenant);
-		if (shadowLoggedHour.get(key) === hourKey(nowMs)) continue;
-		shadowLoggedHour.set(key, hourKey(nowMs));
 		const s = stats.get(key) ?? null;
 		const currentMb = sliceCurrentMb.get(h.tenant) ?? null;
-		const live = holds.find((x) => x.tenant === h.tenant)?.mb;
+		const declared = heldBackMb({
+			declaredMb: h.memoryMb,
+			sliceCurrentMb: currentMb,
+			since: h.since,
+			nowMs,
+			...(h.steadyMb !== undefined ? { steadyMb: h.steadyMb } : {}),
+		});
 		const learned = learnedHold({
 			declaredMb: h.memoryMb,
 			currentMb,
@@ -73,17 +84,21 @@ function shadowLearnedHold(
 			stats: s,
 			nowMs,
 		});
-		logger.info(
-			`[hosting-usage] shadow ${key}: live hold ${live}MB, ` +
-				(learned
-					? `learned ${learned.holdMb}MB (envelope ${learned.envelopeMb}, up mark ${learned.upMarkMb}, `
-					: `learning (`) +
-				`current ${currentMb ?? 'unread'}, declared ${h.memoryMb}` +
-				(s
-					? `, mean ${s.meanMb} sd ${s.sdMb} peak ${s.peakMb} idle ${s.idleMb} over ${s.hours}h)`
-					: ', no readings)')
-		);
-	}
+		if (holdLoggedHour.get(key) !== hourKey(nowMs)) {
+			holdLoggedHour.set(key, hourKey(nowMs));
+			logger.info(
+				`[hosting-usage] hold ${key}: ${learned ? `learned ${learned.holdMb}MB` : `declared ${declared}MB`} decides ` +
+					(learned
+						? `(declared rule ${declared}; envelope ${learned.envelopeMb}, up mark ${learned.upMarkMb}, `
+						: `(learning, ${LEARN_MIN_HOURS}h needed; `) +
+					`current ${currentMb ?? 'unread'}, declared ${h.memoryMb}` +
+					(s
+						? `, mean ${s.meanMb} sd ${s.sdMb} peak ${s.peakMb} idle ${s.idleMb} over ${s.hours}h)`
+						: ', no readings)')
+			);
+		}
+		return { tenant: h.tenant, mb: learned ? learned.holdMb : declared };
+	});
 }
 
 export interface NodeMemoryProbe {
@@ -125,7 +140,9 @@ export interface NodeMemoryProbe {
  *
  * SHARED HOSTING (src/runners/hosting-record.ts): a hosting node's probe also
  * reads the tenant slice's usage, on the same ssh, so admission can hold back
- * exactly the part of the slice the tenant is not using yet.
+ * exactly the part of the slice the tenant is not using yet: the part of its
+ * LEARNED envelope once it has history, of its declaration until then
+ * (`sliceHolds`).
  */
 export async function probeNodeMemory(
 	minting: readonly string[],
@@ -150,19 +167,7 @@ export async function probeNodeMemory(
 					(hosted.length ? `; ${sliceUsageProbe(hosted.map((h) => h.tenant))}` : '')
 			);
 			const { rest: out, sliceCurrentMb } = takeSliceUsage(raw);
-			if (hosted.length) {
-				const holds = hosted.map((h) => ({
-					tenant: h.tenant,
-					mb: heldBackMb({
-						declaredMb: h.memoryMb,
-						sliceCurrentMb: sliceCurrentMb.get(h.tenant) ?? null,
-						since: h.since,
-						...(h.steadyMb !== undefined ? { steadyMb: h.steadyMb } : {}),
-					}),
-				}));
-				heldBackByNode.set(name, holds);
-				shadowLearnedHold(name, hosted, holds, sliceCurrentMb);
-			}
+			if (hosted.length) heldBackByNode.set(name, sliceHolds(name, hosted, sliceCurrentMb));
 			const { first, tmpFreeMb, tmpSizeMb, workFreeMb } = parseSpaceProbe(out);
 			const [free, total] = first.split(/\s+/).map(Number);
 			if (Number.isFinite(free) && free > 0) freeMbByNode.set(name, free);
