@@ -90,6 +90,19 @@ export type { FleetLiveness, LoopLiveness } from './lib/liveness.js';
  * imports these to read its own node-status document the same way.
  */
 export { judgeTenantBackstop, tenantUsableOn } from './lib/tenant-usable.js';
+
+/**
+ * `execFile` from a small helper process once this one is large
+ * (fleet-manager#86): fork() costs the parent's event loop in proportion to
+ * its RSS, ~18 ms at mgmt-api's ~550 MB, against ~0.05 ms for one IPC message.
+ * Resolves, never rejects, to `{ ok, code, stdout, stderr, error? }`.
+ * `FLEET_SPAWNER=off|on` forces the direct path or the helper. Works in a
+ * process that never called `createFleetManager`, and shares one helper with
+ * the fleet loops when it did. Exported for mgmt-api's own spawns
+ * (hadoku_site#513; operator, 2026-11-14).
+ */
+export { execFileOffLoop } from './lib/spawner.js';
+export type { ExecOptions, ExecResult } from './lib/spawner.js';
 export type {
 	TenantBackstop,
 	TenantUsable,

@@ -34,7 +34,7 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { logger } from '../host.js';
+import { hostInstalled, logger } from '../host.js';
 import { execFileWithInput, type ExecResult } from './spawner-exec.js';
 
 export type { ExecResult } from './spawner-exec.js';
@@ -69,6 +69,17 @@ export interface ExecOptions {
 
 /** A direct spawn below this costs under ~10 ms, not worth a second process. */
 export const SPAWNER_MIN_RSS_MB = 150;
+
+/**
+ * The package exports {@link execFileOffLoop}, so a process that never called
+ * `createFleetManager` may run it, and `logger` throws without a host. The
+ * helper-exit warning fires from an event handler, where that throw would take
+ * the caller's process down.
+ */
+function warn(message: string): void {
+	if (hostInstalled()) logger.warn(message);
+	else process.stderr.write(`${message}\n`);
+}
 
 /** Past the helper's own timeout, so the helper's answer always wins a race. */
 const DEADLINE_GRACE_MS = 5_000;
@@ -125,8 +136,7 @@ function startHelper(): ChildProcess {
 	const gone = (why: string) => {
 		if (helper !== child) return;
 		helper = null;
-		if (pending.size)
-			logger.warn(`[spawner] helper ${why}; failing ${pending.size} call(s) it held`);
+		if (pending.size) warn(`[spawner] helper ${why}; failing ${pending.size} call(s) it held`);
 		failAll(`spawner helper ${why}`);
 	};
 	child.on('exit', (code, signal) => gone(`exited (${signal ?? code})`));
@@ -168,7 +178,7 @@ export function execFileOffLoop(
 		try {
 			helper = startHelper();
 		} catch (err) {
-			logger.warn(
+			warn(
 				`[spawner] could not start the helper (${err instanceof Error ? err.message : String(err)}); spawning directly`
 			);
 			return direct(file, args, opts);

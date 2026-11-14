@@ -85,6 +85,30 @@ test('a process whose last call has returned exits: the helper never keeps it al
 	assert.equal(run.status, 0, run.stderr);
 });
 
+test('through the package entry, in a process with no fleet host: a dead helper fails the call and the process lives', () => {
+	// mgmt-api calls the export outside the fleet loops, and the helper-exit
+	// warning fires from an event handler: a throw there would kill the caller.
+	const entry = fileURLToPath(new URL('../index.js', import.meta.url));
+	const script =
+		`const { execFileOffLoop } = await import(${JSON.stringify(entry)});` +
+		`await execFileOffLoop('true', [], { timeout: 5000 });` +
+		`const held = execFileOffLoop('sleep', ['30'], { timeout: 60000 });` +
+		`const ps = await execFileOffLoop('pgrep', ['-P', String(process.pid), '-f', 'spawner-child'], { timeout: 5000 });` +
+		`process.kill(Number(ps.stdout.trim()), 'SIGKILL');` +
+		`const r = await held;` +
+		`process.stdout.write(JSON.stringify(r));`;
+	const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+		env: { ...process.env, FLEET_SPAWNER: 'on' },
+		timeout: 15_000,
+		encoding: 'utf8',
+	});
+	assert.equal(run.status, 0, run.stderr);
+	const r = JSON.parse(run.stdout) as { ok: boolean; error?: string };
+	assert.equal(r.ok, false);
+	assert.match(r.error ?? '', /spawner helper exited/);
+	assert.match(run.stderr, /\[spawner\] helper exited/, 'the warning still reaches stderr');
+});
+
 test('stdin input reaches the command, through the helper and directly', async () => {
 	for (const helper of [true, false]) {
 		__setSpawnerForTesting(helper);
