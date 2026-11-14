@@ -53,6 +53,19 @@ export interface CiTickSummary {
 	ignored: number;
 	/** The target threw. */
 	errors: number;
+	/**
+	 * Cancelled runs whose timeout lookup (`cancelledByTimeout`) failed for
+	 * longer than `CANCEL_LOOKUP_GIVEUP_MS` and were passed as not-a-timeout,
+	 * so the runs after them are judged (fleet-manager#92). Each one is a run
+	 * this alerter could not classify, not a run it cleared.
+	 */
+	cancelUnjudged: number;
+	/**
+	 * Red rows whose run could not be re-read by id (fleet-manager#89). The
+	 * target itself was still judged on its listing; what is missing is only a
+	 * re-run's new attempt.
+	 */
+	rereadUnread: number;
 	/** `CiDecision.reason` -> how many times, so a silence is diagnosable. */
 	reasons: Record<string, number>;
 }
@@ -72,6 +85,8 @@ export function emptySummary(targets: number): CiTickSummary {
 		suppressed: 0,
 		ignored: 0,
 		errors: 0,
+		cancelUnjudged: 0,
+		rereadUnread: 0,
 		reasons: {},
 	};
 }
@@ -94,7 +109,8 @@ export function formatCiTickSummary(s: CiTickSummary): string {
 		`suppressed ${s.suppressed}${reasons ? ` (${reasons})` : ''}, ignored ${s.ignored}, ` +
 		`nothing-new ${s.nothingNew}, no-runs ${s.noRuns}, fork-runs ${s.foreign}, ` +
 		`off-branch-runs ${s.offBranch}, branch-unread ${s.branchUnread}, ` +
-		`unreadable ${s.unreadable}, ` +
+		`unreadable ${s.unreadable}, cancel-unjudged ${s.cancelUnjudged}, ` +
+		`reread-unread ${s.rereadUnread}, ` +
 		`errors ${s.errors}`
 	);
 }
@@ -103,7 +119,13 @@ export function formatCiTickSummary(s: CiTickSummary): string {
 export function logCiTickSummary(s: CiTickSummary): void {
 	// branch-unread is not blind (every run was still judged) but it is a
 	// degraded pass, and WARN is where a degraded pass is looked for.
-	const blind = s.targets === 0 || s.unreadable > 0 || s.errors > 0 || s.branchUnread > 0;
+	const blind =
+		s.targets === 0 ||
+		s.unreadable > 0 ||
+		s.errors > 0 ||
+		s.branchUnread > 0 ||
+		s.cancelUnjudged > 0 ||
+		s.rereadUnread > 0;
 	const line = formatCiTickSummary(s);
 	if (blind) logger.warn(line);
 	else logger.info(line);

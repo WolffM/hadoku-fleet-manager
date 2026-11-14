@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { decideCiAlert, STALE_RUN_MS, STALE_STATE_MS } from '../ci-alerts-decide.js';
-import { DAY_MS as REPAGE_INTERVAL_MS } from '../lib/job-runner.js';
+import { DAILY_REPAGE_MS as REPAGE_INTERVAL_MS } from '../lib/job-runner.js';
 import { NOW, ghRun, poll, run, state } from './helpers/ci-alerts-rig.js';
 
 test('announces a fresh break', () => {
@@ -352,4 +352,32 @@ test('the freshness gate measures when a run ENDED, not when it was queued', () 
 	const late = decideCiAlert(null, stalled, Date.parse('2026-08-18T20:31:00Z'));
 	assert.equal(late.action, 'suppressed');
 	assert.match(late.reason ?? '', /older than the freshness gate/);
+});
+
+test('a nightly failure that lands a few minutes EARLIER than yesterday still re-pages (#92)', () => {
+	// Measured: hadoku-watchparty/e2e paged 2026-11-12 03:33Z and failed again
+	// 2026-11-13 03:24Z, 23 h 51 m later. A 24 h window swallowed it, so the
+	// daily reminder came every other day.
+	const pagedAt = Date.parse('2026-11-12T03:33:06Z');
+	const endedAt = Date.parse('2026-11-13T03:22:47Z');
+	const now = Date.parse('2026-11-13T03:24:54Z');
+	const red = state({
+		lastConclusion: 'failure',
+		lastRunId: 43356886794,
+		lastAlertedRunId: 43356886794,
+		lastAlertedAt: new Date(pagedAt).toISOString(),
+		lastSeen: new Date(now - 600_000).toISOString(),
+	});
+	const nightly = ghRun(
+		43455555555,
+		'failure',
+		new Date(endedAt - 15 * 60_000).toISOString(),
+		new Date(endedAt).toISOString()
+	);
+	const d = decideCiAlert(red, nightly, now);
+	assert.equal(d.action, 'broken');
+	assert.equal(d.repage, true);
+	// And the storm restraint is intact: six hours after a page is still quiet.
+	const storm = decideCiAlert(red, nightly, pagedAt + 6 * 60 * 60_000);
+	assert.equal(storm.action, 'suppressed');
 });

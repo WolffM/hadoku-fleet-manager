@@ -45,7 +45,7 @@
  * WHAT WAS ADDED AFTER. The ported machine treated red -> red as "no
  * transition", so a target that had paged once could not page again until it
  * went green — #20, where a new commit's failure was swallowed for 23 hours.
- * `REPAGE_INTERVAL_MS` re-opens that case at one page per day; it sits BEHIND
+ * `DAILY_REPAGE_MS` re-opens that case at about one page per day; it sits BEHIND
  * both staleness guards, because the case it must not become is the
  * double-paging the handoff boundary was built to end.
  *
@@ -166,9 +166,85 @@ const GITHUB_LISTING_CAP = 1000;
  * lookups are on top, as they were before: two per CANCELLED run, each asked
  * once, in both designs.
  */
-export function ciAlertsCallCeilingPerHour(repoCount: number, tickMs = TICK_INTERVAL_MS): number {
-	return Math.ceil(3_600_000 / tickMs) * (repoCount + EXTRA_PAGES_PER_TICK) + repoCount;
+export function ciAlertsCallCeilingPerHour(
+	repoCount: number,
+	tickMs = TICK_INTERVAL_MS,
+	redTargets = 0
+): number {
+	return (
+		Math.ceil(3_600_000 / tickMs) * (repoCount + EXTRA_PAGES_PER_TICK + redTargets) + repoCount
+	);
 }
+
+/**
+ * A red row's run, re-read by id when the listing did not carry it
+ * (fleet-manager#89).
+ *
+ * A re-run keeps its run id AND its `created_at`; only `run_attempt`,
+ * `run_started_at` and `updated_at` move. The listing is ordered by creation,
+ * and `pollRepo` reads no further back than the floor, which never reaches
+ * past `MAX_LOOKBACK_MS`. So a run re-run more than six hours after it was
+ * created is never on a page again, and its green attempt never reaches the
+ * state machine: hadoku_site/publish-logger run 42932948593, created
+ * 2026-11-11 00:38Z, attempt 1 failed 00:42Z, attempt 2 passed 13:53Z, and the
+ * row stayed red for three days on no evidence but the first attempt.
+ *
+ * Asked only for a RED row, because that is the case that leaves a standing
+ * false finding; a green run re-run red is a new failure on an old commit and
+ * the next push answers it. One conditional GET per red row per tick, so the
+ * call ceiling grows by the red-target count (`ciAlertsCallCeilingPerHour`).
+ * A failed read is counted (`rereadUnread`) and the target is still judged on
+ * its listing.
+ */
+async function rereadRedRuns(
+	repo: string,
+	targets: CiTarget[],
+	listing: CiRun[],
+	states: Record<string, CiState>,
+	summary: CiTickSummary,
+	token: string,
+	ghGet: GhGet
+): Promise<CiRun[]> {
+	const listed = new Set(listing.map((r) => r.id));
+	const out: CiRun[] = [];
+	for (const target of targets) {
+		const row = states[stateKey(target)];
+		if (!row?.lastRunId || listed.has(row.lastRunId)) continue;
+		if (row.lastConclusion === null || row.lastConclusion === 'success') continue;
+		const run = await ghGet<CiRun>(`/actions/runs/${row.lastRunId}`, token, repo);
+		if (!run) {
+			summary.rereadUnread++;
+			logger.warn(
+				`[ci-alerts] ${target.label}: could not re-read red run ${row.lastRunId}, so a re-run of it cannot be seen this tick`
+			);
+			continue;
+		}
+		listed.add(run.id);
+		out.push(run);
+	}
+	return out;
+}
+
+/**
+ * How long a cancelled run whose timeout lookup keeps failing may hold its
+ * target back (fleet-manager#92).
+ *
+ * `cancelledByTimeout` returning null stops the target's pass at that run, so
+ * the next tick asks again: right for a blip. For a lookup that can NEVER
+ * succeed it is a silencer. From 2026-11-11 17:34Z (f5c7081 moved ci-alerts
+ * onto the hadoku-fleet-gates App, which holds no `checks` permission) every
+ * annotation read was `403 Resource not accessible by integration`, so each
+ * cancelled run froze its target: hadoku-crossposter/ci failed at
+ * 2026-11-12 07:14Z behind a 06:45Z supersede-cancel and was not judged until
+ * 22:12Z, when the failures were past the freshness gate and suppressed. The
+ * tick logged `unreadable 1` (later 5) for 35 hours without naming a target.
+ *
+ * Three ticks, then the run is passed as not-a-timeout, counted in
+ * `cancelUnjudged` and named at WARN. That direction can miss a timeout page.
+ * Holding the target can miss every page after it, which is the gate getting
+ * EASIER to pass the worse the failure gets.
+ */
+export const CANCEL_LOOKUP_GIVEUP_MS = 3 * TICK_INTERVAL_MS;
 
 /**
  * Targets come from the artifact `fleet ci-watch --write` generates, read at
@@ -390,10 +466,13 @@ export async function runCiAlerts(token: string, ghGet: GhGet): Promise<CiTickSu
 			);
 		}
 
+		const reread = await rereadRedRuns(repo, repoTargets, poll.runs, states, summary, token, ghGet);
+		const listing = reread.length ? [...poll.runs, ...reread] : poll.runs;
+
 		for (const target of repoTargets) {
 			try {
 				changed =
-					(await evaluateTarget(target, repo, branch, poll.runs, states, summary, token, ghGet)) ||
+					(await evaluateTarget(target, repo, branch, listing, states, summary, token, ghGet)) ||
 					changed;
 			} catch (err) {
 				summary.errors++;
@@ -455,8 +534,18 @@ async function evaluateTarget(
 			// the next tick asks again. Reading it as a supersede would be the
 			// silence #124 is about; reading it as a timeout would page on a guess.
 			if (timedOut === null) {
-				summary.unreadable++;
-				break;
+				const heldMs = Date.now() - runEndedAt(run);
+				if (heldMs < CANCEL_LOOKUP_GIVEUP_MS) {
+					summary.unreadable++;
+					logger.warn(
+						`[ci-alerts] ${target.label}: could not tell whether cancelled run ${run.id} timed out — holding this target's later runs until the next tick`
+					);
+					break;
+				}
+				summary.cancelUnjudged++;
+				logger.warn(
+					`[ci-alerts] ${target.label}: still could not tell whether cancelled run ${run.id} timed out after ${Math.round(heldMs / 60_000)} min — passing it as not-a-timeout so the runs after it are judged (${run.html_url})`
+				);
 			}
 			// `timed_out` is GitHub's own conclusion word for this, and it is what
 			// the page and the stored row then say.

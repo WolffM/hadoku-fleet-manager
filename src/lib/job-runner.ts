@@ -93,6 +93,16 @@ export function classifyMissingDoc(why: string): 'unavailable' | 'broke' {
 export const HOUR_MS = 60 * 60_000;
 /** One day, in ms. */
 export const DAY_MS = 24 * HOUR_MS;
+/**
+ * "Remind me daily" for a condition that recurs DAILY, in ms: 20 h, not 24.
+ * A nightly failure lands at about the same time each day, give or take
+ * GitHub's schedule jitter, so a strict 24 h window swallows every one that
+ * lands a few minutes early and the reminder arrives every other day
+ * (fleet-manager#92: hadoku-watchparty/e2e paged 2026-11-12 03:33Z, failed
+ * again 11-13 03:24Z, 23 h 51 m later, and was held back). 20 h leaves four
+ * hours of slack and still sits far above a push storm's few hours.
+ */
+export const DAILY_REPAGE_MS = 20 * HOUR_MS;
 
 /** `Math.round(ms / 1h)` + `h`, e.g. `6h` — every page/recovery message's duration. */
 export function hours(ms: number): string {

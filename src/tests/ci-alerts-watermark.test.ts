@@ -188,6 +188,8 @@ test('the summary distinguishes every way of looking away, including the zeroes'
 		suppressed: 1,
 		ignored: 0,
 		errors: 0,
+		cancelUnjudged: 0,
+		rereadUnread: 0,
 		reasons: { 'already announced for this run': 1 },
 	});
 	assert.match(line, /polled 67 targets/);
@@ -201,6 +203,8 @@ test('the summary distinguishes every way of looking away, including the zeroes'
 	assert.match(line, /off-branch-runs 0/);
 	assert.match(line, /branch-unread 0/);
 	assert.match(line, /errors 0/);
+	assert.match(line, /cancel-unjudged 0/);
+	assert.match(line, /reread-unread 0/);
 });
 
 test('the summary names the reason a transition was held back', () => {
@@ -218,6 +222,8 @@ test('the summary names the reason a transition was held back', () => {
 		suppressed: 2,
 		ignored: 0,
 		errors: 0,
+		cancelUnjudged: 0,
+		rereadUnread: 0,
 		reasons: { 'run is older than the freshness gate': 1, 'state was stale — cold resync': 1 },
 	});
 	// A rate limit, a timeout and a deleted repo are three different jobs; so are

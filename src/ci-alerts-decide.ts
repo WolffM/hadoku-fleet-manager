@@ -5,13 +5,13 @@
  *
  * HOLDS: the run/state shapes (`CiRun`, `CiState`, `GhGet`), the two
  * staleness guards (`STALE_STATE_MS`, `STALE_RUN_MS`), the re-page window
- * (`REPAGE_INTERVAL_MS`), the fork/foreign-run and freshness predicates
+ * (job-runner's `DAILY_REPAGE_MS`), the fork/foreign-run and freshness predicates
  * (`isForeignRun`, `runEndedAt`, `runsEndedSince`), the `timeout-minutes`
  * annotation check (`cancelledByTimeout`), and the pure state machine
  * itself (`decideCiAlert`). Every name here stays re-exported from
  * `ci-alerts.ts`, so no importer elsewhere needed to change.
  */
-import { DAY_MS as REPAGE_INTERVAL_MS, repageDue } from './lib/job-runner.js';
+import { DAILY_REPAGE_MS, repageDue } from './lib/job-runner.js';
 
 /** Injected so this module never imports runner-health (which would cycle). */
 export type GhGet = <T>(path: string, token: string, repo?: string) => Promise<T | null>;
@@ -50,7 +50,7 @@ export interface CiState {
 	lastAlertedRunId?: number;
 	/**
 	 * ISO time of the last announcement for this target. It anchors the re-page
-	 * throttle (REPAGE_INTERVAL_MS) and is stamped ONLY when something was
+	 * throttle (`DAILY_REPAGE_MS`) and is stamped ONLY when something was
 	 * actually said — a suppressed run that advanced it would push the next
 	 * re-page out indefinitely, and a repo pushing faster than the window would
 	 * then never be re-paged at all. Same reasoning as monitoring-api
@@ -114,7 +114,7 @@ export const STALE_RUN_MS = 6 * 60 * 60 * 1000;
  * swallowed by the equality test. It reached the operator 23 h later, via the
  * daily digest.
  *
- * WHY 24 h, from 90 days of the real watch list (64 targets, 4,362 completed
+ * WHY ABOUT A DAY, from 90 days of the real watch list (64 targets, 4,362 completed
  * runs; replayed through this function). 69 new failing runs landed on an
  * already-red target. Their age since the previous page is bimodal:
  *
@@ -135,16 +135,18 @@ export const STALE_RUN_MS = 6 * 60 * 60 * 1000;
  *     reached the operator. A window longer than a day would be beaten by the
  *     thing it is supposed to improve on.
  *
- * Within that range it is 24 h because monitoring-api's job-alerts uses exactly
- * 24 h (`REMINDER_INTERVAL_MS`) for the same "failure while already broken"
- * case. The two alerters split GitHub Actions between them along the
- * `coveredJobNames` boundary; one policy across the boundary beats two.
+ * It was 24 h until 2026-11-14, to match monitoring-api job-alerts'
+ * `REMINDER_INTERVAL_MS` for the same "failure while already broken" case.
+ * That symmetry cost the case below.
  *
- * VALUE AND NAME ARE UNCHANGED (F12, plan §4.1): this is `job-runner.ts`'s
- * shared `DAY_MS`, imported under this module's own name so every reasoning
- * above and every existing caller (including the test file, which imports it
- * by this name) stays exactly as it reads today. What moved is only that this
- * file no longer DECLARES the value — see the import above.
+ * 20 H, NOT 24 (fleet-manager#92, 2026-11-14): the window is job-runner's
+ * shared `DAILY_REPAGE_MS`. A nightly workflow fails at about the same time
+ * every day, and a window of exactly 24 h lost every failure that landed a few
+ * minutes EARLY: hadoku-watchparty/e2e paged at 2026-11-12 03:33Z, failed
+ * again at 11-13 03:24Z (23 h 51 m later: "still red — re-page window has not
+ * elapsed"), and paged next at 11-14 03:25Z, a daily reminder every other day.
+ * 20 h stays inside the bounds above: well clear of the <6 h storm mass, where
+ * the data is all but empty, and under the daily digest.
  */
 
 /**
@@ -364,7 +366,7 @@ export function decideCiAlert(prev: CiState | null, run: CiRun, now: number): Ci
 		// job-alerts makes on a missing `last_alert_at`. The freshness gate
 		// above still bounds the damage: a cold resync can only reach runs that
 		// ended within the last six hours.
-		if (!repageDue(prev?.lastAlertedAt, now, REPAGE_INTERVAL_MS)) {
+		if (!repageDue(prev?.lastAlertedAt, now, DAILY_REPAGE_MS)) {
 			return { action: 'suppressed', next, reason: 'still red — re-page window has not elapsed' };
 		}
 		return announce('broken', true);
