@@ -1,5 +1,5 @@
-import { execFile } from 'node:child_process';
 import { nodeShell } from '../node-shell.js';
+import { execFileOffLoop } from './spawner.js';
 import { logger } from '../host.js';
 
 const SSH_TIMEOUT_MS = 8000;
@@ -204,11 +204,10 @@ export async function probeNode(node: string): Promise<ProbeResult | null> {
 		);
 		return null;
 	}
-	return new Promise((res) => {
-		execFile(bin, argv, { timeout: SSH_TIMEOUT_MS }, (err, stdout) => {
-			res(err ? null : parseProbe(stdout));
-		});
-	});
+	// Off the event loop when this process is large: see `lib/spawner.ts`.
+	return execFileOffLoop(bin, argv, { timeout: SSH_TIMEOUT_MS }).then((r) =>
+		r.ok ? parseProbe(r.stdout) : null
+	);
 }
 
 /** What one node looked like on the last probe. `null` probe ⇒ unreachable. */

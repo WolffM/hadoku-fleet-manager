@@ -1,8 +1,8 @@
-import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 import { jitRoot } from './ephemeral.js';
 import { nodeShell } from '../node-shell.js';
+import { execFileOffLoop } from '../lib/spawner.js';
 import { logger, manifest } from '../host.js';
 import { isBackstopNode } from '../lib/node-role.js';
 import { nodeOffer } from '../lib/capability-offer.js';
@@ -249,11 +249,10 @@ export function shellOnNode(node: string, cmd: string): Promise<string | null> {
 		);
 		return Promise.resolve(null);
 	}
-	return new Promise((res) => {
-		execFile(bin, [...argv], { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) =>
-			res(err ? null : String(stdout))
-		);
-	});
+	// Off the event loop when this process is large: see `lib/spawner.ts`.
+	return execFileOffLoop(bin, argv, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 }).then((r) =>
+		r.ok ? r.stdout : null
+	);
 }
 
 /**

@@ -397,6 +397,11 @@
     "layer": "access"
   },
   {
+    "glob": "src/lib/spawner*.ts",
+    "layer": "access",
+    "why": "How a command reaches a node, beside node-shell.ts: runs execFile from a small helper process so a fork from mgmt-api's ~550 MB heap stops blocking its event loop (fleet-manager#86). Domain-blind, and both callers (lib/node-probe.ts in access, runners/ephemeral-shared.ts in ci-scheduling) sit at or above access."
+  },
+  {
     "glob": "src/gh-budget.ts",
     "layer": "access"
   },
