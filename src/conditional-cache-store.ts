@@ -33,10 +33,11 @@
  */
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, rmSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { logger, stateDir } from './host.js';
-import { writeJsonAtomic } from './lib/atomic-json.js';
+import { writeFileAtomic } from './lib/atomic-json.js';
 
 /** Under `stateDir()`. One subdirectory per cache. */
 export const CONDITIONAL_CACHE_DIR = 'gh-conditional-cache';
@@ -58,13 +59,57 @@ export interface StoredConditional {
 export interface ConditionalCacheStore {
 	/** Every entry on disk within the bounds, OLDEST first, so a Map built from it keeps touch order. */
 	load(nowMs?: number): StoredConditional[];
-	save(key: string, etag: string, text: string, nowMs?: number): void;
+	/** False when the write failed: the caller must not rely on the disk copy. */
+	save(key: string, etag: string, text: string, nowMs?: number): boolean;
+	/**
+	 * One entry's body, read asynchronously, or `null` when there is no file,
+	 * it does not parse, or it holds a different ETag. For a caller that keeps
+	 * a large body on disk only (`github-client-cache.ts`, fleet-manager#86).
+	 */
+	read(key: string, etag: string): Promise<string | null>;
 	remove(key: string): void;
 	/** Drop every file. Test seam, and the reset a fresh state dir models. */
 	clear(): void;
 }
 
 const reasonOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/**
+ * ON DISK: one line of JSON (`key`, `etag`, `savedAtMs`), a newline, then the
+ * body as it came from GitHub. The body is not a JSON string inside the
+ * header, so reading it back costs a file read and a split, not a second
+ * parse of the whole body: ~2.6 ms of event loop per 304 on a 1.3 MB runs
+ * listing (fleet-manager#86). `.json` files hold the older all-JSON form
+ * (`{key, etag, text, savedAtMs}`). They are still read, and the next save
+ * of the same key replaces each one.
+ */
+const EXT = '.etag';
+const LEGACY_EXT = '.json';
+
+interface Header {
+	key: string;
+	etag: string;
+	savedAtMs: number;
+}
+
+function parseEntry(raw: string, legacy: boolean): StoredConditional | null {
+	if (legacy) {
+		const v = JSON.parse(raw) as Partial<StoredConditional>;
+		return typeof v.key === 'string' &&
+			typeof v.etag === 'string' &&
+			v.etag &&
+			typeof v.text === 'string' &&
+			typeof v.savedAtMs === 'number'
+			? (v as StoredConditional)
+			: null;
+	}
+	const nl = raw.indexOf('\n');
+	if (nl < 0) return null;
+	const h = JSON.parse(raw.slice(0, nl)) as Partial<Header>;
+	if (typeof h.key !== 'string' || typeof h.etag !== 'string' || !h.etag) return null;
+	if (typeof h.savedAtMs !== 'number') return null;
+	return { key: h.key, etag: h.etag, savedAtMs: h.savedAtMs, text: raw.slice(nl + 1) };
+}
 
 /**
  * A store for one cache. `maxBytes` bounds the TEXT kept across all entries on
@@ -85,8 +130,10 @@ export function conditionalCacheStore(
 		logger.warn(`[conditional-cache] ${name}: ${message}`);
 	};
 	const dir = (): string => join(stateDir(), CONDITIONAL_CACHE_DIR, name);
-	const fileOf = (key: string): string =>
-		join(dir(), `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`);
+	const stem = (key: string): string =>
+		join(dir(), createHash('sha256').update(key).digest('hex').slice(0, 32));
+	const fileOf = (key: string): string => stem(key) + EXT;
+	const legacyFileOf = (key: string): string => stem(key) + LEGACY_EXT;
 
 	return {
 		load(nowMs = Date.now()) {
@@ -103,25 +150,19 @@ export function conditionalCacheStore(
 			const entries: StoredConditional[] = [];
 			for (const n of names) {
 				const path = join(dir(), n);
-				if (!n.endsWith('.json')) {
+				const legacy = n.endsWith(LEGACY_EXT);
+				if (!legacy && !n.endsWith(EXT)) {
 					// A `.tmp` left by a write that died mid-rename.
 					rmSync(path, { force: true });
 					continue;
 				}
 				try {
-					const v = JSON.parse(readFileSync(path, 'utf8')) as Partial<StoredConditional>;
-					if (
-						typeof v.key !== 'string' ||
-						typeof v.etag !== 'string' ||
-						!v.etag ||
-						typeof v.text !== 'string' ||
-						typeof v.savedAtMs !== 'number' ||
-						nowMs - v.savedAtMs > maxAgeMs
-					) {
+					const v = parseEntry(readFileSync(path, 'utf8'), legacy);
+					if (!v || nowMs - v.savedAtMs > maxAgeMs) {
 						rmSync(path, { force: true });
 						continue;
 					}
-					entries.push(v as StoredConditional);
+					entries.push(v);
 				} catch (e) {
 					complainOnce('parse', `dropped unreadable ${path}: ${reasonOf(e)}`);
 					rmSync(path, { force: true });
@@ -134,6 +175,7 @@ export function conditionalCacheStore(
 			for (const e of entries) {
 				if (bytes + e.text.length > opts.maxBytes) {
 					rmSync(fileOf(e.key), { force: true });
+					rmSync(legacyFileOf(e.key), { force: true });
 					continue;
 				}
 				bytes += e.text.length;
@@ -151,18 +193,46 @@ export function conditionalCacheStore(
 				// losing one to an unclean restart costs exactly the one read it
 				// would have made free, nothing more, so the two extra fsyncs are
 				// not worth paying on this path.
-				writeJsonAtomic(path, { key, etag, text, savedAtMs: nowMs }, { fsync: false });
+				const header: Header = { key, etag, savedAtMs: nowMs };
+				writeFileAtomic(path, `${JSON.stringify(header)}\n${text}`, { fsync: false });
+				rmSync(legacyFileOf(key), { force: true });
+				return true;
 			} catch (e) {
 				complainOnce(
 					'write',
 					`could not persist to ${dir()}: ${reasonOf(e)} — the next restart pays full price ` +
 						'for the reads this cache would have made free'
 				);
+				return false;
 			}
+		},
+		async read(key, etag) {
+			for (const [path, legacy] of [
+				[fileOf(key), false],
+				[legacyFileOf(key), true],
+			] as const) {
+				let raw: string;
+				try {
+					raw = await readFile(path, 'utf8');
+				} catch (e) {
+					if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
+					complainOnce('read', `could not read ${path}: ${reasonOf(e)}`);
+					return null;
+				}
+				try {
+					const v = parseEntry(raw, legacy);
+					return v && v.key === key && v.etag === etag ? v.text : null;
+				} catch (e) {
+					complainOnce('parse', `unreadable ${path}: ${reasonOf(e)}`);
+					return null;
+				}
+			}
+			return null;
 		},
 		remove(key) {
 			try {
 				rmSync(fileOf(key), { force: true });
+				rmSync(legacyFileOf(key), { force: true });
 			} catch (e) {
 				complainOnce('remove', `could not remove an evicted entry: ${reasonOf(e)}`);
 			}

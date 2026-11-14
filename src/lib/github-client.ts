@@ -23,6 +23,8 @@ import {
 } from './github-client-blackout.js';
 import {
 	ghCache,
+	dropGhCacheEntry,
+	readGhCachedText,
 	ghCacheKey,
 	ghCacheStore,
 	hydrateGhCache,
@@ -218,13 +220,20 @@ export async function readRunnerListingShared(
 ): Promise<RunnerListing | null> {
 	hydrateGhCache();
 	const hit = ghCache.get(ghCacheKey(token, repo, RUNNER_LISTING_PATH));
-	if (hit && hit.atMs > 0 && nowMs - hit.atMs < maxAgeMs) {
+	// A listing held on disk only is revalidated instead: free on a 304.
+	if (hit && hit.text !== null && hit.atMs > 0 && nowMs - hit.atMs < maxAgeMs) {
 		return JSON.parse(hit.text) as RunnerListing;
 	}
 	return ghGet<RunnerListing>(RUNNER_LISTING_PATH, token, repo);
 }
 
-export async function ghGet<T>(path: string, token: string, repo = SELF_REPO): Promise<T | null> {
+export async function ghGet<T>(
+	path: string,
+	token: string,
+	repo = SELF_REPO,
+	/** Internal: this is the one retry after a 304 whose body was gone. */
+	refetched = false
+): Promise<T | null> {
 	// `null` is this function's "I could not look", and every caller in the
 	// dispatcher already treats it that way — see the `null` is the error return,
 	// NOT an empty queue comment in dispatch-tick. Suppression must land there.
@@ -256,8 +265,18 @@ export async function ghGet<T>(path: string, token: string, repo = SELF_REPO): P
 		// free answer as a failure would turn every unchanged listing into
 		// "could not look".
 		if (resp.status === 304 && cached?.etag) {
+			const text = await readGhCachedText(key, cached);
+			if (text === null) {
+				// The disk copy of a body held there only is gone or replaced.
+				// GitHub's 304 vouches for a body we no longer have, so it is not an
+				// answer: forget the entry and ask once more without the ETag.
+				logger.warn(`[runner-health] GET ${path}: 304 but the cached body is gone; refetching`);
+				dropGhCacheEntry(key);
+				if (refetched) return null;
+				return ghGet<T>(path, token, repo, true);
+			}
 			ghCacheStore(key, { ...cached, atMs: fresh ? Date.now() : cached.atMs }, false);
-			return JSON.parse(cached.text) as T;
+			return JSON.parse(text) as T;
 		}
 		if (!resp.ok) {
 			noteGhRateLimit(resp);

@@ -26,11 +26,26 @@ import { conditionalCacheStore } from '../conditional-cache-store.js';
  * holding each boot.
  */
 export const GH_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+
+/**
+ * A body this long or longer is kept on DISK only, once its write there has
+ * succeeded; a 304 reads it back (`readGhCachedText`). fleet-manager#86: the
+ * cache was 120 `/actions/runs` listings of up to 1.3 MB each (ci-alerts reads
+ * 100 runs per repo), and V8 holds a body with any non-Latin-1 character (an
+ * emoji in a commit message) as a two-byte string, so 31.6 MB of text was
+ * ~59 MB of heap. The same entries stay cached, so the same reads stay free:
+ * the bound below still counts every entry's full size.
+ */
+export const GH_CACHE_SPILL_CHARS = 64 * 1024;
+
 export interface GhCached {
 	repo: string;
 	path: string;
 	etag: string | null;
-	text: string;
+	/** The body, or `null` when it is held on disk only (see GH_CACHE_SPILL_CHARS). */
+	text: string | null;
+	/** The body's length in chars, held or not. What the byte bound counts. */
+	size?: number;
 	/**
 	 * When GitHub last vouched for this body: the 200 that carried it, or a 304
 	 * since. 0 when a runner write for the repo may have made it stale — see
@@ -57,8 +72,36 @@ export function hydrateGhCache(): void {
 	for (const e of ghCacheDisk.load()) {
 		const [, repo, path] = e.key.split('\n');
 		if (!repo || !path || ghCache.has(e.key)) continue;
-		ghCacheStore(e.key, { repo, path, etag: e.etag, text: e.text, atMs: 0 }, false);
+		// Just read from disk, so a large one goes straight back to disk only.
+		const spill = e.text.length >= GH_CACHE_SPILL_CHARS;
+		ghCacheStore(
+			e.key,
+			{ repo, path, etag: e.etag, text: spill ? null : e.text, size: e.text.length, atMs: 0 },
+			false
+		);
 	}
+}
+
+const sizeOf = (e: GhCached): number => e.size ?? e.text?.length ?? 0;
+
+/**
+ * The body of a cached entry: from memory, or from disk for one held there.
+ * `null` when the disk copy is gone or no longer matches the entry's ETag. The
+ * caller must then fetch again WITHOUT the ETag, never treat it as a hit.
+ */
+export async function readGhCachedText(key: string, entry: GhCached): Promise<string | null> {
+	if (entry.text !== null) return entry.text;
+	if (!entry.etag) return null;
+	return ghCacheDisk.read(key, entry.etag);
+}
+
+/** Forget an entry whose body could not be read back, here and on disk. */
+export function dropGhCacheEntry(key: string): void {
+	const prev = ghCache.get(key);
+	if (!prev) return;
+	ghCache.delete(key);
+	ghCacheBytes -= sizeOf(prev);
+	ghCacheDisk.remove(key);
 }
 
 /**
@@ -69,23 +112,29 @@ export function hydrateGhCache(): void {
 export function ghCacheStore(key: string, entry: GhCached, persist: boolean): void {
 	const prev = ghCache.get(key);
 	if (prev) {
-		ghCacheBytes -= prev.text.length;
+		ghCacheBytes -= sizeOf(prev);
 		ghCache.delete(key);
 	}
-	// Re-inserted, so Map order is touch order and the first key is the oldest.
-	ghCache.set(key, entry);
-	ghCacheBytes += entry.text.length;
+	let stored: GhCached = { ...entry, size: sizeOf(entry) };
 	if (persist) {
 		// An entry with no ETag can never earn a 304, so the disk copy of an
 		// older one goes rather than staying behind as a pair that no longer
 		// matches what this process holds.
-		if (entry.etag) ghCacheDisk.save(key, entry.etag, entry.text);
-		else ghCacheDisk.remove(key);
+		const onDisk =
+			stored.etag !== null && stored.text !== null
+				? ghCacheDisk.save(key, stored.etag, stored.text)
+				: (ghCacheDisk.remove(key), false);
+		// Only a body the disk really holds leaves memory: a failed write keeps it.
+		if (onDisk && stored.text !== null && stored.text.length >= GH_CACHE_SPILL_CHARS)
+			stored = { ...stored, text: null };
 	}
+	// Re-inserted, so Map order is touch order and the first key is the oldest.
+	ghCache.set(key, stored);
+	ghCacheBytes += sizeOf(stored);
 	for (const [k, v] of ghCache) {
 		if (ghCacheBytes <= GH_CACHE_MAX_BYTES || k === key) break;
 		ghCache.delete(k);
-		ghCacheBytes -= v.text.length;
+		ghCacheBytes -= sizeOf(v);
 		ghCacheDisk.remove(k);
 	}
 }
