@@ -11,25 +11,30 @@
  * that does not parse is simply dropped on read (`unreadableLines` counts it)
  * and never crashes a reader.
  *
- * EVERY WRITE REPLACES THE FILE ATOMICALLY (temp file, fsync, rename, fsync
- * the directory), via the shared `writeFileAtomic` (F3, `lib/atomic-json.ts`)
- * — the same choice `job-rollup-store.ts` made, and for the same reason: a
- * node's own row count is tiny (one fleet's worth every 5 minutes) and a full
- * rewrite is cheap even kept for a retention window measured in weeks, which
- * buys a format a crash mid-write cannot tear in half. At ~9 nodes, a 5-minute
- * tick and {@link CAPACITY_SAMPLE_RETENTION_DAYS} = 14 days, that is on the
- * order of 9 * 12 * 24 * 14 ≈ 36,000 rows — a few MB — rewritten once per
- * tick. If the fleet grows by an order of magnitude this should move to a
- * true append (decision-log.ts's day-file pattern), but today's volume does
- * not justify that complexity.
+ * APPEND, AND COMPACT ON A COUNTED STALE SHARE (fleet-manager#86). This file
+ * used to be rewritten whole, fsync'd, on every 5-minute tick: read, parse
+ * and sort ~38,000 rows (8.4 MB) to add ~9. That was a 205 ms synchronous
+ * stretch on mgmt-api's leader on 2026-11-14, the longest in a 300 s profile,
+ * the same shape job-history had before 0.34.415. A tick now appends its rows.
+ * The full atomic rewrite (temp file, fsync, rename) runs only once rows past
+ * retention, plus unreadable lines, reach {@link COMPACT_STALE_FRACTION} of
+ * the rows that would be kept.
  *
- * RETENTION IS BY TIME, trimmed on every `append` call: a row older than
- * {@link CAPACITY_SAMPLE_RETENTION_DAYS} is dropped the next time anything is
- * written, never read back. 14 days matches job-history's own window (T0) —
- * this store answers "what did admission look like at time T", which is only
- * useful for as long as the ledger it would be joined against still holds
- * that day.
+ * What that costs a reader: a row past {@link CAPACITY_SAMPLE_RETENTION_DAYS}
+ * can stay on disk up to ~10% of the window longer (~1.4 days). Both readers
+ * window by their own clock (`fleet stats --days`, host-reliability's
+ * `RELIABILITY_WINDOW_MS`), and `read` sorts, so neither sees a difference.
+ * An append is not fsync'd: a crash can lose the last tick's rows or leave
+ * a torn last line, which `read` counts as unreadable, and the next append
+ * starts on a fresh line.
  *
+ * The tally behind that decision is per process and per path, because the
+ * sampler builds a fresh store every tick. It is checked against the file's
+ * size before each append, so a file another process wrote (a standby that
+ * took leadership, a hand edit) is re-read once rather than miscounted.
+ *
+ * RETENTION IS BY TIME, and the cutoff moves with every `append`.
+
  * No logging, no host: a reader (a future `fleet capacity-samples`, or a
  * test) runs in a process that never installed one. Problems come back as
  * data (`unreadableLines`), and the caller decides who to tell.
@@ -40,7 +45,8 @@
  * file's own write call can trace, so the detector finds nothing to declare.
  * Hand-adding an entry here would fail that file's own stale check.
  */
-import { readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { writeFileAtomic } from './lib/atomic-json.js';
 import type { ClawState } from './lib/fleet-vocabulary.js';
@@ -62,6 +68,9 @@ export const CAPACITY_SAMPLE_FILE = 'capacity-samples.jsonl';
 
 /** Kept this long; see the module header for why 14 days. */
 export const CAPACITY_SAMPLE_RETENTION_DAYS = 14;
+
+/** Rewrite once rows past retention (and unreadable lines) are this share of the rows kept. */
+export const COMPACT_STALE_FRACTION = 0.1;
 
 const DAY_MS = 86_400_000;
 
@@ -118,10 +127,11 @@ export interface CapacitySampleStore {
 	/** Every row held, oldest first. Throws only on an unreadable FILE (not ENOENT). */
 	read(): CapacitySampleRead;
 	/**
-	 * Add these rows and drop every row older than `nowMs - retention`, in one
-	 * atomic write. Throws on a failed write, leaving the previous file intact
-	 * — the caller (`capacity-sample.ts`) is the one that must not let that
-	 * throw escape to its own caller.
+	 * Add these rows. Rows older than `nowMs - retention` are dropped by an
+	 * atomic rewrite once they make up {@link COMPACT_STALE_FRACTION} of the
+	 * file; otherwise the rows are appended. Throws on a failed write — the
+	 * caller (`capacity-sample.ts`) is the one that must not let that throw
+	 * escape to its own caller.
 	 */
 	append(rows: readonly CapacitySampleRow[], nowMs: number): void;
 }
@@ -138,51 +148,157 @@ function isCapacitySampleRow(v: unknown): v is CapacitySampleRow {
 	);
 }
 
+/** What this process knows is on disk at one path, without reading it again. */
+interface Tally {
+	/** Rows per `at`: a tick's rows share one, so this stays a few thousand entries. */
+	atCounts: Map<string, number>;
+	rows: number;
+	unreadable: number;
+	/** The file's size after our last write; anything else means someone else wrote. */
+	size: number;
+	/** The file ends mid-line (a torn write): the next append starts a new one. */
+	torn: boolean;
+}
+
+const tallies = new Map<string, Tally>();
+
+/** Tests that rewrite a store's file behind its back. */
+export function __resetCapacitySampleTalliesForTesting(): void {
+	tallies.clear();
+}
+
+function parse(raw: string): { rows: CapacitySampleRow[]; unreadableLines: number } {
+	const rows: CapacitySampleRow[] = [];
+	let unreadableLines = 0;
+	for (const line of raw.split('\n')) {
+		if (!line.trim()) continue;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(line);
+		} catch {
+			unreadableLines++;
+			continue;
+		}
+		if (!isCapacitySampleRow(parsed)) {
+			unreadableLines++;
+			continue;
+		}
+		rows.push(parsed);
+	}
+	return { rows, unreadableLines };
+}
+
+const byTime = (a: CapacitySampleRow, b: CapacitySampleRow): number =>
+	a.at.localeCompare(b.at) || a.node.localeCompare(b.node);
+
+const lines = (rows: readonly CapacitySampleRow[]): string =>
+	rows.map((r) => JSON.stringify(r) + '\n').join('');
+
+function count(t: Tally, rows: readonly CapacitySampleRow[]): void {
+	for (const r of rows) t.atCounts.set(r.at, (t.atCounts.get(r.at) ?? 0) + 1);
+	t.rows += rows.length;
+}
+
+function sizeOf(path: string): number | null {
+	try {
+		return statSync(path).size;
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+		throw err;
+	}
+}
+
 /** The JSONL store at `path`. */
 export function capacitySampleStore(path: string): CapacitySampleStore {
-	const read = (): CapacitySampleRead => {
-		let raw: string;
+	const readRaw = (): string | null => {
 		try {
-			raw = readFileSync(path, 'utf8');
+			return readFileSync(path, 'utf8');
 		} catch (err) {
-			if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
-				return { rows: [], unreadableLines: 0, exists: false };
-			}
+			if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
 			throw err;
 		}
-		const rows: CapacitySampleRow[] = [];
-		let unreadableLines = 0;
-		for (const line of raw.split('\n')) {
-			if (!line.trim()) continue;
-			let parsed: unknown;
-			try {
-				parsed = JSON.parse(line);
-			} catch {
-				unreadableLines++;
-				continue;
-			}
-			if (!isCapacitySampleRow(parsed)) {
-				unreadableLines++;
-				continue;
-			}
-			rows.push(parsed);
-		}
-		rows.sort((a, b) => a.at.localeCompare(b.at) || a.node.localeCompare(b.node));
+	};
+
+	const read = (): CapacitySampleRead => {
+		const raw = readRaw();
+		if (raw === null) return { rows: [], unreadableLines: 0, exists: false };
+		const { rows, unreadableLines } = parse(raw);
+		rows.sort(byTime);
 		return { rows, unreadableLines, exists: true };
+	};
+
+	/** The tally for this file, re-read when the file is not the one we last wrote. */
+	const tally = (): Tally => {
+		const size = sizeOf(path) ?? 0;
+		const held = tallies.get(path);
+		if (held && held.size === size) return held;
+		const raw = readRaw() ?? '';
+		const { rows, unreadableLines } = parse(raw);
+		const t: Tally = {
+			atCounts: new Map(),
+			rows: 0,
+			unreadable: unreadableLines,
+			size: Buffer.byteLength(raw),
+			torn: raw.length > 0 && !raw.endsWith('\n'),
+		};
+		count(t, rows);
+		tallies.set(path, t);
+		return t;
+	};
+
+	const compact = (rows: readonly CapacitySampleRow[], cutoff: string): void => {
+		const kept = read()
+			.rows.filter((r) => r.at >= cutoff)
+			.concat(rows)
+			.sort(byTime);
+		const text = lines(kept);
+		writeFileAtomic(path, text);
+		const t: Tally = {
+			atCounts: new Map(),
+			rows: 0,
+			unreadable: 0,
+			size: Buffer.byteLength(text),
+			torn: false,
+		};
+		count(t, kept);
+		tallies.set(path, t);
 	};
 
 	return {
 		read,
 		append(rows, nowMs) {
 			const cutoff = new Date(nowMs - CAPACITY_SAMPLE_RETENTION_DAYS * DAY_MS).toISOString();
-			const kept = read()
-				.rows.filter((r) => r.at >= cutoff)
-				.concat(rows)
-				.sort((a, b) => a.at.localeCompare(b.at) || a.node.localeCompare(b.node));
-			writeFileAtomic(
-				path,
-				kept.map((r) => JSON.stringify(r)).join('\n') + (kept.length ? '\n' : '')
-			);
+			let t: Tally;
+			try {
+				t = tally();
+			} catch (err) {
+				tallies.delete(path);
+				throw err;
+			}
+			let stale = t.unreadable;
+			for (const [at, n] of t.atCounts) if (at < cutoff) stale += n;
+			const kept = t.rows - (stale - t.unreadable) + rows.length;
+			if (stale > 0 && stale >= kept * COMPACT_STALE_FRACTION) {
+				try {
+					compact(rows, cutoff);
+				} catch (err) {
+					tallies.delete(path);
+					throw err;
+				}
+				return;
+			}
+			const text = (t.torn ? '\n' : '') + lines(rows);
+			try {
+				mkdirSync(dirname(path), { recursive: true });
+				appendFileSync(path, text);
+			} catch (err) {
+				// A partial append leaves the file unknown: re-read it next time.
+				tallies.delete(path);
+				throw err;
+			}
+			t.size += Buffer.byteLength(text);
+			t.torn = false;
+			count(t, rows);
 		},
 	};
 }

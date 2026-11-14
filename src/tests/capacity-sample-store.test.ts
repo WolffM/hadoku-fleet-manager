@@ -5,12 +5,13 @@
  */
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
 	CAPACITY_SAMPLE_RETENTION_DAYS,
+	COMPACT_STALE_FRACTION,
 	capacitySampleStore,
 	type CapacitySampleRow,
 } from '../capacity-sample-store.js';
@@ -103,16 +104,74 @@ void test('a corrupt line is counted, not thrown, and does not hide the good row
 	assert.equal(read.unreadableLines, 2);
 });
 
-void test('append is atomic: the file is replaced via a temp file, never truncated in place', () => {
+void test('a tick with nothing stale appends in place: the file grows, it is never rewritten', () => {
+	// fleet-manager#86: the whole-file rewrite on every tick was a 205 ms stretch
+	// on the leader at 38,000 rows.
 	const store = capacitySampleStore(path);
 	store.append([row(NOW)], NOW);
 	const before = readFileSync(path, 'utf8');
+	const ino = statSync(path).ino;
 	store.append([row(NOW + 60_000)], NOW + 60_000);
 	const after = readFileSync(path, 'utf8');
-	assert.notEqual(before, after);
+	assert.equal(statSync(path).ino, ino, 'same file: appended, not replaced');
+	assert.ok(after.startsWith(before), 'the first row survives the second append');
+	assert.equal(store.read().rows.length, 2);
+});
+
+/** `n` in-window rows and `old` rows past retention, written as another writer would. */
+function seedFile(n: number, old: number): void {
+	const rows = [
+		...Array.from({ length: old }, (_, i) =>
+			row(NOW - (CAPACITY_SAMPLE_RETENTION_DAYS + 1) * DAY + i, 'claw-old')
+		),
+		...Array.from({ length: n }, (_, i) => row(NOW - DAY + i * 1000)),
+	];
+	writeFileSync(path, rows.map((r) => JSON.stringify(r) + '\n').join(''));
+}
+
+void test('stale rows under the compaction share are left on disk; the tick appends', () => {
+	seedFile(100, 5);
+	const ino = statSync(path).ino;
+	capacitySampleStore(path).append([row(NOW)], NOW);
+	assert.equal(statSync(path).ino, ino);
+	assert.equal(capacitySampleStore(path).read().rows.length, 106);
+});
+
+void test('once stale rows reach the compaction share, the tick rewrites without them', () => {
+	seedFile(100, 11);
+	const ino = statSync(path).ino;
+	capacitySampleStore(path).append([row(NOW)], NOW);
+	assert.notEqual(statSync(path).ino, ino, 'rewritten atomically, through a temp file');
+	const read = capacitySampleStore(path).read();
+	assert.equal(read.rows.length, 101);
+	assert.ok(!read.rows.some((r) => r.node === 'claw-old'));
+	assert.ok(11 >= 101 * COMPACT_STALE_FRACTION, 'the fixture is over the line it claims to be');
+});
+
+void test('a torn last line costs only itself: the next append starts on a fresh line', () => {
+	// 30 good rows keep one torn line under the compaction share, so this is
+	// the APPEND path: a compaction would drop the torn line and prove nothing.
+	seedFile(30, 0);
+	writeFileSync(path, readFileSync(path, 'utf8') + '{"at":"2026-10-31T11:5');
+	const ino = statSync(path).ino;
+	capacitySampleStore(path).append([row(NOW, 'hokon')], NOW);
+	assert.equal(statSync(path).ino, ino, 'appended, not compacted');
+	const read = capacitySampleStore(path).read();
+	assert.equal(read.rows.length, 31);
+	assert.equal(read.rows.at(-1)?.node, 'hokon', 'the new row parsed: it did not join the torn one');
+	assert.equal(read.unreadableLines, 1);
+});
+
+void test('a file another writer changed is re-read before deciding, not judged by our own count', () => {
+	const store = capacitySampleStore(path);
+	store.append([row(NOW - 60_000)], NOW - 60_000);
+	// A standby that took leadership wrote the file meanwhile, with stale rows
+	// this process never saw. Our own tally says nothing is stale.
+	seedFile(100, 20);
+	store.append([row(NOW)], NOW);
 	assert.ok(
-		after.includes(before.trim().split('\n')[0]!),
-		'the first row survives the second append'
+		!store.read().rows.some((r) => r.node === 'claw-old'),
+		'the stale rows another writer left are compacted on this tick'
 	);
 });
 
