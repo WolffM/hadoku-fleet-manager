@@ -199,34 +199,6 @@ export function egressClassFor(appName, pmCwd, spec) {
 }
 
 /**
- * Every descendant pid of `root`, from a pid→ppid map.
- *
- * A PM2 "app" is a wrapper that spawns the real process — `tunnel` spawns
- * cloudflared, `dataplatform` spawns a venv python, `valheim` spawns a game
- * server. Measuring only the pid PM2 reports charges a service for its
- * wrapper's few MB and nothing for the work, so every per-service figure here
- * is over the whole subtree.
- */
-export function descendantPids(root, ppidByPid) {
-	const children = new Map();
-	for (const [pid, ppid] of ppidByPid) {
-		if (!children.has(ppid)) children.set(ppid, []);
-		children.get(ppid).push(pid);
-	}
-	const out = [];
-	const stack = [root];
-	const seen = new Set();
-	while (stack.length) {
-		const pid = stack.pop();
-		if (seen.has(pid)) continue; // a pid cycle cannot happen, but a reused pid in a stale map can
-		seen.add(pid);
-		out.push(pid);
-		for (const c of children.get(pid) ?? []) stack.push(c);
-	}
-	return out;
-}
-
-/**
  * Per-pid TCP byte counters out of `ss -tinp` output.
  *
  * `ss` prints a socket header line carrying `users:(("name",pid=N,fd=M))` and

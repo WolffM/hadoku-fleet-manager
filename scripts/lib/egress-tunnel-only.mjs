@@ -75,8 +75,19 @@ export function tunnelOnlyProblems(spec) {
  *
  * `ok` and `finding` decide the app; `pending` is additive, and the caller
  * still judges the app where it actually is.
+ *
+ * BY ITS PROCESS TREE when PM2's pid is outside (fleet-manager#87). A wrapper
+ * may stay in pm2's cgroup and talk only to loopback, and put the process
+ * that egresses into a scope of the tunnel-only slice (crossposter's
+ * `systemd-run --user --scope --slice=crossposter.slice`). `children` is every
+ * descendant of the PM2 pid with its cgroup (null: exited mid-scan, not
+ * counted). Every live child inside is `ok`; some inside and some outside is
+ * a `tunnel-only-escaped` finding, since a child out of the scope egresses
+ * past the kill switch; none inside is still `pending`.
  */
-export function tunnelOnlyPlacement(spec, name, cgroup) {
+const under = (cgroup, root) => cgroup === root || cgroup.startsWith(`${root}/`);
+
+export function tunnelOnlyPlacement(spec, name, cgroup, children = []) {
 	const entries = Array.isArray(spec.tunnelOnly) ? spec.tunnelOnly : [];
 	const holding = entries.find(
 		(e) =>
@@ -96,6 +107,28 @@ export function tunnelOnlyPlacement(spec, name, cgroup) {
 		};
 	}
 	const naming = entries.find((e) => Array.isArray(e?.apps) && e.apps.includes(name));
+	const live = children.filter((c) => typeof c?.cgroup === 'string');
+	const inside = naming ? live.filter((c) => under(c.cgroup, naming.cgroup)) : [];
+	if (naming && inside.length === live.length && inside.length)
+		return {
+			ok: {
+				egress: 'tunnel-only',
+				tunnelOnly: naming.cgroup,
+				via: `process tree: ${inside.length} child process(es) inside, the PM2 wrapper in ${cgroup ?? 'an unread cgroup'}`,
+			},
+		};
+	if (naming && inside.length) {
+		const out = live.filter((c) => !under(c.cgroup, naming.cgroup));
+		return {
+			finding: {
+				status: 'tunnel-only-escaped',
+				why:
+					`is tunnel-only (${naming.cgroup}), but ${out.length} of its child processes run ` +
+					`outside it (${out.map((c) => `pid ${c.pid} in ${c.cgroup}`).join('; ')}). Those ` +
+					'egress past the kill switch.',
+			},
+		};
+	}
 	if (naming)
 		return {
 			pending: {

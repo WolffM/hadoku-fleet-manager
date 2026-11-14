@@ -17,9 +17,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { descendantPids } from './proc-tree.mjs';
+
 import {
 	RESIDENT_CLASS,
-	descendantPids,
 	durationStats,
 	egressClassFor,
 	flattenCronProfiles,

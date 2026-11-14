@@ -1,6 +1,6 @@
 {
   "scripts/capability-probe.sh": 1037,
-  "scripts/check-egress-slices.mjs": 1063,
+  "scripts/check-egress-slices.mjs": 1046,
   "scripts/ci-throttle.sh": 1036,
   "scripts/deploy-runners-slice.mjs": 1112,
   "scripts/hosting.mjs": 883,
@@ -11,5 +11,5 @@
   "scripts/lib/toolchain-floor.test.mjs": 1439,
   "scripts/node-bootstrap.sh": 2703,
   "scripts/runners-slice-install.sh": 986,
-  "scripts/service-inventory.mjs": 977
+  "scripts/service-inventory.mjs": 956
 }

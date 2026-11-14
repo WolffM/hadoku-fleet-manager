@@ -38,7 +38,6 @@ import { join } from 'node:path';
 
 import {
 	RESIDENT_CLASS,
-	descendantPids,
 	durationStats,
 	egressClassFor,
 	flattenCronProfiles,
@@ -52,6 +51,7 @@ import {
 	validateResidentRow,
 } from './lib/service-inventory.mjs';
 import { createEmitter } from './lib/emit.mjs';
+import { descendantPids, ppidMap } from './lib/proc-tree.mjs';
 import { stateDir } from '../dist/lib/fleet-paths.js';
 import { hubRepo } from '../dist/lib/fleet-config.js';
 
@@ -110,27 +110,6 @@ function sh(cmd, args, opts = {}) {
 // --- the process tree, from the kernel -------------------------------------
 // Listeners from the process tree, never a `.env` (CLAUDE.md). Same rule for a
 // service's real memory: the tree, never the supervisor's own number.
-
-/** pid → ppid for every process on the box, out of `/proc/<pid>/stat`. */
-function ppidMap() {
-	const map = new Map();
-	for (const name of readdirSync('/proc')) {
-		if (!/^\d+$/.test(name)) continue;
-		let stat;
-		try {
-			stat = read(`/proc/${name}/stat`);
-		} catch (err) {
-			// A pid that exited between readdir and read is normal and not a gap:
-			// it held no resources by the time we looked. Any OTHER errno is.
-			if (err.code === 'ENOENT' || err.code === 'ESRCH') continue;
-			throw err;
-		}
-		// comm can contain spaces and parens, so fields are counted from the LAST ')'.
-		const after = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-		map.set(Number(name), Number(after[1]));
-	}
-	return map;
-}
 
 /**
  * The kernel's tick, by EXECUTING `getconf` rather than assuming 100.

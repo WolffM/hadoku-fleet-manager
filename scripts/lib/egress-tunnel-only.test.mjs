@@ -122,16 +122,55 @@ void test('gate: any OTHER app found in the tunnel-only cgroup fails', () => {
 });
 
 void test('gate: a named app not moved yet is pending, and still judged where it runs', () => {
-	// pid 1 is readable everywhere and sits outside both the tunnel-only cgroup
-	// and the fixture's direct one: pending, AND the ecosystem finding it earns there.
-	const notMoved = { ...ecosystemApp('crossposter'), pid: 1 };
-	const { report } = runGate([[fixtureAnchor, notMoved]], { spec: gateSpec(['crossposter']) });
+	// The app is THIS process, in its own cgroup, and the tunnel-only entry names
+	// a path nothing runs in: outside both it and the fixture's direct cgroup, so
+	// pending, AND the ecosystem finding it earns there. Its children (the gate
+	// itself) run beside it, outside too. Not pid 1 or 2: hidepid on claw-1/2/3
+	// hides them from the ci user, and an unreadable cgroup is a deferral, not a
+	// pending (ppe flake ledger fleet-manager#76, run 43083184266 on jit-claw-2).
+	const tunnel = '/fixture-tunnel.slice';
+	const spec2 = {
+		...gateSpec([]),
+		tunnelOnly: [{ cgroup: tunnel, apps: ['crossposter'], holds: 'x', why: 'fixture' }],
+	};
+	const { report } = runGate([[fixtureAnchor, ecosystemApp('crossposter')]], { spec: spec2 });
 	assert.deepEqual(
 		report.tunnelOnlyPending.map((p) => [p.name, p.tunnelOnly]),
-		[['crossposter', own]]
+		[['crossposter', tunnel]]
 	);
 	assert.deepEqual(
 		appFindings(report).map((f) => [f.name, f.status]),
 		[['crossposter', 'ecosystem-outside-direct']]
 	);
+});
+
+void test('#87: a wrapper in pm2 with its children in the tunnel-only scope is tunnel-only', () => {
+	// Measured 2026-11-14 on hokon: crossposter's wrapper in pm2-hadoku.service,
+	// its python child in crossposter.slice/run-p727965-i507596821.scope.
+	const t = taxonomy([entry(XP)]);
+	const pm2 = '/system.slice/pm2-hadoku.service';
+	const child = { pid: 727965, cgroup: `${XP}/run-p727965-i507596821.scope` };
+	const r = tunnelOnlyPlacement(t, 'crossposter', pm2, [child]);
+	assert.equal(r.ok?.egress, 'tunnel-only');
+	assert.equal(r.ok?.tunnelOnly, XP);
+	assert.equal(r.pending, undefined);
+	// An exited child (null cgroup) neither passes nor fails anything.
+	assert.equal(
+		tunnelOnlyPlacement(t, 'crossposter', pm2, [child, { pid: 9, cgroup: null }]).ok?.egress,
+		'tunnel-only'
+	);
+});
+
+void test('#87: a child that escaped the scope is a finding; no child moved is still pending', () => {
+	const t = taxonomy([entry(XP)]);
+	const pm2 = '/system.slice/pm2-hadoku.service';
+	const inScope = { pid: 10, cgroup: `${XP}/run-p10-i1.scope` };
+	const escaped = { pid: 11, cgroup: pm2 };
+	const r = tunnelOnlyPlacement(t, 'crossposter', pm2, [inScope, escaped]);
+	assert.equal(r.finding?.status, 'tunnel-only-escaped');
+	assert.match(r.finding?.why ?? '', /pid 11 in \/system\.slice\/pm2-hadoku\.service/);
+	assert.equal(tunnelOnlyPlacement(t, 'crossposter', pm2, [escaped]).pending?.tunnelOnly, XP);
+	assert.equal(tunnelOnlyPlacement(t, 'crossposter', pm2, []).pending?.tunnelOnly, XP);
+	// An app the class does not name is not judged by its children at all.
+	assert.deepEqual(tunnelOnlyPlacement(t, 'wiki', pm2, [inScope]), {});
 });

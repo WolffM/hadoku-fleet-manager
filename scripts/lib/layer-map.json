@@ -2271,6 +2271,11 @@
     "why": "fleet-manager#64: the shared rig for the egress-slices suites (stub pm2, fixture apps and taxonomies), split out of egress-slices-guard.test.mjs so the on-demand cases get their own file. Same bucket as doctor-fixtures.mjs; the gate it spawns, scripts/check-*.mjs, is observation."
   },
   {
+    "glob": "scripts/lib/proc-tree.mjs",
+    "layer": "access",
+    "why": "fleet-manager#87: this box's process tree from /proc (pid\u2192ppid, descendants, a pid's cgroup). Another system's data \u2014 the kernel's \u2014 read by the egress-slices gate (observation) and service-inventory (tenancy), so it sits below both; ppidMap and descendantPids moved here from those two."
+  },
+  {
     "glob": "scripts/lib/egress-tunnel-only.mjs",
     "layer": "domain",
     "domain": "observation",

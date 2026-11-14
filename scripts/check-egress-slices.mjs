@@ -162,6 +162,7 @@ import { join } from 'node:path';
 import { createEmitter } from './lib/emit.mjs';
 import { printEgressReport } from './lib/egress-slices-report.mjs';
 import { tunnelOnlyPlacement, tunnelOnlyProblems } from './lib/egress-tunnel-only.mjs';
+import { cgroupOf, descendantCgroups } from './lib/proc-tree.mjs';
 import { manifest, stateDir } from '../dist/lib/fleet-paths.js';
 
 const JSON_OUT = process.argv.includes('--json');
@@ -383,25 +384,6 @@ function createMarkerReader() {
 function sleepSync(ms) {
 	if (!(ms > 0)) return;
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * The cgroup a PID is actually in, from the kernel.
- *
- * cgroup v2 writes one line, `0::<path>`. A PID that vanished between `pm2
- * jlist` and this read returns null, and the caller treats that as "could not
- * look" rather than as a pass — an app whose egress class cannot be observed is
- * exactly the case that must not render as healthy.
- */
-function observedCgroup(pid) {
-	if (!pid || pid <= 0) return null;
-	try {
-		const raw = readFileSync(`/proc/${pid}/cgroup`, 'utf8');
-		const line = raw.split('\n').find((l) => l.startsWith('0::'));
-		return line ? line.slice(3).trim() : null;
-	} catch {
-		return null; // exited, or not ours to read
-	}
 }
 
 /**
@@ -841,7 +823,7 @@ function main() {
 			settledAfterMs = settled.waitedMs;
 		}
 
-		let cgroup = observedCgroup(pid);
+		let cgroup = cgroupOf(pid);
 		let direct = cgroup ? (prefixes.find((p) => cgroup.startsWith(p)) ?? null) : null;
 
 		if (cgroup === null) {
@@ -849,7 +831,7 @@ function main() {
 			// app that restarts between them carries a stale pid. Look again at
 			// whatever pid PM2 reports NOW.
 			const fresh = freshPid(name);
-			const retried = fresh && fresh !== pid ? observedCgroup(fresh) : null;
+			const retried = fresh && fresh !== pid ? cgroupOf(fresh) : null;
 			if (retried) {
 				cgroup = retried;
 				direct = prefixes.find((p) => cgroup.startsWith(p)) ?? null;
@@ -920,7 +902,8 @@ function main() {
 			continue;
 		}
 
-		const tunnel = tunnelOnlyPlacement(spec, name, cgroup);
+		const named = (spec.tunnelOnly ?? []).some((e) => e?.apps?.includes?.(name));
+		const tunnel = tunnelOnlyPlacement(spec, name, cgroup, named ? descendantCgroups(pid) : []);
 		if (tunnel.pending) pending.push({ name, class: declared, ...tunnel.pending });
 		if (tunnel.finding) findings.push({ name, cwd, cgroup, ...tunnel.finding });
 		if (tunnel.ok) ok.push({ name, class: declared, cgroup, ...tunnel.ok });
