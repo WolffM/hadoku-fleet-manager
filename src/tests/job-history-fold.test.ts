@@ -147,3 +147,39 @@ test('summarise over a caller-owned array is folded fresh, never memoised', () =
 	assert.equal(a.total, 1);
 	assert.equal(b.total, 2, 'nothing bumps a version for an array the store does not own');
 });
+
+test('recent is the 40 newest by start, ties in history order, whatever order history holds', () => {
+	// The fold picks them in one backward scan instead of sorting every record:
+	// pin it to what a stable sort of the whole window gives, ties included.
+	const starts = [5, 3, 3, 9, 1, 3, 7, 7, 2, 0, 4, 4, 8, 6, 3, 1, 2, 9, 5, 5];
+	const rs: JobRecord[] = [];
+	for (let i = 0; i < 60; i++)
+		rs.push(rec('warm-claw-1-hadoku_site', starts[(i * 7) % 20] * 10, 30));
+	seed(...rs);
+	const expected = [...rs]
+		.sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0))
+		.slice(0, 40)
+		.map((r) => r.jobId);
+	assert.deepEqual(
+		fold().recent.map((r) => r.jobId),
+		expected
+	);
+});
+
+test('a job renamed in place moves to its new kind in slowest once the writer bumps', () => {
+	const rs = [1, 2, 3].map((m) =>
+		rec('warm-claw-1-hadoku_site', m * 10, 100 * m, { name: 'build' })
+	);
+	seed(...rs);
+	assert.deepEqual(
+		fold().byRepo[0].slowest.map((s) => s.name),
+		['build']
+	);
+	for (const r of rs) r.name = 'e2e';
+	noteHistoryChanged();
+	assert.deepEqual(
+		fold().byRepo[0].slowest.map((s) => s.name),
+		['e2e'],
+		'the kind is cached per record, and a cached kind must follow the name'
+	);
+});

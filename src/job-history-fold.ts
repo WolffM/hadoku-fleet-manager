@@ -29,7 +29,7 @@ import {
 	RETENTION_DAYS,
 	type JobRecord,
 } from './job-history-store.js';
-import { failuresByZone } from './job-history-zone.js';
+import { emptyFailuresByZone, failureBucket, type FailuresByZone } from './job-history-zone.js';
 import { jobKind } from './lib/job-kind.js';
 import { nodeOf } from './runners/census.js';
 import type {
@@ -55,8 +55,7 @@ export function percentileSorted(s: ArrayLike<number>, p: number): number | null
 
 /** A typed array sorts numerically, natively, with no comparator call per step. */
 const ascending = (xs: readonly number[]): Float64Array => Float64Array.from(xs).sort();
-const nums = (xs: (number | undefined)[]): number[] =>
-	xs.filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
+const isNum = (x: number | undefined): x is number => typeof x === 'number' && Number.isFinite(x);
 
 const DAY_MS = 86_400_000;
 const isoDay = (day: number): string => new Date(day * DAY_MS).toISOString().slice(0, 10);
@@ -69,6 +68,8 @@ interface Row {
 	finished: number;
 	/** Days since the epoch, UTC, by `startedAt`; NaN when it will not parse. */
 	day: number;
+	/** {@link jobKind} of the record's name. */
+	kind: string;
 }
 
 function pushTo<K, V>(m: Map<K, V[]>, k: K, v: V): void {
@@ -95,7 +96,7 @@ interface Baseline {
  */
 const derived = new WeakMap<
 	JobRecord,
-	Row & { nodesKey: string; runner: string; startedAt: string; durationSec: number }
+	Row & { nodesKey: string; runner: string; startedAt: string; durationSec: number; name: string }
 >();
 
 function rowOf(r: JobRecord, nodes: string[], nodesKey: string): Row {
@@ -105,7 +106,8 @@ function rowOf(r: JobRecord, nodes: string[], nodesKey: string): Row {
 		hit.nodesKey === nodesKey &&
 		hit.runner === r.runner &&
 		hit.startedAt === r.startedAt &&
-		hit.durationSec === r.durationSec
+		hit.durationSec === r.durationSec &&
+		hit.name === r.name
 	) {
 		return hit;
 	}
@@ -115,15 +117,93 @@ function rowOf(r: JobRecord, nodes: string[], nodesKey: string): Row {
 		node: nodeOf(r.runner, nodes),
 		finished: start + (r.durationSec ?? 0) * 1000,
 		day: Math.floor(start / DAY_MS),
+		kind: jobKind(r.name),
 		nodesKey,
 		runner: r.runner,
 		startedAt: r.startedAt,
 		durationSec: r.durationSec,
+		name: r.name,
 	};
 	derived.set(r, row);
 	return row;
 }
 
+/**
+ * One group's records, accumulated in the single pass over the window. Every
+ * figure the old per-group `map`/`filter` chains computed comes from these.
+ */
+interface Acc {
+	jobs: number;
+	failures: number;
+	zones: FailuresByZone;
+	durations: number[];
+	queue: number[];
+	/** First-seen order matters: it breaks ties in every sort by count below. */
+	machines: Map<string, { jobs: number; busySec: number }>;
+}
+
+const newAcc = (): Acc => ({
+	jobs: 0,
+	failures: 0,
+	zones: emptyFailuresByZone(),
+	durations: [],
+	queue: [],
+	machines: new Map(),
+});
+
+interface RepoAcc extends Acc {
+	dispatch: number[];
+	assign: number[];
+	kinds: Map<string, number[]>;
+}
+
+interface DayAcc extends Acc {
+	backstopJobs: number;
+}
+
+function add(acc: Acc, x: Row, bucket: keyof FailuresByZone | null): void {
+	acc.jobs++;
+	if (bucket) {
+		acc.failures++;
+		acc.zones[bucket]++;
+	}
+	acc.durations.push(x.r.durationSec);
+	if (isNum(x.r.queueSec)) acc.queue.push(x.r.queueSec);
+	const m = acc.machines.get(x.node);
+	if (m) {
+		m.jobs++;
+		m.busySec += x.r.durationSec;
+	} else acc.machines.set(x.node, { jobs: 1, busySec: x.r.durationSec });
+}
+
+/**
+ * Most-recent-first by `startedAt`, ties in history order: a stable sort's top
+ * `n`. Scanned from the END because history is appended in roughly start
+ * order, so nearly every older row is turned away by one comparison. Walking
+ * backwards, a tie goes BEFORE the rows already held (they came later).
+ */
+function newest(rows: readonly Row[], n: number): Row[] {
+	const top: Row[] = [];
+	for (let k = rows.length - 1; k >= 0; k--) {
+		const x = rows[k];
+		const at = x.r.startedAt;
+		if (top.length === n && at < top[n - 1].r.startedAt) continue;
+		let i = top.length;
+		while (i > 0 && at >= top[i - 1].r.startedAt) i--;
+		top.splice(i, 0, x);
+		if (top.length > n) top.pop();
+	}
+	return top;
+}
+
+/**
+ * ONE pass over the window into per-node, per-repo and per-day accumulators
+ * (fleet-manager#86). The version before folded each group with its own
+ * `map`/`filter`/`Set` chains, ~10 passes over 28k records and an allocation
+ * per pass, and sorted every record by start for the 40 newest: 316 ms on the
+ * production leader per history change, the last stretch over 100 ms in its
+ * profile. Output is unchanged, including every tie order.
+ */
 function baseline(
 	nodes: string[],
 	backstopNode: string,
@@ -133,71 +213,84 @@ function baseline(
 	const nodesKey = nodes.join('\0');
 	const rows: Row[] = history.map((r) => rowOf(r, nodes, nodesKey));
 
-	const byNode = new Map<string, Row[]>();
-	const byRepo = new Map<string, Row[]>();
-	const byDay = new Map<number, Row[]>();
-	for (const row of rows) {
-		pushTo(byNode, row.node, row);
-		pushTo(byRepo, row.r.repo, row);
-		if (Number.isFinite(row.day)) pushTo(byDay, row.day, row);
+	const byNode = new Map<string, Acc & { repos: Set<string> }>();
+	const byRepo = new Map<string, RepoAcc>();
+	const byDay = new Map<number, DayAcc>();
+	let builderJobs = 0;
+	let backstopJobs = 0;
+	for (const x of rows) {
+		const bucket = failureBucket(x.r);
+		const builder = !x.r.labels.includes('pm2-host');
+		const backstop = builder && x.node === backstopNode;
+		if (builder) builderJobs++;
+		if (backstop) backstopJobs++;
+
+		let n = byNode.get(x.node);
+		if (!n) byNode.set(x.node, (n = { ...newAcc(), repos: new Set() }));
+		add(n, x, bucket);
+		n.repos.add(x.r.repo);
+
+		let r = byRepo.get(x.r.repo);
+		if (!r) byRepo.set(x.r.repo, (r = { ...newAcc(), dispatch: [], assign: [], kinds: new Map() }));
+		add(r, x, bucket);
+		if (isNum(x.r.dispatchSec)) r.dispatch.push(x.r.dispatchSec);
+		if (isNum(x.r.assignSec)) r.assign.push(x.r.assignSec);
+		pushTo(r.kinds, x.kind, x.r.durationSec);
+
+		if (Number.isFinite(x.day)) {
+			let d = byDay.get(x.day);
+			if (!d) byDay.set(x.day, (d = { ...newAcc(), backstopJobs: 0 }));
+			add(d, x, bucket);
+			if (backstop) d.backstopJobs++;
+		}
 	}
 
 	const byMachine = [...byNode.entries()]
-		.map(([node, rs]) => {
-			const durations = ascending(rs.map((x) => x.r.durationSec));
+		.map(([node, a]) => {
+			const durations = ascending(a.durations);
 			return {
 				machine: node,
-				jobs: rs.length,
-				failures: rs.filter((x) => x.r.conclusion !== 'success').length,
-				failuresByZone: failuresByZone(rs.map((x) => x.r)),
+				jobs: a.jobs,
+				failures: a.failures,
+				failuresByZone: a.zones,
 				medianSec: medianSorted(durations),
 				p95Sec: percentileSorted(durations, 95),
-				repos: new Set(rs.map((x) => x.r.repo)).size,
+				repos: a.repos.size,
 			};
 		})
 		.sort((a, b) => b.jobs - a.jobs);
 
 	const repos = [...byRepo.entries()]
-		.map(([repo, rs]) => {
-			const durations = ascending(rs.map((x) => x.r.durationSec));
-			const queue = ascending(nums(rs.map((x) => x.r.queueSec)));
-			const machines = new Map<string, number>();
-			const kinds = new Map<string, number[]>();
-			for (const x of rs) {
-				machines.set(x.node, (machines.get(x.node) ?? 0) + 1);
-				pushTo(kinds, jobKind(x.r.name), x.r.durationSec);
-			}
-			const slowest = [...kinds.entries()]
+		.map(([repo, a]) => {
+			const durations = ascending(a.durations);
+			const queue = ascending(a.queue);
+			const slowest = [...a.kinds.entries()]
 				.filter(([, ds]) => ds.length >= SLOWEST_MIN_SAMPLES)
 				.map(([name, ds]) => ({
 					name,
 					p95Sec: percentileSorted(ascending(ds), 95) ?? 0,
 					jobs: ds.length,
 				}))
-				.sort((a, b) => b.p95Sec - a.p95Sec)
+				.sort((x, y) => y.p95Sec - x.p95Sec)
 				.slice(0, 3);
 			return {
 				repo,
-				jobs: rs.length,
-				failures: rs.filter((x) => x.r.conclusion !== 'success').length,
-				failuresByZone: failuresByZone(rs.map((x) => x.r)),
+				jobs: a.jobs,
+				failures: a.failures,
+				failuresByZone: a.zones,
 				medianSec: medianSorted(durations),
 				p95Sec: percentileSorted(durations, 95),
 				queueP50Sec: medianSorted(queue),
 				queueP95Sec: percentileSorted(queue, 95),
-				dispatchP50Sec: medianSorted(ascending(nums(rs.map((x) => x.r.dispatchSec)))),
-				assignP50Sec: medianSorted(ascending(nums(rs.map((x) => x.r.assignSec)))),
-				machines: [...machines.entries()]
-					.map(([machine, jobs]) => ({ machine, jobs }))
-					.sort((a, b) => b.jobs - a.jobs),
+				dispatchP50Sec: medianSorted(ascending(a.dispatch)),
+				assignP50Sec: medianSorted(ascending(a.assign)),
+				machines: [...a.machines.entries()]
+					.map(([machine, m]) => ({ machine, jobs: m.jobs }))
+					.sort((x, y) => y.jobs - x.jobs),
 				slowest,
 			};
 		})
 		.sort((a, b) => b.jobs - a.jobs);
-
-	const isBuilder = (x: Row): boolean => !x.r.labels.includes('pm2-host');
-	const builder = rows.filter(isBuilder);
-	const backstopJobs = builder.filter((x) => x.node === backstopNode).length;
 
 	return {
 		summary: {
@@ -205,15 +298,10 @@ function baseline(
 				? history.reduce((a, r) => (r.startedAt < a ? r.startedAt : a), history[0].startedAt)
 				: null,
 			total: history.length,
-			daily: daily(byDay, backstopNode, today, isBuilder),
+			daily: daily(byDay, today),
 			backstopJobs,
-			backstopShare: builder.length ? backstopJobs / builder.length : 0,
-			recent: [...rows]
-				.sort((a, b) =>
-					a.r.startedAt < b.r.startedAt ? 1 : a.r.startedAt > b.r.startedAt ? -1 : 0
-				)
-				.slice(0, 40)
-				.map((x) => ({ ...x.r, machine: x.node })),
+			backstopShare: builderJobs ? backstopJobs / builderJobs : 0,
+			recent: newest(rows, 40).map((x) => ({ ...x.r, machine: x.node })),
 		},
 		byMachine,
 		byRepo: repos,
@@ -226,12 +314,7 @@ function baseline(
 /** Runs a job kind needs before it may appear in `RepoJobStats.slowest`. */
 export const SLOWEST_MIN_SAMPLES = 3;
 
-function daily(
-	byDay: Map<number, Row[]>,
-	backstopNode: string,
-	today: number,
-	isBuilder: (x: Row) => boolean
-): DailyJobStats[] {
+function daily(byDay: Map<number, DayAcc>, today: number): DailyJobStats[] {
 	let firstDay = Infinity;
 	for (const d of byDay.keys()) if (d < firstDay) firstDay = d;
 	const out: DailyJobStats[] = [];
@@ -252,28 +335,21 @@ function daily(
 			});
 			continue;
 		}
-		const rs = byDay.get(day) ?? [];
-		const durations = ascending(rs.map((x) => x.r.durationSec));
-		const queue = ascending(nums(rs.map((x) => x.r.queueSec)));
-		const machines = new Map<string, { jobs: number; busySec: number }>();
-		for (const x of rs) {
-			const e = machines.get(x.node) ?? { jobs: 0, busySec: 0 };
-			e.jobs++;
-			e.busySec += x.r.durationSec;
-			machines.set(x.node, e);
-		}
+		const a = byDay.get(day) ?? { ...newAcc(), backstopJobs: 0 };
+		const durations = ascending(a.durations);
+		const queue = ascending(a.queue);
 		out.push({
 			day: isoDay(day),
-			jobs: rs.length,
-			failuresByZone: failuresByZone(rs.map((x) => x.r)),
+			jobs: a.jobs,
+			failuresByZone: a.zones,
 			runMedianSec: medianSorted(durations),
 			runP95Sec: percentileSorted(durations, 95),
 			queueMedianSec: medianSorted(queue),
 			queueP95Sec: percentileSorted(queue, 95),
-			backstopJobs: rs.filter((x) => isBuilder(x) && x.node === backstopNode).length,
-			byMachine: [...machines.entries()]
+			backstopJobs: a.backstopJobs,
+			byMachine: [...a.machines.entries()]
 				.map(([machine, e]) => ({ machine, ...e }))
-				.sort((a, b) => b.jobs - a.jobs),
+				.sort((x, y) => y.jobs - x.jobs),
 		});
 	}
 	return out;

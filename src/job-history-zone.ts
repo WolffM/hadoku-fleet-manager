@@ -243,14 +243,21 @@ export interface FailuresByZone {
  * dashboard closely enough to catch.
  */
 export function failuresByZone(records: readonly ZoneInput[]): FailuresByZone {
-	const out: FailuresByZone = { runner: 0, seam: 0, content: 0, fleet: 0, cancelled: 0 };
+	const out = emptyFailuresByZone();
 	for (const r of records) {
-		if (r.conclusion === 'success') continue;
-		if (r.conclusion === 'cancelled') {
-			out.cancelled += 1;
-			continue;
-		}
-		out[zoneOf(r)] += 1;
+		const bucket = failureBucket(r);
+		if (bucket) out[bucket] += 1;
 	}
 	return out;
+}
+
+export function emptyFailuresByZone(): FailuresByZone {
+	return { runner: 0, seam: 0, content: 0, fleet: 0, cancelled: 0 };
+}
+
+/** The {@link FailuresByZone} bucket one record counts in; null for a success. */
+export function failureBucket(r: ZoneInput): keyof FailuresByZone | null {
+	if (r.conclusion === 'success') return null;
+	if (r.conclusion === 'cancelled') return 'cancelled';
+	return zoneOf(r);
 }
