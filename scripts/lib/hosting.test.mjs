@@ -384,6 +384,7 @@ test("the tenant's workers outlive an agent restart, and not a teardown", () => 
 		{ lan: '192.0.2.10', tailnet4: '198.51.100.1', tailnet6: null }
 	);
 	assert.match(s, /^Delegate=yes$/m);
+	assert.match(s, /^DelegateSubgroup=agent$/m);
 	assert.match(s, /^KillMode=process$/m);
 	const r = removeScript(CARDTABLE, '192.0.2.10');
 	assert.ok(

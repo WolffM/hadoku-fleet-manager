@@ -60,6 +60,7 @@ test("cardtable's derived names are exactly the ones the hand-written table held
 		'the env name the live agent reads'
 	);
 	assert.match(unit, /^Delegate=yes$/m);
+	assert.match(unit, /^DelegateSubgroup=agent$/m);
 	assert.match(unit, /^KillMode=process$/m);
 });
 
@@ -69,12 +70,16 @@ test("cardtable's derived names are exactly the ones the hand-written table held
  * cardtable's agent (and every JVM it supervises). The cardtable hashes are
  * of `/etc/systemd/system/cardtable-agent.{service,path}` as read from claw-9
  * on 2026-10-27; the pm2 one is the unit hadoku_site#490 deploys against.
+ * The agent unit moved ON PURPOSE on 2026-11-14 (fleet-manager#88,
+ * `DelegateSubgroup=agent`): claw-8/9/10 still read cf921389… until each is
+ * re-declared, which restarts its agent once (the planned-restart path
+ * cardtable's SIGTERM handler covers; KillMode=process keeps the JVMs).
  */
 test('the rendered units are byte-identical to what is deployed', () => {
 	const sha = (s) => createHash('sha256').update(s).digest('hex');
 	assert.equal(
 		sha(tenantUnit(CARDTABLE)),
-		'cf9213891c8475e1a52f7a14395932841c5e80af4add3d1e9236c5d1579842c4'
+		'a1622ff60598674945cd831648ab5ccb0df85a4d7f84f880816a1dbdbd3f6ff1'
 	);
 	assert.equal(
 		sha(pathUnit(CARDTABLE)),

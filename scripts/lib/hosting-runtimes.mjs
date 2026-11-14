@@ -44,6 +44,17 @@ export const RUNTIMES = {
 	 * The tenant's own executable, supervised, as its user. With
 	 * `workersOutliveRestart` (a hosting request field) the agent gets its
 	 * subtree and a restart signals only the agent.
+	 *
+	 * `DelegateSubgroup=agent` (fleet-manager#88, systemd ≥ 254; the claws run
+	 * 257): systemd starts the main process in `<unit>/agent`, not in the unit
+	 * root. cgroup v2 refuses a process in a cgroup whose own subtree_control is
+	 * non-empty, and cardtable's agent grants `+memory` there to cap its draft
+	 * bot. A planned restart clears the grant on SIGTERM; a crash cannot, and
+	 * the respawn failed: reproduced on claw-8 on 2026-11-14 with a transient
+	 * unit (grant +memory, kill -9 the main pid → "Failed to spawn 'start' task:
+	 * Device or resource busy", result `resources`); the same unit with the
+	 * subgroup respawned. `agent` is the leaf name cardtable's `delegate()`
+	 * already recognises.
 	 */
 	agent: {
 		kind: 'agent',
@@ -54,7 +65,10 @@ export const RUNTIMES = {
 # The tenant's workers (cardtable: one JVM per match group) outlive an agent
 # restart: the agent gets its own cgroup subtree to place them in, and a
 # restart signals only the agent. The slice still bounds the whole subtree.
+# The main process starts in the agent/ leaf, so a controller the agent grants
+# in the unit's own subtree_control can never block a respawn (fleet-manager#88).
 Delegate=yes
+DelegateSubgroup=agent
 KillMode=process`
 				: '';
 			return `[Unit]
