@@ -44,7 +44,7 @@
  * omits the key, which `isRollupDay` already tolerates (it checks `rows`
  * alone).
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 
 import { writeFileAtomic } from './lib/atomic-json.js';
 
@@ -87,14 +87,25 @@ export interface RollupRead<Row = unknown, Fleet = unknown> {
 export interface RollupStore<Row = unknown, Fleet = unknown> {
 	/** Every day held, oldest first. Throws only on an unreadable FILE (not ENOENT). */
 	read(): RollupRead<Row, Fleet>;
-	/** The set of days already written. Cached for the life of the store. */
-	writtenDays(): ReadonlySet<string>;
+	/**
+	 * Which days are held, and which of them carry the fleet aggregate,
+	 * without parsing the file again unless it changed (its inode, size or
+	 * mtime). The runner-health tick asks every minute and almost never finds
+	 * a day due: a full read of the ~8 MB file each time was a 50-65 ms
+	 * synchronous stretch on mgmt-api's leader (fleet-manager#86).
+	 */
+	heldDays(): HeldDays;
 	/**
 	 * Add these days (replacing any held for the same day) and drop every day
 	 * older than `keepFromDay`, in one atomic write. Throws on a failed write,
 	 * leaving the previous file intact.
 	 */
 	put(days: readonly RollupDay<Row, Fleet>[], keepFromDay: string): void;
+}
+
+export interface HeldDays {
+	all: ReadonlySet<string>;
+	withFleet: ReadonlySet<string>;
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -109,7 +120,23 @@ function isRollupDay<Row, Fleet>(v: unknown): v is RollupDay<Row, Fleet> {
 export function jsonlRollupStore<Row = unknown, Fleet = unknown>(
 	path: string
 ): RollupStore<Row, Fleet> {
-	let cachedDays: Set<string> | null = null;
+	let held: { stamp: string; days: HeldDays } | null = null;
+
+	/** What identifies this version of the file; null when there is none. */
+	const stampOf = (): string | null => {
+		try {
+			const st = statSync(path);
+			return `${st.ino}:${st.size}:${st.mtimeMs}`;
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+			throw err;
+		}
+	};
+
+	const summarise = (days: readonly RollupDay<Row, Fleet>[]): HeldDays => ({
+		all: new Set(days.map((d) => d.day)),
+		withFleet: new Set(days.filter((d) => d.fleet !== undefined).map((d) => d.day)),
+	});
 
 	const read = (): RollupRead<Row, Fleet> => {
 		let raw: string;
@@ -144,21 +171,28 @@ export function jsonlRollupStore<Row = unknown, Fleet = unknown>(
 
 	return {
 		read,
-		writtenDays() {
-			if (!cachedDays) cachedDays = new Set(read().days.map((d) => d.day));
-			return cachedDays;
+		heldDays() {
+			const stamp = stampOf();
+			if (stamp === null) return summarise([]);
+			if (held?.stamp !== stamp) {
+				// Stamp BEFORE the read: a write landing between the two leaves a
+				// stamp that no longer matches, so the next call reads again.
+				held = { stamp, days: summarise(read().days) };
+			}
+			return held.days;
 		},
 		put(days, keepFromDay) {
-			const held = new Map(read().days.map((d) => [d.day, d]));
-			for (const d of days) held.set(d.day, d);
-			const kept = [...held.values()]
+			const byDay = new Map(read().days.map((d) => [d.day, d]));
+			for (const d of days) byDay.set(d.day, d);
+			const kept = [...byDay.values()]
 				.filter((d) => d.day >= keepFromDay)
 				.sort((a, b) => a.day.localeCompare(b.day));
 			writeFileAtomic(
 				path,
 				kept.map((d) => JSON.stringify(d)).join('\n') + (kept.length ? '\n' : '')
 			);
-			cachedDays = new Set(kept.map((d) => d.day));
+			const stamp = stampOf();
+			held = stamp === null ? null : { stamp, days: summarise(kept) };
 		},
 	};
 }

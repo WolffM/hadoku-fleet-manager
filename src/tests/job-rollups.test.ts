@@ -581,3 +581,32 @@ test('the decision log unreadable: every due day gets waits null, warned, rows s
 	assert.equal(written?.records, 1, 'the row data is unaffected by the decision-log failure');
 	assert.equal(written?.fleet?.waits, null);
 });
+
+test('heldDays: an unchanged file is not parsed again; a file another writer replaced is', () => {
+	// fleet-manager#86: writeClosedDays asked every runner-health tick, and a
+	// full read of the ~8 MB file each time was a 50-65 ms stretch on the leader.
+	const file = join(tmp, 'job-rollups.jsonl');
+	const day = (d: string, fleet: boolean) =>
+		JSON.stringify({
+			day: d,
+			completeSince: d,
+			records: 0,
+			probesExcluded: 0,
+			rows: [],
+			...(fleet ? { fleet: {} } : {}),
+		});
+	writeFileSync(file, `${day('2026-11-01', true)}\n${day('2026-11-02', false)}\n`);
+	const store = jsonlRollupStore(file);
+	const first = store.heldDays();
+	assert.deepEqual([...first.all], ['2026-11-01', '2026-11-02']);
+	assert.deepEqual(
+		[...first.withFleet],
+		['2026-11-01'],
+		'a schema-1 day is held but not up to date'
+	);
+	assert.equal(store.heldDays(), first, 'the same answer object: nothing was read again');
+
+	// Another process (a restarted standby, a hand repair) replaces the file.
+	jsonlRollupStore(file).put([JSON.parse(day('2026-11-02', true))], '2026-01-01');
+	assert.deepEqual([...store.heldDays().withFleet], ['2026-11-01', '2026-11-02']);
+});
