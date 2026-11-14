@@ -318,7 +318,17 @@ function main() {
 	);
 
 	const measurements = active.map(([name, m]) => measure(name, m));
-	const verdict = warmCanaryVerdict(measurements, { warmListenerSlots, warmCacheEligible });
+	const setAside = [
+		...heavyBusy.map((h) => h.node),
+		...heavyMarked.map((h) => h.node),
+		...yielded.map((h) => h.node),
+		...heldByTick.map((h) => h.node),
+	];
+	const verdict = warmCanaryVerdict(
+		measurements,
+		{ warmListenerSlots, warmCacheEligible },
+		{ setAside }
+	);
 	const drained = drainedCandidates.map(([name]) => name);
 
 	if (JSON_OUT) {
@@ -410,6 +420,7 @@ function main() {
 			out.log(
 				`  · ${HEAVY_MARKS_FILE} would not parse — every node scored as if no heavy job had been placed`
 			);
+		if (verdict.notJudged) out.log(`  · not judged: ${verdict.notJudged}`);
 		out.log(
 			`✓ warm cache canary: ${verdict.warm.map((w) => `${w.node} (${w.repo})`).join(', ')} ` +
 				`— ${verdict.eligible.length} eligible node(s) checked` +

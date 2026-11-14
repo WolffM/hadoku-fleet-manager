@@ -68,6 +68,38 @@ test('measured, but none has enough capacity — fails, distinct reason', () => 
 	assert.deepEqual(v.eligible, []);
 });
 
+test('none eligible because the warm cache set every eligible node aside — not judged (#90)', () => {
+	// 2026-11-12: claw-4/8/9/10 held by heavy jobs, the leftovers capped at one.
+	const v = warmCanaryVerdict([ineligible('claw-1'), ineligible('claw-3')], fns, {
+		setAside: ['claw-4', 'claw-8', 'claw-9', 'claw-10'],
+	});
+	assert.equal(v.ok, true);
+	assert.equal(v.reason, null);
+	assert.match(v.notJudged, /2 other candidate node\(s\) measured, none eligible/);
+	assert.match(v.notJudged, /4 node\(s\) set aside .*claw-4, claw-8, claw-9, claw-10/);
+	assert.deepEqual(v.eligible, []);
+});
+
+test('every candidate set aside, none left to measure — not judged (#90)', () => {
+	const v = warmCanaryVerdict([], fns, { setAside: ['claw-9'] });
+	assert.equal(v.ok, true);
+	assert.match(v.notJudged, /no other candidate node/);
+});
+
+test('set-aside nodes never excuse an eligible node that is not warm, or an unreachable one', () => {
+	const cold = warmCanaryVerdict([eligible('claw-4'), ineligible('claw-1')], fns, {
+		setAside: ['claw-9'],
+	});
+	assert.equal(cold.ok, false);
+	assert.match(cold.reason, /not holding a warm listener: claw-4/);
+	assert.equal(cold.notJudged, undefined);
+	const blind = warmCanaryVerdict([unreachable('claw-4'), ineligible('claw-1')], fns, {
+		setAside: ['claw-9'],
+	});
+	assert.equal(blind.ok, false);
+	assert.match(blind.reason, /unreachable/);
+});
+
 test('eligible nodes exist, but none holds a warm listener — the issue #7 shape', () => {
 	const v = warmCanaryVerdict([eligible('claw-1'), eligible('claw-3')], fns);
 	assert.equal(v.ok, false);

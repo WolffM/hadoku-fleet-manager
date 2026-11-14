@@ -57,6 +57,9 @@
  * @property {{node: string, repo: string}[]} warm - eligible nodes actually
  *   holding an active warm listener.
  * @property {string[]} unreachable - candidate nodes that could not be measured.
+ * @property {string} [notJudged] - set, with `ok: true`, when nothing was left
+ *   to judge only because the dispatcher itself set every other node aside —
+ *   see NOT JUDGED below. Absent on every other verdict.
  */
 
 /**
@@ -68,12 +71,41 @@
  *   the library functions this reuses — injected so this module never
  *   imports `dist/` directly, which would make it untestable against a
  *   checkout that has not been built.
+ * @param {{ setAside?: string[] }} [opts] - nodes taken out of the candidate
+ *   set BEFORE measuring because the warm cache holds no listener there by its
+ *   own decision: running or marked for a heavy job, yielded to the queue, or
+ *   held empty by the tick. See NOT JUDGED.
  * @returns {WarmCanaryVerdict}
+ *
+ * NOT JUDGED (fleet-manager#90). When every node that COULD hold a listener has
+ * been set aside by the dispatcher, the candidates left over are the ones that
+ * never could (claw-1/claw-3 capped at one slot, the 8 GB claws), and "none has
+ * room" is read off them. It is true and it is about nothing: the warm cache did
+ * what it was told on every node that matters. 2026-11-08..14: 121 runs failed
+ * this way, and every one had measured only 2 or 3 of the 8 non-slow claws, so
+ * 5 or 6 had been set aside. The healthy run beside them measured 4 eligible
+ * (claw-4/8/9/10), the claws cardtable's Forge matrix holds. A red that meant
+ * "busy" hid any real not-warm finding.
+ *
+ * So "nothing eligible" is `ok` with `notJudged` saying why ONLY when at least
+ * one node was set aside. With nothing set aside it is still a failure: then no
+ * node can EVER hold a listener, which is a fleet that lost its warm cache.
  */
-export function warmCanaryVerdict(measurements, fns) {
+export function warmCanaryVerdict(measurements, fns, { setAside = [] } = {}) {
 	const { warmListenerSlots, warmCacheEligible } = fns;
+	const notJudged = (why) => ({
+		ok: true,
+		reason: null,
+		notJudged:
+			`${why}; ${setAside.length} node(s) set aside by the warm cache's own decision ` +
+			`(${setAside.join(', ')}) — nothing left that could hold a listener, so nothing to judge`,
+		eligible: [],
+		warm: [],
+		unreachable: [],
+	});
 
 	if (!measurements.length) {
+		if (setAside.length) return notJudged('no other candidate node');
 		return {
 			ok: false,
 			reason:
@@ -144,6 +176,8 @@ export function warmCanaryVerdict(measurements, fns) {
 	}
 
 	if (!eligible.length) {
+		if (setAside.length)
+			return notJudged(`${measured.length} other candidate node(s) measured, none eligible`);
 		return {
 			ok: false,
 			reason:
