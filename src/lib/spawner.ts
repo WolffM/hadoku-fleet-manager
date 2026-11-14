@@ -31,10 +31,13 @@
  * NEVER KEEPS A PROCESS ALIVE. The helper and its channel are ref'd only
  * while a call is pending, so a CLI that has finished exits normally.
  */
-import { execFile, fork, type ChildProcess } from 'node:child_process';
+import { fork, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { logger } from '../host.js';
+import { execFileWithInput, type ExecResult } from './spawner-exec.js';
+
+export type { ExecResult } from './spawner-exec.js';
 
 export interface SpawnRequest {
 	id: number;
@@ -42,27 +45,26 @@ export interface SpawnRequest {
 	args: string[];
 	timeout: number;
 	maxBuffer: number;
+	/** Written to the command's stdin, which is then closed. */
+	input?: string;
 }
 
 export interface SpawnReply {
 	id: number;
 	ok: boolean;
+	/** The exit code; null when it never exited normally (timeout, signal, no such file). */
+	code: number | null;
 	stdout: string;
 	stderr: string;
 	/** Why it failed: a non-zero exit, a timeout, or the helper itself. */
 	error?: string;
 }
 
-export interface ExecResult {
-	ok: boolean;
-	stdout: string;
-	stderr: string;
-	error?: string;
-}
-
 export interface ExecOptions {
 	timeout: number;
 	maxBuffer?: number;
+	/** Written to the command's stdin, which is then closed. Without it stdin is closed empty. */
+	input?: string;
 }
 
 /** A direct spawn below this costs under ~10 ms, not worth a second process. */
@@ -101,7 +103,7 @@ function setRef(on: boolean): void {
 
 function failAll(reason: string): void {
 	for (const id of [...pending.keys()])
-		settle(id, { ok: false, stdout: '', stderr: '', error: reason });
+		settle(id, { ok: false, code: null, stdout: '', stderr: '', error: reason });
 }
 
 function startHelper(): ChildProcess {
@@ -114,6 +116,7 @@ function startHelper(): ChildProcess {
 	child.on('message', (m: SpawnReply) =>
 		settle(m.id, {
 			ok: m.ok,
+			code: m.code,
 			stdout: m.stdout,
 			stderr: m.stderr,
 			...(m.error ? { error: m.error } : {}),
@@ -140,20 +143,14 @@ function useHelper(): boolean {
 }
 
 function direct(file: string, args: readonly string[], opts: ExecOptions): Promise<ExecResult> {
-	return new Promise((res) => {
-		execFile(
+	return new Promise((res) =>
+		execFileWithInput(
 			file,
-			[...args],
-			{ timeout: opts.timeout, maxBuffer: opts.maxBuffer ?? DEFAULT_MAX_BUFFER, encoding: 'utf8' },
-			(err, stdout, stderr) =>
-				res({
-					ok: !err,
-					stdout: String(stdout ?? ''),
-					stderr: String(stderr ?? ''),
-					...(err ? { error: err.message } : {}),
-				})
-		);
-	});
+			args,
+			{ timeout: opts.timeout, maxBuffer: opts.maxBuffer ?? DEFAULT_MAX_BUFFER, input: opts.input },
+			res
+		)
+	);
 }
 
 /**
@@ -184,12 +181,14 @@ export function execFileOffLoop(
 		args: [...args],
 		timeout: opts.timeout,
 		maxBuffer: opts.maxBuffer ?? DEFAULT_MAX_BUFFER,
+		...(opts.input !== undefined ? { input: opts.input } : {}),
 	};
 	return new Promise((resolve) => {
 		const timer = setTimeout(
 			() =>
 				settle(id, {
 					ok: false,
+					code: null,
 					stdout: '',
 					stderr: '',
 					error: `spawner helper did not answer within ${opts.timeout + DEADLINE_GRACE_MS} ms`,
@@ -204,6 +203,7 @@ export function execFileOffLoop(
 		} catch (err) {
 			settle(id, {
 				ok: false,
+				code: null,
 				stdout: '',
 				stderr: '',
 				error: `spawner send failed: ${err instanceof Error ? err.message : String(err)}`,

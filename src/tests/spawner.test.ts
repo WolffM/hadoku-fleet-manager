@@ -42,7 +42,9 @@ test('through the helper: a non-zero exit and a timeout are failures that say wh
 	assert.match(bad.stderr, /oops/);
 	const slow = await execFileOffLoop('sleep', ['5'], { timeout: 200 });
 	assert.equal(slow.ok, false, 'a timed-out command is not a success');
-	assert.ok(slow.error, 'and carries a reason');
+	assert.equal(slow.code, null, 'it never exited on its own');
+	assert.equal(slow.error, 'timed out after 0.2 s');
+	assert.equal(bad.code, 3, 'a non-zero exit carries its code');
 });
 
 test('a helper that dies fails the calls it held, and the next call gets a new one', async () => {
@@ -81,4 +83,18 @@ test('a process whose last call has returned exits: the helper never keeps it al
 	});
 	assert.equal(run.error, undefined, 'it exited on its own, not by the 15 s timeout');
 	assert.equal(run.status, 0, run.stderr);
+});
+
+test('stdin input reaches the command, through the helper and directly', async () => {
+	for (const helper of [true, false]) {
+		__setSpawnerForTesting(helper);
+		const r = await execFileOffLoop('sh', ['-c', 'cat; echo " via $1"', 'sh', String(helper)], {
+			timeout: 5_000,
+			input: 'piped',
+		});
+		assert.equal(r.ok, true, r.error);
+		assert.equal(r.code, 0);
+		assert.equal(r.stdout, `piped via ${helper}\n`);
+		__stopSpawnerForTesting();
+	}
 });

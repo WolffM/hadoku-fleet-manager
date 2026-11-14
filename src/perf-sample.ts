@@ -15,12 +15,12 @@
  * Costs: one ssh and ~4 s of pings per node per tick, all nodes in parallel;
  * the controller's own pings are local `ping` processes. No GitHub call.
  */
-import { spawn } from 'node:child_process';
 
 import { logger, stateDir } from './host.js';
 import { readManifestState } from './lib/manifest.js';
 import { isLocalNode } from './lib/node-identity.js';
 import { nodeShell } from './node-shell.js';
+import { execFileOffLoop } from './lib/spawner.js';
 import {
 	parsePerfProbe,
 	PERF_PROBE_SCRIPT,
@@ -50,35 +50,31 @@ const FIRST_PASS_MIN_MS = 2 * 60_000;
 const PROBE_TIMEOUT_MS = 30_000;
 const JOB_NAME = 'fleet:perf-samples';
 
-/** Runs `bin argv`, feeding `input` on stdin. Resolves with what came back; never rejects. */
-function run(
+/**
+ * Runs `bin argv`, feeding `input` on stdin. Resolves with what came back;
+ * never rejects. Off the event loop when this process is large: see
+ * `lib/spawner.ts`. A pass starts one ssh and one ping per node at once, and
+ * a fork from mgmt-api's heap made it the longest stall left in a 180 s
+ * profile (313 ms, fleet-manager#86).
+ */
+async function run(
 	bin: string,
 	argv: string[],
 	input: string | null,
 	timeoutMs: number
 ): Promise<{ code: number | null; stdout: string; stderr: string; why?: string }> {
-	return new Promise((resolve) => {
-		let stdout = '';
-		let stderr = '';
-		let done = false;
-		const finish = (r: { code: number | null; why?: string }) => {
-			if (done) return;
-			done = true;
-			clearTimeout(timer);
-			resolve({ ...r, stdout, stderr });
-		};
-		const child = spawn(bin, argv, { stdio: ['pipe', 'pipe', 'pipe'] });
-		const timer = setTimeout(() => {
-			child.kill('SIGKILL');
-			finish({ code: null, why: `timed out after ${timeoutMs / 1000} s` });
-		}, timeoutMs);
-		child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
-		child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
-		child.on('error', (err) => finish({ code: null, why: err.message }));
-		child.on('close', (code) => finish({ code }));
-		child.stdin.on('error', () => undefined);
-		child.stdin.end(input ?? '');
+	const r = await execFileOffLoop(bin, argv, {
+		timeout: timeoutMs,
+		...(input !== null ? { input } : {}),
 	});
+	// A non-zero exit is an answer with a code, as it was; only a run that
+	// never exited (timeout, signal, no such file) carries a reason.
+	return {
+		code: r.code,
+		stdout: r.stdout,
+		stderr: r.stderr,
+		...(r.code === null ? { why: r.error ?? 'did not exit' } : {}),
+	};
 }
 
 /** The controller's view of a node's LAN path: a ping burst to its reserved address. */
