@@ -71,16 +71,25 @@ export const RUNNER_PATH_TOOLS = Object.freeze(['gh', 'node', 'pnpm', 'python3']
 export const NVIDIA_CAPABILITY = /^(nvenc|nvdec|cuda)/;
 
 /**
- * Active fleet-hosted pm2 tenant units (`pm2-<app>-svc.service`, system units),
- * read on the node itself. A node carrying one is never rebooted here: the
- * reboot cycle (`fleet reboot-claws`) owns rebooting tenant hosts, with its
- * notice and lease handling. Admin's own `pm2-<user>.service` is not a tenant
- * and does not match. A listing that cannot be read prints no end marker.
+ * Active fleet-hosted tenant units, read on the node itself: every active
+ * service whose slice is a tenant's `hosting-<app>.slice`, whatever its runtime
+ * (`pm2-<app>-svc.service`, or an agent such as `cardtable-agent.service`). A
+ * node carrying one is never rebooted here: the reboot cycle (`fleet
+ * reboot-claws`) owns rebooting tenant hosts, with its notice and lease
+ * handling. Matching by slice, not by a pm2 name, is what keeps an agent tenant
+ * out: claw-10 was rebooted here on 2026-11-13 under cardtable's agent, which
+ * paged cardtable as a lost heartbeat because no reboot notice preceded it.
+ * Admin's own `pm2-<user>.service` lives in no hosting slice and does not match.
+ * A listing, or any unit's slice, that cannot be read prints no end marker.
  */
-export const TENANT_SCRIPT = String.raw`if L=$(systemctl list-units 'pm2-*-svc.service' --state=active --no-legend --no-pager --plain 2>/dev/null); then
-  printf '%s\n' "$L" | awk 'NF{print "QR-TENANT " $1}'
-  echo QR-TENANTS-END
-else echo "QR-TENANTS-ERR systemctl could not list this node's pm2 service units"; fi
+export const TENANT_SCRIPT = String.raw`if L=$(systemctl list-units --type=service --state=active --no-legend --no-pager --plain 2>/dev/null); then
+  ok=1
+  for u in $(printf '%s\n' "$L" | awk 'NF{print $1}'); do
+    if ! s=$(systemctl show -p Slice --value "$u" 2>/dev/null); then ok=0; break; fi
+    case "$s" in hosting-*.slice) echo "QR-TENANT $u" ;; esac
+  done
+  if [ "$ok" = 1 ]; then echo QR-TENANTS-END; else echo "QR-TENANTS-ERR systemctl could not read the slice of $u"; fi
+else echo "QR-TENANTS-ERR systemctl could not list this node's service units"; fi
 `;
 
 /** PURE. The tenant units, or null when the listing could not be read. */
@@ -343,12 +352,12 @@ export function makeRebootTest({
 			const tenants = parseTenants(ten.stdout);
 			if (tenants === null)
 				return cnl(
-					`could not list ${ctx.node}'s pm2 service units, so it was not rebooted: ` +
+					`could not list ${ctx.node}'s hosted tenant units, so it was not rebooted: ` +
 						(/^QR-TENANTS-ERR (.*)$/m.exec(ten.stdout ?? '')?.[1] ?? errOf(ten))
 				);
 			if (tenants.length)
 				return cnl(
-					`${ctx.node} hosts pm2 service tenant(s) ${tenants.join(', ')}, so it was not rebooted: ` +
+					`${ctx.node} hosts tenant unit(s) ${tenants.join(', ')}, so it was not rebooted: ` +
 						'the reboot cycle (fleet reboot-claws) owns rebooting tenant hosts',
 					{ tenants }
 				);
