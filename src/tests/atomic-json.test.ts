@@ -7,7 +7,12 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { writeFileAtomic, writeJsonAtomic } from '../lib/atomic-json.js';
+import {
+	writeFileAtomic,
+	writeFileAtomicAsync,
+	writeJsonAtomic,
+	writeJsonAtomicAsync,
+} from '../lib/atomic-json.js';
 
 function tmpDir(): string {
 	return mkdtempSync(join(tmpdir(), 'atomic-json-test-'));
@@ -73,7 +78,7 @@ function elevenMinutesAgo(): Date {
  * and a patched `writeSync` that logs recurses into itself forever. Record
  * to a plain array instead and inspect it after restoring.
  */
-function patchFs<K extends 'writeSync' | 'fsyncSync' | 'renameSync'>(
+function patchFs<K extends 'writeSync' | 'fsyncSync' | 'renameSync' | 'fsync' | 'rename'>(
 	key: K,
 	replacement: (typeof fs)[K]
 ): () => void {
@@ -399,3 +404,84 @@ test('stale temp sweep: a stale tmp for a DIFFERENT path in the same directory i
 // above, which already proves the scoping by writing a real sibling temp
 // file and watching it survive. Deleted by the 2026-11-01 test audit (row 9);
 // the behavioural test above is the one that actually covers this.
+
+// --- writeFileAtomicAsync (fleet-manager#86) --------------------------------
+
+test('writeFileAtomicAsync: fsyncs the temp file before the rename and the directory after, and never calls fsyncSync', async () => {
+	const dir = tmpDir();
+	const realFsync = fs.fsync;
+	const realRename = fs.rename;
+	const log: string[] = [];
+	const restoreSync = patchFs('fsyncSync', (() => {
+		throw new Error('fsyncSync on the event loop');
+	}) as unknown as (typeof fs)['fsyncSync']);
+	const restoreFsync = patchFs('fsync', ((fd: number, cb: (err: Error | null) => void) => {
+		log.push('fsync');
+		realFsync(fd, cb);
+	}) as unknown as (typeof fs)['fsync']);
+	const restoreRename = patchFs('rename', ((
+		from: string,
+		to: string,
+		cb: (err: Error | null) => void
+	) => {
+		log.push('rename');
+		realRename(from, to, cb);
+	}) as unknown as (typeof fs)['rename']);
+	try {
+		const path = join(dir, 'order.json');
+		await writeJsonAtomicAsync(path, { ok: true });
+		assert.deepEqual(log, ['fsync', 'rename', 'fsync']);
+		assert.deepEqual(readJsonState(path), { ok: true, doc: { ok: true } });
+
+		log.length = 0;
+		await writeFileAtomicAsync(join(dir, 'nofsync.json'), '{}', { fsync: false });
+		assert.deepEqual(log, ['rename'], 'fsync:false calls no fsync');
+	} finally {
+		restoreRename();
+		restoreFsync();
+		restoreSync();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('writeFileAtomicAsync: writes to one path in flight together land in call order and leave no temp file', async () => {
+	const dir = tmpDir();
+	try {
+		const path = join(dir, 'state.json');
+		const writes = Array.from({ length: 8 }, (_, i) => writeJsonAtomicAsync(path, { i }));
+		await Promise.all(writes);
+		assert.deepEqual(readJsonState(path), { ok: true, doc: { i: 7 } });
+		assert.deepEqual(fs.readdirSync(dir), ['state.json']);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('writeFileAtomicAsync: a failed write rejects its caller and the next write to the path still lands', async () => {
+	const dir = tmpDir();
+	const realRename = fs.rename;
+	let fail = true;
+	const restore = patchFs('rename', ((
+		from: string,
+		to: string,
+		cb: (err: Error | null) => void
+	) => {
+		if (fail) {
+			fail = false;
+			cb(new Error('injected rename failure'));
+			return;
+		}
+		realRename(from, to, cb);
+	}) as unknown as (typeof fs)['rename']);
+	try {
+		const path = join(dir, 'state.json');
+		const first = writeJsonAtomicAsync(path, { n: 1 });
+		const second = writeJsonAtomicAsync(path, { n: 2 });
+		await assert.rejects(first, /injected rename failure/);
+		await second;
+		assert.deepEqual(readJsonState(path), { ok: true, doc: { n: 2 } });
+	} finally {
+		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 
 import { stateDir, logger } from './host.js';
-import { writeJsonAtomic } from './lib/atomic-json.js';
+import { writeJsonAtomicAsync } from './lib/atomic-json.js';
 import type { CiState } from './ci-alerts-decide.js';
 import type { CiTickSummary } from './ci-alerts-summary.js';
 
@@ -38,12 +38,18 @@ export function readStates(): Record<string, CiState> {
 	}
 }
 
-export function writeStates(states: Record<string, CiState>): void {
+/**
+ * All three writers here are async: their fsyncs run off the event loop
+ * (`writeFileAtomicAsync`). One fsync of this file held mgmt-api's loop for
+ * 52.6 ms on 2026-11-14 (fleet-manager#86). Callers await them, so a write
+ * still lands before the pass goes on.
+ */
+export async function writeStates(states: Record<string, CiState>): Promise<void> {
 	try {
 		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`): a crash mid-write
 		// must not leave truncated JSON that the next tick reads as "no state"
 		// and re-announces every live break from.
-		writeJsonAtomic(statePath(), states, { space: '\t' });
+		await writeJsonAtomicAsync(statePath(), states, { space: '\t' });
 	} catch (err) {
 		logger.warn(`[ci-alerts] could not persist state: ${String(err)}`);
 	}
@@ -97,10 +103,13 @@ export function ciAlertsBootPassDue(nowMs = Date.now()): boolean {
 	return last === null || nowMs - last >= CI_ALERTS_BOOT_SKIP_MS || last > nowMs;
 }
 
-export function recordCleanPass(s: CiTickSummary): void {
+export async function recordCleanPass(s: CiTickSummary): Promise<void> {
 	if (!s.targets || s.unreadable || s.errors) return;
 	try {
-		writeJsonAtomic(passPath(), { completedAt: new Date().toISOString(), targets: s.targets });
+		await writeJsonAtomicAsync(passPath(), {
+			completedAt: new Date().toISOString(),
+			targets: s.targets,
+		});
 	} catch (err) {
 		logger.warn(
 			`[ci-alerts] could not record the pass: ${String(err)} — the next boot runs its own`
@@ -129,9 +138,9 @@ export function readRepoStates(): Record<string, CiRepoState> {
 	}
 }
 
-export function writeRepoStates(states: Record<string, CiRepoState>): void {
+export async function writeRepoStates(states: Record<string, CiRepoState>): Promise<void> {
 	try {
-		writeJsonAtomic(join(stateDir(), REPO_STATE_FILE), states, { space: '\t' });
+		await writeJsonAtomicAsync(join(stateDir(), REPO_STATE_FILE), states, { space: '\t' });
 	} catch (err) {
 		logger.warn(`[ci-alerts] could not persist repo floors: ${String(err)}`);
 	}

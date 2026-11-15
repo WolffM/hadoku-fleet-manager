@@ -11,7 +11,8 @@
  * at most a few hops of local `const`/`function` definitions in the SAME
  * file — never across a file boundary, and never through the DATA being
  * written (only `writeFileSync`/`appendFileSync`/`writeJsonAtomic`/
- * `writeFileAtomic`'s first argument, or `renameSync`'s first two). Comments
+ * `writeFileAtomic`'s first argument, either atomic one's `…Async` form
+ * included, or `renameSync`'s first two). Comments
  * and string-literal CONTENTS are excluded from identifier scanning, so a
  * basename that happens to contain a real local variable's name as a
  * substring (`'label-floor-holdings.json'` contains `holdings`) cannot chain
@@ -54,7 +55,8 @@ import { join } from 'node:path';
 
 import { ROOT, tsAndMjsSources, enclosingSymbol } from './lib.mjs';
 
-const WRITE_CALL = /\b(writeFileSync|renameSync|appendFileSync|writeJsonAtomic|writeFileAtomic)\(/g;
+const WRITE_CALL =
+	/\b(writeFileSync|renameSync|appendFileSync|writeJsonAtomic|writeFileAtomic|writeJsonAtomicAsync|writeFileAtomicAsync)\(/g;
 const APPEND_CALL = /\bappendFileSync\(/;
 const BASENAME_LITERAL = /['"]([A-Za-z0-9._-]+\.(?:jsonl?))['"]/g;
 const IDENT = /[A-Za-z_$][\w$]*/g;

@@ -43,16 +43,22 @@
  * this same call path — there is no separate cron or subcommand for it.
  */
 import {
+	close,
 	closeSync,
+	fsync,
 	fsyncSync,
+	open,
 	mkdirSync,
 	openSync,
 	readdirSync,
+	rename,
 	renameSync,
 	statSync,
 	unlinkSync,
+	write,
 	writeSync,
 } from 'node:fs';
+import { promisify } from 'node:util';
 import { basename, dirname, join } from 'node:path';
 
 /**
@@ -174,4 +180,78 @@ export function writeJsonAtomic(
 ): void {
 	const { space, ...rest } = opts;
 	writeFileAtomic(path, JSON.stringify(value, null, space), rest);
+}
+
+/**
+ * The same write as `writeFileAtomic`, with every syscall on libuv's
+ * threadpool instead of the event loop. An fsync's latency is the disk's, not
+ * the file's: one 33 KB `ci-alert-state.json` write held mgmt-api's loop for
+ * 52.6 ms in a single `fsyncSync` (leader profile, 2026-11-14T22:13Z,
+ * fleet-manager#86), while the same call costs well under a millisecond on an
+ * idle disk. Use this from async code that can await the write; the ordering
+ * (fsync the temp file, rename, fsync the directory) is the sync version's.
+ *
+ * Writes to one `path` from this process run one at a time, in call order.
+ * They share the temp name `${path}.<pid>.tmp`, so two in flight at once
+ * would write into the same file and the second rename would find it gone.
+ * A failed write rejects its own caller and does not block the next one.
+ */
+const pending = new Map<string, Promise<void>>();
+
+export function writeFileAtomicAsync(
+	path: string,
+	text: string,
+	opts: AtomicWriteOptions = {}
+): Promise<void> {
+	const prev = pending.get(path) ?? Promise.resolve();
+	const next = prev.then(
+		() => writeOnce(path, text, opts),
+		() => writeOnce(path, text, opts)
+	);
+	pending.set(path, next);
+	const clear = (): void => {
+		if (pending.get(path) === next) pending.delete(path);
+	};
+	next.then(clear, clear);
+	return next;
+}
+
+async function writeOnce(path: string, text: string, opts: AtomicWriteOptions): Promise<void> {
+	const { fsync: durable = true } = opts;
+	const dir = dirname(path);
+	mkdirSync(dir, { recursive: true });
+	sweepStaleTempFiles(path, dir);
+	const tmp = `${path}.${process.pid}.tmp`;
+	const fd = await promisify(open)(tmp, 'w');
+	try {
+		let buf = Buffer.from(text, 'utf8');
+		while (buf.length) buf = buf.subarray(await writeAt(fd, buf));
+		if (durable) await promisify(fsync)(fd);
+	} finally {
+		await promisify(close)(fd);
+	}
+	await promisify(rename)(tmp, path);
+	if (!durable) return;
+	const dirFd = await promisify(open)(dir, 'r');
+	try {
+		await promisify(fsync)(dirFd);
+	} finally {
+		await promisify(close)(dirFd);
+	}
+}
+
+function writeAt(fd: number, buf: Buffer): Promise<number> {
+	return new Promise((resolve, reject) => {
+		write(fd, buf, (err, written) => (err ? reject(err) : resolve(written)));
+	});
+}
+
+/** `writeFileAtomicAsync`, `JSON.stringify`-ing `value` first. */
+export function writeJsonAtomicAsync(
+	path: string,
+	value: unknown,
+	opts: AtomicWriteOptions & { space?: string | number } = {}
+): Promise<void> {
+	const { space, ...rest } = opts;
+	return writeFileAtomicAsync(path, JSON.stringify(value, null, space), rest);
 }

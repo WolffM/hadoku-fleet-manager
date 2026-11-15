@@ -483,9 +483,9 @@ export async function runCiAlerts(token: string, ghGet: GhGet): Promise<CiTickSu
 		}
 	}
 
-	if (changed) writeStates(states);
-	if (reposChanged) writeRepoStates(repoStates);
-	recordCleanPass(summary);
+	if (changed) await writeStates(states);
+	if (reposChanged) await writeRepoStates(repoStates);
+	await recordCleanPass(summary);
 	logCiTickSummary(summary);
 	return summary;
 }
@@ -593,7 +593,7 @@ async function evaluateTarget(
 		// most a page not yet sent.
 		if ((decision.action === 'broken' || decision.action === 'recovered') && row) {
 			states[key] = { ...row, lastEndedAt: new Date(watermark).toISOString() };
-			writeStates(states);
+			await writeStates(states);
 		}
 	}
 
