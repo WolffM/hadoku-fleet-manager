@@ -136,7 +136,7 @@ export async function runDispatchPass(
 	let reaped: number | null = null;
 	// Marked BEFORE the await (subCadence's own shape), so a slow sweep cannot
 	// let the next pass in behind it and double the cost it was gated to bound.
-	if (subCadence(REAP_CADENCE_NAME, REAP_INTERVAL_MS, nowMs)) {
+	if (!input.skipReap && subCadence(REAP_CADENCE_NAME, REAP_INTERVAL_MS, nowMs)) {
 		const targets = reapTargets(input.repos ?? [], nowMs);
 		// Nothing due is a sweep that LOOKED — every repo was read within
 		// REAP_IDLE_INTERVAL_MS and held nothing — so it reports 0, not `null`.

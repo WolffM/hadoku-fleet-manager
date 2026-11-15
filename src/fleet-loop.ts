@@ -66,7 +66,7 @@ import {
 	type LabelConvergenceGh,
 } from './runners/node-eligibility.js';
 import { __setFleetProbeForTesting } from './fleet-probe-store.js';
-import { trackPass } from './lib/loop-lifecycle.js';
+import { isStopping, trackPass } from './lib/loop-lifecycle.js';
 
 /**
  * The last dispatch input a fast-loop tick built, so the dispatcher can run WITHOUT one.
@@ -94,6 +94,18 @@ let lastDispatchInput: Parameters<typeof dispatchEphemeral>[0] | null = null;
  *  same run: `dispatch-pass` reconstructs in-flight work from LIVE units, and a
  *  pass that has not spawned yet is invisible to the one beside it. */
 let dispatchInFlight = false;
+/**
+ * A pass asked for while one was running, to start the moment it ends. `full`
+ * outranks `triggered`: a timer tick that lands on a webhook-triggered pass must
+ * not be swallowed by it, or a stream of hints could keep the full poll — the
+ * only thing that sees a job no hint announced — from ever running.
+ */
+let rerunWanted: 'full' | 'triggered' | null = null;
+/** How a hint starts a pass; set by `startFleetLoop` on a controller only. */
+let triggerPass: (() => void) | null = null;
+/** Hints landing inside this window share one pass: a push queues its jobs together. */
+export const TRIGGER_COALESCE_MS = 250;
+let triggerTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * What the JIT dispatcher did on its last pass.
@@ -259,10 +271,14 @@ export function getReservationSnapshot(): Reservation {
 export async function dispatchBetweenTicks(
 	token: string,
 	gh: Parameters<typeof dispatchEphemeral>[2],
-	dispatch: typeof dispatchEphemeral = dispatchEphemeral
+	dispatch: typeof dispatchEphemeral = dispatchEphemeral,
+	mode: 'full' | 'triggered' = 'full'
 ): Promise<'ok' | 'no-input' | 'busy'> {
 	if (!lastDispatchInput) return 'no-input';
-	if (dispatchInFlight) return 'busy';
+	if (dispatchInFlight) {
+		if (mode === 'full' || rerunWanted === null) rerunWanted = mode;
+		return 'busy';
+	}
 	dispatchInFlight = true;
 	try {
 		// `res` is the pass result, `null` its "could not look" answer — see
@@ -270,7 +286,8 @@ export async function dispatchBetweenTicks(
 		// the function returned `void`, so EVERY pass recorded a resultless one,
 		// `recordDispatch` scored that as attempted-and-all-failed, and the panel
 		// pinned `failingSince` to the first pass after each restart forever.
-		const input = lastDispatchInput;
+		const input =
+			mode === 'triggered' ? { ...lastDispatchInput, triggered: true } : lastDispatchInput;
 		const res = await withGhCaller('dispatch-poll', () => dispatch(input, token, gh));
 		recordDispatch(res, res ? null : 'no ephemeral node could be probed — see the warnings above');
 		return 'ok';
@@ -284,7 +301,35 @@ export async function dispatchBetweenTicks(
 		return 'ok';
 	} finally {
 		dispatchInFlight = false;
+		const next = rerunWanted;
+		rerunWanted = null;
+		if (next && !isStopping()) {
+			void trackPass(dispatchBetweenTicks(token, gh, dispatch, next)).catch((err: unknown) => {
+				logger.warn(
+					`[fleet-loop] queued dispatch rerun threw: ${err instanceof Error ? err.message : String(err)}`
+				);
+			});
+		}
 	}
+}
+
+/**
+ * Start a webhook-triggered pass soon (see runners/dispatch-hint.ts). Returns
+ * false when this process runs no dispatcher — a passive host, or a controller
+ * whose loop has not started — so the caller can say the hint only waits for a
+ * poll that will not come here.
+ */
+export function requestTriggeredDispatch(): boolean {
+	if (!triggerPass) return false;
+	if (!triggerTimer) {
+		const fire = triggerPass;
+		triggerTimer = setTimeout(() => {
+			triggerTimer = null;
+			fire();
+		}, TRIGGER_COALESCE_MS);
+		triggerTimer.unref?.();
+	}
+	return true;
 }
 
 /** Test seam. Not part of the supported API. */
@@ -298,6 +343,10 @@ export function __setDispatchInputForTesting(
 export function __resetDispatchInputForTesting(): void {
 	lastDispatchInput = null;
 	dispatchInFlight = false;
+	rerunWanted = null;
+	triggerPass = null;
+	if (triggerTimer) clearTimeout(triggerTimer);
+	triggerTimer = null;
 }
 
 /**
@@ -349,6 +398,7 @@ export function __resetFleetLoopForTesting(): void {
 	fastLoopHandle = null;
 	dispatchTimerHandle?.stop();
 	dispatchTimerHandle = null;
+	triggerPass = null;
 }
 
 export interface FleetTickResult {
@@ -585,4 +635,16 @@ export function startFastLoop(
 		// `EveryOptions.noteTick`'s header.
 		{ noteTick: false }
 	);
+
+	triggerPass = () => {
+		const token = getToken();
+		if (!token || isStopping()) return;
+		void trackPass(dispatchBetweenTicks(token, gh, dispatchEphemeral, 'triggered')).catch(
+			(err: unknown) => {
+				logger.warn(
+					`[fleet-loop] triggered dispatch threw: ${err instanceof Error ? err.message : String(err)}`
+				);
+			}
+		);
+	};
 }

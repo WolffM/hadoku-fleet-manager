@@ -40,6 +40,12 @@ export interface DispatchPassInput {
 	ttlSeconds: number;
 	/** Repos to sweep for orphaned JIT registrations. */
 	repos?: string[];
+	/**
+	 * No reap this pass, and its cadence is not consulted, so it stays due. A
+	 * webhook-triggered pass sets it: `pending` then holds only the hinted repos'
+	 * jobs, and the reap releases a unit whose job is not in `pending` as queued.
+	 */
+	skipReap?: boolean;
 	/** Injectable clock. Absent means `Date.now()`; tests drive the reap gate. */
 	nowMs?: number;
 	/**

@@ -329,6 +329,7 @@ export async function dispatchEphemeral(
 			// This is only the backstop above that ceiling.
 			ttlSeconds: JIT_UNIT_MAX_SEC,
 			minQueuedMs: nothingStanding ? 0 : SATURATED_QUEUED_MS,
+			triggered: input.triggered,
 		},
 		token,
 		gh,

@@ -92,6 +92,8 @@ export interface EphemeralTickInput {
 	 * pass it gets the old behaviour rather than a silent removal of the wait.
 	 */
 	standingEligible?: ReadonlySet<string>;
+	/** A webhook-triggered pass — see `DispatchTickInput.triggered`. */
+	triggered?: boolean;
 }
 
 /**

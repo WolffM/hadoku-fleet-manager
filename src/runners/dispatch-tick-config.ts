@@ -134,6 +134,15 @@ export interface DispatchTickInput {
 	 * the proxy costs.
 	 */
 	minQueuedMs?: number;
+	/**
+	 * A pass a webhook hint started (`dispatch-hint.ts`), not the timer. It polls
+	 * ONLY the hinted repos, so the poll's API ceiling is the timer's alone, and
+	 * it runs none of the sub-cadences (pending, recovery, reap): each is left
+	 * due for the next full pass. The reap in particular MUST NOT run on a
+	 * partial pass — it reads "queued" from this pass's jobs, and every repo the
+	 * pass did not poll would read as having none.
+	 */
+	triggered?: boolean;
 }
 
 /**

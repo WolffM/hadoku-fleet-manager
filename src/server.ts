@@ -7,6 +7,7 @@
  * scheduler (which takes host leases). Nothing here is reachable from the edge,
  * so no route re-implements an auth check that the socket already makes.
  */
+import type { HintStats } from './runners/dispatch-hint.js';
 import express, { type Express, type Request, type Response, type Router } from 'express';
 
 import type { RunnerHealthSnapshot } from './runner-health-snapshot.js';
@@ -53,6 +54,26 @@ export interface FleetManager {
 	 * missing route.
 	 */
 	snapshot(): RunnerHealthSnapshot | null;
+	/**
+	 * One GitHub `workflow_job` webhook delivery, already signature-verified by
+	 * the host, parsed. A `queued` job on self-hosted labels becomes a dispatch
+	 * hint and starts a pass within ~250 ms instead of at the next 15 s poll
+	 * (runners/dispatch-hint.ts). The hint names a run; the pass still reads its
+	 * jobs from GitHub before minting, so a bad hint mints nothing.
+	 *
+	 * `dispatching: false` on an accepted hint means this process runs no
+	 * dispatcher (a passive host, or one not started), so only a poll elsewhere
+	 * will act on it. Never throws.
+	 */
+	hintWorkflowJob(payload: unknown): WorkflowJobHintResult;
+}
+
+export interface WorkflowJobHintResult {
+	accepted: boolean;
+	/** Why it was not a hint: `action:completed`, `not-self-hosted`, `malformed`, … */
+	reason?: string;
+	dispatching: boolean;
+	stats: HintStats;
 }
 
 export function createFleetServer(manager: FleetManager, meta: { version: string }): Express {

@@ -71,6 +71,7 @@ import {
 	jobsCacheByRun,
 } from './dispatch-tick-poll.js';
 import { loadWarnedStuck } from './dispatch-tick-stuck-load.js';
+import { dropHint, hintKey, liveHints, type DispatchHint } from './dispatch-hint.js';
 import {
 	INTENT_KEY_SEP,
 	announcedIntents,
@@ -123,12 +124,35 @@ export async function runDispatchTick(
 	// while the function that owns it sat uncalled — and a comment two files away
 	// claimed it was what stopped the hot list going stale. One definition.
 	const hotRepos = deriveHotRepos(input.recentJobCounts);
-	const due = reposDue(input.repos, { ...DEFAULT_POLL_POLICY, hotRepos }, lastPolledMs, nowMs);
+	// WEBHOOK HINTS (dispatch-hint.ts) for repos this fleet serves. A hinted repo
+	// is polled this pass whether or not it is due; a triggered pass polls
+	// nothing else.
+	const served = new Set(input.repos);
+	const hintsByRepo = new Map<string, DispatchHint[]>();
+	for (const h of liveHints(nowMs)) {
+		if (!served.has(h.repo)) continue;
+		const list = hintsByRepo.get(h.repo) ?? [];
+		list.push(h);
+		hintsByRepo.set(h.repo, list);
+	}
+	const due = input.triggered
+		? [...hintsByRepo.keys()]
+		: [
+				...new Set([
+					...reposDue(input.repos, { ...DEFAULT_POLL_POLICY, hotRepos }, lastPolledMs, nowMs),
+					...hintsByRepo.keys(),
+				]),
+			];
+	/** `repo#runId` of hinted runs the listing did not show, probed on the hint's word. */
+	const hintedOnly = new Set<string>();
 
 	// STAMPED BEFORE THE AWAITS, for the reason the reap gate is: a slow pass must
 	// not let the next one in behind it and double the cost this was gated to
 	// bound. Decided once for the whole tick so every repo in the fan-out agrees.
-	const recoveryDue = subCadence(RECOVERY_CADENCE_NAME, RECOVERY_INTERVAL_MS, nowMs);
+	// Not consulted on a triggered pass: `subCadence` marks when asked, so asking
+	// here would spend the full pass's turn on a partial one.
+	const recoveryDue =
+		!input.triggered && subCadence(RECOVERY_CADENCE_NAME, RECOVERY_INTERVAL_MS, nowMs);
 
 	// READ ONCE PER TICK, like the reap gate, so every repo in the fan-out below
 	// agrees about what is declared. One readdir of a directory that is empty
@@ -244,7 +268,41 @@ export async function runDispatchTick(
 		polledOk.add(repo);
 		const all = withOmitted(repo, 'queued', runs);
 		lastReadByRepo.set(repo, { atMs: nowMs, runs: all });
-		const { mintable, stuck, stranded } = mintableRuns(all, {
+		// A HINTED RUN THE LISTING DOES NOT SHOW YET. The `?status=queued` listing
+		// trails a new run by ~2 s, which is most of what the hint is for, so the
+		// run is READ ITSELF (`/actions/runs/<id>`, the resource, not the filtered
+		// index) and then judged exactly like a listed one. The hint supplies only
+		// the id: never the run's identity, which fork safety decides on, and never
+		// its status or age. A read that fails or finds it no longer queued adds
+		// nothing, and the poll stays responsible for it.
+		const listedIds = new Set(all.map((r) => r.id));
+		const hintedRuns: QueuedRun[] = [];
+		await Promise.all(
+			(hintsByRepo.get(repo) ?? []).map(async (h) => {
+				if (listedIds.has(h.runId)) {
+					dropHint(repo, h.runId);
+					return;
+				}
+				let run: QueuedRun | null = null;
+				try {
+					run = (await withGhCaller('dispatch-probe', () =>
+						gh.get(`/actions/runs/${h.runId}`, token, repo)
+					)) as QueuedRun | null;
+				} catch {
+					run = null;
+				}
+				if (!run || run.id !== h.runId) return;
+				// Only a run that is over is done with; any other status keeps the hint
+				// for the next pass, and only `queued` is judged now — the gates below
+				// read run status, and GitHub flips a run back to `queued` while a
+				// `needs:` job waits.
+				if (run.status === 'completed') dropHint(repo, h.runId);
+				if (run.status !== 'queued') return;
+				hintedRuns.push(run);
+				hintedOnly.add(hintKey(repo, h.runId));
+			})
+		);
+		const { mintable, stuck, stranded } = mintableRuns([...all, ...hintedRuns], {
 			nowMs,
 			minQueuedMs: input.minQueuedMs,
 		});
@@ -308,7 +366,8 @@ export async function runDispatchTick(
 			return age >= (input.minQueuedMs ?? MIN_QUEUED_MS) && age <= ZOMBIE_MS;
 		});
 
-	const pendingDue = subCadence(PENDING_CADENCE_NAME, PENDING_INTERVAL_MS, nowMs);
+	const pendingDue =
+		!input.triggered && subCadence(PENDING_CADENCE_NAME, PENDING_INTERVAL_MS, nowMs);
 	const dueSet = new Set(due);
 	// BOUNDED, not `Promise.all`. One token serves the dispatcher, the fleet loop
 	// and runner-health, and a wide simultaneous burst trips GitHub's SECONDARY
@@ -418,6 +477,12 @@ export async function runDispatchTick(
 				const waiting = waitingJobs(r, jobs.jobs, isPending);
 				const omitted = omittedRuns.get(key);
 				if (!waiting.length) {
+					// A hinted run with nothing waiting was served between the
+					// delivery and this read. Not blocked — just done.
+					if (hintedOnly.has(key)) {
+						dropHint(repo, r.id);
+						return;
+					}
 					// An omitted run's unfiltered read is up to a runner-health tick old;
 					// nothing waiting means it moved on since. Forget it rather than
 					// re-probe it every tick or call it blocked.
@@ -522,6 +587,7 @@ export async function runDispatchTick(
 			sliceNameFor: input.sliceNameFor,
 			hostPaceFor: input.hostPaceFor,
 			ttlSeconds: input.ttlSeconds,
+			skipReap: input.triggered,
 			// ONE clock for the tick. `reposDue` above already gates on this
 			// `nowMs`; letting the reap gate read `Date.now()` separately would put
 			// two cadences on one tick and make the sweep untestable from here.

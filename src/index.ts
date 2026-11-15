@@ -11,7 +11,12 @@ import { installHost, type FleetHost } from './host.js';
 import { ghGetConditional, ghGet, ghWrite } from './lib/github-client.js';
 import { startRunnerHealthMonitor, __stopRunnerHealthMonitorForTesting } from './runner-health.js';
 import { getRunnerHealthSnapshot } from './runner-health-snapshot.js';
-import { startFastLoop, __resetFleetLoopForTesting } from './fleet-loop.js';
+import {
+	startFastLoop,
+	requestTriggeredDispatch,
+	__resetFleetLoopForTesting,
+} from './fleet-loop.js';
+import { hintStats, recordWorkflowJobHint } from './runners/dispatch-hint.js';
 import { router as fleetRouter } from './routes/fleet.js';
 import { startClawReboot, __stopClawRebootForTesting } from './claw-reboot.js';
 import { startBackstopTools, __stopBackstopToolsForTesting } from './backstop-tools.js';
@@ -150,7 +155,8 @@ export type { ForceRecord, ForceState } from './runners/backstop-force.js';
  * path for every existing importer.
  */
 import type { FleetManager } from './server.js';
-export type { FleetManager } from './server.js';
+export type { FleetManager, WorkflowJobHintResult } from './server.js';
+export type { HintStats } from './runners/dispatch-hint.js';
 export type { StopResult } from './lib/loop-lifecycle.js';
 
 let constructed = false;
@@ -250,6 +256,18 @@ export function createFleetManager(host: FleetHost): FleetManager {
 			return r;
 		},
 		snapshot: () => getRunnerHealthSnapshot(),
+		hintWorkflowJob(payload) {
+			const v = recordWorkflowJobHint(payload);
+			if (!v.accepted)
+				return { accepted: false, reason: v.reason, dispatching: false, stats: hintStats() };
+			const dispatching = host.controller !== false && requestTriggeredDispatch();
+			host.logger.info(
+				`[dispatch-hint] ${v.hint.repo}#${v.hint.runId} job ${v.hint.jobId} queued, delivered ` +
+					`${((v.hint.receivedAtMs - v.hint.createdAtMs) / 1000).toFixed(1)}s after creation` +
+					(dispatching ? '; pass requested' : '; no dispatcher here, left to the poll')
+			);
+			return { accepted: true, dispatching, stats: hintStats() };
+		},
 	};
 }
 
