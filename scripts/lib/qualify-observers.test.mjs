@@ -406,6 +406,28 @@ void test('run: a malformed user name is could-not-look before anything runs', a
 
 // ── the real shell: start, be counted, be killed, be gone ──────────────────
 
+/**
+ * Is doctor's BUSY block blind HERE, by its own rule? It counts through sudo
+ * where it has it, reads /proc where /proc is not hidepid, and otherwise
+ * answers U — "could not look", which is the correct answer, not a miss.
+ * claw-1/2/3 mount /proc hidepid and the suite runs as `ci` without sudo, so
+ * there U is right; publish 43727568625 (2026-11-15, claw-2) went red on it.
+ * The same two tests as the probe's, so the suite and the probe cannot
+ * disagree about which branch a host takes.
+ */
+function doctorBlindHere() {
+	const proc = readFileSync('/proc/mounts', 'utf8')
+		.split('\n')
+		.find((l) => l.split(' ')[1] === '/proc');
+	if (!proc || !/hidepid=(1|2|invisible|noaccess)/.test(proc)) return false;
+	try {
+		execFileSync('sudo', ['-n', 'true'], { stdio: 'ignore' });
+		return false;
+	} catch {
+		return true;
+	}
+}
+
 void test('REAL SHELL: the decoy starts, every no-sudo reader counts it, and it is gone after the stop', () => {
 	// `spawnclient: false`: a suite run on a claw must not be a phantom job to
 	// the fast loop (node-probe.ts). Every reader here matches by comm or by
@@ -432,7 +454,16 @@ void test('REAL SHELL: the decoy starts, every no-sudo reader counts it, and it 
 		const listed = sh(`pgrep -af '[R]unner\\.Worker' || true`);
 		assert.match(listed, new RegExp(`^${d.pid} ${esc(d.dir)}/bin/Runner\\.Worker `, 'm'));
 		const by = parseReaders(sh(readersScript(built, SAME)));
+		const blind = doctorBlindHere();
 		for (const c of built) {
+			if (c.id === 'doctor-busy' && blind) {
+				assert.equal(
+					String(by[c.id]?.out ?? '').trim(),
+					'U',
+					`doctor-busy on a hidepid host without sudo must say it could not look, read ${JSON.stringify(by[c.id])}`
+				);
+				continue;
+			}
 			const n = c.parse(by[c.id]?.out ?? '');
 			assert.ok(
 				n !== null && n >= 1,
