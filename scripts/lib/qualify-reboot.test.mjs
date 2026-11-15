@@ -1,5 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import process from 'node:process';
 
 import {
 	BOOT_ID_SCRIPT,
@@ -9,6 +14,7 @@ import {
 	makeRebootTest,
 	parseAfterBoot,
 	parseStartup,
+	parseTenants,
 	test as rebootTest,
 } from './qualify-reboot.mjs';
 import { BOOT_TIMEOUT_MS, SERVICES_TIMEOUT_MS, parseRebootProbe } from './reboot-cycle.mjs';
@@ -372,13 +378,13 @@ void test('a pm2 app slow to come back is waited for; one that never does fails'
 
 // ── tenant hosts belong to the reboot cycle ─────────────────────────────────
 
-void test('a node hosting pm2 service tenants is never rebooted: could-not-look naming the units', async () => {
+void test('a node hosting tenants is never rebooted: could-not-look naming the units', async () => {
 	const { r, sent } = await run({
 		tenants:
-			'QR-TENANT pm2-archivebot-svc.service\nQR-TENANT pm2-pygmalion-svc.service\nQR-TENANTS-END',
+			'QR-TENANT cardtable-agent.service\nQR-TENANT pm2-archivebot-svc.service\nQR-TENANTS-END',
 	});
 	assert.equal(r.status, 'could-not-look');
-	assert.match(r.reason, /pm2-archivebot-svc\.service, pm2-pygmalion-svc\.service/);
+	assert.match(r.reason, /cardtable-agent\.service, pm2-archivebot-svc\.service/);
 	assert.match(r.reason, /reboot-claws/);
 	assert.equal(sent.filter((s) => s.script.includes('systemctl reboot')).length, 0);
 });
@@ -395,7 +401,66 @@ void test('an unreadable unit listing is could-not-look, never "no tenants", and
 	}
 });
 
-void test('the tenant listing matches only pm2-*-svc units, so the admin pm2 unit is not a tenant', () => {
-	assert.match(TENANT_SCRIPT, /'pm2-\*-svc\.service'/);
-	assert.match(TENANT_SCRIPT, /--state=active/);
+/** TENANT_SCRIPT run by a real shell against a fake `systemctl` serving `units` ({ name: slice }). */
+function listTenants(units, { listFails = false, showFails = '' } = {}) {
+	const dir = mkdtempSync(join(tmpdir(), 'qr-tenants-'));
+	try {
+		const table = Object.entries(units)
+			.map(([u, sl]) => `${u}) echo ${sl} ;;`)
+			.join('\n    ');
+		writeFileSync(
+			join(dir, 'systemctl'),
+			`#!/bin/sh
+case "$1" in
+  list-units) ${
+		listFails
+			? 'exit 1'
+			: `printf '%s\\n' ${Object.keys(units)
+					.map((u) => `'${u} loaded active running x'`)
+					.join(' ')}`
+	} ;;
+  show)
+    [ "$5" = "${showFails}" ] && exit 1
+    case "$5" in
+    ${table}
+    esac ;;
+esac
+`,
+			{ mode: 0o755 }
+		);
+		return execFileSync('sh', ['-c', TENANT_SCRIPT], {
+			encoding: 'utf8',
+			env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+		});
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+void test('the tenant listing is every active service in a hosting slice, agent or pm2, and nothing else', () => {
+	const out = listTenants({
+		'cardtable-agent.service': 'hosting-cardtable.slice',
+		'pm2-archivebot-svc.service': 'hosting-archivebot.slice',
+		'pm2-hadoku.service': 'system.slice',
+		'ssh.service': 'system.slice',
+		'runner.service': 'runners.slice',
+	});
+	assert.deepEqual(parseTenants(out), ['cardtable-agent.service', 'pm2-archivebot-svc.service']);
+	assert.deepEqual(parseTenants(listTenants({ 'ssh.service': 'system.slice' })), []);
+});
+
+void test('a listing or a slice read that fails ends with no marker, so it is never "no tenants"', () => {
+	assert.equal(
+		parseTenants(listTenants({ 'ssh.service': 'system.slice' }, { listFails: true })),
+		null
+	);
+	assert.equal(
+		parseTenants(
+			listTenants(
+				{ 'ssh.service': 'system.slice', 'cardtable-agent.service': 'hosting-cardtable.slice' },
+				{ showFails: 'cardtable-agent.service' }
+			)
+		),
+		null
+	);
 });
