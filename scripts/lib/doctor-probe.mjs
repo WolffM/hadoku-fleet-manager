@@ -109,6 +109,83 @@ export const SENSORS_SH = [
 	'}',
 ].join('\n');
 
+/**
+ * THE ONE CLOCK READER. Two POSIX-sh functions, each printing one line:
+ *
+ *   clock_ceiling  ->  `<MHz> <source>`         the fastest the CPU says it may run
+ *   clock_now      ->  `<median> <max> <cores>` MHz across cores, measured now
+ *   either         ->  `- <reason>`             I could not look, and why
+ *
+ * WHY IT EXISTS (2026-11-14). claw-5's FX-8350 ran every core at 1400 MHz,
+ * under full load, against a 4300 MHz P-state table: hardware thermal control
+ * was active with the die at 19 °C, so the board was holding it down. The
+ * dispatcher measured the result for two months (p50 2.91x slower than the
+ * fleet; 4300 / 1400 = 3.07) and the fleet blamed the 2012 part.
+ * `fleet benchmark` read the clock too, from cpufreq, and claw-5 has no cpufreq
+ * driver, so the one node with the fault was the one node it could not see.
+ *
+ * THE CEILING, in order: cpufreq's maximum (boost included); the clock in the
+ * model name (`@ 3.50GHz`, Intel's base); else, for AMD family 10h/15h only,
+ * the highest enabled entry of the P-state table in MSRs C001_0064..6B, via
+ * root and the msr module (loaded for the read and unloaded again if this
+ * loaded it). Other families encode those registers differently and are said
+ * to be unreadable rather than decoded wrongly.
+ *
+ * THE CURRENT CLOCK is the kernel's per-core figure, which it measures from
+ * the APERF/MPERF counters, so the reader refuses a CPU without `aperfmperf`
+ * instead of passing on a nominal number. It is only true for a BUSY core:
+ * an idle core reports a stale fallback (claw-5's idle cores flickered
+ * between 1400 and 4300 while pinned), so a caller samples it only while a
+ * load is running. The MEDIAN is what callers judge: one core's spike must not
+ * vouch for the other seven.
+ *
+ * `CLOCK_CPUINFO` and `CLOCK_SYS` stand in for `/proc/cpuinfo` and
+ * `/sys/devices/system/cpu` so the tests can run this against cpuinfo captured
+ * from a real node. Nothing on a node sets them.
+ *
+ * Shared byte-for-byte: `doctorProbe` embeds it, and `benchmark-node.sh`
+ * carries a copy between `# >>> CPU_CLOCK_SH` markers that
+ * `cpu-clock-guard.test.mjs` holds identical to this string. That same test
+ * fails any other file that reads the clock's sources itself.
+ */
+export const CPU_CLOCK_SH = [
+	'clock_pstate_mhz() {',
+	'  case "$1" in [89abcdef]*) ;; *) return 0 ;; esac',
+	'  _cl=$((0x$(printf %s "$1" | cut -c9-16)))',
+	'  echo $(( (100 * ((_cl & 63) + 16)) >> ((_cl >> 6) & 7) ))',
+	'}',
+	'clock_ceiling() {',
+	'  _ck=$(cat "${CLOCK_SYS:-/sys/devices/system/cpu}/cpu0/cpufreq/cpuinfo_max_freq" 2>/dev/null)',
+	'  case "$_ck" in ""|*[!0-9]*) ;; *) echo "$((_ck / 1000)) cpufreq"; return 0 ;; esac',
+	'  _cg=$(sed -n "s/^model name.*@ *\\([0-9]*\\.[0-9]*\\)GHz.*/\\1/p" "${CLOCK_CPUINFO:-/proc/cpuinfo}" | head -1)',
+	'  if [ -n "$_cg" ]; then awk -v g="$_cg" "BEGIN{printf \\"%d brand\\\\n\\", g * 1000 + 0.5}"; return 0; fi',
+	'  _cv=$(sed -n "s/^vendor_id[^:]*: *//p" "${CLOCK_CPUINFO:-/proc/cpuinfo}" | head -1)',
+	'  _cf=$(sed -n "s/^cpu family[^:]*: *//p" "${CLOCK_CPUINFO:-/proc/cpuinfo}" | head -1)',
+	'  if [ "$_cv" != AuthenticAMD ] || { [ "$_cf" != 16 ] && [ "$_cf" != 21 ]; }; then',
+	'    echo "- no cpufreq driver, no clock in the model name, and no P-state table this reader decodes (${_cv:-unknown vendor}, family ${_cf:-unknown})"',
+	'    return 0',
+	'  fi',
+	'  _cz=',
+	'  if [ ! -e /dev/cpu/0/msr ]; then ${SUDO:-} modprobe msr 2>/dev/null && _cz=1; fi',
+	'  _cm=0',
+	'  for _cr in 64 65 66 67 68 69 6A 6B; do',
+	'    _ch=$(${SUDO:-} dd if=/dev/cpu/0/msr bs=8 count=1 skip=$((0xC00100$_cr)) iflag=skip_bytes status=none 2>/dev/null | od -An -tx8 | tr -d " \\n")',
+	'    if [ ${#_ch} -ne 16 ]; then _cm=0; break; fi',
+	'    _cp=$(clock_pstate_mhz "$_ch")',
+	'    if [ -n "$_cp" ] && [ "$_cp" -gt "$_cm" ]; then _cm=$_cp; fi',
+	'  done',
+	'  if [ -n "$_cz" ]; then ${SUDO:-} modprobe -r msr 2>/dev/null; fi',
+	'  if [ "$_cm" -gt 0 ]; then echo "$_cm msr-pstate"; else echo "- no cpufreq driver and no clock in the model name, and the AMD P-state registers could not be read (root and the msr module are needed)"; fi',
+	'}',
+	'clock_now() {',
+	'  if ! grep -qw aperfmperf "${CLOCK_CPUINFO:-/proc/cpuinfo}" 2>/dev/null; then',
+	'    echo "- the kernel does not measure this CPU\'s running clock (no aperfmperf flag), so the per-core figure would be a nominal number"',
+	'    return 0',
+	'  fi',
+	'  awk -F: "/^cpu MHz/{ a[n++] = int(\\$2 + 0.5) } END { if (!n) { print \\"- /proc/cpuinfo printed no per-core clock\\"; exit } for (i = 1; i < n; i++) { v = a[i]; j = i - 1; while (j >= 0 && a[j] > v) { a[j + 1] = a[j]; j-- } a[j + 1] = v } print a[int((n - 1) / 2)], a[n - 1], n }" "${CLOCK_CPUINFO:-/proc/cpuinfo}"',
+	'}',
+].join('\n');
+
 export const THROTTLES_SH =
 	'throttles() { t=0; for c in /sys/devices/system/cpu/cpu*/thermal_throttle/core_throttle_count; do [ -r "$c" ] || continue; t=$((t + $(cat "$c" 2>/dev/null || echo 0))); done; echo "$t"; }';
 
@@ -175,10 +252,15 @@ export function doctorProbe({
 		// ── every temperature sensor, named, emitted by ONE function ──────────
 		SENSORS_SH,
 		THROTTLES_SH,
+		CPU_CLOCK_SH,
 		'SENSED=0',
 		'while read -r k v; do printf "D idle.%s %s\\n" "$k" "$v"; SENSED=$((SENSED+1)); done < <(sensors)',
 		'[ "$SENSED" -gt 0 ] || unk idle.sensors "no readable sensor under /sys/class/thermal or /sys/class/hwmon"',
 		'say idle.throttleCount "$(throttles)"',
+		// The ceiling only. An idle clock is not a measurement (CPU_CLOCK_SH),
+		// so the running clock is read inside the load phase or not at all.
+		'CC=$(clock_ceiling)',
+		'case "$CC" in "- "*) unk clock.ceiling "${CC#- }" ;; *) say clock.ceilingMhz "${CC%% *}"; say clock.ceilingSource "${CC#* }" ;; esac',
 		// ── watchdog: what it will do about load, and what sensor it watches ──
 		'say watchdog.active "$(systemctl is-active watchdog 2>/dev/null)"',
 		'say watchdog.enabled "$(systemctl is-enabled watchdog 2>/dev/null)"',
@@ -375,11 +457,17 @@ export function doctorProbe({
 					'  i=0; while [ "$i" -lt "$NPROC" ]; do (timeout "$LOADSECS" sha512sum /dev/zero >/dev/null 2>&1) & i=$((i+1)); done',
 					'  declare -A PEAK',
 					'  sample() { while read -r k v; do cur=${PEAK[$k]:-0}; if [ "$v" -gt "$cur" ] 2>/dev/null; then PEAK[$k]=$v; fi; done < <(sensors); }',
+					// The median clock across cores, best and last, from samples taken
+					// INSIDE the loop only: the sample after `wait` reads idle cores,
+					// whose clock is a stale fallback (CPU_CLOCK_SH).
+					'  CBEST=0; CLAST=0; CN=0; CWHY=',
+					'  csample() { c=$(clock_now); case "$c" in "- "*) CWHY=${c#- }; return 0 ;; esac; c=${c%% *}; CN=$((CN+1)); CLAST=$c; if [ "$c" -gt "$CBEST" ]; then CBEST=$c; fi; }',
 					'  END=$(( $(date +%s) + LOADSECS ))',
-					'  while [ "$(date +%s)" -lt "$END" ]; do sample; sleep 3; done',
+					'  while [ "$(date +%s)" -lt "$END" ]; do sample; csample; sleep 3; done',
 					'  wait 2>/dev/null',
 					'  sample',
 					'  for k in "${!PEAK[@]}"; do printf "D peak.%s %s\\n" "$k" "${PEAK[$k]}"; done',
+					'  if [ "$CN" -gt 0 ]; then say load.clockBestMhz "$CBEST"; say load.clockLastMhz "$CLAST"; say load.clockSamples "$CN"; else unk load.clock "${CWHY:-no clock sample was taken while the load ran}"; fi',
 					'  say load.throttleAfter "$(throttles)"',
 					'  say load.finishedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"',
 					'fi',

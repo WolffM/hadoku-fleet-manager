@@ -209,6 +209,17 @@ export function healthFacet({
 		load1: facts.load1 === undefined ? null : Number(facts.load1),
 		rootElevation: facts.rootElevation ?? null,
 		thermal,
+		// The CPU's own ceiling beside the median clock its cores held under
+		// the load phase (CPU_CLOCK_SH). Each null carries its reason.
+		clock: {
+			ceilingMhz: num('clock.ceilingMhz'),
+			ceilingSource: facts['clock.ceilingSource'] ?? null,
+			ceilingWhy: unknown['clock.ceiling'] ?? null,
+			loadBestMhz: num('load.clockBestMhz'),
+			loadLastMhz: num('load.clockLastMhz'),
+			loadSamples: num('load.clockSamples'),
+			loadWhy: unknown['load.clock'] ?? unknown.load ?? null,
+		},
 		smart: {
 			device: facts['smart.device'] ?? null,
 			health: smartRead.health,

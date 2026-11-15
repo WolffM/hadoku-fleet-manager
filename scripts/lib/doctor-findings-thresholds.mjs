@@ -153,3 +153,19 @@ export const SENSOR_TRACKS_DIVISOR = 3;
 
 /** How stale `$capabilities` may be before `$health` flags it — one number
  *  with `GET /fleet`'s `vocabulary.bootcampStaleDays`, owned by capabilities.ts. */
+
+/**
+ * A CPU whose cores' best median clock under the load phase is below this
+ * share of its own ceiling is STUCK: the load could not raise its clock.
+ *
+ * Measured 2026-11-15 under all-core load, against each node's own ceiling:
+ * claw-5 held 1400 of 4300 (0.33; board-asserted thermal control, the fault
+ * this exists for); claw-1, a 2014 laptop part, 2893-3071 of 3500 (0.83-0.88);
+ * hokon 5000 of 5453 (0.92). claw-9 runs locked at 3000 with turbo off and
+ * cpufreq reports that lock as its maximum, so it stays near 1. Half sits
+ * well clear of a working part holding all-core clock below its single-core
+ * boost, and above a part stuck at its floor: every node's lowest clock is
+ * 0.10-0.41 of its ceiling (cpufreq min/max on 2026-11-15, claw-10's
+ * 1600/3900 the highest; claw-5's lowest P-state is 1400/4300 = 0.33).
+ */
+export const CLOCK_STUCK_FRACTION = 0.5;

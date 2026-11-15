@@ -2227,6 +2227,13 @@
     "why": "Wave shrink-1 lane D, pure move: doctorFindings' CPU thermal + sensor-agreement judgement, split by facet to bring doctor-findings.mjs under the 600-line target. Same bucket as doctor-findings.mjs itself."
   },
   {
+    "glob": "scripts/lib/doctor-findings-clock.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "doctorFindings' CPU clock judgement: the clock the cores held under the load phase against the CPU's own ceiling (cpu-clock/stuck). Pure; same bucket as doctor-findings-thermal.mjs, whose load phase it reads."
+  },
+  {
     "glob": "scripts/lib/doctor-findings-watchdog.mjs",
     "layer": "domain",
     "domain": "observation",

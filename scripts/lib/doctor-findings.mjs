@@ -76,6 +76,7 @@ import { storageFindings } from './doctor-findings-storage.mjs';
 import { networkFindings } from './doctor-findings-network.mjs';
 import { opsFindings } from './doctor-findings-ops.mjs';
 import { cpuFindings } from './doctor-findings-cpu.mjs';
+import { clockFindings } from './doctor-findings-clock.mjs';
 import { qualifyFindings } from './doctor-findings-qualify.mjs';
 
 /**
@@ -143,6 +144,7 @@ export function doctorFindings(health, { nowMs = Date.now(), machine } = {}) {
 
 	return [
 		...thermalFindings(health, machine?.thermal),
+		...clockFindings(health),
 		...watchdogFindings(health),
 		...storageFindings(health),
 		...networkFindings(health),

@@ -84,20 +84,6 @@ if have lscpu; then
 	L=$(lscpu 2>/dev/null)
 	emit cpu.cores "$(echo "$L" | awk -F: '/^Core\(s\) per socket/{gsub(/ /,"",$2);c=$2} /^Socket\(s\)/{gsub(/ /,"",$2);s=$2} END{print (c&&s)?c*s:"" }')"
 	emit cpu.sockets "$(echo "$L" | awk -F: '/^Socket\(s\)/{gsub(/ /,"",$2);print $2}')"
-	# NOT EVERY CPU HAS A cpufreq DRIVER. claw-5's FX-8350 has none, so lscpu
-	# prints no "CPU max MHz" line and this read empty. Fall back to sysfs, and
-	# if that is absent too, say so rather than leaving a blank that reads like
-	# a machine with no clock.
-	MHZ=$(echo "$L" | awk -F: '/CPU max MHz/{gsub(/ /,"",$2);print int($2)}')
-	if [ -z "$MHZ" ]; then
-		khz=$(cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq 2>/dev/null)
-		[ -n "$khz" ] && MHZ=$((khz / 1000))
-	fi
-	if [ -n "$MHZ" ]; then
-		emit cpu.mhzMax "$MHZ"
-	else
-		unk cpu.mhzMax "no cpufreq driver and lscpu reports no max (common on pre-Zen AMD)"
-	fi
 	emit cpu.mhzMin "$(echo "$L" | awk -F: '/CPU min MHz/{gsub(/ /,"",$2);print int($2)}')"
 	emit cpu.l3 "$(echo "$L" | awk -F: '/^L3 cache/{gsub(/^ +/,"",$2);print $2}')"
 else
@@ -316,32 +302,58 @@ thermal_max() {
 # ACTUAL CLOCK, BECAUSE A THROTTLING BOX LOOKS LIKE A SLOW ONE.
 #
 # claw-3 benchmarks 620 MB/s one run and 336 the next -- a 1.85x spread on the
-# same silicon, at 91-94C both times. Temperature makes that a good GUESS and
-# nothing here made it a measurement. Sampling the clock at the same two points
-# as the thermal reading turns it into one: a chip sitting far below its own
-# ceiling right after a sustained load is throttling, and the number says so.
+# same silicon, at 91-94C both times. Sampling the clock while the load runs
+# turns that guess into a measurement.
 #
-# Free, and deliberately so. scaling_cur_freq is in-kernel on every box that has
-# cpufreq at all, so this needs no package and belongs in no toolpack. claw-5's
-# FX-8350 has no cpufreq driver and therefore no answer -- unk with the reason,
-# not a zero.
-clock_max() {
-	m=0
-	for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do
-		[ -r "$f" ] || continue
-		v=$(cat "$f" 2>/dev/null)
-		[ "${v:-0}" -gt "$m" ] 2>/dev/null && m=$v
-	done
-	echo $((m / 1000))
+# THE READER IS doctor-probe.mjs's CPU_CLOCK_SH, copied byte for byte between
+# the markers below; cpu-clock-guard.test.mjs fails the build if the two
+# differ. The copy this replaced read cpufreq only, so it printed "no cpufreq
+# driver" for claw-5, the one node whose clock was stuck (2026-11-14).
+# >>> CPU_CLOCK_SH
+clock_pstate_mhz() {
+  case "$1" in [89abcdef]*) ;; *) return 0 ;; esac
+  _cl=$((0x$(printf %s "$1" | cut -c9-16)))
+  echo $(( (100 * ((_cl & 63) + 16)) >> ((_cl >> 6) & 7) ))
 }
-emit_clock() {
-	v=$(clock_max)
-	if [ "${v:-0}" -gt 0 ] 2>/dev/null; then
-		emit "$1" "$v"
-	else
-		unk "$1" "no cpufreq driver (common on pre-Zen AMD)"
-	fi
+clock_ceiling() {
+  _ck=$(cat "${CLOCK_SYS:-/sys/devices/system/cpu}/cpu0/cpufreq/cpuinfo_max_freq" 2>/dev/null)
+  case "$_ck" in ""|*[!0-9]*) ;; *) echo "$((_ck / 1000)) cpufreq"; return 0 ;; esac
+  _cg=$(sed -n "s/^model name.*@ *\([0-9]*\.[0-9]*\)GHz.*/\1/p" "${CLOCK_CPUINFO:-/proc/cpuinfo}" | head -1)
+  if [ -n "$_cg" ]; then awk -v g="$_cg" "BEGIN{printf \"%d brand\\n\", g * 1000 + 0.5}"; return 0; fi
+  _cv=$(sed -n "s/^vendor_id[^:]*: *//p" "${CLOCK_CPUINFO:-/proc/cpuinfo}" | head -1)
+  _cf=$(sed -n "s/^cpu family[^:]*: *//p" "${CLOCK_CPUINFO:-/proc/cpuinfo}" | head -1)
+  if [ "$_cv" != AuthenticAMD ] || { [ "$_cf" != 16 ] && [ "$_cf" != 21 ]; }; then
+    echo "- no cpufreq driver, no clock in the model name, and no P-state table this reader decodes (${_cv:-unknown vendor}, family ${_cf:-unknown})"
+    return 0
+  fi
+  _cz=
+  if [ ! -e /dev/cpu/0/msr ]; then ${SUDO:-} modprobe msr 2>/dev/null && _cz=1; fi
+  _cm=0
+  for _cr in 64 65 66 67 68 69 6A 6B; do
+    _ch=$(${SUDO:-} dd if=/dev/cpu/0/msr bs=8 count=1 skip=$((0xC00100$_cr)) iflag=skip_bytes status=none 2>/dev/null | od -An -tx8 | tr -d " \n")
+    if [ ${#_ch} -ne 16 ]; then _cm=0; break; fi
+    _cp=$(clock_pstate_mhz "$_ch")
+    if [ -n "$_cp" ] && [ "$_cp" -gt "$_cm" ]; then _cm=$_cp; fi
+  done
+  if [ -n "$_cz" ]; then ${SUDO:-} modprobe -r msr 2>/dev/null; fi
+  if [ "$_cm" -gt 0 ]; then echo "$_cm msr-pstate"; else echo "- no cpufreq driver and no clock in the model name, and the AMD P-state registers could not be read (root and the msr module are needed)"; fi
 }
+clock_now() {
+  if ! grep -qw aperfmperf "${CLOCK_CPUINFO:-/proc/cpuinfo}" 2>/dev/null; then
+    echo "- the kernel does not measure this CPU's running clock (no aperfmperf flag), so the per-core figure would be a nominal number"
+    return 0
+  fi
+  awk -F: "/^cpu MHz/{ a[n++] = int(\$2 + 0.5) } END { if (!n) { print \"- /proc/cpuinfo printed no per-core clock\"; exit } for (i = 1; i < n; i++) { v = a[i]; j = i - 1; while (j >= 0 && a[j] > v) { a[j + 1] = a[j]; j-- } a[j + 1] = v } print a[int((n - 1) / 2)], a[n - 1], n }" "${CLOCK_CPUINFO:-/proc/cpuinfo}"
+}
+# <<< CPU_CLOCK_SH
+CC=$(clock_ceiling)
+case "$CC" in
+"- "*) unk cpu.mhzMax "${CC#- }" ;;
+*)
+	emit cpu.mhzMax "${CC%% *}"
+	emit cpu.mhzMaxSource "${CC#* }"
+	;;
+esac
 
 # A MISSING SENSOR IS NOT A COLD MACHINE. `m` stays 0 when nothing is readable,
 # and 0 is a plausible-looking temperature -- so this emitted `thermal.idleC 0`
@@ -368,7 +380,6 @@ emit_thermal() {
 	fi
 }
 emit_thermal thermal.idleC
-emit_clock cpu.idleMhz
 emit thermal.zones "$(ls -d /sys/class/thermal/thermal_zone* 2>/dev/null | wc -l)"
 
 # ── MEASURED: cpu ───────────────────────────────────────────────────────────
@@ -407,7 +418,7 @@ if have openssl; then
 	openssl speed -elapsed -evp sha256 -seconds 2 -multi "$NPROC" >/tmp/.fleet-sha256.$$ 2>/dev/null &
 	BPID=$!
 	sleep 2
-	LOADED_MHZ=$(clock_max)
+	LOADED_CLOCK=$(clock_now)
 	LOADED_OUT=$(thermal_max)
 	wait "$BPID" 2>/dev/null || true
 	SM=$(awk '/^sha256/{print $NF}' /tmp/.fleet-sha256.$$ 2>/dev/null | tail -1)
@@ -508,11 +519,10 @@ fi
 
 # ── thermal, loaded ─────────────────────────────────────────────────────────
 # Emit what was captured UNDER LOAD above, not a fresh read of a now-idle box.
-if [ "${LOADED_MHZ:-0}" -gt 0 ] 2>/dev/null; then
-	emit cpu.loadedMhz "$LOADED_MHZ"
-else
-	unk cpu.loadedMhz "no cpufreq driver (common on pre-Zen AMD)"
-fi
+case "${LOADED_CLOCK:-- the CPU load phase did not run}" in
+"- "*) unk cpu.loadedMhz "${LOADED_CLOCK#- }" ;;
+*) emit cpu.loadedMhz "${LOADED_CLOCK%% *}" ;;
+esac
 lv=${LOADED_OUT%% *}
 lsrc=${LOADED_OUT##* }
 if [ "${lv:-0}" -gt 0 ] 2>/dev/null; then
