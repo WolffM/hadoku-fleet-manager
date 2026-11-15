@@ -84,6 +84,15 @@ export { getFleetLiveness } from './lib/liveness.js';
 export type { FleetLiveness, LoopLiveness } from './lib/liveness.js';
 
 /**
+ * Every environment variable the package and its CLI read, with who needs it
+ * and whether the value is a credential (fleet-manager#81). mgmt-api builds the
+ * CLI's child env from `envNamesForCaller()` instead of handing it the whole
+ * vault mirror; scripts/lib/env-reads-guard.test.mjs keeps the list complete.
+ */
+export { ENV_READS, envNamesForCaller } from './env-reads.js';
+export type { EnvRead, EnvReadScope } from './env-reads.js';
+
+/**
  * Whether a claw can serve a hosted tenant now, and whether hokon steps in
  * (operator, 2026-11-04: fleet-manager decides). `fleet node-status --json`
  * publishes the same verdicts as `backstops[]`; the app layer's lease follower

@@ -531,6 +531,11 @@
     "why": "Commits a manifest edit onto hadoku_site's main \u2014 another system's repo."
   },
   {
+    "glob": "src/env-reads.ts",
+    "layer": "config",
+    "why": "fleet-manager#81: the declared list of environment variables the package reads, pure data with no imports; exported for mgmt-api to build the CLI's child env, and checked against the source by scripts/lib/env-reads-guard.test.mjs."
+  },
+  {
     "glob": "src/lib/capability-registry.ts",
     "layer": "config",
     "section": "Wave 5j lane C split of capabilities.ts (plan \u00a74.3 #4): the registry DATA and label queries (capability-registry.ts, capability-labels.ts) land in config exactly as the plan says. bootcamp-proof.ts, workload-gate.ts, capability-offer.ts and capability-validate.ts DEPART from the plan's \"lifecycle core\" / \"ci-scheduling\" / \"lifecycle\" assignments and stay config too \u2014 a DELIBERATE decision, not an oversight: Every one of those four is imported directly by files in ALL FOUR domains (measured from the real import graph before the split): e.g. `src/label-floor.ts` (observation) and `src/runners/ephemeral-shared.ts` (ci-scheduling) both import `nodeOffer`; `src/runners/prove-job.ts` (lifecycle) imports `judgeWorkloadProof`/`proofBudget`; `scripts/lib/collect-offers.mjs` (tenancy) imports `workloadGateContext`. Placing any one of them in a single domain would turn those existing edges into NEW domain-to-domain violations (rule 5, \u00a73.2) \u2014 cut (iii) would grow by one violation per cross-domain importer, not stay flat. `config` is the one layer every domain already imports legally, which is exactly why the whole file sat there as one piece before this split. Re-cutting these four into their target domains is real work for a LATER wave, once the callers themselves go through a domain-owned record instead of calling the registry straight across a domain boundary."

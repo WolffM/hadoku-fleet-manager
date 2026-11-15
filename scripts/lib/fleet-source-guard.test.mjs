@@ -35,6 +35,8 @@ const ALLOWED = {
 		'scheduled bootcamp can write through it too)',
 	'src/lib/fleet-paths.ts': 'defines reposDir, and siteRoot() falls back to it',
 	'src/cli.ts': '--help text naming the variable',
+	'src/env-reads.ts':
+		'declares REPOS_DIR among the env names the package reads; reads nothing (fleet-manager#81)',
 	'scripts/lib/identity-model-fixtures.mjs':
 		'a test rig (wave 5q lane C, split out of check-identity-model.test.mjs, which this walk ' +
 		'never scanned — a test file by name): it only sets REPOS_DIR in the env it hands the ' +
