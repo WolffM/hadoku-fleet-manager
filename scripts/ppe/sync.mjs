@@ -6,12 +6,13 @@ import { pathToFileURL } from 'node:url';
 
 import {
 	CouldNotLook,
-	fetchPushToken,
 	fail,
 	hydrate,
 	log,
 	makeApi,
 	openRepo,
+	pushTokenConfigError,
+	pushTokenSource,
 	reportIssue,
 	setOutput,
 	summary,
@@ -21,11 +22,11 @@ export function syncMessage(mainBranch, ppeBranch, mainSha) {
 	return `Merge ${mainBranch} into ${ppeBranch} at ${mainSha.slice(0, 7)}\n\nSession: sync-main-to-ppe\n`;
 }
 
-export function syncOnce(o) {
+export async function syncOnce(o) {
 	const { mainBranch, ppeBranch } = o;
-	const { git } = openRepo({
+	const { git, arm } = openRepo({
 		remote: o.remote,
-		pushToken: o.pushToken,
+		readToken: o.readToken,
 		branches: [mainBranch, ppeBranch],
 	});
 	const mainSha = git(['rev-parse', `o/${mainBranch}`]).trim();
@@ -55,6 +56,8 @@ export function syncOnce(o) {
 		git.try(['merge', '--abort']);
 		return { action: 'conflict', mainSha, ppeSha, conflicted };
 	}
+	// Minted only now, with a merge in hand: a no-op sync never needs it.
+	arm(await o.pushToken());
 	const push = git.try(['push', '-q', 'origin', `HEAD:refs/heads/${ppeBranch}`]);
 	if (!push.ok) return { action: 'retry', mainSha };
 	return { action: 'merged', mainSha, mergeSha: git(['rev-parse', 'HEAD']).trim() };
@@ -64,38 +67,29 @@ export async function main(env = process.env) {
 	const repo = env.GITHUB_REPOSITORY;
 	const o = {
 		remote: env.PPE_REMOTE || `https://github.com/${repo}.git`,
-		pushToken: null,
+		readToken: env.GITHUB_TOKEN || null,
+		pushToken: pushTokenSource(env),
 		mainBranch: env.PPE_MAIN_BRANCH || 'main',
 		ppeBranch: env.PPE_BRANCH || 'ppe',
 	};
-	// PPE_REMOTE is the tests' local remote, which needs no credential.
-	if (!env.PPE_REMOTE) {
-		if (!env.FLEET_SERVICE_KEY || !env.PPE_PUSH_TOKEN_URL) {
-			fail(
-				'FLEET_SERVICE_KEY and PPE_PUSH_TOKEN_URL are both required: could not get a push token, so nothing was merged'
-			);
-			return 1;
-		}
-		try {
-			o.pushToken = await fetchPushToken({
-				url: env.PPE_PUSH_TOKEN_URL,
-				serviceKey: env.FLEET_SERVICE_KEY,
-			});
-		} catch (err) {
-			fail(`could not get a push token, so nothing was merged: ${err.message}`);
-			return 1;
-		}
+	const configError = pushTokenConfigError(env);
+	if (configError) {
+		fail(`${configError}: could not get a push token, so nothing was merged`);
+		return 1;
 	}
 	let r;
 	try {
 		for (let attempt = 1; attempt <= 3; attempt++) {
-			r = syncOnce(o);
+			r = await syncOnce(o);
 			if (r.action !== 'retry') break;
 			log(`attempt ${attempt}: ${o.ppeBranch} moved while merging; merging again`);
 		}
 	} catch (err) {
 		if (!(err instanceof CouldNotLook)) throw err;
-		fail(`could not look, so nothing was merged: ${err.message}`);
+		const what = err.message.startsWith('push token:')
+			? 'could not get a push token'
+			: 'could not look';
+		fail(`${what}, so nothing was merged: ${err.message}`);
 		setOutput('action', 'could-not-look', env);
 		return 1;
 	}

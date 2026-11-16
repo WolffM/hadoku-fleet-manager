@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CouldNotLook, fetchPushToken, gitEnv } from './lib.mjs';
+import { CouldNotLook, fetchPushToken, gitEnv, pushTokenSource } from './lib.mjs';
 
 const answer = (status, body) => async () =>
 	new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
@@ -61,4 +61,20 @@ test('the token reaches git as an https extraheader, and nothing else carries it
 	);
 	assert.deepEqual(elsewhere, []);
 	assert.equal(gitEnv(null).GIT_CONFIG_COUNT, undefined, 'no token, no header');
+});
+
+test('the push token is minted on first use, once, and a failed mint is tried again', async () => {
+	const answers = [answer(502, {}), answer(200, { token: 'ghs_a' })];
+	let calls = 0;
+	const fetchImpl = (...a) => answers[Math.min(calls++, 1)](...a);
+	const get = pushTokenSource(
+		{ PPE_PUSH_TOKEN_URL: 'https://b/t', FLEET_SERVICE_KEY: 'k' },
+		fetchImpl
+	);
+	assert.equal(calls, 0, 'nothing is minted until a push asks for it');
+	await assert.rejects(get(), CouldNotLook);
+	assert.equal(await get(), 'ghs_a');
+	assert.equal(await get(), 'ghs_a');
+	assert.equal(calls, 2);
+	assert.equal(await pushTokenSource({ PPE_REMOTE: '/r' })(), null, 'a local remote needs none');
 });

@@ -96,12 +96,45 @@ export function makeGit(cwd, env) {
 }
 
 /**
- * A partial clone holding only `main` and `ppe` as o/main and o/ppe.
- * `tree:0` fetches commits alone, so deciding costs no trees or blobs; a
- * revert or merge pulls the ones it touches on demand from the promisor.
+ * The push token, minted on first use and only then. Most runs push nothing (a
+ * promotion's own push to main, a promoter tick inside the cadence), and a
+ * mint that fails must not turn those red (fleet-manager#101). Returns null
+ * for the tests' local remote when no URL is named: it needs no credential.
+ * The URL and key must both be named or neither; that is checked up front by
+ * `pushTokenConfigError`, because a missing secret is a fault on every run.
  */
-export function openRepo({ remote, pushToken, branches }) {
-	const env = gitEnv(pushToken);
+export function pushTokenSource(env, fetchImpl) {
+	let pending = null;
+	return () => {
+		if (!env.PPE_PUSH_TOKEN_URL) return Promise.resolve(null);
+		pending ??= fetchPushToken({
+			url: env.PPE_PUSH_TOKEN_URL,
+			serviceKey: env.FLEET_SERVICE_KEY,
+			fetchImpl,
+		}).catch((err) => {
+			pending = null;
+			throw err;
+		});
+		return pending;
+	};
+}
+
+/** Why the push token cannot be minted at all, or null. */
+export function pushTokenConfigError(env) {
+	if (env.PPE_REMOTE && !env.PPE_PUSH_TOKEN_URL) return null;
+	if (env.FLEET_SERVICE_KEY && env.PPE_PUSH_TOKEN_URL) return null;
+	return 'FLEET_SERVICE_KEY and PPE_PUSH_TOKEN_URL are both required';
+}
+
+/**
+ * A partial clone holding only `main` and `ppe` as o/main and o/ppe, read with
+ * the job's own token (`readToken`, contents: read). `tree:0` fetches commits
+ * alone, so deciding costs no trees or blobs; a revert or merge pulls the ones
+ * it touches on demand from the promisor. `arm(pushToken)` switches every
+ * later git call to the push token, so it is minted only once a push is due.
+ */
+export function openRepo({ remote, readToken, branches }) {
+	const env = gitEnv(readToken);
 	const dir = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), 'ppe-repo-'));
 	const git = makeGit(dir, env);
 	git(['init', '-q']);
@@ -114,7 +147,14 @@ export function openRepo({ remote, pushToken, branches }) {
 	git(['config', 'remote.origin.promisor', 'true']);
 	git(['config', 'remote.origin.partialclonefilter', 'tree:0']);
 	fetchBranches(git, branches);
-	return { git, dir };
+	const arm = (pushToken) => {
+		// The read token's header goes; gitEnv names these three and no others.
+		delete env.GIT_CONFIG_COUNT;
+		delete env.GIT_CONFIG_KEY_0;
+		delete env.GIT_CONFIG_VALUE_0;
+		Object.assign(env, gitEnv(pushToken));
+	};
+	return { git, dir, arm };
 }
 
 export function fetchBranches(git, branches) {

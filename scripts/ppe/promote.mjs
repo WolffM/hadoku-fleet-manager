@@ -23,13 +23,14 @@ import {
 } from './decide.mjs';
 import {
 	CouldNotLook,
-	fetchPushToken,
 	fail,
 	hydrate,
 	log,
 	makeApi,
 	notice,
 	openRepo,
+	pushTokenConfigError,
+	pushTokenSource,
 	reportIssue,
 	setOutput,
 	summary,
@@ -196,9 +197,9 @@ async function fileIssue(api, result, title, body) {
  */
 export async function promoteOnce(o) {
 	const { api, mainBranch, ppeBranch } = o;
-	const { git } = openRepo({
+	const { git, arm } = openRepo({
 		remote: o.remote,
-		pushToken: o.pushToken,
+		readToken: o.readToken,
 		branches: [mainBranch, ppeBranch],
 	});
 	const mainSha = git(['rev-parse', `o/${mainBranch}`]).trim();
@@ -258,6 +259,8 @@ export async function promoteOnce(o) {
 	if (d.promote) {
 		// A plain push of an existing commit: git refuses it unless it is a
 		// fast-forward, which is the only promotion there is. Never --force.
+		// The push token is minted here, not before: most ticks push nothing.
+		arm(await o.pushToken());
 		const push = git.try(['push', '-q', 'origin', `${d.promote.sha}:refs/heads/${mainBranch}`]);
 		if (push.ok) {
 			result.action = 'promoted';
@@ -304,6 +307,7 @@ export async function promoteOnce(o) {
 		}
 		if (d.revert) {
 			git(['commit', '-q', '-m', revertMessage(d.revert)]);
+			arm(await o.pushToken());
 			const push = git.try(['push', '-q', 'origin', `HEAD:refs/heads/${ppeBranch}`]);
 			if (!push.ok) {
 				// ppe moved: decide again on the new tip rather than push over it.
@@ -352,7 +356,8 @@ export async function main(env = process.env) {
 	const o = {
 		api: makeApi({ token: env.GITHUB_TOKEN, repo, base: env.GITHUB_API_URL }),
 		remote: env.PPE_REMOTE || `https://github.com/${repo}.git`,
-		pushToken: null,
+		readToken: env.GITHUB_TOKEN,
+		pushToken: pushTokenSource(env),
 		mainBranch: env.PPE_MAIN_BRANCH || 'main',
 		ppeBranch: env.PPE_BRANCH || 'ppe',
 		force: env.PPE_FORCE === 'true',
@@ -362,23 +367,10 @@ export async function main(env = process.env) {
 		fail('no GITHUB_TOKEN: could not look, so nothing was promoted or reverted');
 		return 1;
 	}
-	// PPE_REMOTE is the tests' local remote, which needs no credential.
-	if (!env.PPE_REMOTE) {
-		if (!env.FLEET_SERVICE_KEY || !env.PPE_PUSH_TOKEN_URL) {
-			fail(
-				'FLEET_SERVICE_KEY and PPE_PUSH_TOKEN_URL are both required: could not get a push token, so nothing was promoted or reverted'
-			);
-			return 1;
-		}
-		try {
-			o.pushToken = await fetchPushToken({
-				url: env.PPE_PUSH_TOKEN_URL,
-				serviceKey: env.FLEET_SERVICE_KEY,
-			});
-		} catch (err) {
-			fail(`could not get a push token, so nothing was promoted or reverted: ${err.message}`);
-			return 1;
-		}
+	const configError = pushTokenConfigError(env);
+	if (configError) {
+		fail(`${configError}: could not get a push token, so nothing was promoted or reverted`);
+		return 1;
 	}
 	let result;
 	try {
@@ -389,7 +381,10 @@ export async function main(env = process.env) {
 		}
 	} catch (err) {
 		if (!(err instanceof CouldNotLook)) throw err;
-		fail(`could not look, so nothing was promoted or reverted: ${err.message}`);
+		const what = err.message.startsWith('push token:')
+			? 'could not get a push token'
+			: 'could not look';
+		fail(`${what}, so nothing was promoted or reverted: ${err.message}`);
 		summary(
 			`### ppe promotion: could not look\n\n${err.message}\n\nNothing was promoted or reverted.`,
 			env

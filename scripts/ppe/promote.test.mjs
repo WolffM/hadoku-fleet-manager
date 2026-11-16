@@ -22,15 +22,33 @@ async function run(repo, state, extra = {}) {
 	}
 }
 
-test('no service key, or no push token: refuses before touching anything', async () => {
+const UNMINTABLE = { FLEET_SERVICE_KEY: 'k', PPE_PUSH_TOKEN_URL: 'http://127.0.0.1:1/push-token' };
+
+test('a token URL with no service key is refused before touching anything', async () => {
 	assert.equal(await main({ GITHUB_REPOSITORY: 'o/r', GITHUB_TOKEN: 'x' }), 1);
-	const unreachable = {
-		GITHUB_REPOSITORY: 'o/r',
-		GITHUB_TOKEN: 'x',
-		FLEET_SERVICE_KEY: 'k',
-		PPE_PUSH_TOKEN_URL: 'http://127.0.0.1:1/push-token',
-	};
-	assert.equal(await main(unreachable), 1);
+	assert.equal(
+		await main({ GITHUB_REPOSITORY: 'o/r', GITHUB_TOKEN: 'x', PPE_PUSH_TOKEN_URL: 'http://x' }),
+		1
+	);
+});
+
+test('nothing to promote: green without minting a push token (fleet-manager#101)', async () => {
+	const repo = makeRepo();
+	const { code, out } = await run(repo, { checks: {}, activity: idle }, UNMINTABLE);
+	assert.equal(code, 0);
+	assert.equal(out.action, 'none');
+});
+
+test('a promotion is due and no token can be minted: red, and main untouched', async () => {
+	const repo = makeRepo();
+	const before = remoteSha(repo.bare, 'main');
+	const g = commit(repo.work, 'a.txt', 'one\n', 'one');
+	git(repo.work, 'push', '-q', 'origin', 'HEAD:refs/heads/ppe');
+
+	const { code, out } = await run(repo, { checks: { [g]: 'success' }, activity: idle }, UNMINTABLE);
+	assert.equal(code, 1);
+	assert.equal(out.action, 'could-not-look');
+	assert.equal(remoteSha(repo.bare, 'main'), before);
 });
 
 test('fast-forwards main to the newest green ppe commit, past a pending tip', async () => {

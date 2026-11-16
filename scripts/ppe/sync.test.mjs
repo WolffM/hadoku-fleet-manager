@@ -25,14 +25,41 @@ function botPush(repo, file, content) {
 	return sha;
 }
 
-test('no service key, or no push token: refuses before touching anything', async () => {
+const UNMINTABLE = { FLEET_SERVICE_KEY: 'k', PPE_PUSH_TOKEN_URL: 'http://127.0.0.1:1/push-token' };
+
+async function runWith(repo, extra) {
+	const api = await fakeApi({ checks: {} });
+	try {
+		const a = actionEnv(repo, api.base, extra);
+		return { code: await main(a.env), out: a.outputs() };
+	} finally {
+		await api.close();
+	}
+}
+
+test('a token URL with no service key is refused before touching anything', async () => {
 	assert.equal(await main({ GITHUB_REPOSITORY: 'o/r' }), 1);
-	const unreachable = {
-		GITHUB_REPOSITORY: 'o/r',
-		FLEET_SERVICE_KEY: 'k',
-		PPE_PUSH_TOKEN_URL: 'http://127.0.0.1:1/push-token',
-	};
-	assert.equal(await main(unreachable), 1);
+	assert.equal(await main({ GITHUB_REPOSITORY: 'o/r', PPE_PUSH_TOKEN_URL: 'http://x' }), 1);
+});
+
+test('nothing to merge: green without minting a push token (fleet-manager#101)', async () => {
+	const repo = makeRepo();
+	const { code, out } = await runWith(repo, UNMINTABLE);
+	assert.equal(code, 0);
+	assert.equal(out.action, 'none');
+});
+
+test('a merge is due and no token can be minted: red, and ppe untouched', async () => {
+	const repo = makeRepo();
+	commit(repo.work, 'a.txt', 'feature\n', 'feature');
+	git(repo.work, 'push', '-q', 'origin', 'HEAD:refs/heads/ppe');
+	const ppe = remoteSha(repo.bare, 'ppe');
+	botPush(repo, 'deps.txt', 'bumped\n');
+
+	const { code, out } = await runWith(repo, UNMINTABLE);
+	assert.equal(code, 1);
+	assert.equal(out.action, 'could-not-look');
+	assert.equal(remoteSha(repo.bare, 'ppe'), ppe);
 });
 
 test('a bot push to main is merged into ppe, keeping both sides', async () => {
