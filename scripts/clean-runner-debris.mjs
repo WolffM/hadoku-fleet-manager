@@ -70,7 +70,13 @@ const log = emitter.log;
 // 600 s for `ci:claw-cleanup`, or the consumer kills the run before a slow
 // node's own timeout can name it. Measured 2026-11-03 once #50's lsof fixes
 // landed: every node 2-10 s (hokon slowest), from 600 s+ before.
-const NODE_TIMEOUT_MS = 90_000;
+//
+// 240 s, not 90 (fleet-manager#105). Under `--confirm` the tail is longer than
+// the dry run: mgmt-api's 13:15 runs finished in 15-60 s on ten nights from
+// 11-04 to 11-16, and the other three (11-06, 11-10, 11-16) ended at exactly
+// 13:16:30, a node killed at 90 s partway through its removals. Still well
+// inside the consumer's 600 s, and a node that hangs is still named.
+const NODE_TIMEOUT_MS = 240_000;
 const GB = (kb) => (kb / 1048576).toFixed(2);
 
 const script = readFileSync(SCRIPT_SRC, 'utf8');
@@ -116,6 +122,25 @@ const DRAINS = readDrains();
 // Already paged as down by runner-health's own offline alert (observed,
 // never a declaration — see lib/known-down.mjs).
 const KNOWN_DOWN = knownDownNodes();
+
+/**
+ * Why a node gave no SUMMARY, reason FIRST (fleet-manager#105).
+ *
+ * The consumer prints the first line of `error`. That used to be the node's
+ * raw output, so a node killed at the timeout after its first removal paged as
+ * `hokon (REMOVED .hadoku/jit/slot1/_work/hadoku-bomberman)`: a progress line
+ * standing where the reason belongs. `runOn` already names the reason (a
+ * timeout, ssh's own last stderr line); the last progress line follows it, as
+ * where the node was when it stopped, then the raw output.
+ */
+function noResultError(r) {
+	const reason = (r.error ?? '').trim() || 'exited without a SUMMARY line';
+	const progress = (r.stdout ?? '').trim().split('\n').filter(Boolean);
+	const where = progress.length
+		? `\nlast output (${progress.length} line(s)): ${progress.at(-1)}`
+		: '';
+	return `${reason}${where}\n${r.out.trim().slice(0, 300)}`.trim();
+}
 
 async function cleanNode(m) {
 	const lines = [];
@@ -179,8 +204,9 @@ async function cleanNode(m) {
 				result: { machine: m, ok: true, knownDown: down, skipped: 'known down' },
 			};
 		}
-		say(`── ${m}\n   ✗ unreachable: ${r.out.trim().slice(0, 160)}`);
-		return { lines, kb: 0, result: { machine: m, ok: false, error: r.out.trim().slice(0, 300) } };
+		const error = noResultError(r);
+		say(`── ${m}\n   ✗ no result: ${error.split('\n')[0]}`);
+		return { lines, kb: 0, result: { machine: m, ok: false, error } };
 	}
 	const f = Object.fromEntries(
 		summary

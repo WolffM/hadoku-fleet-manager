@@ -291,3 +291,47 @@ test('a node no night has swept in a fortnight is a FINDING; a dry run neither r
 	assert.deepEqual(dry.doc.findings, []);
 	assert.deepEqual(dry.saved, log, 'a dry run writes nothing');
 });
+
+// ── fleet-manager#105: the reason leads, not the node's progress output ─────
+//
+// The consumer prints the first line of a failed node's `error`. On 2026-11-16
+// that line was `REMOVED .hadoku/jit/slot1/_work/hadoku-bomberman`: hokon was
+// killed at the node timeout after one removal, and its stdout stood where the
+// reason belongs.
+const DIES_MIDWAY_SHIM = `#!/usr/bin/env bash
+cat > /dev/null
+echo "REMOVED .hadoku/jit/slot1/_work/hadoku-bomberman"
+echo "REMOVED .hadoku/jit/slot2/_work/hadoku-cardtable"
+echo "bash: line 412: du: Input/output error" >&2
+exit 1
+`;
+
+test('#105: a node that stops before its SUMMARY reports the reason first, its last progress after', (t) => {
+	const root = mkdtempSync(join(tmpdir(), 'crd-cli-'));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	writeFileSync(
+		join(root, 'fleet-runner-manifest.json'),
+		JSON.stringify({ machines: { 'fixture-a': {} } })
+	);
+	const bin = join(root, 'bin');
+	mkdirSync(bin);
+	writeFileSync(join(bin, 'ssh'), DIES_MIDWAY_SHIM);
+	chmodSync(join(bin, 'ssh'), 0o755);
+	const outPath = join(root, 'out.json');
+	const r = spawnSync('sh', ['-c', `node "${SCRIPT}" --json > "${outPath}" 2>/dev/null`], {
+		env: {
+			...process.env,
+			PATH: `${bin}:${process.env.PATH}`,
+			FLEET_MANIFEST_DIR: root,
+			HADOKU_STATE_DIR: root,
+		},
+	});
+	const doc = JSON.parse(readFileSync(outPath, 'utf8'));
+	assert.equal(r.status, 1, 'a node with no SUMMARY still fails the run');
+	const [a] = doc.results;
+	assert.equal(a.ok, false);
+	const [first, second] = a.error.split('\n');
+	// MUTATION: put `r.out` back as the error and this reads the REMOVED line.
+	assert.equal(first, 'bash: line 412: du: Input/output error');
+	assert.equal(second, 'last output (2 line(s)): REMOVED .hadoku/jit/slot2/_work/hadoku-cardtable');
+});
