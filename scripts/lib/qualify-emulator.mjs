@@ -88,6 +88,30 @@ const p75 = (rows) => ({
 });
 
 /**
+ * PURE. This node's own p75 job peak memory, MiB, over the profile window:
+ * the same rows and percentile {@link jobProfile} takes as `own`. `peakMb` is
+ * null under MIN_NODE_ROWS, and `rows` says how many there were.
+ *
+ * @param {object[]} metrics this node's job-metrics rows
+ * @param {object[]} history the controller's job-history rows
+ * @param {number} nowMs
+ */
+export function ownJobPeak(metrics, history, nowMs) {
+	const rows = jobCosts(metrics, durations(history), nowMs - PROFILE_DAYS * 86_400_000);
+	return {
+		rows: rows.length,
+		peakMb: rows.length >= MIN_NODE_ROWS ? Math.ceil(p75(rows).peakMb) : null,
+	};
+}
+
+function durations(history) {
+	const dur = new Map();
+	for (const h of history)
+		if (h?.jobId && Number.isFinite(h.durationSec)) dur.set(String(h.jobId), h.durationSec);
+	return dur;
+}
+
+/**
  * PURE. The emulated job: the harsher of the fleet's p75 job and this node's.
  * `{ ok:false, reason }` when the fleet sample is too thin to call it a
  * measurement.
@@ -99,9 +123,7 @@ const p75 = (rows) => ({
  */
 export function jobProfile(metricsByNode, history, node, nowMs) {
 	const since = nowMs - PROFILE_DAYS * 86_400_000;
-	const dur = new Map();
-	for (const h of history)
-		if (h?.jobId && Number.isFinite(h.durationSec)) dur.set(String(h.jobId), h.durationSec);
+	const dur = durations(history);
 	const byNode = Object.fromEntries(
 		Object.entries(metricsByNode).map(([n, rows]) => [n, jobCosts(rows, dur, since)])
 	);

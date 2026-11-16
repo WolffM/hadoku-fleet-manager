@@ -13,9 +13,20 @@
  *
  * So the test fills `/tmp` to TMP_FILL_PCT of its size, inside a directory of
  * its own, reads MemAvailable while it is full, and deletes what it wrote.
- * It fails when a full `/tmp` leaves less than `minFreeMb + HEAVY_JOB_MB`: on
- * that node, the debris of ONE job that used `/tmp` freely is enough to stop
- * every mint.
+ * It fails when a full `/tmp` leaves less than `minFreeMb` plus ONE JOB OF THE
+ * WORK THIS NODE IS GIVEN: on that node, the debris of one job that used
+ * `/tmp` freely is enough to stop the mints it actually takes.
+ *
+ * THE JOB IS THE NODE'S OWN, not a fixed 4096 (issue #107, operator decision
+ * 2026-11-16). The bar was `minFreeMb + HEAVY_JOB_MB` until then, and since
+ * /tmp is half of RAM, an 8-12 GB claw could not meet it however clean it
+ * was: claw-1 (12 GB) read 5707 against 6144 and claw-2 (8 GB) 3219 against
+ * 5632, on idle, drained nodes. The job is now this node's own p75 job peak
+ * over the profile window ({@link ownJobPeak}, the `own` half concurrency-ramp
+ * already emulates), capped at HEAVY_JOB_MB so the bar never rises above what
+ * it was. A node with too few jobs of its own, or whose job-metrics or the
+ * controller's job-history cannot be read, keeps HEAVY_JOB_MB and the verdict
+ * says why: not being able to look makes the bar stricter, never looser.
  *
  * The fill never pushes a node below its own floor: it checks MemAvailable
  * before every chunk and stops at `minFreeMb`, which is itself a fail, because
@@ -24,14 +35,17 @@
  * separate cleanup call whatever happened.
  */
 import { JOB_RESERVE_DEFAULT_MB } from '../../dist/lib/job-reserve.js';
+import { METRICS_MAX_BUFFER, readControllerHistory } from './qualify-concurrency.mjs';
+import { PROFILE_DAYS, ownJobPeak } from './qualify-emulator.mjs';
+import { READ_END, metricsReadScript, metricsSince, parseMetrics } from './job-metrics-read.mjs';
 import { QUALIFY_TTL_DAYS } from './qualify-registry.mjs';
 
 /**
  * One heavy job's memory, MiB: what mint admission reserves for a job nothing
  * has measured (JOB_RESERVE_DEFAULT_MB, 4096: ~1.4x the worst of 674 measured
  * job windows, p95 2,663 MB, max 2,954 MB). Read from admission's own constant,
- * not copied, so this bar moves when admission's reserve does: the question is
- * exactly "would admission take one more unmeasured job".
+ * not copied. Since #107 it is the CAP on the job the bar adds, and the job
+ * used when the node's own cannot be measured.
  */
 export const HEAVY_JOB_MB = JOB_RESERVE_DEFAULT_MB;
 
@@ -179,15 +193,23 @@ export function parseFill(out) {
  * @param {number} a.targetMb what the fill set out to write
  * @param {number} a.tmpSizeMb
  * @param {Partial<ReturnType<typeof parseFill>>} a.fill
+ * @param {{ mb: number, basis: string }} [a.job] the one job the bar adds; HEAVY_JOB_MB when absent
  */
-export function judgeHeadroom({ minFreeMb, targetMb, tmpSizeMb, fill }) {
-	const needMb = minFreeMb + HEAVY_JOB_MB;
+export function judgeHeadroom({
+	minFreeMb,
+	targetMb,
+	tmpSizeMb,
+	fill,
+	job = { mb: HEAVY_JOB_MB, basis: `the ${HEAVY_JOB_MB} MiB unmeasured-job reserve` },
+}) {
+	const needMb = minFreeMb + job.mb;
 	const a = fill.fullAvailMb ?? null;
 	const filled = fill.filledMb ?? 0;
 	const metrics = {
 		needMb,
 		minFreeMb,
-		heavyJobMb: HEAVY_JOB_MB,
+		jobMb: job.mb,
+		jobBasis: job.basis,
 		tmpSizeMb,
 		targetMb,
 		filledMb: fill.filledMb ?? null,
@@ -207,7 +229,7 @@ export function judgeHeadroom({ minFreeMb, targetMb, tmpSizeMb, fill }) {
 					: null;
 	const short = shortBy ? `the fill stopped at ${filled} of ${targetMb} MiB (${shortBy})` : null;
 	const full = `with /tmp at ${fill.fullTmpUsedMb ?? '?'} of ${tmpSizeMb} MiB`;
-	const bar = `${needMb} MiB (minFreeMb ${minFreeMb} + one heavy job ${HEAVY_JOB_MB} MiB)`;
+	const bar = `${needMb} MiB (minFreeMb ${minFreeMb} + one job ${job.mb} MiB, ${job.basis})`;
 
 	let v;
 	if (a === null)
@@ -216,7 +238,7 @@ export function judgeHeadroom({ minFreeMb, targetMb, tmpSizeMb, fill }) {
 		v = {
 			status: 'fail',
 			reason:
-				`${full}, MemAvailable ${a} MiB < ${bar}: mint admission would refuse every unmeasured job` +
+				`${full}, MemAvailable ${a} MiB < ${bar}: mint admission would refuse that job` +
 				(short ? `; ${short}` : ''),
 		};
 	else if (short)
@@ -229,6 +251,44 @@ export function judgeHeadroom({ minFreeMb, targetMb, tmpSizeMb, fill }) {
 	return { ...v, metrics };
 }
 
+/**
+ * The one job the bar adds on this node: its own p75 job peak, capped at
+ * HEAVY_JOB_MB, or HEAVY_JOB_MB with the reason it could not be measured.
+ * Never throws.
+ */
+export async function nodeJob(ctx, readHistory = readControllerHistory) {
+	const fallback = (why) => ({
+		mb: HEAVY_JOB_MB,
+		basis: `the ${HEAVY_JOB_MB} MiB default: ${why}`,
+	});
+	const read = await ctx.exec(metricsReadScript(metricsSince(ctx.nowMs, PROFILE_DAYS)), {
+		timeoutMs: 120_000,
+		maxBuffer: METRICS_MAX_BUFFER,
+	});
+	if (!String(read.stdout ?? '').includes(READ_END))
+		return fallback(
+			`the node's job-metrics read did not finish (${tail(read) || 'no end sentinel'})`
+		);
+	let history;
+	try {
+		history = readHistory();
+	} catch (e) {
+		return fallback(`the controller's job-history is unreadable (${e.message})`);
+	}
+	const own = ownJobPeak(
+		parseMetrics(String(read.stdout).split(READ_END)[0]).rows,
+		history,
+		ctx.nowMs
+	);
+	if (own.peakMb === null)
+		return fallback(
+			`this node has ${own.rows} measured job(s) in ${PROFILE_DAYS} d, too few to count`
+		);
+	return own.peakMb > HEAVY_JOB_MB
+		? { mb: HEAVY_JOB_MB, basis: `this node's p75 job of ${own.rows} is ${own.peakMb} MiB, capped` }
+		: { mb: own.peakMb, basis: `this node's p75 job of ${own.rows}` };
+}
+
 const tail = (r) =>
 	String(r?.error || r?.stderr || r?.stdout || '')
 		.trim()
@@ -236,13 +296,15 @@ const tail = (r) =>
 
 /**
  * The test. `root`, a cap on the fill, the chunk and the settle are injectable
- * so the tests run it for real in /dev/shm at a tiny size; the bar is not.
+ * so the tests run it for real in /dev/shm at a tiny size; so is the job
+ * reader, which reads the node's job-metrics and the controller's history.
  */
 export function makeTmpfsTest({
 	root = '/tmp',
 	maxFillMb = Infinity,
 	chunkMb = CHUNK_MB,
 	settleSec = SETTLE_SEC,
+	jobOf = nodeJob,
 } = {}) {
 	return {
 		id: 'tmpfs-headroom',
@@ -299,6 +361,7 @@ export function makeTmpfsTest({
 				reason: `could not read the size of ${root}`,
 				metrics: {},
 			};
+		const job = await jobOf(ctx);
 		const targetMb = Math.min(
 			fillTargetMb({ sizeMb: facts.sizeMb, usedMb: facts.usedMb }),
 			maxFillMb
@@ -315,7 +378,7 @@ export function makeTmpfsTest({
 			{ timeoutMs: (fillBoundSec(settleSec) + 60) * 1000 }
 		);
 		const fill = parseFill(fillR.stdout);
-		const v = judgeHeadroom({ minFreeMb, targetMb, tmpSizeMb: facts.sizeMb, fill });
+		const v = judgeHeadroom({ minFreeMb, targetMb, tmpSizeMb: facts.sizeMb, fill, job });
 		v.metrics.beforeAvailMb = facts.availMb;
 		v.metrics.memTotalMb = facts.memTotalMb;
 		if (fillR.ok && fill.complete) return v;

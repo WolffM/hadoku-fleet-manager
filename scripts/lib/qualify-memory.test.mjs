@@ -10,6 +10,7 @@ import {
 	fillTargetMb,
 	judgeHeadroom,
 	makeTmpfsTest,
+	nodeJob,
 	parseFacts,
 	parseFill,
 	tmpfsCleanupScript,
@@ -18,6 +19,8 @@ import {
 	test as tmpfsTest,
 } from './qualify-memory.mjs';
 import { validateTest } from './qualify-registry.mjs';
+import { READ_END } from './job-metrics-read.mjs';
+import { MIN_NODE_ROWS } from './qualify-emulator.mjs';
 
 /** /dev/shm is tmpfs on every Linux box this suite runs on; a few MiB there is harmless. */
 const SHM = '/dev/shm';
@@ -138,9 +141,13 @@ void test('the whole test, end to end against this box in /dev/shm at a tiny sha
 	const before = ownDirs();
 	// A machine whose floor is 1 MiB: this box will clear it, and the point here
 	// is that the run happened and cleaned up, not this box's verdict.
-	const r = await makeTmpfsTest({ root: SHM, maxFillMb: 8, chunkMb: 4, settleSec: 0 }).run(
-		ctxFor(localExec(calls), { minFreeMb: 1 })
-	);
+	const r = await makeTmpfsTest({
+		root: SHM,
+		maxFillMb: 8,
+		chunkMb: 4,
+		settleSec: 0,
+		jobOf: async () => ({ mb: 1, basis: 'a fixture job' }),
+	}).run(ctxFor(localExec(calls), { minFreeMb: 1 }));
 	assert.equal(r.status, 'pass', JSON.stringify(r));
 	assert.equal(r.metrics.filledMb, 8);
 	assert.deepEqual(ownDirs(), before, 'a qualify-tmpfs directory was left behind');
@@ -165,6 +172,8 @@ function fakeExec({ factsR = facts(), fillR }) {
 	};
 	return { exec, calls };
 }
+/** The job a scripted node's bar adds: the old fixed reserve, so these tests keep its numbers. */
+const heavy = async () => ({ mb: HEAVY_JOB_MB, basis: 'fixture' });
 const fillOut = (avail, filled = 3542) => ({
 	ok: true,
 	stdout: `FILLED_MB ${filled}\nFULL_AVAIL_MB ${avail}\nFULL_TMP_USED_MB ${filled + 1}\nPSI_SOME_AVG10 0.00\nCLEAN\nAFTER_AVAIL_MB 5700\nFILL_END\n`,
@@ -173,7 +182,7 @@ const fillOut = (avail, filled = 3542) => ({
 
 void test('an 8 GB claw whose full /tmp leaves too little for one heavy job above its floor fails, with the numbers (the #129 shape)', async () => {
 	const { exec, calls } = fakeExec({ fillR: fillOut(2216) });
-	const r = await makeTmpfsTest().run(ctxFor(exec, { minFreeMb: 1536 }));
+	const r = await makeTmpfsTest({ jobOf: heavy }).run(ctxFor(exec, { minFreeMb: 1536 }));
 	assert.equal(r.status, 'fail');
 	const need = 1536 + HEAVY_JOB_MB;
 	assert.match(r.reason, new RegExp(`MemAvailable 2216 MiB < ${need} MiB`));
@@ -190,14 +199,14 @@ void test('a node with room to mint one heavy job above its floor while /tmp is 
 		factsR: facts({ size: 7969, avail: 14000, total: 15937 }),
 		fillR: fillOut(7000, 7171),
 	});
-	const r = await makeTmpfsTest().run(ctxFor(exec, { minFreeMb: 2048 }));
+	const r = await makeTmpfsTest({ jobOf: heavy }).run(ctxFor(exec, { minFreeMb: 2048 }));
 	assert.equal(r.status, 'pass', r.reason);
 	assert.match(r.reason, /MemAvailable 7000 MiB ≥ 6144 MiB/);
 });
 
 void test('a /tmp that is not tmpfs costs no memory to fill: pass, and nothing is written', async () => {
 	const { exec, calls } = fakeExec({ factsR: facts({ fstype: 'ext2/ext3' }) });
-	const r = await makeTmpfsTest().run(ctxFor(exec));
+	const r = await makeTmpfsTest({ jobOf: heavy }).run(ctxFor(exec));
 	assert.equal(r.status, 'pass');
 	assert.match(r.reason, /not tmpfs/);
 	assert.equal(calls.filter((c) => c.script.includes('QUALIFY_TMPFS_FILL')).length, 0);
@@ -205,11 +214,11 @@ void test('a /tmp that is not tmpfs costs no memory to fill: pass, and nothing i
 });
 
 void test('no minFreeMb, unreadable facts, or a fill with no reading are could-not-look', async () => {
-	const a = await makeTmpfsTest().run(ctxFor(fakeExec({}).exec, {}));
+	const a = await makeTmpfsTest({ jobOf: heavy }).run(ctxFor(fakeExec({}).exec, {}));
 	assert.equal(a.status, 'could-not-look');
 	assert.match(a.reason, /minFreeMb/);
 
-	const b = await makeTmpfsTest().run(
+	const b = await makeTmpfsTest({ jobOf: heavy }).run(
 		ctxFor(fakeExec({ factsR: { ok: false, stdout: '', stderr: 'Permission denied' } }).exec)
 	);
 	assert.equal(b.status, 'could-not-look');
@@ -223,7 +232,7 @@ void test('no minFreeMb, unreadable facts, or a fill with no reading are could-n
 			error: 'no answer within 400s (killed by SIGTERM)',
 		},
 	});
-	const c = await makeTmpfsTest().run(ctxFor(exec));
+	const c = await makeTmpfsTest({ jobOf: heavy }).run(ctxFor(exec));
 	assert.equal(c.status, 'could-not-look');
 	assert.match(c.reason, /killed by SIGTERM/);
 	assert.equal(calls.filter((x) => x.script.includes('QUALIFY_TMPFS_CLEANUP')).length, 1);
@@ -286,4 +295,103 @@ void test('files the fill could not delete are said, whatever the verdict', () =
 		},
 	});
 	assert.match(v.reason, /left \/tmp\/qualify-tmpfs\.Ab12Cd/);
+});
+
+// ── the job the bar adds: this node's own (#107) ───────────────────────────
+
+const NOW = Date.now();
+/** `n` jobs on this node, each `peakMb` at peak, 5 min long, inside the window. */
+function nodeJobs(n, peakMb) {
+	const metrics = [];
+	const history = [];
+	for (let i = 0; i < n; i++) {
+		metrics.push({
+			jobId: 1000 + i,
+			ts: new Date(NOW - (i + 1) * 3_600_000).toISOString(),
+			cpuUsageUsec: 300e6,
+			peakBytes: peakMb * 2 ** 20,
+			ioWriteBytes: 0,
+		});
+		history.push({ jobId: 1000 + i, durationSec: 300 });
+	}
+	return { metrics, history };
+}
+const metricsCtx = (stdout, { ok = true, stderr = '' } = {}) => ({
+	nowMs: NOW,
+	exec: async () => ({ ok, stdout, stderr }),
+});
+const jsonlOf = (rows) => rows.map((r) => JSON.stringify(r)).join('\n') + `\n${READ_END}\n`;
+
+void test("the job is this node's own p75 job peak", async () => {
+	const { metrics, history } = nodeJobs(MIN_NODE_ROWS, 1872);
+	const job = await nodeJob(metricsCtx(jsonlOf(metrics)), () => history);
+	assert.equal(job.mb, 1872);
+	assert.match(job.basis, new RegExp(`this node's p75 job of ${MIN_NODE_ROWS}`));
+});
+
+void test('a node whose own job is above the old reserve is capped at it: the bar never rises', async () => {
+	const { metrics, history } = nodeJobs(MIN_NODE_ROWS, HEAVY_JOB_MB + 900);
+	const job = await nodeJob(metricsCtx(jsonlOf(metrics)), () => history);
+	assert.equal(job.mb, HEAVY_JOB_MB);
+	assert.match(job.basis, /capped/);
+});
+
+void test('too few jobs, a cut read, or no job-history keep the old reserve, and say why', async () => {
+	const few = nodeJobs(MIN_NODE_ROWS - 1, 1000);
+	const a = await nodeJob(metricsCtx(jsonlOf(few.metrics)), () => few.history);
+	assert.equal(a.mb, HEAVY_JOB_MB);
+	assert.match(a.basis, new RegExp(`${MIN_NODE_ROWS - 1} measured job\\(s\\).*too few`));
+
+	const b = await nodeJob(
+		metricsCtx('{"jobId":1}\n', { ok: false, stderr: 'ssh: timed out' }),
+		() => []
+	);
+	assert.equal(b.mb, HEAVY_JOB_MB);
+	assert.match(b.basis, /job-metrics read did not finish.*timed out/);
+
+	const c = await nodeJob(metricsCtx(jsonlOf([])), () => {
+		throw new Error('ENOENT job-history.jsonl');
+	});
+	assert.equal(c.mb, HEAVY_JOB_MB);
+	assert.match(c.basis, /job-history is unreadable \(ENOENT/);
+});
+
+void test("#107's measured nights, judged against each node's own job", () => {
+	const full = (fullAvailMb, filledMb) => ({ filledMb, fullAvailMb, complete: true, clean: true });
+	// claw-1 (12 GB), 11-12: 5707 MiB with /tmp full; its own p75 job 2204 MiB.
+	const c1 = judgeHeadroom({
+		minFreeMb: 2048,
+		targetMb: 5328,
+		tmpSizeMb: 5943,
+		fill: full(5707, 5328),
+		job: { mb: 2204, basis: 'own' },
+	});
+	assert.equal(c1.status, 'pass', c1.reason);
+	assert.equal(c1.metrics.needMb, 4252);
+	// claw-10 (16 GB), 11-13: a 2.2 GB tenant JVM left 5333 MiB; its own p75 job is 4046 MiB.
+	const c10 = judgeHeadroom({
+		minFreeMb: 2048,
+		targetMb: 7159,
+		tmpSizeMb: 7958,
+		fill: full(5333, 7159),
+		job: { mb: 4046, basis: 'own' },
+	});
+	assert.equal(c10.status, 'fail');
+	assert.match(c10.reason, /one job 4046 MiB, own/);
+});
+
+void test("run() adds the node's own job to the bar and names it", async () => {
+	const { exec } = fakeExec({
+		factsR: facts({ size: 5943, used: 20, avail: 10903, total: 11885 }),
+		fillR: fillOut(5707, 5328),
+	});
+	const r = await makeTmpfsTest({
+		jobOf: async () => ({ mb: 2204, basis: "this node's p75 job of 847" }),
+	}).run(ctxFor(exec, { minFreeMb: 2048 }));
+	assert.equal(r.status, 'pass', r.reason);
+	assert.match(
+		r.reason,
+		/≥ 4252 MiB \(minFreeMb 2048 \+ one job 2204 MiB, this node's p75 job of 847\)/
+	);
+	assert.equal(r.metrics.jobMb, 2204);
 });

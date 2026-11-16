@@ -156,7 +156,7 @@ const jsonl = (text) =>
 		});
 
 /** The controller's job-history, read where the dispatcher writes it. */
-function readControllerHistory() {
+export function readControllerHistory() {
 	return jsonl(readFileSync(join(stateDir(), 'job-history.jsonl'), 'utf8'));
 }
 
