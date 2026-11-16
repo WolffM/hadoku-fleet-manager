@@ -20,7 +20,7 @@ import { orderCandidates, type TrafficNode } from './traffic.js';
 import { isSchedulable } from './schedulable.js';
 import { nodeHome } from '../lib/node-users.js';
 import { isBackstopHeld } from './backstop-hold.js';
-import { idleSecondsByNode } from '../job-history-index.js';
+import { idleSecondsByNode } from '../job-history-stats.js';
 import { logger } from '../host.js';
 import { withGhCaller } from '../gh-budget.js';
 import { runDispatchTick } from './dispatch-tick.js';

@@ -1957,13 +1957,6 @@
     "why": "fleet-manager#49: summarise()'s fold, memoised on the store's historyVersion(), split out of job-history-stats.ts. Same layer as the file it serves; it reads only job-history-store/-zone, job-kind and census, as job-history-stats.ts did."
   },
   {
-    "glob": "src/job-history-index.ts",
-    "layer": "domain",
-    "domain": "observation",
-    "part": "core",
-    "why": "fleet-manager#86 history index: figures over the job-history window (last end per node, jobs per repo), kept current from job-history-store's change events instead of re-scanned per tick. Same layer as job-history-stats.ts, whose pure functions are its reference; it reads job-history-store (state) and census's nodeOf (observation core)."
-  },
-  {
     "glob": "src/run-listing-gap.ts",
     "layer": "domain",
     "domain": "observation",

@@ -20,7 +20,7 @@
  */
 
 import { mintsOnDemand } from '../lib/node-role.js';
-import { jobsPerDayByRepo } from '../job-history-index.js';
+import { jobRecords } from '../job-history-store.js';
 import { admitMint, spaceRefusal } from './ephemeral-admission.js';
 import { TMP_FREE_FLOOR_MB } from '../lib/jit-naming.js';
 import { type EphemeralTickInput } from './ephemeral-shared.js';
@@ -107,11 +107,22 @@ export function admissionVerdictFor(ns: NodeState, reserveBasis: ReserveSource):
  * hand-maintained list going stale, and it was wired to nothing.
  */
 export function recentJobsPerDay(): Map<string, number> {
+	const out = new Map<string, number>();
 	try {
-		return jobsPerDayByRepo();
+		const records = jobRecords();
+		if (!records.length) return out;
+		let oldest = Infinity;
+		for (const r of records) {
+			const t = Date.parse(r.startedAt);
+			if (Number.isFinite(t)) oldest = Math.min(oldest, t);
+		}
+		const days = Math.max(1, (Date.now() - oldest) / 86_400_000);
+		const counts = new Map<string, number>();
+		for (const r of records) counts.set(r.repo, (counts.get(r.repo) ?? 0) + 1);
+		for (const [repo, n] of counts) out.set(repo, n / days);
 	} catch {
 		// A missing or unreadable history means every repo polls cold — slower,
 		// never wrong. It must not take the dispatch pass down with it.
-		return new Map();
 	}
+	return out;
 }
