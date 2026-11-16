@@ -66,7 +66,11 @@ import type { Request, Response } from 'express';
 
 import { logger, stateDir } from '../host.js';
 import { loadFleetNodeNames } from '../lib/manifest.js';
-import { jobRecords, historyCompleteSinceMs, type JobRecord } from '../job-history-store.js';
+import {
+	historyCompleteSinceMs,
+	recordsStartedBetween,
+	type JobRecord,
+} from '../job-history-store.js';
 import { readDecisions, decisionLogDir } from '../runners/decision-log-storage.js';
 import type { DecisionRecord } from '../runners/decision-log-types.js';
 import { capacitySampleStore, CAPACITY_SAMPLE_FILE } from '../capacity-sample-store.js';
@@ -178,8 +182,8 @@ export interface PerformanceDeps {
 	readRollups?: () => RollupRead<RollupRow, FleetDayAggregate>;
 	/** `historyCompleteSinceMs` — the instant before which job-history cannot vouch a day is whole. `null`: the ledger holds nothing. */
 	historyCompleteSinceMs?: () => number | null;
-	/** Every in-memory job-history record, any day — filtered down to one day's by the caller. */
-	jobRecords?: () => readonly JobRecord[];
+	/** The job-history records that started in `[fromIso, toIso)`: the store's slice of its window. */
+	recordsStartedBetween?: (fromIso: string, toIso: string) => readonly Readonly<JobRecord>[];
 	/** Every dispatch-decision row in `[sinceMs, untilMs)`. `null`: the log could not be read. */
 	decisionsSince?: (sinceMs: number, untilMs: number) => readonly DecisionRecord[] | null;
 	/** Every capacity-sample row the store currently holds, any day. `null`: the store could not be read. */
@@ -222,7 +226,9 @@ function liveDay(
 	day: string,
 	nowMs: number,
 	nodes: readonly string[],
-	deps: Required<Pick<PerformanceDeps, 'jobRecords' | 'decisionsSince' | 'capacitySamples'>>
+	deps: Required<
+		Pick<PerformanceDeps, 'recordsStartedBetween' | 'decisionsSince' | 'capacitySamples'>
+	>
 ): FleetDayAggregate {
 	const dayStartMs = Date.parse(`${day}T00:00:00.000Z`);
 	const dayEndMs = Math.min(nowMs, dayStartMs + DAY_MS);
@@ -230,7 +236,12 @@ function liveDay(
 		const ms = Date.parse(atIso);
 		return Number.isFinite(ms) && ms >= dayStartMs && ms < dayStartMs + DAY_MS;
 	};
-	const records = deps.jobRecords().filter((r) => inDay(r.startedAt) && !r.probe);
+	const records = deps
+		.recordsStartedBetween(
+			new Date(dayStartMs).toISOString(),
+			new Date(dayStartMs + DAY_MS).toISOString()
+		)
+		.filter((r) => inDay(r.startedAt) && !r.probe);
 	const decisions = deps.decisionsSince(dayStartMs, dayEndMs);
 	const capacitySamples = deps.capacitySamples();
 	return buildFleetDayAggregate(records, nodes, {
@@ -337,7 +348,7 @@ export function buildPerformanceReportWith(
 	const today = utcDay(nowMs);
 	const completeSinceMs = (deps.historyCompleteSinceMs ?? (() => historyCompleteSinceMs(nowMs)))();
 	const liveDeps = {
-		jobRecords: deps.jobRecords ?? jobRecords,
+		recordsStartedBetween: deps.recordsStartedBetween ?? recordsStartedBetween,
 		decisionsSince: deps.decisionsSince ?? realDecisionsSince,
 		capacitySamples: deps.capacitySamples ?? realCapacitySamples,
 	};

@@ -95,6 +95,8 @@ const DAY_MS = 86_400_000;
 export interface HistoryRow {
 	r: Readonly<JobRecord>;
 	node: string;
+	/** Start in epoch ms; NaN when it will not parse. */
+	started: number;
 	/** Completion in epoch ms ({@link finishedAtMs}); NaN when the start will not parse. */
 	finished: number;
 	/** Days since the epoch, UTC, by `startedAt`; NaN when it will not parse. */
@@ -107,6 +109,7 @@ function deriveRow(r: Readonly<JobRecord>, nodes: readonly string[]): HistoryRow
 	return {
 		r,
 		node: nodeOf(r.runner, nodes),
+		started: start,
 		finished: start + (r.durationSec ?? 0) * 1000,
 		day: Math.floor(start / DAY_MS),
 		kind: jobKind(r.name),
@@ -124,7 +127,9 @@ function deriveRow(r: Readonly<JobRecord>, nodes: readonly string[]): HistoryRow
 interface ListState {
 	nodes: readonly string[];
 	rows: Map<Readonly<JobRecord>, HistoryRow>;
+	/** Per node, ascending: when its jobs finished, and when they started. */
 	ends: Map<string, number[]>;
+	starts: Map<string, number[]>;
 }
 const MAX_LISTS = 4;
 const byList = new Map<string, ListState>();
@@ -135,13 +140,25 @@ let perRepo: Map<string, number> | null = null;
 /** Records in the window: `perRepo`'s total, which an empty window must report as such. */
 let held = 0;
 
+function addTo(by: Map<string, number[]>, node: string, v: number): void {
+	if (!Number.isFinite(v)) return;
+	let xs = by.get(node);
+	if (!xs) by.set(node, (xs = []));
+	insertSorted(xs, v);
+}
+
+function removeFrom(by: Map<string, number[]>, node: string, v: number): void {
+	if (!Number.isFinite(v)) return;
+	const xs = by.get(node);
+	if (!xs || !removeSorted(xs, v)) return;
+	if (!xs.length) by.delete(node);
+}
+
 function addRow(list: ListState, r: Readonly<JobRecord>): void {
 	const row = deriveRow(r, list.nodes);
 	list.rows.set(r, row);
-	if (!Number.isFinite(row.finished)) return;
-	let xs = list.ends.get(row.node);
-	if (!xs) list.ends.set(row.node, (xs = []));
-	insertSorted(xs, row.finished);
+	addTo(list.ends, row.node, row.finished);
+	addTo(list.starts, row.node, row.started);
 }
 
 /** Take out what `r` added, by the row derived when it was added. */
@@ -149,10 +166,8 @@ function removeRow(list: ListState, r: Readonly<JobRecord>): void {
 	const row = list.rows.get(r);
 	if (!row) return;
 	list.rows.delete(r);
-	if (!Number.isFinite(row.finished)) return;
-	const xs = list.ends.get(row.node);
-	if (!xs || !removeSorted(xs, row.finished)) return;
-	if (!xs.length) list.ends.delete(row.node);
+	removeFrom(list.ends, row.node, row.finished);
+	removeFrom(list.starts, row.node, row.started);
 }
 
 function addRepo(r: Readonly<JobRecord>): void {
@@ -216,7 +231,7 @@ function listFor(nodes: readonly string[]): ListState {
 		return list;
 	}
 	const window = jobRecords(); // loads first: a load resets, then this builds
-	list = { nodes: [...nodes], rows: new Map(), ends: new Map() };
+	list = { nodes: [...nodes], rows: new Map(), ends: new Map(), starts: new Map() };
 	for (const r of window) addRow(list, r);
 	byList.set(key, list);
 	if (byList.size > MAX_LISTS) byList.delete(byList.keys().next().value as string);
@@ -280,5 +295,17 @@ export function jobsPerDayByRepo(now = Date.now()): Map<string, number> {
 	const oldest = starts.length ? starts[0] : Infinity;
 	const days = Math.max(1, (now - oldest) / 86_400_000);
 	for (const [repo, n] of perRepo) out.set(repo, n / days);
+	return out;
+}
+
+/**
+ * When each node last STARTED a job, epoch ms, by `nodeOf` over `nodes`.
+ * Starvation asks this rather than idle seconds: it needs when a node's own
+ * idle window BEGAN, not how long its last job ran. A node with no job in the
+ * window has no entry, which `checkStarvation` reads as idle the whole window.
+ */
+export function lastStartByNode(nodes: readonly string[]): Map<string, number> {
+	const out = new Map<string, number>();
+	for (const [node, xs] of listFor(nodes).starts) out.set(node, xs[xs.length - 1]);
 	return out;
 }

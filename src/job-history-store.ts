@@ -265,12 +265,47 @@ export interface JobRecord {
 export type ProbeOrigin = 'shadow' | 'forced-rerun';
 
 /**
- * THE WINDOW. Private: it changes only through this module's functions —
+ * THE WINDOW, IN START ORDER. Private: it changes only through this module's functions —
  * `appendRecords`, `patchRecord`, the trims and the load — and every one of
  * them bumps {@link historyVersion}. Readers get it through `jobRecords()`,
  * typed read-only, so a consumer cannot push, splice or assign into it.
  */
 const records: JobRecord[] = [];
+
+/**
+ * ALWAYS SORTED BY `startedAt` (plain string order; ties keep arrival order).
+ * It used to be "roughly sorted": ingest appended in fetch order and every
+ * budget trim re-sorted the whole window, so the order a reader saw changed at
+ * each trim. Kept sorted, a question about a span of time (a day, the last
+ * hours) is a binary search and a slice, not a scan, and the trims cut from the
+ * front.
+ */
+function byStart(a: Readonly<JobRecord>, b: Readonly<JobRecord>): number {
+	return a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0;
+}
+
+/** The first index whose `startedAt` is at or past `iso` (`after`: strictly past). */
+function firstFrom(iso: string, after = false): number {
+	let lo = 0;
+	let hi = records.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		const at = records[mid].startedAt;
+		if (at < iso || (after && at === iso)) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo;
+}
+
+/** Insert in start order, after any record with the same start. */
+function insertByStart(r: JobRecord): void {
+	const at =
+		records.length && records[records.length - 1].startedAt <= r.startedAt
+			? records.length
+			: firstFrom(r.startedAt, true);
+	if (at === records.length) records.push(r);
+	else records.splice(at, 0, r);
+}
 /** The same records as a set, so a patch can tell a record still held from one that left. */
 const inWindow = new Set<JobRecord>();
 export const seenRuns = new Set<number>();
@@ -379,8 +414,7 @@ export function cutoffIso(now = Date.now()): string {
 export function trimToBudget(now = Date.now()): void {
 	const excess = records.length - recordBudget;
 	if (excess <= 0) return;
-	records.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-	const gone = records.splice(0, excess);
+	const gone = records.splice(0, excess); // the oldest: the window is in start order
 	for (const r of gone) inWindow.delete(r);
 	staleOnDisk += excess;
 	changed({ kind: 'removed', records: gone });
@@ -455,7 +489,7 @@ export function loadHistory(now = Date.now()): void {
 				// one bad line, not a bad file
 			}
 		}
-		records.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+		records.sort(byStart);
 		changed({ kind: 'reset' });
 		trimToBudget(now);
 		logger.info(`[job-history] loaded ${records.length} record(s) from ${historyFile()}`);
@@ -561,15 +595,11 @@ export const COMPACT_STALE_FRACTION = 0.1;
  * rename is not lost to the rename.
  */
 export async function compactHistory(now = Date.now()): Promise<boolean> {
-	const cutoff = cutoffIso(now);
-	const keep: JobRecord[] = [];
-	const gone: JobRecord[] = [];
-	for (const r of records) (r.startedAt >= cutoff ? keep : gone).push(r);
+	// Everything that aged out is at the front: the window is in start order.
+	const gone = records.splice(0, firstFrom(cutoffIso(now)));
 	if (gone.length) {
 		staleOnDisk += gone.length;
 		for (const r of gone) inWindow.delete(r);
-		records.length = 0;
-		records.push(...keep);
 		changed({ kind: 'removed', records: gone });
 	}
 	if (staleOnDisk === 0 || staleOnDisk < records.length * COMPACT_STALE_FRACTION) return false;
@@ -589,8 +619,10 @@ export function jobRecords(): readonly Readonly<JobRecord>[] {
 export function appendRecords(fresh: readonly JobRecord[]): void {
 	loadHistory();
 	if (!fresh.length) return;
-	records.push(...fresh);
-	for (const r of fresh) inWindow.add(r);
+	for (const r of fresh) {
+		insertByStart(r);
+		inWindow.add(r);
+	}
 	changed({ kind: 'added', records: fresh });
 	// Append the new records only, the whole point of JSONL here. Rewriting the
 	// file every tick would turn a cheap append into O(window) I/O.
@@ -611,8 +643,28 @@ export function patchRecord(record: Readonly<JobRecord>, fields: Partial<JobReco
 	if (!inWindow.has(record)) return false;
 	const before = { ...record };
 	Object.assign(record as JobRecord, fields);
+	if (record.startedAt !== before.startedAt) {
+		// Keep the window in start order: take it out where it was, put it back.
+		const at = records.indexOf(record);
+		records.splice(at, 1);
+		insertByStart(record);
+	}
 	changed({ kind: 'patched', before, after: record });
 	return true;
+}
+
+/**
+ * The records that started in `[fromIso, toIso)`, in start order: a binary
+ * search and a slice of the window, never a scan. `toIso` omitted: everything
+ * from `fromIso` on. For a question about a span of time — a UTC day, the last
+ * few hours; a question about the whole window reads `jobRecords()`.
+ */
+export function recordsStartedBetween(
+	fromIso: string,
+	toIso?: string
+): readonly Readonly<JobRecord>[] {
+	loadHistory();
+	return records.slice(firstFrom(fromIso), toIso === undefined ? records.length : firstFrom(toIso));
 }
 
 /** Has this run been recorded, or claimed for a fetch this process? */

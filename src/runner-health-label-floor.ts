@@ -17,7 +17,7 @@ import {
 	type LabelFloorVerdict,
 } from './label-floor.js';
 import { isProofRunnerName } from './lib/jit-naming.js';
-import { RETENTION_DAYS, jobRecords } from './job-history-store.js';
+import { RETENTION_DAYS, recordsStartedBetween } from './job-history-store.js';
 import { setUnschedulableNodes } from './runners/schedulable.js';
 import { deriveClawState } from './runners/claw-state.js';
 import { setPm2HostBusy } from './pm2-host-busy-store.js';
@@ -105,8 +105,9 @@ let lastStaticDemandProblem: string | null = null;
 function floorWatchSet(): { labels: string[]; staticProblem: string | null } {
 	if (floorDemandOverride) return { labels: floorLabels(floorDemandOverride), staticProblem: null };
 	const nodes = loadFleetNodeNames();
-	const observed = observedFloorDemand(jobRecords(), {
-		sinceIso: new Date(Date.now() - RETENTION_DAYS * 86_400_000).toISOString(),
+	const sinceIso = new Date(Date.now() - RETENTION_DAYS * 86_400_000).toISOString();
+	const observed = observedFloorDemand(recordsStartedBetween(sinceIso), {
+		sinceIso,
 		isProof: (runner) => nodes.some((n) => isProofRunnerName(runner, n)),
 	});
 	const path = join(stateDir(), FLOOR_DEMAND_FILE);

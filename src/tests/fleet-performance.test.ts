@@ -77,6 +77,13 @@ function rollupRow(o: Partial<RollupRow> & { node: string }): RollupRow {
 	};
 }
 
+/** A test's own records, served the way the store serves its window: the ones started in the span. */
+function between(
+	records: readonly JobRecord[]
+): (fromIso: string, toIso: string) => readonly JobRecord[] {
+	return (fromIso, toIso) => records.filter((r) => r.startedAt >= fromIso && r.startedAt < toIso);
+}
+
 function storeOf(days: DayRollup[]): () => RollupRead<RollupRow, FleetDayAggregate> {
 	return () => ({ days, unreadableLines: 0, exists: true });
 }
@@ -86,7 +93,7 @@ function storeOf(days: DayRollup[]): () => RollupRead<RollupRow, FleetDayAggrega
 // rollup stays a gap. Tests that want a day to go live override it.
 const NO_LIVE: PerformanceDeps = {
 	nodes: [],
-	jobRecords: (): readonly JobRecord[] => [],
+	recordsStartedBetween: (): readonly JobRecord[] => [],
 	historyCompleteSinceMs: () => null,
 	decisionsSince: () => [],
 	capacitySamples: () => [],
@@ -110,7 +117,7 @@ void test('today is ALWAYS computed live, never from a rollup entry even if one 
 	const r = buildPerformanceReportWith(NOW, 1, {
 		nodes: ['claw-1'],
 		readRollups: storeOf([bogus]),
-		jobRecords: () => [
+		recordsStartedBetween: between([
 			{
 				repo: 'WolffM/hadoku-cardtable',
 				runId: 1,
@@ -123,7 +130,7 @@ void test('today is ALWAYS computed live, never from a rollup entry even if one 
 				queueSec: 5,
 				conclusion: 'success',
 			},
-		],
+		]),
 		historyCompleteSinceMs: () => null,
 		decisionsSince: () => [],
 		capacitySamples: () => [],
@@ -189,7 +196,7 @@ void test('operator fix-up (wave fleettab): days without a settled rollup but WI
 		readRollups: storeOf([settled]),
 		// job-history can vouch for D-3 onward: D-2/D-1/today are all within it.
 		historyCompleteSinceMs: () => Date.parse(`${d3}T00:00:00.000Z`),
-		jobRecords: () => [rec(d2), rec(d1), rec(TODAY)],
+		recordsStartedBetween: between([rec(d2), rec(d1), rec(TODAY)]),
 		decisionsSince: () => [],
 		capacitySamples: () => [],
 	});

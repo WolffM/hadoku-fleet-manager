@@ -7,7 +7,7 @@ import {
 import { logger, postDiscord as postDiscordSink } from './host.js';
 import { loadFleetNodeNames, loadEphemeralNodes } from './lib/manifest.js';
 import { jobRecords } from './job-history-store.js';
-import { nodeOf } from './runners/census.js';
+import { lastStartByNode } from './job-history-index.js';
 import { admissionVerdictsForReport, refusedRunsFor } from './admission-verdict-store.js';
 import type { ReserveSource } from './lib/job-reserve.js';
 import { ADVISORY_REPAGE_MS, alertDue, alertOnce, clearAlert } from './lib/alert-ledger.js';
@@ -140,26 +140,6 @@ async function tmpEvidence(node: string, key: string, repageMs?: number): Promis
 export const STARVED_NO_JOB_MS = 2 * 60 * 60 * 1000;
 
 /**
- * The epoch ms each node most recently STARTED a job, from job history —
- * never the end time `idleSecondsByNode` (`job-history.ts`) reads, because
- * `checkStarvation` needs to know when a node's own idle window BEGAN, not
- * how long its last job ran. A node absent from the map has no job in the
- * retained window at all, which `checkStarvation` reads as "idle forever",
- * never as "just started".
- */
-function lastStartedAtMsByNode(nodes: readonly string[]): Map<string, number> {
-	const out = new Map<string, number>();
-	for (const r of jobRecords()) {
-		const node = nodeOf(r.runner, nodes);
-		const t = Date.parse(r.startedAt);
-		if (!Number.isFinite(t)) continue;
-		const prev = out.get(node);
-		if (prev === undefined || t > prev) out.set(node, t);
-	}
-	return out;
-}
-
-/**
  * A claw refused by memory admission for hours, while the rest of the fleet
  * served work, is a FINDING — wave 4a, #100: claw-6 and claw-2 sat refused by
  * the memory clause on every tick for days, and the only places that could
@@ -213,7 +193,7 @@ function lastStartedAtMsByNode(nodes: readonly string[]): Map<string, number> {
  * ~10 minutes instead of at most daily (`ADVISORY_REPAGE_MS`, #61). `starved[node]` still flips to
  * `false` the instant the clause stops being `memory` — the PANEL must not
  * keep showing a stale finding — but the LEDGER (`clearAlert`) is only
- * touched when {@link lastStartedAtMsByNode} shows a job genuinely started
+ * touched when `lastStartByNode` (`job-history-index.ts`) shows a job genuinely started
  * within {@link STARVED_NO_JOB_MS}, which is the one fact that means the
  * starvation actually ended rather than admission merely sitting on a
  * boundary.
@@ -232,7 +212,7 @@ const BASIS_WORDS: Record<ReserveSource, string> = {
 export async function checkStarvation(data: TickReport): Promise<void> {
 	const nowMs = Date.now();
 	const nodeNames = loadFleetNodeNames();
-	const lastStarted = lastStartedAtMsByNode(nodeNames);
+	const lastStarted = lastStartByNode(nodeNames);
 	const verdicts = admissionVerdictsForReport();
 	const queuedNow = data.queued_now ?? 0;
 	const prevStarved = lastSnapshot?.starved ?? {};

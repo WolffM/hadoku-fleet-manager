@@ -24,10 +24,16 @@ import {
 	compactHistory,
 	jobRecords,
 	patchRecord,
+	recordsStartedBetween,
 	trimToBudget,
 	type JobRecord,
 } from '../job-history-store.js';
-import { historyRowOf, idleSecondsByNode, jobsPerDayByRepo } from '../job-history-index.js';
+import {
+	historyRowOf,
+	idleSecondsByNode,
+	jobsPerDayByRepo,
+	lastStartByNode,
+} from '../job-history-index.js';
 import { jobKind } from '../lib/job-kind.js';
 import { nodeOf } from '../runners/census.js';
 import { idleSecondsFromRecords } from '../job-history-stats.js';
@@ -146,6 +152,38 @@ function mismatches(step: string, lists: readonly (readonly string[])[]): string
 				);
 		}
 	}
+	// Starvation's question, the scan it used to run, per list.
+	for (const nodes of lists) {
+		const scan = new Map<string, number>();
+		for (const r of jobRecords()) {
+			const t = Date.parse(r.startedAt);
+			if (!Number.isFinite(t)) continue;
+			const node = nodeOf(r.runner, nodes);
+			if (!scan.has(node) || t > (scan.get(node) as number)) scan.set(node, t);
+		}
+		if (!same(lastStartByNode(nodes), scan))
+			out.push(`last start over [${nodes.join(', ')}] after ${step}`);
+	}
+	// The window in start order, and a span of it equal to filtering it.
+	const window = jobRecords();
+	for (let i = 1; i < window.length; i++)
+		if (window[i - 1].startedAt > window[i].startedAt) {
+			out.push(`window out of start order at ${i} after ${step}`);
+			break;
+		}
+	for (const [fromDays, toDays] of [
+		[13, 12],
+		[5, 4.5],
+		[1, 0],
+		[3, -1],
+	]) {
+		const fromIso = new Date(NOW - fromDays * DAY).toISOString();
+		const toIso = new Date(NOW - toDays * DAY).toISOString();
+		const want = window.filter((r) => r.startedAt >= fromIso && r.startedAt < toIso);
+		const got = recordsStartedBetween(fromIso, toIso);
+		if (got.length !== want.length || got.some((r, i) => r !== want[i]))
+			out.push(`span ${fromDays}..${toDays} days after ${step}: ${got.length} vs ${want.length}`);
+	}
 	const index = jobsPerDayByRepo(NOW);
 	const scan = jobsPerDayByScan(jobRecords(), NOW);
 	if (!same(index, scan))
@@ -193,6 +231,7 @@ async function drive(seed: number, lists: readonly (readonly string[])[]): Promi
 				runner: record(rand).runner,
 				name: rand() < 0.5 ? 'e2e (2)' : r.name,
 				durationSec: r.durationSec + 600,
+				...(rand() < 0.3 ? { startedAt: new Date(NOW - rand() * 13 * DAY).toISOString() } : {}),
 				conclusion: 'failure',
 			});
 			what = `patch ${r.jobId}`;

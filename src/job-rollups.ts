@@ -43,7 +43,11 @@ import { join } from 'node:path';
 
 import { logger, stateDir } from './host.js';
 import { FRESH_HORIZON_H } from './job-history-ingest.js';
-import { historyCompleteSinceMs, jobRecords, type JobRecord } from './job-history-store.js';
+import {
+	historyCompleteSinceMs,
+	recordsStartedBetween,
+	type JobRecord,
+} from './job-history-store.js';
 import { percentile } from './job-history-stats.js';
 import { failuresByZone, type FailuresByZone } from './job-history-zone.js';
 import { nodeOf, HOSTED_NODE } from './runners/census.js';
@@ -423,16 +427,15 @@ export async function writeClosedDays(opts: {
 			logger.warn(`[job-rollups] ${refused}`);
 			return { written: [], refused };
 		}
-		const dueSet = new Set(due);
-		const byDay = new Map<string, JobRecord[]>();
-		for (const r of opts.records ?? jobRecords()) {
-			const ms = Date.parse(r.startedAt);
-			if (!Number.isFinite(ms)) continue;
-			const d = utcDay(ms);
-			if (!dueSet.has(d)) continue;
-			const xs = byDay.get(d);
-			if (xs) xs.push(r);
-			else byDay.set(d, [r]);
+		// One slice of the window per due day (the store keeps it in start order),
+		// or, for a test's own list, that list filtered to the day.
+		const byDay = new Map<string, readonly Readonly<JobRecord>[]>();
+		for (const d of due) {
+			const fromIso = `${d}T00:00:00.000Z`;
+			const toIso = new Date(Date.parse(fromIso) + DAY_MS).toISOString();
+			const inSpan = (r: Readonly<JobRecord>): boolean =>
+				Number.isFinite(Date.parse(r.startedAt)) && r.startedAt >= fromIso && r.startedAt < toIso;
+			byDay.set(d, (opts.records ?? recordsStartedBetween(fromIso, toIso)).filter(inSpan));
 		}
 		const decisionsByDue = decisionsForDueDays(due, now, opts.decisions);
 		const samplesByDue = capacitySamplesForDueDays(due, opts.capacitySamples);
