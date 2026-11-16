@@ -176,10 +176,22 @@ export function isForeignRun(run: CiRun, repo: string): boolean {
  * run, as before: a target that judged nothing on a failed read would go quiet
  * on exactly the tick it could not look. A run with no `head_branch` is kept
  * for the same reason `isForeignRun` keeps one with no `head_repository`.
+ *
+ * `ppe` is never off it (fleet-manager#102). A repo on the ppe promotion model
+ * runs CI on push to `ppe` and never on its default branch, so filtering `ppe`
+ * left its `ci` target judging nothing: hadoku-fleet-manager's held a green
+ * from 2026-11-06 for ten days while two red ppe pushes went unannounced. A
+ * repo with no `ppe` branch has no runs there, so it is unaffected.
  */
+export const PROMOTION_BRANCH = 'ppe';
+
 export function isOffDefaultBranch(run: CiRun, defaultBranch: string | null): boolean {
 	if (defaultBranch === null) return false;
-	return typeof run.head_branch === 'string' && run.head_branch !== defaultBranch;
+	return (
+		typeof run.head_branch === 'string' &&
+		run.head_branch !== defaultBranch &&
+		run.head_branch !== PROMOTION_BRANCH
+	);
 }
 
 /**

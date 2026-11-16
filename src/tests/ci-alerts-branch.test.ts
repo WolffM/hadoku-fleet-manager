@@ -36,6 +36,12 @@ test('isOffDefaultBranch: only a run named on ANOTHER branch is off it', () => {
 	assert.equal(isOffDefaultBranch(r, 'main'), false);
 });
 
+test('isOffDefaultBranch: a ppe run is where a promoted repo keeps its CI (fleet-manager#102)', () => {
+	const r = ghRun(1, 'failure', '2026-11-16T02:19:52Z', '2026-11-16T02:32:00Z', 'ci.yml');
+	assert.equal(isOffDefaultBranch(onBranch(r, 'ppe'), 'main'), false);
+	assert.equal(isOffDefaultBranch(onBranch(r, 'ppe-experiment'), 'main'), true);
+});
+
 /** One tick over `runs`, answering the repo read with `repoAnswer`. */
 async function tick(runs: CiRun[], repoAnswer: () => unknown) {
 	const booked: string[] = [];
@@ -91,6 +97,14 @@ test('a verify/* red run books nothing; the same red on main books a break', asy
 	assert.equal(on.summary.evaluated, 1);
 	assert.equal(on.summary.broken, 1);
 	assert.match(on.booked[0], /CI broken/);
+});
+
+test('a red ppe run books a break: the promoted repo CI is not an experiment (fleet-manager#102)', async () => {
+	const red = ghRun(13, 'failure', minAgo(9), minAgo(2), 'forge.yml');
+	const r = await tick([onBranch(red, 'ppe')], () => ({ default_branch: 'main' }));
+	assert.equal(r.summary.offBranch, 0);
+	assert.equal(r.summary.broken, 1);
+	assert.match(r.booked[0], /CI broken/);
 });
 
 test('a default branch that cannot be read judges every branch, and says so at WARN', async () => {
