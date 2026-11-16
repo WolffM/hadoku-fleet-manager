@@ -309,6 +309,7 @@ export function __resetJobHistoryForTesting(): void {
 	loaded = false;
 	diskWarned = false;
 	staleOnDisk = 0;
+	heldAppends = [];
 	__resetProbeLedgerForTesting();
 	recordBudget = MAX_RECORDS;
 }
@@ -430,8 +431,29 @@ export function loadHistory(now = Date.now()): void {
 	}
 }
 
+/**
+ * A REWRITE IN FLIGHT HOLDS APPENDS BACK. `persistHistory` serialises the
+ * window when it is called and renames the result over the file off the event
+ * loop. A line appended to the file in between would go to the inode the
+ * rename is about to replace, and be gone from disk with nothing said. So an
+ * append made while a rewrite is in flight waits here, and lands on the new
+ * file once the newest rewrite has finished (or on the old one, if it failed).
+ * Every record held here is newer than the snapshot being written, so none is
+ * written twice.
+ */
+let rewritesInFlight = 0;
+let heldAppends: JobRecord[] = [];
+
 export function appendToDisk(fresh: JobRecord[]): void {
 	if (!fresh.length) return;
+	if (rewritesInFlight) {
+		heldAppends.push(...fresh);
+		return;
+	}
+	appendLines(fresh);
+}
+
+function appendLines(fresh: readonly JobRecord[]): void {
 	try {
 		mkdirSync(dirname(historyFile()), { recursive: true });
 		appendFileSync(historyFile(), fresh.map((r) => JSON.stringify(r)).join('\n') + '\n');
@@ -457,16 +479,25 @@ export function appendToDisk(fresh: JobRecord[]): void {
  * goes through THIS function instead.
  */
 export async function persistHistory(): Promise<boolean> {
+	// The snapshot is taken NOW, and every append after this point is held until
+	// the write lands (see `appendToDisk`). Records held for an earlier rewrite
+	// are in this snapshot, so they are dropped from the hold, not re-appended.
+	const text = records.map((r) => JSON.stringify(r)).join('\n') + (records.length ? '\n' : '');
+	heldAppends = [];
+	rewritesInFlight++;
 	try {
-		await writeFileAtomic(
-			historyFile(),
-			() => records.map((r) => JSON.stringify(r)).join('\n') + (records.length ? '\n' : '')
-		);
+		await writeFileAtomic(historyFile(), text);
 		staleOnDisk = 0;
 		return true;
 	} catch (err) {
 		warnOnce('could not write history', err);
 		return false;
+	} finally {
+		if (--rewritesInFlight === 0 && heldAppends.length) {
+			const held = heldAppends;
+			heldAppends = [];
+			appendLines(held);
+		}
 	}
 }
 
@@ -491,9 +522,9 @@ export const COMPACT_STALE_FRACTION = 0.1;
  * ~2,100 records a day against a 14-day window, 10% is one rewrite every day
  * or two.
  *
- * Synchronous on purpose. An async rewrite would race {@link appendToDisk}'s
- * synchronous appends: a line appended between the snapshot and the rename is
- * silently lost.
+ * The rewrite runs off the event loop; {@link appendToDisk} holds any append
+ * made while it is in flight, so a line appended between the snapshot and the
+ * rename is not lost to the rename.
  */
 export async function compactHistory(now = Date.now()): Promise<boolean> {
 	const cutoff = cutoffIso(now);

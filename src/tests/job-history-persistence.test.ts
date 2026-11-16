@@ -24,6 +24,7 @@ import { __setHistoryPathForTesting } from '../job-history-store.js';
 import { RETENTION_DAYS } from '../job-history-store.js';
 import { historyFile } from '../job-history-store.js';
 import { compactHistory, COMPACT_STALE_FRACTION } from '../job-history-store.js';
+import { appendToDisk, persistHistory } from '../job-history-store.js';
 import { loadHistory } from '../job-history-store.js';
 import { jobRecords } from '../job-history-store.js';
 import { ingestRuns } from '../job-history-ingest.js';
@@ -52,6 +53,19 @@ test('persistence: records SURVIVE a restart', async () => {
 	const s = summarise(NODES);
 	assert.equal(s.total, 2);
 	assert.equal(s.backstopJobs, 1, 'and the derived numbers survive too');
+});
+
+test('persistence: a line appended while a rewrite is in flight is not lost to its rename', async () => {
+	await seed([job({ runner_name: 'claw-2' }), job({ runner_name: 'hokon' })]);
+	const late = { ...jobRecords()[0], runId: 7, jobId: 7007 };
+	// The rewrite has snapshotted the window and not yet renamed: exactly where
+	// ingest's append used to land on the inode the rename then replaced.
+	const rewrite = persistHistory();
+	appendToDisk([late]);
+	assert.equal(await rewrite, true);
+	const lines = readFileSync(historyFile(), 'utf8').trim().split('\n');
+	assert.equal(lines.length, 3, 'the snapshot plus the held line, each once');
+	assert.equal((JSON.parse(lines[2]) as JobRecord).jobId, 7007);
 });
 
 test('persistence: a seen run is STILL seen after a restart', async () => {
