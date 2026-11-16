@@ -231,7 +231,14 @@ void test('a node with NO live job still reports every field: pgrep -c prints 0 
 			env,
 		});
 		const dir = out.match(/^SAMPLER (\S+)$/m)?.[1];
-		await new Promise((r) => setTimeout(r, 1500));
+		// Until one whole tick is on disk (each ends in an `E` line), not for a
+		// fixed 1.5 s: on a host at load 85 the first tick took longer than that,
+		// and the stop then read no tick at all.
+		const samples = join(dir, 'samples');
+		for (let waited = 0; waited < 30_000; waited += 100) {
+			if (existsSync(samples) && /^E$/m.test(readFileSync(samples, 'utf8'))) break;
+			await new Promise((r) => setTimeout(r, 100));
+		}
 		const text = execFileSync('bash', ['-s'], {
 			input: stopSamplerScript(dir),
 			encoding: 'utf8',
