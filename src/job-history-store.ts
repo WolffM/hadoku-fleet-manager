@@ -271,6 +271,8 @@ export type ProbeOrigin = 'shadow' | 'forced-rerun';
  * typed read-only, so a consumer cannot push, splice or assign into it.
  */
 const records: JobRecord[] = [];
+/** The same records as a set, so a patch can tell a record still held from one that left. */
+const inWindow = new Set<JobRecord>();
 export const seenRuns = new Set<number>();
 
 /**
@@ -282,8 +284,31 @@ let version = 0;
 export function historyVersion(): number {
 	return version;
 }
-function noteHistoryChanged(): void {
+
+/**
+ * What changed, for a reader that keeps figures up to date as the window
+ * moves rather than re-reading it (`job-history-index.ts`). `reset` means the
+ * window was replaced wholesale (a load, a test reset): rebuild from
+ * `jobRecords()`. `removed` carries the records that left; `patched` carries
+ * a copy of the record as it was and the record as it now is.
+ */
+export type HistoryChange =
+	| { kind: 'reset' }
+	| { kind: 'added'; records: readonly Readonly<JobRecord>[] }
+	| { kind: 'removed'; records: readonly Readonly<JobRecord>[] }
+	| { kind: 'patched'; before: Readonly<JobRecord>; after: Readonly<JobRecord> };
+
+const listeners = new Set<(change: HistoryChange) => void>();
+
+/** Hear every change to the window, in order. Returns the unsubscribe. */
+export function onHistoryChange(listener: (change: HistoryChange) => void): () => void {
+	listeners.add(listener);
+	return () => listeners.delete(listener);
+}
+
+function changed(change: HistoryChange): void {
 	version++;
+	for (const listener of listeners) listener(change);
 }
 
 /** Overridable so tests never touch the real host file. */
@@ -310,7 +335,8 @@ export function __setHistoryPathForTesting(p: string | null): void {
 
 export function __resetJobHistoryForTesting(): void {
 	records.length = 0;
-	noteHistoryChanged();
+	inWindow.clear();
+	changed({ kind: 'reset' });
 	seenRuns.clear();
 	loaded = false;
 	diskWarned = false;
@@ -354,9 +380,10 @@ export function trimToBudget(now = Date.now()): void {
 	const excess = records.length - recordBudget;
 	if (excess <= 0) return;
 	records.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-	records.splice(0, excess);
+	const gone = records.splice(0, excess);
+	for (const r of gone) inWindow.delete(r);
 	staleOnDisk += excess;
-	noteHistoryChanged();
+	changed({ kind: 'removed', records: gone });
 	const oldest = Date.parse(records[0]?.startedAt ?? '');
 	const keptDays = Number.isFinite(oldest) ? ((now - oldest) / 86_400_000).toFixed(1) : '0';
 	logger.warn(
@@ -422,13 +449,14 @@ export function loadHistory(now = Date.now()): void {
 				if (r.startedAt < cutoff) continue;
 				staleOnDisk--;
 				records.push(r);
+				inWindow.add(r);
 				seenRuns.add(r.runId);
 			} catch {
 				// one bad line, not a bad file
 			}
 		}
 		records.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-		noteHistoryChanged();
+		changed({ kind: 'reset' });
 		trimToBudget(now);
 		logger.info(`[job-history] loaded ${records.length} record(s) from ${historyFile()}`);
 	} catch (err) {
@@ -534,12 +562,15 @@ export const COMPACT_STALE_FRACTION = 0.1;
  */
 export async function compactHistory(now = Date.now()): Promise<boolean> {
 	const cutoff = cutoffIso(now);
-	const keep = records.filter((r) => r.startedAt >= cutoff);
-	if (keep.length !== records.length) {
-		staleOnDisk += records.length - keep.length;
+	const keep: JobRecord[] = [];
+	const gone: JobRecord[] = [];
+	for (const r of records) (r.startedAt >= cutoff ? keep : gone).push(r);
+	if (gone.length) {
+		staleOnDisk += gone.length;
+		for (const r of gone) inWindow.delete(r);
 		records.length = 0;
 		records.push(...keep);
-		noteHistoryChanged();
+		changed({ kind: 'removed', records: gone });
 	}
 	if (staleOnDisk === 0 || staleOnDisk < records.length * COMPACT_STALE_FRACTION) return false;
 	return persistHistory();
@@ -559,21 +590,29 @@ export function appendRecords(fresh: readonly JobRecord[]): void {
 	loadHistory();
 	if (!fresh.length) return;
 	records.push(...fresh);
-	noteHistoryChanged();
+	for (const r of fresh) inWindow.add(r);
+	changed({ kind: 'added', records: fresh });
 	// Append the new records only, the whole point of JSONL here. Rewriting the
 	// file every tick would turn a cheap append into O(window) I/O.
 	appendToDisk([...fresh]);
 }
 
 /**
- * Change fields of a record already in the window: the backfill's step data.
+ * Change fields of a record still in the window: the backfill's step data.
  * Mutating the object the window holds IS the mechanism; a copy would be
  * written once and then lost to the next compaction. Not persisted here: the
  * caller rewrites the file once after a batch (`persistHistory`).
+ *
+ * FALSE, and nothing changed, for a record that has left the window: a
+ * backfill fetches for seconds, and the record it started from may have aged
+ * out meanwhile. Patching it would describe a record nothing holds.
  */
-export function patchRecord(record: Readonly<JobRecord>, fields: Partial<JobRecord>): void {
+export function patchRecord(record: Readonly<JobRecord>, fields: Partial<JobRecord>): boolean {
+	if (!inWindow.has(record)) return false;
+	const before = { ...record };
 	Object.assign(record as JobRecord, fields);
-	noteHistoryChanged();
+	changed({ kind: 'patched', before, after: record });
+	return true;
 }
 
 /** Has this run been recorded, or claimed for a fetch this process? */

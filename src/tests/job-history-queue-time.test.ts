@@ -15,7 +15,7 @@ import { appendFileSync } from 'node:fs';
 import { __resetJobHistoryForTesting } from '../job-history-store.js';
 import { historyFile } from '../job-history-store.js';
 import { jobRecords } from '../job-history-store.js';
-import { idleSecondsByNode } from '../job-history-stats.js';
+import { idleSecondsByNode } from '../job-history-index.js';
 import { T0, at, installJobHistoryRig } from './helpers/job-history-rig.js';
 
 installJobHistoryRig();

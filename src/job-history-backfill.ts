@@ -96,8 +96,7 @@ export async function backfillFailedSteps(
 			// described. Only the step data is being backfilled.
 			const sf = stepFailure({ ...res.job, conclusion: rec.conclusion }, start, end);
 			if (!sf) continue; // steps do not explain it either — left as it was, never guessed
-			patchRecord(rec, sf);
-			patched++;
+			if (patchRecord(rec, sf)) patched++;
 		}
 	};
 	await Promise.all(Array.from({ length: Math.min(concurrency, toFetch.length) }, worker));
