@@ -99,8 +99,21 @@ function isPidAlive(pid: number): boolean {
  * permissions surprise on an unrelated directory entry) must never block the
  * real write this function exists to make durable — each candidate is
  * handled independently and a failure on one is skipped, not propagated.
+ *
+ * ONCE PER PATH PER PROCESS (fleet-manager#86). The sweep lists the whole
+ * directory, and `gh-conditional-cache/runner-health` holds ~4,800 entries
+ * written one at a time: run on every write, the listing was 7.2 s of
+ * mgmt-api's event loop in one 300 s profile (2026-11-16 01:39Z). An orphan
+ * is left only by a process that died, and this process's own temp file is
+ * never one, so the first write of a path is the one that can find anything.
+ * An orphan still under {@link STALE_TMP_MS} old at that moment waits for the
+ * next process; it is a dead temp file, never the live one.
  */
+const swept = new Set<string>();
+
 function sweepStaleTempFiles(path: string, dir: string): void {
+	if (swept.has(path)) return;
+	swept.add(path);
 	const base = basename(path);
 	const pattern = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(\\d+)\\.tmp$`);
 	let entries: string[];

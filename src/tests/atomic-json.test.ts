@@ -79,10 +79,9 @@ function elevenMinutesAgo(): Date {
  * and a patched `writeSync` that logs recurses into itself forever. Record
  * to a plain array instead and inspect it after restoring.
  */
-function patchFs<K extends 'writeSync' | 'fsyncSync' | 'renameSync' | 'fsync' | 'rename'>(
-	key: K,
-	replacement: (typeof fs)[K]
-): () => void {
+function patchFs<
+	K extends 'writeSync' | 'fsyncSync' | 'renameSync' | 'fsync' | 'rename' | 'readdirSync',
+>(key: K, replacement: (typeof fs)[K]): () => void {
 	const original = fs[key];
 	fs[key] = replacement;
 	syncBuiltinESMExports();
@@ -281,6 +280,26 @@ test('stale temp sweep: a dead-pid, >10-minute-old sibling tmp for the SAME path
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test('stale temp sweep: once per path per process — a later write of the same path does not list the directory again', () => {
+	const dir = tmpDir();
+	const realReaddir = fs.readdirSync;
+	let listings = 0;
+	const restore = patchFs('readdirSync', ((...a: unknown[]) => {
+		listings++;
+		return (realReaddir as (...x: unknown[]) => unknown)(...a);
+	}) as unknown as (typeof fs)['readdirSync']);
+	try {
+		const path = join(dir, 'state.json');
+		writeJsonAtomicSync(path, { n: 1 });
+		writeJsonAtomicSync(path, { n: 2 });
+		writeJsonAtomicSync(join(dir, 'other.json'), { n: 3 });
+	} finally {
+		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+	assert.equal(listings, 2, 'one listing for state.json, one for other.json, none for the repeat');
 });
 
 test('stale temp sweep: a dead-pid sibling tmp UNDER 10 minutes old is left alone — too young to be a confirmed orphan', () => {
