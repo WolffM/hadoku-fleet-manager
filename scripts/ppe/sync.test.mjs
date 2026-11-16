@@ -25,8 +25,14 @@ function botPush(repo, file, content) {
 	return sha;
 }
 
-test('no deploy key: refuses before touching anything', async () => {
+test('no service key, or no push token: refuses before touching anything', async () => {
 	assert.equal(await main({ GITHUB_REPOSITORY: 'o/r' }), 1);
+	const unreachable = {
+		GITHUB_REPOSITORY: 'o/r',
+		FLEET_SERVICE_KEY: 'k',
+		PPE_PUSH_TOKEN_URL: 'http://127.0.0.1:1/push-token',
+	};
+	assert.equal(await main(unreachable), 1);
 });
 
 test('a bot push to main is merged into ppe, keeping both sides', async () => {

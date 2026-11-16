@@ -108,9 +108,11 @@ export const ENV_READS: readonly EnvRead[] = [
 	base('HOME', '~/.ssh for ssh, ~/.gitconfig for git; enroll-ssh reads it'),
 	base('SSH_AUTH_SOCK', 'ssh to the nodes when the key is held by an agent'),
 	// --- this repo's own CI ----------------------------------------------------
-	ci('GIT_SSH_COMMAND', 'git over ssh with the ppe deploy key'),
 	ci('GIT_TERMINAL_PROMPT', 'keeps git from prompting in the ppe scripts'),
-	ci('PPE_DEPLOY_KEY', 'ppe promoter/sync deploy key', true),
+	ci('GIT_CONFIG_COUNT', 'ppe scripts: one env-supplied git config entry'),
+	ci('GIT_CONFIG_KEY_0', 'ppe scripts: the https extraheader key'),
+	ci('GIT_CONFIG_VALUE_0', 'ppe scripts: the App push token as a basic-auth header', true),
+	ci('PPE_PUSH_TOKEN_URL', 'ppe promoter/sync: the mgmt-api push-token verb, set by the workflow'),
 	ci('PPE_REMOTE', 'ppe promoter/sync remote'),
 	ci('PPE_BRANCH', 'ppe branch name'),
 	ci('PPE_MAIN_BRANCH', 'main branch name'),

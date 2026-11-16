@@ -22,9 +22,15 @@ async function run(repo, state, extra = {}) {
 	}
 }
 
-test('no deploy key: refuses before touching anything', async () => {
-	const code = await main({ GITHUB_REPOSITORY: 'o/r', GITHUB_TOKEN: 'x' });
-	assert.equal(code, 1);
+test('no service key, or no push token: refuses before touching anything', async () => {
+	assert.equal(await main({ GITHUB_REPOSITORY: 'o/r', GITHUB_TOKEN: 'x' }), 1);
+	const unreachable = {
+		GITHUB_REPOSITORY: 'o/r',
+		GITHUB_TOKEN: 'x',
+		FLEET_SERVICE_KEY: 'k',
+		PPE_PUSH_TOKEN_URL: 'http://127.0.0.1:1/push-token',
+	};
+	assert.equal(await main(unreachable), 1);
 });
 
 test('fast-forwards main to the newest green ppe commit, past a pending tip', async () => {

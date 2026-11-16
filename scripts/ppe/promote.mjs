@@ -23,6 +23,7 @@ import {
 } from './decide.mjs';
 import {
 	CouldNotLook,
+	fetchPushToken,
 	fail,
 	hydrate,
 	log,
@@ -197,7 +198,7 @@ export async function promoteOnce(o) {
 	const { api, mainBranch, ppeBranch } = o;
 	const { git } = openRepo({
 		remote: o.remote,
-		deployKey: o.deployKey,
+		pushToken: o.pushToken,
 		branches: [mainBranch, ppeBranch],
 	});
 	const mainSha = git(['rev-parse', `o/${mainBranch}`]).trim();
@@ -350,8 +351,8 @@ export async function main(env = process.env) {
 	const repo = env.GITHUB_REPOSITORY;
 	const o = {
 		api: makeApi({ token: env.GITHUB_TOKEN, repo, base: env.GITHUB_API_URL }),
-		remote: env.PPE_REMOTE || `git@github.com:${repo}.git`,
-		deployKey: env.PPE_DEPLOY_KEY,
+		remote: env.PPE_REMOTE || `https://github.com/${repo}.git`,
+		pushToken: null,
 		mainBranch: env.PPE_MAIN_BRANCH || 'main',
 		ppeBranch: env.PPE_BRANCH || 'ppe',
 		force: env.PPE_FORCE === 'true',
@@ -361,11 +362,23 @@ export async function main(env = process.env) {
 		fail('no GITHUB_TOKEN: could not look, so nothing was promoted or reverted');
 		return 1;
 	}
-	if (!o.deployKey && !env.PPE_REMOTE) {
-		fail(
-			'no deploy key (secret PPE_PROMOTE_KEY): could not push, so nothing was promoted or reverted'
-		);
-		return 1;
+	// PPE_REMOTE is the tests' local remote, which needs no credential.
+	if (!env.PPE_REMOTE) {
+		if (!env.FLEET_SERVICE_KEY || !env.PPE_PUSH_TOKEN_URL) {
+			fail(
+				'FLEET_SERVICE_KEY and PPE_PUSH_TOKEN_URL are both required: could not get a push token, so nothing was promoted or reverted'
+			);
+			return 1;
+		}
+		try {
+			o.pushToken = await fetchPushToken({
+				url: env.PPE_PUSH_TOKEN_URL,
+				serviceKey: env.FLEET_SERVICE_KEY,
+			});
+		} catch (err) {
+			fail(`could not get a push token, so nothing was promoted or reverted: ${err.message}`);
+			return 1;
+		}
 	}
 	let result;
 	try {

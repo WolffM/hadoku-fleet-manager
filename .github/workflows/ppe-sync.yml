@@ -1,7 +1,7 @@
 name: ppe sync
 
 # A push to main that is not a promotion (a bot's, or an operator hotfix) is
-# merged into ppe with the PPE_PROMOTE_KEY deploy key, so the next promotion is
+# merged into ppe with the promoter's App push token, so the next promotion is
 # still a fast-forward and CI tests the merge like any ppe push. A promotion's
 # push is already in ppe and the job exits at once. A conflict is an issue and
 # a red job, never forced. Logic: scripts/ppe/sync.mjs.
@@ -40,7 +40,8 @@ jobs:
       - name: Merge main into ppe
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PPE_DEPLOY_KEY: ${{ secrets.PPE_PROMOTE_KEY }}
+          FLEET_SERVICE_KEY: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
+          PPE_PUSH_TOKEN_URL: https://hadoku.me/mgmt/api/repo/push-token
         run: node scripts/ppe/sync.mjs
 
       - name: Report the outcome so a silent failure can't hide

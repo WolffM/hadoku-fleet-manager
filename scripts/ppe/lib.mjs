@@ -1,35 +1,65 @@
-// I/O shared by promote.mjs and sync.mjs (scripts/ppe/): git over the deploy key, the GitHub
-// REST API with the job's own token, and the job summary.
+// I/O shared by promote.mjs and sync.mjs (scripts/ppe/): git over HTTPS with the App push
+// token mgmt-api mints, the GitHub REST API with the job's own token, and the job summary.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /** A read or write we could not make. Never a verdict about the code. */
 export class CouldNotLook extends Error {}
 
-// github.com's published ed25519 host key. Pinned rather than keyscanned: a
-// keyscan trusts whatever answers on the first connection.
-const GITHUB_HOST_KEY =
-	'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl';
+/**
+ * The token the promoter and the sync push with: a one-hour `hadoku-fleet-gates`
+ * installation token, scoped by GitHub to this repo and to contents +
+ * workflows write, minted by mgmt-api for this repo's service key. `url` is
+ * that verb (hadoku_site `routes/repo-actions.ts`), named by the workflow: a
+ * hostname is a fact about one deployment, not this package's.
+ *
+ * NOT the job's GITHUB_TOKEN, for two reasons. A push with it triggers no
+ * workflow (a promotion must fire publish.yml, a revert must fire CI), and
+ * GitHub refuses it across any `.github/workflows/` change, because that
+ * token can never hold `workflows`. That was 13 of 556 commits to 2026-11-16.
+ * It replaced the `ppe-promoter` deploy key, which vanished on 2026-11-15
+ * and stalled every promotion until it was re-minted by hand.
+ */
+export async function fetchPushToken({ url, serviceKey, fetchImpl = fetch }) {
+	let res;
+	try {
+		res = await fetchImpl(url, {
+			method: 'POST',
+			headers: { 'X-User-Key': serviceKey, 'User-Agent': 'fleet-manager-ppe' },
+		});
+	} catch (err) {
+		throw new CouldNotLook(`push token: ${url} unreachable (${err.message})`);
+	}
+	const body = await res.json().catch(() => null);
+	if (!res.ok || typeof body?.token !== 'string' || !body.token) {
+		throw new CouldNotLook(
+			`push token: HTTP ${res.status} ${body?.error ?? '(no usable token in the answer)'}`
+		);
+	}
+	// Masked before anything can print it: git's own errors echo nothing of the
+	// header, but a future log line might.
+	if (process.env.GITHUB_ACTIONS === 'true') process.stdout.write(`::add-mask::${body.token}\n`);
+	return body.token;
+}
 
 /**
- * Environment for every git call. With a deploy key, ssh uses it and nothing
- * else (no agent, no ~/.ssh on a shared claw). Every GIT_* is dropped first:
- * a hook or a runner that exported GIT_DIR would point git at another repo.
+ * Environment for every git call. Every GIT_* is dropped first: a hook or a
+ * runner that exported GIT_DIR would point git at another repo. A push token
+ * goes in as an `http.extraheader` config entry from the environment, never
+ * in the remote URL or argv, so neither `ps` nor a git error can show it.
  */
-export function gitEnv(deployKey) {
+export function gitEnv(pushToken) {
 	const env = Object.fromEntries(
 		Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))
 	);
 	env.GIT_TERMINAL_PROMPT = '0';
-	if (deployKey) {
-		const dir = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), 'ppe-key-'));
-		const key = join(dir, 'key');
-		const hosts = join(dir, 'known_hosts');
-		writeFileSync(key, deployKey.endsWith('\n') ? deployKey : `${deployKey}\n`, { mode: 0o600 });
-		writeFileSync(hosts, `${GITHUB_HOST_KEY}\n`);
-		env.GIT_SSH_COMMAND = `ssh -i ${key} -o IdentitiesOnly=yes -o IdentityAgent=none -o UserKnownHostsFile=${hosts} -o StrictHostKeyChecking=yes`;
+	if (pushToken) {
+		const basic = Buffer.from(`x-access-token:${pushToken}`).toString('base64');
+		env.GIT_CONFIG_COUNT = '1';
+		env.GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader';
+		env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${basic}`;
 	}
 	env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = 'github-actions[bot]';
 	env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL =
@@ -70,8 +100,8 @@ export function makeGit(cwd, env) {
  * `tree:0` fetches commits alone, so deciding costs no trees or blobs; a
  * revert or merge pulls the ones it touches on demand from the promisor.
  */
-export function openRepo({ remote, deployKey, branches }) {
-	const env = gitEnv(deployKey);
+export function openRepo({ remote, pushToken, branches }) {
+	const env = gitEnv(pushToken);
 	const dir = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), 'ppe-repo-'));
 	const git = makeGit(dir, env);
 	git(['init', '-q']);

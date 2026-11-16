@@ -12,9 +12,12 @@ name: ppe promote
 # in-process sweep (src/ppe-sweep.ts), which dispatches this workflow.
 #
 # Every read is this job's own GITHUB_TOKEN (a per-repo budget, never the
-# fleet's shared token). Pushes use the PPE_PROMOTE_KEY deploy key over ssh,
-# because a push made with GITHUB_TOKEN triggers no workflow: a promotion must
-# fire publish.yml, and a revert must fire CI.
+# fleet's shared token). Pushes use a one-hour hadoku-fleet-gates App token
+# that mgmt-api mints for this repo's service key, scoped to this repo and to
+# contents + workflows write (scripts/ppe/lib.mjs fetchPushToken). Not
+# GITHUB_TOKEN: its pushes trigger no workflow (a promotion must fire
+# publish.yml, a revert must fire CI), and GitHub refuses them across any
+# .github/workflows change. It replaced a deploy key that vanished 2026-11-15.
 on:
   workflow_run:
     workflows: [CI]
@@ -71,7 +74,8 @@ jobs:
       - name: Promote
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PPE_DEPLOY_KEY: ${{ secrets.PPE_PROMOTE_KEY }}
+          FLEET_SERVICE_KEY: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
+          PPE_PUSH_TOKEN_URL: https://hadoku.me/mgmt/api/repo/push-token
           PPE_FORCE: ${{ inputs.force == true }}
         run: node scripts/ppe/promote.mjs
 

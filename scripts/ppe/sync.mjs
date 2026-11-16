@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import {
 	CouldNotLook,
+	fetchPushToken,
 	fail,
 	hydrate,
 	log,
@@ -24,7 +25,7 @@ export function syncOnce(o) {
 	const { mainBranch, ppeBranch } = o;
 	const { git } = openRepo({
 		remote: o.remote,
-		deployKey: o.deployKey,
+		pushToken: o.pushToken,
 		branches: [mainBranch, ppeBranch],
 	});
 	const mainSha = git(['rev-parse', `o/${mainBranch}`]).trim();
@@ -62,14 +63,28 @@ export function syncOnce(o) {
 export async function main(env = process.env) {
 	const repo = env.GITHUB_REPOSITORY;
 	const o = {
-		remote: env.PPE_REMOTE || `git@github.com:${repo}.git`,
-		deployKey: env.PPE_DEPLOY_KEY,
+		remote: env.PPE_REMOTE || `https://github.com/${repo}.git`,
+		pushToken: null,
 		mainBranch: env.PPE_MAIN_BRANCH || 'main',
 		ppeBranch: env.PPE_BRANCH || 'ppe',
 	};
-	if (!o.deployKey && !env.PPE_REMOTE) {
-		fail('no deploy key (secret PPE_PROMOTE_KEY): could not push, so nothing was merged');
-		return 1;
+	// PPE_REMOTE is the tests' local remote, which needs no credential.
+	if (!env.PPE_REMOTE) {
+		if (!env.FLEET_SERVICE_KEY || !env.PPE_PUSH_TOKEN_URL) {
+			fail(
+				'FLEET_SERVICE_KEY and PPE_PUSH_TOKEN_URL are both required: could not get a push token, so nothing was merged'
+			);
+			return 1;
+		}
+		try {
+			o.pushToken = await fetchPushToken({
+				url: env.PPE_PUSH_TOKEN_URL,
+				serviceKey: env.FLEET_SERVICE_KEY,
+			});
+		} catch (err) {
+			fail(`could not get a push token, so nothing was merged: ${err.message}`);
+			return 1;
+		}
 	}
 	let r;
 	try {
