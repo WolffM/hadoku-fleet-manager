@@ -27,17 +27,25 @@ import {
 	trimToBudget,
 	type JobRecord,
 } from '../job-history-store.js';
-import { idleSecondsByNode, jobsPerDayByRepo } from '../job-history-index.js';
+import { historyRowOf, idleSecondsByNode, jobsPerDayByRepo } from '../job-history-index.js';
+import { jobKind } from '../lib/job-kind.js';
+import { nodeOf } from '../runners/census.js';
 import { idleSecondsFromRecords } from '../job-history-stats.js';
 import { flushWrites } from '../lib/atomic-json.js';
 
 const NOW = Date.now();
 const DAY = 86_400_000;
 const NODES = ['claw-1', 'claw-2', 'claw-10', 'hokon'];
-const LISTS = [
-	NODES,
-	['claw-1', 'claw-2'],
-	['claw-10'],
+/**
+ * Three lists, fewer than the index holds at once: every ask after the first
+ * reads a list the index has been MOVING with the store's changes, which is the
+ * path production runs. Asking more lists than it holds would rebuild each one
+ * on every ask and test nothing incremental — `CYCLING` does that on purpose.
+ */
+const RESIDENT = [NODES, ['claw-1', 'claw-2'], ['claw-10', 'hokon']];
+/** More lists than the index holds, so each ask may rebuild one it dropped. */
+const CYCLING = [
+	...RESIDENT,
 	['hokon', 'claw-1'],
 	['claw-2', 'claw-10', 'hokon'],
 	['claw-1', 'claw-10'],
@@ -104,17 +112,39 @@ const sorted = (m: Map<string, number>): [string, number][] =>
 	[...m].sort((a, b) => a[0].localeCompare(b[0]));
 
 /** Every way the index disagrees with a scan right now, named by `step`. Empty when it agrees. */
-function mismatches(step: string): string[] {
+function mismatches(step: string, lists: readonly (readonly string[])[]): string[] {
 	const out: string[] = [];
 	const same = (a: Map<string, number>, b: Map<string, number>): boolean =>
 		JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
-	for (const nodes of LISTS) {
+	for (const nodes of lists) {
 		const index = idleSecondsByNode(nodes, NOW);
 		const scan = idleSecondsFromRecords([...jobRecords()], nodes, NOW);
 		if (!same(index, scan))
 			out.push(
 				`idle seconds over [${nodes.join(', ')}] after ${step}: ${JSON.stringify(sorted(index))} vs ${JSON.stringify(sorted(scan))}`
 			);
+	}
+	// Every held row equals what a fresh derivation of its record gives now.
+	for (const nodes of lists) {
+		for (const r of jobRecords()) {
+			const row = historyRowOf(r, nodes);
+			// HELD, not derived on the spot: a missing row would be re-derived
+			// fresh and look right, so identity is what proves it is kept.
+			if (row !== historyRowOf(r, nodes))
+				out.push(`row of ${r.jobId} over [${nodes.join(', ')}] is not held after ${step}`);
+			const start = Date.parse(r.startedAt);
+			const want = {
+				node: nodeOf(r.runner, nodes),
+				kind: jobKind(r.name),
+				finished: start + (r.durationSec ?? 0) * 1000,
+				day: Math.floor(start / DAY),
+			};
+			const got = { node: row.node, kind: row.kind, finished: row.finished, day: row.day };
+			if (JSON.stringify(got) !== JSON.stringify(want))
+				out.push(
+					`row of ${r.jobId} over [${nodes.join(', ')}] after ${step}: ${JSON.stringify(got)} vs ${JSON.stringify(want)}`
+				);
+		}
 	}
 	const index = jobsPerDayByRepo(NOW);
 	const scan = jobsPerDayByScan(jobRecords(), NOW);
@@ -143,47 +173,57 @@ test('an empty window: no idle node, no repo', () => {
 	assert.deepEqual(sorted(jobsPerDayByRepo(NOW)), []);
 });
 
-for (const seed of [1, 7, 42, 1234, 99991]) {
-	test(`the index equals a scan after every change (seed ${seed})`, async () => {
-		const rand = rng(seed);
-		const found = mismatches('the first ask');
-		for (let step = 0; step < 120; step++) {
-			const roll = rand();
-			let what: string;
-			if (roll < 0.55) {
-				const batch = Array.from({ length: 1 + Math.floor(rand() * 20) }, () => record(rand));
-				appendRecords(batch);
-				what = `append ${batch.length}`;
-			} else if (roll < 0.75) {
-				const window = jobRecords();
-				if (!window.length) continue;
-				const r = window[Math.floor(rand() * window.length)];
-				// The fields the index reads, moved: a runner, a start, a duration.
-				patchRecord(r, {
-					runner: record(rand).runner,
-					durationSec: r.durationSec + 600,
-					conclusion: 'failure',
-				});
-				what = `patch ${r.jobId}`;
-			} else if (roll < 0.85) {
-				__setRecordBudgetForTesting(Math.max(1, Math.floor(jobRecords().length * 0.8)));
-				trimToBudget(NOW);
-				__setRecordBudgetForTesting(1_000_000);
-				what = 'trim to budget';
-			} else if (roll < 0.97) {
-				// Retention measured from a later "now", so a slice of the window ages out.
-				await compactHistory(NOW + rand() * 3 * DAY);
-				what = 'compact';
-			} else {
-				await flushWrites();
-				__resetJobHistoryForTesting();
-				what = 'reset';
-			}
-			found.push(...mismatches(`step ${step} (${what})`));
+/** A seeded run of the store's changes, checking the index against a scan after each. */
+async function drive(seed: number, lists: readonly (readonly string[])[]): Promise<string[]> {
+	const rand = rng(seed);
+	const found = mismatches('the first ask', lists);
+	for (let step = 0; step < 120; step++) {
+		const roll = rand();
+		let what: string;
+		if (roll < 0.55) {
+			const batch = Array.from({ length: 1 + Math.floor(rand() * 20) }, () => record(rand));
+			appendRecords(batch);
+			what = `append ${batch.length}`;
+		} else if (roll < 0.75) {
+			const window = jobRecords();
+			if (!window.length) continue;
+			const r = window[Math.floor(rand() * window.length)];
+			// The fields the index reads, moved: a runner, a start, a duration.
+			patchRecord(r, {
+				runner: record(rand).runner,
+				name: rand() < 0.5 ? 'e2e (2)' : r.name,
+				durationSec: r.durationSec + 600,
+				conclusion: 'failure',
+			});
+			what = `patch ${r.jobId}`;
+		} else if (roll < 0.85) {
+			__setRecordBudgetForTesting(Math.max(1, Math.floor(jobRecords().length * 0.8)));
+			trimToBudget(NOW);
+			__setRecordBudgetForTesting(1_000_000);
+			what = 'trim to budget';
+		} else if (roll < 0.97) {
+			// Retention measured from a later "now", so a slice of the window ages out.
+			await compactHistory(NOW + rand() * 3 * DAY);
+			what = 'compact';
+		} else {
+			await flushWrites();
+			__resetJobHistoryForTesting();
+			what = 'reset';
 		}
-		assert.deepEqual(found, []);
+		found.push(...mismatches(`step ${step} (${what})`, lists));
+	}
+	return found;
+}
+
+for (const seed of [1, 7, 42, 1234, 99991]) {
+	test(`the index equals a scan after every change, lists held throughout (seed ${seed})`, async () => {
+		assert.deepEqual(await drive(seed, RESIDENT), []);
 	});
 }
+
+test('the index equals a scan when more lists are asked than it holds (each may be rebuilt)', async () => {
+	assert.deepEqual(await drive(3, CYCLING), []);
+});
 
 test('a patch to a record that has left the window changes nothing and says so', async () => {
 	const rand = rng(5);
@@ -192,6 +232,6 @@ test('a patch to a record that has left the window changes nothing and says so',
 	__setRecordBudgetForTesting(29);
 	trimToBudget(NOW);
 	assert.equal(patchRecord(gone, { runner: 'claw-1' }), false);
-	assert.deepEqual(mismatches('a patch to an evicted record'), []);
+	assert.deepEqual(mismatches('a patch to an evicted record', RESIDENT), []);
 	await flushWrites();
 });

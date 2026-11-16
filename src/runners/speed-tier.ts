@@ -346,10 +346,20 @@ function othersFor(
 
 export function buildSpeedModel(
 	records: readonly JobRecord[],
-	opts: { nowMs?: number; nodes?: readonly string[] } = {}
+	opts: {
+		nowMs?: number;
+		nodes?: readonly string[];
+		/**
+		 * The node a record ran on. Defaults to `nodeOf(r.runner, nodes)`; the
+		 * live rebuild passes the job-history index's held answer for the same
+		 * list (`historyRowOf`), so a rebuild does not re-match every runner name.
+		 */
+		nodeOfRecord?: (r: JobRecord) => string;
+	} = {}
 ): SpeedModel {
 	const now = opts.nowMs ?? Date.now();
 	const nodes = opts.nodes ?? [];
+	const nodeOfRecord = opts.nodeOfRecord ?? ((r: JobRecord) => nodeOf(r.runner, nodes));
 	const cutoffIso = new Date(now - WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
 	// (repo, job) -> node -> runSec[], and an index of which kind-keys belong to
@@ -377,11 +387,11 @@ export function buildSpeedModel(
 	// Nothing is ever held back by a missing list; see the test pinning this.
 	for (const r of records) {
 		if (isLowerBound(r, cutoffIso)) {
-			pushSample(lowerByKindNode, kindKey(r.repo, r.name), nodeOf(r.runner, nodes), r.runSec);
+			pushSample(lowerByKindNode, kindKey(r.repo, r.name), nodeOfRecord(r), r.runSec);
 			continue;
 		}
 		if (!isUsable(r, cutoffIso)) continue;
-		const node = nodeOf(r.runner, nodes);
+		const node = nodeOfRecord(r);
 		if (CLAW_NODE.test(node)) clawNodes.add(node);
 		const kk = kindKey(r.repo, r.name);
 		pushSample(byKindNode, kk, node, r.runSec);

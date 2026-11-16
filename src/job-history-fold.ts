@@ -10,6 +10,9 @@
  *    resolved four or five times per request, ~25%), its UTC day is an integer
  *    rather than a `toISOString()` (~30%), its completion is parsed once, and
  *    each sample is sorted once for both its median and its p95 (~20%).
+ *    Since fleet-manager#86 those per-record fields are the job-history
+ *    index's rows (`historyRowOf`), derived when a record arrives and
+ *    re-derived when the store reports a patch, rather than a cache here.
  *
  * 2. THE BASELINE IS MEMOISED. Everything but the trailing-hour figures changes
  *    only when the history does — or when the UTC day turns, which moves the
@@ -25,8 +28,7 @@
 
 import { historyVersion, jobRecords, RETENTION_DAYS, type JobRecord } from './job-history-store.js';
 import { emptyFailuresByZone, failureBucket, type FailuresByZone } from './job-history-zone.js';
-import { jobKind } from './lib/job-kind.js';
-import { nodeOf } from './runners/census.js';
+import { historyRowOf, type HistoryRow } from './job-history-index.js';
 import type {
 	DailyJobStats,
 	JobHistorySummary,
@@ -55,18 +57,6 @@ const isNum = (x: number | undefined): x is number => typeof x === 'number' && N
 const DAY_MS = 86_400_000;
 const isoDay = (day: number): string => new Date(day * DAY_MS).toISOString().slice(0, 10);
 
-/** A record with what every fold below asks of it, worked out once. */
-interface Row {
-	r: JobRecord;
-	node: string;
-	/** Completion in epoch ms — `finishedAtMs`; NaN when the start will not parse. */
-	finished: number;
-	/** Days since the epoch, UTC, by `startedAt`; NaN when it will not parse. */
-	day: number;
-	/** {@link jobKind} of the record's name. */
-	kind: string;
-}
-
 function pushTo<K, V>(m: Map<K, V[]>, k: K, v: V): void {
 	const xs = m.get(k);
 	if (xs) xs.push(v);
@@ -79,48 +69,7 @@ interface Baseline {
 	byMachine: Omit<NodeJobStats, 'recentJobs' | 'recentMedianSec' | 'recentP95Sec'>[];
 	byRepo: Omit<RepoJobStats, 'recentJobs' | 'recentMedianSec' | 'recentP95Sec'>[];
 	/** Every row with a finite completion, ascending by it, for the trailing cut. */
-	byFinished: Row[];
-}
-
-/**
- * A record's derived fields, kept across folds: a new tick adds a few records
- * to fourteen days of them, and re-parsing every stamp and re-resolving every
- * JIT name (each one unique, so no per-fold cache catches it) was most of a
- * cold fold. Each entry carries what it was derived FROM and is re-derived when
- * any of that differs, so a record edited in place can never keep a stale row.
- */
-const derived = new WeakMap<
-	JobRecord,
-	Row & { nodesKey: string; runner: string; startedAt: string; durationSec: number; name: string }
->();
-
-function rowOf(r: JobRecord, nodes: string[], nodesKey: string): Row {
-	const hit = derived.get(r);
-	if (
-		hit &&
-		hit.nodesKey === nodesKey &&
-		hit.runner === r.runner &&
-		hit.startedAt === r.startedAt &&
-		hit.durationSec === r.durationSec &&
-		hit.name === r.name
-	) {
-		return hit;
-	}
-	const start = Date.parse(r.startedAt);
-	const row = {
-		r,
-		node: nodeOf(r.runner, nodes),
-		finished: start + (r.durationSec ?? 0) * 1000,
-		day: Math.floor(start / DAY_MS),
-		kind: jobKind(r.name),
-		nodesKey,
-		runner: r.runner,
-		startedAt: r.startedAt,
-		durationSec: r.durationSec,
-		name: r.name,
-	};
-	derived.set(r, row);
-	return row;
+	byFinished: HistoryRow[];
 }
 
 /**
@@ -156,7 +105,7 @@ interface DayAcc extends Acc {
 	backstopJobs: number;
 }
 
-function add(acc: Acc, x: Row, bucket: keyof FailuresByZone | null): void {
+function add(acc: Acc, x: HistoryRow, bucket: keyof FailuresByZone | null): void {
 	acc.jobs++;
 	if (bucket) {
 		acc.failures++;
@@ -177,8 +126,8 @@ function add(acc: Acc, x: Row, bucket: keyof FailuresByZone | null): void {
  * order, so nearly every older row is turned away by one comparison. Walking
  * backwards, a tie goes BEFORE the rows already held (they came later).
  */
-function newest(rows: readonly Row[], n: number): Row[] {
-	const top: Row[] = [];
+function newest(rows: readonly HistoryRow[], n: number): HistoryRow[] {
+	const top: HistoryRow[] = [];
 	for (let k = rows.length - 1; k >= 0; k--) {
 		const x = rows[k];
 		const at = x.r.startedAt;
@@ -205,8 +154,9 @@ function baseline(
 	history: readonly JobRecord[],
 	today: number
 ): Baseline {
-	const nodesKey = nodes.join('\0');
-	const rows: Row[] = history.map((r) => rowOf(r, nodes, nodesKey));
+	// Each record's node, kind, completion and day, held by the index and kept
+	// current by the store's change events.
+	const rows: HistoryRow[] = history.map((r) => historyRowOf(r, nodes));
 
 	const byNode = new Map<string, Acc & { repos: Set<string> }>();
 	const byRepo = new Map<string, RepoAcc>();
@@ -351,7 +301,7 @@ function daily(byDay: Map<number, DayAcc>, today: number): DailyJobStats[] {
 }
 
 /** The first index whose completion is at or past `from`. */
-function firstFinishedFrom(rows: readonly Row[], from: number): number {
+function firstFinishedFrom(rows: readonly HistoryRow[], from: number): number {
 	let lo = 0;
 	let hi = rows.length;
 	while (lo < hi) {

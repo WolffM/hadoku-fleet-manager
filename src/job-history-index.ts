@@ -26,6 +26,7 @@
  * and `job-history-index.test.ts` holds this module equal to them.
  */
 import { jobRecords, onHistoryChange, type JobRecord } from './job-history-store.js';
+import { jobKind } from './lib/job-kind.js';
 import { nodeOf } from './runners/census.js';
 
 /**
@@ -80,19 +81,53 @@ function removeSorted(xs: number[], v: number): boolean {
 	return true;
 }
 
+const DAY_MS = 86_400_000;
+
 /**
- * Job ends per node, for ONE node list. `nodeOf` answers relative to the list
- * it is given (an unlisted node's runners stay unattributed), so the figure
- * belongs to the list. The dispatcher passes the nodes it can mint on this
- * tick, which is the same list tick after tick until a node comes or goes, so
- * a handful of lists are held and the least recently asked is dropped.
+ * What every reader of a record derives from it, derived once per record and
+ * node list: its node (`nodeOf`, a prefix match over every node name), its
+ * kind (`jobKind`), when it finished and its UTC day. The fold and the speed
+ * model each used to derive these themselves on every rebuild; the fold kept
+ * them in a WeakMap re-checked against five fields on every hit, to catch a
+ * record edited in place. Here a row is derived when its record arrives and
+ * re-derived when the store reports a patch, so it is never stale.
  */
-interface EndsForList {
+export interface HistoryRow {
+	r: Readonly<JobRecord>;
+	node: string;
+	/** Completion in epoch ms ({@link finishedAtMs}); NaN when the start will not parse. */
+	finished: number;
+	/** Days since the epoch, UTC, by `startedAt`; NaN when it will not parse. */
+	day: number;
+	kind: string;
+}
+
+function deriveRow(r: Readonly<JobRecord>, nodes: readonly string[]): HistoryRow {
+	const start = Date.parse(r.startedAt);
+	return {
+		r,
+		node: nodeOf(r.runner, nodes),
+		finished: start + (r.durationSec ?? 0) * 1000,
+		day: Math.floor(start / DAY_MS),
+		kind: jobKind(r.name),
+	};
+}
+
+/**
+ * Rows and job ends per node, for ONE node list. `nodeOf` answers relative to
+ * the list it is given (an unlisted node's runners stay unattributed), so both
+ * belong to the list. Callers pass the nodes they mean (the dispatcher's
+ * minting nodes, the fleet report's, the manifest's), each the same list
+ * tick after tick until a node comes or goes, so a handful are held and the
+ * least recently asked is dropped.
+ */
+interface ListState {
 	nodes: readonly string[];
+	rows: Map<Readonly<JobRecord>, HistoryRow>;
 	ends: Map<string, number[]>;
 }
 const MAX_LISTS = 4;
-const byList = new Map<string, EndsForList>();
+const byList = new Map<string, ListState>();
 
 /** Starts (ms, finite only) in ascending order, and records per repo. */
 let starts: number[] | null = null;
@@ -100,22 +135,24 @@ let perRepo: Map<string, number> | null = null;
 /** Records in the window: `perRepo`'s total, which an empty window must report as such. */
 let held = 0;
 
-function addEnd(list: EndsForList, r: Readonly<JobRecord>): void {
-	const ended = finishedAtMs(r);
-	if (!Number.isFinite(ended)) return;
-	const node = nodeOf(r.runner, list.nodes);
-	let xs = list.ends.get(node);
-	if (!xs) list.ends.set(node, (xs = []));
-	insertSorted(xs, ended);
+function addRow(list: ListState, r: Readonly<JobRecord>): void {
+	const row = deriveRow(r, list.nodes);
+	list.rows.set(r, row);
+	if (!Number.isFinite(row.finished)) return;
+	let xs = list.ends.get(row.node);
+	if (!xs) list.ends.set(row.node, (xs = []));
+	insertSorted(xs, row.finished);
 }
 
-function removeEnd(list: EndsForList, r: Readonly<JobRecord>): void {
-	const ended = finishedAtMs(r);
-	if (!Number.isFinite(ended)) return;
-	const node = nodeOf(r.runner, list.nodes);
-	const xs = list.ends.get(node);
-	if (!xs || !removeSorted(xs, ended)) return;
-	if (!xs.length) list.ends.delete(node);
+/** Take out what `r` added, by the row derived when it was added. */
+function removeRow(list: ListState, r: Readonly<JobRecord>): void {
+	const row = list.rows.get(r);
+	if (!row) return;
+	list.rows.delete(r);
+	if (!Number.isFinite(row.finished)) return;
+	const xs = list.ends.get(row.node);
+	if (!xs || !removeSorted(xs, row.finished)) return;
+	if (!xs.length) list.ends.delete(row.node);
 }
 
 function addRepo(r: Readonly<JobRecord>): void {
@@ -136,16 +173,6 @@ function removeRepo(r: Readonly<JobRecord>): void {
 	if (Number.isFinite(t)) removeSorted(starts, t);
 }
 
-function add(r: Readonly<JobRecord>): void {
-	for (const list of byList.values()) addEnd(list, r);
-	addRepo(r);
-}
-
-function remove(r: Readonly<JobRecord>): void {
-	for (const list of byList.values()) removeEnd(list, r);
-	removeRepo(r);
-}
-
 onHistoryChange((c) => {
 	switch (c.kind) {
 		case 'reset':
@@ -155,19 +182,31 @@ onHistoryChange((c) => {
 			held = 0;
 			return;
 		case 'added':
-			for (const r of c.records) add(r);
+			for (const r of c.records) {
+				for (const list of byList.values()) addRow(list, r);
+				addRepo(r);
+			}
 			return;
 		case 'removed':
-			for (const r of c.records) remove(r);
+			for (const r of c.records) {
+				for (const list of byList.values()) removeRow(list, r);
+				removeRepo(r);
+			}
 			return;
 		case 'patched':
-			remove(c.before);
-			add(c.after);
+			// The row held for this record is the one derived BEFORE the patch,
+			// so removing by it takes out exactly what it added.
+			for (const list of byList.values()) {
+				removeRow(list, c.after);
+				addRow(list, c.after);
+			}
+			removeRepo(c.before);
+			addRepo(c.after);
 			return;
 	}
 });
 
-function endsFor(nodes: readonly string[]): EndsForList {
+function listFor(nodes: readonly string[]): ListState {
 	const key = nodes.join('\n');
 	let list = byList.get(key);
 	if (list) {
@@ -177,11 +216,19 @@ function endsFor(nodes: readonly string[]): EndsForList {
 		return list;
 	}
 	const window = jobRecords(); // loads first: a load resets, then this builds
-	list = { nodes: [...nodes], ends: new Map() };
-	for (const r of window) addEnd(list, r);
+	list = { nodes: [...nodes], rows: new Map(), ends: new Map() };
+	for (const r of window) addRow(list, r);
 	byList.set(key, list);
 	if (byList.size > MAX_LISTS) byList.delete(byList.keys().next().value as string);
 	return list;
+}
+
+/**
+ * `r`'s row over `nodes`: the held one for a record in the window, derived on
+ * the spot (and not kept) for any other, e.g. a test's or a script's own list.
+ */
+export function historyRowOf(r: Readonly<JobRecord>, nodes: readonly string[]): HistoryRow {
+	return listFor(nodes).rows.get(r) ?? deriveRow(r, nodes);
 }
 
 /**
@@ -209,7 +256,7 @@ function endsFor(nodes: readonly string[]): EndsForList {
  */
 export function idleSecondsByNode(nodes: readonly string[], now = Date.now()): Map<string, number> {
 	const out = new Map<string, number>();
-	for (const [node, xs] of endsFor(nodes).ends) {
+	for (const [node, xs] of listFor(nodes).ends) {
 		out.set(node, Math.max(0, Math.round((now - xs[xs.length - 1]) / 1000)));
 	}
 	return out;

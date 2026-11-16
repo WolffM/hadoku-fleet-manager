@@ -2,6 +2,7 @@ import { statSync } from 'node:fs';
 
 import { historyFile, jobRecords } from '../job-history-store.js';
 import { logger } from '../host.js';
+import { historyRowOf } from '../job-history-index.js';
 import { buildSpeedModel, type SpeedModel } from './speed-tier.js';
 import { buildHeavyModel, type HeavyModel } from './heavy-model.js';
 import { subCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
@@ -111,7 +112,11 @@ export function getSpeedModel(nowMs: number, nodeNames: readonly string[]): Spee
 				'history problem)'
 		);
 	}
-	const model = buildSpeedModel(records, { nowMs, nodes: nodeNames });
+	const model = buildSpeedModel(records, {
+		nowMs,
+		nodes: nodeNames,
+		nodeOfRecord: (r) => historyRowOf(r, nodeNames).node,
+	});
 	// ONE LINE PER REBUILD naming every slow-tier node and its p25 (§A.5), AND
 	// (wave 3z, #83's continuous sibling) every node's placement speed factor —
 	// not per node per tick, which at a 10-minute cadence is already infrequent
