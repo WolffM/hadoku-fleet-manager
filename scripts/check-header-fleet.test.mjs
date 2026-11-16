@@ -824,6 +824,28 @@ for (const [name, files, want] of [
 		['header-name-hardcoded'],
 	],
 	[
+		'a derived name inside a multi-line `const title = (…)` node is read',
+		{
+			'src/SiteHeader.tsx':
+				"import { AppHeader } from '@wolffm/task-ui-components';\n" +
+				'export function SiteHeader() {\n  const title = (\n    <nav>\n' +
+				'      <a href="/">{__HADOKU_APP_NAME__}</a>\n    </nav>\n  );\n' +
+				'  return <AppHeader title={title} />;\n}\n',
+		},
+		[],
+	],
+	[
+		'the same node with the name written out is unverified, not passed',
+		{
+			'src/SiteHeader.tsx':
+				"import { AppHeader } from '@wolffm/task-ui-components';\n" +
+				'export function SiteHeader() {\n  const title = (\n    <nav>\n' +
+				'      <a href="/">App X</a>\n    </nav>\n  );\n' +
+				'  return <AppHeader title={title} />;\n}\n',
+		},
+		['header-name-unverified'],
+	],
+	[
 		'a rendered wrapper that mounts no <AppHeader> is still no-app-header',
 		{ 'src/SiteHeader.tsx': 'export function SiteHeader() {\n  return <header />;\n}\n' },
 		['no-app-header'],

@@ -481,6 +481,18 @@ export function headerWrapper(source, files, root, src) {
 	return null;
 }
 
+/** The `( … )` a declaration match opens, through its matching paren; null when it opens none. */
+function parenthesised(src, decl) {
+	if (!decl[1].trimStart().startsWith('(')) return null;
+	const start = src.indexOf('(', decl.index + decl[0].length - decl[1].length);
+	let depth = 0;
+	for (let i = start; i < src.length; i++) {
+		if (src[i] === '(') depth++;
+		else if (src[i] === ')' && --depth === 0) return src.slice(start, i + 1);
+	}
+	return null;
+}
+
 /**
  * `header-name` — the header calls the app something the catalogue does not.
  *
@@ -572,7 +584,10 @@ export function checkHeaderName(repo, source, appRoots) {
 				`\\b(?:const|let|var)\\s+${ident[1]}\\s*(?::[^=]+)?=\\s*([^\\n]+)`
 			).exec(src);
 			if (decl) {
-				if (DERIVED.test(decl[1])) continue;
+				// A node title is declared over several lines, `const title = (` and
+				// the JSX below it (hadoku-wiki, fleet-manager#97). Read to the
+				// matching paren, or a derived name inside it can never be seen.
+				if (DERIVED.test(parenthesised(src, decl) ?? decl[1])) continue;
 				const lit = /^\s*['"`]([^'"`]*)['"`]/.exec(decl[1]);
 				if (lit) {
 					report(
