@@ -1,3 +1,4 @@
+import { finishedAtMs } from './job-history-index.js';
 import { jobRecords, type JobRecord } from './job-history-store.js';
 import { foldSummary, medianSorted, percentileSorted } from './job-history-fold.js';
 
@@ -16,51 +17,6 @@ import { foldSummary, medianSorted, percentileSorted } from './job-history-fold.
  * full-window one, it is the thing the full-window one is the baseline FOR.
  */
 export const RECENT_WINDOW_MS = 60 * 60 * 1000;
-
-/**
- * Seconds since each node last FINISHED a job, from observed history.
- *
- * The second half of `carousel`. Ordering on `busy` alone spreads CONCURRENT
- * work and nothing else: with the fleet idle every node ties at zero, the sort
- * falls through to ladder order, and every sequential job lands on whichever
- * node the manifest lists first. Measured 2026-09-02 — hadoku-pygmalion's test
- * job went to claw-2 on attempt 1 and attempt 2, which is what made a flaky
- * timing test look like a broken node and vice versa.
- *
- * Derived, never counted. `traffic.ts` is explicit that a cursor is a
- * DECLARATION that drifts from what happened — a restart resets it, a job that
- * failed to start still advanced it. This reads what the fleet DID: the end of
- * the most recent job each node served.
- *
- * A node with no history is ABSENT from the map rather than 0 or Infinity.
- * `orderCandidates` reads a missing value as "unmeasured" and sorts it last
- * among equals, which is the right weight for a node nothing is known about —
- * guessing it idle would hand it every placement.
- */
-export function idleSecondsByNode(nodes: readonly string[], now = Date.now()): Map<string, number> {
-	return idleSecondsFromRecords(jobRecords(), nodes, now);
-}
-
-/**
- * When a job FINISHED, in epoch ms. `NaN` when its start stamp is unusable.
- *
- * STATED ONCE, because two different questions need it and one of them is a
- * trap. `idleSecondsFromRecords` wants it because a node three seconds into a
- * two-hour job is not idle. `summarise`'s trailing window wants it because
- * cutting that window on `startedAt` would make the measure GET BETTER THE
- * WORSE THE FAILURE GETS — a job that ran three hours and finished a minute ago
- * started three hours ago, so a start-time window drops precisely the slowest
- * jobs, and the slower they get the more certainly they fall out. That is the
- * `queue-health` one-hour-ceiling trap in a new place: an excluded category
- * that a real failure MANUFACTURES. Windowing on completion means every job
- * enters the window exactly once, at the moment it lands, whatever it cost.
- *
- * `durationSec` is added rather than trusted from a second field because it is
- * the only end-of-job figure a record carries.
- */
-export function finishedAtMs(r: JobRecord): number {
-	return Date.parse(r.startedAt) + (r.durationSec ?? 0) * 1000;
-}
 
 /**
  * The rule itself, over records the caller supplies.
