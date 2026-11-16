@@ -136,11 +136,28 @@ ps -eo pid=,args= | while read -r pid rest; do
   # Runner.Listener processes under /tmp/…/actions-runner-x. On 2026-11-09
   # 09:34Z two of them on claw-4 paged "2 listeners on one directory"
   # (fleet-manager#79); runner-identity-probe.sh had the same leak on 10-08.
+  #
+  # "Under $HOME" was NOT enough. ci-throttle-install.sh gives every CI job
+  # TMPDIR=$HOME/runner-tmp, so the same fixtures land at
+  # ~/runner-tmp/runner-drift-*/actions-runner-x, and a case \`*\` crosses "/":
+  # "$HOME"/*/actions-runner* matched them. That paged claw-4, claw-6 and
+  # claw-10 eleven times from 11-01 to 11-16, every one during this repo's own
+  # check or publish job. So the runner directory's PARENT must be exactly one
+  # of the three standing layouts, the same list runner-identity-probe.sh
+  # enumerates. It cannot lean on $TMPDIR the way that probe does: this ssh
+  # shell never sees the job's TMPDIR, which lives in the runner's .env.
   case "$rest" in
-    "$HOME"/actions-runner*/bin/Runner.Listener*|"$HOME"/*/actions-runner*/bin/Runner.Listener*) ;;
+    "$HOME"/*/bin/Runner.Listener*) ;;
     *) continue ;;
   esac
   bin=\${rest%%/bin/Runner.Listener*}
+  parent=\${bin%/*}
+  case "\${bin##*/}" in actions-runner*) ;; *) continue ;; esac
+  case "$parent" in
+    "$HOME"|"$HOME"/runners) ;;
+    "$HOME"/repos/*) case "\${parent#"$HOME"/repos/}" in */*) continue ;; esac ;;
+    *) continue ;;
+  esac
   dir=$(basename "$bin")
   cg=$(head -1 /proc/$pid/cgroup 2>/dev/null)
   case "$cg" in

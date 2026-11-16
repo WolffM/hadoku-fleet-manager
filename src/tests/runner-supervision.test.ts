@@ -300,7 +300,7 @@ test('no readable backstops means every node is probed — the strict direction'
 	assert.deepEqual(report?.skippedByRole, []);
 });
 
-test("the probe counts listeners under the runner user's HOME only, never a test fixture under /tmp (fleet-manager#79)", () => {
+test("the probe counts listeners under the runner user's HOME only, never a test fixture under /tmp or the job's TMPDIR (fleet-manager#79)", () => {
 	// The REAL script, with `ps` and `systemctl` stubbed as shell functions: on
 	// 2026-11-09 this package's own suite, running as a CI job on claw-4, started
 	// two fake Runner.Listener processes on one /tmp/…/actions-runner-x and the
@@ -313,6 +313,11 @@ test("the probe counts listeners under the runner user's HOME only, never a test
 		'201 /tmp/runner-env-drift-AbC/actions-runner-x/bin/Runner.Listener run',
 		'202 /tmp/runner-env-drift-AbC/actions-runner-x/bin/Runner.Listener run',
 		`301 ${home}/.hadoku/jit/slot0/bin/Runner.Listener run`,
+		// A CI job's TMPDIR is ~/runner-tmp (ci-throttle-install.sh), so the same
+		// fixtures sit UNDER $HOME too: 11 pages on claw-4/6/10, 11-01..11-16.
+		`401 ${home}/runner-tmp/runner-drift-Xy/actions-runner-x/bin/Runner.Listener run`,
+		`402 ${home}/runner-tmp/runner-drift-Xy/actions-runner-x/bin/Runner.Listener run`,
+		`403 ${home}/repos/app/nested/actions-runner-deep/bin/Runner.Listener run`,
 	]
 		.map((l) => `'${l}'`)
 		.join(' ');
