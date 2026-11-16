@@ -449,6 +449,32 @@ void test('unavailable streak: counted per job, and survives a restart because i
 	assert.deepEqual(warns, []);
 });
 
+void test('unavailable streak: the second pass counts from the first even while the file still holds an older write', async () => {
+	// The file is written behind the count. An older write that has landed says
+	// 0 for this job; reading it back made every pass the first, and the hold
+	// never paged (seen as a 1-in-N red in provisioning-converge.test.ts).
+	const dir = tempDir('streak-lag-');
+	__setHostForTesting({
+		...testHost,
+		stateDir: dir,
+		logger: { info() {}, warn: (m) => warns.push(m), error() {} },
+		jobs: {
+			async recordJobResult(jobName, jobState, durationMs, opts) {
+				jobResults.push({ jobName, jobState, durationMs, opts });
+			},
+		},
+	});
+	await blind('streak-lag');
+	// What a slow disk leaves behind: the file as it was before that count.
+	await flushWrites();
+	writeFileSync(join(dir, STREAK_FILE), '{}');
+	await blind('streak-lag');
+	assert.deepEqual(
+		jobResults.map((r) => r.jobState),
+		['skipped', 'failed']
+	);
+});
+
 void test('unavailable streak: a store it cannot write still counts, in memory, and says so', async () => {
 	const dir = tempDir('streak-ro-');
 	writeFileSync(join(dir, 'blocker'), '');

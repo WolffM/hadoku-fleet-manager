@@ -18,7 +18,7 @@
  *
  * Persisted under `stateDir()`: mgmt-api restarts several times a day, and a
  * counter that lived only in memory would turn "N in a row" into "never". A
- * store that cannot be read or written falls back to memory and says so,
+ * store that cannot be read or written still counts in memory and says so,
  * because losing a counter must not fail the job it counts.
  */
 import fs from 'node:fs';
@@ -36,10 +36,23 @@ export type UnavailableHold =
 	| { state: 'skipped'; count: number; why: string }
 	| { state: 'failed'; count: number; why: string };
 
-/** Memory copy per file, used only when the file cannot be read or written. */
-const fallback = new Map<string, Record<string, number>>();
-
+/**
+ * What THIS process last counted, per file. Once it has counted in a file its
+ * own copy is the newest there is, and `load` answers from it.
+ *
+ * The file is written off the event loop, so it LAGS: reading it back straight
+ * after a save returned whatever the previous write had left. Two
+ * could-not-look passes inside one write's latency both read a count of 0, both
+ * reported `held (1/2)`, and the second never paged — the hold had become the
+ * way to stop paging that the header forbids. Two jobs finishing together lost
+ * one another's count the same way. The file is for the NEXT process: mgmt-api
+ * is the only writer, and it reads the file once, on its first count after a
+ * restart.
+ */
+const counted = new Map<string, Record<string, number>>();
 function load(file: string): Record<string, number> {
+	const held = counted.get(file);
+	if (held) return held;
 	try {
 		const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf-8'));
 		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -48,16 +61,17 @@ function load(file: string): Record<string, number> {
 		logger.warn(`[unavailable-streak] ${file} is not an object; starting the streaks again`);
 		return {};
 	} catch (err) {
-		if ((err as NodeJS.ErrnoException).code === 'ENOENT') return fallback.get(file) ?? {};
+		if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
 		logger.warn(
 			`[unavailable-streak] could not read ${file}: ${err instanceof Error ? err.message : String(err)} — counting in memory only`
 		);
-		return fallback.get(file) ?? {};
+		return {};
 	}
 }
 
 function save(file: string, streaks: Record<string, number>): void {
-	fallback.set(file, streaks);
+	counted.set(file, streaks);
+	// `writeJsonAtomic` queues per path, so an older copy cannot land last.
 	writeJsonAtomic(file, streaks, { space: '\t' }).catch((err: unknown) => {
 		logger.warn(
 			`[unavailable-streak] could not persist ${file}: ${err instanceof Error ? err.message : String(err)} — counting in memory only`
@@ -100,7 +114,7 @@ export function clearUnavailable(job: string, dir: string): void {
 	save(file, rest);
 }
 
-/** Test seam: forget the in-memory fallback copies. */
+/** Test seam: forget what this process counted, as a restart does. */
 export function __resetUnavailableStreaksForTesting(): void {
-	fallback.clear();
+	counted.clear();
 }
