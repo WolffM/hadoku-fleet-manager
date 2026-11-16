@@ -1034,4 +1034,49 @@ docker_try() {
 # shellcheck disable=SC2046
 say docker $(docker_try)
 
+# --- clamav: RUN clamscan, and measure the age of the signatures it loads ---
+#
+# watchparty's ingest (src/lib/capability-registry-label.ts `clamav`). The
+# detail starts with the age in days, the measurement the registry judges; the
+# rest is the version and clamd's state, which the verdict ignores. No test
+# scan: that loads the whole database (~1 GB) at every probe pass.
+clamav_try() {
+	if ! command -v clamscan >/dev/null 2>&1; then
+		printf 'no no-clamscan'
+		return
+	fi
+	# `ClamAV 1.4.3/28184/Sat Nov 14 22:27:28 2026`; no date means no signatures.
+	cv_line=$(clamscan --version 2>/dev/null) || {
+		printf 'no clamscan-failed'
+		return
+	}
+	cv_date=$(printf '%s' "$cv_line" | cut -s -d/ -f3)
+	cv_then=$(date -d "$cv_date" +%s 2>/dev/null)
+	if [ -z "$cv_date" ] || [ -z "$cv_then" ]; then
+		printf 'no no-signature-date'
+		return
+	fi
+	systemctl is-active -q clamav-freshclam 2>/dev/null || {
+		printf 'no freshclam-inactive'
+		return
+	}
+	systemctl is-enabled -q clamav-freshclam 2>/dev/null || {
+		printf 'no freshclam-not-enabled'
+		return
+	}
+	cv_clamd=off
+	if pgrep -x clamd >/dev/null 2>&1; then
+		cv_clamd=running
+	elif systemctl is-enabled -q clamav-daemon.service 2>/dev/null ||
+		systemctl is-enabled -q clamav-daemon.socket 2>/dev/null; then
+		cv_clamd=enabled
+	fi
+	cv_ver=$(printf '%s' "$cv_line" | cut -d/ -f1 | cut -d' ' -f2)
+	printf 'ok %sd,clamav-%s,clamd-%s' \
+		"$(awk -v n="$(date +%s)" -v t="$cv_then" 'BEGIN{printf "%.1f", (n-t)/86400}')" "$cv_ver" "$cv_clamd"
+}
+
+# shellcheck disable=SC2046
+say clamav $(clamav_try)
+
 printf 'PROBE-END %s\n' "$(hostname)"

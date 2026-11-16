@@ -17,6 +17,7 @@ import { RELEASE_TOOLS } from './toolchain-release-tools.mjs';
 import { PM2_BOOT } from './pm2-boot-floor.mjs';
 import { AS_CI, RUST_REPAIRS } from './toolchain-rust.mjs';
 import { NODE_REPAIRS } from './toolchain-node.mjs';
+import { CLAMAV_REPAIRS } from './toolchain-clamav.mjs';
 import { debInstalled } from './deb-installed.mjs';
 import { parseShadow, shadowedBy } from './tool-shadow.mjs';
 
@@ -438,6 +439,7 @@ export const REPAIRS = {
 	 * included.
 	 */
 	...NODE_REPAIRS,
+	...CLAMAV_REPAIRS,
 	...RELEASE_TOOLS,
 	/*
 	 * JDK21 + MAVEN (cardtable#5, added 2026-10-05): forge-e2e/forge-jvm move

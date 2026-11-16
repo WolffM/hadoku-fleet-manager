@@ -62,7 +62,9 @@ test('every label the committed manifest declares is a registry entry', () => {
 	// `data-peer` joined it 2026-10-27 (fleet-manager#16): earned by connecting.
 	// `service-host` joined it 2026-10-31 (fleet-manager#16): earned by the node
 	// proving it can serve a placed service.
+	// `clamav` joined it 2026-11-15: earned by running clamscan on fresh signatures.
 	const runtimeWritten = new Set([
+		'clamav',
 		'data-peer',
 		'service-host',
 		'docker',

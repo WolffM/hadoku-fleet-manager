@@ -714,6 +714,11 @@
     "why": "the toolchain floor's system-Node entries (node24, node-apt-path) and NODE_MAJOR, kept out of toolchain-floor.mjs (config) for size: the same table, in the same layer, with no imports"
   },
   {
+    "glob": "scripts/lib/toolchain-clamav.mjs",
+    "layer": "config",
+    "why": "the toolchain floor's clamav entry, kept out of toolchain-floor.mjs (config) for size: the same table, in the same layer. Imports nodeOffer (capability-offer.ts, config) for its `when`, as toolchain-floor.mjs does"
+  },
+  {
     "glob": "scripts/lib/tool-shadow.mjs",
     "layer": "config",
     "why": "the SHADOWED detect answer for tarball tools, split out of toolchain-floor.mjs (config) for size: pure string builders with no imports, in the same layer"

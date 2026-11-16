@@ -447,3 +447,65 @@ export const DOCKER_CAPABILITY: Capability = {
 		'The CI user can build a docker image with buildx and read it back: rootless on a ' +
 		'cut-over claw, the system daemon through the docker group before that.',
 };
+export const CLAMAV_CAPABILITY: Capability = {
+	/*
+	 * clamav (2026-11-15): hadoku-watchparty's ingest scans each run's new
+	 * source files with ONE `clamscan` invocation inside the job, before it
+	 * encodes them.
+	 *
+	 * A LABEL, SCOPED LIKE `nvenc-h264`. Only the ingest needs it, so it is not
+	 * toolchain: that would put freshclam, ~110 MB of signatures and their
+	 * daily downloads on every node for one job. Not implicit either: the
+	 * ingest must ROUTE on it, because a node without fresh signatures cannot
+	 * do the job's scan step. Bootcamp installs it only where the ingest can
+	 * already land (`toolchain-clamav.mjs`), and a node EARNS it by passing the
+	 * probe, never by declaring it.
+	 *
+	 * THE PROBE RUNS IT. `clamscan --version` executes the scanner and prints
+	 * the build date of the signatures it would load; the age of that date is
+	 * the measurement, judged here (`measure`). freshclam must be active AND
+	 * enabled, since an active-but-disabled updater stops at the next reboot.
+	 * It does not scan a test file: that loads the full database (~1 GB) on
+	 * every node at every probe pass, the exact resident this entry explains.
+	 *
+	 * MEMORY: ~1 GB PEAK PER INGEST RUN, BASIS ESTIMATED. clamscan loads the
+	 * whole signature set for the length of the scan, inside the job's own
+	 * JIT unit, so job-metrics charges it to the ingest job and
+	 * `facets["WolffM/hadoku-watchparty"].jobP95Mb` picks it up at the next
+	 * `reconcile --write-coverage` (that facet is generated per repo from
+	 * measured peaks; it has no slot for an estimate). TO UPDATE: the
+	 * watchparty session measures the job's clamscan peak and replaces
+	 * "~1 GB, estimated" here and in the description with the measured
+	 * figure, its run id and date.
+	 *
+	 * A STANDING `clamd` IS NOT EXPECTED on any managed node. The ingest uses
+	 * per-run clamscan, so a resident clamd (~1 GB) is not the ingest's. The
+	 * fleet has no registry of expected resident processes to record that in,
+	 * so the probe names clamd's state in its detail (`clamd-off`,
+	 * `clamd-enabled`, `clamd-running`) and the verdict ignores it.
+	 */
+	id: 'clamav',
+	label: 'ClamAV scan, fresh signatures',
+	kind: 'identity',
+	surface: 'label',
+	verify: 'probe',
+	description:
+		'`clamscan` runs, its signatures are under 7 days old, and clamav-freshclam is active ' +
+		'and enabled. Routed on by watchparty’s ingest, alongside `nvenc-h264` and ' +
+		'`data-peer`: one clamscan per run inside the job, ~1 GB peak (estimated, not yet ' +
+		'measured) charged to the job’s own unit. A standing clamd is NOT the ingest’s and ' +
+		'not expected on any managed node; the probe detail names its state.',
+	measure: {
+		metric: 'signature age',
+		unit: ' days',
+		atMost: 7,
+		why:
+			'The operator’s bar. freshclam checks every hour by default and the daily database ' +
+			'is republished several times a day, so a working updater keeps this under one ' +
+			'day; 7 days means the updater has been failing for a week, not that one check ' +
+			'was missed.',
+		loadInvariant:
+			'The age of the signature set is a date read from the database, not a rate: a ' +
+			'running job cannot move it, so draining a node to read it would buy nothing.',
+	},
+};
