@@ -16,8 +16,15 @@
  *     PATH is the ci user's systemd --user manager environment at unit start,
  *     not a login shell's, so only reading THAT environment sees it.
  *
- * NEVER A TENANT HOST. A node with an active `pm2-*-svc.service` is
- * could-not-look before anything is rebooted; `fleet reboot-claws` owns those.
+ * NEVER A TENANT HOST. A node with an active tenant unit is not rebooted here;
+ * `fleet reboot-claws` owns those. Its CURRENT boot is judged instead, by the
+ * same after-boot read, when that boot is younger than the qualification TTL:
+ * the cycle reboots every claw far more often than that, so the boot a tenant
+ * host is on IS a recent reboot, and what this test asks of a boot (no failed
+ * unit, nvidia for the running kernel, the runner PATH, runner units up) can
+ * be read off it (fleet-manager#107: claw-4 on 11-16 passed every other check
+ * and failed the night on a reboot the test is designed not to take). A boot
+ * older than the TTL is still could-not-look: there is no recent boot to judge.
  *
  * SHAPE. Read the node (`REBOOT_PROBE`, the same read `fleet reboot-claws`
  * takes, so the before/after comparison is `verifyAfter`'s and not a second
@@ -307,7 +314,15 @@ export function judgeAfterBoot({ qr, rp, before, machine }) {
 	}
 
 	if (!rp?.ok) unknown.push(`the reboot probe after boot: ${rp?.reason ?? 'no answer'}`);
-	else fails.push(...verifyAfter(before, rp));
+	else if (before) fails.push(...verifyAfter(before, rp));
+	else {
+		// The CURRENT boot (a tenant host, see judgeCurrentBoot): there is no
+		// before to diff against, and a kernel installed since the boot is the
+		// reboot cycle's next job, not this boot's fault. What a boot must
+		// still show is every enabled runner unit running.
+		const down = rp.unitsEnabled.filter((u) => !rp.unitsActive.includes(u));
+		if (down.length) fails.push(`runner unit(s) not active: ${down.join(', ')}`);
+	}
 
 	return {
 		fails,
@@ -355,12 +370,7 @@ export function makeRebootTest({
 					`could not list ${ctx.node}'s hosted tenant units, so it was not rebooted: ` +
 						(/^QR-TENANTS-ERR (.*)$/m.exec(ten.stdout ?? '')?.[1] ?? errOf(ten))
 				);
-			if (tenants.length)
-				return cnl(
-					`${ctx.node} hosts tenant unit(s) ${tenants.join(', ')}, so it was not rebooted: ` +
-						'the reboot cycle (fleet reboot-claws) owns rebooting tenant hosts',
-					{ tenants }
-				);
+			if (tenants.length) return judgeCurrentBoot(ctx, tenants);
 			const pre = await ctx.exec(REBOOT_PROBE, { timeoutMs: 60_000 });
 			const before = pre.ok ? parseRebootProbe(pre.stdout) : { ok: false, reason: errOf(pre) };
 			if (!before.ok)
@@ -438,6 +448,63 @@ export function makeRebootTest({
 				metrics,
 			};
 		},
+	};
+}
+
+/** The current boot's age, read beside the after-boot read on a tenant host. */
+const UPTIME_SCRIPT = 'echo "QR-UPTIME-SEC $(cut -d. -f1 /proc/uptime)"\n';
+
+/** PURE. Seconds since boot from `QR-UPTIME-SEC`, or null. */
+export function parseUptime(text) {
+	const m = /^QR-UPTIME-SEC (\d+)$/m.exec(String(text ?? ''));
+	return m ? Number(m[1]) : null;
+}
+
+/**
+ * A tenant host is not rebooted here, so judge the boot it is on (see the
+ * header). Pass, fail and could-not-look mean what they mean after a reboot;
+ * the reason says which boot was judged and why it was not a fresh one.
+ */
+async function judgeCurrentBoot(ctx, tenants) {
+	const why =
+		`${ctx.node} hosts tenant unit(s) ${tenants.join(', ')}, so it was not rebooted here ` +
+		'(the reboot cycle, fleet reboot-claws, owns rebooting tenant hosts)';
+	const cnl = (reason, metrics = {}) => ({
+		status: 'could-not-look',
+		reason: `${why}; ${reason}`,
+		metrics: { tenants, currentBoot: true, ...metrics },
+	});
+	const r = await ctx.exec(
+		`${UPTIME_SCRIPT}${afterBootScript({ machine: ctx.machine })}${REBOOT_PROBE}`,
+		{ timeoutMs: (SETTLE_SEC + 120) * 1000 }
+	);
+	const uptimeSec = parseUptime(r.stdout);
+	if (uptimeSec === null) return cnl(`and its uptime could not be read: ${errOf(r)}`);
+	const ageDays = round1(uptimeSec / 86_400);
+	if (ageDays > QUALIFY_TTL_DAYS)
+		return cnl(
+			`and its current boot is ${ageDays} days old, older than the ${QUALIFY_TTL_DAYS}-day ttl, so there is no recent boot to judge`,
+			{ uptimeSec }
+		);
+	const qr = parseAfterBoot(r.stdout);
+	const rp = parseRebootProbe(r.stdout);
+	const j = judgeAfterBoot({ qr, rp, before: null, machine: ctx.machine });
+	if (!r.ok && !qr.complete) j.unknown.push(`the read failed: ${errOf(r)}`);
+	const metrics = { ...j.metrics, tenants, currentBoot: true, uptimeSec };
+	const judged = `judged its current boot instead, up ${ageDays} days`;
+	if (j.fails.length)
+		return {
+			status: 'fail',
+			reason: `${why}; ${judged}: ${[...j.fails, ...j.unknown].join('; ')}`,
+			metrics,
+		};
+	if (j.unknown.length) return cnl(`${judged}: ${j.unknown.join('; ')}`, metrics);
+	return {
+		status: 'pass',
+		reason:
+			`${why}; ${judged} on ${rp.running}: 0 failed units, ${j.nvidia}; ` +
+			`the runner PATH runs ${RUNNER_PATH_TOOLS.join(', ')} as ci; every enabled runner unit is active`,
+		metrics,
 	};
 }
 

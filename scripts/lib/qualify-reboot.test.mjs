@@ -97,6 +97,7 @@ function fakeNode({
 	afters = [{ qr: afterOut(), rp: probeOut({ bootId: NEW }) }],
 	machine = MACHINE,
 	tenants = 'QR-TENANTS-END',
+	uptimeSec = 2 * 86_400,
 } = {}) {
 	const startedAt = Date.now();
 	let clock = startedAt;
@@ -130,7 +131,8 @@ function fakeNode({
 				return { ok: scheduled === 'SCHEDULED', stdout: `${scheduled}\n`, stderr: '' };
 			if (script.includes('QR-END')) {
 				const a = afters[Math.min(afterI++, afters.length - 1)];
-				return { ok: true, stdout: `${a.qr}\n${a.rp}\n`, stderr: '' };
+				const up = script.includes('QR-UPTIME-SEC') ? `QR-UPTIME-SEC ${uptimeSec}\n` : '';
+				return { ok: true, stdout: `${up}${a.qr}\n${a.rp}\n`, stderr: '' };
 			}
 			if (script.includes('END reboot-probe'))
 				return before === null
@@ -378,15 +380,54 @@ void test('a pm2 app slow to come back is waited for; one that never does fails'
 
 // ── tenant hosts belong to the reboot cycle ─────────────────────────────────
 
-void test('a node hosting tenants is never rebooted: could-not-look naming the units', async () => {
-	const { r, sent } = await run({
-		tenants:
-			'QR-TENANT cardtable-agent.service\nQR-TENANT pm2-archivebot-svc.service\nQR-TENANTS-END',
-	});
-	assert.equal(r.status, 'could-not-look');
+const TENANTS =
+	'QR-TENANT cardtable-agent.service\nQR-TENANT pm2-archivebot-svc.service\nQR-TENANTS-END';
+const rebootsSent = (sent) => sent.filter((s) => s.script.includes('systemctl reboot')).length;
+
+// fleet-manager#107: claw-4 on 11-16 passed every other check and failed the
+// night on this one, which by design never reboots a tenant host. Its current
+// boot (the reboot cycle's, 11-14) is what gets judged.
+void test('a tenant host is never rebooted; a recent current boot that is whole passes, naming the units', async () => {
+	const { r, sent } = await run({ tenants: TENANTS });
+	assert.equal(rebootsSent(sent), 0);
+	assert.equal(r.status, 'pass', r.reason);
 	assert.match(r.reason, /cardtable-agent\.service, pm2-archivebot-svc\.service/);
 	assert.match(r.reason, /reboot-claws/);
-	assert.equal(sent.filter((s) => s.script.includes('systemctl reboot')).length, 0);
+	assert.match(r.reason, /judged its current boot instead, up 2 days/);
+	assert.equal(r.metrics.currentBoot, true);
+	assert.equal(sent.filter((s) => s.script === BOOT_ID_SCRIPT).length, 0, 'nothing polled');
+});
+
+void test("a tenant host's current boot is held to the after-boot bars: a failed unit fails", async () => {
+	const { r, sent } = await run({
+		tenants: TENANTS,
+		afters: [{ qr: afterOut({ failed: ['smartmontools.service'] }), rp: probeOut() }],
+	});
+	assert.equal(rebootsSent(sent), 0);
+	assert.equal(r.status, 'fail');
+	assert.match(r.reason, /1 failed system unit\(s\).*smartmontools\.service/);
+});
+
+void test("a tenant host's enabled runner unit that is not running fails", async () => {
+	const rp = probeOut()
+		.replace('UNITS-ENABLED ', 'UNITS-ENABLED actions-runner-a.service')
+		.replace('UNITS-ACTIVE ', 'UNITS-ACTIVE ');
+	const { r } = await run({ tenants: TENANTS, afters: [{ qr: afterOut(), rp }] });
+	assert.equal(r.status, 'fail');
+	assert.match(r.reason, /runner unit\(s\) not active: actions-runner-a\.service/);
+});
+
+void test('a tenant host whose boot is older than the ttl is could-not-look: no recent boot to judge', async () => {
+	const { r, sent } = await run({ tenants: TENANTS, uptimeSec: 30 * 86_400 });
+	assert.equal(rebootsSent(sent), 0);
+	assert.equal(r.status, 'could-not-look');
+	assert.match(r.reason, /30 days old, older than the 21-day ttl/);
+});
+
+void test('a tenant host whose uptime cannot be read is could-not-look, never a pass', async () => {
+	const { r } = await run({ tenants: TENANTS, uptimeSec: 'x' });
+	assert.equal(r.status, 'could-not-look');
+	assert.match(r.reason, /uptime could not be read/);
 });
 
 void test('an unreadable unit listing is could-not-look, never "no tenants", and reboots nothing', async () => {
