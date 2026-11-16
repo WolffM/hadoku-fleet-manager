@@ -162,6 +162,7 @@ import { join } from 'node:path';
 import { createEmitter } from './lib/emit.mjs';
 import { printEgressReport } from './lib/egress-slices-report.mjs';
 import { tunnelOnlyPlacement, tunnelOnlyProblems } from './lib/egress-tunnel-only.mjs';
+import { slicePopulationFindings } from './lib/egress-slice-population.mjs';
 import { cgroupOf, descendantCgroups } from './lib/proc-tree.mjs';
 import { manifest, stateDir } from '../dist/lib/fleet-paths.js';
 
@@ -975,29 +976,9 @@ function main() {
 		});
 	}
 
-	// A TAXONOMY ENTRY THAT MATCHES NOTHING ROUTES NOTHING. The same shape as a
-	// manifest resolving to an empty directory and reporting a healthy fleet of
-	// zero machines: the policy would be installed, apply to no process, and look
-	// exactly as green as a working one.
-	for (const [prefix, count] of population) {
-		if (count === null) {
-			findings.push({
-				status: 'missing-slice',
-				cgroup: prefix,
-				why:
-					'is declared direct-egress but does not exist under /sys/fs/cgroup. The path ' +
-					'moved or was never created, and a policy keyed on it matches nothing.',
-			});
-		} else if (count === 0) {
-			findings.push({
-				status: 'empty-slice',
-				cgroup: prefix,
-				why:
-					'is declared direct-egress but the kernel has no process in it. A policy keyed ' +
-					'on it would route nothing and still look exactly as green as a working one.',
-			});
-		}
-	}
+	// A declared cgroup that holds nothing routes nothing, unless it is idle on purpose.
+	const sliceCheck = slicePopulationFindings(spec, population);
+	findings.push(...sliceCheck.findings);
 
 	// EXAMINED COUNTS APPS, NOT FINDINGS. The first draft summed findings and
 	// `ok`, so a slice-level finding — which is not an app — reported 22 apps on a
@@ -1025,6 +1006,8 @@ function main() {
 			ok,
 			// ADDITIVE too: apps named tunnel-only that have not moved there yet.
 			tunnelOnlyPending: pending,
+			// ADDITIVE: declared cgroups recorded empty on purpose (fleet-manager#106).
+			idleSlices: sliceCheck.idle,
 			markerFile: markers.report(),
 		});
 	} else {
@@ -1037,6 +1020,7 @@ function main() {
 			dormant,
 			deploying,
 			pending,
+			idleSlices: sliceCheck.idle,
 			markers,
 		});
 	}

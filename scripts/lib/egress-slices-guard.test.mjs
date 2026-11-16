@@ -149,8 +149,10 @@ void test('an unreadable or empty scan fails instead of reporting a clean box', 
 		/apps === null \|\| apps\.length === 0/,
 		'PM2 being unreachable and PM2 reporting nothing must both be failures'
 	);
+	// The population check moved to its own module (fleet-manager#106); the gate must still call it.
+	assert.match(blanked, /findings\.push\(\.\.\.sliceCheck\.findings\)/);
 	assert.match(
-		blanked,
+		blankComments(readFileSync(new URL('./egress-slice-population.mjs', import.meta.url), 'utf8')),
 		/status:\s*'(?:missing-slice|empty-slice)'/,
 		'a declared cgroup that holds nothing must be a finding — a policy keyed on it routes nothing and still looks green'
 	);

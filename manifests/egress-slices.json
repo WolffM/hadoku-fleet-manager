@@ -34,7 +34,11 @@
     {
       "cgroup": "/gameservers.slice",
       "holds": "the Enshrouded and Valheim dedicated-server containers, placed there by cgroup_parent in their docker-compose.yml",
-      "why": "Game servers are hokon-local, not fleet work, and egress direct for the same kind of reason as vpnbypass: the tunnel only hurts them. Through nordlynx, Steam registered the server under the NordVPN exit address and every Steam-relay player's traffic took an extra consumer-VPN hop. Named decision 2026-10-25: the real WAN address appears in the Steam server listing."
+      "why": "Game servers are hokon-local, not fleet work, and egress direct for the same kind of reason as vpnbypass: the tunnel only hurts them. Through nordlynx, Steam registered the server under the NordVPN exit address and every Steam-relay player's traffic took an extra consumer-VPN hop. Named decision 2026-10-25: the real WAN address appears in the Steam server listing.",
+      "idle": {
+        "since": "2026-11-16",
+        "why": "Operator decision (hadoku_site#561): the game servers are stopped and the slice stays declared, to be used again if they are migrated later. Empty is intended; a process appearing in it is a finding."
+      }
     }
   ],
   "$comment_tunnelOnly": [

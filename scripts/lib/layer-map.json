@@ -2319,6 +2319,13 @@
     "why": "fleet-manager#85: the tunnel-only class of the egress taxonomy (validation and placement), zero imports, read by the egress-slices gate (observation/run) and its tests."
   },
   {
+    "glob": "scripts/lib/egress-slice-population.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "fleet-manager#106: the egress-slices gate's population check (missing, empty, or idle on purpose per a directEgress entry's `idle` record), zero imports, moved out of scripts/check-egress-slices.mjs so the gate shrinks toward its file-size ceiling."
+  },
+  {
     "glob": "scripts/lib/egress-slices-report.mjs",
     "layer": "domain",
     "domain": "observation",

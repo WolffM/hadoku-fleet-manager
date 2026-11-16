@@ -13,11 +13,23 @@
  * deploy `markers` reader.
  */
 export function printEgressReport(log, r) {
-	const { examined, population, findings, deferred, leaks, dormant, deploying, pending, markers } =
-		r;
+	const {
+		examined,
+		population,
+		findings,
+		deferred,
+		leaks,
+		dormant,
+		deploying,
+		pending,
+		idleSlices = [],
+		markers,
+	} = r;
 	log(`Examined ${examined} PM2 app(s) against manifests/egress-slices.json.\n`);
 	for (const [prefix, count] of population)
 		log(`  ${(count === null ? 'n/a' : String(count)).padStart(3)} proc(s) in ${prefix}`);
+	for (const i of idleSlices)
+		log(`      idle since ${i.since}, on purpose: ${i.cgroup} — ${i.why}`);
 	log('');
 	for (const f of findings)
 		// `nothing-observed` is about the RUN and names neither an app nor a
