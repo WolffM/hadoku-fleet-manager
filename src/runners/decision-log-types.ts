@@ -75,6 +75,18 @@ export interface DecisionRule {
 	passIndex: number | null;
 }
 
+/**
+ * The winner was cooling when the job was placed on it (`node-cooldown.ts`,
+ * #103). `enforced: false` is the shadow stage: the placement went ahead,
+ * and this row is what the cooldown WOULD have refused.
+ */
+export interface CooldownNote {
+	enforced: boolean;
+	streak: number;
+	until: string;
+	why: string;
+}
+
 export interface DecisionRecord {
 	v: typeof DECISION_SCHEMA;
 	at: string;
@@ -117,4 +129,6 @@ export interface DecisionRecord {
 	 * take the job had not changed.
 	 */
 	fingerprint: string | null;
+	/** Additive (#103): present only on a placement onto a cooling node. */
+	cooldown?: CooldownNote;
 }

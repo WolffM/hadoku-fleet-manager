@@ -42,6 +42,7 @@ import { nodeOf } from './census.js';
 import { recordDispatchDay } from './dispatch-daily.js';
 import { decisionLogEnabled } from './decision-log.js';
 import { JitDecisionBook, recordWarmAssignments } from './decision-log-record.js';
+import { liveCooldowns } from './node-cooldown.js';
 import { makeCapacityOf, toJitObservation } from './dispatch-decision-flatten.js';
 import { satisfiesLabels } from './placement-node-state.js';
 import type { DispatchPassInput, DispatchPassResult } from './dispatch-pass-types.js';
@@ -385,8 +386,22 @@ export async function runDispatchPass(
 	// THE DECISION LOG (T1): planTick tells it each decision as it makes it,
 	// and it writes the ones that changed after the mints below. Off, planTick
 	// gets no observer at all — the shape the equivalence tests compare against.
+	// The cooldown is SHADOW (#103): a placement onto a cooling node is
+	// recorded on its decision and logged, and goes ahead.
+	const cooling = liveCooldowns.refresh(
+		input.nodes.map((m) => m.name),
+		nowMs
+	);
+	const cooldownFor = cooling.size
+		? (node: string, repo: string, jobName: string) => {
+				const note = liveCooldowns.noteFor(node, repo, jobName, nowMs);
+				if (note)
+					logger.info(`[cooldown] shadow: would not place ${repo} ${jobName} on ${note.why}`);
+				return note;
+			}
+		: undefined;
 	const book = decisionLogEnabled()
-		? new JitDecisionBook(nowMs, input.order, input.fingerprintFor)
+		? new JitDecisionBook(nowMs, input.order, input.fingerprintFor, cooldownFor)
 		: null;
 	// WARM YIELD: which full nodes would take a long-waiting job if their idle
 	// warm listener gave its slot back (`warm-yield.ts`). It only reads.

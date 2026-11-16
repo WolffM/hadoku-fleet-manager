@@ -20,10 +20,13 @@
  * applies to this box — load per core, memory available, /tmp free — against
  * the thresholds it uses, then the controller's last verdict from
  * `GET /api/fleet`. The first thing an operator types in an incident should
- * answer "why not", and the second thing should fix it.
+ * answer "why not", and the second thing should fix it. Last, every node the
+ * cooldown (#103) has cooling, from the controller's job-history: SHADOW, so
+ * placement still uses them, and the line says so.
  */
 import { existsSync, readFileSync, statfsSync } from 'node:fs';
 import { cpus, userInfo } from 'node:os';
+import { join } from 'node:path';
 import process from 'node:process';
 
 import {
@@ -44,8 +47,15 @@ import {
 	isHostIdle,
 } from '../dist/runners/backstop.js';
 import { TMP_FREE_FLOOR_MB } from '../dist/lib/jit-naming.js';
+import { stateDir } from '../dist/lib/fleet-paths.js';
+import {
+	COOLDOWN_ENFORCED,
+	describeCooldown,
+	nodeCooldowns,
+} from '../dist/runners/node-cooldown.js';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
+import { loadManifest } from './lib/fleet-exec.mjs';
 import { readDrains } from './lib/expected-down.mjs';
 import { keepStdoutWhole } from './lib/emit.mjs';
 import { BOLD, GREEN, RED, RESET, YELLOW } from './lib/term.mjs';
@@ -166,6 +176,7 @@ if (parsed.has('--status')) {
 	const forces = state ? activeForces(state, now) : null;
 	const local = localGates();
 	const verdict = await controllerVerdict();
+	const cooling = cooldowns();
 	if (parsed.has('--json')) {
 		console.log(
 			JSON.stringify(
@@ -176,6 +187,16 @@ if (parsed.has('--status')) {
 						: forces.map((f) => ({ node: f.node, ...f.record, remainingMin: f.remainingMin })),
 					thisHost: local,
 					controller: verdict,
+					cooldown: cooling.error
+						? { enforced: COOLDOWN_ENFORCED, error: cooling.error }
+						: {
+								enforced: COOLDOWN_ENFORCED,
+								cooling: cooling.list.map((c) => ({
+									...c,
+									until: new Date(c.untilMs).toISOString(),
+									why: describeCooldown(c, now),
+								})),
+							},
 				},
 				null,
 				2
@@ -225,6 +246,12 @@ if (parsed.has('--status')) {
 				`  controller sees forced: ${verdict.backstopForced.map((f) => `${f.node} (${f.remainingMin} min left)`).join(', ')}`
 			);
 	}
+	console.log(
+		`\n${B}cooldown${N} (${COOLDOWN_ENFORCED ? 'enforced' : 'shadow: recorded on dispatch decisions, placement unchanged'})`
+	);
+	if (cooling.error) console.log(`  ${Y}could not look: ${cooling.error}${N}`);
+	else if (!cooling.list.length) console.log('  no node is cooling');
+	else for (const c of cooling.list) console.log(`  ${Y}●${N} ${describeCooldown(c, now)}`);
 	process.exit(error ? 1 : 0);
 }
 
@@ -256,6 +283,41 @@ function localGates() {
 		tmpOk: tmpFreeMb >= TMP_FREE_FLOOR_MB,
 		idle: isHostIdle(h),
 	};
+}
+
+/**
+ * Every node cooling now, from the controller's job-history on this box. An
+ * absent, unreadable or empty history is said, never read as none cooling.
+ */
+function cooldowns() {
+	const file = join(stateDir(), 'job-history.jsonl');
+	let text;
+	try {
+		text = readFileSync(file, 'utf8');
+	} catch (err) {
+		return {
+			error: `job-history unreadable at ${file} (${err.code ?? err.message}); not the controller?`,
+			list: [],
+		};
+	}
+	const records = [];
+	for (const line of text.split('\n')) {
+		if (!line.trim()) continue;
+		try {
+			records.push(JSON.parse(line));
+		} catch {
+			// One torn line (an append in flight) is not a torn file.
+		}
+	}
+	if (!records.length) return { error: `job-history at ${file} held no readable record`, list: [] };
+	let nodes;
+	try {
+		nodes = Object.keys(loadManifest().machines ?? {});
+	} catch (err) {
+		return { error: `the fleet manifest is unreadable (${err.message})`, list: [] };
+	}
+	if (!nodes.length) return { error: 'the fleet manifest names no node', list: [] };
+	return { error: null, list: [...nodeCooldowns(records, nodes, now).values()] };
 }
 
 /** The controller's last verdict, read-only, loopback only. `unknown` is never `fine`. */

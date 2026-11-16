@@ -18,6 +18,7 @@ import {
 	DECISION_SCHEMA,
 	type DecisionKind,
 	type DecisionPath,
+	type CooldownNote,
 	type DecisionRecord,
 	type NodeFigures,
 } from './decision-log-types.js';
@@ -108,7 +109,13 @@ export class JitDecisionBook {
 		private readonly nowMs: number,
 		private readonly order: readonly string[],
 		/** `placementFingerprint` for one job, from the tick that owns it. */
-		private readonly fingerprintFor?: (repo: string, labels: readonly string[]) => string
+		private readonly fingerprintFor?: (repo: string, labels: readonly string[]) => string,
+		/** The winner's cooldown for this job, if it is cooling (#103). */
+		private readonly cooldownFor?: (
+			node: string,
+			repo: string,
+			jobName: string
+		) => CooldownNote | null
 	) {
 		this.at = new Date(nowMs).toISOString();
 	}
@@ -133,6 +140,11 @@ export class JitDecisionBook {
 				r.candidates = [...(p.walk ?? [])];
 				r.refused = p.passed.map((x) => ({ ...x }));
 				r.winner = p.node ?? null;
+				const note =
+					p.node && o.outcome === 'placed' && o.run.jobName
+						? this.cooldownFor?.(p.node, o.run.repo, o.run.jobName)
+						: null;
+				if (note) r.cooldown = { ...note };
 				if (p.node) {
 					r.rule = {
 						position: r.candidates.indexOf(p.node),
