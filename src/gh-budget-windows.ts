@@ -358,6 +358,12 @@ function closeWindow(w: BudgetWindow, nowMs: number): void {
  * the budget accounting `closeWindow` is itself part of.
  */
 function recordHistoryRow(w: BudgetWindow, nowMs: number): void {
+	const warn = (err: unknown): void => {
+		logger.warn(
+			`[gh-budget] could not record the window-ended history row: ` +
+				`${err instanceof Error ? err.message : String(err)} — budget accounting is unaffected`
+		);
+	};
 	try {
 		const row: GhBudgetHistoryRow = {
 			windowEnd: new Date(w.resetAtMs).toISOString(),
@@ -373,12 +379,9 @@ function recordHistoryRow(w: BudgetWindow, nowMs: number): void {
 			})),
 			restarts: w.restarts,
 		};
-		ghBudgetHistoryStore(join(stateDir(), GH_BUDGET_HISTORY_FILE)).append([row], nowMs);
+		ghBudgetHistoryStore(join(stateDir(), GH_BUDGET_HISTORY_FILE)).append([row], nowMs).catch(warn);
 	} catch (err) {
-		logger.warn(
-			`[gh-budget] could not record the window-ended history row: ` +
-				`${err instanceof Error ? err.message : String(err)} — budget accounting is unaffected`
-		);
+		warn(err);
 	}
 }
 
@@ -463,28 +466,17 @@ export function saveBooks(nowMs: number): void {
 		metered: Object.fromEntries(w.metered),
 		timeline: Object.fromEntries(w.timeline),
 	}));
-	try {
-		// Write-then-rename (F3, `lib/atomic-json.ts`), fsync SKIPPED — a RECORDED
-		// divergence (plan §4.1 step 2): this runs on the hot path of every
-		// charged GitHub call (throttled to one disk write per GH_BUDGET_SAVE_MS
-		// = 10 s, but that is still hotter than dispatch-tick's 15 s and sits
-		// inline with the call that is charging the budget it is persisting).
-		// Losing the last few seconds of this file to an unclean restart costs
-		// one hour's per-caller split, never a correctness guarantee runner-health
-		// depends on, so the extra two fsyncs are not worth paying here.
-		writeJsonAtomic(
-			path,
-			{ labels: Object.fromEntries(tokenLabels), windows: saved },
-			{ fsync: false }
-		);
-	} catch (e) {
-		if (saveComplained) return;
-		saveComplained = true;
-		logger.warn(
-			`[gh-budget] could not persist ${path}: ${e instanceof Error ? e.message : String(e)} — ` +
-				'a restart will lose this hour’s split by caller'
-		);
-	}
+	// Write-then-rename, fsync'd off the event loop (F3, `lib/atomic-json.ts`).
+	writeJsonAtomic(path, { labels: Object.fromEntries(tokenLabels), windows: saved }).catch(
+		(e: unknown) => {
+			if (saveComplained) return;
+			saveComplained = true;
+			logger.warn(
+				`[gh-budget] could not persist ${path}: ${e instanceof Error ? e.message : String(e)} — ` +
+					'a restart will lose this hour’s split by caller'
+			);
+		}
+	);
 }
 
 /** Every currently-open window — for `gh-budget.ts`'s snapshot/summary builders. */

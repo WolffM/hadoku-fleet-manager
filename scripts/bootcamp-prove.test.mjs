@@ -142,10 +142,10 @@ test("--prove skips an undersized node's canary on the CPU floor — one probe, 
 	}
 });
 
-test('--prove --due <n> skips a node with an existing FRESH pass — "not due yet", no canary attempted', () => {
+test('--prove --due <n> skips a node with an existing FRESH pass — "not due yet", no canary attempted', async () => {
 	const f = proveFixture({ cores: 8 }); // clears the CPU floor
 	try {
-		writeProof(
+		await writeProof(
 			{
 				node: CLAW,
 				capability: 'jdk21',
@@ -173,10 +173,10 @@ test('--prove --due <n> skips a node with an existing FRESH pass — "not due ye
 	}
 });
 
-test('--prove waits out --due after a FAIL too, so a failing node is not drained every night', () => {
+test('--prove waits out --due after a FAIL too, so a failing node is not drained every night', async () => {
 	const f = proveFixture({ cores: 8 });
 	try {
-		writeProof(
+		await writeProof(
 			{
 				node: CLAW,
 				capability: 'jdk21',
@@ -203,10 +203,10 @@ test('--prove waits out --due after a FAIL too, so a failing node is not drained
 	}
 });
 
-test('--prove retries at once after an ERROR: it says nothing about the node, so it never waits out --due', () => {
+test('--prove retries at once after an ERROR: it says nothing about the node, so it never waits out --due', async () => {
 	const f = proveFixture({ cores: 8 });
 	try {
-		writeProof(
+		await writeProof(
 			{
 				node: CLAW,
 				capability: 'jdk21',

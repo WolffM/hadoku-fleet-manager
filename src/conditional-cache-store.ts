@@ -60,7 +60,7 @@ export interface ConditionalCacheStore {
 	/** Every entry on disk within the bounds, OLDEST first, so a Map built from it keeps touch order. */
 	load(nowMs?: number): StoredConditional[];
 	/** False when the write failed: the caller must not rely on the disk copy. */
-	save(key: string, etag: string, text: string, nowMs?: number): boolean;
+	save(key: string, etag: string, text: string, nowMs?: number): Promise<boolean>;
 	/**
 	 * One entry's body, read asynchronously, or `null` when there is no file,
 	 * it does not parse, or it holds a different ETag. For a caller that keeps
@@ -183,18 +183,13 @@ export function conditionalCacheStore(
 			}
 			return kept.reverse();
 		},
-		save(key, etag, text, nowMs = Date.now()) {
+		async save(key, etag, text, nowMs = Date.now()) {
 			const path = fileOf(key);
 			try {
 				// Temp-and-rename (F3, `lib/atomic-json.ts`): a torn write must not
-				// pair one ETag with half a body. fsync SKIPPED — a RECORDED
-				// divergence (plan §4.1 step 2): this writes once per conditional
-				// GitHub read that changed, and every entry here is disposable —
-				// losing one to an unclean restart costs exactly the one read it
-				// would have made free, nothing more, so the two extra fsyncs are
-				// not worth paying on this path.
+				// pair one ETag with half a body.
 				const header: Header = { key, etag, savedAtMs: nowMs };
-				writeFileAtomic(path, `${JSON.stringify(header)}\n${text}`, { fsync: false });
+				await writeFileAtomic(path, `${JSON.stringify(header)}\n${text}`);
 				rmSync(legacyFileOf(key), { force: true });
 				return true;
 			} catch (e) {

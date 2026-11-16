@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 
 import { writeFileSync } from 'node:fs';
 
+import { flushWrites } from '../lib/atomic-json.js';
 import { tick, __resetRunnerHealthAlertsForTesting } from '../runner-health.js';
 import { SNAPSHOT_RESTORE_MAX_AGE_MS, getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
 import { installRunnerHealthRig, installFetch, snapshotPath } from './helpers/runner-health-rig.js';
@@ -29,6 +30,7 @@ test('snapshot: a restarted process serves the last persisted census, dated as i
 	const live = getRunnerHealthSnapshot();
 	assert.ok(live, 'the tick produced a snapshot');
 	// Forget the in-memory copy, as a restart does. The file is all that is left.
+	await flushWrites();
 	__resetRunnerHealthAlertsForTesting();
 	const restored = getRunnerHealthSnapshot();
 	assert.deepEqual(restored, JSON.parse(JSON.stringify(live)), 'the file round-trips the census');
@@ -45,6 +47,7 @@ test('snapshot: a census older than the restore window is not served', async () 
 		...getRunnerHealthSnapshot(),
 		at: new Date(Date.now() - SNAPSHOT_RESTORE_MAX_AGE_MS - 60_000).toISOString(),
 	};
+	await flushWrites();
 	writeFileSync(snapshotPath, JSON.stringify(stale));
 	__resetRunnerHealthAlertsForTesting();
 	assert.equal(

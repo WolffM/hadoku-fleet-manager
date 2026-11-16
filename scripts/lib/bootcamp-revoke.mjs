@@ -26,7 +26,7 @@ import { stateDir } from '../../dist/lib/fleet-paths.js';
  * it as `writesEvenWithoutWrite` so a caller never has to infer the rule from
  * prose.
  */
-export function computeRevocationChanges(ctx) {
+export async function computeRevocationChanges(ctx) {
 	const { log, revocationVerdicts, WRITE } = ctx;
 	const read = readRevocations(stateDir());
 	if (read.corrupt) {
@@ -35,7 +35,7 @@ export function computeRevocationChanges(ctx) {
 	}
 	const applied = applyVerdicts(read.nodes, revocationVerdicts, 'bootcamp');
 	const changedRevocations = applied.revoked.length > 0 || applied.cleared.length > 0;
-	if (changedRevocations) writeRevocations(stateDir(), applied.nodes);
+	if (changedRevocations) await writeRevocations(stateDir(), applied.nodes);
 	for (const v of applied.revoked) {
 		log(
 			`── ${v.node}  REVOKED ${v.capability} — withheld from routing until a probe passes (${v.reason})`

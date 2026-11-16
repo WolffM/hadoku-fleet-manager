@@ -47,8 +47,8 @@ import {
 	closeSync,
 	fsync,
 	fsyncSync,
-	open,
 	mkdirSync,
+	open,
 	openSync,
 	readdirSync,
 	rename,
@@ -58,7 +58,6 @@ import {
 	write,
 	writeSync,
 } from 'node:fs';
-import { promisify } from 'node:util';
 import { basename, dirname, join } from 'node:path';
 
 /**
@@ -126,132 +125,191 @@ function sweepStaleTempFiles(path: string, dir: string): void {
 }
 
 /**
- * `fsync: false` is a RECORDED divergence (plan §4.1 step 2), not a default:
- * pass it only for a site hot enough that the two fsyncs measurably cost —
- * `conditional-cache-store.ts` (per conditional GitHub read) and
- * `dispatch-tick.ts` (its 15 s tick) are the two in this wave's divergence
- * table. Everywhere else, durability is free compared to how rarely these
- * files are written.
- */
-export interface AtomicWriteOptions {
-	fsync?: boolean;
-}
-
-/**
- * Replace `path` with `text` so a crash at any instant leaves either the old
- * file or the new one, whole, never a truncated mix: write a sibling temp
- * file in the SAME directory (so the rename is same-filesystem and atomic),
- * fsync it, rename it over the target, then fsync the directory so the
- * rename itself survives a crash too.
+ * THE WRITE, ONCE. Each step is a syscall the protocol yields; a driver runs
+ * it. `writeFileAtomicSync` runs every step on the calling thread,
+ * `writeFileAtomic` runs each on libuv's threadpool. Both execute this one
+ * sequence, so the two cannot drift: write a sibling temp file in the SAME
+ * directory (so the rename is same-filesystem and atomic), fsync it, rename it
+ * over the target, then fsync the directory so the rename itself survives a
+ * crash too. A crash at any instant leaves either the old file or the new one,
+ * whole, never a truncated mix.
+ *
+ * There is no way to skip the fsyncs. Nine call sites used to pass
+ * `fsync: false` because two fsyncs on the event loop cost too much on a hot
+ * path; off the loop they cost the loop nothing, and the coalescing in
+ * `writeFileAtomic` bounds how many a hot path can queue (fleet-manager#86).
  *
  * The parent directory is created if missing — every existing call site did
- * this immediately before its own write-then-rename, so folding it in here
- * removes that duplicate line at each one without changing behaviour.
+ * this immediately before its own write-then-rename.
  */
-export function writeFileAtomic(path: string, text: string, opts: AtomicWriteOptions = {}): void {
-	const { fsync = true } = opts;
+type Step =
+	| { op: 'open'; path: string; flags: 'w' | 'r' }
+	| { op: 'write'; fd: number; buf: Buffer }
+	| { op: 'fsync'; fd: number }
+	| { op: 'close'; fd: number }
+	| { op: 'rename'; from: string; to: string };
+
+function* protocol(path: string, text: string): Generator<Step, void, number> {
 	const dir = dirname(path);
 	mkdirSync(dir, { recursive: true });
 	sweepStaleTempFiles(path, dir);
 	const tmp = `${path}.${process.pid}.tmp`;
-	const fd = openSync(tmp, 'w');
+	const fd = yield { op: 'open', path: tmp, flags: 'w' };
 	try {
 		let buf = Buffer.from(text, 'utf8');
-		while (buf.length) buf = buf.subarray(writeSync(fd, buf));
-		if (fsync) fsyncSync(fd);
+		while (buf.length) buf = buf.subarray(yield { op: 'write', fd, buf });
+		yield { op: 'fsync', fd };
 	} finally {
-		closeSync(fd);
+		yield { op: 'close', fd };
 	}
-	renameSync(tmp, path);
-	if (!fsync) return;
-	const dirFd = openSync(dir, 'r');
+	yield { op: 'rename', from: tmp, to: path };
+	const dirFd = yield { op: 'open', path: dir, flags: 'r' };
 	try {
-		fsyncSync(dirFd);
+		yield { op: 'fsync', fd: dirFd };
 	} finally {
-		closeSync(dirFd);
+		yield { op: 'close', fd: dirFd };
 	}
 }
 
-/** `writeFileAtomic`, `JSON.stringify`-ing `value` first. `space` matches `JSON.stringify`'s third argument. */
-export function writeJsonAtomic(
-	path: string,
-	value: unknown,
-	opts: AtomicWriteOptions & { space?: string | number } = {}
-): void {
-	const { space, ...rest } = opts;
-	writeFileAtomic(path, JSON.stringify(value, null, space), rest);
+function stepSync(s: Step): number {
+	switch (s.op) {
+		case 'open':
+			return openSync(s.path, s.flags);
+		case 'write':
+			return writeSync(s.fd, s.buf);
+		case 'fsync':
+			fsyncSync(s.fd);
+			return 0;
+		case 'close':
+			closeSync(s.fd);
+			return 0;
+		case 'rename':
+			renameSync(s.from, s.to);
+			return 0;
+	}
+}
+
+function stepAsync(s: Step): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const done = (err: NodeJS.ErrnoException | null, n = 0): void =>
+			err ? reject(err) : resolve(n);
+		switch (s.op) {
+			case 'open':
+				return open(s.path, s.flags, done);
+			case 'write':
+				return write(s.fd, s.buf, done);
+			case 'fsync':
+				return fsync(s.fd, (err) => done(err));
+			case 'close':
+				return close(s.fd, (err) => done(err));
+			case 'rename':
+				return rename(s.from, s.to, (err) => done(err));
+		}
+	});
 }
 
 /**
- * The same write as `writeFileAtomic`, with every syscall on libuv's
- * threadpool instead of the event loop. An fsync's latency is the disk's, not
- * the file's: one 33 KB `ci-alert-state.json` write held mgmt-api's loop for
- * 52.6 ms in a single `fsyncSync` (leader profile, 2026-11-14T22:13Z,
- * fleet-manager#86), while the same call costs well under a millisecond on an
- * idle disk. Use this from async code that can await the write; the ordering
- * (fsync the temp file, rename, fsync the directory) is the sync version's.
- *
- * Writes to one `path` from this process run one at a time, in call order.
- * They share the temp name `${path}.<pid>.tmp`, so two in flight at once
- * would write into the same file and the second rename would find it gone.
- * A failed write rejects its own caller and does not block the next one.
+ * Drive the protocol, feeding each step's result back in. A failed step is
+ * thrown INTO the generator so its `finally` blocks still close what is open.
  */
-const pending = new Map<string, Promise<void>>();
+function runSync(path: string, text: string): void {
+	const g = protocol(path, text);
+	let r = g.next();
+	while (!r.done) {
+		let out: number;
+		try {
+			out = stepSync(r.value);
+		} catch (err) {
+			r = g.throw(err);
+			continue;
+		}
+		r = g.next(out);
+	}
+}
 
-export function writeFileAtomicAsync(
+async function runAsync(path: string, text: string): Promise<void> {
+	const g = protocol(path, text);
+	let r = g.next();
+	while (!r.done) {
+		let out: number;
+		try {
+			out = await stepAsync(r.value);
+		} catch (err) {
+			r = g.throw(err);
+			continue;
+		}
+		r = g.next(out);
+	}
+}
+
+/**
+ * For short-lived processes only: the CLI's `scripts/`, which have no event
+ * loop serving anyone else. Inside `src/`, which runs in mgmt-api, use
+ * `writeFileAtomic`; `scripts/lib/f-guards/f3-one-writer.test.mjs` holds that.
+ */
+export function writeFileAtomicSync(path: string, text: string): void {
+	runSync(path, text);
+}
+
+/** `writeFileAtomicSync`, `JSON.stringify`-ing `value` first. */
+export function writeJsonAtomicSync(
 	path: string,
-	text: string,
-	opts: AtomicWriteOptions = {}
-): Promise<void> {
-	const prev = pending.get(path) ?? Promise.resolve();
-	const next = prev.then(
-		() => writeOnce(path, text, opts),
-		() => writeOnce(path, text, opts)
-	);
-	pending.set(path, next);
+	value: unknown,
+	opts: { space?: string | number } = {}
+): void {
+	runSync(path, JSON.stringify(value, null, opts.space));
+}
+
+/**
+ * The in-process writer: the protocol with every syscall on libuv's
+ * threadpool. An fsync's latency is the disk's, not the file's — one 33 KB
+ * write held mgmt-api's loop 52.6 ms in a single `fsyncSync` (fleet-manager#86).
+ *
+ * WRITES TO ONE PATH RUN ONE AT A TIME, IN CALL ORDER. They share the temp
+ * name `${path}.<pid>.tmp`, so they cannot overlap. A failed write rejects its
+ * own caller and never blocks the next one.
+ *
+ * TWO WAYS TO CALL IT. A caller that acts on the write — a store returning
+ * what it kept, a page recorded before the next one is sent, a controller's
+ * state before it reboots a node — awaits it. A module whose in-memory state is
+ * the truth and whose file is only its mirror across restarts starts the write
+ * and goes on, reporting a failure with `.catch`; `flushWrites` lands those
+ * before an exit.
+ *
+ * A READ-MODIFY-WRITE PASSES A FUNCTION. `text` may be `() => string`; it is
+ * called when this write's turn comes, after every earlier write to the path
+ * has landed. A store that reads its file, merges, and writes it back does the
+ * read inside that function, so two overlapping calls cannot both read the old
+ * file and lose one another's rows.
+ */
+const queues = new Map<string, Promise<void>>();
+
+export function writeFileAtomic(path: string, text: string | (() => string)): Promise<void> {
+	const prev = queues.get(path) ?? Promise.resolve();
+	const run = (): Promise<void> => runAsync(path, typeof text === 'function' ? text() : text);
+	const next = prev.then(run, run);
+	queues.set(path, next);
 	const clear = (): void => {
-		if (pending.get(path) === next) pending.delete(path);
+		if (queues.get(path) === next) queues.delete(path);
 	};
 	next.then(clear, clear);
 	return next;
 }
 
-async function writeOnce(path: string, text: string, opts: AtomicWriteOptions): Promise<void> {
-	const { fsync: durable = true } = opts;
-	const dir = dirname(path);
-	mkdirSync(dir, { recursive: true });
-	sweepStaleTempFiles(path, dir);
-	const tmp = `${path}.${process.pid}.tmp`;
-	const fd = await promisify(open)(tmp, 'w');
-	try {
-		let buf = Buffer.from(text, 'utf8');
-		while (buf.length) buf = buf.subarray(await writeAt(fd, buf));
-		if (durable) await promisify(fsync)(fd);
-	} finally {
-		await promisify(close)(fd);
-	}
-	await promisify(rename)(tmp, path);
-	if (!durable) return;
-	const dirFd = await promisify(open)(dir, 'r');
-	try {
-		await promisify(fsync)(dirFd);
-	} finally {
-		await promisify(close)(dirFd);
-	}
+/**
+ * Every write started in this process, landed. A module that mirrors in-memory
+ * state to disk starts its write and goes on (write-behind); a process that is
+ * about to exit awaits this first, so no such write is cut short.
+ */
+export async function flushWrites(): Promise<void> {
+	while (queues.size) await Promise.allSettled([...queues.values()]);
 }
 
-function writeAt(fd: number, buf: Buffer): Promise<number> {
-	return new Promise((resolve, reject) => {
-		write(fd, buf, (err, written) => (err ? reject(err) : resolve(written)));
-	});
-}
-
-/** `writeFileAtomicAsync`, `JSON.stringify`-ing `value` first. */
-export function writeJsonAtomicAsync(
+/** `writeFileAtomic`, `JSON.stringify`-ing `value` first. */
+export function writeJsonAtomic(
 	path: string,
 	value: unknown,
-	opts: AtomicWriteOptions & { space?: string | number } = {}
+	opts: { space?: string | number } = {}
 ): Promise<void> {
-	const { space, ...rest } = opts;
-	return writeFileAtomicAsync(path, JSON.stringify(value, null, space), rest);
+	return writeFileAtomic(path, () => JSON.stringify(value, null, opts.space));
 }

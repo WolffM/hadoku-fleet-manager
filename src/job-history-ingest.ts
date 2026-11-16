@@ -393,6 +393,6 @@ export async function ingestRuns(
 	// loop that talks to GitHub.
 	appendToDisk(fresh);
 	trimToBudget();
-	compactHistory();
+	await compactHistory();
 	return fetched;
 }

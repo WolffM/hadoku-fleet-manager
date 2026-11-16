@@ -74,7 +74,7 @@ import { stateDir } from '../dist/lib/fleet-paths.js';
 // can drift from it (docs/VOCABULARY.md: "one question, one answer").
 import { nodeOf } from '../dist/runners/census.js';
 import { drainStatus, effectiveDrains } from '../dist/runners/drain.js';
-import { writeFileAtomic } from '../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../dist/lib/atomic-json.js';
 import { readFacetFile } from '../dist/lib/measured.js';
 import { MEASURED_FACETS } from '../dist/lib/measured-paths.js';
 
@@ -508,7 +508,7 @@ function archiveFacets(node) {
 	archiveDoc.nodes = archiveDoc.nodes ?? {};
 	archiveDoc.nodes[node] = { retiredAt: new Date().toISOString(), facets: toArchive };
 	try {
-		writeFileAtomic(archivePath, `${JSON.stringify(archiveDoc, null, 2)}\n`);
+		writeFileAtomicSync(archivePath, `${JSON.stringify(archiveDoc, null, 2)}\n`);
 	} catch (err) {
 		return {
 			archived: [],
@@ -524,7 +524,7 @@ function archiveFacets(node) {
 		const remaining = { ...info.nodes };
 		for (const k of info.keys) delete remaining[k];
 		try {
-			writeFileAtomic(info.path, `${JSON.stringify({ nodes: remaining }, null, 2)}\n`);
+			writeFileAtomicSync(info.path, `${JSON.stringify({ nodes: remaining }, null, 2)}\n`);
 			archived.push(facet);
 		} catch (err) {
 			warnings.push(

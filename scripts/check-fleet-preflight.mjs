@@ -36,7 +36,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { writeFileAtomic } from '../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../dist/lib/atomic-json.js';
 import { loadManifest, runOn } from './lib/fleet-exec.mjs';
 import { READ_ATTEMPTS, describeReadFailure } from './lib/read-retry-policy.mjs';
 import {
@@ -286,7 +286,7 @@ function readPendingState() {
 	}
 }
 function writePendingState(doc) {
-	writeFileAtomic(PENDING_FILE(), `${JSON.stringify(doc, null, 2)}\n`);
+	writeFileAtomicSync(PENDING_FILE(), `${JSON.stringify(doc, null, 2)}\n`);
 }
 
 /**

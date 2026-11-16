@@ -545,7 +545,7 @@ if (WRITE) {
 		// THE STATE DIR, NO COMMIT. `writeFacet` REFUSES a health.json that exists
 		// and cannot be read, rather than replacing it with this run's subset and
 		// destroying the other nodes' readings with nothing said.
-		const w = writeFacet('health', records);
+		const w = await writeFacet('health', records);
 		if (!w.ok) {
 			console.error(`fleet doctor: $health NOT recorded — ${w.reason}: ${w.why}`);
 			process.exit(1);

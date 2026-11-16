@@ -61,7 +61,11 @@ export function recordHeavyUnits(names: readonly string[], nowMs: number, dir = 
 	const m = load(dir);
 	for (const [name, at] of m) if (nowMs - at > HEAVY_UNIT_TTL_MS) m.delete(name);
 	for (const name of names) m.set(name, nowMs);
-	writeJsonAtomic(join(dir, HEAVY_UNITS_FILE), Object.fromEntries(m), { fsync: false });
+	writeJsonAtomic(join(dir, HEAVY_UNITS_FILE), Object.fromEntries(m)).catch((err: unknown) => {
+		logger.warn(
+			`[heavy-units] could not persist ${HEAVY_UNITS_FILE}: ${err instanceof Error ? err.message : String(err)}`
+		);
+	});
 }
 
 /** Was this unit minted for a heavy job? */

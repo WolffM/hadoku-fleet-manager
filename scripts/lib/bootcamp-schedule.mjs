@@ -49,7 +49,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 
 export const BENCHMARK_LEDGER_FILE = 'benchmark-measured.json';
 const DAY_MS = 86_400_000;
@@ -125,7 +125,7 @@ export function recordBenchmarks(dir, measured, nowMs) {
 	}
 	if (!wrote) return { ok: true, wrote: 0 };
 	try {
-		writeFileAtomic(join(dir, BENCHMARK_LEDGER_FILE), `${JSON.stringify(next, null, 2)}\n`);
+		writeFileAtomicSync(join(dir, BENCHMARK_LEDGER_FILE), `${JSON.stringify(next, null, 2)}\n`);
 		return { ok: true, wrote };
 	} catch (err) {
 		return { ok: false, reason: `${join(dir, BENCHMARK_LEDGER_FILE)}: ${err.message}` };

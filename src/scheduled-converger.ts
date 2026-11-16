@@ -286,11 +286,11 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 		}
 	}
 
-	function writeState(s: ConvergeState): void {
+	async function writeState(s: ConvergeState): Promise<void> {
 		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`). `readState` above
 		// keeps its own corrupt-file-as-empty handling unchanged (recorded as a
 		// divergence for 5c, not widened here).
-		writeJsonAtomic(statePath(), s, { space: 2 });
+		await writeJsonAtomic(statePath(), s, { space: 2 });
 	}
 
 	/**
@@ -336,7 +336,7 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 				await pager.page(SELF_KEY, cfg.words.silent(hours(failingFor), why));
 			summary.pages = pager.counts.pages;
 			summary.recoveries = pager.counts.recoveries;
-			writeState(state);
+			await writeState(state);
 			await finishTick({
 				intervalMs: cfg.intervalMs,
 				jobName: cfg.job,
@@ -393,7 +393,7 @@ export function createConverger<R extends ConvergeRow = ConvergeRow>(
 
 		summary.pages = pager.counts.pages;
 		summary.recoveries = pager.counts.recoveries;
-		writeState(state);
+		await writeState(state);
 		await finishTick({
 			intervalMs: cfg.intervalMs,
 			jobName: cfg.job,

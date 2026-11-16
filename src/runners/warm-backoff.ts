@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from '../lib/atomic-json.js';
@@ -100,26 +100,27 @@ function loadWarmBackoff(): Map<string, WarmBackoffEntry> {
 
 function saveWarmBackoff(): void {
 	const nodes = Object.fromEntries(loadWarmBackoff());
-	try {
-		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`): a torn write here
-		// would be read back as an empty streak on the next restart, which is
-		// precisely the failure this file exists to stop. `loadWarmBackoff`'s own
-		// "unreadable is empty" handling is unchanged (recorded as a divergence
-		// for 5c, not widened here).
-		writeFileAtomic(warmBackoffPath(), `${JSON.stringify({ nodes }, null, 2)}\n`);
-	} catch (err) {
-		logger.warn(
-			`[warm-cache] could not persist the fill backoff: ${
-				err instanceof Error ? err.message : String(err)
-			} — a restart will retry a failing node sooner than it should`
-		);
-	}
+	// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`): a torn write here
+	// would be read back as an empty streak on the next restart, which is
+	// precisely the failure this file exists to stop. `loadWarmBackoff`'s own
+	// "unreadable is empty" handling is unchanged (recorded as a divergence
+	// for 5c, not widened here).
+	writeFileAtomic(warmBackoffPath(), `${JSON.stringify({ nodes }, null, 2)}\n`).catch(
+		(err: unknown) => {
+			logger.warn(
+				`[warm-cache] could not persist the fill backoff: ${
+					err instanceof Error ? err.message : String(err)
+				} — a restart will retry a failing node sooner than it should`
+			);
+		}
+	);
 }
 
 /** Test seam. Not part of the supported API. */
 export function __resetWarmBackoffForTesting(): void {
-	warmBackoff = new Map();
-	saveWarmBackoff();
+	// No file reads as no streaks: deleted here, synchronously, so no write of
+	// an empty record can land after the next test has started.
+	rmSync(warmBackoffPath(), { force: true });
 	warmBackoff = null;
 }
 

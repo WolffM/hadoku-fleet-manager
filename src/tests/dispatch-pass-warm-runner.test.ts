@@ -5,6 +5,7 @@ import { runDispatchPass } from '../runners/dispatch-pass.js';
 import { byPriority, BAND_HEAD_START_MS } from '../runners/dispatch-pass-order.js';
 import { heavyMarkedRecently, HEAVY_MARK_MS } from '../runners/dispatch-pass-state.js';
 import { readHeavyMarks } from '../runners/heavy-marks.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import type { HeavyModel } from '../runners/heavy-model.js';
 import type { PendingRun } from '../runners/dispatcher.js';
 import { answeringJitState, fakeGh, fakeShell } from './helpers/fleet-fakes.js';
@@ -75,6 +76,7 @@ test("#102 REPLAY 23:10Z: a heavy mint evicts the node's IDLE warm listener for 
 	);
 	assert.equal(heavyMarkedRecently('claw-4', 1_000_000 + 60_000), true);
 	assert.equal(heavyMarkedRecently('claw-4', 1_000_000 + HEAVY_MARK_MS), false, 'the mark lapses');
+	await flushWrites();
 	assert.equal(readHeavyMarks()?.['claw-4'], 1_000_000, 'the mark is on disk for warm-canary');
 });
 

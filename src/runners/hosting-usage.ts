@@ -24,7 +24,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { stateDir } from '../host.js';
+import { logger, stateDir } from '../host.js';
 import { writeJsonAtomic } from '../lib/atomic-json.js';
 import { HOLD_FULL_MS } from './hosting-record.js';
 
@@ -190,8 +190,14 @@ export function observeSliceUsage(
 		out.set(key, usageStats(loaded.doc.slices[key]));
 	}
 	if (nowMs - flushedAtMs >= USAGE_FLUSH_MS) {
-		writeJsonAtomic(join(dir, HOSTING_USAGE_FILE), loaded.doc, { fsync: false });
 		flushedAtMs = nowMs;
+		// Write-behind: the in-memory record is the truth; the file is its mirror.
+		const file = join(dir, HOSTING_USAGE_FILE);
+		writeJsonAtomic(file, loaded.doc).catch((err: unknown) => {
+			logger.warn(
+				`[hosting-usage] could not persist ${file}: ${err instanceof Error ? err.message : String(err)}`
+			);
+		});
 	}
 	return out;
 }

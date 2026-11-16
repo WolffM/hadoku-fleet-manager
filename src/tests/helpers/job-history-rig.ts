@@ -19,6 +19,7 @@ import { beforeEach, afterEach } from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { flushWrites } from '../../lib/atomic-json.js';
 
 import {
 	__resetJobHistoryForTesting,
@@ -86,7 +87,9 @@ export function installJobHistoryRig(): void {
 		__resetJobHistoryForTesting();
 		__setHistoryPathForTesting(join(tmp, 'job-history.jsonl'));
 	});
-	afterEach(() => {
+	afterEach(async () => {
+		// Let every write-behind save land before its directory is removed.
+		await flushWrites();
 		rmSync(tmp, { recursive: true, force: true });
 		__setHistoryPathForTesting(null);
 	});

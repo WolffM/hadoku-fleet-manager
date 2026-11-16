@@ -21,7 +21,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 
 export const PROOF_FILE = 'job-proofs.json';
 
@@ -83,7 +83,7 @@ export function recordProof(dir, node, result) {
 	if (next === read.proofs) return { ok: true, written: false };
 	try {
 		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`).
-		writeFileAtomic(proofPath(dir), `${JSON.stringify(next, null, 2)}\n`);
+		writeFileAtomicSync(proofPath(dir), `${JSON.stringify(next, null, 2)}\n`);
 		return { ok: true, written: true };
 	} catch (err) {
 		return { ok: false, reason: `could not write ${proofPath(dir)}: ${err.message}` };

@@ -117,17 +117,15 @@ function load(): void {
 
 function save(): void {
 	const path = filePath();
-	try {
-		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`).
-		writeJsonAtomic(path, Object.fromEntries(marks));
-	} catch (e) {
+	// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`); write-behind, the map is the truth.
+	writeJsonAtomic(path, Object.fromEntries(marks)).catch((e: unknown) => {
 		if (saveComplained) return;
 		saveComplained = true;
 		logger.warn(
 			`[job-history] could not persist ${path}: ${e instanceof Error ? e.message : String(e)} — ` +
 				'a restart will forget any listing gap still open'
 		);
-	}
+	});
 }
 
 const idsOf = (runs: readonly ListedRun[]): number[] =>

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { rmSync } from 'node:fs';
 
 import { __setHostForTesting } from '../host.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import { testHost, testStateDir } from './install-test-host.js';
 import { __setHistoryPathForTesting } from '../job-history-store.js';
 import { __resetJobHistoryForTesting } from '../job-history-store.js';
@@ -29,7 +30,8 @@ const REPO = 'WolffM/hadoku_site';
 let warns: string[] = [];
 let infos: string[] = [];
 
-beforeEach(() => {
+beforeEach(async () => {
+	await flushWrites();
 	warns = [];
 	infos = [];
 	__setHostForTesting({
@@ -169,6 +171,7 @@ test('nothing older than the horizon is read for, or kept', async () => {
 test('the mark and the backlog survive a restart', async () => {
 	await closeListingGap(REPO, ingested(runs(130, 101)), neverPaged, NOW);
 	await closeListingGap(REPO, ingested(runs(200, 171)), pager(200), NOW);
+	await flushWrites();
 	__resetListingGapForTesting();
 	const backlog = await closeListingGap(REPO, ingested(runs(200, 171)), neverPaged, NOW);
 	assert.equal(backlog.length, 40, 'the backlog came back, and the restored mark is not a gap');

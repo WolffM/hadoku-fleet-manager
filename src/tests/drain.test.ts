@@ -101,7 +101,9 @@ const HOST = (manifestDir: string, stateDir: string) =>
 		storeDoctorPath: '/tmp',
 	}) as never;
 
-function withDirs(fn: (manifestDir: string, stateDir: string) => void): void {
+async function withDirs(
+	fn: (manifestDir: string, stateDir: string) => void | Promise<void>
+): Promise<void> {
 	const root = mkdtempSync(join(tmpdir(), 'drain-'));
 	const manifestDir = join(root, 'manifest');
 	const stateDir = join(root, 'state');
@@ -109,7 +111,7 @@ function withDirs(fn: (manifestDir: string, stateDir: string) => void): void {
 	mkdirSync(stateDir, { recursive: true });
 	__setHostForTesting(HOST(manifestDir, stateDir));
 	try {
-		fn(manifestDir, stateDir);
+		await fn(manifestDir, stateDir);
 	} finally {
 		__setHostForTesting(null as never);
 		rmSync(root, { recursive: true, force: true });
@@ -119,9 +121,9 @@ function withDirs(fn: (manifestDir: string, stateDir: string) => void): void {
 const doc = (node: string) =>
 	`${JSON.stringify({ nodes: { [node]: { since: 's', reason: 'r', by: 'b' } } })}\n`;
 
-test('a drain is written to the STATE dir, not into a git checkout', () => {
-	withDirs((manifestDir, stateDir) => {
-		writeDrain({ 'claw-5': { since: 's', reason: 'DRAM', by: 'hadoku' } });
+test('a drain is written to the STATE dir, not into a git checkout', async () => {
+	await withDirs(async (manifestDir, stateDir) => {
+		await writeDrain({ 'claw-5': { since: 's', reason: 'DRAM', by: 'hadoku' } });
 		assert.equal(
 			existsSync(join(stateDir, 'fleet-drain.json')),
 			true,
@@ -135,17 +137,17 @@ test('a drain is written to the STATE dir, not into a git checkout', () => {
 	});
 });
 
-test('a LEGACY drain in the manifest dir is still honoured', () => {
+test('a LEGACY drain in the manifest dir is still honoured', async () => {
 	// The upgrade must not lift a drain an operator set before the move. That
 	// would un-drain a machine somebody is about to open, silently.
-	withDirs((manifestDir) => {
+	await withDirs(async (manifestDir) => {
 		writeFileSync(join(manifestDir, 'fleet-drain.json'), doc('claw-5'));
 		assert.equal(isDraining('claw-5', readDrain()), true);
 	});
 });
 
-test('the state dir wins when both exist', () => {
-	withDirs((manifestDir, stateDir) => {
+test('the state dir wins when both exist', async () => {
+	await withDirs(async (manifestDir, stateDir) => {
 		writeFileSync(join(manifestDir, 'fleet-drain.json'), doc('claw-legacy'));
 		writeFileSync(join(stateDir, 'fleet-drain.json'), doc('claw-current'));
 		const s = readDrain();
@@ -154,18 +156,18 @@ test('the state dir wins when both exist', () => {
 	});
 });
 
-test('writing migrates: the legacy copy is removed, so one file answers', () => {
-	withDirs((manifestDir, stateDir) => {
+test('writing migrates: the legacy copy is removed, so one file answers', async () => {
+	await withDirs(async (manifestDir, stateDir) => {
 		writeFileSync(join(manifestDir, 'fleet-drain.json'), doc('claw-5'));
-		writeDrain(readDrain()); // read legacy, write new
+		await writeDrain(readDrain()); // read legacy, write new
 		assert.equal(existsSync(join(manifestDir, 'fleet-drain.json')), false);
 		assert.equal(isDraining('claw-5', readDrain()), true);
 		assert.equal(existsSync(join(stateDir, 'fleet-drain.json')), true);
 	});
 });
 
-test('neither file is an EMPTY drain, not an error', () => {
-	withDirs(() => {
+test('neither file is an EMPTY drain, not an error', async () => {
+	await withDirs(async () => {
 		assert.deepEqual(readDrain(), {});
 	});
 });
@@ -294,10 +296,10 @@ test('parseWhen reads durations and zoned timestamps, and refuses everything els
 	assert.throws(() => parseWhen('20', T0));
 });
 
-test('planned drains survive a write and are read back through the effective view', () => {
-	withDirs(() => {
+test('planned drains survive a write and are read back through the effective view', async () => {
+	await withDirs(async () => {
 		const now = Date.now();
-		writeDrain({}, [
+		await writeDrain({}, [
 			{
 				...rec,
 				node: 'claw-4',

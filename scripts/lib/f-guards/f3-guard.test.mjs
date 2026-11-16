@@ -363,3 +363,42 @@ void test('exemption MUTATION: an exemption with an empty (or blank) reason fail
 	// above is about the blank reason, not about the key or matchedKeys shape.
 	assertExemptions(assert, { 'scripts/owner.mjs:thing#1': 'a real reason' }, matchedKeys, 'F3');
 });
+
+/**
+ * IN-PROCESS WRITES NEVER BLOCK ON AN FSYNC (fleet-manager#86). Everything
+ * under `src/` runs inside mgmt-api, one event loop serving every loop and
+ * every request, and a synchronous fsync there waits for the whole disk queue:
+ * 52.6 ms for one 33 KB file, 720 ms in one dispatch profile. So `src/`
+ * imports the async `writeFileAtomic`/`writeJsonAtomic` only; the `…Sync`
+ * forms are for `scripts/`, short-lived processes with no loop to hold up.
+ * No exemptions and no debt list: the rule held at zero when it was written.
+ */
+function syncAtomicImports(sources) {
+	const out = [];
+	const fromAtomic = /import\s*\{([^}]*)\}\s*from\s*['"][^'"]*\/atomic-json(?:\.js)?['"]/g;
+	for (const { rel, code } of sources) {
+		if (!rel.startsWith('src/') || rel === 'src/lib/atomic-json.ts') continue;
+		for (const m of code.matchAll(fromAtomic)) {
+			for (const spec of m[1].split(',')) {
+				const name = spec.trim().split(/\s+as\s+/)[0];
+				if (/Sync$/.test(name)) out.push(`${rel}: imports ${name}`);
+			}
+		}
+	}
+	return out;
+}
+
+void test('src/ imports only the async atomic writers', () => {
+	assert.deepEqual(syncAtomicImports(tsAndMjsSources()), []);
+});
+
+void test('src/ sync-writer MUTATION: an import of writeJsonAtomicSync under src/ is found, one under scripts/ is not', () => {
+	const imp = "import { writeJsonAtomic, writeJsonAtomicSync as w } from './lib/atomic-json.js';";
+	assert.deepEqual(
+		syncAtomicImports([
+			{ rel: 'src/x.ts', code: imp },
+			{ rel: 'scripts/y.mjs', code: imp },
+		]),
+		['src/x.ts: imports writeJsonAtomicSync']
+	);
+});

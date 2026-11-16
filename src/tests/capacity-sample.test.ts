@@ -296,29 +296,29 @@ afterEach(() => {
 	rmSync(tmp, { recursive: true, force: true });
 });
 
-void test('capacitySampleTick appends once per call: N nodes, one batch, N rows on disk', () => {
+void test('capacitySampleTick appends once per call: N nodes, one batch, N rows on disk', async () => {
 	const report = reportOf([machine({ name: 'claw-1' }), machine({ name: 'claw-2' })]);
-	capacitySampleTick(NOW, report, {});
+	await capacitySampleTick(NOW, report, {});
 	const read = capacitySampleStore(join(tmp, CAPACITY_SAMPLE_FILE)).read();
 	assert.equal(read.rows.length, 2);
 });
 
-void test('calling the tick twice (two ticks) appends twice, never re-writing the first batch', () => {
-	capacitySampleTick(NOW, reportOf([machine({ name: 'claw-1' })]), {});
-	capacitySampleTick(NOW + 5 * 60_000, reportOf([machine({ name: 'claw-1' })]), {});
+void test('calling the tick twice (two ticks) appends twice, never re-writing the first batch', async () => {
+	await capacitySampleTick(NOW, reportOf([machine({ name: 'claw-1' })]), {});
+	await capacitySampleTick(NOW + 5 * 60_000, reportOf([machine({ name: 'claw-1' })]), {});
 	const read = capacitySampleStore(join(tmp, CAPACITY_SAMPLE_FILE)).read();
 	assert.equal(read.rows.length, 2);
 });
 
-void test('an empty report (no machines) writes nothing and does not throw', () => {
-	capacitySampleTick(NOW, reportOf([]), {});
+void test('an empty report (no machines) writes nothing and does not throw', async () => {
+	await capacitySampleTick(NOW, reportOf([]), {});
 	const read = capacitySampleStore(join(tmp, CAPACITY_SAMPLE_FILE)).read();
 	assert.equal(read.exists, false);
 });
 
 void test('a sampling fault (buildFleetReport throws) is swallowed — the tick never throws into its caller', () => {
-	assert.doesNotThrow(() => {
-		capacitySampleTick(NOW); // no injected report: calls the REAL buildFleetReport()
+	assert.doesNotThrow(async () => {
+		await capacitySampleTick(NOW); // no injected report: calls the REAL buildFleetReport()
 	});
 });
 
@@ -327,7 +327,7 @@ void test('a write fault is logged and swallowed — the tick never throws into 
 	// the sample file's own parent directory needs to be created.
 	rmSync(tmp, { recursive: true, force: true });
 	writeFileSync(tmp, 'not a directory');
-	assert.doesNotThrow(() => {
-		capacitySampleTick(NOW, reportOf([machine({ name: 'claw-1' })]), {});
+	assert.doesNotThrow(async () => {
+		await capacitySampleTick(NOW, reportOf([machine({ name: 'claw-1' })]), {});
 	});
 });

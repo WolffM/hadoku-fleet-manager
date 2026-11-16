@@ -320,21 +320,23 @@ function logLineAgeMs(line: string): number | null {
  * kept regardless: "could not look" must never render as "old enough to
  * discard" (AGENTS.md).
  */
-function appendFacetLog(logPath: string, newLines: readonly string[]): void {
+function appendFacetLog(logPath: string, newLines: readonly string[]): Promise<void> {
 	const cutoffMs = Date.now() - FACET_LOG_RETENTION_DAYS * DAY_MS;
-	let existing: string[] = [];
-	try {
-		existing = readFileSync(logPath, 'utf8')
-			.split('\n')
-			.filter((l) => l.trim().length > 0);
-	} catch (err) {
-		if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
-	}
-	const kept = existing.filter((l) => {
-		const ageMs = logLineAgeMs(l);
-		return ageMs === null || ageMs >= cutoffMs;
+	return writeFileAtomic(logPath, () => {
+		let existing: string[] = [];
+		try {
+			existing = readFileSync(logPath, 'utf8')
+				.split('\n')
+				.filter((l) => l.trim().length > 0);
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
+		}
+		const kept = existing.filter((l) => {
+			const ageMs = logLineAgeMs(l);
+			return ageMs === null || ageMs >= cutoffMs;
+		});
+		return `${[...kept, ...newLines].join('\n')}\n`;
 	});
-	writeFileAtomic(logPath, `${[...kept, ...newLines].join('\n')}\n`);
 }
 
 /** A stable serialisation — keys sorted, recursively — for the log's digest. */
@@ -369,14 +371,14 @@ export type WriteFacetResult =
  * @param extra per-node fields to carry in the LOG line only (the benchmark
  *   writer's raw capture, which the file does not keep).
  */
-export function writeFacet(
+export async function writeFacet(
 	facet: MeasuredFacetName,
 	records: Record<string, FacetRecord>,
 	{
 		dir = stateDir(),
 		extra = {},
 	}: { dir?: string; extra?: Record<string, Record<string, unknown>> } = {}
-): WriteFacetResult {
+): Promise<WriteFacetResult> {
 	const path = facetPath(facet, dir);
 	for (const [node, rec] of Object.entries(records)) {
 		const problem = recordProblem(rec);
@@ -389,21 +391,29 @@ export function writeFacet(
 			};
 		}
 	}
-	const current = readFacetFile(facet, { dir });
-	if (!current.ok && (current.reason === 'unreadable' || current.reason === 'malformed')) {
-		return {
-			ok: false,
-			path,
-			reason: current.reason,
-			why:
-				`${current.why}. NOT overwritten: it may hold other nodes' readings, and ` +
-				'replacing it with this run would destroy them. Move it aside and re-run.',
-		};
-	}
-	const nodes: Record<string, FacetRecord> = current.ok ? { ...current.nodes } : {};
-	for (const [node, rec] of Object.entries(records)) nodes[node] = rec;
-
-	writeFileAtomic(path, `${JSON.stringify({ nodes }, null, 2)}\n`);
+	// The read and the merge run inside the write's turn (`writeFileAtomic`), so
+	// two writers of one facet cannot both merge into the same old file.
+	let refused: WriteFacetResult | null = null;
+	await writeFileAtomic(path, () => {
+		const current = readFacetFile(facet, { dir });
+		if (!current.ok && (current.reason === 'unreadable' || current.reason === 'malformed')) {
+			refused = {
+				ok: false,
+				path,
+				reason: current.reason,
+				why:
+					`${current.why}. NOT overwritten: it may hold other nodes' readings, and ` +
+					'replacing it with this run would destroy them. Move it aside and re-run.',
+			};
+			throw new FacetRefused();
+		}
+		const nodes: Record<string, FacetRecord> = current.ok ? { ...current.nodes } : {};
+		for (const [node, rec] of Object.entries(records)) nodes[node] = rec;
+		return `${JSON.stringify({ nodes }, null, 2)}\n`;
+	}).catch((err: unknown) => {
+		if (!(err instanceof FacetRefused)) throw err;
+	});
+	if (refused) return refused;
 
 	const logPath = facetLogPath(facet, dir);
 	const loggedAt = new Date().toISOString();
@@ -419,9 +429,12 @@ export function writeFacet(
 			...(extra[node] ?? {}),
 		})
 	);
-	if (lines.length) appendFacetLog(logPath, lines);
+	if (lines.length) await appendFacetLog(logPath, lines);
 	return { ok: true, path, logPath, written: Object.keys(records) };
 }
+
+/** Thrown inside `writeFacet`'s write to abandon it; never escapes. */
+class FacetRefused extends Error {}
 
 /**
  * `$proof` — the workload-proof facet (wave 4e, #102) — split to

@@ -219,7 +219,7 @@ export async function tick(token: string): Promise<void> {
 	// rollups. Here because this tick is the one loop that owns job-history —
 	// `ingestRuns` ran above — so it adds no timer and no GitHub call; on almost
 	// every tick it finds nothing due and returns. See `job-rollups.ts`.
-	writeClosedDays({ nodes: loadFleetNodeNames() });
+	await writeClosedDays({ nodes: loadFleetNodeNames() });
 
 	data.runners_checked = runnersChecked;
 	data.runs_checked = runsChecked;

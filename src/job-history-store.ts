@@ -456,12 +456,11 @@ export function appendToDisk(fresh: JobRecord[]): void {
  * begun aging the underlying jobs out. `backfillFailedSteps` exists so that work
  * goes through THIS function instead.
  */
-export function persistHistory(): boolean {
+export async function persistHistory(): Promise<boolean> {
 	try {
-		mkdirSync(dirname(historyFile()), { recursive: true });
-		writeFileAtomic(
+		await writeFileAtomic(
 			historyFile(),
-			records.map((r) => JSON.stringify(r)).join('\n') + (records.length ? '\n' : '')
+			() => records.map((r) => JSON.stringify(r)).join('\n') + (records.length ? '\n' : '')
 		);
 		staleOnDisk = 0;
 		return true;
@@ -496,7 +495,7 @@ export const COMPACT_STALE_FRACTION = 0.1;
  * synchronous appends: a line appended between the snapshot and the rename is
  * silently lost.
  */
-export function compactHistory(now = Date.now()): boolean {
+export async function compactHistory(now = Date.now()): Promise<boolean> {
 	const cutoff = cutoffIso(now);
 	const keep = records.filter((r) => r.startedAt >= cutoff);
 	if (keep.length !== records.length) {

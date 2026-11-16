@@ -37,7 +37,7 @@
  *   4. `renderJson(doc, target)` — the owning repo's own prettier (#12).
  *      Never thrown: an unresolvable prettier degrades to plain
  *      `JSON.stringify` output and the caller is told via `formatter: null`.
- *   5. `writeFileAtomic(target, rendered.text)` (`dist/lib/atomic-json.js`,
+ *   5. `writeFileAtomicSync(target, rendered.text)` (`dist/lib/atomic-json.js`,
  *      since wave 5b) — temp file in the same directory, fsync'd, renamed
  *      over the target, directory fsync'd after. A crash between the write
  *      and the rename leaves the OLD manifest intact; see
@@ -134,7 +134,7 @@ import { readFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { readManifestState } from '../../dist/lib/manifest.js';
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 import { MANIFEST_FILE } from './fleet-exec.mjs';
 import { landWrite, refusalLine, writeTarget } from './manifest-target.mjs';
 import { renderJson } from './prettier-json.mjs';
@@ -254,7 +254,7 @@ export async function manifestEdit(tx, { target, writer, reason, push = true } =
 	// the caller — the same discipline every refusal path above already
 	// follows.
 	try {
-		writeFileAtomic(target, rendered.text);
+		writeFileAtomicSync(target, rendered.text);
 	} catch (err) {
 		return {
 			ok: false,
@@ -270,14 +270,14 @@ export async function manifestEdit(tx, { target, writer, reason, push = true } =
 	// changed in formatting or was overwritten by a racing writer between
 	// this write and this read. NOTHING IS LANDED on a mismatch, and the
 	// MISMATCHED bytes are not left sitting in the checkout either — restored
-	// to `originalText` (the same `writeFileAtomic` the real write used, so the
+	// to `originalText` (the same `writeFileAtomicSync` the real write used, so the
 	// restore is itself crash-safe), because a dirty, uncommitted manifest sat
 	// in front of `landWrite` is exactly the shape an UNRELATED later write
 	// would fold in and commit under its own subject (the `dirty` refusal this
 	// file's STEP 1 already guards against, reached by a different door).
 	const restoreOriginal = (why) => {
 		try {
-			writeFileAtomic(target, originalText);
+			writeFileAtomicSync(target, originalText);
 			return { ok: false, reason: 'readback-mismatch', why: `${why} Restored the original file.` };
 		} catch (err) {
 			return {

@@ -208,14 +208,14 @@ function eightDays(): JobRecord[] {
 	return out;
 }
 
-test('first run BACKFILLS every closed whole day; a second run writes nothing', () => {
+test('first run BACKFILLS every closed whole day; a second run writes nothing', async () => {
 	const file = join(tmp, 'job-rollups.jsonl');
 	const records = eightDays();
 	const since = Date.parse(records[0].startedAt);
 	const expected = closableDays(NOW, since);
 	assert.ok(expected.length >= 3, 'the fixture must leave several days due');
 
-	const first = writeClosedDays({
+	const first = await writeClosedDays({
 		nodes: NODES,
 		nowMs: NOW,
 		records,
@@ -238,34 +238,42 @@ test('first run BACKFILLS every closed whole day; a second run writes nothing', 
 
 	// Same store: cached set. A NEW store is a restarted mgmt-api.
 	assert.deepEqual(
-		writeClosedDays({
-			nodes: NODES,
-			nowMs: NOW,
-			records,
-			completeSinceMs: since,
-			store: jsonlRollupStore(file),
-		}).written,
+		(
+			await writeClosedDays({
+				nodes: NODES,
+				nowMs: NOW,
+				records,
+				completeSinceMs: since,
+				store: jsonlRollupStore(file),
+			})
+		).written,
 		[]
 	);
 	assert.equal(readFileSync(file, 'utf8'), bytes, 'idempotent: the file is untouched');
 	assert.ok(!existsSync(`${file}.${process.pid}.tmp`), 'the atomic write left no temp file');
 });
 
-test('a day later in the week is added without rewriting the days already held', () => {
+test('a day later in the week is added without rewriting the days already held', async () => {
 	const file = join(tmp, 'job-rollups.jsonl');
 	const records = eightDays();
 	const since = Date.parse(records[0].startedAt);
 	const store = jsonlRollupStore<RollupRow, FleetDayAggregate>(file);
-	writeClosedDays({ nodes: NODES, nowMs: NOW - DAY, records, completeSinceMs: since, store });
+	await writeClosedDays({ nodes: NODES, nowMs: NOW - DAY, records, completeSinceMs: since, store });
 	const before = store.read().days;
-	const r = writeClosedDays({ nodes: NODES, nowMs: NOW, records, completeSinceMs: since, store });
+	const r = await writeClosedDays({
+		nodes: NODES,
+		nowMs: NOW,
+		records,
+		completeSinceMs: since,
+		store,
+	});
 	assert.equal(r.written.length, 1, 'exactly the one newly settled day');
 	const after = store.read().days;
 	assert.equal(after.length, before.length + 1);
 	assert.deepEqual(after.slice(0, before.length), before, 'held days are byte-for-byte the same');
 });
 
-test('BACKFILL: a schema-1 day still inside job-history is UPGRADED in place to carry the fleet aggregate (wave fleettab fix-up)', () => {
+test('BACKFILL: a schema-1 day still inside job-history is UPGRADED in place to carry the fleet aggregate (wave fleettab fix-up)', async () => {
 	const file = join(tmp, 'job-rollups.jsonl');
 	const store = jsonlRollupStore<RollupRow, FleetDayAggregate>(file);
 	const day = utcDay(midnight(5));
@@ -279,11 +287,11 @@ test('BACKFILL: a schema-1 day still inside job-history is UPGRADED in place to 
 		rows: [],
 		// No `fleet` key at all — exactly what a pre-wave row looks like.
 	};
-	store.put([schemaOne], utcDay(NOW - ROLLUP_RETENTION_DAYS * DAY));
+	await store.put([schemaOne], utcDay(NOW - ROLLUP_RETENTION_DAYS * DAY));
 	assert.equal(store.read().days[0]?.fleet, undefined, 'seeded as schema 1, no fleet field');
 
 	const records = [rec({ at: midnight(5) + 3600_000, runner: 'claw-1' })];
-	const r = writeClosedDays({
+	const r = await writeClosedDays({
 		nodes: NODES,
 		nowMs: NOW,
 		records,
@@ -297,7 +305,7 @@ test('BACKFILL: a schema-1 day still inside job-history is UPGRADED in place to 
 	assert.equal(upgraded.fleet.jobs, 1, 'rebuilt from the live job-history record, not the old row');
 
 	// Idempotent once upgraded: a second call finds nothing due for that day.
-	const r2 = writeClosedDays({
+	const r2 = await writeClosedDays({
 		nodes: NODES,
 		nowMs: NOW,
 		records,
@@ -307,10 +315,10 @@ test('BACKFILL: a schema-1 day still inside job-history is UPGRADED in place to 
 	assert.ok(!r2.written.includes(day));
 });
 
-test('no node list: refuses loudly rather than writing raw runner names as nodes', () => {
+test('no node list: refuses loudly rather than writing raw runner names as nodes', async () => {
 	const file = join(tmp, 'job-rollups.jsonl');
 	const records = eightDays();
-	const r = writeClosedDays({
+	const r = await writeClosedDays({
 		nodes: [],
 		nowMs: NOW,
 		records,
@@ -323,9 +331,9 @@ test('no node list: refuses loudly rather than writing raw runner names as nodes
 	assert.ok(!existsSync(file));
 });
 
-test('an empty ledger proves nothing: no day is written as a zero', () => {
+test('an empty ledger proves nothing: no day is written as a zero', async () => {
 	const file = join(tmp, 'job-rollups.jsonl');
-	const r = writeClosedDays({
+	const r = await writeClosedDays({
 		nodes: NODES,
 		nowMs: NOW,
 		records: [],
@@ -336,10 +344,10 @@ test('an empty ledger proves nothing: no day is written as a zero', () => {
 	assert.ok(!existsSync(file));
 });
 
-test('a quiet day INSIDE the evidence is a real zero, written as records: 0', () => {
+test('a quiet day INSIDE the evidence is a real zero, written as records: 0', async () => {
 	const file = join(tmp, 'job-rollups.jsonl');
 	const records = eightDays().filter((r) => !r.startedAt.startsWith(utcDay(midnight(4))));
-	writeClosedDays({
+	await writeClosedDays({
 		nodes: NODES,
 		nowMs: NOW,
 		records,
@@ -353,11 +361,11 @@ test('a quiet day INSIDE the evidence is a real zero, written as records: 0', ()
 	assert.deepEqual(quiet?.rows, []);
 });
 
-test('a write failure is logged with its reason and never thrown into the tick', () => {
+test('a write failure is logged with its reason and never thrown into the tick', async () => {
 	// The store path's parent is a FILE, so mkdir fails.
 	writeFileSync(join(tmp, 'blocker'), '');
 	const records = eightDays();
-	const r = writeClosedDays({
+	const r = await writeClosedDays({
 		nodes: NODES,
 		nowMs: NOW,
 		records,
@@ -371,11 +379,11 @@ test('a write failure is logged with its reason and never thrown into the tick',
 
 // ── the store ───────────────────────────────────────────────────────────────
 
-test('store: an unparseable line is a MISSING day, counted, and rewritten while still in the ledger', () => {
+test('store: an unparseable line is a MISSING day, counted, and rewritten while still in the ledger', async () => {
 	const file = join(tmp, 'job-rollups.jsonl');
 	const records = eightDays();
 	const since = Date.parse(records[0].startedAt);
-	writeClosedDays({
+	await writeClosedDays({
 		nodes: NODES,
 		nowMs: NOW,
 		records,
@@ -389,7 +397,7 @@ test('store: an unparseable line is a MISSING day, counted, and rewritten while 
 	const read = jsonlRollupStore(file).read();
 	assert.equal(read.unreadableLines, 1);
 	assert.ok(!read.days.some((d) => d.day === lost));
-	const r = writeClosedDays({
+	const r = await writeClosedDays({
 		nodes: NODES,
 		nowMs: NOW,
 		records,
@@ -400,7 +408,7 @@ test('store: an unparseable line is a MISSING day, counted, and rewritten while 
 	assert.equal(jsonlRollupStore(file).read().unreadableLines, 0);
 });
 
-test('store: days older than ROLLUP_RETENTION_DAYS are dropped on the next write, newer kept', () => {
+test('store: days older than ROLLUP_RETENTION_DAYS are dropped on the next write, newer kept', async () => {
 	const file = join(tmp, 'job-rollups.jsonl');
 	const store = jsonlRollupStore(file);
 	const mk = (day: string): DayRollup => ({
@@ -414,8 +422,8 @@ test('store: days older than ROLLUP_RETENTION_DAYS are dropped on the next write
 	});
 	const old = utcDay(NOW - (ROLLUP_RETENTION_DAYS + 3) * DAY);
 	const yearAgo = utcDay(NOW - 365 * DAY);
-	store.put([mk(old), mk(yearAgo)], '0000-00-00');
-	store.put([mk(utcDay(midnight(5)))], utcDay(NOW - ROLLUP_RETENTION_DAYS * DAY));
+	await store.put([mk(old), mk(yearAgo)], '0000-00-00');
+	await store.put([mk(utcDay(midnight(5)))], utcDay(NOW - ROLLUP_RETENTION_DAYS * DAY));
 	assert.deepEqual(
 		store.read().days.map((d) => d.day),
 		[yearAgo, utcDay(midnight(5))]
@@ -493,7 +501,7 @@ test('ROLLUP_SCHEMA is 2: the envelope now carries a fleet aggregate', () => {
 	assert.equal(r.fleet.jobs, 1);
 });
 
-test('writeClosedDays folds the injected decision and capacity-sample rows into the closed day', () => {
+test('writeClosedDays folds the injected decision and capacity-sample rows into the closed day', async () => {
 	const day = utcDay(midnight(5));
 	const dayStartMs = Date.parse(`${day}T00:00:00.000Z`);
 	const decisions = [
@@ -513,7 +521,7 @@ test('writeClosedDays folds the injected decision and capacity-sample rows into 
 	];
 	const records = [rec({ at: midnight(5), runner: 'claw-1' })];
 	const file = join(tmp, 'job-rollups.jsonl');
-	const r = writeClosedDays({
+	const r = await writeClosedDays({
 		nodes: NODES,
 		nowMs: NOW,
 		records,
@@ -533,7 +541,7 @@ test('writeClosedDays folds the injected decision and capacity-sample rows into 
 	assert.equal(written.fleet.availability!.claws, 0.5);
 });
 
-test('a closed day with decisions in hand but none for it: a real zero inside retention, null outside it', () => {
+test('a closed day with decisions in hand but none for it: a real zero inside retention, null outside it', async () => {
 	const recentDay = utcDay(NOW - (DECISION_RETENTION_DAYS - 2) * DAY);
 	const oldDay = utcDay(NOW - (DECISION_RETENTION_DAYS + 5) * DAY);
 	const completeSinceMs = Date.parse(`${oldDay}T00:00:00.000Z`);
@@ -541,7 +549,7 @@ test('a closed day with decisions in hand but none for it: a real zero inside re
 	// A row for a day OUTSIDE this due range keeps `decisions` non-empty
 	// without landing on either day under test.
 	const decisions = [decisionFixture({ at: new Date(NOW + 10 * DAY).toISOString() })];
-	const r = writeClosedDays({
+	const r = await writeClosedDays({
 		nodes: NODES,
 		nowMs: NOW,
 		records: [],
@@ -559,13 +567,13 @@ test('a closed day with decisions in hand but none for it: a real zero inside re
 	assert.equal(old?.fleet?.waits, null);
 });
 
-test('the decision log unreadable: every due day gets waits null, warned, rows still written', () => {
+test('the decision log unreadable: every due day gets waits null, warned, rows still written', async () => {
 	// No `decisions` override and no real decision-log directory for this
 	// test's `stateDir()` to find: `readDecisions` throws for real here.
 	const day = utcDay(midnight(5));
 	const records = [rec({ at: midnight(5) })];
 	const file = join(tmp, 'job-rollups.jsonl');
-	const r = writeClosedDays({
+	const r = await writeClosedDays({
 		nodes: NODES,
 		nowMs: NOW,
 		records,
@@ -582,7 +590,7 @@ test('the decision log unreadable: every due day gets waits null, warned, rows s
 	assert.equal(written?.fleet?.waits, null);
 });
 
-test('heldDays: an unchanged file is not parsed again; a file another writer replaced is', () => {
+test('heldDays: an unchanged file is not parsed again; a file another writer replaced is', async () => {
 	// fleet-manager#86: writeClosedDays asked every runner-health tick, and a
 	// full read of the ~8 MB file each time was a 50-65 ms stretch on the leader.
 	const file = join(tmp, 'job-rollups.jsonl');
@@ -607,6 +615,6 @@ test('heldDays: an unchanged file is not parsed again; a file another writer rep
 	assert.equal(store.heldDays(), first, 'the same answer object: nothing was read again');
 
 	// Another process (a restarted standby, a hand repair) replaces the file.
-	jsonlRollupStore(file).put([JSON.parse(day('2026-11-02', true))], '2026-01-01');
+	await jsonlRollupStore(file).put([JSON.parse(day('2026-11-02', true))], '2026-01-01');
 	assert.deepEqual([...store.heldDays().withFleet], ['2026-11-01', '2026-11-02']);
 });

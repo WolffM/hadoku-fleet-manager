@@ -21,6 +21,7 @@ import {
 	__reloadAlertLedgerForTesting,
 	__resetAlertLedgerForTesting,
 } from '../lib/alert-ledger.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import { testHost } from './install-test-host.js';
 
 const LEDGER_PATH = () => join(stateDir(), 'runner-health-alerts.json');
@@ -30,6 +31,7 @@ test('alertOnce persists the ledger through the shared atomic writer, byte-for-b
 	try {
 		rmSync(LEDGER_PATH(), { force: true });
 		await alertOnce('clean-a-test-key', 'test content');
+		await flushWrites();
 		const raw = readFileSync(LEDGER_PATH(), 'utf8');
 		// No indentation — matches the old `JSON.stringify(out)` with no `space` arg.
 		assert.doesNotMatch(raw, /\n/, 'single-line JSON, same as the old writeFileSync call');
@@ -47,8 +49,10 @@ test('clearAlert re-persists the ledger with the key removed', async () => {
 	try {
 		rmSync(LEDGER_PATH(), { force: true });
 		await alertOnce('clean-a-test-key-2', 'test content');
+		await flushWrites();
 		assert.ok(JSON.parse(readFileSync(LEDGER_PATH(), 'utf8'))['clean-a-test-key-2']);
 		clearAlert('clean-a-test-key-2');
+		await flushWrites();
 		const doc = JSON.parse(readFileSync(LEDGER_PATH(), 'utf8')) as Record<string, string>;
 		assert.equal(doc['clean-a-test-key-2'], undefined);
 	} finally {

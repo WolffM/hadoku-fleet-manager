@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { logger, stateDir } from '../host.js';
-import { writeJsonAtomic } from '../lib/atomic-json.js';
+import { writeFileAtomic } from '../lib/atomic-json.js';
 import { RETENTION_DAYS } from '../job-history-store.js';
 
 export const DISPATCH_DAILY_FILE = 'dispatch-daily.json';
@@ -58,28 +58,23 @@ export function readDispatchDaily(): DispatchDailyDoc | null {
 export function recordDispatchDay(nowMs: number, pass: DispatchDay): void {
 	if (!pass.minted && !pass.failed) return;
 	const day = utcDay(nowMs);
-	const doc = readDispatchDaily() ?? { since: day, days: {} };
-	const cur = doc.days[day] ?? { minted: 0, failed: 0, mintedViaAffinity: 0 };
-	doc.days[day] = {
-		minted: cur.minted + pass.minted,
-		failed: cur.failed + pass.failed,
-		mintedViaAffinity: cur.mintedViaAffinity + pass.mintedViaAffinity,
-	};
-	const oldest = utcDay(nowMs - RETENTION_DAYS * 86_400_000);
-	for (const d of Object.keys(doc.days)) if (d < oldest) delete doc.days[d];
-	try {
-		// Write-then-rename WITHOUT fsync, a recorded divergence (F3,
-		// `lib/atomic-json.ts`). A pass that mints writes this, every 15 s while
-		// work is queued, and a synchronous fsync on mgmt-api's event loop waits
-		// for the whole disk queue: 720 ms and 583 ms in one profile
-		// (fleet-manager#86). A power cut can lose the last pass's counts, or
-		// leave a file that does not parse; `readDispatchDaily` then answers
-		// `null` and counting restarts with a new `since`, so earlier days read as
-		// unmeasured, never as zero.
-		writeJsonAtomic(path(), doc, { fsync: false });
-	} catch (err) {
+	// Write-then-rename, fsync'd off the event loop (F3, `lib/atomic-json.ts`).
+	// The read and the add run inside the write's turn, so two passes cannot
+	// both add to the same old count.
+	writeFileAtomic(path(), () => {
+		const doc = readDispatchDaily() ?? { since: day, days: {} };
+		const cur = doc.days[day] ?? { minted: 0, failed: 0, mintedViaAffinity: 0 };
+		doc.days[day] = {
+			minted: cur.minted + pass.minted,
+			failed: cur.failed + pass.failed,
+			mintedViaAffinity: cur.mintedViaAffinity + pass.mintedViaAffinity,
+		};
+		const oldest = utcDay(nowMs - RETENTION_DAYS * 86_400_000);
+		for (const d of Object.keys(doc.days)) if (d < oldest) delete doc.days[d];
+		return JSON.stringify(doc);
+	}).catch((err: unknown) => {
 		logger.warn(`[dispatch-daily] could not write ${path()}: ${(err as Error).message}`);
-	}
+	});
 }
 
 /**

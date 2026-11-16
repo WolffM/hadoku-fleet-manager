@@ -16,6 +16,7 @@ import { warmRunnerName } from '../lib/jit-naming.js';
 import { WARM_ASSIGN_WINDOW_MS } from '../runners/ephemeral-warm.js';
 import { __restartWarmBackoffForTesting, WARM_CACHE_INTERVAL_MS } from '../runners/warm-backoff.js';
 import { writeDrain } from '../runners/drain.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
 import {
 	type NodeSim,
@@ -37,7 +38,7 @@ test('dispatchWarmCache: a drained node with no existing listener is never fille
 	// reason string. Anchored anyway: "nothing filters on it yet" is exactly the
 	// assumption that rotted here, and it leaves this file with no absolute date
 	// at all, so the rule needs no per-line exception.
-	writeDrain({ 'claw-1': { since: histAt(0), reason: 'DRAM fault', by: 'hadoku' } });
+	await writeDrain({ 'claw-1': { since: histAt(0), reason: 'DRAM fault', by: 'hadoku' } });
 	try {
 		let shCalls = 0;
 		const inner = simShell({});
@@ -64,7 +65,7 @@ test('dispatchWarmCache: a drained node with no existing listener is never fille
 		assert.ok(shCalls > 0, 'the node is observed, not skipped outright');
 		assert.equal(gh.calls.length, 0, 'nothing to evict means nothing to ask GitHub about');
 	} finally {
-		writeDrain({});
+		await writeDrain({});
 	}
 });
 
@@ -87,7 +88,9 @@ test('dispatchWarmCache: a drained node holding a warm listener has it evicted, 
 	};
 	const sh = simShell(sims);
 	const gh = fakeGh({ runners: [{ id: 1, name: unit, busy: false }] });
-	writeDrain({ 'claw-1': { since: histAt(0), reason: 'semi-annual stress test', by: 'hadoku' } });
+	await writeDrain({
+		'claw-1': { since: histAt(0), reason: 'semi-annual stress test', by: 'hadoku' },
+	});
 	try {
 		const res = await dispatchWarmCache(baseInput(), 'tok', gh, sh, nowMs);
 		assert.equal(res.evicted, 1, 'the listener GitHub could still assign to must be removed');
@@ -103,7 +106,7 @@ test('dispatchWarmCache: a drained node holding a warm listener has it evicted, 
 			`the registration must reach GitHub as a DELETE: ${gh.writes.join(' ')}`
 		);
 	} finally {
-		writeDrain({});
+		await writeDrain({});
 	}
 });
 
@@ -128,7 +131,7 @@ test('dispatchWarmCache: a drained node whose warm listener is BUSY stops being 
 			},
 		],
 	});
-	writeDrain({ 'claw-1': { since: histAt(0), reason: 'stress lease', by: 'hadoku' } });
+	await writeDrain({ 'claw-1': { since: histAt(0), reason: 'stress lease', by: 'hadoku' } });
 	try {
 		const res = await dispatchWarmCache(baseInput(), 'tok', gh, simShell(sims), nowMs);
 		assert.ok(
@@ -138,7 +141,7 @@ test('dispatchWarmCache: a drained node whose warm listener is BUSY stops being 
 		assert.equal(res.evicted, 0, 'a busy registration is not deleted under its job');
 		assert.ok(sims['claw-1'].activeUnits.has(unit), 'the running job keeps its unit');
 	} finally {
-		writeDrain({});
+		await writeDrain({});
 	}
 });
 
@@ -430,6 +433,7 @@ test('dispatchWarmCache: the backoff SURVIVES a restart — it is on disk, not i
 	const callsBefore = gh.calls.length;
 
 	// mgmt-api restarts. Module state is gone; the streak must not be.
+	await flushWrites();
 	__restartWarmBackoffForTesting();
 	__resetWarmCacheClockForTesting();
 

@@ -217,7 +217,7 @@ test('labels: a QUARANTINED node is stripped, even one that would otherwise be p
 
 test('labels: a DRAINED node is stripped', async () => {
 	await withFleet({ 'claw-2': { role: 'claw' } }, async () => {
-		writeDrain({ 'claw-2': { since: 's', reason: 'DRAM', by: 'hadoku' } });
+		await writeDrain({ 'claw-2': { since: 's', reason: 'DRAM', by: 'hadoku' } });
 		const s = ghStub(['claw-2'], ['claw-2']);
 		await tick(s.gh);
 		assert.ok(s.writes.length > 0 && s.writes.every((w) => w.method === 'DELETE'));

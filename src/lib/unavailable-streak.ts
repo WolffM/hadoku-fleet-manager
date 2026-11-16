@@ -58,14 +58,11 @@ function load(file: string): Record<string, number> {
 
 function save(file: string, streaks: Record<string, number>): void {
 	fallback.set(file, streaks);
-	try {
-		fs.mkdirSync(path.dirname(file), { recursive: true });
-		writeJsonAtomic(file, streaks, { space: '\t' });
-	} catch (err) {
+	writeJsonAtomic(file, streaks, { space: '\t' }).catch((err: unknown) => {
 		logger.warn(
 			`[unavailable-streak] could not persist ${file}: ${err instanceof Error ? err.message : String(err)} — counting in memory only`
 		);
-	}
+	});
 }
 
 export function streakFile(dir: string): string {

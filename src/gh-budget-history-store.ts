@@ -96,7 +96,7 @@ export interface GhBudgetHistoryStore {
 	 * — `gh-budget.ts`'s `closeWindow` is the one that must not let that throw
 	 * escape into budget accounting.
 	 */
-	append(rows: readonly GhBudgetHistoryRow[], nowMs: number): void;
+	append(rows: readonly GhBudgetHistoryRow[], nowMs: number): Promise<void>;
 }
 
 function isGhBudgetHistoryRow(v: unknown): v is GhBudgetHistoryRow {
@@ -151,14 +151,13 @@ export function ghBudgetHistoryStore(path: string): GhBudgetHistoryStore {
 		read,
 		append(rows, nowMs) {
 			const cutoff = new Date(nowMs - GH_BUDGET_HISTORY_RETENTION_DAYS * DAY_MS).toISOString();
-			const kept = read()
-				.rows.filter((r) => r.windowEnd >= cutoff)
-				.concat(rows)
-				.sort((a, b) => a.windowEnd.localeCompare(b.windowEnd));
-			writeFileAtomic(
-				path,
-				kept.map((r) => JSON.stringify(r)).join('\n') + (kept.length ? '\n' : '')
-			);
+			return writeFileAtomic(path, () => {
+				const kept = read()
+					.rows.filter((r) => r.windowEnd >= cutoff)
+					.concat(rows)
+					.sort((a, b) => a.windowEnd.localeCompare(b.windowEnd));
+				return kept.map((r) => JSON.stringify(r)).join('\n') + (kept.length ? '\n' : '');
+			});
 		},
 	};
 }

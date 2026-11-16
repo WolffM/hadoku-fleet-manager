@@ -81,12 +81,12 @@ export function readRevocations(dir: string): RevocationRead {
 }
 
 /** Write atomically, fsync'd (F3, `lib/atomic-json.ts`): a reader on the 15 s tick must never see half a file. */
-export function writeRevocations(dir: string, nodes: Revocations): void {
+export async function writeRevocations(dir: string, nodes: Revocations): Promise<void> {
 	const path = join(dir, REVOCATIONS_FILE);
 	const pruned = Object.fromEntries(
 		Object.entries(nodes).filter(([, caps]) => Object.keys(caps).length)
 	);
-	writeFileAtomic(
+	await writeFileAtomic(
 		path,
 		`${JSON.stringify({ $comment: 'Labels a probe executed and judged FAILED; withheld from routing until a passing probe clears them. See src/capability-revocations.ts.', nodes: pruned }, null, 2)}\n`
 	);

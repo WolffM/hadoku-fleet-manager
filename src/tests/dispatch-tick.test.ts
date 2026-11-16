@@ -8,6 +8,7 @@ import { __restartAnnouncedStuckForTesting } from '../runners/dispatch-tick-rese
 import { getDispatchQueueSnapshot } from '../runners/dispatch-tick-poll.js';
 import { STUCK_ANNOUNCED_FILE } from '../runners/stuck-runs.js';
 import { SATURATED_QUEUED_MS } from '../runners/queue-discovery.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import { testStateDir } from './install-test-host.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import {
@@ -196,6 +197,7 @@ test('ten ticks with a RESTART between every one still say it once', async () =>
 	const h = harness([unclearable(1)]);
 	for (let i = 0; i < 10; i++) {
 		await runDispatchTick(base(), 'tok', h.gh, h.sh, NOW + i * TICK_MS);
+		await flushWrites();
 		__restartAnnouncedStuckForTesting();
 	}
 	assert.equal(log.stuck().length, 1, 'ten restarts, one line');
@@ -258,6 +260,7 @@ test('a run that LEAVES the queue is dropped from the book and re-announced if i
 	await runDispatchTick(base(), 'tok', gh as never, sh, NOW + TICK_MS);
 	assert.equal(log.cleared().length, 1, 'the drop is said out loud');
 	assert.match(log.cleared()[0], /WolffM\/hadoku-rally#1/);
+	await flushWrites();
 	assert.deepEqual(
 		JSON.parse(readFileSync(bookPath, 'utf8')),
 		{},
@@ -295,6 +298,7 @@ test('an UNREADABLE listing does not empty the book — "I could not look" is no
 		await runDispatchTick(base(), 'tok', gh as never, sh, NOW + i * TICK_MS);
 	}
 	assert.equal(log.cleared().length, 0, 'an unreadable repo clears nothing');
+	await flushWrites();
 	assert.deepEqual(Object.keys(JSON.parse(readFileSync(bookPath, 'utf8'))), [
 		'WolffM/hadoku-rally#1',
 	]);

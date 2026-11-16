@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { __setHostForTesting } from '../host.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import { testHost } from './install-test-host.js';
 import { jobRunDir, readJobRuns } from '../job-run-store.js';
 import { tempDir, cleanupTempDirs } from './tmpdir.js';
@@ -213,7 +214,9 @@ void test('createPager: every page and recovery it sends is persisted straight a
 		events.push(`post ${content}`);
 		if (failNext) throw new Error('sink down');
 	};
-	const persist = () => events.push(`persist ${JSON.stringify(paged)}`);
+	const persist = (): void => {
+		events.push(`persist ${JSON.stringify(paged)}`);
+	};
 
 	const p1 = createPager({ paged, now: 0, repageMs: 1000, post, source: 'x', persist });
 	await p1.page('k', 'paged');
@@ -421,6 +424,7 @@ void test('unavailable streak: counted per job, and survives a restart because i
 	});
 	await blind('streak-x');
 	await blind('streak-y');
+	await flushWrites();
 	assert.deepEqual(JSON.parse(readFileSync(join(dir, STREAK_FILE), 'utf8')), {
 		'streak-x': 1,
 		'streak-y': 1,
@@ -465,6 +469,7 @@ void test('unavailable streak: a store it cannot write still counts, in memory, 
 		jobResults.map((r) => r.jobState),
 		['skipped', 'failed']
 	);
+	await flushWrites();
 	assert.ok(warns.some((w) => w.includes('counting in memory only')));
 });
 

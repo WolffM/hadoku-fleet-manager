@@ -28,7 +28,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
 
 /** The refresh cycle drains a node for a sweep once it is this long unswept. */
@@ -67,7 +67,7 @@ export function foldSweeps(log, results, { confirm, nowMs }) {
 
 export function recordSweeps(results, { confirm, nowMs = Date.now() }) {
 	const next = foldSweeps(readSweepLog(), results, { confirm, nowMs });
-	writeFileAtomic(logPath(), `${JSON.stringify(next, null, 2)}\n`);
+	writeFileAtomicSync(logPath(), `${JSON.stringify(next, null, 2)}\n`);
 	return next;
 }
 

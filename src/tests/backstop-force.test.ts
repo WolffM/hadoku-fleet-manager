@@ -26,11 +26,11 @@ const rec = (minutesFromNow: number, over: Partial<ReturnType<typeof forceRecord
 	...over,
 });
 
-function withStateDir(fn: (dir: string) => void): void {
+async function withStateDir(fn: (dir: string) => void | Promise<void>): Promise<void> {
 	const dir = mkdtempSync(join(tmpdir(), 'backstop-force-'));
 	__setHostForTesting({ ...testHost, stateDir: dir });
 	try {
-		fn(dir);
+		await fn(dir);
 	} finally {
 		__setHostForTesting(testHost);
 		rmSync(dir, { recursive: true, force: true });
@@ -76,19 +76,19 @@ test('forceRecord stamps since and until from one clock', () => {
 	);
 });
 
-test('the file round-trips through the state dir, and a missing file is no force', () => {
-	withStateDir((dir) => {
+test('the file round-trips through the state dir, and a missing file is no force', async () => {
+	await withStateDir(async (dir) => {
 		assert.deepEqual(readForce(), {}, 'missing file');
-		writeForce({ hokon: rec(45) });
+		await writeForce({ hokon: rec(45) });
 		assert.ok(existsSync(join(dir, 'fleet-backstop-force.json')));
 		assert.equal(isForced('hokon', readForce(), NOW), true);
-		writeForce({});
+		await writeForce({});
 		assert.deepEqual(readForce(), {});
 	});
 });
 
-test('an unreadable file THROWS — the caller must fail toward "not forced" and say so', () => {
-	withStateDir((dir) => {
+test('an unreadable file THROWS — the caller must fail toward "not forced" and say so', async () => {
+	await withStateDir(async (dir) => {
 		writeFileSync(join(dir, 'fleet-backstop-force.json'), '{ not json');
 		assert.throws(() => readForce(), SyntaxError);
 	});

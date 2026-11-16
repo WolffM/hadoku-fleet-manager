@@ -24,12 +24,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { tsAndMjsSources, assertDebt, loadDebt } from './lib.mjs';
+import { tsAndMjsSources, assertDebt, loadDebt, writeCallPattern } from './lib.mjs';
 
 // No `g` flag: every use here is a one-shot `.test()`, and a global regex's
 // `lastIndex` would carry over between files and silently skip matches.
 const REPAGE_CONST = /\bconst\s+(?:REPAGE(?:_INTERVAL)?_MS|RE_ALERT_MS)\s*=/;
-const WRITE = /\b(?:writeFileSync|writeFileAtomic|writeJsonAtomic)(?:Async)?\(/;
 const DEBOUNCE = /\bnow\s*-\s*\w+\s*<\s*[\w.]*(?:MS|Ms)\b/;
 
 function findRepageMs() {
@@ -43,7 +42,7 @@ function findRepageMs() {
 function findPageLedger() {
 	const out = [];
 	for (const { rel, code } of tsAndMjsSources()) {
-		if (WRITE.test(code) && DEBOUNCE.test(code)) out.push(`${rel}:page-ledger#1`);
+		if (writeCallPattern(code).test(code) && DEBOUNCE.test(code)) out.push(`${rel}:page-ledger#1`);
 	}
 	return out;
 }

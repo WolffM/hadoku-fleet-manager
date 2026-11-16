@@ -9,6 +9,7 @@ import {
 	readDispatchDaily,
 	recordDispatchDay,
 } from '../runners/dispatch-daily.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import { testStateDir } from './install-test-host.js';
 
 const file = join(testStateDir, DISPATCH_DAILY_FILE);
@@ -21,10 +22,11 @@ test('no file is null — never an empty history', () => {
 	assert.equal(dispatchForDay(null, '2026-10-09'), null);
 });
 
-test('passes add up per UTC day and survive a re-read (a restart)', () => {
+test('passes add up per UTC day and survive a re-read (a restart)', async () => {
 	recordDispatchDay(T, { minted: 2, failed: 0, mintedViaAffinity: 1 });
 	recordDispatchDay(T + 60_000, { minted: 1, failed: 1, mintedViaAffinity: 0 });
 	recordDispatchDay(T + 86_400_000, { minted: 5, failed: 0, mintedViaAffinity: 5 });
+	await flushWrites();
 	const doc = readDispatchDaily();
 	assert.deepEqual(dispatchForDay(doc, '2026-10-09'), {
 		minted: 3,
@@ -38,9 +40,10 @@ test('passes add up per UTC day and survive a re-read (a restart)', () => {
 	});
 });
 
-test('before counting began is null; a quiet day since is zero', () => {
+test('before counting began is null; a quiet day since is zero', async () => {
 	recordDispatchDay(T, { minted: 1, failed: 0, mintedViaAffinity: 0 });
 	recordDispatchDay(T + 2 * 86_400_000, { minted: 1, failed: 0, mintedViaAffinity: 0 });
+	await flushWrites();
 	const doc = readDispatchDaily();
 	assert.equal(dispatchForDay(doc, '2026-10-08'), null);
 	assert.deepEqual(dispatchForDay(doc, '2026-10-10'), {
@@ -50,14 +53,16 @@ test('before counting began is null; a quiet day since is zero', () => {
 	});
 });
 
-test('a pass that minted nothing and failed nothing writes nothing', () => {
+test('a pass that minted nothing and failed nothing writes nothing', async () => {
 	recordDispatchDay(T, { minted: 0, failed: 0, mintedViaAffinity: 0 });
+	await flushWrites();
 	assert.equal(readDispatchDaily(), null);
 });
 
-test('days past the retention window are pruned', () => {
+test('days past the retention window are pruned', async () => {
 	recordDispatchDay(T, { minted: 1, failed: 0, mintedViaAffinity: 0 });
 	recordDispatchDay(T + 30 * 86_400_000, { minted: 1, failed: 0, mintedViaAffinity: 0 });
+	await flushWrites();
 	assert.deepEqual(Object.keys(readDispatchDaily()!.days), ['2026-11-08']);
 });
 

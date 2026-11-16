@@ -89,7 +89,7 @@ test('backfill: a patched record SURVIVES the next compaction', async () => {
 
 	// Force a full rewrite from the in-memory window — exactly what mgmt-api did
 	// at 15:50 on 2026-09-07 — then reload from the file it produced.
-	assert.equal(compactHistory(COMPACT_AT), true, 'the compaction must really have rewritten');
+	assert.equal(await compactHistory(COMPACT_AT), true, 'the compaction must really have rewritten');
 	restart();
 	const kept = jobRecords();
 	assert.equal(kept.length, 1, 'the aged-out record is gone, which is what forced the rewrite');
@@ -154,7 +154,7 @@ test('backfill: a file-level patch is DESTROYED by the next compaction', async (
 	// reported success right here and exited 0.
 	assert.match(readFileSync(historyFile(), 'utf8'), /Run tests/);
 
-	assert.equal(compactHistory(COMPACT_AT), true);
+	assert.equal(await compactHistory(COMPACT_AT), true);
 	assert.doesNotMatch(
 		readFileSync(historyFile(), 'utf8'),
 		/Run tests/,

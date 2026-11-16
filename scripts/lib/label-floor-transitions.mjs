@@ -33,7 +33,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 import { causeFor } from './label-floor-check.mjs';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
 
@@ -121,7 +121,7 @@ export function trackLabelTransitions(manifest, holdings, log) {
 
 	try {
 		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`).
-		writeFileAtomic(
+		writeFileAtomicSync(
 			path,
 			`${JSON.stringify({ at: new Date().toISOString(), holdings }, null, 2)}\n`
 		);

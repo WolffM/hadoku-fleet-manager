@@ -26,6 +26,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { stateDir } from '../host.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import { writeDrain } from '../runners/drain.js';
 import {
 	runOfflineNodeAlerts,
@@ -82,9 +83,11 @@ const vanishedClears = (): string[] =>
 
 /** Drains every pending microtask (and any macrotask queued ahead of it), so
  *  the `.then` callback that writes `lastPage` on a confirmed post has had
- *  the chance to run before the test reads anything it writes. */
+ *  the chance to run, then waits for the write-behind save it started to land
+ *  on disk, before the test reads anything it writes. */
 async function flush(): Promise<void> {
 	await new Promise<void>((resolve) => setImmediate(resolve));
+	await flushWrites();
 }
 
 async function call(runners: readonly GhRunner[], floorAlreadyBreached = false): Promise<void> {
@@ -143,7 +146,7 @@ test('the loud page does not re-fire inside OFFLINE_REPAGE_MS, but does once it 
 });
 
 test('a DRAINED node (maintenance) past 2h does not page', async () => {
-	writeDrain({
+	await writeDrain({
 		[NODE]: { since: new Date().toISOString(), reason: 'test maintenance', by: 'test' },
 	});
 	seedSince(OFFLINE_PAGE_MS + 1000);
@@ -152,7 +155,7 @@ test('a DRAINED node (maintenance) past 2h does not page', async () => {
 });
 
 test('a node mid-REBOOT WINDOW (drain kind "reboot") past 2h does not page', async () => {
-	writeDrain({
+	await writeDrain({
 		[NODE]: {
 			since: new Date().toISOString(),
 			reason: 'reboot cycle',

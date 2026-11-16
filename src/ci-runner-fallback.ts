@@ -171,7 +171,7 @@ async function readVar(repo: string, token: string): Promise<string | null> {
 	const value = typeof raw === 'string' ? raw : null;
 	if (res.etag && value !== null) {
 		varCache.set(key, { etag: res.etag, value });
-		varDisk.save(key, res.etag, value);
+		void varDisk.save(key, res.etag, value);
 	}
 	return value;
 }

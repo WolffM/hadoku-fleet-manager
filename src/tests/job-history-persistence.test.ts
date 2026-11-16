@@ -188,13 +188,13 @@ test('historyCompleteSinceMs: the retention cutoff when history reaches past it;
 	assert.equal(historyCompleteSinceMs(now), now - (RETENTION_DAYS - 1) * D_MS);
 });
 
-test('persistence: a rewrite is atomic — it replaces the file and leaves no temp file', () => {
+test('persistence: a rewrite is atomic — it replaces the file and leaves no temp file', async () => {
 	const now = Date.now();
 	appendFileSync(historyFile(), diskRecord(951, new Date(now - D_MS).toISOString()));
 	appendFileSync(historyFile(), diskRecord(952, new Date(now - 10 * D_MS).toISOString()));
 	loadHistory(now);
 	// Five days on, the 10-day-old record is past retention, which forces a real rewrite.
-	assert.equal(compactHistory(now + 5 * D_MS), true);
+	assert.equal(await compactHistory(now + 5 * D_MS), true);
 	assert.deepEqual(
 		readdirSync(tmp).filter((f) => f.endsWith('.tmp')),
 		[],
@@ -215,12 +215,12 @@ test('persistence: a missing file is normal, not an error', () => {
 
 test('persistence: compaction rewrites the file without losing live records', async () => {
 	await seed([job({ runner_name: 'claw-1' }), job({ runner_name: 'claw-2' })]);
-	compactHistory();
+	await compactHistory();
 	restart();
 	assert.equal(jobRecords().length, 2, 'compaction must not drop live records');
 });
 
-test('compaction: records over 400 bytes no longer rewrite the file on every call (fleet-manager#86)', () => {
+test('compaction: records over 400 bytes no longer rewrite the file on every call (fleet-manager#86)', async () => {
 	// The old test was `size >= records * 400 + 64 KiB`. Live records averaged
 	// 414 bytes on 2026-11-12, so it was true on every `ingestRuns` call and the
 	// whole 12 MB file was rewritten once per repo per sweep. Records this size,
@@ -232,11 +232,11 @@ test('compaction: records over 400 bytes no longer rewrite the file on every cal
 		appendFileSync(historyFile(), JSON.stringify({ ...line, failedStep: pad }) + '\n');
 	}
 	loadHistory(now);
-	assert.equal(compactHistory(now), false, 'a file of live records is not stale');
-	assert.equal(compactHistory(now + 60_000), false, 'nor a minute later');
+	assert.equal(await compactHistory(now), false, 'a file of live records is not stale');
+	assert.equal(await compactHistory(now + 60_000), false, 'nor a minute later');
 });
 
-test('compaction: rewrites only once the aged-out lines reach the stale fraction', () => {
+test('compaction: rewrites only once the aged-out lines reach the stale fraction', async () => {
 	const now = Date.now();
 	const live = 20;
 	const due = Math.ceil(live * COMPACT_STALE_FRACTION);
@@ -251,13 +251,17 @@ test('compaction: rewrites only once the aged-out lines reach the stale fraction
 	loadHistory(now);
 	assert.equal(jobRecords().length, live + due);
 	const later = now + D_MS;
-	assert.equal(compactHistory(later), true, `${due} stale of ${live} live is due`);
+	assert.equal(await compactHistory(later), true, `${due} stale of ${live} live is due`);
 	const lines = readFileSync(historyFile(), 'utf8').trim().split('\n');
 	assert.equal(lines.length, live);
-	assert.equal(compactHistory(later + 60_000), false, 'and a fresh file is not rewritten again');
+	assert.equal(
+		await compactHistory(later + 60_000),
+		false,
+		'and a fresh file is not rewritten again'
+	);
 });
 
-test('compaction: lines already stale on disk at load count toward the next rewrite', () => {
+test('compaction: lines already stale on disk at load count toward the next rewrite', async () => {
 	const now = Date.now();
 	for (let i = 0; i < 9; i++)
 		appendFileSync(historyFile(), diskRecord(4000 + i, new Date(now - D_MS).toISOString()));
@@ -265,6 +269,6 @@ test('compaction: lines already stale on disk at load count toward the next rewr
 	appendFileSync(historyFile(), '{"truncated');
 	loadHistory(now);
 	assert.equal(jobRecords().length, 9);
-	assert.equal(compactHistory(now), true, '2 stale lines against 9 live is past 10%');
+	assert.equal(await compactHistory(now), true, '2 stale lines against 9 live is past 10%');
 	assert.equal(readFileSync(historyFile(), 'utf8').trim().split('\n').length, 9);
 });

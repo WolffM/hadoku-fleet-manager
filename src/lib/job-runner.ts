@@ -163,7 +163,7 @@ export function createPager(params: {
 	 * mgmt-api handover ("CI broken" twice, 21 s apart); every converger and the
 	 * reboot cycle had the same shape.
 	 */
-	persist: () => void;
+	persist: () => void | Promise<void>;
 }): {
 	page(key: string, content: string): Promise<void>;
 	recover(key: string, content: string): Promise<void>;
@@ -179,7 +179,7 @@ export function createPager(params: {
 			try {
 				await params.post(content, params.source);
 			} finally {
-				params.persist();
+				await params.persist();
 			}
 		},
 		async recover(key, content) {
@@ -189,7 +189,7 @@ export function createPager(params: {
 			try {
 				await (params.recoverPost ?? params.post)(content, params.source);
 			} finally {
-				params.persist();
+				await params.persist();
 			}
 		},
 	};

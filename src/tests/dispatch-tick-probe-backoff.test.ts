@@ -7,6 +7,7 @@ import {
 	__resetPollStateForTesting,
 } from '../runners/dispatch-tick-reset.js';
 import { PROBE_BACKOFF_MS } from '../runners/probe-backoff.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import type { NodeState } from '../runners/placement-node-state.js';
 import { jitRunnerName } from '../lib/jit-naming.js';
 import { answeringJitState, fakeGh, fakeShell } from './helpers/fleet-fakes.js';
@@ -487,6 +488,7 @@ test('a restart keeps the poll ETag: the first poll after it is conditional, and
 		},
 	};
 	await runDispatchTick(base(), 'tok', gh as never, h.sh, NOW);
+	await flushWrites();
 	__restartPollCacheForTesting();
 	answer = 'unchanged';
 	const after = await runDispatchTick(base(), 'tok', gh as never, h.sh, NOW + 60_000);
@@ -494,6 +496,7 @@ test('a restart keeps the poll ETag: the first poll after it is conditional, and
 	assert.ok(after.minted + after.skipped > 0, 'the 304 was answered from the persisted body');
 
 	// "Could not look" after a restart is still not the cached body.
+	await flushWrites();
 	__restartPollCacheForTesting();
 	answer = 'error';
 	const blind = await runDispatchTick(base(), 'tok', gh as never, h.sh, NOW + 120_000);
@@ -518,6 +521,7 @@ test('a restart keeps the jobs-probe ETag too', async () => {
 	};
 	const input = base({ order: ['claw-3'], nodes: [builder('claw-3')], recentJobCounts: hot });
 	await runDispatchTick(input, 'tok', gh, h.sh, NOW);
+	await flushWrites();
 	__restartPollCacheForTesting();
 	await runDispatchTick(input, 'tok', gh, h.sh, NOW + 15_000);
 	assert.deepEqual(sent, [null, 'W/"j1"'], 'the backoff is per process; the ETag is not');

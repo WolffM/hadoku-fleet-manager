@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { parseToolProbe, toolProbeScript } from './toolchain-doctor.mjs';
 import { deferralFor, readDrains } from './expected-down.mjs';
@@ -154,7 +154,7 @@ export function createLiveDeps() {
 		markChecked: (node) => {
 			const log = readRecheckLog();
 			log[node] = Date.now();
-			writeFileAtomic(recheckLogPath(), `${JSON.stringify(log, null, 2)}\n`);
+			writeFileAtomicSync(recheckLogPath(), `${JSON.stringify(log, null, 2)}\n`);
 		},
 		// Re-record the node while the cycle holds it drained, through the cycle's
 		// OWN worktree reset to origin/main first (`siteWriterDir`, lib/manifest-target.mjs). A refusal

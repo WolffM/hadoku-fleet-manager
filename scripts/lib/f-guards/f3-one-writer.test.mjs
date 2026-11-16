@@ -10,9 +10,9 @@
  * "reaches" a write call when it is the PATH argument's value, traced through
  * at most a few hops of local `const`/`function` definitions in the SAME
  * file — never across a file boundary, and never through the DATA being
- * written (only `writeFileSync`/`appendFileSync`/`writeJsonAtomic`/
- * `writeFileAtomic`'s first argument, either atomic one's `…Async` form
- * included, or `renameSync`'s first two). Comments
+ * written (the first argument of `writeFileSync`/`appendFileSync` or of any
+ * name the file imports from `lib/atomic-json`, or `renameSync`'s first two —
+ * `writeCallPattern` in `lib.mjs`). Comments
  * and string-literal CONTENTS are excluded from identifier scanning, so a
  * basename that happens to contain a real local variable's name as a
  * substring (`'label-floor-holdings.json'` contains `holdings`) cannot chain
@@ -53,10 +53,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { ROOT, tsAndMjsSources, enclosingSymbol } from './lib.mjs';
+import { ROOT, tsAndMjsSources, enclosingSymbol, writeCallPattern } from './lib.mjs';
 
-const WRITE_CALL =
-	/\b(writeFileSync|renameSync|appendFileSync|writeJsonAtomic|writeFileAtomic|writeJsonAtomicAsync|writeFileAtomicAsync)\(/g;
 const APPEND_CALL = /\bappendFileSync\(/;
 const BASENAME_LITERAL = /['"]([A-Za-z0-9._-]+\.(?:jsonl?))['"]/g;
 const IDENT = /[A-Za-z_$][\w$]*/g;
@@ -179,7 +177,7 @@ function findFixedNameWriters() {
 	const byBasename = new Map();
 	for (const { rel, code } of tsAndMjsSources()) {
 		const symbolMap = basenameLiteralsBySymbol(code);
-		for (const m of code.matchAll(WRITE_CALL)) {
+		for (const m of code.matchAll(writeCallPattern(code))) {
 			const fn = m[1];
 			const openParenIdx = m.index + m[0].length - 1;
 			const argsText = callArgsText(code, openParenIdx);

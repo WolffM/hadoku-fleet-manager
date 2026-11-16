@@ -134,11 +134,11 @@ export function sampleCapacityNow(
  * fault in forming that opinion must never cost the dispatcher, the fast
  * loop or any other tick sharing this process.
  */
-export function capacitySampleTick(
+export async function capacitySampleTick(
 	nowMs: number = Date.now(),
 	report?: ReturnType<typeof buildFleetReport>,
 	drain?: DrainState
-): { verdict: Verdict; why?: string; rows: number } {
+): Promise<{ verdict: Verdict; why?: string; rows: number }> {
 	let rows: CapacitySampleRow[];
 	try {
 		rows =
@@ -152,7 +152,7 @@ export function capacitySampleTick(
 	}
 	if (!rows.length) return { verdict: 'ok', rows: 0 };
 	try {
-		capacitySampleStore(samplePath()).append(rows, nowMs);
+		await capacitySampleStore(samplePath()).append(rows, nowMs);
 	} catch (err) {
 		const why = `could not record ${rows.length} row(s): ${err instanceof Error ? err.message : String(err)}`;
 		logger.warn(`[capacity-sample] ${why}`);
@@ -167,7 +167,7 @@ export function capacitySampleTick(
  * ~5 minutes after every boot and paged as a critical outage (2026-11-02).
  */
 export async function capacitySamplePass(nowMs: number = Date.now()): Promise<void> {
-	const r = capacitySampleTick(nowMs);
+	const r = await capacitySampleTick(nowMs);
 	await finishTick({
 		jobName: JOB_NAME,
 		intervalMs: CAPACITY_SAMPLE_MS,

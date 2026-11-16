@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { appendFileSync, mkdirSync, truncateSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { historyFile } from '../job-history-store.js';
+import { flushWrites } from '../lib/atomic-json.js';
 
 import { tick, __resetRunnerHealthAlertsForTesting } from '../runner-health.js';
 import { getRunnerHealthSnapshot } from '../runner-health-snapshot.js';
@@ -115,6 +116,7 @@ test('disk-watch #132: a small, nearly empty /tmp is not a repeating advisory â€
 
 	// A restart: the persisted snapshot, not the hour-long alert ledger, is
 	// what remembers the capacity fact was already said.
+	await flushWrites();
 	__resetRunnerHealthAlertsForTesting();
 	__reloadAlertLedgerForTesting();
 	await tick('tok');
@@ -479,7 +481,7 @@ test('regression: five claw-3-shaped divergences mark the proof stale and page o
 	const marked: { node: string; capability: string }[] = [];
 	__setGatedKindsForTesting([JDK21_KIND]);
 	__setReadProofForTesting(passProofAt(FAR_PAST));
-	__setMarkStaleForTesting((node, capability) => {
+	__setMarkStaleForTesting(async (node, capability) => {
 		marked.push({ node, capability });
 		return { ok: true, path: '/fake', logPath: '/fake.log', written: [node] };
 	});
@@ -502,7 +504,7 @@ test('regression: one divergence below N does not act', async () => {
 	__setGatedKindsForTesting([JDK21_KIND]);
 	__setReadProofForTesting(passProofAt(FAR_PAST));
 	let calls = 0;
-	__setMarkStaleForTesting(() => {
+	__setMarkStaleForTesting(async () => {
 		calls++;
 		return { ok: true, path: '/fake', logPath: '/fake.log', written: [] };
 	});
@@ -517,7 +519,7 @@ test('regression: a failure that ALSO failed elsewhere (a real product red) does
 	__setGatedKindsForTesting([JDK21_KIND]);
 	__setReadProofForTesting(passProofAt(FAR_PAST));
 	let calls = 0;
-	__setMarkStaleForTesting(() => {
+	__setMarkStaleForTesting(async () => {
 		calls++;
 		return { ok: true, path: '/fake', logPath: '/fake.log', written: [] };
 	});
@@ -536,7 +538,7 @@ test('regression: hokon never acts, even with five divergences of its own', asyn
 	__setGatedKindsForTesting([JDK21_KIND]);
 	__setReadProofForTesting(passProofAt(FAR_PAST));
 	let calls = 0;
-	__setMarkStaleForTesting(() => {
+	__setMarkStaleForTesting(async () => {
 		calls++;
 		return { ok: true, path: '/fake', logPath: '/fake.log', written: [] };
 	});
@@ -571,7 +573,7 @@ test('regression: a job without a head sha never counts', async () => {
 	__setGatedKindsForTesting([JDK21_KIND]);
 	__setReadProofForTesting(passProofAt(FAR_PAST));
 	let calls = 0;
-	__setMarkStaleForTesting(() => {
+	__setMarkStaleForTesting(async () => {
 		calls++;
 		return { ok: true, path: '/fake', logPath: '/fake.log', written: [] };
 	});
@@ -598,7 +600,7 @@ test('regression (1): five PRE-proof divergences + a fresh pass written after th
 	__setGatedKindsForTesting([JDK21_KIND]);
 	__setReadProofForTesting(passProofAt(new Date().toISOString()));
 	let calls = 0;
-	__setMarkStaleForTesting(() => {
+	__setMarkStaleForTesting(async () => {
 		calls++;
 		return { ok: true, path: '/fake', logPath: '/fake.log', written: [] };
 	});
@@ -621,7 +623,7 @@ test('regression (3): the transition tick marks once; a FOLLOWING tick on the sa
 		verdict,
 	}));
 	let calls = 0;
-	__setMarkStaleForTesting(() => {
+	__setMarkStaleForTesting(async () => {
 		calls++;
 		verdict = 'stale';
 		return { ok: true, path: '/fake', logPath: '/fake.log', written: [] };

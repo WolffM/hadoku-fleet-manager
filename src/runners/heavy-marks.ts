@@ -20,7 +20,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { stateDir } from '../host.js';
+import { logger, stateDir } from '../host.js';
 import { writeJsonAtomic } from '../lib/atomic-json.js';
 
 /**
@@ -43,7 +43,11 @@ export const HEAVY_MARKS_FILE = 'heavy-marks.json';
 export type HeavyMarks = Readonly<Record<string, number>>;
 
 export function writeHeavyMarks(marks: ReadonlyMap<string, number>, dir = stateDir()): void {
-	writeJsonAtomic(join(dir, HEAVY_MARKS_FILE), Object.fromEntries(marks), { fsync: false });
+	writeJsonAtomic(join(dir, HEAVY_MARKS_FILE), Object.fromEntries(marks)).catch((err: unknown) => {
+		logger.warn(
+			`[heavy-marks] could not persist ${HEAVY_MARKS_FILE}: ${err instanceof Error ? err.message : String(err)}`
+		);
+	});
 }
 
 /**

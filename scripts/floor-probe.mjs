@@ -116,6 +116,7 @@ import { modeCandidates } from './lib/floor-probe-mode-candidates.mjs';
 import { modeProbe } from './lib/floor-probe-mode-probe.mjs';
 import { modeRerun } from './lib/floor-probe-mode-rerun.mjs';
 import { installHost } from '../dist/host.js';
+import { flushWrites } from '../dist/lib/atomic-json.js';
 import { liveJitSlots } from '../dist/runners/ephemeral-exec-jit.js';
 
 /**
@@ -389,4 +390,6 @@ else if (mode === 'window') {
 else if (mode === 'rerun') code = await modeRerun(ctx, loadHistory(fail).rows);
 else fail(`unknown mode "${mode}" — one of: report, table, candidates, window, probe, rerun`);
 
+// Land any state a module mirrored to disk on the way (`flushWrites`).
+await flushWrites();
 process.exit(code);

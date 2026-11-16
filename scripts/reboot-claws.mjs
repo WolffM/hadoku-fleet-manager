@@ -28,7 +28,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
-import { writeFileAtomic } from '../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../dist/lib/atomic-json.js';
 import { isLocalNode } from '../dist/lib/node-identity.js';
 import { isBackstopNode } from '../dist/lib/node-role.js';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
@@ -76,7 +76,7 @@ function readState() {
 	return JSON.parse(readFileSync(STATE(), 'utf8'));
 }
 function writeState(s) {
-	writeFileAtomic(STATE(), `${JSON.stringify(s, null, 2)}\n`);
+	writeFileAtomicSync(STATE(), `${JSON.stringify(s, null, 2)}\n`);
 }
 
 const clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };

@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 
 import { stateDir, logger } from './host.js';
-import { writeJsonAtomicAsync } from './lib/atomic-json.js';
+import { writeJsonAtomic } from './lib/atomic-json.js';
 import type { CiState } from './ci-alerts-decide.js';
 import type { CiTickSummary } from './ci-alerts-summary.js';
 
@@ -40,7 +40,7 @@ export function readStates(): Record<string, CiState> {
 
 /**
  * All three writers here are async: their fsyncs run off the event loop
- * (`writeFileAtomicAsync`). One fsync of this file held mgmt-api's loop for
+ * (`writeFileAtomic`). One fsync of this file held mgmt-api's loop for
  * 52.6 ms on 2026-11-14 (fleet-manager#86). Callers await them, so a write
  * still lands before the pass goes on.
  */
@@ -49,7 +49,7 @@ export async function writeStates(states: Record<string, CiState>): Promise<void
 		// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`): a crash mid-write
 		// must not leave truncated JSON that the next tick reads as "no state"
 		// and re-announces every live break from.
-		await writeJsonAtomicAsync(statePath(), states, { space: '\t' });
+		await writeJsonAtomic(statePath(), states, { space: '\t' });
 	} catch (err) {
 		logger.warn(`[ci-alerts] could not persist state: ${String(err)}`);
 	}
@@ -106,7 +106,7 @@ export function ciAlertsBootPassDue(nowMs = Date.now()): boolean {
 export async function recordCleanPass(s: CiTickSummary): Promise<void> {
 	if (!s.targets || s.unreadable || s.errors) return;
 	try {
-		await writeJsonAtomicAsync(passPath(), {
+		await writeJsonAtomic(passPath(), {
 			completedAt: new Date().toISOString(),
 			targets: s.targets,
 		});
@@ -140,7 +140,7 @@ export function readRepoStates(): Record<string, CiRepoState> {
 
 export async function writeRepoStates(states: Record<string, CiRepoState>): Promise<void> {
 	try {
-		await writeJsonAtomicAsync(join(stateDir(), REPO_STATE_FILE), states, { space: '\t' });
+		await writeJsonAtomic(join(stateDir(), REPO_STATE_FILE), states, { space: '\t' });
 	} catch (err) {
 		logger.warn(`[ci-alerts] could not persist repo floors: ${String(err)}`);
 	}

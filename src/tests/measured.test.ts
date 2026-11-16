@@ -239,28 +239,28 @@ test('measuredFacets reads the file once and answers for every node in the roste
 
 // ── writing ──────────────────────────────────────────────────────────────────
 
-test('a writer creates a MISSING state dir and file — absence is "due", not an error', () => {
+test('a writer creates a MISSING state dir and file — absence is "due", not an error', async () => {
 	const dir = join(stateFixture(), 'not-yet');
-	const w = writeFacet('benchmark', { n: rec(ago(0), { cpu: 1 }) }, { dir });
+	const w = await writeFacet('benchmark', { n: rec(ago(0), { cpu: 1 }) }, { dir });
 	assert.equal(w.ok, true);
 	const back = readFacetFile('benchmark', { dir });
 	assert.equal(back.ok && back.nodes.n.cpu, 1);
 });
 
-test('a write MERGES — a node not named keeps its block (the unreachable-node rule)', () => {
+test('a write MERGES — a node not named keeps its block (the unreachable-node rule)', async () => {
 	const dir = stateFixture();
-	writeFacet('health', { kept: rec(ago(9), { v: 'old' }), replaced: rec(ago(9)) }, { dir });
-	writeFacet('health', { replaced: rec(ago(0), { v: 'new' }) }, { dir });
+	await writeFacet('health', { kept: rec(ago(9), { v: 'old' }), replaced: rec(ago(9)) }, { dir });
+	await writeFacet('health', { replaced: rec(ago(0), { v: 'new' }) }, { dir });
 	const back = readFacetFile('health', { dir });
 	assert.ok(back.ok);
 	assert.equal(back.nodes.kept.v, 'old');
 	assert.equal(back.nodes.replaced.v, 'new');
 });
 
-test('a MALFORMED file is REFUSED, never overwritten', () => {
+test('a MALFORMED file is REFUSED, never overwritten', async () => {
 	const dir = stateFixture();
 	writeFileSync(join(dir, 'health.json'), '{ half a doc');
-	const w = writeFacet('health', { n: rec(ago(0)) }, { dir });
+	const w = await writeFacet('health', { n: rec(ago(0)) }, { dir });
 	assert.equal(w.ok, false);
 	assert.equal(!w.ok && w.reason, 'malformed');
 	assert.equal(readFileSync(join(dir, 'health.json'), 'utf8'), '{ half a doc');
@@ -271,17 +271,21 @@ test('a MALFORMED file is REFUSED, never overwritten', () => {
 	);
 });
 
-test('a record with no `at` is refused before anything is touched', () => {
+test('a record with no `at` is refused before anything is touched', async () => {
 	const dir = stateFixture();
-	const w = writeFacet('health', { n: { by: 'x' } as unknown as FacetRecord }, { dir });
+	const w = await writeFacet('health', { n: { by: 'x' } as unknown as FacetRecord }, { dir });
 	assert.equal(!w.ok && w.reason, 'invalid-record');
 	assert.equal(existsSync(join(dir, 'health.json')), false);
 });
 
-test('every write appends one dated, digested line per node to <facet>.log — never rewrites it', () => {
+test('every write appends one dated, digested line per node to <facet>.log — never rewrites it', async () => {
 	const dir = stateFixture();
-	writeFacet('benchmark', { a: rec(ago(1)), b: rec(ago(1)) }, { dir, extra: { a: { raw: 'x' } } });
-	writeFacet('benchmark', { a: rec(ago(0)) }, { dir });
+	await writeFacet(
+		'benchmark',
+		{ a: rec(ago(1)), b: rec(ago(1)) },
+		{ dir, extra: { a: { raw: 'x' } } }
+	);
+	await writeFacet('benchmark', { a: rec(ago(0)) }, { dir });
 	const lines = readFileSync(join(dir, 'benchmark.log'), 'utf8')
 		.trim()
 		.split('\n')
@@ -302,14 +306,14 @@ test('every write appends one dated, digested line per node to <facet>.log — n
 
 // ── T6: the log is bounded by time (refactor plan §7.3, "bound the facet logs") ─
 
-test('a write trims log rows older than FACET_LOG_RETENTION_DAYS, keeping newer ones', () => {
+test('a write trims log rows older than FACET_LOG_RETENTION_DAYS, keeping newer ones', async () => {
 	const dir = stateFixture();
 	const logPath = join(dir, 'health.log');
 	const old = JSON.stringify({ loggedAt: ago(FACET_LOG_RETENTION_DAYS + 1), node: 'ancient' });
 	const recent = JSON.stringify({ loggedAt: ago(FACET_LOG_RETENTION_DAYS - 1), node: 'recent' });
 	writeFileSync(logPath, `${old}\n${recent}\n`);
 
-	writeFacet('health', { n: rec(ago(0)) }, { dir });
+	await writeFacet('health', { n: rec(ago(0)) }, { dir });
 
 	const lines = readFileSync(logPath, 'utf8')
 		.trim()
@@ -322,7 +326,7 @@ test('a write trims log rows older than FACET_LOG_RETENTION_DAYS, keeping newer 
 	);
 });
 
-test('a log row whose age cannot be determined is NEVER dropped, however long the log sits', () => {
+test('a log row whose age cannot be determined is NEVER dropped, however long the log sits', async () => {
 	const dir = stateFixture();
 	const logPath = join(dir, 'health.log');
 	// Not JSON at all, and JSON with no parseable `loggedAt` — two different
@@ -332,7 +336,7 @@ test('a log row whose age cannot be determined is NEVER dropped, however long th
 	const noLoggedAt = JSON.stringify({ node: 'mystery' });
 	writeFileSync(logPath, `${notJson}\n${noLoggedAt}\n`);
 
-	writeFacet('health', { n: rec(ago(0)) }, { dir });
+	await writeFacet('health', { n: rec(ago(0)) }, { dir });
 
 	const lines = readFileSync(logPath, 'utf8').trim().split('\n');
 	assert.equal(
@@ -344,14 +348,14 @@ test('a log row whose age cannot be determined is NEVER dropped, however long th
 	assert.equal(lines[1], noLoggedAt);
 });
 
-test('the log is a REWRITE, not an append, once trimming has something to drop — still atomic', () => {
+test('the log is a REWRITE, not an append, once trimming has something to drop — still atomic', async () => {
 	const dir = stateFixture();
 	const logPath = join(dir, 'health.log');
 	writeFileSync(
 		logPath,
 		`${JSON.stringify({ loggedAt: ago(FACET_LOG_RETENTION_DAYS + 5), node: 'too-old' })}\n`
 	);
-	const w = writeFacet('health', { n: rec(ago(0)) }, { dir });
+	const w = await writeFacet('health', { n: rec(ago(0)) }, { dir });
 	assert.equal(w.ok, true);
 	const lines = readFileSync(logPath, 'utf8').trim().split('\n');
 	assert.equal(lines.length, 1, 'the stale row is gone — this was a rewrite, not a bare append');
@@ -398,10 +402,10 @@ test('readProof is null for every "could not look" reason, never a crash', () =>
 	assert.equal(readProof('claw-4', 'jdk21', { dir }), null, 'malformed');
 });
 
-test('writeProof then readProof round-trips, keyed by (node, capability) — not by node alone', () => {
+test('writeProof then readProof round-trips, keyed by (node, capability) — not by node alone', async () => {
 	const dir = stateFixture();
 	const rec = proofRec();
-	const w = writeProof(rec, { dir });
+	const w = await writeProof(rec, { dir });
 	assert.equal(w.ok, true);
 	assert.deepEqual(readProof('claw-4', 'jdk21', { dir }), rec);
 	assert.equal(
@@ -416,20 +420,20 @@ test('writeProof then readProof round-trips, keyed by (node, capability) — not
 	);
 });
 
-test('writeProof MERGES — a second node/capability does not erase the first', () => {
+test('writeProof MERGES — a second node/capability does not erase the first', async () => {
 	const dir = stateFixture();
-	writeProof(proofRec({ node: 'claw-4' }), { dir });
-	writeProof(proofRec({ node: 'claw-8', runId: 2 }), { dir });
+	await writeProof(proofRec({ node: 'claw-4' }), { dir });
+	await writeProof(proofRec({ node: 'claw-8', runId: 2 }), { dir });
 	assert.equal(readProof('claw-4', 'jdk21', { dir })?.runId, 1);
 	assert.equal(readProof('claw-8', 'jdk21', { dir })?.runId, 2);
 });
 
-test('readProofsForCapability is the fleet-wide view, filtered to the one capability, empty when unreadable', () => {
+test('readProofsForCapability is the fleet-wide view, filtered to the one capability, empty when unreadable', async () => {
 	const dir = stateFixture();
 	assert.deepEqual(readProofsForCapability('jdk21', { dir }), []);
-	writeProof(proofRec({ node: 'claw-4' }), { dir });
-	writeProof(proofRec({ node: 'claw-8', runId: 2 }), { dir });
-	writeProof(proofRec({ node: 'claw-9', capability: 'other', runId: 3 }), { dir });
+	await writeProof(proofRec({ node: 'claw-4' }), { dir });
+	await writeProof(proofRec({ node: 'claw-8', runId: 2 }), { dir });
+	await writeProof(proofRec({ node: 'claw-9', capability: 'other', runId: 3 }), { dir });
 	assert.deepEqual(
 		readProofsForCapability('jdk21', { dir })
 			.map((r) => r.node)
@@ -444,12 +448,12 @@ test('readProofsForCapability is the fleet-wide view, filtered to the one capabi
 	);
 });
 
-test('markProofStale keeps every other field and restamps `at` to NOW, not the original proof time', () => {
+test('markProofStale keeps every other field and restamps `at` to NOW, not the original proof time', async () => {
 	const dir = stateFixture();
 	const original = proofRec({ at: ago(10) });
-	writeProof(original, { dir });
+	await writeProof(original, { dir });
 	const now = new Date();
-	const w = markProofStale('claw-4', 'jdk21', 'diverged from claw-8 on the same commit', {
+	const w = await markProofStale('claw-4', 'jdk21', 'diverged from claw-8 on the same commit', {
 		dir,
 		now,
 	});
@@ -462,9 +466,9 @@ test('markProofStale keeps every other field and restamps `at` to NOW, not the o
 	assert.equal(after?.runner, original.runner);
 });
 
-test('markProofStale on a node with no proof is a `no-proof` failure, never a throw', () => {
+test('markProofStale on a node with no proof is a `no-proof` failure, never a throw', async () => {
 	const dir = stateFixture();
-	const w = markProofStale('claw-4', 'jdk21', 'no record exists', { dir });
+	const w = await markProofStale('claw-4', 'jdk21', 'no record exists', { dir });
 	assert.equal(w.ok, false);
 	assert.equal(!w.ok && w.reason, 'no-proof');
 	assert.match(!w.ok ? w.why : '', /nothing has looked/);

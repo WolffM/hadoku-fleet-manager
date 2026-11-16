@@ -20,6 +20,7 @@
  * into a shared module nothing else reads.
  */
 import { beforeEach, afterEach } from 'node:test';
+import { flushWrites } from '../../lib/atomic-json.js';
 
 import { __resetReapClockForTesting } from '../../runners/dispatch-pass.js';
 import {
@@ -100,7 +101,9 @@ export function installDispatchPassRig(): void {
 	// The reap clock is module state shared by every pass in this process. Without
 	// this, the first test's sweep gates the rest and they assert against a sweep
 	// that never ran.
-	beforeEach(() => {
+	beforeEach(async () => {
+		// A write-behind save from the previous test must land before the resets.
+		await flushWrites();
 		__resetReapClockForTesting();
 		__resetHeavyMarksForTesting();
 		__resetHeavyUnitsForTesting();

@@ -699,7 +699,7 @@ test('backstop: a QUARANTINED hokon is not promoted on saturation', async () => 
 });
 
 test('backstop: a DRAINED hokon is not promoted either', async () => {
-	writeDrain({ hokon: { since: 's', reason: 'operator', by: 'hadoku' } });
+	await writeDrain({ hokon: { since: 's', reason: 'operator', by: 'hadoku' } });
 	installFetch({
 		runners: {
 			runners: [

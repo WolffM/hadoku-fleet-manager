@@ -84,6 +84,36 @@ export function tsAndMjsSources() {
 	return out;
 }
 
+/**
+ * The calls in `code` that write a file, as a GLOBAL regex whose group 1 is
+ * the callee: the three `node:fs` writers, plus every name this file binds by
+ * importing from `lib/atomic-json` — under whatever local name, and through a
+ * namespace import (`aj.writeFileAtomic(`). Keyed on the IMPORT, not on a list
+ * of writer names, so a new or renamed export of `atomic-json` is seen
+ * without editing any guard. `atomic-json` is the one module allowed to wrap
+ * a write (F3), and every one of its exports takes the path first.
+ */
+export function writeCallPattern(code) {
+	const names = ['writeFileSync', 'renameSync', 'appendFileSync'];
+	const fromAtomic =
+		/import\s*(\{[^}]*\}|\*\s*as\s+([A-Za-z_$][\w$]*))\s*from\s*['"][^'"]*\/atomic-json(?:\.js)?['"]/g;
+	for (const m of code.matchAll(fromAtomic)) {
+		if (m[2]) {
+			names.push(`${m[2]}\\.[A-Za-z_$][\\w$]*`);
+			continue;
+		}
+		for (const spec of m[1].slice(1, -1).split(',')) {
+			const parts = spec
+				.trim()
+				.replace(/^type\s+/, '')
+				.split(/\s+as\s+/);
+			const local = (parts[1] ?? parts[0]).trim();
+			if (local && !spec.trim().startsWith('type ')) names.push(local);
+		}
+	}
+	return new RegExp(`(?<![\\w$])(${names.join('|')})\\(`, 'g');
+}
+
 /** 1-based line number of a character offset in `code`. */
 export function lineOf(code, at) {
 	return code.slice(0, at).split('\n').length;

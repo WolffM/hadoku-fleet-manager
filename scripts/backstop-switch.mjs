@@ -131,7 +131,7 @@ if (parsed.has('--force')) {
 	}
 	const next = pruneForce(state, now);
 	next[node] = forceRecord(minutes, reason, userInfo().username, now);
-	writeForce(next);
+	await writeForce(next);
 	console.log(`${G}✓${N} ${describeForce(node, next[node], now)}`);
 	console.log(
 		`  runner-health reads it on its next tick; the dispatcher then mints on ${node} for queued work.\n` +
@@ -154,7 +154,7 @@ if (parsed.has('--off')) {
 	const next = pruneForce(state, now);
 	const had = Object.prototype.hasOwnProperty.call(next, node);
 	delete next[node];
-	writeForce(next);
+	await writeForce(next);
 	console.log(
 		had ? `${G}✓${N} ${node}: force cleared` : `${Y}${node} was not forced${N} (nothing to clear)`
 	);

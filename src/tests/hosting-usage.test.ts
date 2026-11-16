@@ -18,6 +18,7 @@ import {
 	usageStats,
 	type UsageDoc,
 } from '../runners/hosting-usage.js';
+import { flushWrites } from '../lib/atomic-json.js';
 
 const HOUR = 3_600_000;
 const T0 = Date.parse('2026-11-01T00:00:00Z');
@@ -117,7 +118,7 @@ test('a tenant that starts doing more raises the envelope the hour it does; doin
 	assert.equal(usageStats(doc.slices['claw-4/archivebot'])!.peakMb, 160);
 });
 
-test('the record on disk: missing is empty, corrupt is null, a flush reads back', () => {
+test('the record on disk: missing is empty, corrupt is null, a flush reads back', async () => {
 	__resetHostingUsageForTesting();
 	const d = dir();
 	assert.deepEqual(readHostingUsage(d), { version: 1, slices: {} });
@@ -130,6 +131,7 @@ test('the record on disk: missing is empty, corrupt is null, a flush reads back'
 	);
 	assert.equal(stats.get('claw-4/archivebot')!.meanMb, 164);
 	assert.equal(stats.get('claw-4/pygmalion'), null, 'an unread slice records nothing');
+	await flushWrites();
 	assert.deepEqual(readHostingUsage(d)!.slices, {
 		'claw-4/archivebot': { '2026-11-01T00': [1, 164, 164 * 164, 164, 164] },
 	});
@@ -138,18 +140,20 @@ test('the record on disk: missing is empty, corrupt is null, a flush reads back'
 		dir: d,
 		nowMs: T0 + 1000,
 	});
+	await flushWrites();
 	assert.equal(readHostingUsage(d)!.slices['claw-4/archivebot']['2026-11-01T00'][0], 1);
 	observeSliceUsage([{ node: 'claw-4', tenant: 'archivebot', mb: 180 }], {
 		dir: d,
 		nowMs: T0 + USAGE_FLUSH_MS,
 	});
+	await flushWrites();
 	assert.equal(readHostingUsage(d)!.slices['claw-4/archivebot']['2026-11-01T00'][0], 3);
 
 	writeFileSync(join(d, HOSTING_USAGE_FILE), '{"version":1,"slices":{"x":{"h":[1,2]}}}');
 	assert.equal(readHostingUsage(d), null);
 });
 
-test('a corrupt record is reported and replaced, not left broken', () => {
+test('a corrupt record is reported and replaced, not left broken', async () => {
 	__resetHostingUsageForTesting();
 	const d = dir();
 	writeFileSync(join(d, HOSTING_USAGE_FILE), '{"version":1,');
@@ -160,5 +164,6 @@ test('a corrupt record is reported and replaced, not left broken', () => {
 		onUnreadable: (p) => unreadable.push(p),
 	});
 	assert.deepEqual(unreadable, [join(d, HOSTING_USAGE_FILE)]);
+	await flushWrites();
 	assert.equal(JSON.parse(readFileSync(join(d, HOSTING_USAGE_FILE), 'utf8')).version, 1);
 });

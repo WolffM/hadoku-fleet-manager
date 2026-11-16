@@ -21,6 +21,7 @@
 import { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { flushWrites } from '../../lib/atomic-json.js';
 import { tempDir, cleanupTempDirs } from '../tmpdir.js';
 import {
 	__setHistoryPathForTesting,
@@ -335,7 +336,10 @@ export function installFetch(opts: {
  * call this once, at its own top level, before any `test(...)` calls.
  */
 export function installRunnerHealthRig(): void {
-	beforeEach(() => {
+	beforeEach(async () => {
+		// A write-behind save from the previous test must land before this one
+		// resets the state it would otherwise land on top of.
+		await flushWrites();
 		// THE SUITE MUST NOT TOUCH THE OPERATOR'S REAL JOB HISTORY.
 		//
 		// checkRunsAndFailover calls ingestRuns, which loads ~/.hadoku-mgmt/
@@ -429,7 +433,7 @@ export function installRunnerHealthRig(): void {
 		__setFloorDemandForTesting(['hadoku-builder', 'pm2-host', 'taskauto', 'av1-nvenc']);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		// The assertion below is the point of this hook, and it THROWS. Everything
 		// that puts the process back how it was found therefore has to sit in a
 		// `finally`, or the first suite to reach the catch-all takes the rest of the
@@ -448,7 +452,7 @@ export function installRunnerHealthRig(): void {
 			);
 		} finally {
 			__resetSickForTesting();
-			writeDrain({});
+			await writeDrain({});
 			__setHistoryPathForTesting(null);
 			__setSnapshotPathForTesting(null);
 			__setFleetReposForTesting(null);

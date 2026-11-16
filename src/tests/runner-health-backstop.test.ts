@@ -324,7 +324,7 @@ test('green light: a forced on-demand backstop is HELD on a quiet, measured tick
 	__setBackstopMachinesForTesting(() => ON_DEMAND);
 	// A pegged box — the idle gate would refuse this — and NO saturation.
 	__setHostLoadReaderForTesting(() => ({ load1: 60, cores: 12, memAvailableMb: 32_768 }));
-	writeForce({ hokon: forceUntil(30) });
+	await writeForce({ hokon: forceUntil(30) });
 	try {
 		installFetch({
 			runners: {
@@ -341,7 +341,7 @@ test('green light: a forced on-demand backstop is HELD on a quiet, measured tick
 		assert.deepEqual(backstopHold(), ['hokon'], 'the operator does, so it is held');
 		assert.equal(labelOps.length, 0, 'held through the mint path; no label on the deploy runner');
 	} finally {
-		writeForce({});
+		await writeForce({});
 		__setHostLoadReaderForTesting(() => ({ load1: 0, cores: 12, memAvailableMb: 32_768 }));
 		__setBackstopMachinesForTesting(() => ({}));
 	}
@@ -349,8 +349,8 @@ test('green light: a forced on-demand backstop is HELD on a quiet, measured tick
 
 test('green light: a force does NOT beat the drain — red wins', async () => {
 	__setBackstopMachinesForTesting(() => ON_DEMAND);
-	writeForce({ hokon: forceUntil(30) });
-	writeDrain({ hokon: { since: 's', reason: 'lid off', by: 'hadoku' } });
+	await writeForce({ hokon: forceUntil(30) });
+	await writeDrain({ hokon: { since: 's', reason: 'lid off', by: 'hadoku' } });
 	try {
 		installFetch({
 			runners: {
@@ -364,15 +364,15 @@ test('green light: a force does NOT beat the drain — red wins', async () => {
 		await tick('tok');
 		assert.deepEqual(backstopHold(), [], 'drained: not held, forced or not');
 	} finally {
-		writeDrain({});
-		writeForce({});
+		await writeDrain({});
+		await writeForce({});
 		__setBackstopMachinesForTesting(() => ({}));
 	}
 });
 
 test('green light: an expired force lapses on its own — nobody has to remember to turn it off', async () => {
 	__setBackstopMachinesForTesting(() => ON_DEMAND);
-	writeForce({ hokon: forceUntil(-1) });
+	await writeForce({ hokon: forceUntil(-1) });
 	try {
 		installFetch({
 			runners: {
@@ -386,14 +386,14 @@ test('green light: an expired force lapses on its own — nobody has to remember
 		await tick('tok');
 		assert.deepEqual(backstopHold(), [], 'a minute past its until, the force is as good as absent');
 	} finally {
-		writeForce({});
+		await writeForce({});
 		__setBackstopMachinesForTesting(() => ({}));
 	}
 });
 
 test('#120: the drain is the red light — a drained on-demand backstop is not held, outage included', async () => {
 	__setBackstopMachinesForTesting(() => ON_DEMAND);
-	writeDrain({ hokon: { since: 's', reason: 'operator', by: 'hadoku' } });
+	await writeDrain({ hokon: { since: 's', reason: 'operator', by: 'hadoku' } });
 	try {
 		installFetch({
 			runners: {

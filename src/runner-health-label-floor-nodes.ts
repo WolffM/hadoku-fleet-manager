@@ -158,13 +158,11 @@ function loadDownPage(): void {
 }
 
 function saveDownPage(): void {
-	try {
-		writeJsonAtomic(downPagePath(), downPage);
-	} catch (err) {
+	writeJsonAtomic(downPagePath(), downPage).catch((err: unknown) => {
 		logger.warn(
 			`[runner-health] could not persist ${DOWN_PAGE_FILE}: ${err instanceof Error ? err.message : String(err)}`
 		);
-	}
+	});
 }
 
 /** Fire-and-log: a RECOVERY note is informational, never a fact a gate reads back. */

@@ -191,7 +191,7 @@ async function runCadenceCli({ dueDays, jsonOut, passthru, force, refuseIf, log,
 		const stored = measuredFacets('benchmark', machines);
 		const decided = decideRecord(outcome.node, outcome.record, { stored, force });
 		if (decided.ok) {
-			const w = writeFacet(
+			const w = await writeFacet(
 				'benchmark',
 				{ [outcome.node]: decided.record },
 				{ extra: { [outcome.node]: { raw: outcome.record } } }
@@ -650,7 +650,7 @@ async function main() {
 			raw[node] = { raw: r };
 		}
 		if (Object.keys(records).length) {
-			const w = writeFacet('benchmark', records, { extra: raw });
+			const w = await writeFacet('benchmark', records, { extra: raw });
 			if (w.ok) {
 				log(
 					`\nbenchmark recorded for ${w.written.length} node(s) in ${w.path}; logged to ${w.logPath}`

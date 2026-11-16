@@ -558,7 +558,7 @@ const benchLedgerError = !benchLedger.ok
 		? benchRecord.reason
 		: null;
 
-const revocationChanges = computeRevocationChanges(ctx);
+const revocationChanges = await computeRevocationChanges(ctx);
 
 const proveResults = await proveWorkloads(ctx);
 

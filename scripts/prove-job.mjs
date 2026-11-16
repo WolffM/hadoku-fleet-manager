@@ -383,7 +383,7 @@ if (!argv.includes('--no-record') && result.capability && result.verdict !== 're
 			result.findings.push({ rule: 'proof-inconclusive', message: built.inconclusive });
 		} else {
 			const proofRecord = built.record;
-			const w = writeProof(proofRecord, { dir: stateDir() });
+			const w = await writeProof(proofRecord, { dir: stateDir() });
 			if (!w.ok) proofRecordError = `could not write $proof for ${nodeName}/${cap.id}: ${w.why}`;
 			result.proofRecord = proofRecord;
 			if (result.ok && proofRecord.verdict === 'fail') {

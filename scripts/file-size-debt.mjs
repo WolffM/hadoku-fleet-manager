@@ -27,7 +27,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
-import { writeFileAtomic } from '../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../dist/lib/atomic-json.js';
 import { collectSizes, regenerate } from './lib/file-size-guard.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -85,7 +85,7 @@ function main() {
 		return;
 	}
 	// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`).
-	writeFileAtomic(DEBT_PATH, nextText);
+	writeFileAtomicSync(DEBT_PATH, nextText);
 	console.log(`scripts/lib/file-size-debt.json rewritten: ${Object.keys(debt).length} entries.`);
 }
 

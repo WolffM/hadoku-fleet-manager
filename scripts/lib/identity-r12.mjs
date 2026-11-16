@@ -252,7 +252,7 @@ export function checkG9Schemas(files, label, add, erasable = NOT_ERASABLE) {
 // ── code: file stores and derived ids ──────────────────────────────────────
 
 const WRITE_CALL =
-	/\b(?:appendFile|appendFileSync|writeFile|writeFileSync|writeFileAtomic|atomicWriteJson|writeJson|writeJsonSync|outputJson|outputJsonSync)\s*\(/g;
+	/\b(?:appendFile|appendFileSync|writeFile|writeFileSync|writeFileAtomicSync|atomicWriteJson|writeJson|writeJsonSync|outputJson|outputJsonSync)\s*\(/g;
 const PERSON_KEY = /(?:^|[{,\s(])(?:userId|user_id|ownerUserId|owner_user_id)\s*(?=[:,}])/;
 const PERSON_REF = /\b(?:userId|user_id|ownerUserId|owner_user_id)\b/;
 const NAME_KEY =

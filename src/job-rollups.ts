@@ -395,7 +395,7 @@ function capacitySamplesForDueDays(
  * NEVER THROWS. It runs on the runner-health tick, which must not die for a
  * telemetry write; every failure is logged with its reason and returned.
  */
-export function writeClosedDays(opts: {
+export async function writeClosedDays(opts: {
 	nodes: readonly string[];
 	nowMs?: number;
 	records?: readonly JobRecord[];
@@ -405,7 +405,7 @@ export function writeClosedDays(opts: {
 	decisions?: readonly DecisionRecord[];
 	/** Test seam, mirrors `records`: every capacity-sample row in hand, any day. Defaults to a real read of the capacity-sample store. */
 	capacitySamples?: readonly CapacitySampleRow[];
-}): WriteRollupsResult {
+}): Promise<WriteRollupsResult> {
 	const now = opts.nowMs ?? Date.now();
 	try {
 		const store = opts.store ?? storeAtStateDir();
@@ -448,7 +448,7 @@ export function writeClosedDays(opts: {
 				}
 			)
 		);
-		store.put(rollups, utcDay(now - ROLLUP_RETENTION_DAYS * DAY_MS));
+		await store.put(rollups, utcDay(now - ROLLUP_RETENTION_DAYS * DAY_MS));
 		logger.info(
 			`[job-rollups] wrote ${due.length} day(s): ${due[0]}${due.length > 1 ? ` .. ${due[due.length - 1]}` : ''} ` +
 				`(${rollups.reduce((n, r) => n + r.records, 0)} record(s))`

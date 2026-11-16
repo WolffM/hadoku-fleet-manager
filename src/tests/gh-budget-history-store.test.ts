@@ -50,9 +50,9 @@ void test('no file yet: exists is false and read is empty', () => {
 	assert.deepEqual(read.rows, []);
 });
 
-void test('append then read: one row per ended window, byCaller intact', () => {
+void test('append then read: one row per ended window, byCaller intact', async () => {
 	const store = ghBudgetHistoryStore(path);
-	store.append([row(NOW)], NOW);
+	await store.append([row(NOW)], NOW);
 	const read = store.read();
 	assert.equal(read.rows.length, 1);
 	assert.equal(read.rows[0].limit, 5000);
@@ -61,31 +61,31 @@ void test('append then read: one row per ended window, byCaller intact', () => {
 	]);
 });
 
-void test('one append call per window end: calling append twice for the SAME window writes two rows, never one merged', () => {
+void test('one append call per window end: calling append twice for the SAME window writes two rows, never one merged', async () => {
 	// This store does not dedupe by (token, resource, windowEnd) — that
 	// decision belongs to the caller, which only ever calls it once per
 	// `closeWindow` (see gh-budget.test.ts). Pinning the store's own
 	// behaviour here keeps that contract explicit.
 	const store = ghBudgetHistoryStore(path);
-	store.append([row(NOW)], NOW);
-	store.append([row(NOW)], NOW);
+	await store.append([row(NOW)], NOW);
+	await store.append([row(NOW)], NOW);
 	assert.equal(store.read().rows.length, 2);
 });
 
-void test('retention trims rows older than 90 days, and only those', () => {
+void test('retention trims rows older than 90 days, and only those', async () => {
 	const store = ghBudgetHistoryStore(path);
 	const old = NOW - (GH_BUDGET_HISTORY_RETENTION_DAYS + 1) * DAY;
-	store.append([row(old)], old);
-	store.append([row(NOW)], NOW);
+	await store.append([row(old)], old);
+	await store.append([row(NOW)], NOW);
 	assert.equal(store.read().rows.length, 1);
 	assert.equal(store.read().rows[0].windowEnd, new Date(NOW).toISOString());
 });
 
-void test('retention never trims a row still inside the 90-day window', () => {
+void test('retention never trims a row still inside the 90-day window', async () => {
 	const store = ghBudgetHistoryStore(path);
 	const justInside = NOW - (GH_BUDGET_HISTORY_RETENTION_DAYS * DAY - 60_000);
-	store.append([row(justInside)], justInside);
-	store.append([row(NOW)], NOW);
+	await store.append([row(justInside)], justInside);
+	await store.append([row(NOW)], NOW);
 	assert.equal(store.read().rows.length, 2);
 });
 
@@ -97,12 +97,12 @@ void test('a corrupt line is counted, not thrown, and does not hide the good row
 	assert.equal(read.unreadableLines, 2);
 });
 
-void test('a failed write throws from append — the caller (gh-budget.ts) decides, this store never swallows it', () => {
+void test('a failed write throws from append — the caller (gh-budget.ts) decides, this store never swallows it', async () => {
 	const blocker = join(tmp, 'blocked');
 	writeFileSync(blocker, 'not a directory');
 	const badPath = join(blocker, 'nested', 'gh-budget-history.jsonl');
 	const store = ghBudgetHistoryStore(badPath);
-	assert.throws(() => store.append([row(NOW)], NOW));
+	await assert.rejects(store.append([row(NOW)], NOW));
 });
 
 void test('read of a genuinely unreadable file (a directory, not a file) throws rather than reading as empty', () => {

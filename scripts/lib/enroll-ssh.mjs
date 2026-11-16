@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, copyFileSync, readFileSync } from 'node:fs';
 import process from 'node:process';
 
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 // The BUILT copy, for the same reason fleet-exec.mjs imports isLocalNode that
 // way: one question, one answer, and no second implementation to drift from.
 import { DEFAULT_ADMIN_USER } from '../../dist/lib/node-users.js';
@@ -174,7 +174,7 @@ export function writeSshConfig(node, address) {
 	// inode, so the 0600 this file's security depends on is set explicitly
 	// after, rather than relying on `writeFileSync`'s create-only `mode` (which
 	// a pre-existing config left at some other mode anyway).
-	writeFileAtomic(cfg, existing + block);
+	writeFileAtomicSync(cfg, existing + block);
 	chmodSync(cfg, 0o600);
 	return {
 		state: 'written',

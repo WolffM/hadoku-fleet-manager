@@ -19,7 +19,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 
 export const QUALIFY_RESULTS_FILE = 'qualify-results.json';
 
@@ -66,7 +66,7 @@ export function recordQualifyResults(dir, node, window, at) {
 	if (!window.length) return { ok: true };
 	try {
 		const next = mergeQualifyResults(read.results, node, window, at);
-		writeFileAtomic(join(dir, QUALIFY_RESULTS_FILE), `${JSON.stringify(next, null, 2)}\n`);
+		writeFileAtomicSync(join(dir, QUALIFY_RESULTS_FILE), `${JSON.stringify(next, null, 2)}\n`);
 		return { ok: true };
 	} catch (err) {
 		return { ok: false, reason: `${join(dir, QUALIFY_RESULTS_FILE)}: ${err.message}` };

@@ -243,7 +243,7 @@ export async function runDispatchTick(
 			if (c.status !== 'ok') return null;
 			if (c.etag) {
 				etags.set(repo, c.etag);
-				disk.save(diskKey(token, repo), c.etag, JSON.stringify(c.body));
+				void disk.save(diskKey(token, repo), c.etag, JSON.stringify(c.body));
 			} else {
 				etags.delete(repo);
 				disk.remove(diskKey(token, repo));
@@ -444,7 +444,7 @@ export async function runDispatchTick(
 						if (c.status === 'unchanged') return cached?.body ?? null;
 						if (c.status === 'ok') {
 							jobsCacheByRun.set(key, { etag: c.etag, body: c.body });
-							if (c.etag) jobsDisk.save(diskKey(token, key), c.etag, JSON.stringify(c.body));
+							if (c.etag) void jobsDisk.save(diskKey(token, key), c.etag, JSON.stringify(c.body));
 							else jobsDisk.remove(diskKey(token, key));
 							return c.body;
 						}

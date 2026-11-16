@@ -351,14 +351,14 @@ export function readDrainDoc(): DrainDoc {
 	return parseDrainDoc(readFileSync(path, 'utf8'));
 }
 
-export function writeDrain(nodes: DrainState, planned: PlannedDrain[] = []): void {
+export async function writeDrain(nodes: DrainState, planned: PlannedDrain[] = []): Promise<void> {
 	const doc = { nodes, planned };
 	const path = drainPath();
 	// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`) — this used to write
 	// the live path directly (`F3-non-atomic` debt), so a crash mid-write could
 	// leave a drain state nothing could parse, on a file whose own reader fails
 	// CLOSED on exactly that (see `readDrainDoc`'s comment above).
-	writeFileAtomic(
+	await writeFileAtomic(
 		path,
 		`${JSON.stringify({ $comment: 'Nodes held out of service. `fleet drain` writes this; the dispatcher and the tier ladder both read it. Lives in the state dir, NOT a git checkout — see drain.ts.', ...pruneDrainDoc(doc) }, null, 2)}\n`
 	);

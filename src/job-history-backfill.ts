@@ -108,7 +108,7 @@ export async function backfillFailedSteps(
 	// Persist even when nothing was patched? No — an unconditional rewrite of an
 	// unchanged window is pure risk for no gain. But when anything WAS patched the
 	// write is mandatory, or the whole pass evaporates at the next restart.
-	const persisted = patched > 0 ? persistHistory() : false;
+	const persisted = patched > 0 ? await persistHistory() : false;
 	if (patched) {
 		logger.info(
 			`[job-history] backfill: ${patched} record(s) gained failedStep ` +

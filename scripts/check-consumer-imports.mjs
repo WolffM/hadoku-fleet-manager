@@ -48,7 +48,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { writeFileAtomic } from '../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../dist/lib/atomic-json.js';
 import { PKG, SKIP, SOURCE, collectUses } from './lib/consumer-imports.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -116,7 +116,7 @@ export function typecheckProbe(probe, { pkgRoot = ROOT, tsc } = {}) {
 		symlinkSync(pkgRoot, join(scope, 'fleet-manager'), 'dir');
 		// `.mts`: ESM by its extension, so no package.json is written to say so,
 		// and the options go on the command line rather than into a tsconfig.
-		writeFileAtomic(join(dir, 'probe.mts'), probe.text);
+		writeFileAtomicSync(join(dir, 'probe.mts'), probe.text);
 		const bin = tsc ?? createRequire(join(ROOT, 'package.json')).resolve('typescript/bin/tsc');
 		let output = '';
 		try {

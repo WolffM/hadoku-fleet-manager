@@ -91,11 +91,11 @@ export function readForce(): ForceState {
 	return parsed.nodes ?? {};
 }
 
-export function writeForce(state: ForceState): void {
+export async function writeForce(state: ForceState): Promise<void> {
 	const path = forcePath();
 	// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`) — this used to write
 	// the live path directly (`F3-non-atomic` debt).
-	writeFileAtomic(
+	await writeFileAtomic(
 		path,
 		`${JSON.stringify(
 			{

@@ -100,7 +100,7 @@ export interface RollupStore<Row = unknown, Fleet = unknown> {
 	 * older than `keepFromDay`, in one atomic write. Throws on a failed write,
 	 * leaving the previous file intact.
 	 */
-	put(days: readonly RollupDay<Row, Fleet>[], keepFromDay: string): void;
+	put(days: readonly RollupDay<Row, Fleet>[], keepFromDay: string): Promise<void>;
 }
 
 export interface HeldDays {
@@ -181,16 +181,16 @@ export function jsonlRollupStore<Row = unknown, Fleet = unknown>(
 			}
 			return held.days;
 		},
-		put(days, keepFromDay) {
-			const byDay = new Map(read().days.map((d) => [d.day, d]));
-			for (const d of days) byDay.set(d.day, d);
-			const kept = [...byDay.values()]
-				.filter((d) => d.day >= keepFromDay)
-				.sort((a, b) => a.day.localeCompare(b.day));
-			writeFileAtomic(
-				path,
-				kept.map((d) => JSON.stringify(d)).join('\n') + (kept.length ? '\n' : '')
-			);
+		async put(days, keepFromDay) {
+			let kept: RollupDay<Row, Fleet>[] = [];
+			await writeFileAtomic(path, () => {
+				const byDay = new Map(read().days.map((d) => [d.day, d]));
+				for (const d of days) byDay.set(d.day, d);
+				kept = [...byDay.values()]
+					.filter((d) => d.day >= keepFromDay)
+					.sort((a, b) => a.day.localeCompare(b.day));
+				return kept.map((d) => JSON.stringify(d)).join('\n') + (kept.length ? '\n' : '');
+			});
 			const stamp = stampOf();
 			held = stamp === null ? null : { stamp, days: summarise(kept) };
 		},

@@ -17,7 +17,7 @@ import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 import {
 	PROBE_INTENT_DIR,
 	PROBE_INTENT_MAX_MS,
@@ -65,7 +65,7 @@ export function declareProbeIntent({ repo, job, node, runnerName }, { fail, ttlS
 				`${PROBE_INTENT_MAX_MS / 1000}s ceiling — it would be ignored, not honoured`
 		);
 	}
-	writeFileAtomic(
+	writeFileAtomicSync(
 		path,
 		`${JSON.stringify({ repo, job, node, runnerName, expiresAtMs, at: new Date().toISOString() })}\n`
 	);

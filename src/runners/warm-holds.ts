@@ -24,7 +24,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { stateDir } from '../host.js';
+import { logger, stateDir } from '../host.js';
 import { writeJsonAtomic } from '../lib/atomic-json.js';
 
 /**
@@ -65,8 +65,12 @@ export function flushWarmHolds(nowMs: number, dir = stateDir()): void {
 		}
 	}
 	if (!dirty) return;
-	writeJsonAtomic(join(dir, WARM_HOLDS_FILE), Object.fromEntries(holds), { fsync: false });
 	dirty = false;
+	writeJsonAtomic(join(dir, WARM_HOLDS_FILE), Object.fromEntries(holds)).catch((err: unknown) => {
+		logger.warn(
+			`[warm-holds] could not persist ${WARM_HOLDS_FILE}: ${err instanceof Error ? err.message : String(err)}`
+		);
+	});
 }
 
 /**

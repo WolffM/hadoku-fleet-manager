@@ -544,7 +544,7 @@ export async function checkNodeRegression(): Promise<void> {
 	const nodes = loadFleetNodeNames();
 	const watched = [...loadEphemeralNodes()];
 	const gatedKinds = defaultGatedKinds();
-	const applied = checkNodeRegressions(jobRecords(), nodes, watched);
+	const applied = await checkNodeRegressions(jobRecords(), nodes, watched);
 	const activeKeys = new Set(applied.map((a) => `${a.node}\u0000${a.capability}`));
 	for (const node of watched) {
 		for (const kind of gatedKinds) {

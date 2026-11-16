@@ -31,7 +31,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { stateDir } from '../../dist/lib/fleet-paths.js';
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 
 /** The file this module alone writes. */
 export const DEFERRAL_STREAK_FILE = 'toolchain-deferral-streak.json';
@@ -99,7 +99,7 @@ export function writeDeferralStreaks(streaks, path) {
 	// has to be reachable from a `const`.
 	const target = path ?? deferralStreakPath();
 	mkdirSync(dirname(target), { recursive: true });
-	writeFileAtomic(target, `${JSON.stringify(streaks, null, 2)}\n`);
+	writeFileAtomicSync(target, `${JSON.stringify(streaks, null, 2)}\n`);
 }
 
 /**

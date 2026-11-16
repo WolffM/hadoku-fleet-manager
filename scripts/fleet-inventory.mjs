@@ -36,7 +36,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { writeFileAtomic } from '../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../dist/lib/atomic-json.js';
 import { allRepos } from './lib/fleet-roster.mjs';
 import { siteRoot, manifest as manifestFile } from '../dist/lib/fleet-paths.js';
 import { tryShipped } from './lib/fleet-source.mjs';
@@ -276,7 +276,7 @@ async function main() {
 		if (problems.length) {
 			log(`REFUSING to write ${doc}: ${problems.length} finding(s) below.`);
 		} else {
-			writeFileAtomic(doc, spliceRegion(disk, rendered));
+			writeFileAtomicSync(doc, spliceRegion(disk, rendered));
 			wrote = true;
 			log(`wrote ${doc}`);
 		}

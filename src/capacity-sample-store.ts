@@ -133,7 +133,7 @@ export interface CapacitySampleStore {
 	 * caller (`capacity-sample.ts`) is the one that must not let that throw
 	 * escape to its own caller.
 	 */
-	append(rows: readonly CapacitySampleRow[], nowMs: number): void;
+	append(rows: readonly CapacitySampleRow[], nowMs: number): Promise<void>;
 }
 
 function isCapacitySampleRow(v: unknown): v is CapacitySampleRow {
@@ -246,13 +246,17 @@ export function capacitySampleStore(path: string): CapacitySampleStore {
 		return t;
 	};
 
-	const compact = (rows: readonly CapacitySampleRow[], cutoff: string): void => {
-		const kept = read()
-			.rows.filter((r) => r.at >= cutoff)
-			.concat(rows)
-			.sort(byTime);
-		const text = lines(kept);
-		writeFileAtomic(path, text);
+	const compact = async (rows: readonly CapacitySampleRow[], cutoff: string): Promise<void> => {
+		let kept: CapacitySampleRow[] = [];
+		let text = '';
+		await writeFileAtomic(path, () => {
+			kept = read()
+				.rows.filter((r) => r.at >= cutoff)
+				.concat(rows)
+				.sort(byTime);
+			text = lines(kept);
+			return text;
+		});
 		const t: Tally = {
 			atCounts: new Map(),
 			rows: 0,
@@ -266,7 +270,7 @@ export function capacitySampleStore(path: string): CapacitySampleStore {
 
 	return {
 		read,
-		append(rows, nowMs) {
+		async append(rows, nowMs) {
 			const cutoff = new Date(nowMs - CAPACITY_SAMPLE_RETENTION_DAYS * DAY_MS).toISOString();
 			let t: Tally;
 			try {
@@ -280,7 +284,7 @@ export function capacitySampleStore(path: string): CapacitySampleStore {
 			const kept = t.rows - (stale - t.unreadable) + rows.length;
 			if (stale > 0 && stale >= kept * COMPACT_STALE_FRACTION) {
 				try {
-					compact(rows, cutoff);
+					await compact(rows, cutoff);
 				} catch (err) {
 					tallies.delete(path);
 					throw err;

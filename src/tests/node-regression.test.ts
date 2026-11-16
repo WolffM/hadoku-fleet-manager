@@ -199,7 +199,7 @@ test('groupRegressions: an un-gated (repo, job) is ignored even past the thresho
 
 // ── checkNodeRegressions (the injected write) ───────────────────────────────
 
-test('checkNodeRegressions: 5 POST-proof divergences mark the proof stale via the injected markStale, once per finding', () => {
+test('checkNodeRegressions: 5 POST-proof divergences mark the proof stale via the injected markStale, once per finding', async () => {
 	const records: JobRecord[] = [];
 	for (let i = 0; i < REGRESSION_THRESHOLD; i++) {
 		records.push(rec({ runner: 'claw-3', conclusion: 'failure', startedAt: at(i * 7200) }));
@@ -215,10 +215,10 @@ test('checkNodeRegressions: 5 POST-proof divergences mark the proof stale via th
 	const marked: { node: string; capability: string; why: string }[] = [];
 	// FAR_PAST: every divergence above started well AFTER this proof — the
 	// post-proof case, scenario (2) of the manager's send-back.
-	const applied = checkNodeRegressions(records, NODES, NODES, {
+	const applied = await checkNodeRegressions(records, NODES, NODES, {
 		gatedKinds: [JDK21],
 		readProof: passProofAt(FAR_PAST),
-		markStale: (node, capability, why) => {
+		markStale: async (node, capability, why) => {
 			marked.push({ node, capability, why });
 			return { ok: true, path: '/fake', logPath: '/fake.log', written: [node] };
 		},
@@ -236,7 +236,7 @@ test('checkNodeRegressions: 5 POST-proof divergences mark the proof stale via th
 	assert.match(marked[0]!.why, /5/, 'the reason names the count');
 });
 
-test('checkNodeRegressions: a failed write is still reported, never silently dropped', () => {
+test('checkNodeRegressions: a failed write is still reported, never silently dropped', async () => {
 	const records: JobRecord[] = [];
 	for (let i = 0; i < REGRESSION_THRESHOLD; i++) {
 		const sha = `${i}`.repeat(40).slice(0, 40);
@@ -247,10 +247,10 @@ test('checkNodeRegressions: a failed write is still reported, never silently dro
 			rec({ runner: 'claw-8', conclusion: 'success', startedAt: at(i * 7200 + 600), headSha: sha })
 		);
 	}
-	const applied = checkNodeRegressions(records, NODES, NODES, {
+	const applied = await checkNodeRegressions(records, NODES, NODES, {
 		gatedKinds: [JDK21],
 		readProof: passProofAt(FAR_PAST),
-		markStale: () => ({
+		markStale: async () => ({
 			ok: false,
 			path: '/fake',
 			reason: 'no-proof',
@@ -261,16 +261,16 @@ test('checkNodeRegressions: a failed write is still reported, never silently dro
 	assert.equal(applied[0]?.result.ok, false);
 });
 
-test('checkNodeRegressions: below threshold, nothing is marked', () => {
+test('checkNodeRegressions: below threshold, nothing is marked', async () => {
 	const records: JobRecord[] = [
 		rec({ runner: 'claw-3', conclusion: 'failure', startedAt: at(0) }),
 		rec({ runner: 'claw-8', conclusion: 'success', startedAt: at(600), headSha: 'a'.repeat(40) }),
 	];
 	let calls = 0;
-	const applied = checkNodeRegressions(records, NODES, NODES, {
+	const applied = await checkNodeRegressions(records, NODES, NODES, {
 		gatedKinds: [JDK21],
 		readProof: passProofAt(FAR_PAST),
-		markStale: () => {
+		markStale: async () => {
 			calls++;
 			return { ok: true, path: '/fake', logPath: '/fake.log', written: [] };
 		},
@@ -281,7 +281,7 @@ test('checkNodeRegressions: below threshold, nothing is marked', () => {
 
 // ── the manager send-back: a divergence only counts against the CURRENT proof ──
 
-test('checkNodeRegressions (1): 5 PRE-proof divergences + a fresh pass written after them → no mark, no finding', () => {
+test('checkNodeRegressions (1): 5 PRE-proof divergences + a fresh pass written after them → no mark, no finding', async () => {
 	const records: JobRecord[] = [];
 	for (let i = 0; i < REGRESSION_THRESHOLD; i++) {
 		records.push(rec({ runner: 'claw-3', conclusion: 'failure', startedAt: at(i * 7200) }));
@@ -299,10 +299,10 @@ test('checkNodeRegressions (1): 5 PRE-proof divergences + a fresh pass written a
 	// — every one of these divergences predates it and must not count.
 	const freshProofAt = at(28800 + 3600);
 	let calls = 0;
-	const applied = checkNodeRegressions(records, NODES, NODES, {
+	const applied = await checkNodeRegressions(records, NODES, NODES, {
 		gatedKinds: [JDK21],
 		readProof: passProofAt(freshProofAt),
-		markStale: () => {
+		markStale: async () => {
 			calls++;
 			return { ok: true, path: '/fake', logPath: '/fake.log', written: [] };
 		},
@@ -315,7 +315,7 @@ test('checkNodeRegressions (1): 5 PRE-proof divergences + a fresh pass written a
 	);
 });
 
-test('checkNodeRegressions (3): the transition tick marks once; a FOLLOWING tick on the same set does not re-mark', () => {
+test('checkNodeRegressions (3): the transition tick marks once; a FOLLOWING tick on the same set does not re-mark', async () => {
 	const records: JobRecord[] = [];
 	for (let i = 0; i < REGRESSION_THRESHOLD; i++) {
 		records.push(rec({ runner: 'claw-3', conclusion: 'failure', startedAt: at(i * 7200) }));
@@ -340,15 +340,15 @@ test('checkNodeRegressions (3): the transition tick marks once; a FOLLOWING tick
 			...passProofAt(FAR_PAST)(node, capability),
 			verdict,
 		}),
-		markStale: (): WriteFacetResult => {
+		markStale: async (): Promise<WriteFacetResult> => {
 			calls++;
 			verdict = 'stale';
 			return { ok: true, path: '/fake', logPath: '/fake.log', written: [] };
 		},
 	};
-	checkNodeRegressions(records, NODES, NODES, deps); // transition tick
+	await checkNodeRegressions(records, NODES, NODES, deps); // transition tick
 	assert.equal(calls, 1, 'the transition tick marks it stale exactly once');
-	checkNodeRegressions(records, NODES, NODES, deps); // following tick, same records
+	await checkNodeRegressions(records, NODES, NODES, deps); // following tick, same records
 	assert.equal(
 		calls,
 		1,

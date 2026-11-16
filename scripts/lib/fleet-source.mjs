@@ -50,7 +50,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 import { READ_ATTEMPTS } from './read-retry-policy.mjs';
 import { normalizeEol } from './yaml-comments.mjs';
 
@@ -261,7 +261,7 @@ function refresh(repo, dir, { fetch, fresh = false }) {
 		if (stampAgeMs(dir) <= Date.now() - started && hasRef()) return;
 		throw new UnreadableRepo(repo, `fetch from ${remoteUrl(repo)} failed: ${failure}`);
 	}
-	writeFileAtomic(join(dir, STAMP), new Date().toISOString() + '\n');
+	writeFileAtomicSync(join(dir, STAMP), new Date().toISOString() + '\n');
 }
 
 /**

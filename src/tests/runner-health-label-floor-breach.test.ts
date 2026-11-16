@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, appendFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { historyFile } from '../job-history-store.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import { testStateDir } from './install-test-host.js';
 
 import { tick, __resetRunnerHealthAlertsForTesting } from '../runner-health.js';
@@ -198,7 +199,7 @@ test('label floor: every minting offerer DRAINED and no standing runner pages', 
 	__setFloorDemandForTesting(['jdk21']);
 	__setWorkloadGateContextForTesting(workloadGateContext(FIXTURE_NODES, {}));
 	probeWith(JDK21_CLAWS);
-	writeDrain(
+	await writeDrain(
 		Object.fromEntries(
 			JDK21_CLAWS.map((n) => [n, { since: 's', reason: 'operator', by: 'hadoku' }])
 		)
@@ -229,7 +230,7 @@ test('label floor: an UNMEASURED probe holds — never pages, never counts as se
 
 	// 1. Measured, and the only undrained offerer (claw-4) is unreachable: a
 	//    real zero. Streak 1.
-	drainAll();
+	await drainAll();
 	probeWith([]);
 	await tick('tok');
 	// 2. mgmt-api restarted: the fast loop has not probed yet. claw-4 is not
@@ -666,6 +667,7 @@ void test('runner-health: a restart does not re-page a condition already alerted
 	assert.ok(afterAlert > 0, 'the breach must alert once confirmed');
 
 	// Simulate the restart: in-memory suppression gone, ledger on disk intact.
+	await flushWrites();
 	__resetRunnerHealthAlertsForTesting();
 	__reloadAlertLedgerForTesting();
 	discordPosts.length = 0;

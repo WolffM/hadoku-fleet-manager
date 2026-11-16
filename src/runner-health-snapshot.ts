@@ -151,13 +151,11 @@ export function __setSnapshotPathForTesting(path: string | null): void {
 }
 
 function persistSnapshot(snap: RunnerHealthSnapshot): void {
-	try {
-		writeJsonAtomic(SNAPSHOT_FILE(), snap);
-	} catch (err) {
+	writeJsonAtomic(SNAPSHOT_FILE(), snap).catch((err: unknown) => {
 		logger.warn(
 			`[runner-health] could not persist the health snapshot: ${err instanceof Error ? err.message : String(err)}`
 		);
-	}
+	});
 }
 
 function restoreSnapshot(): RunnerHealthSnapshot | null {

@@ -54,7 +54,7 @@
 import process from 'node:process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { writeFileAtomic } from '../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../dist/lib/atomic-json.js';
 import { allRepos } from './lib/fleet-roster.mjs';
 import { tryShipped } from './lib/fleet-source.mjs';
 import { jobNamesIn } from './lib/ci-watch-jobnames.mjs';
@@ -382,7 +382,7 @@ if (WRITE) {
 			);
 	} else {
 		for (const dest of [OUT, OUT_MANIFEST]) {
-			writeFileAtomic(dest, serialised);
+			writeFileAtomicSync(dest, serialised);
 			if (!JSON_OUT) console.log(`  wrote ${dest}`);
 		}
 	}

@@ -12,10 +12,11 @@ import {
 	readHeavyMarks,
 	writeHeavyMarks,
 } from '../runners/heavy-marks.js';
+import { flushWrites } from '../lib/atomic-json.js';
 
 const dir = () => mkdtempSync(join(tmpdir(), 'heavy-marks-'));
 
-test('the marks a pass writes are the marks the canary reads back', () => {
+test('the marks a pass writes are the marks the canary reads back', async () => {
 	const d = dir();
 	writeHeavyMarks(
 		new Map([
@@ -24,6 +25,7 @@ test('the marks a pass writes are the marks the canary reads back', () => {
 		]),
 		d
 	);
+	await flushWrites();
 	assert.deepEqual(readHeavyMarks(d), { 'claw-4': 1_000, 'claw-8': 2_000 });
 });
 

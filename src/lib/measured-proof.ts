@@ -135,7 +135,10 @@ export function readProofsForCapability(
  * Write one (node, capability) proof. MERGES with whatever else is on file —
  * `writeFacet`'s own rule: a pair not named here keeps its record.
  */
-export function writeProof(rec: ProofRecord, opts: { dir?: string } = {}): WriteFacetResult {
+export function writeProof(
+	rec: ProofRecord,
+	opts: { dir?: string } = {}
+): Promise<WriteFacetResult> {
 	const dir = opts.dir ?? stateDir();
 	// Cast, not a structural coincidence: `writeFacet` is generic over any
 	// `{at: string, ...}` shape, and `ProofRecord`'s fixed, typed fields (no
@@ -163,12 +166,12 @@ export function writeProof(rec: ProofRecord, opts: { dir?: string } = {}): Write
  * than throwing when there is nothing to mark: a node that was never proven
  * cannot be marked stale, and that is "nothing has looked", not an error.
  */
-export function markProofStale(
+export async function markProofStale(
 	node: string,
 	capability: string,
 	why: string,
 	opts: { dir?: string; now?: Date } = {}
-): WriteFacetResult | { ok: false; path: string; reason: 'no-proof'; why: string } {
+): Promise<WriteFacetResult | { ok: false; path: string; reason: 'no-proof'; why: string }> {
 	const dir = opts.dir ?? stateDir();
 	const current = readProof(node, capability, { dir });
 	if (!current) {

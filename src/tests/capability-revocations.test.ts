@@ -111,7 +111,7 @@ test('parsing: empty is none, malformed is corrupt — never an empty record', (
 	assert.equal(revokedSets({ corrupt: true, why: 'x' }), 'all');
 });
 
-function withStateDir(fn: (dir: string) => void): void {
+async function withStateDir(fn: (dir: string) => void | Promise<void>): Promise<void> {
 	const root = mkdtempSync(join(tmpdir(), 'revocations-'));
 	const manifestDir = join(root, 'manifest');
 	const stateDir = join(root, 'state');
@@ -127,16 +127,16 @@ function withStateDir(fn: (dir: string) => void): void {
 		storeDoctorPath: '/tmp',
 	} as never);
 	try {
-		fn(stateDir);
+		await fn(stateDir);
 	} finally {
 		__setHostForTesting(null as never);
 		rmSync(root, { recursive: true, force: true });
 	}
 }
 
-test('a written record round-trips, and empty nodes are pruned', () => {
-	withStateDir((dir) => {
-		writeRevocations(dir, {
+test('a written record round-trips, and empty nodes are pruned', async () => {
+	await withStateDir(async (dir) => {
+		await writeRevocations(dir, {
 			'claw-1': { 'nvenc-h264': { at: 'a', reason: 'r', by: 'capabilities' } },
 			'claw-2': {},
 		});
@@ -147,9 +147,9 @@ test('a written record round-trips, and empty nodes are pruned', () => {
 	});
 });
 
-test('THE TICK reads it: the dispatcher’s gate context carries the revocation', () => {
-	withStateDir((dir) => {
-		writeRevocations(dir, {
+test('THE TICK reads it: the dispatcher’s gate context carries the revocation', async () => {
+	await withStateDir(async (dir) => {
+		await writeRevocations(dir, {
 			'claw-1': { 'nvenc-h264': { at: 'a', reason: 'r', by: 'capabilities' } },
 		});
 		const gate = loadWorkloadGateContext(['claw-1', 'claw-2']);
@@ -158,8 +158,8 @@ test('THE TICK reads it: the dispatcher’s gate context carries the revocation'
 	});
 });
 
-test('THE TICK fails closed on a corrupt record', () => {
-	withStateDir((dir) => {
+test('THE TICK fails closed on a corrupt record', async () => {
+	await withStateDir(async (dir) => {
 		writeFileSync(join(dir, REVOCATIONS_FILE), '{ not json');
 		assert.equal(loadWorkloadGateContext(['claw-1']).revoked, 'all');
 	});

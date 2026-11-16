@@ -12,6 +12,7 @@ import { answeringJitState, fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateDir } from '../host.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import {
 	HEAVY_UNITS_FILE,
 	__resetHeavyUnitsForTesting,
@@ -309,10 +310,12 @@ test('heavy units: a shard from a FULLY PLACED run, in no listing, still counts 
 	recordHeavyUnits(OLD, Date.parse('2026-11-11T09:30:00Z'));
 	assert.equal((await pass()).minted, 0, 'two heavy jobs on claw-9: the third is held');
 	// REVERTED (no mint-time record): minted=1, the third shard beside two.
+	await flushWrites();
 	__resetHeavyUnitsForTesting(undefined, true);
 	assert.equal((await pass()).minted, 0, 'and after a restart, from the file');
 	__resetHeavyUnitsForTesting();
 	assert.equal((await pass()).minted, 1, 'with no record the units read light, as before');
+	await flushWrites();
 	const recorded = Object.keys(
 		JSON.parse(readFileSync(join(stateDir(), HEAVY_UNITS_FILE), 'utf8')) as object
 	);

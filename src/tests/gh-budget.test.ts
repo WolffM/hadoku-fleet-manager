@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { __setHostForTesting, stateDir } from '../host.js';
 import { testHost } from './install-test-host.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import {
 	recordGhResponse,
 	withGhCaller,
@@ -38,7 +39,8 @@ let infos: string[] = [];
 /** T5's own file — `__resetGhBudgetForTesting` only clears `gh-budget.json`. */
 const historyPath = () => join(stateDir(), GH_BUDGET_HISTORY_FILE);
 
-beforeEach(() => {
+beforeEach(async () => {
+	await flushWrites();
 	__resetGhBudgetForTesting();
 	__resetGhBlackoutForTesting();
 	posts = [];
@@ -56,8 +58,9 @@ beforeEach(() => {
 	});
 	rmSync(historyPath(), { force: true });
 });
-afterEach(() => {
+afterEach(async () => {
 	globalThis.fetch = realFetch;
+	await flushWrites();
 	rmSync(historyPath(), { force: true });
 	__setHostForTesting(testHost);
 });
@@ -268,6 +271,7 @@ test('the books survive a restart, and the window that ended in between is still
 		recordGhResponse('tok', 200, bucketHeaders(1000, RESET_S), T0);
 		recordGhResponse('tok', 200, bucketHeaders(1001, RESET_S), T0 + GH_BUDGET_SAVE_MS);
 	});
+	await flushWrites();
 	__restartGhBudgetForTesting();
 	await withGhCaller('reap', async () => {
 		recordGhResponse('tok', 200, bucketHeaders(1002, RESET_S), T0 + 2 * GH_BUDGET_SAVE_MS);
@@ -285,6 +289,7 @@ test('the books survive a restart, and the window that ended in between is still
 	assert.equal(w.otherSinceFirst, 0, 'every call accounted for across the restart');
 
 	// The process dies again; the window resets before anything reads it.
+	await flushWrites();
 	__restartGhBudgetForTesting();
 	getGhBudgetSnapshot(T0 + 46 * 60_000);
 	const ended = infos.find((l) => l.startsWith('[gh-budget] window ended'));
@@ -293,9 +298,10 @@ test('the books survive a restart, and the window that ended in between is still
 	assert.match(ended, /books carried across 2 restarts/);
 });
 
-test('a page that fired before a restart does not fire again after it', () => {
+test('a page that fired before a restart does not fire again after it', async () => {
 	recordGhResponse('tok', 200, headers(900), T0);
 	assert.equal(posts.length, 1);
+	await flushWrites();
 	__restartGhBudgetForTesting();
 	recordGhResponse('tok', 200, headers(890), T0 + 1000);
 	assert.equal(posts.length, 1);
@@ -426,6 +432,7 @@ test('metered spend and the timeline survive a restart', async () => {
 		read: pool(1000, 1650),
 		now: () => T0,
 	});
+	await flushWrites();
 	__restartGhBudgetForTesting();
 	withToken();
 	const [w] = getGhBudgetSnapshot(T0 + 1000);
@@ -628,6 +635,7 @@ test('a window ending writes exactly one history row — the same figures the lo
 	// the old one" test above — `closeWindow` is the ONE place both the log
 	// line and this row are produced.
 	recordGhResponse('tok', 200, headers(4999, RESET_S + 3600), T0 + 46 * 60_000);
+	await flushWrites();
 	const read = ghBudgetHistoryStore(historyPath()).read();
 	assert.equal(read.rows.length, 1);
 	const row = read.rows[0];
@@ -643,19 +651,21 @@ test('a window ending writes exactly one history row — the same figures the lo
 	]);
 });
 
-test('a window that produces no charged calls still writes its row', () => {
+test('a window that produces no charged calls still writes its row', async () => {
 	recordGhResponse('tok', 304, headers(5000), T0);
 	recordGhResponse('tok', 200, headers(4999, RESET_S + 3600), T0 + 46 * 60_000);
+	await flushWrites();
 	assert.equal(ghBudgetHistoryStore(historyPath()).read().rows.length, 1);
 });
 
-test('two tokens closing windows write two rows, never merged into one', () => {
+test('two tokens closing windows write two rows, never merged into one', async () => {
 	labelGhToken('tok-a', 'TOKEN_A');
 	labelGhToken('tok-b', 'TOKEN_B');
 	recordGhResponse('tok-a', 200, headers(2000), T0);
 	recordGhResponse('tok-b', 200, headers(3000), T0);
 	recordGhResponse('tok-a', 200, headers(4999, RESET_S + 3600), T0 + 46 * 60_000);
 	recordGhResponse('tok-b', 200, headers(4999, RESET_S + 3600), T0 + 46 * 60_000);
+	await flushWrites();
 	const rows = ghBudgetHistoryStore(historyPath()).read().rows;
 	assert.equal(rows.length, 2);
 	const tokens = rows.map((r) => r.token).sort();
@@ -663,19 +673,21 @@ test('two tokens closing windows write two rows, never merged into one', () => {
 	assert.match(tokens[1]!, /^TOKEN_B \(sha256:[0-9a-f]{8}\)$/);
 });
 
-test('a restart carries the window and its restart count into the row', () => {
+test('a restart carries the window and its restart count into the row', async () => {
 	recordGhResponse('tok', 200, headers(2000), T0);
+	await flushWrites();
 	__restartGhBudgetForTesting();
 	// The restarted process's own loadBooks sees the reset already passed and
 	// closes the carried-over window itself — the same path mgmt-api's real
 	// restart takes, and the one `closeWindow` call this test needs to reach.
 	recordGhResponse('tok', 200, headers(4999, RESET_S + 3600), RESET_S * 1000 + 1000);
+	await flushWrites();
 	const rows = ghBudgetHistoryStore(historyPath()).read().rows;
 	assert.equal(rows.length, 1);
 	assert.equal(rows[0].restarts, 1);
 });
 
-test("a history write failure is logged and never reaches recordGhResponse's caller", () => {
+test("a history write failure is logged and never reaches recordGhResponse's caller", async () => {
 	// A FILE sitting where the history file's own parent directory needs to be
 	// — writeFileAtomic's mkdirSync throws ENOTDIR, a real failure, no mock.
 	const blocker = join(stateDir(), 'blocked-state-dir');
@@ -691,6 +703,7 @@ test("a history write failure is logged and never reaches recordGhResponse's cal
 			recordGhResponse('tok', 200, headers(2000), T0);
 			recordGhResponse('tok', 200, headers(4999, RESET_S + 3600), T0 + 46 * 60_000);
 		});
+		await flushWrites();
 		assert.ok(warns.some((w) => w.includes('could not record the window-ended history row')));
 		// And the thing this whole module exists for is unaffected by that failure.
 		assert.equal(getGhBudgetSnapshot(T0 + 46 * 60_000)[0].remaining, 4999);

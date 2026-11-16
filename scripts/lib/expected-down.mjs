@@ -74,7 +74,7 @@ import {
 import { dirname, join } from 'node:path';
 
 import { manifest, stateDir } from '../../dist/lib/fleet-paths.js';
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 import { effectiveDrains, parseDrainDoc, pruneDrainDoc } from '../../dist/runners/drain.js';
 
 /**
@@ -117,7 +117,7 @@ export function readDrainDoc() {
  * draining four nodes while mgmt-api's hosting converger and reboot pass ran
  * `fleet hosting` / `fleet drain`) lost one update: claw-9's drain vanished
  * and it kept taking jobs through its own reboot window. The write is
- * atomic (`writeFileAtomic`), so a reader never sees half a file.
+ * atomic (`writeFileAtomicSync`), so a reader never sees half a file.
  */
 export function writeDrainDoc(next, base) {
 	if (!base)
@@ -128,7 +128,7 @@ export function writeDrainDoc(next, base) {
 	mkdirSync(dirname(p), { recursive: true });
 	withDrainLock(`${p}.lock`, () => {
 		const merged = mergeDrainDoc(readDrainDoc(), base, next);
-		writeFileAtomic(
+		writeFileAtomicSync(
 			p,
 			`${JSON.stringify({ $comment: 'Nodes held out of service. The fast loop and the dispatcher both read this. Lives in the state dir, NOT a git checkout.', ...pruneDrainDoc(merged) }, null, 2)}\n`
 		);

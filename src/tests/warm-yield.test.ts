@@ -14,6 +14,7 @@ import {
 } from '../runners/dispatch-warm-cache.js';
 import { dispatchEphemeral } from '../runners/ephemeral-tick.js';
 import { warmRunnerName } from '../lib/jit-naming.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import {
 	__resetWarmYieldsForTesting,
 	readWarmYields,
@@ -189,6 +190,7 @@ test('yields: a jdk21 job 90 s queued behind an idle listener, two spare claws -
 		'its registration is deleted'
 	);
 	assert.equal(warmSlotYielded('claw-10'), true);
+	await flushWrites();
 	assert.equal(
 		readWarmYields(tmp)?.['claw-10']?.job.jobId,
 		700,
@@ -608,6 +610,7 @@ test('a yielded node whose cap no longer admits a listener has its yield lifted,
 		sim: { marker: null, activeUnits: new Set() },
 	});
 	assert.equal(warmSlotYielded('claw-10'), false, 'the yield is lifted');
+	await flushWrites();
 	assert.ok(
 		readWarmYields(tmp)?.['claw-10']?.liftedAtMs,
 		'lifted on disk, where the canary reads it'

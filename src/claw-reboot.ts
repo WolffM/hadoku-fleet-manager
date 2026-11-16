@@ -123,9 +123,9 @@ function readState(): ControllerState {
 	}
 }
 
-function writeState(s: ControllerState): void {
+async function writeState(s: ControllerState): Promise<void> {
 	// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`).
-	writeJsonAtomic(statePath(), s, { space: 2 });
+	await writeJsonAtomic(statePath(), s, { space: 2 });
 }
 
 /** Is a reboot in flight, by the cycle's own record? Unreadable counts as yes: look soon. */
@@ -207,7 +207,7 @@ export async function clawRebootTick(
 		}
 		summary.pages = pager.counts.pages;
 		summary.recoveries = pager.counts.recoveries;
-		writeState(state);
+		await writeState(state);
 		await finishTick({
 			intervalMs: CLAW_REBOOT_MS,
 			jobName: JOB_NAME,
@@ -270,7 +270,7 @@ export async function clawRebootTick(
 
 	summary.pages = pager.counts.pages;
 	summary.recoveries = pager.counts.recoveries;
-	writeState(state);
+	await writeState(state);
 	await finishTick({
 		intervalMs: CLAW_REBOOT_MS,
 		jobName: JOB_NAME,

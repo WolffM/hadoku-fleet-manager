@@ -85,6 +85,15 @@ export function hydrateGhCache(): void {
 const sizeOf = (e: GhCached): number => e.size ?? e.text?.length ?? 0;
 
 /**
+ * Drop a large body from memory once its disk copy has landed, unless the
+ * entry was replaced or evicted while the write ran. The entry keeps its
+ * `size`, so the byte count does not move.
+ */
+function spill(key: string, written: GhCached): void {
+	if (ghCache.get(key) === written) ghCache.set(key, { ...written, text: null });
+}
+
+/**
  * The body of a cached entry: from memory, or from disk for one held there.
  * `null` when the disk copy is gone or no longer matches the entry's ETag. The
  * caller must then fetch again WITHOUT the ETag, never treat it as a hit.
@@ -115,18 +124,19 @@ export function ghCacheStore(key: string, entry: GhCached, persist: boolean): vo
 		ghCacheBytes -= sizeOf(prev);
 		ghCache.delete(key);
 	}
-	let stored: GhCached = { ...entry, size: sizeOf(entry) };
+	const stored: GhCached = { ...entry, size: sizeOf(entry) };
 	if (persist) {
 		// An entry with no ETag can never earn a 304, so the disk copy of an
 		// older one goes rather than staying behind as a pair that no longer
 		// matches what this process holds.
-		const onDisk =
-			stored.etag !== null && stored.text !== null
-				? ghCacheDisk.save(key, stored.etag, stored.text)
-				: (ghCacheDisk.remove(key), false);
-		// Only a body the disk really holds leaves memory: a failed write keeps it.
-		if (onDisk && stored.text !== null && stored.text.length >= GH_CACHE_SPILL_CHARS)
-			stored = { ...stored, text: null };
+		if (stored.etag !== null && stored.text !== null) {
+			const text = stored.text;
+			void ghCacheDisk.save(key, stored.etag, text).then((onDisk) => {
+				// Only a body the disk really holds leaves memory: a failed write
+				// keeps it, and so does an entry replaced while the write ran.
+				if (onDisk && text.length >= GH_CACHE_SPILL_CHARS) spill(key, stored);
+			});
+		} else ghCacheDisk.remove(key);
 	}
 	// Re-inserted, so Map order is touch order and the first key is the oldest.
 	ghCache.set(key, stored);

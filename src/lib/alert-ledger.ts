@@ -74,16 +74,14 @@ function loadAlertLedger(): void {
 }
 
 function saveAlertLedger(): void {
-	try {
-		const cutoff = Date.now() - LEDGER_RETENTION_MS;
-		const out: Record<string, string> = {};
-		for (const [k, v] of Object.entries(pagedAlerts)) if (Date.parse(v) > cutoff) out[k] = v;
-		writeJsonAtomic(ALERT_LEDGER(), out);
-	} catch (err) {
+	const cutoff = Date.now() - LEDGER_RETENTION_MS;
+	const out: Record<string, string> = {};
+	for (const [k, v] of Object.entries(pagedAlerts)) if (Date.parse(v) > cutoff) out[k] = v;
+	writeJsonAtomic(ALERT_LEDGER(), out).catch((err: unknown) => {
 		logger.warn(
 			`[runner-health] could not persist the alert ledger: ${err instanceof Error ? err.message : String(err)}`
 		);
-	}
+	});
 }
 
 /**

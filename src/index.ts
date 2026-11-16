@@ -47,6 +47,7 @@ import {
 } from './runner-health-ports.js';
 import { startPpeSweep, __stopPpeSweepForTesting } from './ppe-sweep.js';
 import { stopLoops, STOP_DRAIN_MS, __resetLoopLifecycleForTesting } from './lib/loop-lifecycle.js';
+import { flushWrites } from './lib/atomic-json.js';
 
 export type { FleetHost, FleetHostLogger } from './host.js';
 export type { RunnerHealthSnapshot } from './runner-health.js';
@@ -245,6 +246,8 @@ export function createFleetManager(host: FleetHost): FleetManager {
 		},
 		async stop(boundMs = STOP_DRAIN_MS) {
 			const r = await stopLoops(boundMs);
+			// Land every state file a loop mirrored to disk before the process exits.
+			await flushWrites();
 			if (r.drained)
 				host.logger.info(
 					`[fleet-manager] stopped: every loop's timers cleared, passes in flight finished in ${r.waitedMs}ms`

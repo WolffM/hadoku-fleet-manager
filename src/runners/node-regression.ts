@@ -412,7 +412,7 @@ export function __resetNodeRegressionForTesting(): void {
  * write too (CLAUDE.md: "I could not look" must never render as "nothing is
  * wrong", which applies to a facet write exactly as much as to a read).
  */
-export function checkNodeRegressions(
+export async function checkNodeRegressions(
 	records: readonly JobRecord[],
 	nodes: readonly string[],
 	watchedNodes: readonly string[],
@@ -423,7 +423,7 @@ export function checkNodeRegressions(
 		threshold?: number;
 		matchWindowMs?: number;
 	} = {}
-): AppliedRegression[] {
+): Promise<AppliedRegression[]> {
 	const gatedKinds = deps.gatedKinds ?? gatedKindsOverride ?? defaultGatedKinds();
 	const markStale = deps.markStale ?? markStaleOverride ?? markProofStale;
 	const readProofFn = deps.readProof ?? readProofOverride ?? readProof;
@@ -444,7 +444,7 @@ export function checkNodeRegressions(
 						`run ${d.failedRunId} (head ${d.headSha.slice(0, 8)}, vs ${d.passedNode}#${d.passedRunId})`
 				)
 				.join('; ');
-		const result = markStale(f.node, f.capability, why);
+		const result = await markStale(f.node, f.capability, why);
 		applied.push({
 			node: f.node,
 			capability: f.capability,

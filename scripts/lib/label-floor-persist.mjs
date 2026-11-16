@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
-import { writeFileAtomic } from '../../dist/lib/atomic-json.js';
+import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 import { FLOOR_DEMAND_FILE, floorLabels } from '../../dist/label-floor.js';
 
 /**
@@ -78,7 +78,7 @@ export function persistAndWatchDemand({
 	if (staticComplete) {
 		try {
 			// Write-then-rename, fsync'd (F3, `lib/atomic-json.ts`).
-			writeFileAtomic(
+			writeFileAtomicSync(
 				floorDemandPath,
 				`${JSON.stringify({ at: new Date().toISOString(), labels: staticDemand }, null, 2)}\n`
 			);

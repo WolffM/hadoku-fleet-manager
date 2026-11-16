@@ -27,7 +27,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { stateDir } from '../host.js';
+import { logger, stateDir } from '../host.js';
 import { writeJsonAtomic } from '../lib/atomic-json.js';
 
 /**
@@ -139,9 +139,13 @@ function book(): Map<string, WarmYieldEntry> {
 }
 
 function persist(): void {
-	writeJsonAtomic(join(fileDir ?? stateDir(), WARM_YIELDS_FILE), Object.fromEntries(book()), {
-		fsync: false,
-	});
+	writeJsonAtomic(join(fileDir ?? stateDir(), WARM_YIELDS_FILE), Object.fromEntries(book())).catch(
+		(err: unknown) => {
+			logger.warn(
+				`[warm-yields] could not persist ${WARM_YIELDS_FILE}: ${err instanceof Error ? err.message : String(err)}`
+			);
+		}
+	);
 }
 
 /**

@@ -8,10 +8,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+	flushWrites,
 	writeFileAtomic,
-	writeFileAtomicAsync,
+	writeFileAtomicSync,
 	writeJsonAtomic,
-	writeJsonAtomicAsync,
+	writeJsonAtomicSync,
 } from '../lib/atomic-json.js';
 
 function tmpDir(): string {
@@ -95,7 +96,7 @@ test('writeJsonAtomic + readJsonState round-trip', () => {
 	const dir = tmpDir();
 	try {
 		const path = join(dir, 'state.json');
-		writeJsonAtomic(path, { a: 1, b: ['x', 'y'] });
+		writeJsonAtomicSync(path, { a: 1, b: ['x', 'y'] });
 		const read = readJsonState<{ a: number; b: string[] }>(path);
 		assert.equal(read.ok, true);
 		assert.ok(read.ok && !read.missing);
@@ -109,20 +110,9 @@ test('writeJsonAtomic creates the parent directory, like every call site did by 
 	const dir = tmpDir();
 	try {
 		const path = join(dir, 'nested', 'deeper', 'state.json');
-		writeJsonAtomic(path, { ok: true });
+		writeJsonAtomicSync(path, { ok: true });
 		const read = readJsonState(path);
 		assert.deepEqual(read, { ok: true, doc: { ok: true } });
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
-
-test('writeFileAtomic: fsync:false still writes complete, readable content (the recorded divergence for a hot path)', () => {
-	const dir = tmpDir();
-	try {
-		const path = join(dir, 'hot.json');
-		writeFileAtomic(path, JSON.stringify({ hot: true }), { fsync: false });
-		assert.deepEqual(readJsonState(path), { ok: true, doc: { hot: true } });
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -172,7 +162,7 @@ test('mutation: writeFileAtomic cannot be left corrupt by a kill between the tem
 	try {
 		const path = join(dir, 'new-style.json');
 		const good = { day: '2026-10-28', rows: [1, 2, 3] };
-		writeJsonAtomic(path, good); // "before" state, written through the REAL helper.
+		writeJsonAtomicSync(path, good); // "before" state, written through the REAL helper.
 
 		const realWriteSync = fs.writeSync;
 		let crashed = false;
@@ -189,7 +179,7 @@ test('mutation: writeFileAtomic cannot be left corrupt by a kill between the tem
 
 		let threw = false;
 		try {
-			writeJsonAtomic(path, { day: '2026-10-29', rows: [4, 5, 6, 7] });
+			writeJsonAtomicSync(path, { day: '2026-10-29', rows: [4, 5, 6, 7] });
 		} catch {
 			threw = true;
 		} finally {
@@ -214,10 +204,9 @@ test('mutation: writeFileAtomic cannot be left corrupt by a kill between the tem
  * ORDERING PROOF: patch `writeSync`/`fsyncSync`/`renameSync` to each record a
  * tag (and still perform the real call), so the call LOG proves the temp
  * file is fsync'd BEFORE the rename and the directory is fsync'd AFTER it —
- * not merely that two fsyncs happen somewhere. `fsync:false` is proven to
- * skip both.
+ * not merely that two fsyncs happen somewhere.
  */
-test('writeFileAtomic: fsync happens BEFORE the rename and AFTER it; fsync:false calls neither', () => {
+test('writeFileAtomicSync: fsync happens BEFORE the rename and AFTER it', () => {
 	const dir = tmpDir();
 	const realWriteSync = fs.writeSync;
 	const realFsyncSync = fs.fsyncSync;
@@ -239,7 +228,7 @@ test('writeFileAtomic: fsync happens BEFORE the rename and AFTER it; fsync:false
 		}) as unknown as (typeof fs)['renameSync']);
 
 		try {
-			writeJsonAtomic(path, { ok: true });
+			writeJsonAtomicSync(path, { ok: true });
 		} finally {
 			restoreRename();
 			restoreFsync();
@@ -261,38 +250,6 @@ test('writeFileAtomic: fsync happens BEFORE the rename and AFTER it; fsync:false
 			log.filter((e) => e === 'fsync').length,
 			2,
 			`exactly two fsyncs: ${JSON.stringify(log)}`
-		);
-
-		// fsync:false — neither fsync call happens, write and rename still do.
-		const log2: string[] = [];
-		const path2 = join(dir, 'order-nofsync.json');
-		const restoreWrite2 = patchFs('writeSync', ((fd: number, buffer: NodeJS.ArrayBufferView) => {
-			log2.push('write');
-			return (realWriteSync as (...a: unknown[]) => number)(fd, buffer);
-		}) as unknown as (typeof fs)['writeSync']);
-		const restoreFsync2 = patchFs('fsyncSync', ((fd: number) => {
-			log2.push('fsync');
-			(realFsyncSync as (...a: unknown[]) => void)(fd);
-		}) as unknown as (typeof fs)['fsyncSync']);
-		const restoreRename2 = patchFs('renameSync', ((from: string, to: string) => {
-			log2.push('rename');
-			(realRenameSync as (...a: unknown[]) => void)(from, to);
-		}) as unknown as (typeof fs)['renameSync']);
-		try {
-			writeFileAtomic(path2, JSON.stringify({ ok: true }), { fsync: false });
-		} finally {
-			restoreRename2();
-			restoreFsync2();
-			restoreWrite2();
-		}
-		assert.equal(
-			log2.filter((e) => e === 'fsync').length,
-			0,
-			`fsync:false must call fsyncSync zero times: ${JSON.stringify(log2)}`
-		);
-		assert.ok(
-			log2.includes('write') && log2.includes('rename'),
-			'the write and the rename still happen'
 		);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
@@ -317,7 +274,7 @@ test('stale temp sweep: a dead-pid, >10-minute-old sibling tmp for the SAME path
 		const old = elevenMinutesAgo();
 		utimesSync(stale, old, old);
 
-		writeJsonAtomic(path, { fresh: true });
+		writeJsonAtomicSync(path, { fresh: true });
 
 		assert.ok(!existsSync(stale), 'the stale temp file must be swept');
 		assert.deepEqual(readJsonState(path), { ok: true, doc: { fresh: true } });
@@ -345,7 +302,7 @@ test('stale temp sweep: a dead-pid sibling tmp UNDER 10 minutes old is left alon
 		const now = new Date();
 		utimesSync(recent, now, now);
 
-		writeJsonAtomic(path, { fresh: true });
+		writeJsonAtomicSync(path, { fresh: true });
 
 		assert.ok(existsSync(recent), 'a recent dead-pid temp file must survive — it is not yet stale');
 	} finally {
@@ -370,7 +327,7 @@ test("stale temp sweep: a LIVE pid's sibling tmp is never removed, no matter how
 		const old = elevenMinutesAgo();
 		utimesSync(live, old, old);
 
-		writeJsonAtomic(path, { fresh: true });
+		writeJsonAtomicSync(path, { fresh: true });
 
 		assert.ok(existsSync(live), "a live pid's temp file must never be removed, however old");
 	} finally {
@@ -390,7 +347,7 @@ test('stale temp sweep: a stale tmp for a DIFFERENT path in the same directory i
 		const old = elevenMinutesAgo();
 		utimesSync(staleOther, old, old);
 
-		writeJsonAtomic(path, { fresh: true }); // writes state.json, not other.json
+		writeJsonAtomicSync(path, { fresh: true }); // writes state.json, not other.json
 
 		assert.ok(existsSync(staleOther), "another path's temp file must never be swept");
 	} finally {
@@ -405,9 +362,9 @@ test('stale temp sweep: a stale tmp for a DIFFERENT path in the same directory i
 // file and watching it survive. Deleted by the 2026-11-01 test audit (row 9);
 // the behavioural test above is the one that actually covers this.
 
-// --- writeFileAtomicAsync (fleet-manager#86) --------------------------------
+// --- writeFileAtomic: the in-process driver (fleet-manager#86) -------------
 
-test('writeFileAtomicAsync: fsyncs the temp file before the rename and the directory after, and never calls fsyncSync', async () => {
+test('writeFileAtomic: fsyncs the temp file before the rename and the directory after, and never calls fsyncSync', async () => {
 	const dir = tmpDir();
 	const realFsync = fs.fsync;
 	const realRename = fs.rename;
@@ -429,13 +386,9 @@ test('writeFileAtomicAsync: fsyncs the temp file before the rename and the direc
 	}) as unknown as (typeof fs)['rename']);
 	try {
 		const path = join(dir, 'order.json');
-		await writeJsonAtomicAsync(path, { ok: true });
+		await writeJsonAtomic(path, { ok: true });
 		assert.deepEqual(log, ['fsync', 'rename', 'fsync']);
 		assert.deepEqual(readJsonState(path), { ok: true, doc: { ok: true } });
-
-		log.length = 0;
-		await writeFileAtomicAsync(join(dir, 'nofsync.json'), '{}', { fsync: false });
-		assert.deepEqual(log, ['rename'], 'fsync:false calls no fsync');
 	} finally {
 		restoreRename();
 		restoreFsync();
@@ -444,11 +397,53 @@ test('writeFileAtomicAsync: fsyncs the temp file before the rename and the direc
 	}
 });
 
-test('writeFileAtomicAsync: writes to one path in flight together land in call order and leave no temp file', async () => {
+test('the two drivers run ONE protocol: the same syscalls, in the same order', async () => {
+	const dir = tmpDir();
+	const keys = ['openSync', 'writeSync', 'fsyncSync', 'closeSync', 'renameSync'] as const;
+	const asyncKeys = ['open', 'write', 'fsync', 'close', 'rename'] as const;
+	const syncLog: string[] = [];
+	const asyncLog: string[] = [];
+	const restores: (() => void)[] = [];
+	const record = (key: string, log: string[]): void => {
+		const real = (fs as unknown as Record<string, (...a: unknown[]) => unknown>)[key];
+		const fsAny = fs as unknown as Record<string, unknown>;
+		fsAny[key] = (...a: unknown[]): unknown => {
+			log.push(key.replace(/Sync$/, ''));
+			return real(...a);
+		};
+		syncBuiltinESMExports();
+		restores.push(() => {
+			fsAny[key] = real;
+			syncBuiltinESMExports();
+		});
+	};
+	try {
+		for (const k of keys) record(k, syncLog);
+		for (const k of asyncKeys) record(k, asyncLog);
+		writeFileAtomicSync(join(dir, 'a.json'), 'x'.repeat(1000));
+		await writeFileAtomic(join(dir, 'b.json'), 'x'.repeat(1000));
+	} finally {
+		for (const r of restores.reverse()) r();
+		rmSync(dir, { recursive: true, force: true });
+	}
+	assert.deepEqual(syncLog, [
+		'open',
+		'write',
+		'fsync',
+		'close',
+		'rename',
+		'open',
+		'fsync',
+		'close',
+	]);
+	assert.deepEqual(asyncLog, syncLog);
+});
+
+test('writeFileAtomic: writes to one path in flight together land in call order and leave no temp file', async () => {
 	const dir = tmpDir();
 	try {
 		const path = join(dir, 'state.json');
-		const writes = Array.from({ length: 8 }, (_, i) => writeJsonAtomicAsync(path, { i }));
+		const writes = Array.from({ length: 8 }, (_, i) => writeJsonAtomic(path, { i }));
 		await Promise.all(writes);
 		assert.deepEqual(readJsonState(path), { ok: true, doc: { i: 7 } });
 		assert.deepEqual(fs.readdirSync(dir), ['state.json']);
@@ -457,7 +452,24 @@ test('writeFileAtomicAsync: writes to one path in flight together land in call o
 	}
 });
 
-test('writeFileAtomicAsync: a failed write rejects its caller and the next write to the path still lands', async () => {
+test('writeFileAtomic: a read-modify-write passed as a function reads inside its turn, so overlapping calls lose nothing', async () => {
+	const dir = tmpDir();
+	try {
+		const path = join(dir, 'count.json');
+		writeJsonAtomicSync(path, { n: 0 });
+		const bump = (): Promise<void> =>
+			writeFileAtomic(path, () => {
+				const { n } = JSON.parse(fs.readFileSync(path, 'utf8')) as { n: number };
+				return JSON.stringify({ n: n + 1 });
+			});
+		await Promise.all(Array.from({ length: 10 }, bump));
+		assert.deepEqual(readJsonState(path), { ok: true, doc: { n: 10 } });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('writeFileAtomic: a failed write rejects its caller and the next write to the path still lands', async () => {
 	const dir = tmpDir();
 	const realRename = fs.rename;
 	let fail = true;
@@ -475,13 +487,25 @@ test('writeFileAtomicAsync: a failed write rejects its caller and the next write
 	}) as unknown as (typeof fs)['rename']);
 	try {
 		const path = join(dir, 'state.json');
-		const first = writeJsonAtomicAsync(path, { n: 1 });
-		const second = writeJsonAtomicAsync(path, { n: 2 });
+		const first = writeJsonAtomic(path, { n: 1 });
+		const second = writeJsonAtomic(path, { n: 2 });
 		await assert.rejects(first, /injected rename failure/);
 		await second;
 		assert.deepEqual(readJsonState(path), { ok: true, doc: { n: 2 } });
 	} finally {
 		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('flushWrites: every write started without an await has landed when it resolves', async () => {
+	const dir = tmpDir();
+	try {
+		for (let i = 0; i < 5; i++) void writeJsonAtomic(join(dir, `f${i}.json`), { i });
+		await flushWrites();
+		for (let i = 0; i < 5; i++)
+			assert.deepEqual(readJsonState(join(dir, `f${i}.json`)), { ok: true, doc: { i } });
+	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });

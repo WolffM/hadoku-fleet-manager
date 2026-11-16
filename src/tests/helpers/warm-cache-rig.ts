@@ -26,6 +26,7 @@ import { afterEach, beforeEach } from 'node:test';
 import { appendFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { flushWrites } from '../../lib/atomic-json.js';
 
 import { __setHostForTesting } from '../../host.js';
 import { testHost } from '../install-test-host.js';
@@ -294,7 +295,7 @@ export let tmp: string;
  * original single file's inline `beforeEach`/`afterEach` used to sit.
  */
 export function installWarmCacheRig(): void {
-	beforeEach(() => {
+	beforeEach(async () => {
 		tmp = mkdtempSync(join(tmpdir(), 'warmcache-'));
 		__setHistoryPathForTesting(join(tmp, 'job-history.jsonl'));
 		__resetJobHistoryForTesting();
@@ -318,7 +319,9 @@ export function installWarmCacheRig(): void {
 		// fixture `$proof` context into every test that runs after it.
 		__setWorkloadGateContextForTesting(null);
 	});
-	afterEach(() => {
+	afterEach(async () => {
+		// Let every write-behind save land before its directory is removed.
+		await flushWrites();
 		rmSync(tmp, { recursive: true, force: true });
 		__setHistoryPathForTesting(null);
 		__setWorkloadGateContextForTesting(null);

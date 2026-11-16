@@ -28,6 +28,7 @@ import {
 	warmHoldWithholds,
 } from '../runners/warm-holds.js';
 import { warmRunnerName } from '../lib/jit-naming.js';
+import { flushWrites } from '../lib/atomic-json.js';
 import type { EphemeralTickInput } from '../runners/ephemeral-shared.js';
 import { fakeGh } from './helpers/fleet-fakes.js';
 import { NODE_ELIGIBLE, installWarmCacheRig, simShell } from './helpers/warm-cache-rig.js';
@@ -42,11 +43,12 @@ afterEach(() => {
 	__resetHeavyMarksForTesting();
 });
 
-test('a hold is honoured for the refill window after the last tick that held, then not', () => {
+test('a hold is honoured for the refill window after the last tick that held, then not', async () => {
 	const dir = mkdtempSync(join(tmpdir(), 'warm-holds-'));
 	try {
 		noteWarmHold('claw-6', 'heavy', 1_000_000);
 		flushWarmHolds(1_000_000, dir);
+		await flushWrites();
 		const doc = readWarmHolds(dir);
 		assert.ok(doc);
 		assert.equal(doc['claw-6'].reason, 'heavy');
@@ -56,6 +58,7 @@ test('a hold is honoured for the refill window after the last tick that held, th
 
 		// Past the window the tick drops it from the file too.
 		flushWarmHolds(1_000_000 + WARM_HOLD_REFILL_MS, dir);
+		await flushWrites();
 		assert.deepEqual(readWarmHolds(dir), {});
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
@@ -87,6 +90,7 @@ test('the warm tick writes a heavy hold when it keeps a node empty for a heavy j
 	const sims = { 'claw-6': { marker: null, activeUnits: new Set<string>() } };
 	const res = await dispatchWarmCache(input, 'tok', fakeGh({ runners: [] }), simShell(sims), now);
 	assert.equal(res.filled, 0, 'not filled while heavy');
+	await flushWrites();
 	const doc = readWarmHolds(); // the host's state dir, where the tick writes
 	assert.equal(doc?.['claw-6']?.reason, 'heavy', JSON.stringify(doc));
 	assert.equal(doc?.['claw-6']?.atMs, now);

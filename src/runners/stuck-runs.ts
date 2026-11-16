@@ -146,24 +146,18 @@ export function capAnnouncedStuck(): void {
 export function persistWarnedStuck(): void {
 	capAnnouncedStuck();
 	const path = stuckStorePath();
-	try {
-		// Write-then-rename (F3, `lib/atomic-json.ts`), fsync SKIPPED — a RECORDED
-		// divergence (plan §4.1 step 2): this is the 15 s dispatch tick, named
-		// explicitly in the wave brief as a site where the two extra fsyncs are
-		// not worth paying. A lost write here costs one re-announced zombie, not
-		// a lost decision.
-		writeFileAtomic(path, `${JSON.stringify(Object.fromEntries(warnedStuck), null, '\t')}\n`, {
-			fsync: false,
-		});
-	} catch (e) {
-		// SAY WHY, and say what it costs. A silent persist failure is invisibly
-		// identical to the bug this file was written to close.
-		complainOnce(
-			'write',
-			`could not persist ${path}: ${reasonOf(e)} — every stuck run will be announced ` +
-				`again on the next restart, which is issue #25 back`
-		);
-	}
+	// Write-then-rename, fsync'd off the event loop (F3, `lib/atomic-json.ts`).
+	writeFileAtomic(path, `${JSON.stringify(Object.fromEntries(warnedStuck), null, '\t')}\n`).catch(
+		(e: unknown) => {
+			// SAY WHY, and say what it costs. A silent persist failure is invisibly
+			// identical to the bug this file was written to close.
+			complainOnce(
+				'write',
+				`could not persist ${path}: ${reasonOf(e)} — every stuck run will be announced ` +
+					`again on the next restart, which is issue #25 back`
+			);
+		}
+	);
 }
 
 /** `WolffM/hadoku_site#34749048183` -> `WolffM/hadoku_site`. */

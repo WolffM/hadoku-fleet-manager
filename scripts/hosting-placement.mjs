@@ -31,7 +31,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { writeJsonAtomic } from '../dist/lib/atomic-json.js';
+import { writeJsonAtomicSync } from '../dist/lib/atomic-json.js';
 import { decisionLogDir } from '../dist/runners/decision-log-storage.js';
 import { drainNotices } from '../dist/runners/drain.js';
 import { hostingNotices, readHostingDoc } from '../dist/runners/hosting-record.js';
@@ -243,7 +243,7 @@ if (APP) {
 	const [doc] = docs;
 	try {
 		mkdirSync(join(stateDir(), CACHE_DIR), { recursive: true });
-		writeJsonAtomic(cachePath, doc);
+		writeJsonAtomicSync(cachePath, doc);
 	} catch (err) {
 		out.warn(`could not keep the document for --max-age: ${err.message}`);
 	}

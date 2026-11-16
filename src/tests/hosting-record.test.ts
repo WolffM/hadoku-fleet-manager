@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { flushWrites } from '../lib/atomic-json.js';
 import { ciUnitProperties } from '../runners/ci-unit-properties.js';
 import { buildSpawnPlan, buildWarmSpawnPlan } from '../runners/ephemeral-mint.js';
 import { drainNotices, noticeRefusal, type DrainDoc } from '../runners/drain.js';
@@ -354,6 +355,7 @@ test('A4: the dispatcher holds back the unused share, read on the same ssh as fr
 	// The same reading is recorded for the learned hold-back's shadow (hosting-usage.ts).
 	const { readHostingUsage } = await import('../runners/hosting-usage.js');
 	const { stateDir } = await import('../host.js');
+	await flushWrites();
 	const hours = Object.values(readHostingUsage(stateDir())?.slices['claw-3/cardtable'] ?? {});
 	assert.ok(
 		hours.some((b) => b[3] === 1200),
