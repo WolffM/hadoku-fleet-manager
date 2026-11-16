@@ -31,9 +31,8 @@
  *   - runs completed within GRACE_MIN are skipped. The ingest tick is 10
  *     minutes; three ticks of slack keeps a busy-but-healthy fleet from
  *     reporting its own newest runs as loss.
- *   - runs that STARTED before the OLDEST record on file are skipped. Retention
- *     trims by age and count, so a run legitimately aged out is not a gap. By
- *     start, never by updated_at, which GitHub rewrites months later (#104).
+ *   - runs older than the OLDEST record on file are skipped. Retention trims by
+ *     age and count, so a run legitimately aged out is not a gap.
  *   - runs that COULD NOT HAVE BEEN RECORDED are skipped — see below. This gate
  *     called eight such runs "loss" on 2026-09-14, which was eight of the
  *     eighteen it was reporting fleet-wide.
@@ -157,7 +156,7 @@ function completedRunsOnce(repo) {
 			'api',
 			`repos/${repo}/actions/runs?per_page=100`,
 			'-q',
-			'.workflow_runs[] | select(.status=="completed") | "\\(.id)\\t\\(.updated_at)\\t\\(.run_started_at // .created_at // .updated_at)"',
+			'.workflow_runs[] | select(.status=="completed") | "\\(.id)\\t\\(.updated_at)"',
 		],
 		{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: LIST_TIMEOUT_MS }
 	);
@@ -166,8 +165,8 @@ function completedRunsOnce(repo) {
 		.map((l) => l.trim())
 		.filter(Boolean)
 		.map((l) => {
-			const [id, at, started] = l.split('\t');
-			return { id: Number(id), at, started: started || at };
+			const [id, at] = l.split('\t');
+			return { id: Number(id), at };
 		})
 		.filter((r) => Number.isFinite(r.id) && r.at);
 }
@@ -291,12 +290,7 @@ for (const repo of roster) {
 	for (const r of runs) {
 		const at = Date.parse(r.at);
 		if (!Number.isFinite(at) || at > cutoffNew) continue; // too new to judge
-		// Retention is judged by when the run STARTED: `oldest` is a record's
-		// startedAt, and GitHub rewrites a run's updated_at long after it ends.
-		// On 2026-11-15 it touched 52 hadoku-task-mobile runs from January (log
-		// or artifact expiry), and this gate read them as a day's runs that
-		// job-history had lost: 0/32 (fleet-manager#104).
-		if (Date.parse(r.started) < oldest) continue; // aged out of retention
+		if (at < oldest) continue; // aged out of retention
 		if (at < cutoffOld) continue; // older than the day being judged
 		if (seen.has(r.id)) {
 			n++;
