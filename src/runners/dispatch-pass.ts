@@ -24,6 +24,7 @@
 import { logger } from '../host.js';
 import { withGhCaller } from '../gh-budget.js';
 import { subCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
+import { mapConcurrent, SWEEP_CONCURRENCY } from '../lib/concurrency.js';
 import { planTick } from './dispatcher.js';
 import { type GhLike, type ShellLike } from '../lib/fleet-vocabulary.js';
 import {
@@ -429,23 +430,35 @@ export async function runDispatchPass(
 	const mintedHeavyOn: string[] = [];
 	const mintedHeavyUnits: string[] = [];
 
-	// Serial, deliberately. Each mint consumes capacity that the next one's
-	// admission check has to see, and the plan above already allocated against a
-	// snapshot — running them concurrently would let two mints land in the same
-	// slot index and clobber each other's config (§12.16).
-	for (const action of plan.mint) {
-		const slotIndex = takeFreeSlot(usedSlots, action.node);
-		// BEFORE the call: a mint that fails after GitHub created the
-		// registration has still put a `jit-*` name in this repo.
-		mintedAtMs.set(action.repo, nowMs);
-		const res = await withGhCaller('mint', () =>
+	// CONCURRENT, bounded. Each mint is ~2 s of ssh plus one POST, and serial
+	// they stacked: five cardtable jobs on 2026-11-15 20:15 minted at +3, +5, +7,
+	// +9 and +11 s from ONE pass, the fifth job waiting 8 s on the other four.
+	//
+	// What the serial loop guarded, and why it no longer needs to be serial:
+	// - CAPACITY is not re-checked per mint. `planTick` allocated every action
+	//   against one snapshot before this loop, so mint order never changed
+	//   which nodes got work.
+	// - THE SLOT INDEX (§12.16: RESET=1 into a live slot wipes its job) is
+	//   reserved here, synchronously and in plan order, before any mint awaits,
+	//   so two mints on one node cannot share one. Same indices the serial loop
+	//   handed out.
+	// - SAME-NODE PROVISIONING: each slot is its own directory and unit, and
+	//   the one shared thing, the payload, is built under `flock`
+	//   (runner-payload.sh `payload_ensure`, fleet-manager#1).
+	// The bound is the sweep one: every mint POSTs on the token the poll uses.
+	const slots = plan.mint.map((action) => takeFreeSlot(usedSlots, action.node));
+	// BEFORE the calls: a mint that fails after GitHub created the registration
+	// has still put a `jit-*` name in this repo.
+	for (const action of plan.mint) mintedAtMs.set(action.repo, nowMs);
+	const outcomes = await mapConcurrent(plan.mint, SWEEP_CONCURRENCY, (action, i) =>
+		withGhCaller('mint', () =>
 			mintEphemeralRunner(
 				{
 					node: action.node,
 					repo: action.repo,
 					runnerName: action.runnerName,
 					labels: [...input.labelsFor(action.node), ...(action.lanes ?? [])],
-					slotIndex,
+					slotIndex: slots[i],
 					homeDir: input.homeDirFor(action.node),
 					tarballUrl: input.tarballUrl ?? null,
 					memoryMaxMb: input.memoryMaxMbFor(action.repo, action.node),
@@ -457,7 +470,17 @@ export async function runDispatchPass(
 				gh,
 				sh
 			)
-		);
+		).catch((err: unknown) => ({
+			// mapConcurrent rejects the whole map on one rejection, which would
+			// drop every other mint's outcome on the floor (and their units with
+			// it, uncounted). One bad node is one failed mint, as it was serially.
+			ok: false as const,
+			reason: `mint threw: ${err instanceof Error ? err.message : String(err)}`,
+		}))
+	);
+	// Tallied in PLAN order, so `placed=` reads the same as the serial loop's.
+	for (const [i, action] of plan.mint.entries()) {
+		const res = outcomes[i];
 		book?.minted(action.jobId, action.runnerName, res);
 		if (res.ok) {
 			minted++;

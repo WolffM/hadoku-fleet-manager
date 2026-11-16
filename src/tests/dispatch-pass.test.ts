@@ -156,6 +156,74 @@ test('two mints in one pass take different slots', async () => {
 	);
 });
 
+test('one pass mints CONCURRENTLY: no mint waits for another to finish', async () => {
+	// A barrier: each provision holds until three are in flight at once. Serial
+	// mints can never get there, so each one gives up after 1 s and fails.
+	let inFlight = 0;
+	let peak = 0;
+	let release: () => void = () => undefined;
+	const allIn = new Promise<void>((r) => (release = r));
+	const slotsByNode = new Map<string, number[]>();
+	const sh = answeringJitState(async (n: string, cmd: string) => {
+		if (cmd.includes('CFG-OK')) return 'CFG-OK';
+		if (cmd.includes('pgrep') || cmd.includes('list-units')) return '';
+		const m = /SLOT=(\d+)/.exec(cmd);
+		if (!m) return 'Running as unit: x.service';
+		slotsByNode.set(n, [...(slotsByNode.get(n) ?? []), Number(m[1])]);
+		peak = Math.max(peak, ++inFlight);
+		if (inFlight === 3) release();
+		const met = await Promise.race([
+			allIn.then(() => true),
+			new Promise<boolean>((r) => setTimeout(() => r(false), 1000)),
+		]);
+		inFlight--;
+		return met ? `SLOT-READY /home/fixture-ci/.hadoku/jit/slot${m[1]} 2.336.0` : 'SLOT-FAIL serial';
+	});
+	const h = harness();
+	const r = await runDispatchPass(
+		base({
+			pending: [run(1), run(2), run(3)],
+			order: ['claw-2', 'claw-3'],
+			nodes: [node('claw-2', { maxConcurrent: 2 }), node('claw-3', { maxConcurrent: 2 })],
+		}),
+		'tok',
+		h.gh,
+		sh
+	);
+	assert.equal(peak, 3, `mints in flight at once: ${peak}`);
+	assert.equal(r.minted, 3);
+	assert.equal(r.failed, 0);
+	// Slots are still reserved before any await: two concurrent mints on one
+	// node never share an index (§12.16).
+	for (const [n, s] of slotsByNode)
+		assert.equal(new Set(s).size, s.length, `${n} slots collided: ${JSON.stringify(s)}`);
+});
+
+test('a mint that THROWS fails alone; the pass still counts the others', async () => {
+	const sh = answeringJitState(async (n: string, cmd: string) => {
+		if (cmd.includes('CFG-OK')) return 'CFG-OK';
+		if (cmd.includes('pgrep') || cmd.includes('list-units')) return '';
+		const m = /SLOT=(\d+)/.exec(cmd);
+		if (!m) return 'Running as unit: x.service';
+		if (n === 'claw-3') throw new Error('ssh exploded');
+		return `SLOT-READY /home/fixture-ci/.hadoku/jit/slot${m[1]} 2.336.0`;
+	});
+	const h = harness();
+	const r = await runDispatchPass(
+		base({
+			pending: [run(1), run(2), run(3)],
+			order: ['claw-2', 'claw-3'],
+			nodes: [node('claw-2', { maxConcurrent: 2 }), node('claw-3', { maxConcurrent: 2 })],
+		}),
+		'tok',
+		h.gh,
+		sh
+	);
+	assert.equal(r.minted + r.failed, 3, 'every planned mint is accounted for');
+	assert.ok(r.failed >= 1, 'the throwing node is a failed mint');
+	assert.ok(r.minted >= 1, 'the healthy node still minted');
+});
+
 test('a quiet fleet still sweeps — orphans accumulate precisely when nothing is queued', async () => {
 	const swept: string[] = [];
 	const sh = answeringJitState(async (_m: string, cmd: string) => {
