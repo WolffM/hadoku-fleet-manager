@@ -579,20 +579,20 @@ fi
 # `playwright install` step DELIBERATELY - it depends on the node having one.
 # --no-sandbox because the runner user is unprivileged and Chromium's sandbox
 # needs either root or user namespaces the claws do not grant.
+# xvfb-run is RUN too (#93): every hadoku_site Playwright step execs through it
+# (scripts/ci/pw-isolated), and claw-10 earned this label without the package.
 pw_bin="$(find "$HOME/.cache/ms-playwright" -maxdepth 3 \( -name chrome -o -name headless_shell \) -type f 2>/dev/null | head -1)"
 if [ -z "$pw_bin" ]; then
 	say playwright no "no browser binary under ~/.cache/ms-playwright"
-elif "$pw_bin" --headless --no-sandbox --disable-gpu --dump-dom about:blank 2>/dev/null | grep -qi '<html'; then
-	# The COUNT matters as much as the launch. A node can hold seven chromium
-	# builds or one, and playwright runs the version its package.json pins - so a
-	# repo pinning anything but the one version a node has fails THERE and passes
-	# on its neighbour, which reads as a flaky test rather than as fleet drift.
-	# Measured 2026-09-02: claw-1/2/3 carried chromium-1217 alone while claw-5,
-	# claw-6 and hokon carried seven builds, 1194 through 1234.
+elif ! "$pw_bin" --headless --no-sandbox --disable-gpu --dump-dom about:blank 2>/dev/null | grep -qi '<html'; then
+	say playwright no "binary present but would not launch"
+elif ! xvfb-run -a true >/dev/null 2>&1; then
+	say playwright no "browser launches, but xvfb-run does not run (package: xvfb)"
+else
+	# The build COUNT is reported: playwright runs the version a repo pins, so a
+	# node holding one build fails where its neighbour with seven passes (09-02).
 	pw_n=$(ls -d "$HOME"/.cache/ms-playwright/chromium-* 2>/dev/null | wc -l)
 	say playwright ok "launched $(basename "$(dirname "$(dirname "$pw_bin")")"), ${pw_n} build(s) present"
-else
-	say playwright no "binary present but would not launch"
 fi
 
 # --- gh: RUN it, not `command -v` -------------------------------------------
