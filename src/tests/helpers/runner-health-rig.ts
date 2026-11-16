@@ -21,7 +21,6 @@
 import { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { flushWrites } from '../../lib/atomic-json.js';
 import { tempDir, cleanupTempDirs } from '../tmpdir.js';
 import {
 	__setHistoryPathForTesting,
@@ -336,10 +335,7 @@ export function installFetch(opts: {
  * call this once, at its own top level, before any `test(...)` calls.
  */
 export function installRunnerHealthRig(): void {
-	beforeEach(async () => {
-		// A write-behind save from the previous test must land before this one
-		// resets the state it would otherwise land on top of.
-		await flushWrites();
+	beforeEach(() => {
 		// THE SUITE MUST NOT TOUCH THE OPERATOR'S REAL JOB HISTORY.
 		//
 		// checkRunsAndFailover calls ingestRuns, which loads ~/.hadoku-mgmt/

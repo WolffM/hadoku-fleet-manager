@@ -18,7 +18,6 @@
  * else reads.
  */
 import { beforeEach, afterEach } from 'node:test';
-import { flushWrites } from '../../lib/atomic-json.js';
 
 import { resetRecoveryClock } from '../../runners/dispatch-tick-config.js';
 import { __resetPollStateForTesting } from '../../runners/dispatch-tick-reset.js';
@@ -114,9 +113,7 @@ export function recordingHost() {
  * original single file's inline `beforeEach`/`afterEach` used to sit.
  */
 export function installDispatchTickRig(): void {
-	beforeEach(async () => {
-		// A write-behind save from the previous test must land before the resets.
-		await flushWrites();
+	beforeEach(() => {
 		__resetPollStateForTesting();
 		resetRecoveryClock();
 	});

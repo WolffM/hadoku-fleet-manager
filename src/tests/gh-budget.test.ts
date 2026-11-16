@@ -39,8 +39,7 @@ let infos: string[] = [];
 /** T5's own file — `__resetGhBudgetForTesting` only clears `gh-budget.json`. */
 const historyPath = () => join(stateDir(), GH_BUDGET_HISTORY_FILE);
 
-beforeEach(async () => {
-	await flushWrites();
+beforeEach(() => {
 	__resetGhBudgetForTesting();
 	__resetGhBlackoutForTesting();
 	posts = [];

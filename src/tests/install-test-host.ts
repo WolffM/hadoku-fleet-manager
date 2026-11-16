@@ -15,18 +15,32 @@
  * Keep the beforeEach anyway; belt and braces on a file that cannot be restored.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
+import { beforeEach } from 'node:test';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { __setHostForTesting, type FleetHost } from '../host.js';
 import { __setBackstopMachinesForTesting } from '../runners/backstop-machines.js';
 import { __setHostLoadReaderForTesting } from '../runners/backstop-host-load.js';
+import { flushWrites } from '../lib/atomic-json.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 /** dist/tests/ -> dist/ -> <repo root>/manifests */
 const MANIFESTS = resolve(HERE, '..', '..', 'manifests');
 
 export const testStateDir = mkdtempSync(join(tmpdir(), 'fleet-manager-test-'));
+
+/**
+ * EVERY TEST STARTS WITH NO STATE WRITE IN FLIGHT. In-process state writes are
+ * asynchronous (`lib/atomic-json.ts`), and the modules whose memory is the
+ * truth write behind. A save started by one test can otherwise still be
+ * writing while the next test's reset clears the directory it writes into:
+ * `ENOTEMPTY` from the reset's `rmSync`, seen on ppe CI 2026-11-16 in
+ * runner-listing.test.ts, or the old save landing after the reset. Registered
+ * here, in the preload every test process loads, it runs before every test in
+ * every file; a test that reads its own write back still awaits it itself.
+ */
+beforeEach(() => flushWrites());
 
 // Deliberately NOT `tempDir()` from ./tmpdir.js. That registry is cleared per
 // test by suites like runner-health, and this directory has to outlive every

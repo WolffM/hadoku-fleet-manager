@@ -30,8 +30,7 @@ const REPO = 'WolffM/hadoku_site';
 let warns: string[] = [];
 let infos: string[] = [];
 
-beforeEach(async () => {
-	await flushWrites();
+beforeEach(() => {
 	warns = [];
 	infos = [];
 	__setHostForTesting({
