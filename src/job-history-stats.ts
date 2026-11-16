@@ -1,4 +1,4 @@
-import { jobRecords, loadHistory, records, type JobRecord } from './job-history-store.js';
+import { jobRecords, type JobRecord } from './job-history-store.js';
 import { foldSummary, medianSorted, percentileSorted } from './job-history-fold.js';
 
 /**
@@ -317,7 +317,7 @@ export interface RecentJobRecord extends JobRecord {
 export function summarise(
 	nodes: string[],
 	backstopNode = 'hokon',
-	history: JobRecord[] = (loadHistory(), records),
+	history: readonly Readonly<JobRecord>[] = jobRecords(),
 	// THE CLOCK, INJECTABLE AND READ EXACTLY ONCE.
 	//
 	// The trailing window is relative to when the summary is TAKEN, so `now` is

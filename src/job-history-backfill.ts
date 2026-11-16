@@ -4,7 +4,7 @@
  * shrink-1 lane C, pure move) to bring that file under the 600-line target.
  */
 import { logger } from './host.js';
-import { loadHistory, noteHistoryChanged, persistHistory, records } from './job-history-store.js';
+import { jobRecords, patchRecord, persistHistory } from './job-history-store.js';
 import { type GhJob, stepFailure } from './job-history-phases.js';
 
 /** What one {@link backfillFailedSteps} pass did. */
@@ -56,11 +56,11 @@ export async function backfillFailedSteps(
 	// Read the window back first, exactly as `ingestRuns` does: a backfill that
 	// ran before the first load would patch an empty window and then persist it
 	// OVER the file, which is the very failure this function exists to prevent.
-	loadHistory();
+	const window = jobRecords();
 	const max = opts.max ?? 2000;
 	const concurrency = Math.max(1, opts.concurrency ?? 5);
 
-	const candidates = records.filter(
+	const candidates = window.filter(
 		(r) =>
 			r.conclusion &&
 			r.conclusion !== 'success' &&
@@ -96,10 +96,7 @@ export async function backfillFailedSteps(
 			// described. Only the step data is being backfilled.
 			const sf = stepFailure({ ...res.job, conclusion: rec.conclusion }, start, end);
 			if (!sf) continue; // steps do not explain it either — left as it was, never guessed
-			// Mutating the object the live window holds IS the mechanism. A copy
-			// would be written once and then lost to the next compaction.
-			Object.assign(rec, sf);
-			noteHistoryChanged();
+			patchRecord(rec, sf);
 			patched++;
 		}
 	};

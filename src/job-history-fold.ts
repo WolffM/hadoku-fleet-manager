@@ -23,12 +23,7 @@
  * stale answer waiting to happen.
  */
 
-import {
-	historyVersion,
-	records as storeRecords,
-	RETENTION_DAYS,
-	type JobRecord,
-} from './job-history-store.js';
+import { historyVersion, jobRecords, RETENTION_DAYS, type JobRecord } from './job-history-store.js';
 import { emptyFailuresByZone, failureBucket, type FailuresByZone } from './job-history-zone.js';
 import { jobKind } from './lib/job-kind.js';
 import { nodeOf } from './runners/census.js';
@@ -399,10 +394,10 @@ export function foldSummary(
 ): JobHistorySummary {
 	const today = Math.floor(now / DAY_MS);
 	let base: Baseline;
-	if (history === storeRecords) {
-		// The length rides along with the version as a second witness: a writer
-		// that forgot to bump still changes it whenever it adds or drops a record.
-		const key = JSON.stringify([historyVersion(), history.length, nodes, backstopNode, today]);
+	if (history === jobRecords()) {
+		// Every change to the store's window bumps the version: the store is its
+		// only writer (`appendRecords`, `patchRecord`, the trims).
+		const key = JSON.stringify([historyVersion(), nodes, backstopNode, today]);
 		if (memo?.key !== key) memo = { key, base: baseline(nodes, backstopNode, history, today) };
 		base = memo.base;
 	} else {

@@ -17,7 +17,7 @@ import {
 	quietRecords,
 } from './helpers/runner-health-rig.js';
 import { hokonPromotedLabels } from './helpers/runner-health-fixtures.js';
-import { records } from '../job-history-store.js';
+import { appendRecords } from '../job-history-store.js';
 
 installRunnerHealthRig();
 
@@ -343,17 +343,19 @@ test('hung: a job stuck on the SAME step across ticks pages, and names the step'
 test('hung: a job inside its own green runtime is not stuck; past it, it is', async () => {
 	const started = new Date(Date.now() - 5 * 60_000).toISOString();
 	for (let i = 0; i < 6; i++) {
-		records.push({
-			repo: 'WolffM/hadoku_site',
-			runId: 1000 + i,
-			jobId: 2000 + i,
-			name: `e2e (${i + 1})`,
-			runner: 'claw-1',
-			labels: [],
-			startedAt: started,
-			durationSec: (i === 0 ? 75 : 50) * 60,
-			conclusion: 'success',
-		});
+		appendRecords([
+			{
+				repo: 'WolffM/hadoku_site',
+				runId: 1000 + i,
+				jobId: 2000 + i,
+				name: `e2e (${i + 1})`,
+				runner: 'claw-1',
+				labels: [],
+				startedAt: started,
+				durationSec: (i === 0 ? 75 : 50) * 60,
+				conclusion: 'success',
+			},
+		]);
 	}
 	installFetch({
 		runners: {

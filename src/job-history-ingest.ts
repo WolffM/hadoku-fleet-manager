@@ -1,9 +1,8 @@
 import {
-	appendToDisk,
+	appendRecords,
 	compactHistory,
+	jobRecords,
 	loadHistory,
-	noteHistoryChanged,
-	records,
 	remember,
 	seenRuns,
 	trimToBudget,
@@ -297,7 +296,7 @@ export async function ingestRuns(
 		for (const j of body?.jobs ?? []) {
 			if (!j.runner_name || !j.started_at || !j.completed_at || typeof j.id !== 'number') continue;
 			if (forced) {
-				knownJobIds ??= new Set(records.map((r) => r.jobId));
+				knownJobIds ??= new Set(jobRecords().map((r) => r.jobId));
 				if (knownJobIds.has(j.id)) continue;
 				knownJobIds.add(j.id);
 			}
@@ -386,12 +385,7 @@ export async function ingestRuns(
 			});
 		}
 	}
-	records.push(...fresh);
-	if (fresh.length) noteHistoryChanged();
-	// Append the new records only — the whole point of JSONL here. Rewriting the
-	// file every tick would turn a cheap append into O(window) IO on the same
-	// loop that talks to GitHub.
-	appendToDisk(fresh);
+	appendRecords(fresh);
 	trimToBudget();
 	await compactHistory();
 	return fetched;

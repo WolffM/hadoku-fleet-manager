@@ -24,7 +24,7 @@ import { __setHistoryPathForTesting } from '../job-history-store.js';
 import { RETENTION_DAYS } from '../job-history-store.js';
 import { historyFile } from '../job-history-store.js';
 import { compactHistory, COMPACT_STALE_FRACTION } from '../job-history-store.js';
-import { appendToDisk, persistHistory } from '../job-history-store.js';
+import { appendRecords, persistHistory } from '../job-history-store.js';
 import { loadHistory } from '../job-history-store.js';
 import { jobRecords } from '../job-history-store.js';
 import { ingestRuns } from '../job-history-ingest.js';
@@ -61,7 +61,7 @@ test('persistence: a line appended while a rewrite is in flight is not lost to i
 	// The rewrite has snapshotted the window and not yet renamed: exactly where
 	// ingest's append used to land on the inode the rename then replaced.
 	const rewrite = persistHistory();
-	appendToDisk([late]);
+	appendRecords([late]);
 	assert.equal(await rewrite, true);
 	const lines = readFileSync(historyFile(), 'utf8').trim().split('\n');
 	assert.equal(lines.length, 3, 'the snapshot plus the held line, each once');

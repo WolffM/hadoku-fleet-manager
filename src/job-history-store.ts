@@ -264,19 +264,25 @@ export interface JobRecord {
  */
 export type ProbeOrigin = 'shadow' | 'forced-rerun';
 
-export const records: JobRecord[] = [];
+/**
+ * THE WINDOW. Private: it changes only through this module's functions —
+ * `appendRecords`, `patchRecord`, the trims and the load — and every one of
+ * them bumps {@link historyVersion}. Readers get it through `jobRecords()`,
+ * typed read-only, so a consumer cannot push, splice or assign into it.
+ */
+const records: JobRecord[] = [];
 export const seenRuns = new Set<number>();
 
 /**
- * Bumped by every writer of {@link records}, so a reader can memoise a fold
- * over it (`job-history-fold.ts`, #49). A writer outside this file — ingest's
- * append, backfill's in-place edit — calls {@link noteHistoryChanged} itself.
+ * Bumped by every change to {@link records}, so a reader can memoise a fold
+ * over it (`job-history-fold.ts`, #49). Only this module changes the window,
+ * so only this module bumps it.
  */
 let version = 0;
 export function historyVersion(): number {
 	return version;
 }
-export function noteHistoryChanged(): void {
+function noteHistoryChanged(): void {
 	version++;
 }
 
@@ -444,7 +450,7 @@ export function loadHistory(now = Date.now()): void {
 let rewritesInFlight = 0;
 let heldAppends: JobRecord[] = [];
 
-export function appendToDisk(fresh: JobRecord[]): void {
+function appendToDisk(fresh: JobRecord[]): void {
 	if (!fresh.length) return;
 	if (rewritesInFlight) {
 		heldAppends.push(...fresh);
@@ -539,9 +545,35 @@ export async function compactHistory(now = Date.now()): Promise<boolean> {
 	return persistHistory();
 }
 
-export function jobRecords(): readonly JobRecord[] {
+export function jobRecords(): readonly Readonly<JobRecord>[] {
 	loadHistory();
 	return records;
+}
+
+/**
+ * Add newly ingested records: to the window, then to the file. The window is
+ * loaded first, because an append to a window that was never read back would
+ * be followed by a rewrite of that short window OVER the file.
+ */
+export function appendRecords(fresh: readonly JobRecord[]): void {
+	loadHistory();
+	if (!fresh.length) return;
+	records.push(...fresh);
+	noteHistoryChanged();
+	// Append the new records only, the whole point of JSONL here. Rewriting the
+	// file every tick would turn a cheap append into O(window) I/O.
+	appendToDisk([...fresh]);
+}
+
+/**
+ * Change fields of a record already in the window: the backfill's step data.
+ * Mutating the object the window holds IS the mechanism; a copy would be
+ * written once and then lost to the next compaction. Not persisted here: the
+ * caller rewrites the file once after a batch (`persistHistory`).
+ */
+export function patchRecord(record: Readonly<JobRecord>, fields: Partial<JobRecord>): void {
+	Object.assign(record as JobRecord, fields);
+	noteHistoryChanged();
 }
 
 /** Has this run been recorded, or claimed for a fetch this process? */

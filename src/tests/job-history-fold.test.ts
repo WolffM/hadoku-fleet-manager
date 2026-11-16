@@ -9,13 +9,18 @@
  * hit is proven by object identity, never by a stopwatch: a timing assertion
  * flakes on a loaded runner, and the fleet's runners are loaded by design.
  */
-import { afterEach, test } from 'node:test';
+import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
 	__resetJobHistoryForTesting,
-	noteHistoryChanged,
-	records,
+	__setHistoryPathForTesting,
+	appendRecords,
+	jobRecords,
+	patchRecord,
 	type JobRecord,
 } from '../job-history-store.js';
 import { foldSummary } from '../job-history-fold.js';
@@ -46,17 +51,25 @@ function rec(
 	};
 }
 
-/** The store's own array, filled the way ingest fills it: push, then bump. */
+/** The store's own window, filled the way ingest fills it. */
 function seed(...rs: JobRecord[]): void {
-	records.push(...rs);
-	noteHistoryChanged();
+	appendRecords(rs);
 }
 
-const fold = (now = NOW) => foldSummary(NODES, 'hokon', records, now, RECENT_WINDOW_MS);
+const fold = (now = NOW) => foldSummary(NODES, 'hokon', jobRecords(), now, RECENT_WINDOW_MS);
 /** The same fold over a COPY, which the memo never applies to. */
-const fresh = (now = NOW) => foldSummary(NODES, 'hokon', [...records], now, RECENT_WINDOW_MS);
+const fresh = (now = NOW) => foldSummary(NODES, 'hokon', [...jobRecords()], now, RECENT_WINDOW_MS);
 
-afterEach(() => __resetJobHistoryForTesting());
+let dir = '';
+beforeEach(() => {
+	dir = mkdtempSync(join(tmpdir(), 'fold-'));
+	__setHistoryPathForTesting(join(dir, 'job-history.jsonl'));
+});
+afterEach(() => {
+	__resetJobHistoryForTesting();
+	__setHistoryPathForTesting(null);
+	rmSync(dir, { recursive: true, force: true });
+});
 
 test('a second request against unchanged history reuses the baseline', () => {
 	seed(rec('warm-claw-1-hadoku_site', 300, 60), rec('warm-claw-2-hadoku_site', 10, 30));
@@ -97,12 +110,11 @@ test('an appended record is seen on the next request', () => {
 	assert.deepEqual(s, fresh());
 });
 
-test('a record edited IN PLACE (the backfill shape) is seen once the writer bumps', () => {
+test('a record edited IN PLACE (the backfill shape) is seen at once', () => {
 	const r = rec('warm-claw-1-hadoku_site', 30, 60);
 	seed(r);
 	assert.equal(fold().byMachine[0].failures, 0);
-	Object.assign(r, { conclusion: 'failure', failedStep: 'Run tests' });
-	noteHistoryChanged();
+	patchRecord(r, { conclusion: 'failure', failedStep: 'Run tests' });
 	assert.equal(fold().byMachine[0].failures, 1);
 	assert.deepEqual(fold(), fresh());
 });
@@ -113,15 +125,14 @@ test('a runner renamed in place is re-attributed, not kept on its old node', () 
 	const r = rec('warm-claw-1-hadoku_site', 30, 60);
 	seed(r);
 	assert.equal(fold().byMachine[0].machine, 'claw-1');
-	r.runner = 'warm-claw-2-hadoku_site';
-	noteHistoryChanged();
+	patchRecord(r, { runner: 'warm-claw-2-hadoku_site' });
 	assert.equal(fold().byMachine[0].machine, 'claw-2');
 });
 
 test('a changed node list re-folds: attribution depends on it', () => {
 	seed(rec('warm-claw-1-hadoku_site', 30, 60));
-	const withClaw = foldSummary(NODES, 'hokon', records, NOW, RECENT_WINDOW_MS);
-	const without = foldSummary(['claw-2', 'hokon'], 'hokon', records, NOW, RECENT_WINDOW_MS);
+	const withClaw = foldSummary(NODES, 'hokon', jobRecords(), NOW, RECENT_WINDOW_MS);
+	const without = foldSummary(['claw-2', 'hokon'], 'hokon', jobRecords(), NOW, RECENT_WINDOW_MS);
 	assert.equal(withClaw.byMachine[0].machine, 'claw-1');
 	assert.notEqual(without.byMachine[0].machine, 'claw-1');
 });
@@ -166,7 +177,7 @@ test('recent is the 40 newest by start, ties in history order, whatever order hi
 	);
 });
 
-test('a job renamed in place moves to its new kind in slowest once the writer bumps', () => {
+test('a job renamed in place moves to its new kind in slowest', () => {
 	const rs = [1, 2, 3].map((m) =>
 		rec('warm-claw-1-hadoku_site', m * 10, 100 * m, { name: 'build' })
 	);
@@ -175,8 +186,7 @@ test('a job renamed in place moves to its new kind in slowest once the writer bu
 		fold().byRepo[0].slowest.map((s) => s.name),
 		['build']
 	);
-	for (const r of rs) r.name = 'e2e';
-	noteHistoryChanged();
+	for (const r of rs) patchRecord(r, { name: 'e2e' });
 	assert.deepEqual(
 		fold().byRepo[0].slowest.map((s) => s.name),
 		['e2e'],
