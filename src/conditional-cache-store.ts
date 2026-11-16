@@ -135,6 +135,22 @@ export function conditionalCacheStore(
 	const fileOf = (key: string): string => stem(key) + EXT;
 	const legacyFileOf = (key: string): string => stem(key) + LEGACY_EXT;
 
+	// WHICH FILES THIS STORE HAS ON DISK, once `load` has listed the directory
+	// (fleet-manager#86). `null` is "never listed": then every removal goes to
+	// the disk, as before. `github-client-cache` calls `remove` for every
+	// response it will not keep and every `save` cleared a legacy file that had
+	// been gone for weeks: two synchronous `rm`s each, 2.2 s of the leader's
+	// loop per 300 s in the 2026-11-16 profile, for files that were never
+	// there. A file some other process wrote after the listing is not known
+	// here and survives a `remove`; the next `load` reads it back, and its ETag
+	// is checked by GitHub before its body is ever used.
+	let onDisk: Set<string> | null = null;
+	const rm = (path: string): void => {
+		if (onDisk && !onDisk.has(path)) return;
+		rmSync(path, { force: true });
+		onDisk?.delete(path);
+	};
+
 	return {
 		load(nowMs = Date.now()) {
 			let names: string[];
@@ -144,28 +160,31 @@ export function conditionalCacheStore(
 				// ENOENT is a store that has never been written: the normal first boot.
 				if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
 					complainOnce('list', `could not list ${dir()}: ${reasonOf(e)} — starting cold`);
-				}
+					// Could not look, so nothing is known about what is there.
+					onDisk = null;
+				} else onDisk = new Set();
 				return [];
 			}
+			onDisk = new Set(names.map((n) => join(dir(), n)));
 			const entries: StoredConditional[] = [];
 			for (const n of names) {
 				const path = join(dir(), n);
 				const legacy = n.endsWith(LEGACY_EXT);
 				if (!legacy && !n.endsWith(EXT)) {
 					// A `.tmp` left by a write that died mid-rename.
-					rmSync(path, { force: true });
+					rm(path);
 					continue;
 				}
 				try {
 					const v = parseEntry(readFileSync(path, 'utf8'), legacy);
 					if (!v || nowMs - v.savedAtMs > maxAgeMs) {
-						rmSync(path, { force: true });
+						rm(path);
 						continue;
 					}
 					entries.push(v);
 				} catch (e) {
 					complainOnce('parse', `dropped unreadable ${path}: ${reasonOf(e)}`);
-					rmSync(path, { force: true });
+					rm(path);
 				}
 			}
 			// Newest kept under the byte bound; returned oldest first.
@@ -174,8 +193,8 @@ export function conditionalCacheStore(
 			let bytes = 0;
 			for (const e of entries) {
 				if (bytes + e.text.length > opts.maxBytes) {
-					rmSync(fileOf(e.key), { force: true });
-					rmSync(legacyFileOf(e.key), { force: true });
+					rm(fileOf(e.key));
+					rm(legacyFileOf(e.key));
 					continue;
 				}
 				bytes += e.text.length;
@@ -189,8 +208,11 @@ export function conditionalCacheStore(
 				// Temp-and-rename (F3, `lib/atomic-json.ts`): a torn write must not
 				// pair one ETag with half a body.
 				const header: Header = { key, etag, savedAtMs: nowMs };
+				// Known before the write lands, so a `remove` that overtakes it still
+				// goes to the disk.
+				onDisk?.add(path);
 				await writeFileAtomic(path, `${JSON.stringify(header)}\n${text}`);
-				rmSync(legacyFileOf(key), { force: true });
+				rm(legacyFileOf(key));
 				return true;
 			} catch (e) {
 				complainOnce(
@@ -226,14 +248,15 @@ export function conditionalCacheStore(
 		},
 		remove(key) {
 			try {
-				rmSync(fileOf(key), { force: true });
-				rmSync(legacyFileOf(key), { force: true });
+				rm(fileOf(key));
+				rm(legacyFileOf(key));
 			} catch (e) {
 				complainOnce('remove', `could not remove an evicted entry: ${reasonOf(e)}`);
 			}
 		},
 		clear() {
 			rmSync(dir(), { recursive: true, force: true });
+			onDisk = new Set();
 		},
 	};
 }

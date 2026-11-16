@@ -230,6 +230,49 @@ test('(e1) a matrix shard resolves to its unsharded kind', () => {
 	assert.equal(model.expectedExtraSec('claw-5', repo, 'forge-e2e (2)'), 100);
 });
 
+// fleet-manager#86: the model keeps each answer it has given, because the
+// placement sort asks the same (node, repo, job) from a comparator. A kept
+// answer must be the computed one, and "no job name" must stay its own
+// question: it skips the exact-kind level and answers from the repo.
+test('(e) a repeated question gets the same answer, and a named job never borrows the unnamed answer', () => {
+	const repo = 'WolffM/memo';
+	const records: JobRecord[] = [
+		...kindSamples(repo, 'check', 'claw-5', 200),
+		...kindSamples(repo, 'check', 'claw-1', 100),
+		...kindSamples(repo, 'build', 'claw-5', 900),
+		...kindSamples(repo, 'build', 'claw-1', 100),
+	];
+	const asked = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
+	// Unnamed first, so a key that dropped the name would hand 450 to 'check'.
+	assert.equal(asked.expectedExtraSec('claw-5', repo, undefined), 450);
+	assert.equal(asked.expectedExtraSec('claw-5', repo, 'check'), 100);
+	assert.equal(asked.expectedExtraSec('claw-5', repo, 'build'), 800);
+	assert.equal(
+		asked.expectedExtraSec('claw-5', repo, ''),
+		asked.expectedExtraSec('claw-5', repo, '')
+	);
+	// Every answer again, against a model nobody has asked anything yet.
+	const fresh = buildSpeedModel(records, { nowMs: NOW, nodes: FLEET_NODES });
+	for (const name of ['build', 'check', undefined, 'unknown-job']) {
+		for (const node of ['claw-5', 'claw-1', 'claw-2']) {
+			const first = asked.expectedExtraSec(node, repo, name);
+			assert.equal(
+				asked.expectedExtraSec(node, repo, name),
+				first,
+				`${node}/${String(name)} repeated`
+			);
+			assert.equal(
+				fresh.expectedExtraSec(node, repo, name),
+				first,
+				`${node}/${String(name)} fresh`
+			);
+		}
+	}
+	// A null answer is kept as null, not recomputed into something else.
+	assert.equal(asked.expectedExtraSec('claw-5', 'WolffM/never-seen', undefined), null);
+	assert.equal(asked.expectedExtraSec('claw-5', 'WolffM/never-seen', undefined), null);
+});
+
 test('(e2) falls back to (repo) when the exact job is missing on the node — PER KIND, not pooled', () => {
 	const repo = 'WolffM/repo-fallback';
 	const records: JobRecord[] = [

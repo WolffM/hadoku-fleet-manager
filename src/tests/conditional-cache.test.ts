@@ -224,3 +224,63 @@ test('the store reads a body back only under the ETag it was saved with', async 
 	);
 	store.clear();
 });
+
+// fleet-manager#86: `remove` is called for every response the GitHub cache
+// will not keep, almost always for a key that was never saved. Once the store
+// has listed its directory it knows that, and must not go to the disk for it;
+// a file it DID write or restore must still go.
+test('remove deletes what the store wrote or restored, before and after a listing', async () => {
+	const store = conditionalCacheStore('remove-test', { maxBytes: 1024 });
+	const dir = join(stateDir(), CONDITIONAL_CACHE_DIR, 'remove-test');
+	// Never listed: nothing is known, so the removal goes to the disk.
+	await store.save('a', 'W/"a"', 'body-a');
+	store.remove('a');
+	assert.deepEqual(readdirSync(dir), []);
+
+	await store.save('restored', 'W/"r"', 'body-r');
+	assert.equal(store.load().length, 1);
+	await store.save('fresh', 'W/"f"', 'body-f');
+	assert.equal(readdirSync(dir).length, 2);
+	store.remove('restored');
+	store.remove('fresh');
+	assert.deepEqual(readdirSync(dir), [], 'one listed by load, one saved after it');
+	store.clear();
+});
+
+test('after a listing, removing a key the store never held touches nothing', async () => {
+	const store = conditionalCacheStore('remove-skip-test', { maxBytes: 1024 });
+	const dir = join(stateDir(), CONDITIONAL_CACHE_DIR, 'remove-skip-test');
+	await store.save('kept', 'W/"k"', 'body-k');
+	store.load();
+	// The only way to see "no rm was issued" from outside: a file the store
+	// does not know about, at the path it would have removed.
+	const [keptName] = readdirSync(dir);
+	await store.save('other', 'W/"o"', 'body-o');
+	const otherName = readdirSync(dir).find((n) => n !== keptName)!;
+	store.remove('other');
+	writeFileSync(join(dir, otherName), 'written behind the store');
+	store.remove('other');
+	assert.deepEqual(readdirSync(dir).sort(), [keptName, otherName].sort());
+	// A fresh listing learns it again, and then it can be removed.
+	store.load();
+	store.remove('other');
+	assert.deepEqual(readdirSync(dir), [keptName]);
+	store.clear();
+});
+
+test('a legacy file found by the listing is still cleared by the next save of its key', async () => {
+	const store = conditionalCacheStore('legacy-clear-test', { maxBytes: 1024 });
+	const dir = join(stateDir(), CONDITIONAL_CACHE_DIR, 'legacy-clear-test');
+	await store.save('k', 'W/"1"', 'one');
+	const [name] = readdirSync(dir);
+	const legacy = name.replace(/\.etag$/, '.json');
+	rmSync(join(dir, name));
+	writeFileSync(
+		join(dir, legacy),
+		JSON.stringify({ key: 'k', etag: 'W/"1"', text: 'one', savedAtMs: Date.now() })
+	);
+	assert.equal(store.load().length, 1);
+	await store.save('k', 'W/"2"', 'two');
+	assert.deepEqual(readdirSync(dir), [name], 'the legacy copy is gone, the new form is there');
+	store.clear();
+});

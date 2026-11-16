@@ -444,7 +444,31 @@ export function buildSpeedModel(
 		return d.tier === 'unknown' ? null : d.p50;
 	}
 
+	// MEMOISED PER MODEL (fleet-manager#86). Everything both functions below read
+	// is fixed once this build returns, and the model is replaced whole on the
+	// next rebuild, so an answer cannot go stale inside one. They are asked from
+	// a SORT COMPARATOR (`placement.ts` `paceOf`) and from the warm planner on
+	// every pass, and each uncached answer pools and sorts samples per kind:
+	// 1.5 s of the leader's loop per 300 s in the 2026-11-16 profile.
+	const extraSecMemo = new Map<string, number | null>();
+	const slownessMemo = new Map<string, KindSlowness | null>();
+
 	function expectedExtraSec(
+		node: string,
+		repo: string,
+		jobName: string | undefined
+	): number | null {
+		// `jobName` undefined and '' are different questions (no name skips the
+		// exact-kind level), so the key says which one was asked.
+		const key = `${node}\u0000${repo}\u0000${jobName === undefined ? 'u' : `n${jobName}`}`;
+		const hit = extraSecMemo.get(key);
+		if (hit !== undefined) return hit;
+		const answer = computeExpectedExtraSec(node, repo, jobName);
+		extraSecMemo.set(key, answer);
+		return answer;
+	}
+
+	function computeExpectedExtraSec(
 		node: string,
 		repo: string,
 		jobName: string | undefined
@@ -569,6 +593,15 @@ export function buildSpeedModel(
 	}
 
 	function slownessOf(node: string, kk: string): KindSlowness | null {
+		const key = `${node}\u0000${kk}`;
+		const hit = slownessMemo.get(key);
+		if (hit !== undefined) return hit;
+		const answer = computeSlownessOf(node, kk);
+		slownessMemo.set(key, answer);
+		return answer;
+	}
+
+	function computeSlownessOf(node: string, kk: string): KindSlowness | null {
 		// Claws only, like the tier: the backstop node is judged by the backstop controller, not here.
 		if (!CLAW_NODE.test(node)) return null;
 		const nodeMap = byKindNode.get(kk);
