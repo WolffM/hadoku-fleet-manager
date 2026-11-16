@@ -88,7 +88,9 @@ pnpm run check       # the full gate CI runs
 
 Push to **`ppe`**, never to `main` — `main`'s own branch rules refuse a
 direct push, and a hotfix straight to it is the operator's call, not an
-agent's (`a56eba3`). CI runs on every `ppe` push; a promotion workflow then
+agent's (`a56eba3`). An agent that needs `main` moved now forces a promotion
+of a green `ppe` commit, or asks the operator to run the hotfix tool; the
+ladder is in `AGENTS.md`, "When `main` has to move now". CI runs on every `ppe` push; a promotion workflow then
 fast-forwards `main` to the newest green `ppe` commit on a timer, or sooner
 on request. A red push on `ppe` is reverted automatically and an issue is
 filed naming the session that made it. The package's version is set at

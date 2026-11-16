@@ -61,6 +61,38 @@ is set by `publish.yml` at publish time (registry newest + 1 patch) and is
 never committed; a committed version moves only for a deliberate minor or
 major bump.
 
+**When `main` has to move now**, in this order:
+
+1. **The commit is green on `ppe` and the timer is just slow.** Promote it
+   yourself. This is not a hotfix; nothing skips a check:
+
+       gh workflow run ppe-promote.yml -R WolffM/hadoku-fleet-manager -f force=true
+
+2. **The promoter itself is failing.** It pushes with an installation token of
+   the hadoku-fleet-gates App that mgmt-api mints per run
+   (`POST /api/repo/push-token`; there is no deploy key since 2026-11-16).
+   mgmt-api's log line `[repo:push-token]` carries GitHub's reason. A 422
+   "permissions requested are not granted to this installation" means the
+   operator changed the App's permissions but the INSTALLATION has not
+   accepted them yet; that blocked every promotion for ~12 h on 11-16.
+   Tell the operator; it is a click on their side, not a code fix.
+3. **An untested commit must reach `main` (CI or the promoter is down, and it
+   cannot wait).** STOP and ask the operator to run `hotfix-push`. Agents never
+   run it, nor hand it to `!`: running it IS the operator's consent, so it
+   refuses without a real terminal and makes them type the repo name. Give
+   them the command:
+
+       cd ~/repos/hadoku-fleet-manager   # any checkout of this repo, any age
+       # commit the fix (Session:/Trigger:/Evidence: trailers), then:
+       node ~/srv/hadoku_site/scripts/admin/hotfix-push.mjs hadoku-fleet-manager
+
+   It carries only the commits on neither `origin/main` nor `origin/ppe`,
+   rebuilds them on a fresh `origin/main` without touching the checkout,
+   shows what lands, and pushes as the App: the `ppe-main` ruleset's only
+   bypass actor. A conflict stops it with nothing pushed. Afterwards
+   `ppe-sync` merges `main` back into `ppe` and `publish.yml` publishes.
+   Source: hadoku_site `scripts/admin/hotfix-push.mjs`.
+
 **Every commit message also carries `Trigger:` and `Evidence:` trailers**,
 beside `Session:`. `Trigger:` is one of `plan` (a wave or planning doc),
 `self` (this session found it), `alert` (a gate or page fired), `operator`,
