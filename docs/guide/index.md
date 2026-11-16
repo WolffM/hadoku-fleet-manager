@@ -1,13 +1,10 @@
 ---
 title: Fleet Manager
 summary: >-
-  A library and operator CLI that runs the hadoku CI fleet: a set of
-  self-hosted machines that build and test every repo on the account. It
-  decides which machine a CI job runs on, mints and retires the runner that
-  takes it, onboards new machines, and can lend a machine to another app's
-  own service for a while. Published as `@wolffm/fleet-manager` and consumed
-  in-process by the platform's own management service; nobody signs into it
-  through a browser.
+  A library and operator CLI that runs the hadoku CI fleet, the self-hosted
+  machines that build and test every repo on the account, deciding which
+  machine takes each CI job, onboarding new machines, and lending a
+  machine's spare capacity to another app's own service for a while.
 features:
   - name: Runner-fleet health and dispatch
     summary: Decides which machine takes each CI job, and keeps one runner listening per decision.
@@ -25,7 +22,7 @@ features:
     summary: Walks every repo's CI setup for the same handful of contracts and reports who drifted.
     anchor: repo-fleet-audits
   - name: The operator CLI
-    summary: One `fleet` command, 20-odd subcommands, every one scriptable with `--json`.
+    summary: One `fleet` command covers roughly twenty subcommands, every one scriptable with `--json`.
     anchor: the-operator-cli
   - name: The GitHub API budget
     summary: Tracks what every caller spends against GitHub's rate limit, and pages before it runs out.

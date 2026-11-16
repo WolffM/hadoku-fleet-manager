@@ -3,29 +3,30 @@
 What Fleet Manager does, for the operator running it. How it works inside is
 in [contributing.md](contributing.md).
 
-There is no browser UI and no tier ladder: every feature below is reached
-through the `fleet` CLI or through the platform's own management service,
-which runs this package in-process. "Node" is a machine the fleet manages; a
-**claw** is a node whose only job is CI (a subset, not a synonym); a
-**runner** is one registration of a node against one repo.
+There is no browser UI and no tier ladder. Every feature below is reached
+through the `fleet` CLI, or through the platform's own management service.
+That service runs this package in-process. "Node" is a machine the fleet
+manages; a **claw** is a node whose only job is CI (a subset, not a
+synonym); a **runner** is one registration of a node against one repo.
 
 ## Runner-fleet health and dispatch
 
 **What it does.** Watches every node's liveness and decides, job by job,
-which node takes it. A node earns the label that lets GitHub schedule work on
-it only while it is safe — not quarantined, not drained, not failed by its
-last check-in — so an unsafe node simply stops being offered work rather than
-being specially excluded. Placement ranks candidates by how busy they are,
-how long they have been idle, and a few safety rules (a node slow at one kind
-of job keeps that kind off a faster node; a heavy job may double up on a node
-already running one heavy job only after it has waited long enough).
+which node takes it. A node earns the label that lets GitHub schedule work
+on it only while it is safe: not quarantined, not drained, not failed by
+its last check-in. An unsafe node simply stops being offered work rather
+than being specially excluded. Placement ranks candidates by how busy they
+are and how long they have been idle, plus two safety rules. A node slow at
+one kind of job keeps that kind off a faster node. A heavy job may double
+up on a node already running one heavy job, but only after it has waited
+long enough.
 
 **How to use it.** `fleet queue-health --json` and `fleet decisions [--job
 ID | --node X | --repo R]` read back what the dispatcher saw and why a job
-went where it went — every dispatch decision is written to a log with the
-candidates it considered, in order, and why each one that was skipped was
-skipped. `GET /fleet` (served by the platform's management service) is the
-same report the command station renders.
+went where it went. Every dispatch decision is written to a log with the
+candidates it considered, in order, and why each skipped one was skipped.
+`GET /fleet` (served by the platform's management service) is the same
+report the command station renders.
 
 **What it does not do.** It does not run the jobs themselves — GitHub's own
 Actions runner does that, once this package has registered it and minted it
@@ -34,12 +35,18 @@ silently retried.
 
 ## Node onboarding
 
-**What it does.** Carries a bare machine through six phases — image it, turn
-it into a server (no sleep, ssh, firewall, watchdog), enroll it as a declared
-node, provision it (install everything a runner needs), verify it against
-what was actually installed rather than what the manifest claims, and only
-then admit it to real scheduling. A node **earns** a capability (a routing
-label) by having a probe actually execute it, not by a manifest entry alone.
+**What it does.** Carries a bare machine through six phases:
+
+1. Image it.
+2. Turn it into a server (no sleep, ssh, firewall, watchdog).
+3. Enroll it as a declared node.
+4. Provision it (install everything a runner needs).
+5. Verify it against what was actually installed, not what the manifest
+   claims.
+6. Only then admit it to real scheduling.
+
+A node **earns** a capability (a routing label) by having a probe actually
+execute it, not by a manifest entry alone.
 
 **How to use it.** `fleet enroll` writes a proposed manifest entry and exits
 non-zero until an operator commits it — enrollment is the one place a node
@@ -100,11 +107,13 @@ recorded move.
 ## Repo-fleet audits
 
 **What it does.** Walks every repo this fleet covers for the same handful of
-CI contracts — whether its workflow reads the fleet's own runner label
-instead of a hard-coded one, whether its tier vocabulary matches the shared
-rules, whether a micro-frontend's externals are declared correctly, whether
-its CI header follows the shared contract — and reports every repo that
-drifted, by name.
+CI contracts, and reports every repo that drifted, by name:
+
+- whether its workflow reads the fleet's own runner label instead of a
+  hard-coded one;
+- whether its tier vocabulary matches the shared rules;
+- whether a micro-frontend's externals are declared correctly;
+- whether its CI header follows the shared contract.
 
 **How to use it.** `fleet header-audit --json`, `fleet identity-model --fleet
 --json`, `fleet tier-fleet --json` and `fleet mf-externals --json` each run
@@ -134,14 +143,14 @@ caller that compares stderr byte for byte.
 
 **What it does not do.** A subcommand under the `--json` contract always
 answers on stdout as JSON, even on a finding that also sets a non-zero exit
-code — a caller that checks the exit code before reading stdout would
+code. A caller that checks the exit code before reading stdout would
 mistake a real finding for a crash.
 
 ## The GitHub API budget
 
 **What it does.** Reads GitHub's own rate-limit headers after every call and
-tracks what each caller inside the package spends, so a cadence that is
-cheap for one kind of read (a conditional request GitHub answers "nothing
+tracks what each caller inside the package spends. A cadence that is cheap
+for one kind of read (a conditional request GitHub answers "nothing
 changed" to, for free) is not assumed cheap for a kind that is not
 conditional. Pages before the budget is close to spent, rather than after a
 call starts failing.
@@ -161,9 +170,9 @@ the next reset, read back as "could not look," never silently treated as
 itself. A pair of [herdr](https://herdr.dev) plugins show the fleet, and a
 search over past Claude sessions, inside a terminal multiplexer, read-only.
 `fleet simulate` replays a whole day of real job history through the actual
-dispatcher logic in virtual time — no real node touched — and scores a
-candidate placement policy against what really happened, so a placement
-change can be judged before it reaches a real queue.
+dispatcher logic in virtual time, with no real node touched, and scores a
+candidate placement policy against what really happened. A placement
+change can be judged this way before it reaches a real queue.
 
 **How to use it.** `herdr plugin link herdr/hadoku-fleet` then `herdr plugin
 action invoke hadoku.fleet.open` opens a workspace of panes, one per node

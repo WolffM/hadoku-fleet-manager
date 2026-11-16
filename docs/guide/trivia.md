@@ -10,7 +10,7 @@ repo's own, from its public history, which begins 2026-10-22.
   by one (`50a64a9`).
 - The guard that refuses to attach the private companion repo's history onto
   the wrong checkout landed 72 minutes after that first public commit
-  (`174db27`); the matching pre-push guard, which refuses any commit whose
+  (`174db27`). The matching pre-push guard, which refuses any commit whose
   history still reaches into the private side, landed the next day
   (`b25d752`).
 - The commit that made this repo public says plainly that every issue cited

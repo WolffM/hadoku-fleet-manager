@@ -20,20 +20,21 @@ vault broker through its PM2 wrapper, resolved from `.devvault.local.json`
 (gitignored) from the repo root.
 
 **Work in a git worktree**, never the main checkout, and never run a fleet
-command from it that touches a real node — this package's own tests use
-fixture node names (`claw-fixture` and the like) specifically so a test can
-never match a real machine by accident.
+command from the main checkout that touches a real node. This package's own
+tests use fixture node names (`claw-fixture` and the like) specifically so a
+test can never match a real machine by accident.
 
 ## How it fits together
 
-```
-the platform's management service ──in-process──► createFleetManager()
-                                                      ├─ runner-health + the fast loop   src/runner-health.ts, src/fleet-loop.ts
-                                                      ├─ dispatch + placement            src/runners/
-                                                      ├─ hosting (tenant slices)          src/ (hosting*)
-                                                      └─ GET /fleet                       the command station's report
-
-operator's terminal ──► fleet <subcommand> ──spawns──► scripts/*.mjs
+```mermaid
+flowchart LR
+    mgmt["Platform's management service"] -->|in-process| core["createFleetManager()"]
+    core --> health["Runner health + the fast loop<br/>src/runner-health.ts, src/fleet-loop.ts"]
+    core --> dispatch["Dispatch + placement<br/>src/runners/"]
+    core --> hosting["Hosting, tenant slices<br/>src/hosting*"]
+    core --> report["GET /fleet<br/>the command station's report"]
+    term["Operator's terminal"] -->|"fleet subcommand"| cli["fleet CLI, src/cli.ts"]
+    cli -->|spawns| scripts["scripts/*.mjs"]
 ```
 
 - **One door, subcommands.** `src/cli.ts` assembles `COMMANDS` from five
@@ -44,8 +45,8 @@ operator's terminal ──► fleet <subcommand> ──spawns──► scripts/*
   JSON and read a non-zero exit as a finding, not a crash.
 - **Layers.** Every non-test file under `src/` and `scripts/` sits in one
   layer of a fixed stack (composition → surfaces → domain → observation →
-  automation → state → access → config); imports point down the stack only,
-  and `scripts/lib/layer-map.json` is the placement data a guard test checks
+  automation → state → access → config). Imports point down the stack only.
+  `scripts/lib/layer-map.json` is the placement data; a guard test checks it
   against the real import graph (`scripts/measure-layers.mjs`).
 - **File size.** Every tracked source file has an 800-line ceiling, every
   test file 1,000, gated by `scripts/lib/file-size-guard.mjs` against a debt
