@@ -111,21 +111,47 @@ function isPidAlive(pid: number): boolean {
  */
 const swept = new Set<string>();
 
-function sweepStaleTempFiles(path: string, dir: string): void {
-	if (swept.has(path)) return;
-	swept.add(path);
-	const base = basename(path);
-	const pattern = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(\\d+)\\.tmp$`);
+/**
+ * Each directory is LISTED once per process, too: the first write of each of
+ * `gh-conditional-cache/runner-health`'s ~4,800 paths would otherwise list all
+ * ~4,800 entries again (47 ms per 300 s on 0.34.433 after a restart). The one
+ * listing is grouped by the path a temp file belongs to, `<base>.<pid>.tmp`,
+ * and a path's first write takes only its own group, so the rule above —
+ * never another path's temp file — is the same rule.
+ */
+const tempsByDir = new Map<string, Map<string, { entry: string; pid: number }[]>>();
+const TEMP_NAME = /^(.+)\.(\d+)\.tmp$/;
+
+function tempsOf(dir: string): Map<string, { entry: string; pid: number }[]> {
+	let byBase = tempsByDir.get(dir);
+	if (byBase) return byBase;
+	byBase = new Map();
+	tempsByDir.set(dir, byBase);
 	let entries: string[];
 	try {
 		entries = readdirSync(dir);
 	} catch {
-		return; // nothing to sweep if the directory cannot even be listed
+		return byBase; // nothing to sweep if the directory cannot even be listed
 	}
 	for (const entry of entries) {
-		const m = pattern.exec(entry);
-		if (!m) continue; // not a temp file of THIS path
-		const pid = Number(m[1]);
+		const m = TEMP_NAME.exec(entry);
+		if (!m) continue;
+		const group = byBase.get(m[1]) ?? [];
+		group.push({ entry, pid: Number(m[2]) });
+		byBase.set(m[1], group);
+	}
+	return byBase;
+}
+
+function sweepStaleTempFiles(path: string, dir: string): void {
+	if (swept.has(path)) return;
+	swept.add(path);
+	const byBase = tempsOf(dir);
+	const base = basename(path);
+	const group = byBase.get(base);
+	if (!group) return;
+	byBase.delete(base);
+	for (const { entry, pid } of group) {
 		if (pid === process.pid || isPidAlive(pid)) continue; // never a live pid's
 		const full = join(dir, entry);
 		try {

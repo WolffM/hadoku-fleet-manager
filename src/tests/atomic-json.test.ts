@@ -282,7 +282,7 @@ test('stale temp sweep: a dead-pid, >10-minute-old sibling tmp for the SAME path
 	}
 });
 
-test('stale temp sweep: once per path per process — a later write of the same path does not list the directory again', () => {
+test('stale temp sweep: one listing per directory per process — later writes of any path in it do not list it again', () => {
 	const dir = tmpDir();
 	const realReaddir = fs.readdirSync;
 	let listings = 0;
@@ -299,7 +299,11 @@ test('stale temp sweep: once per path per process — a later write of the same 
 		restore();
 		rmSync(dir, { recursive: true, force: true });
 	}
-	assert.equal(listings, 2, 'one listing for state.json, one for other.json, none for the repeat');
+	assert.equal(
+		listings,
+		1,
+		'one listing for the directory, none for the repeat or the second path'
+	);
 });
 
 test('stale temp sweep: a dead-pid sibling tmp UNDER 10 minutes old is left alone — too young to be a confirmed orphan', () => {
@@ -369,6 +373,10 @@ test('stale temp sweep: a stale tmp for a DIFFERENT path in the same directory i
 		writeJsonAtomicSync(path, { fresh: true }); // writes state.json, not other.json
 
 		assert.ok(existsSync(staleOther), "another path's temp file must never be swept");
+
+		// Its OWN first write sweeps it, from the listing the first write took.
+		writeJsonAtomicSync(otherPath, { fresh: true });
+		assert.ok(!existsSync(staleOther), 'swept by the first write of the path it belongs to');
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
