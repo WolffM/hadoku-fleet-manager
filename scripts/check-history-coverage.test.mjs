@@ -32,7 +32,7 @@ function run(
 	repos,
 	failures,
 	stderr = 'HTTP 502: Bad Gateway',
-	{ missed = 0, jobs = 'ran', rateRemaining = '' } = {}
+	{ missed = 0, jobs = 'ran', rateRemaining = '', touched = 0 } = {}
 ) {
 	const dir = tempDir('history-coverage-');
 	const bin = join(dir, 'bin');
@@ -57,6 +57,14 @@ function run(
 						id: 5000 + i * 100 + k,
 						status: 'completed',
 						updated_at: ran,
+					})),
+					// Started long before the oldest record, updated_at rewritten today (#104).
+					...Array.from({ length: touched }, (_, k) => ({
+						id: 9000 + i * 100 + k,
+						status: 'completed',
+						updated_at: ran,
+						run_started_at: '2026-01-12T17:40:32Z',
+						created_at: '2026-01-12T17:40:32Z',
 					})),
 				],
 			}),
@@ -270,4 +278,21 @@ test('human output is unaffected by the migration — same prose, same exit code
 	assert.equal(human.status, json.status, 'exit code must match between the two modes');
 	assert.match(human.stderr, /job-history is losing runs in 1 repo\(s\)/);
 	assert.ok(!human.stdout.trim().startsWith('{'), 'human mode must not print JSON');
+});
+
+// fleet-manager#104: on 2026-11-15 GitHub rewrote updated_at on 52
+// hadoku-task-mobile runs from January, and the gate read them as a day's runs
+// job-history had lost (0/32). Retention is judged by when a run started.
+test('#104: an old run whose updated_at GitHub rewrote today is out of retention, not lost', () => {
+	const r = run(['alpha'], {}, undefined, { touched: 5 });
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(r.doc.ok, true);
+	assert.equal(r.doc.eligible, 1, 'only the run that started inside retention is judged');
+});
+
+test('#104 control: a run that started inside retention and has no record is still lost', () => {
+	const r = run(['alpha'], {}, undefined, { missed: 25, touched: 5 });
+	assert.equal(r.status, 1);
+	assert.equal(r.doc.eligible, 26, 'the 25 misses count; the 5 touched old runs do not');
+	assert.equal(r.doc.recorded, 1);
 });
