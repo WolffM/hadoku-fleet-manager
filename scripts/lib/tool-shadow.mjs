@@ -27,11 +27,15 @@ export function parseShadow(said) {
 	return m ? m[1] : null;
 }
 
-/** The one sentence for a shadowed tool: which file wins, over which link, for which role. */
-export function shadowNote(path, role) {
+/**
+ * The one sentence for a shadowed tool: which file wins, over which link, for
+ * which role. `over` is the directory the fleet's copy lives in: a tool's
+ * `shadowOver`, else {@link TOOL_BIN}.
+ */
+export function shadowNote(path, role, over = TOOL_BIN) {
 	const bin = path.split('/').pop();
 	return (
-		`${path} comes before ${TOOL_BIN}/${bin} on the ${role} role's PATH. ` +
+		`${path} comes before ${over}/${bin} on the ${role} role's PATH. ` +
 		`The fleet's install is fine, so a repair cannot help: remove or rename ${path}.`
 	);
 }
@@ -40,8 +44,14 @@ export function shadowNote(path, role) {
  * The doctor's verdict for a shadowed tool, or null: absent and a finding, as
  * before, but carrying the path, so the cadence plans no install over it.
  */
-export function shadowVerdict(id, detect, role) {
+export function shadowVerdict(id, detect, role, over = TOOL_BIN) {
 	const shadowed = parseShadow(detect);
 	if (!shadowed) return null;
-	return { id, status: 'absent', finding: true, shadowed, reason: shadowNote(shadowed, role) };
+	return {
+		id,
+		status: 'absent',
+		finding: true,
+		shadowed,
+		reason: shadowNote(shadowed, role, over),
+	};
 }

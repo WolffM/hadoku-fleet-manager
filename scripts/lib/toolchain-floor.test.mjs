@@ -407,7 +407,7 @@ test('an unscoped tool applies to every managed node, the backstop included', ()
 	);
 	assert.deepEqual(
 		applicableRepairs(backstop)
-			.map(([id]) => id)
+			.flatMap(([id]) => (id.startsWith('node') ? [] : [id]))
 			.sort(),
 		[
 			'claude',

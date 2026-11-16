@@ -171,7 +171,7 @@
             "aptList": "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main"
           }
         },
-        "node": "22",
+        "node": "24",
         "packages": [
           "acpi",
           "apt-listchanges",
@@ -411,7 +411,7 @@
             "aptList": "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main"
           }
         },
-        "node": "22",
+        "node": "24",
         "packages": [
           "acpi",
           "apt-listchanges",

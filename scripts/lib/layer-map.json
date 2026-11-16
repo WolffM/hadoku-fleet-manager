@@ -709,6 +709,11 @@
     "why": "the toolchain floor's rust and rust-wasm32 entries and the AS_CI wrapper, moved out of toolchain-floor.mjs (config) whole for size: the same table, in the same layer, with no imports"
   },
   {
+    "glob": "scripts/lib/toolchain-node.mjs",
+    "layer": "config",
+    "why": "the toolchain floor's system-Node entries (node24, node-apt-path) and NODE_MAJOR, kept out of toolchain-floor.mjs (config) for size: the same table, in the same layer, with no imports"
+  },
+  {
     "glob": "scripts/lib/tool-shadow.mjs",
     "layer": "config",
     "why": "the SHADOWED detect answer for tarball tools, split out of toolchain-floor.mjs (config) for size: pure string builders with no imports, in the same layer"

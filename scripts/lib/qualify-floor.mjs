@@ -36,6 +36,7 @@ import { judgeProbe, parseProbe, probeScript, SECURITY_LABEL } from './apt-secur
 import { QUALIFY_TTL_DAYS } from './qualify-registry.mjs';
 import {
 	applicableRepairs,
+	isAdvisory,
 	declaredPackages,
 	parseObservation,
 	probeRole,
@@ -344,6 +345,9 @@ const readDeclared = () =>
  *
  * @param {{ readPackages?: () => string[] }} [o]
  */
+/** The floor tools that can fail a node: a quiet check (`advisory`) is the doctor's to report. */
+const loudRepairs = (machine) => applicableRepairs(machine).filter(([, t]) => !isAdvisory(t));
+
 export function makeFloorTests({ readPackages = readDeclared } = {}) {
 	const base = { track: 'qualify', needsDrain: false, ttlDays: QUALIFY_TTL_DAYS, minutes: 15 };
 	const floorAdmin = {
@@ -359,7 +363,7 @@ export function makeFloorTests({ readPackages = readDeclared } = {}) {
 			};
 			const apt = await read(aptScript(), 600_000, judgeApt, 'unattended-upgrade dry run');
 			const smart = await read(smartdScript(), 60_000, judgeSmartd, 'smartd read');
-			const entries = applicableRepairs(ctx.machine).filter(([, t]) => probeRole(t) === 'admin');
+			const entries = loudRepairs(ctx.machine).filter(([, t]) => probeRole(t) === 'admin');
 			const tools = entries.length
 				? await read(
 						adminToolsScript(entries),
@@ -394,7 +398,7 @@ export function makeFloorTests({ readPackages = readDeclared } = {}) {
 				};
 			}
 			const packages = declared.filter((p) => p in PACKAGE_COMMANDS);
-			const entries = applicableRepairs(ctx.machine).filter(([, t]) => probeRole(t) === 'ci');
+			const entries = loudRepairs(ctx.machine).filter(([, t]) => probeRole(t) === 'ci');
 			const r = await ctx.exec(ciToolsScript(entries, packages), { timeoutMs: 600_000 });
 			const j =
 				!r.ok && !String(r.stdout ?? '').trim()

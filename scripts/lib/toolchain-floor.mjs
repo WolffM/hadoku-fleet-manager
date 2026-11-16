@@ -16,6 +16,7 @@ import { DEFAULT_MIN_AGE_MINUTES, parseVersion } from './version-algebra.mjs';
 import { RELEASE_TOOLS } from './toolchain-release-tools.mjs';
 import { PM2_BOOT } from './pm2-boot-floor.mjs';
 import { AS_CI, RUST_REPAIRS } from './toolchain-rust.mjs';
+import { NODE_REPAIRS } from './toolchain-node.mjs';
 import { debInstalled } from './deb-installed.mjs';
 import { parseShadow, shadowedBy } from './tool-shadow.mjs';
 
@@ -188,6 +189,11 @@ const extractAsRoot = (tarball) => [
  *            and both failed claw-4's cutover on a healthy box (2026-10-28).
  *            Every consumer probes through {@link byRole}; a repair always runs
  *            as admin regardless.
+ *   advisory OPTIONAL `true`: a check that is still QUIET. A failing verdict is
+ *            reported as an advisory by all three consumers and is never a
+ *            finding, drift, or work. Read it through {@link isAdvisory}.
+ *   shadowOver OPTIONAL directory the fleet's copy lives in, named by a
+ *            `SHADOWED` answer. Default `/usr/local/bin` (tool-shadow.mjs).
  */
 /**
  * APT-TRACKED TOOLS (2026-10-09). gh and ffmpeg are Debian packages, and nothing
@@ -430,30 +436,8 @@ export const REPAIRS = {
 	 * system-wide: an admin's fnm or ~/.local/bin, which is how hokon has them,
 	 * is invisible to it. Detected as any user would run them, the ci user
 	 * included.
-	 *
-	 * NODE 24 ONLY ON A SERVICES HOST. System node is also what a CI job gets
-	 * that calls bare `node` without setup-node, and the rest of the fleet runs
-	 * 22 (hokon's CI too). Apply it in a drain, never beside a live job. Moving
-	 * every node to 24 is its own decision.
 	 */
-	node24: {
-		when: pm2ServicesHost,
-		apt: 'nodejs',
-		why:
-			'a hosted service names node >=24 (watchparty); pm2 and the tenant’s pm2 unit run the ' +
-			'system node. nodesource’s 24.x line, apt-tracked so its security releases land.',
-		detect: 'node --version 2>/dev/null | grep -q "^v24\\." && echo OK',
-		// The source line moves 22.x -> 24.x, then apt installs the new major. A node
-		// with no nodesource source fails with the reason: node-bootstrap is what adds it.
-		repair: [
-			'set -e',
-			'src=/etc/apt/sources.list.d/nodesource.sources',
-			'[ -f "$src" ] || { echo "no $src: node-bootstrap installs the nodesource repo" >&2; exit 1; }',
-			'grep -q \'node_24.x\' "$src" || sudo -n sed -i \'s#/node_[0-9]*\\.x#/node_24.x#\' "$src"',
-			'sudo -n apt-get update -qq',
-			'sudo -n apt-get install -y nodejs',
-		].join('\n'),
-	},
+	...NODE_REPAIRS,
 	...RELEASE_TOOLS,
 	/*
 	 * JDK21 + MAVEN (cardtable#5, added 2026-10-05): forge-e2e/forge-jvm move
@@ -783,6 +767,11 @@ export function toolAppliesTo(id, node) {
 	if (!tool.when) return true;
 	if (typeof tool.when === 'function') return tool.when(node ?? {});
 	return nodeOffer(node ?? {}, { eligible: false }).includes(tool.when);
+}
+
+/** Is this tool still quiet? Its failures are advisories, never findings. */
+export function isAdvisory(tool) {
+	return tool?.advisory === true;
 }
 
 /** The role a tool's `detect` runs as: its `role`, else `ci`. */

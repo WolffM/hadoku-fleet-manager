@@ -45,6 +45,7 @@ import { deferralFor, deferralNote, readDrains } from './expected-down.mjs';
 import {
 	applicableRepairs,
 	byRole,
+	isAdvisory,
 	isVersionManaged,
 	minAgeOf,
 	probeRole,
@@ -210,6 +211,28 @@ export function parseToolProbe(out) {
 	return seen;
 }
 
+/** The advisory a quiet check ({@link isAdvisory}) raises: what it saw, never blocking. */
+export function quietAdvisory(node, t) {
+	return {
+		node,
+		kind: 'quiet-check',
+		blocking: false,
+		message: `"${t.id}" on ${node}: ${t.reason}`,
+		fix: quietFix(node, t),
+	};
+}
+
+/**
+ * A copy in /usr/local/bin is removed. Anywhere else the file is a version
+ * manager's or a user's own, and the fix is the PATH that put it first.
+ */
+function quietFix(node, t) {
+	if (!t.shadowed) return REPAIRS[t.id].why;
+	if (t.shadowed.startsWith('/usr/local/bin/')) return `on ${node}: sudo rm ${t.shadowed}`;
+	const dir = t.shadowed.slice(0, t.shadowed.lastIndexOf('/'));
+	return `on ${node}: start whatever ran this without ${dir} ahead of /usr/bin on its PATH`;
+}
+
 /** An apt-tracked tool from the probe's `installed|candidate|state` line. */
 function judgeApt(id, line) {
 	const [inst, cand, state] = String(line ?? '').split('|');
@@ -263,8 +286,14 @@ function judgeApt(id, line) {
  * presence-only tool. "I could not look" is `unknown`, which FAILS.
  */
 export function judgeTool(id, tool, seen, latest) {
+	const j = judgeLoud(id, tool, seen, latest);
+	// A quiet check reports and never fails: `advisory` carries what it saw.
+	return isAdvisory(tool) && j.finding ? { ...j, finding: false, advisory: true } : j;
+}
+
+function judgeLoud(id, tool, seen, latest) {
 	const s = seen ?? {};
-	const shadow = shadowVerdict(id, s.detect, probeRole(tool));
+	const shadow = shadowVerdict(id, s.detect, probeRole(tool), tool?.shadowOver);
 	if (shadow) return shadow;
 	if (s.detect !== 'OK') {
 		const why =
@@ -583,15 +612,18 @@ export async function runDoctor({
 		const sudo = maySudo(m);
 		const rootOnly = (t) => !sudo && REPAIRS[t.id] && repairNeedsRoot(t.id, 'install', m);
 		const toolFindings = toolReports.filter((t) => t.finding && !rootOnly(t));
-		const advisories = toolReports
-			.filter((t) => t.finding && rootOnly(t))
-			.map((t) =>
-				rootAdvisory(
-					node,
-					`repairing "${t.id}" (${t.status}: ${t.reason})`,
-					`fleet converge-toolchain --machine ${node} --write`
-				)
-			);
+		const advisories = [
+			...toolReports
+				.filter((t) => t.finding && rootOnly(t))
+				.map((t) =>
+					rootAdvisory(
+						node,
+						`repairing "${t.id}" (${t.status}: ${t.reason})`,
+						`fleet converge-toolchain --machine ${node} --write`
+					)
+				),
+			...toolReports.filter((t) => t.advisory).map((t) => quietAdvisory(node, t)),
+		];
 		report.push({
 			machine: node,
 			unreachable: false,

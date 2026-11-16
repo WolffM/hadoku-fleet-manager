@@ -74,12 +74,14 @@ import {
 	byRole,
 	declaredPackages,
 	installScript,
+	isAdvisory,
 	isVersionManaged,
 	parseObservation,
 	probeRole,
 	repairNeedsRoot,
 } from './lib/toolchain-floor.mjs';
 import { shadowNote } from './lib/tool-shadow.mjs';
+import { quietAdvisory } from './lib/toolchain-doctor.mjs';
 import { debInstalled } from './lib/deb-installed.mjs';
 import { maySudo, rootAdvisory } from './lib/operator-sudo.mjs';
 import { runRefreshCycle } from './lib/refresh-cycle.mjs';
@@ -209,7 +211,22 @@ function observe(node, packages, repairs) {
 		out += res.out ?? '';
 	}
 	const { missingPackages, brokenCapabilities, shadowed } = parseObservation(out);
-	return { readable: true, missingPkgs: missingPackages, brokenCaps: brokenCapabilities, shadowed };
+	// A quiet check (`advisory`) is reported beside the node and is never drift.
+	const isQuiet = (id) => isAdvisory(REPAIRS[id]);
+	const quiet = brokenCapabilities.filter(isQuiet).map((id) => ({
+		id,
+		shadowed: shadowed[id],
+		reason: shadowed[id]
+			? shadowNote(shadowed[id], probeRole(REPAIRS[id]), REPAIRS[id].shadowOver)
+			: 'its detect did not pass',
+	}));
+	return {
+		readable: true,
+		missingPkgs: missingPackages,
+		brokenCaps: brokenCapabilities.filter((id) => !isQuiet(id)),
+		shadowed: Object.fromEntries(Object.entries(shadowed).filter(([id]) => !isQuiet(id))),
+		quiet,
+	};
 }
 
 /**
@@ -646,6 +663,7 @@ async function main() {
 						`fleet converge-toolchain --machine ${node} --write`
 					)
 				),
+			...state.quiet.map((q) => quietAdvisory(node, q)),
 		];
 		if (clean) {
 			log(`── ${node}  [${advisories.length ? 'advisory' : 'ok'}]${repair ? '  (converged)' : ''}`);
@@ -656,7 +674,9 @@ async function main() {
 			if (missingPkgs.length) log(`   packages missing: ${missingPkgs.join(' ')}`);
 			for (const id of brokenCaps) {
 				if (id in shadowed)
-					log(`   capability "${id}": ${shadowNote(shadowed[id], probeRole(REPAIRS[id]))}`);
+					log(
+						`   capability "${id}": ${shadowNote(shadowed[id], probeRole(REPAIRS[id]), REPAIRS[id].shadowOver)}`
+					);
 				else log(`   capability "${id}": ${REPAIRS[id].why}`);
 			}
 			if (repair && !repair.ok) log(`   repair failed: ${repair.reason}`);

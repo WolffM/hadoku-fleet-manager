@@ -96,6 +96,8 @@ export function planNode(tools, seen, latestById) {
 	for (const [id, tool] of tools) {
 		const latest = latestById[id];
 		const j = judgeTool(id, tool, seen[id], latest);
+		// A quiet check (`advisory`) is the doctor's to report; no work, no finding.
+		if (j.advisory) continue;
 		if (j.status === 'behind') {
 			work.push({ id, action: 'update', from: j.installed, target: j.target });
 		} else if (j.status === 'absent') {
