@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { packageVersion, provenance, provenanceLine } from '../lib/provenance.js';
+import { fleetManagerVersion } from '../index.js';
 
 /** dist/tests/ -> dist/ -> the package root. */
 const PKG = fileURLToPath(new URL('../../package.json', import.meta.url));
@@ -51,6 +52,11 @@ void test('the version is the running package’s own, read from the file beside
 	// ~/repos/.../node_modules/@wolffm/fleet-manager apart from srv's copy is
 	// which package.json sits beside the running code.
 	assert.match(packageVersion(), /^\d+\.\d+\.\d+/);
+});
+
+void test("the package exports that same version as fleetManagerVersion, for mgmt-api's heartbeat", () => {
+	assert.equal(fleetManagerVersion, packageVersion);
+	assert.equal(fleetManagerVersion(), packageVersion());
 });
 
 void test('it reports the paths that actually answered', () => {

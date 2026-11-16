@@ -118,6 +118,16 @@ export { judgeTenantBackstop, tenantUsableOn } from './lib/tenant-usable.js';
  */
 export { execFileOffLoop } from './lib/spawner.js';
 export type { ExecOptions, ExecResult } from './lib/spawner.js';
+
+/**
+ * The version of THIS install of the package, from the `package.json` beside
+ * the running code: the same value the `fleet` CLI prints as `fleet-manager=`
+ * in its provenance line. Exported so mgmt-api's heartbeat stamps every minute
+ * with the fleet-manager it is actually running (`fleet-manager=<version>`),
+ * and a before/after comparison of a release reads the heartbeat alone, with
+ * no version boundaries guessed from install times (operator, 2026-11-16).
+ */
+export { packageVersion as fleetManagerVersion } from './lib/provenance.js';
 export type {
 	TenantBackstop,
 	TenantUsable,

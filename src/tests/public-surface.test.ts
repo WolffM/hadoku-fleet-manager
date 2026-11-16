@@ -96,6 +96,7 @@ const PUBLIC_SURFACE = [
 	'createFleetManager',
 	'envNamesForCaller',
 	'execFileOffLoop',
+	'fleetManagerVersion',
 	'getFleetLiveness',
 	'judgeTenantBackstop',
 	'meterGhPool',
