@@ -173,6 +173,45 @@ test('G2: a table that parses to ZERO columns is reported, not read as clean', (
 	}
 });
 
+test('G2: an unreadable table is told how to be read, not that it stores a credential', () => {
+	// hadoku-crossposter#5: an f-string column list has no credential column,
+	// and the credential fix under it sent the author to look for one.
+	const unread = runFiles({
+		'src/db.py': 'COLS = "id TEXT PRIMARY KEY"\nconn.execute(f"CREATE TABLE t ({COLS})")\n',
+	});
+	assert.equal(missedCheck(unread, 'G2', /could not read the\s+statement/), null);
+	assert.match(unread.out, /written out between the\s+parentheses/);
+	assert.doesNotMatch(unread.out, /Store the resolved userId/);
+
+	const keyed = runFiles({ 'src/schema.sql': 'CREATE TABLE t (id INTEGER, voter_key TEXT);\n' });
+	assert.equal(missedCheck(keyed, 'G2', /Store the resolved userId/), null);
+	assert.doesNotMatch(keyed.out, /could not read/);
+});
+
+test('G2: a file with both kinds of finding prints each fix under its own', () => {
+	const r = runFiles({
+		'src/schema.sql':
+			'CREATE TABLE a (${COLUMNS});\nCREATE TABLE b (id INTEGER, voter_key TEXT);\n',
+	});
+	assert.equal(r.code, 1, r.out);
+	const unreadAt = r.out.indexOf('parsed to ZERO columns');
+	const unreadFix = r.out.indexOf('could not read');
+	const keyedAt = r.out.indexOf('voter_key');
+	const keyedFix = r.out.indexOf('Store the resolved userId');
+	for (const [name, at] of Object.entries({ unreadAt, unreadFix, keyedAt, keyedFix })) {
+		assert.notEqual(at, -1, `${name} missing from:\n${r.out}`);
+	}
+	// Each fix follows its own finding and precedes the other kind's.
+	const order = [
+		[unreadAt, unreadFix],
+		[keyedAt, keyedFix],
+	].sort((x, y) => x[0] - y[0]);
+	assert.ok(
+		order[0][0] < order[0][1] && order[0][1] < order[1][0] && order[1][0] < order[1][1],
+		r.out
+	);
+});
+
 test('G2: a constraint clause is not a column, and a rename still retires one', () => {
 	const r = runFiles({
 		'src/schema.sql':

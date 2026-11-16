@@ -79,6 +79,7 @@ import {
 	OWNER_MODULE,
 	OWNER_IMPORT,
 	EDGE_INDEX,
+	G2_UNREAD,
 	IDENTITY_CHECKS,
 	IDENTITY_WAIVER_GATE,
 } from './lib/identity-constants.mjs';
@@ -440,6 +441,13 @@ const FIXES = {
 	G2: `Store the resolved userId, not the credential. Credentials ROTATE, and a
      rotation detaches every row keyed on one (R7). Resolve at ingest through
      ${OWNER_IMPORT} and name the column owner_user_id.`,
+	[G2_UNREAD]: `This says nothing about the schema: the gate could not read the
+     statement, and a table it cannot read is one it cannot clear. It reads
+     source text, so the column list must be written out between the
+     parentheses of the CREATE TABLE itself, as in
+       CREATE TABLE t (id TEXT PRIMARY KEY, owner_user_id TEXT)
+     and not interpolated from a constant (an f-string, a template literal,
+     format()) or assembled at run time. Write the statement as one literal.`,
 	G8: `Store the resolved userId, not the credential. A credential read is fine —
      forwarding one is normal — but the value must never become ownership. Resolve
      it through ${OWNER_IMPORT}, or read the edge-stamped X-User-Id, and store
@@ -498,8 +506,17 @@ if (violations.length) {
 	for (const v of violations) byCheck.set(v.check, [...(byCheck.get(v.check) ?? []), v]);
 	for (const check of [...byCheck.keys()].sort()) {
 		console.error(`  ${check}:`);
-		for (const v of byCheck.get(check)) console.error(`    ${v.file}:${v.line}  ${v.message}`);
-		console.error(`\n  Fix — ${FIXES[check]}\n`);
+		// One hint per kind of finding, under the findings it answers: a check
+		// that also reports "could not look" carries a different fix for those.
+		const byFix = new Map();
+		for (const v of byCheck.get(check)) {
+			const fix = v.fix ?? check;
+			byFix.set(fix, [...(byFix.get(fix) ?? []), v]);
+		}
+		for (const [fix, found] of byFix) {
+			for (const v of found) console.error(`    ${v.file}:${v.line}  ${v.message}`);
+			console.error(`\n  Fix — ${FIXES[fix]}\n`);
+		}
 	}
 	console.error(`  Contract: docs/architecture/IDENTITY_MODEL.md\n`);
 }

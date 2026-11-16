@@ -101,9 +101,14 @@ export function scanRepo(
 	const userIdReaders = new Map();
 	/** worker -> where it resolves an identity, and by which of the two ways. G7's input. */
 	const resolvers = new Map();
-	const add = (check, file, line, message) => {
+	// `fix` names the hint to print under this finding when it is not the
+	// check's own (check-identity-model.mjs FIXES): a check can also report that
+	// it could not look, and its usual fix would then blame code it never read.
+	const add = (check, file, line, message, fix) => {
 		const rel = label ? `${label}:${file}` : file;
-		const violation = { check, file: rel, line, message };
+		const violation = fix
+			? { check, file: rel, line, message, fix }
+			: { check, file: rel, line, message };
 		if (waivers.absorbs(file, check, line)) {
 			// A central entry for a finding the repo now waives itself is
 			// SUPERSEDED, not stale: the child's waiver lands before the site

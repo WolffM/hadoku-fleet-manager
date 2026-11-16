@@ -15,7 +15,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { blankComments } from './blank-comments.mjs';
-import { EDGE_MOUNTS, READS_USER_ID, EDGE_INDEX, OWNER_MODULE } from './identity-constants.mjs';
+import {
+	EDGE_MOUNTS,
+	READS_USER_ID,
+	EDGE_INDEX,
+	OWNER_MODULE,
+	G2_UNREAD,
+} from './identity-constants.mjs';
 import {
 	isTestFile,
 	lineOf,
@@ -379,7 +385,8 @@ export function checkG2Dir(files, add) {
 				'G2',
 				rel,
 				lineOf(sql, b.index),
-				`CREATE TABLE ${b.table} parsed to ZERO columns — this schema is invisible to G2`
+				`CREATE TABLE ${b.table} parsed to ZERO columns — this schema is invisible to G2`,
+				G2_UNREAD
 			);
 		}
 		// `ADD COLUMN x` anywhere, and the bare `ADD x` SQLite and Postgres both

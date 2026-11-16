@@ -127,3 +127,10 @@ export const EDGE_MOUNTS = {
 export const READS_USER_ID = /(?:\breq\.header|\bheaders\.get)\(\s*['"`]X-User-Id['"`]/i;
 
 export const EDGE_INDEX = 'workers/edge-router/src/index.ts';
+
+/**
+ * The fix hint for a G2 finding that is "this CREATE TABLE could not be read",
+ * not "this column is keyed on a credential". Still check `G2` to waivers and
+ * the allowlist; only the hint printed under it differs.
+ */
+export const G2_UNREAD = 'G2-unread';
