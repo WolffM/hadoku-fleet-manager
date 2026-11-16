@@ -119,7 +119,7 @@ import { fileURLToPath } from 'node:url';
 import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { knownDownNodes, knownDownNote } from './lib/known-down.mjs';
-import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
+import { manifest as manifestFile, stateDir } from '../dist/lib/fleet-paths.js';
 // The queue-health precedent, imported rather than re-derived. READ_ATTEMPTS is
 // a measured property of `gh api` from this box (0.13% transient, 2026-09-07),
 // not a fact about queues, and a second copy of it is a second thing to tune.
@@ -131,7 +131,20 @@ import { createEmitter } from './lib/emit.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { buildGateDoc } from './lib/gate-doc.mjs';
-import { sleep, RETRY_DELAY_MS, canonical, activeWarmUnits } from './lib/runner-identity-reads.mjs';
+import {
+	sleep,
+	RETRY_DELAY_MS,
+	canonical,
+	activeWarmUnits,
+	ghOnce,
+} from './lib/runner-identity-reads.mjs';
+import {
+	listingReader,
+	lookForOrphanWorkers,
+	parseWorkers,
+	printWorkerLook,
+	recordWorkerLook,
+} from './lib/runner-identity-workers.mjs';
 import { printIdentityReport } from './lib/runner-identity-report.mjs';
 import { diffGithubBelief } from './lib/runner-identity-diff.mjs';
 import { recheckWarmSuspects } from './lib/runner-identity-warm-recheck.mjs';
@@ -302,6 +315,8 @@ const unreachable = [];
 const unconfigured = [];
 /** Persistent installs whose identity a JIT probe overwrote — see §12.9. */
 const clobbered = [];
+/** Every Runner.Worker a probe saw: a job the NODE says is running (private#138). */
+const workers = [];
 
 /**
  * Probe one node, retried once, with the reason on failure.
@@ -351,6 +366,7 @@ for (const m of nodes) {
 	}
 	jitUnits.set(m, new Set());
 	warmUnits.set(m, activeWarmUnits(r.out));
+	workers.push(...parseWorkers(m, r.out));
 	for (const line of r.out.split('\n')) {
 		const p = line.trim().split(/\s+/);
 		if (p[0] === 'RUNNER') {
@@ -533,6 +549,19 @@ const { warmOrphans, warmRechecked } = await recheckWarmSuspects({
 	probeNode,
 });
 
+// ---- workers: a job the node runs and GitHub does not count --------------
+// ADVISORY: reported and recorded, in neither the GateDoc nor the exit code.
+// See `lib/runner-identity-workers.mjs` for the two looks and for what it
+// takes to promote it.
+const workerLook = await lookForOrphanWorkers({
+	workers,
+	probeNode,
+	readListing: listingReader(ghOnce),
+	canonical,
+	sleep,
+});
+const workerLookRecorded = recordWorkerLook(stateDir(), workerLook, new Date().toISOString());
+
 // ---- report --------------------------------------------------------------
 /**
  * Unreachable nodes split by whether a human took them out on purpose.
@@ -561,6 +590,16 @@ const summary = {
 	// ADDITIVE (wave gates1 lane A): already paged down by runner-health's own
 	// per-node offline alert, not a fresh finding here — see lib/known-down.mjs.
 	knownDown: knownDownDark.map((u) => ({ node: u.machine, ...u.knownDown })),
+	// ADDITIVE and ADVISORY (private#138): workers GitHub does not count as a
+	// running job. `recorded` says whether this run reached the ledger.
+	orphanWorkers: workerLook.orphans,
+	workers: {
+		seen: workerLook.seen,
+		busy: workerLook.busy,
+		cleared: workerLook.cleared,
+		unjudged: workerLook.unjudged,
+		recorded: workerLookRecorded.ok ? true : workerLookRecorded.reason,
+	},
 	// ADDITIVE (wave gates2 lane F1a, item 4): the same audit
 	// `scripts/runner-units.mjs` runs standalone, folded in here too.
 	runnerUnits: {
@@ -620,6 +659,8 @@ if (!JSON_OUT) {
 	});
 	for (const u of knownDownDark)
 		log(`  · ${knownDownNote(u.knownDown)} — registrations unread\n    probe said: ${u.error}`);
+	printWorkerLook(workerLook, log);
+	if (!workerLookRecorded.ok) log(`  · worker look not recorded: ${workerLookRecorded.reason}`);
 
 	// runner-units (wave gates2 lane F1a, item 4): the install/unit audit,
 	// folded into this same report.

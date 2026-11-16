@@ -12,6 +12,7 @@
 #   RUNNER <dir> <repo|?> <agentName|?> <listenerAlive:0|1>
 #   JITUNIT <unit> <activeState>
 #   WARMUNIT <unit> <activeState>
+#   WORKER <dir> <repo|?> <agentName|?> <ageSec|?> <pid>
 #   PROBE-END <host> <runnerCount> <jitCount>
 set -u
 
@@ -137,5 +138,35 @@ while IFS= read -r line; do
 done <<EOF
 $(XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user list-units 'warm-*' --all --no-legend 2>/dev/null)
 EOF
+
+# A WORKER IS A JOB IN PROGRESS, and the driver asks GitHub whether it agrees
+# (fleet-manager-private#138). On 2026-11-10 a warm listener's Runner.Worker on
+# claw-4 outlived its job by 13 hours and held all of runners.slice: GitHub had
+# given the job to another runner, and every counter on the node kept reading
+# the tree as one busy slot. Every other line here starts from a listener or a
+# unit; this one starts from the worker, so a tree with no job behind it has a
+# row to be judged by.
+#
+# `spawnclient` and not the process name alone: ci-throttle.test.mjs copies
+# bash to `Runner.Worker` (see PROBE_CMD in src/lib/node-probe.ts). The same
+# $HOME / temp-dir rule as the listener union keeps a suite's fake runner out.
+# A worker runs from the VERSIONED directory (`bin.2.338.2/Runner.Worker`), so
+# the strip is `/bin*/`. JIT slots are INCLUDED: a JIT worker is a job too.
+pgrep -ax Runner.Worker 2>/dev/null | grep " spawnclient " | while read -r pid c _; do
+	d=${c%/bin*/Runner.Worker}
+	case "$d" in
+	"$tmp_root"/*) continue ;;
+	"$HOME"/*) ;;
+	*) continue ;;
+	esac
+	repo='?'
+	name='?'
+	if [ -f "$d/.runner" ]; then
+		repo=$(read_field "$d/.runner" gitHubUrl)
+		name=$(read_field "$d/.runner" agentName)
+	fi
+	age=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')
+	echo "WORKER $d $repo $name ${age:-?} $pid"
+done
 
 echo "PROBE-END $HOST $n $j"

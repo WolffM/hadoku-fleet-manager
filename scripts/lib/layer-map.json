@@ -2120,6 +2120,13 @@
     "why": "Wave shrink-1 lane D, pure move: reconcile-runner-identity.mjs's GateDoc findings/unreadable/FAILS assembly. Same bucket as the CLI it was cut from."
   },
   {
+    "glob": "scripts/lib/runner-identity-workers.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "fleet-manager-private#138: `fleet identity`'s advisory look for a Runner.Worker GitHub does not count as a running job, and the ledger that look appends to. Same bucket as the CLI that calls it and as the warm second look beside it."
+  },
+  {
     "glob": "scripts/split-check.mjs",
     "layer": "domain",
     "domain": "observation",

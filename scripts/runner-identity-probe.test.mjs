@@ -27,12 +27,14 @@ const PROBE = join(dirname(fileURLToPath(import.meta.url)), 'runner-identity-pro
 /**
  * `pgrep -af` prints one line per listener in $HOME/.fake/listeners; `pgrep -f
  * ^<dir>/bin/Runner.Listener` succeeds when that dir is listed. Anything else
- * finds nothing — fail closed.
+ * finds nothing — fail closed. `pgrep -ax Runner.Worker` prints
+ * $HOME/.fake/workers verbatim, when a test wrote one.
  */
 const PGREP = `#!/usr/bin/env bash
 list="$HOME/.fake/listeners"
 [ -f "$list" ] || exit 1
 case "$1" in
+-ax) w="$HOME/.fake/workers"; [ -f "$w" ] || exit 1; cat "$w"; exit 0 ;;
 -af) i=100; while IFS= read -r p; do echo "$i $p/bin/Runner.Listener run"; i=$((i + 1)); done < "$list"; exit 0 ;;
 -f) want="\${2#^}"; while IFS= read -r p; do [ "$p/bin/Runner.Listener" = "$want" ] && exit 0; done < "$list"; exit 1 ;;
 esac
@@ -86,6 +88,66 @@ test('#103: a listener outside $HOME, or in a temp dir, is NOT an install and is
 	]);
 	try {
 		assert.deepEqual(probe(fx), [join(fx.home, 'odd-place', 'runner')]);
+	} finally {
+		rmSync(fx.root, { recursive: true, force: true });
+	}
+});
+
+/** The probe's raw `WORKER` rows, with the fixture $HOME cut off the directory. */
+function workerRows(fx, lines) {
+	writeFileSync(join(fx.home, '.fake', 'workers'), lines.join('\n') + '\n');
+	const out = execFileSync('bash', [PROBE], {
+		env: { PATH: `${fx.bin}:/usr/bin:/bin`, HOME: fx.home, TMPDIR: fx.tmp },
+		encoding: 'utf8',
+	});
+	return out
+		.split('\n')
+		.filter((l) => l.startsWith('WORKER '))
+		.map((l) => l.replace(`${fx.home}/`, '~/'));
+}
+
+test('private#138: a spawned worker is reported with its runner name, repo and pid, JIT slots included', () => {
+	const fx = fixture(() => []);
+	try {
+		const slot = join(fx.home, '.hadoku', 'jit', 'slot0');
+		const standing = join(fx.home, 'runners', 'actions-runner-x');
+		for (const d of [slot, standing]) mkdirSync(d, { recursive: true });
+		// A JIT listener writes the capitalised keys and no trailing newline.
+		writeFileSync(
+			join(slot, '.runner'),
+			'{"AgentName":"jit-claw-fixture-a-1794792347","GitHubUrl":"https://github.com/WolffM/a"}'
+		);
+		writeFileSync(
+			join(standing, '.runner'),
+			'\uFEFF{"agentName":"claw-fixture","gitHubUrl":"https://github.com/WolffM/b"}\n'
+		);
+		const rows = workerRows(fx, [
+			`4100 ${slot}/bin/Runner.Worker spawnclient 149 152`,
+			// A worker runs from the versioned directory.
+			`4200 ${standing}/bin.2.338.2/Runner.Worker spawnclient 156 159`,
+		]);
+		// No such pids exist, so the age is `?`: said, never guessed.
+		assert.deepEqual(rows, [
+			'WORKER ~/.hadoku/jit/slot0 WolffM/a jit-claw-fixture-a-1794792347 ? 4100',
+			'WORKER ~/runners/actions-runner-x WolffM/b claw-fixture ? 4200',
+		]);
+	} finally {
+		rmSync(fx.root, { recursive: true, force: true });
+	}
+});
+
+test('private#138: a test double named Runner.Worker, or one outside $HOME or in a temp dir, is not a worker', () => {
+	const fx = fixture(() => []);
+	try {
+		const rows = workerRows(fx, [
+			// ci-throttle.test.mjs's stand-in: the name, without `spawnclient`.
+			`4300 ${fx.home}/runners/actions-runner-x/bin/Runner.Worker -c sleep`,
+			`4400 ${fx.root}/elsewhere/bin/Runner.Worker spawnclient 1 2`,
+			`4500 ${fx.tmp}/runner-drift-def/actions-runner-x/bin/Runner.Worker spawnclient 1 2`,
+			// Under $HOME with no .runner: reported, so the driver can say it could not judge it.
+			`4600 ${fx.home}/odd/bin/Runner.Worker spawnclient 1 2`,
+		]);
+		assert.deepEqual(rows, ['WORKER ~/odd ? ? ? 4600']);
 	} finally {
 		rmSync(fx.root, { recursive: true, force: true });
 	}
