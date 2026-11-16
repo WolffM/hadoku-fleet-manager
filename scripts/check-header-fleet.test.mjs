@@ -789,3 +789,62 @@ test('#7: a CRLF, stale, dirty clone under REPOS_DIR does not change the verdict
 		cleanup(fx);
 	}
 });
+
+// ---- fleet-manager#97: a root that mounts the header through a local wrapper --
+// hadoku-wiki's App.tsx renders <WikiHeader />, and WikiHeader.tsx renders the
+// platform <AppHeader>. Reading only the root reported no-app-header for four
+// days over a header a browser test could see.
+
+const WRAPPED_ROOT =
+	"import { HadokuThemeRoot } from '@wolffm/themes';\n" +
+	"import { SiteHeader } from '../SiteHeader';\n" +
+	'export function App() {\n  return <HadokuThemeRoot><SiteHeader /></HadokuThemeRoot>;\n}\n';
+const wrapper = (title) =>
+	"import { AppHeader } from '@wolffm/task-ui-components';\n" +
+	`export function SiteHeader({ appName }) {\n  return <AppHeader title=${title} />;\n}\n`;
+
+/** CLEAN_APP with its root moved to src/landing/App.tsx, mounting `files`' wrapper. */
+function wrappedFixture(files) {
+	const { 'src/App.tsx': _, ...rest } = CLEAN_APP;
+	const fx = fixture(APP_ROSTER);
+	makeHub(fx);
+	makeRepo(fx, APP, { ...rest, 'src/landing/App.tsx': WRAPPED_ROOT, ...files });
+	return fx;
+}
+
+for (const [name, files, want] of [
+	[
+		'a wrapper one relative import away that renders <AppHeader> is the header',
+		{ 'src/SiteHeader.tsx': wrapper('{appName ?? __HADOKU_APP_NAME__}') },
+		[],
+	],
+	[
+		"the name rule reads the wrapper's title, not the root's absence of one",
+		{ 'src/SiteHeader.tsx': wrapper('"App X"') },
+		['header-name-hardcoded'],
+	],
+	[
+		'a rendered wrapper that mounts no <AppHeader> is still no-app-header',
+		{ 'src/SiteHeader.tsx': 'export function SiteHeader() {\n  return <header />;\n}\n' },
+		['no-app-header'],
+	],
+	[
+		'a wrapper the root imports and never renders is still no-app-header',
+		{
+			'src/SiteHeader.tsx': wrapper('{appName ?? __HADOKU_APP_NAME__}'),
+			'src/landing/App.tsx': WRAPPED_ROOT.replace('<SiteHeader />', '<main />'),
+		},
+		['no-app-header'],
+	],
+]) {
+	test(`#97: ${name}`, () => {
+		const fx = wrappedFixture(files);
+		try {
+			const { code, out } = run(fx);
+			assert.deepEqual(rulesFor(JSON.parse(out)).sort(), want, out);
+			assert.equal(code, want.length ? 1 : 0);
+		} finally {
+			cleanup(fx);
+		}
+	});
+}

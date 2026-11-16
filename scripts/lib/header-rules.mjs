@@ -9,6 +9,7 @@
  * the CLI's own header for what each rule means.
  */
 import { execFileSync } from 'node:child_process';
+import { posix } from 'node:path';
 
 import { readFile, readBlanked, openRepo } from './header-source.mjs';
 import { stripYamlComments } from './yaml-comments.mjs';
@@ -449,6 +450,33 @@ export function appHeaderTitle(src) {
 		else if (src[j] === '}' && --depth === 0) {
 			return { kind: 'node', text: src.slice(i + 1, j) };
 		}
+	}
+	return null;
+}
+
+/**
+ * The local file an app root mounts <AppHeader> THROUGH, or null
+ * (fleet-manager#97). hadoku-wiki has three surfaces and one header component
+ * for all of them, so its App.tsx renders `<WikiHeader />` and WikiHeader.tsx
+ * renders the platform header. Read only the root, the audit called that "no
+ * <AppHeader>" for four days over a header a browser test could see.
+ *
+ * ONE hop, relative imports only. The name must be RENDERED in the root and
+ * its file must itself RENDER <AppHeader>: an import nothing mounts is still
+ * the shape a header disappears in.
+ */
+export function headerWrapper(source, files, root, src) {
+	const dir = posix.dirname(root);
+	for (const [, clause, spec] of src.matchAll(
+		/import\s+([^;'"]*?)\s+from\s*['"](\.{1,2}\/[^'"]+)['"]/g
+	)) {
+		const names = clause.match(/[A-Za-z_$][\w$]*/g) ?? [];
+		if (!names.some((n) => new RegExp(`<\\s*${n.replace(/\$/g, '\\$')}\\b`).test(src))) continue;
+		const base = posix.normalize(posix.join(dir, spec));
+		const file = ['', '.tsx', '.jsx', '.ts', '.js', '/index.tsx', '/index.jsx']
+			.map((ext) => base + ext)
+			.find((f) => files.includes(f));
+		if (file && /<\s*AppHeader\b/.test(readBlanked(source, file) ?? '')) return file;
 	}
 	return null;
 }

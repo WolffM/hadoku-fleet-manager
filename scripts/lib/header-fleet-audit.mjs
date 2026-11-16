@@ -18,6 +18,7 @@ import {
 	checkNpmAuthForm,
 	checkReleaseAgeCooldown,
 	checkHeaderName,
+	headerWrapper,
 	checkFavicon,
 	checkTypesEntry,
 	latestVersion,
@@ -223,19 +224,22 @@ export function auditFleetRepos(
 
 		// ---- an app root should mount the shared header ----------------------
 		const appRoots = sources.filter((f) => /(^|\/)App\.(tsx|jsx)$/.test(f));
+		// The file each root's header is IN: the root, or the local wrapper it
+		// mounts the header through. The name rule reads the title there.
+		const headerFiles = [];
 		for (const f of appRoots) {
 			const src = readBlanked(source, f);
 			if (!src) continue;
 			// RENDERED, not named. A bare-identifier match passed an App.tsx that
 			// imports AppHeader and never mounts it — an import left behind by a
 			// refactor is exactly the shape a header quietly disappears in.
-			if (!/<\s*AppHeader\b/.test(src)) {
-				report(repo, 'no-app-header', `${f} — an app root that renders no <AppHeader>`);
-			}
+			const via = /<\s*AppHeader\b/.test(src) ? f : headerWrapper(source, files, f, src);
+			if (via) headerFiles.push(via);
+			else report(repo, 'no-app-header', `${f} — an app root that renders no <AppHeader>`);
 		}
 
 		// ---- and it must call the app what the catalogue calls it -------------
-		checkHeaderName(repo, source, appRoots);
+		checkHeaderName(repo, source, [...new Set(headerFiles)]);
 
 		// ---- every entry shell declares an icon -------------------------------
 		checkFavicon(repo, source, files);
