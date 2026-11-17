@@ -37,6 +37,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { fixtureRemotes } from './fleet-source-fixture.mjs';
+import { graphqlWorkflowsArm } from './test-gh-graphql-shim.mjs';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const SCRIPTS_DIR = join(ROOT, 'scripts');
@@ -493,9 +494,7 @@ case "$*" in
     echo '[{"nameWithOwner":"${REPO}","isFork":false,"isArchived":false,"pushedAt":"'"$GH_PUSHED_AT"'"}]' ;;
   *"actions/runners"*) cat "$GH_RUNNERS" ;;
   *"releases/latest"*) echo 'v2.337.0' ;;
-  *"/contents/.github/workflows") echo '[{"name":"ci.yml","path":".github/workflows/ci.yml"}]' ;;
-  *"/contents/.github/workflows/"*)
-    printf '{"content":"%s"}\\n' "$(printf 'jobs:\\n  check:\\n    runs-on: \${{ fromJSON(vars.CI_RUNNER) }}\\n' | base64 -w0)" ;;
+${graphqlWorkflowsArm()}
   *"trees/HEAD"*) echo '{"tree":[]}' ;;
   *) echo '{}' ;;
 esac

@@ -10,11 +10,11 @@
  * Calls the function DIRECTLY, in-process, with `gh` shimmed on PATH —
  * `ciRunnerVarCheck` is plain exported sync code, so there is no need to
  * spawn the whole `reconcile-fleet-runners.mjs` CLI just to prove its
- * `.github/workflows` listing/content reads and the `CI_RUNNER` variable
- * read behave. `scripts/lib/runner-var.test.mjs` already covers the PURE
+ * workflow read and the `CI_RUNNER` variable read behave. `scripts/lib/runner-var.test.mjs` already covers the PURE
  * verdict logic (`runnerVarForm`/`readRunnerVar`/`repoVerdict`) this file
  * reuses; this file is additive and covers only the `gh`-reading glue that
- * is new here (`ghJsonOr404`, `ciRunnerVarUses`).
+ * is new here (`ciRunnerVarUses`, fed by `readWorkflowBodies`' GraphQL read,
+ * which the shim answers through `test-gh-graphql-shim.mjs`; fleet-manager#111).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,12 +24,13 @@ import { join } from 'node:path';
 
 import { ciRunnerVarCheck } from './lib/reconcile-apply.mjs';
 import { READ_ATTEMPTS } from './lib/read-retry-policy.mjs';
+import { graphqlWorkflowsArm } from './lib/test-gh-graphql-shim.mjs';
 
 const REPO = 'WolffM/fixture-runner-var';
 
 /**
- * A `gh` that answers `contents/.github/workflows` (a listing or a 404), each
- * file's content (base64), and the `CI_RUNNER` variable read — driven by env
+ * A `gh` that answers the workflow read (a directory, no directory, or a
+ * timeout) and the `CI_RUNNER` variable read — driven by env
  * vars so one shim serves every case below. Logs every call so a retry count
  * can be proven, the same shape `reconcile-fleet-runners-core.test.mjs` uses.
  */
@@ -45,22 +46,12 @@ fail_listing() {
 }
 
 case "$argv" in
-	*"contents/.github/workflows"*".yml"*)
-		body="\${WORKFLOW_BODY:-}"
-		if [ -z "$body" ]; then
-			body='jobs:\\n  check:\\n    runs-on: \${{ fromJSON(vars.CI_RUNNER) }}\\n'
-		fi
-		printf '{"content":"%s"}\\n' "$(printf '%s' "$body" | base64 -w0)" ;;
-	*"contents/.github/workflows"*)
-		if [ -n "\${LISTING_404:-}" ]; then
-			echo "gh: Not Found (HTTP 404)" >&2
-			exit 1
-		fi
-		if fail_listing; then
-			echo "gh: ETIMEDOUT waiting for api.github.com" >&2
-			exit 1
-		fi
-		echo '[{"name":"ci.yml"}]' ;;
+${graphqlWorkflowsArm({
+	body: '"$WORKFLOW_BODY"',
+	pre:
+		'if fail_listing; then echo "gh: ETIMEDOUT waiting for api.github.com" >&2; exit 1; fi; ' +
+		'[ -n "${WORKFLOW_BODY:-}" ] || WORKFLOW_BODY=\'jobs:\\n  check:\\n    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\\n\'',
+})}
 	*"actions/variables/CI_RUNNER"*)
 		if [ -n "\${VAR_404:-}" ]; then
 			echo "gh: Not Found (HTTP 404)" >&2
@@ -85,8 +76,8 @@ function cleanup(fx) {
 	rmSync(fx.root, { recursive: true, force: true });
 }
 
-/** Runs `fn` with `gh` shimmed on PATH and the given env overlaid. */
-function withShimmedGh(fx, env, fn) {
+/** Runs `fn` with `gh` shimmed on PATH and the given env overlaid, until it settles. */
+async function withShimmedGh(fx, env, fn) {
 	const prevPath = process.env.PATH;
 	const prevEnv = { ...process.env };
 	Object.assign(process.env, {
@@ -96,7 +87,7 @@ function withShimmedGh(fx, env, fn) {
 		...env,
 	});
 	try {
-		return fn();
+		return await fn();
 	} finally {
 		process.env.PATH = prevPath;
 		for (const k of Object.keys(env)) delete process.env[k];
@@ -104,10 +95,10 @@ function withShimmedGh(fx, env, fn) {
 	}
 }
 
-test('a bare workflow with CI_RUNNER unset (404) is a finding — FAIL TO START', () => {
+test('a bare workflow with CI_RUNNER unset (404) is a finding — FAIL TO START', async () => {
 	const fx = fixture();
 	try {
-		const r = withShimmedGh(fx, { VAR_404: '1' }, () => ciRunnerVarCheck([REPO]));
+		const r = await withShimmedGh(fx, { VAR_404: '1' }, () => ciRunnerVarCheck([REPO]));
 		assert.equal(r.ok, false);
 		assert.equal(r.findings.length, 1, JSON.stringify(r.findings));
 		assert.equal(r.findings[0].repo, REPO);
@@ -117,10 +108,10 @@ test('a bare workflow with CI_RUNNER unset (404) is a finding — FAIL TO START'
 	}
 });
 
-test('a bare workflow with CI_RUNNER SET is clean — no finding', () => {
+test('a bare workflow with CI_RUNNER SET is clean — no finding', async () => {
 	const fx = fixture();
 	try {
-		const r = withShimmedGh(fx, { VAR_VALUE: '["self-hosted","hadoku-builder"]' }, () =>
+		const r = await withShimmedGh(fx, { VAR_VALUE: '["self-hosted","hadoku-builder"]' }, () =>
 			ciRunnerVarCheck([REPO])
 		);
 		assert.equal(r.ok, true);
@@ -130,10 +121,10 @@ test('a bare workflow with CI_RUNNER SET is clean — no finding', () => {
 	}
 });
 
-test('the fallback form with CI_RUNNER unset is NOT a finding — it still schedules', () => {
+test('the fallback form with CI_RUNNER unset is NOT a finding — it still schedules', async () => {
 	const fx = fixture();
 	try {
-		const r = withShimmedGh(
+		const r = await withShimmedGh(
 			fx,
 			{
 				VAR_404: '1',
@@ -151,10 +142,10 @@ test('the fallback form with CI_RUNNER unset is NOT a finding — it still sched
 	}
 });
 
-test('a repo with NO .github/workflows directory (404 on the listing) draws no finding', () => {
+test('a repo with NO .github/workflows directory (404 on the listing) draws no finding', async () => {
 	const fx = fixture();
 	try {
-		const r = withShimmedGh(fx, { LISTING_404: '1' }, () => ciRunnerVarCheck([REPO]));
+		const r = await withShimmedGh(fx, { LISTING_404: '1' }, () => ciRunnerVarCheck([REPO]));
 		assert.equal(r.ok, true);
 		assert.deepEqual(r.findings, []);
 	} finally {
@@ -162,10 +153,10 @@ test('a repo with NO .github/workflows directory (404 on the listing) draws no f
 	}
 });
 
-test('a workflow-listing read that times out once and recovers draws no finding (retried)', () => {
+test('a workflow-listing read that times out once and recovers draws no finding (retried)', async () => {
 	const fx = fixture();
 	try {
-		const r = withShimmedGh(
+		const r = await withShimmedGh(
 			fx,
 			{ FAIL_LISTING_TIMES: '1', VAR_VALUE: '["self-hosted","hadoku-builder"]' },
 			() => ciRunnerVarCheck([REPO])
@@ -176,10 +167,10 @@ test('a workflow-listing read that times out once and recovers draws no finding 
 	}
 });
 
-test('a workflow-listing read that never recovers is a finding, not a silently clean repo', () => {
+test('a workflow-listing read that never recovers is a finding, not a silently clean repo', async () => {
 	const fx = fixture();
 	try {
-		const r = withShimmedGh(fx, { FAIL_LISTING_TIMES: String(READ_ATTEMPTS + 5) }, () =>
+		const r = await withShimmedGh(fx, { FAIL_LISTING_TIMES: String(READ_ATTEMPTS + 5) }, () =>
 			ciRunnerVarCheck([REPO])
 		);
 		assert.equal(r.ok, false);
@@ -192,8 +183,8 @@ test('a workflow-listing read that never recovers is a finding, not a silently c
 	}
 });
 
-test('an empty population is ok:false with an error — scanning nothing is a broken scan', () => {
-	const r = ciRunnerVarCheck([]);
+test('an empty population is ok:false with an error — scanning nothing is a broken scan', async () => {
+	const r = await ciRunnerVarCheck([]);
 	assert.equal(r.ok, false);
 	assert.deepEqual(r.findings, []);
 	assert.match(r.error, /empty population/);

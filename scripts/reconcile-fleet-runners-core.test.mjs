@@ -46,6 +46,7 @@ import { join } from 'node:path';
 import { createFakeNode } from './lib/fake-node.mjs';
 import { READ_ATTEMPTS } from './lib/read-retry-policy.mjs';
 import { SCRIPT, NO_GIT_ENV } from './lib/reconcile-fleet-runners-rig.mjs';
+import { graphqlWorkflowsArm } from './lib/test-gh-graphql-shim.mjs';
 
 const CLAW = 'fixture-claw';
 const BACKSTOP = 'fixture-backstop';
@@ -115,9 +116,7 @@ case "$argv" in
     fi
     cat "$GH_RUNNERS" ;;
   *"releases/latest"*) echo 'v2.337.0' ;;
-  *"/contents/.github/workflows") echo '[{"name":"ci.yml","path":".github/workflows/ci.yml"}]' ;;
-  *"/contents/.github/workflows/"*)
-    printf '{"content":"%s"}\\n' "$(printf 'jobs:\\n  check:\\n    runs-on: \${{ fromJSON(vars.CI_RUNNER) }}\\n' | base64 -w0)" ;;
+${graphqlWorkflowsArm()}
   *"trees/HEAD"*) echo '{"tree":[]}' ;;
   *) echo '{}' ;;
 esac

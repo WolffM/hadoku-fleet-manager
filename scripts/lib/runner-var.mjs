@@ -89,13 +89,39 @@ export function readRunnerVar(
 		try {
 			return { value: readOnce(repo) || null };
 		} catch (err) {
-			if (/HTTP 404|Not Found/i.test(String(err?.stderr ?? err?.message ?? '')))
-				return { value: null };
+			if (isNotFound(err)) return { value: null };
 			reason = `${describeReadFailure(err, timeoutMs)} (attempt ${attempt}/${attempts})`;
 			if (attempt < attempts) sleep();
 		}
 	}
 	return { value: undefined, reason };
+}
+
+/**
+ * `readRunnerVar` for an ASYNC `readOnce` (and `sleep`), so a caller can read
+ * many repos' variables at once (fleet-manager#111). Same rule, same answers.
+ */
+export async function readRunnerVarAsync(
+	repo,
+	readOnce,
+	{ attempts = READ_ATTEMPTS, sleep = async () => {}, timeoutMs } = {}
+) {
+	let reason = 'no attempt was made';
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			return { value: (await readOnce(repo)) || null };
+		} catch (err) {
+			if (isNotFound(err)) return { value: null };
+			reason = `${describeReadFailure(err, timeoutMs)} (attempt ${attempt}/${attempts})`;
+			if (attempt < attempts) await sleep();
+		}
+	}
+	return { value: undefined, reason };
+}
+
+/** A 404 is the real answer "not set", never retried. */
+function isNotFound(err) {
+	return /HTTP 404|Not Found/i.test(String(err?.stderr ?? err?.message ?? ''));
 }
 
 export function repoVerdict(repo, uses, varValue, reason) {

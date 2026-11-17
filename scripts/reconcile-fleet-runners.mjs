@@ -121,7 +121,7 @@ import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { checkGhReserve } from './lib/gh-reserve.mjs';
 import { useAppPool } from './lib/gh-app.mjs';
-import { listRunners, ciRunnerVarCheck } from './lib/reconcile-apply.mjs';
+import { listRunners, ciRunnerVarCheck, pool } from './lib/reconcile-apply.mjs';
 import { resolveDesired } from './lib/reconcile-resolve.mjs';
 import {
 	buildCoverageDoc,
@@ -249,24 +249,6 @@ function loadManifest() {
 }
 
 // ---------------------------------------------------------------------------
-// Actual state
-// ---------------------------------------------------------------------------
-
-async function pool(items, size, fn) {
-	const out = new Array(items.length);
-	let next = 0;
-	await Promise.all(
-		Array.from({ length: Math.min(size, items.length) }, async () => {
-			while (next < items.length) {
-				const i = next++;
-				out[i] = await fn(items[i], i);
-			}
-		})
-	);
-	return out;
-}
-
-// ---------------------------------------------------------------------------
 // The claw side
 // ---------------------------------------------------------------------------
 
@@ -329,7 +311,7 @@ async function main() {
 		/* no committed baseline yet — reported as none, never as clean */
 	}
 	const committedRoster = onDiskCoverage?.repos ?? [];
-	const { desired, retired, ignored, departed, allRepos } = resolveDesired(
+	const { desired, retired, ignored, departed, allRepos, workflowBodies } = resolveDesired(
 		manifest,
 		committedRoster,
 		{
@@ -382,7 +364,7 @@ async function main() {
 	for (const name of committedRoster) {
 		if (!runnerVarPopulation.includes(name)) runnerVarPopulation.push(name);
 	}
-	const runnerVar = ciRunnerVarCheck(runnerVarPopulation);
+	const runnerVar = await ciRunnerVarCheck(runnerVarPopulation, { bodies: workflowBodies });
 
 	const repos = [...desired.keys()].filter((r) => !ONLY_REPO || r === ONLY_REPO);
 	const retiredScoped = retired.filter((r) => !ONLY_REPO || r.repo === ONLY_REPO);

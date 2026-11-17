@@ -488,6 +488,16 @@
     "why": "`gh api .../actions/runners` with retry, shared by reconcile-fleet-runners and check-label-floor (plan \u00a74.1 F2b, wave 5d lane A)."
   },
   {
+    "glob": "scripts/lib/workflow-bodies.mjs",
+    "layer": "access",
+    "why": "fleet-manager#111: every repo's workflow bodies in batched GraphQL reads, for reconcile's autoInclude probe and runnerVar check. Another system's data behind one reader, same shape as gh-runners.mjs right above."
+  },
+  {
+    "glob": "scripts/lib/test-gh-graphql-shim.mjs",
+    "layer": "config",
+    "why": "fleet-manager#111: a pure string, the bash case arm every reconcile `gh` test shim uses to answer the workflow-bodies GraphQL read. No I/O, same bucket as test-git-identity.mjs."
+  },
+  {
     "glob": "scripts/lib/sibling-repos.mjs",
     "layer": "access"
   },

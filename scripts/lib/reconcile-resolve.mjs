@@ -17,6 +17,7 @@ import {
 	targetsSelfHostedFleet,
 	lookupRepo,
 } from './reconcile-apply.mjs';
+import { readWorkflowBodies } from './workflow-bodies.mjs';
 
 /**
  * Resolve the manifest against GitHub into the set of (repo, claw) pairs that
@@ -92,6 +93,18 @@ export function resolveDesired(manifest, committedRoster, { fail }) {
 	const byName = new Map(all.map((r) => [r.nameWithOwner, r]));
 	const now = Date.now();
 
+	// EVERY repo's workflow bodies, in a few batched GraphQL reads
+	// (fleet-manager#111). The autoInclude probe below and the CLI's runnerVar
+	// check both read them; per-file REST reads had grown to ~300 serial calls.
+	// A fork is read only when autoInclude might admit one.
+	const workflowBodies = readWorkflowBodies(
+		all.filter((r) => !r.isFork || ai.excludeForks === false).map((r) => r.nameWithOwner)
+	);
+	const probe = {
+		countWorkflows: (name) => countWorkflows(name, workflowBodies),
+		targetsSelfHostedFleet: (name) => targetsSelfHostedFleet(name, workflowBodies),
+	};
+
 	const desired = new Map(); // repo -> { claws, reason }
 	const retired = []; // repos whose coverage may be removed
 	const ignored = []; // repos deliberately outside the reconciler's scope
@@ -127,10 +140,8 @@ export function resolveDesired(manifest, committedRoster, { fail }) {
 		}
 
 		// ONE rule, in scripts/lib/roster-eligibility.mjs, returning the REASON.
-		// `probe` passes the two expensive answers as functions so the ordering is
-		// unchanged: countWorkflows is one API call and targetsSelfHostedFleet is
-		// one per workflow file, and only a repo the cheap proxy would drop pays.
-		const why = autoIncludeDrop(repo, ai, { countWorkflows, targetsSelfHostedFleet }, now);
+		// Both probes answer from `workflowBodies` above; no per-repo call.
+		const why = autoIncludeDrop(repo, ai, probe, now);
 		if (why) {
 			leaves(name, why);
 			continue;
@@ -153,5 +164,5 @@ export function resolveDesired(manifest, committedRoster, { fail }) {
 		...vanishedFromUniverse(committedRoster, byName, lookupRepo, new Set(explicit.map(([n]) => n)))
 	);
 
-	return { desired, retired, ignored, departed, allRepos: byName };
+	return { desired, retired, ignored, departed, allRepos: byName, workflowBodies };
 }

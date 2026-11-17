@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createFakeNode } from './lib/fake-node.mjs';
 import { runFleetScript } from './lib/run-fleet-script.mjs';
+import { graphqlWorkflowsArm } from './lib/test-gh-graphql-shim.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLAW = 'fixture-claw';
@@ -48,9 +49,7 @@ case "$*" in
   *"-X POST"*"registration-token"*) echo "fixture-token" ;;
   *"actions/runners"*) echo '{"total_count":0,"runners":[]}' ;;
   *"releases/latest"*) echo 'v${VERSION}' ;;
-  *"/contents/.github/workflows") echo '[{"name":"ci.yml","path":".github/workflows/ci.yml"}]' ;;
-  *"/contents/.github/workflows/"*)
-    printf '{"content":"%s"}\\n' "$(printf 'jobs:\\n  check:\\n    runs-on: \${{ fromJSON(vars.CI_RUNNER) }}\\n' | base64 -w0)" ;;
+${graphqlWorkflowsArm()}
   *"trees/HEAD"*) echo '{"tree":[]}' ;;
   *) echo '{}' ;;
 esac

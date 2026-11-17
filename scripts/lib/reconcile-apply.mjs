@@ -1,8 +1,9 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stripYamlComments } from './yaml-comments.mjs';
-import { runnerVarForm, readRunnerVar, repoVerdict } from './runner-var.mjs';
+import { runnerVarForm, readRunnerVarAsync, repoVerdict } from './runner-var.mjs';
 import { runFleetScript } from './run-fleet-script.mjs';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { readChildApps } from './site-docs.mjs';
@@ -21,6 +22,7 @@ import { qualifyRepo } from '../../dist/lib/fleet-config.js';
 // `reconcile-runner-identity.mjs` already use it (#80).
 import { READ_ATTEMPTS, describeReadFailure } from './read-retry-policy.mjs';
 import { listRunners as ghListRunners } from './gh-runners.mjs';
+import { readWorkflowBodies } from './workflow-bodies.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SLICE_SCRIPT = resolve(HERE, '..', 'deploy-runners-slice.mjs');
@@ -210,19 +212,14 @@ export function ghApiJsonWithRetry(ghArgs) {
 	return { ok: false, reason };
 }
 
-export function listWorkflowFiles(repo) {
-	try {
-		const entries = JSON.parse(
-			gh(['api', `repos/${repo}/contents/.github/workflows`], { quiet: true })
-		);
-		return entries.filter((e) => /\.ya?ml$/.test(e.name)).map((e) => e.name);
-	} catch {
-		return []; // 404 = no workflows directory, or an empty repo
-	}
-}
-
-export function countWorkflows(repo) {
-	return listWorkflowFiles(repo).length;
+/**
+ * How many workflow files `repo` has, from `readWorkflowBodies`. An unreadable
+ * repo counts 0, as the REST listing's swallowed 404 did: this is the soft
+ * autoInclude proxy, and `targetsSelfHostedFleet` below says why it failed.
+ */
+export function countWorkflows(repo, bodies) {
+	const r = bodies.get(repo);
+	return r?.ok ? r.files.length : 0;
 }
 
 /**
@@ -260,35 +257,34 @@ export function countWorkflows(repo) {
  * it. `runnerVarForm` is the one place that question is answered, and it strips
  * comments for the same reason this function does.
  *
- * Only called when the cheap count would EXCLUDE the repo, so a repo already
- * inside autoInclude costs no extra API calls at all.
+ * Only asked when the cheap count would EXCLUDE the repo. It costs no call of
+ * its own: `bodies` is the one batched read `resolveDesired` already made
+ * (./workflow-bodies.mjs, fleet-manager#111), which runnerVar reuses.
  */
-export function targetsSelfHostedFleet(repo) {
-	for (const file of listWorkflowFiles(repo)) {
-		let body;
-		try {
-			const blob = JSON.parse(
-				gh(['api', `repos/${repo}/contents/.github/workflows/${file}`], { quiet: true })
-			);
-			body = Buffer.from(blob.content ?? '', 'base64').toString('utf8');
-		} catch (err) {
-			// An unreadable workflow must not quietly vote "needs no runner" — that
-			// is the silent-exclusion failure this function was added to end. Say so
-			// and keep checking the rest.
-			// stderr, not `say()` — this must stay visible under --json too.
-			console.error(
-				`reconcile-fleet-runners: ${repo}: could not read .github/workflows/${file}, ` +
-					`so its runner target is unknown: ${String(err.stderr || err.message)
-						.trim()
-						.slice(0, 120)}`
-			);
+export function targetsSelfHostedFleet(repo, bodies) {
+	const r = bodies.get(repo) ?? { ok: false, reason: 'not in the workflow read' };
+	// An unreadable workflow must not quietly vote "needs no runner" — that is
+	// the silent-exclusion failure this function was added to end. Say so.
+	// stderr, not `say()` — this must stay visible under --json too.
+	const unread = (what, why) =>
+		console.error(
+			`reconcile-fleet-runners: ${repo}: could not read ${what}, ` +
+				`so its runner target is unknown: ${String(why).trim().slice(0, 120)}`
+		);
+	if (!r.ok) {
+		unread('.github/workflows', r.reason);
+		return false;
+	}
+	for (const { name, text, reason } of r.files) {
+		if (text === null) {
+			unread(`.github/workflows/${name}`, reason);
 			continue;
 		}
 		// COMMENT-STRIPPED. A comment saying why a repo is NOT on the fleet is not
 		// evidence that it is — see scripts/lib/yaml-comments.mjs for the
 		// 2026-08-30 page this caused. Both helpers strip; neither can be skipped.
-		if (/self-hosted/.test(stripYamlComments(body))) return true;
-		if (runnerVarForm(body) !== null) return true;
+		if (/self-hosted/.test(stripYamlComments(text))) return true;
+		if (runnerVarForm(text) !== null) return true;
 	}
 	return false;
 }
@@ -299,69 +295,55 @@ export function targetsSelfHostedFleet(repo) {
 // ---------------------------------------------------------------------------
 
 /**
- * One `gh api` JSON read where an HTTP 404 is a DISTINCT, never-retried
- * answer ("this path genuinely is not there" — no `.github/workflows`
- * directory, or a workflow file that raced a delete since the directory was
- * listed), separate from any other failure, which IS retried `READ_ATTEMPTS`
- * times before being reported unreadable. The same split `readRunnerVar`
- * (`./runner-var.mjs`) already makes for the CI_RUNNER variable itself, and
- * the same policy `check-runner-var.mjs` applies to both reads.
- *
- * NOT `quiet`: this file's `gh()` helper discards stderr under `quiet:true`,
- * which would blind both the 404 test and the reason this surfaces on a real
- * failure — the same gap `ghWrite`'s own doc names for writes.
- */
-function ghJsonOr404(ghArgs) {
-	let reason = 'no attempt was made';
-	for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
-		try {
-			return { ok: true, data: JSON.parse(gh(ghArgs, { timeout: READ_TIMEOUT_MS })) };
-		} catch (err) {
-			const msg = String(err.stderr ?? err.message ?? '');
-			if (/HTTP 404|Not Found/i.test(msg)) return { ok: true, notFound: true };
-			reason = `${describeReadFailure(err, READ_TIMEOUT_MS)} (attempt ${attempt}/${READ_ATTEMPTS})`;
-			if (attempt < READ_ATTEMPTS) sleepSync(RETRY_DELAY_MS);
-		}
-	}
-	return { ok: false, reason };
-}
-
-/**
  * Every workflow in `repo` that references `vars.CI_RUNNER`, with its form —
- * or `{ uses: null, reason }` when the listing or a file could not be read.
+ * or `{ uses: null, reason }` when the directory or a file could not be read.
+ * `read` is the repo's entry from `readWorkflowBodies` (./workflow-bodies.mjs).
  *
  * UNREADABLE MUST NEVER COLLAPSE INTO "NO WORKFLOWS" here, unlike
- * `listWorkflowFiles` above: that function's silent swallow-to-`[]` is
- * correct for `targetsSelfHostedFleet`'s soft autoInclude proxy, where a read
- * failure costs nothing worse than one repo staying off the roster an extra
- * cycle, and wrong for this check, whose entire point is that an unreadable
- * repo is not a healthy one ("I could not look" must never render as
- * "nothing is wrong").
+ * `countWorkflows` above: that function's swallow-to-0 is correct for
+ * `targetsSelfHostedFleet`'s soft autoInclude proxy, where a read failure
+ * costs nothing worse than one repo staying off the roster an extra cycle,
+ * and wrong for this check, whose entire point is that an unreadable repo is
+ * not a healthy one ("I could not look" must never render as "nothing is
+ * wrong").
  */
-function ciRunnerVarUses(repo) {
-	const listing = ghJsonOr404(['api', `repos/${repo}/contents/.github/workflows`]);
-	if (!listing.ok)
-		return { uses: null, reason: `could not list .github/workflows: ${listing.reason}` };
-	if (listing.notFound) return { uses: [] };
-	const files = listing.data.filter((e) => /\.ya?ml$/.test(e.name)).map((e) => e.name);
+function ciRunnerVarUses(read) {
+	if (!read)
+		return { uses: null, reason: 'could not list .github/workflows: not in the workflow read' };
+	if (!read.ok) return { uses: null, reason: `could not list .github/workflows: ${read.reason}` };
 	const uses = [];
-	for (const file of files) {
-		const r = ghJsonOr404(['api', `repos/${repo}/contents/.github/workflows/${file}`]);
-		if (!r.ok)
-			return { uses: null, reason: `could not read .github/workflows/${file}: ${r.reason}` };
-		if (r.notFound) continue; // raced a delete between the listing and this read
-		const body = Buffer.from(r.data.content ?? '', 'base64').toString('utf8');
-		const form = runnerVarForm(body);
-		if (form) uses.push({ file, form });
+	for (const { name, text, reason } of read.files) {
+		if (text === null)
+			return { uses: null, reason: `could not read .github/workflows/${name}: ${reason}` };
+		const form = runnerVarForm(text);
+		if (form) uses.push({ file: name, form });
 	}
 	return { uses };
 }
 
-/** One `CI_RUNNER` variable read — the same shape `readRunnerVar` expects of `readOnce`. */
-function readCiRunnerVarOnce(repo) {
-	return gh(['api', `repos/${repo}/actions/variables/CI_RUNNER`, '-q', '.value'], {
-		timeout: READ_TIMEOUT_MS,
-	}).trim();
+/** One `CI_RUNNER` variable read — the shape `readRunnerVarAsync` expects of `readOnce`. */
+async function readCiRunnerVarOnce(repo) {
+	const { stdout } = await promisify(execFile)(
+		'gh',
+		['api', `repos/${repo}/actions/variables/CI_RUNNER`, '-q', '.value'],
+		{ encoding: 'utf8', timeout: READ_TIMEOUT_MS }
+	);
+	return stdout.trim();
+}
+
+/** Run `fn` over `items`, at most `size` at a time, results in input order. */
+export async function pool(items, size, fn) {
+	const out = new Array(items.length);
+	let next = 0;
+	await Promise.all(
+		Array.from({ length: Math.min(size, items.length) }, async () => {
+			while (next < items.length) {
+				const i = next++;
+				out[i] = await fn(items[i], i);
+			}
+		})
+	);
+	return out;
 }
 
 /**
@@ -388,26 +370,37 @@ function readCiRunnerVarOnce(repo) {
  * check-runner-var.mjs makes for itself, so this spends it once rather than
  * twice. An empty population is reported, never read as a clean fleet.
  */
-export function ciRunnerVarCheck(repos) {
+export async function ciRunnerVarCheck(
+	repos,
+	{ bodies = new Map(), readBodies = readWorkflowBodies, readVarOnce = readCiRunnerVarOnce } = {}
+) {
 	if (!repos.length) {
 		return { ok: false, findings: [], error: 'runnerVar: no repos to examine (empty population)' };
 	}
+	// One batched read for whatever the caller's `bodies` (resolveDesired's,
+	// over the owner's repos) does not already hold: the committed roster's
+	// stragglers, or every repo when called standalone (fleet-manager#111).
+	const unread = repos.filter((r) => !bodies.has(r));
+	const all = unread.length ? new Map([...bodies, ...readBodies(unread)]) : bodies;
 	const findings = [];
+	const users = [];
 	for (const repo of repos) {
-		const { uses, reason } = ciRunnerVarUses(repo);
-		if (uses === null) {
-			findings.push({ repo, reason });
-			continue;
-		}
-		if (!uses.length) continue; // does not reference it — nothing to check
-		const read = readRunnerVar(repo, readCiRunnerVarOnce, {
+		const { uses, reason } = ciRunnerVarUses(all.get(repo));
+		if (uses === null) findings.push({ repo, reason });
+		else if (uses.length) users.push({ repo, uses }); // else: does not reference it
+	}
+	// The variable reads, eight at a time: 40 repos read it on 2026-11-17.
+	const verdicts = await pool(users, 8, async ({ repo, uses }) => {
+		const read = await readRunnerVarAsync(repo, readVarOnce, {
 			attempts: READ_ATTEMPTS,
-			sleep: () => sleepSync(RETRY_DELAY_MS),
+			sleep: () => new Promise((r) => setTimeout(r, RETRY_DELAY_MS)),
 			timeoutMs: READ_TIMEOUT_MS,
 		});
-		const verdict = repoVerdict(repo, uses, read.value, read.reason);
+		return repoVerdict(repo, uses, read.value, read.reason);
+	});
+	for (const verdict of verdicts) {
 		if (verdict && verdict.status !== 'ok' && verdict.status !== 'unset-but-safe') {
-			findings.push({ repo, reason: verdict.why });
+			findings.push({ repo: verdict.repo, reason: verdict.why });
 		}
 	}
 	return { ok: findings.length === 0, findings };
