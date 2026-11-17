@@ -57,11 +57,20 @@ function fixture(listeners) {
 	return { root, home, tmp, bin, dirs };
 }
 
-function probe(fx) {
-	const out = execFileSync('bash', [PROBE], {
-		env: { PATH: `${fx.bin}:/usr/bin:/bin`, HOME: fx.home, TMPDIR: fx.tmp },
-		encoding: 'utf8',
-	});
+/**
+ * The probe's environment. `sshShell` models production: the probe runs in an
+ * ssh shell that never sees the job's TMPDIR (it lives in the runner's .env),
+ * so its own temp dir is the system one, OUTSIDE $HOME. That is /tmp on a
+ * claw; here it is a sibling of the fixture home, because the fixture home is
+ * itself under /tmp and unsetting TMPDIR would drop every path in it.
+ */
+function probeEnv(fx, { sshShell = false } = {}) {
+	const env = { PATH: `${fx.bin}:/usr/bin:/bin`, HOME: fx.home };
+	return { ...env, TMPDIR: sshShell ? join(fx.root, 'system-tmp') : fx.tmp };
+}
+
+function probe(fx, opts) {
+	const out = execFileSync('bash', [PROBE], { env: probeEnv(fx, opts), encoding: 'utf8' });
 	return out
 		.split('\n')
 		.filter((l) => l.startsWith('RUNNER '))
@@ -93,13 +102,24 @@ test('#103: a listener outside $HOME, or in a temp dir, is NOT an install and is
 	}
 });
 
+test("fleet-manager#79: a fixture in a CI job's ~/runner-tmp is dropped even with no TMPDIR in the probe's shell", () => {
+	// ci-throttle-install.sh gives every CI job TMPDIR=$HOME/runner-tmp, but the
+	// probe's ssh shell has no TMPDIR, so the temp-dir rule alone saw only /tmp.
+	const fx = fixture(({ home }) => [
+		join(home, 'odd-place', 'runner'),
+		join(home, 'runner-tmp', 'runner-drift-def', 'actions-runner-x'),
+	]);
+	try {
+		assert.deepEqual(probe(fx, { sshShell: true }), [join(fx.home, 'odd-place', 'runner')]);
+	} finally {
+		rmSync(fx.root, { recursive: true, force: true });
+	}
+});
+
 /** The probe's raw `WORKER` rows, with the fixture $HOME cut off the directory. */
-function workerRows(fx, lines) {
+function workerRows(fx, lines, opts) {
 	writeFileSync(join(fx.home, '.fake', 'workers'), lines.join('\n') + '\n');
-	const out = execFileSync('bash', [PROBE], {
-		env: { PATH: `${fx.bin}:/usr/bin:/bin`, HOME: fx.home, TMPDIR: fx.tmp },
-		encoding: 'utf8',
-	});
+	const out = execFileSync('bash', [PROBE], { env: probeEnv(fx, opts), encoding: 'utf8' });
 	return out
 		.split('\n')
 		.filter((l) => l.startsWith('WORKER '))
@@ -148,6 +168,23 @@ test('private#138: a test double named Runner.Worker, or one outside $HOME or in
 			`4600 ${fx.home}/odd/bin/Runner.Worker spawnclient 1 2`,
 		]);
 		assert.deepEqual(rows, ['WORKER ~/odd ? ? ? 4600']);
+	} finally {
+		rmSync(fx.root, { recursive: true, force: true });
+	}
+});
+
+test("fleet-manager#79: a job-shaped worker in a CI job's ~/runner-tmp is not a worker, with no TMPDIR in the probe's shell", () => {
+	const fx = fixture(() => []);
+	try {
+		const rows = workerRows(
+			fx,
+			[
+				`4700 ${fx.home}/runner-tmp/runner-drift-def/actions-runner-x/bin/Runner.Worker spawnclient 1 2`,
+				`4800 ${fx.home}/odd/bin/Runner.Worker spawnclient 1 2`,
+			],
+			{ sshShell: true }
+		);
+		assert.deepEqual(rows, ['WORKER ~/odd ? ? ? 4800']);
 	} finally {
 		rmSync(fx.root, { recursive: true, force: true });
 	}

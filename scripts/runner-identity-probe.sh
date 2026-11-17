@@ -41,8 +41,16 @@ HOST=$(hostname)
 # convention there the glob misses (the bare ~/actions-runner it was built for),
 # but a path outside $HOME, or inside a temp dir (TMPDIR may sit under $HOME on
 # a claw whose /tmp is tmpfs), is not one and is dropped.
+#
+# $TMPDIR ALONE NEVER COVERED THAT CASE. This probe runs in an ssh shell, and
+# the job's TMPDIR lives in the runner's .env, so here it is unset and tmp_root
+# fell back to /tmp. ci-throttle-install.sh gives every CI job
+# TMPDIR=$HOME/runner-tmp, and fixtures made there passed the "$HOME"/* arm.
+# runner-supervision paged 11 times from 11-01 to 11-16 over exactly that
+# (fleet-manager#79). So that directory is named outright, beside $TMPDIR.
 tmp_root=${TMPDIR:-/tmp}
 tmp_root=${tmp_root%/}
+job_tmp="$HOME/runner-tmp"
 runner_dirs() {
 	{
 		for d in "$HOME"/runners/actions-runner*/ "$HOME"/actions-runner*/ "$HOME"/repos/*/actions-runner*/; do
@@ -55,7 +63,7 @@ runner_dirs() {
 				*/bin/Runner.Listener)
 					dir=${tok%/bin/Runner.Listener}
 					case "$dir" in
-					"$tmp_root"/*) ;;
+					"$tmp_root"/* | "$job_tmp"/*) ;;
 					"$HOME"/*) printf '%s\n' "$dir" ;;
 					esac
 					;;
@@ -155,7 +163,7 @@ EOF
 pgrep -ax Runner.Worker 2>/dev/null | grep " spawnclient " | while read -r pid c _; do
 	d=${c%/bin*/Runner.Worker}
 	case "$d" in
-	"$tmp_root"/*) continue ;;
+	"$tmp_root"/* | "$job_tmp"/*) continue ;;
 	"$HOME"/*) ;;
 	*) continue ;;
 	esac
