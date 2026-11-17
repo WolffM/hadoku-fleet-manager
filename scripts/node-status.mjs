@@ -45,6 +45,7 @@ import process from 'node:process';
 import { drainNotices, effectiveDrains, HOSTING_NOTICE_MS } from '../dist/runners/drain.js';
 import { doctorFindings } from './lib/doctor-findings.mjs';
 import { createEmitter } from './lib/emit.mjs';
+import { askNode, missesWhy } from './lib/node-answer.mjs';
 import { readDrainDoc } from './lib/expected-down.mjs';
 import { loadManifest, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import {
@@ -66,11 +67,16 @@ import {
 	usersObserveScript,
 } from './lib/node-users-facet.mjs';
 import { stateDir } from '../dist/lib/fleet-paths.js';
+import { writeJsonAtomicSync } from '../dist/lib/atomic-json.js';
 import { readTenantRegistry, tenantSpec } from './lib/tenant-registry.mjs';
 
 /** The health writer runs daily; a day and a half covers one late run and no more. */
 export const HEALTH_STALE_HOURS = 36;
-/** ssh connect, then the whole answer. A node slower than this is unreachable for a tenant's purposes. */
+/**
+ * ssh connect, then the whole answer, PER ATTEMPT. A node that misses it on
+ * every attempt (`ANSWER_ATTEMPTS`, lib/node-answer.mjs) is unreachable for a
+ * tenant's purposes. One miss alone is not (fleet-manager#112).
+ */
 const CONNECT_S = 6;
 const ANSWER_MS = 20_000;
 
@@ -111,6 +117,12 @@ const skippedByRole = selectMachines(manifest, { where: isBackstopNode }).map(([
  * `generatedAt`; one that cannot be read is simply not served.
  */
 const LAST_FILE = join(stateDir(), 'node-status-last.json');
+/**
+ * The newest whole-fleet read that called any node unreachable: those rows,
+ * and when. LAST_FILE is overwritten by the next read, usually inside a
+ * minute, and with it the reason (fleet-manager#112 lost it that way).
+ */
+const UNREACHABLE_FILE = join(stateDir(), 'node-status-unreachable.json');
 const maxAgeAt = process.argv.indexOf('--max-age');
 const MAX_AGE_S = maxAgeAt > -1 ? Number(process.argv[maxAgeAt + 1]) : null;
 if (MAX_AGE_S !== null && !(MAX_AGE_S > 0)) {
@@ -235,32 +247,38 @@ const rows = await Promise.all(
 		const observedAt = iso(Date.now());
 		const records = hostingRecords(name);
 		const specOf = (h) => tenantSpec(registry, h.declared.tenant) ?? null;
-		const observeAs = (spec) =>
-			runOn(name, observeScript(spec ?? NO_TENANT, nodeUser(m, 'ci')), {
-				as: 'admin',
-				timeoutMs: ANSWER_MS,
-				connectTimeout: CONNECT_S,
+		const ask = (script, parse) =>
+			askNode({
+				node: name,
+				script,
+				parse,
+				run: runOn,
+				opts: { as: 'admin', timeoutMs: ANSWER_MS, connectTimeout: CONNECT_S },
 			});
+		const observeAs = (spec) =>
+			ask(observeScript(spec ?? NO_TENANT, nodeUser(m, 'ci')), parseObserved);
 		// The node's own facts ride the first tenant's probe; each further tenant
 		// needs its own, since the probe reads that tenant's slice and listener.
-		const r = await observeAs(records[0] ? specOf(records[0]) : null);
-		const obs = parseObserved(r.stdout);
-		const usersRun = await runOn(name, usersObserveScript(m), {
-			as: 'admin',
-			timeoutMs: ANSWER_MS,
-			connectTimeout: CONNECT_S,
-		});
-		const users = judgeNodeUsers(m, parseUsersObservation(usersRun.stdout));
+		const first = await observeAs(records[0] ? specOf(records[0]) : null);
+		const obs = first.value;
+		const users = judgeNodeUsers(
+			m,
+			(await ask(usersObserveScript(m), parseUsersObservation)).value
+		);
 		const findings = [];
 		if (!obs) {
-			findings.push({
-				class: 'blocking',
-				category: 'unreachable',
-				why: r.ok
-					? 'the node answered but its answer stopped short'
-					: r.stderr.trim() || r.error || 'no answer',
-			});
-		} else seen[name] = observedAt;
+			findings.push({ class: 'blocking', category: 'unreachable', why: missesWhy(first.misses) });
+		} else {
+			seen[name] = observedAt;
+			// Answered, but not the first time: not a verdict, and kept so a
+			// pattern of near-misses is visible before one becomes a promotion.
+			if (first.misses.length)
+				findings.push({
+					class: 'advisory',
+					category: 'answer-retried',
+					why: `answered on attempt ${first.misses.length + 1}: ${first.misses.join('; ')}`,
+				});
+		}
 
 		const h = health.nodes[name];
 		let healthOut;
@@ -325,7 +343,7 @@ const rows = await Promise.all(
 		);
 		for (const [i, h] of records.entries()) {
 			const spec = specOf(h);
-			const tObs = i === 0 || !obs ? obs : parseObserved((await observeAs(spec)).stdout);
+			const tObs = i === 0 || !obs ? obs : (await observeAs(spec)).value;
 			const { declared, mode } = h;
 			// Reach is a `controller` ingress's question; a loopback tenant is judged from its socket.
 			const reach =
@@ -485,6 +503,18 @@ if (out.json) {
 			writeFileSync(LAST_FILE, `${JSON.stringify(document)}\n`);
 		} catch (err) {
 			out.warn(`could not keep the document for --max-age: ${err.message}`);
+		}
+		const unreachable = rows.filter((r) => !r.reachable);
+		if (unreachable.length) {
+			try {
+				writeJsonAtomicSync(
+					UNREACHABLE_FILE,
+					{ generatedAt: document.generatedAt, nodes: unreachable },
+					{ space: 2 }
+				);
+			} catch (err) {
+				out.warn(`could not keep the unreachable rows: ${err.message}`);
+			}
 		}
 	}
 	out.emit({ ...document, cached: false });

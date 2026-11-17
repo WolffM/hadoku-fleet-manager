@@ -75,7 +75,9 @@ const SCRIPTS_DIR = join(ROOT, 'scripts');
 
 /** The one place this package reaches a node over ssh. */
 const SSH_IMPORT = /from\s+'\.\/lib\/fleet-exec\.mjs'/;
-const SSH_CALL = /\brunOn(?:Sync)?\s*\(/;
+// A call, or `runOn` handed to a helper that calls it (`run: runOn`, as
+// node-status hands it to askNode and probeReach): that script sshes too.
+const SSH_CALL = /\brunOn(?:Sync)?\s*\(|\brun:\s*runOn(?:Sync)?\b/;
 const DEFER_IMPORT = /from\s+'\.\/lib\/expected-down\.mjs'/;
 const DEFER_CALL = /\bdeferralFor\s*\(/;
 
@@ -96,6 +98,13 @@ const EXEMPT = new Map([
 		'operator-invoked against ONE named node that it REQUIRES to be drained: ' +
 			'the drain is its precondition, not a reason to defer. An unreachable node ' +
 			'there stops the cutover with the reason, and nothing is changed.',
+	],
+	[
+		'hosting-placement.mjs',
+		"node-status's sibling for ONE app: a deploy reads it to follow the app's " +
+			'slices, and a drained hosting node is exactly one it must not follow. ' +
+			'Deferring that slice would report it fine to the reader that acts on it. ' +
+			'The drain is carried beside it instead, as a notice (drainNotices).',
 	],
 	[
 		'node-status.mjs',

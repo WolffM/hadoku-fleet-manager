@@ -1695,6 +1695,13 @@
     "part": "run"
   },
   {
+    "glob": "scripts/lib/node-answer.mjs",
+    "layer": "domain",
+    "domain": "tenancy",
+    "part": "core",
+    "why": "node-status's ask-twice rule (fleet-manager#112): pure over an injected `run`, imports nothing; its one importer is node-status.mjs (tenancy/run), so it sits beside hosting.mjs as tenancy core."
+  },
+  {
     "glob": "scripts/lib/hosting.mjs",
     "layer": "domain",
     "domain": "tenancy",

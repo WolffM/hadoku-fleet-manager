@@ -474,4 +474,12 @@ mode, the declared resources next to the observed ones, and its scheduled end.
 alone, so a tenant placed beside it later never hides it from a reader of
 that field. A node that cannot be reached,
 whose answer is cut off, or whose health record is more than 36 h old has a
-blocking finding and `ok: false`.
+blocking finding and `ok: false`. "Cannot be reached" means every attempt
+missed: each node is asked twice, 20 s per attempt, and the `unreachable`
+finding's `why` names each attempt's own failure (a timeout reads `no answer
+within 20s`). A node that answered only on its second attempt is reachable,
+with an advisory `answer-retried` finding saying why the first missed
+(fleet-manager#112: a ~20 s pause on hokon's path to the wired claws once
+marked five of them unreachable for a single read). The newest read that called
+any node unreachable keeps those rows in `node-status-unreachable.json` beside
+`node-status-last.json`, which the next read overwrites.
