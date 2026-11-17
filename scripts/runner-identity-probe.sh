@@ -42,35 +42,26 @@ HOST=$(hostname)
 # but a path outside $HOME, or inside a temp dir (TMPDIR may sit under $HOME on
 # a claw whose /tmp is tmpfs), is not one and is dropped.
 #
-# $TMPDIR ALONE NEVER COVERED THAT CASE. This probe runs in an ssh shell, and
-# the job's TMPDIR lives in the runner's .env, so here it is unset and tmp_root
-# fell back to /tmp. ci-throttle-install.sh gives every CI job
-# TMPDIR=$HOME/runner-tmp, and fixtures made there passed the "$HOME"/* arm.
-# runner-supervision paged 11 times from 11-01 to 11-16 over exactly that
-# (fleet-manager#79). So that directory is named outright, beside $TMPDIR.
-tmp_root=${TMPDIR:-/tmp}
-tmp_root=${tmp_root%/}
-job_tmp="$HOME/runner-tmp"
-runner_dirs() {
-	{
-		for d in "$HOME"/runners/actions-runner*/ "$HOME"/actions-runner*/ "$HOME"/repos/*/actions-runner*/; do
-			d=${d%/}
-			[ -d "$d" ] && printf '%s\n' "$d"
-		done
-		pgrep -af "bin/Runner\.Listener" 2>/dev/null | tr ' ' '\n' |
-			while IFS= read -r tok; do
-				case "$tok" in
-				*/bin/Runner.Listener)
-					dir=${tok%/bin/Runner.Listener}
-					case "$dir" in
-					"$tmp_root"/* | "$job_tmp"/*) ;;
-					"$HOME"/*) printf '%s\n' "$dir" ;;
-					esac
-					;;
-				esac
-			done
-	} | sort -u | grep -v "^$HOME/\\.hadoku/jit/"
-}
+# That rule, and the JIT exclusion, are lib/runner-install.sh: one answer for
+# every reader. Its ${TMPDIR:-/tmp} version here only ever dropped /tmp, since
+# the job's TMPDIR ($HOME/runner-tmp) never reaches this ssh shell.
+
+# --- the runner-install rule (scripts/lib/runner-install.sh) ----------------
+# PREPENDED by the driver that ships this over ssh; sourced from beside this
+# file when it runs as one (the tests, a hand run). Missing is fatal: without
+# it every reader below would judge whatever process names itself a runner.
+if ! command -v runner_install_dir >/dev/null 2>&1; then
+	__ri_self=${BASH_SOURCE[0]:-}
+	if [ -n "$__ri_self" ] && [ -f "$__ri_self" ] && [ -f "${__ri_self%/*}/lib/runner-install.sh" ]; then
+		# shellcheck source=lib/runner-install.sh
+		. "${__ri_self%/*}/lib/runner-install.sh"
+	else
+		echo "runner-install.sh was not prepended" >&2
+		exit 2
+	fi
+fi
+
+runner_dirs() { standing_runner_dirs; }
 
 # .runner is UTF-8 with a BOM, which breaks every naive JSON reader — python's
 # json.load included. Strip it rather than grepping, so a reformatted file does
@@ -157,16 +148,12 @@ EOF
 #
 # `spawnclient` and not the process name alone: ci-throttle.test.mjs copies
 # bash to `Runner.Worker` (see PROBE_CMD in src/lib/node-probe.ts). The same
-# $HOME / temp-dir rule as the listener union keeps a suite's fake runner out.
+# runner_install_dir rule as the listener union keeps a suite's fake runner out.
 # A worker runs from the VERSIONED directory (`bin.2.338.2/Runner.Worker`), so
 # the strip is `/bin*/`. JIT slots are INCLUDED: a JIT worker is a job too.
 pgrep -ax Runner.Worker 2>/dev/null | grep " spawnclient " | while read -r pid c _; do
 	d=${c%/bin*/Runner.Worker}
-	case "$d" in
-	"$tmp_root"/* | "$job_tmp"/*) continue ;;
-	"$HOME"/*) ;;
-	*) continue ;;
-	esac
+	runner_install_dir "$d" || continue
 	repo='?'
 	name='?'
 	if [ -f "$d/.runner" ]; then

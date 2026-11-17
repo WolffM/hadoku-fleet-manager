@@ -249,7 +249,11 @@ try {
 const KNOWN_DOWN = knownDownNodes();
 
 const coverage = JSON.parse(readFileSync(COVERAGE, 'utf8'));
-const probe = readFileSync(PROBE_SRC, 'utf8');
+// The runner-install rule rides in front of the probe, as it does in front of
+// ci-throttle-install.sh: one answer to which directories are runners.
+const probe =
+	readFileSync(resolve(__dirname, 'lib', 'runner-install.sh'), 'utf8') +
+	readFileSync(PROBE_SRC, 'utf8');
 const manifest = loadManifest();
 const nodes = selectMachines(manifest, { only: ONLY }).map(([name]) => name);
 

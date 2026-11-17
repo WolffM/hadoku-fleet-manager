@@ -13,6 +13,9 @@
 import { readFileSync } from 'node:fs';
 import { provenanceDrift } from './script-provenance.mjs';
 
+/** The one "is this directory a runner install?" rule; see its header. */
+export const RUNNER_INSTALL_RULE = new URL('./runner-install.sh', import.meta.url);
+
 /**
  * Ship the node-side script with its inputs.
  *
@@ -72,6 +75,10 @@ export function remotePayload({
 	return (
 		preamble +
 		readFileSync(toolcacheRule, 'utf8') +
+		// Which directories are runners, and which processes are only a test's
+		// fixtures: the installer asks lib/runner-install.sh rather than
+		// keeping its own answer.
+		readFileSync(RUNNER_INSTALL_RULE, 'utf8') +
 		readFileSync(installSrc, 'utf8') +
 		// APPENDED, not prepended: it publishes `$LINE`/`$TCLINE`/`$MLINE`, which
 		// the node half derives, so it has to run after them. It emits its own

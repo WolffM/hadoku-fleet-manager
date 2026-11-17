@@ -317,6 +317,8 @@ test("the probe counts listeners under the runner user's HOME only, never a test
 		// fixtures sit UNDER $HOME too: 11 pages on claw-4/6/10, 11-01..11-16.
 		`401 ${home}/runner-tmp/runner-drift-Xy/actions-runner-x/bin/Runner.Listener run`,
 		`402 ${home}/runner-tmp/runner-drift-Xy/actions-runner-x/bin/Runner.Listener run`,
+		// A layout no glob knows is still a runner, by the rule every reader
+		// shares (scripts/lib/runner-install.sh): supervised, not ignored.
 		`403 ${home}/repos/app/nested/actions-runner-deep/bin/Runner.Listener run`,
 	]
 		.map((l) => `'${l}'`)
@@ -330,6 +332,11 @@ test("the probe counts listeners under the runner user's HOME only, never a test
 		parseListeners(out)
 			.map((r) => r.dir)
 			.sort(),
-		['actions-runner-app', 'actions-runner-hadoku-site', 'actions-runner-tenhands']
+		[
+			'actions-runner-app',
+			'actions-runner-deep',
+			'actions-runner-hadoku-site',
+			'actions-runner-tenhands',
+		]
 	);
 });

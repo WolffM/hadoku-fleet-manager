@@ -120,7 +120,14 @@ export const NON_LOGIN = 'bash --noprofile --norc -c';
  * `.env` wins, because the listener loads that file after it starts). One
  * `RUNNERPATH <label> <PATH>` line per distinct PATH. NONE at all means "could
  * not look", and `judgeTool` fails every tool on it.
+ *
+ * A listener that is not a runner install (lib/runner-install.sh: a test's fake
+ * listener in a temp dir, which this package's own suite starts while it runs
+ * as a CI job) is skipped: its PATH is the test process's, not a runner's.
  */
+/** The one "is this directory a runner install?" rule; see its header. */
+const RUNNER_INSTALL_RULE = readFileSync(new URL('./runner-install.sh', import.meta.url), 'utf8');
+
 const RUNNER_PATHS_SCRIPT = `__rp=''
 __add() { case "
 $__rp
@@ -132,6 +139,7 @@ __m=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^PATH=//p')
 for __p in $(pgrep -x Runner.Listener 2>/dev/null); do
   __d=$(tr '\\0' '\\n' < "/proc/$__p/cmdline" 2>/dev/null | grep -m1 '/bin/Runner.Listener$')
   __d=\${__d%/bin/Runner.Listener}
+  runner_install_dir "$__d" || continue
   __l=$(sed -n 's/^PATH=//p' "$__d/.env" 2>/dev/null | tail -n1)
   [ -n "$__l" ] || __l=$(tr '\\0' '\\n' < "/proc/$__p/environ" 2>/dev/null | sed -n 's/^PATH=//p')
   [ -n "$__l" ] && __add "listener:\${__d#"$HOME"/}" "$__l"
@@ -197,7 +205,7 @@ export function toolProbeScript(tools) {
 			return lines;
 		})
 		.join('\n');
-	return `${RUNNER_PATHS_SCRIPT}\n${perTool}`;
+	return `${RUNNER_INSTALL_RULE}\n${RUNNER_PATHS_SCRIPT}\n${perTool}`;
 }
 
 /** `{ [id]: { detect, login, runner, version, loginversion } }` from the TOOL lines of a probe. */

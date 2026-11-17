@@ -121,10 +121,17 @@ f)
 	exit 1
 	;;
 af)
-	# The union-enumeration backstop. Every test directory here is already
-	# findable by runner_dirs()'s own glob, so answering empty (nothing
-	# EXTRA to add) is faithful, not a gap.
-	exit 1
+	# The union-enumeration backstop: one line per directory in
+	# $HOME/.fake/af-listeners, as \`pgrep -af\` prints a live listener. Absent,
+	# nothing EXTRA is running, which is faithful for a test whose directories
+	# runner_dirs()'s own glob already finds.
+	[ -r "$HOME/.fake/af-listeners" ] || exit 1
+	i=500
+	while IFS= read -r d; do
+		echo "$i $d/bin/Runner.Listener run"
+		i=$((i + 1))
+	done <"$HOME/.fake/af-listeners"
+	exit 0
 	;;
 esac
 exit 1
@@ -441,6 +448,34 @@ void test("VFS fact behind the regression: a directory's mtime is NOT its creati
 		mtimeAfterTouch > createdAt,
 		`mtime (${mtimeAfterTouch}) should read LATER than creation (${createdAt}) once something touches the directory afterwards — proving mtime is not a safe proxy for "when was this created"`
 	);
+});
+
+// --- which directories are runners: lib/runner-install.sh ------------------
+
+void test('a live listener the glob misses is enumerated; a test fixture, in the job TMPDIR or outside $HOME, is never written or restarted', () => {
+	// 2026-11-16 01:51Z: hokon's converger ran --confirm and reported "restart
+	// failed" on four of this package's own fixtures, /tmp/runner-drift-*/
+	// actions-runner-x. The union took every listener in the process table.
+	const root = take(mkdtempSync(join(tmpdir(), 'runner-drift-union-')));
+	const home = join(root, 'home');
+	const odd = newRunnerDir(home, 'odd-place');
+	const inJobTmp = newRunnerDir(join(home, 'runner-tmp', 'runner-drift-def'));
+	const outside = newRunnerDir(join(root, 'elsewhere'));
+	mkdirSync(join(home, '.fake'), { recursive: true });
+	writeFileSync(join(home, '.fake', 'af-listeners'), [odd, inJobTmp, outside].join('\n') + '\n');
+
+	const out = runHermetic(home);
+	assert.ok(
+		existsSync(join(odd, '.env')),
+		`the union lost a real install the glob misses:\n${out}`
+	);
+	for (const fixture of [inJobTmp, outside]) {
+		assert.ok(
+			!existsSync(join(fixture, '.env')),
+			`wrote a .env into the fixture ${fixture}:\n${out}`
+		);
+		assert.ok(!out.includes(fixture), `reported the fixture ${fixture}:\n${out}`);
+	}
 });
 
 // --- shell-level: the three dispositions a stale listener can end a run in -

@@ -51,6 +51,9 @@
  * run, in the same shape runner-health's alerts already use.
  */
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { nodeShell } from './node-shell.js';
 
 import { logger } from './host.js';
@@ -90,6 +93,16 @@ export interface SupervisionReport {
 }
 
 /**
+ * The one "is this directory a runner install?" rule every node-side reader
+ * shares; it defines functions only. Read from the shipped `scripts/`, the way
+ * `runners/node-script.ts` reads the minters.
+ */
+const RUNNER_INSTALL_RULE = readFileSync(
+	resolve(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'lib', 'runner-install.sh'),
+	'utf8'
+);
+
+/**
  * One line per LISTENER: `dir|unit|scope|state`.
  *
  * Listeners are found from `ps` and matched in the shell, never via
@@ -121,7 +134,9 @@ export interface SupervisionReport {
  * entirely, this check correctly reports nothing and is no longer load-bearing.
  * Reviewed and decided 2026-08-30; see the fleet worklist §8e.
  */
-export const SUPERVISION_PROBE = `
+export const SUPERVISION_PROBE =
+	RUNNER_INSTALL_RULE +
+	`
 ps -eo pid=,args= | while read -r pid rest; do
   # ANCHORED at "/": a listener's argv[0] is an absolute path, while this
   # probe's own \`bash -c <script>\` process has argv starting with "bash" — and
@@ -130,34 +145,23 @@ ps -eo pid=,args= | while read -r pid rest; do
   # listener whose directory is the literal glob \`actions-runner*\` and a bogus
   # "2 listeners" duplicate. Same self-match trap as \`pgrep -f\`, one layer down.
   #
-  # And ANCHORED at the runner user's own $HOME: every standing runner lives
-  # there (~/actions-runner*, ~/runners/…, ~/repos/<r>/…), while this package's
-  # own test suite, running as a CI job on the node, starts fake
-  # Runner.Listener processes under /tmp/…/actions-runner-x. On 2026-11-09
-  # 09:34Z two of them on claw-4 paged "2 listeners on one directory"
-  # (fleet-manager#79); runner-identity-probe.sh had the same leak on 10-08.
+  # And a runner INSTALL, by the one rule every node-side reader shares
+  # (scripts/lib/runner-install.sh, prepended to this script). This package's own suite,
+  # running as a CI job on the node, starts fake Runner.Listener processes in its
+  # temp dir: /tmp/…/actions-runner-x paged on 11-09 (fleet-manager#79), and,
+  # because a CI job's TMPDIR is ~/runner-tmp, ~/runner-tmp/…/actions-runner-x
+  # paged claw-4, claw-6 and claw-10 eleven times from 11-01 to 11-16.
   #
-  # "Under $HOME" was NOT enough. ci-throttle-install.sh gives every CI job
-  # TMPDIR=$HOME/runner-tmp, so the same fixtures land at
-  # ~/runner-tmp/runner-drift-*/actions-runner-x, and a case \`*\` crosses "/":
-  # "$HOME"/*/actions-runner* matched them. That paged claw-4, claw-6 and
-  # claw-10 eleven times from 11-01 to 11-16, every one during this repo's own
-  # check or publish job. So the runner directory's PARENT must be exactly one
-  # of the three standing layouts, the same list runner-identity-probe.sh
-  # enumerates. It cannot lean on $TMPDIR the way that probe does: this ssh
-  # shell never sees the job's TMPDIR, which lives in the runner's .env.
+  # Then this check's own scope: STANDING runners, named actions-runner*. A
+  # warm listener and a JIT slot are not, and are judged elsewhere;
+  # parseListeners keys rows on that same prefix.
   case "$rest" in
-    "$HOME"/*/bin/Runner.Listener*) ;;
+    /*/bin/Runner.Listener*) ;;
     *) continue ;;
   esac
   bin=\${rest%%/bin/Runner.Listener*}
-  parent=\${bin%/*}
+  runner_install_dir "$bin" || continue
   case "\${bin##*/}" in actions-runner*) ;; *) continue ;; esac
-  case "$parent" in
-    "$HOME"|"$HOME"/runners) ;;
-    "$HOME"/repos/*) case "\${parent#"$HOME"/repos/}" in */*) continue ;; esac ;;
-    *) continue ;;
-  esac
   dir=$(basename "$bin")
   cg=$(head -1 /proc/$pid/cgroup 2>/dev/null)
   case "$cg" in

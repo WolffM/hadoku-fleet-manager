@@ -42,6 +42,21 @@ export XDG_RUNTIME_DIR
 # fleet-wide accessor is the step after it.
 NODE_DIR="$HOME/.hadoku"
 
+# --- the runner-install rule (scripts/lib/runner-install.sh) ----------------
+# PREPENDED by the driver that ships this over ssh; sourced from beside this
+# file when it runs as one (the tests, a hand run). Missing is fatal: without
+# it every reader below would judge whatever process names itself a runner.
+if ! command -v runner_install_dir >/dev/null 2>&1; then
+	__ri_self=${BASH_SOURCE[0]:-}
+	if [ -n "$__ri_self" ] && [ -f "$__ri_self" ] && [ -f "${__ri_self%/*}/lib/runner-install.sh" ]; then
+		# shellcheck source=lib/runner-install.sh
+		. "${__ri_self%/*}/lib/runner-install.sh"
+	else
+		echo "runner-install.sh was not prepended" >&2
+		exit 2
+	fi
+fi
+
 HOOK="$NODE_DIR/ci-throttle.sh"
 CONF="$NODE_DIR/ci-throttle.conf"
 LINE="ACTIONS_RUNNER_HOOK_JOB_STARTED=$HOOK"
@@ -416,25 +431,11 @@ nolistener=0
 # "not wired to the throttle" is a permanent false positive, and the union is
 # narrowed by an EXPLICIT known path rather than by tightening the glob, which
 # would restore exactly the blind spot the union exists to close.
-runner_dirs() {
-	{
-		for d in "$HOME"/runners/actions-runner*/ "$HOME"/actions-runner*/ "$HOME"/repos/*/actions-runner*/; do
-			d=${d%/}
-			[ -f "$d/.runner" ] && printf '%s\n' "$d"
-		done
-		# pgrep -f matches its own shell, so filter on the exact argv token
-		# rather than trusting the match.
-		pgrep -af "bin/Runner\.Listener" 2>/dev/null | tr ' ' '\n' |
-			while IFS= read -r tok; do
-				case "$tok" in
-				*/bin/Runner.Listener) printf '%s\n' "${tok%/bin/Runner.Listener}" ;;
-				esac
-			done
-		# The `.` in `.hadoku` is a REGEX dot once the variable is expanded, so it is
-		# escaped back. The literal this replaced already escaped it; losing that in
-		# the substitution would widen the exclusion by one character class.
-	} | sort -u | grep -v "^${NODE_DIR//./\\.}/jit/"
-}
+# Both halves, the JIT exclusion and the rule that a fixture or a job's temp
+# tree is not a runner, are lib/runner-install.sh's standing_runner_dirs.
+# This installer had NO such rule until 2026-11-17: on 11-16 hokon's converger
+# tried to restart four of this package's own test fixtures under /tmp.
+runner_dirs() { standing_runner_dirs; }
 
 while IFS= read -r d; do
 	[ -n "$d" ] || continue
@@ -667,7 +668,11 @@ jobtmp_bad=0
 jobtmp_unread=0
 for wp in $(pgrep -x Runner.Worker 2>/dev/null); do
 	wexe=$(readlink "/proc/$wp/exe" 2>/dev/null)
-	wdir=${wexe%/bin/Runner.Worker}
+	wdir=${wexe%/bin*/Runner.Worker}
+	# A test's fake worker (runner-env.test.mjs copies sleep to Runner.Worker in
+	# a temp dir) is not a job, and its empty environment would read JOBTMP-BAD.
+	# An unreadable exe is still judged: that is a blind spot, not a fixture.
+	if [ -n "$wdir" ] && ! runner_install_dir "$wdir"; then continue; fi
 	[ -n "$wdir" ] || wdir="(unknown-dir)"
 	# The READ's status, not an empty result: a job with an empty environment
 	# is readable, and is the worst case (TMPDIR unset), not a blind spot.
