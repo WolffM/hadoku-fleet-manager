@@ -182,6 +182,7 @@ import { runPass1 } from './lib/bootcamp-probe.mjs';
 import {
 	benchmarkPlan,
 	lastMeasuredMs,
+	pendingMiss,
 	readBenchmarkLedger,
 	recordBenchmarks,
 } from './lib/bootcamp-schedule.mjs';
@@ -380,6 +381,8 @@ const probeFailures = {};
  * counts a finding records it here; `--json` emits the list as `findings`.
  */
 const findingList = [];
+/** Uncounted findings-in-waiting, emitted as `warnings` (`ctx.warn`). */
+const warningList = [];
 /** node -> [{id, action: 'present' | 'installed' | 'failed', detail}] */
 const toolResults = {};
 /** node -> [{id, status, ...}] — see `capability-seeds.mjs`'s `seedNode`. */
@@ -483,6 +486,7 @@ const benchPlans = Object.fromEntries(
 			idleOnly: IDLE_ONLY,
 			nowMs: NOW_MS,
 			measuredMs: benchLedger.ok ? lastMeasuredMs(benchLedger.ledger, name, IDLE_ONLY) : null,
+			missed: benchLedger.ok ? pendingMiss(benchLedger.ledger, name, IDLE_ONLY) : null,
 			force: MEASURE,
 		}),
 	])
@@ -529,6 +533,12 @@ const ctx = {
 		ctx.findings++;
 		findingList.push({ node, kind, reason });
 	},
+	/** node -> id -> miss streak on disk; null when the ledger could not count (see below). */
+	inconclusiveStreaks: null,
+	/** Said and emitted, never counted: a first busy night (fleet-manager#109). */
+	warn(node, kind, reason) {
+		warningList.push({ node, kind, reason });
+	},
 };
 
 // PASS 1 — every node at once: install, then probe.
@@ -541,7 +551,8 @@ await runIdlePass2(ctx);
 await runPass3(ctx);
 
 // WHEN EACH NODE WAS LAST MEASURED IDLE, so a missed slot is retried the next
-// night. Only under --write: a read-only run records nothing.
+// night, and how many nights in a row it has missed, so one busy night warns
+// and a streak is the finding. Only under --write: a read-only run records nothing.
 const benchRecord =
 	WRITE && benchLedger.ok
 		? recordBenchmarks(
@@ -549,9 +560,16 @@ const benchRecord =
 				Object.fromEntries(
 					Object.entries(report).map(([n, r]) => [n, Object.keys(r.measuredIdle ?? {})])
 				),
-				NOW_MS
+				NOW_MS,
+				Object.fromEntries(
+					Object.entries(report).map(([n, r]) => [
+						n,
+						(r.inconclusive ?? []).filter((i) => i.retry).map((i) => i.id),
+					])
+				)
 			)
 		: null;
+ctx.inconclusiveStreaks = benchRecord?.ok ? benchRecord.streaks : null;
 const benchLedgerError = !benchLedger.ok
 	? benchLedger.reason
 	: benchRecord && !benchRecord.ok
@@ -621,6 +639,7 @@ if (emitter.json)
 		// rest, each with its `reason`. `unreachable` stays for mgmt-api's route,
 		// and also lists nodes a human drained, which are neither.
 		findings: findingList,
+		warnings: warningList,
 		unreadable: _reallyUnreachable.map((node) => ({
 			node,
 			reason: `could not probe ${node}: ${probeFailures[node] ?? 'no reason captured'}`,

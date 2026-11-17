@@ -190,6 +190,18 @@ function idleFixture({
 
 const writeArgs = ['--machine', CLAW, '--write', '--no-push', '--json'];
 
+/** `ledger` is the fixture's benchmark ledger, read back. */
+const ledgerOf = (f) =>
+	JSON.parse(readFileSync(join(f.root, 'state', 'benchmark-measured.json'), 'utf8'));
+/** Seed `nights` consecutive misses for CLAW's cargo-bevy, the last on `last`. */
+const seedMisses = (f, nights, last) =>
+	writeFileSync(
+		join(f.root, 'state', 'benchmark-measured.json'),
+		JSON.stringify({
+			[CLAW]: { 'cargo-bevy': { missed: { since: '2026-11-01T12:00:00.000Z', last, nights } } },
+		})
+	);
+
 test('busy in the first pass: --write DRAINS, waits out, re-measures idle, UNDRAINS — and earns on the idle number', () => {
 	// claw-4's shape: 1024 beside a job, 2281 alone.
 	const f = idleFixture();
@@ -221,13 +233,18 @@ test('busy in the first pass: --write DRAINS, waits out, re-measures idle, UNDRA
 	}
 });
 
-test('a node that never goes quiet is INCONCLUSIVE: the previous EARN stands, nothing measured, drain lifted, run fails loudly', () => {
+test('a node that never goes quiet is INCONCLUSIVE: the previous EARN stands, nothing measured, drain lifted, said as a warning', () => {
 	// claw-6's shape: earned 1529 on 2026-09-14, reads 1024 beside CI today.
 	const f = idleFixture({ busy: 1, prevEarned: { [CLAW]: ['cargo-bevy', 'ffmpeg'] } });
 	try {
 		const r = run(writeArgs, f.env);
-		assert.equal(r.code, 1, 'an asked-for measurement that could not be taken is a finding');
+		// One busy night is retried tomorrow, not paged (fleet-manager#109).
+		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
 		const doc = JSON.parse(r.out);
+		assert.deepEqual(doc.findings, []);
+		assert.equal(doc.warnings.length, 1);
+		assert.equal(doc.warnings[0].kind, 'inconclusive');
+		assert.match(doc.warnings[0].reason, /never went quiet.*night 1 of 3/);
 		assert.ok(!f.calls().includes('MEASURED'), 'busy must never become a reading');
 		assert.deepEqual(f.drains(), {}, 'the drain is lifted on the timeout path too');
 		const inc = doc.report[CLAW].inconclusive;
@@ -238,7 +255,10 @@ test('a node that never goes quiet is INCONCLUSIVE: the previous EARN stands, no
 		assert.ok(f.record().earned.includes('cargo-bevy'), 'a busy 1024 stripped an idle 1529');
 		assert.equal(f.record().measurements, undefined, 'nothing new is written for it');
 		const human = run(['--machine', CLAW, '--write', '--no-push'], f.env);
-		assert.match(human.out, /INCONCLUSIVE: cargo-bevy — .*previous record kept \(earned\)/);
+		assert.match(
+			human.out,
+			/INCONCLUSIVE \(warning\): cargo-bevy: .*previous record kept \(earned\)/
+		);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -252,7 +272,7 @@ test('…and in the other direction: a busy HIGH reading never earns a node that
 	});
 	try {
 		const r = run(writeArgs, f.env);
-		assert.equal(r.code, 1);
+		assert.equal(r.code, 0, 'a first busy night is a warning');
 		const report = JSON.parse(r.out).report[CLAW];
 		assert.equal(report.inconclusive[0].kept, 'not earned');
 		assert.ok(!f.record().earned.includes('cargo-bevy'), 'earned on a reading taken beside a job');
@@ -354,7 +374,8 @@ test('a second busy node is held BESIDE the first, so its quiet window is not sp
 		assert.equal(report[CLAW3].idleHold, undefined);
 		assert.equal(report[BACKSTOP].idleHold, undefined);
 		assert.deepEqual(f.drains(), {}, 'bootcamp left a drain behind');
-		assert.equal(r.code, 1, 'CLAW is still INCONCLUSIVE, and that is still a finding');
+		assert.equal(r.code, 0, 'CLAW is INCONCLUSIVE for one night: a warning, not a finding');
+		assert.equal(JSON.parse(r.out).warnings[0].node, CLAW);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}
@@ -412,7 +433,7 @@ test('a drain the capacity guard REFUSES is inconclusive — nothing measured, n
 	const f = idleFixture({ soleClaw: true, prevEarned: { [CLAW]: ['cargo-bevy', 'ffmpeg'] } });
 	try {
 		const r = run(writeArgs, f.env);
-		assert.equal(r.code, 1);
+		assert.equal(r.code, 0, 'retried tomorrow, so a warning tonight');
 		assert.ok(!f.calls().includes('MEASURED'));
 		assert.deepEqual(f.drains(), {});
 		assert.match(
@@ -429,7 +450,7 @@ test('a node that drops off during the idle re-measure is inconclusive, and stil
 	const f = idleFixture({ measured: 'ssh: connect to host: Connection timed out\n' });
 	try {
 		const r = run(writeArgs, f.env);
-		assert.equal(r.code, 1);
+		assert.equal(r.code, 0, 'retried tomorrow, so a warning tonight');
 		assert.deepEqual(f.drains(), {});
 		assert.match(
 			JSON.parse(r.out).report[CLAW].inconclusive[0].reason,
@@ -584,7 +605,8 @@ test('the --json document says WHY it failed, in the shape the job-run store rea
 	// because the document carried a count and no list.
 	const f = idleFixture({ busy: 1, prevEarned: { [CLAW]: ['cargo-bevy', 'ffmpeg'] } });
 	try {
-		const r = run(writeArgs, f.env);
+		seedMisses(f, 2, '2026-11-16');
+		const r = run(writeArgs, { ...f.env, FLEET_TEST_NOW: '2026-11-17T12:00:00Z' });
 		assert.equal(r.code, 1);
 		const doc = JSON.parse(r.out);
 		assert.deepEqual(doc.unreadable, []);
@@ -593,7 +615,7 @@ test('the --json document says WHY it failed, in the shape the job-run store rea
 		assert.equal(doc.findings[0].kind, 'inconclusive');
 		assert.match(
 			doc.findings[0].reason,
-			/^cargo-bevy: .*never went quiet.*previous record kept \(earned\)/
+			/^cargo-bevy: .*never went quiet.*previous record kept \(earned\); inconclusive 3 night\(s\) running since 2026-11-01$/
 		);
 		const c = classifyEmittedDoc(doc);
 		assert.equal(c.verdict, 'findings');
@@ -610,7 +632,7 @@ test('a clean run emits empty lists, and the store reads it as ok', () => {
 		const r = run(writeArgs, f.env);
 		assert.equal(r.code, 0, `${r.out}\n${r.err}`);
 		const doc = JSON.parse(r.out);
-		assert.deepEqual([doc.findings, doc.unreadable], [[], []]);
+		assert.deepEqual([doc.findings, doc.unreadable, doc.warnings], [[], [], []]);
 		assert.equal(classifyEmittedDoc(doc).verdict, 'ok');
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
@@ -642,8 +664,8 @@ test('a slot lost to a busy node is retried the next night, and recorded once it
 		f.answer('all', ALL_ANSWER('ok 1024', 1));
 		f.answer('busy', '1\n');
 		const mon = night('2026-11-16T12:00:00Z');
-		assert.equal(mon.r.code, 1, 'the slot night that never went quiet is a finding');
-		assert.equal(mon.doc.findings[0].kind, 'inconclusive');
+		assert.equal(mon.r.code, 0, 'one busy slot night is retried, not paged');
+		assert.equal(mon.doc.warnings[0].kind, 'inconclusive');
 		assert.equal(
 			ledgerAt(),
 			'2026-11-09T12:00:00.000Z',
@@ -656,6 +678,7 @@ test('a slot lost to a busy node is retried the next night, and recorded once it
 		assert.equal(tue.r.code, 0, `${tue.r.out}\n${tue.r.err}`);
 		assert.deepEqual(tue.calls, ['PROBE'], 'the missed slot was not retried');
 		assert.equal(ledgerAt(), '2026-11-17T12:00:00.000Z');
+		assert.equal(ledgerOf(f)[CLAW]['cargo-bevy'].missed, undefined, 'landing kept the streak');
 
 		const wed = night('2026-11-18T12:00:00Z');
 		assert.deepEqual(wed.calls, ['PRESENCE'], 'a landed retry kept benchmarking');
@@ -663,6 +686,45 @@ test('a slot lost to a busy node is retried the next night, and recorded once it
 			wed.doc.report[CLAW].deferred.map((d) => d.nextOn),
 			['2026-11-23']
 		);
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('INCONCLUSIVE three nights running is the finding; a same-day rerun does not advance the streak (fleet-manager#109)', () => {
+	const f = idleFixture({ busy: 1, prevEarned: { [CLAW]: ['cargo-bevy', 'ffmpeg'] } });
+	const night = (iso) => {
+		const r = run(writeArgs, { ...f.env, FLEET_TEST_NOW: iso });
+		return { code: r.code, doc: JSON.parse(r.out) };
+	};
+	try {
+		const n1 = night('2026-11-16T12:00:00Z');
+		assert.equal(n1.code, 0);
+		assert.match(n1.doc.warnings[0].reason, /night 1 of 3/);
+		const rerun = night('2026-11-16T18:00:00Z');
+		assert.equal(rerun.code, 0);
+		assert.match(rerun.doc.warnings[0].reason, /night 1 of 3/, 'a rerun counted as a night');
+		assert.match(night('2026-11-17T12:00:00Z').doc.warnings[0].reason, /night 2 of 3/);
+		const n3 = night('2026-11-18T12:00:00Z');
+		assert.equal(n3.code, 1, 'a node never idle three nights running is a real finding');
+		assert.deepEqual(n3.doc.warnings, []);
+		assert.equal(n3.doc.findings[0].kind, 'inconclusive');
+		assert.match(n3.doc.findings[0].reason, /inconclusive 3 night\(s\) running since 2026-11-16/);
+		assert.ok(f.record().earned.includes('cargo-bevy'), 'the streak stripped the earned record');
+	} finally {
+		rmSync(f.root, { recursive: true, force: true });
+	}
+});
+
+test('a ledger that cannot count a streak pages the first miss, as before', () => {
+	const f = idleFixture({ busy: 1, prevEarned: { [CLAW]: ['cargo-bevy', 'ffmpeg'] } });
+	try {
+		writeFileSync(join(f.root, 'state', 'benchmark-measured.json'), '{ torn');
+		const r = run(writeArgs, f.env);
+		assert.equal(r.code, 1, 'an uncountable miss read as a warning');
+		const doc = JSON.parse(r.out);
+		assert.equal(doc.findings[0].kind, 'inconclusive');
+		assert.match(doc.benchmarkLedgerError, /torn|JSON/);
 	} finally {
 		rmSync(f.root, { recursive: true, force: true });
 	}

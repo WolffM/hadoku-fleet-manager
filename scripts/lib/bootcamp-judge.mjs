@@ -85,6 +85,10 @@ export async function runPass3(ctx) {
 						id,
 						reason: heldOut ? `${verdict.reason}; idle re-measure: ${heldOut}` : verdict.reason,
 						kept: prevEarned.has(id) ? 'earned' : 'not earned',
+						// A measurement the node was too busy to take quietly. Retried
+						// nightly, so one miss is a warning and a streak is the finding
+						// (fleet-manager#109, lib/bootcamp-schedule.mjs).
+						...(measuredIdleOnly(capability(id)) ? { retry: true } : {}),
 					});
 					if (prevEarned.has(id)) proven.add(id);
 					continue;

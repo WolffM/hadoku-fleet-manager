@@ -10,6 +10,7 @@ import {
 	benchmarkPlan,
 	benchmarkWeekday,
 	lastMeasuredMs,
+	pendingMiss,
 	readBenchmarkLedger,
 	recordBenchmarks,
 	WEEKDAYS,
@@ -161,6 +162,7 @@ void test('the ledger: missing is empty, written per node, and an unreadable one
 		assert.deepEqual(recordBenchmarks(dir, { a: ['cargo-bevy'], b: [] }, THIS_MON), {
 			ok: true,
 			wrote: 1,
+			streaks: {},
 		});
 		assert.deepEqual(readBenchmarkLedger(dir).ledger, {
 			a: { 'cargo-bevy': { at: '2026-11-09T12:10:00.000Z' } },
@@ -172,4 +174,43 @@ void test('the ledger: missing is empty, written per node, and an unreadable one
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+void test('a miss streak advances once per UTC day, and a measurement clears it (fleet-manager#109)', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'bench-ledger-'));
+	const day = (iso) => Date.parse(iso);
+	try {
+		recordBenchmarks(dir, { a: ['cargo-bevy'] }, day('2026-11-09T12:00:00Z'));
+		const first = recordBenchmarks(dir, {}, day('2026-11-16T12:00:00Z'), { a: ['cargo-bevy'] });
+		assert.deepEqual(first.streaks.a['cargo-bevy'], {
+			since: '2026-11-16T12:00:00.000Z',
+			last: '2026-11-16',
+			nights: 1,
+		});
+		const rerun = recordBenchmarks(dir, {}, day('2026-11-16T20:00:00Z'), { a: ['cargo-bevy'] });
+		assert.equal(rerun.wrote, 0);
+		assert.equal(rerun.streaks.a['cargo-bevy'].nights, 1, 'a same-day rerun advanced it');
+		const next = recordBenchmarks(dir, {}, day('2026-11-17T12:00:00Z'), { a: ['cargo-bevy'] });
+		assert.equal(next.streaks.a['cargo-bevy'].nights, 2);
+		const ledger = readBenchmarkLedger(dir).ledger;
+		assert.equal(ledger.a['cargo-bevy'].at, '2026-11-09T12:00:00.000Z', 'a miss moved `at`');
+		assert.equal(pendingMiss(ledger, 'a', ['cargo-bevy']).nights, 2);
+		recordBenchmarks(dir, { a: ['cargo-bevy'] }, day('2026-11-18T12:00:00Z'), {});
+		assert.equal(pendingMiss(readBenchmarkLedger(dir).ledger, 'a', ['cargo-bevy']), null);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+void test('a pending miss makes a node with no idle record due every night, not a week later', () => {
+	// hokon on 2026-11-17: no ledger entry, so its missed slot waited for the next weekday.
+	const node = FLEET.find((n) => benchmarkWeekday(n, FLEET) === 2); // Tuesday
+	const args = { node, machine: MEASURED, fleet: FLEET, idleOnly: ['cargo-bevy'], nowMs: WED };
+	assert.equal(benchmarkPlan(args).measure, false, 'unknown with no miss waits for its weekday');
+	const plan = benchmarkPlan({
+		...args,
+		missed: { since: '2026-11-10T12:08:00.000Z', last: '2026-11-10', nights: 1 },
+	});
+	assert.equal(plan.measure, true);
+	assert.match(plan.why, /inconclusive 1 night\(s\) since 2026-11-10; retrying nightly/);
 });

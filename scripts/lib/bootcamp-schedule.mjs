@@ -45,6 +45,21 @@
  * due, so it waits for its own weekday. Reading "unknown" as "overdue" would
  * benchmark the whole fleet on one night, which this module exists to stop.
  * An UNREADABLE ledger is said, and the run falls back to weekday-only.
+ *
+ * ONE BUSY NIGHT IS A WARNING; A STREAK IS THE FINDING (fleet-manager#109).
+ * A measurement the node was too busy to take quietly keeps the previous
+ * record and is retried the next night, so a single miss says nothing is
+ * wrong with the node. Every `--write` miss was a finding until 2026-11-17,
+ * and hokon's one busy Tuesday paged. The ledger now also carries the miss
+ * streak, `missed: { since, last, nights }`, counted in distinct UTC days so
+ * a rerun the same day does not advance it. `INCONCLUSIVE_PAGE_AFTER`
+ * consecutive nights is a finding: a node that is never idle is a real fact
+ * about it. A run that cannot read or write the ledger cannot count, so it
+ * treats every miss as a finding, as before.
+ *
+ * A pending miss also makes the node DUE every night until it lands, even
+ * with no idle measurement on record. Without that, a node the ledger had
+ * never seen (hokon on 2026-11-17) missed its slot and waited a whole week.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -52,6 +67,8 @@ import { join } from 'node:path';
 import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 
 export const BENCHMARK_LEDGER_FILE = 'benchmark-measured.json';
+/** Consecutive inconclusive nights before an idle-only measurement is a finding. */
+export const INCONCLUSIVE_PAGE_AFTER = 3;
 const DAY_MS = 86_400_000;
 
 /** Weekday names, indexed by `Date#getUTCDay`. */
@@ -107,26 +124,59 @@ export function lastMeasuredMs(ledger, node, idleOnly) {
 }
 
 /**
- * Record this run's idle measurements: `measured` is node -> ids judged idle.
- * Returns `{ok:true, wrote}` or `{ok:false, reason}`; never throws, never
+ * The longest pending miss streak among `node`'s idle-only ids, or null when
+ * none is pending. A pending miss makes the node due tonight (`benchmarkPlan`).
+ */
+export function pendingMiss(ledger, node, idleOnly) {
+	const misses = idleOnly.map((id) => ledger?.[node]?.[id]?.missed).filter(Boolean);
+	return misses.length ? misses.reduce((a, b) => (b.nights > a.nights ? b : a)) : null;
+}
+
+/**
+ * Record this run's idle measurements and misses. `measured` is node -> ids
+ * judged idle, which clears any miss streak; `missed` is node -> ids this run
+ * could not measure quietly, which starts or advances one (at most once per
+ * UTC day). Returns `{ok:true, wrote, streaks}`, `streaks` being node -> id ->
+ * the miss record now on disk, or `{ok:false, reason}`; never throws, never
  * overwrites a ledger it could not read (that would erase every other node).
  */
-export function recordBenchmarks(dir, measured, nowMs) {
+export function recordBenchmarks(dir, measured, nowMs, missed = {}) {
 	const read = readBenchmarkLedger(dir);
 	if (!read.ok) return { ok: false, reason: read.reason };
 	const at = new Date(nowMs).toISOString();
+	const day = at.slice(0, 10);
 	const next = { ...read.ledger };
+	const streaks = {};
 	let wrote = 0;
+	let changed = false;
 	for (const [node, ids] of Object.entries(measured)) {
 		if (!ids.length) continue;
 		next[node] = { ...next[node] };
 		for (const id of ids) next[node][id] = { at };
 		wrote++;
+		changed = true;
 	}
-	if (!wrote) return { ok: true, wrote: 0 };
+	for (const [node, ids] of Object.entries(missed)) {
+		for (const id of ids) {
+			if (measured[node]?.includes(id)) continue;
+			const entry = next[node]?.[id] ?? {};
+			const prev = entry.missed;
+			const miss = !prev
+				? { since: at, last: day, nights: 1 }
+				: prev.last === day
+					? prev
+					: { ...prev, last: day, nights: prev.nights + 1 };
+			if (miss !== prev) {
+				next[node] = { ...next[node], [id]: { ...entry, missed: miss } };
+				changed = true;
+			}
+			(streaks[node] ??= {})[id] = miss;
+		}
+	}
+	if (!changed) return { ok: true, wrote: 0, streaks };
 	try {
 		writeFileAtomicSync(join(dir, BENCHMARK_LEDGER_FILE), `${JSON.stringify(next, null, 2)}\n`);
-		return { ok: true, wrote };
+		return { ok: true, wrote, streaks };
 	} catch (err) {
 		return { ok: false, reason: `${join(dir, BENCHMARK_LEDGER_FILE)}: ${err.message}` };
 	}
@@ -142,6 +192,7 @@ export function recordBenchmarks(dir, measured, nowMs) {
  * @param {string[]} args.idleOnly the registry's idle-only measured capabilities
  * @param {number} args.nowMs
  * @param {number|null} [args.measuredMs] last idle measurement (`lastMeasuredMs`); null when unknown
+ * @param {{since: string, nights: number}|null} [args.missed] a pending miss (`pendingMiss`)
  * @param {boolean} [args.force] `--measure`
  * @returns {{ measure: boolean, weekday: string|null, deferred: {id: string, nextOn: string}[], why: string }}
  */
@@ -152,6 +203,7 @@ export function benchmarkPlan({
 	idleOnly,
 	nowMs,
 	measuredMs = null,
+	missed = null,
 	force = false,
 }) {
 	const day = benchmarkWeekday(node, fleet);
@@ -170,6 +222,15 @@ export function benchmarkPlan({
 	if (day === null) return { measure: true, weekday, deferred: [], why: 'not in the manifest' };
 	const slot = lastSlotStart(day, nowMs);
 	const isSlotDay = slot === Math.floor(nowMs / DAY_MS) * DAY_MS;
+	if (missed && !isSlotDay)
+		return {
+			measure: true,
+			weekday,
+			deferred: [],
+			why:
+				`inconclusive ${missed.nights} night(s) since ${missed.since.slice(0, 10)}; ` +
+				'retrying nightly until it lands',
+		};
 	// Unknown is "measured before the last slot came due": wait for the weekday.
 	if (measuredMs === null ? isSlotDay : measuredMs < slot) {
 		const slotDate = new Date(slot).toISOString().slice(0, 10);

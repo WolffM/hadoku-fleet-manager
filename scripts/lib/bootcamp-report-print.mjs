@@ -5,6 +5,22 @@
  * imports the CLI.
  */
 import { isSeedFinding } from './capability-seeds.mjs';
+import { INCONCLUSIVE_PAGE_AFTER } from './bootcamp-schedule.mjs';
+
+/**
+ * The miss streak that lets `i` stay a warning, or null when it pages: only a
+ * retried measurement, only with a streak the ledger counted, only below the
+ * threshold. A ledger that could not count (`streaks` null) pages, as before.
+ */
+function graceFor(ctx, name, i) {
+	const streak = i.retry ? ctx.inconclusiveStreaks?.[name]?.[i.id] : null;
+	return streak && streak.nights < INCONCLUSIVE_PAGE_AFTER ? streak : null;
+}
+
+function streakNote(ctx, name, i) {
+	const s = i.retry ? ctx.inconclusiveStreaks?.[name]?.[i.id] : null;
+	return s ? `; inconclusive ${s.nights} night(s) running since ${s.since.slice(0, 10)}` : '';
+}
 
 export function printReport(ctx) {
 	const { report, toolResults, seedResultsByNode, WRITE, log } = ctx;
@@ -13,7 +29,8 @@ export function printReport(ctx) {
 		const seedFindings = (seedResultsByNode[name] ?? []).filter((s) => isSeedFinding(s.status));
 		// Under `--write` an unjudged measurement is a run that was asked to record
 		// and could not look; without it, nothing was going to be recorded anyway.
-		const heldOut = WRITE ? r.inconclusive : [];
+		// One busy night is a warning; a streak of them is (fleet-manager#109).
+		const heldOut = WRITE ? r.inconclusive.filter((i) => !graceFor(ctx, name, i)) : [];
 		const verdict =
 			r.unearned.length ||
 			r.blocked.length ||
@@ -90,9 +107,18 @@ export function printReport(ctx) {
 		for (const i of r.inconclusive) {
 			// LOUD, and never a verdict: the record on disk stands for this capability.
 			const kept = `previous record kept (${i.kept})`;
-			if (WRITE) {
-				ctx.finding(name, 'inconclusive', `${i.id}: ${i.reason}; ${kept}`);
-				log(`   INCONCLUSIVE: ${i.id} — ${i.reason}; ${kept}`);
+			const grace = WRITE ? graceFor(ctx, name, i) : null;
+			if (grace) {
+				const why = `${i.id}: ${i.reason}; ${kept}; night ${grace.nights} of ${INCONCLUSIVE_PAGE_AFTER} before it is a finding, retried tomorrow`;
+				ctx.warn(name, 'inconclusive', why);
+				log(`   INCONCLUSIVE (warning): ${why}`);
+			} else if (WRITE) {
+				ctx.finding(
+					name,
+					'inconclusive',
+					`${i.id}: ${i.reason}; ${kept}${streakNote(ctx, name, i)}`
+				);
+				log(`   INCONCLUSIVE: ${i.id} — ${i.reason}; ${kept}${streakNote(ctx, name, i)}`);
 				log(
 					`              nothing new was written for it: a busy measurement neither earns nor strips.`
 				);
