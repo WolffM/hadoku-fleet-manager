@@ -1,5 +1,5 @@
 {
-  "scripts/capability-probe.sh": 1082,
+  "scripts/capability-probe.sh": 1112,
   "scripts/check-egress-slices.mjs": 1030,
   "scripts/ci-throttle.sh": 1036,
   "scripts/deploy-runners-slice.mjs": 1112,

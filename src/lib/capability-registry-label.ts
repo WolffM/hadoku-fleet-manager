@@ -509,3 +509,58 @@ export const CLAMAV_CAPABILITY: Capability = {
 			'running job cannot move it, so draining a node to read it would buy nothing.',
 	},
 };
+/** Installed memory a node needs to hold dataplatform's training run. */
+const ML_CPU_MIN_GB = 11;
+const ML_CPU_WHY =
+	'Derived from a measured run, not chosen. The full training run on the live ' +
+	'catalogue (2026-11-16, 158,711 vectors, two live tag batches, the medium batch, ' +
+	'every file’s suggested tags, the dedup queues) peaked at 2.53 GB resident and took ' +
+	'876 s on hokon beside other work, so it fits the fleet’s 4096 MB unit ceiling. A ' +
+	'node runs it BESIDE other CI: one more job at the fleet’s p95 (3,337 MB) plus the ' +
+	'node’s free floor (minFreeMb, 1,536-2,048) is ~7.4 GB with the run, which the two ' +
+	'7 GB boxes (claw-2, claw-6 at 7.8 GB measured) cannot hold with any margin. 11 admits ' +
+	'claw-1 (11.6), claw-3/4/5/8 (15.5) and claw-9 (31). Re-tune here and nowhere else; ' +
+	'the probe prints the number and never compares it.';
+export const ML_CPU_CAPABILITY: Capability = {
+	/*
+	 * ml-cpu (2026-11-16): hadoku-dataplatform's nightly retraining (its
+	 * server/dataplatform/learn/, workflow learn.yml) moves off hokon. Operator:
+	 * "i dont want this work to run on hokon, ideally it runs on a claw so
+	 * build in a proper way so fleet-manager can train the claws on the label
+	 * and run it properly".
+	 *
+	 * A LABEL, routed on beside `data-peer`. The job pulls a bundle from the
+	 * data endpoint (a SQLite catalogue copy, ~0.4 GB, and every hoard file's
+	 * CLIP vector, ~0.5 GB), builds a venv from the system python3 and fits the
+	 * tag probes, the medium probe and every file's suggested tags. Nothing it
+	 * needs is installed by bootcamp: the venv comes from pip, and the
+	 * python-venv toolchain entry already proves a venv can be made. What a
+	 * node must PROVIDE is a python3 the package accepts (>= 3.11) and the
+	 * memory to hold the run, so the probe reads both and the registry judges
+	 * the memory.
+	 *
+	 * INSTALLED MEMORY, NOT FREE MEMORY. It is a fact about the box (a job
+	 * cannot move it, so it is `loadInvariant`); how much is free at a given
+	 * moment is the throttle's business (`minFreeMb`), which already refuses
+	 * to start a job on a node without room.
+	 */
+	id: 'ml-cpu',
+	label: 'Holds a dataplatform training run',
+	kind: 'identity',
+	surface: 'label',
+	verify: 'probe',
+	description:
+		'python3 >= 3.11 and enough installed memory for dataplatform’s nightly ' +
+		'training run (learn.yml): a ~0.9 GB bundle from the data endpoint, then the probe ' +
+		'fits. Routed on beside `data-peer`. EARNED, never declared: the probe reads the ' +
+		'interpreter and MemTotal, and the registry holds the bar.',
+	measure: {
+		metric: 'installed memory',
+		unit: ' GB',
+		atLeast: ML_CPU_MIN_GB,
+		why: ML_CPU_WHY,
+		loadInvariant:
+			'Installed memory is read from MemTotal, a property of the hardware: a running ' +
+			'job cannot move it, so draining a node to read it would buy nothing.',
+	},
+};

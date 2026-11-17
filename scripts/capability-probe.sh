@@ -1079,4 +1079,34 @@ clamav_try() {
 # shellcheck disable=SC2046
 say clamav $(clamav_try)
 
+# --- ml-cpu: can this node hold a dataplatform training run ------------------
+# hadoku-dataplatform's nightly retraining (its server/dataplatform/learn/)
+# runs here instead of on hokon (operator, 2026-11-16). The job builds a venv
+# from the system python3 and loads a ~0.9 GB bundle: a SQLite catalogue copy
+# and every hoard file's embedding, then fits the probes. So two facts, both
+# read rather than declared: python3 is >= 3.11 (the package's floor; the
+# python-venv toolchain entry already proves a venv can be made), and the
+# INSTALLED memory, which is the measurement the registry judges. Installed,
+# not free: it is a property of the box, and the job's own unit is what the
+# fleet's throttle sizes against. `CAP_MEMINFO` exists for the tests.
+ml_cpu_try() {
+	if ! command -v python3 >/dev/null 2>&1; then
+		printf 'no no-python3'
+		return
+	fi
+	mc_py=$(python3 -c 'import sys; v = sys.version_info; print("%d.%d" % (v[0], v[1])) if v >= (3, 11) else sys.exit(1)' 2>/dev/null) || {
+		printf 'no python-below-3.11'
+		return
+	}
+	mc_kb=$(awk '/^MemTotal:/ {print $2}' "${CAP_MEMINFO:-/proc/meminfo}" 2>/dev/null)
+	if [ -z "$mc_kb" ]; then
+		printf 'no meminfo-unreadable'
+		return
+	fi
+	printf 'ok %sGB,python-%s' "$(awk -v k="$mc_kb" 'BEGIN{printf "%.1f", k/1048576}')" "$mc_py"
+}
+
+# shellcheck disable=SC2046
+say ml-cpu $(ml_cpu_try)
+
 printf 'PROBE-END %s\n' "$(hostname)"
