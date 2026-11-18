@@ -14,6 +14,12 @@ export interface GhJob {
 	runner_name?: string | null;
 	/** null until a runner actually picks the job up — the queued/running tell. */
 	started_at?: string | null;
+	/**
+	 * When GitHub created the JOB — the start of ITS wait. A trailing job (a
+	 * matrix's `report`) is created only when its needs finish, so this is
+	 * the queued clock, not the run's (fleet-manager#113).
+	 */
+	created_at?: string;
 	/** `runs-on` as GitHub resolved it. What a queued job is WAITING for. */
 	labels?: string[];
 	/**
@@ -37,6 +43,29 @@ export interface QueueVerdict {
 	covered: boolean;
 	/** Always populated. A finding with no reason is not actionable. */
 	reason: string;
+	/**
+	 * How long the oldest WAITING job has queued, in minutes, when its jobs
+	 * were read and at least one carried a readable `created_at`. Absent
+	 * otherwise, and the caller falls back to the run's age.
+	 */
+	waitedMin?: number;
+}
+
+/**
+ * Minutes the oldest waiting job has queued, or null when none carries a
+ * readable `created_at`. A run's age is NOT its queue time: GitHub puts a run
+ * back to `queued` whenever a later job waits, so a Forge run whose trailing
+ * `report main` had waited 6.5 min read as "QUEUED 80m" and paged on the
+ * mint ceiling (fleet-manager#113, 11-18 13:48Z).
+ */
+function oldestWaitMin(waiting: GhJob[], nowMs: number): number | null {
+	let oldest: number | null = null;
+	for (const j of waiting) {
+		const at = j.created_at ? Date.parse(j.created_at) : NaN;
+		if (!Number.isFinite(at)) continue;
+		if (oldest === null || at < oldest) oldest = at;
+	}
+	return oldest === null ? null : Math.max(0, (nowMs - oldest) / 60000);
 }
 
 /**
@@ -107,7 +136,6 @@ export async function classifyQueuedRun(
 			covered: false,
 			reason: `the runner listing for \`${repo}\` was unreadable, so coverage could not be judged.`,
 		};
-	const labelOnline = state.labels;
 	const detail = await ghGet<{ jobs?: GhJob[] }>(`/actions/runs/${runId}/jobs`, token, repo);
 	if (!detail || !Array.isArray(detail.jobs))
 		return {
@@ -133,6 +161,24 @@ export async function classifyQueuedRun(
 			reason: 'every job has already been picked up; the run listing is lagging.',
 		};
 
+	// The WAIT is the oldest waiting job's, not the run's. With no readable job
+	// timestamp, the run's age stands: older, so louder, never quieter.
+	const jobWait = oldestWaitMin(waiting, nowMs);
+	const waitMin = jobWait ?? ageMin;
+	const verdict = judgeWaiting(waiting, runId, state, mint, waitMin, nowMs);
+	return jobWait === null ? verdict : { ...verdict, waitedMin: jobWait };
+}
+
+/** The verdict on a run's waiting jobs, `waitMin` being how long they have queued. */
+function judgeWaiting(
+	waiting: GhJob[],
+	runId: number,
+	state: RepoRunnerState,
+	mint: { view: MintView } | null,
+	waitMin: number,
+	nowMs: number
+): QueueVerdict {
+	const labelOnline = state.labels;
 	const deaf = deafMints(waiting, runId, state.runners, mint, nowMs);
 	if (deaf.length)
 		return {
@@ -203,7 +249,7 @@ export async function classifyQueuedRun(
 		const how = unmeasured
 			? `the fast loop has not probed the minting nodes that offer it (${via}) since the restart`
 			: `${via} offer${via.includes(',') ? '' : 's'} it and can mint`;
-		if (ageMin > MINT_WAIT_LOUD_MINUTES)
+		if (waitMin > MINT_WAIT_LOUD_MINUTES)
 			return {
 				covered: false,
 				reason:

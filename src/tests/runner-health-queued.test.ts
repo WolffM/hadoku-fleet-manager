@@ -186,6 +186,93 @@ test('queued (#110): a mint wait past the ceiling PAGES — a mint that never ha
 	assert.match(pings[0]!, /\[dispatch\] skipped run 88/);
 });
 
+/**
+ * fleet-manager#113, 11-18 13:48Z: a Forge run 80 min old went back to `queued`
+ * when its trailing `report main` job was created at 13:41:55Z, and paged on
+ * the 30-min mint ceiling after that job had waited 6.5 min. The wait is the
+ * waiting JOB's, from its own `created_at`.
+ */
+function trailingJobFetch(runAgeMin: number, jobWaitMin: number | null): void {
+	installFetch({
+		runners: { runners: hokonOnly() },
+		runs: {
+			workflow_runs: [
+				{
+					id: 89,
+					name: 'Forge',
+					display_title: 'Forge',
+					created_at: minutesAgo(runAgeMin),
+					status: 'queued',
+					html_url: 'https://gh/run/89',
+				},
+			],
+		},
+		jobs: {
+			jobs: [
+				{
+					id: 30,
+					name: 'forge-e2e (1)',
+					status: 'completed',
+					created_at: minutesAgo(runAgeMin),
+					started_at: minutesAgo(runAgeMin - 1),
+					labels: ['self-hosted', 'hadoku-builder', 'lane-forge'],
+				},
+				{
+					id: 31,
+					name: 'report main',
+					status: 'queued',
+					started_at: null,
+					...(jobWaitMin === null ? {} : { created_at: minutesAgo(jobWaitMin) }),
+					labels: ['self-hosted', 'hadoku-builder', 'lane-forge'],
+				},
+			],
+		},
+	});
+}
+
+const claw9CanMint = () =>
+	__setFleetProbeForTesting({
+		at: new Date().toISOString(),
+		nodes: { 'claw-9': { reachable: true, free: 2, sick: false } },
+	} as never);
+
+test('queued (fleet-manager#113): an old run whose TRAILING job just queued is a mint wait, aged from the job', async () => {
+	claw9CanMint();
+	trailingJobFetch(80, 6.5);
+	await tick('tok');
+
+	assert.equal(
+		discordPosts.filter((m) => m.includes('QUEUED')).length,
+		0,
+		'the run age (80m) was read as queue time'
+	);
+	const quiet = quietRecords.filter((m) => m.includes('QUEUED'));
+	assert.equal(quiet.length, 1);
+	assert.match(quiet[0]!, /QUEUED 7m \(run 80m old\)/);
+	assert.match(quiet[0]!, /waiting for a mint/);
+});
+
+test('queued (fleet-manager#113): a waiting job past the mint ceiling still PAGES, with its own wait', async () => {
+	claw9CanMint();
+	trailingJobFetch(80, 45);
+	await tick('tok');
+
+	const pings = discordPosts.filter((m) => m.includes('QUEUED'));
+	assert.equal(pings.length, 1, 'aging from the job must not make a real stall quiet');
+	assert.match(pings[0]!, /QUEUED 45m \(run 80m old\)/);
+	assert.match(pings[0]!, /nothing has served it in 30\+ min/);
+});
+
+test('queued (fleet-manager#113): no readable job timestamp falls back to the run age — louder, never quieter', async () => {
+	claw9CanMint();
+	trailingJobFetch(80, null);
+	await tick('tok');
+
+	const pings = discordPosts.filter((m) => m.includes('QUEUED'));
+	assert.equal(pings.length, 1);
+	assert.match(pings[0]!, /QUEUED 80m \(>10m\)/);
+});
+
 test('queued (#110): a runner minted for the job and still OFFLINE pages, naming it and its node', async () => {
 	// The 2026-10-16 shape: claw-9 lost DNS, the minted listener retried for 65
 	// minutes, the dispatcher held the job in flight. By labels alone a live

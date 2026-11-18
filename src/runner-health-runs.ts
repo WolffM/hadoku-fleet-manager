@@ -286,9 +286,15 @@ export async function checkRunsAndFailover(
 				// byte-identical alerts — on 2026-09-10 a Tests run and a Pages run
 				// arrived looking like the same finding posted twice.
 				const wf = run.name ? `\`${run.name}\` / ` : '';
+				// The WAITING job's clock when the jobs said one (fleet-manager#113):
+				// a run's age includes every job that already ran.
+				const queuedFor =
+					verdict.waitedMin === undefined
+						? `QUEUED ${Math.round(ageMin)}m (>${QUEUED_WARN_MINUTES}m)`
+						: `QUEUED ${Math.round(verdict.waitedMin)}m (run ${Math.round(ageMin)}m old)`;
 				const line =
 					`⏱ **runners** on \`${selfHostname()}\`: \`${short}\` — ${wf}\`${title}\` has been ` +
-					`QUEUED ${Math.round(ageMin)}m (>${QUEUED_WARN_MINUTES}m) — ${verdict.reason}` +
+					`${queuedFor} — ${verdict.reason}` +
 					`\n${run.html_url}`;
 				if (verdict.covered) quietRecorder(line, 'runner-health');
 				else await alertOnce(`queued:${run.html_url}`, line, ADVISORY_REPAGE_MS);
