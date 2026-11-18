@@ -115,18 +115,24 @@ export async function waitUntilDrained({
 	const start = clock.now();
 	let quietSince = null;
 	let last = 'no reading';
+	// The last COUNTED job total, or null when the last reading could not
+	// count. A caller may treat "still running real jobs" differently from
+	// "could not look" (fleet-manager#114); it must never read null as 0.
+	let running = null;
 	for (;;) {
 		const n = await busy(node);
 		if (n === 0) {
 			quietSince ??= clock.now();
+			running = 0;
 			if (clock.now() - quietSince >= settleMs) return { drained: true };
 			last = `idle for ${clock.now() - quietSince} ms of the ${settleMs} ms settle`;
 		} else {
 			quietSince = null;
+			running = n;
 			last = n === null ? 'could not count running jobs (treated as busy)' : `${n} job(s) running`;
 		}
 		if (clock.now() - start >= timeoutMs) {
-			return { drained: false, reason: `not drained after ${timeoutMs} ms: ${last}` };
+			return { drained: false, running, reason: `not drained after ${timeoutMs} ms: ${last}` };
 		}
 		await clock.sleep(pollMs);
 	}

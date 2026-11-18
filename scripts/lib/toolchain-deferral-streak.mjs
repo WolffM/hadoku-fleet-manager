@@ -4,9 +4,10 @@
  * lane F1a, item 1).
  *
  * `fleet converge-toolchain --refresh`'s PASS 2 can mark a node with real
- * work `deferred` for three independent reasons: an operator's own hold,
- * queue pressure, or running out of the run's own time budget
- * (`scripts/lib/refresh-cycle.mjs`). Any ONE deferral is routine — the next
+ * work `deferred` for four independent reasons: an operator's own hold,
+ * queue pressure, running out of the run's own time budget, or still running
+ * jobs when the drain wait ran out (`scripts/lib/refresh-cycle.mjs`;
+ * fleet-manager#114). Any ONE deferral is routine — the next
  * night picks it up — but a node whose queue is ALWAYS under pressure at its
  * turn, or that always sorts last before the budget runs out, can be deferred
  * forever and look identical to a node with nothing to do. The 3-day
@@ -115,7 +116,7 @@ export function deferralStreakFindings(streaks, pageAfter = DEFERRAL_STREAK_PAGE
 			kind: 'deferral-streak',
 			reason:
 				`deferred ${n} night(s) in a row — the toolchain refresh has not reached this node ` +
-				`since, whatever its own reason each night (an operator hold, queue pressure, or the ` +
-				`run's time budget)`,
+				`since, whatever its own reason each night (an operator hold, queue pressure, the ` +
+				`run's time budget, or jobs still running at the drain deadline)`,
 		}));
 }

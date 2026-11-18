@@ -471,8 +471,20 @@ export async function runRefreshCycle({
 		state.held = name;
 		const w = await attempt(() => deps.waitDrained(name));
 		if (!w.ok || !w.value?.drained) {
-			rec.status = 'finding';
 			const why = w.ok ? (w.value?.reason ?? 'not drained') : w.reason;
+			// Still running COUNTED jobs at the deadline is the node doing its
+			// work, not a fault: a Forge e2e shard runs 50-80 min against a
+			// 45-min wait (fleet-manager#114). That is a deferral, and it feeds
+			// the deferral streak, which pages a node that is never quiet at its
+			// turn. A wait that could not COUNT, or that threw, stays a finding.
+			if (w.ok && typeof w.value?.running === 'number' && w.value.running > 0) {
+				rec.status = 'deferred';
+				rec.reason = `still busy at the drain deadline (${why}); put back, not updated (the next run picks it up)`;
+				await putBack(name, rec, deps, finding, log, state);
+				log(`── ${name}  [deferred] ${rec.reason}`);
+				continue;
+			}
+			rec.status = 'finding';
 			finding(name, 'drain-timeout', `${why}; nothing was updated`);
 			await putBack(name, rec, deps, finding, log, state);
 			continue;
