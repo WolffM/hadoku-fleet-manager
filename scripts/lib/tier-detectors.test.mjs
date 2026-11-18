@@ -29,7 +29,7 @@ test('`[...].includes(tier)` naming a partial list is caught', () => {
 
 test('`[...].includes(tier)` naming EVERY assignable tier is left alone', () => {
 	const src =
-		"const ok = ['member', 'friend', 'service', 'wife', 'admin'].includes(auth.userType);\n";
+		"const ok = ['guest', 'member', 'friend', 'service', 'wife', 'admin'].includes(auth.userType);\n";
 	assert.deepEqual(findNonTopTierEquality(src), []);
 });
 
@@ -53,11 +53,12 @@ test('a `switch (tier)` whose labels leave a tier out is caught, at the switch l
 test('a `switch (tier)` labelling every assignable tier is a complete mapping, left alone', () => {
 	const src = [
 		'switch (auth.userType) {',
-		"  case 'member': return 1;",
-		"  case 'friend': return 2;",
-		"  case 'service': return 3;",
-		"  case 'wife': return 4;",
-		"  case 'admin': return 5;",
+		"  case 'guest': return 1;",
+		"  case 'member': return 2;",
+		"  case 'friend': return 3;",
+		"  case 'service': return 4;",
+		"  case 'wife': return 5;",
+		"  case 'admin': return 6;",
 		'}',
 	].join('\n');
 	assert.deepEqual(findNonTopTierEquality(src), []);
@@ -96,21 +97,39 @@ test('a \'\'\' inside a """ block is prose, not the end of it', () => {
 // ladders of its own.
 
 test('a ladder naming every tier but member is an incomplete vocabulary', () => {
-	const src = 'const TIER_RANK = { public: 0, friend: 1, service: 2, ' + 'wife: 3, admin: 4 };\n';
+	const src =
+		'const TIER_RANK = { public: 0, guest: 1, ' +
+		'friend: 2, service: 3, ' +
+		'wife: 4, admin: 5 };\n';
 	const hits = findStaleVocabularies(src).map(({ line, found, missing }) => ({
 		line,
 		named: found.length,
 		missing,
 	}));
-	assert.deepEqual(hits, [{ line: 1, named: 4, missing: ['member'] }]);
+	assert.deepEqual(hits, [{ line: 1, named: 5, missing: ['member'] }]);
+});
+
+// `guest` went under `member` on 2026-11-18, and every ladder written before
+// it reads as complete without it: the same hole `member` left.
+test('a ladder naming every tier but guest is an incomplete vocabulary', () => {
+	const src =
+		'const TIER_RANK = { public: 0, member: 1, ' +
+		'friend: 2, service: 3, ' +
+		'wife: 4, admin: 5 };\n';
+	const hits = findStaleVocabularies(src).map(({ line, found, missing }) => ({
+		line,
+		named: found.length,
+		missing,
+	}));
+	assert.deepEqual(hits, [{ line: 1, named: 5, missing: ['guest'] }]);
 });
 
 test('the whole ladder, member included, is complete', () => {
 	const src =
-		'const TIER_RANK = { public: 0, member: 1, friend: 2, service: 3, wife: 4, admin: 5 };\n';
+		'const TIER_RANK = { public: 0, guest: 1, member: 2, friend: 3, service: 4, wife: 5, admin: 6 };\n';
 	assert.deepEqual(findStaleVocabularies(src), []);
 	assert.deepEqual(
-		findStaleVocabularies("TIERS = ('admin', 'wife', 'service', 'friend', 'member')\n"),
+		findStaleVocabularies("TIERS = ('admin', 'wife', 'service', 'friend', 'member', 'guest')\n"),
 		[]
 	);
 });
@@ -127,6 +146,7 @@ test('an exact match against member alone is left alone, as one against admin is
 		findNonTopTierEquality("const solo = ['member'].includes(auth.userType);\n"),
 		[]
 	);
+	assert.deepEqual(findNonTopTierEquality("return ctx.tier === 'guest';\n"), []);
 });
 
 test('member alongside any other tier is still a partial allowlist', () => {
