@@ -11,7 +11,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createFakeNode } from './fake-node.mjs';
-import { PM2_MEMORY_MAX_MB_DEFAULT } from './pm2-boot-floor.mjs';
+import { NETWORK_ONLINE_DROP_IN, PM2_MEMORY_MAX_MB_DEFAULT } from './pm2-boot-floor.mjs';
 import { REPAIRS, installScript, repairNeedsRoot } from './toolchain-floor.mjs';
 import { tempDir } from './test-tmpdir.mjs';
 
@@ -49,6 +49,7 @@ echo ${heldMb * MIB} > "$CGROUP_ROOT/system.slice/${UNIT}/memory.current"
 		detect: () => ssh(REPAIRS['pm2-boot'].detect).stdout.trim(),
 		memoryMax: () => readFileSync(join(cg, 'memory.max'), 'utf8').trim(),
 		dropIn: join(node.root, 'etc', 'systemd', 'system', `${UNIT}.d`, '10-ceiling.conf'),
+		netDropIn: join(node.root, 'etc', 'systemd', 'system', `${UNIT}.d`, NETWORK_ONLINE_DROP_IN),
 		pm2Calls: () => {
 			const p = join(node.env.FAKE_STATE, 'pm2.log');
 			return existsSync(p) ? readFileSync(p, 'utf8').trim().split('\n') : [];
@@ -110,15 +111,45 @@ test('pm2-boot: a ceiling the unit already holds 80% of is refused, never an OOM
 	assert.equal(n.memoryMax(), 'max');
 });
 
-test('pm2-boot: an existing finite ceiling passes and is never rewritten', (t) => {
-	// hokon's admin pm2 carries 32 GiB by hand; the fleet has no sudo there.
-	const n = nodeWithPm2({ ceiling: 'MemoryMax=32G\\n' });
+/** Unit-file lines that already order the unit after the network, as the drop-in does. */
+const NETWORK_ORDER =
+	'[Unit]\\nWants=network-online.target\\nAfter=network-online.target nss-lookup.target\\n[Service]\\n';
+
+test('pm2-boot: an existing finite ceiling is never rewritten', (t) => {
+	// A hand-set 32 GiB ceiling stands; the repair only adds the network order.
+	const n = nodeWithPm2({ ceiling: NETWORK_ORDER + 'MemoryMax=32G\\n' });
 	t.after(() => n.node.cleanup());
 	assert.equal(n.detect(), 'OK');
 	const r = n.ssh(installScript('pm2-boot', undefined, { pm2MemoryMaxMb: 1024 }));
 	assert.equal(r.status, 0, r.stderr);
 	assert.equal(n.memoryMax(), String(32 * 1024 * MIB));
 	assert.equal(existsSync(n.dropIn), false);
+	assert.equal(existsSync(n.netDropIn), false, 'an ordered unit is not rewritten either');
+});
+
+test('pm2-boot (fleet-manager#115): a bounded pm2 ordered only after network.target is NOT on the floor; the repair orders it, no restart', (t) => {
+	// `pm2 startup` writes After=network.target alone. On 2026-11-18 pm2 resurrected
+	// a tunnel a second before network-online.target, and its first DNS lookup failed
+	// and paged. Every pm2 claw carried the same unit (measured: claw-4/6/8/9/10).
+	const n = nodeWithPm2({ ceiling: 'MemoryMax=1G\\n' });
+	t.after(() => n.node.cleanup());
+	assert.equal(n.detect(), '', 'unordered is drift');
+
+	const r = n.ssh(installScript('pm2-boot'));
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(
+		readFileSync(n.netDropIn, 'utf8'),
+		'[Unit]\nWants=network-online.target\nAfter=network-online.target nss-lookup.target\n'
+	);
+	assert.match(
+		readFileSync(join(n.node.env.FAKE_STATE, 'calls.log'), 'utf8'),
+		/^system daemon-reload$/m,
+		'reloaded, so systemd loads the order'
+	);
+	assert.equal(n.detect(), 'OK');
+	assert.deepEqual(n.node.starts(), [`START ${UNIT} slice=system.slice`], 'never restarted');
+	assert.equal(existsSync(n.dropIn), false, 'the hand-set ceiling stands');
+	assert.deepEqual(n.node.unhandled(), []);
 });
 
 test('pm2-boot: the repair needs root, so where the fleet has no sudo it is an advisory', () => {
@@ -217,7 +248,8 @@ function runPm2Boot({ supervised }) {
 	stub('systemctl', '[ "$1" = is-active ] && exit 3; exit 0');
 	stub('sudo', '[ "$1" = -n ] && shift; "$@"');
 	const r = spawnSync('bash', ['-c', REPAIRS['pm2-boot'].repair], {
-		env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+		// SYS_DIR too: the network-order drop-in would otherwise go to the host's /etc.
+		env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, SYS_DIR: dir },
 		encoding: 'utf8',
 	});
 	return { code: r.status, err: r.stderr, calls: readFileSync(log, 'utf8').trim().split('\n') };

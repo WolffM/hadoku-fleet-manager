@@ -16,6 +16,14 @@
  */
 export const PM2_MEMORY_MAX_MB_DEFAULT = 512;
 
+/** The drop-in that orders the unit after a usable network and resolver. */
+export const NETWORK_ONLINE_DROP_IN = '20-network-online.conf';
+
+/** True when systemd has loaded `$s` as wanting AND ordered after network-online.target. */
+const NETWORK_ORDERED =
+	'systemctl show "$s" -p After --value 2>/dev/null | tr " " "\\n" | grep -qx network-online.target && ' +
+	'systemctl show "$s" -p Wants --value 2>/dev/null | tr " " "\\n" | grep -qx network-online.target';
+
 /** The entry minus its `when`; toolchain-floor.mjs documents every field. */
 export const PM2_BOOT = {
 	why:
@@ -30,12 +38,19 @@ export const PM2_BOOT = {
 	// asked for whether or not it took (the reader may not read the writer).
 	// claw-4 and claw-6 ran an idle admin pm2 at `max` until 2026-11-02, which
 	// hosting-claims reported as `app-layer-idle` every night.
+	// AND ORDERED AFTER THE NETWORK: `pm2 startup` writes only
+	// `After=network.target`, so on a boot pm2 resurrects its apps before DNS
+	// answers. A tunnel's first SRV lookup failed and paged that way on
+	// 2026-11-18 (fleet-manager#115); every pm2 claw carried the same unit.
+	// Read from systemd's LOADED dependencies (`show -p After/Wants`), not the
+	// drop-in file: a drop-in nobody reloaded orders nothing.
 	role: 'admin',
 	detect:
 		'u="$(id -un)"; s="pm2-$u.service"; systemctl is-enabled "$s" >/dev/null 2>&1 && ' +
 		'systemctl is-active "$s" >/dev/null 2>&1 && ' +
 		'cg="$(systemctl show "$s" -p ControlGroup --value 2>/dev/null)" && [ -n "$cg" ] && ' +
-		'grep -qx "[0-9][0-9]*" "${CGROUP_ROOT:-/sys/fs/cgroup}$cg/memory.max" 2>/dev/null && echo OK',
+		'grep -qx "[0-9][0-9]*" "${CGROUP_ROOT:-/sys/fs/cgroup}$cg/memory.max" 2>/dev/null && ' +
+		`${NETWORK_ORDERED} && echo OK`,
 	repair: [
 		'set -e',
 		'u="$(id -un)"',
@@ -71,6 +86,14 @@ export const PM2_BOOT = {
 		'  [ "$(apps)" -gt 0 ] && pm2 save >/dev/null || true',
 		'  sudo -n systemctl enable --now "$s"',
 		'fi',
+		'd="${SYS_DIR:-/etc/systemd/system}/$s.d"',
+		// THE NETWORK ORDER, for the NEXT boot: a daemon-reload, never a restart
+		// of a pm2 that supervises services now.
+		`if ! { ${NETWORK_ORDERED}; }; then`,
+		'  sudo -n mkdir -p "$d"',
+		`  printf "[Unit]\\nWants=network-online.target\\nAfter=network-online.target nss-lookup.target\\n" | sudo -n tee "$d/${NETWORK_ONLINE_DROP_IN}" >/dev/null`,
+		'  sudo -n systemctl daemon-reload',
+		'fi',
 		// THE CEILING, applied LIVE: a drop-in for every later boot, and
 		// `set-property --runtime` for the cgroup now. Neither restarts the
 		// daemon. Only where the kernel reads none, so a hand-set ceiling stands.
@@ -92,7 +115,6 @@ export const PM2_BOOT = {
 		'    echo "$s holds $((held / 1048576))M, at or above 80% of a ${mb}M ceiling; raise pm2MemoryMaxMb rather than OOM-kill what it runs" >&2',
 		'    exit 1',
 		'  fi',
-		'  d="${SYS_DIR:-/etc/systemd/system}/$s.d"',
 		'  sudo -n mkdir -p "$d"',
 		'  printf "[Service]\\nMemoryMax=%sM\\n" "$mb" | sudo -n tee "$d/10-ceiling.conf" >/dev/null',
 		'  sudo -n systemctl daemon-reload',
