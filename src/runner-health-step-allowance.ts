@@ -23,6 +23,13 @@
  */
 import { jobRecords, type JobRecord } from './job-history-store.js';
 
+/**
+ * Minutes a job may go without finishing a step before it reads as stuck, the
+ * FLOOR under `stepAllowance`. Read by runner-health's hung-job check and by
+ * the refresh cycle's drain wait (scripts/lib/drain-progress.mjs).
+ */
+export const STUCK_MINUTES = 25;
+
 /** Fewer green runs than this and the history says too little; the floor applies. */
 export const MIN_SAMPLES = 5;
 

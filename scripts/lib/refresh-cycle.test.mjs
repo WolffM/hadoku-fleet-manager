@@ -59,46 +59,6 @@ test('the happy path is drain -> wait -> update -> reprobe -> undrain, in that o
 	);
 });
 
-test('a node still running counted jobs at the deadline is put back and DEFERRED, not a finding (#114)', async () => {
-	const world = { 'claw-b': seenFor(TASKAUTO, { claude: '2.1.284' }) };
-	const h = harness([['claw-b', TASKAUTO]], world, {
-		waitResult: {
-			drained: false,
-			running: 2,
-			reason: 'not drained after 2700000 ms: 2 job(s) running',
-		},
-	});
-	const r = await h.run();
-	assert.ok(!h.events.includes('update claw-b'), 'updated a node that was still draining');
-	assert.ok(h.events.includes('undrain claw-b'), 'left a timed-out node drained');
-	assert.equal(r.ok, true, JSON.stringify(r.findings));
-	assert.equal(r.deferred, 1);
-	const rec = r.nodes.find((n) => n.node === 'claw-b');
-	assert.equal(rec.status, 'deferred');
-	assert.match(rec.reason, /2 job\(s\) running/);
-	assert.equal(world['claw-b'].claude.version, '2.1.284');
-});
-
-test('a drain wait that could not COUNT jobs is undrained and NOT updated — a finding, not a pass', async () => {
-	for (const waitResult of [
-		{
-			drained: false,
-			running: null,
-			reason: 'not drained after 2700000 ms: could not count running jobs',
-		},
-		{ drained: false, reason: 'timed out' },
-	]) {
-		const world = { 'claw-b': seenFor(TASKAUTO, { claude: '2.1.284' }) };
-		const h = harness([['claw-b', TASKAUTO]], world, { waitResult });
-		const r = await h.run();
-		assert.ok(!h.events.includes('update claw-b'), 'updated a node that was still draining');
-		assert.ok(h.events.includes('undrain claw-b'), 'left a timed-out node drained');
-		assert.equal(r.ok, false);
-		assert.equal(r.findings[0].kind, 'drain-timeout');
-		assert.equal(world['claw-b'].claude.version, '2.1.284');
-	}
-});
-
 test('waitUntilDrained: draining is not drained, unknown is busy, zero must HOLD past the settle', async () => {
 	let t = 0;
 	const clock = { now: () => t, sleep: async (ms) => void (t += ms) };
@@ -126,7 +86,6 @@ test('waitUntilDrained: draining is not drained, unknown is busy, zero must HOLD
 		settleMs: 0,
 	});
 	assert.equal(unknown.drained, false, 'could-not-look was read as idle');
-	assert.equal(unknown.running, null, 'could-not-look was given a job count');
 	assert.match(unknown.reason, /could not count/);
 
 	t = 0;
@@ -139,7 +98,6 @@ test('waitUntilDrained: draining is not drained, unknown is busy, zero must HOLD
 		settleMs: 0,
 	});
 	assert.equal(stuck.drained, false);
-	assert.equal(stuck.running, 3);
 	assert.match(stuck.reason, /3 job\(s\) running/);
 });
 

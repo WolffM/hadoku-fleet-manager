@@ -86,10 +86,20 @@ export function harness(machines, world, over = {}) {
 			inFlight--;
 			return { ok: !over.undrainFails, reason: 'write failed' };
 		},
-		waitDrained: async (node) => {
+		waitDrained: async (node, opts) => {
 			events.push(`wait ${node}`);
+			(over.waitOpts ??= {})[node] = opts;
 			return over.waitResult ?? { drained: true };
 		},
+		// Only when a test sets `busy`: the cycle must work without it.
+		...(over.busy
+			? {
+					busyNow: async (node) => {
+						events.push(`busy? ${node}`);
+						return node in over.busy ? over.busy[node] : 0;
+					},
+				}
+			: {}),
 		update: async (node, work) => {
 			events.push(`update ${node}`);
 			assert.ok(drained.has(node), 'UPDATE RAN ON A NODE THAT IS NOT DRAINED');
@@ -138,6 +148,7 @@ export function harness(machines, world, over = {}) {
 			return maxInFlight;
 		},
 		toolsSeen: () => over.toolsSeen,
+		waitOpts: () => over.waitOpts ?? {},
 	};
 }
 

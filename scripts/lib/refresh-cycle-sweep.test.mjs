@@ -137,7 +137,7 @@ test('a node that never goes quiet is put back unswept, and that is a finding', 
 	);
 	assert.ok(!h.events.some((e) => e.startsWith('sweep')));
 	assert.ok(!h.drained.has('claw-a'));
-	assert.ok(r.findings.some((f) => f.kind === 'drain-timeout'));
+	assert.ok(r.findings.some((f) => f.kind === 'drain-stuck'));
 });
 
 test('a sweep that fails, throws, or still sees a job is a finding; the node is put back regardless', async () => {

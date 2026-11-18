@@ -265,6 +265,8 @@ export const NOT_RUN = Object.freeze({
 	'src/runners/ephemeral-exec.ts': 'asks about one warm slot path, not the node',
 	'scripts/lib/toolchain-backstop.mjs': 'asks about each runner directory, not the node',
 	'scripts/stress-node.sh': 'run by hand ON the node, as whoever runs it',
+	'scripts/lib/drain-progress.mjs':
+		"the refresh's drain wait; asks the runner-install rule (lib/runner-install.sh) per worker, so the decoy in a temp dir is by that rule no runner and would read as blind. Its script is held against fake JIT slots in drain-progress.test.mjs",
 	'scripts/runner-identity-probe.sh':
 		'lists each worker beside its runner directory, as ci, for the advisory orphan look; no busy or admission decision reads it',
 });

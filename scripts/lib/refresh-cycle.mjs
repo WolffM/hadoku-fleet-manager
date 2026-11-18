@@ -387,8 +387,31 @@ export async function runRefreshCycle({
 
 	// PASS 2 — ONE node at a time.
 	let halted = null;
-	for (const t of todo) {
+	// BUSY NODES GO LAST, once (fleet-manager#114): a node running jobs right
+	// now is moved behind the rest, so an idle node is refreshed without anyone
+	// waiting and the busy one may be quiet by its second turn. Unknown counts
+	// as busy. On its second turn it is drained whatever it is running.
+	const queue = [...todo];
+	const movedBack = new Set();
+	while (queue.length) {
+		const t = queue.shift();
 		const { name, tools, work, toolFindings } = t;
+		if (!halted && deps.busyNow && queue.length && !movedBack.has(name)) {
+			let n;
+			try {
+				n = await deps.busyNow(name);
+			} catch {
+				n = null; // unknown is busy; the drain wait reads it again
+			}
+			if (n !== 0) {
+				movedBack.add(name);
+				queue.push(t);
+				log(
+					`── ${name}  [later] ${n === null ? 'running jobs could not be counted' : `${n} job(s) running`}; idle nodes first`
+				);
+				continue;
+			}
+		}
 		const rec = { node: name, work, findings: toolFindings };
 		nodes.push(rec);
 
@@ -469,23 +492,24 @@ export async function runRefreshCycle({
 
 		// From here every path ends in exactly one of: undrain, or hold-and-halt.
 		state.held = name;
-		const w = await attempt(() => deps.waitDrained(name));
+		// THE WAIT ENDS ON SIGNALS (fleet-manager#114, lib/drain-progress.mjs):
+		// quiet, a job stuck or unreadable, or this run's own budget. There is
+		// no wall clock of its own: a Forge shard runs 50-80 min and a fixed
+		// 45-min wait put a busy node back un-refreshed and paged.
+		const w = await attempt(() => deps.waitDrained(name, { deadline }));
 		if (!w.ok || !w.value?.drained) {
 			const why = w.ok ? (w.value?.reason ?? 'not drained') : w.reason;
-			// Still running COUNTED jobs at the deadline is the node doing its
-			// work, not a fault: a Forge e2e shard runs 50-80 min against a
-			// 45-min wait (fleet-manager#114). That is a deferral, and it feeds
-			// the deferral streak, which pages a node that is never quiet at its
-			// turn. A wait that could not COUNT, or that threw, stays a finding.
-			if (w.ok && typeof w.value?.running === 'number' && w.value.running > 0) {
+			// The run's budget is not a fault on the node: a deferral, which the
+			// deferral streak pages on if it repeats night after night.
+			if (w.ok && w.value?.budget === true) {
 				rec.status = 'deferred';
-				rec.reason = `still busy at the drain deadline (${why}); put back, not updated (the next run picks it up)`;
+				rec.reason = `${why}; put back, not updated (the next run picks it up)`;
 				await putBack(name, rec, deps, finding, log, state);
 				log(`── ${name}  [deferred] ${rec.reason}`);
 				continue;
 			}
 			rec.status = 'finding';
-			finding(name, 'drain-timeout', `${why}; nothing was updated`);
+			finding(name, 'drain-stuck', `${why}; nothing was updated`);
 			await putBack(name, rec, deps, finding, log, state);
 			continue;
 		}

@@ -16,7 +16,7 @@ import { ADVISORY_REPAGE_MS, alertOnce } from './lib/alert-ledger.js';
 import { selfHostname } from './lib/runner-health-shared.js';
 import { getFleetProbeSnapshot } from './fleet-probe-store.js';
 import type { TickReport } from './runner-health-snapshot.js';
-import { stepAllowance } from './runner-health-step-allowance.js';
+import { STUCK_MINUTES, stepAllowance } from './runner-health-step-allowance.js';
 
 /**
  * Minutes a job may sit queued before it counts toward `queuedStale`.
@@ -79,8 +79,9 @@ const jobProgress = new Map<number, { done: number; since: number }>();
  * does not. This is the FLOOR, though, not the whole rule: a job that is one
  * long step (a test suite) cannot show progress inside it, so a job whose green
  * runs take longer than this is allowed that long (runner-health-step-allowance.ts).
+ * Lives beside `stepAllowance` so the refresh cycle's drain wait judges a job
+ * by the same rule (fleet-manager#114).
  */
-const STUCK_MINUTES = 25;
 
 /**
  * Checks 2 & 3 — queued/hung runs, and failover for jobs whose runner vanished.

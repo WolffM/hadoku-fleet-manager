@@ -8,8 +8,8 @@
  * mode now imports `busyCount`/`drain`/`undrain`/`isDrained`/`waitUntilDrained`
  * straight from `drain-wait.mjs` rather than through this file (wave clean-2
  * lane C: this file is lifecycle, `benchmark-fleet.mjs` is observation, and
- * cut (iii) forbids that edge) — `createLiveDeps()` below uses the exact same
- * functions, so behaviour is unchanged.
+ * cut (iii) forbids that edge). `createLiveDeps()` below waits through
+ * drain-progress.mjs instead (fleet-manager#114).
  *
  * Every name defined IN THIS FILE is re-exported from `refresh-cycle.mjs`, so
  * nothing outside this pair of files needs to know the split happened.
@@ -30,13 +30,13 @@ import { SITE_WRITER_ENV, siteWriterDir } from './manifest-target.mjs';
 import { errText } from './term.mjs';
 import { daysUnswept, readSweepLog, sweepDue } from './cache-sweep-log.mjs';
 import { PRESSURE_OLDEST_SECONDS, runWorkItem } from './refresh-cycle.mjs';
-// busyCount/drainCli/isDrained/drain/undrain/waitUntilDrained moved to
-// drain-wait.mjs (wave clean-2 lane C, cut (iii) layer debt): classified
-// observation/run, the stratum both this (lifecycle) file and
-// benchmark-fleet.mjs (observation) may import. `createLiveDeps()` below
-// delegates to the shared `isDrained`/`drain`/`undrain` rather than
-// reimplementing them, so its own behaviour stays byte-identical.
-import { busyCount, drain, isDrained, undrain, waitUntilDrained } from './drain-wait.mjs';
+// isDrained/drain/undrain live in drain-wait.mjs (wave clean-2 lane C, cut
+// (iii) layer debt): observation/run, the stratum both this (lifecycle) file
+// and benchmark-fleet.mjs (observation) may import. The refresh's WAIT is
+// drain-progress.mjs's, on signals, not drain-wait.mjs's fixed 45 minutes
+// (fleet-manager#114); reboot-claws and benchmark-fleet still use that one.
+import { drain, isDrained, undrain } from './drain-wait.mjs';
+import { readWorkerJobs, waitUntilQuiet } from './drain-progress.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS = join(HERE, '..');
@@ -134,7 +134,9 @@ export function createLiveDeps() {
 		isDrained,
 		drain,
 		undrain,
-		waitDrained: (node) => waitUntilDrained({ node, busy: busyCount, clock }),
+		// On signals, ended only by the run's own deadline (lib/drain-progress.mjs).
+		waitDrained: (node, { deadline = null } = {}) => waitUntilQuiet({ node, clock, deadline }),
+		busyNow: (node) => readWorkerJobs(node)?.length ?? null,
 		update: (node, work) =>
 			work.map((w) =>
 				runWorkItem(

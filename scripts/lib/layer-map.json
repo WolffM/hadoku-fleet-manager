@@ -1159,6 +1159,13 @@
     "why": "The refresh cycle's test rig (fixture nodes, probe world, recording harness), moved out of refresh-cycle.test.mjs so the cache-sweep turn's suite shares it rather than copying it. Same bucket as refresh-cycle.mjs, the module it drives."
   },
   {
+    "glob": "scripts/lib/drain-progress.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "fleet-manager#114: the refresh cycle's drain wait on signals (worker count, each running job's step progress against its own green-run allowance, the run's own deadline) instead of a fixed 45 minutes. Same stratum as drain-wait.mjs, whose SETTLE/POLL constants it shares, and it reads runner-health-step-allowance (observation); refresh-cycle-live.mjs (lifecycle) imports it, domain -> observation."
+  },
+  {
     "glob": "scripts/lib/drain-wait.mjs",
     "layer": "domain",
     "domain": "observation",
