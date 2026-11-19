@@ -23,8 +23,9 @@
  *       slot (k = the node's `maxConcurrent`), for RAND_SEC. Judged on p99
  *       completion latency, which includes the sync.
  *   (a) then a sequential write of SEQ_SEGMENTS x 1 GiB, back to back, with an
- *       fdatasync every 16 MiB, each GiB timed on its own. Judged on whether
- *       the last GiB still runs at SEQ_HOLD_RATIO of the first.
+ *       fdatasync every 16 MiB, each GiB timed on its own. Judged on the
+ *       slowest GiB after the first against SEQ_FLOOR_MBPS, an absolute rate;
+ *       the last-over-first ratio is reported, not judged (fleet-manager#120).
  *
  * Random runs first on purpose: run after 6 GiB of sequential writes it would
  * measure the tail of the cliff, not the disk at the start of a busy hour.
@@ -47,12 +48,27 @@ import { QUALIFY_TTL_DAYS } from './qualify-registry.mjs';
 export const RAND_SYNC_P99_MS = 40;
 
 /**
- * The last GiB's write rate over the first GiB's, at or above which a disk
- * "holds" a sustained synced write. claw-6's SSD fell from ~400 MB/s to
- * 110–200 MB/s past ~2.8 GB (0.28–0.5 of its start) and that cost the scraper
- * suite 2.5x (scraper 9611128); 0.5 fails the whole of that range.
+ * The slowest synced sequential GiB after the first, MB/s, below which a disk
+ * does not hold a sustained write. An ABSOLUTE rate (fleet-manager#120).
+ *
+ * Until 2026-11-19 the bar was a RATIO: the last GiB had to run at 0.5 of the
+ * first. That measures the size of a consumer SSD's write cache, not whether
+ * the disk keeps up with a job, and it failed claw-2 (208 → 94 MB/s, 0.45),
+ * claw-3 (323 → 153, 0.47, with a 125 in the middle) and claw-9 (323 → 29,
+ * 0.09) while passing slower flat disks. Measured against what CI actually
+ * runs at (job-history, 11-05..11-19, successful jobs, each node's median
+ * runSec per job kind over the kind's median): claw-2 runs at 0.90x the fleet,
+ * one of its fastest; claw-9, the slowest sustained writer, at 1.12x, beside
+ * claw-3's 1.11x and inside the 0.70–1.25x spread of every claw but the
+ * CPU-pinned claw-5. No sustained rate the fleet has measured (29–577 MB/s)
+ * shows up as a slower job, so the floor sits BELOW the lowest one the fleet
+ * runs CI on without a measurable cost: a disk under it is worse than
+ * anything known to be harmless. claw-6's 10-25 cliff (~400 → 110–200 MB/s,
+ * scraper 2.5x) is why this phase exists; claw-6 now writes 96–124 MB/s flat
+ * and its scraper suite runs at 1.07x. Raise the floor when a job is shown to
+ * slow on a disk above it, with that job named here.
  */
-export const SEQ_HOLD_RATIO = 0.5;
+export const SEQ_FLOOR_MBPS = 20;
 
 /** GiB segments in the sequential phase: 6, so the run passes 5 GB, past claw-6's ~2.8 GB cliff with room. */
 export const SEQ_SEGMENTS = 6;
@@ -260,10 +276,14 @@ export function judgeDisk({
 	const lastMbps = whole ? mbps(segmentMb, segments[segments.length - 1].ms) : null;
 	const holdRatio =
 		firstMbps && lastMbps !== null ? Math.round((lastMbps / firstMbps) * 100) / 100 : null;
-	if (holdRatio !== null && holdRatio < SEQ_HOLD_RATIO)
+	// The slowest GiB once the first (the one a write cache absorbs) is done.
+	const sustainedMbps = whole
+		? Math.min(...segments.slice(1).map((x) => mbps(segmentMb, x.ms) ?? Infinity))
+		: null;
+	if (sustainedMbps !== null && sustainedMbps < SEQ_FLOOR_MBPS)
 		crossed.push(
-			`sustained write fell from first GB ${firstMbps} MB/s to last GB ${lastMbps} MB/s` +
-				` (${holdRatio} of its start < ${SEQ_HOLD_RATIO})`
+			`sustained write fell to ${sustainedMbps} MB/s (slowest GB after the first ${firstMbps} MB/s)` +
+				` < ${SEQ_FLOOR_MBPS} MB/s`
 		);
 
 	const metrics = {
@@ -273,7 +293,8 @@ export function judgeDisk({
 		firstMbps,
 		lastMbps,
 		holdRatio,
-		bars: { randSyncP99Ms: RAND_SYNC_P99_MS, seqHoldRatio: SEQ_HOLD_RATIO },
+		sustainedMbps,
+		bars: { randSyncP99Ms: RAND_SYNC_P99_MS, seqFloorMbps: SEQ_FLOOR_MBPS },
 	};
 	// A crossed bar is a verdict even when something else was unreadable: the
 	// disk DID cross it.
@@ -284,8 +305,8 @@ export function judgeDisk({
 		status: 'pass',
 		reason:
 			`4k O_DSYNC random-write p99 ${rand.p99Ms} ms ≤ ${RAND_SYNC_P99_MS} ms at k=${k}; ` +
-			`${segmentsExpected} x ${segmentMb} MB synced sequential held ${firstMbps} → ${lastMbps} MB/s` +
-			` (${holdRatio} ≥ ${SEQ_HOLD_RATIO})`,
+			`${segmentsExpected} x ${segmentMb} MB synced sequential ${firstMbps} → ${lastMbps} MB/s` +
+			`, slowest after the first ${sustainedMbps} ≥ ${SEQ_FLOOR_MBPS} MB/s (held ${holdRatio} of its start)`,
 		metrics,
 	};
 }

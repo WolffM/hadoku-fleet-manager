@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import {
 	FREE_SPACE_FACTOR,
 	RAND_SYNC_P99_MS,
-	SEQ_HOLD_RATIO,
+	SEQ_FLOOR_MBPS,
 	ioCleanupScript,
 	ioPrepScript,
 	ioRunScript,
@@ -257,14 +257,37 @@ void test('a p99 over the bar fails, naming the bar and the number (the claw-1 s
 	assert.match(v.reason, /k=3/);
 });
 
-void test('a write rate that collapses across the run fails, naming first and last GB (the claw-6 shape)', () => {
+void test('a consumer SSD whose cache runs out passes when what it falls to is over the floor (the claw-9 shape, #120)', () => {
+	// claw-9, 2026-11-19: 323, 53, 41, 33, 36, 29 MB/s. The 0.5 ratio bar failed
+	// it at 0.09; its jobs run at 1.12x the fleet median, beside claw-3's 1.11x.
 	const run = healthy();
-	run.segments = [seg(2560), seg(2560), seg(3000), seg(7000), seg(8000), seg(9300)];
+	run.segments = [seg(3170), seg(19_320), seg(24_975), seg(31_030), seg(28_440), seg(35_310)];
+	const v = judgeDisk(run);
+	assert.equal(v.status, 'pass', v.reason);
+	assert.equal(v.metrics.holdRatio, 0.09);
+	assert.equal(v.metrics.sustainedMbps, 29);
+	assert.match(v.reason, /held 0\.09 of its start/);
+});
+
+void test('a disk that falls under the absolute floor fails, naming the rate and the bar', () => {
+	const run = healthy();
+	run.segments = [seg(2560), seg(2560), seg(3000), seg(7000), seg(9300), seg(60_000)];
 	const v = judgeDisk(run);
 	assert.equal(v.status, 'fail');
-	assert.match(v.reason, /last GB 110 MB\/s/);
-	assert.match(v.reason, /first GB 400 MB\/s/);
-	assert.match(v.reason, new RegExp(`< ${SEQ_HOLD_RATIO}`));
+	assert.match(v.reason, /fell to 17 MB\/s/);
+	assert.match(v.reason, /first 400 MB\/s/);
+	assert.match(v.reason, new RegExp(`< ${SEQ_FLOOR_MBPS} MB/s`));
+});
+
+void test('the floor reads the SLOWEST GB after the first, not the last (the claw-3 shape)', () => {
+	// claw-3, 2026-11-15: 323, 125, 311, 259, 243, 153. A dip in the middle is
+	// the disk's floor as much as one at the end.
+	const run = healthy();
+	run.segments = [seg(2560), seg(60_000), seg(2560), seg(2560), seg(2560), seg(2560)];
+	const v = judgeDisk(run);
+	assert.equal(v.status, 'fail', v.reason);
+	assert.equal(v.metrics.holdRatio, 1);
+	assert.equal(v.metrics.sustainedMbps, 17);
 });
 
 void test('a segment that missed its deadline is a fail, not a missing reading', () => {
