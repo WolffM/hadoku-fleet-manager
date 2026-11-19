@@ -70,6 +70,8 @@ export const PACKAGE_COMMANDS = Object.freeze({
 	gettext: 'gettext --version',
 	openssl: 'openssl version',
 	time: '/usr/bin/time true',
+	// fleet-manager#117: hadoku-housemodel's `check` runs it on the general pool.
+	'poppler-utils': 'pdftotext -v',
 });
 
 const errOf = (r) =>
