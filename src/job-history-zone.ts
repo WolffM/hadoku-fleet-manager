@@ -77,6 +77,8 @@ export interface ZoneInput {
 	failedPhase?: string | null;
 	conclusion?: string | null;
 	durationSec?: number | null;
+	/** When the job started (ISO). {@link isFleetKill} reads it to tell which TTL was live. */
+	startedAt?: string | null;
 }
 
 /**
@@ -158,6 +160,14 @@ export const KNOWN_TTL_SEC: readonly {
 /** How close to a TTL counts. The kill lands a beat after the deadline (3,601). */
 export const TTL_MATCH_SEC = 5;
 
+/**
+ * Days past a TTL's `until` date that a job may start and still have been
+ * minted with it. `until` is the day the change was COMMITTED; the controller
+ * mints with the old value until that build is deployed, which is a later hour
+ * and can be the next day.
+ */
+export const TTL_LIVE_GRACE_DAYS = 1;
+
 /** A step GitHub runs after the job's own work — where a shutdown signal shows up. */
 function isCleanupStep(r: ZoneInput): boolean {
 	return (
@@ -167,14 +177,41 @@ function isCleanupStep(r: ZoneInput): boolean {
 	);
 }
 
+/** Was the fleet minting units with `ttl` when a job that started at `startedAt` got its unit? */
+function ttlLiveAt(ttl: (typeof KNOWN_TTL_SEC)[number], startedAt: string | null | undefined) {
+	const at = Date.parse(startedAt ?? '');
+	if (!Number.isFinite(at)) return false;
+	const from = Date.parse(`${ttl.from}T00:00:00Z`);
+	const until =
+		ttl.until === null
+			? Infinity
+			: Date.parse(`${ttl.until}T00:00:00Z`) + (1 + TTL_LIVE_GRACE_DAYS) * 86_400_000;
+	return at >= from && at < until;
+}
+
 /**
  * Did the FLEET stop this job, rather than the job failing? Issue #22.
  *
- * Both halves matter and neither is sufficient. The duration alone catches a
- * job that happened to take an hour; the cleanup step alone catches every
- * ordinary `Post`-step flake. Together they are the signature of `The runner
- * has received a shutdown signal` — the unit went away under a job whose own
- * steps had all passed.
+ * A non-success whose duration lands on a TTL the fleet has minted, plus ONE
+ * of two things that make the duration more than a coincidence:
+ *
+ *   - it failed in a CLEANUP step. The unit went away under a job whose own
+ *     steps had all passed: `The runner has received a shutdown signal`. The
+ *     duration alone catches a job that happened to take an hour, and the
+ *     cleanup step alone catches every ordinary `Post`-step flake.
+ *   - it failed in ANY step, and it started while the fleet was minting units
+ *     with that TTL (fleet-manager#121). A unit stopped mid-build fails the
+ *     step that was running, with exit 143. Until 2026-11-19 only the cleanup
+ *     half existed, so the longer the job a TTL cut short, the less likely the
+ *     kill was counted: hadoku-watchparty run 44491381285 died in `Ingest` at
+ *     23,401 s and read as an ordinary failure. The dates are what the step
+ *     test was standing in for: over 28,582 records (11-05..11-19) two
+ *     non-successes landed on a TTL outside a cleanup step: that kill, and a
+ *     cardtable job that exited 1 at 3,600 s on 11-06, seven weeks after
+ *     3,600 s units stopped being minted.
+ *
+ * A record with no `startedAt` cannot be dated, so only the cleanup half can
+ * call it a kill.
  *
  * A job that ran to the TTL and SUCCEEDED is evidence the TTL did NOT fire —
  * the unit outlived the job — so it is a duration coincidence, not a kill.
@@ -183,9 +220,11 @@ export function isFleetKill(r: ZoneInput | null | undefined): boolean {
 	if (!r) return false;
 	if (typeof r.durationSec !== 'number' || !Number.isFinite(r.durationSec)) return false;
 	if (r.conclusion === 'success') return false;
-	if (!KNOWN_TTL_SEC.some((t) => Math.abs((r.durationSec as number) - t.sec) <= TTL_MATCH_SEC))
-		return false;
-	return isCleanupStep(r);
+	const hits = KNOWN_TTL_SEC.filter(
+		(t) => Math.abs((r.durationSec as number) - t.sec) <= TTL_MATCH_SEC
+	);
+	if (!hits.length) return false;
+	return isCleanupStep(r) || hits.some((t) => ttlLiveAt(t, r.startedAt));
 }
 
 /**

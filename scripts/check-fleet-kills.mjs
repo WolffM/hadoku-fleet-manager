@@ -18,12 +18,15 @@
  * job history, and there it is unmistakable once you know the shape:
  *
  *   `durationSec` within a few seconds of a TTL the fleet has actually minted,
- *   and a failure in a CLEANUP step (`Post *`, `Complete job`).
+ *   and EITHER a failure in a CLEANUP step (`Post *`, `Complete job`) OR a
+ *   start date on which the fleet was minting units with that TTL.
  *
- * Both halves matter. The duration alone catches a job that happened to take an
- * hour; the step alone catches every ordinary `Post`-step flake. Together they
- * are the signature of `The runner has received a shutdown signal` — the unit
- * went away under a job whose own steps had all passed.
+ * The duration alone catches a job that happened to take an hour, and a cleanup
+ * step alone catches every ordinary `Post`-step flake. A cleanup failure at a
+ * TTL is `The runner has received a shutdown signal` under a job whose own
+ * steps had all passed. A failure in the job's OWN step at a TTL is the same
+ * kill landing mid-build (exit 143), and it counts when the TTL was live that
+ * day (fleet-manager#121).
  *
  * WHY THE TTL LIST IS HISTORICAL, NOT A CONSTANT IMPORT
  * ----------------------------------------------------
@@ -45,12 +48,14 @@
  * NEAR MISSES ARE REPORTED, NOT DISCARDED
  * ---------------------------------------
  * A unit killed at its TTL mid-`run` step fails a `run` step, not a `Post` one —
- * that is what a kill at minute 60 of a 90-minute build looks like. Filtering on
- * the cleanup step alone would make this check quieter the LONGER the job it
- * missed, which is the failure mode CLAUDE.md's "no gate may get easier to pass
- * the worse the failure gets" rule exists for. So a duration match that fails
- * the step test is still carried in the payload, under `nearTtl`, where a reader
- * can see what the filter excluded.
+ * that is what a kill at minute 60 of a 90-minute build looks like. Until
+ * 2026-11-19 that was only a near miss, which made this check quieter the
+ * LONGER the job it missed: the watchparty ingest the 6.5 h TTL killed in its
+ * `Ingest` step (run 44491381285) was listed under `nearTtl` and the gate
+ * exited 0. It is a kill now. What is left under `nearTtl` is a duration match
+ * outside a cleanup step that started when the fleet was NOT minting that TTL
+ * (or carries no start date): a coincidence by the dates, still shown so a
+ * reader can see what the rule excluded.
  *
  * UNDER THE `--json` CONTRACT SINCE 2026-10-28: `ci:fleet-kills` runs
  * `--days 2 --json` nightly (see its entry in `scripts/lib/json-contract.mjs`).
@@ -78,8 +83,8 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 	out.log('  --json       machine-readable findings');
 	out.log('');
 	out.log(`Reads job history for records whose durationSec lands within ${MATCH_SEC} s of`);
-	out.log('a TTL the fleet has minted AND that failed in a cleanup step — the');
-	out.log('signature of a unit stopped out from under a live job (issue #22).');
+	out.log('a TTL the fleet has minted AND that failed in a cleanup step, or in any');
+	out.log('step while that TTL was live: a unit stopped under a live job (issue #22).');
 	process.exit(0);
 }
 
@@ -163,10 +168,11 @@ for (const r of window) {
 		failedPhase: r.failedPhase ?? null,
 	};
 	// `isFleetKill` is the whole signature — duration near a minted TTL, not a
-	// success, AND a cleanup step. The three guards above have already settled
-	// the first two, so what this adds here is the step test; asking the one
-	// function for it keeps the FINDING and the report's `fleet` zone reading
-	// the same rule rather than two that agree until one moves.
+	// success, AND a cleanup step or a start date inside that TTL's life. The
+	// three guards above have already settled the first two, so what this adds
+	// here is the last; asking the one function for it keeps the FINDING and the
+	// report's `fleet` zone reading the same rule rather than two that agree
+	// until one moves.
 	if (isFleetKill(r)) kills.push(finding);
 	else nearTtl.push(finding);
 }
@@ -187,7 +193,9 @@ for (const k of kills) {
 	out.warn(`            runner ${k.runner}`);
 }
 if (nearTtl.length) {
-	out.log(`${nearTtl.length} record(s) matched a TTL duration but not the cleanup-step test:`);
+	out.log(
+		`${nearTtl.length} record(s) matched a TTL duration outside a cleanup step, on a date that TTL was not minted:`
+	);
 	for (const n of nearTtl) {
 		out.log(
 			`  near-ttl  ${n.repo}  run ${n.runId}  ${n.durationSec}s vs ${n.ttlSec}s  ` +
