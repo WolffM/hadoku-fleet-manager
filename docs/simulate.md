@@ -26,6 +26,7 @@ node scripts/simulate.mjs --policy tuned --set narrowFirst=1            # one te
 node scripts/simulate.mjs --tune heavyFree=2                            # a constant, fleet-wide
 node scripts/simulate.mjs --tune-node claw-9:thirdHoldSec=600           # a constant, one node
 node scripts/simulate.mjs --without claw-1,claw-3 --clone claw-9=claw-11 # fleet what-ifs
+node scripts/simulate.mjs --cap claw-5=2                                 # a lower maxConcurrent
 node scripts/simulate.mjs --drop event=schedule                          # workload what-ifs
 ```
 
@@ -110,6 +111,25 @@ runner-hours -2%.
 | One more claw like claw-9       | oldest p95 1,830 -> 1,086 s, jdk21 q95 2,143 -> 1,128 s | hardware; the largest single lever                                                                |
 | Fewer scheduled Forge full sets | oldest p95 1,830 -> 1,452 s                             | a cardtable decision; 81% of jdk21 runner-hours are dispatched or scheduled full sets, 10% pushes |
 | Decommission claw-1 and claw-3  | general CI q95 109 -> 273 s, 168 jobs starve            | replace their slots first                                                                         |
+
+## claw-5's ceiling, 3 to 2 (2026-11-19, fleet-manager#123)
+
+claw-5 runs every job kind about 2.8x slower than the other claws: its CPU
+is held at 1.4 GHz. Job history from 11-05 to 11-19 put it at 2.56x with
+one job on it, 2.81x with two and 3.04x with three, and `fleet qualify`'s
+ramp crossed its 1.5x bar at three. `--cap` scored the lower ceilings over
+28,710 jobs, general CI (`hadoku-builder`), at contention 0.3 / 1.0:
+
+| claw-5 ceiling | queue p95   | queue p99     | oldest-in-queue p95 |
+| -------------- | ----------- | ------------- | ------------------- |
+| 3              | 255 / 229 s | 805 / 673 s   | 455 / 397 s         |
+| 2 (taken)      | 304 / 246 s | 793 / 756 s   | 461 / 404 s         |
+| 1              | 350 / 299 s | 872 / 856 s   | 489 / 441 s         |
+| removed        | 422 / 357 s | 1,086 / 922 s | 514 / 453 s         |
+
+jdk21 waits and starved jobs did not move in any row. The ceiling cuts the
+node's slowest runs; it does not make the node fast. A suite with a budget
+under about 3x its usual time can still fail there until the clock is fixed.
 
 ## The third heavy job, and the count that was not counting
 

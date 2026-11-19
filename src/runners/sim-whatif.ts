@@ -5,6 +5,11 @@
  * - `without`: node names to remove (decommissioning).
  * - `clone`: `existing=new`, a copy of a node under a new name (one more box
  *   like it).
+ * - `cap`: `node=N`, the node's whole ceiling (JIT plus warm slots) held to at
+ *   most N throughout. This is how a lower `maxConcurrent` is scored before
+ *   the manifest changes. It only lowers: the recorded ceiling already moved
+ *   with drains and warm slots, and raising it would invent capacity the node
+ *   never proved.
  * - `drop`: `key=value[,key=value]`, every term must match: `event`, `label`,
  *   `repo`, or `name` (a prefix). Jobs that depended on a dropped job arrive
  *   as recorded.
@@ -18,6 +23,7 @@ import type { SimNodeSpec } from './sim-fleet.js';
 export interface WhatIfs {
 	without?: readonly string[];
 	clone?: readonly string[];
+	cap?: readonly string[];
 	drop?: readonly string[];
 }
 
@@ -44,6 +50,27 @@ export function applyWhatIfs(
 		}
 		nodes.push({ ...src, name: to });
 		notes.push(`${to} cloned from ${from}`);
+	}
+	for (const spec of w.cap ?? []) {
+		const [name, raw] = spec.split('=');
+		const limit = Number(raw);
+		const at = nodes.findIndex((s) => s.name === name);
+		if (at < 0 || raw === undefined || !Number.isInteger(limit) || limit < 0) {
+			throw new Error(`--cap takes node=N for a node in the fleet, got ${spec}`);
+		}
+		const src = nodes[at];
+		if (!src.timeline.some((p) => p.maxConcurrent > limit)) {
+			throw new Error(`--cap ${spec}: ${name} never ran above ${limit}, so nothing would change`);
+		}
+		nodes[at] = {
+			...src,
+			timeline: src.timeline.map((p) => ({
+				...p,
+				maxConcurrent: Math.min(p.maxConcurrent, limit),
+				warmHeld: Math.min(p.warmHeld, limit),
+			})),
+		};
+		notes.push(`${name} capped at ${limit}`);
 	}
 	let jobs = corpus.jobs;
 	for (const spec of w.drop ?? []) {

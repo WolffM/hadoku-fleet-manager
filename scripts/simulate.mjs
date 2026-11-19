@@ -10,7 +10,7 @@
  * baseline policy lands near history: that is the model's validation.
  *
  * USAGE
- *   fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--tune key=value] [--tune-node node:key=value] [--without node,…] [--clone node=new] [--drop key=v,…]
+ *   fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--tune key=value] [--tune-node node:key=value] [--without node,…] [--clone node=new] [--cap node=N] [--drop key=v,…]
  *                  [--tick 15] [--contention 0.3] [--min-queued 0] [--json]
  *
  * READS (never writes): <state>/job-history.jsonl, <state>/dispatch-decisions/*.jsonl,
@@ -37,7 +37,7 @@ const argv = process.argv.slice(2);
 const out = createEmitter({ json: argv.includes('--json') });
 if (argv.includes('--help') || argv.includes('-h')) {
 	out.log(
-		'fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--tune key=value] [--tune-node node:key=value] [--without node,…] [--clone node=new] [--drop key=v,…] [--tick 15]\n' +
+		'fleet simulate [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--policy baseline|legacy-hold|reservation|tuned] [--set key=value] [--tune key=value] [--tune-node node:key=value] [--without node,…] [--clone node=new] [--cap node=N] [--drop key=v,…] [--tick 15]\n' +
 			'               [--contention 0.3] [--min-queued 0] [--json]\n' +
 			'  replays job history through the real dispatcher, no claws touched; prints each\n' +
 			'  objective simulated beside history over the same window'
@@ -230,6 +230,7 @@ try {
 	} = applyWhatIfs(corpus, fleet, {
 		without: listArg('--without'),
 		clone: listArg('--clone'),
+		cap: listArg('--cap'),
 		drop: listArg('--drop'),
 	}));
 } catch (err) {

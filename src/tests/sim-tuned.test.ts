@@ -176,6 +176,40 @@ test('what-if: without removes nodes, clone adds one, and a name that is not the
 	);
 });
 
+test('what-if: cap lowers a node ceiling and its warm slots, never raises, and refuses a no-op', () => {
+	const point = (maxConcurrent: number, warmHeld: number) => ({
+		atMs: maxConcurrent,
+		maxConcurrent,
+		warmHeld,
+		warmRepo: null,
+		healthy: true,
+		drained: false,
+		schedulable: true,
+		minFreeMb: 2048,
+		requiredMb: 3400,
+		baseFreeMb: 12_000,
+	});
+	const slow = { ...spec('claw-fixture'), timeline: [point(3, 0), point(1, 0), point(3, 2)] };
+	const fleet = [slow, spec('claw-9')];
+	const w = applyWhatIfs(corpus([]), fleet, { cap: ['claw-fixture=1'] });
+	assert.deepEqual(
+		w.fleet[0].timeline.map((p) => [p.maxConcurrent, p.warmHeld]),
+		[
+			[1, 0],
+			[1, 0],
+			[1, 1],
+		]
+	);
+	assert.deepEqual(w.notes, ['claw-fixture capped at 1']);
+	assert.equal(slow.timeline[0].maxConcurrent, 3, 'the recorded fleet is not mutated');
+	assert.throws(
+		() => applyWhatIfs(corpus([]), fleet, { cap: ['claw-fixture=3'] }),
+		/never ran above/
+	);
+	assert.throws(() => applyWhatIfs(corpus([]), fleet, { cap: ['claw-7=1'] }), /node=N/);
+	assert.throws(() => applyWhatIfs(corpus([]), fleet, { cap: ['claw-fixture=x'] }), /node=N/);
+});
+
 test('what-if: drop removes jobs matching EVERY term; a spec that matches nothing is refused', () => {
 	const c = corpus([job(1), job(2, { event: 'push' }), job(3, { labels: PLAIN })]);
 	const w = applyWhatIfs(c, [], { drop: ['event=schedule,label=jdk21'] });
