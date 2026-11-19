@@ -1,5 +1,7 @@
 # hadoku-fleet-manager
 
+**Guide:** [overview](docs/guide/index.md) · [features](docs/guide/features.md) · [contributing](docs/guide/contributing.md) · [history](docs/guide/history.md) · [trivia](docs/guide/trivia.md)
+
 Fleet manager for the hadoku CI fleet. Published as `@wolffm/fleet-manager` and
 consumed **in-process by mgmt-api** — this repo ships a library and one CLI, not
 a service.
