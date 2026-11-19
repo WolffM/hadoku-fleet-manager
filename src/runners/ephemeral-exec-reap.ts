@@ -16,7 +16,7 @@ import { type GhLike, type ShellLike } from '../lib/fleet-vocabulary.js';
  * (observation) needs the same two numbers. Re-exported here under their
  * original path.
  */
-import { JIT_REAP_GRACE_MS } from '../lib/jit-reap-cadence.js';
+import { JIT_IDLE_LISTENER_MAX_MS, JIT_REAP_GRACE_MS } from '../lib/jit-reap-cadence.js';
 
 /**
  * How often the sweep re-lists a repo that has NOTHING TO REAP (#116).
@@ -197,7 +197,7 @@ export async function reapJitRunners(
 			// 2026-10-23 a hokon mint for hadoku-bomberman registered without
 			// `hadoku-builder`, and "already has a runner in flight" held the job
 			// off every claw until a hand delete 59 minutes later; nothing else
-			// would have cleared it before JIT_UNIT_MAX_SEC, six and a half hours.
+			// would have cleared it before JIT_IDLE_LISTENER_MAX_MS, six and a half hours.
 			// Deleting the registration is the whole release: the listener sees
 			// "runner no longer exists on the server" and exits, its unit goes, and
 			// the next pass places the job again. Only a job-scoped name can say
@@ -206,7 +206,18 @@ export async function reapJitRunners(
 				liveUnits.has(r.name) && parsed?.jobId != null && opts.queuedJobIds?.has(parsed.jobId)
 					? parsed
 					: null;
-			if (liveUnits.has(r.name) && !stranded) {
+			// IDLE TOO LONG (#116): live, positively idle (`busy === false`, never
+			// an absent field), and older than any listener that was ever going to
+			// get a job. The unit backstop is five days now; this is the bound an
+			// idle listener had before it.
+			const idleExpired =
+				liveUnits.has(r.name) &&
+				r.busy === false &&
+				parsed != null &&
+				nowMs - parsed.mintedAtMs >= JIT_IDLE_LISTENER_MAX_MS
+					? parsed
+					: null;
+			if (liveUnits.has(r.name) && !stranded && !idleExpired) {
 				kept++;
 				continue;
 			}
@@ -223,7 +234,10 @@ export async function reapJitRunners(
 						? `[ephemeral] released stranded registration ${r.name} from ${repo}: idle ` +
 								`${Math.round((nowMs - stranded.mintedAtMs) / 60_000)}m beside its still-queued ` +
 								`job ${stranded.jobId} — GitHub will not assign it there`
-						: `[ephemeral] reaped orphaned registration ${r.name} from ${repo}`
+						: idleExpired
+							? `[ephemeral] released idle registration ${r.name} from ${repo}: live and idle ` +
+								`${Math.round((nowMs - idleExpired.mintedAtMs) / 60_000)}m after its mint, no job came`
+							: `[ephemeral] reaped orphaned registration ${r.name} from ${repo}`
 				);
 			} else {
 				logger.warn(`[ephemeral] failed to reap ${r.name} from ${repo}: ${res.status}`);

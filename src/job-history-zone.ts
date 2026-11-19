@@ -144,8 +144,14 @@ export const KNOWN_TTL_SEC: readonly {
 	{
 		sec: 23_400,
 		from: '2026-09-14',
+		until: '2026-11-19',
+		why: "backstop above GitHub's 360-minute default, read as its ceiling (#116)",
+	},
+	{
+		sec: 433_800,
+		from: '2026-11-19',
 		until: null,
-		why: "backstop above GitHub's 360-minute ceiling",
+		why: "backstop above GitHub's five-day self-hosted job ceiling (#116)",
 	},
 ];
 

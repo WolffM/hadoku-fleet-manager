@@ -398,9 +398,9 @@ export const ZOMBIE_MS = 86_400_000;
  * runners on the non-ephemeral nodes, and those pick work up within seconds.
  * Minting the instant something appears in the queue therefore races them for a
  * run only ONE runner can have — and the loser is a live listener holding a slot
- * until its RuntimeMaxSec, which is `JIT_UNIT_MAX_SEC` — GitHub's own job
- * ceiling plus a cleanup margin, six and a half hours, NOT the hour this said
- * until 2026-09-14. That number was 3600 and was read as an orphan timeout;
+ * until the reap sweep's `JIT_IDLE_LISTENER_MAX_MS`, six and a half hours (the
+ * unit's own RuntimeMaxSec was that number until #116 raised it to GitHub's
+ * five-day self-hosted job ceiling), NOT the hour this said until 2026-09-14. That number was 3600 and was read as an orphan timeout;
  * issue #22 is what it cost. The reasoning below is unchanged and only gets
  * stronger: a loser now holds its slot for longer, not less, so racing the
  * standing fleet for a run is more expensive than this paragraph claimed.

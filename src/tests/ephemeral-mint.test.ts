@@ -102,6 +102,21 @@ test('no ttlSeconds can put RuntimeMaxSec below GitHub’s own job ceiling', () 
 });
 
 /**
+ * #116: the ceiling is the SELF-HOSTED one. 23,400 s (360 + 30 min) killed
+ * hadoku-watchparty's `ingest` (`timeout-minutes: 490`) at exactly mint +
+ * 23,400 s on 2026-11-19. A job may set up to five days on a self-hosted
+ * runner, so the unit must outlive the largest legal `timeout-minutes`.
+ */
+test('the backstop outlives a self-hosted job’s largest legal timeout-minutes, not just the 360 default', () => {
+	const fiveDaysSec = 5 * 24 * 60 * 60;
+	assert.ok(
+		GITHUB_JOB_CEILING_SEC >= fiveDaysSec,
+		`ceiling ${GITHUB_JOB_CEILING_SEC}s < five days`
+	);
+	assert.ok(JIT_UNIT_MAX_SEC > 490 * 60, 'watchparty ingest (490 min) dies under this backstop');
+});
+
+/**
  * THE CONTAINMENT, not the per-unit cap.
  *
  * `MemoryMax` bounds ONE runner; the slice bounds their SUM, and only the sum is

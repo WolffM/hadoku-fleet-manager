@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { reapJitRunners } from '../runners/ephemeral-exec-reap.js';
+import { JIT_IDLE_LISTENER_MAX_MS } from '../lib/jit-reap-cadence.js';
 import { fakeGh, fakeShell } from './helpers/fleet-fakes.js';
 import { SWEEP_CONCURRENCY } from '../lib/concurrency.js';
 
@@ -250,5 +251,47 @@ test('a live JIT with a pre-job-scoped name is never released — it cannot say 
 		nowMs: NOW,
 		queuedJobIds: new Set([40010762625]),
 	});
+	assert.deepEqual(h.deleted, []);
+});
+
+/**
+ * IDLE TOO LONG (fleet-manager#116). The unit backstop went from 6.5 h to five
+ * days so it stops killing long jobs; an idle listener keeps its old 6.5 h bound
+ * here instead. MUTATION: drop `idleExpired` from the live-unit guard and the
+ * first case fails; accept an ABSENT `busy` and the second does.
+ */
+test('a live JIT GitHub reports idle past JIT_IDLE_LISTENER_MAX_MS is released', async () => {
+	const idle = jobName('claw-1', 135447582122, JIT_IDLE_LISTENER_MAX_MS + mins(1));
+	const h = harness({ runners: [{ id: 1, name: idle, busy: false }], liveUnits: [idle] });
+	const r = await reapJitRunners(['WolffM/x'], ['claw-1'], 'tok', h.gh, h.sh, { nowMs: NOW });
+	assert.deepEqual(h.deleted, [1]);
+	assert.equal(r.reaped, 1);
+});
+
+test('an old live JIT whose listing omits `busy` is kept — only a positive idle releases it', async () => {
+	const old = jobName('claw-1', 135447582122, JIT_IDLE_LISTENER_MAX_MS + mins(1));
+	const h = harness({ runners: [{ id: 1, name: old }], liveUnits: [old] });
+	// The shared fake fills `busy: false`; strip it, as a changed serialisation would.
+	const gh = Object.assign(Object.create(h.gh) as typeof h.gh, {
+		get: async (path: string, token: string, repo?: string) => {
+			const list = (await h.gh.get(path, token, repo)) as { runners: { busy?: boolean }[] };
+			return { runners: list.runners.map(({ busy: _busy, ...r }) => r) };
+		},
+	});
+	await reapJitRunners(['WolffM/x'], ['claw-1'], 'tok', gh, h.sh, { nowMs: NOW });
+	assert.deepEqual(h.deleted, []);
+});
+
+test('a BUSY JIT eight hours in is kept — that is a long job, the #116 casualty', async () => {
+	const long = jobName('claw-1', 135447582122, mins(8 * 60));
+	const h = harness({ runners: [{ id: 1, name: long, busy: true }], liveUnits: [long] });
+	await reapJitRunners(['WolffM/x'], ['claw-1'], 'tok', h.gh, h.sh, { nowMs: NOW });
+	assert.deepEqual(h.deleted, []);
+});
+
+test('a live idle JIT younger than JIT_IDLE_LISTENER_MAX_MS is kept — it may still get a job', async () => {
+	const young = jobName('claw-1', 135447582122, JIT_IDLE_LISTENER_MAX_MS - mins(1));
+	const h = harness({ runners: [{ id: 1, name: young, busy: false }], liveUnits: [young] });
+	await reapJitRunners(['WolffM/x'], ['claw-1'], 'tok', h.gh, h.sh, { nowMs: NOW });
 	assert.deepEqual(h.deleted, []);
 });

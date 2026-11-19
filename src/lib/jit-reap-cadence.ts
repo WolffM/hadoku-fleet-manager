@@ -46,3 +46,20 @@ export const REAP_INTERVAL_MS = 60_000;
  * it has FAILED to clear, from this number rather than a second copy of it.
  */
 export const JIT_REAP_GRACE_MS = 10 * 60_000;
+
+/**
+ * How long a LIVE JIT listener may sit IDLE before the sweep releases its
+ * registration (fleet-manager#116).
+ *
+ * A JIT unit serves one job and exits; one that is alive, past this age and
+ * reported idle by GitHub (`busy: false`, never merely absent) never got a job
+ * — it lost a race for the job it was minted for and sat waiting for another.
+ * Until 2026-11-19 nothing but the unit's `RuntimeMaxSec` collected it, at six
+ * and a half hours. #116 raised that backstop to GitHub's five-day self-hosted
+ * job ceiling, because the same number was killing real jobs; this keeps the
+ * idle bound where it was rather than letting an idle listener hold a node's
+ * slot for days. Deleting the registration is the whole release: the listener
+ * sees "runner no longer exists on the server" and exits, as the stranded
+ * release (fleet-manager#2) already relies on.
+ */
+export const JIT_IDLE_LISTENER_MAX_MS = (360 + 30) * 60_000;

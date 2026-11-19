@@ -11,13 +11,24 @@
  */
 
 /**
- * GitHub's own bound on ONE JOB, in seconds: `timeout-minutes`, default 360.
+ * GitHub's own bound on ONE JOB on a SELF-HOSTED runner, in seconds: five days.
+ *
+ * A job's `timeout-minutes` defaults to 360, and until 2026-11-19 this constant
+ * was that default — read as if it were the ceiling. It is not: 360 minutes is
+ * the bound on a GitHub-HOSTED runner, and a job on a self-hosted one may set
+ * `timeout-minutes` up to five days. hadoku-watchparty's `ingest` sets 490, and
+ * on 2026-11-19 (run 44491381285, jit-claw-1) systemd stopped its unit at
+ * exactly mint + 23,400 s — "Service reached runtime time limit" — with the job
+ * past its own work and 100 minutes inside its own timeout
+ * (fleet-manager#116).
  *
  * Nothing on this side needs to bound a job that is RUNNING — GitHub already
- * does, it is the party that knows when the job started, and it cancels the job
- * cleanly instead of shooting the listener out from under it.
+ * does, it is the party that knows when the job started and what its
+ * `timeout-minutes` is, and it cancels the job cleanly instead of shooting the
+ * listener out from under it. So the backstop sits above the LARGEST value a
+ * job may legally ask for, not above the default.
  */
-export const GITHUB_JOB_CEILING_SEC = 360 * 60;
+export const GITHUB_JOB_CEILING_SEC = 5 * 24 * 60 * 60;
 
 /**
  * The floor for a JIT unit's `RuntimeMaxSec` — GitHub's ceiling plus a cleanup
@@ -43,6 +54,11 @@ export const GITHUB_JOB_CEILING_SEC = 360 * 60;
  *   - a JOB is bounded by {@link GITHUB_JOB_CEILING_SEC}. A cap below it is not
  *     a safety net, it is a second, dumber timeout that fires FIRST and
  *     attributes the death to whatever step happened to be running.
+ *
+ * An IDLE listener is not a job, and the backstop no longer bounds it in
+ * hours: the reap sweep releases a live listener GitHub reports idle past
+ * `JIT_IDLE_LISTENER_MAX_MS` (lib/jit-reap-cadence.ts, #116), which is the six
+ * and a half hours this backstop used to give it.
  *
  * So why keep a `RuntimeMaxSec` at all rather than drop it the way
  * {@link buildWarmSpawnPlan} does? Because a JIT unit, unlike a warm listener,
