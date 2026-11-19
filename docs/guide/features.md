@@ -9,6 +9,13 @@ That service runs this package in-process. "Node" is a machine the fleet
 manages; a **claw** is a node whose only job is CI (a subset, not a
 synonym); a **runner** is one registration of a node against one repo.
 
+Two things it owns sit outside the six features below. It writes
+machine-generated blocks into the platform's own docs — the CI alert watch
+list (`fleet ci-watch`) and the workflow-to-runner blast-radius table
+(`fleet inventory`) — each checked for staleness with `--check`. And it does
+**not** own general cron dispatch, repo branch-protection policy, or anything
+scoped to a single repo; those stay in the platform's management service.
+
 ## Runner-fleet health and dispatch
 
 **What it does.** Watches every node's liveness and decides, job by job,

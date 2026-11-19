@@ -14,18 +14,6 @@ a service.
 > Paths under `docs/planning/`, here and in code comments, are the maintainer's
 > design notes. They are kept private and are not part of this repository.
 
-## What it owns
-
-|                  |                                                                                                                                                                                                                                                            |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Runner fleet** | liveness, priority tiering, JIT provisioning, supervision, hosted fallback, throttle + cgroup slice, capability and toolchain probes                                                                                                                       |
-| **Repo fleet**   | the auditors that walk every checkout in `fleet-runner-coverage.json` — header contracts, identity model, tier vocabulary, MF externals                                                                                                                    |
-| **Manifests**    | `manifests/` — machine topology, resolved runner coverage                                                                                                                                                                                                  |
-| **Derived docs** | the fenced GENERATED regions this package writes into `hadoku_site` — the CI alert watch list (`fleet ci-watch`) and the workflow → runner blast-radius table (`fleet inventory`). Each takes `--write` and `--check`, and `--check` is the staleness gate |
-
-It does **not** own general cron dispatch, repo branch-protection policy, or
-anything single-repo. Those stay in `hadoku_site`.
-
 ## Running it
 
 **Today, production runs it in-process inside mgmt-api** (next section). The
@@ -105,14 +93,6 @@ The router serves `GET /fleet`. Its payload types are re-exported wholesale from
 second copy of the shape.
 
 ## The CLI
-
-One door, subcommands — the same convention `administration.py` follows in
-`hadoku_site`. **`fleet --help` prints the current list**; it is generated from
-the `COMMANDS` table in `src/cli.ts`, which is the only place subcommands are
-declared. A hand-copied list here would go stale, and did.
-
-Each subcommand SPAWNS its script rather than importing it, so exit codes and
-stdio pass through untouched.
 
 ### Install the CLI
 
@@ -326,31 +306,7 @@ no subcommand has grown a private `--machine` parser again.
 
 ## Development
 
-```bash
-pnpm install
-pnpm run check      # format:check + lint + typecheck + build + check:exports + test
-pnpm run lint:types # type-aware ESLint — NOT covered by `pnpm lint`
-```
-
-`pnpm lint` runs cheap syntactic rules only. Run `lint:types` before pushing any
-async change. Read `pnpm run check`'s EXIT CODE — do not grep its output. 0.11.0
-published with red CI because the output was filtered for test and TS errors and
-prettier's two `[warn]` lines went straight past. `cmd | tail` reports `tail`'s
-exit code, not `cmd`'s.
-
-## The one rule that is not negotiable
-
-> **The reader for a facet may not read what the writer wrote.**
-> Cgroup limits from `/sys/fs/cgroup/$(ControlGroup)/memory.max`, never
-> `systemctl show`. Listeners from the process tree, never a `.env` file.
-> Registrations from the GitHub API, never a local record. Capabilities by
-> _executing_ the capability.
-
-A verifier that reads the artifact its own writer produced cannot fail.
-`check:slice` was green while 11 of 97 units held the wrong kernel ceiling and 26
-held none. Three independent-looking confirmations, one source, zero contact with
-reality.
-
-The corollary is just as load-bearing: **the idempotency check must read observed
-state too.** With it still reading config, a fleet-wide apply returned
-`changed=0` and fixed nothing.
+See [`docs/guide/contributing.md`](docs/guide/contributing.md) for how to
+run, test and ship this package; the facet-isolation rule behind every
+verifier here ("the reader for a facet may not read what the writer wrote")
+is in [`AGENTS.md`](AGENTS.md).

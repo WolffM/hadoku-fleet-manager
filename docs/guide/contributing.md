@@ -15,9 +15,10 @@ pnpm run lint:types  # type-aware ESLint — NOT covered by plain `lint`
 
 Read `pnpm run check`'s **exit code**, not its output — a filtered-output
 check once let a red build publish because two warning lines scrolled past a
-`tail`. There is no `.env`: production secrets come from the platform's own
-vault broker through its PM2 wrapper, resolved from `.devvault.local.json`
-(gitignored) from the repo root.
+`tail`. `cmd | tail` reports `tail`'s exit code, not `cmd`'s, which is
+exactly how that happened. There is no `.env`: production secrets come from
+the platform's own vault broker through its PM2 wrapper, resolved from
+`.devvault.local.json` (gitignored) from the repo root.
 
 **Work in a git worktree**, never the main checkout, and never run a fleet
 command from the main checkout that touches a real node. This package's own
