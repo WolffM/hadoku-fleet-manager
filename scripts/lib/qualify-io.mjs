@@ -38,14 +38,28 @@
 import { QUALIFY_TTL_DAYS } from './qualify-registry.mjs';
 
 /**
- * The p99 of a 4k O_DSYNC random write at k parallel writers, ms. 40 ms is what
- * claw-1's disk took for an ORDINARY such write when it failed 11 of 83
- * cardtable shards at 3 concurrent jobs (site 1bb546d07, 2026-11-02): a disk
- * whose slowest 1% of synced writes reach the latency that broke claw-1's
- * typical one does not hold k sync-heavy jobs. Since-boot mean flush times read
- * live on 2026-11-11 put the SSD/NVMe claws at 0.7–3.6 ms and claw-1 at 27 ms.
+ * The p99 of a 4k O_DSYNC random write at k parallel writers, ms, above which
+ * a disk does not hold k sync-heavy jobs.
+ *
+ * The bar exists for claw-1's 7,200 rpm laptop disk: at 3 concurrent jobs 11 of
+ * 83 cardtable shards failed on time (site 1bb546d07, 2026-11-02). That disk
+ * reads p50 33 ms and p99 158 ms with ONE writer on a drained node (11-12), and
+ * p50 125 ms, p99 380 ms with the three writers of the incident (11-19, under a
+ * running job). cardtable has not run on it since.
+ *
+ * Until 2026-11-19 the bar was 40 ms: claw-1's ORDINARY write, applied to every
+ * disk's slowest 1%. That failed claw-6 (Samsung 750 EVO: p50 4 ms, p99 52 ms
+ * at k=2, the same 52 on 11-17 drained and on 11-19 live), the one disk between
+ * the fleet's other SSDs (p99 6–25 ms) and claw-1. Measured against the work
+ * the bar was drawn from (job-history 11-05..11-19): claw-6 ran 245 cardtable
+ * unit shards with 3 failures at a 369 s median, between claw-4's 276 s and
+ * claw-9's 417 s and claw-10's 430 s (1–6 failures each), and its jobs overall
+ * run at 0.98x the fleet median. So 52 ms is known harmless and 158 ms is the
+ * disk the bar is for. 80 sits between them, at 1.5x the first and half the
+ * second (fleet-manager#122). Lower it when a job is shown to fail or slow on a
+ * disk under it, with that job named here.
  */
-export const RAND_SYNC_P99_MS = 40;
+export const RAND_SYNC_P99_MS = 80;
 
 /**
  * The slowest synced sequential GiB after the first, MB/s, below which a disk

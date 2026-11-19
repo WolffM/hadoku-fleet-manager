@@ -257,6 +257,24 @@ void test('a p99 over the bar fails, naming the bar and the number (the claw-1 s
 	assert.match(v.reason, /k=3/);
 });
 
+void test('the p99 bar passes claw-6 and fails claw-1, each on its stored reading (#122)', () => {
+	// claw-6, 2026-11-17, k=2: runs cardtable unit shards at the fleet's rate.
+	const claw6 = judgeDisk({
+		...healthy(),
+		k: 2,
+		rand: { rc: 0, p50Ms: 4.18, p99Ms: 52.17, iops: 320 },
+	});
+	assert.equal(claw6.status, 'pass', claw6.reason);
+	// claw-1, 2026-11-12, k=1: the 7,200 rpm disk the bar exists for.
+	const claw1 = judgeDisk({
+		...healthy(),
+		k: 1,
+		rand: { rc: 0, p50Ms: 33.42, p99Ms: 158.33, iops: 21 },
+	});
+	assert.equal(claw1.status, 'fail');
+	assert.match(claw1.reason, /p99 158\.33 ms > 80 ms at k=1/);
+});
+
 void test('a consumer SSD whose cache runs out passes when what it falls to is over the floor (the claw-9 shape, #120)', () => {
 	// claw-9, 2026-11-19: 323, 53, 41, 33, 36, 29 MB/s. The 0.5 ratio bar failed
 	// it at 0.09; its jobs run at 1.12x the fleet median, beside claw-3's 1.11x.
