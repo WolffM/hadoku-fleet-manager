@@ -870,3 +870,118 @@ for (const [name, files, want] of [
 		}
 	});
 }
+
+// ---- fleet-manager#118: a root that mounts the header through a PACKAGE -----
+// bomberman and cardtable render <GameHeader> from the game shell kit, which
+// renders <AppHeader {...props}>. Following relative imports only reported
+// no-app-header for both from the day the shells moved into a package.
+
+const KIT_SHELL = (body) =>
+	"import { AppHeader } from '@wolffm/task-ui-components';\n" +
+	'export function GameShell({ children }) {\n  return <main>{children}</main>;\n}\n' +
+	`export function GameHeader(props) {\n  return ${body};\n}\n`;
+const KIT = (body) => ({
+	'packages/kit/package.json': JSON.stringify({ name: '@x/kit', exports: { './*': './src/*' } }),
+	'packages/kit/src/app/Shell.tsx': KIT_SHELL(body),
+});
+const KIT_ROOT = (spec, title) =>
+	"import { HadokuThemeRoot } from '@wolffm/themes';\n" +
+	`import { GameShell, GameHeader } from '${spec}';\n` +
+	'export function App({ appName }) {\n' +
+	`  return <HadokuThemeRoot><GameShell><GameHeader title=${title} /></GameShell></HadokuThemeRoot>;\n}\n`;
+const DERIVED_TITLE = '{appName ?? __HADOKU_APP_NAME__}';
+
+for (const [name, changes, want] of [
+	[
+		'a workspace package component that renders <AppHeader> is the header',
+		{
+			...KIT('<AppHeader {...props} />'),
+			'src/App.tsx': KIT_ROOT('@x/kit/app/Shell.tsx', DERIVED_TITLE),
+		},
+		[],
+	],
+	[
+		"the name rule reads the title the root passes to the package's component",
+		{
+			...KIT('<AppHeader {...props} />'),
+			'src/App.tsx': KIT_ROOT('@x/kit/app/Shell.tsx', '"App X"'),
+		},
+		['header-name-hardcoded'],
+	],
+	[
+		'a package component that renders no <AppHeader> is still no-app-header',
+		{ ...KIT('<header />'), 'src/App.tsx': KIT_ROOT('@x/kit/app/Shell.tsx', DERIVED_TITLE) },
+		['no-app-header'],
+	],
+]) {
+	test(`#118: ${name}`, () => {
+		const fx = appFixture(changes);
+		try {
+			const { code, out } = run(fx);
+			assert.deepEqual(rulesFor(JSON.parse(out)).sort(), want, out);
+			assert.equal(code, want.length ? 1 : 0);
+		} finally {
+			cleanup(fx);
+		}
+	});
+}
+
+/** APP imports the kit by an npm alias; its source lives in another fleet repo, `kit-y`. */
+function aliasFixture(kitFiles) {
+	const KIT_REPO = 'kit-y';
+	const fx = fixture({
+		repos: [...APP_ROSTER.repos, `WolffM/${KIT_REPO}`],
+		facets: { ...APP_ROSTER.facets, [`WolffM/${KIT_REPO}`]: APP_ROSTER.facets[`WolffM/${APP}`] },
+	});
+	makeHub(fx, [
+		{ id: 'appx', repoName: APP },
+		{ id: 'appx', repoName: KIT_REPO },
+	]);
+	makeRepo(fx, KIT_REPO, { ...CLEAN_APP, ...kitFiles });
+	makeRepo(fx, APP, {
+		...CLEAN_APP,
+		'package.json': JSON.stringify({
+			name: APP,
+			dependencies: {
+				'@wolffm/task-ui-components': '^1.0.0',
+				'@wolffm/kit': 'npm:@x/kit@0.1.0',
+			},
+		}),
+		'pnpm-workspace.yaml':
+			"packages:\n  - '.'\nminimumReleaseAgeExclude:\n  - '@wolffm/*'\n  - '@x/*'\n",
+		'src/App.tsx': KIT_ROOT('@wolffm/kit/app/Shell.tsx', DERIVED_TITLE),
+	});
+	return fx;
+}
+
+test('#118: an npm-aliased package is followed to its source in another fleet repo', () => {
+	const fx = aliasFixture(KIT('<AppHeader {...props} />'));
+	try {
+		const { code, out } = run(fx);
+		const doc = JSON.parse(out);
+		assert.deepEqual(doc.findings, [], out);
+		assert.equal(code, 0);
+	} finally {
+		cleanup(fx);
+	}
+});
+
+test('#118: a package no audited repo holds is no-app-header, and the finding says what it could not follow', () => {
+	const fx = aliasFixture({});
+	try {
+		const { code, out } = run(fx);
+		const found = findingsFor(JSON.parse(out), APP);
+		assert.deepEqual(
+			found.map((f) => f.rule),
+			['no-app-header'],
+			out
+		);
+		assert.match(
+			found[0].detail,
+			/<GameShell>, <GameHeader> from no audited repo holds the source of @wolffm\/kit \(@x\/kit\)/
+		);
+		assert.equal(code, 1);
+	} finally {
+		cleanup(fx);
+	}
+});

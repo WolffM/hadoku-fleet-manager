@@ -64,7 +64,10 @@
  *                   hooks/useTheme.ts + prefs/themePrefs.ts copy. Impossible on
  *                   3.x, so finding one means the repo is stale in a way that
  *                   matters — it still has the drift the lockdown removed.
- *   no-app-header   a React app root that renders no <AppHeader>.
+ *   no-app-header   a React app root that renders no <AppHeader>, directly, through
+ *                   a local wrapper (#97), or through a package component whose
+ *                   source an audited repo holds (#118: the game shell kit's
+ *                   <GameHeader>). An import it could not follow is named.
  *   header-name-hardcoded
  *                   the <AppHeader> title writes the app's NAME into the child
  *                   repo. Reported even when the literal happens to match the

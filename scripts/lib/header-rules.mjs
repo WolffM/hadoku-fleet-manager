@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { posix } from 'node:path';
 
 import { readFile, readBlanked, openRepo } from './header-source.mjs';
+import { SOURCE_EXTS } from './header-package.mjs';
 import { stripYamlComments } from './yaml-comments.mjs';
 import { readChildApps } from './site-docs.mjs';
 import { READ_ATTEMPTS } from './read-retry-policy.mjs';
@@ -430,8 +431,8 @@ export function catalogue() {
  * `>` after `title=` belongs to the BUTTON, not to <AppHeader>. Scanning to it
  * silently truncates the one shape this has to read.
  */
-export function appHeaderTitle(src) {
-	const at = src.indexOf('<AppHeader');
+export function appHeaderTitle(src, tag = 'AppHeader') {
+	const at = src.search(new RegExp(`<\\s*${tag}\\b`));
 	if (at < 0) return null;
 	const t = src.indexOf('title=', at);
 	if (t < 0) return null;
@@ -455,28 +456,62 @@ export function appHeaderTitle(src) {
 }
 
 /**
- * The local file an app root mounts <AppHeader> THROUGH, or null
- * (fleet-manager#97). hadoku-wiki has three surfaces and one header component
- * for all of them, so its App.tsx renders `<WikiHeader />` and WikiHeader.tsx
- * renders the platform header. Read only the root, the audit called that "no
- * <AppHeader>" for four days over a header a browser test could see.
+ * Where an app root mounts <AppHeader> THROUGH, as `{ file, tag }`, or null
+ * (fleet-manager#97, #118). `file` is where the name rule reads the title and
+ * `tag` the element it reads it from.
  *
- * ONE hop, relative imports only. The name must be RENDERED in the root and
- * its file must itself RENDER <AppHeader>: an import nothing mounts is still
- * the shape a header disappears in.
+ * A LOCAL wrapper (#97): hadoku-wiki has three surfaces and one header
+ * component for all of them, so its App.tsx renders `<WikiHeader />` and
+ * WikiHeader.tsx renders the platform header. Read only the root, the audit
+ * called that "no <AppHeader>" for four days over a header a browser test could
+ * see. The title is the wrapper's: `{ file: wrapper, tag: 'AppHeader' }`.
+ *
+ * A PACKAGE component (#118): bomberman and cardtable render `<GameHeader>`
+ * from the game shell kit, which renders `<AppHeader {...props}>`. `locate`
+ * (header-package.mjs) finds the package's source; the title is the one the
+ * ROOT passes: `{ file: root, tag: 'GameHeader' }`. An import `locate` cannot
+ * follow pushes its reason onto `unfollowed`, for the finding to carry.
+ *
+ * ONE hop. The name must be RENDERED in the root and its file must itself
+ * RENDER <AppHeader>: an import nothing mounts is still the shape a header
+ * disappears in.
  */
-export function headerWrapper(source, files, root, src) {
+export function headerWrapper(source, files, root, src, locate, unfollowed = []) {
 	const dir = posix.dirname(root);
-	for (const [, clause, spec] of src.matchAll(
-		/import\s+([^;'"]*?)\s+from\s*['"](\.{1,2}\/[^'"]+)['"]/g
-	)) {
-		const names = clause.match(/[A-Za-z_$][\w$]*/g) ?? [];
-		if (!names.some((n) => new RegExp(`<\\s*${n.replace(/\$/g, '\\$')}\\b`).test(src))) continue;
-		const base = posix.normalize(posix.join(dir, spec));
-		const file = ['', '.tsx', '.jsx', '.ts', '.js', '/index.tsx', '/index.jsx']
-			.map((ext) => base + ext)
-			.find((f) => files.includes(f));
-		if (file && /<\s*AppHeader\b/.test(readBlanked(source, file) ?? '')) return file;
+	for (const [, clause, spec] of src.matchAll(/import\s+([^;'"]*?)\s+from\s*['"]([^'"]+)['"]/g)) {
+		const names = (clause.match(/[A-Za-z_$][\w$]*/g) ?? []).filter((n) =>
+			new RegExp(`<\\s*${n.replace(/\$/g, '\\$')}\\b`).test(src)
+		);
+		if (!names.length) continue;
+		if (/^\.{1,2}\//.test(spec)) {
+			const base = posix.normalize(posix.join(dir, spec));
+			const file = SOURCE_EXTS.map((ext) => base + ext).find((f) => files.includes(f));
+			if (file && /<\s*AppHeader\b/.test(readBlanked(source, file) ?? '')) {
+				return { file, tag: 'AppHeader' };
+			}
+			continue;
+		}
+		if (!locate) continue;
+		const hit = locate(source, files, root, spec);
+		if (!hit.file) {
+			unfollowed.push(`${names.map((n) => `<${n}>`).join(', ')} from ${hit.why}`);
+			continue;
+		}
+		const pkgSrc = readBlanked(hit.source, hit.file) ?? '';
+		const at = pkgSrc.search(/<\s*AppHeader\b/);
+		if (at < 0) continue;
+		// The header is the rendered import whose definition ENCLOSES the
+		// <AppHeader>: the last one declared before it. Another import from the
+		// same module (GameAppShell beside GameHeader) is not the header.
+		let tag = null;
+		let best = -1;
+		for (const n of names) {
+			const def = pkgSrc.search(
+				new RegExp(`\\b(?:function|const|class)\\s+${n.replace(/\$/g, '\\$')}\\b`)
+			);
+			if (def >= 0 && def < at && def > best) [tag, best] = [n, def];
+		}
+		if (tag) return { file: root, tag };
 	}
 	return null;
 }
@@ -517,16 +552,17 @@ function parenthesised(src, decl) {
  *     to keep it, so an unreadable catalogue silenced both rules fleet-wide.
  */
 export const catalogueBlindFor = [];
-export function checkHeaderName(repo, source, appRoots) {
+export function checkHeaderName(repo, source, headers) {
+	const appRoots = headers.map((h) => h.file);
 	const { labels, repoToId, readable } = catalogue();
 	if (!readable) {
 		if (appRoots.length) catalogueBlindFor.push(repo);
 		return;
 	}
-	for (const f of appRoots) {
+	for (const { file: f, tag } of headers) {
 		const src = readBlanked(source, f);
 		if (!src) continue;
-		const title = appHeaderTitle(src);
+		const title = appHeaderTitle(src, tag);
 		if (!title) continue; // no <AppHeader> at all — `no-app-header` owns that
 
 		const appId = (repoToId.get(repo) ?? []).find((id) => labels.has(id));
@@ -560,7 +596,7 @@ export function checkHeaderName(repo, source, appRoots) {
 			report(
 				repo,
 				'header-name-hardcoded',
-				`${f} — <AppHeader title="${title.text}"> writes the app's name into this repo. ` +
+				`${f} — <${tag} title="${title.text}"> writes the app's name into this repo. ` +
 					`The catalogue says "${want}"; take it from there instead: ` +
 					`title={appName ?? __HADOKU_APP_NAME__}, with @wolffm/catalogue wired in ` +
 					`vite.config.ts. See templates/ui-app in ${hubRepo()}.`
@@ -594,7 +630,7 @@ export function checkHeaderName(repo, source, appRoots) {
 						repo,
 						'header-name-hardcoded',
 						`${f} — \`const ${ident[1]} = ${lit[0].trim()}\` writes the app's name into ` +
-							`this repo, and <AppHeader title={${ident[1]}}> renders it. The catalogue ` +
+							`this repo, and <${tag} title={${ident[1]}}> renders it. The catalogue ` +
 							`says "${want}"; assign the derived name instead.`
 					);
 					continue;
@@ -616,7 +652,7 @@ export function checkHeaderName(repo, source, appRoots) {
 		report(
 			repo,
 			'header-name-unverified',
-			`${f} — <AppHeader title={…}> names neither \`appName\` nor \`__HADOKU_APP_NAME__\`, ` +
+			`${f} — <${tag} title={…}> names neither \`appName\` nor \`__HADOKU_APP_NAME__\`, ` +
 				`and has no readable <h1>, so this cannot tell whether the name is derived. ` +
 				`The catalogue says "${want}".`
 		);

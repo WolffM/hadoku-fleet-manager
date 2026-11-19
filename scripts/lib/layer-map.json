@@ -2599,6 +2599,13 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/header-package.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "fleet-manager#118: resolves a package import to its source in the audited fleet, for header-rules.mjs's `headerWrapper`. Same bucket as header-rules.mjs and header-source.mjs, which it reads through."
+  },
+  {
     "glob": "scripts/lib/header-fleet-audit.mjs",
     "layer": "domain",
     "domain": "observation",

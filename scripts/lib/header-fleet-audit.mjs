@@ -24,6 +24,7 @@ import {
 	latestVersion,
 	majorOf,
 } from './header-rules.mjs';
+import { packageLocator } from './header-package.mjs';
 
 /**
  * The patterns the FLEET pass and the TEMPLATE pass both apply.
@@ -54,6 +55,7 @@ export function auditFleetRepos(
 	fleet,
 	{ useWorktree, noFetch, noRegistry, openRepo, resetFileCache }
 ) {
+	const locate = packageLocator(fleet, { openRepo, useWorktree, noFetch });
 	for (const repo of fleet) {
 		resetFileCache();
 		const source = openRepo(repo, { useWorktree, noFetch });
@@ -233,13 +235,28 @@ export function auditFleetRepos(
 			// RENDERED, not named. A bare-identifier match passed an App.tsx that
 			// imports AppHeader and never mounts it — an import left behind by a
 			// refactor is exactly the shape a header quietly disappears in.
-			const via = /<\s*AppHeader\b/.test(src) ? f : headerWrapper(source, files, f, src);
+			const unfollowed = [];
+			const via = /<\s*AppHeader\b/.test(src)
+				? { file: f, tag: 'AppHeader' }
+				: headerWrapper(source, files, f, src, locate, unfollowed);
 			if (via) headerFiles.push(via);
-			else report(repo, 'no-app-header', `${f} — an app root that renders no <AppHeader>`);
+			else {
+				report(
+					repo,
+					'no-app-header',
+					`${f} — an app root that renders no <AppHeader>` +
+						(unfollowed.length ? ` (could not follow: ${unfollowed.join('; ')})` : '')
+				);
+			}
 		}
 
 		// ---- and it must call the app what the catalogue calls it -------------
-		checkHeaderName(repo, source, [...new Set(headerFiles)]);
+		const seen = new Set();
+		checkHeaderName(
+			repo,
+			source,
+			headerFiles.filter((h) => !seen.has(`${h.file}\0${h.tag}`) && seen.add(`${h.file}\0${h.tag}`))
+		);
 
 		// ---- every entry shell declares an icon -------------------------------
 		checkFavicon(repo, source, files);

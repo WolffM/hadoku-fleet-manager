@@ -55,6 +55,12 @@ now documents these rules instead, and the set has grown:
   is why a hardcoded "Craft" tab over a catalogue entry of "Hadoku Craft"
   reported as "no drift" across fifteen repos the whole time
   (`scripts/check-header-fleet.mjs:65-82`).
+- `no-app-header` — **widened** (fleet-manager#97, #118). The header counts
+  when the root renders it directly, through a local wrapper one relative
+  import away, or through a package component (the game shell kit's
+  `<GameHeader>`) whose source is a workspace package in the repo or in
+  another audited repo, npm aliases included (`scripts/lib/header-package.mjs`).
+  The name rule then reads the title the root passes to that component.
 - `no-favicon` — **new**. An index.html entry shell with no `<link
 rel="icon">`; nothing inherits one, so the tab renders the generic globe.
 - **`not-in-fanout` is RETIRED** (2026-08-26). It asked whether a repo was a
