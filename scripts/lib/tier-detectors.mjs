@@ -28,11 +28,14 @@ const TOP_TIER = 'admin';
  * `admin` is: an exact match at either end of the ladder is a question about
  * that end, not an allowlist that forgot the tiers beside it.
  *
- * `member` is in it only for the guest migration (hadoku_site
- * docs/planning/account-journeys-2026-11-18.md): the fleet's
- * `userType === 'member' && verified` checks are exact matches on what WAS
- * the bottom rung, and they become `tierAtLeast(auth, 'member')` in its last
- * stage. Drop `member` from this set then, and the rule catches any left.
+ * `member` is in it for good (2026-11-19). An exact match on it is a
+ * deliberate question in the two places it occurs: a kernel promoting exactly
+ * a member to friend (`tier === 'member' ? 'friend' : tier` — a guest must not
+ * be promoted, a higher tier is past friend already), and a check that a row
+ * is a self-made account (`tier === 'guest' || tier === 'member'`, the only
+ * tiers such an account holds). Neither is an allowlist missing its
+ * neighbours. The guest migration that first put it here ended with every
+ * `member && verified` check gone.
  */
 const BOTTOM_TIERS = new Set(['guest', 'member']);
 
