@@ -18,11 +18,23 @@
  * cutover. Read as ADMIN: only admin may run `sudo -l -U` and read another
  * user's 0700 home.
  *
+ * THE DEV USER (a node whose manifest entry names `users.dev`) is read the
+ * same way, plus two facts of its own: its slice's weight from the kernel's
+ * `cpu.weight`, and `claude` by RUNNING it as that user. Its findings are
+ * ADVISORY until 2026-11-27: a new check starts quiet (AGENTS.md).
+ *
  * A node that has not been cut over (`users.ci` absent) is reported as such,
  * with what that means today, ci = admin with NOPASSWD sudo, as an advisory:
  * true, and worth seeing, but not drift from a declaration nobody made yet.
  */
-import { ciIsSeparate, nodeHome, nodeUser } from '../../dist/lib/node-users.js';
+import {
+	DEV_CLAUDE_BIN,
+	SESSION_WEIGHT,
+	ciIsSeparate,
+	hostsSessions,
+	nodeHome,
+	nodeUser,
+} from '../../dist/lib/node-users.js';
 import { TENANT_USER_SUFFIXES } from './tenant-registry.mjs';
 
 /** Groups a ci user may be in besides its own: GPU device access, granted where a GPU label is proven. */
@@ -38,15 +50,39 @@ const ACCOUNT_SELECT =
 	TENANT_USER_SUFFIXES.map((x) => ` || $1 ~ /${x}$/`).join('') +
 	`)`;
 
+/** The dev user's facts, as `dev*=` lines. Read as admin, through sudo where its 0700 home needs it. */
+function devObserve(dev, home) {
+	return `DEV=${dev}
+DEV_HOME=${home}
+if pw=$(getent passwd "$DEV"); then
+	echo "devUid=$(echo "$pw" | cut -d: -f3)"
+	echo "devHome=$(echo "$pw" | cut -d: -f6)"
+	echo "devGroups=$(id -Gn "$DEV" 2>/dev/null)"
+	echo "devHomeStat=$(stat -c '%U:%a' "$DEV_HOME" 2>/dev/null)"
+	echo "devLinger=$([ -e "/var/lib/systemd/linger/$DEV" ] && echo yes || echo no)"
+	echo "devSudoRead=$(sudo -n true 2>/dev/null && echo yes || echo no)"
+	echo "devSudo=$(sudo -n -l -U "$DEV" 2>/dev/null | grep -c 'may run' || true)"
+	dkeys=$(sudo -n cat "$DEV_HOME/.ssh/authorized_keys" 2>/dev/null)
+	echo "devKeysRead=$([ $? -eq 0 ] && echo yes || echo no)"
+	echo "devKeyLines=$(printf '%s\\n' "$dkeys" | grep -c '[^[:space:]]' || true)"
+	echo "devKeyOpen=$(printf '%s\\n' "$dkeys" | grep '[^[:space:]]' | grep -vc '^from="[^"]*"' || true)"
+	echo "devWeight=$(cat "/sys/fs/cgroup/user.slice/user-$(id -u "$DEV").slice/cpu.weight" 2>/dev/null)"
+	echo "devClaude=$(sudo -n -u "$DEV" -H "$DEV_HOME/${DEV_CLAUDE_BIN}" --version 2>/dev/null | head -1)"
+	echo "devRunners=$(sudo -n pgrep -c -u "$DEV" -x 'Runner\\.(Listener|Worker)' 2>/dev/null || true)"
+fi
+`;
+}
+
 /** `KEY=value` lines between markers, like the hosting observation. */
 export function usersObserveScript(machine) {
 	const ci = nodeUser(machine, 'ci');
 	const admin = nodeUser(machine, 'admin');
+	const dev = hostsSessions(machine) ? nodeUser(machine, 'dev') : null;
 	return `CI=${ci}
 ADMIN=${admin}
 CI_HOME=${nodeHome(machine, 'ci')}
 echo USERS-BEGIN
-if pw=$(getent passwd "$CI"); then
+${dev ? devObserve(dev, nodeHome(machine, 'dev')) : ''}if pw=$(getent passwd "$CI"); then
 	echo "ciUid=$(echo "$pw" | cut -d: -f3)"
 	echo "ciHome=$(echo "$pw" | cut -d: -f6)"
 	echo "ciShell=$(echo "$pw" | cut -d: -f7)"
@@ -138,6 +174,24 @@ export function parseUsersObservation(stdout) {
 		runnerProcs: num('runnerProcs'),
 		runnersNotCi: num('runnersNotCi'),
 		secretArgv: num('secretArgv'),
+		/** The dev user's facts; null when the node names none or the account does not exist. */
+		dev:
+			kv.devUid === undefined
+				? null
+				: {
+						uid: num('devUid'),
+						home: kv.devHome ?? null,
+						groups: kv.devGroups ? kv.devGroups.split(/\s+/) : null,
+						homeStat: kv.devHomeStat || null,
+						linger: kv.devLinger === 'yes',
+						sudo: kv.devSudoRead === 'yes' ? num('devSudo') : null,
+						keysRead: kv.devKeysRead === 'yes',
+						keyLines: num('devKeyLines'),
+						keyOpen: num('devKeyOpen'),
+						weight: num('devWeight'),
+						claude: kv.devClaude || null,
+						runners: num('devRunners'),
+					},
 		/** null when the account database could not be read: could not look. */
 		accounts: kv.accountsRead === 'yes' ? accounts : null,
 	};
@@ -215,6 +269,52 @@ export function judgeNodeUsers(machine, obs) {
 	return { state: findings.length ? 'drift' : 'ok', findings };
 }
 
+/**
+ * Judge a node's dev user: `{ state, findings }`.
+ *   none    the manifest names no `users.dev`: this node hosts no sessions
+ *   ok      every guarantee holds
+ *   drift   the declared dev user is not what it must be
+ *
+ * ADVISORY until 2026-11-27, then promoted with the count of real catches and
+ * false positives in that week (AGENTS.md, "a new gate starts quiet").
+ */
+export function judgeNodeSessions(machine, obs) {
+	if (!hostsSessions(machine)) return { state: 'none', findings: [] };
+	const findings = [];
+	const drift = (why) => findings.push({ class: 'advisory', category: 'dev-user-drift', why });
+	const dev = nodeUser(machine, 'dev');
+	const d = obs?.dev;
+	if (!d) {
+		drift(`the dev user ${dev} does not exist`);
+		return { state: 'drift', findings };
+	}
+	const home = nodeHome(machine, 'dev');
+	if (d.home !== home) drift(`${dev}'s home is ${d.home}, not ${home}`);
+	if (d.homeStat !== `${dev}:700`)
+		drift(`${home} is ${d.homeStat ?? 'unreadable'}, not ${dev}-owned 0700`);
+	if (!d.linger) drift(`${dev} has no linger, so a session dies with the ssh that started it`);
+	if (d.groups === null) drift(`could not read ${dev}'s groups`);
+	else if (d.groups.some((g) => g !== dev))
+		drift(
+			`${dev} is in ${d.groups.filter((g) => g !== dev).join(', ')}: only its own group is allowed`
+		);
+	if (d.sudo === null) drift(`could not read ${dev}'s sudo rights`);
+	else if (d.sudo > 0) drift(`${dev} may run sudo: a session could become root here`);
+	if (!d.keysRead) drift(`could not read ${dev}'s authorized_keys`);
+	else if (!(d.keyLines > 0)) drift(`${dev} has no authorized key, so the operator cannot log in`);
+	else if (d.keyOpen > 0) drift(`${d.keyOpen} of ${dev}'s authorized keys lack from=`);
+	if (d.weight === null) drift(`could not read the cpu.weight of ${dev}'s slice`);
+	else if (d.weight !== SESSION_WEIGHT)
+		drift(
+			`${dev}'s slice weighs ${d.weight}, not ${SESSION_WEIGHT}: sessions and CI contend as equals`
+		);
+	if (!d.claude) drift(`claude does not run as ${dev}`);
+	if (d.runners === null) drift(`could not count runner processes of ${dev}`);
+	else if (d.runners > 0)
+		drift(`${d.runners} runner process(es) run as ${dev}: CI is using the session user`);
+	return { state: findings.length ? 'drift' : 'ok', findings };
+}
+
 const NO_LOGIN = /\/(nologin|false)$/;
 
 /**
@@ -222,7 +322,7 @@ const NO_LOGIN = /\/(nologin|false)$/;
  * (docs/planning/node-users-2026-10-27.md §2, phase 2). Only `fleet node-users`
  * asks this; node-status, which tenants read, does not.
  *
- *   admin, ci           `machines.<node>.users`, through the registry
+ *   admin, ci, dev      `machines.<node>.users`, through the registry
  *   <app>-agent / -svc  a registered tenant's user (the tenant registry). It
  *                       must not log in, sudo, or share a group with ci:
  *                       BLOCKING. With nothing running in its slice it is the
@@ -249,9 +349,10 @@ export function judgeNodeAccounts(machine, obs, registered) {
 	}
 	const admin = nodeUser(machine, 'admin');
 	const ci = ciIsSeparate(machine) ? nodeUser(machine, 'ci') : null;
+	const dev = hostsSessions(machine) ? nodeUser(machine, 'dev') : null;
 	const byUser = new Map(registered.map((t) => [t.user, t]));
 	for (const acct of obs.accounts) {
-		if (acct.name === admin || acct.name === ci) continue;
+		if (acct.name === admin || acct.name === ci || acct.name === dev) continue;
 		const tenant = byUser.get(acct.name);
 		if (!tenant) {
 			findings.push({

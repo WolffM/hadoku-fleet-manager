@@ -100,6 +100,12 @@ const EXEMPT = new Map([
 			'there stops the cutover with the reason, and nothing is changed.',
 	],
 	[
+		'node-users-dev.mjs',
+		'operator-invoked against ONE named node, to create or remove its dev user. ' +
+			'An unreachable node there stops the run with the reason and nothing is ' +
+			'changed; there is no fleet-wide finding to defer.',
+	],
+	[
 		'hosting-placement.mjs',
 		"node-status's sibling for ONE app: a deploy reads it to follow the app's " +
 			'slices, and a drained hosting node is exactly one it must not follow. ' +

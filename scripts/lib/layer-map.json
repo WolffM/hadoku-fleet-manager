@@ -1081,6 +1081,20 @@
     "part": "run"
   },
   {
+    "glob": "scripts/node-users-dev.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "The dev role's setup command (claw sessions, 2026-11-19): the same shape as node-users-cutover.mjs beside it, a node's user being created and its manifest entry written."
+  },
+  {
+    "glob": "scripts/lib/node-users-dev.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "The node scripts and manifest edit of the dev role's setup, pure text like node-users-cutover.mjs, which it imports the sshd helper from (same domain)."
+  },
+  {
     "glob": "scripts/lib/apt-security.mjs",
     "layer": "domain",
     "domain": "lifecycle",

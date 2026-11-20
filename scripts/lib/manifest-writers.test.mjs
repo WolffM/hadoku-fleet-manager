@@ -101,6 +101,10 @@ const WRITERS = [
 		facet: 'placement + ephemeral — `fleet provision --machine <node> --confirm`',
 	},
 	{
+		file: 'scripts/node-users-dev.mjs',
+		facet: 'users.dev — `fleet node-users --dev <node> --confirm`',
+	},
+	{
 		file: 'scripts/retire-node.mjs',
 		facet:
 			'removes `machines.<node>` and adds the retired-name ledger entry — `fleet retire <node> --confirm`',

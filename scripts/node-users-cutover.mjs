@@ -26,8 +26,7 @@
  * idempotent, so re-running `--confirm` finishes a run that stopped.
  */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
@@ -46,6 +45,7 @@ import {
 } from './lib/manifest-target.mjs';
 import {
 	backScript,
+	controllerKeys,
 	cutoverScript,
 	flipManifest,
 	inventoryScript,
@@ -69,15 +69,6 @@ const log = (...a) => console.log(...a);
 function die(msg) {
 	console.error(`node-users --cutover: ${msg}`);
 	process.exit(1);
-}
-
-/** The controller's public keys, `type base64` each: the ones its ssh offers. */
-function controllerKeys() {
-	const dir = join(homedir(), '.ssh');
-	if (!existsSync(dir)) return [];
-	return readdirSync(dir)
-		.filter((f) => f.endsWith('.pub'))
-		.map((f) => readFileSync(join(dir, f), 'utf8').trim().split(/\s+/).slice(0, 2).join(' '));
 }
 
 function printSteps(parsed) {

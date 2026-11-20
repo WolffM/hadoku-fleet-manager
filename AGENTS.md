@@ -169,7 +169,7 @@ different things. Read it before naming anything new.
   unreachable and the true answer runs another node's script here. It had FIVE
   implementations until 2026-08-30 and only one survived an FQDN;
   `scripts/lib/node-identity-guard.test.mjs` fails the build if a sixth appears.
-- **Every command on a node acts as a ROLE: `admin` or `ci`.** Node users are
+- **Every command on a node acts as a ROLE: `admin`, `ci` or `dev`.** Node users are
   a first-party concept (operator, 2026-10-27). `src/lib/node-users.ts` is the
   only place a role becomes a user name. Pass `as:` on every `runOn`/`runOnSync`,
   use `nodeShell` in `src/`, and `sshDestination` for a hand-rolled ssh or rsync.
@@ -177,6 +177,18 @@ different things. Read it before naming anything new.
   out who a role is: until the cutover every CI job was root on its claw through
   the one shared user. `scripts/lib/node-users-guard.test.mjs` enforces it; see
   `docs/VOCABULARY.md` and `docs/planning/node-users-2026-10-27.md`.
+- **`dev` is the role that runs the operator's agent sessions on a claw**
+  (operator, 2026-11-19; `docs/planning/claw-sessions-2026-11-19.md`). It
+  exists only on a node whose manifest entry names `users.dev`, and
+  `nodeUser(m, 'dev')` THROWS everywhere else: there is no admin fallback,
+  because a session as admin has passwordless sudo. `fleet node-users --dev
+<node>` creates it (dry run by default). It never runs a CI job and never
+  has sudo or a shared group. Its slice weighs `SESSION_WEIGHT` (25) against
+  ci's 100, so CI wins a contended node. **A live session is active work**:
+  the drain and reboot cycles must wait for it the way they wait for a job.
+  That is NOT built yet. `busyCount` (`scripts/lib/drain-wait.mjs`) still
+  counts only ci's `Runner.Worker`, so until it is widened a reboot cycle
+  reads a node with a session and no job as idle.
 - **The reader for a facet may not read what the writer wrote.** Cgroup limits
   from `/sys/fs/cgroup/$(ControlGroup)/memory.max`, never `systemctl show`.
   Listeners from the process tree, never a `.env`. Registrations from the GitHub

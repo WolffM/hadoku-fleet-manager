@@ -4,9 +4,11 @@ import { test } from 'node:test';
 import {
 	DEFAULT_ADMIN_USER,
 	ciIsSeparate,
+	hostsSessions,
 	nodeCommand,
 	nodeHome,
 	nodeUser,
+	setupDevUser,
 } from '../lib/node-users.js';
 
 const migrated = { users: { admin: 'hadoku', ci: 'hadoku-ci' } };
@@ -51,4 +53,33 @@ test('local: a role admin plays runs as this process; a role with its own user o
 		nodeCommand('claw-5', 'ci', 'x', migrated, { self: 'claw-5', localUser: 'hadoku-ci' }),
 		['bash', ['-c', 'x']]
 	);
+});
+
+test('dev: a node that names no dev user hosts no sessions, and asking for one THROWS rather than answer admin', () => {
+	assert.equal(hostsSessions(migrated), false);
+	assert.throws(() => nodeUser(migrated, 'dev'), /hosts no sessions/);
+	assert.throws(() => nodeUser({}, 'dev'), /hosts no sessions/);
+	assert.throws(
+		() => nodeCommand('claw-fixture', 'dev', 'x', migrated, { self: 'hokon' }),
+		/hosts no sessions/
+	);
+});
+
+test("dev: a hosting node answers with its own user, never admin's or ci's", () => {
+	const hosting = { users: { ...migrated.users, dev: 'hadoku-dev' } };
+	assert.equal(hostsSessions(hosting), true);
+	assert.equal(nodeUser(hosting, 'dev'), 'hadoku-dev');
+	assert.equal(nodeHome(hosting, 'dev'), '/home/hadoku-dev');
+	assert.equal(setupDevUser(migrated), 'hadoku-dev');
+	assert.equal(nodeUser(hosting, 'ci'), 'hadoku-ci');
+	assert.equal(
+		nodeCommand('claw-fixture', 'dev', 'x', hosting, { self: 'hokon' })[1].at(-2),
+		'hadoku-dev@claw-fixture'
+	);
+	assert.throws(() => nodeUser({ users: { dev: 'hadoku' } }, 'dev'), /also this node's admin/);
+	assert.throws(
+		() => nodeUser({ users: { ci: 'hadoku-ci', dev: 'hadoku-ci' } }, 'dev'),
+		/also this node's ci/
+	);
+	assert.throws(() => nodeUser({ users: { dev: 'Dev User' } }, 'admin'), /users\.dev/);
 });

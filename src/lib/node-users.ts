@@ -10,8 +10,15 @@
  *   ci        runs every CI job and owns what jobs touch: runner slots, the
  *             runner payload, toolchains, caches, its own systemd manager with
  *             `runners.slice`. No sudo, no docker group, no adm.
+ *   dev       runs the operator's interactive agent sessions (a Claude
+ *             session under herdr) on a node that hosts them (operator,
+ *             2026-11-19). No sudo, never a CI job. Its whole user slice is
+ *             the sessions' cgroup, weighted below CI's. Only this role holds
+ *             an operator credential on a claw, and only in a process
+ *             environment. `fleet node-users --dev <node>` creates it;
+ *             `docs/planning/claw-sessions-2026-11-19.md` is the record.
  *
- * Tenant agents (cardtable's `cardtable-agent`) are the third kind. They never
+ * Tenant agents (cardtable's `cardtable-agent`) are the fourth kind. They never
  * log in, so nothing ssh's as them, and their names live in the hosting
  * TENANTS table (`scripts/lib/hosting.mjs`).
  *
@@ -24,7 +31,10 @@
  *
  * PER NODE, SO A CUTOVER IS ONE CLAW AT A TIME. `machines.<node>.users.ci`
  * names that node's CI user. Absent means the node has not been migrated, and
- * its CI runs as admin, which is what is true there.
+ * its CI runs as admin, which is what is true there. `users.dev` is per node
+ * the same way, but its absence means something else: the node hosts NO
+ * sessions, and asking for its dev user THROWS. There is no admin fallback,
+ * because that would start a session with NOPASSWD sudo.
  *
  * `scripts/lib/node-users-guard.test.mjs` fails the build if a user name, a
  * uid-1000 path, or an `id -un` role inference appears anywhere else.
@@ -34,7 +44,7 @@ import { userInfo } from 'node:os';
 import { isLocalNode } from './node-identity.js';
 
 /** Every role a node's user can play. */
-export const NODE_ROLES = ['admin', 'ci'] as const;
+export const NODE_ROLES = ['admin', 'ci', 'dev'] as const;
 export type NodeRole = (typeof NODE_ROLES)[number];
 
 /**
@@ -45,7 +55,7 @@ export const DEFAULT_ADMIN_USER = 'hadoku';
 
 /** A manifest entry, as far as users are concerned. */
 export interface UserBearingNode {
-	users?: { admin?: unknown; ci?: unknown };
+	users?: { admin?: unknown; ci?: unknown; dev?: unknown };
 }
 
 const named = (v: unknown): string | null =>
@@ -55,16 +65,26 @@ const named = (v: unknown): string | null =>
  * The name of the user that plays `role` on this node.
  *
  * A malformed name THROWS. A typo that fell back to admin would run every job
- * as the user this concept exists to keep jobs away from.
+ * as the user this concept exists to keep jobs away from. So does `dev` on a
+ * node that names none, or names admin's or ci's user: a session never shares
+ * a user with sudo or with job code.
  */
 export function nodeUser(node: UserBearingNode | null | undefined, role: NodeRole): string {
 	const users = node?.users;
-	for (const r of ['admin', 'ci'] as const) {
+	for (const r of NODE_ROLES) {
 		if (users?.[r] !== undefined && !named(users[r]))
 			throw new Error(`users.${r} is not a user name: ${JSON.stringify(users[r])}`);
 	}
 	const admin = named(users?.admin) ?? DEFAULT_ADMIN_USER;
-	return role === 'ci' ? (named(users?.ci) ?? admin) : admin;
+	const ci = named(users?.ci) ?? admin;
+	if (role !== 'dev') return role === 'ci' ? ci : admin;
+	const dev = named(users?.dev);
+	if (!dev) throw new Error('this node hosts no sessions: its manifest entry names no users.dev');
+	if (dev === admin || dev === ci)
+		throw new Error(
+			`users.dev is ${dev}, which is also this node's ${dev === admin ? 'admin' : 'ci'} user`
+		);
+	return dev;
 }
 
 /**
@@ -82,6 +102,32 @@ export function nodeHome(node: UserBearingNode | null | undefined, role: NodeRol
  */
 export function cutoverCiUser(node: UserBearingNode | null | undefined): string {
 	return `${nodeUser(node, 'admin')}-ci`;
+}
+
+/**
+ * The dev user `fleet node-users --dev` CREATES on a node: admin's name plus
+ * `-dev`. Only that command asks this; everything after reads `users.dev`.
+ */
+export function setupDevUser(node: UserBearingNode | null | undefined): string {
+	return `${nodeUser(node, 'admin')}-dev`;
+}
+
+/**
+ * CPU and IO weight of the dev user's slice. A user slice defaults to 100,
+ * which is what ci's has: sessions take an idle machine, CI wins a contended one.
+ */
+export const SESSION_WEIGHT = 25;
+
+/**
+ * Where `claude` lives under the dev user's home. The setup copies the
+ * CONTROLLER's own binary there, so a node runs the version the operator's
+ * panes run and fetches nothing itself.
+ */
+export const DEV_CLAUDE_BIN = '.local/bin/claude';
+
+/** Does this node host interactive sessions, under a dev user of its own? */
+export function hostsSessions(node: UserBearingNode | null | undefined): boolean {
+	return node?.users?.dev !== undefined;
 }
 
 /** Has this node's CI moved off the admin user? */

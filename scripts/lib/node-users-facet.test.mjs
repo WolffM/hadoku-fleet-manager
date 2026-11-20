@@ -1,8 +1,10 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
+import { SESSION_WEIGHT } from '../../dist/lib/node-users.js';
 import {
 	judgeNodeAccounts,
+	judgeNodeSessions,
 	judgeNodeUsers,
 	parseUsersObservation,
 	usersObserveScript,
@@ -209,4 +211,78 @@ test("the observation selects tenant users by the runtimes' own suffixes", () =>
 	const s = usersObserveScript(CUT);
 	for (const x of TENANT_USER_SUFFIXES) assert.ok(s.includes(`$1 ~ /${x}$/`), x);
 	assert.match(s, /\$3!=0 && \(\(\$3>=1000 && \$3<60000\)/);
+});
+
+// ── the dev user: a node that hosts the operator's sessions ──────────────────
+
+const HOSTS = { users: { admin: 'hadoku', ci: 'hadoku-ci', dev: 'hadoku-dev' } };
+const devAnswer = (over = {}) =>
+	answer({
+		devUid: 1002,
+		devHome: '/home/hadoku-dev',
+		devGroups: 'hadoku-dev',
+		devHomeStat: 'hadoku-dev:700',
+		devLinger: 'yes',
+		devSudoRead: 'yes',
+		devSudo: 0,
+		devKeysRead: 'yes',
+		devKeyLines: 1,
+		devKeyOpen: 0,
+		devWeight: SESSION_WEIGHT,
+		devClaude: '2.1.329 (Claude Code)',
+		devRunners: 0,
+		...over,
+	});
+const sessions = (over, machine = HOSTS) =>
+	judgeNodeSessions(machine, parseUsersObservation(devAnswer(over)));
+
+test('a node that names no dev user hosts no sessions, and nothing about it is judged', () => {
+	assert.deepEqual(judgeNodeSessions(CUT, parseUsersObservation(answer())), {
+		state: 'none',
+		findings: [],
+	});
+	assert.doesNotMatch(usersObserveScript(CUT), /DEV=/);
+});
+
+test('a dev user serving exactly its contract is ok', () => {
+	assert.deepEqual(sessions(), { state: 'ok', findings: [] });
+	assert.match(usersObserveScript(HOSTS), /DEV=hadoku-dev/);
+});
+
+test('every guarantee of a declared dev user is named when it does not hold', () => {
+	const first = (over) => sessions(over).findings[0].why;
+	assert.match(first({ devSudo: 1 }), /may run sudo/);
+	assert.match(first({ devSudoRead: 'no' }), /could not read hadoku-dev's sudo rights/);
+	assert.match(first({ devGroups: 'hadoku-dev hadoku-ci' }), /in hadoku-ci/);
+	assert.match(first({ devLinger: 'no' }), /no linger/);
+	assert.match(first({ devHomeStat: 'hadoku-dev:755' }), /not hadoku-dev-owned 0700/);
+	assert.match(first({ devKeyOpen: 1 }), /lack from=/);
+	assert.match(first({ devKeyLines: 0 }), /no authorized key/);
+	assert.match(first({ devWeight: 100 }), /weighs 100, not 25/);
+	assert.match(first({ devWeight: '' }), /could not read the cpu.weight/);
+	assert.match(first({ devClaude: '' }), /claude does not run/);
+	assert.match(first({ devRunners: 2 }), /2 runner process\(es\) run as hadoku-dev/);
+});
+
+test('a declared dev user that does not exist is drift, never "no sessions"', () => {
+	const r = judgeNodeSessions(HOSTS, parseUsersObservation(answer()));
+	assert.equal(r.state, 'drift');
+	assert.match(r.findings[0].why, /does not exist/);
+});
+
+test('dev findings are advisory: a new check starts quiet (promotable from 2026-11-27)', () => {
+	assert.ok(sessions({ devSudo: 1 }).findings.every((f) => f.class === 'advisory'));
+});
+
+test('the dev user is claimed by the manifest; the same account on a node that names none is unclaimed', () => {
+	const accounts = (machine) =>
+		judgeNodeAccounts(
+			machine,
+			parseUsersObservation(
+				answer({ accountsRead: 'yes', account: 'hadoku-dev:1002:/bin/bash:hadoku-dev:0:-' })
+			),
+			[]
+		);
+	assert.deepEqual(accounts(HOSTS), []);
+	assert.match(accounts(CUT)[0].why, /hadoku-dev .* is claimed by no role/);
 });

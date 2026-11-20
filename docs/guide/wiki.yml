@@ -9,7 +9,7 @@ features:
     summary: Decides which machine takes each CI job, and keeps one runner listening per decision.
     anchor: runner-fleet-health-and-dispatch
   - name: Node onboarding
-    summary: Six verbs turn a bare machine into one the fleet will schedule real work on.
+    summary: Six verbs turn a bare machine into one the fleet will schedule real work on, and one more lets it host an operator's agent session.
     anchor: node-onboarding
   - name: Drains, leases and the backstop
     summary: Take a machine out of CI for a while, or bring in the one machine held in reserve for an outage.

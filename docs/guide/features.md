@@ -66,6 +66,29 @@ should have, `fleet qualify` to run a one-node playlist of load tests
 manifest's say alone — a capability a probe cannot confirm is not offered,
 even if the operator believes it should be there.
 
+### Agent sessions on a node
+
+**What it does.** Lets a node host the operator's interactive agent sessions
+(a Claude session under herdr), so the builds and browsers a session starts
+use that node's cores instead of the controller's. Each hosting node gets a
+third user for it, the **dev** user, beside the one that manages the node and
+the one that runs CI. It has no sudo and belongs to no shared group, and its
+whole slice of the machine is weighted below CI's: a session gets an idle
+machine to itself, and CI wins when both want it.
+
+**How to use it.** `fleet node-users --dev <node>` is a dry run that lists
+what would change; `--confirm` creates the user, copies the controller's own
+`claude` binary to it, logs in as it to prove the path, and records the user
+in the manifest. `fleet node-users --machine <node>` reads everything back
+from the node and reports `sessions: ok` or what drifted. `--dev <node> --back
+--confirm` undoes it.
+
+**What it does not do.** It does not yet make the reboot and refresh cycles
+wait for a session: they count running CI jobs only, so a node with a session
+and no job still reads as idle. It stores no credential on the node. It never
+removes the home directory on undo (only the account), and it refuses to undo while anything
+still runs as that user.
+
 ## Drains, leases and the backstop
 
 **What it does.** Takes a node out of CI for maintenance (a **drain**) or for

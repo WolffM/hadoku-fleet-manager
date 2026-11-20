@@ -23,6 +23,10 @@
  * with `CUTOVER-END` / `INVENTORY-END` / `BACK-END`. A missing end marker is a
  * run that did not finish, never a pass.
  */
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { JIT_PAYLOAD_DIR } from './preflight.mjs';
 import { ciIsSeparate } from '../../dist/lib/node-users.js';
 
@@ -80,6 +84,15 @@ export const STANDING = '/var/lib/fleet-node-users/standing';
 const NAME = /^[a-z_][a-z0-9_-]*$/;
 const KEY = /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/=]+$/;
 
+/**
+ * Shell: `allowed` prints the users sshd lets in, from its EFFECTIVE config
+ * (empty means no allow-list); `allow_conf` names the file that carries the
+ * list. Shared with the dev role's setup (`node-users-dev.mjs`).
+ */
+export const SSHD_ALLOW_SH = `allowed() { sudo -n sshd -T 2>/dev/null | awk 'tolower($1)=="allowusers"{for(i=2;i<=NF;i++) print $i}'; }
+allow_conf() { sudo -n grep -lsE '^[[:space:]]*[Aa]llow[Uu]sers[[:space:]]' /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config | head -1; }
+`;
+
 function header({ admin, ci, adminHome, ciHome }) {
 	for (const [k, v] of Object.entries({ admin, ci }))
 		if (!NAME.test(v ?? '')) throw new Error(`refusing ${k} user ${JSON.stringify(v)}`);
@@ -100,10 +113,7 @@ die() { step "$1" fail "$2"; exit 1; }
 # path under $CH goes through sudo. A plain [ -e ] there reads "absent" for
 # everything (claw-5, 2026-10-27: 13 system links and 37 uv files skipped).
 ci_has() { sudo -n test -e "$1" || sudo -n test -L "$1"; }
-# The users sshd lets in, from its EFFECTIVE config; empty means no allow-list.
-allowed() { sudo -n sshd -T 2>/dev/null | awk 'tolower($1)=="allowusers"{for(i=2;i<=NF;i++) print $i}'; }
-allow_conf() { sudo -n grep -lsE '^[[:space:]]*[Aa]llow[Uu]sers[[:space:]]' /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config | head -1; }
-busy=$(sudo -n pgrep -xc 'Runner\\.Worker' 2>/dev/null || true)
+${SSHD_ALLOW_SH}busy=$(sudo -n pgrep -xc 'Runner\\.Worker' 2>/dev/null || true)
 `;
 }
 
@@ -397,6 +407,14 @@ fi
 sudo -n mv "$RECORD" "$RECORD.back-$(date +%s)"
 echo BACK-END
 `;
+}
+
+/** The controller's public keys, `type base64` each: the ones its ssh offers. */
+export function controllerKeys(dir = join(homedir(), '.ssh')) {
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir)
+		.filter((f) => f.endsWith('.pub'))
+		.map((f) => readFileSync(join(dir, f), 'utf8').trim().split(/\s+/).slice(0, 2).join(' '));
 }
 
 /** `{ steps: [{ name, status, detail }], complete }` from any of the three. */

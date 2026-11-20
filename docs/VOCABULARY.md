@@ -64,11 +64,12 @@ prose can neither trip that rule nor satisfy it.
 `src/lib/node-users.ts` — `nodeUser(machine, role)`. A first-party concept since
 2026-10-27 (operator: "must be respected"). A node has users by **role**:
 
-| role       | is                                                                                                  | never                           |
-| ---------- | --------------------------------------------------------------------------------------------------- | ------------------------------- |
-| **admin**  | the management identity: ssh, NOPASSWD sudo, the journal, pm2                                       | runs a CI job                   |
-| **ci**     | runs every CI job; owns runner slots, home toolchains, caches, `runners.slice`, its rootless docker | sudo, the docker group, adm     |
-| **tenant** | a hosting agent's system user (`cardtable-agent`), in the tenant registry                           | logs in, shares a group with ci |
+| role       | is                                                                                                     | never                            |
+| ---------- | ------------------------------------------------------------------------------------------------------ | -------------------------------- |
+| **admin**  | the management identity: ssh, NOPASSWD sudo, the journal, pm2                                          | runs a CI job                    |
+| **ci**     | runs every CI job; owns runner slots, home toolchains, caches, `runners.slice`, its rootless docker    | sudo, the docker group, adm      |
+| **dev**    | runs the operator's interactive agent sessions (a Claude session under herdr), where a node hosts them | sudo, any shared group, a CI job |
+| **tenant** | a hosting agent's system user (`cardtable-agent`), in the tenant registry                              | logs in, shares a group with ci  |
 
 Code names the ROLE, never a user. `runOn(node, script, { as: 'ci' })`,
 `nodeShell(node, 'ci', cmd)`, `sshDestination(node, 'admin')` and
@@ -78,6 +79,16 @@ Code names the ROLE, never a user. `runOn(node, script, { as: 'ci' })`,
 not been cut over and its CI still runs as admin. `machines.<node>.containers:
 "docker"` gives that ci user its own rootless docker; the rootful daemon, whose
 group is root-equivalent, stays admin's.
+
+**`dev` exists per node, and only where it is named.** `machines.<node>.users.dev`
+names it; absent means the node hosts no sessions, and `nodeUser(m, 'dev')`
+throws there (never falls back to admin, which has sudo). `fleet node-users
+--dev <node>` creates the user: home 0700, linger, a key only the controller's
+address may use, and a user slice whose CPU and IO weight is `SESSION_WEIGHT`
+(25, against ci's default 100). The facet reads all of it back, the weight from
+the kernel's `cpu.weight`. A **session** here always means one of these agent
+sessions, never a systemd login session. Since 2026-11-19;
+`docs/planning/claw-sessions-2026-11-19.md`.
 
 **Shared tarball tools belong to no role.** jdk21 and maven install under the
 root-owned `/opt/fleet-tools` (`TOOL_OPT`), linked into `/usr/local/bin`, so a

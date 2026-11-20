@@ -123,6 +123,31 @@ a destination, and `service-move` runs from a hadoku_site worktree.
   seq is older than the last one from the same source. Without it, a crash
   report was silently dropped and the dead watcher's last state stayed on screen.
 
+# Sessions on a claw
+
+A Claude session can run ON a claw instead of on the controller, so its builds
+and browsers use that claw's cores (operator, 2026-11-19). It runs as the
+node's **dev** user (`docs/VOCABULARY.md`, "Node users"), which has no sudo and
+never runs a CI job.
+
+```sh
+fleet node-users --dev claw-9             # dry run: what it would change
+fleet node-users --dev claw-9 --confirm   # create the user, copy claude, write users.dev
+herdr machine add <dev-user>@claw-9       # herdr prepares its own server there
+herdr --remote <dev-user>@claw-9
+fleet node-users --machine claw-9         # reads the user back; `sessions: ok`
+fleet node-users --dev claw-9 --back --confirm   # undo; refuses while a session runs
+```
+
+The setup prints the dev user's name when it finishes. The Claude token is not
+stored on the claw: a session leases it from crossposter's pool and holds it in
+its environment only.
+
+Not built yet: a live session does not hold off the reboot or refresh cycle
+(they count CI jobs only), the claw has no lease identity of its own, and the
+dev user has no push credential. The status of each is in
+`docs/planning/claw-sessions-2026-11-19.md`.
+
 # hadoku.sessions — find a Claude session
 
 ```sh

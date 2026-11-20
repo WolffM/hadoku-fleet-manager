@@ -6,6 +6,7 @@
  *   fleet node-users --machine claw-5
  *   fleet node-users --json
  *   fleet node-users --cutover claw-5 [--confirm]   # see node-users-cutover.mjs
+ *   fleet node-users --dev claw-9 [--confirm]       # see node-users-dev.mjs
  *
  * The facet and its rules are `lib/node-users-facet.mjs`; the concept is
  * `src/lib/node-users.ts`. Without `--cutover` it only checks; the cutover
@@ -28,6 +29,7 @@ import { deferralFor, readDrains } from './lib/expected-down.mjs';
 import { loadManifest, machineArg, runOn, selectMachines } from './lib/fleet-exec.mjs';
 import {
 	judgeNodeAccounts,
+	judgeNodeSessions,
 	judgeNodeUsers,
 	parseUsersObservation,
 	usersObserveScript,
@@ -56,11 +58,13 @@ async function checkNode(node, machine, drains, tenants) {
 	}
 	const users = judgeNodeUsers(machine, obs);
 	const accounts = judgeNodeAccounts(machine, obs, tenants);
+	const sessions = judgeNodeSessions(machine, obs);
 	return {
 		machine: node,
 		ok: true,
 		state: users.state,
-		findings: [...users.findings, ...accounts],
+		sessions: sessions.state,
+		findings: [...users.findings, ...sessions.findings, ...accounts],
 		observed: obs,
 	};
 }
@@ -97,7 +101,7 @@ async function main() {
 			log(`── ${r.machine}  [${r.expectedDown ? 'expected down' : 'UNREADABLE'}] ${r.error}`);
 			continue;
 		}
-		log(`── ${r.machine}  [${r.state}]`);
+		log(`── ${r.machine}  [${r.state}]${r.sessions === 'none' ? '' : `  sessions: ${r.sessions}`}`);
 		for (const f of r.findings) log(`   ${f.class.padEnd(9)} ${f.category}: ${f.why}`);
 	}
 	const unread = results.filter((r) => !r.ok && !r.expectedDown);
@@ -114,6 +118,8 @@ async function main() {
 
 if (process.argv.includes('--cutover')) {
 	await import('./node-users-cutover.mjs');
+} else if (process.argv.includes('--dev')) {
+	await import('./node-users-dev.mjs');
 } else {
 	main().catch((err) => {
 		console.error(`node-users: ${err instanceof Error ? err.stack : String(err)}`);
