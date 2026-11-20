@@ -277,6 +277,9 @@ export async function runBackstopDecision(args: {
 		clawsFree,
 		queuePressureSec,
 		reserved: reservation.reserved,
+		reservedWhy: reservation.reserved
+			? [reservation.reason, reservation.detail].filter(Boolean).join(': ')
+			: null,
 		// Do not act on capacity that was never measured. Null probe =>
 		// every claw count is a floor, not a reading.
 		ephemeralUnknown: ephemeralUnknown,

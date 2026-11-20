@@ -35,7 +35,8 @@ import { BUILDER_LABEL } from '../lib/capability-registry-ids.js';
  * So the eligible state says so every tick, and it says it through
  * `explainBackstop`, which lives beside the decision — a log line written
  * here by hand is a second copy of the reasoning and drifts from it. Six
- * lines an hour, and only while the reserve is actually in play.
+ * lines an hour, on every outcome since 2026-11-19: "not wanted" has its own
+ * line (see the last branch).
  *
  * Returns `why` (`explainBackstop`'s own reasoning string) so the caller can
  * reuse it in the demote line later in the same tick without asking twice.
@@ -114,6 +115,14 @@ export function logBackstopEligibility(args: {
 		// "I could not look" must never render as "nothing is wrong", and it
 		// must say WHY. This branch decided nothing at all.
 		logger.info(`[runner-health] BACKSTOP could not look: ${why}`);
+	} else {
+		// NOT WANTED, SAID TOO. This was the one silent outcome, and silence
+		// could not be told apart from a tick that never ran. On 2026-11-19 the
+		// 23:25Z and 23:45Z ticks left hokon out while a job had waited 40
+		// minutes, and nothing recorded whether the queue had read low or a
+		// reservation had overruled it: the inputs were gone. One line per
+		// 10-minute tick; the reading and the reservation's holder are in `why`.
+		logger.info(`[runner-health] BACKSTOP not wanted: ${why}`);
 	}
 	return why;
 }

@@ -66,19 +66,38 @@ import { activeLeases } from './host-lease-record.js';
 import { __resetPm2HostBusyForTesting } from './pm2-host-busy-store.js';
 
 let inFlight = 0;
+/**
+ * WHICH jobs are in flight, by name, for the ones whose caller says.
+ *
+ * The count alone decides; the names only explain. On 2026-11-19 hokon was
+ * dropped off a 350 s backlog by `reserved=true` and nothing recorded what had
+ * reserved it. Rebuilt afterwards from the job-run records, it was a 2.8 s
+ * converger that happened to be running at the instant the tick read the
+ * counter. A reservation that cannot name its holder cannot be judged.
+ */
+const inFlightNames = new Map<string, number>();
 
-/** Wrap a cron dispatch so the node is reserved for exactly its duration. */
-export function noteCronStart(): void {
+/**
+ * Wrap a cron dispatch so the node is reserved for exactly its duration.
+ * Pass the SAME name to both calls; a caller that passes none is still counted.
+ */
+export function noteCronStart(jobName?: string): void {
 	inFlight++;
+	if (jobName) inFlightNames.set(jobName, (inFlightNames.get(jobName) ?? 0) + 1);
 }
-export function noteCronEnd(): void {
+export function noteCronEnd(jobName?: string): void {
 	if (inFlight > 0) inFlight--;
+	if (!jobName) return;
+	const left = (inFlightNames.get(jobName) ?? 0) - 1;
+	if (left > 0) inFlightNames.set(jobName, left);
+	else inFlightNames.delete(jobName);
 }
 export function inFlightCronJobs(): number {
 	return inFlight;
 }
 export function __resetReservationForTesting(): void {
 	inFlight = 0;
+	inFlightNames.clear();
 	__resetPm2HostBusyForTesting();
 }
 
@@ -104,7 +123,12 @@ export interface Reservation {
  */
 export function nodeReservation(now: Date = new Date(), pm2HostBusy = false): Reservation {
 	if (inFlight > 0) {
-		return { reserved: true, reason: 'cron-running', detail: `${inFlight} cron job(s) in flight` };
+		const names = [...inFlightNames.keys()].sort();
+		return {
+			reserved: true,
+			reason: 'cron-running',
+			detail: `${inFlight} cron job(s) in flight${names.length ? `: ${names.join(', ')}` : ''}`,
+		};
 	}
 	// A lease is the host's own statement that it is busy, so it ranks with the
 	// live counter, ahead of anything inferred.

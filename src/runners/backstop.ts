@@ -102,6 +102,11 @@ export interface BackstopInput {
 	/** The priority ladder says hokon is busy with work GitHub cannot see. */
 	reserved: boolean;
 	/**
+	 * What reserved it, for the log line only. `decideBackstop` never reads it.
+	 * Absent on a caller that has only the boolean, and then the line says so.
+	 */
+	reservedWhy?: string | null;
+	/**
 	 * Ephemeral capacity was NOT MEASURED this tick (no probe snapshot yet).
 	 *
 	 * Optional, and absent means measured — a caller that forgets it gets the old
@@ -368,10 +373,15 @@ export function explainBackstop(i: BackstopInput, d: BackstopDecision): string {
 	const queue = d.outage
 		? 'queue=NOT PROBED (an outage skips it — nothing can queue behind a dark fleet)'
 		: `queue=${i.queuePressureSec}s (probed; promotes at ${SATURATION_QUEUE_SECONDS}s)`;
+	// A RESERVATION NAMES ITS HOLDER. `reserved=true` alone overrules a backlog
+	// of any depth, and until 2026-11-19 the line never said what had done it.
+	const reserved = i.reserved
+		? `reserved=true (${i.reservedWhy ?? 'holder not reported'})`
+		: 'reserved=false';
 	return (
 		`reason=${d.reason} claws=${i.clawsOnline}/${i.clawsRegistered} online ` +
 		`free=${i.clawsFree} healthy=${clawsAreHealthy(i.clawsOnline, i.clawsRegistered)} ` +
-		`${queue} reserved=${i.reserved} calmTicks=${d.next.calmTicks}/${BACKSTOP_CALM_TICKS}`
+		`${queue} ${reserved} calmTicks=${d.next.calmTicks}/${BACKSTOP_CALM_TICKS}`
 	);
 }
 

@@ -142,3 +142,30 @@ test('the no-argument reader is the fleet-wide collapse, and it is deliberate', 
 	setPm2HostBusy([]);
 	assert.equal(getPm2HostBusy(), false);
 });
+
+test('nodeReservation: a cron reservation names the jobs holding it', () => {
+	// 2026-11-19: `reserved=true` dropped hokon off a 350 s backlog and nothing
+	// said what had reserved it. The holder was a 2.8 s converger.
+	noteCronStart('fleet:hosting-converge');
+	noteCronStart('fleet:ppe-sweep');
+	noteCronStart();
+	assert.equal(
+		nodeReservation(at(12), false).detail,
+		'3 cron job(s) in flight: fleet:hosting-converge, fleet:ppe-sweep',
+		'named ones are listed; an unnamed one is still counted'
+	);
+	noteCronEnd('fleet:hosting-converge');
+	noteCronEnd();
+	assert.equal(nodeReservation(at(12), false).detail, '1 cron job(s) in flight: fleet:ppe-sweep');
+	noteCronEnd('fleet:ppe-sweep');
+	assert.equal(nodeReservation(at(12), false).reserved, false);
+});
+
+test('nodeReservation: two runs of one job hold its name until both end', () => {
+	noteCronStart('ci:queue-health');
+	noteCronStart('ci:queue-health');
+	noteCronEnd('ci:queue-health');
+	assert.equal(nodeReservation(at(12), false).detail, '1 cron job(s) in flight: ci:queue-health');
+	noteCronEnd('ci:queue-health');
+	assert.equal(inFlightCronJobs(), 0);
+});
