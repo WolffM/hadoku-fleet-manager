@@ -123,6 +123,9 @@ import { checkGhReserve } from './lib/gh-reserve.mjs';
 import { useAppPool } from './lib/gh-app.mjs';
 import { listRunners, ciRunnerVarCheck, pool } from './lib/reconcile-apply.mjs';
 import { resolveDesired } from './lib/reconcile-resolve.mjs';
+import { cargoBinCheck } from './lib/cargo-bin-cache.mjs';
+import { readActionFiles } from './lib/workflow-bodies.mjs';
+import { fleetOwner } from '../dist/lib/fleet-config.js';
 import {
 	buildCoverageDoc,
 	checkCoverageVerdict,
@@ -366,6 +369,21 @@ async function main() {
 	}
 	const runnerVar = await ciRunnerVarCheck(runnerVarPopulation, { bodies: workflowBodies });
 
+	// --- cargoBin ------------------------------------------------------------
+	// A workflow whose Rust cache step would delete the node's own cargo
+	// binaries (lib/cargo-bin-cache.mjs). Read from the bodies already in
+	// hand, plus one batched read of the owner's actions those workflows call.
+	// ADVISORY since 2026-11-19: reported here and by mgmt-api, in no exit
+	// code. Archived repos run nothing and are left out.
+	const cargoBin = cargoBinCheck(
+		[...allRepos].filter(([, r]) => !r.isFork && !r.isArchived).map(([name]) => name),
+		{
+			bodies: workflowBodies,
+			owner: manifest.autoInclude?.owner ?? fleetOwner(),
+			readActions: readActionFiles,
+		}
+	);
+
 	const repos = [...desired.keys()].filter((r) => !ONLY_REPO || r === ONLY_REPO);
 	const retiredScoped = retired.filter((r) => !ONLY_REPO || r.repo === ONLY_REPO);
 
@@ -445,6 +463,7 @@ async function main() {
 		ignored,
 		departed,
 		runnerVar,
+		cargoBin,
 	};
 
 	if (!JSON_OUT) {
@@ -461,6 +480,7 @@ async function main() {
 			departed,
 			ignored,
 			runnerVar,
+			cargoBin,
 			expectedDownNotes,
 			CONFIRM,
 			REMOVE_ORPHANS,

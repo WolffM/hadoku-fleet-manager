@@ -1603,6 +1603,11 @@
     "why": "Wave clean-1 lane D reclassify: zero imports, pure filters over the manifest's own `repos`/`machines` shape (`needs`, `excludeRepos`, `placement`) \u2014 declarative-input derivation per \u00a73.2 rule 1, not a ci-scheduling runtime decision. Filed under ci-scheduling with no `why` before this; moving it to config (where every other manifest-shaped reader already sits) legalises reads from clean-runner-debris.mjs (lifecycle) and capability-seeds.mjs/reconcile-plan.mjs (config/lifecycle) with no new edge: every current importer sits at index <= config already."
   },
   {
+    "glob": "scripts/lib/cargo-bin-cache.mjs",
+    "layer": "config",
+    "why": "2026-11-19: which Rust cache steps clean the node's ~/.cargo/bin. Every export is pure; the workflow bodies and the action-file reader (workflow-bodies.mjs, access) are parameters, the same shape runner-var.mjs below takes its network read in. reconcile-fleet-runners.mjs passes the reader in."
+  },
+  {
     "glob": "scripts/lib/runner-var.mjs",
     "layer": "config",
     "why": "Wave clean-2 lane C (cut (iii) layer debt): RECLASSIFIED from domain/ci-scheduling to config. Every export (runnerVarForm/readRunnerVar/repoVerdict) is pure \u2014 no I/O at all; readRunnerVar takes its own network call (readOnce) as a parameter rather than making one. That is the plan's own placement rule for 'declarative input', and it is why the file's own header already called itself 'pure, so the classification can be tested without a checkout or a token'. check-runner-var.mjs (observation) and reconcile-apply.mjs (lifecycle) both read this one pure rule; config is the layer BELOW both where a shared, domain-blind verdict legally lives \u2014 the same reason yaml-comments.mjs and read-retry-policy.mjs (which this file now imports directly, not through queue-health.mjs) sit there."

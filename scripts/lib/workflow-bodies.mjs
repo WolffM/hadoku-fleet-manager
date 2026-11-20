@@ -21,6 +21,9 @@
  * batch that failed every attempt, or a file whose blob carried no text
  * (binary, or truncated) is reported with its reason; each caller decides
  * what that means for it, exactly as each did with the REST reads.
+ *
+ * `readActionFiles` reads the action files those workflows call, the same
+ * way, for `lib/cargo-bin-cache.mjs`.
  */
 import { execFileSync } from 'node:child_process';
 
@@ -97,31 +100,29 @@ function documentFrom(err) {
 	}
 }
 
+/** gh's default transport and retry pause, shared by both readers below. */
+const DEFAULTS = {
+	runGh: (args) =>
+		execFileSync('gh', args, {
+			encoding: 'utf8',
+			maxBuffer: 64 * 1024 * 1024,
+			timeout: TIMEOUT_MS,
+			stdio: ['ignore', 'pipe', 'pipe'],
+		}),
+	attempts: READ_ATTEMPTS,
+	// The same one-second pause reconcile's other retried reads take.
+	sleep: () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000),
+};
+
 /**
- * Read every repo's workflow files. Never throws: a batch that fails every
- * attempt marks each of its repos `{ ok: false, reason }`.
- *
- * `runGh(args)` returns gh's stdout and throws gh's error; injected for tests.
+ * `items` in batches of `BATCH`, one GraphQL query each. `onBatch(batch, doc)`
+ * gets the parsed document, or `onFailed(batch, reason)` when every attempt
+ * failed. Never throws.
  */
-export function readWorkflowBodies(
-	repos,
-	{
-		runGh = (args) =>
-			execFileSync('gh', args, {
-				encoding: 'utf8',
-				maxBuffer: 64 * 1024 * 1024,
-				timeout: TIMEOUT_MS,
-				stdio: ['ignore', 'pipe', 'pipe'],
-			}),
-		attempts = READ_ATTEMPTS,
-		// The same one-second pause reconcile's other retried reads take.
-		sleep = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000),
-	} = {}
-) {
-	const out = new Map();
-	for (let at = 0; at < repos.length; at += BATCH) {
-		const batch = repos.slice(at, at + BATCH);
-		const args = ['api', 'graphql', '-f', `query=${workflowQuery(batch)}`];
+function readBatched(items, queryOf, onBatch, onFailed, { runGh, attempts, sleep }) {
+	for (let at = 0; at < items.length; at += BATCH) {
+		const batch = items.slice(at, at + BATCH);
+		const args = ['api', 'graphql', '-f', `query=${queryOf(batch)}`];
 		let reason = 'no attempt was made';
 		let doc = null;
 		for (let attempt = 1; attempt <= attempts && !doc; attempt++) {
@@ -136,8 +137,102 @@ export function readWorkflowBodies(
 				if (attempt < attempts) sleep();
 			}
 		}
-		if (doc) for (const [repo, r] of parseWorkflowBatch(doc, batch)) out.set(repo, r);
-		else for (const repo of batch) out.set(repo, { ok: false, reason });
+		if (doc) onBatch(batch, doc);
+		else onFailed(batch, reason);
 	}
+}
+
+/**
+ * Read every repo's workflow files. Never throws: a batch that fails every
+ * attempt marks each of its repos `{ ok: false, reason }`.
+ *
+ * `runGh(args)` returns gh's stdout and throws gh's error; injected for tests.
+ */
+export function readWorkflowBodies(repos, opts = {}) {
+	const out = new Map();
+	readBatched(
+		repos,
+		workflowQuery,
+		(batch, doc) => {
+			for (const [repo, r] of parseWorkflowBatch(doc, batch)) out.set(repo, r);
+		},
+		(batch, reason) => {
+			for (const repo of batch) out.set(repo, { ok: false, reason });
+		},
+		{ ...DEFAULTS, ...opts }
+	);
+	return out;
+}
+
+// ---------------------------------------------------------------------------
+// Action files: what a workflow CALLS (lib/cargo-bin-cache.mjs).
+// ---------------------------------------------------------------------------
+
+/** The files `ref` may be: a reusable workflow as named, an action as either spelling. */
+function actionCandidates({ path }) {
+	if (/\.ya?ml$/.test(path)) return [path];
+	const dir = path ? `${path}/` : '';
+	return [`${dir}action.yml`, `${dir}action.yaml`];
+}
+
+/** The query for one batch of `{ repo, ref, path }`, aliased `a0..aN`. */
+export function actionQuery(refs) {
+	const fields = refs.map((r, i) => {
+		const [owner, name] = r.repo.split('/');
+		const files = actionCandidates(r).map(
+			(f, j) =>
+				`f${j}: object(expression: ${JSON.stringify(`${r.ref}:${f}`)})` +
+				' { ... on Blob { text isTruncated } }'
+		);
+		return (
+			`a${i}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)})` +
+			` { ${files.join(' ')} }`
+		);
+	});
+	return `query { ${fields.join(' ')} }`;
+}
+
+/**
+ * Read owned action and reusable-workflow files at the ref a workflow pins.
+ * Returns `Map<"repo@ref:path", { ok: true, text } | { ok: false, reason }>`.
+ * A ref with no action file is `ok: false`: the caller asked for something
+ * that is not there, which is not the same as an action with no steps.
+ */
+export function readActionFiles(refs, opts = {}) {
+	const out = new Map();
+	const key = (r) => `${r.repo}@${r.ref}:${r.path}`;
+	readBatched(
+		refs,
+		actionQuery,
+		(batch, doc) => {
+			const errs = new Map();
+			for (const e of doc?.errors ?? []) {
+				if (typeof e?.path?.[0] === 'string') errs.set(e.path[0], e.message ?? '');
+			}
+			batch.forEach((r, i) => {
+				const node = doc?.data?.[`a${i}`];
+				if (!node) {
+					const why = errs.get(`a${i}`) ?? 'no error given';
+					out.set(key(r), { ok: false, reason: `GraphQL returned no repository: ${why}` });
+					return;
+				}
+				const blobs = actionCandidates(r).map((_, j) => node[`f${j}`]);
+				const blob = blobs.find((b) => b && typeof b.text === 'string' && !b.isTruncated);
+				if (blob) out.set(key(r), { ok: true, text: blob.text });
+				else if (blobs.some((b) => b && Object.keys(b).length)) {
+					out.set(key(r), { ok: false, reason: 'its body was truncated or carried no text' });
+				} else {
+					out.set(key(r), {
+						ok: false,
+						reason: `no ${actionCandidates(r).join(' or ')} at ${r.ref}`,
+					});
+				}
+			});
+		},
+		(batch, reason) => {
+			for (const r of batch) out.set(key(r), { ok: false, reason });
+		},
+		{ ...DEFAULTS, ...opts }
+	);
 	return out;
 }

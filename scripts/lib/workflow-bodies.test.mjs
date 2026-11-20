@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 
 import {
 	BATCH,
+	actionQuery,
 	parseWorkflowBatch,
+	readActionFiles,
 	readWorkflowBodies,
 	workflowQuery,
 } from './workflow-bodies.mjs';
@@ -100,4 +102,61 @@ void test(`repos are read ${BATCH} per query, and a transient failure is retried
 	assert.deepEqual(seen, [BATCH, BATCH, BATCH, 1]);
 	assert.equal(out.size, repos.length);
 	assert.ok([...out.values()].every((r) => r.ok && r.files.length === 0));
+});
+
+test('readActionFiles: an action at its pinned ref, either spelling, or the reason it is not there', () => {
+	const refs = [
+		{ repo: 'o/act', ref: 'v1', path: '' },
+		{ repo: 'o/mono', ref: 'abc123', path: 'tools/setup' },
+		{ repo: 'o/flows', ref: 'main', path: '.github/workflows/build.yml' },
+		{ repo: 'o/none', ref: 'v2', path: '' },
+		{ repo: 'o/gone', ref: 'v1', path: '' },
+	];
+	const query = actionQuery(refs);
+	assert.match(query, /expression: "v1:action\.yml"/);
+	assert.match(query, /expression: "abc123:tools\/setup\/action\.yaml"/);
+	assert.match(query, /a2: [^}]*expression: "main:\.github\/workflows\/build\.yml"/);
+
+	const runGh = () => {
+		const err = new Error('gh: Could not resolve to a Repository');
+		err.stdout = JSON.stringify({
+			data: {
+				a0: { f0: { text: 'runs: {}', isTruncated: false }, f1: null },
+				a1: { f0: null, f1: { text: 'yaml spelling', isTruncated: false } },
+				a2: { f0: { text: 'on: workflow_call', isTruncated: false } },
+				a3: { f0: null, f1: null },
+				a4: null,
+			},
+			errors: [{ path: ['a4'], type: 'NOT_FOUND', message: 'Could not resolve to a Repository' }],
+		});
+		throw err;
+	};
+	const out = readActionFiles(refs, { runGh });
+	assert.deepEqual(out.get('o/act@v1:'), { ok: true, text: 'runs: {}' });
+	assert.deepEqual(out.get('o/mono@abc123:tools/setup'), { ok: true, text: 'yaml spelling' });
+	assert.deepEqual(out.get('o/flows@main:.github/workflows/build.yml'), {
+		ok: true,
+		text: 'on: workflow_call',
+	});
+	assert.deepEqual(out.get('o/none@v2:'), {
+		ok: false,
+		reason: 'no action.yml or action.yaml at v2',
+	});
+	assert.match(out.get('o/gone@v1:').reason, /no repository: Could not resolve/);
+});
+
+test('readActionFiles: a batch that fails every attempt names why for each ref', () => {
+	let calls = 0;
+	const runGh = () => {
+		calls++;
+		throw Object.assign(new Error('boom'), { stderr: 'gh: HTTP 502' });
+	};
+	const out = readActionFiles([{ repo: 'o/a', ref: 'v1', path: '' }], {
+		runGh,
+		attempts: 2,
+		sleep: () => {},
+	});
+	assert.equal(calls, 2);
+	assert.equal(out.get('o/a@v1:').ok, false);
+	assert.match(out.get('o/a@v1:').reason, /attempt 2\/2/);
 });

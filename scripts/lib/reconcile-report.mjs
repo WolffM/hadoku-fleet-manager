@@ -27,6 +27,7 @@
  * @param {Array} ctx.departed
  * @param {Array} ctx.ignored
  * @param {{ok: boolean, findings: {repo: string, reason: string}[], error?: string}} ctx.runnerVar
+ * @param {ReturnType<typeof import('./cargo-bin-cache.mjs').cargoBinCheck>} ctx.cargoBin
  * @param {Map<string, string>} ctx.expectedDownNotes
  * @param {boolean} ctx.CONFIRM
  * @param {boolean} ctx.REMOVE_ORPHANS
@@ -47,6 +48,7 @@ export function printReport(ctx) {
 		departed,
 		ignored,
 		runnerVar,
+		cargoBin,
 		expectedDownNotes,
 		CONFIRM,
 		REMOVE_ORPHANS,
@@ -175,5 +177,26 @@ export function printReport(ctx) {
 		log('');
 	} else if (runnerVar) {
 		log('CI_RUNNER CHECK: every repo that asks for vars.CI_RUNNER can rely on it.\n');
+	}
+
+	// Advisory (lib/cargo-bin-cache.mjs): never part of the exit code.
+	if (cargoBin?.error) {
+		log(`CARGO BIN CHECK (advisory): could not look — ${cargoBin.error}\n`);
+	} else if (cargoBin?.findings?.length) {
+		log(
+			`CARGO BIN CHECK (advisory, ${cargoBin.findings.length}) — a Rust cache step here ` +
+				"deletes the node's ~/.cargo/bin:"
+		);
+		for (const f of cargoBin.findings) {
+			log(`  ${f.repo}  ${f.file}:${f.line}  ${f.via.join(' -> ')}  ${f.reason}`);
+		}
+		log('');
+	} else if (cargoBin) {
+		const e = cargoBin.examined;
+		log(
+			`CARGO BIN CHECK (advisory): no Rust cache step cleans ~/.cargo/bin ` +
+				`(${e.files} workflows, ${e.ownedActions} owned actions; ` +
+				`${e.thirdParty} third-party steps not read).\n`
+		);
 	}
 }

@@ -143,15 +143,22 @@ CI contracts, and reports every repo that drifted, by name:
   hard-coded one;
 - whether its tier vocabulary matches the shared rules;
 - whether a micro-frontend's externals are declared correctly;
-- whether its CI header follows the shared contract.
+- whether its CI header follows the shared contract;
+- whether a Rust cache step in its workflows, or in an action they call,
+  would delete the cargo tools installed on the node that runs it.
 
 **How to use it.** `fleet header-audit --json`, `fleet identity-model --fleet
 --json`, `fleet tier-fleet --json` and `fleet mf-externals --json` each run
 one auditor; `fleet reconcile --json` reports (and `--confirm` fixes) a
-repo's runner coverage against the manifest.
+repo's runner coverage against the manifest, and carries the Rust cache
+finding as `cargoBin`. That finding is advisory: it is reported and never
+fails the run.
 
 **What it does not do.** These auditors read each repo's current default
-branch; they do not open a PR to fix what they find. A repo with no
+branch; they do not open a PR to fix what they find. The Rust cache check
+follows actions this fleet's owner publishes, at the ref each workflow pins,
+and the two third-party actions known to clean that directory; any other
+third-party action is counted, not read. A repo with no
 `@wolffm/*` dependency and no micro-frontend genuinely has nothing for the
 header or externals auditors to say, which is a fact about that repo, not a
 gap in the auditor.
