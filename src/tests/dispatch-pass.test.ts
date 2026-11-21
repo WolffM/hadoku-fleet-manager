@@ -483,3 +483,38 @@ test('a pass that did not sweep reports null, NOT zero orphans', async () => {
 	);
 	assert.equal(skipped.reaped, null, 'it did not look');
 });
+
+/**
+ * A RELEASE MUST FREE THE JOB (fleet-manager#127). On 2026-11-21 a hokon
+ * listener took 46 minutes to connect; the reap deleted its registration at
+ * 10 minutes, but the unit lived on, and in-flight state is rebuilt from live
+ * units, so the job read "already has a runner in flight" for 35 more minutes.
+ * Mint, strand, release: the SAME pass, which reaps before it reads the nodes,
+ * must mint for the job again. MUTATION: drop the unit stop from the reap and
+ * `minted` is 0.
+ */
+test('releasing a stranded JIT frees its job and slot — the same pass mints again', async () => {
+	const nowMs = 1_787_797_008_000;
+	const stuck = `jit-claw-2-hadoku-rally-j100-r1-${Math.floor((nowMs - 15 * 60_000) / 1000)}`;
+	let unitLive = true;
+	const stops: string[] = [];
+	const inner = fakeShell({ units: [stuck] });
+	const sh = answeringJitState(async (m: string, cmd: string) => {
+		if (cmd.includes('systemctl --user stop')) {
+			stops.push(`${m} ${cmd}`);
+			if (cmd.includes(stuck)) unitLive = false;
+			return '';
+		}
+		if (cmd.includes('list-units') && !unitLive) return '';
+		return inner(m, cmd);
+	});
+	const gh = fakeGh({ runners: [{ id: 7, name: stuck, busy: false }] });
+	const r = await runDispatchPass(base({ nowMs, repos: ['WolffM/hadoku-rally'] }), 'tok', gh, sh);
+	assert.equal(r.reaped, 1, 'the stranded registration is released');
+	assert.deepEqual(
+		stops.map((s) => s.split(' ')[0]),
+		['claw-2'],
+		'and its unit is stopped on the node it runs on'
+	);
+	assert.equal(r.minted, 1, 'so the job is no longer held in flight');
+});

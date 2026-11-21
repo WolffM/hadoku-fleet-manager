@@ -7,7 +7,7 @@
 import { logger } from '../host.js';
 import { SWEEP_CONCURRENCY, mapConcurrent } from '../lib/concurrency.js';
 import { JIT_PREFIX, parseJitName } from '../lib/jit-naming.js';
-import { liveJitUnits } from './ephemeral-exec-jit.js';
+import { liveJitUnits, shellQuote } from './ephemeral-exec-jit.js';
 import { type GhLike, type ShellLike } from '../lib/fleet-vocabulary.js';
 
 /**
@@ -110,7 +110,8 @@ export async function reapJitRunners(
 	const graceMs = opts.graceMs ?? JIT_REAP_GRACE_MS;
 	const nowMs = opts.nowMs ?? Date.now();
 
-	const liveUnits = new Set<string>();
+	// Unit name -> the node it runs on, so a release can stop the unit it frees.
+	const liveUnits = new Map<string, string>();
 	const unreachable: string[] = [];
 	await Promise.all(
 		nodes.map(async (m) => {
@@ -119,7 +120,7 @@ export async function reapJitRunners(
 				unreachable.push(m);
 				return;
 			}
-			for (const u of await liveJitUnits(m, sh)) liveUnits.add(u);
+			for (const u of await liveJitUnits(m, sh)) if (!liveUnits.has(u)) liveUnits.set(u, m);
 		})
 	);
 
@@ -198,10 +199,13 @@ export async function reapJitRunners(
 			// `hadoku-builder`, and "already has a runner in flight" held the job
 			// off every claw until a hand delete 59 minutes later; nothing else
 			// would have cleared it before JIT_IDLE_LISTENER_MAX_MS, six and a half hours.
-			// Deleting the registration is the whole release: the listener sees
-			// "runner no longer exists on the server" and exits, its unit goes, and
-			// the next pass places the job again. Only a job-scoped name can say
-			// which job it was minted for.
+			// Deleting the registration is NOT the whole release: the unit has to
+			// go too, below, because the dispatcher rebuilds "in flight" from live
+			// units. A listener that has not yet connected learns of the delete only
+			// when it does. On 2026-11-21 (fleet-manager#127) a hokon listener took
+			// 46 minutes to print "Connected to GitHub", and its unit held its job
+			// "already has a runner in flight" for 35 of them after the release.
+			// Only a job-scoped name can say which job it was minted for.
 			const stranded =
 				liveUnits.has(r.name) && parsed?.jobId != null && opts.queuedJobIds?.has(parsed.jobId)
 					? parsed
@@ -229,6 +233,16 @@ export async function reapJitRunners(
 			if (res.ok) {
 				reaped++;
 				deletedHere++;
+				// GitHub refuses to delete a runner with a job on it, so a delete that
+				// succeeded leaves nothing for this unit to finish: stop it, so the
+				// same pass's in-flight reconstruction no longer counts it or its slot.
+				const unitNode = liveUnits.get(r.name);
+				if (unitNode) {
+					await sh(
+						unitNode,
+						`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop ${shellQuote(r.name)} 2>/dev/null || true`
+					);
+				}
 				logger.info(
 					stranded
 						? `[ephemeral] released stranded registration ${r.name} from ${repo}: idle ` +
