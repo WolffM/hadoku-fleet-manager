@@ -65,6 +65,8 @@ export interface RunnerHealthSnapshot {
 	reserved_reason?: string | null;
 	/** Why the hokon backstop is up: 'outage' | 'saturation' | 'none'. */
 	backstop_reason?: BackstopReason;
+	/** The backlog-override shadow fired this tick (recorded, not enforced; since 2026-11-22). */
+	backstop_shadow_override?: boolean;
 	/** hokon runners relabelled across the fleet on the last transition. */
 	/**
 	 * SOME node is serving pm2-host work — the top rung of the priority ladder.
@@ -223,6 +225,8 @@ export type TickReport = {
 	reserved_reason?: string | null;
 	backstop_reason?: BackstopReason;
 	backstop_calm_ticks?: number;
+	/** The backlog-override shadow fired this tick (recorded, not enforced; since 2026-11-22). */
+	backstop_shadow_override?: boolean;
 	/** 'hosted' | 'fleet' — reaches the digest through the job-sink payload. */
 	ci_runner?: string;
 	ci_runner_write_failed?: number;
@@ -287,6 +291,7 @@ export function captureSnapshot(
 		queue_zombies_ignored: data.queue_zombies_ignored,
 		reserved_reason: data.reserved_reason,
 		backstop_reason: data.backstop_reason,
+		backstop_shadow_override: data.backstop_shadow_override,
 		pm2_host_busy: data.pm2_host_busy,
 		runner_state: data.runner_state,
 		queuedStale: data.queued_stale,

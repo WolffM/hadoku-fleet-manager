@@ -107,6 +107,12 @@ export interface BackstopInput {
 	 */
 	reservedWhy?: string | null;
 	/**
+	 * WHICH rung reserved it ('cron-running' | 'host-lease' | 'pm2-host'), read
+	 * only by the backlog-override shadow. Absent counts as a kind that never
+	 * yields, so a caller that has only the boolean gets the old behaviour.
+	 */
+	reservedKind?: string | null;
+	/**
 	 * Ephemeral capacity was NOT MEASURED this tick (no probe snapshot yet).
 	 *
 	 * Optional, and absent means measured — a caller that forgets it gets the old
@@ -132,8 +138,33 @@ export interface BackstopDecision {
 	 * BackstopReason past the four values the panel switches on.
 	 */
 	unmeasured: boolean;
+	/**
+	 * SHADOW, NOT ENFORCED: this tick a backlog past BACKLOG_QUEUE_SECONDS sat
+	 * behind a reservation that should yield to it, and the decision kept hokon
+	 * out anyway. See `BACKLOG_OVERRIDABLE_RESERVATIONS`.
+	 */
+	shadowBacklogOverride: boolean;
 	next: BackstopState;
 }
+
+/**
+ * The reservation rungs a backed-up queue should outrank: shadow since
+ * 2026-11-22, recorded and not enforced.
+ *
+ * On 2026-11-22 cardtable's release sat 12+ minutes while hokon was idle at
+ * 0.5 load/core with 30 GB free. The nightly Forge run held every claw
+ * cardtable may use, and the backstop was promoted at 07:15Z, then demoted at
+ * 07:23Z with a 700 s queue: `pm2-host`, because hadoku_site's PM2 deploy runs
+ * on every site push, bump-bot commits included. Earlier that hour a
+ * `cron-running` hold (ops:hub-sync) did the same at 545 s. Both are
+ * minutes-long work that shares hokon fine since PM2 got its memory floor
+ * and oomd kills CI first. `host-lease` is not here: a lease is the operator
+ * lending the box on purpose, and no queue outranks that.
+ */
+export const BACKLOG_OVERRIDABLE_RESERVATIONS: ReadonlySet<string> = new Set([
+	'cron-running',
+	'pm2-host',
+]);
 
 /**
  * At least half the REGISTERED claws are answering.
@@ -202,6 +233,7 @@ export function decideBackstop(i: BackstopInput, s: BackstopState): BackstopDeci
 			outage: false,
 			atCapacity: false,
 			unmeasured: true,
+			shadowBacklogOverride: false,
 			next: { calmTicks: s.calmTicks, lastReason: s.lastReason, promoted: s.promoted },
 		};
 	}
@@ -300,12 +332,22 @@ export function decideBackstop(i: BackstopInput, s: BackstopState): BackstopDeci
 		i.queuePressureSec > 0 &&
 		next.calmTicks < BACKSTOP_CALM_TICKS;
 
+	// What the override WOULD do, before it decides anything. A backlog past
+	// BACKLOG_QUEUE_SECONDS behind a yielding rung: promote hokon, or keep it
+	// promoted. Recorded only, until a week of these lines has been read.
+	const shadowBacklogOverride =
+		!(needed || holdingDown) &&
+		i.reserved &&
+		BACKLOG_OVERRIDABLE_RESERVATIONS.has(i.reservedKind ?? '') &&
+		i.queuePressureSec >= BACKLOG_QUEUE_SECONDS;
+
 	return {
 		wanted: needed || holdingDown,
 		reason: outage ? 'outage' : saturated ? 'saturation' : holdingDown ? 'holding' : 'none',
 		outage,
 		atCapacity,
 		unmeasured: false,
+		shadowBacklogOverride,
 		next,
 	};
 }

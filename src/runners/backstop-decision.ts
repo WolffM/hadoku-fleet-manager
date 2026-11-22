@@ -3,7 +3,12 @@ import { type GhRunner } from '../lib/github-client.js';
 import { withGhCaller } from '../gh-budget.js';
 import { nodeOf } from './census.js';
 import { BUILDER_LABEL } from '../lib/capability-registry-ids.js';
-import { clawsAreHealthy, decideBackstop, hostMayTakeSaturation } from './backstop.js';
+import {
+	BACKLOG_QUEUE_SECONDS,
+	clawsAreHealthy,
+	decideBackstop,
+	hostMayTakeSaturation,
+} from './backstop.js';
 import {
 	isBackstopNode,
 	mintsOnDemand,
@@ -280,6 +285,7 @@ export async function runBackstopDecision(args: {
 		reservedWhy: reservation.reserved
 			? [reservation.reason, reservation.detail].filter(Boolean).join(': ')
 			: null,
+		reservedKind: reservation.reserved ? reservation.reason : null,
 		// Do not act on capacity that was never measured. Null probe =>
 		// every claw count is a floor, not a reading.
 		ephemeralUnknown: ephemeralUnknown,
@@ -301,6 +307,15 @@ export async function runBackstopDecision(args: {
 	data.reserved_reason = reservation.reserved ? reservation.reason : null;
 	data.backstop_reason = backstopReason;
 	data.backstop_calm_ticks = getBackstopCalmTicks();
+	data.backstop_shadow_override = decision.shadowBacklogOverride;
+	if (decision.shadowBacklogOverride) {
+		logger.info(
+			`[runner-health] BACKSTOP shadow backlog-override: would ` +
+				`${getBackstopFleetState() === true ? 'keep the backstop promoted' : 'promote the backstop'} — ` +
+				`queue ${queuePressureSec}s >= ${BACKLOG_QUEUE_SECONDS}s outranks ` +
+				`reserved (${backstopInput.reservedWhy}); enforcing nothing (shadow since 2026-11-22)`
+		);
+	}
 
 	// Tell the fast loop before touching a single label. The two are
 	// phase-locked ~8s apart and the ladder does not know tier4 exists as far
