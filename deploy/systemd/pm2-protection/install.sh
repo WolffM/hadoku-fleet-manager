@@ -48,10 +48,13 @@ for row in "${PLAN[@]}"; do
 	else
 		install -d "$(dirname "$dest")"; render "$section" "$src" >"$dest"; echo "   wrote  $dest"
 	fi
+	# `systemctl set-property` (without --runtime) writes these 50- files. The
+	# drop-in above sorts after them and wins, so a leftover one is dead config
+	# that reads as live, and a later set-property would silently lose to the
+	# drop-in at the next reload. The drop-in is the one place the value lives.
 	for f in "$CTL/$unit.d/50-MemoryMin.conf" "$CTL/$unit.d/50-MemoryLow.conf"; do
 		[ -f "$f" ] || continue
-		case "$unit" in user*) ;; *) continue ;; esac
-		if [ "$DRY" = 1 ]; then echo "   would  remove $f (same value now in $dest)"; else rm "$f"; echo "   removed $f"; fi
+		if [ "$DRY" = 1 ]; then echo "   would  remove $f ($(grep -h '^Memory' "$f"), superseded by $dest)"; else rm "$f"; echo "   removed $f"; fi
 	done
 done
 
