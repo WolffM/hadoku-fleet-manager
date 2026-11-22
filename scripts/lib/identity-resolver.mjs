@@ -42,7 +42,6 @@ const REGISTRY_READER_NAMES = [
 	'liveRowsByName',
 	'searchRegistryNames',
 	'resolveRegistryName',
-	'isRegistryNameTaken',
 ];
 
 /** The service-binding form. Needs `[[services]] → edge-router`, not KV. */
