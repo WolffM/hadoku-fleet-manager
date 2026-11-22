@@ -976,7 +976,7 @@ function main() {
 		});
 	}
 
-	// A declared cgroup that holds nothing routes nothing, unless it is idle on purpose.
+	// A declared cgroup that holds nothing routes nothing, unless idle or on demand.
 	const sliceCheck = slicePopulationFindings(spec, population);
 	findings.push(...sliceCheck.findings);
 
@@ -1006,8 +1006,8 @@ function main() {
 			ok,
 			// ADDITIVE too: apps named tunnel-only that have not moved there yet.
 			tunnelOnlyPending: pending,
-			// ADDITIVE: declared cgroups recorded empty on purpose (fleet-manager#106).
 			idleSlices: sliceCheck.idle,
+			onDemandSlices: sliceCheck.onDemand,
 			markerFile: markers.report(),
 		});
 	} else {
@@ -1020,7 +1020,7 @@ function main() {
 			dormant,
 			deploying,
 			pending,
-			idleSlices: sliceCheck.idle,
+			slices: sliceCheck,
 			markers,
 		});
 	}

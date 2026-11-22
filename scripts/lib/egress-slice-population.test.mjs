@@ -59,7 +59,61 @@ void test('an idle record without a date or a reason is malformed, and excuses n
 
 void test('a populated cgroup with no idle record passes', () => {
 	const r = slicePopulationFindings(specOf({ cgroup: '/a.slice' }), new Map([['/a.slice', 5]]));
-	assert.deepEqual(r, { findings: [], idle: [] });
+	assert.deepEqual(r, { findings: [], idle: [], onDemand: [] });
+});
+
+const ON_DEMAND = { why: 'desktop apps the operator opens and closes' };
+
+void test('an empty cgroup occupied on demand is reported, not failed', () => {
+	const r = slicePopulationFindings(
+		specOf({ cgroup: '/a.slice', onDemand: ON_DEMAND }),
+		new Map([['/a.slice', 0]])
+	);
+	assert.deepEqual(r.findings, []);
+	assert.deepEqual(r.onDemand, [{ cgroup: '/a.slice', ...ON_DEMAND }]);
+});
+
+void test('a populated on-demand cgroup passes, and is not reported empty', () => {
+	const r = slicePopulationFindings(
+		specOf({ cgroup: '/a.slice', onDemand: ON_DEMAND }),
+		new Map([['/a.slice', 7]])
+	);
+	assert.deepEqual(r, { findings: [], idle: [], onDemand: [] });
+});
+
+void test('onDemand covers emptiness only: a missing cgroup is still missing', () => {
+	const r = slicePopulationFindings(
+		specOf({ cgroup: '/a.slice', onDemand: ON_DEMAND }),
+		new Map([['/a.slice', null]])
+	);
+	assert.deepEqual(statuses(r), ['missing-slice /a.slice']);
+});
+
+void test('an onDemand record without a reason, or beside idle, is malformed and excuses nothing', () => {
+	for (const extra of [
+		{ onDemand: {} },
+		{ onDemand: { why: ' ' } },
+		{ onDemand: true },
+		{ onDemand: ON_DEMAND, idle: IDLE },
+	]) {
+		const r = slicePopulationFindings(
+			specOf({ cgroup: '/a.slice', ...extra }),
+			new Map([['/a.slice', 0]])
+		);
+		assert.deepEqual(statuses(r), ['on-demand-malformed /a.slice'], JSON.stringify(extra));
+	}
+});
+
+void test('the live taxonomy: vpnbypass.slice is the only on-demand entry, and it is well formed', () => {
+	const demand = spec.directEgress.filter((d) => d.onDemand !== undefined).map((d) => d.cgroup);
+	assert.deepEqual(demand, ['/user.slice/user-1000.slice/user@1000.service/vpnbypass.slice']);
+	const empty = new Map(spec.directEgress.map((d) => [d.cgroup, 0]));
+	const r = slicePopulationFindings(spec, empty);
+	assert.deepEqual(
+		r.onDemand.map((i) => i.cgroup),
+		demand
+	);
+	assert.ok(!statuses(r).some((s) => s.includes('vpnbypass')));
 });
 
 void test('the live taxonomy: gameservers.slice is the only idle entry, and it is well formed', () => {

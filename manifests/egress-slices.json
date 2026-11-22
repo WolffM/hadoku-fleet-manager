@@ -24,7 +24,10 @@
     {
       "cgroup": "/user.slice/user-1000.slice/user@1000.service/vpnbypass.slice",
       "holds": "Discord and the Battle.net launcher, placed there by their own launchers",
-      "why": "The third reason for direct egress, and the first that is not about fleet role: these destinations REFUSE a VPN exit. Phase 4 moved unclassified Cloudflare traffic onto the tunnel as designed, and Discord then answered every API call 403 / code 40333 and hung on its \"Starting\" splash; Battle.net rejected the login as a VPN. Measured 2026-09-13. Nothing malfunctioned -- the taxonomy only encoded \"this is fleet infrastructure\" as a reason to stay direct, so the operator's own apps fell into \"everything else\". Membership is a named decision, as hokonLocal is: everything in this slice wears the real WAN address. Add an app only when the service actually blocks the tunnel."
+      "why": "The third reason for direct egress, and the first that is not about fleet role: these destinations REFUSE a VPN exit. Phase 4 moved unclassified Cloudflare traffic onto the tunnel as designed, and Discord then answered every API call 403 / code 40333 and hung on its \"Starting\" splash; Battle.net rejected the login as a VPN. Measured 2026-09-13. Nothing malfunctioned -- the taxonomy only encoded \"this is fleet infrastructure\" as a reason to stay direct, so the operator's own apps fell into \"everything else\". Membership is a named decision, as hokonLocal is: everything in this slice wears the real WAN address. Add an app only when the service actually blocks the tunnel.",
+      "onDemand": {
+        "why": "The operator starts and stops Discord and Battle.net on the desktop, so the slice is empty whenever neither is open (red on 2026-11-22 at 13:00 UTC, Discord closed since 00:34 PT). Empty is normal and so is a process in it; the slice path, which the routing rule is keyed on, must still exist. hadoku_site#616."
+      }
     },
     {
       "cgroup": "/system.slice/tailscaled.service",
