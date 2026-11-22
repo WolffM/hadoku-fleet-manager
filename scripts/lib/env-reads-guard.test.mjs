@@ -38,10 +38,6 @@ const COMPUTED = {
 	// Copy the whole env minus GIT_*; no named value is read.
 	'scripts/lib/identity-scan.mjs': { names: [] },
 	'scripts/lib/test-git-identity.mjs': { names: [] },
-	// `fleet node-users --dev <node>` reads the node's lease key, KEY_SERVICE_<NODE>_SESSIONS
-	// (leaseKeyItem): one name per session node, so no fixed list. Only the operator's CLI run
-	// under the site's dev-vault reads it; mgmt-api never runs --dev and must not pass it.
-	'scripts/node-users-dev.mjs': { names: [] },
 };
 
 const LITERAL =

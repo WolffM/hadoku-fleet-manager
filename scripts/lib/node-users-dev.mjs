@@ -8,16 +8,11 @@
  *
  *   devInventoryScript   READ ONLY. What a setup would do here.
  *   devSetupScript       the change, as admin with sudo. IDEMPOTENT.
- *   leaseKeyScript       writes the node's edge key for `claude-lease`, as dev.
- *   leaseCheckScript     runs `claude-lease whoami` as dev: the identity and
- *                        its edge membership, proven by executing them.
  *   devBackScript        the undo. Refuses while anything runs as the dev
  *                        user: a live session is active work. The ACCOUNT is
  *                        removed, because an account no manifest entry claims
  *                        is a blocking finding; its home directory is kept,
- *                        and a later setup takes it over again. Its ssh key
- *                        and its edge lease key are deleted: the home of a
- *                        removed account must hold no credential.
+ *                        and a later setup takes it over again.
  *
  * WHAT THE USER IS. No sudo and no group but its own, checked before and
  * after. Home 0700. Linger, so a session outlives the ssh that started it.
@@ -33,12 +28,7 @@
  * did not finish, never a pass.
  */
 import { SSHD_ALLOW_SH } from './node-users-cutover.mjs';
-import {
-	DEV_CLAUDE_BIN,
-	DEV_LEASE_BIN,
-	DEV_LEASE_KEY,
-	SESSION_WEIGHT,
-} from '../../dist/lib/node-users.js';
+import { DEV_CLAUDE_BIN, SESSION_WEIGHT } from '../../dist/lib/node-users.js';
 
 /** The drop-in that carries the weight across boots, under `user-<uid>.slice.d/`. */
 export const SESSION_DROP_IN = '10-fleet-sessions.conf';
@@ -184,7 +174,7 @@ sudo -n systemctl stop "user@$(id -u "$DEV").service" >/dev/null 2>&1 || true
 n=$(running)
 [ "\${n:-1}" = 0 ] || die preflight "$n process(es) still run as $DEV: a live session is active work; close it first"
 step preflight ok "nothing runs as $DEV"
-sudo -n rm -f "$DH/.ssh/authorized_keys" "$DH/${DEV_LEASE_KEY}"
+sudo -n rm -f "$DH/.ssh/authorized_keys"
 conf=$(allow_conf)
 if [ -n "$conf" ] && allowed | grep -qx "$DEV"; then
 	sudo -n sed -i -E "/^[[:space:]]*[Aa]llow[Uu]sers[[:space:]]/ s/[[:space:]]$DEV([[:space:]]|$)/\\1/" "$conf"
@@ -194,7 +184,7 @@ sudo -n rm -rf "/etc/systemd/system/user-$(id -u "$DEV").slice.d"
 sudo -n systemctl daemon-reload
 sudo -n userdel "$DEV" || die stop "could not remove the account $DEV"
 getent passwd "$DEV" >/dev/null && die stop "$DEV still exists"
-step stop ok "the account $DEV is removed; $DH is kept, without its ssh or lease key"
+step stop ok "the account $DEV is removed; $DH is kept"
 echo BACK-END
 `;
 }
@@ -218,46 +208,4 @@ export function flipDevManifest(doc, node, { dev, back = false }) {
 	if (!NAME.test(dev ?? '')) throw new Error(`refusing dev user ${JSON.stringify(dev)}`);
 	m.users = { ...(m.users ?? {}), dev };
 	return m;
-}
-
-/** A registry key is a v4-shaped UUID. Anything else is refused before it reaches a script. */
-const EDGE_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * The dev user's lease key, written as dev (umask 077, then a rename, so a
- * reader never sees half a file). The value rides inside this script, which
- * goes over ssh STDIN: never argv, and `printf` is a builtin, so it is in no
- * process's command line on either side.
- */
-export function leaseKeyScript(key) {
-	if (!EDGE_KEY.test(key ?? '')) throw new Error('refusing a lease key that is not a registry key');
-	return `set -eu
-umask 077
-f="$HOME/${DEV_LEASE_KEY}"
-mkdir -p "$(dirname "$f")"
-printf '{"key":"%s"}\\n' '${key}' > "$f.new"
-mv -f "$f.new" "$f"
-printf 'KEY-WRITTEN %s\\n' "$(stat -c '%a' "$f")"
-`;
-}
-
-/** `claude-lease whoami` as the dev user, with its key file. Exit status is part of the answer. */
-export function leaseCheckScript() {
-	return `CLAUDE_LEASE_KEY_FILE="$HOME/${DEV_LEASE_KEY}" "$HOME/${DEV_LEASE_BIN}" whoami 2>&1; echo "WHOAMI-EXIT $?"\n`;
-}
-
-/**
- * What `claude-lease whoami` said: `{ identity, member, why }`. `member` is
- * true (the lease route reached crossposter), false (the edge refused it) or
- * null (it could not tell: no key, no edge), and `why` is its last words then.
- */
-export function parseLeaseWhoami(out) {
-	const text = out ?? '';
-	const identity = /^identity:\s+(\S+)/m.exec(text)?.[1] ?? null;
-	const member = /: member \(/m.test(text) ? true : /NOT a member/m.test(text) ? false : null;
-	const lines = text
-		.split('\n')
-		.map((l) => l.trim())
-		.filter((l) => l && !l.startsWith('WHOAMI-EXIT'));
-	return { identity, member, why: member === null ? (lines.at(-1) ?? 'no answer') : null };
 }

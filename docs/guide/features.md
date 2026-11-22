@@ -93,14 +93,7 @@ what would change; `--confirm` creates the user, copies the controller's own
 `claude` binary to it, logs in as it to prove the path, and records the user
 in the manifest. `fleet node-users --machine <node>` reads everything back
 from the node and reports `sessions: ok` or what drifted. `--dev <node> --back
---confirm` undoes it, and deletes the user's keys from the home it keeps.
-
-A session leases its Claude token from crossposter's account pool as the
-node's own identity, `<node>-sessions`, through crossposter's `claude-lease`,
-which the setup copies beside `claude`. So one node's sessions can be granted
-or revoked on their own, and a rate limit a session hits benches the account
-for everyone. The operator mints that identity once per node; the setup then
-delivers its key and proves it by asking the edge who it is.
+--confirm` undoes it.
 
 A live session counts as work in progress. The nightly refresh and the
 reboot cycle skip a node while a session runs there, and come back to it once

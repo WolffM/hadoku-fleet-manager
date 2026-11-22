@@ -193,11 +193,6 @@ different things. Read it before naming anything new.
   `SESSION_CAP_SEC` (24 h, operator 2026-11-21) is no longer counted: the
   cycle goes ahead and its line says so. Any new code that decides a node is
   idle enough to disrupt reads `busyCount`, never `jobCount` alone.
-  **A session leases as its node** (`leaseIdentity`: `<node>-sessions`), with
-  an edge key in the dev user's home that `--dev` delivers from the vault item
-  `leaseKeyItem(node)`. It reads that item through hadoku_site's dev-vault,
-  never this repo's: this repo is public and its vault key is its CI key. The
-  facet proves the key by running `claude-lease whoami` as dev.
 - **The reader for a facet may not read what the writer wrote.** Cgroup limits
   from `/sys/fs/cgroup/$(ControlGroup)/memory.max`, never `systemctl show`.
   Listeners from the process tree, never a `.env`. Registrations from the GitHub
