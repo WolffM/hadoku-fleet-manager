@@ -79,6 +79,16 @@ export const commandsGates: Record<string, Command> = {
 		kind: 'gate',
 		summary: 'is the fleet actually SERVING work — queue age, nothing else',
 	},
+	'node-disk': {
+		// `doctor` judged from the RECORD, on its disk findings alone (backstop
+		// included): the scope, and why it is fixed rather than a category list,
+		// are scripts/lib/doctor-scope.mjs. Its own row because the --json
+		// contract is keyed by subcommand and `doctor` is ci:health-refresh's.
+		script: 'lib/doctor-run.mjs',
+		kind: 'gate',
+		args: ['--from-record', '--disk'],
+		summary: 'is any node root or _work under 10% free, from the $health record',
+	},
 	'label-floor': {
 		script: 'check-label-floor.mjs',
 		kind: 'gate',

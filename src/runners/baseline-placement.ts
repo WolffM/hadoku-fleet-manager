@@ -46,8 +46,8 @@ export function heavyHoldShadow(
 	const held = opts.nodes.flatMap((node) => {
 		const weak = store.weakPoints?.[node]?.['concurrency-ramp'];
 		const ceiling = store.quantities?.[`${node}::ramp.ceiling`]?.mean;
-		if (!weak || !Number.isFinite(ceiling) || (ceiling as number) >= 1) return [];
-		return [{ node, why: weak.reason, ceiling: ceiling as number }];
+		if (!weak || !Number.isFinite(ceiling) || ceiling >= 1) return [];
+		return [{ node, why: weak.reason, ceiling }];
 	});
 	if (!held.length) return [];
 	const since = opts.nowMs - KIND_FAILURE_WINDOW_DAYS * 86_400_000;

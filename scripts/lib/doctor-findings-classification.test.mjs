@@ -182,7 +182,9 @@ test('doctor-run.mjs applies the backstop role before deciding its exit code', (
 	);
 	assert.match(
 		src,
-		/const blocking = blockingFindings\(classified\)/,
+		// Both branches read `classified`: `--disk` (fleet node-disk) narrows the
+		// verdict to disk findings, and must never bypass the classifier either.
+		/const blocking = DISK \? diskVerdict\(classified\) : blockingFindings\(classified\)/,
 		'and its blocking set no longer comes from the classifier'
 	);
 	assert.match(

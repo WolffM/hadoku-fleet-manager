@@ -2290,6 +2290,13 @@
     "why": "#129: doctor's cpu-thermal and cpu-clock bars judged against the node's own range. Pure, beside the doctor findings it feeds; reads the bars (observation thresholds) and the store's math (state)."
   },
   {
+    "glob": "scripts/lib/doctor-scope.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "fleet-manager-private#140: `fleet node-disk`'s verdict, the disk findings out of doctor's classified set (backstop included). Pure, beside the doctor findings it filters; imports only preflight.mjs's ADVISORY constant."
+  },
+  {
     "glob": "scripts/lib/doctor-findings.mjs",
     "layer": "domain",
     "domain": "observation",

@@ -49,6 +49,9 @@
  *   fleet doctor --cadence --write    # the scheduled run (ci:health-refresh)
  *   fleet doctor --from-record        # render from the RECORD, probe nothing
  *                                     # (`--from-manifest`: the old spelling)
+ *   fleet node-disk                   # = doctor --from-record --disk: judge the
+ *                                     # DISK findings only (ci:node-disk; see
+ *                                     # doctor-scope.mjs)
  *   fleet doctor --json
  *
  * `--cadence` IS THE SCHEDULED RUN, and it exists because `$health` had no
@@ -82,6 +85,7 @@ import { LOAD_SECONDS, doctorProbe, BACKSTOP_CADENCE_NO_LOAD_WHY } from './docto
 import { bootcampPointer, healthFacet, healthRecord } from './doctor-facet.mjs';
 import { doctorFindings } from './doctor-findings.mjs';
 import { ADVISORY, advisoryFindings, blockingFindings, backstopAdvisory } from './preflight.mjs';
+import { diskVerdict } from './doctor-scope.mjs';
 import { backstopNodeNames } from '../../dist/lib/node-role.js';
 import { nodeUser } from '../../dist/lib/node-users.js';
 import { readHostingDoc } from '../../dist/runners/hosting-record.js';
@@ -129,6 +133,7 @@ if (CADENCE && (FROM_RECORD || NO_LOAD || argv.includes('--force'))) {
 	process.exit(2);
 }
 const FORCE = argv.includes('--force');
+const DISK = argv.includes('--disk');
 const SECONDS = (() => {
 	const i = argv.indexOf('--seconds');
 	if (i === -1) return LOAD_SECONDS;
@@ -463,7 +468,7 @@ for (const [name, h] of Object.entries(health).sort()) {
 // stays blocking even here (BACKSTOP_BLOCKING_CATEGORIES): a backstop nothing
 // can reach is no use in an emergency.
 const classified = backstopAdvisory(findings, BACKSTOPS);
-const blocking = blockingFindings(classified);
+const blocking = DISK ? diskVerdict(classified) : blockingFindings(classified);
 const advisory = advisoryFindings(classified);
 
 // ── render ───────────────────────────────────────────────────────────────────
@@ -599,6 +604,9 @@ if (emitter.json) {
 		advisory: advisory.length,
 		unreachable,
 		cadence: CADENCE,
+		// `disk` when `--disk` decided `ok`; `judged` is exactly that set.
+		scope: DISK ? 'disk' : 'all',
+		judged: DISK ? blocking : undefined,
 		written,
 		deferred: [...deferred].sort(),
 		log: emitter.held(),

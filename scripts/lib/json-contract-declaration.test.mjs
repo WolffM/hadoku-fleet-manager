@@ -512,6 +512,7 @@ const TODAYS_JSON_CONTRACT = [
 		'services/mgmt-api/src/routes/jobs/slice-inventory.ts',
 	],
 	['doctor', 'ci:health-refresh', 'services/mgmt-api/src/routes/jobs/health-refresh.ts'],
+	['node-disk', 'ci:node-disk', 'services/mgmt-api/src/routes/jobs/node-disk.ts'],
 	['fleet-kills', 'ci:fleet-kills', 'services/mgmt-api/src/routes/jobs/fleet-kills-check.ts'],
 	// Added wave 5f lane B: two `ci:audit-gates` covered subs migrated off
 	// PROSE_CONTRACT onto their own `contract: 'json'` — same umbrella job,
