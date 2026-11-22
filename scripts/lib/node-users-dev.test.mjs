@@ -1,13 +1,21 @@
 import { strict as assert } from 'node:assert';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+
+import { leaseIdentity, leaseKeyItem } from '../../dist/lib/node-users.js';
 
 import {
 	devBackScript,
 	devInventoryScript,
 	devSetupScript,
 	flipDevManifest,
+	leaseCheckScript,
+	leaseKeyScript,
 	manifestSaysDev,
+	parseLeaseWhoami,
 } from './node-users-dev.mjs';
 
 const USERS = {
@@ -89,5 +97,73 @@ test('the manifest flip writes users.dev beside ci and removes only it', () => {
 	assert.throws(
 		() => flipDevManifest(doc, 'claw-fixture', { dev: 'Bad Name' }),
 		/refusing dev user/
+	);
+});
+
+const EDGE_KEY = '0123abcd-4567-89ef-0123-456789abcdef';
+
+test('a node leases as <node>-sessions, from the vault item key-generate names for it', () => {
+	assert.equal(leaseIdentity('claw-9'), 'claw-9-sessions');
+	assert.equal(leaseKeyItem('claw-9'), 'KEY_SERVICE_CLAW_9_SESSIONS');
+});
+
+test('the lease key script writes a 0600 JSON key file through a rename, and nothing else', () => {
+	const home = mkdtempSync(join(tmpdir(), 'lease-key-'));
+	try {
+		const r = spawnSync('bash', ['-s'], {
+			input: leaseKeyScript(EDGE_KEY),
+			encoding: 'utf8',
+			env: { PATH: process.env.PATH, HOME: home },
+		});
+		assert.equal(r.status, 0, r.stderr);
+		assert.match(r.stdout, /^KEY-WRITTEN 600$/m);
+		assert.doesNotMatch(r.stdout + r.stderr, new RegExp(EDGE_KEY));
+		const f = join(home, '.config/claude-lease/key.json');
+		assert.deepEqual(JSON.parse(readFileSync(f, 'utf8')), { key: EDGE_KEY });
+		assert.equal(statSync(f).mode & 0o777, 0o600);
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
+test('anything but a registry key is refused before a script exists', () => {
+	for (const bad of ['', "x'; rm -rf ~; '", `${EDGE_KEY}\n`, undefined])
+		assert.throws(() => leaseKeyScript(bad), /not a registry key/);
+});
+
+test('whoami answers are read for identity and membership; anything else keeps its reason', () => {
+	assert.deepEqual(
+		parseLeaseWhoami(
+			'identity:  claw-9-sessions (service)\nkey file:  /home/hadoku-dev/.config/claude-lease/key.json\n' +
+				'lease list crossposter-claude-code-lease: member (the lease route reached crossposter)\nWHOAMI-EXIT 0\n'
+		),
+		{ identity: 'claw-9-sessions', member: true, why: null }
+	);
+	assert.equal(
+		parseLeaseWhoami(
+			'identity:  claw-9-sessions (service)\nlease list crossposter-claude-code-lease: NOT a member (the edge refused the lease route)\nWHOAMI-EXIT 1\n'
+		).member,
+		false
+	);
+	assert.deepEqual(
+		parseLeaseWhoami(
+			'claude-lease: no service key at /home/hadoku-dev/.config/claude-lease/key.json (No such file or directory)\nWHOAMI-EXIT 1\n'
+		),
+		{
+			identity: null,
+			member: null,
+			why: 'claude-lease: no service key at /home/hadoku-dev/.config/claude-lease/key.json (No such file or directory)',
+		}
+	);
+	assert.match(
+		leaseCheckScript(),
+		/CLAUDE_LEASE_KEY_FILE="\$HOME\/\.config\/claude-lease\/key\.json"/
+	);
+});
+
+test('the undo deletes the lease key with the ssh key: a kept home holds no credential', () => {
+	assert.match(
+		devBackScript(USERS),
+		/rm -f "\$DH\/\.ssh\/authorized_keys" "\$DH\/\.config\/claude-lease\/key\.json"/
 	);
 });

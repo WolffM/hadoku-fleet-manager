@@ -29,9 +29,12 @@
  */
 import {
 	DEV_CLAUDE_BIN,
+	DEV_LEASE_BIN,
+	DEV_LEASE_KEY,
 	SESSION_WEIGHT,
 	ciIsSeparate,
 	hostsSessions,
+	leaseIdentity,
 	nodeHome,
 	nodeUser,
 } from '../../dist/lib/node-users.js';
@@ -69,6 +72,14 @@ if pw=$(getent passwd "$DEV"); then
 	echo "devWeight=$(cat "/sys/fs/cgroup/user.slice/user-$(id -u "$DEV").slice/cpu.weight" 2>/dev/null)"
 	echo "devClaude=$(sudo -n -u "$DEV" -H "$DEV_HOME/${DEV_CLAUDE_BIN}" --version 2>/dev/null | head -1)"
 	echo "devRunners=$(sudo -n pgrep -c -u "$DEV" -x 'Runner\\.(Listener|Worker)' 2>/dev/null || true)"
+	echo "devLeaseKey=$(sudo -n stat -c '%U:%a' "$DEV_HOME/${DEV_LEASE_KEY}" 2>/dev/null)"
+	# EXECUTE the lease identity: whoami asks the edge who the key is and
+	# whether the lease route admits it. Bounded: two calls of 15 s at most.
+	w=$(sudo -n -u "$DEV" -H env CLAUDE_LEASE_KEY_FILE="$DEV_HOME/${DEV_LEASE_KEY}" timeout 35 "$DEV_HOME/${DEV_LEASE_BIN}" whoami 2>&1)
+	echo "devLeaseId=$(printf '%s\\n' "$w" | sed -n 's/^identity:[[:space:]]*\\([^[:space:]]*\\).*/\\1/p' | head -1)"
+	case "$w" in *": member ("*) m=yes ;; *"NOT a member"*) m=no ;; *) m=unknown ;; esac
+	echo "devLeaseMember=$m"
+	echo "devLeaseWhy=$(printf '%s\\n' "$w" | grep . | tail -1 | tr -d '\\r' | cut -c1-200)"
 fi
 `;
 }
@@ -191,6 +202,13 @@ export function parseUsersObservation(stdout) {
 						weight: num('devWeight'),
 						claude: kv.devClaude || null,
 						runners: num('devRunners'),
+						lease: {
+							key: kv.devLeaseKey || null,
+							identity: kv.devLeaseId || null,
+							member:
+								kv.devLeaseMember === 'yes' ? true : kv.devLeaseMember === 'no' ? false : null,
+							why: kv.devLeaseWhy || null,
+						},
 					},
 		/** null when the account database could not be read: could not look. */
 		accounts: kv.accountsRead === 'yes' ? accounts : null,
@@ -270,7 +288,7 @@ export function judgeNodeUsers(machine, obs) {
 }
 
 /**
- * Judge a node's dev user: `{ state, findings }`.
+ * Judge node `node`'s dev user: `{ state, findings }`.
  *   none    the manifest names no `users.dev`: this node hosts no sessions
  *   ok      every guarantee holds
  *   drift   the declared dev user is not what it must be
@@ -278,7 +296,7 @@ export function judgeNodeUsers(machine, obs) {
  * ADVISORY until 2026-11-27, then promoted with the count of real catches and
  * false positives in that week (AGENTS.md, "a new gate starts quiet").
  */
-export function judgeNodeSessions(machine, obs) {
+export function judgeNodeSessions(machine, obs, node) {
 	if (!hostsSessions(machine)) return { state: 'none', findings: [] };
 	const findings = [];
 	const drift = (why) => findings.push({ class: 'advisory', category: 'dev-user-drift', why });
@@ -309,10 +327,31 @@ export function judgeNodeSessions(machine, obs) {
 			`${dev}'s slice weighs ${d.weight}, not ${SESSION_WEIGHT}: sessions and CI contend as equals`
 		);
 	if (!d.claude) drift(`claude does not run as ${dev}`);
+	judgeLease(node, dev, d.lease, drift);
 	if (d.runners === null) drift(`could not count runner processes of ${dev}`);
 	else if (d.runners > 0)
 		drift(`${d.runners} runner process(es) run as ${dev}: CI is using the session user`);
 	return { state: findings.length ? 'drift' : 'ok', findings };
+}
+
+/**
+ * The node's lease identity (plan step 4): a 0600 key of the dev user's
+ * whose `claude-lease whoami` names `<node>-sessions` and is admitted to the
+ * lease route. A wrong identity matters most: the sessions would lease, and
+ * be granted or revoked, as someone else.
+ */
+function judgeLease(node, dev, lease, drift) {
+	const want = leaseIdentity(node);
+	if (!lease?.key)
+		return drift(`${dev} has no lease key, so its sessions cannot lease from crossposter`);
+	if (lease.key !== `${dev}:600`)
+		drift(`${dev}'s lease key is ${lease.key}, not ${dev}-owned 0600`);
+	if (lease.member === null)
+		return drift(`could not ask the edge who ${dev}'s lease key is: ${lease.why ?? 'no answer'}`);
+	if (lease.identity !== want)
+		drift(`${dev}'s lease key is ${lease.identity ?? 'no identity'}, not ${want}`);
+	if (!lease.member)
+		drift(`${lease.identity ?? dev} is not on the edge list crossposter-claude-code-lease`);
 }
 
 const NO_LOGIN = /\/(nologin|false)$/;

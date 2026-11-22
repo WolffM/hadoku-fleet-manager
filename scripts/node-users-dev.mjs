@@ -22,7 +22,20 @@
  *   3. the controller's own `claude` binary, copied into the dev user's home,
  *      then this box logs in AS dev and runs it: a node that will refuse the
  *      operator's herdr stops here;
- *   4. the node-users facet, which must read the user back as ok.
+ *   4. the lease (plan step 4): crossposter's `claude-lease`, copied from the
+ *      controller like `claude`, and the node's own edge key
+ *      (`<node>-sessions`, vault item `leaseKeyItem(node)`), written into the
+ *      dev user's home over ssh stdin. The key comes from THIS process's
+ *      environment, so run from the site checkout's root under its dev-vault:
+ *      the site's `.devvault.json` declares the item and its identity is
+ *      granted it (never this repo's: it is public and its key is its CI key). Then `claude-lease whoami` runs as dev: the identity must be
+ *      the node's and a member of the edge list `crossposter-claude-code-lease`;
+ *   5. the node-users facet, which must read the user back as ok.
+ *
+ * A session then starts on the node as `claude-lease exec -- claude`, so its
+ * lease and the 429/401 outcome that benches an account both go as the
+ * node's identity. No `--want` and no `--fallback-dir`: the pool's change
+ * event exists only on the controller, and a claw has no login of its own.
  *
  * `--back` runs the other way round, node first, for the same reason. It
  * refuses while anything runs as the dev user: a live session is active work.
@@ -30,12 +43,15 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import process from 'node:process';
 
 import {
 	DEV_CLAUDE_BIN,
+	DEV_LEASE_BIN,
 	hostsSessions,
+	leaseIdentity,
+	leaseKeyItem,
 	nodeHome,
 	nodeUser,
 	setupDevUser,
@@ -50,7 +66,10 @@ import {
 	devInventoryScript,
 	devSetupScript,
 	flipDevManifest,
+	leaseCheckScript,
+	leaseKeyScript,
 	manifestSaysDev,
+	parseLeaseWhoami,
 } from './lib/node-users-dev.mjs';
 
 const argv = process.argv.slice(2);
@@ -74,22 +93,34 @@ function printSteps(parsed) {
 		log(`   ${s.status === 'ok' ? '✓' : s.status === 'skip' ? '·' : '✗'} ${s.name}  ${s.detail}`);
 }
 
-/** The `claude` this controller runs, resolved through its links. Throws when there is none. */
-function controllerClaude() {
-	const found = execFileSync('sh', ['-c', 'command -v claude'], { encoding: 'utf8' }).trim();
+/**
+ * crossposter's `claude-lease` as the controller's panes run it. It is not
+ * linked onto PATH: `claude-as`, which is, calls it from its own directory.
+ */
+function controllerLease() {
+	return join(dirname(controllerBin('claude-as')), 'claude-lease');
+}
+
+/** A command this controller runs, resolved through its links. Throws when there is none. */
+function controllerBin(name) {
+	const found = execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
 	return realpathSync(found);
+}
+
+function copyToDev(local, remote, manifest) {
+	runRsync([
+		'-e',
+		'ssh -o BatchMode=yes -o ConnectTimeout=10',
+		'--chmod=F755',
+		local,
+		`${sshDestination(NODE, 'dev', manifest)}:${remote}`,
+	]);
 }
 
 /** Copy the controller's claude to the dev user, then log in as dev and run it. */
 async function installClaude(dev, flipped) {
 	const manifest = { machines: { [NODE]: flipped } };
-	runRsync([
-		'-e',
-		'ssh -o BatchMode=yes -o ConnectTimeout=10',
-		'--chmod=F755',
-		controllerClaude(),
-		`${sshDestination(NODE, 'dev', manifest)}:${DEV_CLAUDE_BIN}`,
-	]);
+	copyToDev(controllerBin('claude'), DEV_CLAUDE_BIN, manifest);
 	const res = await runOn(
 		NODE,
 		`printf 'LOGIN %s\\n' "$USER"; printf 'CLAUDE %s\\n' "$("$HOME/${DEV_CLAUDE_BIN}" --version 2>&1 | head -1)"`,
@@ -106,6 +137,77 @@ async function installClaude(dev, flipped) {
 		};
 	if (!version) return { ok: false, detail: `${dev} logged in, but claude did not run` };
 	return { ok: true, detail: `the controller logs in as ${who}; claude ${version}` };
+}
+
+/**
+ * Copy claude-lease, write the node's key when this environment holds it,
+ * then ask `claude-lease whoami` as dev. `{ ok, lines }`: ok only when the
+ * identity is the node's own and the edge admits it to the lease route.
+ */
+async function installLease(flipped) {
+	const manifest = { machines: { [NODE]: flipped } };
+	const lines = [];
+	const source = controllerLease();
+	copyToDev(source, DEV_LEASE_BIN, manifest);
+	lines.push(`✓ lease  ${source} copied to ~/${DEV_LEASE_BIN}`);
+	const item = leaseKeyItem(NODE);
+	const key = process.env[item];
+	if (key) {
+		const wrote = await runOn(NODE, leaseKeyScript(key), {
+			as: 'dev',
+			manifest,
+			timeoutMs: 60_000,
+			connectTimeout: 10,
+		});
+		const mode = /^KEY-WRITTEN (\d+)$/m.exec(wrote.stdout ?? '')?.[1];
+		if (mode !== '600')
+			return {
+				ok: false,
+				lines: [
+					...lines,
+					`✗ lease  the key was not written: ${wrote.error ?? (mode ? `mode ${mode}` : 'no answer')}`,
+				],
+			};
+		lines.push(`✓ lease  ${item} written, mode 600`);
+	} else {
+		lines.push(`· lease  ${item} is not in this environment; the key on ${NODE}, if any, is kept`);
+	}
+	const who = parseLeaseWhoami(
+		(
+			await runOn(NODE, leaseCheckScript(), {
+				as: 'dev',
+				manifest,
+				timeoutMs: 60_000,
+				connectTimeout: 10,
+			})
+		).stdout
+	);
+	const want = leaseIdentity(NODE);
+	if (who.member === null)
+		return {
+			ok: false,
+			lines: [...lines, `✗ lease  claude-lease could not say who the key is: ${who.why}`],
+		};
+	if (who.identity !== want)
+		return {
+			ok: false,
+			lines: [
+				...lines,
+				`✗ lease  the key on ${NODE} is ${who.identity ?? 'no identity'}, not ${want}`,
+			],
+		};
+	if (!who.member)
+		return {
+			ok: false,
+			lines: [
+				...lines,
+				`✗ lease  ${want} is NOT on the edge list crossposter-claude-code-lease (Service grants)`,
+			],
+		};
+	lines.push(
+		`✓ lease  ${want} reaches the lease route; crossposter lists it under "Who may lease"`
+	);
+	return { ok: true, lines };
 }
 
 async function writeFlip(dev) {
@@ -160,12 +262,19 @@ async function main() {
 				? `   · manifest  ${MANIFEST} already says so`
 				: `   ✓ manifest  users.dev ${BACK ? 'would be removed from' : `= ${dev} would be written to`} ${MANIFEST}`
 		);
+		if (!BACK)
+			log(
+				process.env[leaseKeyItem(NODE)]
+					? `   ✓ lease  claude-lease and ${leaseKeyItem(NODE)} would be written to ${dev}`
+					: `   · lease  claude-lease would be copied; ${leaseKeyItem(NODE)} is not in this environment, so no key would be written`
+			);
 		log('\nDRY RUN. Nothing was changed. Re-run with --confirm.');
 		return;
 	}
 	log('   done:');
 	if (!BACK) await writeFlip(dev);
 
+	let lease = null;
 	const script = BACK
 		? devBackScript(users)
 		: devSetupScript(users, { controllerKeys: controllerKeys() });
@@ -181,6 +290,8 @@ async function main() {
 		const claude = await installClaude(dev, flipped);
 		log(`   ${claude.ok ? '✓' : '✗'} login  ${claude.detail}`);
 		if (!claude.ok) die(`${dev} cannot be used from here yet. Fix it and re-run --confirm.`);
+		lease = await installLease(flipped);
+		for (const l of lease.lines) log(`   ${l}`);
 	}
 
 	if (BACK) await writeFlip(dev);
@@ -191,6 +302,12 @@ async function main() {
 	});
 	if (facet.status !== 0)
 		die(`the node-users facet does not read ${NODE} as ok; see its findings above`);
+	if (lease && !lease.ok)
+		die(
+			`${dev} is set up, but its sessions cannot lease as ${leaseIdentity(NODE)} yet (above). ` +
+				`The operator mints ${leaseIdentity(NODE)} and grants ${leaseKeyItem(NODE)} first; ` +
+				'docs/herdr.md "Sessions on a claw" has the commands, and how to re-run this to deliver the key.'
+		);
 	log(
 		BACK
 			? `\n✓ ${NODE}: no sessions; the account ${dev} is gone and its home is kept.`
