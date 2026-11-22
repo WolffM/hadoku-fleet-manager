@@ -96,6 +96,9 @@ import { perfDir, readPerfRows } from '../../dist/perf-sample-store.js';
 import { CPU_WINDOW_HOURS, cpuLoadFacet } from './doctor-findings-cpu.mjs';
 import { PRODUCTION_DAYS, qualifiedCapacity, rampEntry } from './doctor-findings-qualify.mjs';
 import { readQualifyResults } from './qualify-results.mjs';
+import { DIE_UNTRUSTED, judgeDoctor } from './doctor-baseline.mjs';
+import { thermalFindings } from './doctor-findings-thermal.mjs';
+import { nodeQuantities, readNodeBaselines, recordNodeBaselines } from './node-baselines.mjs';
 
 // Through the shared emitter, which every subcommand under the `--json`
 // contract uses: the document below is printed and `process.exit` runs on the
@@ -396,6 +399,31 @@ function readCycleDecisions() {
 			`\n· the reboot cycle's state at ${path} is unreadable (${e.message}); its decisions are not shown`
 		);
 		return {};
+	}
+}
+
+// ── each node against its own range (#129, lib/doctor-baseline.mjs) ─────────
+// Judged ONCE, here, by the run that probed: the stamp rides in the record, so
+// a later reader sees this probe's verdict, not one re-judged against a range
+// that has since learned the reading. Learned only under --write, from a node
+// that was really measured (not deferred, not read back from the record).
+// An unreadable store stamps `unreadable` and the fixed bars apply.
+if (!FROM_RECORD) {
+	const baselineRead = readNodeBaselines(stateDir());
+	for (const [name, h] of Object.entries(health)) {
+		if (h.reachable === false || deferred.has(name)) continue;
+		if (!baselineRead.ok) {
+			h.baseline = { at, unreadable: baselineRead.reason };
+			continue;
+		}
+		const dieUntrusted = thermalFindings(h, manifest.machines?.[name]?.thermal).some((x) =>
+			DIE_UNTRUSTED.has(x.status)
+		);
+		const judged = judgeDoctor(h, nodeQuantities(baselineRead.store, name), at, { dieUntrusted });
+		h.baseline = judged.stamp;
+		if (!WRITE) continue;
+		const learned = recordNodeBaselines(stateDir(), name, judged.window, at);
+		if (!learned.ok) log(`\n· ${name}: baselines not recorded: ${learned.reason}`);
 	}
 }
 

@@ -10,6 +10,7 @@
 import { ADVISORY, BLOCKING } from './preflight.mjs';
 import { independentCpuSensors } from './doctor-parse.mjs';
 import { f } from './doctor-findings-record.mjs';
+import { describeDrift, stampedVerdict } from './doctor-baseline.mjs';
 import {
 	THERMAL_BLOCKING_C,
 	THERMAL_ADVISORY_C,
@@ -208,7 +209,11 @@ export function thermalFindings(health, declared = {}) {
 		// else: the die reading rose with the sensors beside it. It is tracking
 		// the die, and a die that stays cool under load is a fact about the
 		// cooler, not a finding about the sensor — nothing is pushed.
-	} else if (t.loadC >= THERMAL_ADVISORY_C) {
+	} else if (t.loadC >= THERMAL_ADVISORY_C && !stampedVerdict(health, 'loadTempC')) {
+		// THE FIXED LINE ONLY WHERE THE NODE HAS NO RANGE TO BE JUDGED BY (#129):
+		// a record stamped against node-baselines.json carries this miss as the
+		// node's weak point instead, and a reading outside its own range is the
+		// `drift` finding below. An unstamped record keeps the bar.
 		out.push(
 			f(
 				health,
@@ -223,6 +228,21 @@ export function thermalFindings(health, declared = {}) {
 			)
 		);
 	}
+
+	// OUTSIDE ITS OWN RANGE (#129, lib/doctor-baseline.mjs). Advisory in either
+	// direction: the cooler or the load changed, or the estimate was wrong.
+	const drift = stampedVerdict(health, 'loadTempC');
+	if (t.sensor && drift?.verdict === 'drift')
+		out.push(
+			f(
+				health,
+				'cpu-thermal',
+				ADVISORY,
+				'drift',
+				`${t.sensor} under ${t.loadSeconds}s of all-core load: ${describeDrift(drift, '°C', health.node)}.`,
+				{ sensor: t.sensor, loadC: t.loadC, mean: drift.mean, band: drift.band, n: drift.n }
+			)
+		);
 
 	// A DECLARATION THE NODE HAS OUTGROWN. If a declared node now reports a CPU
 	// sensor beside its die reading, its temperature can be judged after all

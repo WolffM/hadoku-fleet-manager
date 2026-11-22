@@ -23,6 +23,7 @@
 import { ADVISORY } from './preflight.mjs';
 import { f } from './doctor-findings-record.mjs';
 import { CLOCK_STUCK_FRACTION } from './doctor-findings-thresholds.mjs';
+import { describeDrift, stampedVerdict } from './doctor-baseline.mjs';
 
 /** @param {{node: string|null, clock?: object}} health */
 export function clockFindings(health) {
@@ -42,6 +43,25 @@ export function clockFindings(health) {
 	if (c.loadBestMhz === null)
 		return unjudged(c.loadWhy ?? 'the probe reported no clock under load');
 	const share = c.loadBestMhz / c.ceilingMhz;
+	// AGAINST THE NODE'S OWN RANGE when the record was stamped (#129,
+	// lib/doctor-baseline.mjs): a clock the node always runs at is its weak
+	// point, recorded and never a finding; a clock outside its range, either
+	// way, is drift. An unstamped record keeps the fixed line.
+	const stamped = stampedVerdict(health, 'clockShare');
+	if (stamped) {
+		if (stamped.verdict !== 'drift') return [];
+		return [
+			f(
+				health,
+				'cpu-clock',
+				ADVISORY,
+				'drift',
+				`under the all-core load its clock reached ${c.loadBestMhz} of ${c.ceilingMhz} MHz: ` +
+					`the share ${describeDrift(stamped, '', health.node)}.`,
+				{ ceilingMhz: c.ceilingMhz, loadBestMhz: c.loadBestMhz, mean: stamped.mean, n: stamped.n }
+			),
+		];
+	}
 	if (share >= CLOCK_STUCK_FRACTION) return [];
 	return [
 		f(

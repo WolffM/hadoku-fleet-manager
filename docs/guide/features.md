@@ -72,7 +72,8 @@ should have, `fleet qualify` to run a one-node playlist of load tests
 judges each node against its own learned range, not one bar for every box.
 A bar the hardware cannot meet is recorded as that node's weak point. A
 reading outside the node's usual range is a drift finding, and the range
-re-learns at the new reading.
+re-learns at the new reading. The nightly health check judges each node's
+CPU temperature and clock under load the same way.
 
 **What it does not do.** It will not admit a node to scheduling on the
 manifest's say alone — a capability a probe cannot confirm is not offered,

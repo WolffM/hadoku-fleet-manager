@@ -2273,6 +2273,13 @@
     "part": "core"
   },
   {
+    "glob": "scripts/lib/doctor-baseline.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "#129: doctor's cpu-thermal and cpu-clock bars judged against the node's own range. Pure, beside the doctor findings it feeds; reads the bars (observation thresholds) and the store's math (state)."
+  },
+  {
     "glob": "scripts/lib/doctor-findings.mjs",
     "layer": "domain",
     "domain": "observation",
