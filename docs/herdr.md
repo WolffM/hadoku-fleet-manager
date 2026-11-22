@@ -162,8 +162,15 @@ The key is the operator's to mint, once per claw (from hadoku_site):
 ```sh
 python3 scripts/administration.py key-generate --tier service --name claw-9-sessions --confirm
 node scripts/admin/grant-secret.mjs KEY_SERVICE_CLAW_9_SESSIONS --holder repo:WolffM/hadoku_site --confirm
-# and claw-9-sessions onto crossposter-claude-code-lease (Service grants)
+python3 scripts/administration.py key-acl-sync --repo .   # grant-secret only DECLARES a KEY_* item
+python3 scripts/administration.py access-list add crossposter-claude-code-lease claw-9-sessions
 ```
+
+Run them back to back. From the declaration until `key-acl-sync`, every
+dev-vault run in hadoku_site fails with a 403 on the new item. Mint once and
+from one place: two mints racing for the same name leave a live second key that
+holds nothing (check:key-sync reports it as "NO vault item"). Retire that one by
+its preview.
 
 Then `fleet node-users --dev claw-9 --confirm`, run from hadoku_site's root
 under its dev-vault, delivers it over ssh stdin and proves it with
