@@ -17,8 +17,15 @@
  *
  * WHICH PORT: a pair's port is the app's own `<APP>_PEER_PORT` in its literal
  * `tunnel.env` (hadoku_site child-apps.json), so the app and the fleet read
- * one value. A row with a standby and no such env has no peer listener, and
- * nothing is opened or closed for it.
+ * one value. A `handWired` row has no `tunnel`: its wrapper is written by hand,
+ * so the row declares the port as `handWired.peerPort` and the site checks the
+ * wrapper sets that same value. A row with a standby and neither has no peer
+ * listener, and nothing is opened or closed for it.
+ *
+ * ONLY THE PAIR. A row's hub backstop is never given the port: the site's
+ * wrapper sets the peer env on the row's node and its standby alone, so a
+ * backstop holding the lease has no listener to close and a standby's forward
+ * to it finds nothing, answering 503 as it did before.
  *
  * THE READER reads the kernel's raw table, never the unit file: a unit that
  * is enabled and whose rule is gone (an `iptables -t raw -F`, a reboot before
@@ -32,10 +39,18 @@ export const unitName = (app) => `fleet-peer-${app}.service`;
 
 const upperSnake = (id) => id.replace(/[^a-z0-9]+/gi, '_').toUpperCase();
 
+/** Where a row declares its peer port: `tunnel.env.<APP>_PEER_PORT`, or a hand-wired row's `handWired.peerPort`. */
+function declaredPeerPort(app) {
+	if (app.tunnel) {
+		const name = `${upperSnake(app.id)}_PEER_PORT`;
+		return { raw: app.tunnel.env?.[name], name };
+	}
+	return { raw: app.handWired?.peerPort, name: 'handWired.peerPort' };
+}
+
 /**
  * The peer ports each host must close: `node → [{app, port, mate, mateIp}]`,
- * for every app placed with a `host` and a `standby` whose `tunnel.env` names
- * its peer port. Problems (a mate without a tailnetIp, a bad port) are
+ * for every app placed on a node with a `standby` that declares its peer port. Problems (a mate without a tailnetIp, a bad port) are
  * returned with the app, so the caller reports them instead of guessing.
  */
 export function peerPorts(childApps, hostsDoc) {
@@ -45,11 +60,11 @@ export function peerPorts(childApps, hostsDoc) {
 	for (const app of childApps.apps ?? []) {
 		const host = placedHostOf(app);
 		if (!host || !app.standby) continue;
-		const raw = app.tunnel?.env?.[`${upperSnake(app.id)}_PEER_PORT`];
+		const { raw, name } = declaredPeerPort(app);
 		if (raw === undefined) continue;
 		const port = Number(raw);
 		if (!(Number.isInteger(port) && port >= 1024 && port <= 65535)) {
-			problems.push({ app: app.id, why: `${upperSnake(app.id)}_PEER_PORT is ${raw}, not a port` });
+			problems.push({ app: app.id, why: `${name} is ${raw}, not a port` });
 			continue;
 		}
 		const pair = [

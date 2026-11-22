@@ -45,6 +45,35 @@ test('each host of a pair closes the peer port to everyone but the other; no pai
 	assert.match(peerPorts(PYG, noIp).problems[0].why, /claw-6 has no tailnetIp/);
 });
 
+test('a hand-wired fleet row declares its port as handWired.peerPort, and only its pair closes it', () => {
+	const doc = (handWired) => ({
+		apps: [
+			{
+				id: 'watchparty',
+				placement: 'fleet',
+				node: 'claw-6',
+				standby: 'claw-4',
+				backstop: 'cold',
+				handWired,
+			},
+		],
+	});
+	const { byNode, problems } = peerPorts(doc({ port: '8079', peerPort: '9079' }), hostsDoc);
+	assert.deepEqual(problems, []);
+	assert.deepEqual(byNode.get('claw-6'), [
+		{ app: 'watchparty', port: 9079, mate: 'claw-4', mateIp: '192.0.2.4' },
+	]);
+	assert.deepEqual(byNode.get('claw-4'), [
+		{ app: 'watchparty', port: 9079, mate: 'claw-6', mateIp: '192.0.2.6' },
+	]);
+	assert.equal(byNode.has('hokon'), false, 'the hub backstop is not part of the pair');
+	assert.equal(peerPorts(doc({ port: '8079' }), hostsDoc).byNode.size, 0, 'no peer port declared');
+	assert.match(
+		peerPorts(doc({ port: '8079', peerPort: '80' }), hostsDoc).problems[0].why,
+		/handWired\.peerPort is 80, not a port/
+	);
+});
+
 test("the rules are judged from the kernel's own printed form, the unit only for boot", () => {
 	const p = { app: 'pygmalion', port: 9022, mate: 'claw-6', mateIp: '192.0.2.6' };
 	assert.equal(
