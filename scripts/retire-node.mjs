@@ -77,6 +77,7 @@ import { drainStatus, effectiveDrains } from '../dist/runners/drain.js';
 import { writeFileAtomicSync } from '../dist/lib/atomic-json.js';
 import { readFacetFile } from '../dist/lib/measured.js';
 import { MEASURED_FACETS } from '../dist/lib/measured-paths.js';
+import { sessionCount } from './lib/drain-wait.mjs';
 
 const parsed = parseStrict(ARGV_SPECS['retire-node.mjs'], process.argv.slice(2));
 const emitter = createEmitter({ json: parsed.json });
@@ -194,7 +195,10 @@ function busyOn(node) {
 		const [cmd, cmdArgv] = remoteCommand(node, 'ci', PROBE, { connectTimeout: 6 });
 		const out = execFileSync(cmd, cmdArgv, { encoding: 'utf8', timeout: 20000 });
 		const n = parseInt(String(out).trim().split('\n')[0], 10);
-		return Number.isFinite(n) ? n : null;
+		if (!Number.isFinite(n)) return null;
+		// A live session is active work too (drain-wait.mjs): not drained while one runs.
+		const sessions = sessionCount(node);
+		return sessions === null ? null : n + sessions.live;
 	} catch {
 		return null;
 	}

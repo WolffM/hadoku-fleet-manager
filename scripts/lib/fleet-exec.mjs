@@ -43,7 +43,7 @@ import { manifest as manifestFile } from '../../dist/lib/fleet-paths.js';
 // source checkout that has not been built fails LOUDLY on the import rather
 // than quietly taking the wrong branch.
 import { isLocalNode } from '../../dist/lib/node-identity.js';
-import { ciIsSeparate, nodeCommand, nodeUser } from '../../dist/lib/node-users.js';
+import { ciIsSeparate, hostsSessions, nodeCommand, nodeUser } from '../../dist/lib/node-users.js';
 
 /**
  * The single node model. Every fleet script reads placement/limits from here.
@@ -225,6 +225,15 @@ export function repairContext(node, manifest) {
 		ciUser: separateCiUser(node, manifest),
 		...(m?.pm2MemoryMaxMb !== undefined ? { pm2MemoryMaxMb: m.pm2MemoryMaxMb } : {}),
 	};
+}
+
+/**
+ * Whether `node`'s manifest entry names a dev user: the node hosts the
+ * operator's agent sessions (`users.dev`, node-users.ts). Read from the same
+ * cached manifest every role lookup here uses.
+ */
+export function nodeHostsSessions(node, manifest) {
+	return hostsSessions((manifest ?? cachedManifest())?.machines?.[node] ?? null);
 }
 
 let manifestCache;

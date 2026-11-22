@@ -87,6 +87,7 @@ import { readDrainDoc, writeDrainDoc } from './lib/expected-down.mjs';
 // place for "retrying is not tolerating" to drift.
 import { READ_ATTEMPTS, describeReadFailure } from './lib/read-retry-policy.mjs';
 import { BOLD, GREEN, RED, RESET, YELLOW } from './lib/term.mjs';
+import { sessionCount } from './lib/drain-wait.mjs';
 
 // The STATE dir, not the manifest dir — see src/runners/drain.ts for why.
 // Short version: manifestDir is inside a git checkout and there are two of
@@ -150,7 +151,10 @@ function busyOn(node) {
 		const [cmd, cmdArgv] = remoteCommand(node, 'ci', PROBE, { connectTimeout: 6 });
 		const out = execFileSync(cmd, cmdArgv, { encoding: 'utf8', timeout: 20000 });
 		const n = parseInt(String(out).trim().split('\n')[0], 10);
-		return Number.isFinite(n) ? n : null;
+		if (!Number.isFinite(n)) return null;
+		// A live session is active work too (drain-wait.mjs): not drained while one runs.
+		const sessions = sessionCount(node);
+		return sessions === null ? null : n + sessions.live;
 	} catch {
 		// Unreachable is NOT idle. Saying "drained" here is how somebody opens a
 		// case on a node that is mid-build behind a dropped ssh.

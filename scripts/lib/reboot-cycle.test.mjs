@@ -317,7 +317,7 @@ test('a job that lands between the wait and the reboot cancels it', async () => 
 	};
 	const r = await runRebootCycle({ machines: [['claw-1', {}]], deps: w.deps });
 	assert.equal(w.calls.includes('reboot claw-1'), false);
-	assert.match(r.nodes[0].why, /1 job\(s\) running at the last check/);
+	assert.match(r.nodes[0].why, /1 job\(s\) or session\(s\) running at the last check/);
 	assert.deepEqual(w.doc.nodes, {});
 });
 
@@ -832,4 +832,35 @@ test('#68: the reboot names its sender and reason in the node journal, in quote-
 	);
 	assert.match(m, /drained, 0 CI jobs counted as ci$/);
 	assert.doesNotMatch(m, /['"$`]/);
+});
+
+test('a LIVE SESSION defers the reboot before any drain, and the next candidate is taken instead', async () => {
+	const w = world({
+		nodes: {
+			'claw-1': box({ newest: NEW, sessionsLive: 1 }),
+			'claw-4': box({ newest: NEW, busy: 3 }),
+			'claw-8': box(),
+		},
+	});
+	const r = await runRebootCycle({ machines: MACHINES, deps: w.deps });
+	assert.equal(r.ok, true, JSON.stringify(r.findings));
+	assert.ok(!w.calls.includes('drain claw-1'), 'drained a node with a live session');
+	assert.deepEqual(r.rebooted, ['claw-4']);
+	const rec = r.nodes.find((n) => n.node === 'claw-1');
+	assert.equal(rec.status, 'deferred');
+	assert.match(rec.why, /1 live session\(s\)/);
+});
+
+test('a session past the 24 h cap does not hold the reboot, and the record says it went ahead', async () => {
+	const w = world({
+		nodes: { 'claw-1': box({ newest: NEW, sessionsLive: 0, sessionsPastCap: 1 }) },
+	});
+	const lines = [];
+	const r = await runRebootCycle({ machines: MACHINES, deps: w.deps, log: (l) => lines.push(l) });
+	assert.deepEqual(r.rebooted, ['claw-1']);
+	assert.equal(r.nodes.find((n) => n.node === 'claw-1').sessionsPastCap, 1);
+	assert.ok(
+		lines.some((l) => /\[rebooting\].*older than the 24 h cap/.test(l)),
+		lines.join('\n')
+	);
 });

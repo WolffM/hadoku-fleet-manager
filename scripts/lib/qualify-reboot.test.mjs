@@ -505,3 +505,20 @@ void test('a listing or a slice read that fails ends with no marker, so it is ne
 		null
 	);
 });
+
+// ── sessions ────────────────────────────────────────────────────────────────
+
+void test('a node that hosts sessions is not rebooted while one is live, or while they cannot be counted', async () => {
+	for (const [sessions, re] of [
+		[{ live: 1, pastCap: 0 }, /1 live session\(s\) on claw-fixture/],
+		[null, /could not count claw-fixture's live sessions/],
+	]) {
+		const f = fakeNode({
+			machine: { ...MACHINE, users: { ...MACHINE.users, dev: 'fixture-dev' } },
+		});
+		const r = await makeRebootTest({ ...f.deps, sessions: async () => sessions }).run(f.ctx);
+		assert.equal(r.status, 'could-not-look');
+		assert.match(r.reason, re);
+		assert.ok(!f.sent.some((x) => x.script.includes('systemctl reboot')), 'rebooted anyway');
+	}
+});

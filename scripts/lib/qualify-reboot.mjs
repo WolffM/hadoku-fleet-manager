@@ -49,7 +49,8 @@
  *
  * A REAL REBOOT. The unit tests drive this against fakes only.
  */
-import { ciIsSeparate, nodeHome, nodeUser } from '../../dist/lib/node-users.js';
+import { sessionCount } from './drain-wait.mjs';
+import { ciIsSeparate, hostsSessions, nodeHome, nodeUser } from '../../dist/lib/node-users.js';
 import {
 	BOOT_TIMEOUT_MS,
 	REBOOT_PROBE,
@@ -346,11 +347,12 @@ export function judgeAfterBoot({ qr, rp, before, machine }) {
 /**
  * The test, with its clock injectable for tests.
  *
- * @param {{ sleep?: (ms: number) => Promise<void>, now?: () => number }} [o]
+ * @param {{ sleep?: (ms: number) => Promise<void>, now?: () => number, sessions?: (node: string) => ({ live: number, pastCap: number } | null) }} [o]
  */
 export function makeRebootTest({
 	sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
 	now = () => Date.now(),
+	sessions = sessionCount,
 } = {}) {
 	return {
 		id: 'reboot-requalify',
@@ -377,6 +379,14 @@ export function makeRebootTest({
 				return cnl(
 					`could not read the node before rebooting, so it was not rebooted: ${before.reason}`
 				);
+
+			// A LIVE SESSION IS ACTIVE WORK (drain-wait.mjs). The window's drain
+			// stops new CI work, never a session the operator starts mid-window.
+			const s = hostsSessions(ctx.machine) ? await sessions(ctx.node) : { live: 0, pastCap: 0 };
+			if (s === null)
+				return cnl(`could not count ${ctx.node}'s live sessions, so it was not rebooted`);
+			if (s.live > 0)
+				return cnl(`${s.live} live session(s) on ${ctx.node}, so it was not rebooted`);
 
 			// Throws on a malformed users.ci before anything is rebooted.
 			const readScript = `${afterBootScript({ machine: ctx.machine })}${REBOOT_PROBE}`;

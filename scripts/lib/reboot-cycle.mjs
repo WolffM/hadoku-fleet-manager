@@ -20,7 +20,8 @@
  *              by anyone, no drain planned on it. The least busy first.
  *   drain      kind `reboot`, which lapses by itself (REBOOT_LEASE), so a cycle
  *              that dies outright gives the node back on the clock
- *   wait       until zero jobs have held for the settle window (the same
+ *   wait       until zero jobs and zero live sessions (drain-wait.mjs; a
+ *              session holds at most 24 h) have held for the settle window (the same
  *              `waitUntilDrained` the toolchain cadence uses); a timeout
  *              undrains and reboots nothing
  *   reboot     re-probed first: still needs it, still idle, boot id taken
@@ -450,6 +451,16 @@ export async function runRebootCycle({
 			nodes.push({ node: name, status: 'deferred', reason: why, why: w });
 			continue;
 		}
+		// A LIVE SESSION DEFERS BEFORE ANY DRAIN. Draining and then waiting out
+		// the 45 min timeout every hourly pass would keep the node's CI capacity
+		// off for as long as the session runs, to reboot nothing. The 24 h cap is
+		// in the count itself (drain-wait.mjs): past it, the session is not live.
+		if (probe.sessionsLive) {
+			const w = `${probe.sessionsLive} live session(s); a session is active work for up to 24 h`;
+			log(`── ${name}  [deferred] needs a reboot (${why}); ${w}`);
+			nodes.push({ node: name, status: 'deferred', reason: why, why: w });
+			continue;
+		}
 		candidates.push({ name, probe, why, hosting, noticed: Boolean(notice) });
 	}
 
@@ -559,7 +570,7 @@ export async function runRebootCycle({
 		rec.why = !before.ok
 			? `could not re-read it before the reboot: ${before.reason}`
 			: before.busy !== 0
-				? `${before.busy ?? 'an unknown number of'} job(s) running at the last check; nothing was rebooted`
+				? `${before.busy ?? 'an unknown number of'} job(s) or session(s) running at the last check; nothing was rebooted`
 				: 'no longer needs a reboot';
 		log(`── ${pick.name}  [${rec.status}] ${rec.why}`);
 		await putBack(pick.name, rec, deps, finding, log);
@@ -571,7 +582,11 @@ export async function runRebootCycle({
 	const rebootAt = deps.now();
 	state.inFlight = { ...state.inFlight, phase: 'rebooting', before, rebootAt };
 	save();
-	log(`── ${pick.name}  [rebooting] ${pick.why}`);
+	const pastCap = before.sessionsPastCap
+		? `; ${before.sessionsPastCap} session(s) older than the 24 h cap were not counted and end with it`
+		: '';
+	if (pastCap) rec.sessionsPastCap = before.sessionsPastCap;
+	log(`── ${pick.name}  [rebooting] ${pick.why}${pastCap}`);
 	const r = await attempt(() => deps.reboot(pick.name, pick.why));
 	if (!r.ok || r.value?.ok === false) {
 		// Not conclusive: an ssh cut by the reboot itself looks like this. The

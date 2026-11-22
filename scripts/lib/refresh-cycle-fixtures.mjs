@@ -92,6 +92,14 @@ export function harness(machines, world, over = {}) {
 			return over.waitResult ?? { drained: true };
 		},
 		// Only when a test sets `busy`: the cycle must work without it.
+		...(over.sessions
+			? {
+					sessionsNow: async (node) => {
+						events.push(`sessions? ${node}`);
+						return node in over.sessions ? over.sessions[node] : { live: 0, pastCap: 0 };
+					},
+				}
+			: {}),
 		...(over.busy
 			? {
 					busyNow: async (node) => {

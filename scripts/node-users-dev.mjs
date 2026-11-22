@@ -148,17 +148,22 @@ async function main() {
 	log(`── ${NODE}  ${BACK ? `UNDO: sessions as ${dev}` : `sessions will run as ${dev}`}`);
 	const inv = await runOn(NODE, devInventoryScript(users), { as: 'admin', timeoutMs: 60_000 });
 	const invSteps = parseSteps(inv.stdout, 'INVENTORY-END');
+	// On --confirm the inventory is the plan this run is about to carry out,
+	// read before anything changes; the lines after it are what was done.
+	if (CONFIRM) log('   the plan, read before anything changed:');
 	printSteps(invSteps);
 	if (!invSteps.complete) die(`the inventory did not finish: ${inv.error ?? inv.stderr.trim()}`);
-	log(
-		manifestSaysDev(m, { dev, back: BACK })
-			? `   · manifest  ${MANIFEST} already says so`
-			: `   ✓ manifest  users.dev ${BACK ? 'would be removed from' : `= ${dev} would be written to`} ${MANIFEST}`
-	);
 	if (!CONFIRM) {
+		// writeFlip says the same of the manifest when it runs, so only here.
+		log(
+			manifestSaysDev(m, { dev, back: BACK })
+				? `   · manifest  ${MANIFEST} already says so`
+				: `   ✓ manifest  users.dev ${BACK ? 'would be removed from' : `= ${dev} would be written to`} ${MANIFEST}`
+		);
 		log('\nDRY RUN. Nothing was changed. Re-run with --confirm.');
 		return;
 	}
+	log('   done:');
 	if (!BACK) await writeFlip(dev);
 
 	const script = BACK

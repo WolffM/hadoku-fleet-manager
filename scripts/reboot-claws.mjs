@@ -49,7 +49,13 @@ import {
 	rebootNoticeArgs,
 	runRebootCycle,
 } from './lib/reboot-cycle.mjs';
-import { busyCount, drainCli, waitUntilDrained } from './lib/drain-wait.mjs';
+import {
+	busyCount,
+	drainCli,
+	jobCount,
+	sessionCount,
+	waitUntilDrained,
+} from './lib/drain-wait.mjs';
 import { liveQueuePressure } from './lib/refresh-cycle-live.mjs';
 
 const argv = process.argv.slice(2);
@@ -95,7 +101,17 @@ const deps = {
 		// The job count is a SEPARATE read, as ci: admin cannot see ci's
 		// processes on a hidepid node and counted 0 there with jobs live
 		// (fleet-manager#68). null (could not look) never reboots.
-		return p.ok ? { ...p, busy: busyCount(node) } : p;
+		if (!p.ok) return p;
+		// Sessions too: a live one is active work. One past the 24 h cap is
+		// not counted, and is carried so the reboot line says it went ahead.
+		const jobs = jobCount(node);
+		const sessions = jobs === null ? null : sessionCount(node);
+		return {
+			...p,
+			busy: sessions === null ? null : jobs + sessions.live,
+			sessionsLive: sessions?.live ?? null,
+			sessionsPastCap: sessions?.pastCap ?? 0,
+		};
 	},
 	expectedDown: (node) => deferralFor(node, readDrains()).deferred,
 	drainDoc: () => readDrainDoc(),

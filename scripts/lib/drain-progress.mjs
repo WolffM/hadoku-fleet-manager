@@ -7,8 +7,9 @@
  * un-refreshed and paged. The wall clock measured nothing about those jobs.
  *
  * This wait ends on what the jobs themselves say:
- *   - QUIET: the node's counted Runner.Worker processes reach 0 and stay 0
- *     past SETTLE_MS (drain-wait.mjs: the fast loop's label strip lands on its
+ *   - QUIET: the node's counted Runner.Worker processes reach 0, with no live
+ *     session (drain-wait.mjs `sessionCount`: a session is active work, up to
+ *     its 24 h cap), and stay so past SETTLE_MS (drain-wait.mjs: the fast loop's label strip lands on its
  *     next tick, so one zero between jobs is not quiet). The node is refreshed
  *     at once.
  *   - STUCK, a finding: a running job that has not finished a step for longer
@@ -37,7 +38,7 @@ import { join } from 'node:path';
 
 import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { STUCK_MINUTES, stepAllowance } from '../../dist/runner-health-step-allowance.js';
-import { POLL_MS, SETTLE_MS } from './drain-wait.mjs';
+import { POLL_MS, SETTLE_MS, sessionCount } from './drain-wait.mjs';
 import { runOnSync } from './fleet-exec.mjs';
 
 /** How often a running job's steps are re-read from GitHub. A sampling rate, not a limit. */
@@ -165,6 +166,7 @@ export async function waitUntilQuiet({
 	deadline = null,
 	readWorkers = readWorkerJobs,
 	readJob = readJobProgress,
+	readSessions = sessionCount,
 	allowance = liveAllowance,
 	pollMs = POLL_MS,
 	progressPollMs = PROGRESS_POLL_MS,
@@ -176,39 +178,40 @@ export async function waitUntilQuiet({
 	const progress = new Map();
 	for (;;) {
 		const jobs = await readWorkers(node);
-		if (jobs === null) {
+		// A session has no GitHub progress to judge: it holds the node quiet-
+		// not-stuck until it ends, its cap passes, or the run's budget does.
+		const sessions = await readSessions(node);
+		if (jobs === null || sessions === null) {
 			if (++unreadableCounts >= UNREADABLE_READS)
 				return {
 					drained: false,
 					running: null,
 					stuck: true,
-					reason: `could not count running jobs on ${node} (${unreadableCounts} reads in a row)`,
+					reason: `could not count running ${jobs === null ? 'jobs' : 'sessions'} on ${node} (${unreadableCounts} reads in a row)`,
 				};
 		} else {
 			unreadableCounts = 0;
-			if (jobs.length === 0) {
+			if (jobs.length === 0 && sessions.live === 0) {
 				quietSince ??= clock.now();
 				if (clock.now() - quietSince >= settleMs) return { drained: true };
 			} else {
 				quietSince = null;
-				const stuck = await judgeJobs(jobs, progress, {
-					clock,
-					readJob,
-					allowance,
-					progressPollMs,
-				});
+				const stuck = jobs.length
+					? await judgeJobs(jobs, progress, { clock, readJob, allowance, progressPollMs })
+					: null;
 				if (stuck) return { drained: false, running: jobs.length, stuck: true, reason: stuck };
 			}
 		}
 		if (deadline !== null && clock.now() >= deadline) {
 			const n = jobs?.length ?? null;
+			const live = sessions?.live ?? 0;
 			return {
 				drained: false,
 				running: n,
 				budget: true,
 				reason:
 					`the run's time budget ended while ${n ?? 'an uncounted number of'} job(s) ` +
-					'were still running and advancing',
+					`were still running and advancing${live ? ` and ${live} session(s) were live` : ''}`,
 			};
 		}
 		await clock.sleep(pollMs);

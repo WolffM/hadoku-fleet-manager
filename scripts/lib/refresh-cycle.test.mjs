@@ -98,7 +98,7 @@ test('waitUntilDrained: draining is not drained, unknown is busy, zero must HOLD
 		settleMs: 0,
 	});
 	assert.equal(stuck.drained, false);
-	assert.match(stuck.reason, /3 job\(s\) running/);
+	assert.match(stuck.reason, /3 job\(s\) or session\(s\) running/);
 });
 
 test('UNDRAIN ON FAILURE: an update that throws, or exits 1 and moves nothing, still puts the node back', async () => {

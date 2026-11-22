@@ -98,3 +98,41 @@ test('an unreadable busy count also goes behind; nothing is skipped for being bu
 		['busy? claw-a', 'busy? claw-b', 'drain claw-a training', 'drain claw-b training']
 	);
 });
+
+test('a LIVE SESSION defers the node before any drain: nothing drained, nothing updated, no finding', async () => {
+	const world = { 'claw-b': stale() };
+	const h = harness([['claw-b', TASKAUTO]], world, {
+		sessions: { 'claw-b': { live: 1, pastCap: 0 } },
+	});
+	const r = await h.run();
+	assert.ok(!h.events.some((e) => e.startsWith('drain ')), 'drained a node with a live session');
+	assert.ok(!h.events.includes('update claw-b'));
+	assert.equal(r.ok, true, JSON.stringify(r.findings));
+	const rec = r.nodes.find((n) => n.node === 'claw-b');
+	assert.equal(rec.status, 'deferred');
+	assert.match(rec.reason, /1 live session\(s\)/);
+});
+
+test('sessions past the cap do not defer it, and sessions that cannot be counted are a finding', async () => {
+	const past = harness(
+		[['claw-b', TASKAUTO]],
+		{ 'claw-b': stale() },
+		{
+			sessions: { 'claw-b': { live: 0, pastCap: 2 } },
+		}
+	);
+	await past.run();
+	assert.ok(past.events.includes('update claw-b'), 'a day-old session held the refresh off');
+
+	const blind = harness(
+		[['claw-b', TASKAUTO]],
+		{ 'claw-b': stale() },
+		{
+			sessions: { 'claw-b': null },
+		}
+	);
+	const r = await blind.run();
+	assert.ok(!blind.events.some((e) => e.startsWith('drain ')));
+	assert.equal(r.ok, false);
+	assert.equal(r.findings[0].kind, 'sessions-unreadable');
+});

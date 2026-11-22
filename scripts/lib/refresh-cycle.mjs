@@ -197,6 +197,7 @@ function settle(id, res) {
  * @param {object} p
  * @param {Array<[string, object]>} p.machines  manifest `[name, entry]` pairs
  * @param {object} p.deps  detect, latest, isDrained, drain, undrain, waitDrained,
+ *                         sessionsNow (optional: `{ live, pastCap }` or null),
  *                         update, reprobe, queuePressure; optionally rebootcamp,
  *                         and sweepDue(name, nowMs) -> { due, days } with
  *                         sweepCaches(name) -> { ok, swept, reclaimGb?, reason? }
@@ -407,7 +408,7 @@ export async function runRefreshCycle({
 				movedBack.add(name);
 				queue.push(t);
 				log(
-					`── ${name}  [later] ${n === null ? 'running jobs could not be counted' : `${n} job(s) running`}; idle nodes first`
+					`── ${name}  [later] ${n === null ? 'running work could not be counted' : `${n} job(s) or session(s) running`}; idle nodes first`
 				);
 				continue;
 			}
@@ -463,6 +464,31 @@ export async function runRefreshCycle({
 			rec.reason = `queue under pressure: ${pressure.reason}`;
 			log(`── ${name}  [deferred] ${rec.reason}`);
 			continue;
+		}
+
+		// A LIVE SESSION DEFERS BEFORE THE DRAIN (drain-wait.mjs): the wait
+		// would hold the node's CI capacity off until the run's budget ends and
+		// update nothing. Unknown is not idle: a finding, like an unreadable queue.
+		if (deps.sessionsNow) {
+			let s;
+			try {
+				s = await deps.sessionsNow(name);
+			} catch (e) {
+				s = { error: errText(e) };
+			}
+			if (s === null || s?.error) {
+				rec.status = 'deferred';
+				rec.reason = `could not count live sessions, so not starting a node${s?.error ? `: ${s.error}` : ''}`;
+				finding(name, 'sessions-unreadable', rec.reason);
+				log(`── ${name}  [deferred, FINDING] ${rec.reason}`);
+				continue;
+			}
+			if (s.live > 0) {
+				rec.status = 'deferred';
+				rec.reason = `${s.live} live session(s); a session is active work for up to 24 h`;
+				log(`── ${name}  [deferred] ${rec.reason}`);
+				continue;
+			}
 		}
 
 		// DRAIN.

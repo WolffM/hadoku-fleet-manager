@@ -143,9 +143,14 @@ The setup prints the dev user's name when it finishes. The Claude token is not
 stored on the claw: a session leases it from crossposter's pool and holds it in
 its environment only.
 
-Not built yet: a live session does not hold off the reboot or refresh cycle
-(they count CI jobs only), the claw has no lease identity of its own, and the
-dev user has no push credential. The status of each is in
+A live session is active work. The reboot and refresh cycles defer a claw
+while a `claude` runs as its dev user, `fleet drain --status` does not call it
+drained, and qualify's reboot test refuses it. A `claude` older than 24 h is
+not counted, so an abandoned pane holds a reboot off for a day at most. A long
+build in a pane with no `claude` in it is not counted either.
+
+Not built yet: the claw has no lease identity of its own, and the dev user has
+no push credential. The status of each is in
 `docs/planning/claw-sessions-2026-11-19.md`.
 
 # hadoku.sessions — find a Claude session

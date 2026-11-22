@@ -47,6 +47,7 @@ function world(script) {
 					? null
 					: { status: 'in_progress', name: 'forge-e2e (2)', done, step: `step ${done + 1}` };
 			},
+			readSessions: async () => script(t).sessions ?? { live: 0, pastCap: 0 },
 			allowance: () => ({ minutes: 25, samples: 0 }),
 		},
 	};
@@ -227,4 +228,28 @@ test('WORKER_JOBS_SCRIPT reads the job the worker RUNS from its log, and skips a
 		encoding: 'utf8',
 	});
 	assert.deepEqual(parseWorkerJobs(idle.stdout), []);
+});
+
+test('a live session holds the node not-quiet with no job running, and is never judged stuck', async () => {
+	const w = world((t) => ({ jobs: [], sessions: { live: t < 3 * 3_600_000 ? 1 : 0, pastCap: 0 } }));
+	const r = await waitUntilQuiet(w.opts);
+	assert.deepEqual(r, { drained: true });
+	assert.ok(w.now() >= 3 * 3_600_000, 'went quiet while the session was still live');
+	assert.equal(w.reads.jobs, 0, 'a session has no GitHub progress to read');
+});
+
+test("the run's budget ends a wait on a session, and the reason names the session", async () => {
+	const w = world(() => ({ jobs: [], sessions: { live: 2, pastCap: 0 } }));
+	const r = await waitUntilQuiet({ ...w.opts, deadline: 60 * MIN });
+	assert.equal(r.drained, false);
+	assert.equal(r.budget, true);
+	assert.match(r.reason, /2 session\(s\) were live/);
+});
+
+test('sessions that cannot be counted twice running are the finding, like jobs', async () => {
+	const w = world(() => ({ jobs: [] }));
+	const r = await waitUntilQuiet({ ...w.opts, readSessions: async () => null });
+	assert.equal(r.drained, false);
+	assert.equal(r.stuck, true);
+	assert.match(r.reason, /could not count running sessions on claw-fixture/);
 });

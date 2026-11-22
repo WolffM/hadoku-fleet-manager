@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 import { readDrains } from './expected-down.mjs';
-import { runOnSync } from './fleet-exec.mjs';
+import { nodeHostsSessions, runOnSync } from './fleet-exec.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS = join(HERE, '..');
@@ -41,14 +41,15 @@ export const POLL_MS = 15_000;
 export const SETTLE_MS = 90_000;
 
 /**
- * Job count on a node, or null for "could not look" (treated as busy).
+ * CI job count on a node, or null for "could not look" (treated as busy).
+ * Sessions are added by {@link busyCount}, which is what the waiters call.
  *
  * EXPORTED (wave 3x, #87) so `benchmark-fleet.mjs`'s cadence mode can ask the
  * same question before committing to a drain, rather than growing a second
  * "is this node busy" prober. No behaviour change — this is the function
  * `createLiveDeps()` already wired into `waitUntilDrained` below.
  */
-export function busyCount(node) {
+export function jobCount(node) {
 	// AS THE CI ROLE: the jobs are ci's processes. claw-1, claw-2 and claw-3
 	// mount /proc `hidepid=invisible`, so admin's pgrep there counts 0 with jobs
 	// running (measured 11-06: claw-1 admin 0, ci 3; claw-3 admin 0, ci 1), and
@@ -61,6 +62,58 @@ export function busyCount(node) {
 	if (!res.ok) return null;
 	const n = parseInt(String(res.out).trim().split('\n')[0], 10);
 	return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * A LIVE SESSION IS ACTIVE WORK (operator, 2026-11-19). On a node whose
+ * manifest names `users.dev`, the operator runs Claude sessions as that user
+ * (herdr, `docs/herdr.md`). A drain stops new CI work; it never stopped a
+ * session, and before this a reboot cycle read a node with a session and no
+ * job as idle.
+ *
+ * A session is a `claude` process owned by the dev user. Read AS DEV, which
+ * sees its own processes on a hidepid node (admin and ci may not). A long
+ * build in a herdr pane with no claude in it is not counted.
+ *
+ * THE CAP (operator, 2026-11-21): a session holds a node off for at most
+ * SESSION_CAP_SEC. One older than that is reported as past the cap and no
+ * longer counted, so the cycle goes ahead and says why. "Nothing should take
+ * that long anyway": a day-old claude is an abandoned pane, not work.
+ */
+export const SESSION_CAP_SEC = 24 * 3600;
+
+/** One `SESSIONS <live> <past-cap>` line. `ps x`: every process of the user it runs as, tty or not. */
+export const SESSION_SCRIPT = [
+	`ps x -o comm=,etimes= | awk -v cap=${SESSION_CAP_SEC} '$1 == "claude" { if ($2 + 0 < cap) live++; else over++ } END { printf "SESSIONS %d %d\\n", live, over }'`,
+	'',
+].join('\n');
+
+/** `{ live, pastCap }` from {@link SESSION_SCRIPT}'s output, or null when the line is missing. */
+export function parseSessions(out) {
+	const m = /^SESSIONS (\d+) (\d+)$/m.exec(String(out ?? ''));
+	return m ? { live: Number(m[1]), pastCap: Number(m[2]) } : null;
+}
+
+/**
+ * Sessions on `node`: `{ live, pastCap }`, `{ live: 0, pastCap: 0 }` on a node
+ * that hosts none (nothing to read), or null for "could not look" (busy).
+ */
+export function sessionCount(node, { hosts = nodeHostsSessions, run = runOnSync } = {}) {
+	if (!hosts(node)) return { live: 0, pastCap: 0 };
+	const res = run(node, SESSION_SCRIPT, { as: 'dev', timeoutMs: 20_000, connectTimeout: 6 });
+	return res.ok ? parseSessions(res.out) : null;
+}
+
+/**
+ * Jobs plus live sessions: the one "how much active work is on this node"
+ * number every drain waiter reads. null if either could not be read.
+ */
+export function busyCount(node, { jobs = jobCount, sessions = sessionCount } = {}) {
+	const j = jobs(node);
+	if (j === null) return null;
+	const s = sessions(node);
+	if (s === null) return null;
+	return j + s.live;
 }
 
 /** `fleet drain <args>`, as `{ ok, reason? }`. Also the reboot cycle's (lib/reboot-cycle.mjs) one way to drain. */
@@ -123,7 +176,10 @@ export async function waitUntilDrained({
 			last = `idle for ${clock.now() - quietSince} ms of the ${settleMs} ms settle`;
 		} else {
 			quietSince = null;
-			last = n === null ? 'could not count running jobs (treated as busy)' : `${n} job(s) running`;
+			last =
+				n === null
+					? 'could not count running jobs and sessions (treated as busy)'
+					: `${n} job(s) or session(s) running`;
 		}
 		if (clock.now() - start >= timeoutMs) {
 			return { drained: false, reason: `not drained after ${timeoutMs} ms: ${last}` };

@@ -35,7 +35,7 @@ import { PRESSURE_OLDEST_SECONDS, runWorkItem } from './refresh-cycle.mjs';
 // and benchmark-fleet.mjs (observation) may import. The refresh's WAIT is
 // drain-progress.mjs's, on signals, not drain-wait.mjs's fixed 45 minutes
 // (fleet-manager#114); reboot-claws and benchmark-fleet still use that one.
-import { drain, isDrained, undrain } from './drain-wait.mjs';
+import { drain, isDrained, sessionCount, undrain } from './drain-wait.mjs';
 import { readWorkerJobs, waitUntilQuiet } from './drain-progress.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -136,7 +136,13 @@ export function createLiveDeps() {
 		undrain,
 		// On signals, ended only by the run's own deadline (lib/drain-progress.mjs).
 		waitDrained: (node, { deadline = null } = {}) => waitUntilQuiet({ node, clock, deadline }),
-		busyNow: (node) => readWorkerJobs(node)?.length ?? null,
+		sessionsNow: (node) => sessionCount(node),
+		// Jobs plus live sessions: a session is active work too (drain-wait.mjs).
+		busyNow: (node) => {
+			const jobs = readWorkerJobs(node);
+			const sessions = jobs === null ? null : sessionCount(node);
+			return sessions === null ? null : jobs.length + sessions.live;
+		},
 		update: (node, work) =>
 			work.map((w) =>
 				runWorkItem(

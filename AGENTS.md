@@ -185,10 +185,14 @@ different things. Read it before naming anything new.
 <node>` creates it (dry run by default). It never runs a CI job and never
   has sudo or a shared group. Its slice weighs `SESSION_WEIGHT` (25) against
   ci's 100, so CI wins a contended node. **A live session is active work**:
-  the drain and reboot cycles must wait for it the way they wait for a job.
-  That is NOT built yet. `busyCount` (`scripts/lib/drain-wait.mjs`) still
-  counts only ci's `Runner.Worker`, so until it is widened a reboot cycle
-  reads a node with a session and no job as idle.
+  a `claude` process of the dev user, counted as dev by `sessionCount`
+  (`scripts/lib/drain-wait.mjs`) and folded into `busyCount`, so every drain
+  waiter treats it as a job. The reboot and refresh cycles DEFER such a node
+  before draining it (a drain stops new CI, never a session; waiting one out
+  would only hold the node's CI capacity off). A session older than
+  `SESSION_CAP_SEC` (24 h, operator 2026-11-21) is no longer counted: the
+  cycle goes ahead and its line says so. Any new code that decides a node is
+  idle enough to disrupt reads `busyCount`, never `jobCount` alone.
 - **The reader for a facet may not read what the writer wrote.** Cgroup limits
   from `/sys/fs/cgroup/$(ControlGroup)/memory.max`, never `systemctl show`.
   Listeners from the process tree, never a `.env`. Registrations from the GitHub

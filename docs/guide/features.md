@@ -91,9 +91,12 @@ in the manifest. `fleet node-users --machine <node>` reads everything back
 from the node and reports `sessions: ok` or what drifted. `--dev <node> --back
 --confirm` undoes it.
 
-**What it does not do.** It does not yet make the reboot and refresh cycles
-wait for a session: they count running CI jobs only, so a node with a session
-and no job still reads as idle. It stores no credential on the node. It never
+A live session counts as work in progress. The nightly refresh and the
+reboot cycle skip a node while a session runs there, and come back to it once
+it ends; a session more than a day old no longer counts, and the cycle says
+so when it goes ahead.
+
+**What it does not do.** It stores no credential on the node. It never
 removes the home directory on undo (only the account), and it refuses to undo while anything
 still runs as that user.
 
