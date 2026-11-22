@@ -185,7 +185,23 @@ drained, and qualify's reboot test refuses it. A `claude` older than 24 h is
 not counted, so an abandoned pane holds a reboot off for a day at most. A long
 build in a pane with no `claude` in it is not counted either.
 
-Not built yet: the dev user has no push credential. The status of each is in
+**GitHub.** A session pushes and calls `gh` on the claw's own fine-grained
+token, `<NODE>_SESSIONS_GH_TOKEN` (contents, pull requests, issues and workflows
+write; actions read; no administration or secrets). One token per claw, so one
+claw is revoked alone; it never reuses the controller's login or the fleet's
+`HADOKU_SITE_TOKEN`. The operator mints it once (from hadoku_site):
+
+```sh
+python3 scripts/administration.py rotate-secret CLAW_9_SESSIONS_GH_TOKEN   # prints the pre-filled mint link
+# then declare it in .devvault.json, push, and key-acl-sync --repo . in the same minute
+```
+
+The same `--dev --confirm` run then logs the dev user's `gh` in with it
+(`gh auth login --with-token`, fed on stdin) and runs `gh auth setup-git`, so
+git uses it over https. Commits carry the controller's git name and email and
+are not signed: no repo requires a signature. The nightly facet asks `gh api
+user` as the dev user; no answer is `dev-user-drift`. `--back` deletes the
+login with the other keys. The status of each is in
 `docs/planning/claw-sessions-2026-11-19.md`.
 
 # hadoku.sessions — find a Claude session

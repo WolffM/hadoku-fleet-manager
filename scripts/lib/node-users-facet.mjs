@@ -80,6 +80,7 @@ if pw=$(getent passwd "$DEV"); then
 	case "$w" in *": member ("*) m=yes ;; *"NOT a member"*) m=no ;; *) m=unknown ;; esac
 	echo "devLeaseMember=$m"
 	echo "devLeaseWhy=$(printf '%s\\n' "$w" | grep . | tail -1 | tr -d '\\r' | cut -c1-200)"
+	echo "devGh=$(sudo -n -u "$DEV" -H timeout 20 gh api user --jq .login 2>/dev/null | tail -1)"
 fi
 `;
 }
@@ -209,6 +210,7 @@ export function parseUsersObservation(stdout) {
 								kv.devLeaseMember === 'yes' ? true : kv.devLeaseMember === 'no' ? false : null,
 							why: kv.devLeaseWhy || null,
 						},
+						github: kv.devGh || null,
 					},
 		/** null when the account database could not be read: could not look. */
 		accounts: kv.accountsRead === 'yes' ? accounts : null,
@@ -328,6 +330,10 @@ export function judgeNodeSessions(machine, obs, node) {
 		);
 	if (!d.claude) drift(`claude does not run as ${dev}`);
 	judgeLease(node, dev, d.lease, drift);
+	if (!d.github)
+		drift(
+			`${dev}'s gh does not answer as anyone on GitHub, so its sessions cannot push or call gh`
+		);
 	if (d.runners === null) drift(`could not count runner processes of ${dev}`);
 	else if (d.runners > 0)
 		drift(`${d.runners} runner process(es) run as ${dev}: CI is using the session user`);

@@ -11,13 +11,15 @@
  *   leaseKeyScript       writes the node's edge key for `claude-lease`, as dev.
  *   leaseCheckScript     runs `claude-lease whoami` as dev: the identity and
  *                        its edge membership, proven by executing them.
+ *   ghLoginScript        logs the dev user's gh in with the node's GitHub
+ *                        token, points git at it, and sets git's identity.
  *   devBackScript        the undo. Refuses while anything runs as the dev
  *                        user: a live session is active work. The ACCOUNT is
  *                        removed, because an account no manifest entry claims
  *                        is a blocking finding; its home directory is kept,
- *                        and a later setup takes it over again. Its ssh key
- *                        and its edge lease key are deleted: the home of a
- *                        removed account must hold no credential.
+ *                        and a later setup takes it over again. Its ssh key,
+ *                        edge lease key and GitHub login are deleted: the
+ *                        home of a removed account must hold no credential.
  *
  * WHAT THE USER IS. No sudo and no group but its own, checked before and
  * after. Home 0700. Linger, so a session outlives the ssh that started it.
@@ -184,7 +186,7 @@ sudo -n systemctl stop "user@$(id -u "$DEV").service" >/dev/null 2>&1 || true
 n=$(running)
 [ "\${n:-1}" = 0 ] || die preflight "$n process(es) still run as $DEV: a live session is active work; close it first"
 step preflight ok "nothing runs as $DEV"
-sudo -n rm -f "$DH/.ssh/authorized_keys" "$DH/${DEV_LEASE_KEY}"
+sudo -n rm -f "$DH/.ssh/authorized_keys" "$DH/${DEV_LEASE_KEY}" "$DH/.config/gh/hosts.yml"
 conf=$(allow_conf)
 if [ -n "$conf" ] && allowed | grep -qx "$DEV"; then
 	sudo -n sed -i -E "/^[[:space:]]*[Aa]llow[Uu]sers[[:space:]]/ s/[[:space:]]$DEV([[:space:]]|$)/\\1/" "$conf"
@@ -194,7 +196,7 @@ sudo -n rm -rf "/etc/systemd/system/user-$(id -u "$DEV").slice.d"
 sudo -n systemctl daemon-reload
 sudo -n userdel "$DEV" || die stop "could not remove the account $DEV"
 getent passwd "$DEV" >/dev/null && die stop "$DEV still exists"
-step stop ok "the account $DEV is removed; $DH is kept, without its ssh or lease key"
+step stop ok "the account $DEV is removed; $DH is kept, without its ssh key, lease key or GitHub login"
 echo BACK-END
 `;
 }
@@ -260,4 +262,52 @@ export function parseLeaseWhoami(out) {
 		.map((l) => l.trim())
 		.filter((l) => l && !l.startsWith('WHOAMI-EXIT'));
 	return { identity, member, why: member === null ? (lines.at(-1) ?? 'no answer') : null };
+}
+
+/** A fine-grained GitHub token. A classic one (`ghp_`) is refused: it cannot be narrowed. */
+const GH_TOKEN = /^github_pat_[A-Za-z0-9_]{20,250}$/;
+const GIT_NAME = /^[A-Za-z0-9 ._-]{1,64}$/;
+const GIT_EMAIL = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$/;
+
+/**
+ * Log the dev user's gh in with the node's GitHub token and make it git's
+ * credential (`gh auth setup-git`), so a session pushes and calls the API on
+ * the node's own token. The token rides inside this script, which goes over
+ * ssh STDIN, into gh's stdin through the `printf` builtin: never argv. git's
+ * name and email are the controller's, so a commit from a claw reads like one
+ * from the controller. It is not signed: no repo requires a signature, and a
+ * signing key would be one more credential on the claw.
+ */
+export function ghLoginScript(token, { name, email }) {
+	if (!GH_TOKEN.test(token ?? ''))
+		throw new Error('refusing a GitHub token that is not fine-grained');
+	if (!GIT_NAME.test(name ?? '') || !GIT_EMAIL.test(email ?? ''))
+		throw new Error('refusing a git identity that is not a plain name and address');
+	return `set -eu
+umask 077
+printf '%s\\n' '${token}' | gh auth login --hostname github.com --git-protocol https --with-token
+gh auth setup-git --hostname github.com
+git config --global user.name '${name}'
+git config --global user.email '${email}'
+printf 'GH-LOGIN %s\\n' "$(gh api user --jq .login)"
+`;
+}
+
+/** Who the dev user's gh is logged in as, by asking GitHub. Exit status is part of the answer. */
+export function ghCheckScript() {
+	return `gh api user --jq .login 2>&1 | tail -1; echo "GH-EXIT \${PIPESTATUS[0]}"\n`;
+}
+
+/** `{ login, why }` from {@link ghCheckScript}: a login only when gh exited 0. */
+export function parseGhCheck(out) {
+	const text = (out ?? '').trim();
+	const exit = /^GH-EXIT (\d+)$/m.exec(text)?.[1];
+	const last =
+		text
+			.split('\n')
+			.filter((l) => !l.startsWith('GH-EXIT'))
+			.at(-1)
+			?.trim() ?? '';
+	if (exit === '0' && /^[A-Za-z0-9-]+$/.test(last)) return { login: last, why: null };
+	return { login: null, why: last || 'no answer' };
 }

@@ -101,7 +101,9 @@ node's own identity, `<node>-sessions`, through crossposter's `claude-lease`,
 which the setup copies beside `claude`. So one node's sessions can be granted
 or revoked on their own, and a rate limit a session hits benches the account
 for everyone. The operator mints that identity once per node; the setup then
-delivers its key and proves it by asking the edge who it is.
+delivers its key and proves it by asking the edge who it is. A session pushes and
+calls GitHub on a token of the node's own too, which the same setup logs the
+user's `gh` in with and proves by asking GitHub who it is.
 
 A live session counts as work in progress. The nightly refresh and the
 reboot cycle skip a node while a session runs there, and come back to it once

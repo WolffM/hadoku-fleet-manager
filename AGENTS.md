@@ -197,7 +197,10 @@ different things. Read it before naming anything new.
   an edge key in the dev user's home that `--dev` delivers from the vault item
   `leaseKeyItem(node)`. It reads that item through hadoku_site's dev-vault,
   never this repo's: this repo is public and its vault key is its CI key. The
-  facet proves the key by running `claude-lease whoami` as dev.
+  facet proves the key by running `claude-lease whoami` as dev. Its GitHub
+  credential is the node's own fine-grained token (`ghTokenItem`), logged into
+  dev's `gh` by the same run and proven with `gh api user`; never the
+  controller's login or `HADOKU_SITE_TOKEN`.
 - **The reader for a facet may not read what the writer wrote.** Cgroup limits
   from `/sys/fs/cgroup/$(ControlGroup)/memory.max`, never `systemctl show`.
   Listeners from the process tree, never a `.env`. Registrations from the GitHub

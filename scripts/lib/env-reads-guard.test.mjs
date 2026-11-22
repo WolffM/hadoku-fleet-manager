@@ -39,7 +39,8 @@ const COMPUTED = {
 	'scripts/lib/identity-scan.mjs': { names: [] },
 	'scripts/lib/test-git-identity.mjs': { names: [] },
 	// `fleet node-users --dev <node>` reads the node's lease key, KEY_SERVICE_<NODE>_SESSIONS
-	// (leaseKeyItem): one name per session node, so no fixed list. Only the operator's CLI run
+	// (leaseKeyItem), and its GitHub token, <NODE>_SESSIONS_GH_TOKEN (ghTokenItem): names per
+	// session node, so no fixed list. Only the operator's CLI run
 	// under the site's dev-vault reads it; mgmt-api never runs --dev and must not pass it.
 	'scripts/node-users-dev.mjs': { names: [] },
 };

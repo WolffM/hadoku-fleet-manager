@@ -153,6 +153,17 @@ export function leaseKeyItem(node: string): string {
 		.replace(/[^A-Z0-9]/g, '_')}`;
 }
 
+/**
+ * The vault item holding the node's sessions' GitHub token (plan step 5): a
+ * fine-grained PAT, one per node, that `--dev` logs the dev user's `gh` in with
+ * and points git at. Enrolled in hadoku_site's rotate-secret ROTATIONS.
+ */
+export function ghTokenItem(node: string): string {
+	return `${leaseIdentity(node)
+		.toUpperCase()
+		.replace(/[^A-Z0-9]/g, '_')}_GH_TOKEN`;
+}
+
 /** Does this node host interactive sessions, under a dev user of its own? */
 export function hostsSessions(node: UserBearingNode | null | undefined): boolean {
 	return node?.users?.dev !== undefined;

@@ -236,6 +236,7 @@ const devAnswer = (over = {}) =>
 		devLeaseMember: 'yes',
 		devLeaseWhy:
 			'lease list crossposter-claude-code-lease: member (the lease route reached crossposter)',
+		devGh: 'gh-fixture',
 		...over,
 	});
 const sessions = (over, machine = HOSTS) =>

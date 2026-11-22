@@ -30,7 +30,11 @@
  *      the site's `.devvault.json` declares the item and its identity is
  *      granted it (never this repo's: it is public and its key is its CI key). Then `claude-lease whoami` runs as dev: the identity must be
  *      the node's and a member of the edge list `crossposter-claude-code-lease`;
- *   5. the node-users facet, which must read the user back as ok.
+ *   5. GitHub (plan step 5): the node's fine-grained token (`ghTokenItem`),
+ *      from the same environment, logs the dev user's gh in and becomes git's
+ *      credential; git's name and email are copied from the controller. Then
+ *      `gh api user` as dev must answer a login;
+ *   6. the node-users facet, which must read the user back as ok.
  *
  * A session then starts on the node as `claude-lease exec -- claude`, so its
  * lease and the 429/401 outcome that benches an account both go as the
@@ -49,6 +53,7 @@ import process from 'node:process';
 import {
 	DEV_CLAUDE_BIN,
 	DEV_LEASE_BIN,
+	ghTokenItem,
 	hostsSessions,
 	leaseIdentity,
 	leaseKeyItem,
@@ -66,9 +71,12 @@ import {
 	devInventoryScript,
 	devSetupScript,
 	flipDevManifest,
+	ghCheckScript,
+	ghLoginScript,
 	leaseCheckScript,
 	leaseKeyScript,
 	manifestSaysDev,
+	parseGhCheck,
 	parseLeaseWhoami,
 } from './lib/node-users-dev.mjs';
 
@@ -210,6 +218,53 @@ async function installLease(flipped) {
 	return { ok: true, lines };
 }
 
+/** The controller's own git name and email, which a claw session commits as. */
+function controllerGitIdentity() {
+	const get = (k) => {
+		const r = spawnSync('git', ['config', '--global', k], { encoding: 'utf8' });
+		return r.status === 0 ? r.stdout.trim() : '';
+	};
+	return { name: get('user.name'), email: get('user.email') };
+}
+
+/**
+ * Log the dev user's gh in when this environment holds the node's GitHub
+ * token, then ask GitHub who it is as dev. `{ ok, lines }`.
+ */
+async function installGh(flipped) {
+	const manifest = { machines: { [NODE]: flipped } };
+	const as = { manifest, timeoutMs: 60_000, connectTimeout: 10 };
+	const lines = [];
+	const item = ghTokenItem(NODE);
+	const token = process.env[item];
+	if (token) {
+		const identity = controllerGitIdentity();
+		if (!identity.name || !identity.email)
+			return {
+				ok: false,
+				lines: ['✗ github  this controller has no global git user.name/user.email to copy'],
+			};
+		const wrote = await runOn(NODE, ghLoginScript(token, identity), { as: 'dev', ...as });
+		if (!/^GH-LOGIN \S+$/m.test(wrote.stdout ?? ''))
+			return {
+				ok: false,
+				lines: [
+					`✗ github  gh did not log in: ${wrote.error ?? (wrote.stderr.trim().split('\n').pop() || 'no answer')}`,
+				],
+			};
+		lines.push(`✓ github  ${item} logged gh in; git uses it and commits as ${identity.name}`);
+	} else {
+		lines.push(
+			`· github  ${item} is not in this environment; the login on ${NODE}, if any, is kept`
+		);
+	}
+	const who = parseGhCheck((await runOn(NODE, ghCheckScript(), { as: 'dev', ...as })).stdout);
+	if (!who.login)
+		return { ok: false, lines: [...lines, `✗ github  gh as dev is not logged in: ${who.why}`] };
+	lines.push(`✓ github  GitHub answers ${who.login} to the dev user's gh`);
+	return { ok: true, lines };
+}
+
 async function writeFlip(dev) {
 	const result = await manifestEdit(
 		(doc) => {
@@ -268,6 +323,12 @@ async function main() {
 					? `   ✓ lease  claude-lease and ${leaseKeyItem(NODE)} would be written to ${dev}`
 					: `   · lease  claude-lease would be copied; ${leaseKeyItem(NODE)} is not in this environment, so no key would be written`
 			);
+		if (!BACK)
+			log(
+				process.env[ghTokenItem(NODE)]
+					? `   ✓ github  ${ghTokenItem(NODE)} would log in ${dev}'s gh and become git's credential`
+					: `   · github  ${ghTokenItem(NODE)} is not in this environment, so gh would not be logged in`
+			);
 		log('\nDRY RUN. Nothing was changed. Re-run with --confirm.');
 		return;
 	}
@@ -275,6 +336,7 @@ async function main() {
 	if (!BACK) await writeFlip(dev);
 
 	let lease = null;
+	let github = null;
 	const script = BACK
 		? devBackScript(users)
 		: devSetupScript(users, { controllerKeys: controllerKeys() });
@@ -292,6 +354,8 @@ async function main() {
 		if (!claude.ok) die(`${dev} cannot be used from here yet. Fix it and re-run --confirm.`);
 		lease = await installLease(flipped);
 		for (const l of lease.lines) log(`   ${l}`);
+		github = await installGh(flipped);
+		for (const l of github.lines) log(`   ${l}`);
 	}
 
 	if (BACK) await writeFlip(dev);
@@ -302,6 +366,11 @@ async function main() {
 	});
 	if (facet.status !== 0)
 		die(`the node-users facet does not read ${NODE} as ok; see its findings above`);
+	if (github && !github.ok)
+		die(
+			`${dev} cannot reach GitHub as ${ghTokenItem(NODE)} yet (above). ` +
+				'docs/herdr.md "Sessions on a claw" says how to mint and grant it, and how to re-run this to deliver it.'
+		);
 	if (lease && !lease.ok)
 		die(
 			`${dev} is set up, but its sessions cannot lease as ${leaseIdentity(NODE)} yet (above). ` +

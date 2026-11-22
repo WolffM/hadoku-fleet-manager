@@ -5,16 +5,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { leaseIdentity, leaseKeyItem } from '../../dist/lib/node-users.js';
+import { ghTokenItem, leaseIdentity, leaseKeyItem } from '../../dist/lib/node-users.js';
 
 import {
 	devBackScript,
 	devInventoryScript,
 	devSetupScript,
 	flipDevManifest,
+	ghCheckScript,
+	ghLoginScript,
 	leaseCheckScript,
 	leaseKeyScript,
 	manifestSaysDev,
+	parseGhCheck,
 	parseLeaseWhoami,
 } from './node-users-dev.mjs';
 
@@ -167,4 +170,48 @@ test('the undo deletes the lease key with the ssh key: a kept home holds no cred
 		devBackScript(USERS),
 		/rm -f "\$DH\/\.ssh\/authorized_keys" "\$DH\/\.config\/claude-lease\/key\.json"/
 	);
+});
+
+// Shaped like a fine-grained token, low-entropy so gitleaks does not read it as one.
+const GH_FIXTURE = `github_pat_${'0'.repeat(22)}_${'0'.repeat(59)}`;
+const WHO = { name: 'Fixture Person', email: 'fixture@example.invalid' };
+
+test('a node pushes on <NODE>_SESSIONS_GH_TOKEN, the item rotate-secret enrols', () => {
+	assert.equal(ghTokenItem('claw-9'), 'CLAW_9_SESSIONS_GH_TOKEN');
+});
+
+test('the gh login feeds the token to gh on stdin, never as an argument, and is valid bash', () => {
+	const text = ghLoginScript(GH_FIXTURE, WHO);
+	assert.match(
+		text,
+		new RegExp(
+			`printf '%s\\\\n' '${GH_FIXTURE}' \\| gh auth login --hostname github\\.com --git-protocol https --with-token`
+		)
+	);
+	assert.match(text, /gh auth setup-git --hostname github\.com/);
+	assert.equal(text.split(GH_FIXTURE).length, 2, 'the token appears once, in the printf');
+	assert.equal(spawnSync('bash', ['-n'], { input: text, encoding: 'utf8' }).status, 0);
+	assert.equal(spawnSync('bash', ['-n'], { input: ghCheckScript(), encoding: 'utf8' }).status, 0);
+});
+
+test('a classic token, an injected value or an odd git identity is refused before a script exists', () => {
+	for (const bad of ['ghp_' + '0'.repeat(36), `${GH_FIXTURE}'; id; '`, '', undefined])
+		assert.throws(() => ghLoginScript(bad, WHO), /not fine-grained/);
+	assert.throws(
+		() => ghLoginScript(GH_FIXTURE, { name: "x'; id; '", email: WHO.email }),
+		/git identity/
+	);
+	assert.throws(() => ghLoginScript(GH_FIXTURE, { name: WHO.name, email: '' }), /git identity/);
+});
+
+test("gh's answer is a login only on exit 0; anything else keeps its last words", () => {
+	assert.deepEqual(parseGhCheck('gh-fixture\nGH-EXIT 0\n'), { login: 'gh-fixture', why: null });
+	assert.deepEqual(
+		parseGhCheck('HTTP 401: Bad credentials (https://api.github.com/user)\nGH-EXIT 1\n'),
+		{
+			login: null,
+			why: 'HTTP 401: Bad credentials (https://api.github.com/user)',
+		}
+	);
+	assert.deepEqual(parseGhCheck(''), { login: null, why: 'no answer' });
 });
