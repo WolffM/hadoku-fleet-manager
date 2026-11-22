@@ -17,6 +17,7 @@ import {
 	__resetFleetLoopForTesting,
 } from './fleet-loop.js';
 import { hintStats, recordWorkflowJobHint } from './runners/dispatch-hint.js';
+import { appendJobQueued } from './runners/job-queued-log.js';
 import { router as fleetRouter } from './routes/fleet.js';
 import { startClawReboot, __stopClawRebootForTesting } from './claw-reboot.js';
 import { startBackstopTools, __stopBackstopToolsForTesting } from './backstop-tools.js';
@@ -273,6 +274,17 @@ export function createFleetManager(host: FleetHost): FleetManager {
 			const v = recordWorkflowJobHint(payload);
 			if (!v.accepted)
 				return { accepted: false, reason: v.reason, dispatching: false, stats: hintStats() };
+			// The release moment of a concurrency-held job, which only this delivery
+			// records (runners/job-queued-log.ts): ci:queue-health ages from it. A
+			// failed write is logged and costs the gate only its credit for a hold.
+			try {
+				appendJobQueued(v.hint);
+			} catch (err) {
+				host.logger.warn(
+					`[dispatch-hint] could not record job ${v.hint.jobId}'s queued time: ` +
+						(err instanceof Error ? err.message : String(err))
+				);
+			}
 			const dispatching = host.controller !== false && requestTriggeredDispatch();
 			host.logger.info(
 				`[dispatch-hint] ${v.hint.repo}#${v.hint.runId} job ${v.hint.jobId} queued, delivered ` +

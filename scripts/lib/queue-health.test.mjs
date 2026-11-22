@@ -9,6 +9,7 @@ import {
 	isSaturated,
 	readQueuedWithRetry,
 	isRateLimitFailure,
+	queuedSinceOf,
 	FAIL_SECONDS,
 } from './queue-health.mjs';
 import { describeReadFailure, READ_ATTEMPTS } from './read-retry-policy.mjs';
@@ -721,4 +722,73 @@ test('unlisted runs are ADVISORY: they never become a finding while the signal i
 		FAIL_SECONDS
 	);
 	assert.deepEqual(findings, []);
+});
+
+// tsunami-surfer run 45030742428, 2026-11-22: three browser parts created
+// 14:15:35, held by their job-level concurrency group, then queued (by the
+// webhook) 14:33:25, 14:39:43 and 14:43:28. At 14:40:52 the gate read the run
+// as 1,517 s old, against ~70 s since GitHub queued the oldest part still waiting.
+test('queuedSinceOf: a job a concurrency group held is aged from its queued delivery', () => {
+	const created = '2026-11-22T14:15:35Z';
+	const queuedAt = new Map([
+		[137236919776, Date.parse('2026-11-22T14:39:43Z')],
+		[137236919967, Date.parse('2026-11-22T14:43:28Z')],
+	]);
+	const r = queuedSinceOf(
+		[
+			{ id: 137236919776, created_at: created },
+			{ id: 137236919967, created_at: created },
+		],
+		queuedAt
+	);
+	assert.equal(r.since, '2026-11-22T14:39:43.000Z');
+	assert.deepEqual(r.held, [
+		{ id: 137236919776, heldSec: 1448 },
+		{ id: 137236919967, heldSec: 1673 },
+	]);
+	// The same jobs read through summarisePending: invisible before, not after.
+	const at = Date.parse('2026-11-22T14:40:52Z');
+	const base = {
+		repo: 'WolffM/tsunami-surfer',
+		id: '45030742428',
+		createdAt: '2026-11-22T14:03:39Z',
+		jobless: false,
+		started: false,
+	};
+	assert.equal(
+		summarisePending([{ ...base, queuedSince: created }], { nowMs: at }).invisible.length,
+		1
+	);
+	assert.equal(
+		summarisePending([{ ...base, queuedSince: r.since }], { nowMs: at }).invisible.length,
+		0
+	);
+});
+
+test('queuedSinceOf: no delivery recorded, or one before creation, credits nothing', () => {
+	const created = '2026-11-22T10:00:00Z';
+	const none = queuedSinceOf([{ id: 1, created_at: created }], new Map());
+	assert.equal(none.since, '2026-11-22T10:00:00.000Z');
+	assert.deepEqual(none.held, []);
+	const early = queuedSinceOf(
+		[{ id: 1, created_at: created }],
+		new Map([[1, Date.parse('2026-11-22T09:59:58Z')]])
+	);
+	assert.equal(early.since, '2026-11-22T10:00:00.000Z');
+	assert.deepEqual(early.held, []);
+	// No map at all (the record could not be read) is the same strict answer.
+	assert.equal(queuedSinceOf([{ id: 1, created_at: created }], undefined).since, none.since);
+});
+
+test('queuedSinceOf: the run waits from its EARLIEST queued job, held or not', () => {
+	const r = queuedSinceOf(
+		[
+			{ id: 1, created_at: '2026-11-22T10:00:00Z' },
+			{ id: 2, created_at: '2026-11-22T10:05:00Z' },
+			{ id: 3, created_at: 'not a date' },
+		],
+		new Map([[1, Date.parse('2026-11-22T10:20:00Z')]])
+	);
+	assert.equal(r.since, '2026-11-22T10:05:00.000Z');
+	assert.equal(queuedSinceOf([], new Map()).since, undefined);
 });

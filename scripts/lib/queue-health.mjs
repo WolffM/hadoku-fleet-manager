@@ -297,6 +297,12 @@ export const CLOCK_SKEW_TOLERANCE_SEC = 60;
  *     its jobs 10:40:32, so a 40-minute wait for a runner read as 66 minutes
  *     and went STRANDED past the one-hour line. Nothing could have placed a job
  *     that did not exist yet.
+ *
+ *   One level down, a JOB can sit in its own job-level concurrency group: it
+ *   exists, is listed `pending`, and keeps its `created_at` when the group
+ *   releases it to `queued`. Only the `queued` webhook delivery records that
+ *   moment, and mgmt-api keeps it (`dist/runners/job-queued-log.js`);
+ *   `queuedSinceOf` below measures each queued job from it.
  */
 export function summariseQueue(
 	runs,
@@ -551,4 +557,34 @@ export function queueFindings(summary, unreadable = [], failSeconds = FAIL_SECON
 		);
 	}
 	return findings;
+}
+
+/**
+ * When a run's queued jobs began waiting for a runner, and which of them a
+ * concurrency group held first.
+ *
+ * Each job is measured from the later of its `created_at` and its recorded
+ * `queued` delivery (`queuedAt`, job id → epoch ms); the run's wait is the
+ * earliest of those. A job with no recorded delivery, or one that does not
+ * postdate its creation, is measured from `created_at`: the strict direction.
+ * tsunami-surfer's browser parts, 2026-11-22: held 304-1,673 s behind the
+ * previous push's parts, started 10 s-4.7 min after GitHub queued them, and
+ * read as that whole hold.
+ *
+ * `queuedJobs`: `[{id, created_at}]`. Returns `{ since, held }`: `since` an
+ * ISO string or `undefined` when no job has a readable `created_at`; `held`
+ * `[{id, heldSec}]` for each job credited with a hold.
+ */
+export function queuedSinceOf(queuedJobs, queuedAt) {
+	let earliest;
+	const held = [];
+	for (const j of queuedJobs ?? []) {
+		const created = Date.parse(j.created_at);
+		if (!Number.isFinite(created)) continue;
+		const at = queuedAt?.get(j.id);
+		const since = at !== undefined && at > created ? at : created;
+		if (since > created) held.push({ id: j.id, heldSec: Math.round((since - created) / 1000) });
+		if (earliest === undefined || since < earliest) earliest = since;
+	}
+	return { since: earliest === undefined ? undefined : new Date(earliest).toISOString(), held };
 }

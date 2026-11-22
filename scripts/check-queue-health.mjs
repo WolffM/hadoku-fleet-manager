@@ -63,7 +63,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
 
-import { manifest as manifestFile } from '../dist/lib/fleet-paths.js';
+import { manifest as manifestFile, stateDir } from '../dist/lib/fleet-paths.js';
 import {
 	summariseQueue,
 	summarisePending,
@@ -73,11 +73,13 @@ import {
 	isSaturated,
 	wedgedClaws,
 	isRateLimitFailure,
+	queuedSinceOf,
 	FAIL_SECONDS,
 } from './lib/queue-health.mjs';
 import { MAX_QUEUED_MS } from '../dist/lib/queue-thresholds.js';
 import { backstopNodeNames } from '../dist/lib/node-role.js';
 import { nodeOf } from '../dist/runners/census.js';
+import { readJobQueued } from '../dist/runners/job-queued-log.js';
 import { loadManifest } from './lib/fleet-exec.mjs';
 import { createEmitter } from './lib/emit.mjs';
 
@@ -220,6 +222,18 @@ if (!roster.length) {
  * read ever actually hit a rate limit (see `isRateLimitFailure`'s doc) — this
  * closes the gap before the day it does (wave gates1, 2026-11-08).
  */
+// WHEN EACH JOB WAS QUEUED, by its webhook delivery (queuedSinceOf in
+// lib/queue-health.mjs). Read once per sweep. A missing directory, torn line or
+// unreadable day file only removes credit, never adds it, so each is logged and
+// the sweep goes on measuring from `created_at`.
+const queuedLog = readJobQueued(Date.now(), stateDir());
+if (!queuedLog.present)
+	log('  no queued-delivery record yet — every job is aged from its creation');
+if (queuedLog.torn) log(`  queued-delivery record: ${queuedLog.torn} unparseable line(s) skipped`);
+for (const u of queuedLog.unreadable) log(`  queued-delivery record unreadable: ${u}`);
+/** Job id → {repo, heldSec}: jobs aged from their delivery, not their creation. */
+const heldJobs = new Map();
+
 function readJobsOnce(repo, id) {
 	const out = execFileSync(
 		'gh',
@@ -228,7 +242,7 @@ function readJobsOnce(repo, id) {
 			`repos/${repo}/actions/runs/${id}/jobs?per_page=100`,
 			'-q',
 			'{total: .total_count, ' +
-				'queued: [.jobs[] | select(.status == "queued") | {labels, created_at}], ' +
+				'queued: [.jobs[] | select(.status == "queued") | {id, labels, created_at}], ' +
 				'running: ([.jobs[] | select(.status == "in_progress" or .status == "completed")] | length)}',
 		],
 		{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
@@ -236,10 +250,8 @@ function readJobsOnce(repo, id) {
 	const doc = JSON.parse(out);
 	const n = Number(doc.total);
 	const queued = Array.isArray(doc.queued) ? doc.queued : undefined;
-	const firstQueued = (queued ?? [])
-		.map((j) => j.created_at)
-		.filter((at) => Number.isFinite(Date.parse(at)))
-		.sort()[0];
+	const { since: firstQueued, held } = queuedSinceOf(queued, queuedLog.queuedAt);
+	for (const h of held) heldJobs.set(h.id, { repo, run: id, heldSec: h.heldSec });
 	return {
 		jobless: Number.isFinite(n) ? n === 0 : undefined,
 		queuedJobs: queued,
@@ -598,6 +610,17 @@ if (held.length) {
 	for (const s of held.slice(0, 5)) log(`    ${s.repo}  ${s.ageSec}s`);
 }
 
+const heldFirst = [...heldJobs].map(([job, h]) => ({ job, ...h }));
+heldFirst.sort((a, b) => b.heldSec - a.heldSec);
+if (heldFirst.length) {
+	log(
+		`  heldFirst=${heldFirst.length} (job(s) a concurrency group held before GitHub queued ` +
+			'them; aged from the queued delivery, not from creation)'
+	);
+	for (const h of heldFirst.slice(0, 5))
+		log(`    ${h.repo}  run ${h.run}  job ${h.job}  held ${h.heldSec}s`);
+}
+
 const findings = queueFindings({ ...q, invisible }, unreadable, FAIL_SECONDS);
 
 if (JSON_OUT) {
@@ -627,6 +650,9 @@ if (JSON_OUT) {
 		heldRuns: held,
 		// Additive: runs the ?status= filters missed. Advisory — never a finding yet.
 		unlistedRuns: unlisted,
+		// Additive: jobs aged from their queued delivery because a concurrency
+		// group held them first. Reported, never a finding.
+		heldFirstJobs: heldFirst,
 		// NAMES ONLY, exactly as before. This field has been a string[] for every
 		// consumer that has ever parsed it, and widening it to objects under the
 		// --json contract would be a cross-repo change for a diagnostic. The

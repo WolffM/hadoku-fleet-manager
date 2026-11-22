@@ -73,6 +73,11 @@
     "why": "Wave shrink-1 lane B split of decision-log.ts (800-line ceiling): the row types (decision-log-types.ts), the per-path row builders (decision-log-record.ts) and the day-file storage (decision-log-storage.ts). Same state shape as decision-log.ts itself, which re-exports every name here \u2014 explicit, since the directory catch-all below would otherwise place these as ci-scheduling/domain and make decision-log.ts's own import of them a layer violation."
   },
   {
+    "glob": "src/runners/job-queued-log.ts",
+    "layer": "state",
+    "why": "One-writer day files of each workflow_job queued delivery's receipt (mgmt-api writes, ci:queue-health reads). State, like decision-log-storage.ts; the runners/ catch-all would place it in ci-scheduling and make scripts/check-queue-health.mjs (observation) import a domain."
+  },
+  {
     "glob": "src/runners/warm-backoff.ts",
     "layer": "state",
     "why": "Wave 5g lane B split of ephemeral-tick.ts (plan \u00a74.3 #3): the persisted warm-fill backoff streak, same \"one declared writer, read back by something else\" shape as its neighbours above."
