@@ -186,3 +186,25 @@ export function nodeQuantities(store, node) {
 			.map(([k, v]) => [k.slice(prefix.length), v])
 	);
 }
+
+/**
+ * PURE. One node's weak points for a status reader, oldest first: `null` with
+ * the reason when the store is unreadable, never an empty list, because "no
+ * weak points" and "could not look" are different answers.
+ *
+ * @param {{ ok: boolean, store?: object, reason?: string }} read readNodeBaselines' answer
+ * @param {string} node
+ * @returns {{ weakPoints: { test: string, reason: string, since: string, lastSeen: string }[] | null,
+ *   why?: string }}
+ */
+export function nodeWeakPoints(read, node) {
+	if (!read.ok) return { weakPoints: null, why: read.reason };
+	const mine = read.store.weakPoints?.[node] ?? {};
+	return {
+		weakPoints: Object.entries(mine)
+			.map(([test, w]) => ({ test, ...w }))
+			.sort(
+				(a, b) => String(a.since).localeCompare(String(b.since)) || a.test.localeCompare(b.test)
+			),
+	};
+}

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { learnReading } from './node-baselines.mjs';
-import { ABSOLUTE_TESTS, RELATIVE, judgeWindow } from './qualify-baseline.mjs';
+import { ABSOLUTE_TESTS, RELATIVE, judgeWindow, seedFromLedger } from './qualify-baseline.mjs';
 import { QUALIFY_TESTS } from './qualify-playlist.mjs';
 
 const RAMP_CLAW1 = {
@@ -190,4 +190,28 @@ void test('a could-not-look teaches the range nothing and clears no weak point',
 		quantities: {},
 	});
 	assert.deepEqual(j, { findings: [], weak: [], cleared: [], readings: [], judged: [] });
+});
+
+void test('seeding from the ledger: one window per node, latest time, a known node skipped', () => {
+	const t1 = new Date(Date.now() - 2 * 86_400_000).toISOString();
+	const t2 = new Date(Date.now() - 86_400_000).toISOString();
+	const ledger = {
+		'claw-1::disk-sync-writes': { last: { ...DISK_CLAW1, at: t1 } },
+		'claw-1::tmpfs-headroom': { last: { ...TMPFS_CLAW1, at: t2 } },
+		'claw-6::network-soak': { last: { ...NET_CLAW6, at: t1 } },
+		'claw-4::disk-sync-writes': { last: { ...DISK_CLAW1, at: t1 } },
+	};
+	const store = {
+		quantities: { 'claw-4::disk.holdRatio': { mean: 1, sd: 0, n: 1 } },
+		weakPoints: {},
+	};
+	const seeds = seedFromLedger(ledger, store);
+	assert.deepEqual(
+		seeds.map((s) => [s.node, s.at, s.window.weak.map((w) => w.test)]),
+		[
+			['claw-1', t2, ['disk-sync-writes']],
+			['claw-6', t1, ['network-soak']],
+		]
+	);
+	assert.equal(seeds[0].window.readings.length, 4);
 });

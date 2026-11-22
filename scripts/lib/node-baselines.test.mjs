@@ -12,6 +12,7 @@ import {
 	learnReading,
 	mergeNodeBaselines,
 	nodeQuantities,
+	nodeWeakPoints,
 	readNodeBaselines,
 	recordNodeBaselines,
 } from './node-baselines.mjs';
@@ -104,4 +105,25 @@ void test('the store: missing is empty; unreadable is said and never overwritten
 	const bad = recordNodeBaselines(dir, 'claw-1', w, AT);
 	assert.equal(bad.ok, false);
 	assert.equal(readFileSync(join(dir, NODE_BASELINES_FILE), 'utf8'), '{not json');
+});
+
+void test('weak points for a status reader: oldest first; unreadable is null with the reason', () => {
+	const store = {
+		quantities: {},
+		weakPoints: {
+			'claw-1': {
+				'disk-sync-writes': { reason: 'p99 150 > 80', since: LATER, lastSeen: LATER },
+				'concurrency-ramp': { reason: '98 °C', since: AT, lastSeen: LATER },
+			},
+		},
+	};
+	assert.deepEqual(
+		nodeWeakPoints({ ok: true, store }, 'claw-1').weakPoints.map((w) => w.test),
+		['concurrency-ramp', 'disk-sync-writes']
+	);
+	assert.deepEqual(nodeWeakPoints({ ok: true, store }, 'claw-4'), { weakPoints: [] });
+	assert.deepEqual(nodeWeakPoints({ ok: false, reason: 'bad json' }, 'claw-1'), {
+		weakPoints: null,
+		why: 'bad json',
+	});
 });

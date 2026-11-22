@@ -18,6 +18,9 @@
  *     12:00Z). Its own `recordedAt` and age ride along, and a record past
  *     HEALTH_STALE_HOURS is a BLOCKING finding: an old verdict is not a
  *     current one.
+ *   - `weakPoints` — RECORDED by `fleet qualify` (lib/node-baselines.mjs,
+ *     #129): each qualification bar this node's hardware does not meet, with
+ *     its reason and since when. Never a finding; `null` when unreadable.
  *   - `drain` and `notices` — the drain file, at this instant: what is held
  *     now, and every scheduled start and end still ahead. A hosting node is
  *     owed HOSTING_NOTICE_MS of notice, so anything that takes one away
@@ -57,6 +60,7 @@ import {
 	probeReach,
 } from './lib/hosting.mjs';
 import { readRevocations } from '../dist/capability-revocations.js';
+import { nodeWeakPoints, readNodeBaselines } from './lib/node-baselines.mjs';
 import { hostingNotices, readHostingDoc } from '../dist/runners/hosting-record.js';
 import { isBackstopNode } from '../dist/lib/node-role.js';
 import { judgeTenantBackstop } from '../dist/lib/tenant-usable.js';
@@ -240,6 +244,7 @@ const rebootDrainOn = (name) =>
 	held[name]?.kind === 'reboot' || doc.planned.some((p) => p.node === name && p.kind === 'reboot');
 const health = readHealth();
 const revocationRead = readRevocations(stateDir());
+const baselineRead = readNodeBaselines(stateDir());
 const seen = readSeen();
 
 const rows = await Promise.all(
@@ -327,6 +332,18 @@ const rows = await Promise.all(
 				why: `${r.capability} withheld since ${r.at}: ${r.reason}`,
 			});
 		}
+
+		// What the node is measurably bad at (#129): a qualification bar its
+		// hardware does not meet. Shown, never a finding: the fleet works around
+		// a weak point, nobody is asked to fix it. Only an unreadable store is
+		// said, because "none" and "could not look" are different answers.
+		const weak = nodeWeakPoints(baselineRead, name);
+		if (weak.weakPoints === null)
+			findings.push({
+				class: 'advisory',
+				category: 'baselines-unreadable',
+				why: `the node baseline store is unreadable (${weak.why}), so its weak points are unknown`,
+			});
 
 		const rec = held[name] ?? null;
 		const tenants = [];
@@ -444,6 +461,7 @@ const rows = await Promise.all(
 			ciUser: { name: nodeUser(m, 'ci'), state: users.state },
 			capabilities: m.$capabilities?.earned ?? [],
 			revoked,
+			weakPoints: weak.weakPoints,
 			health: healthOut,
 			findings,
 		};

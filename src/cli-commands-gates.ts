@@ -23,7 +23,7 @@ export const commandsGates: Record<string, Command> = {
 	qualify: {
 		script: 'qualify-node.mjs',
 		kind: 'converger',
-		flags: ['--json', '--dry-run', '--next', '--machine='],
+		flags: ['--json', '--dry-run', '--next', '--machine=', '--seed-baselines', '--write'],
 		summary:
 			'hold ONE node out of service and run the qualification playlist against it (--dry-run: drain nothing)',
 	},

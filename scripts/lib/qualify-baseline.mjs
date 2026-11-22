@@ -194,3 +194,38 @@ export function judgeWindow({ node, results, quantities }) {
 	}
 	return { findings, weak, cleared, readings, judged };
 }
+
+/**
+ * PURE. The windows a store that never saw the qualification ledger would have
+ * learned: each node's `last` results (lib/qualify-results.mjs), one window per
+ * node, judged in ledger time order. A node the store already holds a reading
+ * or weak point for is skipped, so seeding twice changes nothing and never
+ * replays a window over what `fleet qualify` has since learned.
+ *
+ * @param {Record<string, { last?: { at: string, status: string, reason: string, metrics?: object } }>} ledger
+ * @param {{ quantities: object, weakPoints: object }} store
+ * @returns {{ node: string, at: string, window: ReturnType<typeof judgeWindow> }[]}
+ */
+export function seedFromLedger(ledger, store) {
+	const byNode = {};
+	for (const [key, entry] of Object.entries(ledger ?? {})) {
+		const i = key.indexOf('::');
+		if (i < 0 || !entry?.last) continue;
+		(byNode[key.slice(0, i)] ??= []).push({ id: key.slice(i + 2), ...entry.last });
+	}
+	const known = new Set([
+		...Object.keys(store.quantities ?? {}).map((k) => k.slice(0, k.indexOf('::'))),
+		...Object.keys(store.weakPoints ?? {}),
+	]);
+	return Object.entries(byNode)
+		.filter(([node]) => !known.has(node))
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([node, results]) => ({
+			node,
+			at: results
+				.map((r) => r.at)
+				.sort()
+				.at(-1),
+			window: judgeWindow({ node, results, quantities: {} }),
+		}));
+}

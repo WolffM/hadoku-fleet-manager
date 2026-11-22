@@ -6,6 +6,8 @@
  *   fleet qualify --machine claw-5 --dry-run   what would run; drains nothing
  *   fleet qualify --machine claw-5 --json      run the window, record the results
  *   fleet qualify --next --json                the scheduled form: the most overdue node, or none
+ *   fleet qualify --seed-baselines [--write]   learn each node's last ledger window into
+ *                                              node-baselines.json (dry run without --write)
  *
  * `--machine` (or `--next`) is REQUIRED. A qualification drains a node for up to
  * QUALIFY_WINDOW_MINUTES; there is no fleet-wide form, by design (one node at a
@@ -39,7 +41,7 @@ import { loadManifest, machineArg, runOn } from './lib/fleet-exec.mjs';
 import { QUALIFY_TESTS } from './lib/qualify-playlist.mjs';
 import { QUALIFY_WINDOW_MINUTES } from './lib/qualify-registry.mjs';
 import { readQualifyResults, recordQualifyResults } from './lib/qualify-results.mjs';
-import { judgeWindow } from './lib/qualify-baseline.mjs';
+import { judgeWindow, seedFromLedger } from './lib/qualify-baseline.mjs';
 import { nodeQuantities, readNodeBaselines, recordNodeBaselines } from './lib/node-baselines.mjs';
 import { nextNode, runQualification } from './lib/qualify-runner.mjs';
 import { spawnJsonToFile } from './lib/spawn-json.mjs';
@@ -53,6 +55,47 @@ const finish = (doc, code) => {
 	if (emitter.json) emitter.emit(doc);
 	process.exit(code);
 };
+if (process.argv.includes('--seed-baselines')) {
+	// One-off: learn each node's last ledger window into a store that never saw
+	// it (#129). Dry run unless --write; a node the store already knows is skipped.
+	const write = process.argv.includes('--write');
+	const ledger = readQualifyResults(stateDir());
+	const store = readNodeBaselines(stateDir());
+	if (!ledger.ok || !store.ok) {
+		const reason = ledger.ok ? store.reason : ledger.reason;
+		log(`fleet qualify --seed-baselines: could not read: ${reason}`);
+		finish({ ok: false, error: reason }, 1);
+	}
+	const seeds = seedFromLedger(ledger.results, store.store);
+	const failed = [];
+	for (const s of seeds) {
+		log(
+			`${write ? 'seed' : 'would seed'} ${s.node} (${s.at}): ${s.window.readings.length} reading(s); ` +
+				`weak points: ${s.window.weak.map((w) => w.test).join(', ') || 'none'}; ` +
+				`absolute findings: ${s.window.findings.length}`
+		);
+		if (!write) continue;
+		const r = recordNodeBaselines(stateDir(), s.node, s.window, s.at);
+		if (!r.ok) failed.push({ node: s.node, reason: r.reason });
+	}
+	if (!seeds.length)
+		log('fleet qualify --seed-baselines: every node in the ledger is already known');
+	finish(
+		{
+			ok: !failed.length,
+			written: write,
+			seeds: seeds.map((s) => ({
+				node: s.node,
+				at: s.at,
+				readings: s.window.readings.length,
+				weakPoints: s.window.weak.map((w) => w.test),
+			})),
+			failed,
+		},
+		failed.length ? 1 : 0
+	);
+}
+
 const manifest = loadManifest();
 const NEXT = process.argv.includes('--next');
 let node = machineArg(process.argv.slice(2));
