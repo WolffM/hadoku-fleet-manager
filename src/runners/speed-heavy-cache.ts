@@ -5,6 +5,7 @@ import { logger } from '../host.js';
 import { historyRowOf } from '../job-history-index.js';
 import { buildSpeedModel, type SpeedModel } from './speed-tier.js';
 import { buildHeavyModel, type HeavyModel } from './heavy-model.js';
+import { describeKindFailure, failingKinds } from './kind-failures.js';
 import { subCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
 
 /**
@@ -140,6 +141,16 @@ export function getSpeedModel(nowMs: number, nodeNames: readonly string[]): Spee
 			? `[speed-tier] rebuilt from ${records.length} record(s) across ${nodeNames.length} node(s): slow tier = ${slow.join(', ')}`
 			: `[speed-tier] rebuilt from ${records.length} record(s) across ${nodeNames.length} node(s): no node is in the slow tier`) +
 			`; factors: ${factors.join(', ')}`
+	);
+	// SHADOW (#129): the kinds that fail on one node far beyond their rate
+	// elsewhere. Logged, acted on by nothing, until the shadow window's counts
+	// are read (src/runners/kind-failures.ts).
+	const failing = failingKinds(records, {
+		nowMs,
+		nodeOf: (r) => historyRowOf(r, nodeNames).node,
+	});
+	logger.info(
+		`[kind-failures] shadow: ${failing.length ? failing.map(describeKindFailure).join('; ') : 'no node fails a kind beyond its rate elsewhere'}`
 	);
 	cachedSpeedModel = model;
 	return model;
