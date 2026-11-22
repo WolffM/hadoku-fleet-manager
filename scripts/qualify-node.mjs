@@ -15,8 +15,13 @@
  * (lib/qualify-results.mjs). Nothing here writes the manifest; a derived
  * `maxConcurrent` is lane Q6's, in shadow first.
  *
- * `--json` emits `{ ok, node, status, reason, results, findings, unreadable }`:
- * `findings` holds every `fail` with its reason, `unreadable` every
+ * `--json` emits `{ ok, node, status, reason, results, findings, unreadable,
+ * weakPoints, baseline }`. Since #129 a node is judged against its OWN range
+ * (lib/qualify-baseline.mjs): `findings` holds every fail whose bar is absolute
+ * and every reading outside the node's learned range (`kind: 'absolute'|'drift'`);
+ * a hardware bar the node misses is a `weakPoints` entry, recorded in
+ * `node-baselines.json` and never a finding; `baseline` is each reading's
+ * verdict against the range. `unreadable` holds every
  * `could-not-look` (and a window that never opened), each with its reason — the
  * shape `classifyEmittedDoc` (src/job-run-store.ts) reads. A refusal is exit 2.
  *
@@ -34,6 +39,8 @@ import { loadManifest, machineArg, runOn } from './lib/fleet-exec.mjs';
 import { QUALIFY_TESTS } from './lib/qualify-playlist.mjs';
 import { QUALIFY_WINDOW_MINUTES } from './lib/qualify-registry.mjs';
 import { readQualifyResults, recordQualifyResults } from './lib/qualify-results.mjs';
+import { judgeWindow } from './lib/qualify-baseline.mjs';
+import { nodeQuantities, readNodeBaselines, recordNodeBaselines } from './lib/node-baselines.mjs';
 import { nextNode, runQualification } from './lib/qualify-runner.mjs';
 import { spawnJsonToFile } from './lib/spawn-json.mjs';
 
@@ -167,9 +174,34 @@ const recorded =
 		: { ok: true };
 if (!recorded.ok) log(`✗ results not recorded: ${recorded.reason}`);
 
-const findings = out.results
-	.filter((r) => r.status === 'fail')
-	.map((r) => ({ node, test: r.id, reason: `${r.id}: ${r.reason}` }));
+// Judge the window against this node's own range (#129): a hardware bar it
+// misses is a weak point, a reading outside its range is a drift finding. An
+// unreadable store judges nothing relative, so every fail stays a finding: the
+// gate never gets easier because the baseline could not be read.
+const judging = out.status === 'ran' || out.status === 'could-not-look';
+const baselines = judging ? readNodeBaselines(stateDir()) : { ok: true, store: null };
+const judged = baselines.ok
+	? judgeWindow({
+			node,
+			results: judging ? out.results : [],
+			quantities: baselines.store ? nodeQuantities(baselines.store, node) : {},
+		})
+	: null;
+const learned =
+	judged && judging ? recordNodeBaselines(stateDir(), node, judged, at) : { ok: true };
+if (!learned.ok) log(`✗ baselines not recorded: ${learned.reason}`);
+for (const j of judged?.judged ?? [])
+	log(
+		`   baseline ${j.quantity} = ${j.value}: ${j.verdict}${j.direction ? ` (${j.direction})` : ''}` +
+			(j.n ? ` vs ${j.mean} ± ${j.band} (n=${j.n})` : '')
+	);
+for (const w of judged?.weak ?? []) log(`   weak point ${w.test}: ${w.reason}`);
+
+const findings = judged
+	? judged.findings
+	: out.results
+			.filter((r) => r.status === 'fail')
+			.map((r) => ({ node, test: r.id, kind: 'absolute', reason: `${r.id}: ${r.reason}` }));
 const unreadable = [
 	...(out.status === 'could-not-look' && !out.results.length ? [{ node, reason: out.reason }] : []),
 	...(out.status === 'dry-run'
@@ -178,6 +210,15 @@ const unreadable = [
 				.filter((r) => r.status === 'could-not-look')
 				.map((r) => ({ node, test: r.id, reason: `${r.id}: ${r.reason}` }))),
 	...(recorded.ok ? [] : [{ node, reason: `results not recorded: ${recorded.reason}` }]),
+	...(baselines.ok
+		? []
+		: [
+				{
+					node,
+					reason: `the node baselines are unreadable, so every fail is a finding: ${baselines.reason}`,
+				},
+			]),
+	...(learned.ok ? [] : [{ node, reason: `baselines not recorded: ${learned.reason}` }]),
 	...(out.undrainFailed
 		? [{ node, reason: `STILL DRAINED: the window could not lift its drain: ${out.undrainFailed}` }]
 		: []),
@@ -198,6 +239,8 @@ finish(
 		results: out.results,
 		findings,
 		unreadable,
+		weakPoints: judged?.weak ?? [],
+		baseline: judged?.judged ?? [],
 	},
 	out.status === 'dry-run' ? 0 : ok ? 0 : 1
 );

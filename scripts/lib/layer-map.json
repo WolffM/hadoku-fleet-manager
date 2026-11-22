@@ -2218,6 +2218,11 @@
     "why": "Wave bootcamp2 Q6: qualify-results.json's one writer and its reader, a one-writer record like job-proof-record.mjs. State, so doctor (observation) can read a node's qualification without importing lifecycle."
   },
   {
+    "glob": "scripts/lib/node-baselines.mjs",
+    "layer": "state",
+    "why": "#129: node-baselines.json's one writer and reader, each node's learned range per measured quantity plus its weak points. State, so qualify (lifecycle), doctor and placement can all read one store without importing each other."
+  },
+  {
     "glob": "scripts/lib/qualify-*.mjs",
     "layer": "domain",
     "domain": "lifecycle",

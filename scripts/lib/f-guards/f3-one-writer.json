@@ -28,6 +28,7 @@
     "job-history.jsonl": ["src/job-history-store.ts"],
     "job-proofs.json": ["scripts/lib/job-proof-record.mjs"],
     "label-floor-holdings.json": ["scripts/lib/label-floor-transitions.mjs"],
+    "node-baselines.json": ["scripts/lib/node-baselines.mjs"],
     "node-status-boots.json": ["scripts/node-status.mjs"],
     "node-status-last.json": ["scripts/node-status.mjs"],
     "node-status-seen.json": ["scripts/node-status.mjs"],

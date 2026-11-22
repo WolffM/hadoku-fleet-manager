@@ -68,7 +68,11 @@ non-zero until an operator commits it — enrollment is the one place a node
 describes itself; everywhere else the manifest declares and a probe observes.
 `fleet provision`, then `fleet bootcamp` to prove the capabilities a node
 should have, `fleet qualify` to run a one-node playlist of load tests
-(network, disk, concurrency) before trusting its numbers.
+(network, disk, concurrency) before trusting its numbers. A qualification
+judges each node against its own learned range, not one bar for every box.
+A bar the hardware cannot meet is recorded as that node's weak point. A
+reading outside the node's usual range is a drift finding, and the range
+re-learns at the new reading.
 
 **What it does not do.** It will not admit a node to scheduling on the
 manifest's say alone — a capability a probe cannot confirm is not offered,
