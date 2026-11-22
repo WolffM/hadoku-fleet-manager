@@ -191,6 +191,8 @@ import { runPass3 } from './lib/bootcamp-judge.mjs';
 import { computeRevocationChanges } from './lib/bootcamp-revoke.mjs';
 import { proveWorkloads, printProveResults } from './lib/bootcamp-canary.mjs';
 import { printReport } from './lib/bootcamp-report-print.mjs';
+import { describeBootcamp, judgeBootcamp } from './lib/bootcamp-baseline.mjs';
+import { nodeQuantities, readNodeBaselines, recordNodeBaselines } from './lib/node-baselines.mjs';
 import { writeManifestFacet } from './lib/bootcamp-write.mjs';
 import { SITE_WRITER_ENV, siteWriterDir } from './lib/manifest-target.mjs';
 
@@ -578,6 +580,34 @@ const benchLedgerError = !benchLedger.ok
 
 const revocationChanges = await computeRevocationChanges(ctx);
 
+// WHAT THE NODE BASELINES SAY (#129, lib/bootcamp-baseline.mjs). LOG-ONLY: each
+// node's weak points beside its labels, and each idle-only measurement against
+// the node's own range for it (learned under --write). Nothing here earns,
+// withholds or revokes; an unreadable store is said, never read as "none".
+const baselineRead = readNodeBaselines(stateDir());
+const baselineAt = new Date(NOW_MS).toISOString();
+const baselines = baselineRead.ok
+	? Object.keys(report)
+			.sort()
+			.map((n) =>
+				judgeBootcamp({
+					node: n,
+					measured: report[n].measuredIdle,
+					capability,
+					quantities: nodeQuantities(baselineRead.store, n),
+					weakPoints: baselineRead.store.weakPoints?.[n],
+				})
+			)
+	: null;
+if (!baselineRead.ok) log(`\n· node baselines unreadable — not reported: ${baselineRead.reason}`);
+for (const j of baselines ?? []) {
+	const line = describeBootcamp(j);
+	if (line) log(`\n· baseline ${line}`);
+	if (!WRITE || !j.window.readings.length) continue;
+	const learned = recordNodeBaselines(stateDir(), j.node, j.window, baselineAt);
+	if (!learned.ok) log(`\n· ${j.node}: baselines not recorded: ${learned.reason}`);
+}
+
 const proveResults = await proveWorkloads(ctx);
 
 printReport(ctx);
@@ -649,6 +679,8 @@ if (emitter.json)
 		tools: toolResults,
 		seeds: seedResultsByNode,
 		revocations: revocationChanges,
+		baselines: baselines?.map(({ window: _w, ...j }) => j) ?? null,
+		...(baselineRead.ok ? {} : { baselinesError: baselineRead.reason }),
 		written,
 		...(proofLedger.ok ? {} : { jobProofLedgerError: proofLedger.reason }),
 		...(benchLedgerError ? { benchmarkLedgerError: benchLedgerError } : {}),

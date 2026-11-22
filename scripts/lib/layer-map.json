@@ -88,6 +88,11 @@
     "why": "Wave 5i lane C split of dispatch-tick.ts (plan \u00a74.3 #16): the announced-stuck book persisted to dispatch-stuck-announced.json \u2014 same \"one declared writer, read back by something else\" shape."
   },
   {
+    "glob": "src/node-baselines-read.ts",
+    "layer": "state",
+    "why": "#129: the one reader of node-baselines.json (each node's learned range and weak points). In src so placement reads it in-process; scripts/lib/node-baselines.mjs, the file's sole writer, re-exports it."
+  },
+  {
     "glob": "src/capability-revocations.ts",
     "layer": "state"
   },

@@ -26,12 +26,25 @@
  * store; an UNREADABLE one is said and never overwritten, because writing over
  * a file nobody could parse erases every other node's history.
  */
-import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
+import {
+	NODE_BASELINES_FILE,
+	nodeQuantities,
+	readNodeBaselines,
+} from '../../dist/node-baselines-read.js';
 
-export const NODE_BASELINES_FILE = 'node-baselines.json';
+// The READER is src/node-baselines-read.ts, so placement (in-process) parses the
+// file the same way; this module stays its only writer.
+export { NODE_BASELINES_FILE, nodeQuantities, readNodeBaselines };
+
+/**
+ * The file this module WRITES, spelled here because the one-writer guard
+ * (f-guards/f3-one-writer) finds a writer by the literal its write path names.
+ * node-baselines.test.mjs holds it equal to the reader's NODE_BASELINES_FILE.
+ */
+export const WRITTEN_FILE = 'node-baselines.json';
 
 /**
  * The fewest readings an estimate weighs as: a reading is never worth less than
@@ -46,23 +59,6 @@ export const DRIFT_SDS = 3;
 export const baselineKey = (node, quantity) => `${node}::${quantity}`;
 
 const round = (x) => (Number.isFinite(x) ? Number(x.toPrecision(5)) : x);
-
-/** `{ok:true, store}` or `{ok:false, reason}`. A missing file is an empty store. */
-export function readNodeBaselines(dir) {
-	const path = join(dir, NODE_BASELINES_FILE);
-	if (!existsSync(path)) return { ok: true, store: { quantities: {}, weakPoints: {} } };
-	try {
-		const doc = JSON.parse(readFileSync(path, 'utf8'));
-		if (!doc || typeof doc !== 'object' || Array.isArray(doc))
-			return { ok: false, reason: `${path} is not a JSON object` };
-		return {
-			ok: true,
-			store: { quantities: doc.quantities ?? {}, weakPoints: doc.weakPoints ?? {} },
-		};
-	} catch (err) {
-		return { ok: false, reason: `${path}: ${err.message}` };
-	}
-}
 
 /**
  * PURE. How far a reading may sit from an estimate before it is drift: the
@@ -167,7 +163,7 @@ export function recordNodeBaselines(dir, node, window, at) {
 	const read = readNodeBaselines(dir);
 	if (!read.ok) return { ok: false, reason: read.reason };
 	if (!window.readings.length && !window.weak.length && !window.cleared.length) return { ok: true };
-	const path = join(dir, NODE_BASELINES_FILE);
+	const path = join(dir, WRITTEN_FILE);
 	try {
 		const next = mergeNodeBaselines(read.store, node, window, at);
 		writeFileAtomicSync(path, `${JSON.stringify(next, null, 2)}\n`);
@@ -175,16 +171,6 @@ export function recordNodeBaselines(dir, node, window, at) {
 	} catch (err) {
 		return { ok: false, reason: `${path}: ${err.message}` };
 	}
-}
-
-/** PURE. One node's estimates, quantity → entry. */
-export function nodeQuantities(store, node) {
-	const prefix = `${node}::`;
-	return Object.fromEntries(
-		Object.entries(store.quantities ?? {})
-			.filter(([k]) => k.startsWith(prefix))
-			.map(([k, v]) => [k.slice(prefix.length), v])
-	);
 }
 
 /**

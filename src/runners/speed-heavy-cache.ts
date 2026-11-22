@@ -1,11 +1,13 @@
 import { statSync } from 'node:fs';
 
 import { historyFile, jobRecords } from '../job-history-store.js';
-import { logger } from '../host.js';
+import { logger, stateDir } from '../host.js';
 import { historyRowOf } from '../job-history-index.js';
 import { buildSpeedModel, type SpeedModel } from './speed-tier.js';
 import { buildHeavyModel, type HeavyModel } from './heavy-model.js';
 import { describeKindFailure, failingKinds } from './kind-failures.js';
+import { describeHeavyHold, heavyHoldShadow } from './baseline-placement.js';
+import { readNodeBaselines } from '../node-baselines-read.js';
 import { subCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
 
 /**
@@ -152,6 +154,24 @@ export function getSpeedModel(nowMs: number, nodeNames: readonly string[]): Spee
 	logger.info(
 		`[kind-failures] shadow: ${failing.length ? failing.map(describeKindFailure).join('; ') : 'no node fails a kind beyond its rate elsewhere'}`
 	);
+	// SHADOW (#129): what placement would do with each node's learned range and
+	// weak points (src/runners/baseline-placement.ts). Logged, acted on by
+	// nothing; an unreadable store is said, never read as "nothing to hold".
+	const baselines = readNodeBaselines(stateDir());
+	if (!baselines.ok)
+		logger.warn(`[node-baselines] shadow: could not read the store: ${baselines.reason}`);
+	else {
+		const heavy = getHeavyModel(nowMs);
+		const holds = heavyHoldShadow(baselines.store, records, {
+			nowMs,
+			nodes: nodeNames,
+			isHeavy: (repo, job) => heavy.isHeavy(repo, job),
+			nodeOf: (r) => historyRowOf(r, nodeNames).node,
+		});
+		logger.info(
+			`[node-baselines] shadow: ${holds.length ? `heavy jobs would be held off ${holds.map(describeHeavyHold).join('; ')}` : 'no node would hold heavy jobs off on its baseline'}`
+		);
+	}
 	cachedSpeedModel = model;
 	return model;
 }

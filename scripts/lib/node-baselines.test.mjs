@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import {
 	BASELINE_WINDOW,
 	NODE_BASELINES_FILE,
+	WRITTEN_FILE,
 	bandOf,
 	judgeReading,
 	learnReading,
@@ -126,4 +127,8 @@ void test('weak points for a status reader: oldest first; unreadable is null wit
 		weakPoints: null,
 		why: 'bad json',
 	});
+});
+
+void test('the writer writes the file the reader reads', () => {
+	assert.equal(WRITTEN_FILE, NODE_BASELINES_FILE);
 });
