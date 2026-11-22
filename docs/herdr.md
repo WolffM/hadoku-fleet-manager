@@ -139,9 +139,38 @@ fleet node-users --machine claw-9         # reads the user back; `sessions: ok`
 fleet node-users --dev claw-9 --back --confirm   # undo; refuses while a session runs
 ```
 
-The setup prints the dev user's name when it finishes. The Claude token is not
-stored on the claw: a session leases it from crossposter's pool and holds it in
-its environment only.
+The setup prints the dev user's name when it finishes. Start a session in a
+pane on the claw with:
+
+```sh
+~/.local/bin/claude-lease exec -- ~/.local/bin/claude
+```
+
+The Claude token is not stored on the claw: `claude-lease` (crossposter's, copied
+from the controller like `claude`) leases it from crossposter's pool and holds
+it in the session's environment only. What IS stored is the claw's own edge key,
+`~/.config/claude-lease/key.json` (0600), so the lease, and the 429 or 401 that
+benches an account, go as `<node>-sessions`. The operator grants or revokes
+that one claw under "Who may lease" on the Social tab. Do not pass `--want`:
+the pool's change event it reads exists only on the controller. No lease means
+the session does not start, and the reason is on stderr; a claw has no login to
+fall back on. The first session on a new dev user shows Claude's one-time
+onboarding.
+
+The key is the operator's to mint, once per claw (from hadoku_site):
+
+```sh
+python3 scripts/administration.py key-generate --tier service --name claw-9-sessions --confirm
+node scripts/admin/grant-secret.mjs KEY_SERVICE_CLAW_9_SESSIONS --holder repo:WolffM/hadoku_site --confirm
+# and claw-9-sessions onto crossposter-claude-code-lease (Service grants)
+```
+
+Then `fleet node-users --dev claw-9 --confirm`, run from hadoku_site's root
+under its dev-vault, delivers it over ssh stdin and proves it with
+`claude-lease whoami` as the dev user. `fleet node-users --machine` runs the
+same `whoami` every night: a missing key, a key that is someone else's, or one
+the edge no longer admits is `dev-user-drift`. After a key swap, re-run the
+delivery.
 
 A live session is active work. The reboot and refresh cycles defer a claw
 while a `claude` runs as its dev user, `fleet drain --status` does not call it
@@ -149,8 +178,7 @@ drained, and qualify's reboot test refuses it. A `claude` older than 24 h is
 not counted, so an abandoned pane holds a reboot off for a day at most. A long
 build in a pane with no `claude` in it is not counted either.
 
-Not built yet: the claw has no lease identity of its own, and the dev user has
-no push credential. The status of each is in
+Not built yet: the dev user has no push credential. The status of each is in
 `docs/planning/claw-sessions-2026-11-19.md`.
 
 # hadoku.sessions — find a Claude session

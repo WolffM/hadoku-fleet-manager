@@ -231,10 +231,15 @@ const devAnswer = (over = {}) =>
 		devWeight: SESSION_WEIGHT,
 		devClaude: '2.1.329 (Claude Code)',
 		devRunners: 0,
+		devLeaseKey: 'hadoku-dev:600',
+		devLeaseId: 'claw-fixture-sessions',
+		devLeaseMember: 'yes',
+		devLeaseWhy:
+			'lease list crossposter-claude-code-lease: member (the lease route reached crossposter)',
 		...over,
 	});
 const sessions = (over, machine = HOSTS) =>
-	judgeNodeSessions(machine, parseUsersObservation(devAnswer(over)));
+	judgeNodeSessions(machine, parseUsersObservation(devAnswer(over)), 'claw-fixture');
 
 test('a node that names no dev user hosts no sessions, and nothing about it is judged', () => {
 	assert.deepEqual(judgeNodeSessions(CUT, parseUsersObservation(answer())), {
@@ -262,6 +267,33 @@ test('every guarantee of a declared dev user is named when it does not hold', ()
 	assert.match(first({ devWeight: '' }), /could not read the cpu.weight/);
 	assert.match(first({ devClaude: '' }), /claude does not run/);
 	assert.match(first({ devRunners: 2 }), /2 runner process\(es\) run as hadoku-dev/);
+	assert.match(first({ devLeaseKey: '' }), /no lease key/);
+	assert.match(first({ devLeaseKey: 'hadoku-dev:644' }), /not hadoku-dev-owned 0600/);
+	assert.match(
+		first({ devLeaseId: 'crossposter-service-key' }),
+		/is crossposter-service-key, not claw-fixture-sessions/
+	);
+	assert.match(
+		first({ devLeaseMember: 'no' }),
+		/not on the edge list crossposter-claude-code-lease/
+	);
+});
+
+test('a lease key nobody could ask about is "could not look", with its reason, never a pass', () => {
+	const r = sessions({
+		devLeaseId: '',
+		devLeaseMember: 'unknown',
+		devLeaseWhy: 'claude-lease: HTTP 503',
+	});
+	assert.equal(r.state, 'drift');
+	assert.match(r.findings[0].why, /could not ask the edge .*HTTP 503/);
+});
+
+test('the observation runs claude-lease whoami AS dev, with its own key file', () => {
+	assert.match(
+		usersObserveScript(HOSTS),
+		/sudo -n -u "\$DEV" -H env CLAUDE_LEASE_KEY_FILE="\$DEV_HOME\/\.config\/claude-lease\/key\.json" timeout 35 "\$DEV_HOME\/\.local\/bin\/claude-lease" whoami/
+	);
 });
 
 test('a declared dev user that does not exist is drift, never "no sessions"', () => {

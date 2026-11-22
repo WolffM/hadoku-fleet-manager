@@ -125,6 +125,34 @@ export const SESSION_WEIGHT = 25;
  */
 export const DEV_CLAUDE_BIN = '.local/bin/claude';
 
+/**
+ * Where crossposter's `claude-lease` lives under the dev user's home, copied
+ * from the controller like `claude`. A session starts as
+ * `claude-lease exec -- claude`: the lease, and the 429/401 outcome that
+ * benches an account, both go as the node's own identity
+ * (docs/planning/claw-sessions-2026-11-19.md, step 4).
+ */
+export const DEV_LEASE_BIN = '.local/bin/claude-lease';
+
+/** The dev user's edge key file (mode 0600), which `claude-lease` reads as `CLAUDE_LEASE_KEY_FILE`. */
+export const DEV_LEASE_KEY = '.config/claude-lease/key.json';
+
+/**
+ * The edge identity a node's sessions lease as: one per node, so the
+ * operator grants or revokes a claw on its own in crossposter's pool table.
+ * No repo owns it (hadoku_site key-sync-allowlist `noRepoService`).
+ */
+export function leaseIdentity(node: string): string {
+	return `${node}-sessions`;
+}
+
+/** The vault item holding {@link leaseIdentity}'s key: `key-generate` upper-snakes the name. */
+export function leaseKeyItem(node: string): string {
+	return `KEY_SERVICE_${leaseIdentity(node)
+		.toUpperCase()
+		.replace(/[^A-Z0-9]/g, '_')}`;
+}
+
 /** Does this node host interactive sessions, under a dev user of its own? */
 export function hostsSessions(node: UserBearingNode | null | undefined): boolean {
 	return node?.users?.dev !== undefined;

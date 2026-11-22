@@ -43,7 +43,8 @@ const log = (...a) => emitter.log(...a);
 async function checkNode(node, machine, drains, tenants) {
 	const res = await runOn(node, usersObserveScript(machine), {
 		as: 'admin',
-		timeoutMs: 30_000,
+		// A session host also runs `claude-lease whoami`, bounded at 35 s.
+		timeoutMs: 60_000,
 		connectTimeout: 8,
 	});
 	const obs = parseUsersObservation(res.stdout);
@@ -58,7 +59,7 @@ async function checkNode(node, machine, drains, tenants) {
 	}
 	const users = judgeNodeUsers(machine, obs);
 	const accounts = judgeNodeAccounts(machine, obs, tenants);
-	const sessions = judgeNodeSessions(machine, obs);
+	const sessions = judgeNodeSessions(machine, obs, node);
 	return {
 		machine: node,
 		ok: true,

@@ -63,6 +63,12 @@ const ALLOWED = {
 		'tempDir to simulate the preseed late_command writing into /target — never a real node or a ' +
 		'path this suite reads/writes outside the sandbox (wave 5s lane D test-file split of ' +
 		'make-preseed.test.mjs, which this walk never scanned — a test file by name — pure move)',
+	'literal:scripts/lib/node-users-dev.mjs':
+		"`claude-lease whoami`, crossposter's subcommand asking the EDGE which identity a lease key " +
+		'is; it names no node user (claw-sessions plan step 4)',
+	'literal:scripts/lib/node-users-facet.mjs':
+		'the facet runs `claude-lease whoami` as dev to prove the lease key: an edge identity, not ' +
+		'a node user (claw-sessions plan step 4)',
 	'literal:scripts/lib/egress-slices-fixtures.mjs':
 		'`pm_cwd` values in fake `pm2 jlist` answers, matched against the ecosystem root; no node ' +
 		'is reached (fleet-manager#64: the egress-slices test rig, moved out of a test file)',
