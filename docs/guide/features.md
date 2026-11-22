@@ -40,6 +40,14 @@ Actions runner does that, once this package has registered it and minted it
 a credential. A job that waits past a long ceiling is reported as queued, not
 silently retried.
 
+**Containment.** Every job runs in a memory-capped unit that may lower its
+CPU priority but never raise it. A unit still running ten minutes after
+GitHub closed its job is stopped: a starved runner can lose touch with
+GitHub and run on for an hour holding the memory it was starving for. On the
+shared workstation node, CI is the first thing the kernel reclaims and the
+first thing oomd kills under memory pressure, before the production services
+beside it.
+
 ## Node onboarding
 
 **What it does.** Carries a bare machine through six phases:

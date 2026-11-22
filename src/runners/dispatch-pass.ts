@@ -33,7 +33,8 @@ import {
 	retireStrandedJit,
 	type LiveJitUnit,
 } from './ephemeral-exec-jit.js';
-import { reapJitRunners } from './ephemeral-exec-reap.js';
+import { reapJitRunners, stopFinishedUnits } from './ephemeral-exec-reap.js';
+import { finishedRunners, forgetFinishedRunner } from './dispatch-hint.js';
 import { REAP_INTERVAL_MS } from '../lib/jit-reap-cadence.js';
 import { JIT_PREFIX, WARM_PREFIX, parseJitName } from '../lib/jit-naming.js';
 import { recordCapacityLedger } from './capacity-ledger.js';
@@ -156,6 +157,14 @@ export async function runDispatchPass(
 			for (const o of res.observed) reapBook.set(o.repo, { listedAtMs: nowMs, heldJit: o.heldJit });
 		} else {
 			reaped = 0;
+		}
+		// Units that outlived their job. Outside the `targets` branch: a sweep
+		// with no listing due still has to stop them, and the input is the
+		// webhook's `completed` deliveries, so this costs no GitHub call.
+		const finished = finishedRunners(nowMs);
+		if (finished.size) {
+			const done = await stopFinishedUnits(input.order, sh, finished, nowMs);
+			for (const name of done.settled) forgetFinishedRunner(name);
 		}
 	}
 

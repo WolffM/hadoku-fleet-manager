@@ -317,3 +317,23 @@ test('CI jobs are counted through sudo, and a refused sudo is unknown, never 0',
 	assert.equal(parsed.fields.workers, null);
 	assert.match(PERF_PROBE_SCRIPT, /^echo "workers=\$\(ciw\)"$/m);
 });
+
+void test('the CI slice pressure is read when the node has one, and null (not zeros) when it has none', () => {
+	// The figures hokon's ci.slice printed on 2026-11-21, after the incident's
+	// throttling: pressure back at 0, the throttle count kept.
+	const withSlice = WIFI_PROBE.replace(
+		'end=1',
+		'ciMem.some10=0.00\nciMem.some300=0.07\nciMem.full10=0.00\nciMem.full300=0.01\nciMem.high=7745636\nend=1'
+	);
+	const r = parsePerfProbe(withSlice);
+	assert.ok(r.ok);
+	assert.deepEqual(r.fields.ciMemory, {
+		some10: 0,
+		some300: 0.07,
+		full300: 0.01,
+		highEvents: 7745636,
+	});
+	const none = parsePerfProbe(WIFI_PROBE);
+	assert.ok(none.ok);
+	assert.equal(none.fields.ciMemory, null);
+});

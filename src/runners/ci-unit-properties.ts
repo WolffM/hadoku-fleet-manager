@@ -88,5 +88,12 @@ export function ciUnitProperties(o: { memoryMaxMb: number; sliceName?: string | 
 		// CI is the first thing a global OOM takes, before pm2, sshd or a
 		// hosting tenant (src/runners/hosting-record.ts).
 		`--property=OOMScoreAdjust=${CI_OOM_SCORE_ADJ}`,
+		// A job may lower its priority, never raise it. hokon's user manager
+		// inherits RLIMIT_NICE=39 from the @pipewire limits rule, and Chromium
+		// raises its own main thread to nice -8 when allowed, so every headless
+		// shell a browser suite started ran above the desktop's processes in its
+		// cgroup. `+0` is the nice floor 0 (rlimit 20); measured 2026-11-21, a
+		// unit carrying it gets "cannot set niceness: Permission denied".
+		'--property=LimitNICE=+0',
 	];
 }

@@ -267,3 +267,68 @@ export async function reapJitRunners(
 	}
 	return { reaped, kept, unreachable, observed };
 }
+
+/**
+ * How long a JIT unit may outlive GitHub's `completed` for its job. A runner
+ * that finished honestly exits within seconds of reporting; ten minutes is
+ * far past that and far short of the hour the 2026-11-21 units held.
+ */
+export const FINISHED_UNIT_GRACE_MS = 10 * 60_000;
+
+/**
+ * Stop every live JIT unit whose job GitHub has closed more than
+ * FINISHED_UNIT_GRACE_MS ago (`finished`, from the `workflow_job` completed
+ * deliveries: runners/dispatch-hint.ts explains the incident). The reap above
+ * cannot do this: it walks REGISTRATIONS, and GitHub deletes an ephemeral one
+ * when it closes the job, so a unit that outlives its job has nothing left
+ * for the reap to find.
+ *
+ * Only nodes holding a due name are probed, and each name is answered once:
+ * `settled` lists the ones to forget (stopped, or already gone). A name on an
+ * unreachable node, or one naming no known node, stays for the next sweep —
+ * "I could not look" is not "it exited".
+ */
+export async function stopFinishedUnits(
+	nodes: readonly string[],
+	sh: ShellLike,
+	finished: ReadonlyMap<string, number>,
+	nowMs: number
+): Promise<{ stopped: string[]; settled: string[]; unreachable: string[] }> {
+	const due = new Map<string, string[]>();
+	for (const [name, at] of finished) {
+		if (nowMs - at < FINISHED_UNIT_GRACE_MS) continue;
+		// Longest first: `claw-1` must not claim a `claw-10` unit.
+		const node = [...nodes]
+			.sort((a, b) => b.length - a.length)
+			.find((m) => name.startsWith(`${JIT_PREFIX}${m}-`));
+		if (node) due.set(node, [...(due.get(node) ?? []), name]);
+	}
+	const stopped: string[] = [];
+	const settled: string[] = [];
+	const unreachable: string[] = [];
+	await Promise.all(
+		[...due].map(async ([node, names]) => {
+			const probe = await sh(node, 'echo REACHABLE');
+			if (probe === null || !probe.includes('REACHABLE')) {
+				unreachable.push(node);
+				return;
+			}
+			const live = new Set(await liveJitUnits(node, sh));
+			for (const name of names) {
+				if (live.has(name)) {
+					await sh(
+						node,
+						`XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop ${shellQuote(name)} 2>/dev/null || true`
+					);
+					stopped.push(name);
+					logger.warn(
+						`[ephemeral] stopped ${name} on ${node}: GitHub closed its job ` +
+							`${Math.round((nowMs - finished.get(name)!) / 60_000)}m ago and the unit was still running`
+					);
+				}
+				settled.push(name);
+			}
+		})
+	);
+	return { stopped, settled, unreachable };
+}

@@ -45,9 +45,13 @@ Before=slices.target
 #   MemoryMax=16G    hard: cgroup OOM kill, scoped to CI
 #   MemorySwapMax=2G bounds the swap storm that froze the box, not just the RAM
 #
-#   MemoryHigh is right HERE even though runners-slice-install.sh argues against
-#   it. That argument is about claw-1's 7200rpm disk at 13.6% iowait, where
-#   reclaim thrashes instead of protecting. hokon is not that machine.
+#   MemoryHigh throttles; it never kills. On 2026-11-21 07:57-09:07Z three units
+#   sat at this 12G for an hour (memory.events high=7.7M), reading 1.2-2 T of
+#   refaults off the NVMe PM2 swaps to, and froze cardtable's prod server. So
+#   hokon IS the machine runners-slice-install.sh warns about once nothing kills
+#   the throttled cgroup. It is kept because it holds the pressure INSIDE CI,
+#   where ci.slice's oomd rule (user-priority/ci.slice.d/oomd.conf, 50% for 30s)
+#   sees it and kills one job instead of the box paying for an hour.
 #
 # NOT MANAGED BY TOOLING. fleet-runner-manifest.json marks hokon
 # `slice.manageUnit: false`, so deploy-runners-slice.mjs places runners into this

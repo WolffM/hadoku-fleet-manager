@@ -67,6 +67,18 @@ export interface PerfSampleRow {
 	 * written before 2026-11-05. Judged by doctor's `cpu-oversubscribed`.
 	 */
 	psi300?: PsiReading;
+	/**
+	 * The user manager's ci.slice: memory.pressure some avg10/avg300, full avg300,
+	 * and memory.events `high` (cumulative throttle count, since the slice was
+	 * created). What oomd's ci.slice kill rule (50% for 30s, hokon) judges; read
+	 * to choose a tighter limit from data. null: this node has no such slice.
+	 */
+	ciMemory?: {
+		some10: number | null;
+		some300: number | null;
+		full300: number | null;
+		highEvents: number | null;
+	} | null;
 	/** CI jobs running on the node at the tick (Runner.Worker processes). null: could not count. */
 	workers?: number | null;
 	load?: { one: number | null; five: number | null; fifteen: number | null; cores: number | null };

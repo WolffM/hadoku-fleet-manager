@@ -169,6 +169,44 @@ Enabling it needs a root `user@.service` drop-in with `Delegate=`. Memory is
 deliberately uncapped per pane for now; the swap pressure seen in the same
 incident is not addressed by this.
 
+## PM2 survives a memory incident (hokon, 2026-11-21)
+
+On 2026-11-21 07:57–09:07Z hokon's memory pressure sat at ~60% for an hour,
+cardtable's prod server stalled up to 32 s at a time, and six matches
+restarted. Three things let it happen, each read from the kernel's own files:
+
+- **PM2's protection was inert.** cgroup2 is mounted `memory_recursiveprot`, so
+  a child's `memory.min`/`memory.low` cannot exceed its ancestors'.
+  `system.slice` was at 0/0, so `pm2-hadoku.service`'s `MemoryLow=8G` (and the
+  journald/oomd/tailscaled Mins) protected nothing. The user tree held a
+  hand-set Min 8G / Low 12G, so the kernel spared CI and reclaimed PM2.
+- **CI was throttled, never killed.** Three units filled `ci-runner.slice` to
+  its 12G `MemoryHigh` (`memory.events` `high` = 7.7M) and refaulted 1.2–2 T
+  off the NVMe that PM2 swaps to. The only oomd kill rule on CI was on the
+  system `ci.slice`, which has no cgroup on hokon.
+- **The units outlived their jobs.** GitHub logged "the self-hosted runner
+  lost communication" and closed the jobs at ~08:09Z. The units ran until
+  09:06Z, one `Post Run actions/checkout` taking 33 minutes, and GitHub had
+  already removed the registrations the reap walks.
+
+What changed:
+
+| where                | what                                                                                    | installed by                                      |
+| -------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `system.slice`       | `MemoryMin=13G`, `MemoryLow=17G`                                                        | `deploy/systemd/pm2-protection/install.sh` (root) |
+| `pm2-hadoku.service` | `MemoryMin=12G`, `MemoryLow=16G` (working set 12.6G, peak 21.5G)                        | same                                              |
+| user tree            | its hand-set floor, unchanged, moved out of `system.control/` into named drop-ins       | same                                              |
+| `app.slice` (user)   | `MemoryMin=8G`, `MemoryLow=8G`: claims the user floor so none of it shields CI          | `deploy/systemd/user-priority/install.sh`         |
+| `ci.slice` (user)    | oomd `kill` at 50% memory pressure for 30 s                                             | same                                              |
+| every minted unit    | `LimitNICE=+0`: a browser in a job cannot raise itself above the node                   | `ciUnitProperties`                                |
+| the reap             | stops a live JIT unit 10 min after GitHub's `workflow_job` `completed` names its runner | `stopFinishedUnits`                               |
+
+Both installers take `--dry-run`. The perf row's `ciMemory` (ci.slice
+pressure plus its `high` count) is the data for tightening the oomd limit.
+Agent sessions' Chrome still self-raises: a scope cannot carry an rlimit, and
+the user manager's `DefaultLimitNICE` is left alone because pipewire, kwin,
+the game and Discord rely on it.
+
 ## Converged by the controller since 2026-10-24 (fleet-manager#1)
 
 `fleet converge-provisioning` runs every 30 minutes inside mgmt-api

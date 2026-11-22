@@ -32,6 +32,8 @@ test('the spawn plan is a transient unit with a backstop and its own memory cap'
 	assert.ok(p.argv.includes(`--property=RuntimeMaxSec=${JIT_UNIT_MAX_SEC}`));
 	assert.ok(p.argv.includes('--property=MemoryMax=3000M'));
 	assert.ok(p.argv.includes('--property=MemorySwapMax=0'));
+	// A browser in a CI job may not raise itself above the node's own processes.
+	assert.ok(p.argv.includes('--property=LimitNICE=+0'));
 	// THE SECRET IS NOT IN THE COMMAND LINE. A jitconfig carries a real OAuth
 	// token; as an argv token it lands in /proc/<pid>/cmdline — world-readable,
 	// and `openclaw` has a login on these boxes — and in the systemd journal,

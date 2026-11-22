@@ -52,6 +52,14 @@ fi
 for p in cpu io memory; do
   [ -r /proc/pressure/$p ] && awk -v p=$p '{split($2,a,"="); split($4,b,"="); print "psi."p"."$1"="a[2]; print "psi300."p"."$1"="b[2]}' /proc/pressure/$p
 done
+# The CI slice's own pressure: what oomd's ci.slice kill rule judges, and
+# memory.events' hierarchical "high" count, how often the slice was throttled.
+for c in /sys/fs/cgroup/user.slice/user-*.slice/user@*.service/ci.slice; do
+  [ -r "$c/memory.pressure" ] || continue
+  awk '{split($2,a,"="); split($4,b,"="); print "ciMem."$1"10="a[2]; print "ciMem."$1"300="b[2]}' "$c/memory.pressure"
+  awk '$1=="high"{print "ciMem.high="$2}' "$c/memory.events"
+  break
+done
 echo "workers=$(ciw)"
 echo "load=$(cut -d' ' -f1-3 /proc/loadavg)"; echo "cores=$(nproc)"
 awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2} /^SwapTotal:/{st=$2} /^SwapFree:/{print "swapUsedKb="st-$2}' /proc/meminfo
@@ -169,6 +177,14 @@ export function parsePerfProbe(
 			gateway: gw ? pingStats(gw, gwTimes, PING_COUNT) : null,
 			psi: psiAt('psi'),
 			psi300: psiAt('psi300'),
+			ciMemory: kv.has('ciMem.some10')
+				? {
+						some10: num(kv.get('ciMem.some10')),
+						some300: num(kv.get('ciMem.some300')),
+						full300: num(kv.get('ciMem.full300')),
+						highEvents: num(kv.get('ciMem.high')),
+					}
+				: null,
 			workers: num(kv.get('workers')),
 			load: { one: num(one), five: num(five), fifteen: num(fifteen), cores: num(kv.get('cores')) },
 			memory: {

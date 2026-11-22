@@ -46,6 +46,8 @@ const stats = {
 	lastAcceptedAt: null as string | null,
 	/** Delivery lag of the last accepted hint: receipt minus the job's creation. */
 	lastDeliveryLagSec: null as number | null,
+	/** `completed` deliveries naming a JIT runner: the reap's input. */
+	finished: 0,
 };
 
 export type HintVerdict =
@@ -73,9 +75,11 @@ export function recordWorkflowJobHint(payload: unknown, nowMs = Date.now()): Hin
 			run_id?: unknown;
 			labels?: unknown;
 			created_at?: unknown;
+			runner_name?: unknown;
 		};
 	} | null;
 	if (!p || typeof p !== 'object') return ignore('not-an-object');
+	if (p.action === 'completed') recordFinishedRunner(p.workflow_job, nowMs);
 	if (p.action !== 'queued') return ignore(`action:${String(p.action)}`);
 	const j = p.workflow_job;
 	const repo = p.repository?.full_name;
@@ -108,6 +112,48 @@ export function recordWorkflowJobHint(payload: unknown, nowMs = Date.now()): Hin
 	return { accepted: true, hint };
 }
 
+/**
+ * FINISHED RUNNERS: GitHub saying a job is over, by the runner that ran it.
+ *
+ * A JIT unit is supposed to exit when its one job ends, but it ends on the
+ * RUNNER's word, and a starved runner can lose that word. On 2026-11-21 three
+ * hokon units were throttled at ci-runner.slice's MemoryHigh until GitHub
+ * logged "The self-hosted runner lost communication with the server" and closed
+ * their jobs (08:06-08:09Z). The units ran on until 09:06:45Z: the cancelled
+ * step until 08:28, then `Post Run actions/checkout` for 33 minutes, holding
+ * the memory that froze cardtable's prod server. GitHub had already removed
+ * the ephemeral registrations, so the reap, which walks registrations, never
+ * saw them.
+ *
+ * Keyed by runner NAME, not job id: GitHub may hand a JIT runner a different
+ * job than the one it was minted for (lane steals), and the name is what the
+ * unit is called. The reap stops a live unit named here once
+ * FINISHED_UNIT_GRACE_MS has passed (ephemeral-exec-reap.ts).
+ */
+export const FINISHED_TTL_MS = 24 * 60 * 60_000;
+export const MAX_FINISHED = 500;
+const finished = new Map<string, number>();
+
+function recordFinishedRunner(j: { runner_name?: unknown } | undefined, nowMs: number): void {
+	const name = j?.runner_name;
+	if (typeof name !== 'string' || !name.startsWith('jit-')) return;
+	stats.finished++;
+	finished.delete(name);
+	finished.set(name, nowMs);
+	while (finished.size > MAX_FINISHED) finished.delete(finished.keys().next().value!);
+}
+
+/** Runner name -> when GitHub said its job completed, epoch ms. */
+export function finishedRunners(nowMs: number): ReadonlyMap<string, number> {
+	for (const [k, t] of finished) if (nowMs - t > FINISHED_TTL_MS) finished.delete(k);
+	return finished;
+}
+
+/** Its unit is gone, by the reap's hand or its own. */
+export function forgetFinishedRunner(name: string): void {
+	finished.delete(name);
+}
+
 export function pruneHints(nowMs: number): void {
 	for (const [k, h] of hints) if (nowMs - h.receivedAtMs > HINT_TTL_MS) hints.delete(k);
 }
@@ -130,6 +176,7 @@ export interface HintStats {
 	ignored: Record<string, number>;
 	lastAcceptedAt: string | null;
 	lastDeliveryLagSec: number | null;
+	finished: number;
 }
 
 export function hintStats(nowMs = Date.now()): HintStats {
@@ -140,6 +187,8 @@ export function hintStats(nowMs = Date.now()): HintStats {
 /** Tests only. */
 export function __resetHintsForTesting(): void {
 	hints.clear();
+	finished.clear();
+	stats.finished = 0;
 	stats.received = 0;
 	stats.accepted = 0;
 	stats.ignored = {};
