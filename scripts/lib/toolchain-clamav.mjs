@@ -14,6 +14,16 @@
  * `nvenc-h264` AND `data-peer` (its `runs-on`), so bootcamp installs it
  * before probing and the node can then earn `clamav`. If the ingest's
  * `runs-on` changes, {@link INGEST_LABELS} changes with it.
+ *
+ * ONE UPDATER, NOT TWO. Debian's clamav-freshclam ships the updater daemon AND
+ * a daily `clamav-freshclam-once.timer` with `Persistent=true`, both enabled.
+ * After any boot that missed the timer's slot the two start within seconds,
+ * and the second loses the lock on /var/log/clamav/freshclam.log and exits 2.
+ * When the daemon is the loser it stays dead (`Restart=no`): no signature
+ * updates, and the capability probe reads freshclam inactive. That is what
+ * claw-1 did after the reboot cycle's kernel reboot on 2026-11-23. The daemon
+ * already polls on its own schedule, so the repair disables the timer and the
+ * detect refuses a node where it is still enabled.
  */
 
 import { nodeOffer } from '../../dist/lib/capability-offer.js';
@@ -40,13 +50,18 @@ export const CLAMAV_REPAIRS = {
 		// is the capability probe's measurement, not a reason to reinstall.
 		detect:
 			'clamscan --version >/dev/null 2>&1 && systemctl is-active -q clamav-freshclam && ' +
-			'systemctl is-enabled -q clamav-freshclam && echo OK',
+			'systemctl is-enabled -q clamav-freshclam && ' +
+			'! systemctl is-enabled -q clamav-freshclam-once.timer && echo OK',
 		// `install` on an installed package moves it to apt's candidate, so the
 		// same text is the install and the refresh cycle's upgrade.
 		repair: [
 			'set -e',
 			'sudo -n apt-get update -qq',
 			'sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq clamav clamav-freshclam',
+			// Only where the package ships it: an absent unit makes `disable` fail.
+			'if systemctl cat clamav-freshclam-once.timer >/dev/null 2>&1; then',
+			'\tsudo -n systemctl disable --now clamav-freshclam-once.timer',
+			'fi',
 			'sudo -n systemctl enable --now clamav-freshclam',
 		].join('\n'),
 	},

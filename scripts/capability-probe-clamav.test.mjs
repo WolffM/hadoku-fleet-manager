@@ -167,5 +167,56 @@ test('the install is apt-tracked, enables freshclam, and never installs the daem
 	assert.match(script, /apt-get install -y -qq clamav clamav-freshclam$/m);
 	assert.match(script, /systemctl enable --now clamav-freshclam/);
 	assert.doesNotMatch(script, /clamav-daemon|clamdscan/);
-	assert.match(REPAIRS.clamav.detect, /is-enabled -q clamav-freshclam && echo OK$/);
+	assert.match(script, /systemctl disable --now clamav-freshclam-once\.timer/);
+});
+
+/**
+ * Runs the repair's detect against a stub `clamscan` and `systemctl` that
+ * answer from `units` (unit -> the verbs it passes), as the toolchain does.
+ */
+async function detect(units) {
+	const root = mkdtempSync(join(tmpdir(), 'fleet-detect-clamav-'));
+	try {
+		const bin = join(root, 'bin');
+		mkdirSync(bin);
+		writeFileSync(join(bin, 'clamscan'), '#!/bin/sh\necho "ClamAV 1.4.6"\n', { mode: 0o755 });
+		const cases = Object.entries(units)
+			.flatMap(([unit, verbs]) => verbs.map((v) => `"${v} ${unit}") exit 0 ;;`))
+			.join('\n\t');
+		writeFileSync(
+			join(bin, 'systemctl'),
+			`#!/bin/sh\n[ "$2" = -q ] && shift_q="$1 $3" || shift_q="$1 $2"\ncase "$shift_q" in\n\t${cases}\nesac\nexit 1\n`,
+			{ mode: 0o755 }
+		);
+		const r = await promisify(execFile)('sh', ['-c', REPAIRS.clamav.detect], {
+			env: { PATH: `${bin}:/usr/bin:/bin` },
+		}).catch((e) => e);
+		return (r.stdout ?? '').trim();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}
+
+test('detect: one updater running and enabled is OK', async () => {
+	assert.equal(await detect({ 'clamav-freshclam': ['is-active', 'is-enabled'] }), 'OK');
+});
+
+test('detect: the daily -once timer still enabled beside the daemon is drift (claw-1, 11-23)', async () => {
+	assert.equal(
+		await detect({
+			'clamav-freshclam': ['is-active', 'is-enabled'],
+			'clamav-freshclam-once.timer': ['is-enabled'],
+		}),
+		''
+	);
+});
+
+test('detect: a daemon that lost the lock race and stayed dead is drift', async () => {
+	assert.equal(
+		await detect({
+			'clamav-freshclam': ['is-enabled'],
+			'clamav-freshclam-once.timer': ['is-enabled'],
+		}),
+		''
+	);
 });
