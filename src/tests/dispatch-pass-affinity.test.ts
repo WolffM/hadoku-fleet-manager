@@ -325,6 +325,65 @@ test('heavy units: a shard from a FULLY PLACED run, in no listing, still counts 
 	// REVERTED (mint path writes nothing): no file.
 });
 
+test('heavy units: a unit minted for a LIGHT job its labels let GitHub swap for a heavy one counts as heavy (#103)', async () => {
+	// 2026-11-20 07:54Z: units minted on claw-4 and claw-9 for cardtable's
+	// e2e-nightly (light, lane-forge) were each handed a forge-e2e shard of
+	// another run. That run had nothing left queued, so no listing named the
+	// shards, the units were not recorded heavy, and claw-9 read heavy-free
+	// while running one (124 of 1,068 heavy placements 11-20..23 undercounted).
+	const CT = 'WolffM/hadoku-cardtable';
+	const heavyModel: HeavyModel = {
+		isHeavy: (repo, jobName) => repo === CT && /^forge-(jvm|e2e)/.test(jobName ?? ''),
+		isHeavyRepo: (repo) => repo === CT,
+	};
+	const job = (jobId: number, jobName: string, labels: string[]): PendingRun => ({
+		id: 50000000010,
+		jobId,
+		repo: CT,
+		jobName,
+		labels,
+		jobCreatedAt: '2026-11-20T07:54:00Z',
+		repository: { full_name: CT },
+		head_repository: { full_name: CT, fork: false },
+		event: 'workflow_dispatch',
+	});
+	const recorded = async (pending: PendingRun[]) => {
+		__resetHeavyUnitsForTesting();
+		const sh = answeringJitState(fakeShell());
+		await runDispatchPass(
+			base({
+				order: ['claw-9'],
+				// One slot: only the light job (first in the queue) is minted.
+				nodes: [node('claw-9', { maxConcurrent: 1, heavyModel, labels: ['hadoku-builder'] })],
+				pending,
+				runningJobs: [],
+				nowMs: Date.parse('2026-11-20T07:54:19Z'),
+			}),
+			'tok',
+			fakeGh(),
+			sh
+		);
+		await flushWrites();
+		return Object.keys(
+			JSON.parse(readFileSync(join(stateDir(), HEAVY_UNITS_FILE), 'utf8')) as object
+		);
+	};
+	const forge = ['self-hosted', 'hadoku-builder', 'lane-forge'];
+	const swap = await recorded([
+		job(300000000001, 'e2e-nightly', forge),
+		job(300000000002, 'forge-e2e (1)', forge),
+	]);
+	assert.equal(swap.length, 1, 'the light mint is recorded: a queued heavy job fits its labels');
+	assert.match(swap[0], /^jit-claw-9-hadoku-cardtabl-j300000000001-/);
+	// REVERTED (only action.heavy recorded): no file, so readFileSync throws.
+	const otherLane = await recorded([
+		job(300000000003, 'unit (1/2)', ['self-hosted', 'hadoku-builder', 'lane-ci']),
+		job(300000000004, 'forge-e2e (1)', forge),
+	]).catch(() => []);
+	assert.deepEqual(otherLane, [], 'a lane-ci unit cannot be handed a lane-forge job');
+	__resetHeavyUnitsForTesting();
+});
+
 test('#102: a JIT sibling is in liveUnits already, so it raises heavyJobs but not standingBusy', async () => {
 	const infos = recordInfos();
 	const h = harness(['jit-claw-4-hadoku-cardtabl-j7-r9-1791497283']);

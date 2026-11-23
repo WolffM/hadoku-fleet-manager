@@ -25,7 +25,7 @@ import { logger } from '../host.js';
 import { withGhCaller } from '../gh-budget.js';
 import { subCadence, __resetSubCadenceKeyForTesting } from '../lib/every.js';
 import { mapConcurrent, SWEEP_CONCURRENCY } from '../lib/concurrency.js';
-import { planTick } from './dispatcher.js';
+import { planTick, type PendingRun } from './dispatcher.js';
 import { type GhLike, type ShellLike } from '../lib/fleet-vocabulary.js';
 import {
 	mintEphemeralRunner,
@@ -46,6 +46,8 @@ import { JitDecisionBook, recordWarmAssignments } from './decision-log-record.js
 import { liveCooldowns } from './node-cooldown.js';
 import { makeCapacityOf, toJitObservation } from './dispatch-decision-flatten.js';
 import { satisfiesLabels } from './placement-node-state.js';
+import { isLaneLabel } from '../lib/capability-labels.js';
+import type { HeavyModel } from './heavy-model.js';
 import type { DispatchPassInput, DispatchPassResult } from './dispatch-pass-types.js';
 import {
 	reapBook,
@@ -326,14 +328,18 @@ export async function runDispatchPass(
 	//
 	// AND ONE NO LISTING SHOWS AT ALL: a unit whose job is no longer queued and
 	// whose run has nothing left queued is in no listing this pass reads, so
-	// the mint-time record (`heavy-units.ts`) says what it was minted for.
+	// the mint-time record (`heavy-units.ts`) says what it was minted for, or
+	// what heavy job it could have been handed instead (see the mint loop).
+	// The record is read even while the unit's own job is still queued: GitHub
+	// may hand it a heavy job of another run at any moment, and a held light
+	// job must not make the node read heavy-free.
 	if (heavyModel) {
 		for (const [node, units] of unitRecordsByNode) {
 			for (const { name } of units) {
 				if (busyRunners.has(name)) continue;
 				const jobId = parseJitName(name)?.jobId;
 				const job = jobId == null ? undefined : queuedJobs.get(jobId);
-				if (!(job ? heavyModel.isHeavy(job.repo, job.jobName) : isHeavyUnit(name))) continue;
+				if (!(isHeavyUnit(name) || (job && heavyModel.isHeavy(job.repo, job.jobName)))) continue;
 				const c = siblings.get(node) ?? { standing: 0, warm: 0, heavy: 0 };
 				c.heavy++;
 				siblings.set(node, c);
@@ -471,6 +477,10 @@ export async function runDispatchPass(
 	//   (runner-payload.sh `payload_ensure`, fleet-manager#1).
 	// The bound is the sweep one: every mint POSTs on the token the poll uses.
 	const slots = plan.mint.map((action) => takeFreeSlot(usedSlots, action.node));
+	const mintLabels = plan.mint.map((action) => [
+		...input.labelsFor(action.node),
+		...(action.lanes ?? []),
+	]);
 	// BEFORE the calls: a mint that fails after GitHub created the registration
 	// has still put a `jit-*` name in this repo.
 	for (const action of plan.mint) mintedAtMs.set(action.repo, nowMs);
@@ -481,7 +491,7 @@ export async function runDispatchPass(
 					node: action.node,
 					repo: action.repo,
 					runnerName: action.runnerName,
-					labels: [...input.labelsFor(action.node), ...(action.lanes ?? [])],
+					labels: mintLabels[i],
 					slotIndex: slots[i],
 					homeDir: input.homeDirFor(action.node),
 					tarballUrl: input.tarballUrl ?? null,
@@ -515,6 +525,8 @@ export async function runDispatchPass(
 				mintedHeavyUnits.push(action.runnerName);
 				mintedHeavy++;
 				if (action.busyAtChoice > 0) mintedHeavyOnBusy++;
+			} else if (heavyModel && couldTakeHeavy(action.repo, mintLabels[i], fresh, heavyModel)) {
+				mintedHeavyUnits.push(action.runnerName);
 			}
 			placedEntries.push(`${action.node}@${action.busyAtChoice}`);
 		} else {
@@ -579,4 +591,34 @@ export async function runDispatchPass(
 		unplaceable: plan.skipped.filter((x) => x.kind === 'unplaceable'),
 		reserved: [...new Set(plan.reserved.map((r) => `${r.repo}#${r.runId}`))],
 	};
+}
+
+/**
+ * Could GitHub hand a unit minted with `labels` for `repo` one of the heavy
+ * jobs queued now? It assigns a runner to ANY queued job its labels cover,
+ * not the one it was minted for (`lanes-stop-runner-steals`), so a unit
+ * minted for a light job is a heavy job's runner as often as not, and the
+ * heavy count then reads its node heavy-free while a Forge shard runs there.
+ * Measured 2026-11-20..23 (#103): 124 of 1,068 heavy placements counted
+ * fewer heavy jobs on the winner than job-history shows running; of the
+ * heavy jobs running in those, 118 were on a runner minted for a light job
+ * (cardtable's `e2e-nightly`, lane-forge, taking `forge-e2e` shards).
+ */
+function couldTakeHeavy(
+	repo: string,
+	labels: readonly string[],
+	queued: readonly PendingRun[],
+	heavyModel: HeavyModel
+): boolean {
+	return queued.some(
+		(p) =>
+			p.repo === repo &&
+			!!p.labels?.length &&
+			satisfiesLabels(labels, p.labels) &&
+			// satisfiesLabels passes any lane (a node carries none until a mint
+			// stamps it); a minted unit does carry its lanes, and GitHub will
+			// not give a lane-ci unit a lane-forge job.
+			p.labels.filter(isLaneLabel).every((l) => labels.includes(l)) &&
+			heavyModel.isHeavy(p.repo, p.jobName)
+	);
 }

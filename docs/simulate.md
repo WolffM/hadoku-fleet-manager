@@ -204,3 +204,25 @@ compare p50 duration and failure rate at 1, 2, 3 and 4. Join `fleet perf`'s
 `psi300.cpuSome` by `workers` for CPU pressure. The dispatch decision log's
 `capacity[].heavyJobs` against job history shows whether the count is now
 right: before the fix, 66% of claw-9's heavy placements undercounted.
+
+**Read back 2026-11-23: the trial is over.** Job history 11-12..11-23,
+claw-9, full-set forge-e2e by the most heavy jobs on the node during the
+shard:
+
+| heavy jobs at once | shards | p50     | failed | cancelled |
+| ------------------ | ------ | ------- | ------ | --------- |
+| 2                  | 17     | 3,231 s | 5.9%   | 0         |
+| 3                  | 135    | 3,659 s | 21.5%  | 15        |
+| 4                  | 96     | 3,974 s | 56.2%  | 49        |
+
+Three at once failed at well over the two-at-once rate, the exit rule above,
+so `heavyThirdHoldSec` came off claw-9 (hadoku_site manifest, #103). The
+fours were the count still missing shards: a unit minted for a LIGHT job
+(cardtable's `e2e-nightly`, lane-forge) is handed a Forge shard of another
+run, and when that run has nothing left queued no listing names it. 124 of
+1,068 heavy placements 11-20..23 counted fewer heavy jobs on the winner than
+job-history shows running, and 118 of the heavy jobs running in those were on
+such a unit. Since then a mint whose labels and lanes cover a queued heavy job
+of its repo is recorded in `heavy-units.ts` as heavy (`couldTakeHeavy` in
+`dispatch-pass.ts`), and that record is read even while the unit's own job is
+still queued.
