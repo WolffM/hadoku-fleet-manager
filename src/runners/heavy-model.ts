@@ -129,9 +129,17 @@ export function buildHeavyModel(records: readonly JobRecord[]): HeavyModel {
 		// a failed job's duration is how far it got before failing, not its
 		// normal runtime, and a probe sample (`shadow`/`forced-rerun`) is a
 		// synthetic placement test, not organic traffic.
-		if (r.conclusion !== 'success') continue;
 		if (typeof r.runSec !== 'number' || !Number.isFinite(r.runSec)) continue;
 		if (r.probe) continue;
+		// A job that did NOT succeed but ran past the line is a LOWER BOUND on
+		// its kind's runtime: it was at least that long before it failed, timed
+		// out or was cancelled. Counted at what it ran, so it can only pull the
+		// kind toward heavy. Excluding it made the model easier to pass the
+		// worse the job got: tsunami-surfer's ppe nightly legs failed or hit
+		// their 90-minute timeout on 21 of 26 runs (2026-11-23), so they never
+		// had five samples and stayed light while running 40-90 minutes. A short
+		// failure says nothing about how long the job takes, and stays out.
+		if (r.conclusion !== 'success' && r.runSec < HEAVY_P75_SEC) continue;
 		jobsByRepo.set(r.repo, (jobsByRepo.get(r.repo) ?? 0) + 1);
 		const kk = heavyKindKey(r.repo, r.name);
 		const arr = samplesByKind.get(kk);

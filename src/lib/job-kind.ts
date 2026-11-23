@@ -13,10 +13,16 @@
  * and `unit (2/2)` are two halves of one suite. Until 2026-10-29 they were two
  * kinds, so each model met them with half the history they had between them.
  *
+ * A shard written as `part INDEX/TOTAL` folds too. tsunami-surfer names its
+ * nightly legs `nightly ppe part 3/6`; on 2026-11-23 it went from three parts
+ * to six, every leg arrived under a name with no history, the heavy model
+ * read 40-90 minute browser legs as light, and four of them landed on claw-9
+ * at once and timed out together.
+ *
  * ONLY a numeric suffix. `test (ubuntu, 20)` is a different job from
  * `test (windows, 20)` and stays distinct; a shard index is a slice of the
  * same work.
  */
 export function jobKind(name: string): string {
-	return name.replace(/ \(\d+(?:\/\d+)?\)$/, '');
+	return name.replace(/ \(\d+(?:\/\d+)?\)$/, '').replace(/ part \d+\/\d+$/, '');
 }
