@@ -44,7 +44,11 @@ jobs:
   # this file, and approval is what stops that edit from running at all.
   check:
     runs-on: ${{ fromJSON((github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) && '["ubuntu-latest"]') || vars.CI_RUNNER) }}
-    timeout-minutes: 15
+    # A HANG guard, not a budget. 15 from the 08-29 scaffold until 11-23, when
+    # the suite's slowest run had grown to 905-909 s (idle claw-2: 6 min) and a
+    # loaded claw ran every test 2.5-3.2x slower, so three runs of one commit
+    # (claw-6, claw-4, claw-10) were cancelled mid-suite with nothing failing.
+    timeout-minutes: 25
     steps:
       - name: Mark the start, so the reported duration is real
         run: echo "JOB_STARTED_AT=$(date -u +%s)" >> "$GITHUB_ENV"
