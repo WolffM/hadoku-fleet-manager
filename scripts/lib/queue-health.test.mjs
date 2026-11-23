@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
 	summariseQueue,
 	summarisePending,
+	groupHeldJobs,
 	summariseUnlisted,
 	queueFindings,
 	isSaturated,
@@ -791,4 +792,79 @@ test('queuedSinceOf: the run waits from its EARLIEST queued job, held or not', (
 	);
 	assert.equal(r.since, '2026-11-22T10:05:00.000Z');
 	assert.equal(queuedSinceOf([], new Map()).since, undefined);
+});
+
+// --- fleet-manager#133: a job a JOB-level concurrency group holds ---------
+//
+// tsunami-surfer 2026-11-23. Run 45226287468's browser parts were created
+// 17:39:41 while run 45223198488's same parts held check-browser-N-<ref>.
+
+const T = (iso) => Date.parse(iso);
+const part = (id, n) => ({ id, name: `browser (${n}/6)`, created_at: '2026-11-23T17:39:41Z' });
+
+test('#133: held with nothing delivered, while the twin runs, is group-held', () => {
+	const queued = [part(1, 1), part(3, 3), part(4, 4)];
+	const live = new Set(['browser (1/6)', 'browser (3/6)', 'browser (4/6)']);
+	const held = groupHeldJobs(queued, {
+		present: true,
+		queuedAt: new Map(),
+		holderOf: (name) => live.has(name),
+	});
+	assert.deepEqual([...held].sort(), [1, 3, 4]);
+	const p = summarisePending(
+		[
+			{
+				repo: 'WolffM/tsunami-surfer',
+				id: 45226287468,
+				createdAt: '2026-11-23T17:39:41Z',
+				groupHeld: true,
+			},
+		],
+		{ nowMs: T('2026-11-23T18:13:00Z') }
+	);
+	assert.equal(p.invisible.length, 0, 'not a finding');
+	assert.equal(p.held.length, 1);
+	assert.equal(p.held[0].why, 'job concurrency group');
+	// REVERTED (no groupHeld branch): invisible=1 at 2,000 s, the page.
+});
+
+test('#133: released then queued (a delivery) is aged from the delivery, never group-held', () => {
+	// 45233684227's 4/6: delivered 18:51:48, a minute after its holder ended.
+	const held = groupHeldJobs([part(4, 4)], {
+		present: true,
+		queuedAt: new Map([[4, T('2026-11-23T18:51:48Z')]]),
+		holderOf: () => true,
+	});
+	assert.equal(held.size, 0);
+});
+
+test('#133: delivered at once (nothing ahead) is not group-held', () => {
+	// 45223198488: all six delivered within 1 s of creation.
+	const held = groupHeldJobs([part(1, 1)], {
+		present: true,
+		queuedAt: new Map([[1, T('2026-11-23T17:18:38Z')]]),
+		holderOf: () => true,
+	});
+	assert.equal(held.size, 0);
+});
+
+test('#133: a lost webhook with no live holder stays strict', () => {
+	// No delivery and nothing of that name running elsewhere: a stuck job.
+	for (const holder of [false, undefined]) {
+		const held = groupHeldJobs([part(1, 1)], {
+			present: true,
+			queuedAt: new Map(),
+			holderOf: () => holder,
+		});
+		assert.equal(held.size, 0, `holder ${holder}`);
+	}
+});
+
+test('#133: with no delivery record at all, nothing is group-held', () => {
+	const held = groupHeldJobs([part(1, 1)], {
+		present: false,
+		queuedAt: new Map(),
+		holderOf: () => true,
+	});
+	assert.equal(held.size, 0);
 });

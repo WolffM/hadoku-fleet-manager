@@ -416,6 +416,8 @@ export function summariseQueue(
  * run's jobs existed one second after the run. So:
  *
  *   - zero jobs: `held`. Waiting on its own group, not on the fleet. Reported, never a finding.
+ *   - `groupHeld`: every queued job is held by a JOB-level concurrency group
+ *     (see {@link groupHeldJobs}). Also `held`, with `why` saying so.
  *   - a job started: the run status lags its jobs, as for queued runs. Dropped.
  *   - jobs queued, or jobs UNREADABLE: `invisible`, a finding past `failSeconds`,
  *     measured from the first queued job like summariseQueue. An unread run is
@@ -424,7 +426,7 @@ export function summariseQueue(
  * No zombie band, unlike queued runs: a pending run can be cancelled, so a run
  * here is always something an operator can clear (cancel, then re-run).
  *
- * `runs`: `[{repo, id, createdAt, jobless, started, queuedSince}]`, with the jobs
+ * `runs`: `[{repo, id, createdAt, jobless, started, queuedSince, groupHeld}]`, with the jobs
  * fields set only for runs whose jobs were read.
  */
 export function summarisePending(runs, { nowMs = Date.now(), failSeconds = FAIL_SECONDS } = {}) {
@@ -435,6 +437,8 @@ export function summarisePending(runs, { nowMs = Date.now(), failSeconds = FAIL_
 		const ageSec = Math.max(0, Math.round((nowMs - Date.parse(since)) / 1000));
 		if (!Number.isFinite(ageSec) || ageSec <= failSeconds) continue;
 		if (r.jobless === true) held.push({ repo: r.repo, id: r.id, ageSec });
+		else if (r.groupHeld === true)
+			held.push({ repo: r.repo, id: r.id, ageSec, why: 'job concurrency group' });
 		else if (r.started !== true) invisible.push({ repo: r.repo, id: r.id, ageSec });
 	}
 	held.sort((a, b) => b.ageSec - a.ageSec);
@@ -587,4 +591,43 @@ export function queuedSinceOf(queuedJobs, queuedAt) {
 		if (earliest === undefined || since < earliest) earliest = since;
 	}
 	return { since: earliest === undefined ? undefined : new Date(earliest).toISOString(), held };
+}
+
+/**
+ * The queued jobs a JOB-level concurrency group is holding (fleet-manager#133).
+ *
+ * GitHub sends `workflow_job: queued` only when a job's group releases it. A
+ * job behind another run's job in the same group exists in the jobs API as
+ * `queued` with no delivery at all. tsunami-surfer, 2026-11-23: run
+ * 45226287468's browser parts 1,3,4,5,6 sat `queued` 17:39:41 -> 18:13:30
+ * with no delivery while run 45223198488's same parts held
+ * `check-browser-N-<ref>`; part 2 was delivered at 17:43:16, 65 s after its
+ * twin ended, and started. Aged from `created_at`, the held parts read as a
+ * run the dispatcher could not serve, ~30 pages a day.
+ *
+ * A job counts as held only when ALL of these hold, so a lost webhook cannot
+ * hide a stuck job:
+ *   - the delivery record is `present` (with no record, nothing is held);
+ *   - this job has no recorded delivery;
+ *   - `holderOf(name)` is `true`: a job of the same name, in another run of
+ *     the same workflow on the same branch, is running or delivered-queued
+ *     now. That job is what the group is waiting on. Once it ends GitHub
+ *     delivers this one, and it is aged from that delivery as before.
+ *     `undefined` (the holder could not be read) is not held: the strict
+ *     direction.
+ *
+ * No separate ceiling: the hold lasts only while the holder is live, and the
+ * holder is bounded by its own `timeout-minutes`.
+ *
+ * Returns the held job ids.
+ */
+export function groupHeldJobs(queuedJobs, { present, queuedAt, holderOf }) {
+	const held = new Set();
+	if (!present) return held;
+	for (const j of queuedJobs ?? []) {
+		if (queuedAt?.get(j.id) !== undefined) continue;
+		if (typeof j.name !== 'string' || !j.name) continue;
+		if (holderOf(j.name) === true) held.add(j.id);
+	}
+	return held;
 }

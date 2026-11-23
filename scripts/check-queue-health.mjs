@@ -74,6 +74,7 @@ import {
 	wedgedClaws,
 	isRateLimitFailure,
 	queuedSinceOf,
+	groupHeldJobs,
 	FAIL_SECONDS,
 } from './lib/queue-health.mjs';
 import { MAX_QUEUED_MS } from '../dist/lib/queue-thresholds.js';
@@ -150,7 +151,7 @@ function readRunsOnce(repo, status) {
 			'api',
 			`repos/${repo}/actions/runs?status=${status}&per_page=100`,
 			'-q',
-			'.workflow_runs[] | "\\(.id) \\(.created_at)"',
+			'.workflow_runs[] | "\\(.id) \\(.created_at) \\(.workflow_id) \\(.head_branch)"',
 		],
 		{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
 	);
@@ -242,7 +243,7 @@ function readJobsOnce(repo, id) {
 			`repos/${repo}/actions/runs/${id}/jobs?per_page=100`,
 			'-q',
 			'{total: .total_count, ' +
-				'queued: [.jobs[] | select(.status == "queued") | {id, labels, created_at}], ' +
+				'queued: [.jobs[] | select(.status == "queued") | {id, name, labels, created_at}], ' +
 				'running: ([.jobs[] | select(.status == "in_progress" or .status == "completed")] | length)}',
 		],
 		{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
@@ -421,8 +422,8 @@ for (const repo of roster) {
 		unreadable.push({ repo, reason: `pending listing: ${pending.reason}` });
 	} else {
 		for (const line of pending.created) {
-			const [id, createdAt] = line.split(' ');
-			pendingRuns.push({ repo, id, createdAt });
+			const [id, createdAt, workflowId, branch] = line.split(' ');
+			pendingRuns.push({ repo, id, createdAt, workflowId, branch });
 		}
 	}
 }
@@ -448,6 +449,66 @@ for (const r of runs) {
 		}
 	}
 }
+// THE HOLDER OF A JOB-LEVEL GROUP (groupHeldJobs in lib/queue-health.mjs):
+// per workflow + branch, the names of jobs running, or queued with a delivery,
+// in its live runs. One runs listing plus one jobs read per live run, cached
+// for the sweep; reached only for a pending run past the floor with queued
+// jobs that have no delivery. Unreadable is `undefined`: not held.
+const holders = new Map();
+const groupHeldLog = [];
+function readHoldersOnce(repo, workflowId, branch) {
+	const ids = execFileSync(
+		'gh',
+		[
+			'api',
+			`repos/${repo}/actions/workflows/${workflowId}/runs?branch=${encodeURIComponent(branch)}&status=in_progress&per_page=20`,
+			'-q',
+			'.workflow_runs[].id',
+		],
+		{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
+	)
+		.split('\n')
+		.map((x) => x.trim())
+		.filter(Boolean);
+	const byRun = new Map();
+	for (const id of ids) {
+		const jobs = JSON.parse(
+			execFileSync(
+				'gh',
+				[
+					'api',
+					`repos/${repo}/actions/runs/${id}/jobs?per_page=100`,
+					'-q',
+					'[.jobs[] | select(.status == "in_progress" or .status == "queued") | {id, name, status}]',
+				],
+				{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
+			)
+		);
+		const names = new Set(
+			jobs
+				.filter((j) => j.status === 'in_progress' || queuedLog.queuedAt?.get(j.id) !== undefined)
+				.map((j) => j.name)
+		);
+		byRun.set(id, names);
+	}
+	return byRun;
+}
+function holderLive(r, name) {
+	const key = `${r.repo}|${r.workflowId}|${r.branch}`;
+	if (!holders.has(key)) {
+		const read = guardedRead(r.repo, `live runs of workflow ${r.workflowId} on ${r.branch}`, () =>
+			readHoldersOnce(r.repo, r.workflowId, r.branch)
+		);
+		if (!read.ok)
+			log(`  could not read the group holder for ${r.repo} run ${r.id}: ${read.reason}`);
+		holders.set(key, read.ok ? read.created : null);
+	}
+	const byRun = holders.get(key);
+	if (!byRun) return undefined;
+	for (const [id, names] of byRun) if (id !== String(r.id) && names.has(name)) return true;
+	return false;
+}
+
 // The same floor for pending runs: a run held by its concurrency group is
 // usually well under it, so a healthy fleet pays nothing here either.
 for (const r of pendingRuns) {
@@ -456,6 +517,18 @@ for (const r of pendingRuns) {
 		r.jobless = jobs.jobless;
 		r.started = jobs.started;
 		r.queuedSince = jobs.queuedSince;
+		const queued = jobs.queuedJobs ?? [];
+		if (!queued.length || !r.workflowId || !r.branch || r.branch === 'null') continue;
+		const groupHeld = groupHeldJobs(queued, {
+			present: queuedLog.present,
+			queuedAt: queuedLog.queuedAt,
+			holderOf: (name) => holderLive(r, name),
+		});
+		if (!groupHeld.size) continue;
+		for (const id of groupHeld) groupHeldLog.push({ repo: r.repo, run: r.id, job: id });
+		const rest = queued.filter((j) => !groupHeld.has(j.id));
+		if (!rest.length) r.groupHeld = true;
+		else r.queuedSince = queuedSinceOf(rest, queuedLog.queuedAt).since ?? r.queuedSince;
 	}
 }
 
@@ -518,6 +591,7 @@ const summary = {
 	busyPool: busyPool.length,
 	started: started.length,
 	held: held.length,
+	groupHeld: groupHeldLog.length,
 	invisible: invisible.length,
 	unlisted: unlisted.length,
 	unreadable: unreadable.length,
@@ -607,7 +681,15 @@ if (held.length) {
 		`  held=${held.length} (pending with no jobs — waiting on their own concurrency group, ` +
 			'not on the fleet; not counted)'
 	);
-	for (const s of held.slice(0, 5)) log(`    ${s.repo}  ${s.ageSec}s`);
+	for (const s of held.slice(0, 5))
+		log(`    ${s.repo}  ${s.ageSec}s${s.why ? `  (${s.why})` : ''}`);
+}
+if (groupHeldLog.length) {
+	log(
+		`  groupHeld=${groupHeldLog.length} queued job(s) with no queued delivery while a same-name ` +
+			'job of another run of their workflow and branch holds the group; not counted'
+	);
+	for (const g of groupHeldLog.slice(0, 5)) log(`    ${g.repo}  run ${g.run}  job ${g.job}`);
 }
 
 const heldFirst = [...heldJobs].map(([job, h]) => ({ job, ...h }));
