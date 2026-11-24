@@ -15,9 +15,10 @@
  * secrets it needs, are done here: the same GARAGE_REPAIR script, the same
  * secret files. From then on the toolchain floor keeps it.
  *
- * PEERS DIAL BY ADDRESS. The daemon's `rpc_public_addr` is unset and Garage
- * autodetects the LAN address, so the apply connects every new node by an
- * explicit `<id>@<addr>` that `ctx.rpcAddr` resolves (the tailnet name).
+ * PEERS DIAL THE TAILNET. Each daemon advertises `rpc_public_addr`, its own
+ * tailnet IPv4 (toolchain-garage.mjs, #152), and the apply connects every new
+ * node by an explicit `<id>@<addr>` that `ctx.rpcAddr` resolves from the
+ * tailnet name: the same address, from both ends.
  */
 import {
 	ROOT_ZONE_DATA_DIR,

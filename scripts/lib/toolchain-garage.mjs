@@ -42,6 +42,16 @@
  * ci or dev work, and a dynamic user owns only /var/lib/garage and the
  * credentials. Ports are Garage's defaults: RPC 3901 (every member), S3 3900,
  * admin API 3903 on loopback only.
+ *
+ * PEERS DIAL THE TAILNET (#152). Without `rpc_public_addr`, Garage advertises
+ * the address it autodetects, the LAN one, and every peer gossips it. claw-1
+ * runs ufw with INPUT DROP and only the tailnet allowed, so claw-8/9 never
+ * reached it: claw-1 saw 3/3 up, they saw it "never seen". The repair writes
+ * `rpc_public_addr = "<tailscale ip -4>:3901"`, read ON the node, so the layout's
+ * bring-up and the toolchain floor's refresh render the same config. A node
+ * with no tailnet IPv4 fails the repair and says so; falling back to the LAN
+ * address is the failure itself. S3 needs nothing: Garage has no public S3
+ * address, and `[::]:3900` answers on the tailnet (measured from hokon).
  */
 
 import { STORAGE_LABEL } from '../../dist/lib/capability-registry-storage.js';
@@ -78,7 +88,6 @@ const TOML_HEAD = [
 const TOML_TAIL = [
 	'db_engine = "lmdb"',
 	'replication_factor = 3',
-	'rpc_bind_addr = "[::]:3901"',
 	`rpc_secret_file = "${CRED}/rpc_secret"`,
 	'',
 	'[s3_api]',
@@ -91,18 +100,20 @@ const TOML_TAIL = [
 	'',
 ];
 
-/**
- * PURE. The config, with `dataDirs` (the data-dirs file's text) in place of
- * the default data directory. Paths and ports only: the secrets are files
- * systemd hands over.
- */
-export const garageToml = (dataDirs = null) =>
-	[...TOML_HEAD, dataDirs ? dataDirs.replace(/\n+$/, '') : DEFAULT_DATA_DIR, ...TOML_TAIL].join(
-		'\n'
-	);
+const rpcLines = (ip4) => ['rpc_bind_addr = "[::]:3901"', `rpc_public_addr = "${ip4}:3901"`];
 
-/** The config on a node with no data-dirs file. */
-export const GARAGE_TOML = garageToml();
+/**
+ * PURE. The config of a node whose tailnet IPv4 is `ip4`, with `dataDirs`
+ * (the data-dirs file's text) in place of the default data directory. Paths
+ * and ports only: the secrets are files systemd hands over.
+ */
+export const garageToml = (dataDirs, ip4) =>
+	[
+		...TOML_HEAD,
+		dataDirs ? dataDirs.replace(/\n+$/, '') : DEFAULT_DATA_DIR,
+		...rpcLines(ip4),
+		...TOML_TAIL,
+	].join('\n');
 
 export const GARAGE_UNIT = [
 	'# Written by fleet-manager (scripts/lib/toolchain-garage.mjs); edits are replaced.',
@@ -179,11 +190,16 @@ export const GARAGE_REPAIR = [
 	'cat > "$tmp/head" <<\'HEAD_EOF\'',
 	TOML_HEAD.join('\n'),
 	'HEAD_EOF',
+	// #152: the address peers dial, this node's own tailnet IPv4, never the LAN.
+	'ip4="$(tailscale ip -4 2>/dev/null | head -n 1)"',
+	`printf '%s' "$ip4" | grep -Eq '^[0-9]{1,3}(\\.[0-9]{1,3}){3}$' ||`,
+	'  { echo "garage: no tailnet IPv4 on this node (tailscale ip -4 printed \'$ip4\'); peers dial rpc_public_addr over the tailnet, so the config is not written" >&2; exit 1; }',
+	`printf '%s\\n%s\\n' '${rpcLines('IP4').join("' '").replaceAll('IP4', `'"$ip4"'`)}' > "$tmp/rpc"`,
 	'cat > "$tmp/tail" <<\'TAIL_EOF\'',
 	TOML_TAIL.join('\n').replace(/\n$/, ''),
 	'TAIL_EOF',
 	`if [ -s ${GARAGE_DATA_DIRS_FILE} ]; then dd="$(cat ${GARAGE_DATA_DIRS_FILE})"; else dd='${DEFAULT_DATA_DIR}'; fi`,
-	'printf \'%s\\n%s\\n%s\\n\' "$(cat "$tmp/head")" "$dd" "$(cat "$tmp/tail")" > "$tmp/toml"',
+	'printf \'%s\\n%s\\n%s\\n%s\\n\' "$(cat "$tmp/head")" "$dd" "$(cat "$tmp/rpc")" "$(cat "$tmp/tail")" > "$tmp/toml"',
 	`if ! cmp -s "$tmp/toml" ${GARAGE_CONFIG}; then`,
 	`  sudo -n install -D -m 0644 "$tmp/toml" ${GARAGE_CONFIG}`,
 	'  changed=1',

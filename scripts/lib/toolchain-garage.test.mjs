@@ -20,7 +20,6 @@ import {
 	GARAGE_SECRET_ITEMS,
 	GARAGE_DATA_DIRS_FILE,
 	GARAGE_REPAIR,
-	GARAGE_TOML,
 	garageToml,
 	GARAGE_UNIT,
 } from './toolchain-garage.mjs';
@@ -28,6 +27,7 @@ import {
 const garage = REPAIRS.garage;
 // Eight days after the pin: past its seven-day debounce, whatever today is.
 const NOW = Date.parse(GARAGE_RELEASE.publishedAt) + 8 * 86_400_000;
+const TAILNET_IP = '192.0.2.10';
 const earned = (ids) => ({ role: 'claw', $capabilities: { earned: ids } });
 
 test('#139: when: storage gates the entry, read through nodeOffer', () => {
@@ -76,15 +76,12 @@ test('#139: secrets are files systemd hands over, never config text, and the uni
 		assert.ok(GARAGE_UNIT.includes(`AssertFileNotEmpty=${GARAGE_SECRET_DIR}/${item}`), item);
 		assert.match(GARAGE_UNIT, new RegExp(`LoadCredential=\\w+:${GARAGE_SECRET_DIR}/${item}$`, 'm'));
 	}
-	assert.match(GARAGE_TOML, /^rpc_secret_file = /m);
-	assert.match(GARAGE_TOML, /^admin_token_file = /m);
-	assert.doesNotMatch(GARAGE_TOML, /^(rpc_secret|admin_token) =/m, 'no inline secret');
-	assert.match(GARAGE_TOML, /^replication_factor = 3$/m);
-	assert.match(
-		GARAGE_TOML,
-		/^\[admin\]\napi_bind_addr = "127\.0\.0\.1:3903"$/m,
-		'admin on loopback'
-	);
+	const toml = garageToml(null, TAILNET_IP);
+	assert.match(toml, /^rpc_secret_file = /m);
+	assert.match(toml, /^admin_token_file = /m);
+	assert.doesNotMatch(toml, /^(rpc_secret|admin_token) =/m, 'no inline secret');
+	assert.match(toml, /^replication_factor = 3$/m);
+	assert.match(toml, /^\[admin\]\napi_bind_addr = "127\.0\.0\.1:3903"$/m, 'admin on loopback');
 	assert.match(GARAGE_UNIT, /^DynamicUser=yes$/m);
 	// #151: systemd's credentials are 0440 and Garage refuses them without this.
 	assert.match(GARAGE_UNIT, /^Environment=GARAGE_ALLOW_WORLD_READABLE_SECRETS=true$/m);
@@ -135,8 +132,11 @@ test('#139: the detect fails closed and names the missing vault items for the do
 	assert.match(j.reason, /GARAGE_RPC_SECRET GARAGE_ADMIN_TOKEN absent/);
 });
 
-/** Run the repair's own config-rendering lines with a data-dirs file (or none) in a tmp dir. */
-function renderedToml(dataDirs) {
+/**
+ * Run the repair's own config-rendering lines in a tmp dir, with a data-dirs
+ * file (or none) and a `tailscale` that prints `ip4` (or nothing).
+ */
+function renderToml(dataDirs, ip4 = TAILNET_IP) {
 	const root = mkdtempSync(join(tmpdir(), 'garage-toml-'));
 	try {
 		const lines = GARAGE_REPAIR.split('\n');
@@ -145,26 +145,63 @@ function renderedToml(dataDirs) {
 		assert.ok(from > 0 && to > from, 'the repair renders the config from head, data dirs, tail');
 		const dd = join(root, 'data-dirs.toml');
 		if (dataDirs !== null) writeFileSync(dd, dataDirs);
+		const bin = join(root, 'bin');
+		spawnSync('mkdir', ['-p', bin]);
+		writeFileSync(
+			join(bin, 'tailscale'),
+			`#!/bin/sh\n[ "$*" = "ip -4" ] && printf '%s' '${ip4}'\n`
+		);
+		chmodSync(join(bin, 'tailscale'), 0o755);
 		const text = [`tmp=${root}`, ...lines.slice(from, to + 1)]
 			.join('\n')
 			.replaceAll(GARAGE_DATA_DIRS_FILE, dd);
-		const r = spawnSync('bash', ['-c', text], { encoding: 'utf8' });
-		assert.equal(r.status, 0, r.stderr);
-		return readFileSync(join(root, 'toml'), 'utf8');
+		const r = spawnSync('bash', ['--noprofile', '--norc', '-c', text], {
+			encoding: 'utf8',
+			env: { PATH: `${bin}:/usr/bin:/bin` },
+		});
+		let toml = null;
+		try {
+			toml = readFileSync(join(root, 'toml'), 'utf8');
+		} catch (e) {
+			if (e?.code !== 'ENOENT') throw e;
+		}
+		return { status: r.status, stderr: r.stderr, toml };
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
 }
 
+function renderedToml(dataDirs) {
+	const r = renderToml(dataDirs);
+	assert.equal(r.status, 0, r.stderr);
+	return r.toml;
+}
+
 test('#141: the config on the node is garageToml() around its data-dirs file, byte for byte', () => {
-	assert.equal(renderedToml(null), GARAGE_TOML);
+	assert.equal(renderedToml(null), garageToml(null, TAILNET_IP));
 	const dd = 'data_dir = [ { path = "/srv/storage/root/garage", capacity = "200000000000" } ]\n';
-	assert.equal(renderedToml(dd), garageToml(dd));
+	assert.equal(renderedToml(dd), garageToml(dd, TAILNET_IP));
 	assert.match(
-		garageToml(dd),
+		garageToml(dd, TAILNET_IP),
 		/^metadata_dir = .*\ndata_dir = \[ \{ path = "\/srv\/storage\/root\/garage"/m
 	);
-	assert.doesNotMatch(garageToml(dd), /\/var\/lib\/garage\/data/);
+	assert.doesNotMatch(garageToml(dd, TAILNET_IP), /\/var\/lib\/garage\/data/);
 	// ProtectSystem=strict keeps /srv read-only unless the unit opens it.
 	assert.match(GARAGE_UNIT, /^ReadWritePaths=-\/srv\/storage$/m);
+});
+
+test('#152: peers dial the node on its tailnet IPv4, and a node without one writes no config', () => {
+	// claw-1 advertised its LAN address and its ufw dropped every peer that dialled it.
+	const toml = renderedToml(null);
+	assert.match(toml, /^rpc_bind_addr = "\[::\]:3901"\nrpc_public_addr = "192\.0\.2\.10:3901"$/m);
+	assert.ok(
+		toml.indexOf('rpc_public_addr') < toml.indexOf('[s3_api]'),
+		'a top-level key, not inside a table'
+	);
+	for (const bad of ['', '2001:db8::1', 'not running']) {
+		const r = renderToml(null, bad);
+		assert.equal(r.status, 1, `tailscale printed ${JSON.stringify(bad)}`);
+		assert.match(r.stderr, /no tailnet IPv4 on this node/);
+		assert.equal(r.toml, null, 'no config written');
+	}
 });
