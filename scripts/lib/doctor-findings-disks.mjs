@@ -29,6 +29,7 @@ import { ADVISORY } from './preflight.mjs';
 import { f } from './doctor-findings-record.mjs';
 import { parseStorage } from './storage-inventory.mjs';
 import { SMART_HOURS_ADVISORY, SMART_HOURS_BLOCKING } from './doctor-findings-thresholds.mjs';
+import { wearText } from './doctor-disk-wear.mjs';
 
 const CATEGORY = 'disk-smart';
 
@@ -227,7 +228,8 @@ export function disksLine(storage) {
 			if (!d.mediaPresent) return `${d.device} empty slot`;
 			const sm = d.smart ?? {};
 			const hours = sm.powerOnHours === null ? '' : ` ${sm.powerOnHours.toLocaleString('en-US')}h`;
-			return `${d.device} ${Math.round(d.sizeBytes / 1e9)}G ${sm.status}${hours}`;
+			const wear = wearText(sm);
+			return `${d.device} ${Math.round(d.sizeBytes / 1e9)}G ${sm.status}${hours}${wear ? ` ${wear}` : ''}`;
 		})
 		.join(' · ');
 }

@@ -110,6 +110,7 @@ import { readQualifyResults } from './qualify-results.mjs';
 import { DIE_UNTRUSTED, judgeDoctor } from './doctor-baseline.mjs';
 import { thermalFindings } from './doctor-findings-thermal.mjs';
 import { disksLine } from './doctor-findings-disks.mjs';
+import { rootWearText } from './doctor-disk-wear.mjs';
 import { judgeReload, pm2LogsLine, reloadLogsScript } from './doctor-findings-pm2-logs.mjs';
 import { poolFindings, poolSummary, withRootZones } from './doctor-findings-pool.mjs';
 import { rootZoneNodes } from './garage-layout-state.mjs';
@@ -589,7 +590,8 @@ for (const [name, h] of Object.entries(health).sort()) {
 	);
 	log(
 		`   smart     ${C(s.health)}  ${C(s.powerOnHours && s.powerOnHours.toLocaleString('en-US'))}h  ` +
-			`${C(s.temperatureC, '°C')}  life ${C(s.lifetimeRemainingPct, '%')}${s.why ? `  — ${s.why}` : ''}`
+			`${C(s.temperatureC, '°C')}  life ${C(s.lifetimeRemainingPct, '%')}` +
+			`${rootWearText(h) ? `  ${rootWearText(h)}` : ''}${s.why ? `  — ${s.why}` : ''}`
 	);
 	log(`   disks     ${disksLine(h.storage)}`);
 	log(`   pm2 logs  ${pm2LogsLine(h.pm2Logs)}`);

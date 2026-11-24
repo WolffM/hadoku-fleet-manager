@@ -47,6 +47,7 @@ export function parseSmart(lines) {
 		reallocated: null,
 		pendingSectors: null,
 		offlineUncorrectable: null,
+		reportedUncorrect: null,
 		lifetimeRemainingPct: null,
 		trim: null,
 		model: null,
@@ -118,6 +119,10 @@ export function parseSmart(lines) {
 		res.reallocated = attr('Reallocated_Sector_Ct') ?? attr('Reallocate_NAND_Blk_Cnt');
 		res.pendingSectors = attr('Current_Pending_Sector') ?? attr('Current_Pending_ECC_Cnt');
 		res.offlineUncorrectable = attr('Offline_Uncorrectable');
+		// Attribute 187: errors the drive could not correct and reported to the
+		// host. Samsung names it `Uncorrectable_Error_Cnt`; claw-10's 870 EVO
+		// root carries 2886 of them beside PASSED (#155).
+		res.reportedUncorrect = attr('Reported_Uncorrect') ?? attr('Uncorrectable_Error_Cnt');
 		// `smartctl -i`'s `TRIM Command: Available, deterministic` or
 		// `Unavailable`. Absent (most spinning disks print no TRIM line) is null.
 		const trim = /^TRIM Command:\s*(\S+)/m.exec(text);
@@ -181,6 +186,7 @@ function smartOf(tool, root, lines) {
 		reallocated: read.reallocated,
 		pendingSectors: read.pendingSectors,
 		offlineUncorrectable: read.offlineUncorrectable,
+		reportedUncorrect: read.reportedUncorrect,
 		lifetimeRemainingPct: read.lifetimeRemainingPct,
 	};
 	const text = lines.join('\n');

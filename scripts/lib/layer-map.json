@@ -2360,6 +2360,13 @@
     "why": "#129: doctor's cpu-thermal and cpu-clock bars judged against the node's own range. Pure, beside the doctor findings it feeds; reads the bars (observation thresholds) and the store's math (state)."
   },
   {
+    "glob": "scripts/lib/doctor-disk-wear.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "#155: every disk's SMART error counts (root included) learned per serial in node-baselines and judged for growth; shadow findings and the render text. Pure, beside doctor-baseline.mjs, which folds its readings into the doctor's window."
+  },
+  {
     "glob": "scripts/lib/doctor-scope.mjs",
     "layer": "domain",
     "domain": "observation",

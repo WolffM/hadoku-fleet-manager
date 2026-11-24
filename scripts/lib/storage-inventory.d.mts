@@ -37,6 +37,8 @@ export interface StorageSmart {
 	pendingSectors: number | null;
 	/** ATA attribute 198: sectors the drive's own offline scan could not read. */
 	offlineUncorrectable: number | null;
+	/** ATA attribute 187 (Reported_Uncorrect, Samsung's Uncorrectable_Error_Cnt). */
+	reportedUncorrect: number | null;
 	lifetimeRemainingPct: number | null;
 }
 

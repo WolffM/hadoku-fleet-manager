@@ -27,6 +27,7 @@
  * baseline could not be read.
  */
 import { judgeReading } from './node-baselines.mjs';
+import { judgeWear } from './doctor-disk-wear.mjs';
 import {
 	CLOCK_STUCK_FRACTION,
 	THERMAL_ADVISORY_C,
@@ -110,6 +111,10 @@ export function judgeDoctor(health, quantities, at, opts = {}) {
 		stamp[key] = { value, ...v };
 		readings.push({ quantity, value, spec, drifted: v.verdict === 'drift' });
 	}
+	// Every disk's SMART error counts, per serial (#155, doctor-disk-wear.mjs).
+	const wear = judgeWear(health, quantities);
+	if (wear.stamp.length) stamp.diskWear = wear.stamp;
+	readings.push(...wear.readings);
 	const t = stamp.loadTempC;
 	if (t) {
 		if (t.value >= THERMAL_ADVISORY_C && t.value < THERMAL_BLOCKING_C)

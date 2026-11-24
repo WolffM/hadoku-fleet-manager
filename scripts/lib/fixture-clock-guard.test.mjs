@@ -337,6 +337,10 @@ for (const days of SHIFTS) {
  */
 const DECLARED = new Map([
 	[
+		'scripts/lib/doctor-disk-wear.test.mjs',
+		'AT is only the `updatedAt` stamp `learnReading` copies onto an estimate; nothing in judgeWear or wearFindings reads a time or filters by age.',
+	],
+	[
 		'scripts/lib/qualify-concurrency.test.mjs',
 		'`jobProfile` and the ramp take `nowMs` (the fixture passes its own NOW, and the fake ' +
 			"ctx carries it); job `ts` values are compared with that, never with the clock. The one in a fake job-metrics read's stdout is only checked for its sentinel.",
