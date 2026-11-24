@@ -147,6 +147,28 @@ export const ARGV_SPECS = {
 		positionals: false,
 	},
 
+	'storage-format.mjs': {
+		usage: [
+			'fleet storage-format — format + fstab + mount ONE qualified disk for the storage pool',
+			'',
+			'  (no flags)                    every node: each spare disk, its verdict and why',
+			'  --machine <node>              one node, with the exact script per disk',
+			'  --machine <node> --disk <serial> --confirm',
+			'                                format THAT disk, under the drain/idle hold',
+			'  --wipe-signature              also destroy an existing partition table/filesystem',
+			'  --fs <ext4|xfs>               default ext4',
+			'  --json                        one document',
+			'',
+			'Without --confirm only the read-only probe runs on a node. --confirm needs',
+			'--machine AND --disk. Refused always: the root disk, a mounted disk, a',
+			'serial two disks share, a disk F2 has not qualified. The node re-reads the',
+			'serial and every refusal before its first write (lib/storage-format.mjs).',
+		].join('\n'),
+		booleans: ['--json', '--confirm', '--wipe-signature'],
+		valued: ['--machine', '--disk', '--fs'],
+		positionals: false,
+	},
+
 	'failures.mjs': {
 		usage: [
 			'fleet failures — per-node CI failure rate against the FLEET rate for the same repo+kind',

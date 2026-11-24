@@ -2253,6 +2253,20 @@
     "why": "#129: node-baselines.json's one writer and reader, each node's learned range per measured quantity plus its weak points. State, so qualify (lifecycle), doctor and placement can all read one store without importing each other."
   },
   {
+    "glob": "scripts/lib/storage-format.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Storage bootcamp F5 (fleet-manager#140): the guarded format + fstab + mount converger. Lifecycle, like qualify and bootcamp: it decides what a node's disk becomes, under proof-drain's idle hold (lifecycle). Reads F1's record (access) and F2's verdicts in qualify-results.mjs (state)."
+  },
+  {
+    "glob": "scripts/storage-format.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Storage bootcamp F5 (fleet-manager#140): the `fleet storage-format` CLI. Beside scripts/qualify-node.mjs."
+  },
+  {
     "glob": "scripts/lib/qualify-*.mjs",
     "layer": "domain",
     "domain": "lifecycle",

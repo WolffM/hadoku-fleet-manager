@@ -39,6 +39,15 @@ export const commandsGates: Record<string, Command> = {
 			'hold ONE node out of service and run the qualification playlist against it (--dry-run: drain nothing;' +
 			' --disks: the storage SMR/SMART checks; --burn-in <serial> --confirm: burn one disk in)',
 	},
+	// Not under the --json contract: no cron runs it. It DESTROYS a disk's data
+	// with --confirm, so it is an operator act (scripts/lib/storage-format.mjs).
+	'storage-format': {
+		script: 'storage-format.mjs',
+		kind: 'operator',
+		help: true,
+		summary:
+			'format + fstab + mount ONE qualified disk by serial for the storage pool (dry run unless --disk <serial> --confirm)',
+	},
 	'capability-schema': {
 		script: 'check-capability-schema.mjs',
 		kind: 'gate',

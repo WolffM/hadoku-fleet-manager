@@ -88,6 +88,27 @@ a fact about that node's hardware. It never becomes a task for the operator.
 manifest's say alone — a capability a probe cannot confirm is not offered,
 even if the operator believes it should be there.
 
+### A disk for the storage pool
+
+**What it does.** `fleet storage-format` turns one qualified spare disk into
+storage-pool space: one GPT partition, ext4 (or xfs), an fstab line by UUID
+with `nofail`, and a mount at `/srv/storage/<serial>` with a `garage/` data
+directory. It destroys whatever is on the disk, so its refusals are the
+feature.
+
+**How to use it.** Run it bare, or with `--machine <node>`, to see each spare
+disk's verdict and the exact script it would run. Nothing but a read-only
+probe touches the node. `--machine <node> --disk <serial> --confirm` formats
+that one disk, and it runs under the same drain-and-wait-for-idle hold
+qualification uses.
+
+**What it does not do.** It never formats a disk named by device (`sdb`
+moves between boots), the root disk, a mounted disk, a disk shared by two
+serials, or one that has not passed every disk qualification test. A disk
+with an existing partition table or filesystem also needs
+`--wipe-signature`. The script on the node reads the serial and every
+refusal again just before its first write, and stops having written nothing.
+
 ### Agent sessions on a node
 
 **What it does.** Lets a node host the operator's interactive agent sessions
