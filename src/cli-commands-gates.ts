@@ -48,6 +48,16 @@ export const commandsGates: Record<string, Command> = {
 		summary:
 			'format + fstab + mount ONE qualified disk by serial for the storage pool (dry run unless --disk <serial> --confirm)',
 	},
+	// Not under the --json contract's cron list: an operator declares and applies
+	// a layout by hand; the doctor reads the pool on its own clock (readPool).
+	'garage-layout': {
+		script: 'garage-layout.mjs',
+		kind: 'operator',
+		help: true,
+		summary:
+			'the storage pool: declared Garage zones and tenant buckets against the cluster, the capacity rules, ' +
+			'and a dry-run plan (--apply carries it out)',
+	},
 	'capability-schema': {
 		script: 'check-capability-schema.mjs',
 		kind: 'gate',

@@ -12,10 +12,11 @@
  *     everything? That needs a spare zone (factor + 1 of them) AND the room:
  *     everything stored must fit on what is left after the biggest member goes.
  *
- * NOTHING READS GARAGE YET. The layout manager (#141) and the pool gate (#142)
- * will hand this module the cluster's state; until then `garage` is null. A
- * fleet where no node offers `storage` has no pool, and that is `state: 'none'`
- * with no finding. Members with no state read is a finding: "I could not look".
+ * THE STATE IS READ by garage-admin.mjs's `readPool` (#141) through the first
+ * member whose admin API answers; `garage` is null, with why, when none does.
+ * A fleet where no node offers `storage` has no pool, and that is
+ * `state: 'none'` with no finding. Members with no state read is a finding:
+ * "I could not look".
  *
  * SHIPPED QUIET: every finding is ADVISORY with `shadow: true` until its
  * false-positive rate is known. One fleet-wide pool, so the findings' `node`

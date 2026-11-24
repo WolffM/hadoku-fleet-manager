@@ -28,6 +28,31 @@
 
 /** @type {Record<string, ArgvSpec>} */
 export const ARGV_SPECS = {
+	'garage-layout.mjs': {
+		usage: [
+			'fleet garage-layout [--apply [--override <reason>]] [--json]',
+			'fleet garage-layout --declare <node> (--disk SERIAL=SIZE[,...] | --root SIZE)',
+			'fleet garage-layout --drain <node> | --forget <node> | --bucket <ns> [--key <name>]',
+			'  (no flag)   the plan: bring-up, layout change, rules, buckets; touches nothing',
+			'  --apply     carry it out; a refused rule stops it unless --override gives a reason',
+			'  --declare   a node as a zone, its capacity per disk by serial (or a quota on /)',
+			'  --drain     take a zone out: its role leaves the layout, Garage moves its data',
+			'  --forget    drop a drained zone from the declaration',
+			'  --bucket    tenant namespace <ns> gets bucket dp-<ns> and key <name> (default dp-<ns>)',
+		].join('\n'),
+		booleans: ['--apply', '--json'],
+		valued: [
+			'--override',
+			'--declare',
+			'--disk',
+			'--root',
+			'--drain',
+			'--forget',
+			'--bucket',
+			'--key',
+		],
+		positionals: false,
+	},
 	'reboot-claws.mjs': {
 		usage: [
 			'fleet reboot-claws [--plan] [--machine <claw>] [--force] [--json]',

@@ -84,6 +84,21 @@ node is drained, and writes and verifies every sector too if the disk is
 blank. It runs in parts and picks up where it stopped. A disk that fails is
 a fact about that node's hardware. It never becomes a task for the operator.
 
+`fleet garage-layout` manages the storage pool itself: which nodes are Garage
+zones, how much of which disk each one gives, and one bucket per tenant
+namespace (`dp-<ns>`, a global alias, the tenant's key granted read and
+write). `--declare`, `--drain` and `--bucket` only record what should be;
+with no flag it prints the plan against what the cluster and the nodes
+report, and touches nothing. `--apply` carries it out: it installs Garage
+and its secrets on a new zone, connects it, applies the layout, creates the
+buckets. It refuses a change that breaks a capacity rule. Each disk stays
+under 80% full. The pool never drops below 3 healthy zones. The space
+outside the biggest zone must hold everything in it. A zone leaves by
+draining, never by removal. An operator can override a refused rule with
+`--override "<reason>"`, and the reason is kept. Nothing overrides a reading
+that could not be taken. With exactly 3 zones the last rule cannot hold, and
+the plan reports that instead of refusing.
+
 **What it does not do.** It will not admit a node to scheduling on the
 manifest's say alone — a capability a probe cannot confirm is not offered,
 even if the operator believes it should be there.

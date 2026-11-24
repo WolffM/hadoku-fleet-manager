@@ -104,6 +104,7 @@ import { DIE_UNTRUSTED, judgeDoctor } from './doctor-baseline.mjs';
 import { thermalFindings } from './doctor-findings-thermal.mjs';
 import { disksLine } from './doctor-findings-disks.mjs';
 import { poolFindings, poolSummary } from './doctor-findings-pool.mjs';
+import { readPool } from './garage-admin.mjs';
 import { toolAppliesTo } from './toolchain-floor.mjs';
 import { nodeQuantities, readNodeBaselines, recordNodeBaselines } from './node-baselines.mjs';
 
@@ -472,14 +473,18 @@ for (const [name, h] of Object.entries(health).sort()) {
 }
 
 // ── the storage pool (#138): fleet-wide, so judged once, not per node ───────
-// Members are the nodes the Garage entry applies to. Nothing reads the cluster
-// yet (the layout manager, #141), so a fleet with members says "unread".
+// Members are the nodes the Garage entry applies to; the cluster is read
+// through the first one whose admin API answers (garage-admin.mjs, #141).
+const POOL_MEMBERS = selectMachines(manifest, {})
+	.filter(([, m]) => toolAppliesTo('garage', m))
+	.map(([name]) => name);
 const POOL = {
-	members: selectMachines(manifest, {})
-		.filter(([, m]) => toolAppliesTo('garage', m))
-		.map(([name]) => name),
-	garage: null,
-	why: 'nothing reads the Garage cluster state yet (the layout manager, fleet-manager#141)',
+	members: POOL_MEMBERS,
+	...(await readPool(
+		POOL_MEMBERS,
+		(node) => (script) => runOn(node, script, { as: 'admin', timeoutMs: 30_000 }),
+		at
+	)),
 };
 findings.push(...poolFindings(POOL));
 

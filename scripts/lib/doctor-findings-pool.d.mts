@@ -1,9 +1,10 @@
 /**
  * THE POOL INPUT `poolFindings` judges (hadoku-fleet-manager#138, F3).
  *
- * Nothing reads a Garage cluster yet: the layout manager (#141) and the pool
- * gate (#142) will. Until then the doctor hands `garage: null`, and a fleet in
- * which no node offers `storage` is `state: 'none'`, which is not a finding.
+ * The doctor reads it through the first member whose admin API answers
+ * (`readPool` in garage-admin.mjs, #141); `garage: null` with `why` when none
+ * does. A fleet in which no node offers `storage` is `state: 'none'`, which is
+ * not a finding.
  *
  * NULL MEANS "NOT REPORTED", never zero: a node whose capacity is null was not
  * measured, and the N+1 sum refuses to run over it.

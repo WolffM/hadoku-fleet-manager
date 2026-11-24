@@ -106,6 +106,12 @@ const EXEMPT = new Map([
 			'changed; there is no fleet-wide finding to defer.',
 	],
 	[
+		'garage-layout.mjs',
+		'operator-invoked, and an unreachable declared zone is already a BLOCKED bring-up ' +
+			'step or a could-not-look rule in its plan, which refuses --apply. No cron runs it, ' +
+			'so a drained node there is reported in the plan, never paged.',
+	],
+	[
 		'hosting-placement.mjs',
 		"node-status's sibling for ONE app: a deploy reads it to follow the app's " +
 			'slices, and a drained hosting node is exactly one it must not follow. ' +

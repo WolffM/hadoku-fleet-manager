@@ -56,6 +56,16 @@ export const ENV_READS: readonly EnvRead[] = [
 	cli('FLEET_GH_APP_ID', 'fleet-gates GitHub App id (bulk gates mint an installation token)'),
 	cli('FLEET_GH_APP_KEY', 'fleet-gates GitHub App private key (PEM)', true),
 	cli('FLEET_GH_APP_INSTALLATION_ID', 'fleet-gates GitHub App installation, when not discovered'),
+	cli(
+		'GARAGE_RPC_SECRET',
+		'`fleet garage-layout --apply`: the storage pool RPC secret a new zone gets',
+		true
+	),
+	cli(
+		'GARAGE_ADMIN_TOKEN',
+		'`fleet garage-layout --apply`: the storage pool admin token a new zone gets',
+		true
+	),
 	cli('FLEET_SERVICE_KEY', 'monitoring-api / consumer-imports service key', true),
 	cli('CLOUDFLARE_TUNNEL_API_TOKEN', 'converge-toolchain: Cloudflare tunnel API token', true),
 	cli('DISCORD_EMERGENCY_NOTIFICATIONS_WEBHOOK', 'standalone serve: the paging webhook', true),

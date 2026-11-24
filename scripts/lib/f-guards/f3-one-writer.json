@@ -18,6 +18,7 @@
     "fleet-hosting.json": ["src/runners/hosting-record.ts"],
     "fleet-runner-coverage.json": ["scripts/lib/reconcile-coverage.mjs"],
     "fleet-runner-manifest.json": ["scripts/node-users-cutover.mjs"],
+    "garage-layout.json": ["scripts/lib/garage-layout-state.mjs"],
     "gh-budget.json": ["src/gh-budget-windows.ts"],
     "heavy-marks.json": ["src/runners/heavy-marks.ts"],
     "heavy-units.json": ["src/runners/heavy-units.ts"],

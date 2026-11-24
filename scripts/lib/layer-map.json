@@ -495,6 +495,16 @@
     "why": "Verbatim storage-probe.sh captures from real nodes for storage-inventory.test.mjs; same layer as the parser it feeds, like fleet-source-fixture.mjs."
   },
   {
+    "glob": "scripts/lib/garage-admin.mjs",
+    "layer": "access",
+    "why": "Storage bootcamp F6 (#141): the Garage admin API (in-process HTTP, or curl on a member's loopback via fleet-exec) and readCluster/garageState, the one reader of a cluster that both the layout plan and the doctor's pool findings use. Another system's data, like gh-app.mjs."
+  },
+  {
+    "glob": "scripts/lib/garage-layout-state.mjs",
+    "layer": "state",
+    "why": "Storage bootcamp F6 (#141): garage-layout.json's one writer and reader, the declared pool (zones, disks, buckets, overrides). A one-writer record like qualify-results.mjs."
+  },
+  {
     "glob": "scripts/lib/gh-app.mjs",
     "layer": "access"
   },
@@ -2279,6 +2289,27 @@
     "domain": "lifecycle",
     "part": "run",
     "why": "Wave bootcamp2 lane Q0: the `fleet qualify` CLI. Beside scripts/bootcamp.mjs."
+  },
+  {
+    "glob": "scripts/lib/garage-layout.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core",
+    "why": "Storage bootcamp F6 (#141): the pure Garage layout and bucket plan, declared against observed, and the capacity rules (80% ceiling, 3-zone floor, N+1, drain before remove). Onboarding storage is lifecycle, like qualify-*."
+  },
+  {
+    "glob": "scripts/lib/garage-apply.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Storage bootcamp F6 (#141): the I/O around garage-layout.mjs: probe each declared zone, read the cluster, bring a zone up (F4's repair + the secret files), apply the layout and the buckets."
+  },
+  {
+    "glob": "scripts/garage-layout.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "Storage bootcamp F6 (#141): the `fleet garage-layout` CLI. Beside scripts/qualify-node.mjs."
   },
   {
     "glob": "scripts/lib/bootcamp-*.mjs",
