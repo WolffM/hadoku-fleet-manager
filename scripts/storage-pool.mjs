@@ -133,6 +133,16 @@ if (members.length) {
 if (verdict.state === 'read') writeJsonAtomicSync(recordPath, verdict.record, { space: 2 });
 
 emitter.log(verdict.summary);
+// The join comparison is added after the pool verdict; say its share apart, so
+// the counts above stay the pool's own.
+const joinLines = [...verdict.warnings, ...verdict.known].filter((f) =>
+	String(f.kind).startsWith('pool-join/')
+);
+if (joinLines.length)
+	emitter.log(
+		`across each join: ${joinLines.filter((f) => f.kind === 'pool-join/regressed').length} warn, ` +
+			`${joinLines.filter((f) => f.kind !== 'pool-join/regressed').length} known (included in the lines below)`
+	);
 for (const [label, list] of [
 	['PAGE', verdict.findings],
 	['warn', verdict.warnings],
