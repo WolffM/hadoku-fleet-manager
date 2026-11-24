@@ -210,7 +210,14 @@ export const THROTTLES_SH =
  * Picking the die sensor on the control side (see {@link cpuSensor}) would be
  * worthless if the two halves could disagree about which sensor that was.
  *
- * @param {{loadSeconds?: number, force?: boolean, seedCachePaths?: string[], noLoadWhy?: string}} [opts]
+ * `storageProbeSh` is `scripts/storage-probe.sh`'s text (#138): the one device
+ * loop, run as root through a quoted heredoc so the doctor reads SMART on EVERY
+ * disk with the same probe the inventory and the benchmark use. Its lines come
+ * back prefixed `T ` (its own `S <dev>` lines would read as the root drive's
+ * smartctl output otherwise). Absent, the probe says so as `U storage`.
+ *
+ * @param {{loadSeconds?: number, force?: boolean, seedCachePaths?: string[], noLoadWhy?: string,
+ *          storageProbeSh?: string}} [opts]
  *   `loadSeconds: 0` disables the load phase and says so as an `unknown`.
  *   `force` loads the box even while CI is building on it.
  *   `seedCachePaths`: `~`-relative paths (wave 4c §E's manifest `$seeds[*].cache`
@@ -225,6 +232,7 @@ export function doctorProbe({
 	force = false,
 	seedCachePaths = [],
 	noLoadWhy = NO_LOAD_WHY,
+	storageProbeSh = null,
 } = {}) {
 	const secs = Number.isFinite(loadSeconds) && loadSeconds > 0 ? Math.floor(loadSeconds) : 0;
 	// Embedded in a remote shell line inside double quotes, so nothing that
@@ -361,6 +369,7 @@ export function doctorProbe({
 		'  SOUT=$($SUDO /usr/sbin/smartctl -H -A "/dev/$RDEV" 2>&1)',
 		'  if [ -n "$SOUT" ]; then printf "%s\\n" "$SOUT" | sed "s/^/S /"; else unk smart "smartctl produced no output at all for /dev/$RDEV"; fi',
 		'fi',
+		...storageBlock(storageProbeSh),
 		// ── staged reboot. Same file and shape `preflight.mjs` already judges. ─
 		'if [ -f /var/run/reboot-required ]; then',
 		'  say reboot.required yes',
@@ -475,4 +484,29 @@ export function doctorProbe({
 			: `unk load ${JSON.stringify(noLoadWhy)}`,
 		'echo "DOCTOR-END $(cat /proc/sys/kernel/hostname 2>/dev/null)"',
 	].join('\n');
+}
+
+const STORAGE_EOF = 'FLEET_STORAGE_PROBE_EOF';
+
+/**
+ * Every disk, through storage-probe.sh (#138). As root when `sudo -n` works,
+ * else as the probe's user, which the inventory records as `storage.root no`
+ * and every drive as `not-root`: a refusal, never a pass.
+ */
+export function storageBlock(sh) {
+	if (!sh) {
+		return [
+			'unk storage "the doctor was not handed storage-probe.sh, so no disk but root was read"',
+		];
+	}
+	if (sh.split('\n').includes(STORAGE_EOF)) {
+		throw new Error(`doctorProbe: storage-probe.sh contains its own terminator ${STORAGE_EOF}`);
+	}
+	return [
+		'if [ "$ROOTOK" = yes ]; then SPRUN="$SUDO sh -s"; else SPRUN="sh -s"; fi',
+		`$SPRUN 2>&1 <<'${STORAGE_EOF}' | sed "s/^/T /"`,
+		sh,
+		'storage_probe',
+		STORAGE_EOF,
+	];
 }

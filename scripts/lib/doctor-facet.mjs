@@ -1,5 +1,6 @@
 import { cpuSensor, sensorMap } from './doctor-parse.mjs';
 import { parseSmart } from './storage-inventory.mjs';
+import { storageFacet } from './doctor-findings-disks.mjs';
 import { parseWifiManager } from './node-interfaces.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -231,6 +232,8 @@ export function healthFacet({
 			lifetimeRemainingPct: smartRead.lifetimeRemainingPct,
 			why: unknown.smart ?? smartRead.reason,
 		},
+		// Every disk, root included, from storage-probe.sh (#138).
+		storage: storageFacet(probe.storage ?? [], unknown),
 		disk: {
 			device: facts['disk.root.device'] ?? null,
 			fs: facts['disk.root.fs'] ?? null,

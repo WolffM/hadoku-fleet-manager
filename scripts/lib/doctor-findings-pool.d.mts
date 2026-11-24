@@ -1,0 +1,60 @@
+/**
+ * THE POOL INPUT `poolFindings` judges (hadoku-fleet-manager#138, F3).
+ *
+ * Nothing reads a Garage cluster yet: the layout manager (#141) and the pool
+ * gate (#142) will. Until then the doctor hands `garage: null`, and a fleet in
+ * which no node offers `storage` is `state: 'none'`, which is not a finding.
+ *
+ * NULL MEANS "NOT REPORTED", never zero: a node whose capacity is null was not
+ * measured, and the N+1 sum refuses to run over it.
+ */
+
+export interface PoolNodeState {
+	/** The fleet node name (claw-9), which is also its one Garage zone. */
+	node: string;
+	zone: string | null;
+	up: boolean;
+	capacityBytes: number | null;
+	usedBytes: number | null;
+}
+
+export interface GarageState {
+	/** `replication_factor` the cluster runs with; the design is 3. */
+	replicationFactor: number | null;
+	nodes: PoolNodeState[];
+	/** Blocks held on fewer copies than the factor. Null: not read. */
+	underReplicatedBlocks: number | null;
+	/** When this state was read, ISO. */
+	at: string;
+}
+
+export interface PoolInput {
+	/** Nodes that offer `storage`, i.e. where the Garage entry applies. */
+	members: string[];
+	/** The cluster as Garage reports it, or null when nothing read it. */
+	garage: GarageState | null;
+	/** Why `garage` is null. */
+	why: string | null;
+}
+
+export interface PoolSummary {
+	state: 'none' | 'unread' | 'read';
+	members: string[];
+	why: string | null;
+}
+
+export interface PoolFinding {
+	node: string;
+	category: 'pool-copies' | 'pool-fill' | 'pool-node' | 'pool-n-plus-1';
+	class: 'advisory';
+	status: string;
+	why: string;
+	shadow: true;
+	[k: string]: unknown;
+}
+
+export const POOL_COPIES: 3;
+export const POOL_FILL_ADVISORY_PCT: number;
+export const POOL_FILL_FULL_PCT: number;
+export function poolSummary(input: PoolInput): PoolSummary;
+export function poolFindings(input: PoolInput): PoolFinding[];

@@ -73,6 +73,7 @@ import { f } from './doctor-findings-record.mjs';
 import { thermalFindings } from './doctor-findings-thermal.mjs';
 import { watchdogFindings } from './doctor-findings-watchdog.mjs';
 import { storageFindings } from './doctor-findings-storage.mjs';
+import { diskFindings } from './doctor-findings-disks.mjs';
 import { networkFindings } from './doctor-findings-network.mjs';
 import { opsFindings } from './doctor-findings-ops.mjs';
 import { cpuFindings } from './doctor-findings-cpu.mjs';
@@ -147,6 +148,7 @@ export function doctorFindings(health, { nowMs = Date.now(), machine } = {}) {
 		...clockFindings(health),
 		...watchdogFindings(health),
 		...storageFindings(health),
+		...diskFindings(health),
 		...networkFindings(health),
 		...opsFindings(health, { nowMs }),
 		...cpuFindings(health),

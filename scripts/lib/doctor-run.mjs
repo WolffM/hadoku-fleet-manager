@@ -102,6 +102,9 @@ import { PRODUCTION_DAYS, qualifiedCapacity, rampEntry } from './doctor-findings
 import { readQualifyResults } from './qualify-results.mjs';
 import { DIE_UNTRUSTED, judgeDoctor } from './doctor-baseline.mjs';
 import { thermalFindings } from './doctor-findings-thermal.mjs';
+import { disksLine } from './doctor-findings-disks.mjs';
+import { poolFindings, poolSummary } from './doctor-findings-pool.mjs';
+import { toolAppliesTo } from './toolchain-floor.mjs';
 import { nodeQuantities, readNodeBaselines, recordNodeBaselines } from './node-baselines.mjs';
 
 // Through the shared emitter, which every subcommand under the `--json`
@@ -158,12 +161,19 @@ if (!nodes.length) {
 	process.exit(1);
 }
 
-const PROBE = doctorProbe({ loadSeconds: NO_LOAD ? 0 : SECONDS, force: FORCE });
+// Every disk, through the one device loop (#138), sent inside the probe.
+const STORAGE_PROBE_SH = readFileSync(new URL('../storage-probe.sh', import.meta.url), 'utf8');
+const PROBE = doctorProbe({
+	loadSeconds: NO_LOAD ? 0 : SECONDS,
+	force: FORCE,
+	storageProbeSh: STORAGE_PROBE_SH,
+});
 const BACKSTOPS = backstopNodeNames(manifest);
 const PROBE_ATTEMPTS = 2;
 const BACKSTOP_CADENCE_PROBE = doctorProbe({
 	loadSeconds: 0,
 	noLoadWhy: BACKSTOP_CADENCE_NO_LOAD_WHY,
+	storageProbeSh: STORAGE_PROBE_SH,
 });
 const probeFor = (name) => (CADENCE && BACKSTOPS.has(name) ? BACKSTOP_CADENCE_PROBE : PROBE);
 const at = new Date().toISOString();
@@ -461,6 +471,18 @@ for (const [name, h] of Object.entries(health).sort()) {
 	}
 }
 
+// ── the storage pool (#138): fleet-wide, so judged once, not per node ───────
+// Members are the nodes the Garage entry applies to. Nothing reads the cluster
+// yet (the layout manager, #141), so a fleet with members says "unread".
+const POOL = {
+	members: selectMachines(manifest, {})
+		.filter(([, m]) => toolAppliesTo('garage', m))
+		.map(([name]) => name),
+	garage: null,
+	why: 'nothing reads the Garage cluster state yet (the layout manager, fleet-manager#141)',
+};
+findings.push(...poolFindings(POOL));
+
 // THE BACKSTOP'S NODE HEALTH DOES NOT FAIL THIS RUN: it is the production host,
 // and its reboots and kernel are the operator's. The one implementation is the
 // one `check-fleet-preflight` also uses. Nothing is dropped: the finding keeps
@@ -500,6 +522,7 @@ for (const [name, h] of Object.entries(health).sort()) {
 		`   smart     ${C(s.health)}  ${C(s.powerOnHours && s.powerOnHours.toLocaleString('en-US'))}h  ` +
 			`${C(s.temperatureC, '°C')}  life ${C(s.lifetimeRemainingPct, '%')}${s.why ? `  — ${s.why}` : ''}`
 	);
+	log(`   disks     ${disksLine(h.storage)}`);
 	log(
 		`   network   wifi ${C(n.wifiManager)}${n.radio ? ` on ${n.radio} (${C(n.operstate)}` : ' ('}` +
 			`${n.ssid ? ` ssid ${n.ssid}` : ''}${n.signalDbm ? ` ${n.signalDbm}dBm` : ''})`
@@ -528,6 +551,11 @@ for (const [name, h] of Object.entries(health).sort()) {
 			`   qualified ${qc.state}${qc.proposal ? `: would set ${qc.proposal} (live ${qc.live})` : ''} — ${qc.why}`
 		);
 }
+
+const pool = poolSummary(POOL);
+log(
+	`\n══ pool  ${pool.state}${pool.members.length ? ` (${pool.members.join(', ')})` : ''}  — ${pool.why ?? 'read'}`
+);
 
 if (findings.length) {
 	log('');
@@ -600,6 +628,7 @@ if (emitter.json) {
 		nodes: Object.keys(health).sort(),
 		health,
 		findings,
+		pool,
 		blocking: blocking.length,
 		advisory: advisory.length,
 		unreachable,

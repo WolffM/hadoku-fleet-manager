@@ -1,18 +1,25 @@
 /**
- * Split {@link doctorProbe}'s stdout into facts, unknowns and smartctl lines.
+ * Split {@link doctorProbe}'s stdout into facts, unknowns, the root drive's
+ * smartctl lines and storage-probe.sh's lines (`T `, every disk; #138).
  *
  * @param {string} out
  * @returns {{complete: boolean, facts: Record<string,string>,
- *            unknown: Record<string,string>, smart: string[], wifiRaw: string}}
+ *            unknown: Record<string,string>, smart: string[], storage: string[],
+ *            wifiRaw: string}}
  */
 export function parseDoctor(out) {
 	const text = String(out ?? '');
 	const facts = {};
 	const unknown = {};
 	const smart = [];
+	const storage = [];
 	for (const line of text.split('\n')) {
-		const m = /^([DUS]) (.*)$/.exec(line.replace(/\r$/, ''));
+		const m = /^([DUST]) (.*)$/.exec(line.replace(/\r$/, ''));
 		if (!m) continue;
+		if (m[1] === 'T') {
+			storage.push(m[2]);
+			continue;
+		}
 		if (m[1] === 'S') {
 			smart.push(m[2]);
 			continue;
@@ -26,6 +33,7 @@ export function parseDoctor(out) {
 		facts,
 		unknown,
 		smart,
+		storage,
 		wifiRaw: text,
 	};
 }

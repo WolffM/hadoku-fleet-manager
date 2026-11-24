@@ -2364,6 +2364,20 @@
     "why": "Wave shrink-1 lane D, pure move: doctorFindings' disk-free (root + _work) and SMART judgement. Same bucket as doctor-findings.mjs itself."
   },
   {
+    "glob": "scripts/lib/doctor-findings-disks.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "#138 (storage bootcamp F3): $health.storage from storage-probe.sh's lines (via parseStorage, access) and the per-disk SMART judgement for every disk beside root. Pure; same bucket as doctor-findings-storage.mjs, which keeps the root drive."
+  },
+  {
+    "glob": "scripts/lib/doctor-findings-pool.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "#138 (storage bootcamp F3): the Garage pool's copies/fill/N+1 judgement over a typed input (doctor-findings-pool.d.mts). Pure; doctor-run.mjs hands it the members. Same bucket as the other doctor-findings-* judges."
+  },
+  {
     "glob": "scripts/lib/doctor-findings-network.mjs",
     "layer": "domain",
     "domain": "observation",
