@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { bucketAlias, diskCeiling, parseSize, planBuckets, planLayout } from './garage-layout.mjs';
+import {
+	bucketAlias,
+	dataDirsToml,
+	diskCeiling,
+	diskQualified,
+	parseSize,
+	planBuckets,
+	planLayout as planWith,
+	quotaMb,
+} from './garage-layout.mjs';
+import { resultKey } from './qualify-results.mjs';
 
 const TB = 1e12;
 const GB = 1e9;
@@ -29,6 +39,24 @@ const used = (pairs) => ({
 });
 const check = (p, rule) => p.checks.filter((c) => c.rule === rule);
 
+/** A qualify ledger in which every disk, root included, passed every disk test. */
+const passDisks = Object.assign([], {
+	find: (f) => [{ serial: '*', verdict: 'pass' }].find(() => f),
+});
+const PASS = {
+	ok: true,
+	results: new Proxy(
+		{},
+		{
+			get: () => ({
+				last: { at: 'T', metrics: { disks: passDisks, rootDisk: { verdict: 'pass' } } },
+			}),
+		}
+	),
+};
+/** The plan with every disk qualified, unless a test hands its own ledger. */
+const planLayout = (input) => planWith({ ledger: PASS, ...input });
+
 describe('parseSize', () => {
 	it('reads decimal units and bytes, and refuses anything else', () => {
 		assert.equal(parseSize('800G'), 800 * GB);
@@ -43,7 +71,7 @@ describe('parseSize', () => {
 describe('the ceiling: 80% of the disk as the node reports it', () => {
 	const obs = up('a', [{ serial: 'S1', sizeBytes: TB }]);
 	it('fits at 80% and is refused above it', () => {
-		assert.deepEqual(diskCeiling(disk('S1', 800 * GB), obs, 0), { ceiling: 800 * GB });
+		assert.deepEqual(diskCeiling(disk('S1', 800 * GB), obs), { ceiling: 800 * GB });
 		const p = planLayout({
 			declared: { zones: { 'claw-x': active([disk('S1', 801 * GB)]) } },
 			cluster: null,
@@ -55,19 +83,25 @@ describe('the ceiling: 80% of the disk as the node reports it', () => {
 		assert.match(c.why, /801\.0 GB is over its 80% ceiling of 800\.0 GB/);
 	});
 	it('a serial the node does not report, or disks not read, is could-not-look', () => {
-		assert.match(diskCeiling(disk('NOPE', 1), obs, 0).why, /no disk with serial NOPE/);
+		assert.match(diskCeiling(disk('NOPE', 1), obs).why, /no disk with serial NOPE/);
 		assert.match(
-			diskCeiling(disk('S1', 1), { ...obs, disks: null, disksWhy: 'sudo refused' }, 0).why,
+			diskCeiling(disk('S1', 1), { ...obs, disks: null, disksWhy: 'sudo refused' }).why,
 			/sudo refused/
 		);
 	});
-	it("a zone on root gets 80% less what the system already holds there, not counting the pool's own data", () => {
+	it("a root zone: quota + the system's own use of / stays under 80%, the pool dir measured by du", () => {
 		const root = { sizeBytes: 500 * GB, usedBytes: 150 * GB };
 		const r = { serial: null, capacityBytes: 0, root: true };
-		assert.deepEqual(diskCeiling(r, up('a', [], root), 0), { ceiling: 250 * GB });
-		// 50 GB of the 150 used is Garage's: the rest of the system holds 100.
-		assert.deepEqual(diskCeiling(r, up('a', [], root), 50 * GB), { ceiling: 300 * GB });
-		assert.match(diskCeiling(r, { ...up('a', []), rootWhy: 'df failed' }, 0).why, /df failed/);
+		const rz = (duBytes, dir = true) => ({
+			...up('a', [], root),
+			rootZone: { dir, reserveMb: null, duBytes },
+		});
+		assert.deepEqual(diskCeiling(r, rz(null, false)), { ceiling: 250 * GB });
+		// 50 GB of the 150 used is the pool's own directory: the rest of the system holds 100.
+		assert.deepEqual(diskCeiling(r, rz(50 * GB)), { ceiling: 300 * GB });
+		assert.match(diskCeiling(r, rz(null)).why, /size of \/srv\/storage\/root\/garage was not read/);
+		assert.match(diskCeiling(r, { ...up('a', []), rootWhy: 'df failed' }).why, /df failed/);
+		assert.match(diskCeiling(r, up('a', [], root)).why, /root zone directory was not read/);
 	});
 });
 
@@ -85,6 +119,8 @@ describe('the pilot: claw-8, claw-9, claw-1 on its root, no cluster yet', () => 
 		nodeId: null,
 		disks,
 		root,
+		dataDirs: '',
+		rootZone: { dir: false, reserveMb: null, duBytes: null },
 	});
 	const zones = {
 		'claw-8': absent([{ serial: 'S8', sizeBytes: TB }]),
@@ -98,10 +134,14 @@ describe('the pilot: claw-8, claw-9, claw-1 on its root, no cluster yet', () => 
 			p.bringUp.map((s) => `${s.node} ${s.step}`),
 			[
 				'claw-1 secrets',
+				'claw-1 root-dir',
+				'claw-1 data-dirs',
 				'claw-1 install',
 				'claw-8 secrets',
+				'claw-8 data-dirs',
 				'claw-8 install',
 				'claw-9 secrets',
+				'claw-9 data-dirs',
 				'claw-9 install',
 			]
 		);
@@ -431,5 +471,137 @@ describe('buckets', () => {
 		});
 		assert.deepEqual(b.undeclared, ['dp-old']);
 		assert.deepEqual(b.ops, []);
+	});
+});
+
+describe('root-disk zones (claw-8, claw-1: no spare disk)', () => {
+	// Measured 2026-11-23 with df -B1 / on each node.
+	const ROOT = {
+		'claw-8': { sizeBytes: 1950014128128, usedBytes: 91752902656 },
+		'claw-1': { sizeBytes: 969742974976, usedBytes: 129827389440 },
+	};
+	const rootZone = (quota) => active([{ serial: null, capacityBytes: quota, root: true }]);
+	const node = (name, extra = {}) => ({
+		probe: 'ok',
+		why: null,
+		nodeId: name,
+		disks: [],
+		root: ROOT[name],
+		dataDirs: '',
+		rootZone: { dir: false, reserveMb: null, duBytes: null },
+		...extra,
+	});
+
+	it('the data dirs are the root zone directory with the quota as quoted bytes', () => {
+		assert.equal(
+			dataDirsToml([{ serial: null, capacityBytes: 2e11, root: true }]),
+			'data_dir = [ { path = "/srv/storage/root/garage", capacity = "200000000000" } ]\n'
+		);
+		assert.equal(
+			dataDirsToml([disk('S9', 8e11), disk('SA', 1e12)]),
+			'data_dir = [ { path = "/srv/storage/S9/garage", capacity = "800000000000" }, ' +
+				'{ path = "/srv/storage/SA/garage", capacity = "1000000000000" } ]\n'
+		);
+	});
+
+	it('a new root zone: create the dir, reserve the quota from CI, write the data dirs, re-render', () => {
+		const p = planLayout({
+			declared: { zones: { 'claw-1': rootZone(200 * GB) } },
+			cluster: null,
+			state: null,
+			zones: { 'claw-1': node('claw-1') },
+		});
+		assert.deepEqual(
+			p.bringUp.map((s) => s.step),
+			['root-dir', 'data-dirs', 'install']
+		);
+		assert.equal(p.bringUp[0].reserveMb, quotaMb(200 * GB));
+		assert.equal(quotaMb(200 * GB), 190735);
+		assert.match(p.bringUp[1].text, /\/srv\/storage\/root\/garage/);
+	});
+
+	it('read back as written, nothing is left to do; a changed quota re-reserves and re-renders', () => {
+		const z = rootZone(200 * GB);
+		const done = node('claw-1', {
+			dataDirs: dataDirsToml(z.disks),
+			rootZone: { dir: true, reserveMb: quotaMb(200 * GB), duBytes: 4096 },
+		});
+		const declared = { zones: { 'claw-1': z } };
+		assert.deepEqual(
+			planLayout({ declared, cluster: null, state: null, zones: { 'claw-1': done } }).bringUp,
+			[]
+		);
+		const bigger = { zones: { 'claw-1': rootZone(300 * GB) } };
+		assert.deepEqual(
+			planLayout({
+				declared: bigger,
+				cluster: null,
+				state: null,
+				zones: { 'claw-1': done },
+			}).bringUp.map((s) => s.step),
+			['root-dir', 'data-dirs', 'install']
+		);
+	});
+
+	it("quota + the node's non-Garage use must stay under 80% of /: claw-8 and claw-1 as measured", () => {
+		const zones = { 'claw-8': node('claw-8'), 'claw-1': node('claw-1') };
+		const at = (q8, q1) =>
+			check(
+				planLayout({
+					declared: { zones: { 'claw-8': rootZone(q8), 'claw-1': rootZone(q1) } },
+					cluster: null,
+					state: null,
+					zones,
+				}),
+				'ceiling'
+			).map((c) => [c.subject, c.status]);
+		// claw-1: 0.8 × 969.7 GB − 129.8 GB = 646.0 GB; claw-8: 1560.0 − 91.8 = 1468.3 GB.
+		assert.deepEqual(at(1400 * GB, 600 * GB), [
+			['claw-1 root', 'ok'],
+			['claw-8 root', 'ok'],
+		]);
+		assert.deepEqual(at(1500 * GB, 700 * GB), [
+			['claw-1 root', 'refused'],
+			['claw-8 root', 'refused'],
+		]);
+	});
+
+	it('a root disk must have passed SMR and SMART; a pool disk every disk test', () => {
+		const ledger = (rootVerdict) => ({
+			ok: true,
+			results: {
+				[resultKey('claw-1', 'disk-smr')]: {
+					last: { at: 'T', metrics: { disks: [], rootDisk: { verdict: 'pass' } } },
+				},
+				[resultKey('claw-1', 'disk-smart')]: {
+					last: {
+						at: 'T',
+						metrics: { disks: [], rootDisk: { verdict: rootVerdict, reason: '22 reallocated' } },
+					},
+				},
+			},
+		});
+		const r = { serial: null, capacityBytes: 1, root: true };
+		assert.deepEqual(diskQualified(ledger('pass'), 'claw-1', r), { ok: true });
+		assert.match(
+			diskQualified(ledger('fail'), 'claw-1', r).why,
+			/disk-smart \(T\) says fail: 22 reallocated/
+		);
+		assert.match(
+			diskQualified({ ok: true, results: {} }, 'claw-1', r).why,
+			/no disk-smr result for claw-1/
+		);
+		// A pool disk is F5's rule: burn-in too, which this ledger has none of.
+		assert.match(diskQualified(ledger('pass'), 'claw-1', disk('S1', 1)).why, /not qualified/);
+
+		const p = planWith({
+			declared: { zones: { 'claw-1': rootZone(200 * GB) } },
+			cluster: null,
+			state: null,
+			zones: { 'claw-1': node('claw-1') },
+			ledger: ledger('fail'),
+		});
+		assert.equal(check(p, 'qualified')[0].status, 'refused');
+		assert.equal(p.refused, true);
 	});
 });

@@ -78,6 +78,16 @@ export function candidates(inventory) {
 	return inventory.disks.filter((d) => !d.isRoot && d.mediaPresent);
 }
 
+/**
+ * The root disk through one disk test's judge, or null when the node reports
+ * none. A storage zone on the root filesystem (#141) reads this verdict; the
+ * root disk is never a `candidate`, so nothing else does.
+ */
+export function judgeRoot(inventory, judge) {
+	const root = inventory.disks.find((d) => d.isRoot && d.mediaPresent);
+	return root ? judge(root) : null;
+}
+
 /** A disk's name in a reason: serial first, then where it is today. */
 export function diskName(d) {
 	return `${d.serial ?? '(no serial)'} (${d.device}, ${d.model ?? 'unknown model'})`;

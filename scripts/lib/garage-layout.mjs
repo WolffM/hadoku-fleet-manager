@@ -12,9 +12,13 @@
  *
  * THE RULES (operator-agreed), judged on the layout the change would leave:
  *
+ *   qualified every declared disk passed F2: a pool disk every disk test (the
+ *             rule F5 formats by), a root disk SMR and SMART (never burned in).
  *   ceiling   every declared disk's capacity fits under 80% of the disk as
- *             the node reports it. A zone on the root disk (claw-1) gets 80%
- *             less what the rest of the system already holds there.
+ *             the node reports it. A root-disk zone (claw-8, claw-1: no spare
+ *             disk) has a fixed quota, and quota + what the rest of the system
+ *             holds on `/` (used less the pool dir's measured `du`) stays
+ *             under 80% of it.
  *   floor     never fewer than 3 healthy zones: 3 copies need 3 zones.
  *   n-plus-1  the free space outside the biggest zone holds that zone's used
  *             bytes, so losing it can be rebuilt. With exactly 3 zones there
@@ -31,7 +35,13 @@
  * reading) is refused and no override passes it: the fix is to look.
  */
 
+import { ROOT_ZONE_DATA_DIR } from '../../dist/lib/capability-registry-storage.js';
+import { resultKey } from './qualify-results.mjs';
+import { GARAGE_DATA_SUBDIR, mountPointFor, qualifiedFor } from './storage-format.mjs';
+
 export const FILL_CEILING = 0.8;
+/** What a ROOT disk must pass: it is never burned in (F2 refuses), so SMR and SMART. */
+export const ROOT_QUALIFY_TESTS = ['disk-smr', 'disk-smart'];
 export const MIN_ZONES = 3;
 export const BUCKET_PREFIX = 'dp-';
 
@@ -52,19 +62,77 @@ const zoneCapacity = (z) => z.disks.reduce((a, d) => a + d.capacityBytes, 0);
 
 /**
  * The per-disk ceiling for one declared disk, or why it cannot be judged.
+ * A root zone's ceiling is 80% of `/` less what everything else holds there:
+ * the filesystem's used bytes less the pool directory's own, MEASURED (`du`),
+ * so quota + the node's non-Garage use stays under the line.
  * @returns {{ ceiling: number } | { why: string }}
  */
-export function diskCeiling(disk, obs, garageUsedHere) {
+export function diskCeiling(disk, obs) {
 	if (!obs?.disks) return { why: `its disks were not read: ${obs?.disksWhy ?? 'no reading'}` };
 	if (disk.root) {
 		if (!obs.root)
 			return { why: `its root filesystem was not read: ${obs.rootWhy ?? 'no reading'}` };
-		const others = Math.max(0, obs.root.usedBytes - (garageUsedHere ?? 0));
+		const rz = obs.rootZone;
+		if (!rz)
+			return { why: `its root zone directory was not read: ${obs.rootZoneWhy ?? 'no reading'}` };
+		if (rz.dir && rz.duBytes === null)
+			return { why: `the size of ${ROOT_ZONE_DATA_DIR} was not read` };
+		const others = Math.max(0, obs.root.usedBytes - (rz.duBytes ?? 0));
 		return { ceiling: Math.floor(FILL_CEILING * obs.root.sizeBytes) - others };
 	}
 	const d = obs.disks.find((x) => x.serial === disk.serial);
 	if (!d) return { why: `the node reports no disk with serial ${disk.serial}` };
 	return { ceiling: Math.floor(FILL_CEILING * d.sizeBytes) };
+}
+
+/**
+ * PURE. The node's `data_dir` list, the text of GARAGE_DATA_DIRS_FILE
+ * (toolchain-garage.mjs): F5's `/srv/storage/<serial>/garage` per disk, or
+ * the root zone's directory, each with its capacity as Garage's quoted bytes
+ * (measured on v2.5.0: an unquoted number is a TOML decode error).
+ */
+export function dataDirsToml(
+	disks,
+	{
+		rootDir = ROOT_ZONE_DATA_DIR,
+		diskDir = (serial) => `${mountPointFor(serial)}/${GARAGE_DATA_SUBDIR}`,
+	} = {}
+) {
+	const entries = disks.map(
+		(d) => `{ path = "${d.root ? rootDir : diskDir(d.serial)}", capacity = "${d.capacityBytes}" }`
+	);
+	return `data_dir = [ ${entries.join(', ')} ]\n`;
+}
+
+/** A root zone's quota in whole MB, the unit of the CI reserve file. */
+export const quotaMb = (bytes) => Math.ceil(bytes / 1048576);
+
+/**
+ * PURE. One declared disk against the F2 ledger. A pool disk passes every
+ * disk test (F5's `qualifiedFor`, the same rule format uses); a root disk
+ * passes SMR and SMART, read from each result's `metrics.rootDisk`.
+ * @returns {{ ok: true } | { ok: false, why: string }}
+ */
+export function diskQualified(ledger, node, disk) {
+	if (!disk.root) {
+		const q = qualifiedFor(ledger, node, disk.serial);
+		return q.ok ? q : { ok: false, why: q.reason };
+	}
+	if (!ledger?.ok) return { ok: false, why: `not qualified: ${ledger?.reason ?? 'no ledger'}` };
+	for (const id of ROOT_QUALIFY_TESTS) {
+		const last = ledger.results?.[resultKey(node, id)]?.last;
+		if (!last) return { ok: false, why: `not qualified: no ${id} result for ${node}` };
+		const r = last.metrics?.rootDisk;
+		if (!r)
+			return { ok: false, why: `not qualified: ${id} (${last.at}) did not judge the root disk` };
+		if (r.verdict !== 'pass') {
+			return {
+				ok: false,
+				why: `not qualified: ${id} (${last.at}) says ${r.verdict}: ${r.reason ?? 'no reason'}`,
+			};
+		}
+	}
+	return { ok: true };
 }
 
 /**
@@ -76,7 +144,10 @@ export function diskCeiling(disk, obs, garageUsedHere) {
  *   state: import('./doctor-findings-pool.d.mts').GarageState | null,
  *   zones: Record<string, { probe: 'ok'|'absent'|'stopped'|'no-secrets'|'unreachable', why: string|null, nodeId: string|null,
  *     disks: { serial: string|null, sizeBytes: number }[] | null, disksWhy?: string,
- *     root: { sizeBytes: number, usedBytes: number } | null, rootWhy?: string }>,
+ *     root: { sizeBytes: number, usedBytes: number } | null, rootWhy?: string,
+ *     dataDirs?: string | null,   // GARAGE_DATA_DIRS_FILE as it is on the node, '' when absent
+ *     rootZone?: { dir: boolean, reserveMb: number | null, duBytes: number | null } | null }>,
+ *   ledger: object,               // qualify-results (readQualifyResults)
  *   override?: string | null,
  *   secretsMissing?: string[],   // vault items this process does not hold (bring-up writes them)
  * }} input
@@ -86,6 +157,7 @@ export function planLayout({
 	cluster,
 	state,
 	zones,
+	ledger,
 	override = null,
 	secretsMissing = [],
 }) {
@@ -123,7 +195,7 @@ export function planLayout({
 			}
 			continue;
 		}
-		if (obs.probe !== 'ok') bringUp.push(...bringUpSteps(node, obs, secretsMissing));
+		bringUp.push(...bringUpSteps(node, z, obs, secretsMissing));
 		const capacity = zoneCapacity(z);
 		if (!role) {
 			changes.push({ node, kind: 'add', from: null, to: capacity });
@@ -164,7 +236,8 @@ export function planLayout({
 	const used = (node) => (byNode.has(node) ? (usedByNode.get(node) ?? null) : 0);
 
 	const checks = [
-		...ceilingChecks(declared, zones, usedByNode),
+		...qualifyChecks(declared, ledger),
+		...ceilingChecks(declared, zones),
 		floorCheck(now, after, healthy, changes.length > 0),
 		nPlusOneCheck(now, after, used, changes.length > 0),
 	];
@@ -196,7 +269,12 @@ export function planLayout({
 	};
 }
 
-function bringUpSteps(node, obs, secretsMissing) {
+/**
+ * What a zone needs before the layout can count on it, in order: secrets, the
+ * root zone's directory and CI reserve, the data-dirs file, then F4's repair
+ * (which installs, renders the config around the data dirs, and restarts).
+ */
+function bringUpSteps(node, z, obs, secretsMissing) {
 	if (obs.probe === 'unreachable') {
 		return [{ node, step: 'reach', blocked: true, why: `${node} could not be read: ${obs.why}` }];
 	}
@@ -212,24 +290,68 @@ function bringUpSteps(node, obs, secretsMissing) {
 				: 'write the RPC secret and admin token from the vault to /etc/garage/secrets',
 		});
 	}
-	steps.push({
-		node,
-		step: 'install',
-		why:
-			obs.probe === 'stopped'
-				? (obs.why ?? 'garage.service is not active')
-				: 'install the pinned Garage, its config and unit, and start it',
-	});
+	const root = z.disks.find((d) => d.root);
+	if (root) {
+		const mb = quotaMb(root.capacityBytes);
+		const rz = obs.rootZone;
+		if (!rz?.dir || rz.reserveMb !== mb) {
+			steps.push({
+				node,
+				step: 'root-dir',
+				reserveMb: mb,
+				why: !rz?.dir
+					? `create ${ROOT_ZONE_DATA_DIR} (user garage) and reserve ${mb} MB of / from CI`
+					: `CI's reserve is ${rz.reserveMb ?? 'unset'} MB; the quota is ${mb} MB`,
+			});
+		}
+	}
+	const want = dataDirsToml(z.disks);
+	const dataDirsChange = (obs.dataDirs ?? '') !== want;
+	if (dataDirsChange) {
+		steps.push({ node, step: 'data-dirs', text: want, why: `write ${want.trim()}` });
+	}
+	if (obs.probe !== 'ok' || dataDirsChange) {
+		steps.push({
+			node,
+			step: 'install',
+			why:
+				obs.probe === 'ok'
+					? 'render the config around the new data dirs and restart'
+					: obs.probe === 'stopped'
+						? (obs.why ?? 'garage.service is not active')
+						: 'install the pinned Garage, its config and unit, and start it',
+		});
+	}
 	return steps;
 }
 
-function ceilingChecks(declared, zones, usedByNode) {
+function qualifyChecks(declared, ledger) {
 	const out = [];
 	for (const [node, z] of Object.entries(declared.zones).sort()) {
 		if (z.state !== 'active') continue;
 		for (const disk of z.disks) {
 			const name = disk.root ? `${node} root` : `${node} ${disk.serial}`;
-			const c = diskCeiling(disk, zones[node], usedByNode.get(node) ?? 0);
+			const q = diskQualified(ledger, node, disk);
+			out.push({
+				rule: 'qualified',
+				status: q.ok ? 'ok' : 'refused',
+				subject: name,
+				why: q.ok
+					? `${name}: passed ${disk.root ? ROOT_QUALIFY_TESTS.join(' + ') : 'every disk test'}`
+					: `${name}: ${q.why}`,
+			});
+		}
+	}
+	return out;
+}
+
+function ceilingChecks(declared, zones) {
+	const out = [];
+	for (const [node, z] of Object.entries(declared.zones).sort()) {
+		if (z.state !== 'active') continue;
+		for (const disk of z.disks) {
+			const name = disk.root ? `${node} root` : `${node} ${disk.serial}`;
+			const c = diskCeiling(disk, zones[node]);
 			if ('why' in c) {
 				out.push({
 					rule: 'ceiling',

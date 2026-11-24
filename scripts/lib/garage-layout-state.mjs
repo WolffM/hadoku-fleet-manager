@@ -106,3 +106,19 @@ export function recordOverride(declared, rules, reason, at) {
 	declared.overrides = [...(declared.overrides ?? []), { at, rules, reason }];
 	return declared;
 }
+
+/**
+ * The declared zones that hold pool data on their root filesystem, for the
+ * doctor's root fill, or why the declaration could not be read.
+ * @returns {{ nodes: string[], error: string | null }}
+ */
+export function rootZoneNodes(path = declaredPath()) {
+	const { declared, error } = readDeclared(path);
+	if (error) return { nodes: [], error };
+	return {
+		nodes: Object.entries(declared.zones)
+			.filter(([, z]) => z.state === 'active' && z.disks?.some((d) => d.root))
+			.map(([node]) => node),
+		error: null,
+	};
+}

@@ -103,7 +103,8 @@ import { readQualifyResults } from './qualify-results.mjs';
 import { DIE_UNTRUSTED, judgeDoctor } from './doctor-baseline.mjs';
 import { thermalFindings } from './doctor-findings-thermal.mjs';
 import { disksLine } from './doctor-findings-disks.mjs';
-import { poolFindings, poolSummary } from './doctor-findings-pool.mjs';
+import { poolFindings, poolSummary, withRootZones } from './doctor-findings-pool.mjs';
+import { rootZoneNodes } from './garage-layout-state.mjs';
 import { readPool } from './garage-admin.mjs';
 import { toolAppliesTo } from './toolchain-floor.mjs';
 import { nodeQuantities, readNodeBaselines, recordNodeBaselines } from './node-baselines.mjs';
@@ -478,15 +479,43 @@ for (const [name, h] of Object.entries(health).sort()) {
 const POOL_MEMBERS = selectMachines(manifest, {})
 	.filter(([, m]) => toolAppliesTo('garage', m))
 	.map(([name]) => name);
+const POOL_READ = await readPool(
+	POOL_MEMBERS,
+	(node) => (script) => runOn(node, script, { as: 'admin', timeoutMs: 30_000 }),
+	at
+);
+// A root-disk zone (#141) is judged against its quota and its / together: the
+// declared layout says which zones are on root, this run's disk facet says /.
+const ROOT_ZONES = rootZoneNodes();
 const POOL = {
 	members: POOL_MEMBERS,
-	...(await readPool(
-		POOL_MEMBERS,
-		(node) => (script) => runOn(node, script, { as: 'admin', timeoutMs: 30_000 }),
-		at
-	)),
+	...POOL_READ,
+	garage: withRootZones(
+		POOL_READ.garage,
+		Object.fromEntries(
+			ROOT_ZONES.nodes.map((node) => {
+				const d = health[node]?.disk;
+				return [
+					node,
+					d?.totalKb > 0 && Number.isFinite(d.availKb)
+						? { sizeBytes: d.totalKb * 1024, availBytes: d.availKb * 1024 }
+						: null,
+				];
+			})
+		)
+	),
 };
 findings.push(...poolFindings(POOL));
+if (ROOT_ZONES.error && POOL_MEMBERS.length) {
+	findings.push({
+		node: 'pool',
+		category: 'pool-fill',
+		class: ADVISORY,
+		status: 'unreadable',
+		why: `which zones are on a root disk is unknown, so their / was not judged: ${ROOT_ZONES.error}`,
+		shadow: true,
+	});
+}
 
 // THE BACKSTOP'S NODE HEALTH DOES NOT FAIL THIS RUN: it is the production host,
 // and its reboots and kernel are the operator's. The one implementation is the

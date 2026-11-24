@@ -1,11 +1,11 @@
 /**
- * The storage pool's findings (#138), against typed fixtures: no Garage reader
- * exists yet, so these are the shape the layout manager will hand over.
+ * The storage pool's findings (#138), against typed fixtures: the shape
+ * garage-admin.mjs's garageState hands over (#141).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { poolFindings, poolSummary, POOL_COPIES } from './doctor-findings-pool.mjs';
+import { poolFindings, poolSummary, POOL_COPIES, withRootZones } from './doctor-findings-pool.mjs';
 import { ADVISORY } from './preflight.mjs';
 
 const TB = 1e12;
@@ -119,4 +119,34 @@ void test('every pool finding is advisory and shadow', () => {
 		assert.equal(x.class, ADVISORY);
 		assert.equal(x.shadow, true);
 	}
+});
+
+void test('#141: a root-disk zone is judged against its quota AND the 80% line of /', () => {
+	const input = healthy();
+	// claw-8: its quota 0.85 used (over 80%), and / at 70%; claw-9: quota fine, / at 85%.
+	input.garage.nodes[1] = member('claw-8', 1, 0.85);
+	input.garage = withRootZones(input.garage, {
+		'claw-8': { sizeBytes: 2 * TB, availBytes: 0.6 * TB },
+		'claw-9': { sizeBytes: 1 * TB, availBytes: 0.15 * TB },
+	});
+	const fill = poolFindings(input).filter((f) => f.category === 'pool-fill');
+	assert.deepEqual(
+		fill.map((f) => [f.node, f.status]),
+		[
+			['claw-8', 'tight'],
+			['claw-9', 'root-over-ceiling'],
+		]
+	);
+	assert.match(fill[0].why, /claw-8's root-disk quota is 85% used/);
+	assert.match(fill[1].why, /claw-9's \/ is 85% used, over the 80% line/);
+	assert.ok(fill.every((f) => f.class === ADVISORY && f.shadow));
+});
+
+void test('#141: a root-disk zone whose / was not read is unreadable, never fine', () => {
+	const input = healthy();
+	input.garage = withRootZones(input.garage, { 'claw-9': null });
+	assert.ok(statuses(poolFindings(input)).includes('pool-fill/unreadable'));
+	// Other members are not root zones and carry no rootFs.
+	assert.equal(input.garage.nodes[0].rootFs, undefined);
+	assert.equal(withRootZones(null, {}), null);
 });

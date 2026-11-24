@@ -35,7 +35,22 @@ import { after, before, describe, it } from 'node:test';
 import { GARAGE_RELEASE } from './toolchain-garage.mjs';
 import { garageState, httpAdmin, readCluster } from './garage-admin.mjs';
 import { applyBuckets, applyLayout, observeBuckets, observeCluster } from './garage-apply.mjs';
-import { planBuckets, planLayout } from './garage-layout.mjs';
+import { dataDirsToml, planBuckets, planLayout as planWith } from './garage-layout.mjs';
+
+/** Every disk qualified: F2's ledger is not what these tests are about. */
+const PASS_DISKS = Object.assign([], { find: () => ({ verdict: 'pass' }) });
+const PASS = {
+	ok: true,
+	results: new Proxy(
+		{},
+		{
+			get: () => ({
+				last: { at: 'T', metrics: { disks: PASS_DISKS, rootDisk: { verdict: 'pass' } } },
+			}),
+		}
+	),
+};
+const planLayout = (input) => planWith({ ledger: PASS, ...input });
 
 const sha256 = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
@@ -88,7 +103,7 @@ class Cluster {
 		this.nodes = new Map();
 	}
 
-	async add(name) {
+	async add(name, { dataDirs = null } = {}) {
 		const dir = join(this.root, name);
 		mkdirSync(dir, { recursive: true });
 		const n = {
@@ -102,7 +117,8 @@ class Cluster {
 			join(dir, 'garage.toml'),
 			[
 				`metadata_dir = "${join(dir, 'meta')}"`,
-				`data_dir = "${join(dir, 'data')}"`,
+				// A zone's data_dir as the layout writes it (dataDirsToml), or the plain one.
+				dataDirs ? dataDirs.trim() : `data_dir = "${join(dir, 'data')}"`,
 				'db_engine = "sqlite"',
 				'replication_factor = 3',
 				`rpc_bind_addr = "127.0.0.1:${n.rpc}"`,
@@ -304,5 +320,42 @@ describe('garage layout + buckets against a real v2.5.0 cluster', { timeout: 600
 		assert.equal(floor.status, 'refused', floor.why);
 		assert.equal(after2.plan.refused, true);
 		assert.equal(after2.plan.layout, null);
+	});
+	it('a root-disk zone: its data_dir list from dataDirsToml boots, and it joins with its quota', async () => {
+		const zoneDir = join(c.root, 'claw-e-root');
+		mkdirSync(zoneDir, { recursive: true });
+		const quota = 200e9;
+		const disks = [{ serial: null, capacityBytes: quota, root: true }];
+		const e = await c.add('claw-e', { dataDirs: dataDirsToml(disks, { rootDir: zoneDir }) });
+		assert.ok(e.id);
+		declared.zones['claw-c'] = { ...declared.zones['claw-c'], state: 'active' };
+		declared.zones['claw-e'] = { state: 'active', disks };
+		const names = ['claw-a', 'claw-b', 'claw-c', 'claw-d', 'claw-e'];
+		const zones = c.zones(names);
+		zones['claw-e'] = {
+			...zones['claw-e'],
+			disks: [],
+			root: { sizeBytes: 1e12, usedBytes: 1e11 },
+			rootZone: { dir: true, reserveMb: null, duBytes: 0 },
+		};
+		// The previous test's removal may still be draining: one change at a time.
+		let seen;
+		let p;
+		const until = Date.now() + 120_000;
+		for (;;) {
+			seen = await observeCluster(c.ctx(), zones);
+			p = planLayout({ declared, cluster: seen.cluster, state: seen.state, zones });
+			if (!p.waiting.length) break;
+			assert.ok(Date.now() < until, `still draining: ${JSON.stringify(p.waiting)}`);
+			await new Promise((r) => setTimeout(r, 500));
+		}
+		assert.equal(p.refused, false, JSON.stringify(p.checks.filter((x) => x.status !== 'ok')));
+		assert.deepEqual(
+			p.changes.filter((x) => x.kind === 'add'),
+			[{ node: 'claw-e', kind: 'add', from: null, to: quota }]
+		);
+		await applyLayout(c.ctx(), seen.via, p.layout, zones);
+		const layout = await c.admin('claw-a').call('GET', 'GetClusterLayout');
+		assert.equal(layout.roles.find((r) => r.zone === 'claw-e').capacity, quota);
 	});
 });

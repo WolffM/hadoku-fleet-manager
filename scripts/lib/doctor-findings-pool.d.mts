@@ -17,6 +17,12 @@ export interface PoolNodeState {
 	up: boolean;
 	capacityBytes: number | null;
 	usedBytes: number | null;
+	/**
+	 * A ROOT-DISK zone's root filesystem (#141): its share of the pool is a
+	 * fixed quota on `/`, so its fill is judged against the quota AND the 80%
+	 * line of `/`. Absent for a zone on its own disks; null when not read.
+	 */
+	rootFs?: { sizeBytes: number; availBytes: number } | null;
 }
 
 export interface GarageState {
@@ -59,3 +65,8 @@ export const POOL_FILL_ADVISORY_PCT: number;
 export const POOL_FILL_FULL_PCT: number;
 export function poolSummary(input: PoolInput): PoolSummary;
 export function poolFindings(input: PoolInput): PoolFinding[];
+export const ROOT_FS_CEILING_PCT: number;
+export function withRootZones(
+	state: GarageState | null,
+	rootFs: Record<string, { sizeBytes: number; availBytes: number } | null>
+): GarageState | null;

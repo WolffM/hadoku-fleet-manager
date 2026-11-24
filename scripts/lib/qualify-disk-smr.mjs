@@ -22,7 +22,13 @@
  *      RECORDING with its source. Never assumed CMR.
  */
 import { QUALIFY_TTL_DAYS } from './qualify-registry.mjs';
-import { candidates, nodeStatus, readInventory, unnamed } from './qualify-disk-inventory.mjs';
+import {
+	candidates,
+	judgeRoot,
+	nodeStatus,
+	readInventory,
+	unnamed,
+} from './qualify-disk-inventory.mjs';
 
 /**
  * Identified rotational models: a pattern on the full model string (lsblk's
@@ -166,6 +172,11 @@ export const test = {
 	async run(ctx) {
 		const read = await readInventory(ctx);
 		if ('error' in read) return { status: 'could-not-look', reason: read.error, metrics: {} };
-		return nodeStatus('the SMR check', candidates(read.inventory).map(judgeSmr));
+		// A root-disk storage zone (#141) needs its root disk judged too; kept
+		// apart from `disks`, so the node's status and F5's format rule never
+		// read it as a pool disk.
+		return nodeStatus('the SMR check', candidates(read.inventory).map(judgeSmr), {
+			rootDisk: judgeRoot(read.inventory, judgeSmr),
+		});
 	},
 };

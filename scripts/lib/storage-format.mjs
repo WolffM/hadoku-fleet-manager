@@ -48,6 +48,14 @@ export const STORAGE_ROOT = '/srv/storage';
 export const GARAGE_DATA_SUBDIR = 'garage';
 /** The static user F4's DynamicUser unit then runs as (see the header). */
 export const GARAGE_USER = 'garage';
+/**
+ * Root shell: the static system user Garage's data belongs to, created once.
+ * Shared with the layout manager's root-disk zone (garage-apply.mjs, #141).
+ */
+export const GARAGE_USER_SH = [
+	`getent passwd ${GARAGE_USER} >/dev/null ||`,
+	`  useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ${GARAGE_USER}`,
+];
 /** F2's disk tests (#137). Every one must have passed THIS serial. */
 export const DISK_QUALIFY_TESTS = ['disk-smr', 'disk-smart', 'disk-burnin'];
 export const FILESYSTEMS = ['ext4', 'xfs'];
@@ -237,8 +245,7 @@ export function formatScript({ serial, device, fs = 'ext4', wipeSignature = fals
 		'systemctl daemon-reload',
 		'mount "$MNT"',
 		'[ "$(findmnt -no UUID "$MNT")" = "$UUID" ] || { echo "$MNT is not $UUID after mount" >&2; exit 1; }',
-		`getent passwd ${GARAGE_USER} >/dev/null ||`,
-		`  useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ${GARAGE_USER}`,
+		...GARAGE_USER_SH,
 		`install -d -m 0750 -o ${GARAGE_USER} -g ${GARAGE_USER} "$MNT/${GARAGE_DATA_SUBDIR}"`,
 		'echo "FORMATTED $SERIAL $PART $UUID $MNT"',
 	].join('\n');

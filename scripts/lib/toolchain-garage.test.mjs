@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,7 +18,10 @@ import {
 	GARAGE_RELEASE,
 	GARAGE_SECRET_DIR,
 	GARAGE_SECRET_ITEMS,
+	GARAGE_DATA_DIRS_FILE,
+	GARAGE_REPAIR,
 	GARAGE_TOML,
+	garageToml,
 	GARAGE_UNIT,
 } from './toolchain-garage.mjs';
 
@@ -128,4 +131,38 @@ test('#139: the detect fails closed and names the missing vault items for the do
 	const j = judgeTool('garage', garage, { detect: none, login: none });
 	assert.equal(j.finding, true);
 	assert.match(j.reason, /GARAGE_RPC_SECRET GARAGE_ADMIN_TOKEN absent/);
+});
+
+/** Run the repair's own config-rendering lines with a data-dirs file (or none) in a tmp dir. */
+function renderedToml(dataDirs) {
+	const root = mkdtempSync(join(tmpdir(), 'garage-toml-'));
+	try {
+		const lines = GARAGE_REPAIR.split('\n');
+		const from = lines.findIndex((l) => l.startsWith('cat > "$tmp/head"'));
+		const to = lines.findIndex((l) => l.includes('> "$tmp/toml"'));
+		assert.ok(from > 0 && to > from, 'the repair renders the config from head, data dirs, tail');
+		const dd = join(root, 'data-dirs.toml');
+		if (dataDirs !== null) writeFileSync(dd, dataDirs);
+		const text = [`tmp=${root}`, ...lines.slice(from, to + 1)]
+			.join('\n')
+			.replaceAll(GARAGE_DATA_DIRS_FILE, dd);
+		const r = spawnSync('bash', ['-c', text], { encoding: 'utf8' });
+		assert.equal(r.status, 0, r.stderr);
+		return readFileSync(join(root, 'toml'), 'utf8');
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}
+
+test('#141: the config on the node is garageToml() around its data-dirs file, byte for byte', () => {
+	assert.equal(renderedToml(null), GARAGE_TOML);
+	const dd = 'data_dir = [ { path = "/srv/storage/root/garage", capacity = "200000000000" } ]\n';
+	assert.equal(renderedToml(dd), garageToml(dd));
+	assert.match(
+		garageToml(dd),
+		/^metadata_dir = .*\ndata_dir = \[ \{ path = "\/srv\/storage\/root\/garage"/m
+	);
+	assert.doesNotMatch(garageToml(dd), /\/var\/lib\/garage\/data/);
+	// ProtectSystem=strict keeps /srv read-only unless the unit opens it.
+	assert.match(GARAGE_UNIT, /^ReadWritePaths=-\/srv\/storage$/m);
 });

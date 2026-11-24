@@ -20,6 +20,13 @@
  * explicit `<id>@<addr>` that `ctx.rpcAddr` resolves (the tailnet name).
  */
 import {
+	ROOT_ZONE_DATA_DIR,
+	ROOT_ZONE_DIR,
+	ROOT_ZONE_RESERVE,
+} from '../../dist/lib/capability-registry-storage.js';
+import { GARAGE_USER, GARAGE_USER_SH, STORAGE_ROOT } from './storage-format.mjs';
+import {
+	GARAGE_DATA_DIRS_FILE,
 	GARAGE_DETECT,
 	GARAGE_RELEASE,
 	GARAGE_REPAIR,
@@ -98,7 +105,44 @@ export async function probeZone(ctx, node) {
 	} else {
 		out.rootWhy = why(df);
 	}
+	const zf = await ctx.exec(node, ZONE_FILES, { timeoutMs: 120_000 });
+	if (zf?.ok) Object.assign(out, parseZoneFiles(zf.stdout));
+	else {
+		out.dataDirs = null;
+		out.rootZone = null;
+		out.rootZoneWhy = why(zf);
+	}
 	return out;
+}
+
+/**
+ * The node's own record of what the layout gave it: the data-dirs file, the
+ * root zone's CI reserve, whether its directory exists, and that directory's
+ * size (`du`, as root: the dir is the garage user's, 0750). Sections are split
+ * by a line of `@@`.
+ */
+export const ZONE_FILES = [
+	`cat ${GARAGE_DATA_DIRS_FILE} 2>/dev/null || true`,
+	'echo @@',
+	`cat ${ROOT_ZONE_RESERVE} 2>/dev/null || true`,
+	'echo @@',
+	`if [ -d ${ROOT_ZONE_DATA_DIR} ]; then echo yes; sudo -n du -sxb ${ROOT_ZONE_DATA_DIR} | cut -f1; fi`,
+].join('\n');
+
+/** PURE. {@link ZONE_FILES}'s output. */
+export function parseZoneFiles(text) {
+	const [dd = '', reserve = '', dir = ''] = String(text ?? '').split(/^@@\n/m);
+	const [present, du] = dir.trim().split('\n');
+	const mb = reserve.trim();
+	return {
+		dataDirs: dd,
+		rootZone: {
+			dir: present === 'yes',
+			reserveMb: /^\d+$/.test(mb) ? Number(mb) : null,
+			duBytes: present === 'yes' && /^\d+$/.test(du ?? '') ? Number(du) : null,
+		},
+		rootZoneWhy: null,
+	};
 }
 
 /**
@@ -139,15 +183,51 @@ export function secretsScript(secrets) {
 }
 
 /** Carry out bring-up steps. Throws on the first that fails, naming it. */
+/** The root zone's directory, owned by the static garage user, and CI's reserve beside it. */
+export function rootDirScript(reserveMb) {
+	if (!Number.isInteger(reserveMb) || reserveMb <= 0)
+		throw new Error(`reserve ${reserveMb} MB is not a quota`);
+	return [
+		'set -e',
+		"sudo -n sh -s <<'ROOT_DIR_EOF'",
+		'set -e',
+		...GARAGE_USER_SH,
+		`install -d -m 0755 ${STORAGE_ROOT} ${ROOT_ZONE_DIR}`,
+		`install -d -m 0750 -o ${GARAGE_USER} -g ${GARAGE_USER} ${ROOT_ZONE_DATA_DIR}`,
+		`printf '%s\\n' ${reserveMb} > ${ROOT_ZONE_RESERVE}.new && chmod 0644 ${ROOT_ZONE_RESERVE}.new && mv -f ${ROOT_ZONE_RESERVE}.new ${ROOT_ZONE_RESERVE}`,
+		'ROOT_DIR_EOF',
+	].join('\n');
+}
+
+/** The data-dirs file F4's repair renders the config around. */
+export function dataDirsScript(text) {
+	return [
+		'set -e',
+		'tmp="$(mktemp)"',
+		'trap \'rm -f "$tmp"\' EXIT',
+		'cat > "$tmp" <<\'DATA_DIRS_EOF\'',
+		text.replace(/\n$/, ''),
+		'DATA_DIRS_EOF',
+		`sudo -n install -D -m 0644 "$tmp" ${GARAGE_DATA_DIRS_FILE}`,
+	].join('\n');
+}
+
+/** The script one bring-up step runs on its node. */
+export function stepScript(ctx, s) {
+	if (s.step === 'secrets') return secretsScript(ctx.secrets);
+	if (s.step === 'root-dir') return rootDirScript(s.reserveMb);
+	if (s.step === 'data-dirs') return dataDirsScript(s.text);
+	if (s.step === 'install')
+		return `export TARGET_VERSION=${GARAGE_RELEASE.version}\n${GARAGE_REPAIR}`;
+	throw new Error(`${s.node}: no script for bring-up step ${s.step}`);
+}
+
+/** Carry out bring-up steps. Throws on the first that fails, naming it. */
 export async function applyBringUp(ctx, steps) {
 	for (const s of steps) {
 		if (s.blocked) throw new Error(`${s.node} ${s.step}: ${s.why}`);
-		const script =
-			s.step === 'secrets'
-				? secretsScript(ctx.secrets)
-				: `export TARGET_VERSION=${GARAGE_RELEASE.version}\n${GARAGE_REPAIR}`;
 		ctx.log(`   ${s.node}: ${s.step}`);
-		const r = await ctx.exec(s.node, script, { timeoutMs: 900_000 });
+		const r = await ctx.exec(s.node, stepScript(ctx, s), { timeoutMs: 900_000 });
 		if (!r?.ok) throw new Error(`${s.node} ${s.step} failed: ${why(r)}`);
 	}
 }

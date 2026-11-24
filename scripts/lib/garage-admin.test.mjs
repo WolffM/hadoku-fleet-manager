@@ -9,7 +9,14 @@ import {
 	readPool,
 } from './garage-admin.mjs';
 import { CLAW9 } from './storage-fixtures.mjs';
-import { ROOT_DF, detectState, probeZone, secretsScript } from './garage-apply.mjs';
+import {
+	ROOT_DF,
+	ZONE_FILES,
+	detectState,
+	probeZone,
+	rootDirScript,
+	secretsScript,
+} from './garage-apply.mjs';
 
 /**
  * Captured from a real 3-zone v2.5.0 cluster on 2026-11-23 (dataplatform's
@@ -194,6 +201,13 @@ describe('the zone probe', () => {
 		const exec = async (node, script) => {
 			if (script.includes('QUALIFY_DISK_PROBE')) return { ok: true, stdout: CLAW9 };
 			if (script === ROOT_DF) return { ok: true, stdout: ' 240000000000 61000000000\n' };
+			if (script === ZONE_FILES) {
+				return {
+					ok: true,
+					stdout:
+						'data_dir = [ { path = "/srv/storage/root/garage", capacity = "1" } ]\n@@\n190735\n@@\nyes\n4096\n',
+				};
+			}
 			return { ok: true, stdout: '' }; // GARAGE_DETECT: not installed
 		};
 		const z = await probeZone(
@@ -206,6 +220,8 @@ describe('the zone probe', () => {
 			{ serial: 'SERIAL-claw-9-sdb', sizeBytes: 1000204886016 },
 		]);
 		assert.deepEqual(z.root, { sizeBytes: 240e9, usedBytes: 61e9 });
+		assert.match(z.dataDirs, /^data_dir = \[ \{ path = "\/srv\/storage\/root\/garage"/);
+		assert.deepEqual(z.rootZone, { dir: true, reserveMb: 190735, duBytes: 4096 });
 	});
 	it('an unreachable node is unreachable, with the reason', async () => {
 		const z = await probeZone(
@@ -230,5 +246,18 @@ describe('the secrets bring-up', () => {
 			() => secretsScript({ GARAGE_RPC_SECRET: 'x' }),
 			/GARAGE_ADMIN_TOKEN is not in this process's environment/
 		);
+	});
+});
+
+describe('the root zone bring-up', () => {
+	it("creates the garage user and its dir as root, and writes CI's reserve atomically", () => {
+		const s = rootDirScript(190735);
+		assert.match(s, /useradd --system --user-group .* garage/);
+		assert.match(s, /install -d -m 0750 -o garage -g garage \/srv\/storage\/root\/garage/);
+		assert.match(
+			s,
+			/printf '%s\\n' 190735 > \/srv\/storage\/root\/garage\.reserve-mb\.new && .*mv -f/
+		);
+		assert.throws(() => rootDirScript(0), /not a quota/);
 	});
 });

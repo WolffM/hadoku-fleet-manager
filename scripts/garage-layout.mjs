@@ -49,7 +49,9 @@ import {
 	recordOverride,
 	updateDeclared,
 } from './lib/garage-layout-state.mjs';
+import { readQualifyResults } from './lib/qualify-results.mjs';
 import { GARAGE_SECRET_ITEMS } from './lib/toolchain-garage.mjs';
+import { stateDir } from '../dist/lib/fleet-paths.js';
 
 const args = parseStrict(ARGV_SPECS['garage-layout.mjs'], process.argv.slice(2));
 const emitter = createEmitter({ argv: process.argv });
@@ -142,6 +144,8 @@ async function planNow() {
 		cluster: seen.cluster,
 		state: seen.state,
 		zones: seen.zones,
+		// F2's verdicts: a zone's disks must have passed qualification.
+		ledger: readQualifyResults(stateDir()),
 		override,
 		secretsMissing,
 	});

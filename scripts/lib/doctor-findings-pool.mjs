@@ -30,6 +30,20 @@ export const POOL_COPIES = 3;
 export const POOL_FILL_ADVISORY_PCT = 80;
 /** A member's share at which Garage is close to refusing writes to it. */
 export const POOL_FILL_FULL_PCT = 90;
+/** A root-disk zone's `/` past this is over the line its quota was sized under (#141). */
+export const ROOT_FS_CEILING_PCT = 80;
+
+/**
+ * PURE. Mark the root-disk zones: `rootFs[node]` is that node's `/` (the
+ * doctor's own disk facet), null when it was not read. Other nodes unchanged.
+ */
+export function withRootZones(state, rootFs) {
+	if (!state) return state;
+	return {
+		...state,
+		nodes: state.nodes.map((n) => (n.node in rootFs ? { ...n, rootFs: rootFs[n.node] } : n)),
+	};
+}
 
 const q = (node, category, status, why, extra = {}) => ({
 	node,
@@ -141,6 +155,7 @@ function membership(members, g) {
 function fill(g) {
 	const out = [];
 	for (const n of g.nodes) {
+		if (n.rootFs !== undefined) out.push(...rootFill(n));
 		if (n.capacityBytes === null || n.usedBytes === null || n.capacityBytes <= 0) {
 			out.push(
 				q(n.node, 'pool-fill', 'unreadable', `${n.node}'s pool capacity or use was not read.`)
@@ -154,13 +169,35 @@ function fill(g) {
 					n.node,
 					'pool-fill',
 					pct >= POOL_FILL_FULL_PCT ? 'full' : 'tight',
-					`${n.node}'s share of the pool is ${pct}% used (over ${pct >= POOL_FILL_FULL_PCT ? POOL_FILL_FULL_PCT : POOL_FILL_ADVISORY_PCT}%).`,
+					`${n.node}'s ${n.rootFs !== undefined ? 'root-disk quota' : 'share of the pool'} is ${pct}% used (over ${pct >= POOL_FILL_FULL_PCT ? POOL_FILL_FULL_PCT : POOL_FILL_ADVISORY_PCT}%).`,
 					{ usedPct: pct }
 				)
 			);
 		}
 	}
 	return out;
+}
+
+/** A root-disk zone's `/` against the 80% line its quota was sized under. */
+function rootFill(n) {
+	const fs = n.rootFs;
+	if (!fs || !(fs.sizeBytes > 0)) {
+		return [
+			q(n.node, 'pool-fill', 'unreadable', `${n.node} is a root-disk zone and its / was not read.`),
+		];
+	}
+	const pct = Math.round(((fs.sizeBytes - fs.availBytes) / fs.sizeBytes) * 1000) / 10;
+	if (pct < ROOT_FS_CEILING_PCT) return [];
+	return [
+		q(
+			n.node,
+			'pool-fill',
+			'root-over-ceiling',
+			`${n.node}'s / is ${pct}% used, over the ${ROOT_FS_CEILING_PCT}% line its pool quota was sized ` +
+				'under: the rest of the system has grown into the room the quota assumed.',
+			{ rootUsedPct: pct }
+		),
+	];
 }
 
 function nPlusOne(g) {

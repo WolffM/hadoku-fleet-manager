@@ -176,6 +176,17 @@ void test('the SMR test runs the probe as admin and judges the parsed node', asy
 	assert.match(none.reason, /ssh: timeout/);
 });
 
+void test('#141: SMR and SMART judge the root disk apart, for a root-disk storage zone', async () => {
+	const ctx = { node: 'claw-9', exec: async () => ({ ok: true, stdout: CLAW9 }) };
+	for (const t of [smrTest, smartTest]) {
+		const r = await t.run(ctx);
+		assert.equal(r.metrics.rootDisk.serial, 'SERIAL-claw-9-sda', t.id);
+		assert.equal(r.metrics.rootDisk.verdict, 'pass', `${t.id}: ${r.metrics.rootDisk.reason}`);
+		// The node's own status and its pool-disk list are unchanged: sda is not a candidate.
+		assert.ok(!r.metrics.disks.some((d) => d.serial === 'SERIAL-claw-9-sda'), t.id);
+	}
+});
+
 void test('baselines: a refused disk is a weak point, never a finding; hours are learned per serial', () => {
 	const smart = {
 		id: 'disk-smart',

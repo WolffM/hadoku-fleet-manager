@@ -21,7 +21,13 @@
  * different drive answering to a serial, shows as drift.
  */
 import { QUALIFY_TTL_DAYS } from './qualify-registry.mjs';
-import { candidates, nodeStatus, readInventory, unnamed } from './qualify-disk-inventory.mjs';
+import {
+	candidates,
+	judgeRoot,
+	nodeStatus,
+	readInventory,
+	unnamed,
+} from './qualify-disk-inventory.mjs';
 
 /**
  * Reallocated sectors a disk may carry. Not measured against a failure in this
@@ -102,6 +108,10 @@ export const test = {
 		if ('error' in read) return { status: 'could-not-look', reason: read.error, metrics: {} };
 		return nodeStatus('the SMART check', candidates(read.inventory).map(judgeSmart), {
 			bars: { reallocatedMax: REALLOCATED_MAX, lifetimeMinPct: LIFETIME_MIN_PCT },
+			// A root-disk storage zone (#141) needs its root disk judged too; kept
+			// apart from `disks`, so the node's status and F5's format rule never
+			// read it as a pool disk.
+			rootDisk: judgeRoot(read.inventory, judgeSmart),
 		});
 	},
 };

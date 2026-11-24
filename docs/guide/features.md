@@ -99,6 +99,14 @@ draining, never by removal. An operator can override a refused rule with
 that could not be taken. With exactly 3 zones the last rule cannot hold, and
 the plan reports that instead of refusing.
 
+A node with no spare disk can still be a zone: `--declare <node> --root 200G`
+gives the pool a fixed quota of the root filesystem, in its own directory.
+The quota plus what the rest of the node already holds on `/` must stay
+under 80% of it. The root disk must have passed the SMR and SMART checks;
+it is never burned in. CI counts the quota as taken, so builds never grow
+into it, and no cleanup ever deletes pool data. The nightly health check
+judges such a zone against its quota and against the 80% line of `/`.
+
 **What it does not do.** It will not admit a node to scheduling on the
 manifest's say alone — a capability a probe cannot confirm is not offered,
 even if the operator believes it should be there.

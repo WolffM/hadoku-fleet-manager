@@ -56,11 +56,22 @@ export const GARAGE_CONFIG = '/etc/garage.toml';
 export const GARAGE_BIN = '/usr/local/bin/garage';
 const CRED = '/run/credentials/garage.service';
 
-/** The config. Paths and ports only: the secrets are files systemd hands over. */
-export const GARAGE_TOML = [
+/**
+ * WHERE THE DATA GOES is the layout's, per node (fleet-manager#141): the
+ * layout manager writes `data_dir = [...]` into {@link GARAGE_DATA_DIRS_FILE},
+ * one entry per pool disk (`/srv/storage/<serial>/garage`, F5) or the root
+ * zone (`/srv/storage/root/garage`), each with its capacity. The repair builds
+ * the config around that file, so a refresh keeps the node's disks; without
+ * it the daemon keeps its data under its own state directory.
+ */
+export const GARAGE_DATA_DIRS_FILE = '/etc/garage/data-dirs.toml';
+const DEFAULT_DATA_DIR = 'data_dir = "/var/lib/garage/data"';
+
+const TOML_HEAD = [
 	'# Written by fleet-manager (scripts/lib/toolchain-garage.mjs); edits are replaced.',
 	'metadata_dir = "/var/lib/garage/meta"',
-	'data_dir = "/var/lib/garage/data"',
+];
+const TOML_TAIL = [
 	'db_engine = "lmdb"',
 	'replication_factor = 3',
 	'rpc_bind_addr = "[::]:3901"',
@@ -74,7 +85,20 @@ export const GARAGE_TOML = [
 	'api_bind_addr = "127.0.0.1:3903"',
 	`admin_token_file = "${CRED}/admin_token"`,
 	'',
-].join('\n');
+];
+
+/**
+ * PURE. The config, with `dataDirs` (the data-dirs file's text) in place of
+ * the default data directory. Paths and ports only: the secrets are files
+ * systemd hands over.
+ */
+export const garageToml = (dataDirs = null) =>
+	[...TOML_HEAD, dataDirs ? dataDirs.replace(/\n+$/, '') : DEFAULT_DATA_DIR, ...TOML_TAIL].join(
+		'\n'
+	);
+
+/** The config on a node with no data-dirs file. */
+export const GARAGE_TOML = garageToml();
 
 export const GARAGE_UNIT = [
 	'# Written by fleet-manager (scripts/lib/toolchain-garage.mjs); edits are replaced.',
@@ -94,6 +118,8 @@ export const GARAGE_UNIT = [
 	'NoNewPrivileges=yes',
 	'ProtectHome=yes',
 	'ProtectSystem=strict',
+	// The pool's disks (F5) and the root zone; `-`: a node with neither still starts.
+	'ReadWritePaths=-/srv/storage',
 	'LimitNOFILE=42000',
 	'Restart=on-failure',
 	'RestartSec=10',
@@ -142,7 +168,19 @@ export const GARAGE_REPAIR = [
 	`  sudo -n mv -f ${GARAGE_BIN}.new ${GARAGE_BIN}`,
 	'  changed=1',
 	'fi',
-	...placeFile(GARAGE_TOML, GARAGE_CONFIG, 'toml'),
+	// The config: head, this node's data dirs (or the default), tail.
+	'cat > "$tmp/head" <<\'HEAD_EOF\'',
+	TOML_HEAD.join('\n'),
+	'HEAD_EOF',
+	'cat > "$tmp/tail" <<\'TAIL_EOF\'',
+	TOML_TAIL.join('\n').replace(/\n$/, ''),
+	'TAIL_EOF',
+	`if [ -s ${GARAGE_DATA_DIRS_FILE} ]; then dd="$(cat ${GARAGE_DATA_DIRS_FILE})"; else dd='${DEFAULT_DATA_DIR}'; fi`,
+	'printf \'%s\\n%s\\n%s\\n\' "$(cat "$tmp/head")" "$dd" "$(cat "$tmp/tail")" > "$tmp/toml"',
+	`if ! cmp -s "$tmp/toml" ${GARAGE_CONFIG}; then`,
+	`  sudo -n install -D -m 0644 "$tmp/toml" ${GARAGE_CONFIG}`,
+	'  changed=1',
+	'fi',
 	...placeFile(GARAGE_UNIT, '/etc/systemd/system/garage.service', 'unit'),
 	// 0711: any user may stat an item (the detect, as ci), only root may read one.
 	`sudo -n install -d -m 0711 ${GARAGE_SECRET_DIR}`,

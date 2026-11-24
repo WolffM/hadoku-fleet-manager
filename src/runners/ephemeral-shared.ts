@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 import { jitRoot } from './ephemeral.js';
+import { ROOT_ZONE_DIR } from '../lib/capability-registry-storage.js';
 import { nodeShell } from '../node-shell.js';
 import { execFileOffLoop } from '../lib/spawner.js';
 import { logger, manifest } from '../host.js';
@@ -267,9 +268,28 @@ export function shellOnNode(node: string, cmd: string): Promise<string | null> {
  */
 const JIT_PROBE_DIR = jitRoot('~');
 const JIT_PROBE_PARENT_DIR = JIT_PROBE_DIR.slice(0, JIT_PROBE_DIR.lastIndexOf('/'));
-export const SPACE_PROBE_DF_CMD =
-	"df -Pm /tmp | awk 'NR==2{print $4, $2}'; " +
-	`(df -Pm ${JIT_PROBE_DIR} 2>/dev/null || df -Pm ${JIT_PROBE_PARENT_DIR} 2>/dev/null || df -Pm ~) | awk 'NR==2{print $4}'`;
+/**
+ * The `_work` line, less a root-disk storage zone's quota when that zone sits
+ * on the same filesystem (fleet-manager#141): the pool is a protected
+ * consumer, so CI's floor and the disk watch never count its quota as free.
+ * The whole quota is reserved, not quota minus what Garage holds: knowing the
+ * difference takes a `du`, which this probe runs too often to afford, so it
+ * errs on the side of the pool. No reserve file, a different filesystem, or a
+ * reserve that is not digits: the plain free figure, as before. An empty `df`
+ * still prints an empty line, which `parseSpaceProbe` reads as unreadable.
+ *
+ * `rootZoneDir` is a parameter only so a test can run it against a temp dir.
+ */
+export function spaceProbeCmd(rootZoneDir: string): string {
+	const reserve = `${rootZoneDir}/garage.reserve-mb`;
+	return (
+		"df -Pm /tmp | awk 'NR==2{print $4, $2}'; " +
+		`w=$( (df -Pm ${JIT_PROBE_DIR} 2>/dev/null || df -Pm ${JIT_PROBE_PARENT_DIR} 2>/dev/null || df -Pm ~) | awk 'NR==2{print $6, $4}'); ` +
+		`r=$(cat ${reserve} 2>/dev/null); rf=$(df -Pm ${rootZoneDir} 2>/dev/null | awk 'NR==2{print $6}'); ` +
+		`echo "$w" | awk -v r="$r" -v rf="$rf" '{ f = $2; if (rf != "" && rf == $1 && r ~ /^[0-9]+$/) f = f - r; if (f < 0) f = 0; print f }'`
+	);
+}
+export const SPACE_PROBE_DF_CMD = spaceProbeCmd(ROOT_ZONE_DIR);
 
 /**
  * #101: the other half of the shared probe — parses `shellOnNode`'s RAW

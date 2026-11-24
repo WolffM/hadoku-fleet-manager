@@ -72,7 +72,10 @@ test('#101: SPACE_PROBE_DF_CMD is still the exact text that runs on a node, afte
 	assert.equal(
 		SPACE_PROBE_DF_CMD,
 		"df -Pm /tmp | awk 'NR==2{print $4, $2}'; " +
-			"(df -Pm ~/.hadoku/jit 2>/dev/null || df -Pm ~/.hadoku 2>/dev/null || df -Pm ~) | awk 'NR==2{print $4}'"
+			"w=$( (df -Pm ~/.hadoku/jit 2>/dev/null || df -Pm ~/.hadoku 2>/dev/null || df -Pm ~) | awk 'NR==2{print $6, $4}'); " +
+			'r=$(cat /srv/storage/root/garage.reserve-mb 2>/dev/null); ' +
+			"rf=$(df -Pm /srv/storage/root 2>/dev/null | awk 'NR==2{print $6}'); " +
+			'echo "$w" | awk -v r="$r" -v rf="$rf" \'{ f = $2; if (rf != "" && rf == $1 && r ~ /^[0-9]+$/) f = f - r; if (f < 0) f = 0; print f }\''
 	);
 });
 
