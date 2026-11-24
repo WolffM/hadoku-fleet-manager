@@ -76,6 +76,7 @@ import { storageFindings } from './doctor-findings-storage.mjs';
 import { diskFindings } from './doctor-findings-disks.mjs';
 import { wearFindings } from './doctor-disk-wear.mjs';
 import { pm2LogFindings } from './doctor-findings-pm2-logs.mjs';
+import { ioWeightFindings } from './doctor-findings-io-weight.mjs';
 import { networkFindings } from './doctor-findings-network.mjs';
 import { opsFindings } from './doctor-findings-ops.mjs';
 import { cpuFindings } from './doctor-findings-cpu.mjs';
@@ -155,6 +156,7 @@ export function doctorFindings(health, { nowMs = Date.now(), machine } = {}) {
 		...networkFindings(health),
 		...opsFindings(health, { nowMs }),
 		...pm2LogFindings(health),
+		...ioWeightFindings(health),
 		...cpuFindings(health),
 		...qualifyFindings(health),
 	];

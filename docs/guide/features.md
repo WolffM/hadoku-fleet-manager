@@ -228,6 +228,20 @@ nowhere. That shows up as a warning. `fleet doctor --machine <node>
 --reload-logs` reopens the logs as that daemon's own user and restarts
 nothing.
 
+It also checks that disk priorities are real. A service can ask for a
+bigger share of the disk than the work beside it (`IOWeight`), but the
+kernel only honours that on a disk that runs io.cost or the BFQ scheduler.
+On a fast SSD it usually runs neither, so the request does nothing. Doctor
+warns when the root disk ignores the weights a node declares. It also warns
+when a heavy weight is capped by its parent slice: weights are shared down
+the tree, so production at 1000 against builds at 20 still splits 50:50 if
+both parent slices weigh 100. `scripts/io-cost.sh` shows what it would
+change and can turn io.cost on and keep it on across reboots.
+`scripts/io-cost-ab.mjs` measures the change before it is kept, under
+whatever load the box has: production's IO pressure and readiness latency
+against how much work the lower-priority jobs still get done, with io.cost
+off and then on.
+
 **What it does not do.** It never guesses which node is best for a tenant
 that has not opted into automatic placement (`placement.auto: true`) — for
 everyone else it only reports what it would do. A singleton service never

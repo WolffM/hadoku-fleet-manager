@@ -1,11 +1,12 @@
 /**
  * Split {@link doctorProbe}'s stdout into facts, unknowns, the root drive's
  * smartctl lines, storage-probe.sh's lines (`T `, every disk; #138) and the
- * pm2 log-stream lines (`P `, every pm2 daemon; #143).
+ * pm2 log-stream lines (`P `, every pm2 daemon; #143) and the io weight lines
+ * (`W `, the root disk's enforcement and every declared weight; #158).
  *
  * @param {string} out
  * @returns {{complete: boolean, facts: Record<string,string>,
- *            unknown: Record<string,string>, smart: string[], storage: string[], pm2Logs: string[],
+ *            unknown: Record<string,string>, smart: string[], storage: string[], pm2Logs: string[], ioWeight: string[],
  *            wifiRaw: string}}
  */
 export function parseDoctor(out) {
@@ -15,11 +16,16 @@ export function parseDoctor(out) {
 	const smart = [];
 	const storage = [];
 	const pm2Logs = [];
+	const ioWeight = [];
 	for (const line of text.split('\n')) {
-		const m = /^([DUSTP]) (.*)$/.exec(line.replace(/\r$/, ''));
+		const m = /^([DUSTPW]) (.*)$/.exec(line.replace(/\r$/, ''));
 		if (!m) continue;
 		if (m[1] === 'T') {
 			storage.push(m[2]);
+			continue;
+		}
+		if (m[1] === 'W') {
+			ioWeight.push(m[2]);
 			continue;
 		}
 		if (m[1] === 'P') {
@@ -41,6 +47,7 @@ export function parseDoctor(out) {
 		smart,
 		storage,
 		pm2Logs,
+		ioWeight,
 		wifiRaw: text,
 	};
 }

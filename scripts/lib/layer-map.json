@@ -2102,6 +2102,13 @@
     "part": "run"
   },
   {
+    "glob": "scripts/io-cost-ab.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "#158: the io.cost A/B under real load (production io.pressure, ready latency, low-weight cgroups' progress), switched through the root helper scripts/io-cost.sh installs. Reads the local box only."
+  },
+  {
     "glob": "scripts/benchmark-fleet.mjs",
     "layer": "domain",
     "domain": "observation",
@@ -2438,6 +2445,13 @@
     "domain": "observation",
     "part": "core",
     "why": "#138 (storage bootcamp F3): $health.storage from storage-probe.sh's lines (via parseStorage, access) and the per-disk SMART judgement for every disk beside root. Pure; same bucket as doctor-findings-storage.mjs, which keeps the root drive."
+  },
+  {
+    "glob": "scripts/lib/doctor-findings-io-weight.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "#158: whether the root filesystem's disks enforce the io.weight cgroups declare (scheduler, io.cost.qos) and whether the highest weight is diluted by its top-level slice; the probe stanza, its facet and its shadow findings. Pure; same bucket as the other doctor-findings-* judges."
   },
   {
     "glob": "scripts/lib/doctor-findings-pm2-logs.mjs",

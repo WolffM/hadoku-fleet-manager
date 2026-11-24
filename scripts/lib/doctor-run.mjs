@@ -112,6 +112,7 @@ import { thermalFindings } from './doctor-findings-thermal.mjs';
 import { disksLine } from './doctor-findings-disks.mjs';
 import { rootWearText } from './doctor-disk-wear.mjs';
 import { judgeReload, pm2LogsLine, reloadLogsScript } from './doctor-findings-pm2-logs.mjs';
+import { ioWeightLine } from './doctor-findings-io-weight.mjs';
 import { poolFindings, poolSummary, withRootZones } from './doctor-findings-pool.mjs';
 import { rootZoneNodes } from './garage-layout-state.mjs';
 import { declaredMembers } from './garage-layout-declared.mjs';
@@ -595,6 +596,7 @@ for (const [name, h] of Object.entries(health).sort()) {
 	);
 	log(`   disks     ${disksLine(h.storage)}`);
 	log(`   pm2 logs  ${pm2LogsLine(h.pm2Logs)}`);
+	log(`   io weight ${ioWeightLine(h.ioWeight)}`);
 	log(
 		`   network   wifi ${C(n.wifiManager)}${n.radio ? ` on ${n.radio} (${C(n.operstate)}` : ' ('}` +
 			`${n.ssid ? ` ssid ${n.ssid}` : ''}${n.signalDbm ? ` ${n.signalDbm}dBm` : ''})`

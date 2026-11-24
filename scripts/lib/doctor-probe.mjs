@@ -1,6 +1,7 @@
 import { WIFI_MANAGER_PROBE } from './node-interfaces.mjs';
 import { EFFECTIVE_MEMORY_MAX_SH } from './cgroup-ceiling.mjs';
 import { PM2_LOGS_SH } from './doctor-findings-pm2-logs.mjs';
+import { IO_WEIGHT_SH } from './doctor-findings-io-weight.mjs';
 
 /** Seconds of all-core load the thermal reading is taken under. Fixed, by §H. */
 export const LOAD_SECONDS = 60;
@@ -428,6 +429,9 @@ export function doctorProbe({
 		// Every pm2 daemon's apps against its open files (#143).
 		PM2_LOGS_SH,
 		'pm2_logs',
+		// Whether the root disk enforces the io.weight cgroups declare (#158).
+		IO_WEIGHT_SH,
+		'io_weight',
 		'if E=$(journalctl -b 0 -p err --no-pager 2>/dev/null); then say errorsThisBoot "$(printf "%s\\n" "$E" | grep -vcE "ACPI|Bluetooth")"; else unk errorsThisBoot "the journal could not be read by this user"; fi',
 		// ── which stack owns the radio. node-interfaces.mjs owns the question. ─
 		//

@@ -2,6 +2,7 @@ import { cpuSensor, sensorMap } from './doctor-parse.mjs';
 import { parseSmart } from './storage-inventory.mjs';
 import { storageFacet } from './doctor-findings-disks.mjs';
 import { pm2LogsFacet } from './doctor-findings-pm2-logs.mjs';
+import { ioWeightFacet } from './doctor-findings-io-weight.mjs';
 import { parseWifiManager } from './node-interfaces.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -282,6 +283,8 @@ export function healthFacet({
 		storage: storageFacet(probe.storage ?? [], unknown),
 		// Every pm2 daemon's apps against its open files (#143).
 		pm2Logs: pm2LogsFacet(probe.pm2Logs ?? [], unknown),
+		// Whether the root disk enforces the io.weight cgroups declare (#158).
+		ioWeight: ioWeightFacet(probe.ioWeight ?? [], unknown),
 		disk: {
 			device: facts['disk.root.device'] ?? null,
 			fs: facts['disk.root.fs'] ?? null,
