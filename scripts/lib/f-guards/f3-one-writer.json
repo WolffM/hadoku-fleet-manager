@@ -43,6 +43,7 @@
     "runner-health-snapshot.json": ["src/runner-health-snapshot.ts"],
     "security-pending.json": ["scripts/check-fleet-preflight.mjs"],
     "snapshot.json": ["scripts/lib/herdr-fleet.mjs"],
+    "storage-pool.json": ["scripts/storage-pool.mjs"],
     "tool-inventory-capabilities.json": ["scripts/tool-inventory.mjs"],
     "toolchain-deferral-streak.json": ["scripts/lib/toolchain-deferral-streak.mjs"],
     "warm-backoff.json": ["src/runners/warm-backoff.ts"],

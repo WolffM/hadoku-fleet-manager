@@ -186,6 +186,7 @@ code first would turn every real finding into "the checker broke".
 | `fleet hosting-placement --json`                                              | `ci:fleet-placement`   |
 | `fleet doctor --cadence --write --json`                                       | `ci:health-refresh`    |
 | `fleet node-disk --json`                                                      | `ci:node-disk`         |
+| `fleet storage-pool --json`                                                   | `ci:storage-pool`      |
 | `fleet service-inventory --slices --write --json`                             | `ci:slice-inventory`   |
 | `fleet fleet-kills --days 2 --json`                                           | `ci:fleet-kills`       |
 | `fleet warm-canary --json`                                                    | `ci:warm-canary`       |

@@ -53,6 +53,17 @@ export const ARGV_SPECS = {
 		],
 		positionals: false,
 	},
+	'storage-pool.mjs': {
+		usage: [
+			'fleet storage-pool [--json]',
+			'  the ci:storage-pool gate: copies, fill and N+1 of the Garage pool, read live',
+			'  pages on a block short of its copies for 24 h or a full disk; warns on N+1 or a tight disk',
+			'  no node offers storage: "no pool", exit 0',
+		].join('\n'),
+		booleans: ['--json'],
+		valued: [],
+		positionals: false,
+	},
 	'reboot-claws.mjs': {
 		usage: [
 			'fleet reboot-claws [--plan] [--machine <claw>] [--force] [--json]',

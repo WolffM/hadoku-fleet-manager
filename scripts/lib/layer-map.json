@@ -2423,6 +2423,20 @@
     "why": "#138 (storage bootcamp F3): the Garage pool's copies/fill/N+1 judgement over a typed input (doctor-findings-pool.d.mts). Pure; doctor-run.mjs hands it the members. Same bucket as the other doctor-findings-* judges."
   },
   {
+    "glob": "scripts/lib/storage-pool-gate.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "#142 (storage bootcamp F7): the ci:storage-pool verdict, sorting F3's pool findings into page/warn/known/unreadable and keeping the 24 h under-replicated clock. Pure, beside the judge it reads."
+  },
+  {
+    "glob": "scripts/storage-pool.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "#142 (storage bootcamp F7): the `fleet storage-pool` gate CLI; reads the pool through garage-admin.mjs's readPool, as doctor-run.mjs does, and writes its one record. Same bucket as scripts/check-*.mjs."
+  },
+  {
     "glob": "scripts/lib/doctor-findings-network.mjs",
     "layer": "domain",
     "domain": "observation",

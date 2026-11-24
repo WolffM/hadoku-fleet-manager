@@ -138,7 +138,7 @@ void test('the contract itself is well-formed', () => {
  * json-contract.mjs. This is a REGRESSION test, not a structural one: it does
  * not re-derive which entries are host-bound from the source (that would just
  * be the declaration checking itself), it pins them by hand, so that flipping
- * one — or adding a fourth without updating this list — fails loudly instead
+ * one — or adding another without updating this list — fails loudly instead
  * of silently changing what an active/passive split is allowed to assume.
  *
  * There were eight. header-audit, identity-model, inventory, check-runner-var
@@ -181,9 +181,10 @@ const HOST_BOUND_SUBS = [
 	'history-coverage',
 	'hosting-placement',
 	'label-floor',
+	'storage-pool',
 ].sort();
 
-void test('the host-bound declaration matches the evidenced four, exactly', () => {
+void test('the host-bound declaration matches the evidenced five, exactly', () => {
 	const actual = JSON_CONTRACT.filter((e) => e.hostBound === true)
 		.map((e) => e.sub)
 		.sort();
@@ -513,6 +514,7 @@ const TODAYS_JSON_CONTRACT = [
 	],
 	['doctor', 'ci:health-refresh', 'services/mgmt-api/src/routes/jobs/health-refresh.ts'],
 	['node-disk', 'ci:node-disk', 'services/mgmt-api/src/routes/jobs/node-disk.ts'],
+	['storage-pool', 'ci:storage-pool', 'services/mgmt-api/src/routes/jobs/storage-pool.ts'],
 	['fleet-kills', 'ci:fleet-kills', 'services/mgmt-api/src/routes/jobs/fleet-kills-check.ts'],
 	// Added wave 5f lane B: two `ci:audit-gates` covered subs migrated off
 	// PROSE_CONTRACT onto their own `contract: 'json'` — same umbrella job,

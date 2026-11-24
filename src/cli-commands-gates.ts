@@ -58,6 +58,14 @@ export const commandsGates: Record<string, Command> = {
 			'the storage pool: declared Garage zones and tenant buckets against the cluster, the capacity rules, ' +
 			'and a dry-run plan (--apply carries it out)',
 	},
+	// ci:storage-pool (#142): the pool's copies, fill and N+1 against F3's
+	// numbers, read live through the doctor's own reader. "No pool" is exit 0.
+	'storage-pool': {
+		script: 'storage-pool.mjs',
+		kind: 'gate',
+		help: true,
+		summary: 'is every block of the storage pool on 3 copies and every disk under its fill line',
+	},
 	'capability-schema': {
 		script: 'check-capability-schema.mjs',
 		kind: 'gate',

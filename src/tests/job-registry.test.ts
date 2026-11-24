@@ -45,8 +45,9 @@ void test('parseDurationMs: throws rather than silently matching nothing', () =>
 	}
 });
 
-void test('cadencePeriodMs: the two cron shapes profiles.json actually uses, plus clockMs', () => {
+void test('cadencePeriodMs: the three cron shapes profiles.json actually uses, plus clockMs', () => {
 	assert.equal(cadencePeriodMs({ cron: '*/10 * * * *' }), 10 * 60_000);
+	assert.equal(cadencePeriodMs({ cron: '40 * * * *' }), 3_600_000);
 	assert.equal(cadencePeriodMs({ cron: '0 13 * * *' }), 86_400_000);
 	assert.equal(cadencePeriodMs({ cron: '0 12 * * *' }), 86_400_000);
 	assert.equal(cadencePeriodMs({ clockMs: 300_000 }), 300_000);

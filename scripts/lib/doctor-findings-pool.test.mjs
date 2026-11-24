@@ -65,10 +65,10 @@ void test('copies: a factor under 3, and blocks under their target', () => {
 	assert.deepEqual(statuses(poolFindings(p)), ['pool-copies/unreadable', 'pool-copies/unreadable']);
 });
 
-void test('fill: tight at 80%, full at 90%, unreadable with no reading', () => {
+void test('fill: tight at 75%, full at 85%, unreadable with no reading', () => {
 	const p = healthy();
-	p.garage.nodes[0].usedBytes = 0.85 * TB;
-	p.garage.nodes[1].usedBytes = 0.95 * TB;
+	p.garage.nodes[0].usedBytes = 0.8 * TB;
+	p.garage.nodes[1].usedBytes = 0.9 * TB;
 	const fill = poolFindings(p).filter((x) => x.category === 'pool-fill');
 	assert.deepEqual(statuses(fill), ['pool-fill/tight', 'pool-fill/full']);
 	assert.deepEqual(
@@ -123,8 +123,8 @@ void test('every pool finding is advisory and shadow', () => {
 
 void test('#141: a root-disk zone is judged against its quota AND the 80% line of /', () => {
 	const input = healthy();
-	// claw-8: its quota 0.85 used (over 80%), and / at 70%; claw-9: quota fine, / at 85%.
-	input.garage.nodes[1] = member('claw-8', 1, 0.85);
+	// claw-8: its quota 0.8 used (over 75%), and / at 70%; claw-9: quota fine, / at 85%.
+	input.garage.nodes[1] = member('claw-8', 1, 0.8);
 	input.garage = withRootZones(input.garage, {
 		'claw-8': { sizeBytes: 2 * TB, availBytes: 0.6 * TB },
 		'claw-9': { sizeBytes: 1 * TB, availBytes: 0.15 * TB },
@@ -137,7 +137,7 @@ void test('#141: a root-disk zone is judged against its quota AND the 80% line o
 			['claw-9', 'root-over-ceiling'],
 		]
 	);
-	assert.match(fill[0].why, /claw-8's root-disk quota is 85% used/);
+	assert.match(fill[0].why, /claw-8's root-disk quota is 80% used/);
 	assert.match(fill[1].why, /claw-9's \/ is 85% used, over the 80% line/);
 	assert.ok(fill.every((f) => f.class === ADVISORY && f.shadow));
 });

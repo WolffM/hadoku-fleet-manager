@@ -26,10 +26,14 @@
 import { ADVISORY } from './preflight.mjs';
 
 export const POOL_COPIES = 3;
-/** A member's share of the pool at which it is worth a look. */
-export const POOL_FILL_ADVISORY_PCT = 80;
-/** A member's share at which Garage is close to refusing writes to it. */
-export const POOL_FILL_FULL_PCT = 90;
+/**
+ * A member's share of the pool at which it is worth a look (WARN), and the one
+ * at which it pages (`ci:storage-pool`, #142). Agreed with the operator for
+ * the gate; the doctor judges by the same two numbers, so they live here once.
+ */
+export const POOL_FILL_ADVISORY_PCT = 75;
+/** A member's share at which Garage is close to refusing writes to it (PAGE). */
+export const POOL_FILL_FULL_PCT = 85;
 /** A root-disk zone's `/` past this is over the line its quota was sized under (#141). */
 export const ROOT_FS_CEILING_PCT = 80;
 

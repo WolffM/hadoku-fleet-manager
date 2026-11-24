@@ -92,6 +92,7 @@ import { jobRegistryBenchmark } from './job-registry-benchmark.js';
 import { jobRegistryLiveness } from './job-registry-liveness.js';
 import { jobRegistryAuditGates } from './job-registry-audit-gates.js';
 import { jobRegistryInProcess } from './job-registry-in-process.js';
+import { jobRegistryStorage } from './job-registry-storage.js';
 
 /**
  * THE DIRECTLY REGISTERED `JSON_CONTRACT` JOBS (22 at wave 5e lane A's
@@ -113,6 +114,7 @@ export const JOB_REGISTRY: JobEntry[] = [
 	...jobRegistryBenchmark,
 	...jobRegistryLiveness,
 	...jobRegistryAuditGates,
+	...jobRegistryStorage,
 	...jobRegistryInProcess,
 ];
 
@@ -202,6 +204,8 @@ export function cadencePeriodMs(cadence: JobCadence): number {
 	const { cron } = cadence;
 	const everyNMinutes = /^\*\/(\d+) \* \* \* \*$/.exec(cron);
 	if (everyNMinutes) return Number(everyNMinutes[1]) * 60_000;
+	const hourlyAtFixedMinute = /^\d{1,2} \* \* \* \*$/.exec(cron);
+	if (hourlyAtFixedMinute) return 3_600_000;
 	const dailyAtFixedHour = /^\d{1,2} \d{1,2} \* \* \*$/.exec(cron);
 	if (dailyAtFixedHour) return 86_400_000;
 	throw new Error(

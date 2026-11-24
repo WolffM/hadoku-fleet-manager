@@ -107,6 +107,14 @@ it is never burned in. CI counts the quota as taken, so builds never grow
 into it, and no cleanup ever deletes pool data. The nightly health check
 judges such a zone against its quota and against the 80% line of `/`.
 
+`fleet storage-pool` is the pool's hourly check. It reads the cluster live
+and fails when any block has sat on fewer than 3 copies for more than a
+day, or a disk is over 85% full. A disk over 75%, a member down, or a pool
+that could not survive losing one member is a warning and does not fail it.
+With exactly 3 zones that last one is reported as the pool's known state.
+A cluster it could not read fails it. With no storage node at all it says
+"no pool" and passes.
+
 **What it does not do.** It will not admit a node to scheduling on the
 manifest's say alone — a capability a probe cannot confirm is not offered,
 even if the operator believes it should be there.
