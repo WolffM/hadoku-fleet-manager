@@ -216,7 +216,6 @@ cb_try() {
 	printf 'ok %s' "$((cb_n * CB_PER_UNIT * 1000 / cb_ms))"
 }
 
-
 # LOAD IS SAMPLED THROUGHOUT, not at the ends. One sample before and one after
 # misses a job that starts and finishes inside the batch (a lint job runs in
 # seconds; the batch is ~16 s on the slowest claw). A sampler counts once a
@@ -359,6 +358,8 @@ if [ -n "${CAP_DATA_URL:-}" ]; then
 	# shellcheck disable=SC2046
 	say data-peer $(data_peer_try)
 fi
+
+say storage no no-qualified-disk-in-the-garage-layout # F2 qualify + F6 layout; neither yet
 
 # --- service-host: can this node serve a placed pm2 service ------------------
 # What hadoku_site's cutover and remote deploy need of a NODE before any tenant
@@ -543,7 +544,6 @@ if [ -n "$bin" ]; then
 else
 	say jitconfig no no-runner-binary
 fi
-
 
 # --- python-toolcache: EXECUTE the cached interpreter -----------------------
 # NOT `ls /opt/hostedtoolcache/Python`. That directory is the presence-check

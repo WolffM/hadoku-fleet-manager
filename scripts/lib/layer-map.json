@@ -581,6 +581,11 @@
     "why": "Wave 5r lane D split of capability-registry.ts: the surface:'toolchain' entries, a pure move of data. Same layer as its neighbours above."
   },
   {
+    "glob": "src/lib/capability-registry-storage.ts",
+    "layer": "config",
+    "why": "Storage bootcamp F0 (fleet-manager#135): the `storage` capability entry, registry data that capability-registry.ts assembles into CAPABILITIES. Same layer as its neighbours above."
+  },
+  {
     "glob": "src/lib/capability-labels.ts",
     "layer": "config"
   },

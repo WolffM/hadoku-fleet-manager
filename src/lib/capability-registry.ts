@@ -87,6 +87,7 @@ import {
 	PYTHON_VENV_CAPABILITY,
 	RUST_CAPABILITY,
 } from './capability-registry-toolchain.js';
+import { STORAGE_CAPABILITY } from './capability-registry-storage.js';
 
 /** A fact about the node, or a routing lever the fast loop flips. */
 export type CapabilityKind = 'identity' | 'eligibility';
@@ -523,6 +524,7 @@ export const CAPABILITIES: readonly Capability[] = [
 	PYTHON_TOOLCACHE_CAPABILITY,
 	PLAYWRIGHT_CAPABILITY,
 	JITCONFIG_CAPABILITY,
+	STORAGE_CAPABILITY,
 ];
 
 const BY_ID = new Map(CAPABILITIES.map((c) => [c.id, c]));
