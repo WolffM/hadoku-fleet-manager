@@ -113,6 +113,40 @@ void test('one qualification at a time, fleet-wide', () => {
 	);
 });
 
+void test('a window that drains nothing runs while another node is being qualified (#144)', async () => {
+	const held = {
+		'claw-other': {
+			kind: 'training',
+			reason: `${QUALIFY_DRAIN_REASON_PREFIX} disk-burnin (returns when the window ends)`,
+		},
+	};
+	const r = rig({ drains: { ...held } });
+	const out = await go(r, [
+		T('disk-smr', async (ctx) => (await ctx.exec('true'), { status: 'pass', reason: 'cmr' }), {
+			needsDrain: false,
+		}),
+	]);
+	assert.equal(out.status, 'ran', out.reason);
+	assert.deepEqual(
+		out.results.map((x) => [x.id, x.status]),
+		[['disk-smr', 'pass']]
+	);
+	assert.ok(!r.calls.some(([c]) => c === 'drain' || c === 'undrain'), 'it drained something');
+	assert.deepEqual(Object.keys(r.drains), ['claw-other'], 'the other hold was touched');
+	// A draining window on the same fleet is still refused.
+	const r2 = rig({ drains: { ...held } });
+	const out2 = await go(r2, [T('concurrency-ramp', async () => ({ status: 'pass', reason: 'x' }))]);
+	assert.equal(out2.status, 'refused');
+	assert.match(out2.reason, /claw-other is being qualified now/);
+	assert.deepEqual(r2.calls, []);
+	// A mixed window drains, so it takes the lock.
+	assert.match(
+		refusal({ node: NODE, machine: CLAW, drains: held, drainsNode: true }),
+		/one node at a time/
+	);
+	assert.equal(refusal({ node: NODE, machine: CLAW, drains: held, drainsNode: false }), null);
+});
+
 void test('an empty playlist is could-not-look, never a pass, and drains nothing', async () => {
 	const r = rig();
 	const out = await go(r, []);

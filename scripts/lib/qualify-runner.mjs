@@ -18,7 +18,13 @@
  *   - the backstop. "hokon remains the backstop" (operator, 2026-11-11).
  *   - a node someone else already holds. A qualification measures a node it
  *     emptied itself; a maintenance or reboot drain is a human's, not ours.
- *   - a second qualification anywhere in the fleet. One node at a time.
+ *   - a second qualification anywhere in the fleet, when this window DRAINS.
+ *     One node at a time exists so two qualifications never take two nodes'
+ *     CI capacity at once; every test that loads or writes a disk declares
+ *     `needsDrain`. A window that drains nothing (the read-only `--disks`
+ *     checks) takes no capacity, so it runs while another node is held: a
+ *     multi-hour burn-in on one node locked every other node out of its
+ *     SMR/SMART read (#144).
  *
  * COULD NOT LOOK is said, never scored. An empty playlist, a test that throws,
  * a test whose result breaks the contract, a test that would overrun the
@@ -31,8 +37,12 @@ import { parseSamples, startSamplerScript, stopSamplerScript } from './qualify-s
 
 const reasonOf = (e) => (e instanceof Error ? e.message : String(e));
 
-/** Why `node` may not be qualified right now, or null. Pure. */
-export function refusal({ node, machine, drains }) {
+/**
+ * Why `node` may not be qualified right now, or null. Pure.
+ * `drainsNode` false (no test in the window needsDrain) skips the fleet-wide
+ * one-at-a-time lock; the backstop and own-node refusals hold either way.
+ */
+export function refusal({ node, machine, drains, drainsNode = true }) {
 	if (machine?.role === 'backstop')
 		return `${node} is the backstop and is never qualified ("hokon remains the backstop", operator 2026-11-11)`;
 	const own = drains?.[node];
@@ -41,6 +51,7 @@ export function refusal({ node, machine, drains }) {
 			`${node} is already drained (kind=${own.kind ?? 'unset'}, ` +
 			`reason=${JSON.stringify(own.reason ?? '')}); a qualification only runs on a node it emptied itself`
 		);
+	if (!drainsNode) return null;
 	const other = Object.entries(drains ?? {}).find(
 		([n, row]) =>
 			n !== node &&
@@ -133,7 +144,12 @@ export async function runQualification(a) {
 		const reason = `could not read the drain state: ${reasonOf(e)}`;
 		return { status: 'could-not-look', reason, results: notRun(reason) };
 	}
-	const refused = refusal({ node, machine, drains });
+	const refused = refusal({
+		node,
+		machine,
+		drains,
+		drainsNode: tests.some((t) => t?.needsDrain !== false),
+	});
 	if (refused) return { status: 'refused', reason: refused, results: [] };
 
 	const invalid = tests

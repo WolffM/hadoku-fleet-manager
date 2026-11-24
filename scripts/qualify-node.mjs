@@ -18,7 +18,8 @@
  *
  * `--machine` (or `--next`) is REQUIRED. A qualification drains a node for up to
  * QUALIFY_WINDOW_MINUTES; there is no fleet-wide form, by design (one node at a
- * time, and never the backstop — lib/qualify-runner.mjs `refusal`).
+ * time for a window that drains, never the backstop — lib/qualify-runner.mjs
+ * `refusal`; a read-only `--disks` run takes no capacity and skips the lock).
  *
  * Results go to `qualify-results.json` in the state directory
  * (lib/qualify-results.mjs). Nothing here writes the manifest; a derived
