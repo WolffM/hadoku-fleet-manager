@@ -197,6 +197,14 @@ describe('the zone probe', () => {
 			why: 'garage.service is not active',
 		});
 	});
+	it('a running daemon with drifted files is ok, with the drift said (#153)', () => {
+		assert.deepEqual(detectState('OK\n'), { probe: 'ok', why: null, drift: null });
+		assert.deepEqual(detectState('WHY drift: /etc/garage.toml not what this version renders'), {
+			probe: 'ok',
+			why: null,
+			drift: '/etc/garage.toml not what this version renders',
+		});
+	});
 	it("a real node's disks by serial, and its root filesystem", async () => {
 		const exec = async (node, script) => {
 			if (script.includes('QUALIFY_DISK_PROBE')) return { ok: true, stdout: CLAW9 };

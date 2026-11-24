@@ -9,8 +9,9 @@
  * reason. Nothing else edits it, and the plan READS the cluster, never this
  * file, to learn what is: declared is what should be.
  *
- * A missing file is an empty pool. An UNREADABLE one is said and never
- * overwritten: writing over a file nobody could parse would forget every zone.
+ * The reader, and who counts as a member, is garage-layout-declared.mjs
+ * (config, #153). An UNREADABLE file is never overwritten: writing over a
+ * file nobody could parse would forget every zone.
  *
  * Shape (version 1):
  *   zones[node] = {
@@ -21,53 +22,25 @@
  *   buckets[ns] = { key, at }   // global alias dp-<ns>; `key` is the tenant key's name
  *   overrides[] = { at, rules, reason }
  */
-import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeFileAtomicSync } from '../../dist/lib/atomic-json.js';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
-
-export const GARAGE_LAYOUT_FILE = 'garage-layout.json';
-export const LAYOUT_SCHEMA = 1;
-
-export const emptyDeclared = () => ({
-	version: LAYOUT_SCHEMA,
-	zones: {},
-	buckets: {},
-	overrides: [],
-});
-
-export const declaredPath = (dir = stateDir()) => join(dir, GARAGE_LAYOUT_FILE);
+import { declaredPath, readDeclared } from './garage-layout-declared.mjs';
 
 /**
- * @returns {{ declared: object, error: null } | { declared: null, error: string }}
+ * The file this module writes: garage-layout-declared.mjs's GARAGE_LAYOUT_FILE,
+ * spelled here because the F3 one-writer guard traces a writer by the literal
+ * in its own file. The round-trip test reads it back by the reader's name.
  */
-export function readDeclared(path = declaredPath()) {
-	if (!existsSync(path)) return { declared: emptyDeclared(), error: null };
-	let doc;
-	try {
-		doc = JSON.parse(readFileSync(path, 'utf8'));
-	} catch (e) {
-		return {
-			declared: null,
-			error: `${path} is unreadable: ${e instanceof Error ? e.message : e}`,
-		};
-	}
-	if (doc?.version !== LAYOUT_SCHEMA || typeof doc.zones !== 'object' || !doc.zones) {
-		return {
-			declared: null,
-			error: `${path} is not a version ${LAYOUT_SCHEMA} garage layout (version ${doc?.version})`,
-		};
-	}
-	return { declared: { ...emptyDeclared(), ...doc }, error: null };
-}
+const WRITTEN_FILE = 'garage-layout.json';
 
 /**
  * Read, change, write. `change(declared)` returns the new document; a file
  * that could not be read is never written over.
  */
 export function updateDeclared(change, dir = stateDir()) {
-	const path = join(dir, GARAGE_LAYOUT_FILE);
+	const path = join(dir, WRITTEN_FILE);
 	const { declared, error } = readDeclared(path);
 	if (error) throw new Error(`${error}; not writing over it`);
 	const next = change(structuredClone(declared));

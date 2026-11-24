@@ -46,13 +46,19 @@ const why = (r) =>
 /** `df` of `/`, in bytes: the ceiling of a zone that shares the root disk. */
 export const ROOT_DF = 'df -B1 --output=size,used / | tail -n 1';
 
-/** PURE. GARAGE_DETECT's answer as a probe state. */
+/**
+ * PURE. GARAGE_DETECT's answer as a probe state. A running daemon whose config
+ * or unit is not what this version renders is `ok` with `drift` (#153): it is
+ * up, has a node id and is in the layout, and still needs an install step.
+ */
 export function detectState(out) {
 	const line =
 		String(out ?? '')
 			.trim()
 			.split('\n')[0] ?? '';
-	if (line === 'OK') return { probe: 'ok', why: null };
+	if (line === 'OK') return { probe: 'ok', why: null, drift: null };
+	if (line.startsWith('WHY drift:'))
+		return { probe: 'ok', why: null, drift: line.replace(/^WHY drift: */, '') };
 	if (!line) return { probe: 'absent', why: 'Garage is not installed' };
 	const reason = line.replace(/^WHY /, '');
 	if (/vault item/.test(reason)) return { probe: 'no-secrets', why: reason };

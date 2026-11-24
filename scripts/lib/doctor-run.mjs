@@ -113,8 +113,8 @@ import { disksLine } from './doctor-findings-disks.mjs';
 import { judgeReload, pm2LogsLine, reloadLogsScript } from './doctor-findings-pm2-logs.mjs';
 import { poolFindings, poolSummary, withRootZones } from './doctor-findings-pool.mjs';
 import { rootZoneNodes } from './garage-layout-state.mjs';
+import { declaredMembers } from './garage-layout-declared.mjs';
 import { readPool } from './garage-admin.mjs';
-import { toolAppliesTo } from './toolchain-floor.mjs';
 import { nodeQuantities, readNodeBaselines, recordNodeBaselines } from './node-baselines.mjs';
 
 // Through the shared emitter, which every subcommand under the `--json`
@@ -510,11 +510,9 @@ for (const [name, h] of Object.entries(health).sort()) {
 }
 
 // ── the storage pool (#138): fleet-wide, so judged once, not per node ───────
-// Members are the nodes the Garage entry applies to; the cluster is read
-// through the first one whose admin API answers (garage-admin.mjs, #141).
-const POOL_MEMBERS = selectMachines(manifest, {})
-	.filter(([, m]) => toolAppliesTo('garage', m))
-	.map(([name]) => name);
+// Members are the declared zones (garage-layout-declared.mjs, #153); the cluster
+// is read through the first one whose admin API answers (garage-admin.mjs, #141).
+const { nodes: POOL_MEMBERS, error: POOL_MEMBERS_WHY } = declaredMembers();
 const POOL_READ = await readPool(
 	POOL_MEMBERS,
 	(node) => (script) => runOn(node, script, { as: 'admin', timeoutMs: 30_000 }),
@@ -525,6 +523,7 @@ const POOL_READ = await readPool(
 const ROOT_ZONES = rootZoneNodes();
 const POOL = {
 	members: POOL_MEMBERS,
+	membersWhy: POOL_MEMBERS_WHY,
 	...POOL_READ,
 	garage: withRootZones(
 		POOL_READ.garage,

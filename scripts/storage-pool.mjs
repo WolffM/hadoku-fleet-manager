@@ -11,7 +11,9 @@
  * document, `ok` false on a finding that pages or anything unreadable, plus
  * `warnings` and `known`, which never fail it. Exit 1 when not ok.
  *
- * No node offers `storage`: "no pool", exit 0. Nothing is read or written.
+ * Members are the zones garage-layout.json declares (garage-layout-declared.mjs,
+ * #153). None declared: "no pool", exit 0, nothing read or written. A
+ * declaration that cannot be read fails, as anything else unread does.
  *
  * Writes `<stateDir>/storage-pool.json` (`underReplicatedSince`) on every run
  * that read the pool: the 24 h clock lives on the controller, so the job is
@@ -25,9 +27,9 @@ import { createEmitter } from './lib/emit.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
-import { loadManifest, runOn, selectMachines } from './lib/fleet-exec.mjs';
+import { runOn } from './lib/fleet-exec.mjs';
+import { declaredMembers } from './lib/garage-layout-declared.mjs';
 import { readPool } from './lib/garage-admin.mjs';
-import { toolAppliesTo } from './lib/toolchain-floor.mjs';
 import { judgePool } from './lib/storage-pool-gate.mjs';
 import { stateDir } from '../dist/lib/fleet-paths.js';
 import { writeJsonAtomicSync } from '../dist/lib/atomic-json.js';
@@ -36,9 +38,7 @@ parseStrict(ARGV_SPECS['storage-pool.mjs'], process.argv.slice(2));
 const emitter = createEmitter({ argv: process.argv });
 const now = new Date();
 
-const members = selectMachines(loadManifest(), {})
-	.filter(([, m]) => toolAppliesTo('garage', m))
-	.map(([name]) => name);
+const { nodes: members, error: membersWhy } = declaredMembers();
 
 const recordPath = join(stateDir(), 'storage-pool.json');
 const prior = existsSync(recordPath) ? JSON.parse(readFileSync(recordPath, 'utf8')) : null;
@@ -52,7 +52,7 @@ const input = members.length
 				now.toISOString()
 			)),
 		}
-	: { members, garage: null, why: null };
+	: { members, membersWhy, garage: null, why: null };
 
 // A drain file that cannot be read is its own "could not look", never "nothing
 // is drained" (expected-down.mjs): it fails the run with that reason.

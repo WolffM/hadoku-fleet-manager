@@ -232,7 +232,9 @@ export async function runRefreshCycle({
 	const finding = (node, kind, reason) => findings.push({ node, kind, reason });
 
 	// Upstream ONCE PER TOOL PER RUN, for tools some node carries.
-	const toolsByNode = new Map(machines.map(([name, entry]) => [name, applicableRepairs(entry)]));
+	const toolsByNode = new Map(
+		machines.map(([name, entry]) => [name, applicableRepairs(entry, name)])
+	);
 	const latestById = {};
 	const wanted = new Map();
 	for (const tools of toolsByNode.values()) {

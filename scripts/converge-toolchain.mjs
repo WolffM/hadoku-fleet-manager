@@ -588,7 +588,7 @@ async function main() {
 
 		const entry = manifest.machines?.[node];
 		const sudo = maySudo(entry);
-		const repairs = applicableRepairs(manifest.machines?.[node]);
+		const repairs = applicableRepairs(manifest.machines?.[node], node);
 		let state = observe(node, common, repairs);
 		if (!state.readable) {
 			// A node a human deliberately powered off is EXPECTED down, not a

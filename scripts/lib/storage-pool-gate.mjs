@@ -17,9 +17,9 @@
  *                          a failure, until a fourth zone joins.
  *
  * "I COULD NOT LOOK" FAILS. Members whose cluster nobody could read, a factor
- * or a fill or a block count that was not reported: each goes to `unreadable`,
- * and the job is red. No pool at all (no node offers `storage`) is the one
- * green answer with nothing read: `state: 'none'`.
+ * or a fill or a block count that was not reported, a garage-layout.json that
+ * could not be read: each goes to `unreadable`, and the job is red. No pool
+ * at all (no zone declared; #153) is the one green answer with nothing read.
  *
  * THE 24 HOURS NEED A MEMORY. Garage reports how many blocks are short now,
  * not since when, so the gate keeps `underReplicatedSince`: the first run that
@@ -65,7 +65,8 @@ export function judgePool(input, prior, now, deferred = new Map()) {
 
 	for (const f of poolFindings(input)) {
 		const e = entry(f);
-		if (f.status === 'unread' && summary.members.every((m) => deferred.has(m))) {
+		const allDeferred = summary.members.length > 0 && summary.members.every((m) => deferred.has(m));
+		if (f.status === 'unread' && !input?.membersWhy && allDeferred) {
 			warn.push({
 				...e,
 				reason: `${e.reason} Every member is expected down: ${[...deferred.values()].join('; ')}.`,

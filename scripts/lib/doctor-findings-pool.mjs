@@ -14,9 +14,10 @@
  *
  * THE STATE IS READ by garage-admin.mjs's `readPool` (#141) through the first
  * member whose admin API answers; `garage` is null, with why, when none does.
- * A fleet where no node offers `storage` has no pool, and that is
- * `state: 'none'` with no finding. Members with no state read is a finding:
- * "I could not look".
+ * MEMBERS ARE THE DECLARED ZONES (garage-layout-declared.mjs, #153), never
+ * the earned `storage` label, which no probe grants. None declared is no pool:
+ * `state: 'none'` with no finding. A declaration that could not be read, or
+ * members whose cluster nobody read, is a finding: "I could not look".
  *
  * SHIPPED QUIET: every finding is ADVISORY with `shadow: true` until its
  * false-positive rate is known. One fleet-wide pool, so the findings' `node`
@@ -62,8 +63,13 @@ const q = (node, category, status, why, extra = {}) => ({
 /** @param {import('./doctor-findings-pool.d.mts').PoolInput} input */
 export function poolSummary(input) {
 	const members = [...(input?.members ?? [])].sort();
+	if (input?.membersWhy) return { state: 'unread', members, why: input.membersWhy };
 	if (!members.length) {
-		return { state: 'none', members, why: 'no node offers storage, so there is no Garage pool' };
+		return {
+			state: 'none',
+			members,
+			why: 'garage-layout.json declares no zone, so there is no pool',
+		};
 	}
 	if (!input.garage) {
 		return { state: 'unread', members, why: input.why ?? 'nothing read the Garage cluster' };
@@ -81,8 +87,8 @@ export function poolFindings(input) {
 				'pool',
 				'pool-copies',
 				'unread',
-				`${sum.members.length} node(s) offer storage (${sum.members.join(', ')}) but the pool's ` +
-					`state was not read: ${sum.why}. Copies, fill and N+1 are unknown, not fine.`
+				`${sum.members.length ? `${sum.members.length} declared zone(s) (${sum.members.join(', ')})` : 'the pool'} ` +
+					`was not read: ${sum.why}. Copies, fill and N+1 are unknown, not fine.`
 			),
 		];
 	}
@@ -137,7 +143,7 @@ function membership(members, g) {
 	for (const m of members) {
 		if (!inLayout.has(m)) {
 			out.push(
-				q(m, 'pool-node', 'not-in-layout', `${m} offers storage but is not in the Garage layout.`)
+				q(m, 'pool-node', 'not-in-layout', `${m} is a declared zone but not in Garage's layout.`)
 			);
 		}
 	}

@@ -408,7 +408,7 @@ const seedResultsByNode = {};
  */
 async function ensureTools(name, m) {
 	const results = [];
-	for (const [id, tool] of applicableRepairs(m)) {
+	for (const [id, tool] of applicableRepairs(m, name)) {
 		if (!tool.when) continue;
 		// `true` makes an ABSENT tool exit 0, so a non-ok result means the node did
 		// not answer — which is the probe's to report, not a reason to install.

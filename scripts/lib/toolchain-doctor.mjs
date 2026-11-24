@@ -519,7 +519,7 @@ export async function runDoctor({
 
 	// THE TOOLS EACH NODE CARRIES come from the ONE declaration (REPAIRS), filtered
 	// by `applicableRepairs`: `when` in both directions.
-	const toolsByNode = new Map(selected.map(([name, m]) => [name, applicableRepairs(m)]));
+	const toolsByNode = new Map(selected.map(([name, m]) => [name, applicableRepairs(m, name)]));
 
 	// Upstream ONCE PER TOOL PER RUN, and only for tools some selected node
 	// carries. The question is "what had cleared minAge + tolerance ago" — see

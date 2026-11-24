@@ -4,6 +4,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
 	RECHECK_DAYS,
@@ -28,6 +31,10 @@ import {
 	two,
 	withRebootcamp,
 } from './refresh-cycle-fixtures.mjs';
+
+// The fixtures name real nodes (claw-1), and garage's `when` reads the declared
+// layout in the state dir (#153): an empty one, never the host's.
+process.env.HADOKU_STATE_DIR = mkdtempSync(join(tmpdir(), 'refresh-cycle-state-'));
 
 test('only nodes with something to move are drained; a current node is never touched', async () => {
 	const machines = two();

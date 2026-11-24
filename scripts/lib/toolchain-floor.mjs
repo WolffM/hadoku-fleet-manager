@@ -749,25 +749,25 @@ export function isVersionManaged(tool) {
  *   - No `when` => every managed node, the backstop included.
  *   - `when` AS A STRING => the node must OFFER that capability per
  *     `nodeOffer` — the same derivation `ephemeral-tick.ts` mints with.
- *     `taskauto` is ASSIGNED, not probed, so bootcamp's `$capabilities.earned`
- *     alone would say no node carries it; `nodeOffer` is the one place that
- *     knows both kinds.
- *   - `when` AS A FUNCTION `(node) => boolean` => a predicate over the node's
- *     own manifest fields, for a scoping rule that is not itself a capability
- *     — `jdk21`/`maven`'s installed-RAM floor (`installedRamAtLeast`) is the
- *     case that exists.
+ *     `taskauto` is ASSIGNED, not probed, so `$capabilities.earned` alone would
+ *     say no node carries it; `nodeOffer` knows both kinds.
+ *   - `when` AS A FUNCTION `(node, name) => boolean` => a predicate over the
+ *     node's manifest fields or its name, for a rule that is not a capability:
+ *     `jdk21`/`maven`'s installed-RAM floor (`installedRamAtLeast`), garage's
+ *     declared zones (toolchain-garage.mjs `garageZone`, #153).
  *
  * INVARIANT 2: a node for which this is false neither gets the tool nor is
  * reported broken for lacking it. Consumers MUST filter through this.
  *
  * @param {string} id     REPAIRS key
  * @param {object} node   a manifest machine entry (`labels`, `role`, `$capabilities`)
+ * @param {string} [name] the node's name; a predicate keyed on it sees no node without it
  */
-export function toolAppliesTo(id, node) {
+export function toolAppliesTo(id, node, name) {
 	const tool = REPAIRS[id];
 	if (!tool) throw new Error(`unknown tool ${JSON.stringify(id)}`);
 	if (!tool.when) return true;
-	if (typeof tool.when === 'function') return tool.when(node ?? {});
+	if (typeof tool.when === 'function') return tool.when(node ?? {}, name);
 	return nodeOffer(node ?? {}, { eligible: false }).includes(tool.when);
 }
 
@@ -796,8 +796,8 @@ export function byRole(tools) {
 }
 
 /** `[id, tool]` for every REPAIRS entry that applies to this node. */
-export function applicableRepairs(node) {
-	return Object.entries(REPAIRS).filter(([id]) => toolAppliesTo(id, node));
+export function applicableRepairs(node, name) {
+	return Object.entries(REPAIRS).filter(([id]) => toolAppliesTo(id, node, name));
 }
 
 /**

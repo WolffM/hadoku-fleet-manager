@@ -5,14 +5,13 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
-	GARAGE_LAYOUT_FILE,
 	declareBucket,
 	declareZone,
 	drainZone,
-	readDeclared,
 	recordOverride,
 	updateDeclared,
 } from './garage-layout-state.mjs';
+import { GARAGE_LAYOUT_FILE, readDeclared } from './garage-layout-declared.mjs';
 
 const withDir = (fn) => {
 	const dir = mkdtempSync(join(tmpdir(), 'garage-layout-state-'));

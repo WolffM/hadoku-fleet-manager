@@ -142,7 +142,7 @@ export function diskQualified(ledger, node, disk) {
  *   declared: { zones: Record<string, { state: 'active'|'drain', disks: { serial: string, capacityBytes: number, root?: boolean }[] }> },
  *   cluster: object | null,   // garage-admin readCluster, or null when there is none
  *   state: import('./doctor-findings-pool.d.mts').GarageState | null,
- *   zones: Record<string, { probe: 'ok'|'absent'|'stopped'|'no-secrets'|'unreachable', why: string|null, nodeId: string|null,
+ *   zones: Record<string, { probe: 'ok'|'absent'|'stopped'|'no-secrets'|'unreachable', why: string|null, drift?: string|null, nodeId: string|null,
  *     disks: { serial: string|null, sizeBytes: number }[] | null, disksWhy?: string,
  *     root: { sizeBytes: number, usedBytes: number } | null, rootWhy?: string,
  *     dataDirs?: string | null,   // GARAGE_DATA_DIRS_FILE as it is on the node, '' when absent
@@ -310,13 +310,15 @@ function bringUpSteps(node, z, obs, secretsMissing) {
 	if (dataDirsChange) {
 		steps.push({ node, step: 'data-dirs', text: want, why: `write ${want.trim()}` });
 	}
-	if (obs.probe !== 'ok' || dataDirsChange) {
+	if (obs.probe !== 'ok' || dataDirsChange || obs.drift) {
 		steps.push({
 			node,
 			step: 'install',
 			why:
 				obs.probe === 'ok'
-					? 'render the config around the new data dirs and restart'
+					? dataDirsChange
+						? 'render the config around the new data dirs and restart'
+						: `re-render and restart: ${obs.drift}`
 					: obs.probe === 'stopped'
 						? (obs.why ?? 'garage.service is not active')
 						: 'install the pinned Garage, its config and unit, and start it',

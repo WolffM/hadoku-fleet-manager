@@ -42,13 +42,12 @@ import { bucketAlias, parseSize, planBuckets, planLayout } from './lib/garage-la
 import {
 	declareBucket,
 	declareZone,
-	declaredPath,
 	drainZone,
 	forgetZone,
-	readDeclared,
 	recordOverride,
 	updateDeclared,
 } from './lib/garage-layout-state.mjs';
+import { declaredPath, readDeclared } from './lib/garage-layout-declared.mjs';
 import { readQualifyResults } from './lib/qualify-results.mjs';
 import { GARAGE_SECRET_ITEMS } from './lib/toolchain-garage.mjs';
 import { stateDir } from '../dist/lib/fleet-paths.js';

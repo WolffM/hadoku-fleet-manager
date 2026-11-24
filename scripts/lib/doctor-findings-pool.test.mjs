@@ -30,7 +30,7 @@ const healthy = () => ({
 });
 const statuses = (fs) => fs.map((x) => `${x.category}/${x.status}`);
 
-void test('no node offers storage: no pool, and no finding', () => {
+void test('no zone declared: no pool, and no finding', () => {
 	const input = { members: [], garage: null, why: 'nothing reads it' };
 	assert.equal(poolSummary(input).state, 'none');
 	assert.deepEqual(poolFindings(input), []);

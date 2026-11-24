@@ -543,6 +543,26 @@ describe('root-disk zones (claw-8, claw-1: no spare disk)', () => {
 		);
 	});
 
+	it('a running zone whose config drifted gets an install step, nothing else (#153)', () => {
+		const z = rootZone(200 * GB);
+		const drifted = node('claw-1', {
+			dataDirs: dataDirsToml(z.disks),
+			rootZone: { dir: true, reserveMb: quotaMb(200 * GB), duBytes: 4096 },
+			drift: '/etc/garage.toml not what this version renders',
+		});
+		const steps = planLayout({
+			declared: { zones: { 'claw-1': z } },
+			cluster: null,
+			state: null,
+			zones: { 'claw-1': drifted },
+		}).bringUp;
+		assert.deepEqual(
+			steps.map((s) => `${s.node} ${s.step}`),
+			['claw-1 install']
+		);
+		assert.match(steps[0].why, /re-render and restart: \/etc\/garage\.toml/);
+	});
+
 	it("quota + the node's non-Garage use must stay under 80% of /: claw-8 and claw-1 as measured", () => {
 		const zones = { 'claw-8': node('claw-8'), 'claw-1': node('claw-1') };
 		const at = (q8, q1) =>

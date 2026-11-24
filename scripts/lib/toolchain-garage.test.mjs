@@ -21,7 +21,9 @@ import {
 	GARAGE_DATA_DIRS_FILE,
 	GARAGE_REPAIR,
 	garageToml,
+	GARAGE_CONFIG,
 	GARAGE_UNIT,
+	GARAGE_UNIT_PATH,
 } from './toolchain-garage.mjs';
 
 const garage = REPAIRS.garage;
@@ -30,17 +32,12 @@ const NOW = Date.parse(GARAGE_RELEASE.publishedAt) + 8 * 86_400_000;
 const TAILNET_IP = '192.0.2.10';
 const earned = (ids) => ({ role: 'claw', $capabilities: { earned: ids } });
 
-test('#139: when: storage gates the entry, read through nodeOffer', () => {
-	assert.equal(garage.when, 'storage');
-	assert.equal(toolAppliesTo('garage', earned(['storage'])), true, 'a node that earned storage');
-	assert.equal(toolAppliesTo('garage', earned(['jdk21'])), false, 'a bootcamped node without it');
-	assert.equal(toolAppliesTo('garage', { role: 'claw' }), false, 'a node with no record');
+test('#153: the declared layout gates the entry, never the earned storage label', () => {
+	// The membership itself, read from a declared layout: garage-membership.test.mjs.
+	assert.equal(typeof garage.when, 'function');
+	assert.equal(`${garage.when}`, 'a zone of garage-layout.json');
+	assert.equal(toolAppliesTo('garage', earned(['storage'])), false, 'a label is not a zone');
 	assert.equal(toolAppliesTo('garage', { role: 'backstop' }), false, 'the backstop');
-	assert.equal(
-		toolAppliesTo('garage', { role: 'claw', labels: ['storage'], $capabilities: { earned: [] } }),
-		false,
-		'a declared label is not an earned one on a bootcamped node'
-	);
 });
 
 test('#139: the release is pinned, debounced, and the repair refuses any other version', async () => {
@@ -90,8 +87,18 @@ test('#139: secrets are files systemd hands over, never config text, and the uni
 	assert.ok(failClosed.indexOf('exit 1') < failClosed.indexOf('systemctl enable'));
 });
 
-/** Run the detect against a fake garage, a fake systemctl and a secret dir in a tmp root. */
-function detectIn({ installed = true, items = [], active = true }) {
+/**
+ * Run the detect against a fake garage, systemctl and tailscale, a secret dir,
+ * and an installed config and unit (by default what this version renders) in
+ * a tmp root.
+ */
+function detectIn({
+	installed = true,
+	items = [],
+	active = true,
+	toml = garageToml(null, TAILNET_IP),
+	unit = GARAGE_UNIT,
+}) {
 	const root = mkdtempSync(join(tmpdir(), 'garage-detect-'));
 	try {
 		const bin = join(root, 'bin');
@@ -103,8 +110,18 @@ function detectIn({ installed = true, items = [], active = true }) {
 		};
 		if (installed) stub('garage', 'echo "garage v2.5.0 [features: lmdb]"');
 		stub('systemctl', active ? 'exit 0' : 'exit 3');
+		stub('tailscale', `[ "$*" = "ip -4" ] && printf '%s' '${TAILNET_IP}'`);
 		for (const i of items) writeFileSync(join(secrets, i), 'x\n');
-		const text = garage.detect.replaceAll(GARAGE_SECRET_DIR, secrets);
+		// The unit names the config and secret paths, so the installed copy moves with them.
+		const here = (t) =>
+			t
+				.replaceAll(GARAGE_SECRET_DIR, secrets)
+				.replaceAll(GARAGE_DATA_DIRS_FILE, join(root, 'data-dirs.toml'))
+				.replaceAll(GARAGE_CONFIG, join(root, 'garage.toml'))
+				.replaceAll(GARAGE_UNIT_PATH, join(root, 'garage.service'));
+		writeFileSync(join(root, 'garage.toml'), toml);
+		writeFileSync(join(root, 'garage.service'), here(unit));
+		const text = here(garage.detect);
 		const r = spawnSync('bash', ['--noprofile', '--norc', '-c', text], {
 			encoding: 'utf8',
 			env: { PATH: `${bin}:/usr/bin:/bin` },
@@ -204,4 +221,21 @@ test('#152: peers dial the node on its tailnet IPv4, and a node without one writ
 		assert.match(r.stderr, /no tailnet IPv4 on this node/);
 		assert.equal(r.toml, null, 'no config written');
 	}
+});
+
+test('#153: a running daemon whose config or unit is not what this version renders is drift', () => {
+	const running = { items: GARAGE_SECRET_ITEMS };
+	// claw-1/8/9 as measured: installed before #152, so no rpc_public_addr.
+	const pre152 = garageToml(null, TAILNET_IP).replace(/^rpc_public_addr = .*\n/m, '');
+	assert.match(
+		detectIn({ ...running, toml: pre152 }),
+		/^WHY drift: \S+\/garage\.toml not what this version renders$/
+	);
+	assert.match(
+		detectIn({ ...running, unit: GARAGE_UNIT.replace('RestartSec=10', 'RestartSec=5') }),
+		/^WHY drift: \S+\/garage\.service not what this version renders$/
+	);
+	assert.equal(detectIn(running), 'OK', 'what this version renders is not drift');
+	const j = judgeTool('garage', garage, { detect: detectIn({ ...running, toml: pre152 }) });
+	assert.equal(j.finding, true, 'the floor repairs drift');
 });

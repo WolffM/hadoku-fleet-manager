@@ -31,7 +31,7 @@ const pool = (names, usedTb = 0.3) => ({
 const FOUR = ['claw-4', 'claw-8', 'claw-9', 'claw-10'];
 const kinds = (list) => list.map((f) => `${f.node} ${f.kind}`);
 
-void test('no node offers storage: "no pool", ok, nothing read', () => {
+void test('no zone declared: "no pool", ok, nothing read', () => {
 	const v = judgePool({ members: [], garage: null, why: null }, null, NOW);
 	assert.equal(v.ok, true);
 	assert.equal(v.state, 'none');

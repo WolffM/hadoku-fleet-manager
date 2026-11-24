@@ -3,8 +3,9 @@
  *
  * The doctor reads it through the first member whose admin API answers
  * (`readPool` in garage-admin.mjs, #141); `garage: null` with `why` when none
- * does. A fleet in which no node offers `storage` is `state: 'none'`, which is
- * not a finding.
+ * does. Members are the zones garage-layout.json declares
+ * (garage-layout-declared.mjs, #153); none declared is `state: 'none'`, which
+ * is not a finding, and a declaration that could not be read is `unread`.
  *
  * NULL MEANS "NOT REPORTED", never zero: a node whose capacity is null was not
  * measured, and the N+1 sum refuses to run over it.
@@ -36,8 +37,10 @@ export interface GarageState {
 }
 
 export interface PoolInput {
-	/** Nodes that offer `storage`, i.e. where the Garage entry applies. */
+	/** The declared zones (`declaredMembers`); empty and meaningless when `membersWhy` is set. */
 	members: string[];
+	/** Why the members are unknown: the declared layout could not be read. */
+	membersWhy?: string | null;
 	/** The cluster as Garage reports it, or null when nothing read it. */
 	garage: GarageState | null;
 	/** Why `garage` is null. */

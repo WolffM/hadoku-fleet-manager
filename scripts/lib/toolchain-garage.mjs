@@ -5,10 +5,18 @@
  * spreads that into REPAIRS. One declaration, three consumers: the refresh
  * cycle, the doctor and bootcamp.
  *
- * WHERE: only on a node that offers `storage` (`when`, read through
- * `nodeOffer`; src/lib/capability-registry-storage.ts). No node earns it until
- * disk qualification (F2) and the layout (F6) exist, so until then this entry
- * applies nowhere and installs nothing.
+ * WHERE: on every zone garage-layout.json declares (`when`,
+ * {@link garageZone}; garage-layout-declared.mjs, #153), the pool's one
+ * membership answer. It is NOT the earned `storage` label: the probe answers
+ * `no` for it everywhere, so a label-keyed `when` applied nowhere and nothing
+ * kept a running member's config current.
+ *
+ * DRIFT IS NOT RUNNING. The detect renders the config and unit this version
+ * would write, from the same shell the repair uses ({@link renderScript}), and
+ * compares them with what is installed. A difference is a `WHY drift: ...`
+ * line: the floor repairs it, and the layout's probe plans an `install` step
+ * on a node whose daemon is up (#153: #152's `rpc_public_addr` reached no
+ * node, because every node read as `ok`).
  *
  * THE RELEASE IS PINNED, not looked up. Garage publishes on its own Forgejo,
  * and its binaries carry no checksum file, so there is no feed to trust. The
@@ -54,7 +62,7 @@
  * address, and `[::]:3900` answers on the tailnet (measured from hokon).
  */
 
-import { STORAGE_LABEL } from '../../dist/lib/capability-registry-storage.js';
+import { declaredMembers } from './garage-layout-declared.mjs';
 
 export const GARAGE_RELEASE = {
 	version: '2.5.0',
@@ -68,6 +76,7 @@ export const GARAGE_SECRET_ITEMS = ['GARAGE_RPC_SECRET', 'GARAGE_ADMIN_TOKEN'];
 export const GARAGE_SECRET_DIR = '/etc/garage/secrets';
 export const GARAGE_CONFIG = '/etc/garage.toml';
 export const GARAGE_BIN = '/usr/local/bin/garage';
+export const GARAGE_UNIT_PATH = '/etc/systemd/system/garage.service';
 const CRED = '/run/credentials/garage.service';
 
 /**
@@ -155,15 +164,29 @@ const MISSING_SECRETS = [
 	'done',
 ];
 
-/** Write `text` to `dest` (root, 0644) only when it differs; sets `changed=1`. */
-const placeFile = (text, dest, tag) => [
-	`cat > "$tmp/${tag}" <<'${tag.toUpperCase()}_EOF'`,
-	text.replace(/\n$/, ''),
-	`${tag.toUpperCase()}_EOF`,
-	`if ! cmp -s "$tmp/${tag}" ${dest}; then`,
-	`  sudo -n install -D -m 0644 "$tmp/${tag}" ${dest}`,
-	'  changed=1',
-	'fi',
+/**
+ * Shell, run with a `$tmp` dir: this node's config in `$tmp/toml` (head, its
+ * data dirs or the default, its tailnet `rpc_public_addr`, tail) and the unit
+ * in `$tmp/unit`. `fail(msg)` runs when the node has no tailnet IPv4. The
+ * repair installs the two files; the detect compares them (#153).
+ */
+const renderScript = (fail) => [
+	'cat > "$tmp/head" <<\'HEAD_EOF\'',
+	TOML_HEAD.join('\n'),
+	'HEAD_EOF',
+	// #152: the address peers dial, this node's own tailnet IPv4, never the LAN.
+	'ip4="$(tailscale ip -4 2>/dev/null | head -n 1)"',
+	`printf '%s' "$ip4" | grep -Eq '^[0-9]{1,3}(\\.[0-9]{1,3}){3}$' ||`,
+	`  { ${fail("no tailnet IPv4 on this node (tailscale ip -4 printed '$ip4'); peers dial rpc_public_addr over the tailnet, so the config is not written")} }`,
+	`printf '%s\\n%s\\n' '${rpcLines('IP4').join("' '").replaceAll('IP4', `'"$ip4"'`)}' > "$tmp/rpc"`,
+	'cat > "$tmp/tail" <<\'TAIL_EOF\'',
+	TOML_TAIL.join('\n').replace(/\n$/, ''),
+	'TAIL_EOF',
+	`if [ -s ${GARAGE_DATA_DIRS_FILE} ]; then dd="$(cat ${GARAGE_DATA_DIRS_FILE})"; else dd='${DEFAULT_DATA_DIR}'; fi`,
+	'printf \'%s\\n%s\\n%s\\n%s\\n\' "$(cat "$tmp/head")" "$dd" "$(cat "$tmp/rpc")" "$(cat "$tmp/tail")" > "$tmp/toml"',
+	`cat > "$tmp/unit" <<'UNIT_EOF'`,
+	GARAGE_UNIT.replace(/\n$/, ''),
+	'UNIT_EOF',
 ];
 
 export const GARAGE_REPAIR = [
@@ -186,25 +209,15 @@ export const GARAGE_REPAIR = [
 	`  sudo -n mv -f ${GARAGE_BIN}.new ${GARAGE_BIN}`,
 	'  changed=1',
 	'fi',
-	// The config: head, this node's data dirs (or the default), tail.
-	'cat > "$tmp/head" <<\'HEAD_EOF\'',
-	TOML_HEAD.join('\n'),
-	'HEAD_EOF',
-	// #152: the address peers dial, this node's own tailnet IPv4, never the LAN.
-	'ip4="$(tailscale ip -4 2>/dev/null | head -n 1)"',
-	`printf '%s' "$ip4" | grep -Eq '^[0-9]{1,3}(\\.[0-9]{1,3}){3}$' ||`,
-	'  { echo "garage: no tailnet IPv4 on this node (tailscale ip -4 printed \'$ip4\'); peers dial rpc_public_addr over the tailnet, so the config is not written" >&2; exit 1; }',
-	`printf '%s\\n%s\\n' '${rpcLines('IP4').join("' '").replaceAll('IP4', `'"$ip4"'`)}' > "$tmp/rpc"`,
-	'cat > "$tmp/tail" <<\'TAIL_EOF\'',
-	TOML_TAIL.join('\n').replace(/\n$/, ''),
-	'TAIL_EOF',
-	`if [ -s ${GARAGE_DATA_DIRS_FILE} ]; then dd="$(cat ${GARAGE_DATA_DIRS_FILE})"; else dd='${DEFAULT_DATA_DIR}'; fi`,
-	'printf \'%s\\n%s\\n%s\\n%s\\n\' "$(cat "$tmp/head")" "$dd" "$(cat "$tmp/rpc")" "$(cat "$tmp/tail")" > "$tmp/toml"',
+	...renderScript((msg) => `echo "garage: ${msg}" >&2; exit 1;`),
 	`if ! cmp -s "$tmp/toml" ${GARAGE_CONFIG}; then`,
 	`  sudo -n install -D -m 0644 "$tmp/toml" ${GARAGE_CONFIG}`,
 	'  changed=1',
 	'fi',
-	...placeFile(GARAGE_UNIT, '/etc/systemd/system/garage.service', 'unit'),
+	`if ! cmp -s "$tmp/unit" ${GARAGE_UNIT_PATH}; then`,
+	`  sudo -n install -D -m 0644 "$tmp/unit" ${GARAGE_UNIT_PATH}`,
+	'  changed=1',
+	'fi',
 	// 0711: any user may stat an item (the detect, as ci), only root may read one.
 	`sudo -n install -d -m 0711 ${GARAGE_SECRET_DIR}`,
 	'sudo -n systemctl daemon-reload',
@@ -224,7 +237,8 @@ export const GARAGE_REPAIR = [
 ].join('\n');
 
 /**
- * Present, keyed and running. The first line is the doctor's reason when it is
+ * Present, keyed, running, and its config and unit are what this version
+ * renders (`WHY drift: <files> ...` otherwise). The first line is the doctor's reason when it is
  * not `OK` (a `WHY ` line; toolchain-doctor.mjs), so a node without its secrets
  * is a finding that names the vault items.
  */
@@ -236,17 +250,31 @@ export const GARAGE_DETECT = [
 	'elif ! systemctl is-active -q garage.service; then',
 	'  echo "WHY garage.service is not active"',
 	'else',
-	'  echo OK',
+	'  tmp="$(mktemp -d)"',
+	'  trap \'rm -rf "$tmp"\' EXIT',
+	...renderScript((msg) => `echo "WHY drift: ${msg}"; exit 0;`),
+	'  drift=""',
+	`  cmp -s "$tmp/toml" ${GARAGE_CONFIG} || drift="$drift ${GARAGE_CONFIG}"`,
+	`  cmp -s "$tmp/unit" ${GARAGE_UNIT_PATH} || drift="$drift ${GARAGE_UNIT_PATH}"`,
+	'  if [ -n "$drift" ]; then echo "WHY drift:$drift not what this version renders"; else echo OK; fi',
 	'fi',
 ].join('\n');
 
+/**
+ * A `when` predicate (toolchain-floor.mjs `toolAppliesTo`): `name` is a zone
+ * garage-layout.json declares. An unreadable declaration applies nowhere here;
+ * the pool gate is what fails on it. `toString` is what bootcamp prints.
+ */
+export const garageZone = (_node, name) => declaredMembers().nodes.includes(name);
+garageZone.toString = () => 'a zone of garage-layout.json';
+
 export const GARAGE_REPAIRS = {
 	garage: {
-		when: STORAGE_LABEL,
+		when: garageZone,
 		// A daemon, not a tool a job runs: no runner PATH to judge.
 		role: 'admin',
 		why:
-			'the storage pool: every `storage` node is a member of the 3-copy Garage cluster ' +
+			'the storage pool: every declared zone is a member of the 3-copy Garage cluster ' +
 			'dataplatform stores blobs in. The pinned upstream binary, its config and a systemd unit.',
 		detect: GARAGE_DETECT,
 		version: 'garage --version 2>/dev/null',

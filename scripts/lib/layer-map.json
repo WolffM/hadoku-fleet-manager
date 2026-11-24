@@ -500,6 +500,11 @@
     "why": "Storage bootcamp F6 (#141): the Garage admin API (in-process HTTP, or curl on a member's loopback via fleet-exec) and readCluster/garageState, the one reader of a cluster that both the layout plan and the doctor's pool findings use. Another system's data, like gh-app.mjs."
   },
   {
+    "glob": "scripts/lib/garage-layout-declared.mjs",
+    "layer": "config",
+    "why": "#153: the READER of garage-layout.json and the pool's one membership answer (declaredMembers), moved down from garage-layout-state.mjs (state) so F4's toolchain-floor `when` (config) may read it, as manifest.ts reads the manifest. The one writer stays garage-layout-state.mjs."
+  },
+  {
     "glob": "scripts/lib/garage-layout-state.mjs",
     "layer": "state",
     "why": "Storage bootcamp F6 (#141): garage-layout.json's one writer and reader, the declared pool (zones, disks, buckets, overrides). A one-writer record like qualify-results.mjs."
