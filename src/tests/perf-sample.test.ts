@@ -192,11 +192,15 @@ void test('a missing directory is no rows yet; a day file past retention is prun
 const lan = pingStats('192.0.2.9', [3, 4], 20);
 
 void test('a node whose probe cannot run is ok:false with the reason, and still carries the controller ping', async () => {
-	const r = await sampleNode({ node: 'claw-9', lanIp: '192.0.2.9' }, new Date().toISOString(), {
-		ping: () => Promise.resolve(lan),
-		probe: () =>
-			Promise.resolve({ code: null, stdout: '', stderr: '', why: 'timed out after 30 s' }),
-	});
+	const r = await sampleNode(
+		{ node: 'claw-fixture', lanIp: '192.0.2.9' },
+		new Date().toISOString(),
+		{
+			ping: () => Promise.resolve(lan),
+			probe: () =>
+				Promise.resolve({ code: null, stdout: '', stderr: '', why: 'timed out after 30 s' }),
+		}
+	);
 	assert.equal(r.ok, false);
 	assert.match(r.why ?? '', /timed out/);
 	assert.deepEqual(r.lan, lan);
@@ -214,10 +218,14 @@ void test('a torn probe is ok:false naming the exit and the last stderr line', a
 });
 
 void test('a whole probe becomes an ok row', async () => {
-	const r = await sampleNode({ node: 'claw-1', lanIp: '192.0.2.9' }, new Date().toISOString(), {
-		ping: () => Promise.resolve(lan),
-		probe: () => Promise.resolve({ code: 0, stdout: WIFI_PROBE, stderr: '' }),
-	});
+	const r = await sampleNode(
+		{ node: 'claw-fixture', lanIp: '192.0.2.9' },
+		new Date().toISOString(),
+		{
+			ping: () => Promise.resolve(lan),
+			probe: () => Promise.resolve({ code: 0, stdout: WIFI_PROBE, stderr: '' }),
+		}
+	);
 	assert.equal(r.ok, true);
 	assert.equal(r.link?.kind, 'wifi');
 	assert.deepEqual(r.lan, lan);
