@@ -46,24 +46,25 @@ const plainFree = (): number => {
 // Free space moves while the rest of the suite writes to the same disk, so
 // each figure is compared within TOL, and the reserve is large beside it.
 const TOL = 256;
-const near = (got: number | null, want: number): void => {
-	assert.ok(got !== null && Math.abs(got - want) <= TOL, `${got} vs ${want} (±${TOL} MB)`);
-};
+const near = (got: number | null, want: number): [boolean, string] => [
+	got !== null && Math.abs(got - want) <= TOL,
+	`${got} vs ${want} (±${TOL} MB)`,
+];
 
 test('no reserve file: the plain free figure', () => {
-	near(probe(null), plainFree());
+	assert.ok(...near(probe(null), plainFree()));
 });
 
 test('a reserve on the same filesystem is subtracted, floored at 0', () => {
 	const free = plainFree();
 	const reserve = Math.floor(free / 2);
 	assert.ok(reserve > 4 * TOL, `the test disk has too little free space to tell (${free} MB)`);
-	near(probe(`${reserve}\n`), free - reserve);
+	assert.ok(...near(probe(`${reserve}\n`), free - reserve));
 	assert.equal(probe(String(free * 10)), 0);
 });
 
 test('a reserve that is not digits, or a zone on another filesystem, subtracts nothing', () => {
 	const free = plainFree();
-	near(probe('lots'), free);
-	near(probe('100', true), free);
+	assert.ok(...near(probe('lots'), free));
+	assert.ok(...near(probe('100', true), free));
 });
