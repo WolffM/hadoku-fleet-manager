@@ -6,7 +6,11 @@ import {
 	garageState,
 	nodeAdmin,
 	nodeAdminScript,
+	CORRUPTED_COUNT,
+	parseCorrupted,
+	readMemberViews,
 	readPool,
+	seenBy,
 } from './garage-admin.mjs';
 import { CLAW9 } from './storage-fixtures.mjs';
 import {
@@ -89,8 +93,10 @@ describe('garageState: a cluster as the doctor reads it', () => {
 				up: true,
 				capacityBytes: 1e9,
 				usedBytes: 300000,
+				resyncErrors: 0,
 			})),
 			underReplicatedBlocks: 0,
+			underReplicatedWhy: null,
 			at: 'T',
 		});
 	});
@@ -99,9 +105,23 @@ describe('garageState: a cluster as the doctor reads it', () => {
 		c.nodeStats.error = { [ID.b]: 'timeout' };
 		delete c.nodeStats.success[ID.b];
 		assert.equal(garageState(c).underReplicatedBlocks, null);
+		assert.equal(garageState(c).underReplicatedWhy, 'claw-b: timeout');
 		const d = structuredClone(CAPTURED);
 		d.nodeStats = null;
+		d.errors = { nodeStats: 'HTTP 500' };
 		assert.equal(garageState(d).underReplicatedBlocks, null);
+		assert.match(garageState(d).underReplicatedWhy, /GetNodeStatistics was not read: HTTP 500/);
+	});
+	it('a node the cluster reports down is not an unread count: the members up are summed', () => {
+		// The 2026-11-24 drill: claw-9 stopped, its statistics in `error`.
+		const c = structuredClone(CAPTURED);
+		c.status.nodes[2].isUp = false;
+		c.nodeStats.error = { [ID.c]: 'Remote error: Could not reach node' };
+		delete c.nodeStats.success[ID.c];
+		c.nodeStats.success[ID.a].blockManagerStats = { resyncQueueLen: 56, resyncErrors: 0 };
+		const s = garageState(c);
+		assert.equal(s.underReplicatedBlocks, 56);
+		assert.equal(s.underReplicatedWhy, null);
 	});
 	it('queued and errored blocks count; a down node is down', () => {
 		const c = structuredClone(CAPTURED);
@@ -118,6 +138,70 @@ describe('garageState: a cluster as the doctor reads it', () => {
 		const c = structuredClone(CAPTURED);
 		c.statistics = null;
 		assert.ok(garageState(c).nodes.every((n) => n.usedBytes === null));
+	});
+});
+
+describe("readMemberViews + seenBy: every member's own view", () => {
+	it('reads each member through its own admin API and keeps a refused one with its reason', async () => {
+		const asked = [];
+		const adminFor = (node) => ({
+			async call(_m, endpoint) {
+				asked.push(`${node} ${endpoint}`);
+				if (node === 'claw-c') throw new Error('ssh: connect timed out');
+				return endpoint === 'GetClusterHealth' ? CAPTURED.health : CAPTURED.status;
+			},
+		});
+		const v = await readMemberViews(['claw-a', 'claw-c'], adminFor);
+		assert.deepEqual(asked, [
+			'claw-a GetClusterHealth',
+			'claw-a GetClusterStatus',
+			'claw-c GetClusterHealth',
+		]);
+		assert.equal(v[0].status, CAPTURED.status);
+		assert.deepEqual(
+			{ ...v[1], why: v[1].why },
+			{ node: 'claw-c', health: null, status: null, why: 'ssh: connect timed out' }
+		);
+	});
+	it("counts each member's quarantine through execFor when given", async () => {
+		const adminFor = () => ({
+			call: async (_m, e) => (e === 'GetClusterHealth' ? CAPTURED.health : CAPTURED.status),
+		});
+		const ran = [];
+		const execFor = (node) => async (script) => {
+			ran.push([node, script]);
+			return { ok: true, stdout: '2 /srv/storage/WD-X/garage\n0 /srv/storage/root/garage\n' };
+		};
+		const [v] = await readMemberViews(['claw-a'], adminFor, execFor);
+		assert.deepEqual(ran, [['claw-a', CORRUPTED_COUNT]]);
+		assert.deepEqual(v.corrupted, [
+			{ path: '/srv/storage/WD-X/garage', disk: 'WD-X', count: 2 },
+			{ path: '/srv/storage/root/garage', disk: 'root', count: 0 },
+		]);
+	});
+	it('a count that did not run, or ran to nothing, is unread with its reason, never 0', () => {
+		// The failure captured live: the config path did not exist.
+		assert.deepEqual(
+			parseCorrupted({ ok: false, stderr: 'grep: /etc/nope.toml: No such file or directory\n' }),
+			{
+				corrupted: null,
+				corruptedWhy: 'grep: /etc/nope.toml: No such file or directory',
+			}
+		);
+		assert.equal(parseCorrupted({ ok: true, stdout: '' }).corrupted, null);
+		assert.match(
+			parseCorrupted({ ok: true, stdout: 'sudo: a password is required' }).corruptedWhy,
+			/unexpected line/
+		);
+		assert.match(CORRUPTED_COUNT, /pipefail/);
+		assert.match(CORRUPTED_COUNT, /-name '\*\.corrupted'/);
+	});
+	it('up, failed (last seen N s ago) and never-seen (null, down) by fleet node', () => {
+		const st = structuredClone(CAPTURED.status);
+		st.nodes[0].lastSeenSecsAgo = null; // self: up, null
+		st.nodes[1] = { ...st.nodes[1], isUp: false, lastSeenSecsAgo: 40 };
+		st.nodes[2] = { ...st.nodes[2], isUp: false, lastSeenSecsAgo: null };
+		assert.deepEqual(seenBy(st), { 'claw-a': 'up', 'claw-b': 'failed', 'claw-c': 'never-seen' });
 	});
 });
 

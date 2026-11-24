@@ -161,13 +161,13 @@ Reverting either branch of the switch fails its test.
 `hostBound: true | false`. `true` means the subcommand reads something that
 belongs to THIS box specifically, not the fleet:
 
-| sub                 | reads                                                                                                                       | evidence                                |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| `egress-slices`     | this host's `pm2 jlist` and `/proc/<pid>/cgroup`                                                                            | `scripts/check-egress-slices.mjs:39-40` |
-| `history-coverage`  | `job-history.jsonl` under `HADOKU_STATE_DIR` — THIS process's own recorded ingest                                           | `scripts/check-history-coverage.mjs`    |
-| `hosting-placement` | the controller's placement record (`fleet-hosting.json`, the tenant registry, the converger's last pass) in its state dir   | `scripts/hosting-placement.mjs`         |
-| `label-floor`       | `job-history.jsonl` AND `demand-ledger.jsonl` under `HADOKU_STATE_DIR` — same class as `history-coverage`                   | `scripts/check-label-floor.mjs`         |
-| `storage-pool`      | `storage-pool.json` under `HADOKU_STATE_DIR`: the 24 h clock of blocks short of their copies (the pool itself is read live) | `scripts/storage-pool.mjs`              |
+| sub                 | reads                                                                                                                                                              | evidence                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------- |
+| `egress-slices`     | this host's `pm2 jlist` and `/proc/<pid>/cgroup`                                                                                                                   | `scripts/check-egress-slices.mjs:39-40` |
+| `history-coverage`  | `job-history.jsonl` under `HADOKU_STATE_DIR` — THIS process's own recorded ingest                                                                                  | `scripts/check-history-coverage.mjs`    |
+| `hosting-placement` | the controller's placement record (`fleet-hosting.json`, the tenant registry, the converger's last pass) in its state dir                                          | `scripts/hosting-placement.mjs`         |
+| `label-floor`       | `job-history.jsonl` AND `demand-ledger.jsonl` under `HADOKU_STATE_DIR` — same class as `history-coverage`                                                          | `scripts/check-label-floor.mjs`         |
+| `storage-pool`      | `storage-pool.json` under `HADOKU_STATE_DIR`: the 24 h clocks of blocks short of their copies and of a split between members' views (the pool itself is read live) | `scripts/storage-pool.mjs`              |
 
 Two host-bound gates (`reap-trend`, `srv-drift`) and one coversSub
 (`contract-consumers`) retired outright in wave gates2 (2026-11-08) rather

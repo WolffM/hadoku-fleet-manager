@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { POOL_FILL_ADVISORY_PCT, POOL_FILL_FULL_PCT } from './doctor-findings-pool.mjs';
-import { UNDER_REPLICATED_PAGE_MS, judgePool } from './storage-pool-gate.mjs';
+import { UNDER_REPLICATED_PAGE_MS, judgePool, judgeViews } from './storage-pool-gate.mjs';
 
 const TB = 1e12;
 const NOW = new Date();
@@ -27,6 +27,20 @@ const pool = (names, usedTb = 0.3) => ({
 	},
 	why: null,
 	via: names[0],
+	// Every member's own view, each seeing every member up (#154).
+	views: names.map((node) => ({
+		node,
+		health: { status: 'healthy', storageNodes: names.length, storageNodesUp: names.length },
+		status: {
+			nodes: names.map((n) => ({
+				id: `id-${n}`,
+				isUp: true,
+				lastSeenSecsAgo: n === node ? null : 3,
+				role: { zone: n, tags: [n] },
+			})),
+		},
+		why: null,
+	})),
 });
 const FOUR = ['claw-4', 'claw-8', 'claw-9', 'claw-10'];
 const kinds = (list) => list.map((f) => `${f.node} ${f.kind}`);
@@ -155,4 +169,172 @@ void test("a root-disk zone's / over its ceiling warns; the doctor owns that lin
 	const v = judgePool(p, null, NOW);
 	assert.equal(v.ok, true);
 	assert.deepEqual(kinds(v.warnings), ['claw-8 pool-fill/root-over-ceiling']);
+});
+
+// Each member's GetClusterStatus, as `readMemberViews` returns it (#154).
+const PILOT = ['claw-1', 'claw-8', 'claw-9'];
+const statusSeeing = (self, others = {}) => ({
+	nodes: PILOT.map((n) => {
+		const s = n === self ? 'up' : (others[n] ?? 'up');
+		return {
+			id: `id-${n}`,
+			isUp: s === 'up',
+			lastSeenSecsAgo: n === self || s === 'never-seen' ? null : 3,
+			role: { zone: n, tags: [n] },
+		};
+	}),
+});
+const health = (up) => ({
+	status: up === 3 ? 'healthy' : 'degraded',
+	storageNodes: 3,
+	storageNodesUp: up,
+});
+const view = (node, others, up = 3) => ({
+	node,
+	health: health(up),
+	status: statusSeeing(node, others),
+	why: null,
+});
+const withViews = (views) => ({ ...pool(PILOT), views });
+
+void test('the split: claw-1 sees 3/3, claw-8 and claw-9 never saw claw-1: a warn naming the pair', () => {
+	const input = withViews([
+		view('claw-1'),
+		view('claw-8', { 'claw-1': 'never-seen' }, 2),
+		view('claw-9', { 'claw-1': 'never-seen' }, 2),
+	]);
+	const v = judgePool(input, null, NOW);
+	assert.equal(v.ok, true, 'under 24 h it warns');
+	const f = v.warnings.find((w) => w.kind === 'pool-view/never-seen');
+	assert.equal(f.node, 'claw-1');
+	assert.match(
+		f.reason,
+		/claw-8 \(never-seen\), claw-9 \(never-seen\) cannot see claw-1\. claw-1 itself sees 3\/3 up\./
+	);
+	assert.equal(v.record.splitSince, NOW.toISOString());
+	assert.deepEqual(
+		v.views.map((x) => `${x.node} ${x.health} ${x.sees['claw-1']}`),
+		[
+			'claw-1 healthy, 3/3 up up',
+			'claw-8 degraded, 2/3 up never-seen',
+			'claw-9 degraded, 2/3 up never-seen',
+		]
+	);
+	const late = judgePool(input, { splitSince: hoursAgo(25) }, NOW);
+	assert.equal(late.ok, false, 'past 24 h it pages');
+	assert.deepEqual(kinds(late.findings), ['claw-1 pool-view/never-seen']);
+	assert.match(late.findings[0].reason, /Split for 25 h/);
+});
+
+void test('every member seeing 3/3 is quiet and clears the split clock', () => {
+	const v = judgePool(withViews(PILOT.map((n) => view(n))), { splitSince: hoursAgo(30) }, NOW);
+	assert.equal(v.ok, true);
+	assert.deepEqual(
+		v.warnings.filter((w) => w.kind.startsWith('pool-view')),
+		[]
+	);
+	assert.equal(v.record.splitSince, null);
+	assert.equal(v.views.length, 3);
+});
+
+void test('the drill: claw-9 stopped is one down finding under the clock, not unreadable', () => {
+	const input = withViews([
+		view('claw-1', { 'claw-9': 'failed' }, 2),
+		view('claw-8', { 'claw-9': 'failed' }, 2),
+		{ node: 'claw-9', health: null, status: null, why: 'claw-9 GET GetClusterHealth: HTTP 000' },
+	]);
+	const v = judgePool(input, null, NOW);
+	assert.equal(v.ok, true);
+	assert.deepEqual(v.unreadable, []);
+	const f = v.warnings.find((w) => w.kind === 'pool-view/failed');
+	assert.equal(f.node, 'claw-9');
+	assert.match(f.reason, /Its own view was not read: claw-9 GET GetClusterHealth: HTTP 000/);
+	assert.equal(v.record.splitSince, NOW.toISOString(), 'the clock starts');
+	assert.equal(
+		judgePool(input, { splitSince: hoursAgo(25) }, NOW).ok,
+		false,
+		'and pages past 24 h'
+	);
+});
+
+void test('a member nobody sees down whose view is unread is unreadable, named; drained warns', () => {
+	const input = withViews([
+		view('claw-1'),
+		view('claw-8'),
+		{ node: 'claw-9', health: null, status: null, why: 'ssh: connect timed out' },
+	]);
+	const v = judgePool(input, { splitSince: hoursAgo(2) }, NOW);
+	assert.equal(v.ok, false);
+	assert.deepEqual(v.unreadable, [
+		{
+			node: 'claw-9',
+			why: "claw-9's own view of the cluster was not read: ssh: connect timed out",
+		},
+	]);
+	assert.equal(v.record.splitSince, hoursAgo(2), 'an incomplete read keeps the clock');
+	const drained = judgePool(input, null, NOW, new Map([['claw-9', 'expected down: drained']]));
+	assert.equal(drained.ok, true);
+	assert.deepEqual(
+		kinds(drained.warnings).filter((k) => k.includes('view')),
+		['claw-9 pool-view/unread']
+	);
+});
+
+void test('a drained target others cannot see is known, not a split', () => {
+	const out = judgeViews(
+		withViews([
+			view('claw-1', { 'claw-9': 'failed' }),
+			view('claw-8', { 'claw-9': 'failed' }),
+			view('claw-9'),
+		]),
+		new Map([['claw-9', 'expected down: drained']])
+	);
+	assert.deepEqual(out.pairs, []);
+	assert.equal(out.known[0].kind, 'pool-view/failed');
+});
+
+const counted = (node, count, disk = 'root') => ({
+	corrupted: [{ path: `/srv/storage/${disk}/garage`, disk, count }],
+	corruptedWhy: null,
+	node,
+});
+
+void test('a quarantined copy or resync errors warn naming node and disk, and show in the view', () => {
+	const input = withViews([
+		{ ...view('claw-1'), ...counted('claw-1', 0) },
+		{ ...view('claw-8'), ...counted('claw-8', 0) },
+		{ ...view('claw-9'), ...counted('claw-9', 1, 'WD-WCC6Y3VLV8SU') },
+	]);
+	input.garage.nodes[1].resyncErrors = 4;
+	const v = judgePool(input, null, NOW);
+	assert.equal(v.ok, true, 'a warning, advisory');
+	assert.deepEqual(kinds(v.warnings), [
+		'claw-8 pool-disk/resync-errors',
+		'claw-9 pool-disk/corrupted',
+	]);
+	assert.match(v.warnings[1].reason, /claw-9 disk WD-WCC6Y3VLV8SU has 1 quarantined block copy/);
+	assert.deepEqual(
+		v.views.map((x) => [x.node, x.corrupted[0].count, x.resyncErrors]),
+		[
+			['claw-1', 0, null],
+			['claw-8', 0, 4],
+			['claw-9', 1, null],
+		]
+	);
+});
+
+void test('a quarantine count that could not be taken is unreadable, named', () => {
+	const input = withViews([
+		{ ...view('claw-1'), ...counted('claw-1', 0) },
+		{ ...view('claw-8'), ...counted('claw-8', 0) },
+		{ ...view('claw-9'), corrupted: null, corruptedWhy: 'sudo: a password is required' },
+	]);
+	const v = judgePool(input, null, NOW);
+	assert.equal(v.ok, false);
+	assert.deepEqual(v.unreadable, [
+		{
+			node: 'claw-9',
+			why: "claw-9's quarantined (*.corrupted) blocks were not counted: sudo: a password is required",
+		},
+	]);
 });

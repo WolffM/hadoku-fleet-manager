@@ -18,6 +18,21 @@ const ZONES = ['claw-fixture-a', 'claw-fixture-b', 'claw-fixture-c'];
 const NO_STORAGE = { role: 'claw', labels: [], $capabilities: { earned: ['docker', 'rust'] } };
 const TB = 1e12;
 const NOW = new Date();
+/** Every member's own view (#154): each sees the members `up` names. */
+const views = (members, up = () => true) =>
+	members.map((node) => ({
+		node,
+		health: { status: 'healthy', storageNodes: members.length, storageNodesUp: members.length },
+		status: {
+			nodes: members.map((n, i) => ({
+				id: `id-${n}`,
+				isUp: n === node || up(i),
+				lastSeenSecsAgo: n === node ? null : 3,
+				role: { zone: n, tags: [n] },
+			})),
+		},
+		why: null,
+	}));
 
 let dir;
 let saved;
@@ -49,7 +64,11 @@ test('declared and running, no earned storage: the gate reads the pool, not "no 
 		underReplicatedBlocks: 0,
 		at: NOW.toISOString(),
 	};
-	const v = judgePool({ members, membersWhy: error, garage, why: null }, null, NOW);
+	const v = judgePool(
+		{ members, membersWhy: error, garage, why: null, views: views(members) },
+		null,
+		NOW
+	);
 	assert.equal(v.state, 'read');
 	assert.equal(v.ok, true);
 	assert.deepEqual(v.members, ZONES);
@@ -70,10 +89,14 @@ test('a declared member down is seen: the 2-of-3 pool the label-keyed gate calle
 		underReplicatedBlocks: 0,
 		at: NOW.toISOString(),
 	};
-	const v = judgePool({ members, garage, why: null }, null, NOW);
+	const v = judgePool(
+		{ members, garage, why: null, views: views(members, (i) => i !== 0) },
+		null,
+		NOW
+	);
 	assert.deepEqual(
 		v.warnings.map((w) => `${w.node} ${w.kind}`),
-		['claw-fixture-a pool-node/down']
+		['claw-fixture-a pool-node/down', 'claw-fixture-a pool-view/failed']
 	);
 });
 

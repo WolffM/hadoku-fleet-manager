@@ -3,9 +3,10 @@
  * fleet storage-pool — the `ci:storage-pool` gate (hadoku-fleet-manager#142).
  *
  * Reads the Garage pool live, through the first member whose admin API
- * answers (garage-admin.mjs's `readPool`, the doctor's own reader), and judges
- * it with `storage-pool-gate.mjs` over F3's findings. What pages, what warns
- * and what is a known state is that module's header.
+ * answers (garage-admin.mjs's `readPool`, the doctor's own reader), then every
+ * member's own view of who is up (`readMemberViews`, #154: a split only the
+ * other members see), and judges both with `storage-pool-gate.mjs`. What
+ * pages, what warns and what is a known state is that module's header.
  *
  * `--json` is under the contract (`ci:storage-pool`): one GateDoc-shaped
  * document, `ok` false on a finding that pages or anything unreadable, plus
@@ -29,7 +30,7 @@ import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
 import { runOn } from './lib/fleet-exec.mjs';
 import { declaredMembers } from './lib/garage-layout-declared.mjs';
-import { readPool } from './lib/garage-admin.mjs';
+import { nodeAdmin, readMemberViews, readPool, seenBy } from './lib/garage-admin.mjs';
 import { judgePool } from './lib/storage-pool-gate.mjs';
 import { stateDir } from '../dist/lib/fleet-paths.js';
 import { writeJsonAtomicSync } from '../dist/lib/atomic-json.js';
@@ -43,22 +44,26 @@ const { nodes: members, error: membersWhy } = declaredMembers();
 const recordPath = join(stateDir(), 'storage-pool.json');
 const prior = existsSync(recordPath) ? JSON.parse(readFileSync(recordPath, 'utf8')) : null;
 
+const execFor = (node) => (script) => runOn(node, script, { as: 'admin', timeoutMs: 30_000 });
+// 120 s: the quarantine count walks every block file of a data dir.
+const countFor = (node) => (script) => runOn(node, script, { as: 'admin', timeoutMs: 120_000 });
 const input = members.length
 	? {
 			members,
-			...(await readPool(
-				members,
-				(node) => (script) => runOn(node, script, { as: 'admin', timeoutMs: 30_000 }),
-				now.toISOString()
-			)),
+			...(await readPool(members, execFor, now.toISOString())),
+			views: await readMemberViews(members, (node) => nodeAdmin(node, execFor(node)), countFor),
 		}
-	: { members, membersWhy, garage: null, why: null };
+	: { members, membersWhy, garage: null, why: null, views: [] };
 
 // A drain file that cannot be read is its own "could not look", never "nothing
 // is drained" (expected-down.mjs): it fails the run with that reason.
 const deferred = new Map();
 let drainError = null;
-if (input.garage === null && members.length) {
+const viewsOff = input.views.some(
+	(v) =>
+		!v.status || v.corrupted === null || Object.values(seenBy(v.status)).some((s) => s !== 'up')
+);
+if (members.length && (input.garage === null || viewsOff)) {
 	try {
 		const drains = readDrains(now.getTime());
 		for (const m of members) {
@@ -93,5 +98,18 @@ for (const [label, list] of [
 	for (const f of list) emitter.log(`  ${label}  ${f.node}  ${f.kind}: ${f.reason}`);
 }
 for (const u of verdict.unreadable) emitter.log(`  UNREADABLE  ${u.node}: ${u.why}`);
+for (const v of verdict.views) {
+	const sees = v.read
+		? Object.entries(v.sees)
+				.map(([n, s]) => `${n}=${s}`)
+				.join(' ')
+		: `unread: ${v.why}`;
+	const disks = v.corrupted
+		? v.corrupted.map((d) => `${d.disk}:${d.count} corrupted`).join(' ')
+		: `corrupted unread: ${v.corruptedWhy ?? 'not counted'}`;
+	emitter.log(
+		`  view  ${v.node}: ${v.health ?? ''} ${sees}; ${disks}; resync errors ${v.resyncErrors ?? '?'}`
+	);
+}
 if (emitter.json) emitter.emit({ ...verdict, via: input.via ?? null });
 process.exit(verdict.ok ? 0 : 1);

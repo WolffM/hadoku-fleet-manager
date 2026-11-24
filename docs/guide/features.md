@@ -112,7 +112,13 @@ and fails when any block has sat on fewer than 3 copies for more than a
 day, or a disk is over 85% full. A disk over 75%, a member down, or a pool
 that could not survive losing one member is a warning and does not fail it.
 With exactly 3 zones that last one is reported as the pool's known state.
-A cluster it could not read fails it. With no storage node at all it says
+It also asks every member what it sees, because one member can see all
+three up while the other two cannot see it. A member that sees another
+one as failed or never seen is a warning for a day and fails it after
+that. The report lists each member's view, so a split names who cannot
+see whom. A cluster it could not read fails it, and so does a member
+whose own view it could not read, unless the other members see that
+member down. With no storage node at all it says
 "no pool" and passes.
 
 **What it does not do.** It will not admit a node to scheduling on the

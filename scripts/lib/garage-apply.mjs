@@ -34,7 +34,7 @@ import {
 	GARAGE_SECRET_DIR,
 	GARAGE_SECRET_ITEMS,
 } from './toolchain-garage.mjs';
-import { GarageAdminError, garageState, readCluster } from './garage-admin.mjs';
+import { GarageAdminError, garageState, readCluster, readMemberViews } from './garage-admin.mjs';
 import { bucketAlias } from './garage-layout.mjs';
 import { readInventory } from './qualify-disk-inventory.mjs';
 
@@ -250,15 +250,10 @@ export async function waitHealthy(ctx, nodes, { timeoutMs = 120_000, everyMs = 5
 	const last = {};
 	for (;;) {
 		let ok = true;
-		for (const node of nodes) {
-			try {
-				const h = await ctx.admin(node).call('GET', 'GetClusterHealth');
-				last[node] = `${h.status}, ${h.storageNodesUp}/${h.storageNodes} up`;
-				if (h.status !== 'healthy' || h.storageNodesUp < nodes.length) ok = false;
-			} catch (e) {
-				last[node] = e instanceof Error ? e.message : String(e);
-				ok = false;
-			}
+		for (const v of await readMemberViews(nodes, (n) => ctx.admin(n))) {
+			const h = v.health;
+			last[v.node] = h ? `${h.status}, ${h.storageNodesUp}/${h.storageNodes} up` : v.why;
+			if (!h || h.status !== 'healthy' || h.storageNodesUp < nodes.length) ok = false;
 		}
 		if (ok) return last;
 		if (Date.now() > until) {

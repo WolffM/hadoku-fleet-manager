@@ -24,6 +24,8 @@ export interface PoolNodeState {
 	 * line of `/`. Absent for a zone on its own disks; null when not read.
 	 */
 	rootFs?: { sizeBytes: number; availBytes: number } | null;
+	/** Blocks this node holds with resync errors (its own statistics); null when not read. */
+	resyncErrors?: number | null;
 }
 
 export interface GarageState {
@@ -32,6 +34,8 @@ export interface GarageState {
 	nodes: PoolNodeState[];
 	/** Blocks held on fewer copies than the factor. Null: not read. */
 	underReplicatedBlocks: number | null;
+	/** Why the count is null: the members whose statistics were not read. */
+	underReplicatedWhy?: string | null;
 	/** When this state was read, ISO. */
 	at: string;
 }

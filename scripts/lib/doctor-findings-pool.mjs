@@ -118,7 +118,8 @@ function copies(g) {
 				'pool',
 				'pool-copies',
 				'unreadable',
-				'the count of blocks under their copy target was not read.'
+				`the count of blocks under their copy target was not read` +
+					(g.underReplicatedWhy ? ` (${g.underReplicatedWhy}).` : '.')
 			)
 		);
 	} else if (g.underReplicatedBlocks > 0) {

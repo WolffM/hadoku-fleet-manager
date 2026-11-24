@@ -19,7 +19,7 @@
  * `GarageState` (doctor-findings-pool.d.mts).
  */
 
-import { GARAGE_SECRET_DIR } from './toolchain-garage.mjs';
+import { GARAGE_CONFIG, GARAGE_SECRET_DIR } from './toolchain-garage.mjs';
 
 export const ADMIN_PORT = 3903;
 export const RPC_PORT = 3901;
@@ -169,7 +169,9 @@ export const roleNode = (role) => role?.tags?.[0] ?? role?.zone ?? null;
  *   partitions. Garage reports no per-node use; a filesystem's `used` would
  *   count everything else on that disk (claw-1's pool is on its root).
  * - `underReplicatedBlocks`: blocks queued for resync plus blocks with resync
- *   errors on every node. Null when any node's statistics were not read.
+ *   errors on every node up. Null when an up node's statistics were not read,
+ *   and `underReplicatedWhy` names which and why. A node the cluster reports
+ *   down is not counted: it is a pool-node/down finding of its own.
  *
  * @returns {import('./doctor-findings-pool.d.mts').GarageState}
  */
@@ -182,6 +184,7 @@ export function garageState(c, at = new Date().toISOString()) {
 	const statusById = new Map((c?.status?.nodes ?? []).map((n) => [n.id, n]));
 	const objectBytes = c?.statistics?.totalObjectBytes ?? null;
 	const nodes = roles.map((r) => {
+		const b = c?.nodeStats?.success?.[r.id]?.blockManagerStats;
 		const s = statusById.get(r.id);
 		return {
 			node: roleNode(r),
@@ -192,20 +195,31 @@ export function garageState(c, at = new Date().toISOString()) {
 				objectBytes === null || !partitions || r.storedPartitions == null
 					? null
 					: Math.round((objectBytes * r.storedPartitions) / partitions),
+			resyncErrors: typeof b?.resyncErrors === 'number' ? b.resyncErrors : null,
 		};
 	});
+	// A member the cluster reports DOWN has no statistics to give (the drill of
+	// 2026-11-24: claw-9 stopped, its entry in `error`). Its absence is the
+	// pool-node/down finding, not an unread count: the members up are summed.
+	// Any member UP whose statistics are missing leaves the count unread, named.
 	let underReplicatedBlocks = null;
+	let underReplicatedWhy = null;
 	const stats = c?.nodeStats;
-	if (stats && Object.keys(stats.error ?? {}).length === 0) {
-		const each = Object.values(stats.success ?? {}).map((s) => s.blockManagerStats);
-		if (each.length === roles.length && each.every(Boolean)) {
-			underReplicatedBlocks = each.reduce(
-				(a, b) => a + (b.resyncQueueLen ?? 0) + (b.resyncErrors ?? 0),
-				0
-			);
+	if (!stats) {
+		underReplicatedWhy = `GetNodeStatistics was not read: ${c?.errors?.nodeStats ?? 'no answer'}`;
+	} else {
+		const missing = [];
+		let sum = 0;
+		for (const r of roles) {
+			const b = stats.success?.[r.id]?.blockManagerStats;
+			if (b) sum += (b.resyncQueueLen ?? 0) + (b.resyncErrors ?? 0);
+			else if (statusById.get(r.id)?.isUp !== false)
+				missing.push(`${roleNode(r)}: ${String(stats.error?.[r.id] ?? 'no block statistics')}`);
 		}
+		if (missing.length) underReplicatedWhy = missing.join('; ');
+		else underReplicatedBlocks = sum;
 	}
-	return { replicationFactor, nodes, underReplicatedBlocks, at };
+	return { replicationFactor, nodes, underReplicatedBlocks, underReplicatedWhy, at };
 }
 
 /**
@@ -231,4 +245,97 @@ export async function readPool(members, execFor, at = new Date().toISOString()) 
 			: 'no member to read',
 		via: null,
 	};
+}
+
+/**
+ * EVERY MEMBER'S OWN VIEW, one by one. One observer is not enough: measured
+ * on the pilot (2026-11-24, #154), claw-1 saw 3/3 while claw-8 and claw-9
+ * each saw claw-1 as never seen, and a reader through claw-1 called that
+ * green. `waitHealthy` (garage-apply.mjs) and `ci:storage-pool` both read
+ * through this.
+ *
+ * Per node: `{ node, health, status, why }`, where `health` is
+ * GetClusterHealth and `status` GetClusterStatus as THAT node answers them.
+ * Both are `null` (and `why` says why) when the node could not be read.
+ *
+ * @param {string[]} nodes
+ * @param {(node: string) => { call: Function }} adminFor
+ * @param {((node: string) => (script: string) => Promise<object>) | null} [execFor] counts each member's quarantine ({@link CORRUPTED_COUNT}) when given
+ */
+export async function readMemberViews(nodes, adminFor, execFor = null) {
+	const views = [];
+	for (const node of nodes) {
+		const v = { node, health: null, status: null, why: null };
+		try {
+			v.health = await adminFor(node).call('GET', 'GetClusterHealth');
+			v.status = await adminFor(node).call('GET', 'GetClusterStatus');
+		} catch (e) {
+			v.why = e instanceof Error ? e.message : String(e);
+		}
+		if (execFor) Object.assign(v, parseCorrupted(await execFor(node)(CORRUPTED_COUNT)));
+		views.push(v);
+	}
+	return views;
+}
+
+/**
+ * Garage's QUARANTINE, counted (#154 scope, the 2026-11-24 drill): a block
+ * that fails its checksum is restored from a peer and the bad copy is kept as
+ * `<hash>.zst.corrupted` beside it. Nothing else reads those files, and they
+ * are the earliest sign of a disk going bad. One line per data dir of the
+ * rendered config, `<count> <path>`; `sudo -n` because the dirs are the garage
+ * user's, 0750. A failed read exits non-zero, never a count of 0.
+ */
+export const CORRUPTED_COUNT = [
+	'set -eo pipefail',
+	`paths="$(sudo -n grep -E '^data_dir' ${GARAGE_CONFIG} | grep -oE 'path = "[^"]+"' | sed -E 's/^path = "(.*)"$/\\1/')"`,
+	'[ -n "$paths" ] || { echo "no data_dir path in ' + GARAGE_CONFIG + '" >&2; exit 1; }',
+	'for p in $paths; do',
+	`  n="$(sudo -n find "$p" -type f -name '*.corrupted' | wc -l)"`,
+	'  printf \'%s %s\\n\' "$n" "$p"',
+	'done',
+].join('\n');
+
+/**
+ * PURE. {@link CORRUPTED_COUNT}'s result as `{ corrupted, corruptedWhy }`:
+ * per data dir `{ path, disk, count }`, the disk being the serial of
+ * `<storage root>/<serial>/garage` (`root` for a root zone): the directory
+ * above the data dir.
+ */
+export function parseCorrupted(r) {
+	const fail = (why) => ({ corrupted: null, corruptedWhy: why });
+	if (!r?.ok)
+		return fail(
+			String(r?.error || r?.stderr || r?.stdout || 'no output')
+				.trim()
+				.slice(-300)
+		);
+	const corrupted = [];
+	for (const line of String(r.stdout ?? '')
+		.trim()
+		.split('\n')) {
+		const m = /^(\d+) (\/\S+)$/.exec(line.trim());
+		if (!m) return fail(`unexpected line: ${line.slice(0, 120)}`);
+		const disk = m[2].split('/').filter(Boolean).at(-2) ?? m[2];
+		corrupted.push({ path: m[2], disk, count: Number(m[1]) });
+	}
+	return corrupted.length ? { corrupted, corruptedWhy: null } : fail('no data dir counted');
+}
+
+/**
+ * PURE. How one member's GetClusterStatus sees each layout node: `up`,
+ * `failed` (down, last seen some seconds ago) or `never-seen` (down with no
+ * `lastSeenSecsAgo`; Garage reports null for the node itself too, which is up).
+ * Keyed by fleet node (the role's first tag), nodes without a role skipped.
+ *
+ * @returns {Record<string, 'up' | 'failed' | 'never-seen'>}
+ */
+export function seenBy(status) {
+	const out = {};
+	for (const n of status?.nodes ?? []) {
+		const node = roleNode(n.role);
+		if (!node) continue;
+		out[node] = n.isUp ? 'up' : n.lastSeenSecsAgo == null ? 'never-seen' : 'failed';
+	}
+	return out;
 }
