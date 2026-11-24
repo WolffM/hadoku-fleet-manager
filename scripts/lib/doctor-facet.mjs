@@ -1,4 +1,5 @@
-import { cpuSensor, sensorMap, parseSmart } from './doctor-parse.mjs';
+import { cpuSensor, sensorMap } from './doctor-parse.mjs';
+import { parseSmart } from './storage-inventory.mjs';
 import { parseWifiManager } from './node-interfaces.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════

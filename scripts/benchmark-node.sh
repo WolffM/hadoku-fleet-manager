@@ -111,56 +111,22 @@ fi
 
 # ── storage: EVERY drive, mounted or not ────────────────────────────────────
 # claw-4 has two, and the second is invisible to anything that only looks at /.
-for b in /sys/block/*; do
-	d=$(basename "$b")
-	case $d in loop*|ram*|sr*|dm-*|zram*|md*) continue ;; esac
-	emit "disk.$d.sizeBytes" "$(( $(cat "$b/size" 2>/dev/null || echo 0) * 512 ))"
-	emit "disk.$d.rotational" "$(cat "$b/queue/rotational" 2>/dev/null)"
-	emit "disk.$d.model" "$(cat "$b/device/model" 2>/dev/null | sed 's/ *$//')"
-	emit "disk.$d.scheduler" "$(sed 's/.*\[\(.*\)\].*/\1/' "$b/queue/scheduler" 2>/dev/null)"
-	MP=$(lsblk -nro MOUNTPOINT "/dev/$d" 2>/dev/null | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
-	emit "disk.$d.mountpoints" "${MP:-none}"
-	# BUS TYPE COMES FROM THE DEVICE, NOT FROM smartctl BEING AVAILABLE.
-	# kind used to be emitted inside the smartctl block and chosen by whether its
-	# OUTPUT mentioned "NVMe Log" -- so on any box where smartctl cannot run
-	# (hokon, which has no passwordless sudo) the output is empty, the NVMe test
-	# fails, and every drive fell through to `ata`. hokon's four NVMe devices
-	# were all recorded as ata: not a gap but a wrong answer, which is worse.
-	case "$d" in
-	nvme*) emit "disk.$d.kind" nvme ;;
-	*) emit "disk.$d.kind" ata ;;
-	esac
-	if have smartctl; then
-		S=$(/usr/sbin/smartctl -H -A "/dev/$d" 2>/dev/null)
-		emit "disk.$d.smartHealth" "$(echo "$S" | awk -F: '/overall-health|SMART Health Status/{gsub(/^ +/,"",$2);print $2}' | head -1)"
-		# ATA AND NVMe REPORT NOTHING ALIKE. ATA gives an attribute table with
-		# the raw value in column 10; NVMe gives "Power On Hours: 31,328" as a
-		# key/value line, commas and all. claw-3 is NVMe and reported no disk
-		# hours at all because only the ATA shape was parsed -- a field that
-		# silently reads empty on a whole class of drive.
-		if echo "$S" | grep -q 'NVMe Log'; then
-			nv() { echo "$S" | awk -F: -v k="$1" '$0 ~ "^"k":" {gsub(/[^0-9]/,"",$2); print $2; exit}'; }
-			emit "disk.$d.powerOnHours" "$(nv 'Power On Hours')"
-			emit "disk.$d.percentageUsed" "$(nv 'Percentage Used')"
-			emit "disk.$d.availableSparePct" "$(nv 'Available Spare')"
-			emit "disk.$d.mediaErrors" "$(nv 'Media and Data Integrity Errors')"
-			emit "disk.$d.unsafeShutdowns" "$(nv 'Unsafe Shutdowns')"
-			emit "disk.$d.tempC" "$(nv 'Temperature')"
-			# NVMe has no reallocated-sector concept; spare exhaustion is the
-			# equivalent signal, and saying `unknown` beats implying zero.
-			unk "disk.$d.reallocated" "NVMe reports wear as percentageUsed and availableSparePct"
-		else
-			at() { echo "$S" | awk -v a="$1" '$2==a{print $10; exit}'; }
-			emit "disk.$d.powerOnHours" "$(at Power_On_Hours)"
-			emit "disk.$d.reallocated" "$(at Reallocated_Sector_Ct)"
-			emit "disk.$d.pendingSectors" "$(at Current_Pending_Sector)"
-			emit "disk.$d.wearLeveling" "$(at Wear_Leveling_Count)"
-			emit "disk.$d.tempC" "$(at Temperature_Celsius)"
-		fi
-	else
-		unk "disk.$d.powerOnHours" "smartctl absent"
-	fi
-done
+# The device loop is storage_probe, in storage-probe.sh: `fleet benchmark` sends
+# that file ahead of this one, and a by-hand run sources it from beside this.
+# Its SMART lines are read by storage-inventory.mjs's parseSmart, not here.
+# Only a run FROM THE FILE sources: piped into `sh -s`, $0 is the shell and
+# "beside this" would be whatever directory the node happens to be in.
+case "${0##*/}" in
+benchmark-node.sh)
+	command -v storage_probe >/dev/null 2>&1 ||
+		{ [ -r "$(dirname "$0")/storage-probe.sh" ] && . "$(dirname "$0")/storage-probe.sh"; }
+	;;
+esac
+if command -v storage_probe >/dev/null 2>&1; then
+	storage_probe
+else
+	unk storage "storage-probe.sh was neither sent ahead of this script nor beside it"
+fi
 
 # ── gpu ─────────────────────────────────────────────────────────────────────
 GPUN=0

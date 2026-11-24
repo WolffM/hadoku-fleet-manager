@@ -1,5 +1,6 @@
 import { loadManifest } from './fleet-exec.mjs';
 import { measuredFacets } from '../../dist/lib/measured.js';
+import { parseSmart } from './storage-inventory.mjs';
 
 /** "Twice a year" cadence, unchanged — the `never`/`stale` coverage bands. */
 const STALE_DAYS = 200;
@@ -102,7 +103,18 @@ export function parse(text) {
 	// as a fully measured one.
 	if (e === -1) throw new Error('BENCH-BEGIN with no BENCH-END — truncated');
 	const out = {};
+	/** device -> its smartctl lines, from storage-probe.sh's `S <dev> …` rows. */
+	const smart = new Map();
 	for (const line of lines.slice(b + 1, e)) {
+		// storage-probe.sh's block: its lsblk rows, device markers and markers
+		// are the storage inventory's (parseStorage), not flat benchmark keys.
+		const sm = /^S (\S+) ?(.*)$/.exec(line);
+		if (sm) {
+			if (!smart.has(sm[1])) smart.set(sm[1], []);
+			smart.get(sm[1]).push(sm[2]);
+			continue;
+		}
+		if (/^(P |disk |STORAGE-(BEGIN|END))/.test(line)) continue;
 		const s = line.trim();
 		if (!s) continue;
 		const sp = s.indexOf(' ');
@@ -110,6 +122,37 @@ export function parse(text) {
 		const v = s.slice(sp + 1).trim();
 		out[s.slice(0, sp)] = v.startsWith('unknown') ? null : v;
 	}
+	for (const [d, sl] of smart) Object.assign(out, smartKeys(d, parseSmart(sl)));
+	return out;
+}
+
+/**
+ * The record's flat `disk.<dev>.*` SMART keys, from parseSmart. These are the
+ * keys benchmark-node.sh's own awk used to emit, kept by name so stored
+ * records and every reader of them stay as they were. NVMe has no reallocated
+ * count: its media errors are `mediaErrors`, and `reallocated` stays absent.
+ */
+function smartKeys(d, s) {
+	const keys =
+		s.kind === 'nvme'
+			? {
+					powerOnHours: s.powerOnHours,
+					percentageUsed: s.percentageUsed,
+					availableSparePct: s.availableSparePct,
+					mediaErrors: s.mediaErrors,
+					unsafeShutdowns: s.unsafeShutdowns,
+					tempC: s.temperatureC,
+				}
+			: {
+					powerOnHours: s.powerOnHours,
+					reallocated: s.reallocated,
+					pendingSectors: s.pendingSectors,
+					wearLeveling: s.wearLeveling,
+					tempC: s.temperatureC,
+				};
+	const out = {};
+	if (s.health !== null) out[`disk.${d}.smartHealth`] = s.health;
+	for (const [k, v] of Object.entries(keys)) if (v !== null) out[`disk.${d}.${k}`] = String(v);
 	return out;
 }
 

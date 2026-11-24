@@ -9,6 +9,16 @@ import { parse } from './benchmark-inventory.mjs';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCRIPT = join(HERE, 'benchmark-node.sh');
+const STORAGE_PROBE = join(HERE, 'storage-probe.sh');
+
+/**
+ * What goes down the pipe: storage-probe.sh, then benchmark-node.sh. The node
+ * runs `sh -s`, so the device loop benchmark-node.sh calls (`storage_probe`)
+ * has to arrive with it; there is no checkout on the far side to source.
+ */
+export function benchmarkScript() {
+	return `${readFileSync(STORAGE_PROBE, 'utf8')}\n${readFileSync(SCRIPT, 'utf8')}`;
+}
 
 /**
  * MEASURE ONE NODE, RETURNING A RESULT RATHER THAN EXITING OR MUTATING AN
@@ -86,7 +96,7 @@ export function measureOneNode(
 		const argv = local ? ['sh', '-s', '--', ...passthru] : null;
 		const spawn = (cmd, a) =>
 			execFileSync(cmd, a, {
-				input: readFileSync(SCRIPT),
+				input: benchmarkScript(),
 				encoding: 'utf8',
 				timeout: timeoutMs,
 				maxBuffer: 8 << 20,
@@ -110,7 +120,7 @@ export function measureOneNode(
 					try {
 						process.stderr.write('\n    (needs root for the disk test) ');
 						out = execFileSync('sudo', argv, {
-							input: readFileSync(SCRIPT),
+							input: benchmarkScript(),
 							encoding: 'utf8',
 							timeout: timeoutMs,
 							maxBuffer: 8 << 20,

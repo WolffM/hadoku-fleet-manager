@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseDoctor, cpuSensor, independentCpuSensors, parseSmart } from './doctor-parse.mjs';
+import { parseDoctor, cpuSensor, independentCpuSensors } from './doctor-parse.mjs';
 import { healthFacet } from './doctor-facet.mjs';
 import { doctorFindings } from './doctor-findings.mjs';
 import { BLOCKING } from './preflight.mjs';
-import { CLAW1, CLAW9, CLAW7_SMART, facetOf } from './doctor-fixtures.mjs';
+import { CLAW1, CLAW9, facetOf } from './doctor-fixtures.mjs';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PARSING
@@ -120,52 +120,4 @@ void test('a counter sharing the `idle.` prefix is not read as a sensor', () => 
 	assert.ok(!('throttleCount' in h.thermal.idleSensors));
 	assert.equal(h.thermal.throttleTotal, 2_022_029);
 	assert.equal(h.thermal.throttleEvents, 23_650);
-});
-
-void test('SMART reads the RAW_VALUE column, not the normalised one', () => {
-	// claw-1's drive is 19,727 hours at 39 °C. Reading the wrong column gave
-	// 55 hours at 150 °C — both plausible-looking numbers, both the normalised
-	// columns, and neither of them a measurement of anything.
-	const s = parseSmart(parseDoctor(CLAW1).smart);
-	assert.equal(s.health, 'PASSED');
-	assert.equal(s.powerOnHours, 19_727);
-	assert.equal(s.temperatureC, 39);
-	assert.equal(s.reallocated, 0);
-	assert.equal(s.pendingSectors, 0);
-});
-
-void test('Percent_Lifetime_Remain is a percent USED in the raw column', () => {
-	// claw-7's MX100: normalised 067, raw 33, summing to 100. The attribute NAME
-	// describes the normalised column; the raw column is the used half.
-	const s = parseSmart(CLAW7_SMART);
-	assert.equal(s.powerOnHours, 91_529);
-	assert.equal(s.lifetimeRemainingPct, 67);
-	assert.equal(s.temperatureC, 35);
-	assert.equal(s.reallocated, 1);
-});
-
-void test('an NVMe SMART log is read from its key/value shape', () => {
-	const s = parseSmart([
-		'SMART/Health Information (NVMe Log 0x02)',
-		'SMART overall-health self-assessment test result: PASSED',
-		'Temperature:                        44 Celsius',
-		'Available Spare:                    100%',
-		'Percentage Used:                    4%',
-		'Power On Hours:                     1,280',
-		'Media and Data Integrity Errors:    0',
-	]);
-	assert.equal(s.powerOnHours, 1280, 'thousands separators are stripped');
-	assert.equal(s.temperatureC, 44);
-	assert.equal(s.lifetimeRemainingPct, 96);
-});
-
-void test('a drive that REFUSED SMART is never read as PASSED', () => {
-	// claw-4 carries four empty USB card-reader slots that answer exactly this.
-	const s = parseSmart([
-		'smartctl 7.4 2023-08-01 r5530 [x86_64-linux-6.12.94+deb13-amd64] (local build)',
-		'/dev/sdc: Unknown USB bridge [0x058f:0x6362 (0x100)]',
-		'Please specify device type with the -d option.',
-	]);
-	assert.equal(s.health, null);
-	assert.match(s.reason, /Unknown USB bridge/);
 });

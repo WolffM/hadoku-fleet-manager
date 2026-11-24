@@ -485,6 +485,16 @@
     "layer": "access"
   },
   {
+    "glob": "scripts/lib/storage-inventory.mjs",
+    "layer": "access",
+    "why": "Storage bootcamp F1 (#136): the typed record of a node's disks, parsed from storage-probe.sh, plus parseSmart moved down from doctor-parse.mjs (observation) so doctor, benchmark and the inventory share one smartctl reader."
+  },
+  {
+    "glob": "scripts/lib/storage-fixtures.mjs",
+    "layer": "access",
+    "why": "Verbatim storage-probe.sh captures from real nodes for storage-inventory.test.mjs; same layer as the parser it feeds, like fleet-source-fixture.mjs."
+  },
+  {
     "glob": "scripts/lib/gh-app.mjs",
     "layer": "access"
   },
