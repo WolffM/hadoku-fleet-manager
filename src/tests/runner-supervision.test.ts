@@ -188,7 +188,10 @@ test('the probe does not match its own process', async () => {
 	// above identified it.
 	//
 	// `ps -eo args=` carries no pattern, so filtering in JS cannot be self-caught.
-	const standingCount = execFileSync('ps', ['-eo', 'args='])
+	// The listing is not small: hokon's ran to 1.7 MB on 2026-11-23 (agent
+	// sessions carry ~65 KB argvs), past execFileSync's 1 MB default, and the
+	// test died on ENOBUFS before asserting anything.
+	const standingCount = execFileSync('ps', ['-eo', 'args='], { maxBuffer: 64 * 1024 * 1024 })
 		.toString()
 		.split('\n')
 		.filter((l) => /\/actions-runner[^ ]*\/bin\/Runner\.Listener/.test(l)).length;
