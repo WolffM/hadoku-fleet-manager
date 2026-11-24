@@ -6,7 +6,7 @@
  */
 import { ghGet } from '../lib/github-client.js';
 import { SATURATION_QUEUE_SECONDS } from './backstop.js';
-import { ZOMBIE_MS } from './queue-discovery.js';
+import { jobQueuedSinceMs, runnableJobs, ZOMBIE_MS, type QueuedJob } from './queue-discovery.js';
 
 /**
  * Past this, a queued run is a ZOMBIE and is NOT queue pressure.
@@ -57,7 +57,8 @@ export const QUEUE_ZOMBIE_SECONDS = ZOMBIE_MS / 1000;
 /** What the queue probe saw, split into what it acted on and what it refused. */
 export interface QueuePressure {
 	/**
-	 * Age of the oldest queued run INSIDE the band, seconds. This is the only
+	 * Age of the oldest JOB waiting for a runner, among runs INSIDE the band,
+	 * seconds (the run's own age where its jobs could not be read). This is the only
 	 * field the backstop decision reads.
 	 */
 	pressureSec: number;
@@ -75,38 +76,52 @@ export interface QueuePressure {
 }
 
 /**
- * Age of the oldest run that cannot start at all, in seconds.
+ * Most per-run jobs reads one probe may spend. Past it, a run is aged by its
+ * own clock, the pre-2026-11-24 answer, which can only overstate.
+ */
+export const PROBE_JOB_READS_MAX = 10;
+
+/**
+ * Age of the oldest JOB waiting for a runner, in seconds.
  *
- * RUN level here, deliberately. The justification this comment used to give —
- * "only ever called when `clawsFree === 0`, and with no free runner anywhere a
- * newly-arrived run cannot start ANY of its jobs" — stopped being true on
- * 2026-09-24, when the caller began probing whenever the fleet is UP (#63). It
- * is recorded rather than deleted because the conclusion survives the premise:
- * only the MAXIMUM is returned and only `>= SATURATION_QUEUE_SECONDS` moves the
- * decision, so a run sitting queued for the seconds GitHub takes to place it is
- * under the bar with or without a free claw, and a run still queued past the
- * fleet's measured p90 is STUCK either way — that is precisely the 2026-09-01
- * shape, where `clawsFree` never hit zero and 13 jobs waited 11-19 minutes.
- * (Job-level queue time is the right measure for the DISTRIBUTION, which is why
- * `JobRecord.queueSec` records it; it is not needed to answer "is anything
- * stuck right now".)
+ * JOB level since 2026-11-24 (operator-approved). The run's clock overstates
+ * the wait on any multi-stage run: a run whose first wave finished and whose
+ * `deploy` was just created stays `queued` from the attempt's start, so a
+ * 20-minute build followed by a fresh job read as 20 minutes of queue. Replayed
+ * over job-history against every probed BACKSTOP line from 11-21 to 11-24
+ * (665 ticks), the run clock read an hour or more on 99 of them and the jobs
+ * themselves on 35. The 100 s promote line barely moved: 415 ticks over it on
+ * the run clock, 427 on the job clock. The probe's early exit had hidden
+ * job-level waits behind a first repo that was just over the line. So this
+ * mostly makes the number honest; it is not a quieter backstop.
  *
- * IT IS NO LONGER FREE ON A HEALTHY FLEET in the worst case. `ghGet` revalidates
- * with an ETag, so an unchanged queue answers 304 for nothing, but a repo whose
- * queue moved between ticks is charged, and the ceiling is sized as if every
- * listing were; the per-hour arithmetic is stated at the call site and asserted by
- * `the queue probe stays inside the hourly API budget at fleet size`. It exits
- * at the first run over the threshold, so "yes, there is pressure" is one API
- * call and the quiet answer is one per repo — and the quiet answer is now the
- * common one, which is the direction that costs.
+ * A job's wait is {@link jobQueuedSinceMs}: its own `created_at`, bounded below
+ * by the attempt's start, so it is never older than its run. That bound is what
+ * keeps the extra reads cheap. Runs are read oldest first, and once a run is no
+ * older than the worst job already found, no job inside it can be, so the rest
+ * are skipped. A queued run with no job waiting for a runner (held by
+ * `concurrency`, an environment approval, or between waves) contributes 0;
+ * {@link runnableJobs} is the dispatcher's own definition of waiting.
+ *
+ * "I could not look" stays loud. A jobs read that fails, a run with no id, or a
+ * read past {@link PROBE_JOB_READS_MAX} falls back to the run's age: the old
+ * answer, an overstatement, never a zero.
+ *
+ * BUDGET, sized as if every read were charged. The listing ceiling is unchanged
+ * (26 repos x 6 ticks/hr = 156/hr, asserted in `runner-health-backstop.test.ts`).
+ * The jobs reads add at most {@link PROBE_JOB_READS_MAX} per tick, 60/hr, for
+ * 216/hr worst case: 4.3% of a 5,000/hr budget. On a quiet fleet there are no
+ * in-band queued runs and they cost nothing. The loop still exits at the first
+ * job over the threshold, so a backed-up fleet costs less, not more.
+ *
+ * Zombies are still decided on the RUN's age: a run queued past the band is
+ * stuck whatever its jobs say, and reading its jobs would spend calls on a run
+ * the backstop deliberately refuses.
  *
  * THE ZOMBIE WAS ALSO HIDING THE SPEND. With a permanently-over-threshold run in
  * the first repo swept, this broke after ONE listing on every tick from
- * 2026-09-25 to 09-28 — so the measured cost was ~6 calls/hr and the arithmetic
- * at the call site described a path nothing took. Excluding it restores the
- * worst case the budget test has always asserted: 26 listings x 6 ticks/hr =
- * 156/hr, 3.1% of a 5,000/hr budget. The spend goes UP by design, and it is the
- * number that was already under test.
+ * 2026-09-25 to 09-28, so the measured cost was ~6 calls/hr and the arithmetic
+ * at the call site described a path nothing took.
  */
 export async function probeQueuePressure(
 	token: string,
@@ -117,32 +132,54 @@ export async function probeQueuePressure(
 	let pressureSec = 0;
 	let zombies = 0;
 	let oldestZombieSec = 0;
+	let jobReads = 0;
+	const ageOf = (sinceMs: number) => Math.max(0, Math.round((nowMs - sinceMs) / 1000));
 	for (const repo of repos) {
 		const resp = await ghGet<{
-			workflow_runs?: { created_at?: string; run_started_at?: string }[];
+			workflow_runs?: { id?: number; created_at?: string; run_started_at?: string }[];
 		}>('/actions/runs?status=queued&per_page=20', token, repo);
+		const inBand: {
+			id?: number;
+			run: { created_at?: string; run_started_at?: string };
+			age: number;
+		}[] = [];
 		for (const run of resp?.workflow_runs ?? []) {
-			// THIS ATTEMPT'S CLOCK, like every other age in this file.
-			//
-			// `created_at` pins to the ORIGINAL run and GitHub never moves it, so on
-			// a re-run the two diverge by the whole gap between attempts. That is
-			// the bug `GhRun.run_started_at` was added for on 2026-09-10, when a
-			// re-run of a 2h-old hadoku-tenhands run alerted as "QUEUED 122m" while
-			// its jobs started four seconds later — and this function was still
-			// reading the field that mistake was about. A re-run of anything old
-			// therefore read as hours of queue pressure the instant it was
-			// requeued, which is enough on its own to promote the production host.
-			// Both fields are absent on runs old enough to predate `run_started_at`,
+			// THIS ATTEMPT'S CLOCK. `created_at` pins to the ORIGINAL run and
+			// GitHub never moves it, so a re-run of a 2h-old run read as "QUEUED
+			// 122m" while its jobs started four seconds later (2026-09-10). Both
+			// fields are absent on runs old enough to predate `run_started_at`,
 			// hence the fallback.
 			const started = Date.parse(run.run_started_at ?? run.created_at ?? '');
 			if (!Number.isFinite(started)) continue;
-			const age = Math.max(0, Math.round((nowMs - started) / 1000));
+			const age = ageOf(started);
 			if (age > zombieSec) {
 				zombies++;
 				if (age > oldestZombieSec) oldestZombieSec = age;
 				continue;
 			}
-			if (age > pressureSec) pressureSec = age;
+			inBand.push({ id: run.id, run, age });
+		}
+		inBand.sort((a, b) => b.age - a.age);
+		for (const { id, run, age } of inBand) {
+			if (age <= pressureSec) break;
+			let waited = age;
+			if (id !== undefined && jobReads < PROBE_JOB_READS_MAX) {
+				jobReads++;
+				const jobs = await ghGet<{ jobs?: QueuedJob[] }>(
+					`/actions/runs/${id}/jobs?per_page=100`,
+					token,
+					repo
+				);
+				if (jobs) {
+					waited = 0;
+					for (const job of runnableJobs(jobs.jobs ?? [])) {
+						const since = jobQueuedSinceMs(run, job.created_at);
+						if (since !== undefined) waited = Math.max(waited, Math.min(age, ageOf(since)));
+					}
+				}
+			}
+			if (waited > pressureSec) pressureSec = waited;
+			if (pressureSec >= SATURATION_QUEUE_SECONDS) break;
 		}
 		if (pressureSec >= SATURATION_QUEUE_SECONDS) break;
 	}

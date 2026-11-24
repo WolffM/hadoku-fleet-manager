@@ -251,7 +251,8 @@ export async function checkRunsAndFailover(
 			const ageMin = (now - startedMs) / 60000;
 			if (run.status === 'queued') {
 				queuedNow++;
-				if (ageMin > oldestQueuedMin) oldestQueuedMin = ageMin;
+				// A stale run is aged by its WAITING job below, once its jobs are read.
+				if (ageMin <= QUEUED_WARN_MINUTES && ageMin > oldestQueuedMin) oldestQueuedMin = ageMin;
 			} else if (run.status === 'in_progress') {
 				runningNow++;
 				if (ageMin > longestRunningMin) longestRunningMin = ageMin;
@@ -282,6 +283,12 @@ export async function checkRunsAndFailover(
 					ageMin,
 					now
 				);
+				// The oldest-queued signal takes the same clock as the alert below
+				// (fleet-manager#113): a multi-stage run stays `queued` from its start
+				// while a later job waits, so its run age includes every job that
+				// already ran. Unread jobs fall back to the run's age, never to zero.
+				const waitedMin = verdict.waitedMin ?? ageMin;
+				if (waitedMin > oldestQueuedMin) oldestQueuedMin = waitedMin;
 				// The workflow NAME, not just the commit subject. `display_title` is
 				// the commit message, so two different workflows on one push render as
 				// byte-identical alerts — on 2026-09-10 a Tests run and a Pages run
