@@ -6,8 +6,12 @@
  * in ~/.local/bin, because the fleet has no sudo there and the operator's
  * scripts run them (fleet-manager#34). Spread into REPAIRS by
  * lib/toolchain-floor.mjs, which owns how every entry is read.
+ *
+ * The storage pool's Garage daemon is one too, pinned rather than looked up;
+ * it lives in toolchain-garage.mjs and is spread in at the end.
  */
 import { hostsPm2Services, isBackstopNode } from '../../dist/lib/node-role.js';
+import { GARAGE_REPAIRS } from './toolchain-garage.mjs';
 
 /** A node declaring `services: "pm2"` (see hostsPm2Services in src/lib/node-role.ts). */
 const pm2ServicesHost = (node) => hostsPm2Services(node);
@@ -139,4 +143,5 @@ export const RELEASE_TOOLS = {
 		latest: { source: { kind: 'github-release', repo: 'denoland/deno', tagPrefix: 'v' } },
 		repair: denoRepair(USER_BIN),
 	},
+	...GARAGE_REPAIRS,
 };

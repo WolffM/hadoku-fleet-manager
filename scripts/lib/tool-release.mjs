@@ -379,14 +379,35 @@ export async function fetchGithubReleaseTimes(source, opts = {}) {
 }
 
 /**
+ * A release the declaration PINS: `{ kind: 'pinned', version, publishedAt }`,
+ * for a vendor with no feed and no checksum file to trust (Garage,
+ * toolchain-garage.mjs, which also pins the sha256). Nothing is fetched; the
+ * debounce still applies, so a pin younger than `minAge` is `unknown`, as
+ * any other source's newest release would be.
+ */
+export function lookupPinned(source, { now = Date.now(), minAge = DEFAULT_MIN_AGE_MINUTES } = {}) {
+	const at = Date.parse(source?.publishedAt);
+	if (!parseVersion(source?.version) || Number.isNaN(at))
+		return { status: 'unknown', reason: 'the pin names no x.y.z version and publish date' };
+	if ((now - at) / 60_000 < minAge)
+		return {
+			status: 'unknown',
+			reason: `the pinned ${source.version} is younger than minAge (${minAge} min)`,
+		};
+	return { status: 'known', version: source.version, publishedAt: new Date(at).toISOString() };
+}
+
+/**
  * Dispatch a `latest.source` to the lookup that can actually read it: npm by
- * default, Adoptium, Maven Central or a GitHub release list when the source says so.
+ * default, Adoptium, Maven Central or a GitHub release list when the source says so,
+ * or a `pinned` release the declaration carries itself.
  *
  * ONE DISPATCHER, not three call sites that each have to remember which
  * lookup goes with which `source.kind` — `createReleaseLookup`'s whole reason
  * to exist is that every real caller shares it.
  */
 export function dispatchLookup(source, opts) {
+	if (source?.kind === 'pinned') return Promise.resolve(lookupPinned(source, opts));
 	if (source?.kind === 'adoptium') return lookupAdoptiumLatest(source, opts);
 	if (source?.kind === 'maven-metadata') return lookupMavenLatest(source, opts);
 	if (source?.kind === 'github-release') return lookupGithubRelease(source, opts);
@@ -418,6 +439,7 @@ export function createReleaseLookup(opts = {}) {
 			source?.feature ?? '',
 			source?.majorMinor ?? '',
 			source?.repo ?? '',
+			source?.version ?? '',
 			minAge,
 		].join('|');
 		if (!cache.has(key)) cache.set(key, dispatchLookup(source, { ...opts, ...perCall, minAge }));

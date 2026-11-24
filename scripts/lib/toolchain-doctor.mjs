@@ -304,10 +304,12 @@ function judgeLoud(id, tool, seen, latest) {
 	const shadow = shadowVerdict(id, s.detect, probeRole(tool), tool?.shadowOver);
 	if (shadow) return shadow;
 	if (s.detect !== 'OK') {
+		// A detect may say why itself, as a first line `WHY <reason>` (toolchain-garage.mjs).
+		const said = /^WHY (.+)/.exec(s.detect ?? '')?.[1];
 		const why =
 			s.login === 'OK'
 				? 'installed, but reachable only from a login shell — a workflow step sees a stock PATH'
-				: 'not installed, or not reachable from a non-login shell';
+				: (said ?? 'not installed, or not reachable from a non-login shell');
 		const loginOnly = s.login === 'OK';
 		return {
 			id,
