@@ -4,7 +4,7 @@
  * declared against observed (storage bootcamp F6, hadoku-fleet-manager#141).
  *
  *   fleet garage-layout                     the plan; touches nothing (a dry run)
- *   fleet garage-layout --apply             carry it out: bring-up, layout, buckets
+ *   fleet garage-layout --apply             carry it out: bring-up, layout, buckets, tuning
  *   fleet garage-layout --apply --override "<reason>"   past a refused rule, recorded
  *   fleet garage-layout --declare claw-9 --disk SERIAL=800G[,SERIAL=...]
  *   fleet garage-layout --declare claw-1 --root 200G     a fixed quota on `/`
@@ -45,8 +45,10 @@ import {
 	drainZone,
 	forgetZone,
 	recordOverride,
+	recordTuning,
 	updateDeclared,
 } from './lib/garage-layout-state.mjs';
+import { applyTuning, observeTuning, planTuning, wantedTuning } from './lib/garage-tuning.mjs';
 import { declaredPath, readDeclared } from './lib/garage-layout-declared.mjs';
 import { readDiskRejections, withRejections } from './lib/disk-rejections.mjs';
 import { readQualifyResults } from './lib/qualify-results.mjs';
@@ -158,11 +160,20 @@ async function planNow() {
 			buckets: seen.cluster.buckets ?? [],
 		});
 	}
-	return { seen, plan, buckets };
+	// Each admitted zone's Garage background load, from its node-impact soak (#159).
+	const wanted = wantedTuning({ declared, checks: plan.checks });
+	const tuning = {
+		wanted,
+		...planTuning({
+			wanted,
+			observed: await observeTuning(ctx.admin, [...wanted.keys()]),
+		}),
+	};
+	return { seen, plan, buckets, tuning };
 }
 
 const gb = (b) => (b === null || b === undefined ? '—' : `${(b / 1e9).toFixed(1)} GB`);
-function render({ seen, plan, buckets }) {
+function render({ seen, plan, buckets, tuning }) {
 	log(
 		`\n══ garage pool  ${seen.cluster ? `read via ${seen.via}, layout v${seen.cluster.layout.version}` : seen.why}`
 	);
@@ -195,6 +206,17 @@ function render({ seen, plan, buckets }) {
 			`   buckets  ${Object.keys(declared.buckets).length} declared; created once the layout is applied`
 		);
 	}
+	log('   tuning');
+	if (!tuning.wanted.size)
+		log('     nothing admitted or recorded yet: Garage defaults left as they are');
+	for (const [node, w] of tuning.wanted) {
+		const mine = tuning.ops.filter((o) => o.node === node);
+		log(
+			`     ${node.padEnd(9)} resync ${w.tuning.resyncTranquility}, scrub ${w.tuning.scrubTranquility}` +
+				` (${w.why})${mine.length ? `: set ${mine.map((o) => `${o.variable} ${o.from ?? 'unset'} → ${o.to}`).join(', ')}` : ': as it runs'}`
+		);
+	}
+	for (const p of tuning.problems) log(`     COULD NOT LOOK ${p.node}: ${p.why}`);
 	if (plan.refused) {
 		log(
 			plan.checks.some((c) => c.status === 'could-not-look')
@@ -206,13 +228,18 @@ function render({ seen, plan, buckets }) {
 	}
 }
 
-const summary = ({ seen, plan, buckets }) => ({
+const summary = ({ seen, plan, buckets, tuning }) => ({
 	via: seen.via,
 	clusterWhy: seen.why,
 	zones: seen.zones,
 	state: seen.state,
 	plan,
 	buckets,
+	tuning: {
+		wanted: Object.fromEntries(tuning.wanted),
+		ops: tuning.ops,
+		problems: tuning.problems,
+	},
 });
 
 const first = await planNow();
@@ -264,7 +291,23 @@ try {
 			await applyBuckets(ctx, admin, b.ops);
 		}
 	}
+	if (now.tuning.ops.length) {
+		log('── tuning');
+		await applyTuning(ctx.admin, now.tuning.ops, log);
+	}
+	// Record what each admitted zone runs with, set now or already in place.
+	for (const [node, w] of now.tuning.wanted) {
+		const z = declared.zones[node];
+		const same =
+			z?.tuning?.resyncTranquility === w.tuning.resyncTranquility &&
+			z?.tuning?.scrubTranquility === w.tuning.scrubTranquility;
+		if (w.admitted && !same) updateDeclared((d) => recordTuning(d, node, w.tuning, at));
+	}
 	const after = await planNow();
+	if (after.tuning.ops.length || after.tuning.problems.length)
+		fail(
+			`tuning did not hold after --apply: ${[...after.tuning.ops.map((o) => `${o.node} ${o.variable} reads ${o.from}, wants ${o.to}`), ...after.tuning.problems.map((p) => `${p.node}: ${p.why}`)].join('; ')}`
+		);
 	render(after);
 	finish({ ok: true, applied: true, ...summary(after) }, 0);
 } catch (e) {

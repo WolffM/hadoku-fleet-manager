@@ -2322,6 +2322,13 @@
     "why": "#156: the admission half of garage-layout's qualified rule (disk-bench + disk-node-impact per declared disk), pure, beside garage-layout.mjs."
   },
   {
+    "glob": "scripts/lib/garage-tuning.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "run",
+    "why": "#159: each admitted zone's Garage resync/scrub tranquility from its node-impact soak, against the node's own worker variables; the plan's tune ops and their SetWorkerVariable. Beside garage-apply.mjs, the other I/O of garage-layout --apply."
+  },
+  {
     "glob": "scripts/lib/garage-apply.mjs",
     "layer": "domain",
     "domain": "lifecycle",

@@ -18,6 +18,7 @@
  *     state: 'active' | 'drain',
  *     disks: [{ serial, capacityBytes, root? }],   // root: the pool shares `/`
  *     at,                                          // when it was last declared
+ *     tuning?: { resyncTranquility, scrubTranquility, at },  // what --apply set (#159)
  *   }
  *   buckets[ns] = { key, at }   // global alias dp-<ns>; `key` is the tenant key's name
  *   overrides[] = { at, rules, reason }
@@ -65,6 +66,25 @@ export function drainZone(declared, node, at) {
 /** PURE. Forget a drained zone. Only `--forget` after the plan says it is drained. */
 export function forgetZone(declared, node) {
 	delete declared.zones[node];
+	return declared;
+}
+
+/**
+ * PURE. Record the Garage tuning `--apply` set on `node` (garage-tuning.mjs).
+ * Defaults are recorded too: "set to the defaults by admission" is a fact,
+ * and the record is what a zone keeps when its admission result expires.
+ */
+export function recordTuning(declared, node, tuning, at) {
+	const z = declared.zones[node];
+	if (!z) throw new Error(`${node} is not a declared zone`);
+	declared.zones[node] = {
+		...z,
+		tuning: {
+			resyncTranquility: tuning.resyncTranquility,
+			scrubTranquility: tuning.scrubTranquility,
+			at,
+		},
+	};
 	return declared;
 }
 
