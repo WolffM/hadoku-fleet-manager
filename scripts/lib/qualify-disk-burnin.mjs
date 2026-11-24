@@ -47,6 +47,32 @@ export const STATE_DIR = '/var/lib/fleet-storage/burnin';
 const STATE_SCHEMA = 1;
 const MB = 1024 * 1024;
 const DEADLINE_RCS = new Set([124, 137]);
+/** Direct I/O moves whole logical sectors; every disk size is a multiple of this. */
+const SECTOR = 512;
+
+/**
+ * PURE. The next chunk from `offsetBytes`: whole MiB, or the disk's sub-MiB
+ * TAIL on its own. fio rounds `--size` DOWN to a multiple of `--bs`, so a
+ * 1 MiB block over a non-aligned rest moved every byte but the last
+ * 745,472 of a 1,000,204,886,016-byte disk and refused it forever (#147).
+ * The tail chunk gets `bs` equal to its length (chunkScript), so every chunk
+ * is a whole number of blocks.
+ */
+export function nextChunkBytes({ sizeBytes, offsetBytes, chunkBytes }) {
+	const rest = sizeBytes - offsetBytes;
+	if (rest <= MB) return rest;
+	const len = Math.min(chunkBytes, rest);
+	return len - (len % MB);
+}
+
+/** The fio block for a chunk: 1 MiB, or the whole of a sub-MiB tail. Throws on a length fio would truncate. */
+export function chunkBlockBytes(lengthBytes) {
+	if (lengthBytes > 0 && lengthBytes % MB === 0) return MB;
+	if (lengthBytes > 0 && lengthBytes < MB && lengthBytes % SECTOR === 0) return lengthBytes;
+	throw new Error(
+		`a chunk of ${lengthBytes} bytes is neither whole MiB nor a sector-aligned sub-MiB tail; fio would not move all of it`
+	);
+}
 
 const SERIAL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export function assertSerial(serial) {
@@ -110,6 +136,7 @@ export function chunkScript({ serial, phase, offsetBytes, lengthBytes, deadlineS
 	assertSerial(serial);
 	for (const [n, v] of Object.entries({ offsetBytes, lengthBytes, deadlineSec })) assertInt(n, v);
 	if (phase !== 'read' && phase !== 'write') throw new Error(`bad phase: ${phase}`);
+	const bs = chunkBlockBytes(lengthBytes);
 	const fio =
 		phase === 'read'
 			? '--rw=read --readonly'
@@ -137,7 +164,7 @@ export function chunkScript({ serial, phase, offsetBytes, lengthBytes, deadlineS
 		'echo "BURNIN_DEV $dev"',
 		't0=$(date +%s%N)',
 		'echo BURNIN_JSON_BEGIN',
-		`timeout -k 10 ${deadlineSec} fio --name=burnin --filename="$dev" ${fio} --bs=1M --direct=1` +
+		`timeout -k 10 ${deadlineSec} fio --name=burnin --filename="$dev" ${fio} --bs=${bs} --direct=1` +
 			` --ioengine=psync --offset=${offsetBytes} --size=${lengthBytes} --output-format=json`,
 		'rc=$?',
 		'echo; echo BURNIN_JSON_END',
@@ -311,7 +338,11 @@ export function makeBurninTest({
 			ctx.log?.(`   ${serial}: ${plan.summary}`);
 
 			while (st.phase !== 'done') {
-				const lengthBytes = Math.min(chunkBytes, st.sizeBytes - st.offsetBytes);
+				const lengthBytes = nextChunkBytes({
+					sizeBytes: st.sizeBytes,
+					offsetBytes: st.offsetBytes,
+					chunkBytes,
+				});
 				const ioMb = (lengthBytes / MB) * (st.phase === 'write' ? 2 : 1);
 				const deadlineSec = Math.ceil(ioMb / FLOOR_MBPS) + 30;
 				if ((now() - started) / 1000 + deadlineSec > budgetMinutes * 60)

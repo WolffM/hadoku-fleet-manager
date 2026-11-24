@@ -16,9 +16,11 @@ import { judgeSmr, recordingOf, test as smrTest } from './qualify-disk-smr.mjs';
 import { judgeSmart, REALLOCATED_MAX, test as smartTest } from './qualify-disk-smart.mjs';
 import {
 	assertSerial,
+	chunkBlockBytes,
 	chunkScript,
 	initialState,
 	makeBurninTest,
+	nextChunkBytes,
 	parseChunk,
 	smartWorse,
 	STATE_DIR,
@@ -325,18 +327,25 @@ function fakeNode({ serial, sizeBytes = 4 * 1024 * 1024, chunk, probe = CLAW9 } 
 			const phase = /--rw=read/.test(script) ? 'read' : 'write';
 			const len = Number(script.match(/--size=(\d+)/)[1]);
 			const off = Number(script.match(/--offset=(\d+)/)[1]);
-			return chunk({ phase, off, len });
+			const bs = Number(script.match(/--bs=(\d+)/)[1]);
+			return chunk({ phase, off, len, bs });
 		}
 		throw new Error(`unexpected script: ${kind}`);
 	};
 	return { files, calls, ctx: { node: 'claw-9', nowMs: 0, exec, log: () => {} } };
 }
-const okChunk = ({ phase, len }) => ({
+/**
+ * fio as measured (3.39, --direct=1, read and write+verify, 2026-11-23): it
+ * rounds --size DOWN to a multiple of --bs and still exits 0, which is how
+ * claw-9's last chunk moved 3597 MiB of 3597.71 (#147).
+ */
+const fioMoves = (len, bs) => len - (len % bs);
+const okChunk = ({ phase, len, bs }) => ({
 	ok: true,
 	stdout: [
 		'BURNIN_DEV /dev/sdb',
 		'BURNIN_JSON_BEGIN',
-		JSON.stringify({ jobs: [{ error: 0, [phase]: { io_bytes: len } }] }),
+		JSON.stringify({ jobs: [{ error: 0, [phase]: { io_bytes: fioMoves(len, bs) } }] }),
 		'BURNIN_JSON_END',
 		'BURNIN_RC 0',
 		'BURNIN_MS 100',
@@ -369,6 +378,59 @@ void test('burn-in of a blank disk: read then write+verify, every chunk saved, t
 	assert.equal(again.status, 'pass');
 	assert.match(again.reason, /remove .*WD-BLANK1\.json to run it again/);
 	assert.equal(seen.length, 8);
+});
+
+void test('#147: a non-MiB-aligned disk is read, written and verified to its last byte', async () => {
+	const serial = 'WD-UNALIGNED';
+	const tail = 745_472; // claw-9's WD-WCC6Y3VLV8SU: 1,000,204,886,016 B = 953,869 MiB + this
+	const sizeBytes = 2 * 1024 * 1024 + 1024 * 1024 + tail;
+	const seen = [];
+	const n = fakeNode({
+		serial,
+		sizeBytes,
+		chunk: (c) => (seen.push(`${c.phase}@${c.off}+${c.len}/bs${c.bs}`), okChunk(c)),
+	});
+	const r = await makeBurninTest({ serial, chunkMb: 2, budgetMinutes: 60 }).run(n.ctx);
+	assert.equal(r.status, 'pass', r.reason);
+	const plan = (phase) => [
+		`${phase}@0+2097152/bs1048576`,
+		`${phase}@2097152+1048576/bs1048576`,
+		`${phase}@3145728+${tail}/bs${tail}`,
+	];
+	assert.deepEqual(seen, [...plan('read'), ...plan('write')]);
+	const moved = (phase) =>
+		seen
+			.filter((x) => x.startsWith(phase))
+			.reduce((sum, x) => {
+				const [, len, bs] = x.match(/\+(\d+)\/bs(\d+)/).map(Number);
+				return sum + fioMoves(len, bs);
+			}, 0);
+	assert.equal(moved('read'), sizeBytes, 'the read pass skipped bytes');
+	assert.equal(moved('write'), sizeBytes, 'the write+verify pass skipped bytes');
+});
+
+void test('#147: chunk sizing — whole MiB, then the tail alone; claw-9 resumes at its tail', () => {
+	const size = 1_000_204_886_016;
+	const chunk = 16 * 1024 * 1024 * 1024;
+	const resume = 996_432_412_672; // 950272 MiB, claw-9's saved offsetBytes
+	const first = nextChunkBytes({ sizeBytes: size, offsetBytes: resume, chunkBytes: chunk });
+	assert.equal(first, 3597 * 1024 * 1024);
+	const second = nextChunkBytes({
+		sizeBytes: size,
+		offsetBytes: resume + first,
+		chunkBytes: chunk,
+	});
+	assert.equal(second, 745_472);
+	assert.equal(resume + first + second, size);
+	assert.equal(chunkBlockBytes(first), 1024 * 1024);
+	assert.equal(chunkBlockBytes(second), 745_472);
+	assert.throws(() => chunkBlockBytes(1024 * 1024 + 4096), /fio would not move all of it/);
+	assert.throws(() => chunkBlockBytes(1000), /fio would not move all of it/);
+	assert.throws(() => chunkBlockBytes(0), /fio would not move all of it/);
+	assert.equal(
+		nextChunkBytes({ sizeBytes: 4 * 1024 * 1024, offsetBytes: 0, chunkBytes: chunk }),
+		4 * 1024 * 1024
+	);
 });
 
 void test('burn-in resumes where the budget stopped it, and an unfinished one is never a pass', async () => {
