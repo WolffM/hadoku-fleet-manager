@@ -24,6 +24,8 @@ import { test as tmpfsHeadroom } from './qualify-memory.mjs';
 import { test as diskSyncWrites } from './qualify-io.mjs';
 import { test as concurrencyRamp } from './qualify-concurrency.mjs';
 import { test as rebootRequalify } from './qualify-reboot.mjs';
+import { test as diskSmr } from './qualify-disk-smr.mjs';
+import { test as diskSmart } from './qualify-disk-smart.mjs';
 
 export const QUALIFY_TESTS = Object.freeze([
 	busyCounters,
@@ -34,3 +36,13 @@ export const QUALIFY_TESTS = Object.freeze([
 	concurrencyRamp,
 	rebootRequalify,
 ]);
+
+/**
+ * `fleet qualify --disks`: the read-only disk checks of the storage bootcamp
+ * (F2, #137), SMR then SMART, on every candidate disk. NOT in QUALIFY_TESTS:
+ * a node with no spare disk would fail them forever and `--next` would read
+ * it as due every night. They drain nothing (needsDrain false). The burn-in
+ * writes to a disk and runs only by serial: `--burn-in <serial> --confirm`
+ * (qualify-disk-burnin.mjs).
+ */
+export const QUALIFY_DISK_TESTS = Object.freeze([diskSmr, diskSmart]);

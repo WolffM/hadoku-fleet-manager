@@ -47,6 +47,27 @@ const firstStep = (m) => (Array.isArray(m?.steps) && m.steps[0]?.k === 1 ? m.ste
  * night-to-night noise: the band before a history exists to show spread.
  */
 export const RELATIVE = Object.freeze({
+	// The disk tests (storage bootcamp F2, #137) judge DISKS, and a refused disk
+	// is the hardware's: SMR, a failing drive, a burn-in error. Every failure is
+	// a weak point of the node and the disk simply does not earn `storage`;
+	// none is a finding (#129: hardware is never an operator task).
+	'disk-smr': { absolute: () => [], quantities: () => [] },
+	'disk-smart': {
+		absolute: () => [],
+		// Power-on hours per SERIAL. The counter only climbs, and the estimate
+		// lags it by under one window's hours, so the band is half the mean:
+		// what drifts is a counter that went BACKWARDS, which is a different
+		// drive answering to the serial, or a reset.
+		quantities: (m) =>
+			(m?.disks ?? [])
+				.filter((d) => d.serial && d.verdict !== 'blocked')
+				.map((d) => ({
+					quantity: `disk.${d.serial}.powerOnHours`,
+					value: num(d.powerOnHours),
+					spec: { unit: 'h', worse: 'higher', rel: 0.5, abs: 24 * 365 },
+				})),
+	},
+	'disk-burnin': { absolute: () => [], quantities: () => [] },
 	'disk-sync-writes': {
 		absolute: () => [],
 		quantities: (m) => [

@@ -56,6 +56,10 @@ storage_probe() {
 		printf 'disk.%s.removable %s\n' "$_sp_d" "$(cat "$_sp_b/removable" 2>/dev/null)"
 		printf 'disk.%s.model %s\n' "$_sp_d" "$(sed 's/ *$//' "$_sp_b/device/model" 2>/dev/null)"
 		printf 'disk.%s.scheduler %s\n' "$_sp_d" "$(sed 's/.*\[\(.*\)\].*/\1/' "$_sp_b/queue/scheduler" 2>/dev/null)"
+		# The kernel's zone model: `none`, or `host-aware`/`host-managed` for a
+		# drive that SAYS it is shingled. A drive-managed SMR disk says `none`,
+		# which is why the SMR judge never reads `none` as CMR (qualify-disk-smr.mjs).
+		printf 'disk.%s.zoned %s\n' "$_sp_d" "$(cat "$_sp_b/queue/zoned" 2>/dev/null)"
 		# BUS TYPE COMES FROM THE DEVICE, NOT FROM smartctl BEING AVAILABLE.
 		# kind used to be chosen by whether smartctl's OUTPUT mentioned "NVMe
 		# Log", so on a box where smartctl cannot run every drive fell through

@@ -23,9 +23,21 @@ export const commandsGates: Record<string, Command> = {
 	qualify: {
 		script: 'qualify-node.mjs',
 		kind: 'converger',
-		flags: ['--json', '--dry-run', '--next', '--machine=', '--seed-baselines', '--write'],
+		flags: [
+			'--json',
+			'--dry-run',
+			'--next',
+			'--machine=',
+			'--seed-baselines',
+			'--write',
+			'--disks',
+			'--burn-in=',
+			'--confirm',
+			'--minutes=',
+		],
 		summary:
-			'hold ONE node out of service and run the qualification playlist against it (--dry-run: drain nothing)',
+			'hold ONE node out of service and run the qualification playlist against it (--dry-run: drain nothing;' +
+			' --disks: the storage SMR/SMART checks; --burn-in <serial> --confirm: burn one disk in)',
 	},
 	'capability-schema': {
 		script: 'check-capability-schema.mjs',

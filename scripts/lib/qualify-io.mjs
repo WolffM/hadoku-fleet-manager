@@ -204,6 +204,25 @@ export function parsePrep(out) {
 	};
 }
 
+/**
+ * The first job of a fio `--output-format=json` document printed between
+ * `<MARK>_BEGIN` and `<MARK>_END` lines, or null. fio may print warnings ahead
+ * of the document, hence the first brace; a torn document is "no reading",
+ * never a pass. Shared with the disk burn-in (qualify-disk-burnin.mjs).
+ */
+export function fioJob(out, mark) {
+	const body =
+		String(out ?? '').match(new RegExp(`^${mark}_BEGIN$([\\s\\S]*?)^${mark}_END$`, 'm'))?.[1] ?? '';
+	const brace = body.indexOf('{');
+	if (brace < 0) return null;
+	try {
+		return JSON.parse(body.slice(brace))?.jobs?.[0] ?? null;
+	} catch {
+		// A torn document is "no reading": the caller says the phase produced none.
+		return null;
+	}
+}
+
 const ms2 = (ns) => (Number.isFinite(ns) ? Math.round(ns / 1e4) / 100 : null);
 
 /**
@@ -214,23 +233,12 @@ export function parseRun(out) {
 	const s = String(out ?? '');
 	const rcM = s.match(/^RAND_RC (\d+)$/m);
 	const rand = { rc: rcM ? Number(rcM[1]) : null, p50Ms: null, p99Ms: null, iops: null };
-	const body = s.match(/^RAND_JSON_BEGIN$([\s\S]*?)^RAND_JSON_END$/m)?.[1] ?? '';
-	const brace = body.indexOf('{');
-	if (brace >= 0) {
-		let doc = null;
-		try {
-			doc = JSON.parse(body.slice(brace));
-		} catch {
-			// A torn document is "no reading": the judge says the phase produced none.
-			doc = null;
-		}
-		const job = doc?.jobs?.[0];
-		const pct = job?.write?.clat_ns?.percentile;
-		if (job && job.error === 0 && pct) {
-			rand.p50Ms = ms2(pct['50.000000']);
-			rand.p99Ms = ms2(pct['99.000000']);
-			rand.iops = Number.isFinite(job.write.iops) ? Math.round(job.write.iops) : null;
-		}
+	const job = fioJob(s, 'RAND_JSON');
+	const pct = job?.write?.clat_ns?.percentile;
+	if (job && job.error === 0 && pct) {
+		rand.p50Ms = ms2(pct['50.000000']);
+		rand.p99Ms = ms2(pct['99.000000']);
+		rand.iops = Number.isFinite(job.write.iops) ? Math.round(job.write.iops) : null;
 	}
 	const segments = [...s.matchAll(/^SEG (\d+) (\d+) (\d+)$/gm)].map((m) => ({
 		rc: Number(m[2]),

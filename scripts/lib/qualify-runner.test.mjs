@@ -367,3 +367,25 @@ void test('--next: a drained node is skipped, and nothing runs while another qua
 	});
 	assert.deepEqual([r.node, r.why], [null, 'claw-a is being qualified now']);
 });
+
+void test('a window of read-only tests drains nothing and still runs them', async () => {
+	const r = rig();
+	const out = await go(r, [
+		T('disk-check', async () => ({ status: 'pass', reason: 'read only' }), { needsDrain: false }),
+	]);
+	assert.equal(out.status, 'ran');
+	assert.deepEqual(
+		out.results.map((x) => [x.id, x.status]),
+		[['disk-check', 'pass']]
+	);
+	assert.ok(!r.calls.some((c) => /drain|waitQuiet/.test(c[0])), JSON.stringify(r.calls));
+	// The refusals still apply: a backstop is refused even for a read.
+	const b = await go(
+		rig(),
+		[T('d', async () => ({ status: 'pass', reason: 'x' }), { needsDrain: false })],
+		{
+			machine: { role: 'backstop' },
+		}
+	);
+	assert.equal(b.status, 'refused');
+});

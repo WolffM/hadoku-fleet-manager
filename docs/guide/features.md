@@ -75,6 +75,15 @@ reading outside the node's usual range is a drift finding, and the range
 re-learns at the new reading. The nightly health check judges each node's
 CPU temperature and clock under load the same way.
 
+`fleet qualify --disks` checks every disk other than the root disk for the
+storage pool. It refuses shingled (SMR) disks: a rotational model nobody has
+identified stays blocked and is never assumed safe. It also checks each
+drive's own SMART health record. Both checks only read. `fleet qualify
+--burn-in <serial> --confirm` then reads every sector of one disk while the
+node is drained, and writes and verifies every sector too if the disk is
+blank. It runs in parts and picks up where it stopped. A disk that fails is
+a fact about that node's hardware. It never becomes a task for the operator.
+
 **What it does not do.** It will not admit a node to scheduling on the
 manifest's say alone — a capability a probe cannot confirm is not offered,
 even if the operator believes it should be there.

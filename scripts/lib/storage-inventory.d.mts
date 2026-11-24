@@ -35,6 +35,8 @@ export interface StorageSmart {
 	/** ATA reallocated sectors, or NVMe media-and-data-integrity errors. */
 	reallocated: number | null;
 	pendingSectors: number | null;
+	/** ATA attribute 198: sectors the drive's own offline scan could not read. */
+	offlineUncorrectable: number | null;
 	lifetimeRemainingPct: number | null;
 }
 
@@ -68,6 +70,14 @@ export interface StorageDisk {
 	transport: string | null;
 	kind: 'nvme' | 'ata';
 	scheduler: string | null;
+	/**
+	 * sysfs `queue/zoned`: `none`, `host-aware` or `host-managed`; null when the
+	 * probe did not report it. `none` is NOT evidence of CMR: a drive-managed
+	 * SMR disk hides its zones and says `none`.
+	 */
+	zoned: string | null;
+	/** smartctl's `TRIM Command:` line; null when the drive printed none. */
+	trim: boolean | null;
 	/** `/` is on this disk. */
 	isRoot: boolean;
 	/** Anything on this disk is mounted, swap included. */

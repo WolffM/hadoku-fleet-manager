@@ -243,3 +243,16 @@ void test('the probe runs here and its output parses', () => {
 	const want = readdirSync('/sys/block').filter((d) => !/^(loop|ram|sr|dm-|zram|md)/.test(d));
 	assert.deepEqual(inv.disks.map((d) => d.device).sort(), want.sort());
 });
+
+void test('the disk-qualify fields: TRIM from smartctl -i, attribute 198, the kernel zone model', () => {
+	const inv = parseStorage(CLAW9);
+	assert.equal(disk(inv, 'sda').trim, true, 'the SSD prints TRIM Command: Available');
+	assert.equal(disk(inv, 'sdb').trim, null, 'a spinning disk prints no TRIM line: not reported');
+	assert.equal(disk(inv, 'sdb').smart.offlineUncorrectable, 0);
+	assert.equal(disk(inv, 'sdb').zoned, null, 'this capture predates the zoned line');
+	const zoned = parseStorage(
+		CLAW9.replace('disk.sdb.kind ata', 'disk.sdb.kind ata\ndisk.sdb.zoned none')
+	);
+	assert.equal(disk(zoned, 'sdb').zoned, 'none');
+	assert.equal(disk(parseStorage(CLAW2), 'nvme0n1').smart.offlineUncorrectable, null);
+});

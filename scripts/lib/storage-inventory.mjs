@@ -46,7 +46,9 @@ export function parseSmart(lines) {
 		temperatureC: null,
 		reallocated: null,
 		pendingSectors: null,
+		offlineUncorrectable: null,
 		lifetimeRemainingPct: null,
+		trim: null,
 		model: null,
 		reason: null,
 		kind: null,
@@ -115,6 +117,11 @@ export function parseSmart(lines) {
 		res.temperatureC = attr('Temperature_Celsius') ?? attr('Airflow_Temperature_Cel');
 		res.reallocated = attr('Reallocated_Sector_Ct') ?? attr('Reallocate_NAND_Blk_Cnt');
 		res.pendingSectors = attr('Current_Pending_Sector') ?? attr('Current_Pending_ECC_Cnt');
+		res.offlineUncorrectable = attr('Offline_Uncorrectable');
+		// `smartctl -i`'s `TRIM Command: Available, deterministic` or
+		// `Unavailable`. Absent (most spinning disks print no TRIM line) is null.
+		const trim = /^TRIM Command:\s*(\S+)/m.exec(text);
+		res.trim = trim ? /^Available/.test(trim[1]) : null;
 		// BOTH SPELLINGS CARRY PERCENT *USED* IN THE RAW COLUMN, whatever the
 		// attribute is called. Verified on claw-7's Crucial MX100:
 		// `202 Percent_Lifetime_Remain … VALUE 067 … RAW 33` — 67 normalised,
@@ -173,6 +180,7 @@ function smartOf(tool, root, lines) {
 		temperatureC: read.temperatureC,
 		reallocated: read.reallocated,
 		pendingSectors: read.pendingSectors,
+		offlineUncorrectable: read.offlineUncorrectable,
 		lifetimeRemainingPct: read.lifetimeRemainingPct,
 	};
 	const text = lines.join('\n');
@@ -275,6 +283,8 @@ export function parseStorage(text) {
 			transport: orNull(self?.TRAN),
 			kind: f('kind') === 'nvme' ? 'nvme' : 'ata',
 			scheduler: f('scheduler'),
+			zoned: f('zoned'),
+			trim: parseSmart(smart.get(d) ?? []).trim,
 			isRoot: mountpoints.includes('/'),
 			mounted: mountpoints.length > 0,
 			mountpoints,

@@ -11,6 +11,9 @@
  * claim `prove-job --under-own-drain` honours, so `ctx.mintJob` can put real
  * jobs on the node it holds.
  *
+ * NO HOLD when no test in the window `needsDrain`: the playlist runs on the
+ * node as it is. The refusals below still apply.
+ *
  * REFUSED, before anything is drained:
  *   - the backstop. "hokon remains the backstop" (operator, 2026-11-11).
  *   - a node someone else already holds. A qualification measures a node it
@@ -163,6 +166,15 @@ export async function runQualification(a) {
 		});
 		return { status: 'dry-run', reason: `${tests.length} test(s), ${used} min budgeted`, results };
 	}
+
+	// A window of read-only tests (the disk SMR and SMART checks: seconds, no
+	// load) drains nothing; the refusals above still hold.
+	if (!tests.some((t) => t.needsDrain))
+		return {
+			status: 'ran',
+			reason: null,
+			results: await runPlaylist({ node, machine, manifest, tests, windowMinutes, log, deps }),
+		};
 
 	const held = await underIdleHold(
 		node,

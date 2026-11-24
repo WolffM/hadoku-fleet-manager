@@ -8,6 +8,13 @@
  *   fleet qualify --next --json                the scheduled form: the most overdue node, or none
  *   fleet qualify --seed-baselines [--write]   learn each node's last ledger window into
  *                                              node-baselines.json (dry run without --write)
+ *   fleet qualify --machine claw-9 --disks     the storage disk checks (SMR, SMART) on every
+ *                                              candidate disk; read-only, drains nothing
+ *   fleet qualify --machine claw-9 --burn-in <serial> [--confirm] [--minutes N]
+ *                                              burn ONE disk in, by serial: its plan without
+ *                                              --confirm; with it, up to N (170) min under the
+ *                                              drain, resuming where the last run stopped
+ *                                              (lib/qualify-disk-burnin.mjs)
  *
  * `--machine` (or `--next`) is REQUIRED. A qualification drains a node for up to
  * QUALIFY_WINDOW_MINUTES; there is no fleet-wide form, by design (one node at a
@@ -38,7 +45,8 @@ import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, readDrains } from './lib/expected-down.mjs';
 import { busyCount, drain, isDrained, undrain, waitUntilDrained } from './lib/drain-wait.mjs';
 import { loadManifest, machineArg, runOn } from './lib/fleet-exec.mjs';
-import { QUALIFY_TESTS } from './lib/qualify-playlist.mjs';
+import { QUALIFY_DISK_TESTS, QUALIFY_TESTS } from './lib/qualify-playlist.mjs';
+import { BUDGET_MINUTES, makeBurninTest, planBurnin } from './lib/qualify-disk-burnin.mjs';
 import { QUALIFY_WINDOW_MINUTES } from './lib/qualify-registry.mjs';
 import { readQualifyResults, recordQualifyResults } from './lib/qualify-results.mjs';
 import { judgeWindow, seedFromLedger } from './lib/qualify-baseline.mjs';
@@ -157,6 +165,68 @@ if (!machine) {
 	finish({ ok: false, error: `${node} is not in the manifest` }, 2);
 }
 
+// THE DISK FORMS (storage bootcamp F2, #137). Explicit, one node, never --next.
+const flagValue = (name) => {
+	const i = process.argv.indexOf(name);
+	return i < 0 ? null : (process.argv[i + 1] ?? '');
+};
+const BURN_IN = flagValue('--burn-in');
+const DISKS = process.argv.includes('--disks');
+if ((BURN_IN !== null || DISKS) && NEXT) {
+	log('fleet qualify: --disks and --burn-in name one node with --machine, never --next');
+	finish({ ok: false, error: '--disks/--burn-in need --machine' }, 2);
+}
+let tests = [...QUALIFY_TESTS];
+if (DISKS) tests = [...QUALIFY_DISK_TESTS];
+if (BURN_IN !== null) {
+	const minutesArg = flagValue('--minutes');
+	const budgetMinutes = minutesArg === null ? BUDGET_MINUTES : Number(minutesArg);
+	if (
+		!Number.isInteger(budgetMinutes) ||
+		budgetMinutes <= 0 ||
+		budgetMinutes + 5 > QUALIFY_WINDOW_MINUTES
+	) {
+		log(`fleet qualify: --minutes must be a whole number from 1 to ${QUALIFY_WINDOW_MINUTES - 5}`);
+		finish({ ok: false, error: 'bad --minutes' }, 2);
+	}
+	let burnin;
+	try {
+		burnin = makeBurninTest({ serial: BURN_IN, budgetMinutes });
+	} catch (e) {
+		log(`fleet qualify --burn-in: ${e.message}`);
+		finish({ ok: false, error: e.message }, 2);
+	}
+	if (!process.argv.includes('--confirm')) {
+		// The plan reads the disk and its state file; it drains and writes nothing.
+		const plan = await planBurnin(
+			{
+				node,
+				nowMs: Date.now(),
+				exec: (script, o = {}) => runOn(node, script, { timeoutMs: 120_000, ...o, as: 'admin' }),
+			},
+			BURN_IN
+		);
+		if ('error' in plan) {
+			log(`fleet qualify --burn-in ${BURN_IN} on ${node}: ${plan.error}`);
+			finish({ ok: false, node, status: 'could-not-look', reason: plan.error }, 1);
+		}
+		log(`fleet qualify --burn-in ${BURN_IN} on ${node} — PLAN, nothing drained or written:`);
+		log(`   ${plan.disk.device} ${plan.disk.model ?? ''}: ${plan.summary}`);
+		log(`   add --confirm to run it for up to ${budgetMinutes} min under the drain`);
+		finish(
+			{
+				ok: true,
+				node,
+				status: 'dry-run',
+				serial: BURN_IN,
+				plan: { summary: plan.summary, state: plan.state },
+			},
+			0
+		);
+	}
+	tests = [burnin];
+}
+
 /** The node while it is drained, for the signal handler below. */
 const state = { held: null };
 for (const sig of ['SIGINT', 'SIGTERM']) {
@@ -171,7 +241,7 @@ const out = await runQualification({
 	node,
 	machine,
 	manifest,
-	tests: [...QUALIFY_TESTS],
+	tests,
 	windowMinutes: QUALIFY_WINDOW_MINUTES,
 	dryRun: DRY_RUN,
 	log,
