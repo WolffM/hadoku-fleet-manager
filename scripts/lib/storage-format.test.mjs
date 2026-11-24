@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { nodeStatus } from './qualify-disk-inventory.mjs';
+import { mergeQualifyResults } from './qualify-results.mjs';
 import { CLAW10, CLAW4, CLAW9 } from './storage-fixtures.mjs';
 import { parseStorage } from './storage-inventory.mjs';
 import {
@@ -72,6 +74,31 @@ describe('qualifiedFor: F2 verdicts by serial', () => {
 			'SERIAL-claw-9-sdb'
 		);
 		assert.match(blocked.reason, /disk-smart .* says blocked/);
+	});
+});
+
+describe('qualifiedFor reads the ledger F2 actually writes', () => {
+	it('a ledger built by nodeStatus + mergeQualifyResults: pass, then a burn-in fail', () => {
+		const at = new Date().toISOString();
+		const disks = (v) => [
+			{ serial: 'WD-A', device: 'sdb', verdict: v, reason: 'r' },
+			{ serial: 'WD-B', device: 'sdc', verdict: 'fail', reason: 'SMR' },
+		];
+		const window = (burn) =>
+			DISK_QUALIFY_TESTS.map((id) => ({
+				id,
+				...nodeStatus(id, disks(id === 'disk-burnin' ? burn : 'pass')),
+			}));
+		let results = mergeQualifyResults({}, 'claw-9', window('pass'), at);
+		const L = () => ({ ok: true, results });
+		assert.equal(qualifiedFor(L(), 'claw-9', 'WD-A').ok, true);
+		assert.match(qualifiedFor(L(), 'claw-9', 'WD-B').reason, /says fail/);
+		results = mergeQualifyResults(results, 'claw-9', window('fail'), at);
+		assert.match(
+			qualifiedFor(L(), 'claw-9', 'WD-A').reason,
+			/disk-burnin .* says fail/,
+			'the NEWEST result decides'
+		);
 	});
 });
 
