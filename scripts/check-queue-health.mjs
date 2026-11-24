@@ -71,6 +71,7 @@ import {
 	queueFindings,
 	readQueuedWithRetry,
 	isSaturated,
+	visibleRunningJobs,
 	wedgedClaws,
 	isRateLimitFailure,
 	queuedSinceOf,
@@ -244,7 +245,9 @@ function readJobsOnce(repo, id) {
 			'-q',
 			'{total: .total_count, ' +
 				'queued: [.jobs[] | select(.status == "queued") | {id, name, labels, created_at}], ' +
-				'running: ([.jobs[] | select(.status == "in_progress" or .status == "completed")] | length)}',
+				'running: ([.jobs[] | select(.status == "in_progress" or .status == "completed")] | length), ' +
+				'inProgress: [.jobs[] | select(.status == "in_progress") | ' +
+				'{runner: .runner_name, name, startedAt: .started_at}]}',
 		],
 		{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: READ_TIMEOUT_MS }
 	);
@@ -258,6 +261,7 @@ function readJobsOnce(repo, id) {
 		queuedJobs: queued,
 		started: queued !== undefined && queued.length === 0 && Number(doc.running) > 0,
 		queuedSince: firstQueued,
+		runningJobs: Array.isArray(doc.inProgress) ? doc.inProgress : undefined,
 	};
 }
 
@@ -285,7 +289,13 @@ function readJobs(repo, id) {
 	} else {
 		log(`  could not read jobs for ${repo} run ${id}: ${read.reason} — counted as fleet work`);
 	}
-	return { jobless: undefined, queuedJobs: undefined, started: false, queuedSince: undefined };
+	return {
+		jobless: undefined,
+		queuedJobs: undefined,
+		started: false,
+		queuedSince: undefined,
+		runningJobs: undefined,
+	};
 }
 
 /** One runners read, unretried — see readJobsOnce for why this is split out
@@ -438,15 +448,25 @@ for (const r of runs) {
 		r.jobless = jobs.jobless;
 		r.started = jobs.started;
 		r.queuedSince = jobs.queuedSince;
+		r.queuedJobs = jobs.queuedJobs;
+		r.runningJobs = jobs.runningJobs;
 		r.saturated = isSaturated(jobs.queuedJobs, repoRunners(r.repo), { isBackstop });
-		// Past the stuck ceiling, busy is capacity only if the pool is turning
-		// over (fleet-manager#75); that costs one more read per such repo.
-		if (r.saturated && !r.started && ageSec * 1000 > MAX_QUEUED_MS) {
-			r.wedged = wedgedClaws(jobs.queuedJobs, repoRunners(r.repo), repoRunningJobs(r.repo), {
-				isBackstop,
-				nowMs: sweptAt,
-			});
-		}
+	}
+}
+// Past the stuck ceiling, busy is capacity only if the pool is turning over
+// (fleet-manager#75); that costs one more read per such repo. A separate pass
+// so every queued run's own running jobs are in hand first: GitHub lists a
+// part-running run as `queued`, and the in-progress listing never shows it.
+for (const r of runs) {
+	const ageSec = (sweptAt - Date.parse(r.createdAt)) / 1000;
+	if (r.saturated && !r.started && ageSec * 1000 > MAX_QUEUED_MS) {
+		const ownRuns = runs.filter((o) => o.repo === r.repo).map((o) => o.runningJobs);
+		r.wedged = wedgedClaws(
+			r.queuedJobs,
+			repoRunners(r.repo),
+			visibleRunningJobs(repoRunningJobs(r.repo), ownRuns),
+			{ isBackstop, nowMs: sweptAt }
+		);
 	}
 }
 // THE HOLDER OF A JOB-LEVEL GROUP (groupHeldJobs in lib/queue-health.mjs):

@@ -251,6 +251,26 @@ export function wedgedClaws(
 }
 
 /**
+ * Every in-progress job of a repo that this sweep can see, for wedgedClaws.
+ *
+ * `inProgress` is what the `?status=in_progress` runs listing yields. That
+ * misses a run that is part running, part waiting: GitHub lists such a run
+ * as `queued`, so its running jobs live only in its own jobs read
+ * (`queuedRunJobs`, one array per queued run already read). On 2026-11-24 a
+ * cardtable Forge run had seven jobs running and three waiting. The gate
+ * named the four claws running it as "busy with no in-progress job visible"
+ * and paged "the fleet stopped serving" behind a pool that was turning over.
+ *
+ * `undefined` stays `undefined`: the repo-wide listing is the only read
+ * that sees every run, so without it a busy claw may hold a job we never
+ * looked at, and wedgedClaws must take the strict direction.
+ */
+export function visibleRunningJobs(inProgress, queuedRunJobs = []) {
+	if (!Array.isArray(inProgress)) return undefined;
+	return [...inProgress, ...queuedRunJobs.filter(Array.isArray).flat()];
+}
+
+/**
  * How far into the future a `createdAt` may sit before it means the CLOCK is
  * wrong rather than the caller merely being slow.
  *

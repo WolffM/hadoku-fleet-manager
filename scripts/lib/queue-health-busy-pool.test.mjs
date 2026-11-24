@@ -7,7 +7,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { summariseQueue, queueFindings, wedgedClaws, WEDGED_JOB_SECONDS } from './queue-health.mjs';
+import {
+	summariseQueue,
+	queueFindings,
+	visibleRunningJobs,
+	wedgedClaws,
+	WEDGED_JOB_SECONDS,
+} from './queue-health.mjs';
 
 const NOW = Date.now();
 const STUCK_MS = 3_600_000;
@@ -97,4 +103,24 @@ test('a days-old run is a zombie whatever its pool says', () => {
 	const s = sum([{ repo: 'WolffM/x', createdAt: ago(2 * 86_400), saturated: true, wedged: [] }]);
 	assert.equal(s.zombie.length, 1);
 	assert.equal(s.busyPool.length, 0);
+});
+
+test('11-24 03:41: claws running the QUEUED run itself are capacity, not "no in-progress job visible"', () => {
+	// Run 45312501653 had seven jobs running and three waiting, so GitHub listed
+	// it `queued` and the in-progress runs listing had none of them.
+	const runners = ['claw-10-a', 'claw-10-b', 'claw-4-a', 'claw-9-a'].map((n) => claw(n));
+	const ownRun = runners.map((r) => job(r.name, 30 * 60));
+	assert.deepEqual(wedgedClaws(queued, runners, [], { nowMs: NOW }).length, 4, 'the bug');
+	assert.deepEqual(
+		wedgedClaws(queued, runners, visibleRunningJobs([], [ownRun]), { nowMs: NOW }),
+		[]
+	);
+});
+
+test('visibleRunningJobs: an unread in-progress listing stays unread, whatever the queued runs show', () => {
+	assert.equal(visibleRunningJobs(undefined, [[job('claw-1', 60)]]), undefined);
+	assert.deepEqual(
+		visibleRunningJobs([job('claw-1', 60)], [undefined, [job('claw-2', 60)]]).length,
+		2
+	);
 });
