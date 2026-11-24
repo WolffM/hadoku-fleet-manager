@@ -2461,6 +2461,13 @@
     "why": "#142 (storage bootcamp F7): the ci:storage-pool verdict, sorting F3's pool findings into page/warn/known/unreadable and keeping the 24 h under-replicated clock. Pure, beside the judge it reads."
   },
   {
+    "glob": "scripts/lib/storage-join-impact.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "#156 item 4: the week before against the week after a zone joined (job times, PSI), pure; ci:storage-pool reports it as a warning, beside the pool verdict."
+  },
+  {
     "glob": "scripts/storage-pool.mjs",
     "layer": "domain",
     "domain": "observation",

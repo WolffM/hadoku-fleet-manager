@@ -28,10 +28,12 @@ import { createEmitter } from './lib/emit.mjs';
 import { parseStrict } from './lib/argv.mjs';
 import { ARGV_SPECS } from './lib/argv-specs.mjs';
 import { deferralFor, deferralNote, readDrains } from './lib/expected-down.mjs';
-import { runOn } from './lib/fleet-exec.mjs';
-import { declaredMembers } from './lib/garage-layout-declared.mjs';
+import { declaredMembers, readDeclared } from './lib/garage-layout-declared.mjs';
 import { nodeAdmin, readMemberViews, readPool, seenBy } from './lib/garage-admin.mjs';
 import { judgePool } from './lib/storage-pool-gate.mjs';
+import { JOIN_WINDOW_DAYS, joinImpact } from './lib/storage-join-impact.mjs';
+import { loadManifest, runOn } from './lib/fleet-exec.mjs';
+import { perfDir, readPerfRows } from '../dist/perf-sample-store.js';
 import { stateDir } from '../dist/lib/fleet-paths.js';
 import { writeJsonAtomicSync } from '../dist/lib/atomic-json.js';
 
@@ -75,6 +77,35 @@ if (members.length && (input.garage === null || viewsOff)) {
 	}
 }
 
+/** The week either side of every join: job-history and perf samples, read here. */
+function readJoinImpact(nowMs) {
+	try {
+		const { declared, error } = readDeclared();
+		if (error) return { error };
+		const sinceMs = nowMs - 3 * JOIN_WINDOW_DAYS * 86_400_000;
+		const since = new Date(sinceMs).toISOString();
+		const jobs = readFileSync(join(stateDir(), 'job-history.jsonl'), 'utf8')
+			.split('\n')
+			.filter((l) => l.startsWith('{'))
+			.flatMap((l) => {
+				try {
+					const j = JSON.parse(l);
+					return j.startedAt >= since ? [j] : [];
+				} catch {
+					// A torn line is one job not compared, not a reason to compare none.
+					return [];
+				}
+			});
+		const perf = readPerfRows(perfDir(stateDir()), { sinceMs });
+		const nodes = Object.keys(loadManifest().machines ?? {});
+		return { results: joinImpact({ declared, nodes, nowMs, jobs, perf: perf.rows }) };
+	} catch (e) {
+		return {
+			error: `the before/after-join comparison could not read its data: ${e instanceof Error ? e.message : e}`,
+		};
+	}
+}
+
 const judged = judgePool(input, prior, now, deferred);
 const verdict = drainError
 	? {
@@ -87,6 +118,18 @@ const verdict = drainError
 			why: [judged.why, `fleet-drain.json unreadable: ${drainError}`].filter(Boolean).join('; '),
 		}
 	: judged;
+// Did joining cost each zone's node its CI time or pressure (#156)? A warning
+// at most: advisory until its readings over the first joins are read.
+if (members.length) {
+	const joined = readJoinImpact(now.getTime());
+	if (joined.error)
+		verdict.known.push({ node: null, kind: 'pool-join/unread', reason: joined.error });
+	for (const j of joined.results ?? []) {
+		const e = { node: j.node, kind: `pool-join/${j.status}`, reason: j.reason };
+		if (j.status === 'regressed') verdict.warnings.push(e);
+		else if (j.status === 'known') verdict.known.push(e);
+	}
+}
 if (verdict.state === 'read') writeJsonAtomicSync(recordPath, verdict.record, { space: 2 });
 
 emitter.log(verdict.summary);
