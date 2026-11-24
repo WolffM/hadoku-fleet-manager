@@ -10,7 +10,15 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import { parseStorage } from './storage-inventory.mjs';
-import { CLAW10, CLAW2, CLAW4, CLAW9, CLAW9_NOROOT, CLAW9_NOTOOL } from './storage-fixtures.mjs';
+import {
+	CLAW1,
+	CLAW10,
+	CLAW2,
+	CLAW4,
+	CLAW9,
+	CLAW9_NOROOT,
+	CLAW9_NOTOOL,
+} from './storage-fixtures.mjs';
 import { candidates, nodeStatus } from './qualify-disk-inventory.mjs';
 import { judgeSmr, recordingOf, test as smrTest } from './qualify-disk-smr.mjs';
 import { judgeSmart, REALLOCATED_MAX, test as smartTest } from './qualify-disk-smart.mjs';
@@ -150,7 +158,11 @@ void test('node status: a passing disk passes the node; only blocked disks are c
 	assert.equal(nodeStatus('x', [p, b, f]).status, 'pass');
 	assert.equal(nodeStatus('x', [b, f]).status, 'could-not-look');
 	assert.equal(nodeStatus('x', [f]).status, 'fail');
-	assert.equal(nodeStatus('x', []).status, 'fail');
+	// No candidate: the root disk decides (#149); none reported is could-not-look.
+	assert.equal(nodeStatus('x', []).status, 'could-not-look');
+	assert.equal(nodeStatus('x', [], { rootDisk: p }).status, 'pass');
+	assert.equal(nodeStatus('x', [], { rootDisk: f }).status, 'fail');
+	assert.equal(nodeStatus('x', [], { rootDisk: b }).status, 'could-not-look');
 	assert.match(nodeStatus('x', [p, f]).reason, /refused: C: SMR/);
 });
 
@@ -187,6 +199,28 @@ void test('#141: SMR and SMART judge the root disk apart, for a root-disk storag
 		// The node's own status and its pool-disk list are unchanged: sda is not a candidate.
 		assert.ok(!r.metrics.disks.some((d) => d.serial === 'SERIAL-claw-9-sda'), t.id);
 	}
+});
+
+void test('#149: a root-only node (claw-1) passes on its root disk and records no weak point', async () => {
+	const ctx = { node: 'claw-1', exec: async () => ({ ok: true, stdout: CLAW1 }) };
+	const results = [];
+	for (const t of [smrTest, smartTest]) {
+		const r = await t.run(ctx);
+		assert.deepEqual(r.metrics.disks, [], t.id);
+		assert.equal(r.metrics.rootDisk.serial, 'SERIAL-claw-1-sda', t.id);
+		assert.equal(r.metrics.rootDisk.verdict, 'pass', `${t.id}: ${r.metrics.rootDisk.reason}`);
+		assert.equal(r.status, 'pass', `${t.id}: ${r.reason}`);
+		assert.match(
+			r.reason,
+			/no disk besides the root disk .*; the root disk SERIAL-claw-1-sda passes/
+		);
+		results.push({ id: t.id, ...r });
+	}
+	const w = judgeWindow({ node: 'claw-1', results, quantities: {} });
+	assert.deepEqual(w.weak, []);
+	assert.deepEqual(w.findings, []);
+	// A pass clears the weak points the old `fail` recorded (node-baselines retires `cleared`).
+	assert.deepEqual(w.cleared.sort(), ['disk-smart', 'disk-smr']);
 });
 
 void test('baselines: a refused disk is a weak point, never a finding; hours are learned per serial', () => {

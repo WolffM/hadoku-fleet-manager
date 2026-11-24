@@ -18,8 +18,10 @@
  * And ONE NODE STATUS from them (`nodeStatus`), the question the node-level
  * ledger answers: "does this node have a disk that passes this test?"
  *   pass            yes; every disk's own verdict is in `metrics.disks`
- *   fail            no, and every candidate was judged (or there is none)
+ *   fail            no, and every candidate was judged
  *   could-not-look  no passing disk, and at least one could not be judged
+ * A node with NO candidate takes its root disk's verdict instead (#149): a
+ * root-only node is the root-zone case (#141), never a fail of its own.
  * A failing disk is a fact about the hardware: qualify-baseline.mjs records it
  * as a weak point of the node, never a finding and never an operator task
  * (hadoku-fleet-manager#129).
@@ -104,11 +106,38 @@ export function unnamed(d) {
 }
 
 /**
+ * A node with no candidate disk is judged by its ROOT disk (#149). A root-only
+ * node is the root-zone case (#141), not a failure: claw-1's lone HGST read
+ * `fail` and became two weak points of claw-1 although its root verdict was
+ * `pass`. Only a root disk that itself fails is a weak point; one that could
+ * not be judged, or no root disk reported at all, is could-not-look.
+ */
+function rootOnly(testName, root, metrics) {
+	const none = `no disk besides the root disk to qualify for ${testName}`;
+	if (!root)
+		return {
+			status: 'could-not-look',
+			reason: `${none}, and the node reports no root disk`,
+			metrics,
+		};
+	const name = `root disk ${root.serial ?? root.device}`;
+	if (root.verdict === 'pass')
+		return { status: 'pass', reason: `${none}; the ${name} passes: ${root.reason}`, metrics };
+	if (root.verdict === 'fail')
+		return { status: 'fail', reason: `${none}; the ${name} is refused: ${root.reason}`, metrics };
+	return {
+		status: 'could-not-look',
+		reason: `${none}; the ${name} could not be judged: ${root.reason}`,
+		metrics,
+	};
+}
+
+/**
  * PURE. The node-level result of one disk test.
  *
  * @param {string} testName what a passing disk passed, for the reason
  * @param {{ serial: string|null, device: string, verdict: 'pass'|'fail'|'blocked', reason: string }[]} disks
- * @param {object} [extra] more metrics
+ * @param {object} [extra] more metrics; `rootDisk` decides a node with no candidate
  */
 export function nodeStatus(testName, disks, extra = {}) {
 	const metrics = { disks, ...extra };
@@ -117,12 +146,7 @@ export function nodeStatus(testName, disks, extra = {}) {
 			.filter((d) => d.verdict === v)
 			.map((d) => `${d.serial ?? d.device}: ${d.reason}`)
 			.join('; ');
-	if (!disks.length)
-		return {
-			status: 'fail',
-			reason: `no disk besides the root disk to qualify for ${testName}`,
-			metrics,
-		};
+	if (!disks.length) return rootOnly(testName, extra.rootDisk, metrics);
 	const passed = disks.filter((d) => d.verdict === 'pass');
 	const blocked = disks.filter((d) => d.verdict === 'blocked');
 	const failed = disks.filter((d) => d.verdict === 'fail');

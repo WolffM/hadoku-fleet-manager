@@ -605,3 +605,69 @@ S nvme0n1 Temperature Sensor 1:               62 Celsius
 S nvme0n1 
 STORAGE-END
 `;
+
+/** claw-1: ONE disk, the root (sda, a 1TB HGST HTS721010A9E630 laptop CMR drive); no pool candidate. As root (hadoku-fleet-manager#149). */
+export const CLAW1 = `STORAGE-BEGIN v1
+storage.root yes
+storage.smartTool /usr/sbin/smartctl
+disk sda
+disk.sda.sizeBytes 1000204886016
+disk.sda.rotational 1
+disk.sda.removable 0
+disk.sda.model HGST HTS721010A9
+disk.sda.scheduler mq-deadline
+disk.sda.zoned none
+disk.sda.kind ata
+disk.sda.mountpoints /boot/efi,/,[SWAP]
+P sda NAME="sda" TYPE="disk" SIZE="1000204886016" MODEL="HGST HTS721010A9E630" SERIAL="SERIAL-claw-1-sda" TRAN="sata" FSTYPE="" UUID="" PTTYPE="gpt" LABEL="" MOUNTPOINT=""
+P sda NAME="sda1" TYPE="part" SIZE="1023410176" MODEL="" SERIAL="" TRAN="" FSTYPE="vfat" UUID="332F-2D2D" PTTYPE="gpt" LABEL="" MOUNTPOINT="/boot/efi"
+P sda NAME="sda2" TYPE="part" SIZE="986379714560" MODEL="" SERIAL="" TRAN="" FSTYPE="ext4" UUID="f8c2a58c-57ff-4e5b-a03e-90b24bd3ca38" PTTYPE="gpt" LABEL="" MOUNTPOINT="/"
+P sda NAME="sda3" TYPE="part" SIZE="12799967232" MODEL="" SERIAL="" TRAN="" FSTYPE="swap" UUID="685ba9c7-49c1-4ea0-af9b-fa4f58db2d45" PTTYPE="gpt" LABEL="" MOUNTPOINT="[SWAP]"
+S sda smartctl 7.4 2023-08-01 r5530 [x86_64-linux-6.12.118+deb13-amd64] (local build)
+S sda Copyright (C) 2002-23, Bruce Allen, Christian Franke, www.smartmontools.org
+S sda 
+S sda === START OF INFORMATION SECTION ===
+S sda Model Family:     HGST Travelstar 7K1000
+S sda Device Model:     HGST HTS721010A9E630
+S sda Serial Number:    SERIAL-claw-1-sda
+S sda LU WWN Device Id: 0 000000 000000000
+S sda Firmware Version: JB0OA3J0
+S sda User Capacity:    1,000,204,886,016 bytes [1.00 TB]
+S sda Sector Sizes:     512 bytes logical, 4096 bytes physical
+S sda Rotation Rate:    7200 rpm
+S sda Form Factor:      2.5 inches
+S sda Device is:        In smartctl database 7.3/5528
+S sda ATA Version is:   ATA8-ACS T13/1699-D revision 6
+S sda SATA Version is:  SATA 3.0, 6.0 Gb/s (current: 6.0 Gb/s)
+S sda Local Time is:    Mon Nov 23 23:28:11 2026 PST
+S sda SMART support is: Available - device has SMART capability.
+S sda SMART support is: Enabled
+S sda 
+S sda === START OF READ SMART DATA SECTION ===
+S sda SMART overall-health self-assessment test result: PASSED
+S sda 
+S sda SMART Attributes Data Structure revision number: 16
+S sda Vendor Specific SMART Attributes with Thresholds:
+S sda ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
+S sda   1 Raw_Read_Error_Rate     0x000b   100   100   062    Pre-fail  Always       -       0
+S sda   2 Throughput_Performance  0x0005   100   100   040    Pre-fail  Offline      -       0
+S sda   3 Spin_Up_Time            0x0007   132   132   033    Pre-fail  Always       -       2
+S sda   4 Start_Stop_Count        0x0012   097   097   000    Old_age   Always       -       4878
+S sda   5 Reallocated_Sector_Ct   0x0033   100   100   005    Pre-fail  Always       -       0
+S sda   7 Seek_Error_Rate         0x000b   100   100   067    Pre-fail  Always       -       0
+S sda   8 Seek_Time_Performance   0x0005   100   100   040    Pre-fail  Offline      -       0
+S sda   9 Power_On_Hours          0x0012   051   051   000    Old_age   Always       -       21518
+S sda  10 Spin_Retry_Count        0x0013   100   100   060    Pre-fail  Always       -       0
+S sda  12 Power_Cycle_Count       0x0032   098   098   000    Old_age   Always       -       4301
+S sda 191 G-Sense_Error_Rate      0x000a   100   100   000    Old_age   Always       -       0
+S sda 192 Power-Off_Retract_Count 0x0032   100   100   000    Old_age   Always       -       35
+S sda 193 Load_Cycle_Count        0x0012   001   001   000    Old_age   Always       -       1014877
+S sda 194 Temperature_Celsius     0x0002   150   150   000    Old_age   Always       -       40 (Min/Max 8/50)
+S sda 196 Reallocated_Event_Count 0x0032   100   100   000    Old_age   Always       -       0
+S sda 197 Current_Pending_Sector  0x0022   100   100   000    Old_age   Always       -       0
+S sda 198 Offline_Uncorrectable   0x0008   100   100   000    Old_age   Offline      -       0
+S sda 199 UDMA_CRC_Error_Count    0x000a   200   200   000    Old_age   Always       -       0
+S sda 223 Load_Retry_Count        0x000a   100   100   000    Old_age   Always       -       0
+S sda 
+STORAGE-END
+`;
