@@ -15,7 +15,11 @@
     "dist",
     "scripts",
     "deploy",
-    "README.md"
+    "README.md",
+    "!dist/tests",
+    "!dist/**/*.map",
+    "!scripts/**/*.test.mjs",
+    "!scripts/**/__pycache__"
   ],
   "exports": {
     ".": {
