@@ -31,7 +31,11 @@
  * there the repair installs everything, leaves the unit stopped and disabled,
  * and fails naming the missing items; the detect answers the same, so the
  * doctor's finding names them too. The unit asserts both files as well, so a
- * hand-started daemon cannot run without them. Putting them there is the
+ * hand-started daemon cannot run without them. systemd exposes a credential at
+ * 0440 under /run/credentials/garage.service, which only the unit can enter,
+ * and Garage refuses any mode but 0600 unless
+ * `GARAGE_ALLOW_WORLD_READABLE_SECRETS` is set: the unit sets it (#151,
+ * measured on claw-1 with a transient unit, with and without). Putting them there is the
  * layout's job (F6, fleet-manager#141): this entry never reads the vault.
  *
  * THE USER IS SYSTEMD'S (`DynamicUser`), not a node role: Garage is not admin,
@@ -111,6 +115,9 @@ export const GARAGE_UNIT = [
 	'[Service]',
 	`ExecStart=${GARAGE_BIN} -c ${GARAGE_CONFIG} server`,
 	'Environment=RUST_LOG=garage=info',
+	// systemd hands credentials over at 0440 in a directory only this unit can
+	// enter; Garage v2.5.0 refuses anything but 0600 without this knob (#151).
+	'Environment=GARAGE_ALLOW_WORLD_READABLE_SECRETS=true',
 	'DynamicUser=yes',
 	'StateDirectory=garage',
 	`LoadCredential=rpc_secret:${GARAGE_SECRET_DIR}/GARAGE_RPC_SECRET`,

@@ -86,6 +86,8 @@ test('#139: secrets are files systemd hands over, never config text, and the uni
 		'admin on loopback'
 	);
 	assert.match(GARAGE_UNIT, /^DynamicUser=yes$/m);
+	// #151: systemd's credentials are 0440 and Garage refuses them without this.
+	assert.match(GARAGE_UNIT, /^Environment=GARAGE_ALLOW_WORLD_READABLE_SECRETS=true$/m);
 	// The repair fails closed on missing secrets: stops the unit, never enables it.
 	const failClosed = garage.repair.slice(garage.repair.indexOf('if [ -n "$missing" ]'));
 	assert.ok(failClosed.indexOf('exit 1') < failClosed.indexOf('systemctl enable'));
