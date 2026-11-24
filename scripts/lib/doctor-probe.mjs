@@ -1,5 +1,6 @@
 import { WIFI_MANAGER_PROBE } from './node-interfaces.mjs';
 import { EFFECTIVE_MEMORY_MAX_SH } from './cgroup-ceiling.mjs';
+import { PM2_LOGS_SH } from './doctor-findings-pm2-logs.mjs';
 
 /** Seconds of all-core load the thermal reading is taken under. Fixed, by §H. */
 export const LOAD_SECONDS = 60;
@@ -424,6 +425,9 @@ export function doctorProbe({
 		'else unk nic "no default route"; fi',
 		EFFECTIVE_MEMORY_MAX_SH,
 		PM2_UNITS_PROBE,
+		// Every pm2 daemon's apps against its open files (#143).
+		PM2_LOGS_SH,
+		'pm2_logs',
 		'if E=$(journalctl -b 0 -p err --no-pager 2>/dev/null); then say errorsThisBoot "$(printf "%s\\n" "$E" | grep -vcE "ACPI|Bluetooth")"; else unk errorsThisBoot "the journal could not be read by this user"; fi',
 		// ── which stack owns the radio. node-interfaces.mjs owns the question. ─
 		//

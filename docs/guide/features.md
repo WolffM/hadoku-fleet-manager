@@ -214,6 +214,14 @@ hosting-converge --dry-run` shows what the converger would do about it.
 `fleet hosting --check` verifies a declaration against what the kernel
 actually enforces, not against the record that declared it.
 
+The nightly health check (`fleet doctor`) also reads every PM2 daemon on
+every node, tenant or not, and checks that each running app's log files are
+still open in that daemon. PM2 never reopens a log after a write fails (a
+full disk, for instance), so the app keeps running and its output goes
+nowhere. That shows up as a warning. `fleet doctor --machine <node>
+--reload-logs` reopens the logs as that daemon's own user and restarts
+nothing.
+
 **What it does not do.** It never guesses which node is best for a tenant
 that has not opted into automatic placement (`placement.auto: true`) — for
 everyone else it only reports what it would do. A singleton service never

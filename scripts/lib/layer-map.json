@@ -2416,6 +2416,13 @@
     "why": "#138 (storage bootcamp F3): $health.storage from storage-probe.sh's lines (via parseStorage, access) and the per-disk SMART judgement for every disk beside root. Pure; same bucket as doctor-findings-storage.mjs, which keeps the root drive."
   },
   {
+    "glob": "scripts/lib/doctor-findings-pm2-logs.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "#143: every pm2 daemon's running apps against its open files (a dead log stream), the probe stanza, its facet and its shadow findings, plus the --reload-logs repair script and its read-back judgement. Pure; doctor-run.mjs runs it. Same bucket as the other doctor-findings-* judges."
+  },
+  {
     "glob": "scripts/lib/doctor-findings-pool.mjs",
     "layer": "domain",
     "domain": "observation",

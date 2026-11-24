@@ -52,6 +52,9 @@
  *   fleet node-disk                   # = doctor --from-record --disk: judge the
  *                                     # DISK findings only (ci:node-disk; see
  *                                     # doctor-scope.mjs)
+ *   fleet doctor --reload-logs        # reopen every DEAD pm2 log stream this
+ *                                     # probe found, as the daemon's own user
+ *                                     # (pm2 reloadLogs, restarts nothing; #143)
  *   fleet doctor --json
  *
  * `--cadence` IS THE SCHEDULED RUN, and it exists because `$health` had no
@@ -107,6 +110,7 @@ import { readQualifyResults } from './qualify-results.mjs';
 import { DIE_UNTRUSTED, judgeDoctor } from './doctor-baseline.mjs';
 import { thermalFindings } from './doctor-findings-thermal.mjs';
 import { disksLine } from './doctor-findings-disks.mjs';
+import { judgeReload, pm2LogsLine, reloadLogsScript } from './doctor-findings-pm2-logs.mjs';
 import { poolFindings, poolSummary, withRootZones } from './doctor-findings-pool.mjs';
 import { rootZoneNodes } from './garage-layout-state.mjs';
 import { readPool } from './garage-admin.mjs';
@@ -142,6 +146,17 @@ if (CADENCE && (FROM_RECORD || NO_LOAD || argv.includes('--force'))) {
 	process.exit(2);
 }
 const FORCE = argv.includes('--force');
+// THE ONE REPAIR doctor makes, and only when asked by name: `pm2 reloadLogs`
+// on a daemon THIS run's probe found a dead log stream under (#143). Never on
+// a record read back, and never on the schedule: the finding is shadow until
+// its false-positive rate is known.
+const RELOAD_LOGS = argv.includes('--reload-logs');
+if (RELOAD_LOGS && (FROM_RECORD || CADENCE)) {
+	console.error(
+		'fleet doctor: --reload-logs repairs what THIS probe found; it takes neither --from-record nor --cadence.'
+	);
+	process.exit(2);
+}
 const DISK = argv.includes('--disk');
 const SECONDS = (() => {
 	const i = argv.indexOf('--seconds');
@@ -578,6 +593,7 @@ for (const [name, h] of Object.entries(health).sort()) {
 			`${C(s.temperatureC, '°C')}  life ${C(s.lifetimeRemainingPct, '%')}${s.why ? `  — ${s.why}` : ''}`
 	);
 	log(`   disks     ${disksLine(h.storage)}`);
+	log(`   pm2 logs  ${pm2LogsLine(h.pm2Logs)}`);
 	log(
 		`   network   wifi ${C(n.wifiManager)}${n.radio ? ` on ${n.radio} (${C(n.operstate)}` : ' ('}` +
 			`${n.ssid ? ` ssid ${n.ssid}` : ''}${n.signalDbm ? ` ${n.signalDbm}dBm` : ''})`
@@ -676,6 +692,29 @@ if (WRITE) {
 	}
 }
 
+// ── --reload-logs: one `pm2 reloadLogs` per daemon with a dead stream ─────────
+const reloads = [];
+if (RELOAD_LOGS) {
+	for (const fd of findings) {
+		if (fd.category !== 'pm2-log-stream' || fd.status !== 'dead-stream') continue;
+		const d = health[fd.node].pm2Logs.daemons.find((x) => x.home === fd.home);
+		let r;
+		try {
+			const run = await runOn(fd.node, reloadLogsScript(d), { as: 'admin', timeoutMs: 60_000 });
+			r = judgeReload(run.out, d);
+			if (!r.ok && run.error) r.why = `${r.why} (${run.error})`;
+		} catch (e) {
+			r = { ok: false, why: e.message, missingAfter: null };
+		}
+		reloads.push({ node: fd.node, home: d.home, user: d.user, missingBefore: d.missing, ...r });
+		log(
+			`\n${r.ok ? '✓' : '✗'} ${fd.node} ${d.home}: pm2 reloadLogs as ${d.user} ` +
+				(r.ok ? 'reopened every stream' : `did not take: ${r.why}`)
+		);
+	}
+	if (!reloads.length) log('\n· --reload-logs: no dead pm2 log stream, nothing reloaded');
+}
+
 if (emitter.json) {
 	emitter.emit({
 		ok: blocking.length === 0,
@@ -694,6 +733,7 @@ if (emitter.json) {
 		written,
 		deferred: [...deferred].sort(),
 		carried: [...carried].sort(),
+		reloadLogs: RELOAD_LOGS ? reloads : undefined,
 		log: emitter.held(),
 	});
 } else if (!findings.length) {

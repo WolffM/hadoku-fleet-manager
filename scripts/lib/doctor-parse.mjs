@@ -1,10 +1,11 @@
 /**
  * Split {@link doctorProbe}'s stdout into facts, unknowns, the root drive's
- * smartctl lines and storage-probe.sh's lines (`T `, every disk; #138).
+ * smartctl lines, storage-probe.sh's lines (`T `, every disk; #138) and the
+ * pm2 log-stream lines (`P `, every pm2 daemon; #143).
  *
  * @param {string} out
  * @returns {{complete: boolean, facts: Record<string,string>,
- *            unknown: Record<string,string>, smart: string[], storage: string[],
+ *            unknown: Record<string,string>, smart: string[], storage: string[], pm2Logs: string[],
  *            wifiRaw: string}}
  */
 export function parseDoctor(out) {
@@ -13,11 +14,16 @@ export function parseDoctor(out) {
 	const unknown = {};
 	const smart = [];
 	const storage = [];
+	const pm2Logs = [];
 	for (const line of text.split('\n')) {
-		const m = /^([DUST]) (.*)$/.exec(line.replace(/\r$/, ''));
+		const m = /^([DUSTP]) (.*)$/.exec(line.replace(/\r$/, ''));
 		if (!m) continue;
 		if (m[1] === 'T') {
 			storage.push(m[2]);
+			continue;
+		}
+		if (m[1] === 'P') {
+			pm2Logs.push(m[2]);
 			continue;
 		}
 		if (m[1] === 'S') {
@@ -34,6 +40,7 @@ export function parseDoctor(out) {
 		unknown,
 		smart,
 		storage,
+		pm2Logs,
 		wifiRaw: text,
 	};
 }
