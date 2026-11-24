@@ -69,11 +69,23 @@ const DEVICE_RE = /^\/dev\/[a-z0-9]+$/;
 export const mountPointFor = (serial) => `${STORAGE_ROOT}/${serial}`;
 
 /**
- * PURE. Whether `serial` on `node` passed every F2 disk test.
+ * PURE. Why `serial` is rejected for good (lib/disk-rejections.mjs, attached
+ * to the ledger by `withRejections`), or null.
+ */
+export function rejectionReason(ledger, serial) {
+	const r = serial ? ledger?.rejected?.[serial] : null;
+	return r ? `rejected ${r.at} on ${r.node} by the ${r.rule} rule (${r.step}): ${r.reason}` : null;
+}
+
+/**
+ * PURE. Whether `serial` on `node` passed every F2 disk test, and was never
+ * rejected.
  * @returns {{ ok: true } | { ok: false, reason: string }}
  */
 export function qualifiedFor(ledger, node, serial) {
 	if (!ledger?.ok) return { ok: false, reason: `not qualified: ${ledger?.reason ?? 'no ledger'}` };
+	const rejected = rejectionReason(ledger, serial);
+	if (rejected) return { ok: false, reason: rejected };
 	for (const id of DISK_QUALIFY_TESTS) {
 		const last = ledger.results?.[resultKey(node, id)]?.last;
 		if (!last) return { ok: false, reason: `not qualified: no ${id} result for ${node}` };

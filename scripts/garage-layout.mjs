@@ -48,6 +48,7 @@ import {
 	updateDeclared,
 } from './lib/garage-layout-state.mjs';
 import { declaredPath, readDeclared } from './lib/garage-layout-declared.mjs';
+import { readDiskRejections, withRejections } from './lib/disk-rejections.mjs';
 import { readQualifyResults } from './lib/qualify-results.mjs';
 import { GARAGE_SECRET_ITEMS } from './lib/toolchain-garage.mjs';
 import { stateDir } from '../dist/lib/fleet-paths.js';
@@ -144,7 +145,7 @@ async function planNow() {
 		state: seen.state,
 		zones: seen.zones,
 		// F2's verdicts: a zone's disks must have passed qualification.
-		ledger: readQualifyResults(stateDir()),
+		ledger: withRejections(readQualifyResults(stateDir()), readDiskRejections(stateDir())),
 		override,
 		secretsMissing,
 	});

@@ -32,12 +32,17 @@ export const commandsGates: Record<string, Command> = {
 			'--write',
 			'--disks',
 			'--burn-in=',
+			'--wipe=',
+			'--disk-bench',
+			'--node-impact',
 			'--confirm',
 			'--minutes=',
 		],
 		summary:
 			'hold ONE node out of service and run the qualification playlist against it (--dry-run: drain nothing;' +
-			' --disks: the storage SMR/SMART checks; --burn-in <serial> --confirm: burn one disk in)',
+			' --disks: the storage SMR/SMART/link checks; --wipe <serial> --confirm: clear an old filesystem;' +
+			' --disk-bench / --node-impact: the zone bench and the node soak;' +
+			' --burn-in <serial> --confirm: burn one disk in)',
 	},
 	// Not under the --json contract: no cron runs it. It DESTROYS a disk's data
 	// with --confirm, so it is an operator act (scripts/lib/storage-format.mjs).

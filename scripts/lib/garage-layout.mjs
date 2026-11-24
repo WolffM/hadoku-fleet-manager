@@ -13,7 +13,10 @@
  * THE RULES (operator-agreed), judged on the layout the change would leave:
  *
  *   qualified every declared disk passed F2: a pool disk every disk test (the
- *             rule F5 formats by), a root disk SMR and SMART (never burned in).
+ *             rule F5 formats by), a root disk SMR and SMART (never burned in),
+ *             and was never rejected (disk-rejections.json, #156).
+ *   admitted  every declared disk passed disk-bench and disk-node-impact
+ *             (garage-admission.mjs, #156); shadow until enforced.
  *   ceiling   every declared disk's capacity fits under 80% of the disk as
  *             the node reports it. A root-disk zone (claw-8, claw-1: no spare
  *             disk) has a fixed quota, and quota + what the rest of the system
@@ -36,8 +39,14 @@
  */
 
 import { ROOT_ZONE_DATA_DIR } from '../../dist/lib/capability-registry-storage.js';
+import { admissionChecks } from './garage-admission.mjs';
 import { resultKey } from './qualify-results.mjs';
-import { GARAGE_DATA_SUBDIR, mountPointFor, qualifiedFor } from './storage-format.mjs';
+import {
+	GARAGE_DATA_SUBDIR,
+	mountPointFor,
+	qualifiedFor,
+	rejectionReason,
+} from './storage-format.mjs';
 
 export const FILL_CEILING = 0.8;
 /** What a ROOT disk must pass: it is never burned in (F2 refuses), so SMR and SMART. */
@@ -125,6 +134,8 @@ export function diskQualified(ledger, node, disk) {
 		const r = last.metrics?.rootDisk;
 		if (!r)
 			return { ok: false, why: `not qualified: ${id} (${last.at}) did not judge the root disk` };
+		const rejected = rejectionReason(ledger, r.serial);
+		if (rejected) return { ok: false, why: rejected };
 		if (r.verdict !== 'pass') {
 			return {
 				ok: false,
@@ -237,6 +248,8 @@ export function planLayout({
 
 	const checks = [
 		...qualifyChecks(declared, ledger),
+		// bench + node-impact (#156): `shadow` until ADMISSION_ENFORCED.
+		...admissionChecks({ declared, ledger, inLayout: new Set(byNode.keys()) }),
 		...ceilingChecks(declared, zones),
 		floorCheck(now, after, healthy, changes.length > 0),
 		nPlusOneCheck(now, after, used, changes.length > 0),

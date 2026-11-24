@@ -34,7 +34,7 @@ import {
 	STATE_DIR,
 } from './qualify-disk-burnin.mjs';
 import { validateTest } from './qualify-registry.mjs';
-import { QUALIFY_DISK_TESTS, QUALIFY_TESTS } from './qualify-playlist.mjs';
+import { QUALIFY_TESTS, diskTests } from './qualify-playlist.mjs';
 import { judgeWindow } from './qualify-baseline.mjs';
 
 const disk = (fixture, dev) => parseStorage(fixture).disks.find((d) => d.device === dev);
@@ -42,14 +42,15 @@ const disk = (fixture, dev) => parseStorage(fixture).disks.find((d) => d.device 
 void test('every disk test meets the qualify contract, and none is in the nightly playlist', () => {
 	const burnin = makeBurninTest({ serial: 'WD-ABC123' });
 	for (const t of [smrTest, smartTest, burnin]) assert.deepEqual(validateTest(t), [], t.id);
+	for (const t of diskTests()) assert.deepEqual(validateTest(t), [], t.id);
 	assert.deepEqual(
-		QUALIFY_DISK_TESTS.map((t) => t.id),
-		['disk-smr', 'disk-smart']
+		diskTests().map((t) => t.id),
+		['disk-smr', 'disk-smart', 'disk-link']
 	);
 	assert.ok(
 		!QUALIFY_TESTS.some((t) => t.id.startsWith('disk-smr') || t.id.startsWith('disk-smart'))
 	);
-	assert.ok(!QUALIFY_DISK_TESTS.some((t) => t.needsDrain), 'the read-only checks drain nothing');
+	assert.ok(!diskTests().some((t) => t.needsDrain), 'the read-only checks drain nothing');
 	assert.equal(burnin.needsDrain, true);
 });
 

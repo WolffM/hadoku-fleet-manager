@@ -15,6 +15,15 @@
  *                                              --confirm; with it, up to N (170) min under the
  *                                              drain, resuming where the last run stopped
  *                                              (lib/qualify-disk-burnin.mjs)
+ *   fleet qualify --machine claw-10 --wipe <serial> [--confirm]
+ *                                              what an old disk carries; with --confirm, record
+ *                                              it and clear it so its burn-in can write (#156)
+ *   fleet qualify --machine claw-8 --disk-bench  the zone's disks benched on their mount and judged
+ *                                              against the pool's other zones (drains; #156)
+ *   fleet qualify --machine claw-8 --node-impact the node soaked under Garage's resync + scrub load
+ *                                              on its zone: CI's p75 unit, PSI, heat, root fsync
+ *   (every disk form's step is read against the kernel log: a link error REJECTS the
+ *   disk, persisted in disk-rejections.json; lib/qualify-disk-forms.mjs)
  *
  * `--machine` (or `--next`) is REQUIRED. A qualification drains a node for up to
  * QUALIFY_WINDOW_MINUTES; there is no fleet-wide form, by design (one node at a
@@ -46,8 +55,12 @@ import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, readDrains } from './lib/expected-down.mjs';
 import { busyCount, drain, isDrained, undrain, waitUntilDrained } from './lib/drain-wait.mjs';
 import { loadManifest, machineArg, runOn } from './lib/fleet-exec.mjs';
-import { QUALIFY_DISK_TESTS, QUALIFY_TESTS } from './lib/qualify-playlist.mjs';
-import { BUDGET_MINUTES, makeBurninTest, planBurnin } from './lib/qualify-disk-burnin.mjs';
+import { QUALIFY_TESTS } from './lib/qualify-playlist.mjs';
+import { readDiskRejections, recordDiskRejections } from './lib/disk-rejections.mjs';
+import { DISK_VALUE_FLAGS, selectDiskForm } from './lib/qualify-disk-forms.mjs';
+import { readDeclared } from './lib/garage-layout-declared.mjs';
+import { mountPointFor } from './lib/storage-format.mjs';
+import { ROOT_ZONE_DIR } from '../dist/lib/capability-registry-storage.js';
 import { QUALIFY_WINDOW_MINUTES } from './lib/qualify-registry.mjs';
 import { readQualifyResults, recordQualifyResults } from './lib/qualify-results.mjs';
 import { judgeWindow, seedFromLedger } from './lib/qualify-baseline.mjs';
@@ -107,7 +120,7 @@ if (process.argv.includes('--seed-baselines')) {
 
 const manifest = loadManifest();
 const NEXT = process.argv.includes('--next');
-let node = machineArg(process.argv.slice(2), { valueFlags: ['--burn-in', '--minutes'] });
+let node = machineArg(process.argv.slice(2), { valueFlags: DISK_VALUE_FLAGS });
 if (NEXT && node) {
 	log('fleet qualify: --next and --machine are exclusive; --next picks the node');
 	finish({ ok: false, error: '--next and --machine are exclusive' }, 2);
@@ -166,67 +179,25 @@ if (!machine) {
 	finish({ ok: false, error: `${node} is not in the manifest` }, 2);
 }
 
-// THE DISK FORMS (storage bootcamp F2, #137). Explicit, one node, never --next.
-const flagValue = (name) => {
-	const i = process.argv.indexOf(name);
-	return i < 0 ? null : (process.argv[i + 1] ?? '');
-};
-const BURN_IN = flagValue('--burn-in');
-const DISKS = process.argv.includes('--disks');
-if ((BURN_IN !== null || DISKS) && NEXT) {
-	log('fleet qualify: --disks and --burn-in name one node with --machine, never --next');
-	finish({ ok: false, error: '--disks/--burn-in need --machine' }, 2);
-}
+// THE DISK FORMS (storage bootcamp F2 #137, admission #156): one node, never --next.
 let tests = [...QUALIFY_TESTS];
-if (DISKS) tests = [...QUALIFY_DISK_TESTS];
-if (BURN_IN !== null) {
-	const minutesArg = flagValue('--minutes');
-	const budgetMinutes = minutesArg === null ? BUDGET_MINUTES : Number(minutesArg);
-	if (
-		!Number.isInteger(budgetMinutes) ||
-		budgetMinutes <= 0 ||
-		budgetMinutes + 5 > QUALIFY_WINDOW_MINUTES
-	) {
-		log(`fleet qualify: --minutes must be a whole number from 1 to ${QUALIFY_WINDOW_MINUTES - 5}`);
-		finish({ ok: false, error: 'bad --minutes' }, 2);
-	}
-	let burnin;
-	try {
-		burnin = makeBurninTest({ serial: BURN_IN, budgetMinutes });
-	} catch (e) {
-		log(`fleet qualify --burn-in: ${e.message}`);
-		finish({ ok: false, error: e.message }, 2);
-	}
-	if (!process.argv.includes('--confirm')) {
-		// The plan reads the disk and its state file; it drains and writes nothing.
-		const plan = await planBurnin(
-			{
-				node,
-				nowMs: Date.now(),
-				exec: (script, o = {}) => runOn(node, script, { timeoutMs: 120_000, ...o, as: 'admin' }),
-			},
-			BURN_IN
-		);
-		if ('error' in plan) {
-			log(`fleet qualify --burn-in ${BURN_IN} on ${node}: ${plan.error}`);
-			finish({ ok: false, node, status: 'could-not-look', reason: plan.error }, 1);
-		}
-		log(`fleet qualify --burn-in ${BURN_IN} on ${node} — PLAN, nothing drained or written:`);
-		log(`   ${plan.disk.device} ${plan.disk.model ?? ''}: ${plan.summary}`);
-		log(`   add --confirm to run it for up to ${budgetMinutes} min under the drain`);
-		finish(
-			{
-				ok: true,
-				node,
-				status: 'dry-run',
-				serial: BURN_IN,
-				plan: { summary: plan.summary, state: plan.state },
-			},
-			0
-		);
-	}
-	tests = [burnin];
-}
+const form = await selectDiskForm({
+	argv: process.argv,
+	node,
+	next: NEXT,
+	rejected: () => readDiskRejections(stateDir()),
+	pool: () => {
+		const d = readDeclared();
+		const l = readQualifyResults(stateDir());
+		if (d.error || !l.ok) return { ok: false, reason: d.error ?? l.reason };
+		return { ok: true, declared: d.declared, results: l.results };
+	},
+	zonePaths: { rootZoneDir: ROOT_ZONE_DIR, mountPointFor },
+	planExec: (script, o = {}) => runOn(node, script, { timeoutMs: 120_000, ...o, as: 'admin' }),
+	log,
+});
+if (form?.done) finish(form.done.doc, form.done.code);
+if (form) tests = form.tests;
 
 /** The node while it is drained, for the signal handler below. */
 const state = { held: null };
@@ -287,6 +258,11 @@ const recorded =
 		? recordQualifyResults(stateDir(), node, out.results, at)
 		: { ok: true };
 if (!recorded.ok) log(`✗ results not recorded: ${recorded.reason}`);
+// A disk an onboarding step rejected is persisted by serial (#156), so the next
+// scan lists it as rejected even after a reboot clears the kernel log.
+const rejectedNow = recordDiskRejections(stateDir(), node, out.results ?? [], at);
+if (!rejectedNow.ok) log(`✗ disk rejections not recorded: ${rejectedNow.reason}`);
+for (const s of rejectedNow.added ?? []) log(`   REJECTED ${s}: persisted in disk-rejections.json`);
 
 // Judge the window against this node's own range (#129): a hardware bar it
 // misses is a weak point, a reading outside its range is a drift finding. An
@@ -333,6 +309,9 @@ const unreadable = [
 				},
 			]),
 	...(learned.ok ? [] : [{ node, reason: `baselines not recorded: ${learned.reason}` }]),
+	...(rejectedNow.ok
+		? []
+		: [{ node, reason: `disk rejections not recorded: ${rejectedNow.reason}` }]),
 	...(out.undrainFailed
 		? [{ node, reason: `STILL DRAINED: the window could not lift its drain: ${out.undrainFailed}` }]
 		: []),

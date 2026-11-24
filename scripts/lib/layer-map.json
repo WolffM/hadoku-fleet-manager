@@ -2263,6 +2263,11 @@
     "why": "Wave bootcamp2 Q6: qualify-results.json's one writer and its reader, a one-writer record like job-proof-record.mjs. State, so doctor (observation) can read a node's qualification without importing lifecycle."
   },
   {
+    "glob": "scripts/lib/disk-rejections.mjs",
+    "layer": "state",
+    "why": "#156: disk-rejections.json's one writer and reader, the disks onboarding rejected by serial (a link error, ...). State, like qualify-results.mjs, so qualify, storage-format and garage-layout read one record."
+  },
+  {
     "glob": "scripts/lib/node-baselines.mjs",
     "layer": "state",
     "why": "#129: node-baselines.json's one writer and reader, each node's learned range per measured quantity plus its weak points. State, so qualify (lifecycle), doctor and placement can all read one store without importing each other."
@@ -2301,6 +2306,13 @@
     "domain": "lifecycle",
     "part": "core",
     "why": "Storage bootcamp F6 (#141): the pure Garage layout and bucket plan, declared against observed, and the capacity rules (80% ceiling, 3-zone floor, N+1, drain before remove). Onboarding storage is lifecycle, like qualify-*."
+  },
+  {
+    "glob": "scripts/lib/garage-admission.mjs",
+    "layer": "domain",
+    "domain": "lifecycle",
+    "part": "core",
+    "why": "#156: the admission half of garage-layout's qualified rule (disk-bench + disk-node-impact per declared disk), pure, beside garage-layout.mjs."
   },
   {
     "glob": "scripts/lib/garage-apply.mjs",

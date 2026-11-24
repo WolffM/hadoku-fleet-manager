@@ -68,6 +68,34 @@ export const RELATIVE = Object.freeze({
 				})),
 	},
 	'disk-burnin': { absolute: () => [], quantities: () => [] },
+	// A disk that drops its link is the hardware's (#156): rejected, a weak
+	// point of the node, never a finding.
+	'disk-link': { absolute: () => [], quantities: () => [] },
+	// A zone that benches under the bars is the disk's (#156): a weak point,
+	// never a finding. Each reading is learned per SERIAL (is this disk still
+	// what it was) and per MODEL on the node (is this disk what its model is).
+	'disk-bench': { absolute: () => [], quantities: benchQuantities },
+	// A node that does not hold Garage's load is the hardware's: a weak point.
+	// The load it tolerated is learned per serial, so a zone that holds less
+	// than it did shows as drift.
+	'disk-node-impact': {
+		absolute: () => [],
+		quantities: (m) =>
+			(m?.disks ?? [])
+				.filter((d) => d?.serial && d.verdict !== 'blocked')
+				.map((d) => ({
+					quantity: `disk.${d.serial}.impact.tolerated`,
+					value: num(d.tolerated),
+					spec: { unit: '', worse: 'lower', rel: 0, abs: 0.1 },
+				})),
+	},
+	// A wipe the link check rejected is the disk's; one that left a signature
+	// behind on a healthy link is wipefs or the guard misbehaving: a finding.
+	'disk-wipe': {
+		absolute: (r) =>
+			(r.metrics?.disks ?? []).some((d) => d?.rejection) ? [] : [`disk-wipe: ${r.reason}`],
+		quantities: () => [],
+	},
 	'disk-sync-writes': {
 		absolute: () => [],
 		quantities: (m) => [
@@ -157,6 +185,29 @@ export const RELATIVE = Object.freeze({
 		],
 	},
 });
+
+/** The bench's readings, each keyed by serial and by model. */
+const BENCH_SPECS = Object.freeze({
+	seqWriteMbps: { unit: 'MB/s', worse: 'lower', rel: 0.25, abs: 10 },
+	seqReadMbps: { unit: 'MB/s', worse: 'lower', rel: 0.25, abs: 10 },
+	randReadP99Ms: { unit: 'ms', worse: 'higher', rel: 0.5, abs: 5 },
+	randWriteP99Ms: { unit: 'ms', worse: 'higher', rel: 0.5, abs: 5 },
+	blockMbps: { unit: 'MB/s', worse: 'lower', rel: 0.25, abs: 5 },
+	metaP99Ms: { unit: 'ms', worse: 'higher', rel: 0.5, abs: 5 },
+});
+const slug = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, '_');
+function benchQuantities(m) {
+	return (m?.disks ?? [])
+		.filter((d) => d?.serial && d.reading && d.verdict !== 'blocked')
+		.flatMap((d) =>
+			Object.entries(BENCH_SPECS).flatMap(([k, spec]) => [
+				{ quantity: `disk.${d.serial}.bench.${k}`, value: num(d.reading[k]), spec },
+				...(d.model
+					? [{ quantity: `disk.model.${slug(d.model)}.bench.${k}`, value: num(d.reading[k]), spec }]
+					: []),
+			])
+		);
+}
 
 const fmt = (x) => (Number.isFinite(x) ? Number(x.toPrecision(4)) : x);
 

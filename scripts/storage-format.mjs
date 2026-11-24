@@ -30,6 +30,7 @@ import { parseStrict } from './lib/argv.mjs';
 import { createEmitter } from './lib/emit.mjs';
 import { deferralFor, readDrains } from './lib/expected-down.mjs';
 import { loadManifest, machineArg, runOn } from './lib/fleet-exec.mjs';
+import { readDiskRejections, withRejections } from './lib/disk-rejections.mjs';
 import { readQualifyResults } from './lib/qualify-results.mjs';
 import { parseStorage } from './lib/storage-inventory.mjs';
 import { convergeNode, idleHold, rootWrapped } from './lib/storage-format.mjs';
@@ -99,7 +100,7 @@ const deps = {
 			return { ok: false, reason: `probe output unreadable: ${e.message}` };
 		}
 	},
-	readLedger: () => readQualifyResults(stateDir()),
+	readLedger: () => withRejections(readQualifyResults(stateDir()), readDiskRejections(stateDir())),
 	hold: (node, reason, act) => {
 		holdState.held = node;
 		return hold(node, reason, act).finally(() => (holdState.held = null));
