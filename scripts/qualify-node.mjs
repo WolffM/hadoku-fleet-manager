@@ -106,7 +106,7 @@ if (process.argv.includes('--seed-baselines')) {
 
 const manifest = loadManifest();
 const NEXT = process.argv.includes('--next');
-let node = machineArg(process.argv.slice(2));
+let node = machineArg(process.argv.slice(2), { valueFlags: ['--burn-in', '--minutes'] });
 if (NEXT && node) {
 	log('fleet qualify: --next and --machine are exclusive; --next picks the node');
 	finish({ ok: false, error: '--next and --machine are exclusive' }, 2);

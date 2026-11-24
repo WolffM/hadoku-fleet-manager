@@ -4,6 +4,9 @@
  * the burn-in loop, against a fake node that answers its scripts.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import { parseStorage } from './storage-inventory.mjs';
@@ -459,4 +462,30 @@ void test('burn-in: a not-blank disk is read only; an unknown serial or the root
 		fakeNode({ serial: 'X', chunk: okChunk }).ctx
 	);
 	assert.match(root.reason, /holds \/; the root disk is never burned in/);
+});
+
+void test('the CLI door: --burn-in and --minutes take values, so a serial is not a stray positional', () => {
+	// 0.34.486 shipped without this: `fleet qualify --machine claw-9 --burn-in <serial>`
+	// was refused as "unrecognised argument: <serial>".
+	const here = dirname(fileURLToPath(import.meta.url));
+	const r = spawnSync(
+		process.execPath,
+		[
+			join(here, '..', 'qualify-node.mjs'),
+			'--machine',
+			'claw-fixture-absent',
+			'--burn-in',
+			'WD-ABC123',
+			'--minutes',
+			'5',
+		],
+		{
+			encoding: 'utf8',
+			env: { ...process.env, FLEET_MANIFEST_DIR: join(here, '..', '..', 'manifests') },
+		}
+	);
+	const out = `${r.stdout}${r.stderr}`;
+	assert.doesNotMatch(out, /unrecognised argument/);
+	assert.match(out, /claw-fixture-absent is not in the manifest/);
+	assert.equal(r.status, 2);
 });
