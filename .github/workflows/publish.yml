@@ -34,7 +34,10 @@ permissions:
 jobs:
   publish:
     runs-on: ${{ fromJSON(vars.CI_RUNNER) }}
-    timeout-minutes: 15
+    # A HANG guard. This job runs the whole `check` gate, the same suite ci.yml
+    # gives 25 minutes, and then builds and publishes on top of it. At 15 it
+    # cancelled 50e363b's publish on claw-6 mid-suite on 2026-11-23; see ci.yml.
+    timeout-minutes: 30
     steps:
       # FULL history, not `fetch-depth: 2`.
       #
