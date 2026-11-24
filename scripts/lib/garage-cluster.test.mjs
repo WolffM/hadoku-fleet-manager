@@ -7,9 +7,20 @@
  * API: the plan is computed from what the cluster reports, applied through
  * garage-apply.mjs, and read back.
  *
- * The binary is downloaded once into $XDG_CACHE_HOME/fleet-manager/garage/
- * and refused if its hash differs; FLEET_GARAGE_BIN points at a local copy,
- * held to the same hash.
+ * The binary is downloaded once per CI user into
+ * $XDG_CACHE_HOME/fleet-manager/garage/<version>/ and held to its sha256 on
+ * EVERY use: a cached copy that fails it is deleted and fetched again.
+ * FLEET_GARAGE_BIN points at a local copy, held to the same hash. Each run
+ * logs one `[garage-bin]` line saying which it was.
+ *
+ * A MISS FETCHES WITH ROOM TO CONNECT (hadoku-fleet-manager#150). Node's
+ * fetch tries each of the host's addresses for 250 ms (happy eyeballs) and
+ * gives up when all have. The host has three IPv4 addresses in France and the
+ * claws have no IPv6 route, so a loaded claw on Wi-Fi (claw-2, twice on
+ * 11-24) failed in ~1.2 s with `connect ETIMEDOUT` on all three, while the
+ * same fetch idle connects in ~150 ms. A miss allows 2 s per address and
+ * {@link FETCH_ATTEMPTS} tries; when every try fails the test fails naming
+ * each one's reason, not a timeout.
  */
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -24,7 +35,11 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs';
-import { createServer } from 'node:net';
+import {
+	createServer,
+	getDefaultAutoSelectFamilyAttemptTimeout,
+	setDefaultAutoSelectFamilyAttemptTimeout,
+} from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -54,6 +69,59 @@ const planLayout = (input) => planWith({ ledger: PASS, ...input });
 
 const sha256 = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
+const FETCH_ATTEMPTS = 3;
+const CONNECT_ATTEMPT_MS = 2_000;
+
+/** The reason a fetch failed, down to each address it tried. */
+function why(e) {
+	const c = e?.cause;
+	if (c?.errors?.length) return c.errors.map((x) => x.message).join('; ');
+	return c?.message || c?.code || e?.message || String(e);
+}
+
+/** One download into `part`, hash-checked; throws with the reason. */
+async function fetchOnce(part) {
+	const res = await fetch(GARAGE_RELEASE.url, { signal: AbortSignal.timeout(300_000) });
+	if (!res.ok) throw new Error(`HTTP ${res.status}`);
+	await pipeline(Readable.fromWeb(res.body), createWriteStream(part));
+	const got = sha256(part);
+	if (got !== GARAGE_RELEASE.sha256) throw new Error(`sha256 ${got}, not the pinned one`);
+}
+
+async function download(path) {
+	mkdirSync(dirname(path), { recursive: true });
+	// Per process, then renamed: two jobs on one claw missing at once each
+	// write their own file and the last rename wins with identical bytes.
+	const part = `${path}.part-${process.pid}`;
+	const saved = getDefaultAutoSelectFamilyAttemptTimeout();
+	setDefaultAutoSelectFamilyAttemptTimeout(CONNECT_ATTEMPT_MS);
+	const failures = [];
+	try {
+		for (let i = 1; i <= FETCH_ATTEMPTS; i++) {
+			const t0 = Date.now();
+			try {
+				await fetchOnce(part);
+				chmodSync(part, 0o755);
+				renameSync(part, path);
+				console.log(
+					`[garage-bin] downloaded v${GARAGE_RELEASE.version} to ${path} (attempt ${i}, ${Date.now() - t0} ms)`
+				);
+				return path;
+			} catch (e) {
+				rmSync(part, { force: true });
+				failures.push(`attempt ${i} after ${Date.now() - t0} ms: ${why(e)}`);
+				if (i < FETCH_ATTEMPTS) await new Promise((r) => setTimeout(r, 2_000 * i));
+			}
+		}
+	} finally {
+		setDefaultAutoSelectFamilyAttemptTimeout(saved);
+	}
+	assert.fail(
+		`could not fetch Garage v${GARAGE_RELEASE.version} from ${GARAGE_RELEASE.url} ` +
+			`(cache miss at ${path}):\n  ${failures.join('\n  ')}`
+	);
+}
+
 async function garageBinary() {
 	const override = process.env.FLEET_GARAGE_BIN;
 	if (override) {
@@ -62,24 +130,21 @@ async function garageBinary() {
 			GARAGE_RELEASE.sha256,
 			`FLEET_GARAGE_BIN=${override} is not the pinned v${GARAGE_RELEASE.version}`
 		);
+		console.log(`[garage-bin] FLEET_GARAGE_BIN ${override}, sha256 ok`);
 		return override;
 	}
 	const cache = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
 	const path = join(cache, 'fleet-manager', 'garage', GARAGE_RELEASE.version, 'garage');
-	if (existsSync(path) && sha256(path) === GARAGE_RELEASE.sha256) return path;
-	mkdirSync(dirname(path), { recursive: true });
-	const part = `${path}.part-${process.pid}`;
-	const res = await fetch(GARAGE_RELEASE.url, { signal: AbortSignal.timeout(300_000) });
-	assert.ok(res.ok, `${GARAGE_RELEASE.url}: HTTP ${res.status}`);
-	await pipeline(Readable.fromWeb(res.body), createWriteStream(part));
-	const got = sha256(part);
-	if (got !== GARAGE_RELEASE.sha256) {
-		rmSync(part, { force: true });
-		assert.fail(`${GARAGE_RELEASE.url} has sha256 ${got}, not the pinned ${GARAGE_RELEASE.sha256}`);
+	if (existsSync(path)) {
+		const got = sha256(path);
+		if (got === GARAGE_RELEASE.sha256) {
+			console.log(`[garage-bin] cache hit ${path}, sha256 ok, no download`);
+			return path;
+		}
+		console.log(`[garage-bin] cached ${path} has sha256 ${got}: deleted, fetching again`);
+		rmSync(path, { force: true });
 	}
-	chmodSync(part, 0o755);
-	renameSync(part, path);
-	return path;
+	return download(path);
 }
 
 const freePort = () =>
