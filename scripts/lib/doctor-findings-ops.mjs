@@ -9,6 +9,7 @@
 
 import { ADVISORY, BLOCKING, rebootFinding } from './preflight.mjs';
 import { f } from './doctor-findings-record.mjs';
+import { LOAD_CARRIED_STALE_DAYS } from './doctor-facet.mjs';
 
 import { BOOTCAMP_STALE_DAYS } from '../../dist/lib/workload-gate.js';
 
@@ -230,6 +231,32 @@ export function opsFindings(health, { nowMs = Date.now() } = {}) {
 						`ago (${b.at}) — past ${BOOTCAMP_STALE_DAYS}d. What this node can do is being read ` +
 						'off a record older than the toolchain on it.',
 					{ capabilitiesAt: b.at }
+				)
+			);
+		}
+	}
+
+	// ── a load reading carried from an earlier run (#148). doctor-facet's
+	// `carryLoadReading` keeps a busy node's record fresh; this keeps the age of
+	// the one part it did not re-measure visible. ADVISORY on purpose (a new
+	// check starts quiet): a box busy at noon every day for a week is worth
+	// saying, not worth blocking a node whose every other facet is current.
+	const lc = health.loadCarried;
+	if (lc) {
+		const ageDays = (nowMs - Date.parse(lc.from)) / 86_400_000;
+		if (!Number.isFinite(ageDays) || ageDays > LOAD_CARRIED_STALE_DAYS) {
+			out.push(
+				f(
+					health,
+					'load-reading',
+					ADVISORY,
+					'carried-stale',
+					`the under-load thermal and clock readings in this record were measured ` +
+						`${Number.isFinite(ageDays) ? `${Math.round(ageDays)}d` : 'at an unparseable time'} ago ` +
+						`(${lc.from}), past ${LOAD_CARRIED_STALE_DAYS}d: CI has been building here at every ` +
+						'scheduled run since, so none took a load phase. Run `fleet doctor --machine ' +
+						`${health.node} --write\` when it is idle.`,
+					{ loadFrom: lc.from }
 				)
 			);
 		}

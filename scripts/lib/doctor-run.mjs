@@ -64,12 +64,16 @@
  *     builds on a box, and the missing reading is a BLOCKING `no-load-reading`.
  *     That is right for an operator, who can re-run when the box is idle, and
  *     wrong for a cron, which would page whenever a claw happened to be busy at
- *     12:00 UTC. A deferred node's finding is advisory, and its record is NOT
- *     rewritten: a fresh record with no under-load reading would replace the
- *     last real one and leave a blocking finding in the stored record, and
- *     provisioning refuses a node on exactly that. The node keeps its older,
- *     dated record, so a box that stays busy every night still ages past
- *     the 14-day staleness threshold, with the reason.
+ *     12:00 UTC. A fresh record with no under-load reading must not replace
+ *     the last real one either: it would leave a blocking finding in the
+ *     stored record, and provisioning refuses a node on exactly that. So a
+ *     deferred node's record is rewritten from this probe with its PREVIOUS
+ *     under-load reading carried (`carryLoadReading`, doctor-facet.mjs, #148)
+ *     and dated by `loadCarried.from`. Until 2026-11-24 it was not rewritten
+ *     at all, on the reasoning that it would age past a 14-day threshold;
+ *     node-status blocks at 36 h, and five claws busy at noon read
+ *     `health-stale` with nothing paging. Only a node with no readable
+ *     previous record is still left as it was.
  *   - A `--cadence` run NEVER LOADS THE BACKSTOP. See `BACKSTOP_CADENCE_NO_LOAD_WHY`
  *     in doctor-probe.mjs.
  */
@@ -82,7 +86,7 @@ import { deferralFor, deferralNote, readDrains, readDrainDoc } from './expected-
 import { createEmitter } from './emit.mjs';
 import { parseDoctor } from './doctor-parse.mjs';
 import { LOAD_SECONDS, doctorProbe, BACKSTOP_CADENCE_NO_LOAD_WHY } from './doctor-probe.mjs';
-import { bootcampPointer, healthFacet, healthRecord } from './doctor-facet.mjs';
+import { bootcampPointer, carryLoadReading, healthFacet, healthRecord } from './doctor-facet.mjs';
 import { doctorFindings } from './doctor-findings.mjs';
 import { ADVISORY, advisoryFindings, blockingFindings, backstopAdvisory } from './preflight.mjs';
 import { diskVerdict } from './doctor-scope.mjs';
@@ -284,6 +288,21 @@ const deferred = new Set(
 				.map(([name]) => name)
 		: []
 );
+// A deferred node's record is still rewritten, carrying only its previous load
+// reading (#148, `carryLoadReading`). Done before the findings so this run
+// judges what it will store. A node with no readable previous record has
+// nothing to carry: it stays in `deferred` and keeps the old rule below.
+const carried = new Set();
+if (deferred.size) {
+	const stored = measuredFacets('health', manifest.machines ?? {});
+	for (const name of deferred) {
+		const r = stored.nodes[name];
+		const next = r && !r.unavailable ? carryLoadReading(health[name], r.value, at) : null;
+		if (!next) continue;
+		health[name] = next;
+		carried.add(name);
+	}
+}
 
 // ── who claims each pm2 manager ──────────────────────────────────────────────
 // A join against the controller's records, made here on every run and never
@@ -464,8 +483,10 @@ for (const [name, h] of Object.entries(health).sort()) {
 				...fd,
 				class: ADVISORY,
 				why:
-					`${fd.why} DEFERRED by --cadence: CI was building here, so this run did not ` +
-					'rewrite the record; the previous one stands and keeps ageing.',
+					`${fd.why} DEFERRED by --cadence: CI was building here, so this run took no ` +
+					(carried.has(name)
+						? 'load reading, and the previous record had none to carry either.'
+						: 'load reading and, with no previous record to carry one from, did not rewrite it.'),
 			});
 			continue;
 		}
@@ -615,7 +636,7 @@ if (WRITE) {
 	let kept = 0;
 	for (const [name, h] of Object.entries(health)) {
 		if (!manifest.machines?.[name]) continue;
-		if (deferred.has(name)) {
+		if (deferred.has(name) && !carried.has(name)) {
 			kept++;
 			continue;
 		}
@@ -672,6 +693,7 @@ if (emitter.json) {
 		judged: DISK ? blocking : undefined,
 		written,
 		deferred: [...deferred].sort(),
+		carried: [...carried].sort(),
 		log: emitter.held(),
 	});
 } else if (!findings.length) {

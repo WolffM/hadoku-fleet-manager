@@ -57,6 +57,51 @@ export function healthRecord(health) {
 }
 
 /**
+ * A DEFERRED node's record, rewritten (#148). `--cadence` takes no load phase
+ * on a node CI is building on, so this run's probe has no under-load reading.
+ * Until 2026-11-24 such a node was not written at all and its whole record
+ * aged: node-status blocks a record past 36 h, and a claw that builds at noon
+ * two days running (claw-9 did for four) read `health-stale` with every other
+ * facet measured that morning.
+ *
+ * So the record IS rewritten from this probe, and only the parts the load
+ * phase owns come from the previous record: `thermal` and `clock` whole (an
+ * "idle" temperature read on a busy box is not idle, and a block mixed from
+ * two runs would describe neither), and the `baseline` stamp that judged
+ * them. `loadCarried.from` is when that reading was really taken, kept across
+ * any number of carries, so its age stays visible ({@link LOAD_CARRIED_STALE_DAYS}).
+ *
+ * `null` when there is nothing to carry (no readable previous record): the
+ * caller then keeps the old behaviour and leaves the node's record alone.
+ *
+ * @param {object} fresh this run's facet for the node
+ * @param {object | null | undefined} previous the node's stored record
+ * @param {string} at this run's timestamp
+ */
+export function carryLoadReading(fresh, previous, at) {
+	if (!previous || typeof previous !== 'object' || !previous.at) return null;
+	const from = previous.loadCarried?.from ?? previous.at;
+	const out = {
+		...fresh,
+		thermal: previous.thermal ?? fresh.thermal,
+		clock: previous.clock ?? fresh.clock,
+		loadCarried: {
+			from,
+			at,
+			why:
+				'CI was building here when this run probed, so it took no load reading; the ' +
+				`under-load thermal and clock readings are the ones measured at ${from}.`,
+		},
+	};
+	if (previous.baseline) out.baseline = previous.baseline;
+	else delete out.baseline;
+	return out;
+}
+
+/** A carried load reading older than this is said (advisory) in every read of the record. */
+export const LOAD_CARRIED_STALE_DAYS = 7;
+
+/**
  * The `_work` filesystem, ONLY when `doctorProbe`'s own three-state source
  * comparison positively says it differs from `/` — see that probe's comment.
  * `null` for both "same disk" and "could not tell": a reader that wants to

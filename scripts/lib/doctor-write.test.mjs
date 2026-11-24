@@ -361,25 +361,44 @@ const BUSY_PROBE = PROBE.replace(
 	].join('\n')
 );
 
-void test('--cadence DEFERS a busy node: its record is kept and its missing load reading does not block', () => {
+void test('--cadence DEFERS a busy node: its record is REWRITTEN with the previous load reading carried (#148)', () => {
 	const fx = scratch({ [NODE]: { cores: 4 } }, { probe: BUSY_PROBE, health: { [NODE]: EXISTING } });
 	const r = run(fx, ['--cadence', '--write', '--json']);
 	const doc = JSON.parse(r.stdout);
 	assert.deepEqual(doc.deferred, [NODE]);
+	assert.deepEqual(doc.carried, [NODE]);
+	assert.deepEqual(doc.written, [NODE], 'a busy node is written, not left to age past 36 h');
 	assert.equal(doc.cadence, true);
+	const stored = readHealth(fx).nodes[NODE];
+	assert.notEqual(stored.at, EXISTING.at, 'the record is dated by THIS run');
+	assert.equal(stored.smart.powerOnHours, 4321, 'every facet but the load reading is this probe');
 	assert.deepEqual(
-		readHealth(fx).nodes[NODE],
-		EXISTING,
-		'a record with no under-load reading must not replace one that has it'
+		stored.thermal,
+		EXISTING.thermal,
+		'the under-load reading is the last real one, never replaced by a run that took none'
 	);
-	const thermal = doc.findings.find((f) => f.status === 'no-load-reading');
-	assert.ok(thermal, 'the missing reading is still SAID');
-	assert.equal(thermal.class, 'advisory');
-	assert.match(thermal.why, /DEFERRED by --cadence/);
+	assert.equal(stored.loadCarried.from, EXISTING.at);
 	assert.ok(
 		!doc.findings.some((f) => f.class === 'blocking' && f.category === 'cpu-thermal'),
 		'a claw that is merely busy at 12:00 UTC must not page'
 	);
+	const aged = doc.findings.find((f) => f.category === 'load-reading');
+	assert.ok(aged, 'a carried reading past its age is SAID');
+	assert.equal(aged.class, 'advisory');
+	assert.equal(aged.status, 'carried-stale');
+});
+
+void test('--cadence with NO previous record for a busy node keeps the old rule: not written', () => {
+	const fx = scratch({ [NODE]: { cores: 4 } }, { probe: BUSY_PROBE });
+	const r = run(fx, ['--cadence', '--write', '--json']);
+	const doc = JSON.parse(r.stdout);
+	assert.deepEqual(doc.deferred, [NODE]);
+	assert.deepEqual(doc.carried, []);
+	assert.deepEqual(doc.written, []);
+	const thermal = doc.findings.find((f) => f.status === 'no-load-reading');
+	assert.ok(thermal, 'the missing reading is still SAID');
+	assert.equal(thermal.class, 'advisory');
+	assert.match(thermal.why, /DEFERRED by --cadence/);
 });
 
 void test('without --cadence the same busy node is BLOCKING and IS written, as before', () => {

@@ -2,7 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { parseDoctor } from './doctor-parse.mjs';
-import { healthFacet, healthRecord, bootcampPointer } from './doctor-facet.mjs';
+import {
+	healthFacet,
+	healthRecord,
+	bootcampPointer,
+	carryLoadReading,
+	LOAD_CARRIED_STALE_DAYS,
+} from './doctor-facet.mjs';
 import { doctorFindings } from './doctor-findings.mjs';
 import { ADVISORY } from './preflight.mjs';
 import {
@@ -297,4 +303,57 @@ void test('healthFacet: an unreadable ceiling is unbounded and an uncounted mana
 	const blind = pm2Facet(["U pm2Units systemctl could not list this node's pm2 units"]);
 	assert.equal(blind.pm2Units.units, null, 'could not look is never an empty list');
 	assert.equal(find(doctorFindings(blind, { nowMs: NOW }), 'pm2-claims')[0].status, 'unknown');
+});
+
+// ── carryLoadReading (#148) ─────────────────────────────────────────────────
+
+const PREV = {
+	at: '2026-11-19T12:00:01.556Z',
+	node: 'claw-fixture',
+	reachable: true,
+	thermal: { sensor: 's', idleC: 43, loadC: 50, riseC: 7 },
+	clock: { ceilingMhz: 3000, loadBestMhz: 3005 },
+	baseline: { at: '2026-11-19T12:00:01.556Z' },
+	disk: { freePct: 50 },
+};
+const FRESH = {
+	at: '2026-11-23T12:00:01.807Z',
+	node: 'claw-fixture',
+	reachable: true,
+	thermal: { sensor: 's', idleC: 61, loadC: null, loadWhy: 'CI was building here' },
+	clock: { ceilingMhz: 3000, loadBestMhz: null, loadWhy: 'CI was building here' },
+	disk: { freePct: 40 },
+};
+
+void test('carryLoadReading: this probe, with only the load-phase blocks from the previous record', () => {
+	const out = carryLoadReading(FRESH, PREV, FRESH.at);
+	assert.equal(out.at, FRESH.at);
+	assert.deepEqual(out.disk, FRESH.disk);
+	assert.deepEqual(out.thermal, PREV.thermal);
+	assert.deepEqual(out.clock, PREV.clock);
+	assert.deepEqual(out.baseline, PREV.baseline);
+	assert.equal(out.loadCarried.from, PREV.at);
+});
+
+void test('carryLoadReading: a reading carried twice keeps the date it was MEASURED', () => {
+	const once = carryLoadReading(FRESH, PREV, FRESH.at);
+	const twice = carryLoadReading({ ...FRESH, at: '2026-11-24T12:00:00.000Z' }, once, 'T');
+	assert.equal(twice.loadCarried.from, PREV.at);
+});
+
+void test('carryLoadReading: nothing to carry from is null, not a guess', () => {
+	assert.equal(carryLoadReading(FRESH, null, FRESH.at), null);
+	assert.equal(carryLoadReading(FRESH, {}, FRESH.at), null);
+});
+
+void test('a carried load reading past its age is ADVISORY load-reading/carried-stale; a young one says nothing', () => {
+	const out = carryLoadReading(FRESH, PREV, FRESH.at);
+	const fromMs = Date.parse(PREV.at);
+	const old = doctorFindings(out, { nowMs: fromMs + (LOAD_CARRIED_STALE_DAYS + 1) * 86_400_000 });
+	const hit = old.find((x) => x.category === 'load-reading');
+	assert.ok(hit);
+	assert.equal(hit.class, ADVISORY);
+	assert.equal(hit.status, 'carried-stale');
+	const young = doctorFindings(out, { nowMs: fromMs + 86_400_000 });
+	assert.equal(young.filter((x) => x.category === 'load-reading').length, 0);
 });
