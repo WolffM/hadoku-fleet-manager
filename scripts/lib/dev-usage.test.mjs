@@ -43,17 +43,17 @@ test('repoOfPath: anywhere else, or no cwd at all, is (other)', () => {
 
 test('repoOfCiUnit: a JIT mint and a standing runner name their repo; anything else is null', () => {
 	assert.equal(
-		repoOfCiUnit('jit-hokon-hadoku-cardtable-j13882264-1.service', 'hokon'),
+		repoOfCiUnit('jit-claw-fixture-hadoku-cardtable-j13882264-1.service', 'claw-fixture'),
 		'hadoku-cardtable'
 	);
 	assert.equal(repoOfCiUnit('jit-claw-10-hadoku_site-j99.scope', 'claw-10'), 'hadoku_site');
-	assert.equal(repoOfCiUnit('actions-runner-hadoku-site.service', 'hokon'), 'hadoku-site');
+	assert.equal(repoOfCiUnit('actions-runner-hadoku-site.service', 'claw-fixture'), 'hadoku-site');
 	assert.equal(
-		repoOfCiUnit('jit-claw-9-x-j1.service', 'hokon'),
+		repoOfCiUnit('jit-claw-9-x-j1.service', 'claw-fixture'),
 		null,
 		"another node's mint is not ours"
 	);
-	assert.equal(repoOfCiUnit('cgroup.procs', 'hokon'), null);
+	assert.equal(repoOfCiUnit('cgroup.procs', 'claw-fixture'), null);
 });
 
 const g = (id, repo, usageUsec, extra = {}) => ({
