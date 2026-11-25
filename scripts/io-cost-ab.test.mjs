@@ -10,11 +10,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+	ddSeconds,
 	heaviestCgroup,
 	ioStatBytes,
 	lowWeightCgroups,
 	parsePressure,
 	percentile,
+	summarizeProbe,
 	verdict,
 	windowDelta,
 } from './io-cost-ab.mjs';
@@ -39,12 +41,14 @@ void test('a window is rates over its length; a scope born in the window counts 
 	const a = {
 		t: 0n,
 		prod: { some: 0, full: 0 },
+		inter: { some: 0, full: 0 },
 		host: { some: 0, full: 0 },
 		lows: { x: { cpuUsec: 1_000_000, bytes: 0, ioSome: 0 } },
 	};
 	const b = {
 		t: 10_000_000_000n, // 10 s
 		prod: { some: 3_100_000, full: 1_000_000 },
+		inter: { some: 400_000, full: 0 },
 		host: { some: 5_000_000, full: 0 },
 		lows: {
 			x: { cpuUsec: 21_000_000, bytes: 100e6, ioSome: 2_000_000 },
@@ -55,6 +59,7 @@ void test('a window is rates over its length; a scope born in the window counts 
 		seconds: 10,
 		prodSome: 31,
 		prodFull: 10,
+		interSome: 4,
 		hostSome: 50,
 		hostFull: 0,
 		lowCgroups: 2,
@@ -64,30 +69,75 @@ void test('a window is rates over its length; a scope born in the window counts 
 	});
 });
 
-const win = (state, prodSome, p99, lowCpuPerSec) => ({
+const win = (state, interP99, prodSome, readyP99, lowCpuPerSec) => ({
 	state,
+	inter: { p99: interP99 },
+	interSome: 1,
 	prodSome,
 	lowCpuPerSec,
 	lowMBps: 100,
 	hostSome: 50,
 	load1: 200,
-	ready: { p99, fails: 0 },
+	ready: { p99: readyP99, fails: 0 },
+});
+const OFF = win('off', 480, 3.8, 737, 10);
+
+void test('ships when interactive p99 falls, production holds within the band, and agents keep the floor', () => {
+	// Production slightly worse but inside +25% +1 pt / +25% +50 ms; agents at 30%.
+	const good = verdict([OFF, win('on', 40, 5.5, 950, 3)], 0.25);
+	assert.equal(good.ships, true, good.why);
+	assert.equal(good.lowKept, 0.3);
+	assert.match(good.band, /1\.25/);
 });
 
-void test('ships only when production pressure and p99 fall and the low-weight work holds', () => {
-	const good = verdict([win('off', 30, 1200, 10), win('on', 8, 40, 8)], 0.5);
-	assert.equal(good.ships, true);
-	assert.equal(good.lowKept, 0.8);
+void test('the interactive side is the target: production improving does not ship it alone', () => {
+	const v = verdict([OFF, win('on', 500, 1, 100, 10)], 0.25);
+	assert.equal(v.ships, false);
+	assert.match(v.why, /interactive p99 did not fall \(480 -> 500 ms\)/);
+});
 
-	const collapse = verdict([win('off', 30, 1200, 10), win('on', 8, 40, 3)], 0.5);
-	assert.equal(collapse.ships, false);
-	assert.match(collapse.why, /kept 30% of its OFF rate, under the 50% floor/);
+void test('production rising past the band is a fail, as the first A/B measured', () => {
+	// 11-24: prod io some 3.8% -> 6.5%, ready p99 737 -> 2187 ms.
+	const v = verdict([OFF, win('on', 40, 6.5, 2187, 10)], 0.25);
+	assert.equal(v.ships, false);
+	assert.match(v.why, /production io\.pressure rose past the band \(3\.8% -> 6\.5%/);
+	assert.match(v.why, /ready p99 rose past the band \(737 -> 2187 ms/);
+});
 
-	const noHelp = verdict([win('off', 30, 1200, 10), win('on', 31, 40, 10)], 0.5);
-	assert.equal(noHelp.ships, false);
-	assert.match(noHelp.why, /production io\.pressure did not fall/);
+void test('stalled agents are a fail: slower is the point, under the floor is not', () => {
+	const v = verdict([OFF, win('on', 40, 3.8, 737, 2)], 0.25);
+	assert.equal(v.ships, false);
+	assert.match(v.why, /kept 20% of its OFF rate, under the 25% floor/);
+	assert.equal(verdict([OFF], 0.25).ships, null);
+});
 
-	assert.equal(verdict([win('off', 30, 1200, 10)], 0.5).ships, null);
+void test('dd times itself; the probe summary counts failures and names the first', () => {
+	assert.equal(
+		ddSeconds(
+			'1+0 records in\n1+0 records out\n4096 bytes (4.1 kB, 4.0 KiB) copied, 0.00507664 s, 807 kB/s\n'
+		),
+		0.00507664
+	);
+	assert.equal(ddSeconds('dd: failed to open'), null);
+	const s = summarizeProbe(
+		[
+			{ ms: 2, readMs: 1, writeMs: 1 },
+			{ ms: 10, readMs: 2, writeMs: 8 },
+			{ err: 'dd exit 1: No space left' },
+		],
+		'/u/session.slice/run-1.scope'
+	);
+	assert.deepEqual(s, {
+		cgroup: '/u/session.slice/run-1.scope',
+		samples: 3,
+		fails: 1,
+		p50: 2,
+		p99: 10,
+		max: 10,
+		readP99: 2,
+		writeP99: 8,
+		firstError: 'dd exit 1: No space left',
+	});
 });
 
 void test('the low-weight set stops at the first cgroup below the default, so work is counted once', () => {
@@ -102,6 +152,7 @@ void test('the low-weight set stops at the first cgroup below the default, so wo
 	cg('user.slice/u/ci.slice', 25);
 	cg('user.slice/u/ci.slice/runner.slice', 50);
 	cg('user.slice/u/app.slice/tmux-a.scope', 20);
+	cg('user.slice/u/session.slice', 5000); // the desktop: heavier, and not production
 	assert.deepEqual(lowWeightCgroups(root).sort(), [
 		'user.slice/u/app.slice/tmux-a.scope',
 		'user.slice/u/ci.slice',

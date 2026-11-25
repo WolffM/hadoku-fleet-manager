@@ -35,7 +35,7 @@ void test('a shipped script run through a pnpm-style symlink runs main()', () =>
 			encoding: 'utf8',
 		})
 	);
-	assert.match(out, /io-cost-ab: does enforcing io\.weight help production/);
+	assert.match(out, /io-cost-ab: does enforcing io\.weight keep the interactive desktop/);
 });
 
 void test('a symlinked FILE is main too, and an importer is not', () => {

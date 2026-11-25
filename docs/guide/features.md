@@ -239,9 +239,11 @@ both parent slices weigh 100. `scripts/io-cost.sh` shows what it would
 change, can turn io.cost on, can weigh system.slice above user.slice so
 that cap lifts, and can keep both across reboots.
 `scripts/io-cost-ab.mjs` measures the change before it is kept, under
-whatever load the box has: production's IO pressure and readiness latency
-against how much work the lower-priority jobs still get done, with io.cost
-off and then on.
+whatever load the box has, with both off and then both on. What it is for
+is the person at the desktop: a small disk probe runs where the desktop
+runs, and the change ships only if that probe's slowest responses get
+faster, production's IO pressure and readiness latency do not get worse,
+and the lower-priority jobs keep at least a quarter of their pace.
 
 **What it does not do.** It never guesses which node is best for a tenant
 that has not opted into automatic placement (`placement.auto: true`) — for
