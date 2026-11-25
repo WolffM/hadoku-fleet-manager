@@ -79,6 +79,13 @@ pnpm run check       # the full gate CI runs
   table straight out of the README and fails the build if it drifts from the
   table declared in `scripts/lib/json-contract.mjs` — a hand-kept copy of
   that list has gone stale three times before this test existed.
+- **Every test is reported.** `pnpm run test` writes JUnit beside its
+  console output, `reports/node-test.xml` (source) and
+  `reports/node-test-scripts.xml` (scripts), and CI's `check` and the publish
+  job's verify post both, red runs too, to the fleet test store through
+  `WolffM/hadoku-actions/report-tests` (suites `unit` and `publish`;
+  advisory, it never fails the job). The two reports are ~1.7 MB together
+  for ~7,000 tests, ~230 KB gzipped as posted.
 - **The CI job must stay named `check`.** Renaming it breaks every PR's
   required status forever.
 - **Never `runs-on: ubuntu-latest`.** Workflows read the fleet's own runner

@@ -42,7 +42,7 @@
     "lint:types": "ESLINT_TYPE_AWARE=1 eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "rm -rf dist/tests && tsc && node --disable-warning=ExperimentalWarning --import ./dist/tests/install-test-host.js --test 'dist/tests/**/*.test.js' && node --disable-warning=ExperimentalWarning --test 'scripts/**/*.test.mjs'",
+    "test": "rm -rf dist/tests && tsc && mkdir -p reports && node --disable-warning=ExperimentalWarning --import ./dist/tests/install-test-host.js --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=reports/node-test.xml 'dist/tests/**/*.test.js' && node --disable-warning=ExperimentalWarning --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=reports/node-test-scripts.xml 'scripts/**/*.test.mjs'",
     "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run check:exports && pnpm run test",
     "check:exports": "node scripts/check-exports.mjs",
     "prepare": "git config core.hooksPath .husky 2>/dev/null || true",

@@ -1,6 +1,9 @@
 node_modules
 dist/
 
+# Test reports (report-tests reads them in CI)
+reports/
+
 # Agent worktrees. git skips a REGISTERED worktree in `status`, so these never
 # show as untracked — but eslint and prettier walk the filesystem and happily
 # lint a second, stale copy of the whole repo. Measured 2026-08-30: 172 of the

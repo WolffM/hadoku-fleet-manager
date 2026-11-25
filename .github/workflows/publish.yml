@@ -168,11 +168,27 @@ jobs:
       # produces no completion event at all — which is silence, not a refusal.
       # Verifying in-process keeps "published" and "verified" the same event.
       - name: Verify (the `check` gate, same as CI)
+        id: verify
         if: steps.gate.outputs.ships == 'true'
         # publish-safety-guard reads its denylist from here; absent, it FAILS.
         env:
           PUBLISH_DENYLIST: ${{ secrets.PUBLISH_DENYLIST }}
         run: pnpm run check
+
+      # Every test into the fleet test store (hadoku_site
+      # docs/planning/unified-test-reporting-2026-11-23.md), red runs too.
+      # Not after a skipped verify (nothing ships): no report was written.
+      # Advisory: it never fails the job, which the check step already does.
+      # `pnpm test` writes both reports: the src suite and the scripts' suite.
+      - name: Report the tests
+        if: always() && steps.verify.outcome != 'skipped'
+        uses: WolffM/hadoku-actions/report-tests@v1
+        with:
+          suite: publish
+          reports: |
+            node-test reports/node-test.xml
+            node-test reports/node-test-scripts.xml
+          key: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
 
       # THE CONSUMERS' VIEW OF THIS BUILD (fleet-manager#67). `check` proves the
       # package agrees with itself; this proves it still provides everything a
