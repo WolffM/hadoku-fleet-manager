@@ -236,7 +236,8 @@ warns when the root disk ignores the weights a node declares. It also warns
 when a heavy weight is capped by its parent slice: weights are shared down
 the tree, so production at 1000 against builds at 20 still splits 50:50 if
 both parent slices weigh 100. `scripts/io-cost.sh` shows what it would
-change and can turn io.cost on and keep it on across reboots.
+change, can turn io.cost on, can weigh system.slice above user.slice so
+that cap lifts, and can keep both across reboots.
 `scripts/io-cost-ab.mjs` measures the change before it is kept, under
 whatever load the box has: production's IO pressure and readiness latency
 against how much work the lower-priority jobs still get done, with io.cost
