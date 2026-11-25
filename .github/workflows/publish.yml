@@ -50,6 +50,12 @@ jobs:
       - name: Mark the start, so the reported duration is real
         run: echo "JOB_STARTED_AT=$(date -u +%s)" >> "$GITHUB_ENV"
 
+      # A reused runner workspace can be left sparse by an earlier job, and
+      # checkout's own `sparse-checkout disable` does not stick: the local
+      # core.sparseCheckout=true comes back live. Turning it off here does.
+      - name: Widen a workspace an earlier sparse checkout narrowed
+        run: if [ -d .git ]; then git config --local core.sparseCheckout false; fi
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0

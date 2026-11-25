@@ -60,3 +60,26 @@ for (const [workflow, script] of [
 		);
 	});
 }
+
+void test('a sparse checkout gets its own path, and every full checkout heals a narrowed workspace first', () => {
+	const wf = (f) => readFileSync(join(ROOT, '.github/workflows', f), 'utf8');
+	// 2026-11-25: ppe-promote's sparse checkout in the workspace root left
+	// claw-4's workspace narrowed, and publish.yml's full checkout of e3fe1ab
+	// on the same runner found no src/ ("TS18003: No inputs were found").
+	for (const f of ['ppe-promote.yml', 'ppe-sync.yml']) {
+		assert.match(wf(f), /^\s+path: \.ppe-src\s*$/m, `${f}: sparse checkout outside .ppe-src`);
+		assert.match(
+			wf(f),
+			/run: node \.ppe-src\/scripts\/ppe\//,
+			`${f}: runs a script outside .ppe-src`
+		);
+	}
+	for (const f of ['ci.yml', 'publish.yml']) {
+		const s = wf(f);
+		const heal = s.indexOf('git config --local core.sparseCheckout false');
+		assert.ok(
+			heal >= 0 && heal < s.indexOf('uses: actions/checkout@'),
+			`${f}: no heal before checkout`
+		);
+	}
+});

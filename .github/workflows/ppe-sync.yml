@@ -36,6 +36,10 @@ jobs:
             /scripts/ppe/
             /scripts/lib/is-main.mjs
           sparse-checkout-cone-mode: false
+          # Its own directory, never the workspace root: a runner's workspace
+          # outlives the job, and a sparse checkout there narrowed the next
+          # job's full checkout too (publish of e3fe1ab found no src/).
+          path: .ppe-src
           persist-credentials: false
 
       - uses: actions/setup-node@v6
@@ -47,7 +51,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           FLEET_SERVICE_KEY: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
           PPE_PUSH_TOKEN_URL: https://hadoku.me/mgmt/api/repo/push-token
-        run: node scripts/ppe/sync.mjs
+        run: node .ppe-src/scripts/ppe/sync.mjs
 
       - name: Report the outcome so a silent failure can't hide
         if: always()
