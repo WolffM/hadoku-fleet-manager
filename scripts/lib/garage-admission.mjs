@@ -10,17 +10,17 @@
  *   missing  no result yet, or one that did not judge this disk.
  *   failed   a result judged it and refused it.
  *
- * SHIPPED QUIET. Until ADMISSION_ENFORCED is true every check is `shadow`:
- * shown in the plan, never refusing, so its verdicts can be read over the
- * pilot zones first. Once enforced, a zone ALREADY in the layout that does not
- * pass is `known` (reported, never evicted, until someone has read it), and a
- * zone the change would ADD is `refused`.
+ * ENFORCED since #159 (2026-11-25), after the pilot dry run posted there:
+ * claw-8 and claw-9 admitted, claw-9 at resync 5 / scrub 9. A zone ALREADY in
+ * the layout that does not pass is `known` (reported, never evicted, until
+ * someone has read it), and a zone the change would ADD is `refused`.
+ * `enforced: false` gives the shadow reading again (`shadow`, never refusing).
  */
 import { resultKey } from './qualify-results.mjs';
 
 export const ZONE_ADMISSION_TESTS = Object.freeze(['disk-bench', 'disk-node-impact']);
-/** Flip only with the dry run of these verdicts over the pilot zones on #156. */
-export const ADMISSION_ENFORCED = false;
+/** Flipped on #159 with the pilot dry run; see the header. */
+export const ADMISSION_ENFORCED = true;
 
 /**
  * PURE. One declared disk against the admission tests.

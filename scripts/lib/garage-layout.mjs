@@ -248,7 +248,7 @@ export function planLayout({
 
 	const checks = [
 		...qualifyChecks(declared, ledger),
-		// bench + node-impact (#156): `shadow` until ADMISSION_ENFORCED.
+		// bench + node-impact (#156), enforced since #159: `known` for a member, `refused` for a newcomer.
 		...admissionChecks({ declared, ledger, inLayout: new Set(byNode.keys()) }),
 		...ceilingChecks(declared, zones),
 		floorCheck(now, after, healthy, changes.length > 0),

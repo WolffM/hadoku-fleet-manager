@@ -219,8 +219,10 @@ void test('each reading is learned per serial and per model, and a slow zone is 
 	);
 });
 
-void test('admission: shadow until enforced, then known for a member and refused for a newcomer', async () => {
-	const { admissionChecks, diskAdmitted } = await import('./garage-admission.mjs');
+void test('admission: shadow when not enforced, then known for a member and refused for a newcomer', async () => {
+	const { admissionChecks, diskAdmitted, ADMISSION_ENFORCED } =
+		await import('./garage-admission.mjs');
+	assert.equal(ADMISSION_ENFORCED, true, 'enforced since #159');
 	const entry = (disks) => ({ last: { at: new Date().toISOString(), metrics: { disks } } });
 	const ledger = {
 		ok: true,
@@ -253,7 +255,12 @@ void test('admission: shadow until enforced, then known for a member and refused
 			'claw-10': { state: 'active', disks: [{ serial: 'WD-B' }] },
 		},
 	};
-	const shadow = admissionChecks({ declared, ledger, inLayout: new Set(['claw-8', 'claw-9']) });
+	const shadow = admissionChecks({
+		declared,
+		ledger,
+		inLayout: new Set(['claw-8', 'claw-9']),
+		enforced: false,
+	});
 	assert.deepEqual(
 		shadow.map((c) => [c.subject, c.status]),
 		[
@@ -262,12 +269,7 @@ void test('admission: shadow until enforced, then known for a member and refused
 			['claw-9 WD-A', 'shadow'],
 		]
 	);
-	const live = admissionChecks({
-		declared,
-		ledger,
-		inLayout: new Set(['claw-8', 'claw-9']),
-		enforced: true,
-	});
+	const live = admissionChecks({ declared, ledger, inLayout: new Set(['claw-8', 'claw-9']) });
 	assert.deepEqual(
 		live.map((c) => c.status),
 		['refused', 'ok', 'known']
