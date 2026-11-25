@@ -13,11 +13,13 @@
  * behaving byte-identically.
  */
 
-const pick = ({ tenant, memoryMb, cores, role }) => ({
+const pick = ({ tenant, memoryMb, cores, role, until }) => ({
 	tenant,
 	memoryMb,
 	cores,
 	...(role ? { role } : {}),
+	// A slice serving out its notice: still on the node, no longer counted as held.
+	...(until ? { until } : {}),
 });
 
 /** Every hosting declaration per node, whole-box (a drain) and shared (its own file). */

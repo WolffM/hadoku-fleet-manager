@@ -246,6 +246,21 @@ test('a standby is its own entry: never in held, never at max, never the primary
 	);
 });
 
+test('an ENDING standby is not held: its replacement is planned during the notice, off its node', () => {
+	const until = new Date(Date.now() + 15 * 60_000).toISOString();
+	const plan = planFor(FENCED(1), [
+		peer('claw-4', { tenants: [slice()] }),
+		peer('claw-6', { tenants: [{ ...slice('standby'), until }] }),
+		peer('claw-8'),
+	]);
+	assert.deepEqual(plan.standby.held, []);
+	assert.deepEqual(
+		plan.standby.ranked.map((r) => r.node),
+		['claw-8'],
+		'the ending node is still not a candidate'
+	);
+});
+
 test('a standby passes the same rules as the primary, runtime included, and a shortfall says so', () => {
 	const req = { ...FENCED(2), runtime: { ...ARCHIVEBOT.runtime, tools: ['ffmpeg'] } };
 	const plan = planFor(req, [

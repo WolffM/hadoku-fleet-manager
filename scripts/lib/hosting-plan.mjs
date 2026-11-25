@@ -214,7 +214,14 @@ export function planFor(request, offers) {
 function standbyPlan(request, offers, holds, ranked, atMax) {
 	const wanted = request.availability.standby ?? 0;
 	if (!wanted) return {};
-	const held = offers.filter((o) => holds(o, true)).map((o) => o.node);
+	// AN ENDING STANDBY IS NOT HELD. Counting one left the plan asking for no
+	// replacement for the whole notice while the converger counted it as not
+	// serving: "0 more node(s) fit", and a page, on archivebot's claw-8 to
+	// claw-9 move (2026-11-25 07:28Z). It is still on its node, so `ranked`
+	// still excludes that node.
+	const ending = (o) =>
+		o.tenants.some((t) => t.tenant === request.app && t.role === 'standby' && t.until);
+	const held = offers.filter((o) => holds(o, true) && !ending(o)).map((o) => o.node);
 	const candidates = (atMax ? ranked : ranked.slice(1)).map((r) => ({ ...r, role: 'standby' }));
 	const need = Math.max(0, wanted - held.length);
 	return {
