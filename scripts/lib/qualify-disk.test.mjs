@@ -444,6 +444,31 @@ void test('#147: a non-MiB-aligned disk is read, written and verified to its las
 	assert.equal(moved('write'), sizeBytes, 'the write+verify pass skipped bytes');
 });
 
+void test('burn-in: only a full chunk rates the disk, so a slow short tail cannot set "slowest"', async () => {
+	const serial = 'WD-SLOWTAIL';
+	const tail = 745_472;
+	const n = fakeNode({
+		serial,
+		sizeBytes: 2 * 1024 * 1024 + 1024 * 1024 + tail,
+		// Every full 2-MiB chunk takes 100 ms (20 MB/s read); a short chunk takes 10 s.
+		chunk: (c) => {
+			const r = okChunk(c);
+			return c.len < 2 * 1024 * 1024
+				? { ...r, stdout: r.stdout.replace('BURNIN_MS 100', 'BURNIN_MS 10000') }
+				: r;
+		},
+	});
+	const r = await makeBurninTest({ serial, chunkMb: 2, budgetMinutes: 60 }).run(n.ctx);
+	assert.equal(r.status, 'pass', r.reason);
+	assert.match(r.reason, /over 6 chunk\(s\), slowest full chunk 20 MB\/s;/);
+	const small = fakeNode({ serial: 'WD-TINY', sizeBytes: tail, chunk: okChunk });
+	const t = await makeBurninTest({ serial: 'WD-TINY', chunkMb: 2, budgetMinutes: 60 }).run(
+		small.ctx
+	);
+	assert.equal(t.status, 'pass', t.reason);
+	assert.match(t.reason, /no full chunk to rate/);
+});
+
 void test('#147: chunk sizing — whole MiB, then the tail alone; claw-9 resumes at its tail', () => {
 	const size = 1_000_204_886_016;
 	const chunk = 16 * 1024 * 1024 * 1024;

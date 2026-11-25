@@ -403,7 +403,12 @@ export function makeBurninTest({
 					phase: nextPhase,
 					offsetBytes: phaseDone ? 0 : offsetBytes,
 					chunks: st.chunks + 1,
-					slowestMbps: mbps === null ? st.slowestMbps : Math.min(st.slowestMbps ?? Infinity, mbps),
+					// A short chunk (the disk's last) is mostly fixed sync cost: claw-10's
+					// 0.7 MiB tail read 2 MB/s beside 62 MB/s full chunks. Only full ones rate the disk.
+					slowestMbps:
+						mbps === null || lengthBytes < chunkBytes
+							? st.slowestMbps
+							: Math.min(st.slowestMbps ?? Infinity, mbps),
 					updatedAt: new Date(now()).toISOString(),
 				};
 				const bad = await save(st);
@@ -432,7 +437,7 @@ export function makeBurninTest({
 			return finish(
 				'pass',
 				`${serial}: every sector ${st.mode === 'write' ? 'read, written and verified' : 'read (read-only: the disk was not blank)'}` +
-					` over ${st.chunks} chunk(s), slowest ${st.slowestMbps} MB/s; SMART unchanged`
+					` over ${st.chunks} chunk(s), ${st.slowestMbps === null ? 'no full chunk to rate' : `slowest full chunk ${st.slowestMbps} MB/s`}; SMART unchanged`
 			);
 		},
 	};
