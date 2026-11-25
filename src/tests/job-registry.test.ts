@@ -94,6 +94,9 @@ void test('MANUAL names exactly the subcommands that are automated but carry no 
 		'runner-units',
 		'node-users',
 		'check-runner-var',
+		// 2026-11-24: clocked by hokon's own user timer (dev-usage.timer), not
+		// mgmt-api, because it reads that desktop's user-manager cgroups.
+		'dev-usage',
 	];
 	assert.deepEqual(Object.keys(MANUAL).sort(), expected.sort());
 	for (const [sub, why] of Object.entries(MANUAL)) {

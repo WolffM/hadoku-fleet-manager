@@ -2159,6 +2159,20 @@
     "why": "T6 (plan \u00a77.3): the `fleet stats` CLI \u2014 reads job-rollup-store.ts, job-run-store.ts, capacity-sample-store.ts and gh-budget-history-store.ts and wires them into fleet-stats.ts. Same shape as job-rollups.mjs/failures.mjs beside it."
   },
   {
+    "glob": "scripts/dev-usage.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "The `fleet dev-usage` CLI: reads this box's user-manager cgroups into a per-repo ledger (--sample) and reports it through lib/dev-usage.mjs. Same shape as perf.mjs beside it."
+  },
+  {
+    "glob": "scripts/lib/dev-usage.mjs",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "core",
+    "why": "Per-repo attribution and the shadow verdict for the dev-slice ceilings. PURE, same shape as perf-summary.mjs."
+  },
+  {
     "glob": "scripts/perf.mjs",
     "layer": "domain",
     "domain": "observation",

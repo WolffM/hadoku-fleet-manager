@@ -1,0 +1,10 @@
+[Unit]
+Description=Sample per-repo dev-session and CI use every minute (dev-slices shadow week)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

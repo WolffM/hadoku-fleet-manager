@@ -175,6 +175,13 @@ export const commandsGates: Record<string, Command> = {
 		summary:
 			'replay the whole job history through the real dispatcher in virtual time, no claw touched: oldest-in-queue, work/slot ratio and free capacity, each beside history (--policy, --json)',
 	},
+	'dev-usage': {
+		script: 'dev-usage.mjs',
+		kind: 'recorder',
+		help: true,
+		summary:
+			'per-repo use of this box by agent sessions and CI, against the proposed dev-slice ceilings; --sample records one interval (dev-usage.timer)',
+	},
 	perf: {
 		script: 'perf.mjs',
 		kind: 'operator',

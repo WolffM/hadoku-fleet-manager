@@ -10,6 +10,9 @@
 #
 # Also the memory side: ci.slice gets an oomd pressure kill, and app.slice
 # claims the user manager's memory floor so none of it shields CI.
+# Also dev-usage.timer: one sample a minute of what each repo's agent sessions
+# and CI jobs use, the shadow week for per-repo dev slices (docs/tools/slice.md,
+# "Dev slices"). It records; it moves and caps nothing.
 # --dry-run prints what would change and touches nothing.
 #
 # daemon-reload loads the drop-ins but does NOT rewrite the weights of cgroups
@@ -24,7 +27,8 @@ DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
 
 for f in session.slice.d/priority.conf ci.slice.d/priority.conf ci.slice.d/oomd.conf \
-	tmux-spawn-.scope.d/priority.conf app.slice.d/protect.conf; do
+	tmux-spawn-.scope.d/priority.conf app.slice.d/protect.conf \
+	dev-usage.service dev-usage.timer; do
 	if [ "$DRY" = 1 ]; then
 		if cmp -s "$SRC/$f" "$DEST/$f"; then echo "same   $DEST/$f"; else echo "would  $DEST/$f"; fi
 		continue
@@ -37,6 +41,7 @@ if [ "$DRY" = 1 ]; then
 	exit 0
 fi
 systemctl --user daemon-reload
+systemctl --user enable --now dev-usage.timer
 
 systemctl --user set-property --runtime session.slice CPUWeight=1000 IOWeight=1000
 systemctl --user set-property --runtime ci.slice CPUWeight=25 IOWeight=25
@@ -49,4 +54,5 @@ B="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service"
 echo "session.slice cpu.weight=$(cat "$B/session.slice/cpu.weight")"
 echo "ci.slice      cpu.weight=$(cat "$B/ci.slice/cpu.weight" 2>/dev/null || echo 'n/a (inactive)')"
 echo "app.slice     memory.min=$(cat "$B/app.slice/memory.min") memory.low=$(cat "$B/app.slice/memory.low")"
+echo "dev-usage.timer $(systemctl --user is-active dev-usage.timer)"
 oomctl | grep -A2 "user@$(id -u).service/ci.slice$" || echo "oomd: ci.slice not monitored yet (it registers when the slice is active)"

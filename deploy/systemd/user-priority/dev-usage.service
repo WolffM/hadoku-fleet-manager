@@ -1,0 +1,11 @@
+[Unit]
+Description=Record one interval of per-repo dev-session and CI use (dev-slices shadow week)
+Documentation=file:///home/hadoku/repos/hadoku-fleet-manager/docs/tools/slice.md
+
+[Service]
+Type=oneshot
+# The production CLI (mgmt-api's install), not a dev checkout's dist/.
+ExecStart=%h/.local/bin/fleet dev-usage --sample
+# A recorder must never compete with what it measures.
+CPUWeight=20
+Nice=10

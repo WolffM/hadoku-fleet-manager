@@ -169,6 +169,54 @@ Enabling it needs a root `user@.service` drop-in with `Delegate=`. Memory is
 deliberately uncapped per pane for now; the swap pressure seen in the same
 incident is not addressed by this.
 
+## Dev slices: the shadow week (hokon, 2026-11-24)
+
+**Why.** On 2026-11-24 the Forge coordinator (pm2 `cardtable`) lost its claws
+15 times in a day. Each time, both ends of the link went silent for 10 s
+together. The claws were healthy. hokon was frozen: load 70 to 314 on 12
+cores, swap 25 GB on the dm-crypt root, I/O pressure 40 to 76% at the alert
+minutes. The coordinator's CPU weight (1000) and memory floor held. Its I/O
+weight is inert (#158). Since boot (11-18), agent sessions had used 256
+CPU-hours, 219 of them tsunami-surfer's, against 283 for all CI.
+
+The pane drop-in above is **per pane**: 50 panes at weight 20 outweigh Firefox
+ten to one, and nothing caps their memory. The plan:
+
+```
+app.slice/
+  app-dev.slice               every agent session: one ceiling (CPUQuota, MemoryHigh)
+    app-dev-<repo>.slice      one per repo, by weight: fair between repos
+```
+
+A pane's children (headless Chrome, vite, cargo, Gradle) inherit its cgroup,
+so placing the pane places everything it starts. Docker containers, `systemd-run`
+units and pm2 apps escape. That is fine for pm2, which is meant to be protected.
+
+**Shadow first. Nothing is moved yet.** `fleet dev-usage --sample` runs every
+minute from `dev-usage.timer` (installed by `user-priority/install.sh`). It
+attributes each `tmux-spawn-*.scope`, and any other `app.slice` cgroup holding
+a `claude` process, to a repo by the session's working directory. It does the
+same for each CI unit under `ci-runner.slice`, by unit name. Rows go to
+`~/.hadoku-mgmt/dev-usage/<day>.jsonl` (30 days). `fleet dev-usage [--hours N]`
+reports per-repo use. It also reports how often the proposed ceilings
+(`PROPOSED` in `scripts/lib/dev-usage.mjs`: 8 cores, 24 GiB for all dev
+sessions together) would have bitten, and whose work they would have slowed.
+
+**Why measure in place rather than move panes for the week.** Three things
+read the `app.slice/tmux-spawn-*.scope` layout, and moving a pane breaks each
+of them silently:
+
+| reader                     | what it does with the layout                                        |
+| -------------------------- | ------------------------------------------------------------------- |
+| `~/.local/bin/game-mode`   | freezes `app.slice/tmux-spawn-*.scope`; a moved pane keeps running  |
+| `~/.local/bin/memtriage`   | reclaims only `*tmux-spawn-*` cgroups; a moved pane is never parked |
+| `user-priority/install.sh` | re-weights live `tmux-spawn-*.scope` units                          |
+
+Enforcing moves panes and changes all three in the same change.
+
+**Enforcing** waits for a week of rows read with the operator, from 2026-12-01.
+The I/O weight only means something once #158 lands.
+
 ## PM2 survives a memory incident (hokon, 2026-11-21)
 
 On 2026-11-21 07:57–09:07Z hokon's memory pressure sat at ~60% for an hour,

@@ -126,6 +126,8 @@ export const JOB_REGISTRY: JobEntry[] = [
  * `manual: '<why>'` field (plan §6.2 item 4 / wave 5e lane A task 3).
  */
 export const MANUAL: Record<string, string> = {
+	'dev-usage':
+		"Scheduled on hokon by its own user timer, not mgmt-api: deploy/systemd/user-priority/dev-usage.timer runs `fleet dev-usage --sample` every minute, because it reads the desktop user manager's cgroups (tmux panes, Claude sessions), which belong to that box alone. The no-flag report is operator-only.",
 	'apt-security':
 		"Driven as a facet inside ci:converge-provisioning's own 30-minute pass (scripts/converge-provisioning.mjs's DRIVER map resolves apt-security.mjs by its own script path, not through the `fleet` door). `fleet apt-security` as a standalone subcommand is operator-only; its registered automation is the converge-provisioning row above.",
 	toolpack:

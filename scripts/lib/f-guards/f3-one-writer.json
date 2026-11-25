@@ -11,6 +11,7 @@
     "claw-reboot-controller.json": ["src/claw-reboot.ts"],
     "claw-reboot.json": ["scripts/reboot-claws.mjs"],
     "demand-ledger.jsonl": ["scripts/lib/slice-inventory-run.mjs", "scripts/service-inventory.mjs"],
+    "dev-usage-last.json": ["scripts/dev-usage.mjs"],
     "disk-rejections.json": ["scripts/lib/disk-rejections.mjs"],
     "dispatch-daily.json": ["src/runners/dispatch-daily.ts"],
     "dispatch-stuck-announced.json": ["src/runners/stuck-runs.ts"],
@@ -56,6 +57,7 @@
     "^(\\d{4}-\\d{2}-\\d{2})\\.jsonl$": ["src/runners/decision-log-storage.ts"],
     "^usage-(\\d{4})-(\\d{2})\\.jsonl$": ["src/lib/usage-store.ts"],
     "^run-(\\d{4}-\\d{2}-\\d{2})\\.jsonl$": ["src/job-run-store.ts"],
+    "^dev-usage-(\\d{4}-\\d{2}-\\d{2})\\.jsonl$": ["scripts/dev-usage.mjs"],
     "^perf-(\\d{4}-\\d{2}-\\d{2})\\.jsonl$": ["src/perf-sample-store.ts"],
     "^perf-active-(\\d{4}-\\d{2}-\\d{2})\\.jsonl$": ["src/perf-sample-store.ts"],
     "^queued-(\\d{4}-\\d{2}-\\d{2})\\.jsonl$": ["src/runners/job-queued-log.ts"]
