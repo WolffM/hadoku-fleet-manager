@@ -138,10 +138,11 @@ plan)
 	if [ -x "$BIN" ]; then echo "installed: $BIN"; else echo "not installed: $BIN"; fi
 	# The grant is read from sudo's own listing: the file is 0440, and
 	# `sudo -l <cmd>` says yes to anything a password would allow.
-	grants=$(sudo -n -l 2>/dev/null | grep -o "NOPASSWD:.*" || true)
-	if grep -q "$BIN slices-on" <<<"$grants"; then echo "grant: covers slices-on/slices-off"
-	elif grep -q "$BIN on" <<<"$grants"; then echo "grant: io.cost verbs only; re-run 'sudo bash io-cost.sh install' for slices-on/slices-off"
-	else echo "grant: none for $(id -un)"; fi
+	# sudo may wrap one entry across lines: rejoin before matching.
+	grants=$(sudo -n -l 2>/dev/null | tr -s ' \t\n' ' ' | grep -o "NOPASSWD:[^(]*" || true)
+	if grep -qE "$BIN slices-on(,| |$)" <<<"$grants"; then echo "grant: covers slices-on/slices-off"
+	elif grep -qE "$BIN on(,| |$)" <<<"$grants"; then echo "grant: io.cost verbs only; re-run 'sudo bash io-cost.sh install' for slices-on/slices-off"
+	else echo "grant: none for this user"; fi
 	if systemctl is-enabled --quiet "$UNIT" 2>/dev/null; then echo "boot unit: enabled"; else echo "boot unit: not enabled"; fi
 	;;
 status)
@@ -166,7 +167,7 @@ persist)
 	echo "boot unit: $(systemctl is-enabled "$UNIT")"
 	while read -r slice want; do
 		mkdir -p "/etc/systemd/system/$slice.d"
-		printf '# fleet-io-cost persist (hadoku-fleet-manager#158)\n[Slice]\nIOWeight=%s\n' "$want" \
+		printf '# fleet-io-cost persist (#158)\n[Slice]\nIOWeight=%s\n' "$want" \
 			>"/etc/systemd/system/$slice.d/$DROPIN"
 		echo "wrote /etc/systemd/system/$slice.d/$DROPIN"
 	done <<<"$SLICE_WEIGHTS"
