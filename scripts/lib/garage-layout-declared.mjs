@@ -24,6 +24,15 @@ import { join } from 'node:path';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
 
 export const GARAGE_LAYOUT_FILE = 'garage-layout.json';
+/**
+ * Whether the pool's Garage fsyncs every data block. toolchain-garage.mjs
+ * writes garage.toml without `data_fsync`, so Garage's default holds: false
+ * (blocks are written and renamed; three copies stand in for the fsync).
+ * Admission judges a zone on what Garage asks of it, so the bench's
+ * fsync-per-block rate and the soak's writer follow this, and setting
+ * `data_fsync` in the config means setting this with it.
+ */
+export const GARAGE_DATA_FSYNC = false;
 export const LAYOUT_SCHEMA = 1;
 
 export const emptyDeclared = () => ({

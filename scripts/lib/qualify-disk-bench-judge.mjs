@@ -2,9 +2,13 @@
  * `disk-bench`'s BARS, TARGETS and the POOL it is judged against
  * (hadoku-fleet-manager#156). Pure; the I/O is qualify-disk-bench.mjs.
  *
- * A zone is judged on what Garage asks of it: 4k O_DSYNC writes (every
- * metadata commit and, with `data_fsync`, every block), 1 MiB block writes
- * with an fsync each, and the sequential rate a resync or a rebuild moves.
+ * A zone is judged on what Garage asks of it: 4k O_DSYNC writes (what a
+ * synced commit waits on), and the sequential rate a resync or a rebuild
+ * moves. 1 MiB block writes with an fsync each are always READ, and judged
+ * only when the pool's Garage fsyncs data blocks (GARAGE_DATA_FSYNC, false:
+ * the fleet's garage.toml leaves Garage's default). claw-1's root HDD read
+ * 8 MB/s fsync'd blocks against 71 MB/s sequential on 2026-11-25 and was
+ * refused for a cost Garage never charges it.
  *
  * TWO KINDS OF BAR.
  *   absolute   a zone no pool should hold, whatever the others do.
@@ -31,13 +35,15 @@
  *   - BENCH_SEQ_WRITE_FLOOR_MBPS 20: the floor `disk-sync-writes` holds every
  *     CI disk to (qualify-io.mjs SEQ_FLOOR_MBPS). A zone under it rebuilds a
  *     400 GB zone in more than 5.5 hours of a node's full write bandwidth.
- *   - BENCH_BLOCK_FLOOR_MBPS 10: Garage-shaped 1 MiB writes with an fsync
- *     each, beside metadata fsyncs. Half the sequential floor: the fsync per
- *     block is what this phase adds, and on a spinning disk it halves the
- *     rate (one seek per block).
+ *   - BENCH_BLOCK_FLOOR_MBPS 10, with data_fsync only: 1 MiB writes with an
+ *     fsync each, beside metadata fsyncs. Half the sequential floor: the
+ *     fsync per block is what this phase adds, and on a spinning disk it
+ *     halves the rate (one seek per block).
  * Change a number when a pool zone is shown to slow the pool (or a refused
  * disk is shown harmless), with the measurement named here.
  */
+
+import { GARAGE_DATA_FSYNC } from './garage-layout-declared.mjs';
 
 export const BENCH_WRITE_P99_FACTOR = 4;
 export const BENCH_WRITE_P99_MAX_MS = 250;
@@ -125,9 +131,10 @@ export function poolReadings({ declared, results, exceptNode }) {
  *   randReadP99Ms: number|null, randWriteP50Ms: number|null, randWriteP99Ms: number|null,
  *   blockMbps: number|null, metaP99Ms: number|null }} reading
  * @param {{ writeP99Ms: number }[]} pool the other zones' readings
+ * @param {{ dataFsync?: boolean }} [o] whether Garage fsyncs blocks (GARAGE_DATA_FSYNC)
  * @returns {{ verdict: 'pass'|'fail'|'blocked', reason: string, bars: object }}
  */
-export function judgeBench(reading, pool) {
+export function judgeBench(reading, pool, { dataFsync = GARAGE_DATA_FSYNC } = {}) {
 	const missing = Object.entries(reading)
 		.filter(([, v]) => !Number.isFinite(v))
 		.map(([k]) => k);
@@ -141,7 +148,7 @@ export function judgeBench(reading, pool) {
 		poolZones: pool.length,
 		relativeWriteP99MaxMs: relMax,
 		seqWriteFloorMbps: BENCH_SEQ_WRITE_FLOOR_MBPS,
-		blockFloorMbps: BENCH_BLOCK_FLOOR_MBPS,
+		blockFloorMbps: dataFsync ? BENCH_BLOCK_FLOOR_MBPS : null,
 	};
 	if (missing.length)
 		return { verdict: 'blocked', reason: `no reading for ${missing.join(', ')}`, bars };
@@ -156,12 +163,13 @@ export function judgeBench(reading, pool) {
 		);
 	if (r.seqWriteMbps < BENCH_SEQ_WRITE_FLOOR_MBPS)
 		crossed.push(`sequential write ${r.seqWriteMbps} MB/s < ${BENCH_SEQ_WRITE_FLOOR_MBPS}`);
-	if (r.blockMbps < BENCH_BLOCK_FLOOR_MBPS)
+	if (dataFsync && r.blockMbps < BENCH_BLOCK_FLOOR_MBPS)
 		crossed.push(`1 MiB block writes with fsync ${r.blockMbps} MB/s < ${BENCH_BLOCK_FLOOR_MBPS}`);
 	const summary =
 		`seq ${r.seqWriteMbps}/${r.seqReadMbps} MB/s w/r; 4k read p50/p99 ${r.randReadP50Ms}/${r.randReadP99Ms} ms; ` +
 		`4k O_DSYNC write p50/p99 ${r.randWriteP50Ms}/${r.randWriteP99Ms} ms; ` +
-		`Garage-shaped ${r.blockMbps} MB/s blocks, metadata fsync p99 ${r.metaP99Ms} ms`;
+		`fsync'd 1 MiB blocks ${r.blockMbps} MB/s${dataFsync ? '' : ' (not judged: Garage runs without data_fsync)'}, ` +
+		`metadata fsync p99 ${r.metaP99Ms} ms`;
 	const relNote =
 		relMax === null
 			? ` (pool-relative bar not applied: ${pool.length} other benched zone(s), needs ${BENCH_POOL_MIN})`

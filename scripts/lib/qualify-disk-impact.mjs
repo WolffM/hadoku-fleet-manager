@@ -20,6 +20,8 @@
  *      whatever happened; the load also ends itself at its deadline.
  * Space is bounded: each stream wraps inside LOAD_FILE_MB.
  */
+import { GARAGE_DATA_FSYNC } from './garage-layout-declared.mjs';
+import { onAbort } from './qualify-abort.mjs';
 import { assertSerial } from './qualify-disk-burnin.mjs';
 import { readInventory } from './qualify-disk-inventory.mjs';
 import { benchTargets } from './qualify-disk-bench-judge.mjs';
@@ -76,7 +78,10 @@ export function loadStartScript({ dir, serial, writeMbps, readMbps, totalSec }) 
 	assertSerial(serial);
 	for (const [k, v] of Object.entries({ writeMbps, readMbps, totalSec })) int(v, k);
 	const writer = (file) =>
-		`--name=resync --filename="$d/${file}" --rw=write --bs=1M --rate=${writeMbps}m --fsync=1 --size=${LOAD_FILE_MB}M`;
+		// Direct, no fsync per block: Garage writes blocks without one
+		// (GARAGE_DATA_FSYNC), and direct is that rate reaching the disk.
+		`--name=resync --filename="$d/${file}" --rw=write --bs=1M --rate=${writeMbps}m ` +
+		`${GARAGE_DATA_FSYNC ? '--fsync=1' : '--direct=1'} --size=${LOAD_FILE_MB}M`;
 	return [
 		"sudo -n sh -s <<'DISK_IMPACT_EOF'",
 		'set -u',
@@ -117,7 +122,19 @@ export function loadStopScript(dir) {
 		`d='${dir}'`,
 		'[ -d "$d" ] || { echo LOAD_STOPPED gone; exit 0; }',
 		'p=$(cat "$d/pid" 2>/dev/null)',
-		'case "$p" in ""|*[!0-9]*) ;; *) kill -TERM -- "-$p" 2>/dev/null; sleep 2; kill -KILL -- "-$p" 2>/dev/null ;; esac',
+		// The whole TREE under the load's own pid, never its process group:
+		// GNU `timeout` moves itself and fio into a group of their own, so a
+		// group kill stopped only load.sh and left fio writing at full rate
+		// under the next level (claw-8, 2026-11-25). The pid is ours only while
+		// its command line names this directory.
+		'tree() { for c in $(pgrep -P "$1"); do tree "$c"; done; echo "$1"; }',
+		'all=""',
+		'case "$p" in ""|*[!0-9]*) ;; *) tr "\\0" " " < "/proc/$p/cmdline" 2>/dev/null | grep -qF "$d" && all=$(tree "$p") ;; esac',
+		'if [ -n "$all" ]; then',
+		'  kill -TERM $all 2>/dev/null; sleep 2',
+		'  for x in $all; do kill -0 "$x" 2>/dev/null && kill -KILL "$x" 2>/dev/null; done; sleep 1',
+		'  for x in $all; do kill -0 "$x" 2>/dev/null && { echo "LOAD_LEFT pid $x"; exit 1; }; done',
+		'fi',
 		'f=$(cat "$d/failed" 2>/dev/null)',
 		'rm -rf -- "$d"',
 		'[ -e "$d" ] && { echo "LOAD_LEFT $d"; exit 1; }',
@@ -243,6 +260,11 @@ async function runLevel(ctx, { t, level, load, shape, baseSec, sleep }) {
 			? { ok: true, failed: o.match(/^LOAD_STOPPED failed: (.+)$/m)?.[1] ?? null }
 			: { ok: false, why: tail(r) };
 	};
+	// A killed run stops the load before it undrains (qualify-abort.mjs).
+	const unregister = onAbort(async () => {
+		const s = await stop();
+		if (!s.ok) throw new Error(`the load in ${dir} was not confirmed stopped: ${s.why}`);
+	});
 	try {
 		await sleep((LOAD_WARM_SEC + 5) * 1000);
 		sampler = await ctx.sample({ everySec: 5, maxMinutes: Math.ceil(totalSec / 60) + 5 });
@@ -270,6 +292,7 @@ async function runLevel(ctx, { t, level, load, shape, baseSec, sleep }) {
 	} finally {
 		if (sampler && !sampler.stopped) await sampler.stop().catch(() => []);
 		stopped ??= await stop();
+		unregister();
 		if (!stopped.ok) ctx.log?.(`   ✗ the load in ${dir} was not confirmed stopped: ${stopped.why}`);
 	}
 }

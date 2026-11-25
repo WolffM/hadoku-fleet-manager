@@ -63,6 +63,19 @@ void test('the bars: absolute always, the pool median only with enough zones', (
 	const slow = parseBench(OUTPUT({ p99: BENCH_WRITE_P99_MAX_MS + 1 })).reading;
 	assert.match(judgeBench(slow, []).reason, /> 250 ms/);
 	assert.match(judgeBench(parseBench(OUTPUT({ seqw: 12 })).reading, []).reason, /12 MB\/s < 20/);
+	// claw-1's root HDD, 2026-11-25: 8 MB/s fsync'd blocks, 71 MB/s sequential.
+	// Garage writes blocks without an fsync, so that rate is read, not judged.
+	const hdd = { ...r, seqWriteMbps: 71, blockMbps: 8 };
+	const noFsync = judgeBench(hdd, []);
+	assert.equal(noFsync.verdict, 'pass');
+	assert.match(
+		noFsync.reason,
+		/fsync'd 1 MiB blocks 8 MB\/s \(not judged: Garage runs without data_fsync\)/
+	);
+	assert.equal(noFsync.bars.blockFloorMbps, null);
+	const withFsync = judgeBench(hdd, [], { dataFsync: true });
+	assert.equal(withFsync.verdict, 'fail');
+	assert.match(withFsync.reason, /1 MiB block writes with fsync 8 MB\/s < 10/);
 });
 
 const INV = {

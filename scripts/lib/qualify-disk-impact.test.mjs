@@ -5,6 +5,7 @@ import {
 	IMPACT_IO_PSI_P90,
 	impactResult,
 	judgeLevel,
+	RESYNC_LINK_MBPS,
 	loadAt,
 	tuningFor,
 } from './qualify-disk-impact-judge.mjs';
@@ -23,13 +24,20 @@ const io = (...xs) => xs.map((x) => ({ ioSome10: x }));
 
 void test("the load is Garage's default resync and scrub share of the zone's own rates", () => {
 	// Resync tranquility 2 holds a third of the disk, scrub's 4 a fifth.
-	assert.deepEqual(loadAt({ seqWriteMbps: 150, seqReadMbps: 160 }, 1), {
-		writeMbps: 50,
+	assert.deepEqual(loadAt({ seqWriteMbps: 90, seqReadMbps: 160 }, 1), {
+		writeMbps: 30,
 		readMbps: 32,
 	});
-	assert.deepEqual(loadAt({ seqWriteMbps: 150, seqReadMbps: 160 }, 0.5), {
-		writeMbps: 25,
+	assert.deepEqual(loadAt({ seqWriteMbps: 90, seqReadMbps: 160 }, 0.5), {
+		writeMbps: 15,
 		readMbps: 16,
+	});
+	// A resync arrives over the link: claw-8's NVMe (2253 MB/s) is written at
+	// a third of what 1 GbE carries, never a third of its own rate. Scrub is
+	// local and keeps the disk's rate.
+	assert.deepEqual(loadAt({ seqWriteMbps: 2253, seqReadMbps: 2343 }, 1), {
+		writeMbps: Math.floor(RESYNC_LINK_MBPS / 3),
+		readMbps: 468,
 	});
 	assert.equal(tuningFor(1), null);
 	// Half the default duty: (1+2)/0.5 − 1 = 5, (1+4)/0.5 − 1 = 9.
@@ -100,7 +108,8 @@ void test('the load is bounded, guarded and stoppable; the stop names only its o
 		readMbps: 32,
 		totalSec: 900,
 	});
-	assert.match(s, /--rate=50m --fsync=1 --size=2048M/);
+	// Direct, no fsync per block: Garage writes blocks without one.
+	assert.match(s, /--rate=50m --direct=1 --size=2048M/);
 	assert.match(s, /--name=scrub .* --rate=32m --direct=1/);
 	assert.ok(s.indexOf('LOAD_REFUSE') < s.indexOf('setsid'), 'guards before the load');
 	assert.match(s, /setsid nohup/);
@@ -114,7 +123,10 @@ void test('the load is bounded, guarded and stoppable; the stop names only its o
 		})
 	);
 	assert.throws(() => loadStopScript('/srv/storage/root'), /unexpected load dir/);
-	assert.match(loadStopScript('/srv/storage/root/qualify-impact.Ab12Cd'), /kill -TERM -- "-\$p"/);
+	const stopper = loadStopScript('/srv/storage/root/qualify-impact.Ab12Cd');
+	// The tree, never the group: `timeout` puts fio in a group of its own.
+	assert.match(stopper, /tree\(\) \{ for c in \$\(pgrep -P/);
+	assert.doesNotMatch(stopper, /kill -TERM -- "-/);
 	assert.match(rootProbeScript(), /--sync=dsync/);
 	assert.equal(
 		parseRootProbe(

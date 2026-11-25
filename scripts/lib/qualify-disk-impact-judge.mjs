@@ -46,9 +46,19 @@ export const IMPACT_IO_PSI_P90 = 10;
 /** The root disk's synced-write p99 under load, over its own p99 without. */
 export const IMPACT_ROOT_SYNC_RATIO = 2;
 
+/**
+ * The most a resync can write into a zone, MB/s: what a gigabit link
+ * carries. Every block a resync writes arrives over the network from another
+ * zone, and no claw has more than 1 GbE (Wi-Fi ones less). Scrub reads stay
+ * local and keep the disk's own rate. Without this cap claw-8's NVMe soak
+ * wrote 375 MB/s (2026-11-25), ten times what any resync could send it.
+ */
+export const RESYNC_LINK_MBPS = 117;
+
 /** PURE. The load at one level, MB/s, from the zone's bench reading. */
 export function loadAt(reading, level) {
-	const w = Math.floor(((reading?.seqWriteMbps ?? 0) * level) / (1 + RESYNC_TRANQUILITY));
+	const fill = Math.min(reading?.seqWriteMbps ?? 0, RESYNC_LINK_MBPS);
+	const w = Math.floor((fill * level) / (1 + RESYNC_TRANQUILITY));
 	const r = Math.floor(((reading?.seqReadMbps ?? 0) * level) / (1 + SCRUB_TRANQUILITY));
 	return { writeMbps: Math.max(1, w), readMbps: Math.max(1, r) };
 }

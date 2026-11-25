@@ -52,6 +52,7 @@ import { fileURLToPath } from 'node:url';
 
 import { stateDir } from '../dist/lib/fleet-paths.js';
 import { createEmitter } from './lib/emit.mjs';
+import { runAbortHooks } from './lib/qualify-abort.mjs';
 import { deferralFor, readDrains } from './lib/expected-down.mjs';
 import { busyCount, drain, isDrained, undrain, waitUntilDrained } from './lib/drain-wait.mjs';
 import { loadManifest, machineArg, runOn } from './lib/fleet-exec.mjs';
@@ -203,9 +204,14 @@ if (form) tests = form.tests;
 const state = { held: null };
 for (const sig of ['SIGINT', 'SIGTERM']) {
 	process.once(sig, () => {
-		// A process killed mid-window must not leave the node out of service.
-		if (state.held) undrain(state.held);
-		process.exit(sig === 'SIGINT' ? 130 : 143);
+		// Stop what a step left running on the node first (the node-impact load),
+		// then put the node back: a process killed mid-window must not leave the
+		// node out of service, nor back in service under a test load.
+		void runAbortHooks().then((why) => {
+			for (const w of why) log(`   ✗ on ${sig}: ${w}`);
+			if (state.held) undrain(state.held);
+			process.exit(sig === 'SIGINT' ? 130 : 143);
+		});
 	});
 }
 

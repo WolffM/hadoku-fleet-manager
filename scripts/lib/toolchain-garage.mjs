@@ -94,6 +94,8 @@ const TOML_HEAD = [
 	'# Written by fleet-manager (scripts/lib/toolchain-garage.mjs); edits are replaced.',
 	'metadata_dir = "/var/lib/garage/meta"',
 ];
+// No `data_fsync`: Garage's default, false, is GARAGE_DATA_FSYNC
+// (garage-layout-declared.mjs), which admission's bench and soak read.
 const TOML_TAIL = [
 	'db_engine = "lmdb"',
 	'replication_factor = 3',
