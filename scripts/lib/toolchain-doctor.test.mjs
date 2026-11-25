@@ -398,6 +398,7 @@ test('the backstop is evaluated for REAL, never reported as tools: []', async ()
 				'deno-user',
 				'docker',
 				'ffmpeg',
+				'fonts',
 				'gh',
 				'jdk21',
 				'mpv',

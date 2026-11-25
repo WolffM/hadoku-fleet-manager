@@ -414,6 +414,7 @@ test('an unscoped tool applies to every managed node, the backstop included', ()
 			'deno-user',
 			'docker',
 			'ffmpeg',
+			'fonts',
 			'gh',
 			'jdk21',
 			'mpv',

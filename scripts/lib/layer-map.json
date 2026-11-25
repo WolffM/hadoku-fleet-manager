@@ -774,6 +774,11 @@
     "why": "the toolchain floor's clamav entry, kept out of toolchain-floor.mjs (config) for size: the same table, in the same layer. Imports nodeOffer (capability-offer.ts, config) for its `when`, as toolchain-floor.mjs does"
   },
   {
+    "glob": "scripts/lib/toolchain-fonts.mjs",
+    "layer": "config",
+    "why": "the toolchain floor's fonts entry, kept out of toolchain-floor.mjs (config) for size: the same table, in the same layer. Imports debInstalled (deb-installed.mjs, config) for its repair"
+  },
+  {
     "glob": "scripts/lib/toolchain-garage.mjs",
     "layer": "config",
     "why": "the toolchain floor's garage entry (storage F4, fleet-manager#139), spread into RELEASE_TOOLS (config) for size: the same table, in the same layer. Imports STORAGE_LABEL (capability-registry-storage.ts, config) for its `when`"

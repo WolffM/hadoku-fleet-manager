@@ -18,6 +18,7 @@ import { PM2_BOOT } from './pm2-boot-floor.mjs';
 import { AS_CI, RUST_REPAIRS } from './toolchain-rust.mjs';
 import { NODE_REPAIRS } from './toolchain-node.mjs';
 import { CLAMAV_REPAIRS } from './toolchain-clamav.mjs';
+import { FONT_REPAIRS } from './toolchain-fonts.mjs';
 import { debInstalled } from './deb-installed.mjs';
 import { parseShadow, shadowedBy } from './tool-shadow.mjs';
 
@@ -440,6 +441,7 @@ export const REPAIRS = {
 	 */
 	...NODE_REPAIRS,
 	...CLAMAV_REPAIRS,
+	...FONT_REPAIRS,
 	...RELEASE_TOOLS,
 	/*
 	 * JDK21 + MAVEN (cardtable#5, added 2026-10-05): forge-e2e/forge-jvm move
@@ -733,14 +735,9 @@ export function isVersionManaged(tool) {
 }
 
 /**
- * THE ONE RESOLVER (issue #70) — the install target for a tool, i.e. the
- * newest release that has cleared its debounce — now lives in
- * `tool-release.mjs` as {@link resolveInstallTarget} (cut (iii) layer debt,
- * wave layers-3 lane T). It needs `dispatchLookup`, a real network call
- * against another system's registry, and this file is `config`, which may
- * import nothing above config; `tool-release.mjs` is `access`, and imports
- * {@link minAgeOf} and {@link isVersionManaged} back from here, both of
- * which stay since `check-fleet-toolchain.mjs` also reads them from here.
+ * The install target for a version-managed tool is `resolveInstallTarget` in
+ * `tool-release.mjs` (access), which imports {@link minAgeOf} and
+ * {@link isVersionManaged} back from here.
  */
 
 /**

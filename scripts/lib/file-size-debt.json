@@ -6,9 +6,9 @@
   "scripts/hosting.mjs": 883,
   "scripts/lib/hosting.mjs": 1126,
   "scripts/lib/slice-placement-guard.test.mjs": 2214,
-  "scripts/lib/toolchain-doctor.test.mjs": 1468,
-  "scripts/lib/toolchain-floor.mjs": 902,
-  "scripts/lib/toolchain-floor.test.mjs": 1439,
+  "scripts/lib/toolchain-doctor.test.mjs": 1469,
+  "scripts/lib/toolchain-floor.mjs": 899,
+  "scripts/lib/toolchain-floor.test.mjs": 1440,
   "scripts/node-bootstrap.sh": 2703,
   "scripts/runners-slice-install.sh": 986,
   "scripts/service-inventory.mjs": 956

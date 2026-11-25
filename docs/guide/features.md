@@ -63,6 +63,13 @@ beside it.
 A node **earns** a capability (a routing label) by having a probe actually
 execute it, not by a manifest entry alone.
 
+Every node also carries one **toolchain floor**: the packages both node
+profiles declare, which imaging installs, plus the tools
+`fleet converge-toolchain` checks and `--write` repairs, which the nightly
+refresh also installs wherever one is missing. Browser fonts are part of it
+(Playwright's Debian font set plus DejaVu), so a browser test renders a page
+with the same fonts on every claw.
+
 **How to use it.** `fleet enroll` writes a proposed manifest entry and exits
 non-zero until an operator commits it — enrollment is the one place a node
 describes itself; everywhere else the manifest declares and a probe observes.

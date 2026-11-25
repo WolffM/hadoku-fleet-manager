@@ -186,6 +186,15 @@
           "fail2ban",
           "ffmpeg",
           "mpv",
+          "fontconfig",
+          "fonts-dejavu-core",
+          "fonts-freefont-ttf",
+          "fonts-ipafont-gothic",
+          "fonts-liberation",
+          "fonts-noto-color-emoji",
+          "fonts-tlwg-loma-otf",
+          "fonts-unifont",
+          "fonts-wqy-zenhei",
           "gettext",
           "gh",
           "git",
@@ -242,6 +251,7 @@
           "util-linux",
           "watchdog",
           "wget",
+          "xfonts-scalable",
           "xvfb"
         ],
         "maskServices": ["cups", "cups.socket", "cups.path", "avahi-daemon", "avahi-daemon.socket"],
@@ -253,7 +263,8 @@
         "$why-bevy-deps": "Bevy's build dependencies, for brave-quartet's `check`, `wasm-size` and `bundle` jobs. Those were GitHub-HOSTED until 2026-09-10 on the stated grounds that the claws had neither a Rust toolchain nor a way to run `sudo apt-get` — the second half was about the retired `openclaw` runner user, which has not been what jobs run as for some time, and `hadoku` has NOPASSWD sudo. Named here so a node imaged from this profile can build the crate on arrival rather than after someone notices. The workflow still carries its own install step, but it now installs only what dpkg reports missing, so on a node built from this profile it is a no-op — which is also what keeps it working on hokon, where sudo needs a password.",
         "$why-kf6-qt6": "KF6/Qt6 development headers, for hadoku-task's kate-plugin build. That job ran `container: debian:trixie` on `ubuntu-24.04` because KF6 dev packages exist only on trixie or Ubuntu 25.04 — while EVERY NODE THIS PROFILE IMAGES ALREADY IS Debian 13 (trixie), which is what the profile id says. The container was importing an OS the machine already runs, and the Docker the claws lack was only needed to paper over the wrong base image. Dropped 2026-09-10; the job now builds natively against trixie's own KF6 6.13.0 / Qt6 6.8.2, which is the same KF6 the target desktop runs and therefore what the container was for in the first place.",
         "$why-t64": "The t64 TRANSITION. Debian renamed every library whose ABI changed with 64-bit time_t, so trixie has no `libasound2` at all — `apt-cache policy` reports Candidate: (none) for the old name while `libasound2t64` is installed and doing the job. These four were declared under their pre-transition names, which meant the profile asked for four packages that CANNOT be installed on the distro its own id names. Nothing caught it because nothing ever converged against this list: bootstrap ran once per node and `apt-get install` on an unavailable name fails the step, not the fleet. `fleet converge-toolchain` found all four on its first run, on every node, 2026-09-10.",
-        "$why-time": "GNU `time` (/usr/bin/time -v), for peak RSS. The shell builtin reports wall/user/sys and NOT maximum resident set size, which is the number a capability probe needs when it has to say how much memory a payload actually wants. Found missing on all seven claws 2026-09-11, when the cargo-bevy payload probe exited 127 on every node at once."
+        "$why-time": "GNU `time` (/usr/bin/time -v), for peak RSS. The shell builtin reports wall/user/sys and NOT maximum resident set size, which is the number a capability probe needs when it has to say how much memory a payload actually wants. Found missing on all seven claws 2026-09-11, when the cargo-bevy payload probe exited 127 on every node at once.",
+        "$why-fonts": "Browser fonts, for the `playwright` capability, on every node: fontconfig decides what a page renders with, so two claws with different fonts lay the same page out differently and a layout assertion passes on one and fails on the other (hadoku-watchparty's nightly e2e). MEASURED 2026-11-25, `fc-list | wc -l` as ci: claw-2/3/4/5/6/8/9 58; claw-1 50 (no DejaVu, so sans-serif resolved to WenQuanYi Zen Hei there and to DejaVu Sans elsewhere); claw-10, imaged from this profile, 8 (DejaVu only: no Liberation, no emoji). Every one had come from a hand-run `playwright install-deps` nothing declared. The set is Playwright's own install-deps font list for Debian 13 (playwright-core 1.62.1, debian13-x64: fonts-liberation, fonts-noto-color-emoji, fonts-unifont, fonts-ipafont-gothic, fonts-wqy-zenhei, fonts-tlwg-loma-otf, fonts-freefont-ttf, xfonts-scalable) plus fonts-dejavu-core (the default sans/serif/mono the claws disagreed on) and fontconfig (fc-list, which the floor's `fonts` detect runs). The per-package reasons and the drift repair are the toolchain floor's `fonts` entry, scripts/lib/toolchain-fonts.mjs."
       },
       "unattendedUpgrades": {
         "$why": "Security origin only, and Automatic-Reboot false. A node that reboots itself mid-job turns a security update into a CI failure with no operator-visible cause, and the watchdog already owns the 'this box is wedged' reboot; the fleet's own reboot cycle (`fleet reboot-claws`, drained and one node at a time) owns the kernel one.",
@@ -430,6 +441,15 @@
           "fail2ban",
           "ffmpeg",
           "mpv",
+          "fontconfig",
+          "fonts-dejavu-core",
+          "fonts-freefont-ttf",
+          "fonts-ipafont-gothic",
+          "fonts-liberation",
+          "fonts-noto-color-emoji",
+          "fonts-tlwg-loma-otf",
+          "fonts-unifont",
+          "fonts-wqy-zenhei",
           "gettext",
           "gh",
           "git",
@@ -486,6 +506,7 @@
           "util-linux",
           "watchdog",
           "wget",
+          "xfonts-scalable",
           "xvfb"
         ],
         "maskServices": ["cups", "cups.socket", "cups.path", "avahi-daemon", "avahi-daemon.socket"],
@@ -496,7 +517,8 @@
         "$why-bevy-deps": "Bevy's build dependencies, for brave-quartet's `check`, `wasm-size` and `bundle` jobs. Those were GitHub-HOSTED until 2026-09-10 on the stated grounds that the claws had neither a Rust toolchain nor a way to run `sudo apt-get` — the second half was about the retired `openclaw` runner user, which has not been what jobs run as for some time, and `hadoku` has NOPASSWD sudo. Named here so a node imaged from this profile can build the crate on arrival rather than after someone notices. The workflow still carries its own install step, but it now installs only what dpkg reports missing, so on a node built from this profile it is a no-op — which is also what keeps it working on hokon, where sudo needs a password.",
         "$why-kf6-qt6": "KF6/Qt6 development headers, for hadoku-task's kate-plugin build. That job ran `container: debian:trixie` on `ubuntu-24.04` because KF6 dev packages exist only on trixie or Ubuntu 25.04 — while EVERY NODE THIS PROFILE IMAGES ALREADY IS Debian 13 (trixie), which is what the profile id says. The container was importing an OS the machine already runs, and the Docker the claws lack was only needed to paper over the wrong base image. Dropped 2026-09-10; the job now builds natively against trixie's own KF6 6.13.0 / Qt6 6.8.2, which is the same KF6 the target desktop runs and therefore what the container was for in the first place.",
         "$why-t64": "The t64 TRANSITION. Debian renamed every library whose ABI changed with 64-bit time_t, so trixie has no `libasound2` at all — `apt-cache policy` reports Candidate: (none) for the old name while `libasound2t64` is installed and doing the job. These four were declared under their pre-transition names, which meant the profile asked for four packages that CANNOT be installed on the distro its own id names. Nothing caught it because nothing ever converged against this list: bootstrap ran once per node and `apt-get install` on an unavailable name fails the step, not the fleet. `fleet converge-toolchain` found all four on its first run, on every node, 2026-09-10.",
-        "$why-time": "GNU `time` (/usr/bin/time -v), for peak RSS. The shell builtin reports wall/user/sys and NOT maximum resident set size, which is the number a capability probe needs when it has to say how much memory a payload actually wants. Found missing on all seven claws 2026-09-11, when the cargo-bevy payload probe exited 127 on every node at once."
+        "$why-time": "GNU `time` (/usr/bin/time -v), for peak RSS. The shell builtin reports wall/user/sys and NOT maximum resident set size, which is the number a capability probe needs when it has to say how much memory a payload actually wants. Found missing on all seven claws 2026-09-11, when the cargo-bevy payload probe exited 127 on every node at once.",
+        "$why-fonts": "Browser fonts, for the `playwright` capability, on every node: fontconfig decides what a page renders with, so two claws with different fonts lay the same page out differently and a layout assertion passes on one and fails on the other (hadoku-watchparty's nightly e2e). MEASURED 2026-11-25, `fc-list | wc -l` as ci: claw-2/3/4/5/6/8/9 58; claw-1 50 (no DejaVu, so sans-serif resolved to WenQuanYi Zen Hei there and to DejaVu Sans elsewhere); claw-10, imaged from this profile, 8 (DejaVu only: no Liberation, no emoji). Every one had come from a hand-run `playwright install-deps` nothing declared. The set is Playwright's own install-deps font list for Debian 13 (playwright-core 1.62.1, debian13-x64: fonts-liberation, fonts-noto-color-emoji, fonts-unifont, fonts-ipafont-gothic, fonts-wqy-zenhei, fonts-tlwg-loma-otf, fonts-freefont-ttf, xfonts-scalable) plus fonts-dejavu-core (the default sans/serif/mono the claws disagreed on) and fontconfig (fc-list, which the floor's `fonts` detect runs). The per-package reasons and the drift repair are the toolchain floor's `fonts` entry, scripts/lib/toolchain-fonts.mjs."
       },
       "unattendedUpgrades": {
         "$why": "Security origin only, and Automatic-Reboot false. A node that reboots itself mid-job turns a security update into a CI failure with no operator-visible cause, and the watchdog already owns the 'this box is wedged' reboot; the fleet's own reboot cycle (`fleet reboot-claws`, drained and one node at a time) owns the kernel one.",
