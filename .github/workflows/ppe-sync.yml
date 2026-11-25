@@ -30,7 +30,12 @@ jobs:
 
       - uses: actions/checkout@v6
         with:
-          sparse-checkout: scripts/ppe
+          # Every file the scripts import, and nothing else; the list is
+          # held to their import graph by scripts/ppe/sparse-checkout.test.mjs.
+          sparse-checkout: |
+            /scripts/ppe/
+            /scripts/lib/is-main.mjs
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - uses: actions/setup-node@v6
