@@ -40,6 +40,7 @@
  * Exits 0 and prints nothing on a clean split; exits 1 and lists the
  * mismatch otherwise.
  */
+import { isMain } from './lib/is-main.mjs';
 import { execFileSync } from 'node:child_process';
 
 const IMPORT_LINE =
@@ -226,4 +227,4 @@ function main() {
 	process.exit(1);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (isMain(import.meta.url)) main();

@@ -29,8 +29,8 @@
  *
  * @guards scripts/benchmark-node.sh
  */
+import { isMain } from './lib/is-main.mjs';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
 // WHERE `$benchmark` LIVES — the state dir since Wave 3h, through the one
 // reader/writer that merges it with the manifest's copy while the migration is
 // in flight. See src/lib/measured.ts; the BUILT copy, for the reason
@@ -708,7 +708,7 @@ async function main() {
 // uses, and the reason `runCadence`, `cadenceBands` and the other pure
 // functions above can be imported by a test without that import also parsing
 // argv, ssh-ing to a node, or writing a state file.
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+if (isMain(import.meta.url)) {
 	main().catch((err) => {
 		console.error(err);
 		process.exit(1);

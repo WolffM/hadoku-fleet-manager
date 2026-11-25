@@ -2,7 +2,7 @@
 // Merge a push to main that is not a promotion (a bot's) into ppe, so the
 // next promotion is still a fast-forward. Run by .github/workflows/ppe-sync.yml.
 // A promotion's push is already in ppe and is left alone. A conflict is reported, never forced.
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../lib/is-main.mjs';
 
 import {
 	CouldNotLook,
@@ -140,6 +140,6 @@ export async function main(env = process.env) {
 	return 1;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+if (isMain(import.meta.url)) {
 	process.exitCode = await main();
 }

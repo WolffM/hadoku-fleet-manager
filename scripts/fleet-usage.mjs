@@ -33,6 +33,7 @@
  * logging off, or no door table) — "I could not look" is never "nobody ran
  * anything"; 2 on a bad argument.
  */
+import { isMain } from './lib/is-main.mjs';
 import process from 'node:process';
 
 import { createEmitter } from './lib/emit.mjs';
@@ -179,4 +180,4 @@ function main(argv = process.argv.slice(2), nowMs = Date.now()) {
 	return 0;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) process.exit(main());
+if (isMain(import.meta.url)) process.exit(main());

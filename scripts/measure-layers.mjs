@@ -32,6 +32,7 @@
  * "a domain never imports another domain" is the same-index, different-group
  * case within whichever stratum is the domain stratum for that cut.
  */
+import { isMain } from './lib/is-main.mjs';
 import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve as pathResolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -424,4 +425,4 @@ function main() {
 	}
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (isMain(import.meta.url)) main();

@@ -339,6 +339,11 @@
     "layer": "automation"
   },
   {
+    "glob": "scripts/lib/is-main.mjs",
+    "layer": "automation",
+    "why": "fleet-manager#160: the entry-point check every CLI script ends with, realpath on both sides so a pnpm symlink still runs main(); generic, domain-blind, same bucket as argv.mjs right above it."
+  },
+  {
     "glob": "scripts/lib/term.mjs",
     "layer": "automation",
     "why": "F10: the ANSI palette + errText sweep (wave 5d lane B) \u2014 same \"generic, domain-blind, cross-cutting\" shape as argv.mjs beside it."

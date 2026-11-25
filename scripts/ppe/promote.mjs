@@ -10,7 +10,7 @@
 //
 // "I could not look" never promotes and never reverts. Any failed read exits
 // 1 with the reason and changes nothing.
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../lib/is-main.mjs';
 
 import {
 	commitVerdict,
@@ -435,6 +435,6 @@ export async function main(env = process.env) {
 	return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+if (isMain(import.meta.url)) {
 	process.exitCode = await main();
 }

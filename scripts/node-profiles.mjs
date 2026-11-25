@@ -28,6 +28,7 @@
  * @guards scripts/node-bootstrap.sh
  * @guards scripts/node-usb-prep.sh
  */
+import { isMain } from './lib/is-main.mjs';
 import process from 'node:process';
 import { keepStdoutWhole } from './lib/emit.mjs';
 import {
@@ -41,7 +42,7 @@ import {
 
 keepStdoutWhole();
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+if (isMain(import.meta.url)) {
 	const [verb, ...rest] = process.argv.slice(2);
 	const fi = rest.indexOf('--file');
 	const opts = fi > -1 ? { path: rest[fi + 1] } : {};

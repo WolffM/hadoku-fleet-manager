@@ -19,8 +19,7 @@
  * --refresh`'s own nightly pass) can act on it.
  */
 
-import { realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { isMain } from './lib/is-main.mjs';
 
 import { loadManifest, machineArg } from './lib/fleet-exec.mjs';
 import { isLocalNode } from '../dist/lib/node-identity.js';
@@ -231,5 +230,4 @@ async function main() {
 
 // Run only as the entry point, so a test can import the pure halves (today,
 // only through `scripts/lib/toolchain-doctor.mjs`).
-const entry = process.argv[1] ? realpathSync(process.argv[1]) : null;
-if (entry === realpathSync(fileURLToPath(import.meta.url))) await main();
+if (isMain(import.meta.url)) await main();

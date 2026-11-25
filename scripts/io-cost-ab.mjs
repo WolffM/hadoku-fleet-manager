@@ -30,11 +30,11 @@
  * `--measure-only` takes ONE window in the current state and switches
  * nothing; it needs no root (the OFF baseline before the helper exists).
  */
+import { isMain } from './lib/is-main.mjs';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const CG = '/sys/fs/cgroup';
 const HELPER = '/usr/local/sbin/fleet-io-cost';
@@ -399,7 +399,7 @@ async function main() {
 	);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+if (isMain(import.meta.url)) {
 	main().catch((e) => {
 		process.stderr.write(`[io-cost-ab] ${e.stack ?? e}\n`);
 		process.exit(1);

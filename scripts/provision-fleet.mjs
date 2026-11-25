@@ -114,10 +114,11 @@
  * @guards scripts/**
  */
 
+import { isMain } from './lib/is-main.mjs';
 import process from 'node:process';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import {
 	loadManifest,
@@ -379,7 +380,7 @@ async function main() {
 		: fleetRun({ confirm, verifyOnly });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+if (isMain(import.meta.url)) {
 	main().then(
 		(code) => process.exit(code),
 		(err) => {

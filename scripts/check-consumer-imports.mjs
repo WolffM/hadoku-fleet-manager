@@ -41,12 +41,13 @@
  *   pnpm run check:consumers [--json] [--repo owner/name ...]
  *   FLEET_SERVICE_KEY=... node scripts/check-consumer-imports.mjs --surface-url <mgmt>/api/repo/consumer-imports
  */
+import { isMain } from './lib/is-main.mjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import { writeFileAtomicSync } from '../dist/lib/atomic-json.js';
 import { PKG, SKIP, SOURCE, collectUses } from './lib/consumer-imports.mjs';
@@ -274,6 +275,6 @@ async function main(argv) {
 	return result.ok ? 0 : 1;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+if (isMain(import.meta.url)) {
 	process.exitCode = await main(process.argv.slice(2));
 }
