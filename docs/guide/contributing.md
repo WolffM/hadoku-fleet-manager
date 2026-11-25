@@ -108,10 +108,9 @@ in a commit.
 Publishing to GitHub Packages happens on every version bump. The platform's
 own management service installs the new version on its own deploy cycle —
 a push here does not, by itself, restart anything that is running it.
-The registry keeps only the newest 30 versions: each publish deletes the
-older ones, and the published package carries a one-line README that links
-back here. Both keep the package's metadata small, because every install
-that resolves it downloads that metadata whole.
+The published package carries a one-line README that links back here: the
+registry copies each version's README into the package's metadata, and every
+install that resolves the package downloads that metadata whole.
 
 ## Trivia
 

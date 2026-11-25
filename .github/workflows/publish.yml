@@ -261,44 +261,6 @@ jobs:
           body: '{"event_type":"packages_updated","client_payload":{"packages":["@wolffm/fleet-manager"],"sha":"${{ github.sha }}"}}'
           service-key: ${{ secrets.KEY_SERVICE_FLEET_MANAGER }}
 
-      # KEEP THE NEWEST 30 VERSIONS, delete the rest. Every version is a row in
-      # the package's metadata, which each resolve downloads whole, and this
-      # package publishes about 200 times a month: 443 versions made it 9.7 MB
-      # (2026-11-25). The consumer picks a new version up within minutes, so 30
-      # is days of history. GITHUB_TOKEN may delete only with this repository
-      # holding the Admin role on the package (package settings, Manage
-      # Actions access); without it the DELETE is refused and this step fails.
-      - name: Prune old versions
-        if: steps.gate.outputs.ships == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          KEEP: '30'
-        run: |
-          node -e '
-            const api = `${process.env.GITHUB_API_URL}/users/${process.env.GITHUB_REPOSITORY_OWNER}/packages/npm/fleet-manager/versions`;
-            const headers = { authorization: `Bearer ${process.env.GH_TOKEN}`, accept: "application/vnd.github+json" };
-            const keep = Number(process.env.KEEP);
-            const semver = (v) => v.split(".").map(Number);
-            const newer = (a, b) => { const x = semver(a.name), y = semver(b.name); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return y[i] - x[i]; return 0; };
-            (async () => {
-              const all = [];
-              for (let page = 1; ; page++) {
-                const r = await fetch(`${api}?per_page=100&page=${page}`, { headers });
-                if (!r.ok) throw new Error(`list versions: HTTP ${r.status} ${await r.text()}`);
-                const batch = await r.json();
-                all.push(...batch);
-                if (batch.length < 100) break;
-              }
-              const doomed = all.sort(newer).slice(keep);
-              console.log(`${all.length} versions, keeping ${Math.min(keep, all.length)}, deleting ${doomed.length}`);
-              for (const v of doomed) {
-                const r = await fetch(`${api}/${v.id}`, { method: "DELETE", headers });
-                if (!r.ok && r.status !== 404) throw new Error(`delete ${v.name}: HTTP ${r.status} ${await r.text()}`);
-                console.log(`deleted ${v.name}`);
-              }
-            })().catch((e) => { console.error(e.message); process.exit(1); });
-          '
-
       # A red run is seen by nobody unless it says so itself: nothing polls
       # these repos. `always()` so RECOVERIES report too -- without the success
       # side the alert state stays broken and the next real failure arrives as a
