@@ -7,7 +7,8 @@
  *
  * NEEDS the zone's own `disk-bench` (its rates set the load) and the node's
  * own `concurrency-ramp` (its stored p75 unit and the k=1 wall that unit took
- * are the decoy job and its baseline). Either missing is could-not-look.
+ * are the decoy job and its baseline; that k=1 step's heat is also what the
+ * node does without the load, #162). Either missing is could-not-look.
  *
  * ONE LEVEL, on the node, under the drain (no CI runs; Garage keeps running):
  *   1. the root disk's 4k O_DSYNC write p99, without the load (IMPACT_PROBE_SEC);
@@ -205,6 +206,7 @@ export function makeImpactTest({
 						load: loadAt(reading, level),
 						shape,
 						baseSec,
+						alone: ramp.steps[0],
 						sleep,
 					});
 					levels.push(l);
@@ -233,7 +235,7 @@ export function makeImpactTest({
 }
 
 /** One level on one zone. The load is stopped on every path. */
-async function runLevel(ctx, { t, level, load, shape, baseSec, sleep }) {
+async function runLevel(ctx, { t, level, load, shape, baseSec, alone, sleep }) {
 	const out = (verdict, reasons, metrics = {}) => ({ level, load, verdict, reasons, metrics });
 	const base = parseRootProbe((await ctx.exec(rootProbeScript(), { timeoutMs: 180_000 })).stdout);
 	const unitTimeout = Math.ceil(baseSec * QUALIFY_BARS.durationRatio) + 30;
@@ -287,7 +289,7 @@ async function runLevel(ctx, { t, level, load, shape, baseSec, sleep }) {
 			baselineSec: baseSec,
 			noDieTemperature: ctx.machine?.thermal?.noDieTemperature === true,
 		});
-		const j = judgeLevel({ step, samples: rows, rootP99Base: base, rootP99Load: loaded });
+		const j = judgeLevel({ step, samples: rows, rootP99Base: base, rootP99Load: loaded, alone });
 		return out(j.verdict, j.reasons, j.metrics);
 	} finally {
 		if (sampler && !sampler.stopped) await sampler.stop().catch(() => []);

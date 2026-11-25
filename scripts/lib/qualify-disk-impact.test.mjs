@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { judgeStep } from './qualify-concurrency.mjs';
 import {
 	IMPACT_IO_PSI_P90,
+	IMPACT_TEMP_MARGIN_C,
 	impactResult,
 	judgeLevel,
+	ownHeat,
 	RESYNC_LINK_MBPS,
 	loadAt,
 	tuningFor,
@@ -146,14 +149,14 @@ const PATHS = { rootZoneDir: '/srv/storage/root', mountPointFor: (s) => `/srv/st
 const PROBE = (p99) =>
 	`PROBE_BEGIN\n${JSON.stringify({ jobs: [{ error: 0, write: { clat_ns: { percentile: { '99.000000': p99 * 1e6 } } } }] })}\nPROBE_RC 0\nPROBE_END`;
 
-function fakeNode({ rootLoaded = 20, unitSec = 310, ioP = 2, loadFailed = '' } = {}) {
+function fakeNode({ rootLoaded = 20, unitSec = 310, ioP = 2, loadFailed = '', heat = null } = {}) {
 	const calls = [];
 	let probes = 0;
 	return {
 		calls,
 		ctx: {
 			node: 'claw-1',
-			machine: { thermal: { noDieTemperature: true } },
+			machine: { thermal: { noDieTemperature: heat === null } },
 			log: () => {},
 			exec: async (script) => {
 				calls.push(script.split('\n')[0]);
@@ -175,7 +178,14 @@ function fakeNode({ rootLoaded = 20, unitSec = 310, ioP = 2, loadFailed = '' } =
 				stopped: false,
 				async stop() {
 					this.stopped = true;
-					return [{ at: 200, cpuSome10: 1, ioSome10: ioP, throttle: 0, temps: {} }];
+					if (!heat) return [{ at: 200, cpuSome10: 1, ioSome10: ioP, throttle: 0, temps: {} }];
+					return Array.from({ length: 100 }, (_, i) => ({
+						at: 200 + 5 * i,
+						cpuSome10: 1,
+						ioSome10: ioP,
+						throttle: Math.round((heat.throttle * i) / 99),
+						temps: { [DIE]: heat.temp },
+					}));
 				},
 			}),
 		},
@@ -219,4 +229,89 @@ void test('without its own bench or ramp the soak could not look', async () => {
 		...PATHS,
 	});
 	assert.match((await noBench.run(fakeNode().ctx)).reason, /no disk-bench reading/);
+});
+
+// #162: claw-1 as measured. Its ramp k=1 (the same unit, no disk load) and its node-impact levels.
+const DIE = 'hwmon.3.coretemp.Package_id_0';
+const CLAW1_ALONE = { tempMax: 98, throttleDelta: 109832, samples: 93, worstSec: 466.975 };
+/** judgeStep's own output for one unit at `temp` °C, `throttle` events over 100 samples. */
+const heatStep = (temp, throttle) =>
+	judgeStep({
+		k: 1,
+		samples: Array.from({ length: 100 }, (_, i) => ({
+			cpuSome10: 0.12,
+			temps: { [DIE]: temp },
+			throttle: Math.round((throttle * i) / 99),
+		})),
+		run: { complete: true, units: [{ wallSec: 470, exit: 0, timedOut: false }], oomKills: 0 },
+		baselineSec: 466.975,
+		noDieTemperature: false,
+	});
+
+void test("#162: a node's own heat at one job alone is not charged to Garage's load", () => {
+	const step = heatStep(98, 122776);
+	assert.equal(step.verdict, 'crossed', 'the absolute bars still fire on their own');
+	assert.equal(step.reasons.length, 2, step.reasons.join('; '));
+	const at = (alone, ioP = 2, rootLoad = 120) =>
+		judgeLevel({ step, samples: io(ioP), rootP99Base: 108.53, rootP99Load: rootLoad, alone });
+
+	// Without a baseline the old reading stands: both heat reasons count.
+	assert.deepEqual(at(null).reasons, step.reasons);
+	// claw-1's own k=1 already did this: the level is held, and says what it did not count.
+	const own = at(CLAW1_ALONE);
+	assert.equal(own.verdict, 'held', own.reasons.join('; '));
+	assert.match(
+		own.metrics.ownHeat,
+		/package 98 °C \(98 °C alone\), 1228 throttles per sample \(1181 alone\)/
+	);
+	// The disk's crossings are still the load's: claw-1 at 0.25 as measured fails on them alone.
+	const measured = at(CLAW1_ALONE, 13.44, 408.94);
+	assert.equal(measured.verdict, 'crossed');
+	assert.equal(measured.reasons.length, 2, measured.reasons.join('; '));
+	assert.match(measured.reasons[0], /^IO pressure p90 13\.44% ≥ 10%$/);
+	assert.match(measured.reasons[1], /^root 4k O_DSYNC write p99 408\.94 ms > 2× its 108\.53 ms/);
+
+	// The load made it worse: hotter past the margin, or throttling faster, counts again.
+	const hotter = ownHeat(heatStep(98 + IMPACT_TEMP_MARGIN_C + 1, 0).metrics, CLAW1_ALONE);
+	assert.equal(hotter.temp, false);
+	assert.equal(ownHeat(heatStep(98, 2 * 122776).metrics, CLAW1_ALONE).throttle, false);
+	// A node cool alone (claw-8: 60 °C, no throttles) is judged by the bars as before.
+	const cool = { tempMax: 60, throttleDelta: 0, samples: 77 };
+	assert.deepEqual(ownHeat(step.metrics, cool), { temp: false, throttle: false, why: null });
+	assert.equal(at(cool).reasons.length, 2);
+});
+
+void test('#162: the result names the heat it did not count', () => {
+	const lvl = (level, verdict, ownHeatWhy) => ({
+		level,
+		verdict,
+		load: { writeMbps: 8, readMbps: 5 },
+		reasons: verdict === 'crossed' ? ['IO pressure p90 13.44% ≥ 10%'] : [],
+		metrics: ownHeatWhy ? { ownHeat: ownHeatWhy } : {},
+	});
+	const why = "the node's own heat at one job without the load: package 98 °C (98 °C alone)";
+	const fail = impactResult('JR1', [lvl(0.25, 'crossed', why)]);
+	assert.match(fail.reason, /IO pressure p90 13\.44% ≥ 10%; not counted: the node's own heat/);
+	const pass = impactResult('JR1', [lvl(1, 'held', why)]);
+	assert.match(pass.reason, /held level 1 .*; not counted: the node's own heat/);
+	assert.doesNotMatch(impactResult('JR1', [lvl(1, 'held')]).reason, /not counted/);
+});
+
+void test("#162: the soak passes the node's ramp k=1 to the judge", async () => {
+	const t = (alone) =>
+		makeImpactTest({
+			zoneDisks: [{ serial: null, root: true }],
+			benchOf: () => READING,
+			ramp: { ...RAMP, steps: [{ ...alone, worstSec: 300 }] },
+			...PATHS,
+			sleep: async () => {},
+		});
+	const heat = { temp: 98, throttle: 122776 };
+	const hot = await t(CLAW1_ALONE).run(fakeNode({ heat }).ctx);
+	assert.equal(hot.status, 'pass', hot.reason);
+	assert.match(hot.reason, /not counted: the node's own heat/);
+	// The same heat on a node that is cool alone fails every level on it.
+	const cool = await t({ tempMax: 60, throttleDelta: 0, samples: 77 }).run(fakeNode({ heat }).ctx);
+	assert.equal(cool.status, 'fail');
+	assert.match(cool.reason, /package reached 98 °C/);
 });

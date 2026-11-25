@@ -28,8 +28,19 @@
  *   - the ROOT disk's 4k O_DSYNC write p99 (what every CI job's fsync waits
  *     on): if it held RAND_SYNC_P99_MS without the load it must hold it with
  *     the load, and it may not grow past IMPACT_ROOT_SYNC_RATIO of itself.
+ *
+ * THE NODE'S OWN HEAT IS NOT THE LOAD'S (hadoku-fleet-manager#162). A node
+ * whose ramp k=1 step (`alone`: the same unit, no disk load) already crossed
+ * the temperature or throttle bar would cross it at every level whatever
+ * Garage did. claw-1 read 98 °C and ~1,181 throttles per sample alone, and
+ * 98-99 °C and 1,188-1,228 under every level, so a disk-sized change in load
+ * was billed for CPU heat. Such a crossing counts only when the load made it
+ * worse: hotter than `alone` by IMPACT_TEMP_MARGIN_C, or throttling faster
+ * per sample by IMPACT_THROTTLE_RATIO. Otherwise it is dropped and named in
+ * `metrics.ownHeat`, and the verdict rests on what the load did.
  */
 import { RAND_SYNC_P99_MS } from './qualify-io.mjs';
+import { QUALIFY_BARS } from './qualify-registry.mjs';
 
 /** Garage's default worker tranquilities (v2.5.0). */
 export const RESYNC_TRANQUILITY = 2;
@@ -45,6 +56,45 @@ export const IMPACT_LEVELS = Object.freeze([1, 0.5, 0.25]);
 export const IMPACT_IO_PSI_P90 = 10;
 /** The root disk's synced-write p99 under load, over its own p99 without. */
 export const IMPACT_ROOT_SYNC_RATIO = 2;
+/** °C over the node's own k=1 peak before an already-hot node's heat is the load's. */
+export const IMPACT_TEMP_MARGIN_C = 3;
+/** Throttles per sample over the node's own k=1 rate before they are the load's. */
+export const IMPACT_THROTTLE_RATIO = 1.5;
+
+const TEMP_REASON = /^package reached /;
+const THROTTLE_REASON = /^\d+ new core throttle event/;
+const perSample = (m) =>
+	Number.isFinite(m?.throttleDelta) && m?.samples > 0 ? m.throttleDelta / m.samples : null;
+
+/**
+ * PURE. Which of a level's heat crossings the node makes on its own (#162).
+ * @param {object} m the level's judgeStep metrics
+ * @param {object|null|undefined} alone the node's concurrency-ramp k=1 step metrics
+ * @returns {{ temp: boolean, throttle: boolean, why: string|null }}
+ */
+export function ownHeat(m, alone) {
+	const hotAlone = Number.isFinite(alone?.tempMax) && alone.tempMax >= QUALIFY_BARS.packageTempC;
+	const temp =
+		hotAlone && Number.isFinite(m?.tempMax) && m.tempMax <= alone.tempMax + IMPACT_TEMP_MARGIN_C;
+	const rateAlone = perSample(alone);
+	const rate = perSample(m);
+	const throttle =
+		rateAlone !== null &&
+		alone.throttleDelta > QUALIFY_BARS.newThrottleEvents &&
+		rate !== null &&
+		rate <= rateAlone * IMPACT_THROTTLE_RATIO;
+	const parts = [
+		temp ? `package ${m.tempMax} °C (${alone.tempMax} °C alone)` : null,
+		throttle ? `${Math.round(rate)} throttles per sample (${Math.round(rateAlone)} alone)` : null,
+	].filter(Boolean);
+	return {
+		temp,
+		throttle,
+		why: parts.length
+			? `the node's own heat at one job without the load: ${parts.join(', ')}`
+			: null,
+	};
+}
 
 /**
  * The most a resync can write into a zone, MB/s: what a gigabit link
@@ -85,11 +135,18 @@ const q90 = (xs) => {
  * PURE. One level's verdict.
  *
  * @param {{ step: { verdict: string, reasons: string[], metrics: object },
- *   samples: { ioSome10: number|null }[], rootP99Base: number|null, rootP99Load: number|null }} a
+ *   samples: { ioSome10: number|null }[], rootP99Base: number|null, rootP99Load: number|null,
+ *   alone?: object|null }} a  `alone`: the node's concurrency-ramp k=1 step metrics
  * @returns {{ verdict: 'held'|'crossed'|'could-not-look', reasons: string[], metrics: object }}
  */
-export function judgeLevel({ step, samples, rootP99Base, rootP99Load }) {
-	const reasons = step.verdict === 'crossed' ? [...step.reasons] : [];
+export function judgeLevel({ step, samples, rootP99Base, rootP99Load, alone = null }) {
+	const own = ownHeat(step.metrics, alone);
+	const reasons =
+		step.verdict === 'crossed'
+			? step.reasons.filter(
+					(r) => !(own.temp && TEMP_REASON.test(r)) && !(own.throttle && THROTTLE_REASON.test(r))
+				)
+			: [];
 	const unknown = step.verdict === 'could-not-look' ? [...step.reasons] : [];
 	const ioP90 = q90(samples.map((s) => s.ioSome10));
 	if (ioP90 === null) unknown.push('no IO pressure reading (no /proc/pressure/io?)');
@@ -107,7 +164,13 @@ export function judgeLevel({ step, samples, rootP99Base, rootP99Load }) {
 				`root 4k O_DSYNC write p99 ${rootP99Load} ms > ${IMPACT_ROOT_SYNC_RATIO}× its ${rootP99Base} ms without the load`
 			);
 	}
-	const metrics = { ...step.metrics, ioP90, rootP99Base, rootP99Load };
+	const metrics = {
+		...step.metrics,
+		ioP90,
+		rootP99Base,
+		rootP99Load,
+		...(own.why ? { ownHeat: own.why } : {}),
+	};
 	if (reasons.length) return { verdict: 'crossed', reasons: [...reasons, ...unknown], metrics };
 	if (unknown.length) return { verdict: 'could-not-look', reasons: unknown, metrics };
 	return { verdict: 'held', reasons: [], metrics };
@@ -125,6 +188,8 @@ export function impactResult(serial, levels) {
 	const where = (l) =>
 		`level ${l.level} (resync ${l.load.writeMbps} MB/s + scrub ${l.load.readMbps} MB/s)`;
 	const base = { serial, tolerated, tuning, levels };
+	const said = held ?? last;
+	const note = said?.metrics?.ownHeat ? `; not counted: ${said.metrics.ownHeat}` : '';
 	if (held)
 		return {
 			verdict: 'pass',
@@ -133,18 +198,19 @@ export function impactResult(serial, levels) {
 				(tuning
 					? `, not the default load; admit with resync-tranquility ${tuning.resyncTranquility}, ` +
 						`scrub-tranquility ${tuning.scrubTranquility}`
-					: ''),
+					: '') +
+				note,
 			...base,
 		};
 	if (levels.some((l) => l.verdict === 'could-not-look'))
 		return {
 			verdict: 'blocked',
-			reason: `${serial}: ${where(last)} could not be judged: ${last.reasons.join('; ')}`,
+			reason: `${serial}: ${where(last)} could not be judged: ${last.reasons.join('; ')}${note}`,
 			...base,
 		};
 	return {
 		verdict: 'fail',
-		reason: `${serial}: the node held no level of Garage's load; at ${where(last)}: ${last.reasons.join('; ')}`,
+		reason: `${serial}: the node held no level of Garage's load; at ${where(last)}: ${last.reasons.join('; ')}${note}`,
 		...base,
 	};
 }
