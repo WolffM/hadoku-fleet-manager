@@ -21,7 +21,7 @@ import { runOn, selectMachines } from './fleet-exec.mjs';
 import { offerFor, offerProbe, parseOfferProbe } from './hosting-offers.mjs';
 import { stateDir } from '../../dist/lib/fleet-paths.js';
 import { CAPACITY_SAMPLE_FILE, capacitySampleStore } from '../../dist/capacity-sample-store.js';
-import { reliabilityOf } from './host-reliability.mjs';
+import { downStreakOf, reliabilityOf } from './host-reliability.mjs';
 import { pm2Peers } from './pm2-app-layer.mjs';
 import { tenantsByNode } from './tenant-declarations.mjs';
 import { requiredRules } from './hosting-placement.mjs';
@@ -74,7 +74,9 @@ export async function collectOffers(manifest, { tools = [] } = {}) {
 	const peers = pm2Peers();
 	const drains = readDrains();
 	const labelsOf = offeredLabels(manifest.machines ?? {});
-	const reliability = reliabilityOf(readSamples(), Date.now());
+	const samples = readSamples();
+	const reliability = reliabilityOf(samples, Date.now());
+	const downStreak = downStreakOf(samples, Date.now());
 	const rulesOf = registeredRules();
 
 	const offers = await Promise.all(
@@ -99,6 +101,7 @@ export async function collectOffers(manifest, { tools = [] } = {}) {
 				offer.expectedDown = deferralFor(node, drains).deferred;
 			} else if (peers.set === null) offer.unknown.push(peers.why);
 			offer.reliability = reliability(node);
+			offer.downStreak = downStreak(node);
 			// Every tenant already here carries ITS rules, so a plan for a newcomer
 			// can refuse a node where the newcomer would break them (cardtable,
 			// 2026-11-04, its hosting contract §12.1).

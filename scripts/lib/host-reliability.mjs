@@ -130,3 +130,43 @@ export function reliabilityOf(read, nowMs) {
 		return memo.get(node);
 	};
 }
+
+/**
+ * HOW LONG HAS THIS NODE BEEN UNREACHABLE, RIGHT NOW? Counted in samples, for
+ * the converger's question "is a standby that did not answer this probe
+ * actually gone?". On 2026-11-24 claw-9 was saturated by CI (4/4, three heavy,
+ * load ~26) and missed one 30 s offer probe at 19:17Z. The converger read that
+ * one miss as a dead standby, declared a second on claw-8, then ended claw-9's
+ * proven slice when it answered at 19:26Z: archivebot was left with no
+ * guaranteed standby for hours. A node is not gone until the sampler has seen
+ * it down OUTAGE_MIN_SAMPLES ticks in a row, the same bar an outage is.
+ *
+ * Unlike an outage, a DRAINED down sample counts here: a drain explains why a
+ * node is down, not that it is still there.
+ *
+ * Returns node -> the trailing run of down samples, or null "could not look":
+ * unreadable samples, none for the node, or a newest sample older than two
+ * ticks (the sampler itself is not running). A caller treats null as no
+ * evidence of a blip, never as proof the node is up.
+ * @returns {(node: string) => number|null}
+ */
+export function downStreakOf(read, nowMs) {
+	if (read.error || !read.exists) return () => null;
+	const byNode = new Map();
+	for (const r of read.rows) {
+		const at = Date.parse(r.at);
+		if (!(at <= nowMs) || nowMs - at > RELIABILITY_WINDOW_MS) continue;
+		if (!byNode.has(r.node)) byNode.set(r.node, []);
+		byNode.get(r.node).push({ at, down: DOWN_STATES.has(r.state) });
+	}
+	return (node) => {
+		const rows = (byNode.get(node) ?? []).sort((a, b) => a.at - b.at);
+		if (!rows.length || nowMs - rows.at(-1).at > GAP_MS) return null;
+		let n = 0;
+		for (let i = rows.length - 1; i >= 0 && rows[i].down; i--) {
+			if (i < rows.length - 1 && rows[i + 1].at - rows[i].at > GAP_MS) break;
+			n++;
+		}
+		return n;
+	};
+}

@@ -72,6 +72,7 @@
  * past the count is ended with the tenant's notice; it holds no authority, so
  * no release order is needed. An unplaceable standby is replaced, not ended.
  */
+import { OUTAGE_MIN_SAMPLES } from './host-reliability.mjs';
 import { requiredRules, ruleDetail, ruleHoldsHeld } from './hosting-placement.mjs';
 import { nodesWanted, unitsOf } from './hosting-request.mjs';
 import { REASON_PREFIX } from './reboot-hold.mjs';
@@ -448,11 +449,27 @@ function meetStandby({
 	const unplaceable = [];
 	for (const s of standbySlices.filter((x) => !x.until)) {
 		const why = fault(s.node);
-		if (why)
-			unplaceable.push({ node: s.node, why, reachable: offerOf.get(s.node)?.reachable === true });
+		if (!why) continue;
+		const offer = offerOf.get(s.node);
+		// ONE MISSED PROBE IS NOT A DEAD STANDBY (2026-11-24, host-reliability
+		// downStreakOf): a node the sampler has not yet seen down for an
+		// outage's worth of ticks stays the standby, and the pass says why.
+		const streak = offer?.downStreak;
+		if (offer?.reachable !== true && typeof streak === 'number' && streak < OUTAGE_MIN_SAMPLES) {
+			blocked.push({
+				node: s.node,
+				why:
+					`the standby on ${s.node} did not answer this probe, but the sampler has seen it down ` +
+					`${streak} of the ${OUTAGE_MIN_SAMPLES} ticks in a row an outage needs: it is kept, not replaced`,
+				soft: true,
+			});
+			continue;
+		}
+		unplaceable.push({ node: s.node, why, reachable: offer?.reachable === true });
 	}
 	const bad = new Set(unplaceable.map((u) => u.node));
-	const serving = standbySlices.filter((s) => !s.until && !bad.has(s.node)).map((s) => s.node);
+	const live = standbySlices.filter((s) => !s.until && !bad.has(s.node));
+	const serving = live.map((s) => s.node);
 
 	if (serving.length < wanted) {
 		if (!primaryHeld) {
@@ -483,7 +500,15 @@ function meetStandby({
 				});
 		}
 	} else if (serving.length > wanted) {
-		for (const node of serving.slice(wanted))
+		// THE OLDEST STANDBYS ARE KEPT. Manifest order decided this until
+		// 2026-11-24, which ended claw-9's proven archivebot standby and kept the
+		// claw-8 slice declared nine minutes earlier, with no deploy on it yet.
+		// An undated slice counts as the newest; ties keep node order.
+		const since = (s) => (s.since ? Date.parse(s.since) : Infinity);
+		const oldest = [...live].sort((a, b) =>
+			since(a) === since(b) ? 0 : since(a) < since(b) ? -1 : 1
+		);
+		for (const { node } of oldest.slice(wanted))
 			actions.push({
 				op: 'end',
 				role: 'standby',
