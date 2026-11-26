@@ -183,8 +183,8 @@ export const NVENC_H264_CAPABILITY: Capability = {
 	 * PROMOTED TO A LABEL 2026-10-23 (fleet-manager#3), against probe output that
 	 * already existed: bootcamp had earned it on hokon (10-09), claw-1 (10-10),
 	 * claw-8 and claw-9 (10-06). No `nodeOffer` change came with it — every
-	 * earned identity label is offered, on the backstop too, which is how hokon
-	 * already carried `jdk21`.
+	 * earned identity label is offered, on the backstop too (unless it is
+	 * `clawOnly`, as `ml-cpu` is), which is how hokon already carried `jdk21`.
 	 *
 	 * FOUR NODES DEEP, ON PURPOSE. watchparty's ingest needs only H.264, so
 	 * any of them can encode. What it also needs is the data endpoint's
@@ -554,6 +554,10 @@ export const ML_CPU_CAPABILITY: Capability = {
 		'training run (learn.yml): a ~0.9 GB bundle from the data endpoint, then the probe ' +
 		'fits. Routed on beside `data-peer`. EARNED, never declared: the probe reads the ' +
 		'interpreter and MemTotal, and the registry holds the bar.',
+	clawOnly:
+		'Operator 2026-11-16: this training moves off the production host. The backstop earns ' +
+		'the label (python3 and memory), so offering every earned label put learn.yml there ' +
+		'twice in ten runs, the second OOM-killed in its 8 GiB unit on 11-26 (fleet-manager#167).',
 	measure: {
 		metric: 'installed memory',
 		unit: ' GB',

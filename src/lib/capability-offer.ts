@@ -2,6 +2,7 @@ import { CAPABILITIES, capability, type ManifestNode } from './capability-regist
 import { eligibilityLabels, ephemeralOnlyLabels } from './capability-labels.js';
 import { provenCapabilities } from './bootcamp-proof.js';
 import { workloadGateStatus, type ProofRecord } from './workload-gate.js';
+import { isBackstopNode } from './node-role.js';
 
 /**
  * THE ONE ANSWER TO "WHAT LABELS DOES THIS NODE OFFER" — issue #19.
@@ -133,13 +134,16 @@ export function nodeOffer(
 		}
 	}
 	const revoked = opts.revoked;
-	const kept = revoked
-		? out.filter((id) => {
-				if (revoked !== 'all') return !revoked.has(id);
-				const cap = capability(id);
-				return !(cap && cap.surface === 'label' && cap.verify === 'probe');
-			})
-		: out;
+	// A claw-only label is withheld on the backstop whatever the node earned or
+	// declares (`Capability.clawOnly`, #167).
+	const backstop = isBackstopNode(node);
+	const kept = out.filter((id) => {
+		if (backstop && capability(id)?.clawOnly) return false;
+		if (!revoked) return true;
+		if (revoked !== 'all') return !revoked.has(id);
+		const cap = capability(id);
+		return !(cap && cap.surface === 'label' && cap.verify === 'probe');
+	});
 	// Eligibility is the fast loop's and the backstop's to grant, never a probe's
 	// to revoke: general CI keeps flowing whatever the revocation record says.
 	if (opts.eligible) kept.push(...eligibilityLabels());

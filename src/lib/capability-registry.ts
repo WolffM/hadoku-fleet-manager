@@ -397,6 +397,15 @@ export interface Capability {
 	 * Absent for every capability a probe can settle by itself.
 	 */
 	jobProof?: JobProof;
+	/**
+	 * NEVER OFFERED BY THE BACKSTOP, with the reason. Earning is a fact about
+	 * the box and stays recorded; offering is a routing decision, and a label
+	 * whose workload the operator moved off the production host must not route
+	 * there just because hokon can run it. A label job needs no eligibility
+	 * label, so neither backstop promotion nor demotion is in that path: the
+	 * offer is the only lever. Read by `nodeOffer` alone.
+	 */
+	clawOnly?: string;
 }
 
 /**

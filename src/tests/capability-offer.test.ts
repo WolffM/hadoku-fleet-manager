@@ -223,3 +223,18 @@ test('a STANDING registration never carries a mint-only label, even on an epheme
 		'the MINT still carries it'
 	);
 });
+
+test('a claw-only label is earned on the backstop but never offered there (#167)', () => {
+	const earned = { earned: ['ml-cpu', 'data-peer'], prereqs: [] };
+	const hokon: ManifestNode = { role: 'backstop', labels: ['pm2-host'], $capabilities: earned };
+	const claw: ManifestNode = { role: 'claw', labels: [], $capabilities: earned };
+	// 11-26: learn.yml asks [self-hosted, data-peer, ml-cpu]; hokon offered both.
+	assert.ok(!nodeOffer(hokon, { eligible: false }).includes('ml-cpu'));
+	assert.ok(!nodeOffer(hokon, { eligible: true }).includes('ml-cpu'), 'promotion changes nothing');
+	assert.ok(nodeOffer(hokon, { eligible: false }).includes('data-peer'), 'only the claw-only id');
+	assert.ok(nodeOffer(claw, { eligible: false }).includes('ml-cpu'));
+	// A declaration on the backstop is withheld the same way.
+	assert.ok(
+		!nodeOffer({ role: 'backstop', labels: ['ml-cpu'] }, { eligible: false }).includes('ml-cpu')
+	);
+});
