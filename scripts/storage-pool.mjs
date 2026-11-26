@@ -47,7 +47,7 @@ const recordPath = join(stateDir(), 'storage-pool.json');
 const prior = existsSync(recordPath) ? JSON.parse(readFileSync(recordPath, 'utf8')) : null;
 
 const execFor = (node) => (script) => runOn(node, script, { as: 'admin', timeoutMs: 30_000 });
-// 120 s: the quarantine count walks every block file of a data dir.
+// 120 s: the quarantine count waits up to CORRUPTED_WAIT_SEC (90) for its walk (#166).
 const countFor = (node) => (script) => runOn(node, script, { as: 'admin', timeoutMs: 120_000 });
 const input = members.length
 	? {

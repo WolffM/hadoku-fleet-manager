@@ -282,25 +282,82 @@ export async function readMemberViews(nodes, adminFor, execFor = null) {
  * Garage's QUARANTINE, counted (#154 scope, the 2026-11-24 drill): a block
  * that fails its checksum is restored from a peer and the bad copy is kept as
  * `<hash>.zst.corrupted` beside it. Nothing else reads those files, and they
- * are the earliest sign of a disk going bad. One line per data dir of the
- * rendered config, `<count> <path>`; `sudo -n` because the dirs are the garage
- * user's, 0750. A failed read exits non-zero, never a count of 0.
+ * are the earliest sign of a disk going bad. `sudo -n` because the dirs are the
+ * garage user's, 0750.
+ *
+ * THE WALK OUTLIVES THE READ (fleet-manager#166). Counting means a readdir of
+ * every one of a data dir's ~65k block directories. Warm, claw-1 does one
+ * top-level dir in 24 ms; cold, on its HDD under CI load, 3.5 s, so a full
+ * cold walk is ~15 min. An hourly read with a 120 s ceiling therefore failed
+ * there (130-149 s, 4 of ~48 runs on 11-24/25; >300 s measured 11-26). So the
+ * walk runs DETACHED on the node under a lock, the read waits up to
+ * {@link CORRUPTED_WAIT_SEC} for it, and then prints the newest COMPLETED count
+ * with the time it finished. A fast node answers exactly as before: a count
+ * walked this run. A slow one answers with the previous walk, and
+ * {@link parseCorrupted} says "could not look" once that count is older than
+ * {@link CORRUPTED_MAX_AGE_SEC}, so a walk that never finishes still fails.
+ *
+ * Output, one line each: `<count> <path>` per data dir and `at <epoch>` (from
+ * the newest completed walk, absent before the first), `err <text>` when the
+ * last walk failed, and `now <epoch>`.
  */
-export const CORRUPTED_COUNT = [
-	'set -eo pipefail',
-	`paths="$(sudo -n grep -E '^data_dir' ${GARAGE_CONFIG} | grep -oE 'path = "[^"]+"' | sed -E 's/^path = "(.*)"$/\\1/')"`,
-	'[ -n "$paths" ] || { echo "no data_dir path in ' + GARAGE_CONFIG + '" >&2; exit 1; }',
-	'for p in $paths; do',
-	`  n="$(sudo -n find "$p" -type f -name '*.corrupted' | wc -l)"`,
-	'  printf \'%s %s\\n\' "$n" "$p"',
-	'done',
-].join('\n');
+export const CORRUPTED_WAIT_SEC = 90;
+/** Six hourly reads in a row with no completed walk is no longer a count. */
+export const CORRUPTED_MAX_AGE_SEC = 6 * 3600;
 
 /**
- * PURE. {@link CORRUPTED_COUNT}'s result as `{ corrupted, corruptedWhy }`:
- * per data dir `{ path, disk, count }`, the disk being the serial of
- * `<storage root>/<serial>/garage` (`root` for a root zone): the directory
- * above the data dir.
+ * The script, with its seams named so a test can run it for real against a
+ * temporary tree: the config file, the privilege prefix, the state dir.
+ */
+export function corruptedCountScript({
+	config = GARAGE_CONFIG,
+	sudo = 'sudo -n',
+	stateDir = '"$HOME/.cache/fleet-garage"',
+	waitSec = CORRUPTED_WAIT_SEC,
+} = {}) {
+	return [
+		'set -eo pipefail',
+		`paths="$(${sudo} grep -E '^data_dir' ${config} | grep -oE 'path = "[^"]+"' | sed -E 's/^path = "(.*)"$/\\1/')"`,
+		`[ -n "$paths" ] || { echo "no data_dir path in ${config}" >&2; exit 1; }`,
+		`d=${stateDir}; mkdir -p "$d"; out="$d/garage-corrupted"`,
+		'walk() {',
+		// A fresh `bash -c` inherits no shell options: without this, a find that
+		// fails piped into wc reads as a count of 0.
+		'  set -o pipefail',
+		`  trap 'printf "walk killed by a signal at %s\\n" "$(date -u +%FT%TZ)" > "$out.err"; exit 1' TERM INT HUP`,
+		'  t="$out.tmp"; : > "$t"',
+		'  for p in $paths; do',
+		`    if ! n="$(${sudo} nice -n 19 find "$p" -type f -name '*.corrupted' | wc -l)"; then`,
+		`      printf 'find failed in %s at %s\\n' "$p" "$(date -u +%FT%TZ)" > "$out.err"; rm -f "$t"; return 1`,
+		'    fi',
+		`    printf '%s %s\\n' "$n" "$p" >> "$t"`,
+		'  done',
+		`  printf 'at %s\\n' "$(date +%s)" >> "$t"; mv "$t" "$out"; rm -f "$out.err"`,
+		'}',
+		// Its own session (setsid), so the hangup when this ssh session closes
+		// never reaches sudo or find: a plain background subshell died with it
+		// on claw-1 (11-26). The lock is held by the walker's inherited
+		// descriptor, so the wait below ends when the walk does, whichever read
+		// started it.
+		'export out paths; export -f walk',
+		'exec 9>"$out.lock"',
+		'if flock -n 9; then setsid -f bash -c walk </dev/null >/dev/null 2>&1; fi',
+		'exec 9>&-',
+		`flock -w ${waitSec} "$out.lock" true || true`,
+		'[ ! -f "$out" ] || cat "$out"',
+		`[ ! -f "$out.err" ] || printf 'err %s\\n' "$(cat "$out.err")"`,
+		`printf 'now %s\\n' "$(date +%s)"`,
+	].join('\n');
+}
+
+export const CORRUPTED_COUNT = corruptedCountScript();
+
+/**
+ * PURE. {@link CORRUPTED_COUNT}'s result as `{ corrupted, corruptedWhy,
+ * corruptedAgeSec }`: per data dir `{ path, disk, count }`, the disk being the
+ * serial of `<storage root>/<serial>/garage` (`root` for a root zone): the
+ * directory above the data dir. `corruptedAgeSec` is how long ago the walk
+ * that counted them finished.
  */
 export function parseCorrupted(r) {
 	const fail = (why) => ({ corrupted: null, corruptedWhy: why });
@@ -311,15 +368,39 @@ export function parseCorrupted(r) {
 				.slice(-300)
 		);
 	const corrupted = [];
+	let at = null;
+	let now = null;
+	let err = null;
 	for (const line of String(r.stdout ?? '')
 		.trim()
 		.split('\n')) {
-		const m = /^(\d+) (\/\S+)$/.exec(line.trim());
-		if (!m) return fail(`unexpected line: ${line.slice(0, 120)}`);
-		const disk = m[2].split('/').filter(Boolean).at(-2) ?? m[2];
-		corrupted.push({ path: m[2], disk, count: Number(m[1]) });
+		const t = line.trim();
+		let m;
+		if ((m = /^at (\d+)$/.exec(t))) at = Number(m[1]);
+		else if ((m = /^now (\d+)$/.exec(t))) now = Number(m[1]);
+		else if ((m = /^err (.*)$/.exec(t))) err = m[1];
+		else if ((m = /^(\d+) (\/\S+)$/.exec(t))) {
+			const disk = m[2].split('/').filter(Boolean).at(-2) ?? m[2];
+			corrupted.push({ path: m[2], disk, count: Number(m[1]) });
+		} else return fail(`unexpected line: ${line.slice(0, 120)}`);
 	}
-	return corrupted.length ? { corrupted, corruptedWhy: null } : fail('no data dir counted');
+	const lastErr = err ? `; the last walk failed: ${err}` : '';
+	if (now === null) return fail('the count printed no clock line');
+	if (at === null)
+		return fail(
+			err
+				? `no walk has completed${lastErr}`
+				: `no walk has completed yet: the first is still running after ${CORRUPTED_WAIT_SEC}s`
+		);
+	const age = now - at;
+	if (age > CORRUPTED_MAX_AGE_SEC)
+		return fail(
+			`the newest completed count is ${(age / 3600).toFixed(1)} h old, over ` +
+				`${CORRUPTED_MAX_AGE_SEC / 3600} h${lastErr || ': the walk has not finished since'}`
+		);
+	return corrupted.length
+		? { corrupted, corruptedWhy: null, corruptedAgeSec: age }
+		: fail('no data dir counted');
 }
 
 /**

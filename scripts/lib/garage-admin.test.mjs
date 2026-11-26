@@ -170,7 +170,10 @@ describe("readMemberViews + seenBy: every member's own view", () => {
 		const ran = [];
 		const execFor = (node) => async (script) => {
 			ran.push([node, script]);
-			return { ok: true, stdout: '2 /srv/storage/WD-X/garage\n0 /srv/storage/root/garage\n' };
+			return {
+				ok: true,
+				stdout: '2 /srv/storage/WD-X/garage\n0 /srv/storage/root/garage\nat 1000\nnow 1060\n',
+			};
 		};
 		const [v] = await readMemberViews(['claw-a'], adminFor, execFor);
 		assert.deepEqual(ran, [['claw-a', CORRUPTED_COUNT]]);
