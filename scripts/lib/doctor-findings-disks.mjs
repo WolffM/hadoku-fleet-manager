@@ -28,7 +28,6 @@
 import { ADVISORY } from './preflight.mjs';
 import { f } from './doctor-findings-record.mjs';
 import { parseStorage } from './storage-inventory.mjs';
-import { SMART_HOURS_ADVISORY, SMART_HOURS_BLOCKING } from './doctor-findings-thresholds.mjs';
 import { wearText } from './doctor-disk-wear.mjs';
 
 const CATEGORY = 'disk-smart';
@@ -182,7 +181,7 @@ function oneDisk(d, quiet) {
 	}
 }
 
-/** A drive that answered PASSED: its age and its pending sectors still count. */
+/** A drive that answered PASSED: its pending sectors still count, and its hours must read. */
 function okDisk(d, sm, quiet, extra, name) {
 	const out = [];
 	if (sm.pendingSectors !== null && sm.pendingSectors > 0) {
@@ -195,21 +194,13 @@ function okDisk(d, sm, quiet, extra, name) {
 			)
 		);
 	}
-	const h = sm.powerOnHours;
-	if (h === null) {
+	// Age alone is context, never a finding (#169, the 11-21 decision in #129):
+	// power-on hours only climb, and a gate never asks for a part. What warns
+	// is a drive CHANGING: pending sectors above, and its wear counts judged
+	// for growth (doctor-disk-wear.mjs). The hours stay on the record and in
+	// `disksLine`.
+	if (sm.powerOnHours === null)
 		out.push(quiet('no-hours', `${name} answered SMART but reported no power-on hours.`, extra));
-	} else if (h >= SMART_HOURS_ADVISORY) {
-		const past = h >= SMART_HOURS_BLOCKING ? SMART_HOURS_BLOCKING : SMART_HOURS_ADVISORY;
-		out.push(
-			quiet(
-				h >= SMART_HOURS_BLOCKING ? 'beyond-service-life' : 'aging',
-				`${name} reports ${h.toLocaleString('en-US')} power-on hours ` +
-					`(${(h / 8766).toFixed(1)} years), past ${past}h. Plan its replacement before it holds ` +
-					'a copy of anything.',
-				{ ...extra, powerOnHours: h }
-			)
-		);
-	}
 	return out;
 }
 

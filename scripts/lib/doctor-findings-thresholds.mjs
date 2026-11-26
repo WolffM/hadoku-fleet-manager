@@ -62,39 +62,6 @@ export const DISK_BLOCKING_FREE_PCT = 10;
 export const DISK_ADVISORY_FREE_PCT = 20;
 
 /**
- * Drive power-on hours at which the drive becomes an ADVISORY finding.
- *
- * 43 800 h is five years of continuous power-on. Nothing is wrong with the
- * drive at this point; it is the age at which "plan its replacement" is a real
- * item rather than a worry, which is exactly what `workstreams.md` already says
- * about claw-7 in prose.
- */
-export const SMART_HOURS_ADVISORY = 43_800;
-
-/**
- * Drive power-on hours at which the drive becomes a BLOCKING finding.
- *
- * 87 600 h is ten years of continuous power-on — past any service life a
- * consumer SSD or laptop HDD is specified for. STATED PLAINLY, as above:
- * **claw-7 measures 91 529 h and is therefore BLOCKING from the day this
- * lands**, with the drive still reporting `PASSED` and 67 % lifetime remaining.
- * That is the design and not an accident. `workstreams.md` already carries the
- * operator item ("plan its replacement before it hosts anything resident"), and
- * a finding that goes green when the drive is replaced is how that item stops
- * living in a planning doc. Two further properties make this honest rather than
- * merely loud:
- *
- *   - `fleet doctor` is NOT in `scripts/lib/json-contract.mjs`, so no mgmt-api
- *     cron parses it and nothing pages `@here` on this. It is an operator
- *     command and a record writer. A later lane that puts it under contract
- *     owes this threshold a second look FIRST.
- *   - The direction is monotone, per CLAUDE.md's "no gate may get EASIER to
- *     pass the worse the failure gets": more hours is stricter, never looser,
- *     and a drive whose SMART cannot be read at all is blocking too.
- */
-export const SMART_HOURS_BLOCKING = 87_600;
-
-/**
  * The rise below which the die reading is ASKED TO PROVE IT TRACKS — not, on
  * its own, a verdict. See the `sensor-did-not-move` branch of
  * {@link doctorFindings} for the question this now triggers.

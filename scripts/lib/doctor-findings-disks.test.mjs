@@ -23,19 +23,30 @@ void test('a node whose disks all read PASSED and young has no disk finding', ()
 	for (const fx of [CLAW9, CLAW2, CLAW4]) assert.deepEqual(diskFindings(health(fx)), []);
 });
 
-void test('claw-10: SMART switched off and a five-year drive are each named by serial', () => {
-	const fs = diskFindings(health(CLAW10));
-	assert.deepEqual(statuses(fs), ['smart-disabled', 'aging']);
+void test('claw-10: SMART switched off is named by serial; a five-year drive is not a finding (#169)', () => {
+	const h = health(CLAW10);
+	const fs = diskFindings(h);
+	assert.deepEqual(statuses(fs), ['smart-disabled']);
 	assert.deepEqual(
 		fs.map((x) => x.serial),
-		['SERIAL-claw-10-sdb', 'SERIAL-claw-10-sdc']
+		['SERIAL-claw-10-sdb']
 	);
 	assert.match(fs[0].why, /sdb \(serial SERIAL-claw-10-sdb\)/);
+	// The age is still shown, as context.
+	assert.ok(h.storage.disks.some((d) => d.smart?.powerOnHours >= 43_800));
+	assert.match(disksLine(h.storage), /\d{2},\d{3}h/);
+});
+
+void test('no disk finding asks for hardware (#169)', () => {
+	const all = [CLAW10, CLAW9, CLAW2, CLAW4, CLAW9_NOROOT, CLAW9_NOTOOL].flatMap((fx) =>
+		diskFindings(health(fx))
+	);
+	for (const x of all) assert.doesNotMatch(x.why, /replac|plan (its|a) /i, x.why);
 });
 
 void test('every finding is advisory and marked shadow: a new reading ships quiet', () => {
 	const all = [CLAW10, CLAW9_NOROOT, CLAW9_NOTOOL].flatMap((fx) => diskFindings(health(fx)));
-	assert.ok(all.length >= 4);
+	assert.ok(all.length >= 3);
 	for (const x of all) {
 		assert.equal(x.class, ADVISORY);
 		assert.equal(x.shadow, true);
@@ -66,13 +77,13 @@ void test('a USB bridge that hides a present drive is usb-bridge, not unsupporte
 	assert.match(fs[0].why, /Unknown USB bridge/);
 });
 
-void test('a failing drive, pending sectors and a ten-year drive each fire', () => {
+void test('a failing drive and pending sectors fire; a ten-year drive alone does not', () => {
 	const h = health(CLAW9);
 	const sdb = h.storage.disks[1].smart;
 	Object.assign(sdb, { status: 'failing', health: 'FAILED!' });
 	assert.deepEqual(statuses(diskFindings(h)), ['failing']);
 	Object.assign(sdb, { status: 'ok', health: 'PASSED', pendingSectors: 8, powerOnHours: 90_000 });
-	assert.deepEqual(statuses(diskFindings(h)), ['pending-sectors', 'beyond-service-life']);
+	assert.deepEqual(statuses(diskFindings(h)), ['pending-sectors']);
 	Object.assign(sdb, { pendingSectors: 0, powerOnHours: null });
 	assert.deepEqual(statuses(diskFindings(h)), ['no-hours']);
 	Object.assign(sdb, { status: 'something-new' });

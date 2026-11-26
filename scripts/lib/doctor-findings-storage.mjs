@@ -8,12 +8,7 @@
 
 import { ADVISORY, BLOCKING } from './preflight.mjs';
 import { f } from './doctor-findings-record.mjs';
-import {
-	DISK_BLOCKING_FREE_PCT,
-	DISK_ADVISORY_FREE_PCT,
-	SMART_HOURS_ADVISORY,
-	SMART_HOURS_BLOCKING,
-} from './doctor-findings-thresholds.mjs';
+import { DISK_BLOCKING_FREE_PCT, DISK_ADVISORY_FREE_PCT } from './doctor-findings-thresholds.mjs';
 
 /**
  * @param {ReturnType<import('./doctor-facet.mjs').healthFacet>} health
@@ -143,41 +138,15 @@ export function storageFindings(health) {
 				BLOCKING,
 				'unreadable',
 				`${s.device} answered SMART but reported no power-on hours, so its age is unknown. ` +
-					'An unaged drive cannot be planned around.',
+					'A drive that cannot say its age may not be saying the rest.',
 				{ device: s.device }
 			)
 		);
-	} else if (s.powerOnHours !== null && s.powerOnHours >= SMART_HOURS_BLOCKING) {
-		out.push(
-			f(
-				health,
-				'smart-hours',
-				BLOCKING,
-				'beyond-service-life',
-				`${s.device} reports ${s.powerOnHours.toLocaleString('en-US')} power-on hours ` +
-					`(${(s.powerOnHours / 8766).toFixed(1)} years) — past ${SMART_HOURS_BLOCKING}h, any ` +
-					`service life this class of drive is specified for. It still reports ` +
-					`"${s.health}"${s.lifetimeRemainingPct === null ? '' : ` with ${s.lifetimeRemainingPct}% lifetime remaining`}, ` +
-					'and that is not a reason to plan around it: replace the drive, or give this node ' +
-					'nothing it cannot lose.',
-				{ device: s.device, powerOnHours: s.powerOnHours }
-			)
-		);
-	} else if (s.powerOnHours !== null && s.powerOnHours >= SMART_HOURS_ADVISORY) {
-		out.push(
-			f(
-				health,
-				'smart-hours',
-				ADVISORY,
-				'aging',
-				`${s.device} reports ${s.powerOnHours.toLocaleString('en-US')} power-on hours ` +
-					`(${(s.powerOnHours / 8766).toFixed(1)} years) — past ${SMART_HOURS_ADVISORY}h. ` +
-					'Nothing is wrong with it; plan a replacement before this node hosts anything ' +
-					'resident.',
-				{ device: s.device, powerOnHours: s.powerOnHours }
-			)
-		);
 	}
+	// Age alone is context, never a finding (#169, the 11-21 decision in #129):
+	// the hours only climb, and a gate never asks for a part. A drive that is
+	// CHANGING warns instead: smart-health above, and its wear counts judged
+	// for growth per serial (doctor-disk-wear.mjs).
 
 	return out;
 }

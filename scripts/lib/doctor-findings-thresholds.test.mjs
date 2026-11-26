@@ -30,8 +30,6 @@ import {
 	SENSOR_MOVED_C,
 	SENSOR_TRACKS_DIVISOR,
 	IMPLAUSIBLE_RISE_C,
-	SMART_HOURS_ADVISORY,
-	SMART_HOURS_BLOCKING,
 	THERMAL_ADVISORY_C,
 	THERMAL_BLOCKING_C,
 } from './doctor-findings-thresholds.mjs';
@@ -75,8 +73,6 @@ void test('each threshold is pinned to its documented value', () => {
 	assert.equal(THERMAL_ADVISORY_C, 90);
 	assert.equal(DISK_BLOCKING_FREE_PCT, 10, '§H names this one');
 	assert.equal(DISK_ADVISORY_FREE_PCT, 20);
-	assert.equal(SMART_HOURS_ADVISORY, 43_800, 'five years of continuous power-on');
-	assert.equal(SMART_HOURS_BLOCKING, 87_600, 'ten years of continuous power-on');
 	assert.equal(
 		IMPLAUSIBLE_RISE_C,
 		8,
@@ -329,10 +325,11 @@ void test('_work unreadable is its own finding, distinct from an unreadable root
 	assert.match(fs[0].why, /df said nothing on _work/);
 });
 
-void test('91,529h is BLOCKING, 87,600h is BLOCKING, 43,800h advisory, 43,799h clean', () => {
-	// claw-7's root SSD measured 91,529 power-on hours on 2026-09-10, still
-	// reporting PASSED with 67% lifetime remaining. It is BLOCKING from the day
-	// this lands; see the constant's own note for why that is the design.
+void test('power-on hours alone are never a finding, however many (#169)', () => {
+	// claw-7's root SSD read 91,529 h on 2026-09-10 and was BLOCKING on age
+	// alone; claw-10's sda read 45,063 h on 11-26 and asked to "plan its
+	// replacement". Age is context (the 11-21 decision in #129): a drive that is
+	// CHANGING warns, through smart-health and the wear counts.
 	const hours = (powerOnHours, lifetimeRemainingPct = null) =>
 		find(
 			doctorFindings(
@@ -343,22 +340,10 @@ void test('91,529h is BLOCKING, 87,600h is BLOCKING, 43,800h advisory, 43,799h c
 			),
 			'smart-hours'
 		);
-
-	const claw7 = hours(91_529, 67);
-	assert.equal(claw7[0].class, BLOCKING);
-	assert.equal(claw7[0].status, 'beyond-service-life');
-	assert.equal(claw7[0].powerOnHours, 91_529);
-
-	assert.equal(hours(87_600)[0].class, BLOCKING, 'exactly ten years is past it');
-	assert.equal(hours(87_599)[0].class, ADVISORY);
-	assert.equal(hours(43_800)[0].class, ADVISORY, 'exactly five years is aging');
-	assert.equal(hours(43_800)[0].status, 'aging');
-	assert.equal(hours(43_799).length, 0);
-	// The rest of the fleet as measured: claw-3 31,388h, claw-6 23,335h,
-	// claw-1 19,727h, claw-4 14,561h, claw-5 3,583h, claw-2 352h — all clean.
-	for (const h of [31_388, 23_335, 19_727, 14_561, 3_583, 352]) {
+	for (const h of [91_529, 87_600, 45_063, 43_800, 31_388, 352])
 		assert.equal(hours(h).length, 0, `${h}h must report nothing`);
-	}
+	// Hours that cannot be read are still unreadable, never young.
+	assert.equal(hours(null)[0].status, 'unreadable');
 });
 
 void test('a drive whose firmware says it is failing is BLOCKING at any age', () => {
