@@ -35,7 +35,11 @@ installCiThrottleRig();
 test('under the limit: admits immediately, exit 0', () => {
 	const r = run({ conf: { MAX_CONCURRENT: 3, MIN_FREE_MB: 0, MAX_WAIT_S: 5 }, others: 1 });
 	assert.equal(r.code, 0);
-	assert.ok(r.elapsedMs < 3000, `should not have waited at all, took ${r.elapsedMs}ms`);
+	// "Did not wait" is read from what the hook says, not the wall clock: every
+	// wait announces `holding:` before its first sleep (#73), while the time a
+	// hook takes to start on a loaded box is not this test's property (3.4 s
+	// once under a full parallel suite, 2026-11-26).
+	assert.doesNotMatch(r.out + r.err, /holding:|slot free after/, `${r.out}${r.err}`);
 });
 
 test('the N+1th job against maxConcurrent=N waits, then is REFUSED, not admitted', () => {
