@@ -7,7 +7,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { learnReading } from './node-baselines.mjs';
-import { ABSOLUTE_TESTS, RELATIVE, judgeWindow, seedFromLedger } from './qualify-baseline.mjs';
+import {
+	ABSOLUTE_TESTS,
+	QUALIFY_MIN_READINGS,
+	RELATIVE,
+	judgeWindow,
+	seedFromLedger,
+} from './qualify-baseline.mjs';
 import { QUALIFY_TESTS } from './qualify-playlist.mjs';
 
 const RAMP_CLAW1 = {
@@ -103,7 +109,12 @@ void test('claw-1 11-21 on an empty store: hardware misses are weak points, noth
 });
 
 void test('the same window against its own range is clean; a disk that got worse is drift', () => {
-	const seed = (v, spec) => learnReading(undefined, v, spec, new Date().toISOString(), false);
+	const seed = (v, spec) => {
+		let e;
+		for (let i = 0; i < QUALIFY_MIN_READINGS; i++)
+			e = learnReading(e, v, spec, new Date().toISOString(), false);
+		return e;
+	};
 	const spec = (q) =>
 		[...RELATIVE['disk-sync-writes'].quantities({ k: 1 })].find((x) => x.quantity === q).spec;
 	const own = {
@@ -124,7 +135,7 @@ void test('the same window against its own range is clean; a disk that got worse
 	assert.equal(j.findings[0].kind, 'drift');
 	assert.match(
 		j.findings[0].reason,
-		/disk\.randSyncP99Ms\.k1 400 ms is worse than claw-1's range 140 ± 70 \(n=1\)/
+		/disk\.randSyncP99Ms\.k1 400 ms is worse than claw-1's range 140 ± 70 \(n=3\)/
 	);
 	assert.equal(j.readings.find((r) => r.quantity === 'disk.randSyncP99Ms.k1').drifted, true);
 });
@@ -214,4 +225,50 @@ void test('seeding from the ledger: one window per node, latest time, a known no
 		]
 	);
 	assert.equal(seeds[0].window.readings.length, 4);
+});
+
+void test('claw-4 11-26: one prior reading is learning, never drift, and the estimate gains a spread (#165)', () => {
+	const at = new Date().toISOString();
+	const own = {
+		'disk.holdRatio': learnReading(undefined, 1.21, { unit: '', worse: 'lower' }, at, false),
+		'ramp.ceiling': learnReading(undefined, 2, { unit: 'jobs', worse: 'lower' }, at, false),
+	};
+	const results = [
+		{ id: 'disk-sync-writes', status: 'pass', reason: '', metrics: { k: 2, holdRatio: 0.87 } },
+		{ id: 'concurrency-ramp', status: 'pass', reason: '', metrics: { ceiling: 1 } },
+	];
+	const j = judgeWindow({ node: 'claw-4', results, quantities: own });
+	assert.deepEqual(j.findings, []);
+	assert.deepEqual(
+		j.judged.map((x) => [x.quantity, x.verdict, x.n]),
+		[
+			['disk.holdRatio', 'learning', 1],
+			['ramp.ceiling', 'learning', 1],
+		]
+	);
+	assert.ok(j.readings.every((r) => !r.drifted));
+	const next = learnReading(own['disk.holdRatio'], 0.87, j.readings[0].spec, at, false);
+	assert.equal(next.n, 2);
+	assert.ok(next.sd > 0, 'a second reading teaches a spread instead of re-seeding at sd 0');
+});
+
+void test('ramp.ceiling: one job either way is within, two is drift (#165)', () => {
+	const spec = RELATIVE['concurrency-ramp']
+		.quantities({ ceiling: 3 })
+		.find((q) => q.quantity === 'ramp.ceiling').spec;
+	let e;
+	for (let i = 0; i < QUALIFY_MIN_READINGS; i++) e = learnReading(e, 3, spec, 'x', false);
+	const ramp = (ceiling) => ({
+		id: 'concurrency-ramp',
+		status: 'pass',
+		reason: '',
+		metrics: { ceiling },
+	});
+	const at = (c) =>
+		judgeWindow({ node: 'claw-fixture', results: [ramp(c)], quantities: { 'ramp.ceiling': e } })
+			.judged[0];
+	assert.equal(at(2).verdict, 'within');
+	assert.equal(at(4).verdict, 'within');
+	assert.equal(at(1).verdict, 'drift');
+	assert.equal(at(1).direction, 'worse');
 });

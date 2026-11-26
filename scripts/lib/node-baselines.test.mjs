@@ -44,6 +44,20 @@ void test('a reading in the band is within; outside it is drift, worse or better
 	assert.equal(judgeReading(e, 40, { ...SPEC, worse: 'lower' }).direction, 'worse');
 });
 
+void test('minReadings: an estimate with fewer readings is learning, not drift (#165)', () => {
+	const e = { mean: 150, sd: 0, n: 2 };
+	assert.deepEqual(judgeReading(e, 400, { ...SPEC, minReadings: 3 }), {
+		verdict: 'learning',
+		mean: 150,
+		sd: 0,
+		n: 2,
+		band: 75,
+	});
+	assert.equal(judgeReading({ ...e, n: 3 }, 400, { ...SPEC, minReadings: 3 }).verdict, 'drift');
+	// The default judges from the first reading: an exact counter needs no history.
+	assert.equal(judgeReading({ ...e, n: 1 }, 400, SPEC).verdict, 'drift');
+});
+
 void test('learning: the first reading seeds; later ones step with weight never below 1/window', () => {
 	let e = learnReading(undefined, 100, SPEC, AT, false);
 	assert.deepEqual(

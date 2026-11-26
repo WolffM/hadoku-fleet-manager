@@ -81,9 +81,17 @@ export function bandOf(entry, spec) {
 /**
  * PURE. One reading against a node's estimate.
  *
+ * `spec.minReadings` (default 1) is how many readings an estimate must hold
+ * before a reading is judged against it; below that the verdict is `learning`
+ * and the reading is one ordinary learning step. A noisy measurement needs it:
+ * one prior reading has sd 0, so its "range" is only the tolerance, and the
+ * second night a node is ever qualified paged on noise (#165). An EXACT
+ * counter (doctor-disk-wear) keeps the default, because there one prior
+ * reading IS the reference.
+ *
  * @param {object|null|undefined} entry the stored estimate, or none yet
  * @param {number} value
- * @param {{ worse: 'higher'|'lower', rel?: number, abs?: number }} spec
+ * @param {{ worse: 'higher'|'lower', rel?: number, abs?: number, minReadings?: number }} spec
  * @returns {{ verdict: 'learning'|'within'|'drift', direction?: 'worse'|'better',
  *   mean?: number, sd?: number, n?: number, band?: number }}
  */
@@ -92,6 +100,7 @@ export function judgeReading(entry, value, spec) {
 	const band = bandOf(entry, spec);
 	const delta = value - entry.mean;
 	const base = { mean: entry.mean, sd: entry.sd ?? 0, n: entry.n, band: round(band) };
+	if (entry.n < (spec.minReadings ?? 1)) return { verdict: 'learning', ...base };
 	if (Math.abs(delta) <= band) return { verdict: 'within', ...base };
 	const worse = spec.worse === 'higher' ? delta > 0 : delta < 0;
 	return { verdict: 'drift', direction: worse ? 'worse' : 'better', ...base };

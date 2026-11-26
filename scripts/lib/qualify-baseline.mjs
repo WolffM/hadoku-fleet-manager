@@ -131,7 +131,10 @@ export const RELATIVE = Object.freeze({
 			{
 				quantity: 'ramp.ceiling',
 				value: num(m?.ceiling),
-				spec: { unit: 'jobs', worse: 'lower', rel: 0, abs: 0.5 },
+				// An integer job count: one step either way is the ramp's own noise
+				// (claw-4's k=2 missed by a hair on 11-26, CPU p90 22.8% vs 20%), so
+				// only a move of two or more jobs is drift (#165).
+				spec: { unit: 'jobs', worse: 'lower', rel: 0, abs: 1 },
 			},
 			{
 				quantity: 'ramp.k1.packageTempC',
@@ -209,6 +212,16 @@ function benchQuantities(m) {
 		);
 }
 
+/**
+ * Readings a node's estimate must hold before qualify judges against it
+ * (#165). One prior reading has sd 0, so its band is the tolerance alone and
+ * the second night a node is ever qualified, or the second after a drift
+ * re-seeded it, paged on noise: claw-4's holdRatio 1.21 -> 0.87 on 11-26 sat
+ * inside the test's own segment spread. Three readings give the estimate a
+ * measured spread to judge by; until then the verdict is `learning`.
+ */
+export const QUALIFY_MIN_READINGS = 3;
+
 const fmt = (x) => (Number.isFinite(x) ? Number(x.toPrecision(4)) : x);
 
 /**
@@ -250,7 +263,10 @@ export function judgeWindow({ node, results, quantities }) {
 		if (!rel || r.status === 'could-not-look') continue;
 		for (const q of rel.quantities(r.metrics ?? {})) {
 			if (q.value === null) continue;
-			const v = judgeReading(quantities[q.quantity], q.value, q.spec);
+			const v = judgeReading(quantities[q.quantity], q.value, {
+				minReadings: QUALIFY_MIN_READINGS,
+				...q.spec,
+			});
 			judged.push({ test: r.id, quantity: q.quantity, value: q.value, ...v });
 			readings.push({ ...q, drifted: v.verdict === 'drift' });
 			if (v.verdict === 'drift')
