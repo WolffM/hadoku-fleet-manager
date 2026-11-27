@@ -163,11 +163,23 @@ pane's transient scope with no tmux change (verified with a
 contention; idle tests still get every core. `daemon-reload` does not
 re-weight existing cgroups, hence the `--runtime` pass in the installer.
 
-`IOWeight` is set alongside but is **inert**: the `io` controller is not
-delegated to the user manager (`cgroup.subtree_control` is `cpu memory pids`).
-Enabling it needs a root `user@.service` drop-in with `Delegate=`. Memory is
-deliberately uncapped per pane for now; the swap pressure seen in the same
-incident is not addressed by this.
+`IOWeight` is set alongside. The `io` controller is now delegated to the user
+manager (`cgroup.subtree_control` is `cpu io memory pids`), but a weight still
+does nothing on hokon's root disk while io.cost sees no contention (below).
+Memory is deliberately uncapped per pane for now.
+
+### Agent panes cannot starve PM2 (2026-11-27)
+
+`app.slice.d/io-cap.conf` caps `app.slice`, every agent pane included, at
+120 MB/s written and 250 MB/s read on the root LV (`io.max`, on the dm-crypt
+device 254:0). Weights could not do it: io.cost's auto model rates the NVMe at
+1.7 GB/s, so at the ~400 MB/s parallel Rust builds wrote it saw no contention,
+while btrfs over dm-crypt stalled every writer. mgmt-api blocked its event
+loop 4-22 s at a time (CPU profile: `writeFileSync`, directory prunes, file
+refaults), and the command station's grant read and a friend-key mint ran past
+the edge's 30 s. Measured the same hour, after the cap: `pm2-hadoku.service`
+io pressure avg60 43% → 1.6%, mgmt-api's worst stall 22 s → 52 ms. Agent panes
+pay for it: `app.slice` io pressure rose to ~47%.
 
 ## Dev slices: the shadow week (hokon, 2026-11-24)
 
@@ -239,15 +251,16 @@ restarted. Three things let it happen, each read from the kernel's own files:
 
 What changed:
 
-| where                | what                                                                                    | installed by                                      |
-| -------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `system.slice`       | `MemoryMin=13G`, `MemoryLow=17G`                                                        | `deploy/systemd/pm2-protection/install.sh` (root) |
-| `pm2-hadoku.service` | `MemoryMin=12G`, `MemoryLow=16G` (working set 12.6G, peak 21.5G)                        | same                                              |
-| user tree            | its hand-set floor, unchanged, moved out of `system.control/` into named drop-ins       | same                                              |
-| `app.slice` (user)   | `MemoryMin=8G`, `MemoryLow=8G`: claims the user floor so none of it shields CI          | `deploy/systemd/user-priority/install.sh`         |
-| `ci.slice` (user)    | oomd `kill` at 50% memory pressure for 30 s                                             | same                                              |
-| every minted unit    | `LimitNICE=+0`: a browser in a job cannot raise itself above the node                   | `ciUnitProperties`                                |
-| the reap             | stops a live JIT unit 10 min after GitHub's `workflow_job` `completed` names its runner | `stopFinishedUnits`                               |
+| where                | what                                                                                                | installed by                                      |
+| -------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `system.slice`       | `MemoryMin=13G`, `MemoryLow=17G`                                                                    | `deploy/systemd/pm2-protection/install.sh` (root) |
+| `pm2-hadoku.service` | `MemoryMin=12G`, `MemoryLow=16G` (working set 12.6G, peak 21.5G)                                    | same                                              |
+| user tree            | its hand-set floor, unchanged, moved out of `system.control/` into named drop-ins                   | same                                              |
+| `app.slice` (user)   | `MemoryMin=8G`, `MemoryLow=8G`: claims the user floor so none of it shields CI                      | `deploy/systemd/user-priority/install.sh`         |
+| `app.slice` (user)   | `IOWriteBandwidthMax=120M`, `IOReadBandwidthMax=250M` on the root LV: agent panes cannot starve PM2 | `deploy/systemd/user-priority/install.sh`         |
+| `ci.slice` (user)    | oomd `kill` at 50% memory pressure for 30 s                                                         | same                                              |
+| every minted unit    | `LimitNICE=+0`: a browser in a job cannot raise itself above the node                               | `ciUnitProperties`                                |
+| the reap             | stops a live JIT unit 10 min after GitHub's `workflow_job` `completed` names its runner             | `stopFinishedUnits`                               |
 
 Both installers take `--dry-run`. The perf row's `ciMemory` (ci.slice
 pressure plus its `high` count) is the data for tightening the oomd limit.
