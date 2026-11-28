@@ -2007,6 +2007,13 @@
     "why": "The 5-minute performance recorder: pings each node from the controller, runs perf-probe.ts over node-shell, appends to perf-sample-store.ts, reports through job-runner. Observation run, like the other in-process recorders' clocks."
   },
   {
+    "glob": "src/host-pressure.ts",
+    "layer": "domain",
+    "domain": "observation",
+    "part": "run",
+    "why": "The production host's 2 s PSI early warning: reads /proc/pressure and its own cgroup's PSI, posts through host.ts alerts, writes a tmpfs state file. An in-process recorder's clock, like perf-sample.ts."
+  },
+  {
     "glob": "src/perf-active.ts",
     "layer": "domain",
     "domain": "observation",

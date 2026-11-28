@@ -21,6 +21,7 @@ import { appendJobQueued } from './runners/job-queued-log.js';
 import { router as fleetRouter } from './routes/fleet.js';
 import { startClawReboot, __stopClawRebootForTesting } from './claw-reboot.js';
 import { startBackstopTools, __stopBackstopToolsForTesting } from './backstop-tools.js';
+import { startHostPressure, __stopHostPressureForTesting } from './host-pressure.js';
 import { startHostingConverge, __stopHostingConvergeForTesting } from './hosting-converge.js';
 import { startHostingVerify, __stopHostingVerifyForTesting } from './hosting-verify.js';
 import {
@@ -248,6 +249,9 @@ export function createFleetManager(host: FleetHost): FleetManager {
 			startPerfActive();
 			// The backstop's hand-installed yt-dlp and deno: a reminder, at most monthly (#34).
 			startBackstopTools();
+			// The production host's own PSI every 2 s: an early warning before its
+			// stalls take the tailnet, the tunnel and prod with them.
+			startHostPressure();
 			// T4 (refactor plan §7.3): one admission-state row per node, every 5
 			// minutes, read entirely from state the loops above already hold.
 			startCapacitySampling();
@@ -314,6 +318,7 @@ export function __resetFleetManagerForTesting(): void {
 	__stopHostingConvergeForTesting();
 	__stopHostingVerifyForTesting();
 	__stopBackstopToolsForTesting();
+	__stopHostPressureForTesting();
 	__stopCapacitySamplingForTesting();
 	__stopPerfSamplingForTesting();
 	__stopPerfActiveForTesting();

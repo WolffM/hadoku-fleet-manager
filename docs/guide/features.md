@@ -252,6 +252,15 @@ runs, and the change ships only if that probe's slowest responses get
 faster, production's IO pressure and readiness latency do not get worse,
 and the lower-priority jobs keep at least a quarter of their pace.
 
+Weights cannot see everything, though. On a btrfs-over-dm-crypt root, much
+of the writing is filesystem bookkeeping that no cgroup is charged for, so
+the agent sessions and the production host's own CI also get a hard disk
+cap sized to what the device can really take, and the agent sessions a
+memory ceiling, so a runaway test dies in its own slice instead of pushing
+production out of memory. Every 2 seconds the controller reads the
+production host's pressure and its own, and warns (one post, no page) when
+the host looks about to stall, before the claws lose their coordinator.
+
 **What it does not do.** It never guesses which node is best for a tenant
 that has not opted into automatic placement (`placement.auto: true`) — for
 everyone else it only reports what it would do. A singleton service never

@@ -73,6 +73,7 @@ export const ENV_READS: readonly EnvRead[] = [
 	cli('FLEET_MANIFEST_DIR', 'operator manifests (default <site>/scripts/admin)'),
 	cli('HADOKU_SITE_ROOT', 'the hub repo checkout manifests default under'),
 	cli('HADOKU_STATE_DIR', 'the state directory override'),
+	cli('XDG_RUNTIME_DIR', 'host-pressure: its state file goes on this tmpfs, never the root disk'),
 	cli('REPOS_DIR', 'where repo checkouts live'),
 	cli('FLEET_DEPLOY_SITE_ROOT', 'the deployed site tree manifest writers target'),
 	cli('FLEET_DEPLOY_ROOTS', 'extra deploy trees a manifest write fans out to'),

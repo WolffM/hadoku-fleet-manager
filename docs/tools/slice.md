@@ -181,6 +181,27 @@ the edge's 30 s. Measured the same hour, after the cap: `pm2-hadoku.service`
 io pressure avg60 43% → 1.6%, mgmt-api's worst stall 22 s → 52 ms. Agent panes
 pay for it: `app.slice` io pressure rose to ~47%.
 
+### Sized to the device, plus a memory ceiling (2026-11-28)
+
+120/250 MB/s held but was not enough. In the two all-claw heartbeat losses after
+it (2026-11-27 05:32Z, 06:39Z) `app.slice`'s charged writes stayed at 26-94
+MB/s while the root LV sat 97-98% busy: btrfs metadata and dm-crypt writeback
+are charged to no cgroup. The cap is now **60 MB/s write, 150 MB/s read**, on
+`app.slice` and on hokon's minted CI (`ci.slice.d/io-cap.conf`). Measured
+under an 8-writer small-file storm in `app.slice`: claws' tailnet connect p99
+under 100 ms, mgmt-api ready p99 under 15 ms. Prod's own io pressure still
+peaked at 16-23% avg10, and an `IOWriteIOPSMax=600` A/B did not lower it
+(device busy fell 40% → 15%, prod pressure did not), so what remains is btrfs
+commit contention that no per-cgroup cap reaches. No IOPS cap ships.
+
+`app.slice.d/memory-cap.conf`: `MemoryHigh=24G`, `MemoryMax=28G`,
+`MemorySwapMax=20G`. A runaway pane test is throttled and then OOM-killed in
+its own slice, and total swap stays under swap-black's 32 GB, so nothing
+spills onto `/swapfile-invoke` on the root btrfs (1-9 GB did on 2026-11-27).
+
+The root half (pm2's `MemoryHigh` 20G → 26G, tailscaled's logs on tmpfs) is
+`deploy/systemd/hokon-prod-guard/install.sh`, run by the operator.
+
 ## Dev slices: the shadow week (hokon, 2026-11-24)
 
 **Why.** On 2026-11-24 the Forge coordinator (pm2 `cardtable`) lost its claws
@@ -251,16 +272,17 @@ restarted. Three things let it happen, each read from the kernel's own files:
 
 What changed:
 
-| where                | what                                                                                                | installed by                                      |
-| -------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `system.slice`       | `MemoryMin=13G`, `MemoryLow=17G`                                                                    | `deploy/systemd/pm2-protection/install.sh` (root) |
-| `pm2-hadoku.service` | `MemoryMin=12G`, `MemoryLow=16G` (working set 12.6G, peak 21.5G)                                    | same                                              |
-| user tree            | its hand-set floor, unchanged, moved out of `system.control/` into named drop-ins                   | same                                              |
-| `app.slice` (user)   | `MemoryMin=8G`, `MemoryLow=8G`: claims the user floor so none of it shields CI                      | `deploy/systemd/user-priority/install.sh`         |
-| `app.slice` (user)   | `IOWriteBandwidthMax=120M`, `IOReadBandwidthMax=250M` on the root LV: agent panes cannot starve PM2 | `deploy/systemd/user-priority/install.sh`         |
-| `ci.slice` (user)    | oomd `kill` at 50% memory pressure for 30 s                                                         | same                                              |
-| every minted unit    | `LimitNICE=+0`: a browser in a job cannot raise itself above the node                               | `ciUnitProperties`                                |
-| the reap             | stops a live JIT unit 10 min after GitHub's `workflow_job` `completed` names its runner             | `stopFinishedUnits`                               |
+| where                | what                                                                                                                        | installed by                                      |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `system.slice`       | `MemoryMin=13G`, `MemoryLow=17G`                                                                                            | `deploy/systemd/pm2-protection/install.sh` (root) |
+| `pm2-hadoku.service` | `MemoryMin=12G`, `MemoryLow=16G` (working set 12.6G, peak 21.5G)                                                            | same                                              |
+| user tree            | its hand-set floor, unchanged, moved out of `system.control/` into named drop-ins                                           | same                                              |
+| `app.slice` (user)   | `MemoryMin=8G`, `MemoryLow=8G`: claims the user floor so none of it shields CI                                              | `deploy/systemd/user-priority/install.sh`         |
+| `app.slice` (user)   | `IOWriteBandwidthMax=60M`, `IOReadBandwidthMax=150M` on the root LV; `MemoryHigh=24G`, `MemoryMax=28G`, `MemorySwapMax=20G` | `deploy/systemd/user-priority/install.sh`         |
+| `ci.slice` (user)    | `IOWriteBandwidthMax=60M`, `IOReadBandwidthMax=150M` on the root LV                                                         | same                                              |
+| `ci.slice` (user)    | oomd `kill` at 50% memory pressure for 30 s                                                                                 | same                                              |
+| every minted unit    | `LimitNICE=+0`: a browser in a job cannot raise itself above the node                                                       | `ciUnitProperties`                                |
+| the reap             | stops a live JIT unit 10 min after GitHub's `workflow_job` `completed` names its runner                                     | `stopFinishedUnits`                               |
 
 Both installers take `--dry-run`. The perf row's `ciMemory` (ci.slice
 pressure plus its `high` count) is the data for tightening the oomd limit.
